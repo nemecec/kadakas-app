@@ -585,7 +585,11 @@ impl History {
             })))
         };
         if self.versions.len() > limits.max_versions {
-            return refuse(LimitKind::Versions, limits.max_versions, self.versions.len());
+            return refuse(
+                LimitKind::Versions,
+                limits.max_versions,
+                self.versions.len(),
+            );
         }
         if self.bytes() > limits.max_bytes {
             return refuse(LimitKind::Bytes, limits.max_bytes, self.bytes());
@@ -713,7 +717,11 @@ impl History {
             if v.meta.parents.contains(&id) {
                 let mut seen = Vec::new();
                 for p in v.meta.parents.iter().filter_map(|p| {
-                    if *p == id { parent_of_removed } else { Some(*p) }
+                    if *p == id {
+                        parent_of_removed
+                    } else {
+                        Some(*p)
+                    }
                 }) {
                     if !seen.contains(&p) {
                         seen.push(p);
@@ -873,7 +881,9 @@ fn read_blobs(
     let mut out = BTreeMap::new();
     let Some(map) = value.and_then(Value::as_object) else {
         if value.is_some() {
-            notes.push("the table of pictures of the history is not a table and was left out".into());
+            notes.push(
+                "the table of pictures of the history is not a table and was left out".into(),
+            );
         }
         return out;
     };
@@ -1055,7 +1065,10 @@ fn read(value: &Value, doc: &Document, notes: &mut Vec<String>) -> Option<Histor
     for (key, ok) in [
         ("branch", obj.get("branch").is_none_or(|v| v.is_string())),
         ("next_id", obj.get("next_id").is_none_or(|v| v.is_u64())),
-        ("head", obj.get("head").is_none_or(|v| v.is_null() || v.is_u64())),
+        (
+            "head",
+            obj.get("head").is_none_or(|v| v.is_null() || v.is_u64()),
+        ),
     ] {
         if !ok {
             let _ = key;

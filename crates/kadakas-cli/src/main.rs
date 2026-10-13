@@ -184,7 +184,8 @@ impl Backend {
         session.scripting.trust = kadakas_api::TrustStore::load_default();
         session.wasm_plugins.registry.trust = kadakas_api::ModuleTrust::load_default();
         if let Some(f) = file {
-            session.editor = kadakas_core::command::Editor::new(load(&f)?);
+            session.adopt_document(load(&f)?);
+            report_notes(&f, &session);
             session.doc_dir = doc_dir_of(&f);
         }
         session.set_sequential_ids(sequential);
@@ -282,12 +283,17 @@ fn remote_call(
 
 fn load(path: &std::path::Path) -> Result<Document, String> {
     let mut doc = kadakas_api::files::read_document(path).map_err(|e| e.message)?;
-    for note in doc.load_notes() {
-        eprintln!("kadakas: {}: {note}", path.display());
-    }
     // An old file has no project GUID. It gets one in memory, and the next save writes it.
     doc.ensure_project_guid();
     Ok(doc)
+}
+
+/// Tells on stderr what the load of a file repaired or could not read (for example a history of
+/// versions that is kept as it is and read only).
+fn report_notes(path: &std::path::Path, session: &Session) {
+    for note in session.load_notes() {
+        eprintln!("kadakas: {}: {note}", path.display());
+    }
 }
 
 /// The folder of a document file.
@@ -407,7 +413,15 @@ fn mcp(mut backend: Backend, flat: bool) {
                     mcp_tools::Call::Method(m, params) => {
                         let r = backend.call(json!(1), m, params);
                         let (text, is_error) = match r.get("error") {
-                            Some(e) => (e["message"].as_str().unwrap_or("error").to_string(), true),
+                            Some(e) => {
+                                // Facts beyond the kind (the versions of a refused save) go in the
+                                // text, so that an agent can pass them to the person.
+                                let mut text = e["message"].as_str().unwrap_or("error").to_string();
+                                if e["data"].as_object().is_some_and(|d| d.len() > 1) {
+                                    text = format!("{text}\n{}", e["data"]);
+                                }
+                                (text, true)
+                            }
                             None => (r["result"].to_string(), false),
                         };
                         Ok(json!({"content": tool_content(m, &r, text), "isError": is_error}))
@@ -460,10 +474,14 @@ fn import_command(
 ) -> Result<(), String> {
     let mut session = Session::default();
     if let Some(base) = base {
-        session.editor = kadakas_core::command::Editor::new(load(&base)?);
+        session.adopt_document(load(&base)?);
+        report_notes(&base, &session);
     }
     let result = io_call(&mut session, "import.file", file, format, options)?;
-    save(session.editor.doc(), output)?;
+    save(
+        &*session.document_for_save().map_err(|e| e.message)?,
+        output,
+    )?;
     println!(
         "{}",
         serde_json::to_string_pretty(&result["report"]).unwrap_or_default()
@@ -478,6 +496,7 @@ fn export_command(
     options: Option<String>,
 ) -> Result<(), String> {
     let mut session = Session::with_document(load(file)?);
+    report_notes(file, &session);
     let result = io_call(&mut session, "export.file", output, format, options)?;
     println!(
         "{}",

@@ -999,7 +999,11 @@ impl KadakasApp {
                 file_io::with_extension(&p)
             }
         };
-        match file_io::write_document(&path, self.session.editor.doc()) {
+        let written = match self.session.document_for_save() {
+            Ok(doc) => file_io::write_document(&path, &doc),
+            Err(e) => Err(e.message),
+        };
+        match written {
             Ok(()) => {
                 self.status = tr!("app-saved", name = path.display());
                 self.session.collab_mark_saved();

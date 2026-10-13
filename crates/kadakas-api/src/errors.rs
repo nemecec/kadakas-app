@@ -60,6 +60,9 @@ pub struct RpcError {
     /// A stable reason for callers in the same process (a UI), for a case where `kind` is too
     /// coarse. It is not part of the JSON-RPC answer. See the `REASON_*` constants.
     pub reason: Option<&'static str>,
+    /// More facts for the caller, in the answer as `data` next to `kind` (for example the list of
+    /// versions when a save is refused because of a limit). `None`: nothing more.
+    pub details: Option<Value>,
 }
 
 /// `collab.connect`: the open document has changes that nobody saved, and the shared document
@@ -70,6 +73,12 @@ pub const REASON_UNSAVED_CHANGES: &str = "unsaved_changes";
 pub const REASON_EDITS_WAIT: &str = "edits_wait";
 /// `collab.connect`: the session is connected already.
 pub const REASON_ALREADY_CONNECTED: &str = "already_connected";
+/// `version.create` and `version.restore`: the new version would go over a limit of versions or
+/// bytes. Nothing was saved or deleted. The details list the versions; the person decides.
+pub const REASON_VERSION_LIMIT: &str = "version_limit";
+/// `version.create`, `version.restore`, `version.delete`: the history of the file could not be
+/// read completely. It is kept as it is and read only, until the person calls `version.repair`.
+pub const REASON_HISTORY_READONLY: &str = "history_read_only";
 
 impl RpcError {
     pub fn new(code: i64, kind: &'static str, e: impl std::fmt::Display) -> Self {
@@ -78,7 +87,13 @@ impl RpcError {
             message: e.to_string(),
             kind,
             reason: None,
+            details: None,
         }
+    }
+    /// Adds facts that go into the answer as `data` (see `details`).
+    pub fn with_details(mut self, details: Value) -> Self {
+        self.details = Some(details);
+        self
     }
     /// Adds a stable reason (see the `REASON_*` constants).
     pub fn with_reason(mut self, reason: &'static str) -> Self {
@@ -138,14 +153,31 @@ pub fn app(e: impl std::fmt::Display) -> RpcError {
 
 /// The JSON text of an error response.
 pub fn error_response(id: Value, code: i64, kind: &str, message: &str) -> String {
-    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message, "data": {"kind": kind}}})
+    error_response_with(id, code, kind, message, None)
+}
+
+/// Like [`error_response`], with the facts of `RpcError::details` in `data` next to `kind`.
+pub fn error_response_with(
+    id: Value,
+    code: i64,
+    kind: &str,
+    message: &str,
+    details: Option<&Value>,
+) -> String {
+    let mut data = json!({"kind": kind});
+    if let (Some(Value::Object(extra)), Some(map)) = (details, data.as_object_mut()) {
+        for (k, v) in extra {
+            map.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message, "data": data}})
         .to_string()
 }
 
 /// The `describe` entry for the error codes.
 pub fn describe() -> Value {
     json!({
-        "shape": "error: {code, message, data: {kind}}. data.kind is a stable string. Match on it or on the code, never on the message.",
+        "shape": "error: {code, message, data: {kind, ...}}. data.kind is a stable string. Match on it or on the code, never on the message. Some errors have more facts in data (a refused save lists the versions).",
         "codes": CODES.iter().map(|(c, k, m)| json!({"code": c, "kind": k, "meaning": m})).collect::<Vec<_>>(),
     })
 }

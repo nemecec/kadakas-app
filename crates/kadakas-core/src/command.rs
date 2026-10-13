@@ -762,6 +762,7 @@ impl Patch {
             changed,
             removed,
             document,
+            detail: None,
         }
     }
 
@@ -1853,6 +1854,7 @@ impl Editor {
         self.check_pictures(cmd)?;
         self.transact(
             || change::op_name(cmd).unwrap_or_else(|| "command".into()),
+            None,
             |tx, out| tx.run(cmd, out),
         )
     }
@@ -1862,6 +1864,7 @@ impl Editor {
     fn transact(
         &mut self,
         op: impl FnOnce() -> String,
+        detail: Option<Value>,
         body: impl FnOnce(&mut Tx, &mut Outcome) -> Result<(), CommandError>,
     ) -> Result<Outcome, CommandError> {
         let meta_before = Meta::of(&self.doc);
@@ -1877,8 +1880,9 @@ impl Editor {
             Ok(()) => {
                 if !patch.is_empty() {
                     self.revision = next_revision();
-                    self.log
-                        .push(patch.change_set(true, self.revision, &op(), self.origin));
+                    let mut cs = patch.change_set(true, self.revision, &op(), self.origin);
+                    cs.detail = detail;
+                    self.log.push(cs);
                     self.undo.push(patch);
                     self.redo.clear();
                     self.trim_history();
@@ -1895,9 +1899,22 @@ impl Editor {
     /// Sets or clears the history of the document (the named versions, see `crate::history`) as
     /// one undo step. Returns false if nothing changed.
     pub fn set_history(&mut self, history: Option<crate::history::HistoryData>) -> bool {
+        self.set_history_with(history, "set_history", None)
+    }
+
+    /// Like [`Editor::set_history`], with the name of the step (the `op` of the change set) and a
+    /// detail that goes into the change set (what the change was, for the ones who follow the
+    /// events).
+    pub fn set_history_with(
+        &mut self,
+        history: Option<crate::history::HistoryData>,
+        op: &str,
+        detail: Option<Value>,
+    ) -> bool {
         let before = self.revision;
         let _ = self.transact(
-            || "set_history".into(),
+            || op.to_string(),
+            detail,
             |tx, _| {
                 tx.doc.history = history;
                 Ok(())
@@ -1916,9 +1933,22 @@ impl Editor {
         target: &Document,
         history: Option<crate::history::HistoryData>,
     ) -> Result<bool, CommandError> {
+        self.restore_content_with(target, history, "restore", None)
+    }
+
+    /// Like [`Editor::restore_content`], with the name of the step and a detail for the change
+    /// set (see [`Editor::set_history_with`]).
+    pub fn restore_content_with(
+        &mut self,
+        target: &Document,
+        history: Option<crate::history::HistoryData>,
+        op: &str,
+        detail: Option<Value>,
+    ) -> Result<bool, CommandError> {
         let before = self.revision;
         self.transact(
-            || "restore".into(),
+            || op.to_string(),
+            detail,
             |tx, _| {
                 tx.replace_content(target);
                 tx.doc.history = history;
@@ -2017,6 +2047,7 @@ impl Editor {
             changed,
             removed,
             document,
+            detail: None,
         };
         self.log.push(cs.clone());
         Some(cs)

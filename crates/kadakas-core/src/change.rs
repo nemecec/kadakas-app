@@ -113,6 +113,11 @@ pub struct ChangeSet {
     pub changed: IdsByKind,
     pub removed: IdsByKind,
     pub document: DocumentChanged,
+    /// What the host says about the change, when the ids do not tell it (the versions that a
+    /// `version.delete` removed: their IDs and names). Only the step that made the change has it;
+    /// undo and redo of it do not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
 }
 
 impl ChangeSet {
@@ -185,6 +190,11 @@ impl ChangeSet {
                 self.document
             } else {
                 DocumentChanged::default()
+            },
+            detail: if want("document") {
+                self.detail.clone()
+            } else {
+                None
             },
         })
     }
@@ -578,6 +588,7 @@ mod tests {
             changed: IdsByKind::default(),
             removed: IdsByKind::default(),
             document: DocumentChanged::default(),
+            detail: None,
         }
     }
 

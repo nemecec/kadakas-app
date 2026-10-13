@@ -40,13 +40,16 @@ fn a_file_without_history_loads_and_one_with_history_keeps_it() {
 }
 
 #[test]
-fn a_history_that_is_not_an_object_is_dropped_with_a_note() {
+fn a_history_that_is_not_an_object_is_kept_unchanged_with_a_note() {
     let mut v = serde_json::to_value(Document::with_sequential_ids()).unwrap();
     for bad in [json!([1, 2]), json!("text"), json!(5)] {
-        v["history"] = bad;
+        v["history"] = bad.clone();
         let loaded = Document::from_value(v.clone()).unwrap();
-        assert!(loaded.history.is_none());
+        // Nothing is thrown away: the person decides about the versions.
+        assert_eq!(loaded.history.as_ref().unwrap().value(), &bad);
         assert_eq!(loaded.load_notes().len(), 1);
+        assert!(loaded.load_notes()[0].contains("read only"));
+        assert_eq!(serde_json::to_value(&loaded).unwrap()["history"], bad);
     }
     v["history"] = Value::Null;
     assert!(Document::from_value(v).unwrap().history.is_none());
@@ -254,4 +257,64 @@ fn a_big_history_does_not_shrink_the_undo_stack_of_other_edits() {
         json!({"blob": "y".repeat(1024 * 1024)}),
     )));
     assert!(ed.history_bytes() < again + 2 * 1024 * 1024);
+}
+
+#[test]
+fn a_step_of_the_history_can_say_what_it_did() {
+    let mut ed = Editor::with_sequential_ids();
+    let rev = ed.revision();
+    let detail = json!({"deleted": [{"id": 3, "name": "Old"}]});
+    assert!(ed.set_history_with(
+        Some(HistoryData::new(json!({"format": 2}))),
+        "version_delete",
+        Some(detail.clone())
+    ));
+    let cs = ed
+        .changes_since(rev)
+        .changes
+        .last()
+        .cloned()
+        .unwrap()
+        .clone();
+    assert_eq!(cs.op, "version_delete");
+    assert_eq!(cs.detail, Some(detail));
+    assert!(cs.document.history);
+    // The undo of the step has no detail.
+    assert!(ed.undo());
+    let cs = ed
+        .changes_since(rev)
+        .changes
+        .last()
+        .cloned()
+        .unwrap()
+        .clone();
+    assert_eq!(cs.op, "undo");
+    assert_eq!(cs.detail, None);
+    // A restore too, and the detail is part of the JSON of the event.
+    let target = ed.doc().clone();
+    ed.execute(&cmd(json!({"op": "add_layer", "name": "X"})))
+        .unwrap();
+    let rev = ed.revision();
+    ed.restore_content_with(
+        &target,
+        None,
+        "version_restore",
+        Some(json!({"restored": 1})),
+    )
+    .unwrap();
+    let cs = ed
+        .changes_since(rev - 1)
+        .changes
+        .last()
+        .cloned()
+        .unwrap()
+        .clone();
+    assert_eq!(cs.op, "version_restore");
+    let text = serde_json::to_value(&cs).unwrap();
+    assert_eq!(text["detail"], json!({"restored": 1}));
+    // A change set without a detail has no field.
+    ed.execute(&cmd(json!({"op": "add_layer", "name": "Y"})))
+        .unwrap();
+    let cs = ed.changes_since(0).changes.last().cloned().unwrap().clone();
+    assert!(serde_json::to_value(&cs).unwrap().get("detail").is_none());
 }

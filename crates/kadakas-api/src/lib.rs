@@ -11,7 +11,10 @@ mod errors;
 pub mod events;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
-pub use errors::{REASON_ALREADY_CONNECTED, REASON_EDITS_WAIT, REASON_UNSAVED_CHANGES, RpcError};
+pub use errors::{
+    REASON_ALREADY_CONNECTED, REASON_EDITS_WAIT, REASON_HISTORY_READONLY, REASON_UNSAVED_CHANGES,
+    REASON_VERSION_LIMIT, RpcError,
+};
 #[cfg(test)]
 mod care_api_tests;
 mod data_api;
@@ -668,6 +671,7 @@ pub const METHODS: &[(&str, &str)] = &[
     review_api::VERSION_RESTORE,
     review_api::VERSION_DELETE,
     review_api::VERSION_DIFF,
+    review_api::VERSION_REPAIR,
     // Collaboration (see collab_api.rs).
     collab_api::STATUS,
     collab_api::CONNECT,
@@ -800,7 +804,7 @@ impl Session {
 
     /// A session for an opened document, with empty history and selection.
     pub fn with_document(mut doc: Document) -> Self {
-        review_api::vet_document(&mut doc, &SessionLimits::default());
+        review_api::vet_document(&mut doc);
         let notes = doc.load_notes().to_vec();
         let mut s = Session::with_vetted_document(doc);
         s.load_notes = notes;
@@ -821,7 +825,7 @@ impl Session {
     /// versions of the new document is checked against the limits of the session; what was
     /// repaired or dropped is returned as notes (they are also the load notes of the document).
     pub fn replace_document(&mut self, mut doc: Document) -> Vec<String> {
-        review_api::vet_document(&mut doc, &self.limits);
+        review_api::vet_document(&mut doc);
         let notes = doc.load_notes().to_vec();
         #[cfg(not(target_arch = "wasm32"))]
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
@@ -1504,7 +1508,9 @@ impl Session {
         let id = id?;
         Some(match result {
             Ok(v) => json!({"jsonrpc": "2.0", "id": id, "result": v}).to_string(),
-            Err(e) => errors::error_response(id, e.code, e.kind, &e.message),
+            Err(e) => {
+                errors::error_response_with(id, e.code, e.kind, &e.message, e.details.as_ref())
+            }
         })
     }
 }

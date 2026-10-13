@@ -355,7 +355,7 @@ proptest! {
             prop_assert_eq!(&d["totals"], &json!({"added": 0, "removed": 0, "changed": 0}));
         }
         // The file form of the document keeps the versions.
-        let file = serde_json::to_value(s.editor.doc()).unwrap();
+        let file = serde_json::to_value(&*s.document_for_save().unwrap()).unwrap();
         let mut t = Session::with_sequential_ids();
         let loaded = t.handle("document.load", json!({"document": file})).unwrap();
         prop_assert!(loaded.get("notes").is_none(), "{loaded}");

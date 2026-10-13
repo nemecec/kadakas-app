@@ -25,9 +25,11 @@ fn editor_with_underlay(megabytes: usize) -> (Editor, ObjectId) {
     let png = kadakas_core::underlay::base64_encode(&bytes);
     let mut ed = editor();
     let out = ed
-        .execute(&cmd(json!({"op": "add_object", "shape": {"kind": "underlay",
+        .execute(&cmd(
+            json!({"op": "add_object", "shape": {"kind": "underlay",
             "min": [0, 0], "max": [6400, 6400], "width": 64, "height": 64,
-            "png": png, "opacity": 1.0}})))
+            "png": png, "opacity": 1.0}}),
+        ))
         .unwrap();
     (ed, ObjectId(out.created[0]))
 }
@@ -103,7 +105,11 @@ fn a_picture_is_stored_once_however_many_versions_move_it() {
         .unwrap();
     assert_eq!(gone.blobs().len(), 1);
     gone.remove(1).unwrap();
-    assert_eq!(gone.blobs().len(), 1, "the newest version holds the picture");
+    assert_eq!(
+        gone.blobs().len(),
+        1,
+        "the newest version holds the picture"
+    );
     gone.remove(2).unwrap();
     assert!(gone.is_empty() && gone.blobs().is_empty());
 }
@@ -149,7 +155,11 @@ fn pictures_in_a_file_are_checked() {
     let l = load(&bad, ed.doc());
     assert!(l.history.is_none());
     assert!(l.notes.iter().any(|n| n.contains("hash")), "{:?}", l.notes);
-    assert!(l.notes.iter().any(|n| n.contains("missing")), "{:?}", l.notes);
+    assert!(
+        l.notes.iter().any(|n| n.contains("missing")),
+        "{:?}",
+        l.notes
+    );
     let mut bad = good.clone();
     bad["blobs"][&hash] = json!(5);
     assert!(load(&bad, ed.doc()).history.is_none());
@@ -257,7 +267,11 @@ fn a_save_and_a_save_after_many_versions_cost_the_drawing() {
     let tip = h.tip_state().unwrap().unwrap();
     APPLIED.with(|c| c.set(0));
     let _ = h.to_disk(ed.doc(), &tip);
-    assert_eq!(APPLIED.with(std::cell::Cell::get), 0, "a save replays nothing");
+    assert_eq!(
+        APPLIED.with(std::cell::Cell::get),
+        0,
+        "a save replays nothing"
+    );
     // A new version makes the old newest a delta: the snapshot is applied once.
     APPLIED.with(|c| c.set(0));
     h.add(ed.doc(), new_version("last"), Limits::default())

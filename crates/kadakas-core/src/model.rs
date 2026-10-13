@@ -1270,9 +1270,11 @@ impl Document {
                 }
             }
         }
+        // A history that is not an object or is too big is not dropped: the versions of a file
+        // belong to the person. The history stays as it is, and a host treats it as read only
+        // (see `kadakas-review`).
         if let Some(problem) = self.history.as_ref().and_then(|h| h.problem()) {
             notes.push(problem);
-            self.history = None;
         }
         self.load_notes = notes;
         let mut seen = std::collections::HashSet::new();

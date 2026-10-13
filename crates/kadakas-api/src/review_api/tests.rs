@@ -37,6 +37,13 @@ fn object_count(s: &mut Session) -> usize {
         .unwrap() as usize
 }
 
+/// What a save writes, read as a file: a session that opened it.
+fn through_file(s: &mut Session) -> (Value, Session) {
+    let file = serde_json::to_value(&*s.document_for_save().unwrap()).unwrap();
+    let doc = Document::from_json(&file.to_string()).unwrap();
+    (file, Session::with_document(doc))
+}
+
 #[test]
 fn a_version_has_its_data_and_one_undo_step() {
     let mut s = Session::with_sequential_ids();
@@ -59,6 +66,7 @@ fn a_version_has_its_data_and_one_undo_step() {
     assert_eq!(v["origin"], "agent");
     assert!(v["base_revision"].as_u64().unwrap() > 0);
     assert_eq!(r["count"], 1);
+    assert!(r.get("dropped").is_none(), "a save never drops a version");
     assert_eq!(s.editor.undo_depth(), depth + 1);
     // Author and origin default from the session.
     let two = ok(&mut s, "version.create", json!({"name": "Second"}));
@@ -79,6 +87,7 @@ fn the_list_and_get_describe_versions() {
     let mut s = Session::with_sequential_ids();
     assert_eq!(ok(&mut s, "version.list", json!({}))["count"], 0);
     assert!(ok(&mut s, "version.list", json!(null))["current_is_newest"].is_null());
+    assert_eq!(ok(&mut s, "version.list", json!({}))["read_only"], false);
     rect(&mut s, 0);
     let one = create(&mut s, "One");
     rect(&mut s, 20);
@@ -86,8 +95,11 @@ fn the_list_and_get_describe_versions() {
     let l = ok(&mut s, "version.list", json!({}));
     assert_eq!(l["count"], 2);
     assert_eq!(l["versions"][0]["name"], "One");
-    assert_eq!(l["versions"][0]["delta_bytes"], 0);
-    assert!(l["versions"][1]["delta_bytes"].as_u64().unwrap() > 0);
+    assert!(l["versions"][0]["delta_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(
+        l["versions"][1]["delta_bytes"], 0,
+        "the newest has no delta"
+    );
     assert_eq!(l["current_is_newest"], true);
     assert_eq!(l["limits"]["max_versions"], 100);
     assert!(l["bytes"].as_u64().unwrap() > 100);
@@ -105,7 +117,6 @@ fn the_list_and_get_describe_versions() {
     assert_eq!(g["document"]["objects"].as_array().unwrap().len(), 2);
     assert!(g["document"].get("history").is_none());
     assert!(g["document"]["objects"][0].get("order").is_none());
-    // It is a document that loads.
     let loaded = Document::from_value(g["document"].clone()).unwrap();
     assert_eq!(loaded.objects.len(), 2);
     assert_eq!(
@@ -132,7 +143,6 @@ fn get_refuses_a_document_above_the_size_cap() {
     let id = create(&mut s, "Big");
     let e = fail(&mut s, "version.get", json!({"id": id, "document": true}));
     assert_eq!(e.kind, "limit");
-    // The summary works, and the diff cuts the value.
     assert_eq!(
         ok(&mut s, "version.get", json!({"id": id}))["things"]["objects"],
         1
@@ -159,6 +169,7 @@ fn restore_saves_the_work_and_is_one_undo_step() {
     assert_eq!(r["restored"], one);
     assert_eq!(r["saved_version"], json!({"id": 2, "new": true}));
     assert_eq!(r["changed"], true);
+    assert!(r.get("dropped").is_none());
     assert_eq!(object_count(&mut s), 1);
     assert_eq!(s.editor.undo_depth(), depth + 1);
     let l = ok(&mut s, "version.list", json!({}));
@@ -166,12 +177,14 @@ fn restore_saves_the_work_and_is_one_undo_step() {
     assert_eq!(l["versions"][1]["auto"], true);
     assert_eq!(l["versions"][1]["time_ms"], 5);
     assert!(l["versions"][1]["name"].as_str().unwrap().contains("One"));
-    // The change event names the history and the objects.
+    // The change event names the history, the step and what it did.
     let notes = s.take_notifications(LOCAL);
     let ev = &notes.last().unwrap()["params"];
-    assert_eq!(ev["op"], "restore");
+    assert_eq!(ev["op"], "version_restore");
     assert_eq!(ev["document"]["history"], true);
     assert_eq!(ev["removed"]["objects"].as_array().unwrap().len(), 1);
+    assert_eq!(ev["detail"]["restored"], json!({"id": one, "name": "One"}));
+    assert_eq!(ev["detail"]["saved_version"], json!({"id": 2, "new": true}));
     // The work can be brought back from the automatic version.
     let back = ok(&mut s, "version.restore", json!({"id": 2}));
     assert_eq!(back["saved_version"]["new"], true);
@@ -181,7 +194,6 @@ fn restore_saves_the_work_and_is_one_undo_step() {
     assert_eq!(object_count(&mut s), 1);
     assert!(s.editor.undo());
     assert_eq!(s.editor.doc(), &before);
-    // Redo does it again.
     assert!(s.editor.redo());
     assert_eq!(object_count(&mut s), 1);
     // A document that equals the newest version needs no new version.
@@ -215,7 +227,7 @@ fn restore_prunes_the_selection() {
 }
 
 #[test]
-fn delete_is_one_undo_step_and_keeps_the_other_versions() {
+fn delete_names_what_it_deleted_and_is_one_undo_step() {
     let mut s = Session::with_sequential_ids();
     rect(&mut s, 0);
     let one = create(&mut s, "One");
@@ -223,10 +235,20 @@ fn delete_is_one_undo_step_and_keeps_the_other_versions() {
     let two = create(&mut s, "Two");
     rect(&mut s, 40);
     let three = create(&mut s, "Three");
+    ok(&mut s, "events.subscribe", json!({}));
     let depth = s.editor.undo_depth();
     let d = ok(&mut s, "version.delete", json!({"id": two}));
-    assert_eq!(d, json!({"deleted": two, "count": 2}));
+    assert_eq!(d["count"], 2);
+    assert_eq!(d["deleted"][0]["id"], two);
+    assert_eq!(d["deleted"][0]["name"], "Two");
+    assert!(d["deleted"][0]["bytes"].as_u64().unwrap() > 0);
     assert_eq!(s.editor.undo_depth(), depth + 1);
+    // The change event names the deleted version too.
+    let notes = s.take_notifications(LOCAL);
+    let ev = &notes.last().unwrap()["params"];
+    assert_eq!(ev["op"], "version_delete");
+    assert_eq!(ev["detail"]["deleted"][0]["name"], "Two");
+    assert_eq!(ev["document"]["history"], true);
     let g = ok(
         &mut s,
         "version.get",
@@ -243,11 +265,32 @@ fn delete_is_one_undo_step_and_keeps_the_other_versions() {
     );
     assert!(s.editor.undo());
     assert_eq!(ok(&mut s, "version.list", json!({}))["count"], 3);
-    ok(&mut s, "version.delete", json!({"id": one}));
+    // Several at once, in one step; nothing is deleted if one is missing.
+    let depth = s.editor.undo_depth();
+    assert_eq!(
+        fail(&mut s, "version.delete", json!({"ids": [one, 99]})).kind,
+        "not_found"
+    );
+    assert_eq!(ok(&mut s, "version.list", json!({}))["count"], 3);
+    let d = ok(&mut s, "version.delete", json!({"ids": [one, three]}));
+    assert_eq!(d["deleted"].as_array().unwrap().len(), 2);
+    assert_eq!(s.editor.undo_depth(), depth + 1);
+    // The newest version can go too: the one before it takes its place.
+    assert_eq!(
+        ok(&mut s, "version.get", json!({"id": two, "document": true}))["things"]["objects"],
+        2
+    );
     ok(&mut s, "version.delete", json!({"id": two}));
-    ok(&mut s, "version.delete", json!({"id": three}));
     assert!(s.editor.doc().history.is_none());
     assert_eq!(ok(&mut s, "version.list", json!({}))["count"], 0);
+    for bad in [
+        json!({}),
+        json!({"ids": []}),
+        json!({"ids": ["a"]}),
+        json!({"id": 1, "ids": [1]}),
+    ] {
+        assert_eq!(fail(&mut s, "version.delete", bad).code, -32602);
+    }
 }
 
 #[test]
@@ -283,7 +326,6 @@ fn diff_compares_versions_and_the_current_document() {
     assert_eq!(d["objects"]["removed"][0]["id"], b);
     assert_eq!(d["objects"]["changed"][0]["id"], a);
     assert_eq!(d["objects"]["changed"][0]["properties"][0]["path"], "shape");
-    // The current document, in both places.
     let same = ok(
         &mut s,
         "version.diff",
@@ -301,7 +343,6 @@ fn diff_compares_versions_and_the_current_document() {
         json!({"from": "Current", "to": one}),
     );
     assert_eq!(d["counts"]["objects"]["removed"], 2);
-    // Kinds and limit.
     let d = ok(
         &mut s,
         "version.diff",
@@ -320,7 +361,6 @@ fn diff_compares_versions_and_the_current_document() {
         .map(|k| d["objects"][k].as_array().unwrap().len())
         .sum();
     assert_eq!(listed, 1);
-    // Bad parameters.
     for p in [
         json!({"from": one}),
         json!({"from": one, "to": "head"}),
@@ -335,7 +375,6 @@ fn diff_compares_versions_and_the_current_document() {
         fail(&mut s, "version.diff", json!({"from": 99, "to": one})).kind,
         "not_found"
     );
-    // Without any version, current against current is empty.
     let mut t = Session::with_sequential_ids();
     let d = ok(
         &mut t,
@@ -389,29 +428,70 @@ fn bad_parameters_are_refused() {
 }
 
 #[test]
-fn the_limits_of_the_session_cap_the_history() {
+fn a_limit_stops_the_save_and_the_error_lists_the_versions() {
     let mut s = Session::with_sequential_ids();
     s.set_limits(SessionLimits {
         max_versions: 3,
         ..SessionLimits::default()
     });
-    for i in 0..6 {
+    for i in 0..3 {
         rect(&mut s, i * 20);
-        let r = ok(&mut s, "version.create", json!({"name": format!("v{i}")}));
-        assert!(r["count"].as_u64().unwrap() <= 3);
-        assert_eq!(r["dropped"].as_array().unwrap().len(), usize::from(i >= 3));
+        create(&mut s, &format!("v{i}"));
     }
-    let l = ok(&mut s, "version.list", json!({}));
-    let names: Vec<&str> = l["versions"]
+    rect(&mut s, 100);
+    let history_before = s.editor.doc().history.clone();
+    let depth = s.editor.undo_depth();
+    let e = fail(&mut s, "version.create", json!({"name": "one too many"}));
+    assert_eq!((e.code, e.kind), (6, "limit"));
+    assert_eq!(e.reason, Some(REASON_VERSION_LIMIT));
+    let d = e.details.as_ref().unwrap();
+    assert_eq!(
+        d["limit"],
+        json!({"kind": "versions", "max": 3, "needed": 4})
+    );
+    assert_eq!(d["versions"].as_array().unwrap().len(), 3);
+    assert_eq!(d["versions"][0]["name"], "v0");
+    assert!(d["versions"][0]["bytes"].as_u64().unwrap() > 0);
+    assert!(d["versions"][0].get("time_ms").is_some());
+    assert_eq!(d["ask_the_person"], true);
+    assert!(d["options"].as_array().unwrap().len() == 2);
+    assert!(e.message.contains("nothing was deleted"));
+    // Nothing changed: not the history, not the undo steps.
+    assert_eq!(s.editor.doc().history, history_before);
+    assert_eq!(s.editor.undo_depth(), depth);
+    // The error goes over the wire with the facts in data.
+    let line = s
+        .handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"version.create","params":{"name":"x"}}"#)
+        .unwrap();
+    let wire: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(wire["error"]["code"], 6);
+    assert_eq!(wire["error"]["data"]["kind"], "limit");
+    assert_eq!(
+        wire["error"]["data"]["versions"].as_array().unwrap().len(),
+        3
+    );
+    // A restore whose automatic version would go over the limit is refused the same way.
+    let doc_before = s.editor.doc().clone();
+    let e = fail(&mut s, "version.restore", json!({"id": 1}));
+    assert_eq!(e.reason, Some(REASON_VERSION_LIMIT));
+    assert_eq!(s.editor.doc(), &doc_before);
+    // The person deletes the versions that they choose (not the oldest), and the save goes on.
+    ok(&mut s, "version.delete", json!({"ids": [2]}));
+    create(&mut s, "now it fits");
+    let names: Vec<String> = ok(&mut s, "version.list", json!({}))["versions"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|v| v["name"].as_str().unwrap())
+        .map(|v| v["name"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(names, ["v3", "v4", "v5"]);
-    // The kept versions keep their content.
-    let g = ok(&mut s, "version.get", json!({"id": 4, "document": true}));
-    assert_eq!(g["document"]["objects"].as_array().unwrap().len(), 4);
+    assert_eq!(names, ["v0", "v2", "now it fits"]);
+    // Or the person raises the limit.
+    rect(&mut s, 200);
+    s.set_limits(SessionLimits {
+        max_versions: 4,
+        ..SessionLimits::default()
+    });
+    create(&mut s, "after raising the limit");
     // Off.
     s.set_limits(SessionLimits {
         max_versions: 0,
@@ -421,16 +501,30 @@ fn the_limits_of_the_session_cap_the_history() {
         fail(&mut s, "version.create", json!({"name": "x"})).kind,
         "limit"
     );
-    // Bytes.
+    assert_eq!(SessionLimits::strict().max_versions, 20);
+}
+
+#[test]
+fn the_byte_limit_stops_the_save_too() {
+    let mut s = Session::with_sequential_ids();
+    for i in 0..4 {
+        rect(&mut s, i * 20);
+        create(&mut s, &format!("v{i}"));
+    }
+    let used = ok(&mut s, "version.list", json!({}))["bytes"]
+        .as_u64()
+        .unwrap();
     s.set_limits(SessionLimits {
-        max_version_bytes: 800,
+        max_version_bytes: used + 10,
         ..SessionLimits::default()
     });
-    assert_eq!(
-        fail(&mut s, "version.create", json!({"name": "x"})).kind,
-        "limit"
-    );
-    assert_eq!(SessionLimits::strict().max_versions, 20);
+    rect(&mut s, 500);
+    let e = fail(&mut s, "version.create", json!({"name": "big"}));
+    assert_eq!(e.reason, Some(REASON_VERSION_LIMIT));
+    let d = e.details.unwrap();
+    assert_eq!(d["limit"]["kind"], "bytes");
+    assert!(d["limit"]["needed"].as_u64().unwrap() > used + 10);
+    assert_eq!(ok(&mut s, "version.list", json!({}))["count"], 4);
 }
 
 #[test]
@@ -442,83 +536,200 @@ fn history_counts_in_the_memory_of_the_session() {
     let before = s.estimated_bytes();
     create(&mut s, "One");
     assert!(s.estimated_bytes() > before);
-    let h = s.editor.doc().history.clone().unwrap();
-    assert!(document_bytes_of(&s) >= h.bytes() as u64);
-}
-
-fn document_bytes_of(s: &Session) -> u64 {
-    s.estimated_bytes()
 }
 
 #[test]
-fn document_get_leaves_the_history_out_and_a_saved_file_keeps_it() {
-    let mut s = Session::with_sequential_ids();
-    rect(&mut s, 0);
-    create(&mut s, "One");
-    assert!(
-        ok(&mut s, "document.get", json!({}))
-            .get("history")
-            .is_none()
-    );
-    // A file has the history; a session that loads it has the versions.
-    let file = serde_json::to_value(s.editor.doc()).unwrap();
-    assert!(file["history"].is_object());
-    let mut t = Session::with_sequential_ids();
-    let r = ok(&mut t, "document.load", json!({"document": file}));
-    assert!(r.get("notes").is_none());
-    assert_eq!(ok(&mut t, "version.list", json!({}))["count"], 1);
-    let g = ok(&mut t, "version.get", json!({"id": 1, "document": true}));
-    assert_eq!(g["document"]["objects"].as_array().unwrap().len(), 1);
-}
-
-#[test]
-fn a_hostile_history_in_a_file_is_repaired_or_dropped_with_notes() {
+fn document_get_leaves_the_history_out_and_a_save_writes_the_file_form() {
     let mut s = Session::with_sequential_ids();
     rect(&mut s, 0);
     create(&mut s, "One");
     rect(&mut s, 20);
     create(&mut s, "Two");
-    let mut file = serde_json::to_value(s.editor.doc()).unwrap();
-    // A delta that does not fit: the version is dropped.
-    file["history"]["versions"][1]["delta"] = json!([{"op": "delete",
-        "target": {"kind": "object", "id": "00000000-0000-0000-0000-0000000000ee"}}]);
-    let mut t = Session::with_sequential_ids();
-    let r = ok(&mut t, "document.load", json!({"document": file.clone()}));
-    assert!(!r["notes"].as_array().unwrap().is_empty(), "{r}");
-    assert_eq!(ok(&mut t, "version.list", json!({}))["count"], 1);
-    // The repaired history is what the document keeps (and saves).
-    assert_eq!(
-        t.editor.doc().history.as_ref().unwrap().value()["versions"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
+    rect(&mut s, 40);
+    assert!(
+        ok(&mut s, "document.get", json!({}))
+            .get("history")
+            .is_none()
     );
-    // Nonsense in the field: dropped by the core with a note.
-    file["history"] = json!("what");
-    let r = ok(&mut t, "document.load", json!({"document": file.clone()}));
-    assert_eq!(r["notes"].as_array().unwrap().len(), 1);
-    assert_eq!(ok(&mut t, "version.list", json!({}))["count"], 0);
-    // A history over the limits of the session is folded.
-    let mut file = serde_json::to_value(s.editor.doc()).unwrap();
-    file["history"]["next_id"] = json!(3);
-    let mut u = Session::with_sequential_ids();
-    u.set_limits(SessionLimits {
-        max_versions: 1,
-        ..SessionLimits::default()
-    });
-    let r = ok(&mut u, "document.load", json!({"document": file}));
-    assert!(r["notes"][0].as_str().unwrap().contains("folded"));
-    assert_eq!(ok(&mut u, "version.list", json!({}))["count"], 1);
-    // The constructor for an opened file checks it too.
-    let mut doc = Document::with_sequential_ids();
-    doc.history = Some(HistoryData::new(json!({"format": 7})));
-    let v = Session::with_document(doc);
-    assert!(v.editor.doc().history.is_none());
+    // The file: the newest version is a change from the drawing, and the drawing is complete.
+    let (file, mut t) = through_file(&mut s);
+    let h = &file["history"];
+    assert_eq!(h["format"], 2);
+    assert!(h["newest"].get("snapshot").is_none() && h["newest"]["delta"].is_array());
+    assert_eq!(h["newest"]["anchor"].as_str().unwrap().len(), 64);
+    assert!(h.get("base").is_none());
+    assert_eq!(file["objects"].as_array().unwrap().len(), 3);
+    // The session that opened the file has the versions and the same content for each.
+    assert!(t.load_notes().is_empty(), "{:?}", t.load_notes());
+    let l = ok(&mut t, "version.list", json!({}));
+    assert_eq!(l["count"], 2);
+    assert_eq!(l["read_only"], false);
+    for id in [1u64, 2] {
+        let a = ok(&mut s, "version.get", json!({"id": id, "document": true}));
+        let b = ok(&mut t, "version.get", json!({"id": id, "document": true}));
+        assert_eq!(
+            a["document"]["objects"], b["document"]["objects"],
+            "version {id}"
+        );
+    }
+    // The opened session keeps the versions in the self contained form: the next change and
+    // save work, and a drawing that changed since is saved as a new change.
+    rect(&mut t, 60);
+    create(&mut t, "Three");
+    rect(&mut t, 80);
+    let (file, mut u) = through_file(&mut t);
+    assert_eq!(ok(&mut u, "version.list", json!({}))["count"], 3);
+    assert_eq!(file["objects"].as_array().unwrap().len(), 5);
+    let d = ok(&mut u, "version.diff", json!({"from": 3, "to": "current"}));
+    assert_eq!(d["totals"], json!({"added": 1, "removed": 0, "changed": 0}));
+    // The file written by `file.save` is the same form.
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("kadakas-review-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("a.kad");
+    let mut w = Session::with_sequential_ids();
+    rect(&mut w, 0);
+    let one = create(&mut w, "One");
+    let text = crate::files::document_text(&*w.document_for_save().unwrap()).unwrap();
+    std::fs::write(&path, &text).unwrap();
+    let read = crate::files::read_document(&path).unwrap();
+    assert_eq!(
+        Session::with_document(read).editor.doc().history.is_some(),
+        true
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(one, 1);
 }
 
 #[test]
-fn a_change_of_the_history_is_a_document_event() {
+fn a_history_that_cannot_be_read_stays_as_it_is_and_is_read_only() {
+    let mut donor = Session::with_sequential_ids();
+    rect(&mut donor, 0);
+    create(&mut donor, "One");
+    rect(&mut donor, 20);
+    create(&mut donor, "Two");
+    let mut file = serde_json::to_value(&*donor.document_for_save().unwrap()).unwrap();
+    // A delta that does not fit: the older version cannot be rebuilt.
+    file["history"]["versions"][0]["delta"] = json!([{"op": "delete",
+        "target": {"kind": "object", "id": "00000000-0000-0000-0000-0000000000ee"}}]);
+    let original = file["history"].clone();
+
+    let mut t = Session::with_sequential_ids();
+    let r = ok(&mut t, "document.load", json!({"document": file.clone()}));
+    assert!(!r["notes"].as_array().unwrap().is_empty(), "{r}");
+    assert!(r["notes"].to_string().contains("read only"));
+    // The history is the file's history, not a repaired one.
+    assert_eq!(t.editor.doc().history.as_ref().unwrap().value(), &original);
+    // Reading works on what could be read; the list says what is the matter.
+    let l = ok(&mut t, "version.list", json!({}));
+    assert_eq!(l["read_only"], true);
+    assert_eq!(l["count"], 1);
+    assert!(l["notes"][0].as_str().unwrap().contains("left out"));
+    // Nothing changes the history until the person decides.
+    for (m, p) in [
+        ("version.create", json!({"name": "x"})),
+        ("version.restore", json!({"id": 2})),
+        ("version.delete", json!({"id": 2})),
+    ] {
+        let e = fail(&mut t, m, p);
+        assert_eq!(
+            (e.kind, e.reason),
+            ("conflict", Some(REASON_HISTORY_READONLY))
+        );
+        assert!(e.details.as_ref().unwrap()["notes"].is_array());
+    }
+    assert_eq!(t.editor.doc().history.as_ref().unwrap().value(), &original);
+    // A save writes it back as it is.
+    let saved = serde_json::to_value(&*t.document_for_save().unwrap()).unwrap();
+    assert_eq!(saved["history"], original);
+    // The repair needs the explicit yes.
+    assert_eq!(fail(&mut t, "version.repair", json!({})).code, -32602);
+    assert_eq!(
+        fail(&mut t, "version.repair", json!({"confirm": false})).code,
+        -32602
+    );
+    ok(&mut t, "events.subscribe", json!({}));
+    let r = ok(&mut t, "version.repair", json!({"confirm": true}));
+    assert_eq!(r["kept"], 1);
+    let ev = &t.take_notifications(LOCAL).last().unwrap()["params"].clone();
+    assert_eq!(ev["op"], "version_repair");
+    assert_eq!(ev["detail"]["repaired"]["kept"], 1);
+    let l = ok(&mut t, "version.list", json!({}));
+    assert_eq!(
+        (l["read_only"].clone(), l["count"].clone()),
+        (json!(false), json!(1))
+    );
+    create(&mut t, "works again");
+    assert_eq!(
+        fail(&mut t, "version.repair", json!({"confirm": true})).kind,
+        "conflict",
+        "nothing left to repair"
+    );
+    // One undo brings the unreadable history back, untouched.
+    assert!(t.editor.undo());
+    assert!(t.editor.undo());
+    assert_eq!(t.editor.doc().history.as_ref().unwrap().value(), &original);
+    assert_eq!(ok(&mut t, "version.list", json!({}))["read_only"], true);
+}
+
+#[test]
+fn a_drawing_that_changed_after_the_versions_were_saved_keeps_the_history_unread() {
+    let mut donor = Session::with_sequential_ids();
+    rect(&mut donor, 0);
+    create(&mut donor, "One");
+    rect(&mut donor, 20);
+    create(&mut donor, "Two");
+    let mut file = serde_json::to_value(&*donor.document_for_save().unwrap()).unwrap();
+    // Another program moved an object and left the history alone.
+    file["objects"][0]["shape"]["min"] = json!([1.0, 0.0]);
+    let original = file["history"].clone();
+    let mut t = Session::with_sequential_ids();
+    let r = ok(&mut t, "document.load", json!({"document": file}));
+    assert!(
+        r["notes"]
+            .to_string()
+            .contains("changed after the versions"),
+        "{r}"
+    );
+    assert_eq!(t.editor.doc().history.as_ref().unwrap().value(), &original);
+    let l = ok(&mut t, "version.list", json!({}));
+    assert_eq!(
+        (l["read_only"].clone(), l["count"].clone()),
+        (json!(true), json!(0))
+    );
+    // The file is saved with the history as it was.
+    let saved = serde_json::to_value(&*t.document_for_save().unwrap()).unwrap();
+    assert_eq!(saved["history"], original);
+}
+
+#[test]
+fn a_history_of_another_form_is_kept_as_it_is() {
+    let mut donor = Session::with_sequential_ids();
+    rect(&mut donor, 0);
+    create(&mut donor, "One");
+    let mut file = serde_json::to_value(&*donor.document_for_save().unwrap()).unwrap();
+    for bad in [json!("nonsense"), json!([1, 2]), json!({"format": 99})] {
+        file["history"] = bad.clone();
+        let mut t = Session::with_sequential_ids();
+        let r = ok(&mut t, "document.load", json!({"document": file.clone()}));
+        assert!(r["notes"].as_array().unwrap().len() >= 2, "{r}");
+        assert_eq!(t.editor.doc().history.as_ref().unwrap().value(), &bad);
+        assert_eq!(ok(&mut t, "version.list", json!({}))["read_only"], true);
+        assert_eq!(
+            serde_json::to_value(&*t.document_for_save().unwrap()).unwrap()["history"],
+            bad
+        );
+    }
+    // The constructor for an opened file checks it too and keeps the history.
+    let mut doc = Document::with_sequential_ids();
+    doc.history = Some(HistoryData::new(json!({"format": 7})));
+    let v = Session::with_document(doc);
+    assert!(v.editor.doc().history.is_some());
+    assert!(!v.load_notes().is_empty());
+}
+
+#[test]
+fn a_change_of_the_history_is_a_document_event_with_a_detail() {
     let mut s = Session::with_sequential_ids();
     ok(&mut s, "events.subscribe", json!({"kinds": ["document"]}));
     rect(&mut s, 0);
@@ -527,32 +738,17 @@ fn a_change_of_the_history_is_a_document_event() {
     let notes = s.take_notifications(LOCAL);
     assert_eq!(notes.len(), 1);
     let p = &notes[0]["params"];
-    assert_eq!(p["op"], "set_history");
+    assert_eq!(p["op"], "version_create");
     assert_eq!(p["document"]["history"], true);
-    ok(&mut s, "version.delete", json!({"id": 1}));
-    assert_eq!(s.take_notifications(LOCAL).len(), 1);
+    assert_eq!(p["detail"]["created"]["name"], "One");
+    ok(&mut s, "version.delete", json!({"ids": [1]}));
+    let notes = s.take_notifications(LOCAL);
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["params"]["detail"]["deleted"][0]["id"], 1);
     ok(&mut s, "undo", json!({}));
-    assert_eq!(s.take_notifications(LOCAL).len(), 1);
-}
-
-#[test]
-fn the_cache_follows_the_document() {
-    let mut s = Session::with_sequential_ids();
-    rect(&mut s, 0);
-    create(&mut s, "One");
-    // Undo and redo change the history without the cache knowing: the next read is right.
-    assert!(s.editor.undo());
-    assert_eq!(ok(&mut s, "version.list", json!({}))["count"], 0);
-    assert!(s.editor.redo());
-    assert_eq!(ok(&mut s, "version.list", json!({}))["count"], 1);
-    // Same JSON in another value hits the cache.
-    let data = s.editor.doc().history.clone().unwrap();
-    assert!(s.review.get(&data).is_some());
-    assert!(
-        s.review
-            .get(&HistoryData::new(json!({"format": 1})))
-            .is_none()
-    );
+    let notes = s.take_notifications(LOCAL);
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0]["params"].get("detail").is_none());
 }
 
 #[test]
@@ -572,10 +768,10 @@ fn describe_lists_the_methods_and_examples() {
         "version.restore",
         "version.delete",
         "version.diff",
+        "version.repair",
     ] {
         assert!(methods.contains(&m), "{m}");
     }
-    // Every example runs against a document that has a version.
     for e in d["review"]["examples"].as_array().unwrap() {
         let mut t = Session::with_sequential_ids();
         rect(&mut t, 0);
@@ -583,13 +779,28 @@ fn describe_lists_the_methods_and_examples() {
         rect(&mut t, 20);
         create(&mut t, "B");
         let r = t.handle(e["method"].as_str().unwrap(), e["params"].clone());
-        match e["method"].as_str().unwrap() {
-            "version.create" | "version.list" | "version.diff" | "version.get"
-            | "version.restore" | "version.delete" => {
-                assert!(r.is_ok(), "{e}: {:?}", r.err().map(|e| e.message))
-            }
-            other => panic!("unexpected example {other}"),
-        }
+        assert!(r.is_ok(), "{e}: {:?}", r.err().map(|e| e.message));
     }
     assert!(d["review"]["local"].as_str().unwrap().contains("REV-09"));
+    // The texts say what an agent must do.
+    let text = |name: &str| {
+        d["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"] == name)
+            .unwrap()["doc"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(text("version.create").contains("Pass this to the person"));
+    assert!(text("version.create").contains("Never delete versions by yourself"));
+    assert!(text("version.restore").contains("ask the person"));
+    assert!(
+        d["review"]["consent"]
+            .as_str()
+            .unwrap()
+            .contains("without the person")
+    );
 }

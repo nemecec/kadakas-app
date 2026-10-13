@@ -104,8 +104,12 @@ fn a_limit_refuses_the_version_and_changes_nothing() {
     let mut h = History::new();
     for i in 0..3 {
         circle(&mut ed, f64::from(i));
-        h.add(ed.doc(), new_version(&format!("v{i}")), limits(3, usize::MAX))
-            .unwrap();
+        h.add(
+            ed.doc(),
+            new_version(&format!("v{i}")),
+            limits(3, usize::MAX),
+        )
+        .unwrap();
     }
     let before = h.clone();
     circle(&mut ed, 50.0);
@@ -115,12 +119,19 @@ fn a_limit_refuses_the_version_and_changes_nothing() {
     let ReviewError::LimitReached(info) = &err else {
         panic!("{err:?}")
     };
-    assert_eq!((info.kind, info.max, info.needed), (LimitKind::Versions, 3, 4));
+    assert_eq!(
+        (info.kind, info.max, info.needed),
+        (LimitKind::Versions, 3, 4)
+    );
     assert_eq!(
         info.versions.iter().map(|v| v.id).collect::<Vec<_>>(),
         vec![1, 2, 3]
     );
-    assert!(info.versions.iter().all(|v| v.bytes > 0 && !v.name.is_empty()));
+    assert!(
+        info.versions
+            .iter()
+            .all(|v| v.bytes > 0 && !v.name.is_empty())
+    );
     assert!(err.to_string().contains("nothing was deleted"), "{err}");
     assert_eq!(h, before, "the history is unchanged");
     // The same for the bytes.
@@ -295,10 +306,17 @@ fn a_file_whose_drawing_changed_cannot_rebuild_the_newest_version() {
         .translate(kadakas_core::DVec2::new(1.0, 0.0));
     let l = History::load(&value, &saved);
     assert!(l.history.is_none());
-    assert!(l.notes[0].contains("changed after the versions"), "{:?}", l.notes);
+    assert!(
+        l.notes[0].contains("changed after the versions"),
+        "{:?}",
+        l.notes
+    );
     // A file form without an anchor fails the same way.
     let mut no_anchor = value.clone();
-    no_anchor["newest"].as_object_mut().unwrap().remove("anchor");
+    no_anchor["newest"]
+        .as_object_mut()
+        .unwrap()
+        .remove("anchor");
     assert!(History::load(&no_anchor, ed.doc()).history.is_none());
 }
 
@@ -336,7 +354,10 @@ fn a_history_that_cannot_be_read_is_reported() {
         assert!(l.history.is_none(), "{bad}");
         assert!(!l.notes.is_empty(), "{bad}");
     }
-    let l = load(&json!({"format": 2, "newest": {"snapshot": []}, "versions": []}), &doc);
+    let l = load(
+        &json!({"format": 2, "newest": {"snapshot": []}, "versions": []}),
+        &doc,
+    );
     assert!(l.history.is_none() && !l.notes.is_empty());
 }
 
@@ -350,7 +371,11 @@ fn a_broken_delta_leaves_out_that_version_and_the_older_ones() {
     x["versions"][1]["delta"] = bad_op.clone();
     let l = load(&x, &doc);
     assert_eq!(l.history.unwrap().len(), 1, "only the newest is left");
-    assert!(l.notes.iter().any(|n| n.contains("left out")), "{:?}", l.notes);
+    assert!(
+        l.notes.iter().any(|n| n.contains("left out")),
+        "{:?}",
+        l.notes
+    );
     let mut x = v.clone();
     x["versions"][0]["delta"] = bad_op;
     assert_eq!(load(&x, &doc).history.unwrap().len(), 2);
@@ -391,7 +416,10 @@ fn texts_ids_parents_and_branches_are_repaired() {
     assert!(l.notes.iter().any(|n| n.contains("repaired")));
     let mut h = h;
     let ed = editor();
-    let id = h.add(ed.doc(), new_version("n"), Limits::default()).unwrap().id;
+    let id = h
+        .add(ed.doc(), new_version("n"), Limits::default())
+        .unwrap()
+        .id;
     assert!(!ids.contains(&id));
 
     // A merge keeps its second parent; the first parent is the version before.
@@ -435,7 +463,11 @@ fn too_many_versions_are_not_all_read_and_say_so() {
     x["versions"] = json!(many);
     let l = load(&x, &doc);
     assert_eq!(l.history.unwrap().len(), HARD_MAX_VERSIONS);
-    assert!(l.notes.iter().any(|n| n.contains("only the newest")), "{:?}", l.notes);
+    assert!(
+        l.notes.iter().any(|n| n.contains("only the newest")),
+        "{:?}",
+        l.notes
+    );
 }
 
 #[test]

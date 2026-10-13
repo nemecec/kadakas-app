@@ -2,13 +2,22 @@
 //! the document and the diff between versions.
 //!
 //! Methods: `version.create`, `version.list`, `version.get`, `version.restore`, `version.delete`,
-//! `version.diff`.
+//! `version.diff`, `version.repair`.
 //!
 //! The logic is in `kadakas-review`. This module reads and writes the history in the document
 //! (`Document::history`, opaque JSON for the core) through the editor, so every change is one undo
-//! step and one change set (`document.history`). A parsed history is cached by the identity of
-//! its JSON, so a read does not parse the file again.
+//! step and one change set (`document.history`, with the versions that it made or deleted in
+//! `detail`). A parsed history is cached by the identity of its JSON, so a read does not parse the
+//! file again.
+//!
+//! **No version is dropped without the consent of the person.** The limits (`max_versions`,
+//! `max_version_bytes`) stop a save with an error that lists the versions. A history that could
+//! not be read completely is kept as it is and is read only (`version.repair` is the explicit
+//! choice to keep only the readable part). While a file is open, the history in the document is in
+//! the self contained memory form. A save writes the file form: the newest version as a change
+//! from the drawing (see `Session::document_for_save`).
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
@@ -16,11 +25,11 @@ use serde_json::{Map, Value, json};
 use kadakas_core::history::HistoryData;
 use kadakas_core::model::Document;
 use kadakas_review::diff::{DEFAULT_LIMIT, DiffOptions, Group, MAX_LIMIT};
-use kadakas_review::history::{AUTHOR_MAX, NAME_MAX, NewVersion};
+use kadakas_review::history::{AUTHOR_MAX, HARD_MAX_BYTES, LimitInfo, NAME_MAX, NewVersion};
 use kadakas_review::restore::{self, without_stacking_keys};
-use kadakas_review::{History, Limits, ReviewError, State};
+use kadakas_review::{History, Limits, ReviewError, State, VersionInfo};
 
-use crate::errors::bad;
+use crate::errors::{REASON_HISTORY_READONLY, REASON_VERSION_LIMIT, bad};
 use crate::{RpcError, Session, SessionLimits};
 
 /// The largest document that `version.get` returns, in bytes of the estimated JSON.
@@ -28,11 +37,11 @@ pub const GET_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 pub const VERSION_CREATE: (&str, &str) = (
     "version.create",
-    "Save the document as a named version. One undo step (undo removes the version again). params: {name, note?, author?, now_ms?}. The version keeps the author (default: the collaboration name, else the origin: user, agent or script), the time, the origin and the editor revision. The oldest versions are folded into the base when the count or the size passes the session limits (max_versions, max_version_bytes). Returns {version, dropped: [ids of versions the limits pushed out], count, bytes}.",
+    "Save the document as a named version. One undo step (undo removes the version again). params: {name, note?, author?, now_ms?}. The version keeps the author (default: the collaboration name, else the origin: user, agent or script), the time, the origin and the editor revision. If the version would go over a limit (max_versions or max_version_bytes of the session), nothing is saved and nothing is deleted: the call fails with a limit error whose data has `limit` {kind: versions|bytes, max, needed}, `versions` [{id, name, bytes, time_ms, auto}] and `options`. Pass this to the person and ask what to do: which versions to delete (version.delete {ids}), or raising the limit in Preferences. Never delete versions by yourself to make room. Fails with a conflict error (reason history_read_only) if the history of the file could not be read completely. Returns {version, count, bytes}.",
 );
 pub const VERSION_LIST: (&str, &str) = (
     "version.list",
-    "The versions, oldest first. params: {current? (false: leave out current_is_newest, which costs a pass over the drawing; default true)}. Returns {notes? (what the check of a history that came from a file repaired), versions: [{id, name, note?, author, time_ms, origin, parents (the IDs of the versions it was made from, first parent first), branch, base_revision, auto?, delta_bytes}], branch (the current branch, default main), head (the version that the next one is made from), count, bytes, limits: {max_versions, max_bytes}, current_is_newest (true: the document has the content of the newest version, null: there is no version)}.",
+    "The versions, oldest first. params: {current? (false: leave out current_is_newest, which costs a pass over the drawing; default true)}. Returns {read_only (true: the history of the file could not be read completely; it is kept as it is until the person decides, see version.repair), notes? (what could not be read), versions: [{id, name, note?, author, time_ms, origin, parents (the IDs of the versions it was made from, first parent first), branch, base_revision, auto?, delta_bytes}], branch (the current branch, default main), head (the version that the next one is made from), count, bytes, limits: {max_versions, max_bytes} (the thresholds at which a save is refused), current_is_newest (true: the document has the content of the newest version, null: there is no version)}.",
 );
 pub const VERSION_GET: (&str, &str) = (
     "version.get",
@@ -40,65 +49,79 @@ pub const VERSION_GET: (&str, &str) = (
 );
 pub const VERSION_RESTORE: (&str, &str) = (
     "version.restore",
-    "Make the document equal to a version. The current state is saved first as an automatic version (not if it equals the newest version), then the content is replaced in one undo step. Undo takes back the restore and also removes the automatic version that this call made; the versions you had stay. params: {id, now_ms?}. The active layer and class stay if they exist. Returns {restored, saved_version: {id, new} or null, dropped, changed, notes (things of the version that did not fit and were left out)}.",
+    "Make the document equal to a version. The current state is saved first as an automatic version (not if it equals the newest version), then the content is replaced in one undo step. Undo takes back the restore and also removes the automatic version that this call made; the versions you had stay. If the automatic version would go over a limit, the call fails as version.create does (nothing changes): ask the person. params: {id, now_ms?}. The active layer and class stay if they exist. Returns {restored, saved_version: {id, new} or null, changed, notes (things of the version that did not fit and were left out)}.",
 );
 pub const VERSION_DELETE: (&str, &str) = (
     "version.delete",
-    "Delete a version. One undo step. The other versions keep their content. params: {id}. Returns {deleted, count}.",
+    "Delete versions that the person chose. One undo step (undo brings them back). The other versions keep their content. params: {id} or {ids: [id]}. Nothing is deleted if one of the IDs does not exist. Returns {deleted: [{id, name, bytes, time_ms, auto}], count}; the change event names the deleted versions in `detail.deleted`.",
 );
 pub const VERSION_DIFF: (&str, &str) = (
     "version.diff",
-    "Compare two versions, or a version and the current document. params: {from, to (a version ID or \"current\"), kinds? (objects, layers, classes, resources, document; default all), limit? (most things listed, default 100, at most 1000)}. Returns {from, to, counts: {<kind>: {added, removed, changed}}, totals, truncated (more things than listed), exact (false: the work limit stopped the diff and the counts are partial), objects|layers|classes|resources|document: {added: [{id, ...}], removed: [{id, ...}], changed: [{id, ..., properties: [{path, old?, new?}], properties_truncated?}]}}. Property paths are those of collaboration (shape, attrs.pen, data.<key>, drawing.project.name, order = stacking). A value longer than 160 characters is {cut, len, hash}.",
+    "Compare two versions, or a version and the current document. params: {from, to (a version ID or \"current\"), kinds? (objects, layers, classes, resources, document; default all), limit? (most things listed, default 100, at most 1000)}. Returns {from, to, counts: {<kind>: {added, removed, changed}}, totals, truncated (more things than listed), exact (false: the work limit stopped the diff and the counts are partial), objects|layers|classes|resources|document: {added: [{id, ...}], removed: [{id, ...}], changed: [{id, ..., properties: [{path, old?, new?}], properties_truncated?}]}}. Property paths are those of collaboration (shape, attrs.pen, data.<key>, drawing.project.name). order is the stacking position among the things that both sides have on the layer, and it is listed only for a thing that moved. A value longer than 160 characters is {cut, len, hash}.",
+);
+pub const VERSION_REPAIR: (&str, &str) = (
+    "version.repair",
+    "Keep only the part of the history that could be read. A file whose history could not be read completely (a damaged part, more than 1000 versions, a drawing that was changed by a program that did not update the versions) is opened as it is, and the history is read only: no version is changed or lost until the person decides. This call is that decision and it loses the versions that could not be read: call it only when the person has said so. params: {confirm: true}. One undo step. Returns {kept, notes (what was left out)}.",
 );
 
 pub fn describe() -> Value {
     json!({
-        "model": "A version is a named state of the whole document: objects, layers, classes, resources, drawing data and georeference. The file keeps the first version as a full snapshot and each later one as a list of property changes (the property model of collaboration), so many small edits cost little. The caps on the count and the size drop the oldest versions first and fold them into the snapshot.",
+        "model": "A version is a named state of the whole document: objects, layers, classes, resources, drawing data and georeference. The file keeps the newest version as a change from the current drawing and every older version as a reverse delta from the next newer one (the property model of collaboration), so many small edits cost little and the drawing is the only full copy. Pictures are stored once, by hash.",
+        "consent": "No version is deleted or merged without the person. The limits (max_versions, max_version_bytes) are thresholds: a save over one is refused with the list of versions (code 6, data.kind limit, reason version_limit), and you pass the list to the person. A history that could not be read completely is kept as it is and is read only (code 5, reason history_read_only) until the person chooses version.repair.",
         "local": "Versions belong to the file. Collaboration does not share them: joining a shared document keeps your versions, and the other users have their own. Shared versions are planned (REV-09). The active layer and class, the order of classes and resources, and the history itself are not part of a version.",
-        "events": "version.create, version.delete and version.restore make an events.change with document.history = true (restore also lists the objects, layers, classes and resources it changed, with op \"restore\").",
+        "events": "version.create, version.delete, version.restore and version.repair make an events.change with document.history = true and an op (version_create, version_delete, version_restore, version_repair). The change names what it did in `detail`: {created: {version}}, {deleted: [{id, name, ...}]}, {restored: {id, name}, saved_version}, {repaired: {notes}}. A restore also lists the objects, layers, classes and resources it changed.",
         "examples": [
             {"method": "version.create", "params": {"name": "Concept approved", "note": "Before the client meeting"}},
             {"method": "version.list", "params": {}},
             {"method": "version.diff", "params": {"from": 1, "to": "current", "kinds": ["objects"], "limit": 20}},
             {"method": "version.get", "params": {"id": 1, "document": false}},
             {"method": "version.restore", "params": {"id": 1}},
-            {"method": "version.delete", "params": {"id": 2}}
+            {"method": "version.delete", "params": {"ids": [2]}}
         ],
     })
 }
 
-/// The parsed history of a session and the state of its head version, by the identity of the
+/// What the cache holds for one history.
+struct Cached {
+    serial: u64,
+    /// The reading of the JSON: the whole history, or what could be read.
+    history: Arc<History>,
+    /// What could not be read. While there are notes, the history is read only.
+    notes: Vec<String>,
+}
+
+/// The parsed history of a session and the state of its newest version, by the identity of the
 /// JSON (`HistoryData::serial`: a number, not a comparison of tens of megabytes).
 #[derive(Default)]
 pub struct ReviewCache {
-    cached: Option<(u64, Arc<History>)>,
-    /// The state of the head version, for the serial of the history it was made from.
+    cached: Option<Cached>,
+    /// The state of the newest version, for the serial of the history it was made from.
     tip: Option<(u64, Option<Arc<State>>)>,
-    /// What the last parse of the JSON repaired (a history from a file that was not checked yet).
-    notes: Vec<String>,
-    /// How often the JSON was parsed, and how often the head state was rebuilt by replay. Tests
+    /// How often the JSON was parsed, and how often the newest state was rebuilt by replay. Tests
     /// count them.
     pub(crate) parses: u32,
     pub(crate) replays: u32,
 }
 
 impl ReviewCache {
-    fn get(&self, data: &HistoryData) -> Option<Arc<History>> {
-        self.cached
-            .as_ref()
-            .filter(|(serial, _)| *serial == data.serial())
-            .map(|(_, h)| h.clone())
+    /// Keeps a history that is the parsed form of this JSON.
+    fn keep(&mut self, data: &HistoryData, history: Arc<History>, notes: Vec<String>) {
+        self.cached = Some(Cached {
+            serial: data.serial(),
+            history,
+            notes,
+        });
+        self.tip = None;
     }
 
-    /// Keeps a history that is the parsed form of this JSON.
-    fn keep(&mut self, data: &HistoryData, h: Arc<History>) {
-        self.cached = Some((data.serial(), h));
+    fn forget(&mut self) {
+        self.cached = None;
         self.tip = None;
     }
 }
 
 impl SessionLimits {
-    /// The caps of the history.
+    /// The thresholds of the history.
     pub fn version_limits(&self) -> Limits {
         Limits {
             max_versions: self.max_versions,
@@ -107,50 +130,123 @@ impl SessionLimits {
     }
 }
 
-/// Checks the history of a document that comes from a file or a peer, and repairs or drops what
-/// does not fit. Each repair is a load note of the document.
-pub fn vet_document(doc: &mut Document, limits: &SessionLimits) {
+/// Checks the history of a document that comes from a file or a peer. It does not change the
+/// history in the file: a history that could not be read completely stays as it is, and every
+/// problem is a load note of the document (the history is then read only). A history in the file
+/// form is read now, while the drawing is as it was saved, and replaced by its self contained
+/// memory form, which has the same versions.
+pub fn vet_document(doc: &mut Document) {
     let Some(data) = doc.history.clone() else {
         return;
     };
-    let loaded = History::load(data.value(), limits.version_limits());
-    if loaded.notes.is_empty() {
+    let (history, notes) = read_history(doc, &data);
+    if notes.is_empty() {
+        if let Some(h) = history
+            && data.value()["newest"].get("snapshot").is_none()
+        {
+            doc.history = Some(HistoryData::new(h.to_value()));
+        }
         return;
     }
-    doc.history = loaded.history.map(|h| HistoryData::new(h.to_value()));
-    for n in loaded.notes {
+    for n in notes {
         doc.add_load_note(n);
     }
+    doc.add_load_note(
+        "The versions of this file are kept as they are and are read only until you choose to keep only the part that could be read."
+            .into(),
+    );
+}
+
+/// Reads a history. Returns the history that could be read, and what could not.
+fn read_history(doc: &Document, data: &HistoryData) -> (Option<History>, Vec<String>) {
+    if let Some(problem) = data.problem() {
+        return (None, vec![problem]);
+    }
+    if data.bytes() > HARD_MAX_BYTES * 2 {
+        return (
+            None,
+            vec![format!(
+                "the history of versions has {} bytes, more than is read: it is kept as it is and read only",
+                data.bytes()
+            )],
+        );
+    }
+    let loaded = History::load(data.value(), doc);
+    (loaded.history, loaded.notes)
 }
 
 fn limit_error(e: ReviewError) -> RpcError {
     match e {
         ReviewError::NotFound(_) => RpcError::not_found(e),
-        ReviewError::TooLarge { .. } | ReviewError::Disabled => RpcError::limit(e),
+        ReviewError::Disabled => RpcError::limit(e),
+        ReviewError::LimitReached(info) => limit_reached(&info),
         ReviewError::Invalid(_) => RpcError::validation(e),
         ReviewError::Damaged(_) => RpcError::app(e),
     }
 }
 
-/// The history of the open document (an empty one if there is none).
-fn history(s: &mut Session) -> Result<Arc<History>, RpcError> {
+fn version_json(v: &VersionInfo) -> Value {
+    json!({"id": v.id, "name": v.name, "bytes": v.bytes, "time_ms": v.time_ms, "auto": v.auto})
+}
+
+/// The error of a save that would go over a limit. The data lists the versions and the choices.
+fn limit_reached(info: &LimitInfo) -> RpcError {
+    RpcError::limit(info)
+        .with_reason(REASON_VERSION_LIMIT)
+        .with_details(json!({
+            "limit": {"kind": info.kind, "max": info.max, "needed": info.needed},
+            "versions": info.versions.iter().map(version_json).collect::<Vec<_>>(),
+            "options": [
+                {"action": "delete", "how": "Ask the person which versions to delete, then call version.delete {ids}. Any versions can be chosen, not only the oldest."},
+                {"action": "raise_limit", "how": "The person raises the limit in Preferences (most versions, most size of versions). Then save again."}
+            ],
+            "ask_the_person": true,
+        }))
+}
+
+/// The history of the open document (an empty one if there is none) and what could not be read.
+/// A history with notes is read only.
+fn read(s: &mut Session) -> Arc<History> {
     let Some(data) = s.editor.doc().history.clone() else {
-        return Ok(Arc::new(History::new()));
+        s.review.forget();
+        return Arc::new(History::new());
     };
-    if let Some(h) = s.review.get(&data) {
-        return Ok(h);
+    if let Some(c) = &s.review.cached
+        && c.serial == data.serial()
+    {
+        return c.history.clone();
     }
-    let loaded = History::load(data.value(), s.limits.version_limits());
+    let (history, notes) = read_history(s.editor.doc(), &data);
     s.review.parses += 1;
-    // A history that was not checked at load (the lazy path of a host that put the document in
-    // the editor itself) keeps what the check repaired: `version.list` reports it.
-    s.review.notes = loaded.notes;
-    let h = Arc::new(loaded.history.unwrap_or_default());
-    s.review.keep(&data, h.clone());
+    let h = Arc::new(history.unwrap_or_default());
+    s.review.keep(&data, h.clone(), notes);
+    h
+}
+
+/// What could not be read of the history of the open document. Empty: the reading is the whole
+/// file and the history can be changed.
+fn notes(s: &Session) -> &[String] {
+    s.review.cached.as_ref().map_or(&[], |c| &c.notes)
+}
+
+/// The history, for a call that changes it: refused while the history is read only.
+fn writable(s: &mut Session) -> Result<Arc<History>, RpcError> {
+    let h = read(s);
+    if s.editor.doc().history.is_some() && !notes(s).is_empty() {
+        return Err(read_only_error(notes(s)));
+    }
     Ok(h)
 }
 
-/// The state of the head version, from the cache if the history is the same. One replay of the
+fn read_only_error(notes: &[String]) -> RpcError {
+    RpcError::conflict(
+        "the history of versions of this file could not be read completely. It is kept as it is and is read only: no version is saved, restored or deleted until the person chooses to keep only the part that could be read (version.repair {confirm: true}), which loses the versions that could not be read",
+    )
+    .with_reason(REASON_HISTORY_READONLY)
+    .with_details(json!({"notes": notes, "ask_the_person": true}))
+}
+
+/// The state of the newest version, from the cache if the history is the same. One replay of the
 /// history for each new history, however often the window or an agent asks.
 fn tip(s: &mut Session, h: &History) -> Result<Option<Arc<State>>, RpcError> {
     let serial = s
@@ -171,17 +267,51 @@ fn tip(s: &mut Session, h: &History) -> Result<Option<Arc<State>>, RpcError> {
 }
 
 /// Writes a history into the document as one undo step, and keeps its parsed form.
-fn store(s: &mut Session, h: &History) {
-    s.review.notes.clear();
+fn store(s: &mut Session, h: &History, op: &str, detail: Value) {
     if h.is_empty() {
-        s.editor.set_history(None);
-        s.review.cached = None;
-        s.review.tip = None;
+        s.editor.set_history_with(None, op, Some(detail));
+        s.review.forget();
         return;
     }
-    s.editor.set_history(Some(HistoryData::new(h.to_value())));
+    s.editor
+        .set_history_with(Some(HistoryData::new(h.to_value())), op, Some(detail));
     if let Some(data) = s.editor.doc().history.clone() {
-        s.review.keep(&data, Arc::new(h.clone()));
+        s.review.keep(&data, Arc::new(h.clone()), Vec::new());
+    }
+}
+
+impl Session {
+    /// The document as a save writes it. Without versions it is the document. With versions it is
+    /// a copy in which the history is in the file form: the newest version as a change from the
+    /// drawing, the pictures that the drawing holds not repeated, and the stacking keys of the
+    /// drawing written into its objects and layers, so that the file gives the versions back
+    /// when it is read. A history that could not be read completely is written as it is.
+    pub fn document_for_save(&mut self) -> Result<Cow<'_, Document>, RpcError> {
+        if self.editor.doc().history.is_none() {
+            return Ok(Cow::Borrowed(self.editor.doc()));
+        }
+        let h = read(self);
+        if !notes(self).is_empty() || h.is_empty() {
+            return Ok(Cow::Borrowed(self.editor.doc()));
+        }
+        let Some(tip) = tip(self, &h)? else {
+            return Ok(Cow::Borrowed(self.editor.doc()));
+        };
+        let (value, state) = h.to_disk(self.editor.doc(), &tip);
+        let mut out = self.editor.doc().clone();
+        state.stamp_keys(&mut out);
+        out.history = Some(HistoryData::new(value));
+        Ok(Cow::Owned(out))
+    }
+
+    /// Puts a loaded document into the editor of this session, with its history checked (see
+    /// `vet_document`), without the other changes that `replace_document` makes. For a host that
+    /// starts a session with a file.
+    pub fn adopt_document(&mut self, mut doc: Document) {
+        vet_document(&mut doc);
+        self.load_notes = doc.load_notes().to_vec();
+        self.editor = kadakas_core::command::Editor::new(doc);
+        self.review = ReviewCache::default();
     }
 }
 
@@ -260,6 +390,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
             | "version.restore"
             | "version.delete"
             | "version.diff"
+            | "version.repair"
     ) {
         return None;
     }
@@ -273,6 +404,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
         "version.get" => get(s, m),
         "version.restore" => restore_version(s, m),
         "version.delete" => delete(s, m),
+        "version.repair" => repair(s, m),
         _ => diff(s, m),
     })
 }
@@ -288,14 +420,14 @@ fn create(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         base_revision: s.editor.revision(),
         auto: false,
     };
-    let mut h = (*history(s)?).clone();
+    let mut h = (*writable(s)?).clone();
     let added = h
         .add(s.editor.doc(), new, s.limits.version_limits())
         .map_err(limit_error)?;
-    store(s, &h);
+    let version = meta_json(&h, added.id);
+    store(s, &h, "version_create", json!({"created": version}));
     Ok(json!({
-        "version": meta_json(&h, added.id),
-        "dropped": added.dropped,
+        "version": version,
         "count": h.len(),
         "bytes": h.bytes(),
     }))
@@ -307,10 +439,12 @@ fn list(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad("current must be true or false")),
     };
-    let h = history(s)?;
+    let h = read(s);
     let versions: Vec<Value> = h.versions().map(|v| meta_json(&h, v.id)).collect();
     let l = s.limits.version_limits().clamped();
+    let read_only = s.editor.doc().history.is_some() && !notes(s).is_empty();
     let mut out = json!({
+        "read_only": read_only,
         "versions": versions,
         "count": h.len(),
         "bytes": h.bytes(),
@@ -326,8 +460,8 @@ fn list(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             Some(t) => json!(State::of(s.editor.doc(), Some(&t)) == *t),
         };
     }
-    if !s.review.notes.is_empty() {
-        out["notes"] = json!(s.review.notes);
+    if read_only {
+        out["notes"] = json!(notes(s));
     }
     Ok(out)
 }
@@ -339,7 +473,7 @@ fn get(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad("document must be true or false")),
     };
-    let h = history(s)?;
+    let h = read(s);
     let state = h.state_of(id).map_err(limit_error)?;
     let things = json!({
         "objects": state.count(Group::Objects),
@@ -380,7 +514,7 @@ fn get(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
 
 fn restore_version(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let id = version_id(m, "id")?;
-    let h = history(s)?;
+    let h = writable(s)?;
     let name = h
         .meta(id)
         .map(|v| v.name.clone())
@@ -400,34 +534,79 @@ fn restore_version(s: &mut Session, m: &Map<String, Value>) -> Result<Value, Rpc
     };
     let r = restore::prepare(&h, s.editor.doc(), id, auto, s.limits.version_limits())
         .map_err(limit_error)?;
+    let saved = r.saved.map(|(id, new)| json!({"id": id, "new": new}));
+    let detail = json!({"restored": {"id": id, "name": name}, "saved_version": saved});
     let changed = s
         .editor
-        .restore_content(&r.doc, Some(HistoryData::new(r.history.to_value())))
+        .restore_content_with(
+            &r.doc,
+            Some(HistoryData::new(r.history.to_value())),
+            "version_restore",
+            Some(detail),
+        )
         .map_err(RpcError::from)?;
-    s.review.notes.clear();
     match s.editor.doc().history.clone() {
-        Some(d) => s.review.keep(&d, Arc::new(r.history.clone())),
-        None => {
-            s.review.cached = None;
-            s.review.tip = None;
-        }
+        Some(d) => s.review.keep(&d, Arc::new(r.history.clone()), Vec::new()),
+        None => s.review.forget(),
     }
     s.prune_selection();
     Ok(json!({
         "restored": id,
-        "saved_version": r.saved.map(|(id, new)| json!({"id": id, "new": new})),
-        "dropped": r.dropped,
+        "saved_version": saved,
         "changed": changed,
         "notes": r.notes,
     }))
 }
 
 fn delete(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
-    let id = version_id(m, "id")?;
-    let mut h = (*history(s)?).clone();
-    h.remove(id).map_err(limit_error)?;
-    store(s, &h);
-    Ok(json!({"deleted": id, "count": h.len()}))
+    let ids: Vec<u64> = match (m.get("ids"), m.get("id")) {
+        (Some(Value::Array(list)), None) => list
+            .iter()
+            .map(|v| v.as_u64().ok_or_else(|| bad("ids are numbers of versions")))
+            .collect::<Result<_, _>>()?,
+        (None, Some(_)) => vec![version_id(m, "id")?],
+        _ => return Err(bad("give id (a version) or ids (a list of versions)")),
+    };
+    if ids.is_empty() {
+        return Err(bad("ids must name at least one version"));
+    }
+    let mut h = (*writable(s)?).clone();
+    let gone = h.remove_many(&ids).map_err(limit_error)?;
+    let deleted: Vec<Value> = gone.iter().map(version_json).collect();
+    store(s, &h, "version_delete", json!({"deleted": deleted}));
+    Ok(json!({"deleted": deleted, "count": h.len()}))
+}
+
+fn repair(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    if m.get("confirm") != Some(&Value::Bool(true)) {
+        return Err(bad(
+            "version.repair loses the versions that could not be read. Ask the person, and pass confirm: true only if they agree",
+        ));
+    }
+    let h = read(s);
+    let reasons = notes(s).to_vec();
+    if s.editor.doc().history.is_none() || reasons.is_empty() {
+        return Err(RpcError::conflict(
+            "the history of this file was read completely: there is nothing to repair",
+        ));
+    }
+    let detail = json!({"repaired": {"notes": reasons, "kept": h.len()}});
+    let kept = h.len();
+    if h.is_empty() {
+        s.editor
+            .set_history_with(None, "version_repair", Some(detail));
+        s.review.forget();
+    } else {
+        s.editor.set_history_with(
+            Some(HistoryData::new(h.to_value())),
+            "version_repair",
+            Some(detail),
+        );
+        if let Some(data) = s.editor.doc().history.clone() {
+            s.review.keep(&data, h.clone(), Vec::new());
+        }
+    }
+    Ok(json!({"kept": kept, "notes": reasons}))
 }
 
 /// A side of a diff: a version ID or "current".
@@ -491,7 +670,7 @@ fn diff(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             .map(|n| usize::try_from(n).unwrap_or(usize::MAX).min(MAX_LIMIT))
             .ok_or_else(|| bad("limit must be a whole number"))?,
     };
-    let h = history(s)?;
+    let h = read(s);
     let tip_state = if matches!(from, Side::Current) || matches!(to, Side::Current) {
         tip(s, &h)?
     } else {

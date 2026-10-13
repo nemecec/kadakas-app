@@ -2,10 +2,10 @@
 //!
 //! Core only holds the history and moves it with the document: it is saved in the field `history`
 //! of the file, it is one value in the undo steps (a cheap clone), and a change of it is one undo
-//! step (`Editor::set_history`). What the history means (versions, base snapshot, deltas) is
-//! the business of `kadakas-review`, which reads and writes the JSON. Core does one thing with
-//! it: at load, a history that is not a JSON object or is too big is dropped with a note, so a
-//! hostile file cannot make the process hold gigabytes in a field that nobody checks.
+//! step (`Editor::set_history`). What the history means (versions, reverse deltas) is the
+//! business of `kadakas-review`, which reads and writes the JSON. Core does one thing with it: at
+//! load, a history that is not a JSON object or is too big gets a note. It is not dropped: the
+//! versions of a file belong to the person, and the history is written back as it is.
 //!
 //! The history is local to the file. It is not part of the shared properties of collaboration.
 
@@ -15,7 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 /// The most bytes (of JSON) that the history of a loaded file may have. A history above it is
-/// dropped at load. `kadakas-review` keeps the history far below this with its own caps.
+/// noted at load (the history is kept, and read only). `kadakas-review` reads far less than this.
 pub const MAX_HISTORY_BYTES: usize = 512 * 1024 * 1024;
 
 /// The history as JSON, shared: a clone is cheap, and the check of equality stops at once for the
@@ -76,10 +76,13 @@ impl HistoryData {
     /// Why the history cannot stay in a document, if it cannot.
     pub fn problem(&self) -> Option<String> {
         if !self.value.is_object() {
-            Some("the history of versions was not a JSON object and was dropped".into())
+            Some(
+                "the history of versions is not a JSON object: it is kept as it is and read only"
+                    .into(),
+            )
         } else if self.bytes > MAX_HISTORY_BYTES {
             Some(format!(
-                "the history of versions had {} bytes, the limit is {MAX_HISTORY_BYTES}: it was dropped",
+                "the history of versions has {} bytes, more than {MAX_HISTORY_BYTES}: it is kept as it is and read only",
                 self.bytes
             ))
         } else {

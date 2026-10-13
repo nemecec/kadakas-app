@@ -91,7 +91,7 @@ pub fn file_call(
         .check_path(Path::new(path), saving, &DOC_EXTS)
         .map_err(RpcError::policy)?;
     if saving {
-        let text = document_text(s.editor.doc())?;
+        let text = document_text(&*s.document_for_save()?)?;
         write(&p, text.as_bytes()).map_err(RpcError::app)?;
         s.collab_mark_saved();
         s.doc_dir = dir_of(&p);
@@ -119,7 +119,9 @@ pub fn file_reply(id: Value, result: Result<FileDone, RpcError>) -> String {
             json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true, "notes": notes}}).to_string()
         }
         Ok(_) => json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}}).to_string(),
-        Err(e) => crate::errors::error_response(id, e.code, e.kind, &e.message),
+        Err(e) => {
+            crate::errors::error_response_with(id, e.code, e.kind, &e.message, e.details.as_ref())
+        }
     }
 }
 
