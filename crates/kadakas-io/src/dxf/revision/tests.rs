@@ -263,7 +263,7 @@ fn types_and_scopes_never_mix() {
     let mut circle = ent("CIRCLE", &[(8, s("A")), (10, s(1)), (20, s(0)), (40, s(3))]);
     let b = Rec::from_entity(&circle, MODEL);
     let d = diff(
-        &[a.clone()],
+        std::slice::from_ref(&a),
         &[b],
         &Options {
             tolerance: 100.0,
@@ -488,14 +488,18 @@ fn bad_numbers_and_options_do_not_panic() {
             &[huge.clone(), ok.clone(), nan.clone()],
             &o,
         );
-        assert_eq!(d.entries.len() >= 3, true);
+        assert!(d.entries.len() >= 3);
     }
     // The automatic tolerance has nothing to work with.
     let none = Rec {
         kind: "X".into(),
         ..Rec::default()
     };
-    let d = diff(&[none.clone()], &[none], &Options::default());
+    let d = diff(
+        std::slice::from_ref(&none),
+        std::slice::from_ref(&none),
+        &Options::default(),
+    );
     assert_eq!((d.tolerance, d.counts.unchanged), (0.0, 1));
 }
 

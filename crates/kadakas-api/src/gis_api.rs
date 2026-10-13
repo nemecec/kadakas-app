@@ -156,7 +156,7 @@ enum Outcome {
     Map(Box<MapJob>),
     Features {
         fetched: wfs::Fetched,
-        options: ImportOptions,
+        options: Box<ImportOptions>,
     },
 }
 
@@ -947,7 +947,10 @@ impl Session {
                 caps.as_ref(),
                 doc_crs.as_ref().map(|(c, g)| (c, g)),
             )?;
-            Ok(Outcome::Features { fetched, options })
+            Ok(Outcome::Features {
+                fetched,
+                options: Box::new(options),
+            })
         })
     }
 
