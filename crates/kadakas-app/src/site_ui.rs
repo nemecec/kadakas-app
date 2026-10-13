@@ -614,7 +614,16 @@ mod tests {
         let mut grade = ModifierKind::GradeLimit;
         let _ = ctx.run_ui(Default::default(), |ui| {
             egui::Grid::new("g").show(ui, |ui| {
-                assert!(!model_fields(ui, 3, 0, &mut settings));
+                assert!(!model_fields(ui, 3, 0, &mut settings, &[]));
+                // Every look draws its rows without an edit.
+                let mats = [(ResourceId::from_num(3), "Grass".to_string())];
+                for look in SurfaceLook::ALL {
+                    settings.surface_look = look;
+                    settings.texture = Some(ResourceId::from_num(3));
+                    settings.elevation_range = Some([0.0, 100.0]);
+                    assert!(!model_fields(ui, 3, 0, &mut settings, &mats));
+                }
+                settings = SiteSettings::default();
                 let b = kadakas_core::curve::corners(&[
                     glam::DVec2::ZERO,
                     glam::DVec2::X * 1000.0,

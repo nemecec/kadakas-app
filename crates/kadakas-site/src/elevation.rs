@@ -56,7 +56,7 @@ pub fn range_of(settings: &SiteSettings, vertices: &[DVec3]) -> Option<(f64, f64
 /// last band. A flat range gives band 0.
 pub fn band_of(z: f64, lo: f64, hi: f64, bands: u32) -> usize {
     let n = bands.max(1) as usize;
-    if !(hi > lo) || !z.is_finite() {
+    if hi <= lo || !(z.is_finite() && lo.is_finite() && hi.is_finite()) {
         return 0;
     }
     let t = ((z - lo) / (hi - lo)).clamp(0.0, 1.0);
