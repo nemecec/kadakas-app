@@ -1042,6 +1042,10 @@ pub struct Document {
     /// Sheets, project data and saved views. Older files have none.
     #[serde(default, skip_serializing_if = "crate::sheets::Drawing::is_empty")]
     pub drawing: crate::sheets::Drawing,
+    /// The named versions of this file (REV-01), as JSON that `kadakas-review` reads. It is local
+    /// to the file: collaboration does not share it. Older files have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<crate::history::HistoryData>,
     /// The generator of new IDs (see `crate::uid`). It is not saved.
     #[serde(skip)]
     ids: IdGen,
@@ -1064,6 +1068,7 @@ impl PartialEq for Document {
             && self.georef == other.georef
             && self.resources == other.resources
             && self.drawing == other.drawing
+            && self.history == other.history
             && self.extra == other.extra
             && self.objects.len() == other.objects.len()
             && self.objects.iter().eq(other.objects.iter())
@@ -1131,6 +1136,7 @@ impl Default for Document {
             georef: None,
             resources: Resources::default(),
             drawing: Default::default(),
+            history: None,
             ids: IdGen::default(),
             load_notes: Vec::new(),
             extra: Default::default(),
@@ -1236,6 +1242,11 @@ impl Document {
         &self.load_notes
     }
 
+    /// Adds a note about a repair that a host made after the load (see `load_notes`).
+    pub fn add_load_note(&mut self, note: String) {
+        self.load_notes.push(note);
+    }
+
     pub fn validate(&mut self) -> Result<(), String> {
         // A bad value in the 3D look of a site model (from a hand-edited file or a newer
         // version) must not make the file unreadable: the look goes back to its defaults.
@@ -1258,6 +1269,10 @@ impl Document {
                     *settings = fixed;
                 }
             }
+        }
+        if let Some(problem) = self.history.as_ref().and_then(|h| h.problem()) {
+            notes.push(problem);
+            self.history = None;
         }
         self.load_notes = notes;
         let mut seen = std::collections::HashSet::new();

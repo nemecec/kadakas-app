@@ -2,7 +2,7 @@
 //! agents all send the same commands, so every change is undoable and
 //! scriptable.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use glam::DVec2;
 use indexmap::IndexMap;
@@ -591,6 +591,7 @@ struct Meta {
     active_layer: LayerId,
     active_class: ClassId,
     georef: Option<crate::georef::Georeference>,
+    history: Option<crate::history::HistoryData>,
 }
 
 impl Command {
@@ -625,6 +626,7 @@ impl Meta {
             active_layer: doc.active_layer,
             active_class: doc.active_class,
             georef: doc.georef.clone(),
+            history: doc.history.clone(),
         }
     }
 
@@ -636,6 +638,7 @@ impl Meta {
         doc.active_layer = self.active_layer;
         doc.active_class = self.active_class;
         doc.georef = self.georef.clone();
+        doc.history = self.history.clone();
     }
 
     fn is_finite(&self) -> bool {
@@ -698,7 +701,11 @@ impl Meta {
                 _ => serde_json::to_vec(r).map_or(META_PART_BYTES, |v| v.len() as u64),
             })
             .sum();
-        (self.layers.len() + self.classes.len()) as u64 * META_PART_BYTES + resources + 512
+        let history = self.history.as_ref().map_or(0, |h| h.bytes() as u64);
+        (self.layers.len() + self.classes.len()) as u64 * META_PART_BYTES
+            + resources
+            + history
+            + 512
     }
 }
 
@@ -748,6 +755,7 @@ impl Patch {
                 active_class: old.active_class != new.active_class,
                 georef: old.georef != new.georef,
                 drawing: old.drawing != new.drawing,
+                history: old.history != new.history,
             };
         }
         ChangeSet {
@@ -840,6 +848,31 @@ fn insert_at(objects: &mut Objects, items: &[(usize, Object)]) {
 fn unique(ids: &[ObjectId]) -> Vec<ObjectId> {
     let mut seen = HashSet::with_capacity(ids.len());
     ids.iter().copied().filter(|id| seen.insert(*id)).collect()
+}
+
+/// The items of the longest run that is increasing in the second field. Items are in the order of
+/// the first list. O(n log n).
+fn longest_increasing(items: &[(ObjectId, usize)]) -> Vec<ObjectId> {
+    // tails[k]: the index of the item that ends the best run of length k + 1.
+    let mut tails: Vec<usize> = Vec::new();
+    let mut prev: Vec<Option<usize>> = vec![None; items.len()];
+    for (i, (_, p)) in items.iter().enumerate() {
+        let k = tails.partition_point(|t| items[*t].1 < *p);
+        prev[i] = k.checked_sub(1).map(|j| tails[j]);
+        if k == tails.len() {
+            tails.push(i);
+        } else {
+            tails[k] = i;
+        }
+    }
+    let mut out = Vec::new();
+    let mut at = tails.last().copied();
+    while let Some(i) = at {
+        out.push(items[i].0);
+        at = prev[i];
+    }
+    out.reverse();
+    out
 }
 
 /// Turns indices in the current object list into indices before earlier
@@ -985,6 +1018,54 @@ impl<'a> Tx<'a> {
         } else if !ids.is_empty() {
             let gone: HashSet<ObjectId> = ids.into_iter().collect();
             self.doc.objects.retain(|id, _| !gone.contains(id));
+        }
+    }
+
+    /// Makes the objects and the settings of the document equal to those of `target` (see
+    /// `Editor::restore_content`). An object that is gone, changed or out of place in the z-order
+    /// is removed and put back where `target` has it; the others stay.
+    fn replace_content(&mut self, target: &Document) {
+        let cur_ids: Vec<ObjectId> = self.doc.objects.keys().copied().collect();
+        // The objects that keep their place: the longest run of the current order that is also in
+        // the order of `target`, among the objects that did not change.
+        let pos: HashMap<ObjectId, usize> = target
+            .objects
+            .keys()
+            .enumerate()
+            .map(|(i, id)| (*id, i))
+            .collect();
+        let same: Vec<(ObjectId, usize)> = cur_ids
+            .iter()
+            .filter_map(|id| {
+                let p = *pos.get(id)?;
+                (self.doc.objects.get(id) == target.objects.get(id)).then_some((*id, p))
+            })
+            .collect();
+        let keep: HashSet<ObjectId> = longest_increasing(&same).into_iter().collect();
+        let remove: Vec<ObjectId> = cur_ids
+            .iter()
+            .copied()
+            .filter(|id| !keep.contains(id))
+            .collect();
+        self.remove_objects(remove);
+        for (i, (id, o)) in target.objects.iter().enumerate() {
+            if !keep.contains(id) {
+                self.doc.objects.shift_insert(i, *id, o.clone());
+                self.added.push(*id);
+                self.added_set.insert(*id);
+            }
+        }
+        let doc = &mut *self.doc;
+        doc.layers = target.layers.clone();
+        doc.classes = target.classes.clone();
+        doc.resources = target.resources.clone();
+        doc.drawing = target.drawing.clone();
+        doc.georef = target.georef.clone();
+        if doc.layer(doc.active_layer).is_none() {
+            doc.active_layer = target.active_layer;
+        }
+        if doc.class(doc.active_class).is_none() {
+            doc.active_class = target.active_class;
         }
     }
 
@@ -1766,10 +1847,23 @@ impl Editor {
     /// Runs a command as one undo step. On error the document is unchanged.
     pub fn execute(&mut self, cmd: &Command) -> Result<Outcome, CommandError> {
         self.check_pictures(cmd)?;
+        self.transact(
+            || change::op_name(cmd).unwrap_or_else(|| "command".into()),
+            |tx, out| tx.run(cmd, out),
+        )
+    }
+
+    /// Runs `body` on a transaction as one undo step. The name of the step is made only when the
+    /// step changed something.
+    fn transact(
+        &mut self,
+        op: impl FnOnce() -> String,
+        body: impl FnOnce(&mut Tx, &mut Outcome) -> Result<(), CommandError>,
+    ) -> Result<Outcome, CommandError> {
         let meta_before = Meta::of(&self.doc);
         let mut tx = Tx::new(&mut self.doc);
         let mut out = Outcome::default();
-        let result = tx.run(cmd, &mut out).and_then(|()| tx.check_result());
+        let result = body(&mut tx, &mut out).and_then(|()| tx.check_result());
         let patch = tx.finish(meta_before);
         let result = result.and_then(|()| match &patch.meta {
             Some((_, after)) if !after.is_finite() => Err(CommandError::Invalid(NOT_FINITE.into())),
@@ -1779,9 +1873,8 @@ impl Editor {
             Ok(()) => {
                 if !patch.is_empty() {
                     self.revision = next_revision();
-                    let op = change::op_name(cmd).unwrap_or_else(|| "command".into());
                     self.log
-                        .push(patch.change_set(true, self.revision, &op, self.origin));
+                        .push(patch.change_set(true, self.revision, &op(), self.origin));
                     self.undo.push(patch);
                     self.redo.clear();
                     self.trim_history();
@@ -1793,6 +1886,42 @@ impl Editor {
                 Err(e)
             }
         }
+    }
+
+    /// Sets or clears the history of the document (the named versions, see `crate::history`) as
+    /// one undo step. Returns false if nothing changed.
+    pub fn set_history(&mut self, history: Option<crate::history::HistoryData>) -> bool {
+        let before = self.revision;
+        let _ = self.transact(
+            || "set_history".into(),
+            |tx, _| {
+                tx.doc.history = history;
+                Ok(())
+            },
+        );
+        self.revision != before
+    }
+
+    /// Makes the content of the document equal to `target` as one undo step (REV-01 restore): the
+    /// objects with their z-order, the layers, classes, resources, drawing data and the
+    /// georeference. The history is set to `history`. The active layer and class stay if `target`
+    /// has them. Objects that did not change keep their place in the undo step, so a restore of a
+    /// big document costs what changed. Returns false if nothing changed.
+    pub fn restore_content(
+        &mut self,
+        target: &Document,
+        history: Option<crate::history::HistoryData>,
+    ) -> Result<bool, CommandError> {
+        let before = self.revision;
+        self.transact(
+            || "restore".into(),
+            |tx, _| {
+                tx.replace_content(target);
+                tx.doc.history = history;
+                Ok(())
+            },
+        )?;
+        Ok(self.revision != before)
     }
 
     pub fn undo(&mut self) -> bool {
@@ -1826,6 +1955,8 @@ impl Editor {
     /// exactly what changed and keep their caches for the rest. Returns `None` (and does nothing)
     /// if the document is already equal. The generator of IDs of the current document stays.
     pub fn apply_remote(&mut self, mut doc: Document) -> Option<ChangeSet> {
+        // The history is local to the file: it does not travel with a shared document.
+        doc.history = self.doc.history.clone();
         if doc == self.doc {
             return None;
         }
@@ -1866,6 +1997,7 @@ impl Editor {
             active_class: old.active_class != new.active_class,
             georef: old.georef != new.georef,
             drawing: old.drawing != new.drawing,
+            history: false,
         };
         // The generator of IDs belongs to this editor, not to the document that came in.
         doc.swap_ids(&mut self.doc);

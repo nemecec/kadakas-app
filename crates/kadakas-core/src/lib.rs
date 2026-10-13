@@ -17,6 +17,7 @@ pub mod ground;
 pub mod group;
 pub mod guid;
 pub mod hardscape;
+pub mod history;
 pub mod irrigation;
 pub mod landscape;
 pub mod library;

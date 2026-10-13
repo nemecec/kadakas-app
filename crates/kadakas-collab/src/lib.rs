@@ -39,7 +39,7 @@ pub mod testkit;
 pub use kadakas_props::{blob, docsync, materialize, op, order, replica, validate};
 
 pub use client::{Client, ClientConfig, ClientEvent, ConnState};
+pub use kadakas_props::Replica;
 pub use kadakas_props::{Materialized, Quarantined, materialize_with};
 pub use op::{Kind, Op, Target, Txn, Writer};
 pub use protocol::{ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg};
-pub use kadakas_props::Replica;

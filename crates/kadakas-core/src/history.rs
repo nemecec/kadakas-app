@@ -1,0 +1,134 @@
+//! The saved history of a document (REV-01), as the file keeps it.
+//!
+//! Core only holds the history and moves it with the document: it is saved in the field `history`
+//! of the file, it is one value in the undo steps (a cheap clone), and a change of it is one undo
+//! step (`Editor::set_history`). What the history means (versions, base snapshot, deltas) is
+//! the business of `kadakas-review`, which reads and writes the JSON. Core does one thing with
+//! it: at load, a history that is not a JSON object or is too big is dropped with a note, so a
+//! hostile file cannot make the process hold gigabytes in a field that nobody checks.
+//!
+//! The history is local to the file. It is not part of the shared properties of collaboration.
+
+use std::sync::Arc;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
+
+/// The most bytes (of JSON) that the history of a loaded file may have. A history above it is
+/// dropped at load. `kadakas-review` keeps the history far below this with its own caps.
+pub const MAX_HISTORY_BYTES: usize = 512 * 1024 * 1024;
+
+/// The history as JSON, shared: a clone is cheap, and the check of equality stops at once for the
+/// same value.
+#[derive(Clone, Debug)]
+pub struct HistoryData {
+    value: Arc<Value>,
+    bytes: usize,
+}
+
+/// A writer that counts the bytes and keeps none.
+struct Counter(usize);
+
+impl std::io::Write for Counter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(buf.len());
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl HistoryData {
+    pub fn new(value: Value) -> HistoryData {
+        let mut count = Counter(0);
+        // Writing to a counter cannot fail.
+        let _ = serde_json::to_writer(&mut count, &value);
+        HistoryData {
+            value: Arc::new(value),
+            bytes: count.0,
+        }
+    }
+
+    pub fn value(&self) -> &Value {
+        &self.value
+    }
+
+    /// The size of the JSON text in bytes.
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    /// Why the history cannot stay in a document, if it cannot.
+    pub fn problem(&self) -> Option<String> {
+        if !self.value.is_object() {
+            Some("the history of versions was not a JSON object and was dropped".into())
+        } else if self.bytes > MAX_HISTORY_BYTES {
+            Some(format!(
+                "the history of versions had {} bytes, the limit is {MAX_HISTORY_BYTES}: it was dropped",
+                self.bytes
+            ))
+        } else {
+            None
+        }
+    }
+}
+
+impl PartialEq for HistoryData {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.value, &other.value) || self.value == other.value
+    }
+}
+
+impl Serialize for HistoryData {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.value.serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for HistoryData {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(HistoryData::new(Value::deserialize(d)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn counts_bytes_and_compares_by_value() {
+        let a = HistoryData::new(json!({"format": 1, "versions": []}));
+        assert_eq!(a.bytes(), a.value().to_string().len());
+        let b = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(a, HistoryData::new(json!({"versions": [], "format": 1})));
+        assert_ne!(a, HistoryData::new(json!({"format": 2})));
+        assert!(a.problem().is_none());
+    }
+
+    #[test]
+    fn problems_are_named() {
+        assert!(HistoryData::new(json!([1])).problem().is_some());
+        assert!(
+            HistoryData::new(json!("x"))
+                .problem()
+                .unwrap()
+                .contains("object")
+        );
+        let mut big = HistoryData::new(json!({}));
+        big.bytes = MAX_HISTORY_BYTES + 1;
+        assert!(big.problem().unwrap().contains("limit"));
+    }
+
+    #[test]
+    fn json_round_trip_keeps_the_value() {
+        let a = HistoryData::new(json!({"format": 1}));
+        let text = serde_json::to_string(&a).unwrap();
+        assert_eq!(text, r#"{"format":1}"#);
+        let back: HistoryData = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, a);
+    }
+}

@@ -90,11 +90,14 @@ pub struct DocumentChanged {
     pub georef: bool,
     /// Project data, sheets' settings, saved views, view rules, visibility modes.
     pub drawing: bool,
+    /// The named versions of the file (REV-01).
+    #[serde(default)]
+    pub history: bool,
 }
 
 impl DocumentChanged {
     pub fn any(&self) -> bool {
-        self.active_layer || self.active_class || self.georef || self.drawing
+        self.active_layer || self.active_class || self.georef || self.drawing || self.history
     }
 }
 
