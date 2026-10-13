@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{ClassId, Color, Document, Object, ObjectId, Shape};
 use crate::resource::{ResourceBody, ResourceId};
+use crate::site::SurfaceLook;
 use crate::sun::{self, SunTime};
 
 /// Largest texture image, as base64 text of the PNG file.
@@ -244,6 +245,19 @@ pub fn texture_uv(
     center: [f64; 3],
     radius: f64,
 ) -> [f32; 2] {
+    let uv = texture_uv_f64(m, p, n, center, radius);
+    [uv[0] as f32, uv[1] as f32]
+}
+
+/// Like [`texture_uv`], in double precision. A caller can take away whole repeats before it
+/// goes to single precision, so a texture far from the origin stays sharp.
+pub fn texture_uv_f64(
+    m: &TextureMapping,
+    p: [f64; 3],
+    n: [f32; 3],
+    center: [f64; 3],
+    radius: f64,
+) -> [f64; 2] {
     let (a, b) = match m.kind {
         MappingKind::Planar => (p[0], p[1]),
         MappingKind::Box => {
@@ -265,7 +279,7 @@ pub fn texture_uv(
     let (a, b) = (a - m.offset[0], b - m.offset[1]);
     let (s, c) = m.rotation.to_radians().sin_cos();
     let (u, v) = (a * c + b * s, -a * s + b * c);
-    [(u / m.scale[0]) as f32, (v / m.scale[1]) as f32]
+    [u / m.scale[0], v / m.scale[1]]
 }
 
 /// A material: color and texture, plus roughness, metallic and opacity.
@@ -741,6 +755,18 @@ fn style_of(obj: &Object) -> Option<ResourceId> {
     crate::plants::link::style_of(obj).or_else(|| crate::hardscape::style_id(obj))
 }
 
+/// The mapping that an object forces on its material, if it does. A site model with the texture
+/// look maps its texture from above in world units, with the tile size, offset and rotation of
+/// its settings (3D-05).
+pub fn mapping_override(obj: &Object) -> Option<TextureMapping> {
+    match &obj.shape {
+        Shape::SiteModel { settings, .. } if settings.surface_look == SurfaceLook::Texture => {
+            Some(settings.texture_mapping())
+        }
+        _ => None,
+    }
+}
+
 /// The slots of a document, indexed for fast lookup.
 pub struct SlotIndex {
     objects: HashMap<(ObjectId, Option<String>), ResourceId>,
@@ -771,6 +797,16 @@ impl SlotIndex {
                 }
             }
         }
+        // The texture of a site model with the texture look is a slot of the object.
+        for obj in doc.objects.values() {
+            if let Shape::SiteModel { settings, .. } = &obj.shape
+                && settings.surface_look == SurfaceLook::Texture
+                && let Some(m) = settings.texture
+                && material(doc, m).is_some()
+            {
+                ix.objects.insert((obj.id, None), m);
+            }
+        }
         ix
     }
 
@@ -781,6 +817,11 @@ impl SlotIndex {
     /// The material for a part of an object. The order is: the part of the object, the whole
     /// object, the part of its style, its class. `None`: the object keeps its own color.
     pub fn resolve(&self, obj: &Object, part: u8) -> Option<ResourceId> {
+        // Colors by elevation are vertex colors: no material covers them.
+        if matches!(&obj.shape, Shape::SiteModel { settings, .. } if settings.surface_look == SurfaceLook::Elevation)
+        {
+            return None;
+        }
         let slot = part_slot(obj, part);
         if let Some(s) = &slot
             && let Some(m) = self.objects.get(&(obj.id, Some(s.clone())))

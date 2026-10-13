@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use kadakas_core::mesh::Scene;
 use kadakas_core::model::{Document, ObjectId};
-use kadakas_core::present::{self, SlotIndex, Texture, TextureMapping, texture_uv};
+use kadakas_core::present::{self, SlotIndex, Texture, TextureMapping};
+use kadakas_core::site::MAX_TEXTURE_REPEATS;
 use kadakas_core::resource::ResourceId;
 
 use crate::texture::{TextureImage, downscale, load};
@@ -195,6 +196,9 @@ impl Look {
         // Middle and half size of each object that has a material with cylindrical mapping.
         let mut frames: HashMap<ObjectId, ([f64; 3], f64)> = HashMap::new();
         let mut mappings: Vec<TextureMapping> = Vec::new();
+        // Objects that force their own mapping (a site model with the texture look), with the
+        // whole repeats to take away from their texture coordinates.
+        let mut forced: HashMap<ObjectId, Option<(TextureMapping, [f64; 2])>> = HashMap::new();
         for t in 0..mesh.triangle_count() {
             let (object, part) = (
                 mesh.tri_object[t],
@@ -244,17 +248,22 @@ impl Look {
             if index == NO_MATERIAL {
                 continue;
             }
-            let mapping = mappings[index as usize];
             let frame = *frames
                 .entry(object)
                 .or_insert_with(|| frame_of(scene, object));
+            let forced = *forced.entry(object).or_insert_with(|| {
+                let m = present::mapping_override(doc.object(object)?)?;
+                Some(bounded_mapping(m, frame))
+            });
+            let mapping = forced.map_or(mappings[index as usize], |f| f.0);
+            let shift = forced.map_or([0.0; 2], |f| f.1);
             for k in 0..3 {
                 let v = mesh.indices[t * 3 + k] as usize;
                 if look.vertex_material[v] != NO_MATERIAL {
                     continue;
                 }
                 look.vertex_material[v] = index;
-                look.uvs[v] = vertex_uv(scene, &mapping, v, frame);
+                look.uvs[v] = vertex_uv(scene, &mapping, v, frame, shift);
             }
         }
         cache.finish();
@@ -317,11 +326,32 @@ fn frame_of(scene: &Scene, object: ObjectId) -> ([f64; 3], f64) {
         })
 }
 
-fn vertex_uv(scene: &Scene, m: &TextureMapping, v: usize, frame: ([f64; 3], f64)) -> [f32; 2] {
+/// The mapping of a terrain texture, made safe for a big terrain, and the whole repeats at the
+/// middle of the object. The tile grows when the terrain would hold more than
+/// [`MAX_TEXTURE_REPEATS`] of them. Taking the repeats at the middle away changes no pixel (a
+/// texture repeats), and keeps the coordinates small, so single precision is enough.
+fn bounded_mapping(mut m: TextureMapping, frame: ([f64; 3], f64)) -> (TextureMapping, [f64; 2]) {
+    let extent = 2.0 * frame.1;
+    let min_tile = extent / MAX_TEXTURE_REPEATS;
+    for s in &mut m.scale {
+        *s = s.max(min_tile).max(1e-6);
+    }
+    let mid = present::texture_uv_f64(&m, frame.0, [0.0, 0.0, 1.0], frame.0, frame.1);
+    (m, [mid[0].floor(), mid[1].floor()])
+}
+
+fn vertex_uv(
+    scene: &Scene,
+    m: &TextureMapping,
+    v: usize,
+    frame: ([f64; 3], f64),
+    shift: [f64; 2],
+) -> [f32; 2] {
     let p = scene.mesh.positions[v];
     let o = scene.origin;
     let world = [o.x + p.x as f64, o.y + p.y as f64, o.z + p.z as f64];
-    texture_uv(m, world, scene.mesh.normals[v].to_array(), frame.0, frame.1)
+    let uv = present::texture_uv_f64(m, world, scene.mesh.normals[v].to_array(), frame.0, frame.1);
+    [(uv[0] - shift[0]) as f32, (uv[1] - shift[1]) as f32]
 }
 
 #[cfg(test)]

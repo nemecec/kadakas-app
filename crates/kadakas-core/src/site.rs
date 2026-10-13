@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::curve::{self, Vertex};
 use crate::model::Color;
+use crate::present::{MappingKind, TextureMapping};
+use crate::resource::ResourceId;
 
 /// A 3D polygon or contour that is source data of a site model.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -37,6 +39,85 @@ pub enum Display3d {
     Both,
 }
 
+/// How the 3D terrain mesh gets its look (3D-05).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfaceLook {
+    /// The surface color, or the material that a slot of the object or of its class gives
+    /// (the mapping of that material applies).
+    #[default]
+    Color,
+    /// A texture with a planar top projection: the material of `texture`, or, when `texture`
+    /// is not set, the material of the slot of the object or its class. The tile size, the
+    /// offset and the rotation of the site model set the mapping.
+    Texture,
+    /// Colors by height: the elevation range is cut into bands, and each band takes its color
+    /// from the gradient ramp. Materials do not apply.
+    Elevation,
+}
+
+impl SurfaceLook {
+    pub const ALL: [SurfaceLook; 3] = [
+        SurfaceLook::Color,
+        SurfaceLook::Texture,
+        SurfaceLook::Elevation,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            SurfaceLook::Color => "color",
+            SurfaceLook::Texture => "texture",
+            SurfaceLook::Elevation => "elevation",
+        }
+    }
+}
+
+/// Smallest and largest tile size of a terrain texture, in mm.
+pub const MIN_TEXTURE_TILE: f64 = 10.0;
+pub const MAX_TEXTURE_TILE: f64 = 1.0e8;
+/// Largest offset of a terrain texture, in mm.
+pub const MAX_TEXTURE_OFFSET: f64 = 1.0e9;
+/// The most elevation bands, and the most colors of a ramp.
+pub const MAX_ELEVATION_BANDS: u32 = 64;
+pub const MAX_RAMP_STOPS: usize = 16;
+/// The most repeats of a texture across a terrain. A smaller tile is made larger to stay under
+/// it, so the texture coordinates stay precise in single precision.
+pub const MAX_TEXTURE_REPEATS: f64 = 100_000.0;
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+/// The ramp of a new site model: low land green, then yellow, brown and white.
+pub fn default_elevation_ramp() -> Vec<Color> {
+    vec![
+        Color([70, 132, 76, 255]),
+        Color([214, 204, 108, 255]),
+        Color([150, 104, 64, 255]),
+        Color([244, 244, 240, 255]),
+    ]
+}
+
+fn default_bands() -> u32 {
+    12
+}
+
+fn default_tile() -> f64 {
+    2000.0
+}
+
+fn is_default_bands(v: &u32) -> bool {
+    *v == default_bands()
+}
+
+fn is_default_tile(v: &f64) -> bool {
+    *v == default_tile()
+}
+
+fn is_default_ramp(v: &[Color]) -> bool {
+    v == default_elevation_ramp().as_slice()
+}
+
 /// Settings of a site model. Lengths are in mm.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -64,6 +145,31 @@ pub struct SiteSettings {
     /// When false, the proposed surface changes only on an explicit "Update Site Model" and shows
     /// "out of date" until then.
     pub auto_update: bool,
+    /// How the 3D mesh gets its look: surface color, texture or colors by elevation.
+    #[serde(skip_serializing_if = "is_default")]
+    pub surface_look: SurfaceLook,
+    /// The material resource (with a texture) for the texture look. `None`: the material that
+    /// a slot of the object or of its class gives ("by class").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub texture: Option<ResourceId>,
+    /// Size of one repeat of the texture on the ground (a square), in mm.
+    #[serde(skip_serializing_if = "is_default_tile")]
+    pub texture_tile: f64,
+    /// Shift of the texture on the ground, in mm.
+    #[serde(skip_serializing_if = "is_default")]
+    pub texture_offset: [f64; 2],
+    /// Counterclockwise turn of the texture, in degrees.
+    #[serde(skip_serializing_if = "is_default")]
+    pub texture_rotation: f64,
+    /// The number of elevation bands of the elevation look.
+    #[serde(skip_serializing_if = "is_default_bands")]
+    pub elevation_bands: u32,
+    /// The colors of the gradient ramp, from the lowest to the highest ground.
+    #[serde(skip_serializing_if = "is_default_ramp")]
+    pub elevation_ramp: Vec<Color>,
+    /// Lowest and highest elevation of the ramp. `None`: the range of the shown surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elevation_range: Option<[f64; 2]>,
 }
 
 /// The most contour levels a site model may ask for.
@@ -84,6 +190,14 @@ impl Default for SiteSettings {
             proposed_color: None,
             crop: Vec::new(),
             auto_update: true,
+            surface_look: SurfaceLook::default(),
+            texture: None,
+            texture_tile: default_tile(),
+            texture_offset: [0.0, 0.0],
+            texture_rotation: 0.0,
+            elevation_bands: default_bands(),
+            elevation_ramp: default_elevation_ramp(),
+            elevation_range: None,
         }
     }
 }
@@ -95,6 +209,22 @@ impl SiteSettings {
             && self.major_interval.is_finite()
             && self.datum.is_finite()
             && self.crop.iter().all(|p| p.is_finite())
+            && self.texture_tile.is_finite()
+            && self.texture_rotation.is_finite()
+            && self.texture_offset.iter().all(|v| v.is_finite())
+            && self
+                .elevation_range
+                .is_none_or(|r| r.iter().all(|v| v.is_finite()))
+    }
+
+    /// The mapping of the texture look: a planar projection from above, in world units.
+    pub fn texture_mapping(&self) -> TextureMapping {
+        TextureMapping {
+            kind: MappingKind::Planar,
+            scale: [self.texture_tile, self.texture_tile],
+            rotation: self.texture_rotation,
+            offset: self.texture_offset,
+        }
     }
 
     /// Why the settings are not usable, if they are not.
@@ -111,6 +241,20 @@ impl SiteSettings {
             Some("minor contour interval must be at least 0.001 mm")
         } else if !self.crop.is_empty() && self.crop.len() < 3 {
             Some("crop boundary needs at least 3 points")
+        } else if !(MIN_TEXTURE_TILE..=MAX_TEXTURE_TILE).contains(&self.texture_tile) {
+            Some("texture tile size must be from 10 mm to 100000 m")
+        } else if self
+            .texture_offset
+            .iter()
+            .any(|v| v.abs() > MAX_TEXTURE_OFFSET)
+        {
+            Some("texture offset must not be larger than 1000000 m")
+        } else if !(1..=MAX_ELEVATION_BANDS).contains(&self.elevation_bands) {
+            Some("elevation bands must be from 1 to 64")
+        } else if !(1..=MAX_RAMP_STOPS).contains(&self.elevation_ramp.len()) {
+            Some("the elevation ramp needs 1 to 16 colors")
+        } else if self.elevation_range.is_some_and(|r| r[1] <= r[0]) {
+            Some("the elevation range must have its high end above its low end")
         } else {
             None
         }

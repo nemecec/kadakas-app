@@ -10,6 +10,7 @@ pub mod check;
 pub mod contour;
 pub mod drape;
 pub mod draw;
+pub mod elevation;
 pub mod grading;
 pub mod grid;
 pub mod model;

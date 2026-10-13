@@ -8,9 +8,10 @@ use glam::DVec3;
 use kadakas_core::ground::GroundSource;
 use kadakas_core::mesh::SceneSink;
 use kadakas_core::model::{Color, Document, Object, Shape};
-use kadakas_core::site::{Display3d, SurfaceDisplay};
+use kadakas_core::site::{Display3d, SurfaceDisplay, SurfaceLook};
 
 use crate::contour::Contour;
+use crate::elevation;
 use crate::grading::{self, analysis::AnalysisResult};
 use crate::model::{SiteCache, SiteResult, Surface};
 
@@ -89,7 +90,18 @@ pub fn draw_3d_with(
                 vertices.extend(q);
                 idx.extend([n, n + 1, n + 2, n, n + 2, n + 3]);
             }
-            sink.mesh(&vertices, &idx, mesh_color(site, which));
+            if site.settings.surface_look == SurfaceLook::Elevation
+                && let Some((lo, hi)) = elevation::range_of(&site.settings, &vertices)
+            {
+                // Colors by elevation: one mesh per band, each with the color of its band.
+                let bands = site.settings.elevation_bands;
+                let colors = elevation::band_colors(&site.settings.elevation_ramp, bands);
+                for part in elevation::split_bands(&vertices, &idx, lo, hi, bands) {
+                    sink.mesh(&part.vertices, &part.indices, colors[part.band]);
+                }
+            } else {
+                sink.mesh(&vertices, &idx, mesh_color(site, which));
+            }
         }
         if matches!(display, Display3d::Contours | Display3d::Both) {
             let color = line_color(site, which).0;
@@ -408,6 +420,40 @@ mod tests {
         let bare = mesh::build_with(ed.doc(), glam::DVec3::ZERO, None);
         assert_eq!(bare.mesh.triangle_count(), 0);
         assert_eq!(bare.lines.segment_count(), 4);
+    }
+
+    #[test]
+    fn elevation_look_colors_the_mesh_by_band() {
+        let (mut ed, id) = site_with_pad();
+        let cache = SiteCache::default();
+        let build = |ed: &Editor| {
+            let ext = scene_ext(&cache, ed.revision());
+            mesh::build_with(ed.doc(), glam::DVec3::ZERO, Some(&ext))
+        };
+        let plain = build(&ed);
+        set_settings(&mut ed, id, |s| {
+            s.surface_look = SurfaceLook::Elevation;
+            s.elevation_bands = 4;
+        });
+        let banded = build(&ed);
+        let colors: std::collections::BTreeSet<[u8; 4]> = banded
+            .mesh
+            .colors
+            .iter()
+            .zip(&banded.mesh.tri_object)
+            .map(|(c, _)| *c)
+            .collect();
+        assert!(colors.len() > 1 && colors.len() <= 4, "{}", colors.len());
+        // The triangles are the same ones.
+        assert_eq!(banded.mesh.triangle_count(), plain.mesh.triangle_count());
+        // An explicit range puts everything into the first band.
+        set_settings(&mut ed, id, |s| {
+            s.surface_look = SurfaceLook::Elevation;
+            s.elevation_range = Some([1.0e6, 2.0e6]);
+        });
+        let flat = build(&ed);
+        let one: std::collections::BTreeSet<[u8; 4]> = flat.mesh.colors.iter().copied().collect();
+        assert_eq!(one.len(), 1);
     }
 
     #[test]
