@@ -13,10 +13,10 @@ use kadakas_core::model::ObjectId;
 use kadakas_core::uid::Uid;
 use kadakas_l10n::tr;
 use kadakas_ui_core::versions::{
-    Change, ChangeRow, DiffView, SaveError, SaveForm, Side, VersionList, VersionRow, diff_params,
-    time_parts,
+    Change, ChangeRow, DiffView, LimitKind, LimitReached, SaveError, SaveForm, Side, SizeUnit,
+    VersionList, VersionRow, diff_params, size_parts, time_parts,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// The most things that a comparison lists.
 const DIFF_LIMIT: usize = 200;
@@ -29,6 +29,21 @@ const CHECK_DELAY: f64 = 0.5;
 enum Confirm {
     Restore(u64),
     Delete(u64),
+    /// Keep only the part of the history that could be read.
+    Repair,
+}
+
+/// What goes on after the person made room, or raised the limit.
+#[derive(Clone, Debug, PartialEq)]
+enum Retry {
+    Save(Value),
+    Restore(u64),
+}
+
+/// The dialog of a save that the limit stopped: the versions, to tick the ones to delete.
+struct LimitDialog {
+    info: LimitReached,
+    retry: Retry,
 }
 
 /// State of the window.
@@ -42,6 +57,10 @@ pub struct VersionsUi {
     to: Side,
     diff: Option<DiffView>,
     confirm: Option<Confirm>,
+    /// A save or a restore that a limit stopped, waiting for the choice of the person.
+    limit: Option<LimitDialog>,
+    /// The person asked to raise the limit: the app opens Preferences.
+    preferences_requested: bool,
     /// When the comparison of the drawing with the newest version is due (the time of egui).
     check_due: Option<f64>,
 }
@@ -57,6 +76,8 @@ impl Default for VersionsUi {
             to: Side::Current,
             diff: None,
             confirm: None,
+            limit: None,
+            preferences_requested: false,
             check_due: None,
         }
     }
@@ -137,6 +158,9 @@ impl VersionsUi {
         {
             self.confirm = None;
         }
+        if self.confirm == Some(Confirm::Repair) && !self.list.read_only {
+            self.confirm = None;
+        }
         // A side that is gone cannot be compared. The drawing changed: a comparison with it is old.
         let gone = |s: Side| matches!(s, Side::Version(id) if self.list.find(id).is_none());
         if self.from.is_some_and(gone) {
@@ -148,6 +172,11 @@ impl VersionsUi {
         if self.from == Some(Side::Current) || self.to == Side::Current || self.from.is_none() {
             self.diff = None;
         }
+    }
+
+    /// True once after the person asked to raise the limit in Preferences.
+    pub fn take_preferences_request(&mut self) -> bool {
+        std::mem::take(&mut self.preferences_requested)
     }
 
     fn save(&mut self, session: &mut Session, status: &mut String) {
@@ -171,7 +200,12 @@ impl VersionsUi {
                 return;
             }
         };
-        match session.handle("version.create", params) {
+        self.try_save(session, params, status);
+    }
+
+    /// Saves a version. A limit that stops it opens the dialog; the choice of the person decides.
+    fn try_save(&mut self, session: &mut Session, params: Value, status: &mut String) {
+        match session.handle("version.create", params.clone()) {
             Ok(v) => {
                 *status = tr!(
                     "versions-ui-saved",
@@ -181,8 +215,19 @@ impl VersionsUi {
                 self.refresh(session);
                 self.form.name = self.default_name();
             }
-            Err(e) => *status = tr!("panels-error", e = e.message),
+            Err(e) => self.failed(e, Retry::Save(params), status),
         }
+    }
+
+    /// An error of a call: a limit opens the dialog, anything else is a message.
+    fn failed(&mut self, e: kadakas_api::RpcError, retry: Retry, status: &mut String) {
+        if e.reason == Some(kadakas_api::REASON_VERSION_LIMIT)
+            && let Some(info) = e.details.as_ref().and_then(LimitReached::parse)
+        {
+            self.limit = Some(LimitDialog { info, retry });
+            return;
+        }
+        *status = tr!("panels-error", e = e.message);
     }
 
     fn restore(&mut self, session: &mut Session, id: u64, status: &mut String) {
@@ -205,7 +250,7 @@ impl VersionsUi {
                     None => tr!("versions-ui-restored", name = name),
                 };
             }
-            Err(e) => *status = tr!("panels-error", e = e.message),
+            Err(e) => self.failed(e, Retry::Restore(id), status),
         }
     }
 
@@ -217,6 +262,147 @@ impl VersionsUi {
                 *status = tr!("versions-ui-deleted", name = name);
             }
             Err(e) => *status = tr!("panels-error", e = e.message),
+        }
+    }
+
+    /// Keeps only the part of the history that could be read (the person said yes).
+    fn repair(&mut self, session: &mut Session, status: &mut String) {
+        match session.handle("version.repair", json!({"confirm": true})) {
+            Ok(v) => {
+                self.refresh(session);
+                *status = tr!(
+                    "versions-ui-repaired",
+                    count = v["kept"].as_u64().unwrap_or(0)
+                );
+            }
+            Err(e) => *status = tr!("panels-error", e = e.message),
+        }
+    }
+
+    /// Deletes the versions that the person ticked in the dialog, and goes on with the save.
+    fn delete_ticked_and_go_on(&mut self, session: &mut Session, status: &mut String) {
+        let Some(dialog) = self.limit.take() else {
+            return;
+        };
+        let ids = dialog.info.ticked();
+        match session.handle("version.delete", json!({"ids": ids})) {
+            Ok(_) => {
+                *status = tr!("versions-ui-deleted-many", count = ids.len());
+                self.refresh(session);
+                self.go_on(session, dialog.retry, status);
+            }
+            Err(e) => *status = tr!("panels-error", e = e.message),
+        }
+    }
+
+    /// Tries the save or the restore again (the limit may be higher now).
+    fn go_on(&mut self, session: &mut Session, retry: Retry, status: &mut String) {
+        match retry {
+            Retry::Save(params) => self.try_save(session, params, status),
+            Retry::Restore(id) => self.restore(session, id, status),
+        }
+    }
+
+    /// The dialog of a save that the limit stopped.
+    fn limit_dialog(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String) {
+        let mut action = None;
+        let mut open = true;
+        let Some(dialog) = &mut self.limit else {
+            return;
+        };
+        egui::Window::new(tr!("versions-ui-limit-title"))
+            .id(egui::Id::new("win-versions-limit"))
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                let size = |b: u64| {
+                    let (v, unit) = size_parts(b);
+                    let n = kadakas_units::current().number_text(v, 1);
+                    match unit {
+                        SizeUnit::Kib => tr!("versions-ui-size-kib", size = n),
+                        SizeUnit::Mib => tr!("versions-ui-size-mib", size = n),
+                    }
+                };
+                let info = &mut dialog.info;
+                ui.label(match info.kind {
+                    LimitKind::Versions => tr!(
+                        "versions-ui-limit-versions",
+                        needed = info.needed,
+                        max = info.max
+                    ),
+                    LimitKind::Bytes => tr!(
+                        "versions-ui-limit-bytes",
+                        needed = size(info.needed),
+                        max = size(info.max)
+                    ),
+                });
+                ui.label(tr!("versions-ui-limit-choose"));
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .id_salt("versions-limit-list")
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for row in info.rows.iter_mut().rev() {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.checkbox(&mut row.ticked, "");
+                                ui.strong(&row.name);
+                                if row.auto {
+                                    ui.small(tr!("versions-ui-auto"));
+                                }
+                                ui.small(size(row.bytes));
+                                ui.small(time_text(&VersionRow {
+                                    id: row.id,
+                                    name: row.name.clone(),
+                                    note: None,
+                                    author: String::new(),
+                                    time_ms: row.time_ms,
+                                    origin: String::new(),
+                                    auto: row.auto,
+                                }));
+                            });
+                        }
+                    });
+                ui.separator();
+                let ticked = !info.ticked().is_empty();
+                if ticked {
+                    ui.small(if info.enough() {
+                        tr!("versions-ui-limit-room")
+                    } else {
+                        tr!("versions-ui-limit-no-room")
+                    });
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(ticked, egui::Button::new(tr!("versions-ui-limit-delete")))
+                        .clicked()
+                    {
+                        action = Some(0);
+                    }
+                    if ui.button(tr!("versions-ui-limit-preferences")).clicked() {
+                        action = Some(1);
+                    }
+                    if ui.button(tr!("versions-ui-limit-again")).clicked() {
+                        action = Some(2);
+                    }
+                    if ui.button(tr!("common-cancel")).clicked() {
+                        action = Some(3);
+                    }
+                });
+            });
+        if !open {
+            action = Some(3);
+        }
+        match action {
+            Some(0) => self.delete_ticked_and_go_on(session, status),
+            Some(1) => self.preferences_requested = true,
+            Some(2) => {
+                if let Some(d) = self.limit.take() {
+                    self.go_on(session, d.retry, status);
+                }
+            }
+            Some(_) => self.limit = None,
+            None => {}
         }
     }
 
@@ -271,10 +457,14 @@ impl VersionsUi {
             .default_width(460.0)
             .show(ctx, |ui| self.body(ui, session, status));
         self.open = open;
+        self.limit_dialog(ctx, session, status);
     }
 
     fn body(&mut self, ui: &mut Ui, session: &mut Session, status: &mut String) {
         ui.small(tr!("versions-ui-intro"));
+        if self.list.read_only {
+            self.read_only_notice(ui, session, status);
+        }
         ui.separator();
         ui.strong(tr!("versions-ui-save-heading"));
         egui::Grid::new("versions-save")
@@ -287,7 +477,13 @@ impl VersionsUi {
                 ui.text_edit_multiline(&mut self.form.note);
                 ui.end_row();
             });
-        if ui.button(tr!("versions-ui-save")).clicked() {
+        if ui
+            .add_enabled(
+                !self.list.read_only,
+                egui::Button::new(tr!("versions-ui-save")),
+            )
+            .clicked()
+        {
             self.save(session, status);
         }
         ui.small(tr!("versions-ui-undo-note"));
@@ -295,6 +491,30 @@ impl VersionsUi {
         self.list_section(ui, session, status);
         ui.separator();
         self.compare_section(ui, session, status);
+    }
+
+    /// The history of the file could not be read completely: it is kept as it is. The person may
+    /// choose to keep only what could be read.
+    fn read_only_notice(&mut self, ui: &mut Ui, session: &mut Session, status: &mut String) {
+        ui.separator();
+        ui.colored_label(Color32::from_rgb(200, 120, 0), tr!("versions-ui-read-only"));
+        for note in &self.list.notes {
+            ui.small(note);
+        }
+        if self.confirm == Some(Confirm::Repair) {
+            ui.label(tr!("versions-ui-confirm-repair"));
+            ui.horizontal(|ui| {
+                if ui.button(tr!("versions-ui-readable-only")).clicked() {
+                    self.confirm = None;
+                    self.repair(session, status);
+                }
+                if ui.button(tr!("common-cancel")).clicked() {
+                    self.confirm = None;
+                }
+            });
+        } else if ui.button(tr!("versions-ui-readable-only")).clicked() {
+            self.confirm = Some(Confirm::Repair);
+        }
     }
 
     fn list_section(&mut self, ui: &mut Ui, session: &mut Session, status: &mut String) {
@@ -341,10 +561,17 @@ impl VersionsUi {
                         ui.small(note);
                     }
                     ui.horizontal(|ui| {
-                        if ui.button(tr!("versions-ui-restore")).clicked() {
+                        let ok = !self.list.read_only;
+                        if ui
+                            .add_enabled(ok, egui::Button::new(tr!("versions-ui-restore")))
+                            .clicked()
+                        {
                             ask = Some(Confirm::Restore(row.id));
                         }
-                        if ui.button(tr!("versions-ui-delete")).clicked() {
+                        if ui
+                            .add_enabled(ok, egui::Button::new(tr!("versions-ui-delete")))
+                            .clicked()
+                        {
                             ask = Some(Confirm::Delete(row.id));
                         }
                     });
@@ -364,6 +591,8 @@ impl VersionsUi {
                 tr!("versions-ui-confirm-delete", name = self.list.name_of(id)),
                 tr!("versions-ui-delete"),
             ),
+            // The notice has its own question.
+            Confirm::Repair => return,
         };
         ui.separator();
         ui.label(text);
@@ -373,6 +602,7 @@ impl VersionsUi {
                 match confirm {
                     Confirm::Restore(id) => self.restore(session, id, status),
                     Confirm::Delete(id) => self.delete(session, id, status),
+                    Confirm::Repair => {}
                 }
             }
             if ui.button(tr!("common-cancel")).clicked() {
@@ -712,6 +942,130 @@ mod tests {
         });
         assert_eq!(ui.list.current_is_newest, Some(false));
         assert!(ui.check_due.is_none());
+    }
+
+    #[test]
+    fn a_limit_stops_the_save_and_the_dialog_lets_the_person_choose() {
+        let mut s = Session::with_sequential_ids();
+        s.set_limits(kadakas_api::SessionLimits {
+            max_versions: 2,
+            ..Default::default()
+        });
+        let mut ui = VersionsUi::default();
+        let mut status = String::new();
+        for (i, name) in ["Alpha", "Beta"].into_iter().enumerate() {
+            add(&mut s, i as i32 * 30);
+            ui.open(&mut s);
+            ui.form.name = name.into();
+            ui.save(&mut s, &mut status);
+        }
+        assert_eq!(ui.list.rows.len(), 2);
+        add(&mut s, 90);
+        ui.form.name = "Gamma".into();
+        ui.form.note = "n".into();
+        ui.save(&mut s, &mut status);
+        // Nothing was saved and nothing was deleted; the dialog asks.
+        assert_eq!(ui.list.rows.len(), 2);
+        let dialog = ui.limit.as_ref().expect("the limit dialog");
+        assert_eq!(dialog.info.kind, LimitKind::Versions);
+        assert_eq!(dialog.info.rows.len(), 2);
+        assert!(matches!(dialog.retry, Retry::Save(_)));
+        // The dialog draws in every language.
+        for lang in kadakas_l10n::languages() {
+            kadakas_l10n::with_language(lang.tag, || {
+                let ctx = egui::Context::default();
+                let _ = ctx.run_ui(egui::RawInput::default(), |u| {
+                    ui.show(&u.ctx().clone(), &mut s, &mut status);
+                });
+            });
+        }
+        // The person ticks the newer one (not the oldest), and the save goes on.
+        ui.limit.as_mut().unwrap().info.rows[1].ticked = true;
+        assert!(ui.limit.as_ref().unwrap().info.enough());
+        let ctx = egui::Context::default();
+        ui.delete_ticked_and_go_on(&mut s, &mut status);
+        assert!(ui.limit.is_none());
+        let names: Vec<_> = ui.list.rows.iter().map(|r| r.name.clone()).collect();
+        assert_eq!(names, ["Alpha", "Gamma"]);
+        // The request to raise the limit goes to the app, and a retry with a higher limit works.
+        add(&mut s, 120);
+        ui.form.name = "Delta".into();
+        ui.save(&mut s, &mut status);
+        assert!(ui.limit.is_some());
+        ui.preferences_requested = true;
+        assert!(ui.take_preferences_request() && !ui.take_preferences_request());
+        s.set_limits(kadakas_api::SessionLimits {
+            max_versions: 3,
+            ..Default::default()
+        });
+        let retry = ui.limit.take().unwrap().retry;
+        ui.go_on(&mut s, retry, &mut status);
+        assert_eq!(ui.list.rows.len(), 3);
+        // A restore that the limit stops opens the dialog too, and Cancel closes it.
+        add(&mut s, 150);
+        ui.restore(&mut s, 1, &mut status);
+        assert!(matches!(
+            ui.limit.as_ref().unwrap().retry,
+            Retry::Restore(1)
+        ));
+        let _ = ctx.run_ui(egui::RawInput::default(), |u| {
+            ui.limit_dialog(&u.ctx().clone(), &mut s, &mut status);
+        });
+        ui.limit = None;
+        // Another error is a message.
+        ui.restore(&mut s, 99, &mut status);
+        assert!(ui.limit.is_none() && !status.is_empty());
+    }
+
+    #[test]
+    fn a_history_that_cannot_be_read_is_read_only_until_the_person_chooses() {
+        let mut donor = Session::with_sequential_ids();
+        add(&mut donor, 0);
+        donor
+            .handle("version.create", json!({"name": "One"}))
+            .unwrap();
+        add(&mut donor, 30);
+        donor
+            .handle("version.create", json!({"name": "Two"}))
+            .unwrap();
+        let mut file = serde_json::to_value(&*donor.document_for_save().unwrap()).unwrap();
+        file["history"]["versions"][0]["delta"] = json!([{"op": "delete",
+            "target": {"kind": "object", "id": "00000000-0000-0000-0000-0000000000ee"}}]);
+        let mut s = Session::with_sequential_ids();
+        s.handle("document.load", json!({"document": file}))
+            .unwrap();
+        let mut ui = VersionsUi::default();
+        let mut status = String::new();
+        ui.open(&mut s);
+        assert!(ui.list.read_only && !ui.list.notes.is_empty());
+        for lang in kadakas_l10n::languages() {
+            kadakas_l10n::with_language(lang.tag, || {
+                let ctx = egui::Context::default();
+                ui.confirm = None;
+                let _ = ctx.run_ui(egui::RawInput::default(), |u| {
+                    ui.show(&u.ctx().clone(), &mut s, &mut status);
+                });
+                ui.confirm = Some(Confirm::Repair);
+                let _ = ctx.run_ui(egui::RawInput::default(), |u| {
+                    ui.show(&u.ctx().clone(), &mut s, &mut status);
+                });
+            });
+        }
+        // A save is refused with a message (the buttons are disabled; this is the call).
+        ui.form.name = "x".into();
+        ui.save(&mut s, &mut status);
+        assert!(ui.limit.is_none() && !status.is_empty());
+        assert!(ui.list.read_only);
+        // The person agrees: the readable part stays.
+        ui.confirm = Some(Confirm::Repair);
+        ui.repair(&mut s, &mut status);
+        assert!(!ui.list.read_only);
+        assert_eq!(ui.list.rows.len(), 1);
+        assert!(ui.confirm.is_none());
+        // Nothing to repair now: an error message, not a change.
+        ui.repair(&mut s, &mut status);
+        assert!(status.contains("nothing to repair"), "{status}");
+        assert_eq!(ui.list.rows.len(), 1);
     }
 
     #[test]

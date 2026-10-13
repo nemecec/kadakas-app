@@ -35,6 +35,11 @@ pub struct Prefs {
     pub language: crate::locale::LanguageChoice,
     /// Units and formats. What is not chosen follows the language.
     pub units: kadakas_units::Settings,
+    /// The most named versions in a file. A save over it is stopped and the person is asked which
+    /// versions to delete (REV-01). No version is dropped by itself.
+    pub max_versions: u32,
+    /// The most size of the versions in a file, in MiB. The same.
+    pub max_version_mib: u32,
 }
 
 impl Default for Prefs {
@@ -46,6 +51,8 @@ impl Default for Prefs {
             icon_size: IconSize::default(),
             language: crate::locale::LanguageChoice::SYSTEM,
             units: kadakas_units::Settings::default(),
+            max_versions: 100,
+            max_version_mib: 64,
         }
     }
 }

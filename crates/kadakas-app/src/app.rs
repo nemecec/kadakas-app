@@ -64,6 +64,8 @@ pub struct KadakasApp {
     /// The language and the units that the program uses now (see `locale`), and the tag of the
     /// language.
     locale_applied: (crate::locale::LanguageChoice, kadakas_units::Settings),
+    /// The limits of the versions that the session has (most versions, most MiB).
+    limits_applied: Option<(u32, u32)>,
     language: &'static str,
     /// The panels and the canvas use the dark theme.
     dark: bool,
@@ -395,6 +397,7 @@ impl KadakasApp {
                 crate::locale::LanguageChoice::SYSTEM,
                 kadakas_units::Settings::default(),
             ),
+            limits_applied: None,
             language: kadakas_l10n::FALLBACK,
             dark: false,
             layouts: Layouts::default(),
@@ -515,6 +518,18 @@ impl KadakasApp {
         }
         panels::run_command(&mut self.session, cmd, &mut self.status);
         crate::annot_ui::set_revision(self.session.editor.revision());
+    }
+
+    /// The limits of the versions of a file follow the preferences.
+    fn sync_limits(&mut self) {
+        let limits = (self.prefs.max_versions, self.prefs.max_version_mib);
+        if self.limits_applied != Some(limits) {
+            self.limits_applied = Some(limits);
+            let mut l = self.session.limits().clone();
+            l.max_versions = limits.0 as usize;
+            l.max_version_bytes = u64::from(limits.1) * 1024 * 1024;
+            self.session.set_limits(l);
+        }
     }
 
     /// Replaces the open document. False (and a message) while the session belongs to a shared
@@ -2386,9 +2401,10 @@ impl eframe::App for KadakasApp {
         self.collab_frame(&ctx);
         #[cfg(target_arch = "wasm32")]
         crate::collab_ui::web::test_hook(&mut self.session, &self.collab, self.canvas_rect);
-        if self.autosave.take_prefs_request() {
+        if self.autosave.take_prefs_request() || self.versions_ui.take_preferences_request() {
             self.prefs_ui.open();
         }
+        self.sync_limits();
         self.prefs_ui.show(
             &ctx,
             crate::prefs_ui::PrefsEdit {
@@ -2397,6 +2413,8 @@ impl eframe::App for KadakasApp {
                 units: &mut self.prefs.units,
                 active_language: self.language,
                 profiles: &mut self.profiles,
+                max_versions: &mut self.prefs.max_versions,
+                max_version_mib: &mut self.prefs.max_version_mib,
             },
             &mut self.autosave,
         );
@@ -2706,6 +2724,29 @@ mod tests {
         let _ = ctx.run_ui(Default::default(), |ui| {
             egui::CentralPanel::no_frame().show(ui, |ui| app.show_dock(ui));
         });
+    }
+
+    #[test]
+    fn the_limits_of_the_versions_follow_the_preferences() {
+        let mut app = KadakasApp::blank();
+        app.sync_limits();
+        assert_eq!(app.session.limits().max_versions, 100);
+        assert_eq!(app.session.limits().max_version_bytes, 64 * 1024 * 1024);
+        app.prefs.max_versions = 3;
+        app.prefs.max_version_mib = 5;
+        app.sync_limits();
+        assert_eq!(app.session.limits().max_versions, 3);
+        assert_eq!(app.session.limits().max_version_bytes, 5 * 1024 * 1024);
+        // The other limits stay, and the choice is saved with the preferences.
+        assert_eq!(
+            app.session.limits().import_text_bytes,
+            kadakas_api::SessionLimits::default().import_text_bytes
+        );
+        let text = serde_json::to_string(&app.prefs).unwrap();
+        let back: Prefs = serde_json::from_str(&text).unwrap();
+        assert_eq!((back.max_versions, back.max_version_mib), (3, 5));
+        let old: Prefs = serde_json::from_str("{}").unwrap();
+        assert_eq!((old.max_versions, old.max_version_mib), (100, 64));
     }
 
     #[test]

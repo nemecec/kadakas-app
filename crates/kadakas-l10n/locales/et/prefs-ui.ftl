@@ -23,3 +23,7 @@ prefs-ui-example = Näide: { $length }, { $area }, { $angle }, { $number }, { $d
 prefs-ui-decimal-degrees = Kümnendkraadid
 prefs-ui-degrees-minutes-seconds = Kraadid, minutid, sekundid
 prefs-ui-bearing = Rumb (N 45° E)
+prefs-ui-versions = Versioonid
+prefs-ui-max-versions = Versioone failis kuni
+prefs-ui-max-version-size = Versioonide suurus failis kuni (MiB)
+prefs-ui-versions-hint = Piirist ületav salvestus peatatakse ja sinult küsitakse, milliseid versioone kustutada. Ükski versioon ei kustu iseenesest.

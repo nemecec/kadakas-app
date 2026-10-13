@@ -23,3 +23,7 @@ prefs-ui-example = Example: { $length }, { $area }, { $angle }, { $number }, { $
 prefs-ui-decimal-degrees = Decimal degrees
 prefs-ui-degrees-minutes-seconds = Degrees, minutes, seconds
 prefs-ui-bearing = Bearing (N 45° E)
+prefs-ui-versions = Versions
+prefs-ui-max-versions = Most versions in a file
+prefs-ui-max-version-size = Most size of the versions in a file (MiB)
+prefs-ui-versions-hint = A save over a limit is stopped, and you are asked which versions to delete. No version is deleted by itself.

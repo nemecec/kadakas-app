@@ -485,7 +485,12 @@ class Versions:
 
     def create(self, name: str, note: str | None = None, *, author: str | None = None,
                **params: Any) -> JsonDict:
-        """Save the document as a version. Returns ``{version, dropped, count, bytes}``."""
+        """Save the document as a version. Returns ``{version, count, bytes}``.
+
+        If the version would go over a limit of the session, nothing is saved and nothing is
+        deleted: the call raises ``KadakasError`` (code 6) and ``data`` lists the versions. Show the
+        list to the person and ask which versions to delete (``delete``), or whether to raise the
+        limit. Do not delete versions by yourself."""
         given = {"name": name, "note": note, "author": author}
         p: JsonDict = {k: v for k, v in given.items() if v is not None}
         p.update(params)
@@ -505,8 +510,19 @@ class Versions:
         """Make the document equal to a version. The state before is saved as a version first."""
         return self._doc.api.version_restore(id=id, **params)
 
-    def delete(self, id: int) -> JsonDict:
-        return self._doc.api.version_delete(id=id)
+    def delete(self, id: int | Sequence[int]) -> JsonDict:
+        """Delete a version, or several in one undo step. Only the versions that a person chose:
+        never delete versions to make room by yourself (see ``create``). Returns
+        ``{deleted: [{id, name, ...}], count}``."""
+        if isinstance(id, int):
+            return self._doc.api.version_delete(id=id)
+        return self._doc.api.version_delete(ids=list(id))
+
+    def repair(self, *, confirm: bool = False) -> JsonDict:
+        """Keep only the part of a history that could be read. A history that could not be read
+        completely is read only; this call loses the versions that could not be read, so call it
+        only when the person has said so (``confirm=True``)."""
+        return self._doc.api.version_repair(confirm=confirm)
 
     def diff(self, from_: int | str, to: int | str = "current", *, kinds: Sequence[str] | None = None,
              limit: int | None = None) -> JsonDict:

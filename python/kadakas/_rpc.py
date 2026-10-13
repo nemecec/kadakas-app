@@ -165,7 +165,7 @@ class _LineRpc:
         if "error" in reply:
             err = reply["error"]
             raise KadakasError(err.get("code", 0), err.get("message", "error"), method=method,
-                                kind=(err.get("data") or {}).get("kind"))
+                                kind=(err.get("data") or {}).get("kind"), data=err.get("data"))
         return reply.get("result")
 
 

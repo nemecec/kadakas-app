@@ -34,9 +34,14 @@ pub struct VersionRow {
 pub struct VersionList {
     /// Oldest first.
     pub rows: Vec<VersionRow>,
-    /// `None`: there is no version.
+    /// `None`: there is no version, or the answer was asked without the comparison.
     pub current_is_newest: Option<bool>,
     pub max_versions: usize,
+    /// True: the history of the file could not be read completely. It is kept as it is, and no
+    /// version can be saved, restored or deleted until the person decides (`version.repair`).
+    pub read_only: bool,
+    /// What could not be read.
+    pub notes: Vec<String>,
 }
 
 impl VersionList {
@@ -64,6 +69,13 @@ impl VersionList {
             max_versions: v["limits"]["max_versions"]
                 .as_u64()
                 .map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX)),
+            read_only: v["read_only"].as_bool().unwrap_or(false),
+            notes: v["notes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|n| n.as_str().map(str::to_string))
+                .collect(),
         }
     }
 
@@ -252,6 +264,107 @@ impl DiffView {
     }
 }
 
+/// Which limit a refused save broke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LimitKind {
+    Versions,
+    Bytes,
+}
+
+/// A version in the list of a refused save.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LimitRow {
+    pub id: u64,
+    pub name: String,
+    pub bytes: u64,
+    pub time_ms: u64,
+    pub auto: bool,
+    /// The person ticked it for deletion.
+    pub ticked: bool,
+}
+
+/// The facts of the error "the version limit is reached" (`data` of a `version.create` or
+/// `version.restore` error).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LimitReached {
+    pub kind: LimitKind,
+    pub max: u64,
+    pub needed: u64,
+    pub rows: Vec<LimitRow>,
+}
+
+impl LimitReached {
+    /// Reads the details of the error. `None` if they do not have the facts.
+    pub fn parse(details: &Value) -> Option<LimitReached> {
+        let kind = match details["limit"]["kind"].as_str()? {
+            "versions" => LimitKind::Versions,
+            "bytes" => LimitKind::Bytes,
+            _ => return None,
+        };
+        let rows = details["versions"]
+            .as_array()?
+            .iter()
+            .filter_map(|r| {
+                Some(LimitRow {
+                    id: r["id"].as_u64()?,
+                    name: r["name"].as_str()?.to_string(),
+                    bytes: r["bytes"].as_u64().unwrap_or(0),
+                    time_ms: r["time_ms"].as_u64().unwrap_or(0),
+                    auto: r["auto"].as_bool().unwrap_or(false),
+                    ticked: false,
+                })
+            })
+            .collect();
+        Some(LimitReached {
+            kind,
+            max: details["limit"]["max"].as_u64()?,
+            needed: details["limit"]["needed"].as_u64()?,
+            rows,
+        })
+    }
+
+    /// The IDs that the person ticked.
+    pub fn ticked(&self) -> Vec<u64> {
+        self.rows
+            .iter()
+            .filter(|r| r.ticked)
+            .map(|r| r.id)
+            .collect()
+    }
+
+    /// The bytes that deleting the ticked versions frees, about.
+    pub fn freed(&self) -> u64 {
+        self.rows.iter().filter(|r| r.ticked).map(|r| r.bytes).sum()
+    }
+
+    /// True if deleting the ticked versions would make room for the new version.
+    pub fn enough(&self) -> bool {
+        match self.kind {
+            LimitKind::Versions => {
+                self.needed.saturating_sub(self.ticked().len() as u64) <= self.max
+            }
+            LimitKind::Bytes => self.needed.saturating_sub(self.freed()) <= self.max,
+        }
+    }
+}
+
+/// The unit of a size that a person reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SizeUnit {
+    Kib,
+    Mib,
+}
+
+/// A size in bytes as a number and a unit: KiB below one MiB, else MiB.
+pub fn size_parts(bytes: u64) -> (f64, SizeUnit) {
+    const MIB: u64 = 1024 * 1024;
+    if bytes < MIB {
+        ((bytes as f64 / 1024.0).max(0.1), SizeUnit::Kib)
+    } else {
+        (bytes as f64 / MIB as f64, SizeUnit::Mib)
+    }
+}
+
 /// The date and the time of day (UTC) of a time in milliseconds: `(unix seconds, hours, minutes)`.
 /// `None` for 0, which means that the time is not known.
 pub fn time_parts(time_ms: u64) -> Option<(i64, u32, u32)> {
@@ -278,6 +391,65 @@ mod tests {
             "limits": {"max_versions": 100, "max_bytes": 1},
             "current_is_newest": false
         })
+    }
+
+    #[test]
+    fn a_refused_save_gives_the_versions_to_choose_from() {
+        let details = json!({
+            "limit": {"kind": "versions", "max": 3, "needed": 4},
+            "versions": [
+                {"id": 1, "name": "A", "bytes": 5000, "time_ms": 1000, "auto": false},
+                {"id": 2, "name": "B", "bytes": 3_000_000, "time_ms": 0, "auto": true},
+                {"name": "no id"}
+            ]
+        });
+        let mut l = LimitReached::parse(&details).unwrap();
+        assert_eq!(
+            (l.kind, l.max, l.needed, l.rows.len()),
+            (LimitKind::Versions, 3, 4, 2)
+        );
+        assert!(l.rows[1].auto && !l.rows[0].ticked);
+        assert!(l.ticked().is_empty() && !l.enough());
+        l.rows[1].ticked = true;
+        assert_eq!(l.ticked(), vec![2]);
+        assert_eq!(l.freed(), 3_000_000);
+        assert!(l.enough());
+        let mut b = LimitReached::parse(&json!({
+            "limit": {"kind": "bytes", "max": 1000, "needed": 1500},
+            "versions": [{"id": 7, "name": "x", "bytes": 400}, {"id": 8, "name": "y", "bytes": 900}]
+        }))
+        .unwrap();
+        assert!(!b.enough());
+        b.rows[0].ticked = true;
+        assert!(!b.enough(), "400 bytes are not enough");
+        b.rows[1].ticked = true;
+        assert!(b.enough());
+        for bad in [
+            json!({}),
+            json!({"limit": {"kind": "other", "max": 1, "needed": 2}, "versions": []}),
+            json!({"limit": {"kind": "bytes", "max": 1}, "versions": []}),
+            json!({"limit": {"kind": "bytes", "max": 1, "needed": 2}}),
+        ] {
+            assert!(LimitReached::parse(&bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn sizes_are_shown_in_kib_or_mib() {
+        assert_eq!(size_parts(0).1, SizeUnit::Kib);
+        assert!(size_parts(0).0 >= 0.1);
+        assert_eq!(size_parts(2048), (2.0, SizeUnit::Kib));
+        assert_eq!(size_parts(1024 * 1024 - 1).1, SizeUnit::Kib);
+        assert_eq!(size_parts(3 * 1024 * 1024), (3.0, SizeUnit::Mib));
+    }
+
+    #[test]
+    fn a_list_tells_when_the_history_is_read_only() {
+        let l =
+            VersionList::parse(&json!({"read_only": true, "notes": ["a", 5, "b"], "versions": []}));
+        assert!(l.read_only);
+        assert_eq!(l.notes, vec!["a", "b"]);
+        assert!(!VersionList::parse(&json!({})).read_only);
     }
 
     #[test]

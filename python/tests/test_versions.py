@@ -36,12 +36,18 @@ def test_read_and_change_calls():
     doc.versions.get(3, document=True)
     doc.versions.restore(2)
     doc.versions.delete(2)
+    doc.versions.delete([3, 4])
+    doc.versions.repair()
+    doc.versions.repair(confirm=True)
     assert fake.calls == [
         ("version.list", None),
         ("version.get", {"id": 3}),
         ("version.get", {"id": 3, "document": True}),
         ("version.restore", {"id": 2}),
         ("version.delete", {"id": 2}),
+        ("version.delete", {"ids": [3, 4]}),
+        ("version.repair", {"confirm": False}),
+        ("version.repair", {"confirm": True}),
     ]
 
 

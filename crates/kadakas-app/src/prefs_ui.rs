@@ -24,6 +24,9 @@ pub struct PrefsEdit<'a> {
     pub active_language: &'static str,
     /// The workspace profiles (PLAT-04).
     pub profiles: &'a mut crate::profiles::Profiles,
+    /// The limits of the versions of a file.
+    pub max_versions: &'a mut u32,
+    pub max_version_mib: &'a mut u32,
 }
 
 impl PrefsDialog {
@@ -58,6 +61,17 @@ impl PrefsDialog {
                         ui.selectable_value(edit.icon_size, z, z.label());
                     }
                 });
+                ui.add_space(6.0);
+                ui.heading(tr!("prefs-ui-versions"));
+                ui.horizontal(|ui| {
+                    ui.label(tr!("prefs-ui-max-versions"));
+                    ui.add(egui::DragValue::new(edit.max_versions).range(1..=1000));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tr!("prefs-ui-max-version-size"));
+                    ui.add(egui::DragValue::new(edit.max_version_mib).range(1..=256));
+                });
+                ui.small(tr!("prefs-ui-versions-hint"));
                 ui.add_space(6.0);
                 autosave.settings_section(ui);
             });
@@ -270,6 +284,8 @@ mod tests {
             units,
             active_language: "en-US",
             profiles,
+            max_versions: Box::leak(Box::new(100)),
+            max_version_mib: Box::leak(Box::new(64)),
         }
     }
 

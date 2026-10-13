@@ -74,3 +74,12 @@ def test_converters_are_off_unless_allowed(tmp_path):
         with pytest.raises(KadakasError) as e:
             d.call("import.file", path=str(dwg))
         assert "--allow-converters" not in e.value.message
+
+
+def test_the_facts_of_a_refused_save_are_in_data():
+    from kadakas.errors import KadakasError
+
+    e = KadakasError(6, "limit", method="version.create", kind="limit",
+                     data={"kind": "limit", "versions": [{"id": 1}], "limit": {"max": 3}})
+    assert e.data == {"versions": [{"id": 1}], "limit": {"max": 3}}
+    assert KadakasError(2, "x").data == {}

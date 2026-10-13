@@ -2127,13 +2127,13 @@ class Api:
         return self._call("revision.list", params or None)
 
     def version_create(self, **params: Any) -> Any:
-        """Save the document as a named version. One undo step. params: {name, note?, author?, now_ms?}. The version keeps the author (default: the collaboration name, else the origin: user, agent or script), the time, the origin and the editor revision. The oldest versions are folded into the base when the count or the size passes the session limits (max_versions, max_version_bytes). Returns {version, dropped: [ids of versions the limits pushed out], count, bytes}.
+        """Save the document as a named version. One undo step (undo removes the version again). params: {name, note?, author?, now_ms?}. The version keeps the author (default: the collaboration name, else the origin: user, agent or script), the time, the origin and the editor revision. If the version would go over a limit (max_versions or max_version_bytes of the session), nothing is saved and nothing is deleted: the call fails with a limit error whose data has `limit` {kind: versions|bytes, max, needed}, `versions` [{id, name, bytes, time_ms, auto}] and `options`. Pass this to the person and ask what to do: which versions to delete (version.delete {ids}), or raising the limit in Preferences. Never delete versions by yourself to make room. Fails with a conflict error (reason history_read_only) if the history of the file could not be read completely. Returns {version, count, bytes}.
 
         JSON-RPC method ``version.create``."""
         return self._call("version.create", params or None)
 
     def version_list(self, **params: Any) -> Any:
-        """The versions, oldest first. Returns {versions: [{id, name, note?, author, time_ms, origin, parents (the IDs of the versions it was made from, first parent first), branch, base_revision, auto?, delta_bytes}], branch (the current branch, default main), head (the version that the next one is made from), count, bytes, limits: {max_versions, max_bytes}, current_is_newest (true: the document has the content of the newest version, null: there is no version)}.
+        """The versions, oldest first. params: {current? (false: leave out current_is_newest, which costs a pass over the drawing; default true)}. Returns {read_only (true: the history of the file could not be read completely; it is kept as it is until the person decides, see version.repair), notes? (what could not be read), versions: [{id, name, note?, author, time_ms, origin, parents (the IDs of the versions it was made from, first parent first), branch, base_revision, auto?, delta_bytes}], branch (the current branch, default main), head (the version that the next one is made from), count, bytes, limits: {max_versions, max_bytes} (the thresholds at which a save is refused), current_is_newest (true: the document has the content of the newest version, null: there is no version)}.
 
         JSON-RPC method ``version.list``."""
         return self._call("version.list", params or None)
@@ -2145,22 +2145,28 @@ class Api:
         return self._call("version.get", params or None)
 
     def version_restore(self, **params: Any) -> Any:
-        """Make the document equal to a version. The current state is saved first as an automatic version (not if it equals the newest version), then the content is replaced in one undo step; undo gives back the work, the versions stay. params: {id, now_ms?}. The active layer and class stay if they exist. Returns {restored, saved_version: {id, new} or null, dropped, changed, notes (things of the version that did not fit and were left out)}.
+        """Make the document equal to a version. The current state is saved first as an automatic version (not if it equals the newest version), then the content is replaced in one undo step. Undo takes back the restore and also removes the automatic version that this call made; the versions you had stay. If the automatic version would go over a limit, the call fails as version.create does (nothing changes): ask the person. params: {id, now_ms?}. The active layer and class stay if they exist. Returns {restored, saved_version: {id, new} or null, changed, notes (things of the version that did not fit and were left out)}.
 
         JSON-RPC method ``version.restore``."""
         return self._call("version.restore", params or None)
 
     def version_delete(self, **params: Any) -> Any:
-        """Delete a version. One undo step. The other versions keep their content. params: {id}. Returns {deleted, count}.
+        """Delete versions that the person chose. One undo step (undo brings them back). The other versions keep their content. params: {id} or {ids: [id]}. Nothing is deleted if one of the IDs does not exist. Returns {deleted: [{id, name, bytes, time_ms, auto}], count}; the change event names the deleted versions in `detail.deleted`.
 
         JSON-RPC method ``version.delete``."""
         return self._call("version.delete", params or None)
 
     def version_diff(self, **params: Any) -> Any:
-        """Compare two versions, or a version and the current document. params: {from, to (a version ID or "current"), kinds? (objects, layers, classes, resources, document; default all), limit? (most things listed, default 100, at most 1000)}. Returns {from, to, counts: {<kind>: {added, removed, changed}}, totals, truncated (more things than listed), exact (false: the work limit stopped the diff and the counts are partial), objects|layers|classes|resources|document: {added: [{id, ...}], removed: [{id, ...}], changed: [{id, ..., properties: [{path, old?, new?}], properties_truncated?}]}}. Property paths are those of collaboration (shape, attrs.pen, data.<key>, drawing.project.name, order = stacking). A value longer than 160 characters is {cut, len, hash}.
+        """Compare two versions, or a version and the current document. params: {from, to (a version ID or "current"), kinds? (objects, layers, classes, resources, document; default all), limit? (most things listed, default 100, at most 1000)}. Returns {from, to, counts: {<kind>: {added, removed, changed}}, totals, truncated (more things than listed), exact (false: the work limit stopped the diff and the counts are partial), objects|layers|classes|resources|document: {added: [{id, ...}], removed: [{id, ...}], changed: [{id, ..., properties: [{path, old?, new?}], properties_truncated?}]}}. Property paths are those of collaboration (shape, attrs.pen, data.<key>, drawing.project.name). order is the stacking position among the things that both sides have on the layer, and it is listed only for a thing that moved. A value longer than 160 characters is {cut, len, hash}.
 
         JSON-RPC method ``version.diff``."""
         return self._call("version.diff", params or None)
+
+    def version_repair(self, **params: Any) -> Any:
+        """Keep only the part of the history that could be read. A file whose history could not be read completely (a damaged part, more than 1000 versions, a drawing that was changed by a program that did not update the versions) is opened as it is, and the history is read only: no version is changed or lost until the person decides. This call is that decision and it loses the versions that could not be read: call it only when the person has said so. params: {confirm: true}. One undo step. Returns {kept, notes (what was left out)}.
+
+        JSON-RPC method ``version.repair``."""
+        return self._call("version.repair", params or None)
 
     def collab_status(self, **params: Any) -> Any:
         """State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text without a token, or null if there is none), reconnecting (true: the session connects again by itself after a loss), last_error (why the last try to connect failed, or null), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), waiting_for_snapshot (true: the first snapshot has not arrived, also in the wait between two tries of a first connection, so the document will be replaced and an edit now would be lost; edits are refused with a conflict error), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.
@@ -2581,6 +2587,7 @@ METHOD_NAMES: tuple[str, ...] = (
     "version.restore",
     "version.delete",
     "version.diff",
+    "version.repair",
     "collab.status",
     "collab.connect",
     "collab.disconnect",

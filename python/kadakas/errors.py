@@ -13,19 +13,22 @@ class KadakasError(Exception):
     so ``except NotFound`` works. Catch ``KadakasError`` to catch them all."""
 
     def __new__(cls, code: int = 1, message: str = "", method: str | None = None,
-                kind: str | None = None):
+                kind: str | None = None, data: dict | None = None):
         if cls is KadakasError:
             cls = _BY_CODE.get(code, KadakasError)
         return super().__new__(cls)
 
     def __init__(self, code: int, message: str, method: str | None = None,
-                 kind: str | None = None) -> None:
+                 kind: str | None = None, data: dict | None = None) -> None:
         prefix = f"{method}: " if method else ""
         super().__init__(f"{prefix}{message}")
         self.code = code
         self.message = message
         self.method = method
         self.kind = kind or KINDS.get(code, "error")
+        #: More facts of the error (``data`` of the reply without ``kind``), for example the list of
+        #: versions when a save is refused because of a limit.
+        self.data = {k: v for k, v in (data or {}).items() if k != "kind"}
 
     @property
     def is_forbidden(self) -> bool:

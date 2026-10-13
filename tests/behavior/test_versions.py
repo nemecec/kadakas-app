@@ -31,9 +31,11 @@ def test_save_compare_restore_and_undo(cad):
     listing = cad.result("version.list")
     assert [v["name"] for v in listing["versions"]] == ["Concept", "Revised"]
     assert listing["current_is_newest"] is True
-    # The second version is a small delta, not a copy.
-    assert listing["versions"][0]["delta_bytes"] == 0
-    assert 0 < listing["versions"][1]["delta_bytes"]
+    # The older version is a small reverse delta from the newer one, not a copy; the newest is
+    # stored as a change from the drawing.
+    assert listing["versions"][1]["delta_bytes"] == 0
+    assert 0 < listing["versions"][0]["delta_bytes"]
+    assert listing["read_only"] is False
 
     diff = cad.result("version.diff", {"from": 1, "to": 2})
     assert diff["counts"]["objects"] == {"added": 1, "removed": 1, "changed": 1}
@@ -90,7 +92,9 @@ def test_delete_a_version_in_the_middle_keeps_the_others(cad):
     for i in range(3):
         cad.execute(rect_cmd(i * 20, 0, i * 20 + 10, 10))
         cad.result("version.create", {"name": f"v{i + 1}"})
-    assert cad.result("version.delete", {"id": 2}) == {"deleted": 2, "count": 2}
+    deleted = cad.result("version.delete", {"id": 2})
+    assert deleted["count"] == 2
+    assert [(v["id"], v["name"]) for v in deleted["deleted"]] == [(2, "v2")]
     assert [v["name"] for v in cad.result("version.list")["versions"]] == ["v1", "v3"]
     assert len(cad.result("version.get", {"id": 3, "document": True})["document"]["objects"]) == 3
     assert cad.error("version.get", {"id": 2})["data"]["kind"] == "not_found"
@@ -107,10 +111,16 @@ def test_versions_are_saved_in_the_file_and_open_again(make_serve, tmp_path):
     first.result("version.create", {"name": "Two trees", "now_ms": 8})
     first.result("file.save", {"path": str(path)})
     on_disk = json.loads(path.read_text())
-    assert on_disk["history"]["format"] == 1
-    assert len(on_disk["history"]["versions"]) == 2
-    # The second version holds only what changed.
-    assert len(on_disk["history"]["versions"][1]["delta"]) < len(on_disk["history"]["base"])
+    history = on_disk["history"]
+    assert history["format"] == 2
+    assert len(history["versions"]) == 2
+    # The drawing is the only full copy: the newest version is a change from it, and there is no
+    # separate snapshot.
+    assert "snapshot" not in history["newest"] and "base" not in history
+    assert len(history["newest"]["anchor"]) == 64
+    # The older version is a reverse delta that is smaller than the drawing.
+    assert len(history["versions"][0]["delta"]) < len(on_disk["objects"]) + 5
+    assert "delta" not in history["versions"][1]
 
     second = make_serve()
     second.result("file.open", {"path": str(path)})
@@ -134,46 +144,129 @@ def test_a_file_without_history_opens_and_gets_one(make_serve, tmp_path):
     assert reader.result("version.list")["current_is_newest"] is True
 
 
-def test_a_hostile_history_is_dropped_or_repaired_with_notes(cad):
+def test_a_save_after_more_edits_keeps_every_version(make_serve, tmp_path):
+    path = tmp_path / "g.kad"
+    first = make_serve()
+    for i in range(3):
+        first.execute(rect_cmd(i * 20, 0, i * 20 + 10, 10))
+        first.result("version.create", {"name": f"v{i}"})
+    first.execute(rect_cmd(500, 0, 510, 10))  # not in any version
+    first.result("file.save", {"path": str(path)})
+    second = make_serve(path)
+    assert second.result("version.list")["read_only"] is False
+    assert second.result("version.list")["current_is_newest"] is False
+    for i in (1, 2, 3):
+        got = second.result("version.get", {"id": i, "document": True})
+        assert len(got["document"]["objects"]) == i
+    assert second.result("version.diff", {"from": 3, "to": "current"})["totals"]["added"] == 1
+    # Edit, save again: the versions are still all there.
+    second.execute(rect_cmd(700, 0, 710, 10))
+    second.result("file.save", {"path": str(path)})
+    third = make_serve(path)
+    assert third.result("version.list")["count"] == 3
+    assert third.result("version.diff", {"from": 3, "to": "current"})["totals"]["added"] == 2
+
+
+def saved_file(cad, tmp_path):
+    path = tmp_path / "h.kad"
+    cad.result("file.save", {"path": str(path)})
+    return json.loads(path.read_text())
+
+
+def test_a_history_that_cannot_be_read_stays_as_it_is_and_is_read_only(make_serve, tmp_path):
+    cad = make_serve()
     cad.execute(rect_cmd(0, 0, 10, 10))
     cad.result("version.create", {"name": "One"})
     cad.execute(rect_cmd(20, 0, 30, 10))
     cad.result("version.create", {"name": "Two"})
-    doc = json.loads(json.dumps(cad.doc()))
-    file_form = {**doc, "history": None}
-
-    # Nonsense in the field.
-    file_form["history"] = "what"
-    loaded = cad.result("document.load", {"document": file_form})
-    assert len(loaded["notes"]) == 1
-    assert cad.result("version.list")["count"] == 0
-
-    # A damaged chain: the version that does not fit is dropped.
-    cad.execute(rect_cmd(0, 0, 10, 10))
-    cad.result("version.create", {"name": "One"})
-    cad.execute(rect_cmd(20, 0, 30, 10))
-    cad.result("version.create", {"name": "Two"})
-    # The saved form of the document is in the file; build it from a save.
-    import tempfile
-    from pathlib import Path
-
-    with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "h.kad"
-        cad.result("file.save", {"path": str(p)})
-        saved = json.loads(p.read_text())
-    saved["history"]["versions"][1]["delta"] = [
+    saved = saved_file(cad, tmp_path)
+    saved["history"]["versions"][0]["delta"] = [
         {"op": "delete", "target": {"kind": "object", "id": uid(9999)}}
     ]
-    saved["history"]["versions"][0]["name"] = "x" * 500
-    loaded = cad.result("document.load", {"document": saved})
-    assert loaded["notes"]
-    versions = cad.result("version.list")["versions"]
-    assert [v["id"] for v in versions] == [1]
-    assert len(versions[0]["name"]) == 120
-    # A history in an unknown format is dropped.
-    saved["history"] = {"format": 99}
-    assert cad.result("document.load", {"document": saved})["notes"]
-    assert cad.result("version.list")["count"] == 0
+    original = json.loads(json.dumps(saved["history"]))
+    broken = tmp_path / "broken.kad"
+    broken.write_text(json.dumps(saved))
+
+    reader = make_serve()
+    opened = reader.result("file.open", {"path": str(broken)})
+    # file.open reports what it could not read, like document.load.
+    assert opened["ok"] is True and any("read only" in n for n in opened["notes"])
+    listing = reader.result("version.list")
+    assert listing["read_only"] is True and listing["count"] == 1 and listing["notes"]
+    for method, params in [
+        ("version.create", {"name": "x"}),
+        ("version.restore", {"id": 2}),
+        ("version.delete", {"id": 2}),
+    ]:
+        err = reader.error(method, params)
+        assert err["code"] == 5 and err["data"]["kind"] == "conflict"
+        assert err["data"]["notes"]
+    # A save writes the history as it was.
+    again = tmp_path / "again.kad"
+    reader.result("file.save", {"path": str(again)})
+    assert json.loads(again.read_text())["history"] == original
+    # The repair needs a yes.
+    assert reader.error("version.repair", {})["code"] == -32602
+    kept = reader.result("version.repair", {"confirm": True})
+    assert kept["kept"] == 1 and kept["notes"]
+    assert reader.result("version.list")["read_only"] is False
+    reader.result("version.create", {"name": "works again"})
+    # Undo brings the unreadable history back.
+    reader.result("undo")
+    reader.result("undo")
+    assert reader.result("version.list")["read_only"] is True
+
+
+def test_nonsense_in_the_history_field_is_kept_and_reported(cad, tmp_path):
+    cad.execute(rect_cmd(0, 0, 10, 10))
+    cad.result("version.create", {"name": "One"})
+    saved = saved_file(cad, tmp_path)
+    for bad in ("what", [1, 2], {"format": 99}):
+        saved["history"] = bad
+        loaded = cad.result("document.load", {"document": saved})
+        assert loaded["notes"]
+        assert cad.result("version.list")["read_only"] is True
+        out = tmp_path / "out.kad"
+        cad.result("file.save", {"path": str(out)})
+        assert json.loads(out.read_text())["history"] == bad
+
+
+def test_the_limit_stops_the_save_and_lists_the_versions(cad):
+    cad.execute(rect_cmd(0, 0, 10, 10))
+    limit = cad.result("version.list")["limits"]["max_versions"]
+    for i in range(limit):
+        cad.result("version.create", {"name": f"v{i + 1}"})
+    before = cad.result("version.list")
+    err = cad.error("version.create", {"name": "one too many"})
+    assert err["code"] == 6 and err["data"]["kind"] == "limit"
+    data = err["data"]
+    assert data["limit"] == {"kind": "versions", "max": limit, "needed": limit + 1}
+    assert [v["id"] for v in data["versions"]] == list(range(1, limit + 1))
+    assert {"id", "name", "bytes", "time_ms", "auto"} <= set(data["versions"][0])
+    assert data["ask_the_person"] is True
+    assert {o["action"] for o in data["options"]} == {"delete", "raise_limit"}
+    # Nothing was saved and nothing was deleted.
+    assert cad.result("version.list") == before
+    # A restore is stopped the same way when it needs an automatic version.
+    cad.execute(rect_cmd(50, 0, 60, 10))
+    assert cad.error("version.restore", {"id": 1})["data"]["kind"] == "limit"
+    # The person chooses versions to delete (not the oldest), and the save goes on.
+    gone = cad.result("version.delete", {"ids": [3, 5, 7]})
+    assert [v["id"] for v in gone["deleted"]] == [3, 5, 7]
+    cad.result("version.create", {"name": "now it fits"})
+    ids = [v["id"] for v in cad.result("version.list")["versions"]]
+    assert 3 not in ids and 1 in ids and len(ids) == limit - 3 + 1
+
+
+def test_delete_names_what_it_deleted_in_the_event(cad):
+    cad.execute(rect_cmd(0, 0, 10, 10))
+    cad.result("version.create", {"name": "One"})
+    cad.result("version.create", {"name": "Two"})
+    call(cad, "events.subscribe", {"kinds": ["document"]})
+    notes, reply = call(cad, "version.delete", {"ids": [1]})
+    assert reply["result"]["deleted"][0]["name"] == "One"
+    assert notes[0]["params"]["op"] == "version_delete"
+    assert notes[0]["params"]["detail"]["deleted"][0]["name"] == "One"
 
 
 def test_errors_use_the_standard_kinds(cad):
@@ -227,7 +320,8 @@ def test_version_changes_are_change_events(cad):
     assert len(notes) == 1
     note = notes[0]
     assert note["method"] == "events.change"
-    assert note["params"]["op"] == "set_history"
+    assert note["params"]["op"] == "version_create"
+    assert note["params"]["detail"]["created"]["name"] == "One"
     assert note["params"]["document"]["history"] is True
     assert note["params"]["origin"] == "agent"
 
@@ -248,3 +342,7 @@ def test_describe_has_the_review_section(cad):
     assert "version.diff" in [m["name"] for m in d["methods"]]
     assert d["review"]["examples"]
     assert "REV-09" in d["review"]["local"]
+    assert "without the person" in d["review"]["consent"]
+    docs = {m["name"]: m["doc"] for m in d["methods"]}
+    assert "Pass this to the person" in docs["version.create"]
+    assert "version.repair" in docs
