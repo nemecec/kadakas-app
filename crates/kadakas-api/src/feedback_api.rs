@@ -11,7 +11,9 @@
 pub mod excerpt;
 pub mod review;
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::sync::Once;
 
 use kadakas_core::model::ObjectId;
 use kadakas_core::uid::Uid;
@@ -100,6 +102,13 @@ impl FeedbackState {
         self.client = Some((scrub::text(name, 60), scrub::text(version, 60)));
     }
 
+    /// Forgets the calls and the last failure. A new document starts a new story. The log lines,
+    /// the outbox, the consent, the rate limit and the client stay.
+    pub fn clear_context(&mut self) {
+        self.calls.clear();
+        self.failure = None;
+    }
+
     /// The recent calls, newest last (what the call log of a report is made from).
     pub fn recent_calls(&self) -> Vec<Value> {
         self.calls.iter().cloned().collect()
@@ -144,16 +153,80 @@ pub(crate) fn finish(s: &mut Session, b: Option<Begun>, result: &Result<Value, R
         entry["params"] = b.params;
     }
     if let Err(e) = result {
-        let error = format!("{} (code {}, {})", e.message, e.code, e.kind);
-        entry["error"] = json!(scrub::text(&error, 200));
+        // The error text is filled in from the session, so the harder scrub applies: layer and
+        // object names in quotes and the stems of file names go.
+        let error = scrub::harsh(&format!("{} (code {}, {})", e.message, e.code, e.kind));
+        entry["error"] = json!(scrub::cut(&error, 200));
         f.log(&format!("{}: {error}", b.method));
         f.failure = Some(Failure {
             method: b.method,
-            error: scrub::text(&error, MAX_ERROR),
+            error: scrub::cut(&error, MAX_ERROR),
             ids: b.ids,
         });
     }
     f.calls.push_back(entry);
+}
+
+thread_local! {
+    /// The message and place of the last panic on this thread, left by the hook.
+    static LAST_PANIC: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+static HOOK: Once = Once::new();
+
+/// Installs (once) a panic hook that keeps the message and the place of a panic for the report
+/// and then calls the hook that was there before (so the message still goes to stderr).
+fn install_panic_hook() {
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let payload = info.payload();
+            let msg = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".into());
+            let place = info
+                .location()
+                .map(|l| format!(" at {}:{}", l.file(), l.line()))
+                .unwrap_or_default();
+            LAST_PANIC.with(|p| *p.borrow_mut() = Some(format!("{msg}{place}")));
+            previous(info);
+        }));
+    });
+}
+
+impl Session {
+    /// Runs `f` so that a panic becomes an internal error (code -32603) and the session goes on.
+    /// The command that panicked took its own changes back (`Editor::execute`). The session is
+    /// marked `tainted`, because other state may be half way through a change. The panic is a bug
+    /// of Kadakas, so the message and the place go to the log lines and the failure of the
+    /// session, where a bug report finds them. In a program built with `panic = "abort"`, such as
+    /// the web build, a panic ends the program and this function never sees it.
+    pub(crate) fn guarded<T>(
+        &mut self,
+        method: &str,
+        f: impl FnOnce(&mut Session) -> Result<T, RpcError>,
+    ) -> Result<T, RpcError> {
+        install_panic_hook();
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
+            Ok(r) => r,
+            Err(_) => {
+                let detail = LAST_PANIC.with(|p| p.borrow_mut().take());
+                let detail = scrub::harsh(&detail.unwrap_or_else(|| "panic".into()));
+                self.tainted = true;
+                let method = scrub::text(method, 80);
+                let error = scrub::cut(&format!("internal error: {detail}"), MAX_ERROR);
+                self.feedback.log(&format!("{method}: {error}"));
+                self.feedback.failure = Some(Failure {
+                    method: method.clone(),
+                    error,
+                    ids: Vec::new(),
+                });
+                Err(RpcError::internal(format!("internal error in {method}")))
+            }
+        }
+    }
 }
 
 fn now() -> u64 {
@@ -312,21 +385,17 @@ impl Session {
         if self.editor.doc().objects.is_empty() {
             return None;
         }
-        for width in [640u64, 320] {
-            let mut p = view.cloned().unwrap_or_else(|| json!({}));
-            if p.get("width").is_none() {
-                p["width"] = json!(width);
-                p["height"] = json!(width * 3 / 4);
-            }
-            let r = self.dispatch("render.png", p).ok()?;
-            let png = base64::engine::general_purpose::STANDARD
-                .decode(r["png_base64"].as_str()?)
-                .ok()?;
-            if png.len() <= MAX_IMAGE_BYTES {
-                return Some(png);
-            }
+        // One render. A picture over the limit is left out, not made again.
+        let mut p = view.cloned().unwrap_or_else(|| json!({}));
+        if p.get("width").is_none() {
+            p["width"] = json!(640);
+            p["height"] = json!(480);
         }
-        None
+        let r = self.dispatch("render.png", p).ok()?;
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(r["png_base64"].as_str()?)
+            .ok()?;
+        (png.len() <= MAX_IMAGE_BYTES).then_some(png)
     }
 
     fn call_log(&self) -> Option<Vec<u8>> {
@@ -394,7 +463,12 @@ impl Session {
         d.context = context(client.as_ref());
 
         let mut att: Vec<AttachmentData> = Vec::new();
-        let wants = |flag: Option<bool>, default: bool| flag.unwrap_or(default);
+        // An equal report only raises a counter and drops new attachments, so make none.
+        let merges = self
+            .feedback
+            .hub
+            .would_merge(p.kind, &p.title, &d.method, Origin::Agent);
+        let wants = |flag: Option<bool>, default: bool| !merges && flag.unwrap_or(default);
         let bug = p.kind == Kind::Bug;
         let feature = p.kind == Kind::FeatureRequest;
         if wants(
@@ -493,6 +567,13 @@ fn near_middle(doc: &kadakas_core::model::Document, n: usize) -> Vec<ObjectId> {
     v.into_iter().take(n).map(|x| x.0).collect()
 }
 
+/// A report of an agent. The reports of people are not visible to agents: they are "not found".
+fn agent_report(hub: &mut Hub, id: &str) -> Result<Report, RpcError> {
+    hub.get(id)
+        .filter(|r| r.origin == Origin::Agent)
+        .ok_or_else(|| RpcError::not_found(format!("no report {}", scrub::text(id, 40))))
+}
+
 fn summary(r: &Report) -> Value {
     let mut v = json!({
         "id": r.id,
@@ -523,7 +604,13 @@ pub(crate) fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<V
             }
             let P { status, limit } = params(p)?;
             let hub = &mut s.feedback.hub;
-            let mut list = hub.list();
+            let all = hub.list();
+            // The reports of people are not for agents: they are a count.
+            let people = all.iter().filter(|r| r.origin != Origin::Agent).count();
+            let mut list: Vec<Report> = all
+                .into_iter()
+                .filter(|r| r.origin == Origin::Agent)
+                .collect();
             list.reverse();
             let reports: Vec<Value> = list
                 .iter()
@@ -535,9 +622,14 @@ pub(crate) fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<V
                 .take(limit.unwrap_or(50).min(200))
                 .map(summary)
                 .collect();
+            let waiting = list
+                .iter()
+                .filter(|r| r.status == kadakas_feedback::Status::NeedsReview)
+                .count();
             Ok(json!({
                 "reports": reports,
-                "needs_review": hub.needs_review(),
+                "needs_review": waiting,
+                "reports_of_people": people,
                 "sending": {"enabled": hub.send_enabled(), "asked": hub.consent_asked()},
             }))
         })(),
@@ -547,9 +639,7 @@ pub(crate) fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<V
                 id: String,
             }
             let P { id } = params(p)?;
-            let r = s.feedback.hub.get(&id).ok_or_else(|| {
-                RpcError::not_found(format!("no report {}", scrub::text(&id, 40)))
-            })?;
+            let r = agent_report(&mut s.feedback.hub, &id)?;
             let mut v = serde_json::to_value(&r).map_err(RpcError::app)?;
             v["note"] = json!(status_note(&s.feedback.hub, r.status));
             Ok(v)
@@ -560,6 +650,7 @@ pub(crate) fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<V
                 id: String,
             }
             let P { id } = params(p)?;
+            agent_report(&mut s.feedback.hub, &id)?;
             let r = s.feedback.hub.withdraw(&id).map_err(rpc)?;
             serde_json::to_value(&r).map_err(RpcError::app)
         })(),
@@ -567,18 +658,40 @@ pub(crate) fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<V
     })
 }
 
+/// The option or variant that a message names: the first word in quotes after `field`, `variant`
+/// or `option`.
+fn named_option(message: &str) -> Option<String> {
+    let at = ["field", "variant", "option"]
+        .iter()
+        .filter_map(|w| message.find(w))
+        .min()?;
+    let rest = &message[at..];
+    let open = rest.find(['`', '\'', '"'])?;
+    let q = rest[open..].chars().next()?;
+    let inner = &rest[open + 1..];
+    let name = &inner[..inner.find(q)?];
+    (!name.is_empty()
+        && name.len() <= 40
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '-')))
+    .then(|| name.to_string())
+}
+
 /// The hint in an error reply: a short sentence and a draft for `feedback.submit`. Only the
-/// errors that point to a missing feature or a bug have one.
+/// errors that point to a missing feature or a bug have one. The draft has the kind, a title and
+/// the method; the error is in the context of the session, so it is not repeated.
 pub fn hint(method: &str, kind: &str, message: &str) -> Option<Value> {
     if method.starts_with("feedback.") {
         return None;
     }
     let lower = message.to_ascii_lowercase();
+    const MISSING: &str = "If the name is right according to `describe` and the feature is missing, file a feature request with `feedback`.";
     let (draft_kind, title, text) = match kind {
         "method_not_found" => (
             "feature_request",
             format!("Method {method} is missing"),
-            "If a task needs this method, file a feature request with the feedback tool. Submit the draft or edit it.",
+            MISSING,
         ),
         "invalid_params"
             if [
@@ -591,16 +704,16 @@ pub fn hint(method: &str, kind: &str, message: &str) -> Option<Value> {
             .iter()
             .any(|w| lower.contains(w)) =>
         {
-            (
-                "feature_request",
-                format!("Option not supported by {method}"),
-                "If this option should work, file a feature request with the feedback tool. Submit the draft or edit it.",
-            )
+            let title = match named_option(message) {
+                Some(o) => format!("Option {o} not supported by {method}"),
+                None => format!("Option not supported by {method}"),
+            };
+            ("feature_request", title, MISSING)
         }
         "internal" => (
             "bug",
             format!("Internal error in {method}"),
-            "This is a bug in Kadakas. File it with the feedback tool. Submit the draft or edit it.",
+            "This is a bug in Kadakas. File it with `feedback`.",
         ),
         _ => return None,
     };
@@ -610,7 +723,6 @@ pub fn hint(method: &str, kind: &str, message: &str) -> Option<Value> {
             "kind": draft_kind,
             "title": scrub::text(&title, 100),
             "method": scrub::text(method, 80),
-            "error": scrub::text(message, 300),
         },
     }))
 }
@@ -633,7 +745,8 @@ pub fn describe() -> Value {
             {"feedback.get": {"id": "fb-1"}},
             {"feedback.withdraw": {"id": "fb-1"}},
         ],
-        "errors": "An error of an unknown method, an unsupported option or an internal error has data.feedback: {hint, draft: {kind, title, method, error}}. Pass the draft to feedback.submit as it is, or edit it.",
+        "errors": "An error of an unknown method, an unsupported option or an internal error has data.feedback: {hint, draft: {kind, title, method}}. Pass the draft to feedback.submit as it is, or edit it. The error of the last failed call is added to a bug report by itself.",
+        "visibility": "You see and change the reports of agents only. The reports of people show as a count (reports_of_people).",
     })
 }
 
@@ -911,7 +1024,7 @@ mod tests {
             let _ = s.handle(m, p);
         }
         // The report is gone (withdrawn) or waits; nothing is ready to send.
-        assert!(s.feedback.hub.outgoing(true, 10).is_empty());
+        assert!(s.feedback.hub.outgoing(true, 10, 1_000).is_empty());
         let st = s.feedback.hub.get(&id).unwrap().status;
         assert!(
             matches!(st, Status::Withdrawn | Status::NeedsReview),
@@ -920,7 +1033,7 @@ mod tests {
         // A second report: with sending on, still nothing goes out until the approval path runs.
         let r = submit(&mut s, json!({"kind": "bug", "title": "wait too"}));
         assert_eq!(r["status"], "needs_review");
-        assert!(s.feedback.hub.outgoing(true, 10).is_empty());
+        assert!(s.feedback.hub.outgoing(true, 10, 1_000).is_empty());
     }
 
     #[test]
@@ -935,7 +1048,21 @@ mod tests {
         assert_eq!(h["draft"]["method"], "plants.nope");
         assert!(h["hint"].as_str().unwrap().len() < 160);
         let h = hint("edit.offset", "invalid_params", "unknown field `side`").unwrap();
+        assert_eq!(
+            h["draft"]["title"],
+            "Option side not supported by edit.offset"
+        );
+        assert!(h["draft"].get("error").is_none());
+        assert!(h["hint"].as_str().unwrap().contains("`describe`"));
+        let h = hint(
+            "edit.offset",
+            "invalid_params",
+            "operation is not supported here",
+        )
+        .unwrap();
         assert_eq!(h["draft"]["title"], "Option not supported by edit.offset");
+        let h = hint("a.b", "invalid_params", "unknown field 'x y'").unwrap();
+        assert_eq!(h["draft"]["title"], "Option not supported by a.b");
         let h = hint("x.y", "internal", "internal error in x.y").unwrap();
         assert_eq!(h["draft"]["kind"], "bug");
         assert!(hint("x.y", "not_found", "object missing").is_none());

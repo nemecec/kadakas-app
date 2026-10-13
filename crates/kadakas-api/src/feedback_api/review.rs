@@ -95,12 +95,19 @@ impl Review {
         }
     }
 
-    pub fn calls_text(&self) -> Option<&str> {
-        self.calls.as_deref()
+    /// The call log as it will be sent: the options of the review apply to it (coordinates, the
+    /// georeference and the CRS, and with the names option the free texts).
+    pub fn calls_text(&self) -> Option<String> {
+        self.calls
+            .as_deref()
+            .map(|c| excerpt::calls_privacy(c, self.privacy))
     }
 
-    pub fn log_text(&self) -> Option<&str> {
-        self.log.as_deref()
+    /// The log lines as they will be sent (the same options).
+    pub fn log_text(&self) -> Option<String> {
+        self.log
+            .as_deref()
+            .map(|l| excerpt::log_privacy(l, self.privacy))
     }
 
     /// The excerpt as it will be sent (privacy options applied).
@@ -129,15 +136,8 @@ impl Review {
         } else {
             None
         };
-        // Free texts in the parameters of the recent calls count as names and notes.
-        let calls = self.calls.as_deref().filter(|_| on(AttachmentKind::Calls));
-        let calls = calls.map(|c| {
-            if self.privacy.remove_names {
-                excerpt::blank_names_in(c)
-            } else {
-                c.to_string()
-            }
-        });
+        let calls = self.calls_text().filter(|_| on(AttachmentKind::Calls));
+        let log = self.log_text().filter(|_| on(AttachmentKind::Log));
         let mut report = self.report.clone();
         report.privacy = self.privacy;
         payload::build(
@@ -153,13 +153,20 @@ impl Review {
                     .as_deref()
                     .filter(|_| on(AttachmentKind::Render)),
                 calls: calls.as_deref(),
-                log: self.log.as_deref().filter(|_| on(AttachmentKind::Log)),
+                log: log.as_deref(),
             },
         )
     }
 
     /// The person agrees: the payload that [`Review::payload`] gives is stored and goes out.
     pub fn approve(&self, hub: &mut Hub) -> Result<(), FeedbackError> {
+        // The person said no to sending: an approval would never be sent. Say so, and change
+        // nothing.
+        if hub.sending_off() {
+            return Err(FeedbackError::State(
+                "sending is off; turn it on in Help > Feedback first".into(),
+            ));
+        }
         let p = self.payload()?;
         hub.approve(&self.report.id, &p, self.privacy)
     }
@@ -208,11 +215,25 @@ mod tests {
         assert!(!text.contains("Smith garden"));
         // Approval stores exactly that payload and the hub gives it to the sender.
         r.approve(&mut s.feedback.hub).unwrap();
-        let out = s.feedback.hub.outgoing(false, 5);
+        let out = s.feedback.hub.outgoing(false, 5, 1_000);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].payload, text);
         assert!(Review::open(&mut s.feedback.hub, &id).is_err());
         assert!(Review::open(&mut s.feedback.hub, "fb-77").is_err());
+    }
+
+    #[test]
+    fn a_review_cannot_approve_while_sending_is_off() {
+        let (mut s, id) = session_with_report();
+        s.feedback.hub.set_send(Some(false)).unwrap();
+        let r = Review::open(&mut s.feedback.hub, &id).unwrap();
+        assert!(matches!(
+            r.approve(&mut s.feedback.hub),
+            Err(FeedbackError::State(_))
+        ));
+        assert_eq!(s.feedback.hub.get(&id).unwrap().status, Status::NeedsReview);
+        s.feedback.hub.set_send(Some(true)).unwrap();
+        r.approve(&mut s.feedback.hub).unwrap();
     }
 
     #[test]

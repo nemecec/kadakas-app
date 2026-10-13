@@ -20,8 +20,16 @@ pub struct Reply {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SendError {
-    /// Worth a retry: no connection, a timeout, a busy server.
+    /// Worth a retry now: a timeout, a dropped connection, a server error.
     Transient(String),
+    /// The server cannot be reached (DNS or connect failed). The computer may be offline, so this
+    /// does not count toward the lifetime limit of tries.
+    Unreachable(String),
+    /// The server is busy and may say when to come back (`Retry-After`, in seconds).
+    Busy {
+        message: String,
+        retry_after: Option<u64>,
+    },
     /// The server refused the report. A retry gives the same answer.
     Permanent(String),
 }
@@ -80,13 +88,24 @@ pub enum Delivery {
         message: String,
         /// True if the server refused the report: do not retry in later runs.
         permanent: bool,
+        /// True if the server could not be reached. Such a failure is not counted.
+        unreachable: bool,
+        /// Seconds that the server asked to wait.
+        retry_after: Option<u64>,
+        /// Tries made in this start.
         attempts: u32,
     },
 }
 
 /// `<url>/v1/feedback`.
 pub fn endpoint(url: &str) -> String {
-    format!("{}/v1/feedback", url.trim().trim_end_matches('/'))
+    let u = url.trim();
+    // A query or a fragment stays at the end.
+    let (base, rest) = match u.find(['?', '#']) {
+        Some(i) => (&u[..i], &u[i..]),
+        None => (u, ""),
+    };
+    format!("{}/v1/feedback{rest}", base.trim_end_matches('/'))
 }
 
 /// Sends one payload, with retries on transient errors.
@@ -107,6 +126,30 @@ pub fn deliver(
                 return Delivery::Failed {
                     message: m,
                     permanent: true,
+                    unreachable: false,
+                    retry_after: None,
+                    attempts: n,
+                };
+            }
+            // No point in more tries now: the next start comes after the back-off of the outbox.
+            Err(SendError::Unreachable(m)) => {
+                return Delivery::Failed {
+                    message: m,
+                    permanent: false,
+                    unreachable: true,
+                    retry_after: None,
+                    attempts: n,
+                };
+            }
+            Err(SendError::Busy {
+                message,
+                retry_after,
+            }) => {
+                return Delivery::Failed {
+                    message,
+                    permanent: false,
+                    unreachable: false,
+                    retry_after,
                     attempts: n,
                 };
             }
@@ -121,6 +164,8 @@ pub fn deliver(
     Delivery::Failed {
         message: last,
         permanent: false,
+        unreachable: false,
+        retry_after: None,
         attempts: tries,
     }
 }
@@ -219,6 +264,8 @@ mod tests {
             Delivery::Failed {
                 message: "down".into(),
                 permanent: false,
+                unreachable: false,
+                retry_after: None,
                 attempts: 3
             }
         );
@@ -236,11 +283,55 @@ mod tests {
             Delivery::Failed {
                 message: "422".into(),
                 permanent: true,
+                unreachable: false,
+                retry_after: None,
                 attempts: 1
             }
         );
         assert_eq!(s.requests().len(), 1);
         assert!(z.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn offline_and_busy_stop_at_once() {
+        let s = FakeSender::new(vec![Err(SendError::Unreachable("dns".into()))]);
+        let z = NoSleep::default();
+        let d = deliver(&s, &z, "u", "{}", RetryPolicy::default());
+        assert_eq!(
+            d,
+            Delivery::Failed {
+                message: "dns".into(),
+                permanent: false,
+                unreachable: true,
+                retry_after: None,
+                attempts: 1
+            }
+        );
+        let s = FakeSender::new(vec![Err(SendError::Busy {
+            message: "429".into(),
+            retry_after: Some(90),
+        })]);
+        let d = deliver(&s, &z, "u", "{}", RetryPolicy::default());
+        assert_eq!(
+            d,
+            Delivery::Failed {
+                message: "429".into(),
+                permanent: false,
+                unreachable: false,
+                retry_after: Some(90),
+                attempts: 1
+            }
+        );
+        assert!(z.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_address_keeps_a_query() {
+        assert_eq!(
+            endpoint("https://a.b/x/?k=v"),
+            "https://a.b/x/v1/feedback?k=v"
+        );
+        assert_eq!(endpoint("https://a.b#f"), "https://a.b/v1/feedback#f");
     }
 
     #[test]

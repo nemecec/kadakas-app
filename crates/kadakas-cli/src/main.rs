@@ -113,6 +113,12 @@ enum FeedbackCmd {
     },
     /// List the reports of the outbox.
     List,
+    /// Give a report (or every unsent report) a fresh start after failed tries: no tries
+    /// counted, no waiting for the back-off.
+    Retry {
+        /// The report, for example fb-3. Default: every unsent report.
+        id: Option<String>,
+    },
 }
 
 #[derive(clap::Args)]
@@ -613,6 +619,9 @@ fn feedback_main(cmd: FeedbackCmd) -> Result<(), String> {
     match cmd {
         FeedbackCmd::List => {
             feedback_cmd::list(&mut hub, &mut std::io::stdout()).map_err(|e| e.to_string())
+        }
+        FeedbackCmd::Retry { id } => {
+            feedback_cmd::retry(&mut hub, id.as_deref(), &mut std::io::stdout())
         }
         FeedbackCmd::Review { id, feedback_url } => {
             feedback_cmd::require_terminal(

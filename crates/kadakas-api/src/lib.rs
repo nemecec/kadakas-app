@@ -155,6 +155,9 @@ pub struct Session {
     pub wasm_plugins: WasmPluginState,
     /// Feedback reports: the outbox, the recent calls and the last failure (see `feedback_api`).
     pub feedback: feedback_api::FeedbackState,
+    /// True after a method panicked (see `Session::guarded`). Error replies say so
+    /// (`data.tainted`), and a new document clears it.
+    tainted: bool,
 }
 
 /// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
@@ -763,6 +766,7 @@ impl Session {
             scripting: ScriptingState::default(),
             wasm_plugins: WasmPluginState::default(),
             feedback: feedback_api::FeedbackState::default(),
+            tainted: false,
         }
     }
 
@@ -808,6 +812,10 @@ impl Session {
         let wasm_plugins = std::mem::take(&mut self.wasm_plugins);
         let limits = self.limits.clone();
         let collab = std::mem::take(&mut self.collab);
+        // The outbox, the consent, the rate limit and the flags of the run belong to the program,
+        // not to the document. The calls and the last failure belong to the old document.
+        let mut feedback = std::mem::take(&mut self.feedback);
+        feedback.clear_context();
         let mut hub = std::mem::take(&mut self.events);
         hub.document_replaced();
         let sequential = self.sequential_ids;
@@ -818,6 +826,7 @@ impl Session {
             ..Session::with_document(doc)
         };
         self.events = hub;
+        self.feedback = feedback;
         self.collab = collab;
         self.collab_mark_saved();
         self.set_sequential_ids(sequential);
@@ -974,8 +983,8 @@ impl Session {
     }
 
     fn dispatch(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
-        if let Some(r) = feedback_api::handle(self, method, p.clone()) {
-            return r;
+        if feedback_api::knows(method) {
+            return feedback_api::handle(self, method, p).expect("a feedback method");
         }
         if let Some(r) = events::handle(self, method, p.clone()) {
             return r;
@@ -1472,20 +1481,15 @@ impl Session {
         let params = req.get("params").cloned().unwrap_or(Value::Null);
         // A panic in a method becomes an internal error with a hint to file a bug, so a long
         // session survives it. The document may be in a state the method did not expect.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.handle_as(conn, kadakas_core::change::Origin::Agent, method, params)
-        }))
-        .unwrap_or_else(|_| {
-            let e = RpcError::internal(format!("internal error in {method}"));
-            self.feedback.log(&e.message);
-            Err(e)
+        let result = self.guarded(method, |s| {
+            s.handle_as(conn, kadakas_core::change::Origin::Agent, method, params)
         });
         let id = id?;
         Some(match result {
             Ok(v) => json!({"jsonrpc": "2.0", "id": id, "result": v}).to_string(),
             Err(e) => {
                 let hint = feedback_api::hint(method, e.kind, &e.message);
-                errors::error_response_with(id, e.code, e.kind, &e.message, hint)
+                errors::error_response_with(id, e.code, e.kind, &e.message, hint, self.tainted)
             }
         })
     }

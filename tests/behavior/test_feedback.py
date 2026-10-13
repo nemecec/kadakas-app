@@ -47,9 +47,9 @@ def test_an_unknown_method_carries_a_ready_draft_that_can_be_submitted_as_is(cad
     err = cad.error("plants.teleport", {})
     assert err["code"] == -32601
     hint = err["data"]["feedback"]
-    assert len(hint["hint"]) < 200
+    assert len(hint["hint"]) < 200 and "describe" in hint["hint"]
     draft = hint["draft"]
-    assert set(draft) == {"kind", "title", "method", "error"}
+    assert set(draft) == {"kind", "title", "method"}
     assert draft["kind"] == "feature_request" and draft["method"] == "plants.teleport"
     report = cad.result("feedback.submit", draft)
     assert report["merged"] is False
@@ -62,6 +62,7 @@ def test_an_unknown_method_carries_a_ready_draft_that_can_be_submitted_as_is(cad
 def test_an_unsupported_option_has_a_hint_but_a_plain_mistake_has_none(cad):
     err = cad.error("massing.add", {"footprint": [[0, 0], [1000, 0], [1000, 1000]], "bogus": 1})
     assert err["data"]["feedback"]["draft"]["method"] == "massing.add"
+    assert "bogus" in err["data"]["feedback"]["draft"]["title"]
     assert "feedback" not in cad.error("objects.get", {})["data"]
 
 
@@ -174,3 +175,8 @@ def test_review_needs_a_terminal():
     out = run_cli("feedback", "review")
     assert out.returncode != 0
     assert "terminal" in out.stderr
+
+
+def test_a_panic_is_not_reachable_from_outside_but_the_list_counts_people(cad):
+    listing = cad.result("feedback.list")
+    assert listing["reports_of_people"] == 0 and listing["reports"] == []

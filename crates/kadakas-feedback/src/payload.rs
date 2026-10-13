@@ -131,6 +131,9 @@ mod tests {
             server_id: None,
             server_status: None,
             attempts: 0,
+            retries: 0,
+            next_try: 0,
+            claimed_until: 0,
             last_error: None,
         }
     }

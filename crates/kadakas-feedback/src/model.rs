@@ -29,6 +29,11 @@ pub const MAX_PAYLOAD_BYTES: usize = 6 << 20;
 pub const MAX_OUTBOX_BYTES: usize = 2 << 20;
 /// Tries over all runs; then the report waits for a human to try again.
 pub const MAX_ATTEMPTS: u32 = 8;
+/// A report that a program is sending is claimed on disk for this long (seconds).
+pub const CLAIM_SECS: u64 = 300;
+/// The back-off between starts: one minute, doubling, at most six hours (seconds).
+pub const BACKOFF_BASE_SECS: u64 = 60;
+pub const BACKOFF_MAX_SECS: u64 = 6 * 3600;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -253,8 +258,18 @@ pub struct Report {
     pub server_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_status: Option<String>,
+    /// Failed starts that count toward `MAX_ATTEMPTS`. A failure to reach the server does not count.
     #[serde(default)]
     pub attempts: u32,
+    /// All failed starts, for the back-off.
+    #[serde(default)]
+    pub retries: u32,
+    /// Seconds since 1970: the earliest time of the next try.
+    #[serde(default)]
+    pub next_try: u64,
+    /// Seconds since 1970: another program is sending this report until then.
+    #[serde(default)]
+    pub claimed_until: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
 }

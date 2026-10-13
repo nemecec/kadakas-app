@@ -3771,10 +3771,10 @@ mod tests {
             let _ = app.feedback.show(&c, &mut app.session);
         });
         assert!(app.feedback.consent_is_due());
-        assert!(app.session.feedback.hub.outgoing(true, 5).is_empty());
+        assert!(app.session.feedback.hub.outgoing(true, 5, 1_000).is_empty());
         app.feedback
             .answer_consent(&mut app.session.feedback.hub, Some(true));
-        assert_eq!(app.session.feedback.hub.outgoing(true, 5).len(), 1);
+        assert_eq!(app.session.feedback.hub.outgoing(true, 5, 1_000).len(), 1);
         // The same report again only raises the counter.
         app.feedback.open(Open::RequestFeature);
         app.feedback.skip_picture();

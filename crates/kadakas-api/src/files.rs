@@ -81,6 +81,16 @@ pub fn file_call(
     params: &Value,
     write: &mut WriteFn<'_>,
 ) -> Result<FileDone, RpcError> {
+    // A panic in a reader or a writer becomes an internal error, as for every other method.
+    s.guarded(method, |s| file_call_inner(s, method, params, write))
+}
+
+fn file_call_inner(
+    s: &mut Session,
+    method: &str,
+    params: &Value,
+    write: &mut WriteFn<'_>,
+) -> Result<FileDone, RpcError> {
     let path = params
         .get("path")
         .and_then(Value::as_str)

@@ -11,6 +11,12 @@ pub trait Storage: Send {
     fn remove(&mut self, name: &str);
     /// True if the files survive the end of the program.
     fn persistent(&self) -> bool;
+    /// An exclusive lock around a load-change-save of the outbox, for programs that share the
+    /// folder. The lock ends when the guard is dropped. A store that only one program can reach
+    /// needs none.
+    fn lock(&self) -> Result<Box<dyn Send>, String> {
+        Ok(Box::new(()))
+    }
 }
 
 /// A name is safe if it has letters, digits, `-`, `_` and inner dots only, and is not long.
@@ -154,7 +160,47 @@ mod native {
         fn persistent(&self) -> bool {
             true
         }
+
+        fn lock(&self) -> Result<Box<dyn Send>, String> {
+            kadakas_sys::fsio::create_private_dir(&self.dir)
+                .or_else(|e| if self.dir.is_dir() { Ok(()) } else { Err(e) })
+                .map_err(|e| format!("cannot create the feedback folder: {e}"))?;
+            let path = self.dir.join("lock");
+            for _ in 0..STEPS {
+                match kadakas_sys::fsio::create_new_private(&path) {
+                    Ok(_) => return Ok(Box::new(Guard(path))),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        // A lock that a dead program left behind goes after a while.
+                        let old = std::fs::metadata(&path)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| t.elapsed().ok())
+                            .is_some_and(|age| age > STALE);
+                        if old {
+                            let _ = std::fs::remove_file(&path);
+                        } else {
+                            std::thread::sleep(WAIT);
+                        }
+                    }
+                    Err(e) => return Err(format!("cannot lock the feedback folder: {e}")),
+                }
+            }
+            Err("the feedback folder is locked by another program".into())
+        }
     }
+
+    /// The lock file; it is removed when the guard is dropped.
+    struct Guard(PathBuf);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    const STEPS: u32 = 250;
+    const WAIT: std::time::Duration = std::time::Duration::from_millis(20);
+    const STALE: std::time::Duration = std::time::Duration::from_secs(30);
 }
 
 #[cfg(test)]

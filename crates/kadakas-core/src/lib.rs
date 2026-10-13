@@ -10,6 +10,8 @@ pub mod csv;
 pub mod curve;
 pub mod datamap;
 pub mod edit2d;
+#[cfg(feature = "fault-injection")]
+pub mod fault;
 pub mod geom;
 pub mod georef;
 pub mod graphics;

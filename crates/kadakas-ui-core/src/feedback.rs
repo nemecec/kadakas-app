@@ -233,15 +233,16 @@ impl Flow {
                 },
             )
             .map_err(|e| e.to_string())?;
-            if hub.consent_asked() {
-                hub.approve(&out.id, &p, report.privacy)
-                    .map_err(|e| e.to_string())?;
-            } else {
+            if !hub.consent_asked() {
                 self.waiting.push(Waiting {
                     id: out.id.clone(),
                     payload: Some(p),
                 });
+            } else if hub.send_enabled() {
+                hub.approve(&out.id, &p, report.privacy)
+                    .map_err(|e| e.to_string())?;
             }
+            // Else the person said no: the report waits in the outbox for a review.
         }
         let status = hub.get(&out.id).map_or(out.status, |r| r.status);
         Ok(Sent {
@@ -361,10 +362,10 @@ mod tests {
         assert_eq!((s.id.as_str(), s.status), ("fb-1", Status::Pending));
         assert!(flow.consent_due(hub.consent_asked(), &hub.list()));
         // Nothing is ready to send before the answer.
-        assert!(hub.outgoing(true, 5).is_empty());
+        assert!(hub.outgoing(true, 5, 1_000).is_empty());
         flow.answer_consent(&mut hub, Some(true)).unwrap();
         assert!(!flow.consent_due(hub.consent_asked(), &hub.list()));
-        assert_eq!(hub.outgoing(true, 5).len(), 1);
+        assert_eq!(hub.outgoing(true, 5, 1_000).len(), 1);
         assert_eq!(hub.get("fb-1").unwrap().origin, Origin::User);
         assert_eq!(hub.get("fb-1").unwrap().context.client_name, "kadakas-app");
     }
@@ -390,7 +391,7 @@ mod tests {
                     Status::NeedsReview
                 }
             );
-            let out = hub.outgoing(false, 5);
+            let out = hub.outgoing(false, 5, 1_000);
             assert_eq!(out.len(), usize::from(allow));
             if allow {
                 // The payload is the one that was built from the form: text and screenshot.
@@ -419,6 +420,24 @@ mod tests {
     }
 
     #[test]
+    fn a_form_with_a_screenshot_is_not_approved_when_the_person_said_no() {
+        let mut hub = Hub::in_memory();
+        hub.set_send(Some(false)).unwrap();
+        let mut flow = Flow::default();
+        let mut f = Form::new(Kind::Bug);
+        f.title = "Refused".into();
+        f.want_screenshot = true;
+        f.screenshot = Some(png());
+        let s = flow.send(&mut hub, &f, ctx(), 0).unwrap();
+        assert_eq!(s.status, Status::NeedsReview);
+        assert_eq!(hub.get("fb-1").unwrap().status, Status::NeedsReview);
+        assert!(hub.outgoing(true, 5, 1_000).is_empty());
+        assert!(hub.outgoing(false, 5, 1_000).is_empty());
+        // No dialog either: the answer was given.
+        assert!(!flow.consent_due(hub.consent_asked(), &hub.list()));
+    }
+
+    #[test]
     fn later_and_refusal() {
         let mut hub = Hub::in_memory();
         let mut flow = Flow::default();
@@ -432,7 +451,7 @@ mod tests {
         assert!(flow.consent_due(hub.consent_asked(), &hub.list()));
         flow.answer_consent(&mut hub, Some(false)).unwrap();
         assert!(hub.consent_asked() && !hub.send_enabled());
-        assert!(hub.outgoing(true, 5).is_empty());
+        assert!(hub.outgoing(true, 5, 1_000).is_empty());
         assert!(
             flow.send(&mut hub, &Form::new(Kind::Bug), ctx(), 0)
                 .is_err()

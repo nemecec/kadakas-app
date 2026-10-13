@@ -4,13 +4,18 @@
 //! folder (the app and a headless run) see each other's reports. The file is small: the
 //! attachments are files of their own.
 //!
+//! Programs that share the folder lock it around each load-change-save (`Storage::lock`), and a
+//! program claims a report on disk before it sends it, so a report is not sent twice.
+//!
 //! Consent has two parts, and the code keeps them apart:
 //!
-//! - Text-only reports go to the server when sending is on (`Settings::send`, or the override
-//!   that `--feedback-send` sets).
+//! - Text-only reports go to the server when sending is on (`Settings::send`). The override that
+//!   `--feedback-send` sets covers the reports of the run only, and never beats a stored "no".
 //! - A report with attachments has the status `NeedsReview`. Only [`Hub::approve`] moves it on.
 //!   The app review dialog and `kadakas feedback review` call it after a person has seen the
 //!   exact payload. No API method calls it, and [`Hub::outgoing`] never returns such a report.
+
+use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
@@ -78,8 +83,11 @@ pub struct Hub {
     storage: Box<dyn Storage>,
     send_override: Option<bool>,
     url_override: Option<String>,
+    /// Reports made by agents in this run, merged ones included (the rate limit).
     submitted: u32,
     max_submits: u32,
+    /// The ids of reports that this run made or merged into. `--feedback-send` covers these only.
+    run_ids: HashSet<String>,
 }
 
 impl Hub {
@@ -90,6 +98,7 @@ impl Hub {
             url_override: None,
             submitted: 0,
             max_submits: MAX_SUBMITS_PER_SESSION,
+            run_ids: HashSet::new(),
         }
     }
 
@@ -127,6 +136,10 @@ impl Hub {
             .map_err(FeedbackError::Store)
     }
 
+    fn lock(&self) -> Result<Box<dyn Send>, FeedbackError> {
+        self.storage.lock().map_err(FeedbackError::Store)
+    }
+
     /// Stores the answer of the person to "may Kadakas send my reports?".
     pub fn set_send(&mut self, on: Option<bool>) -> Result<(), FeedbackError> {
         let mut s = self.settings();
@@ -134,16 +147,25 @@ impl Hub {
         self.save_settings(&s)
     }
 
-    /// Stores another server address (`None`: the default). The address is checked when it is used.
+    /// Stores another server address (`None`: the default). The address is checked when it is
+    /// used. A new address gives every unsent report a fresh start: the tries and the back-off
+    /// belonged to the old address.
     pub fn set_url(&mut self, url: Option<String>) -> Result<(), FeedbackError> {
         let mut s = self.settings();
-        s.url = url
+        let new = url
             .map(|u| u.trim().to_string())
             .filter(|u| !u.is_empty() && u.len() <= 300);
-        self.save_settings(&s)
+        let changed = s.url != new;
+        s.url = new;
+        self.save_settings(&s)?;
+        if changed {
+            self.reset_tries(None)?;
+        }
+        Ok(())
     }
 
-    /// A choice for this run only (`--feedback-send`). It is not stored.
+    /// A choice for this run only (`--feedback-send`). It is not stored. It never overrides a
+    /// stored "no", and it covers the reports of this run only.
     pub fn set_send_override(&mut self, on: Option<bool>) {
         self.send_override = on;
     }
@@ -152,9 +174,18 @@ impl Hub {
         self.url_override = url.filter(|u| !u.trim().is_empty());
     }
 
-    /// True if text-only reports may go to the server.
+    /// True if the person said no. Then nothing goes out, whatever a flag says.
+    pub fn sending_off(&self) -> bool {
+        self.settings().send == Some(false)
+    }
+
+    /// True if text-only reports may go to the server (for the reports of this run, if only a
+    /// flag says so).
     pub fn send_enabled(&self) -> bool {
-        self.send_override.or(self.settings().send).unwrap_or(false)
+        match self.settings().send {
+            Some(on) => on,
+            None => self.send_override == Some(true),
+        }
     }
 
     /// True if the person was asked (or a flag answered for them).
@@ -230,18 +261,37 @@ impl Hub {
         self.storage.read(&kind.file(id))
     }
 
+    /// The stored message of an approved report.
+    pub fn approved_payload(&self, id: &str) -> Option<String> {
+        self.storage
+            .read(&payload_file(id))
+            .and_then(|b| String::from_utf8(b).ok())
+    }
+
+    /// True if a report with these fields would merge into one that exists (`submit` would only
+    /// raise its counter). A caller checks this before it makes attachments that a merge drops.
+    pub fn would_merge(&mut self, kind: Kind, title: &str, method: &str, origin: Origin) -> bool {
+        let title = scrub::text(title.trim(), MAX_TITLE);
+        let method = scrub::text(method.trim(), MAX_METHOD);
+        let key = dedupe_key(kind, &title, &method);
+        !title.is_empty() && self.load().reports.iter().any(|r| merges(r, &key, origin))
+    }
+
     // ---- writes
 
     /// Adds a report, or raises the counter of an equal one. The texts are scrubbed and cut
     /// here, whatever the caller did. Attachments are checked against their limits; a merged
-    /// report drops the new attachments.
+    /// report drops the new attachments. A report that was sent is not merged into: the new one
+    /// is a report of its own. Reports of agents merge with reports of agents only.
     pub fn submit(
         &mut self,
         draft: Draft,
         attachments: Vec<AttachmentData>,
         now: u64,
     ) -> Result<Submitted, FeedbackError> {
-        if self.submitted >= self.max_submits {
+        // The limit is for agents. A person who writes many reports is not a flood.
+        let agent = draft.origin == Origin::Agent;
+        if agent && self.submitted >= self.max_submits {
             return Err(FeedbackError::Limit(format!(
                 "this session already made {} reports; wait for the next session or ask the person to use Help > Feedback",
                 self.max_submits
@@ -254,12 +304,12 @@ impl Hub {
         let att = check_attachments(attachments)?;
         let method = scrub::text(draft.method.trim(), MAX_METHOD);
         let key = dedupe_key(draft.kind, &title, &method);
+        let _guard = self.lock()?;
         let mut ob = self.load();
-        self.submitted += 1;
         if let Some(r) = ob
             .reports
             .iter_mut()
-            .find(|r| r.key == key && r.status != Status::Withdrawn)
+            .find(|r| merges(r, &key, draft.origin))
         {
             r.count = r.count.saturating_add(1);
             let out = Submitted {
@@ -269,6 +319,8 @@ impl Hub {
                 status: r.status,
             };
             self.save(&ob)?;
+            self.submitted += u32::from(agent);
+            self.run_ids.insert(out.id.clone());
             return Ok(out);
         }
         if ob.reports.len() >= MAX_REPORTS {
@@ -282,23 +334,22 @@ impl Hub {
                     self.drop_files(&r);
                 }
                 None => {
-                    self.submitted -= 1;
                     return Err(FeedbackError::Limit(format!(
                         "the outbox holds {MAX_REPORTS} reports that wait; a person must send or withdraw some"
                     )));
                 }
             }
         }
-        let waiting: usize = ob
+        let waiting = ob
             .reports
             .iter()
             .filter(|r| !matches!(r.status, Status::Sent | Status::Withdrawn))
             .flat_map(|r| &r.attachments)
-            .map(|a| a.bytes)
-            .sum();
-        let new_bytes: usize = att.iter().map(|a| a.bytes.len()).sum();
-        if waiting + new_bytes > MAX_WAITING_BYTES {
-            self.submitted -= 1;
+            .fold(0usize, |n, a| n.saturating_add(a.bytes));
+        let new_bytes = att
+            .iter()
+            .fold(0usize, |n, a| n.saturating_add(a.bytes.len()));
+        if waiting.saturating_add(new_bytes) > MAX_WAITING_BYTES {
             return Err(FeedbackError::Limit(
                 "too many attachments wait in the outbox; a person must review or withdraw some"
                     .into(),
@@ -344,17 +395,19 @@ impl Hub {
             server_id: None,
             server_status: None,
             attempts: 0,
+            retries: 0,
+            next_try: 0,
+            claimed_until: 0,
             last_error: None,
         };
         for a in &att {
             if let Err(e) = self.storage.write(&a.kind.file(&id), &a.bytes) {
                 self.drop_files(&report);
-                self.submitted -= 1;
                 return Err(FeedbackError::Store(e));
             }
         }
         let out = Submitted {
-            id,
+            id: id.clone(),
             merged: false,
             count: 1,
             status: report.status,
@@ -362,14 +415,16 @@ impl Hub {
         ob.reports.push(report.clone());
         if let Err(e) = self.save(&ob) {
             self.drop_files(&report);
-            self.submitted -= 1;
             return Err(e);
         }
+        self.submitted += u32::from(agent);
+        self.run_ids.insert(id);
         Ok(out)
     }
 
     /// Takes a report back. A report that went to the server cannot be taken back here.
     pub fn withdraw(&mut self, id: &str) -> Result<Report, FeedbackError> {
+        let _guard = self.lock()?;
         let mut ob = self.load();
         let r =
             ob.reports.iter_mut().find(|r| r.id == id).ok_or_else(|| {
@@ -386,6 +441,7 @@ impl Hub {
         }
         let old = r.clone();
         r.status = Status::Withdrawn;
+        r.claimed_until = 0;
         let out = r.clone();
         self.save(&ob)?;
         self.drop_files(&old);
@@ -404,6 +460,7 @@ impl Hub {
         privacy: Privacy,
     ) -> Result<(), FeedbackError> {
         payload::check(payload, id)?;
+        let _guard = self.lock()?;
         let mut ob = self.load();
         let r =
             ob.reports.iter_mut().find(|r| r.id == id).ok_or_else(|| {
@@ -420,54 +477,136 @@ impl Hub {
         r.status = Status::Approved;
         r.privacy = privacy;
         r.attempts = 0;
+        r.retries = 0;
+        r.next_try = 0;
         r.last_error = None;
+        self.save(&ob)
+    }
+
+    /// Gives one report (or every unsent report, with `None`) a fresh start: no tries counted,
+    /// no waiting. This is the "Try again" of a person.
+    pub fn reset_tries(&mut self, id: Option<&str>) -> Result<(), FeedbackError> {
+        let _guard = self.lock()?;
+        let mut ob = self.load();
+        let mut found = id.is_none();
+        for r in ob.reports.iter_mut() {
+            if id.is_some_and(|i| i != r.id) || matches!(r.status, Status::Sent | Status::Withdrawn)
+            {
+                continue;
+            }
+            found = true;
+            r.attempts = 0;
+            r.retries = 0;
+            r.next_try = 0;
+            r.claimed_until = 0;
+            r.last_error = None;
+        }
+        if !found {
+            return Err(FeedbackError::NotFound(format!(
+                "no report {}",
+                scrub::text(id.unwrap_or(""), 40)
+            )));
+        }
         self.save(&ob)
     }
 
     /// Makes a report that failed too often ready for new tries.
     pub fn retry(&mut self, id: &str) -> Result<(), FeedbackError> {
-        let mut ob = self.load();
-        let r =
-            ob.reports.iter_mut().find(|r| r.id == id).ok_or_else(|| {
-                FeedbackError::NotFound(format!("no report {}", scrub::text(id, 40)))
-            })?;
-        r.attempts = 0;
-        r.last_error = None;
-        self.save(&ob)
+        self.reset_tries(Some(id))
     }
 
-    /// The reports that may go out now: approved ones, and text-only ones if `include_text` and
-    /// sending is on. Reports that failed `MAX_ATTEMPTS` times wait for `retry`. At most `max`.
-    pub fn outgoing(&mut self, include_text: bool, max: usize) -> Vec<Outgoing> {
-        let text_ok = include_text && self.send_enabled();
-        let ob = self.load();
+    /// The reports that may go out at time `now` (seconds since 1970), claimed on disk so that no
+    /// other program sends them too. Approved reports go; text-only reports go if `include_text`
+    /// and the consent allows (see below). A report waits while its back-off runs, and after
+    /// `MAX_ATTEMPTS` counted failures. At most `max`.
+    ///
+    /// Consent: if the person said no, nothing goes out, whatever a flag says. If the person said
+    /// yes, text-only reports go. If the person was not asked, `--feedback-send` covers the text
+    /// reports of this run only.
+    pub fn outgoing(&mut self, include_text: bool, max: usize, now: u64) -> Vec<Outgoing> {
+        let stored = self.settings().send;
+        if stored == Some(false) {
+            return Vec::new();
+        }
+        let Ok(_guard) = self.lock() else {
+            return Vec::new();
+        };
+        let mut ob = self.load();
         let mut out = Vec::new();
-        for r in ob.reports.iter().filter(|r| r.attempts < MAX_ATTEMPTS) {
+        let mut dirty = false;
+        for i in 0..ob.reports.len() {
             if out.len() >= max {
                 break;
             }
+            let r = &ob.reports[i];
+            if r.attempts >= MAX_ATTEMPTS || r.next_try > now || r.claimed_until > now {
+                continue;
+            }
+            let text_ok = include_text
+                && (stored == Some(true)
+                    || (self.send_override == Some(true) && self.run_ids.contains(&r.id)));
             let payload = match r.status {
-                Status::Approved => self
-                    .storage
-                    .read(&payload_file(&r.id))
-                    .and_then(|b| String::from_utf8(b).ok()),
+                Status::Approved => match self.approved_payload(&r.id) {
+                    Some(p) => Some(p),
+                    None => {
+                        // The message is gone. The person must look at the report again.
+                        let r = &mut ob.reports[i];
+                        r.status = Status::NeedsReview;
+                        r.last_error = Some(
+                            "The approved message is missing. Review the report again.".into(),
+                        );
+                        dirty = true;
+                        None
+                    }
+                },
                 Status::Pending if text_ok && r.attachments.is_empty() => {
                     payload::build(r, &PayloadParts::default()).ok()
                 }
                 _ => None,
             };
             if let Some(payload) = payload {
+                let r = &mut ob.reports[i];
+                r.claimed_until = now.saturating_add(CLAIM_SECS);
+                dirty = true;
                 out.push(Outgoing {
                     id: r.id.clone(),
                     payload,
                 });
             }
         }
+        // If the claim cannot be written, nothing is sent: another program could send it too.
+        if dirty && self.save(&ob).is_err() {
+            return Vec::new();
+        }
         out
     }
 
-    /// Writes down what happened to a report that was sent.
-    pub fn record(&mut self, id: &str, delivery: &Delivery) -> Result<(), FeedbackError> {
+    /// Claims one approved report for sending now (for a person who sends it from a review). It
+    /// fails if the person said no to sending, if another program has the report, or if the
+    /// report is not approved.
+    pub fn claim(&mut self, id: &str, now: u64) -> Option<Outgoing> {
+        if self.sending_off() {
+            return None;
+        }
+        let _guard = self.lock().ok()?;
+        let mut ob = self.load();
+        let r = ob.reports.iter_mut().find(|r| r.id == id)?;
+        if r.status != Status::Approved || r.claimed_until > now {
+            return None;
+        }
+        let payload = self.approved_payload(id)?;
+        let r = ob.reports.iter_mut().find(|r| r.id == id)?;
+        r.claimed_until = now.saturating_add(CLAIM_SECS);
+        self.save(&ob).ok()?;
+        Some(Outgoing {
+            id: id.to_string(),
+            payload,
+        })
+    }
+
+    /// Writes down what happened to a report that was sent, at time `now`.
+    pub fn record(&mut self, id: &str, delivery: &Delivery, now: u64) -> Result<(), FeedbackError> {
+        let _guard = self.lock()?;
         let mut ob = self.load();
         let Some(r) = ob.reports.iter_mut().find(|r| r.id == id) else {
             return Ok(());
@@ -476,23 +615,30 @@ impl Hub {
             return Ok(());
         }
         let old = r.clone();
+        r.claimed_until = 0;
         match delivery {
             Delivery::Sent(reply) => {
                 r.status = Status::Sent;
                 r.server_id = Some(scrub::text(&reply.id, 100));
                 r.server_status = Some(scrub::text(&reply.status, 40));
                 r.last_error = None;
+                r.next_try = 0;
             }
             Delivery::Failed {
                 message,
                 permanent,
-                attempts,
+                unreachable,
+                retry_after,
+                ..
             } => {
-                r.attempts = if *permanent {
-                    MAX_ATTEMPTS
-                } else {
-                    r.attempts.saturating_add(*attempts)
-                };
+                r.retries = r.retries.saturating_add(1);
+                if *permanent {
+                    r.attempts = MAX_ATTEMPTS;
+                } else if !*unreachable {
+                    r.attempts = r.attempts.saturating_add(1);
+                }
+                let wait = backoff_secs(r.retries, &r.id).max(retry_after.unwrap_or(0));
+                r.next_try = now.saturating_add(wait);
                 r.last_error = Some(scrub::text(message, 200));
             }
         }
@@ -504,6 +650,29 @@ impl Hub {
         }
         Ok(())
     }
+}
+
+/// True if a new report with this key and origin would merge into `r`.
+fn merges(r: &Report, key: &str, origin: Origin) -> bool {
+    r.key == key
+        && !matches!(r.status, Status::Withdrawn | Status::Sent)
+        && (r.origin == Origin::Agent) == (origin == Origin::Agent)
+}
+
+/// The wait after the `retries`-th failed start: one minute, doubling, at most six hours, with a
+/// jitter of plus or minus 20 percent that depends on the report and the count (so that many
+/// installations do not come back at the same second, and the value is the same in a test).
+pub fn backoff_secs(retries: u32, id: &str) -> u64 {
+    let n = retries.saturating_sub(1).min(20);
+    let base = BACKOFF_BASE_SECS
+        .saturating_mul(1u64 << n)
+        .min(BACKOFF_MAX_SECS);
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in id.bytes().chain(retries.to_le_bytes()) {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    base * (80 + h % 41) / 100
 }
 
 fn payload_file(id: &str) -> String {
@@ -553,6 +722,9 @@ mod tests {
     use crate::send::Reply;
     use proptest::prelude::*;
 
+    /// A fixed time for the tests (seconds since 1970).
+    const T0: u64 = 1_000_000;
+
     fn draft(title: &str) -> Draft {
         let mut d = Draft::new(Kind::Bug, title, "body", Origin::Agent);
         d.method = "edit.fillet".into();
@@ -571,6 +743,42 @@ mod tests {
             bytes,
             objects: None,
         }
+    }
+
+    fn sent(id: &str) -> Delivery {
+        Delivery::Sent(Reply {
+            id: id.into(),
+            status: "received".into(),
+        })
+    }
+
+    fn failed(message: &str) -> Delivery {
+        Delivery::Failed {
+            message: message.into(),
+            permanent: false,
+            unreachable: false,
+            retry_after: None,
+            attempts: 4,
+        }
+    }
+
+    fn offline() -> Delivery {
+        Delivery::Failed {
+            message: "dns".into(),
+            permanent: false,
+            unreachable: true,
+            retry_after: None,
+            attempts: 1,
+        }
+    }
+
+    /// Two hubs on one folder, like the app and a headless run.
+    fn two_hubs() -> (kadakas_sys::tmp::PrivateTempDir, Hub, Hub) {
+        let tmp = kadakas_sys::tmp::PrivateTempDir::new("kadakas-fb-hubs").unwrap();
+        let dir = tmp.path().join("fb");
+        let a = Hub::new(Box::new(crate::store::DirStorage::new(dir.clone())));
+        let b = Hub::new(Box::new(crate::store::DirStorage::new(dir)));
+        (tmp, a, b)
     }
 
     #[test]
@@ -620,12 +828,14 @@ mod tests {
             Err(FeedbackError::Invalid(_))
         ));
         assert!(h.list().is_empty());
+        assert!(!h.would_merge(Kind::Bug, " ", "", Origin::Agent));
     }
 
     #[test]
     fn equal_reports_merge_into_a_counter() {
         let mut h = Hub::in_memory();
         h.submit(draft("Fillet fails"), vec![], 0).unwrap();
+        assert!(h.would_merge(Kind::Bug, "fillet FAILS", " edit.fillet", Origin::Agent));
         let s = h
             .submit(
                 draft("fillet  FAILS!"),
@@ -644,12 +854,39 @@ mod tests {
         assert!(!h.submit(d, vec![], 0).unwrap().merged);
         // A withdrawn report does not absorb a new one.
         h.withdraw("fb-1").unwrap();
+        assert!(!h.would_merge(Kind::Bug, "Fillet fails", "edit.fillet", Origin::Agent));
         assert!(!h.submit(draft("Fillet fails"), vec![], 0).unwrap().merged);
         assert_eq!(h.list().len(), 3);
     }
 
     #[test]
-    fn the_session_rate_limit() {
+    fn a_report_that_was_sent_is_not_merged_into() {
+        let mut h = Hub::in_memory();
+        h.submit(draft("Sent one"), vec![], 0).unwrap();
+        h.record("fb-1", &sent("s1"), T0).unwrap();
+        assert!(!h.would_merge(Kind::Bug, "Sent one", "edit.fillet", Origin::Agent));
+        let s = h.submit(draft("Sent one"), vec![], 0).unwrap();
+        assert_eq!((s.merged, s.id.as_str()), (false, "fb-2"));
+    }
+
+    #[test]
+    fn agents_and_people_do_not_merge_with_each_other() {
+        let mut h = Hub::in_memory();
+        h.submit(draft("Same"), vec![], 0).unwrap();
+        let mut d = draft("Same");
+        d.origin = Origin::User;
+        assert!(!h.would_merge(Kind::Bug, "Same", "edit.fillet", Origin::User));
+        let s = h.submit(d, vec![], 0).unwrap();
+        assert_eq!((s.merged, s.id.as_str()), (false, "fb-2"));
+        // A second report of the person merges with the first of the person.
+        let mut d = draft("Same");
+        d.origin = Origin::Crash;
+        assert!(h.submit(d, vec![], 0).unwrap().merged);
+        assert_eq!(h.get("fb-1").unwrap().count, 1);
+    }
+
+    #[test]
+    fn the_session_rate_limit_is_for_agents_only() {
         let mut h = Hub::in_memory();
         h.set_max_submits(2);
         h.submit(draft("a"), vec![], 0).unwrap();
@@ -658,6 +895,13 @@ mod tests {
             h.submit(draft("b"), vec![], 0),
             Err(FeedbackError::Limit(_))
         ));
+        // A person is not limited.
+        for i in 0..5 {
+            let mut d = draft(&format!("person {i}"));
+            d.origin = Origin::User;
+            h.submit(d, vec![], 0).unwrap();
+        }
+        assert_eq!(h.list().len(), 6);
     }
 
     #[test]
@@ -670,14 +914,7 @@ mod tests {
         let e = h.submit(draft("one more"), vec![], 0).unwrap_err();
         assert!(matches!(e, FeedbackError::Limit(_)), "{e}");
         // A sent report makes room.
-        h.record(
-            "fb-1",
-            &Delivery::Sent(Reply {
-                id: "s1".into(),
-                status: "received".into(),
-            }),
-        )
-        .unwrap();
+        h.record("fb-1", &sent("s1"), T0).unwrap();
         h.submit(draft("one more"), vec![], 0).unwrap();
         assert_eq!(h.list().len(), MAX_REPORTS);
         assert!(h.get("fb-1").is_none());
@@ -709,19 +946,20 @@ mod tests {
         // Nothing goes out: not with sending on, not as text.
         h.set_send(Some(true)).unwrap();
         h.set_send_override(Some(true));
-        assert!(h.outgoing(true, 10).is_empty());
+        assert!(h.outgoing(true, 10, T0).is_empty());
         // The approval path makes it ready, and the payload is the stored one.
         let p = payload::build(&r, &PayloadParts::default()).unwrap();
         h.approve(&s.id, &p, Privacy::default()).unwrap();
-        let out = h.outgoing(false, 10);
+        let out = h.outgoing(false, 10, T0);
         assert_eq!(
             out,
             vec![Outgoing {
                 id: s.id.clone(),
-                payload: p
+                payload: p.clone()
             }]
         );
         assert_eq!(h.get(&s.id).unwrap().status, Status::Approved);
+        assert_eq!(h.approved_payload(&s.id).as_deref(), Some(p.as_str()));
         // Approval works once.
         assert!(matches!(
             h.approve(&s.id, &out[0].payload, Privacy::default()),
@@ -787,7 +1025,6 @@ mod tests {
     fn waiting_attachments_are_capped() {
         let mut h = Hub::in_memory();
         h.set_max_submits(1000);
-        // 64 MiB of waiting images need 64 reports of 1 MiB. Use the real cap with few big ones.
         let mut ok = 0;
         for i in 0..80 {
             let mut p = png();
@@ -821,14 +1058,7 @@ mod tests {
             Err(FeedbackError::NotFound(_))
         ));
         let t = h.submit(draft("b"), vec![], 0).unwrap();
-        h.record(
-            &t.id,
-            &Delivery::Sent(Reply {
-                id: "s".into(),
-                status: "received".into(),
-            }),
-        )
-        .unwrap();
+        h.record(&t.id, &sent("s"), T0).unwrap();
         assert!(matches!(h.withdraw(&t.id), Err(FeedbackError::State(_))));
         assert_eq!(h.get(&t.id).unwrap().server_id.as_deref(), Some("s"));
     }
@@ -838,22 +1068,67 @@ mod tests {
         let mut h = Hub::in_memory();
         h.submit(draft("a"), vec![], 0).unwrap();
         assert!(!h.consent_asked() && !h.send_enabled());
-        assert!(h.outgoing(true, 5).is_empty());
+        assert!(h.outgoing(true, 5, T0).is_empty());
         h.set_send(Some(true)).unwrap();
         assert!(h.consent_asked() && h.send_enabled());
         // The host decides if text reports go out in this program.
-        assert!(h.outgoing(false, 5).is_empty());
-        assert_eq!(h.outgoing(true, 5).len(), 1);
-        // The override of a flag wins over the preference and is not stored.
-        h.set_send_override(Some(false));
-        assert!(!h.send_enabled() && h.settings().send == Some(true));
-        h.set_send_override(None);
+        assert!(h.outgoing(false, 5, T0).is_empty());
+        assert_eq!(h.outgoing(true, 5, T0).len(), 1);
         h.set_send(None).unwrap();
         assert!(!h.consent_asked());
     }
 
     #[test]
-    fn urls() {
+    fn a_stored_no_beats_every_flag_and_every_approval() {
+        let mut h = Hub::in_memory();
+        h.submit(draft("text"), vec![], 0).unwrap();
+        let s = h
+            .submit(
+                draft("pictures"),
+                vec![att(AttachmentKind::Log, b"x".to_vec())],
+                0,
+            )
+            .unwrap();
+        let p = payload::build(&h.get(&s.id).unwrap(), &PayloadParts::default()).unwrap();
+        h.approve(&s.id, &p, Privacy::default()).unwrap();
+        h.set_send(Some(false)).unwrap();
+        h.set_send_override(Some(true));
+        assert!(h.sending_off());
+        assert!(!h.send_enabled());
+        assert!(h.outgoing(true, 10, T0).is_empty());
+        assert!(h.outgoing(false, 10, T0).is_empty());
+        // The person changes their mind: both go.
+        h.set_send(Some(true)).unwrap();
+        assert!(!h.sending_off());
+        assert_eq!(h.outgoing(true, 10, T0).len(), 2);
+    }
+
+    #[test]
+    fn a_flag_covers_the_reports_of_its_run_only() {
+        let (_tmp, mut old_run, mut this_run) = two_hubs();
+        old_run.submit(draft("from before"), vec![], 0).unwrap();
+        this_run.set_send_override(Some(true));
+        assert!(this_run.send_enabled() && this_run.consent_asked());
+        // The old report was not made in this run: it stays.
+        assert!(this_run.outgoing(true, 10, T0).is_empty());
+        let mut d = draft("from now");
+        d.method = "other".into();
+        let s = this_run.submit(d, vec![], 0).unwrap();
+        let out = this_run.outgoing(true, 10, T0);
+        assert_eq!(
+            out.iter().map(|o| o.id.as_str()).collect::<Vec<_>>(),
+            vec![s.id.as_str()]
+        );
+        // The flag is not stored.
+        assert_eq!(this_run.settings().send, None);
+        // A report of this run that a merge touched counts as made in this run.
+        let m = this_run.submit(draft("from before"), vec![], 0).unwrap();
+        assert!(m.merged);
+        assert_eq!(this_run.outgoing(true, 10, T0 + 1).len(), 1);
+    }
+
+    #[test]
+    fn urls_and_a_new_address_gives_a_fresh_start() {
         let mut h = Hub::in_memory();
         assert_eq!(h.url(), DEFAULT_URL);
         h.set_url(Some(" https://fb.example ".into())).unwrap();
@@ -862,78 +1137,192 @@ mod tests {
         assert_eq!(h.url(), "https://other.example");
         h.set_url_override(Some(" ".into()));
         assert_eq!(h.url(), "https://fb.example");
+        // Failures belong to the address that failed.
+        h.set_send(Some(true)).unwrap();
+        h.submit(draft("a"), vec![], 0).unwrap();
+        h.record("fb-1", &failed("down"), T0).unwrap();
+        let r = h.get("fb-1").unwrap();
+        assert_eq!(
+            (r.attempts, r.retries > 0, r.next_try > T0),
+            (1, true, true)
+        );
+        h.set_url(Some("https://fb.example".into())).unwrap(); // same address: no reset
+        assert_eq!(h.get("fb-1").unwrap().attempts, 1);
+        h.set_url(Some("https://new.example".into())).unwrap();
+        let r = h.get("fb-1").unwrap();
+        assert_eq!(
+            (r.attempts, r.retries, r.next_try, r.last_error),
+            (0, 0, 0, None)
+        );
         h.set_url(Some("".into())).unwrap();
         assert_eq!(h.url(), DEFAULT_URL);
     }
 
     #[test]
-    fn delivery_results_are_recorded() {
+    fn a_failure_waits_with_a_back_off_and_an_offline_one_is_not_counted() {
         let mut h = Hub::in_memory();
         h.set_send(Some(true)).unwrap();
         h.submit(draft("a"), vec![], 0).unwrap();
-        h.record(
-            "fb-1",
-            &Delivery::Failed {
-                message: "down at /srv/x/y.log".into(),
-                permanent: false,
-                attempts: 4,
-            },
-        )
-        .unwrap();
+        assert_eq!(h.outgoing(true, 5, T0).len(), 1);
+        h.record("fb-1", &failed("down at /srv/x/y.log"), T0)
+            .unwrap();
         let r = h.get("fb-1").unwrap();
-        assert_eq!((r.attempts, r.status), (4, Status::Pending));
+        assert_eq!((r.attempts, r.retries, r.status), (1, 1, Status::Pending));
         assert_eq!(r.last_error.as_deref(), Some("down at <path>/y.log"));
-        h.record(
-            "fb-1",
-            &Delivery::Failed {
-                message: "again".into(),
-                permanent: false,
-                attempts: 4,
-            },
-        )
-        .unwrap();
-        // Eight tries: it waits for a person.
-        assert!(h.outgoing(true, 5).is_empty());
+        assert_eq!(r.next_try, T0 + backoff_secs(1, "fb-1"));
+        // It waits: not before the time, yes after it.
+        assert!(h.outgoing(true, 5, T0 + 10).is_empty());
+        assert_eq!(h.outgoing(true, 5, r.next_try).len(), 1);
+        // Offline: the wait grows, the lifetime count does not.
+        for n in 0..20u64 {
+            let at = T0 + 100_000 * (n + 1);
+            h.record("fb-1", &offline(), at).unwrap();
+        }
+        let r = h.get("fb-1").unwrap();
+        assert_eq!((r.attempts, r.retries), (1, 21));
+        assert!(h.outgoing(true, 5, T0 + 100_000_000).len() == 1);
+        // A busy server that says when to come back is obeyed.
+        h.reset_tries(None).unwrap();
+        let busy = Delivery::Failed {
+            message: "429".into(),
+            permanent: false,
+            unreachable: false,
+            retry_after: Some(5000),
+            attempts: 1,
+        };
+        h.record("fb-1", &busy, T0).unwrap();
+        assert_eq!(h.get("fb-1").unwrap().next_try, T0 + 5000);
+        // Eight counted failures: it waits for a person.
+        for _ in 0..8 {
+            h.record("fb-1", &failed("no"), T0).unwrap();
+        }
+        assert!(h.outgoing(true, 5, T0 + 100_000_000).is_empty());
         h.retry("fb-1").unwrap();
-        assert_eq!(h.outgoing(true, 5).len(), 1);
-        h.record(
-            "fb-1",
-            &Delivery::Failed {
-                message: "no".into(),
-                permanent: true,
-                attempts: 1,
-            },
-        )
-        .unwrap();
-        assert!(h.outgoing(true, 5).is_empty());
+        assert_eq!(h.outgoing(true, 5, T0).len(), 1);
+        // A refusal is final until a person says so.
+        let refused = Delivery::Failed {
+            message: "no".into(),
+            permanent: true,
+            unreachable: false,
+            retry_after: None,
+            attempts: 1,
+        };
+        h.record("fb-1", &refused, T0).unwrap();
+        assert!(h.outgoing(true, 5, T0 + 100_000_000).is_empty());
         assert!(matches!(h.retry("nope"), Err(FeedbackError::NotFound(_))));
         // Unknown ids, and reports that are done, are ignored.
-        h.record(
-            "fb-9",
-            &Delivery::Sent(Reply {
-                id: "s".into(),
-                status: "x".into(),
-            }),
-        )
-        .unwrap();
-        h.record(
-            "fb-1",
-            &Delivery::Sent(Reply {
-                id: "s".into(),
-                status: "received".into(),
-            }),
-        )
-        .unwrap();
-        h.record(
-            "fb-1",
-            &Delivery::Failed {
-                message: "late".into(),
-                permanent: false,
-                attempts: 1,
-            },
-        )
-        .unwrap();
+        h.record("fb-9", &sent("s"), T0).unwrap();
+        h.reset_tries(None).unwrap();
+        h.record("fb-1", &sent("s"), T0).unwrap();
+        h.record("fb-1", &failed("late"), T0).unwrap();
         assert_eq!(h.get("fb-1").unwrap().status, Status::Sent);
+    }
+
+    #[test]
+    fn the_back_off_grows_to_hours_with_a_jitter() {
+        let mut last = 0;
+        for n in 1..=10 {
+            let w = backoff_secs(n, "fb-1");
+            let base = (BACKOFF_BASE_SECS << (n - 1)).min(BACKOFF_MAX_SECS);
+            assert!(
+                (base * 80 / 100..=base * 120 / 100).contains(&w),
+                "{n}: {w}"
+            );
+            if n <= 5 {
+                assert!(w > last, "{n}");
+            }
+            last = w;
+        }
+        assert_eq!(backoff_secs(u32::MAX, "x") / 3600 >= 4, true);
+        // Another report gets another wait.
+        assert_ne!(backoff_secs(3, "fb-1"), backoff_secs(3, "fb-2"));
+    }
+
+    #[test]
+    fn an_approved_report_without_its_message_goes_back_to_review() {
+        let (tmp, mut h, _other) = two_hubs();
+        let s = h
+            .submit(draft("a"), vec![att(AttachmentKind::Log, b"x".to_vec())], 0)
+            .unwrap();
+        let p = payload::build(&h.get(&s.id).unwrap(), &PayloadParts::default()).unwrap();
+        h.approve(&s.id, &p, Privacy::default()).unwrap();
+        // The message file is lost.
+        std::fs::remove_file(tmp.path().join("fb").join(payload_file(&s.id))).unwrap();
+        assert!(h.outgoing(true, 5, T0).is_empty());
+        let r = h.get(&s.id).unwrap();
+        assert_eq!(r.status, Status::NeedsReview);
+        assert!(r.last_error.unwrap().contains("missing"));
+    }
+
+    #[test]
+    fn a_person_claims_one_approved_report() {
+        let (_tmp, mut a, mut b) = two_hubs();
+        let s = a
+            .submit(draft("a"), vec![att(AttachmentKind::Log, b"x".to_vec())], 0)
+            .unwrap();
+        // Not approved yet.
+        assert!(a.claim(&s.id, T0).is_none());
+        let p = payload::build(&a.get(&s.id).unwrap(), &PayloadParts::default()).unwrap();
+        a.approve(&s.id, &p, Privacy::default()).unwrap();
+        let got = a.claim(&s.id, T0).unwrap();
+        assert_eq!(got.payload, p);
+        // Another program cannot take it, until the claim ends.
+        assert!(b.claim(&s.id, T0 + 1).is_none());
+        assert!(b.outgoing(false, 5, T0 + 1).is_empty());
+        assert!(b.claim(&s.id, T0 + CLAIM_SECS + 1).is_some());
+        // A stored no stops it.
+        b.set_send(Some(false)).unwrap();
+        assert!(a.claim(&s.id, T0 + 10 * CLAIM_SECS).is_none());
+        assert!(a.claim("fb-99", T0).is_none());
+    }
+
+    #[test]
+    fn two_hubs_on_one_folder_do_not_lose_or_double_reports() {
+        let (_tmp, mut a, mut b) = two_hubs();
+        a.set_send(Some(true)).unwrap();
+        let x = a.submit(draft("from a"), vec![], 0).unwrap();
+        let mut d = draft("from b");
+        d.method = "m2".into();
+        let y = b.submit(d, vec![], 0).unwrap();
+        assert_eq!((x.id.as_str(), y.id.as_str()), ("fb-1", "fb-2"));
+        assert_eq!(a.list().len(), 2);
+        // Both ask for work at once: each report goes to one program.
+        let ga = a.outgoing(true, 10, T0);
+        let gb = b.outgoing(true, 10, T0);
+        assert_eq!(ga.len() + gb.len(), 2, "{ga:?} {gb:?}");
+        // A claim ends after a while: a crashed program does not hold a report for ever.
+        assert_eq!(b.outgoing(true, 10, T0 + CLAIM_SECS + 1).len(), 2);
+        // The program that finished records; the report is not sent again.
+        a.record("fb-1", &sent("s1"), T0).unwrap();
+        assert_eq!(b.get("fb-1").unwrap().status, Status::Sent);
+    }
+
+    #[test]
+    fn many_threads_make_unique_ids() {
+        let tmp = kadakas_sys::tmp::PrivateTempDir::new("kadakas-fb-threads").unwrap();
+        let dir = tmp.path().join("fb");
+        let handles: Vec<_> = (0..4)
+            .map(|t| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    let mut h = Hub::new(Box::new(crate::store::DirStorage::new(dir)));
+                    for i in 0..10 {
+                        let mut d = draft(&format!("thread {t} report {i}"));
+                        d.origin = Origin::User;
+                        h.submit(d, vec![], 0).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let mut h = Hub::new(Box::new(crate::store::DirStorage::new(dir)));
+        let mut ids: Vec<String> = h.list().into_iter().map(|r| r.id).collect();
+        assert_eq!(ids.len(), 40);
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 40);
     }
 
     #[test]
@@ -983,7 +1372,7 @@ mod tests {
         ) {
             let mut h = Hub::in_memory();
             let mut d = draft(&format!("{title} {s}@example.com"));
-            d.body = format!("/home/{s}/proj/a.kad and token={s}");
+            d.body = format!("/home/{s}/proj/a.kad and token={s} file:///home/{s}/b.kad");
             d.wanted = format!("Authorization: Bearer {s}");
             d.tried = format!("C:\\Users\\{s}\\a.kad");
             d.error = format!("https://u:{s}@host.example/x");

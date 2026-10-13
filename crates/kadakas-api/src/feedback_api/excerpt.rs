@@ -12,9 +12,6 @@ use kadakas_core::uid::Uid;
 use kadakas_feedback::{MAX_EXCERPT_BYTES, MAX_EXCERPT_OBJECTS, Privacy};
 use serde_json::Value;
 
-/// A resource with a text this long holds a picture. Pictures are not part of an excerpt.
-const PICTURE_TEXT: usize = 20_000;
-
 pub struct Excerpt {
     /// The text of the document.
     pub json: String,
@@ -44,15 +41,6 @@ pub fn uids_in(v: &Value, max: usize) -> BTreeSet<Uid> {
     let mut out = BTreeSet::new();
     walk(v, &mut out, max, &mut 2000);
     out
-}
-
-fn has_picture(v: &Value) -> bool {
-    match v {
-        Value::String(s) => s.len() > PICTURE_TEXT,
-        Value::Array(a) => a.iter().any(has_picture),
-        Value::Object(o) => o.values().any(has_picture),
-        _ => false,
-    }
 }
 
 /// Builds an excerpt of the named objects. Groups bring their members, and members bring their
@@ -86,7 +74,8 @@ pub fn build(doc: &Document, ids: &[ObjectId]) -> Option<Excerpt> {
         // Unknown shapes may hold coordinates that no option can move, and an underlay is a
         // picture of the place. Both stay out, and so do objects over the cap.
         let left_out = matches!(o.shape, Shape::Unknown { .. } | Shape::Underlay(_))
-            || kept.len() >= MAX_EXCERPT_OBJECTS;
+            || kept.len() >= MAX_EXCERPT_OBJECTS
+            || serde_json::to_value(o).is_ok_and(|v| has_image(&v, None));
         if left_out {
             omitted += 1;
         } else {
@@ -175,7 +164,7 @@ fn assemble(doc: &Document, kept: &[&Object]) -> Option<Document> {
                 continue;
             }
             let v = serde_json::to_value(r).ok()?;
-            if has_picture(&v) {
+            if has_image(&v, None) {
                 continue;
             }
             chosen.insert(rid);
@@ -204,12 +193,35 @@ const NAME_KEYS: [&str; 10] = [
     "remarks",
 ];
 
+/// Maps of free values that belong to records and title blocks: every text in them goes.
+const MAP_KEYS: [&str; 7] = [
+    "fields",
+    "values",
+    "record",
+    "records",
+    "properties",
+    "props",
+    "data",
+];
+
+/// Keys whose text is part of the structure of a resource, not a name or a note.
+const STRUCTURE_KEYS: [&str; 14] = [
+    "type", "kind", "op", "unit", "units", "mode", "align", "anchor", "style", "fill", "format",
+    "shape", "dash", "side",
+];
+
+fn is_uid_text(s: &str) -> bool {
+    Uid::parse(s).is_some()
+}
+
 fn blank_names(v: &mut Value) {
     match v {
         Value::Object(o) => {
             for (k, x) in o.iter_mut() {
                 if NAME_KEYS.contains(&k.as_str()) && x.is_string() {
                     *x = Value::String(String::new());
+                } else if MAP_KEYS.contains(&k.as_str()) {
+                    blank_all(x);
                 } else {
                     blank_names(x);
                 }
@@ -217,6 +229,83 @@ fn blank_names(v: &mut Value) {
         }
         Value::Array(a) => a.iter_mut().for_each(blank_names),
         _ => {}
+    }
+}
+
+/// Blanks every text, at any depth, except object ids.
+fn blank_all(v: &mut Value) {
+    match v {
+        Value::String(s) => {
+            if !is_uid_text(s) {
+                s.clear();
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(blank_all),
+        Value::Object(o) => o.values_mut().for_each(blank_all),
+        _ => {}
+    }
+}
+
+/// Blanks the texts of a resource body: worksheet cells, symbol texts, defaults of record
+/// fields, notes and so on. What stays: object ids and the words that set the structure
+/// (`type`, `kind`, units).
+fn blank_resource(v: &mut Value, key: Option<&str>) {
+    match v {
+        Value::String(s) => {
+            if !is_uid_text(s) && !key.is_some_and(|k| STRUCTURE_KEYS.contains(&k)) {
+                s.clear();
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(|x| blank_resource(x, key)),
+        Value::Object(o) => {
+            for (k, x) in o.iter_mut() {
+                blank_resource(x, Some(k));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Blanks the free texts in the call log (the same keys as in an excerpt).
+pub fn blank_names_in(json: &str) -> String {
+    match serde_json::from_str::<Value>(json) {
+        Ok(mut v) => {
+            blank_names(&mut v);
+            v.to_string()
+        }
+        Err(_) => json.to_string(),
+    }
+}
+
+/// True if a text starts like a picture file in base64 (PNG, JPEG, GIF, WebP) or is a data address
+/// of a picture.
+fn image_text(s: &str) -> bool {
+    ["iVBOR", "/9j/", "R0lGOD", "UklGR", "data:image"]
+        .iter()
+        .any(|m| s.starts_with(m))
+}
+
+/// True if a value holds a picture: a text that starts like one, or a long text (over 64
+/// characters) under a key that names a picture.
+fn has_image(v: &Value, key: Option<&str>) -> bool {
+    const KEYS: [&str; 9] = [
+        "png",
+        "jpeg",
+        "jpg",
+        "image",
+        "thumb",
+        "thumbnail",
+        "picture",
+        "base64",
+        "bytes",
+    ];
+    match v {
+        Value::String(s) => {
+            image_text(s) || (s.len() > 64 && key.is_some_and(|k| KEYS.contains(&k)))
+        }
+        Value::Array(a) => a.iter().any(|x| has_image(x, key)),
+        Value::Object(o) => o.iter().any(|(k, x)| has_image(x, Some(k))),
+        _ => false,
     }
 }
 
@@ -233,31 +322,34 @@ pub fn apply_privacy(json: &str, p: Privacy) -> Result<String, String> {
     {
         let d = -c.round();
         for o in doc.objects.values_mut() {
-            if !matches!(o.shape, Shape::Group { .. }) {
-                o.shape.translate(d);
-                kadakas_core::hardscape::translate_object_data(o, d);
+            if matches!(o.shape, Shape::Group { .. } | Shape::TitleBlock(_)) {
+                continue;
             }
+            // The frame of a viewport is on paper, in mm of the sheet. A viewport also names the
+            // model point it shows: that point moves.
+            if let Shape::Viewport(vp) = &mut o.shape {
+                vp.center += d;
+                continue;
+            }
+            o.shape.translate(d);
+            kadakas_core::hardscape::translate_object_data(o, d);
         }
     }
     let mut v = serde_json::to_value(&doc).map_err(|e| e.to_string())?;
     if p.remove_names {
         strip_names(&mut v);
+        // Texts in resources can break a rule (a name that must not be empty). Then the
+        // resources go and the objects stay.
+        if Document::from_value(v.clone()).is_err()
+            && let Some(o) = v.as_object_mut()
+        {
+            o.remove("resources");
+        }
     }
     // The result must open again.
     Document::from_value(v.clone())
         .map_err(|e| format!("the options leave an invalid document: {e}"))?;
     serde_json::to_string(&v).map_err(|e| e.to_string())
-}
-
-/// Blanks the free texts in the call log (the same keys as in an excerpt).
-pub fn blank_names_in(json: &str) -> String {
-    match serde_json::from_str::<Value>(json) {
-        Ok(mut v) => {
-            blank_names(&mut v);
-            v.to_string()
-        }
-        Err(_) => json.to_string(),
-    }
 }
 
 fn strip_names(v: &mut Value) {
@@ -272,6 +364,25 @@ fn strip_names(v: &mut Value) {
                     let keep = key == "classes" && x["id"] == Value::String(NONE_CLASS.to_string());
                     if !keep && x.get("name").is_some() {
                         x["name"] = Value::String(format!("{prefix} {}", i + 1));
+                    }
+                    if key == "resources"
+                        && let Some(body) = x.get_mut("body")
+                    {
+                        blank_resource(body, None);
+                    }
+                    // Any other text of a layer or a class (a note, a label) goes too.
+                    if key != "resources"
+                        && let Some(m) = x.as_object_mut()
+                    {
+                        for (k, y) in m.iter_mut() {
+                            if k != "name"
+                                && y.is_string()
+                                && !is_uid_text(y.as_str().unwrap_or(""))
+                                && !matches!(k.as_str(), "id" | "kind")
+                            {
+                                *y = Value::String(String::new());
+                            }
+                        }
                     }
                 }
             }
@@ -291,15 +402,162 @@ fn strip_names(v: &mut Value) {
     }
 }
 
-/// The middle of the bounds of the objects, if there is one.
+/// The middle of the bounds of the model objects, if there is one. The viewports and title blocks
+/// of sheets are on paper and do not count.
 fn center(doc: &Document) -> Option<DVec2> {
     let (lo, hi) = doc
         .objects
         .values()
+        .filter(|o| !matches!(o.shape, Shape::Viewport(_) | Shape::TitleBlock(_)))
         .map(|o| doc.object_bounds(o))
         .filter(|(a, b)| a.is_finite() && b.is_finite())
         .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))?;
     Some((lo + hi) / 2.0)
+}
+
+// ---- the call log and the log lines
+
+/// Keys that hold a place or a coordinate system.
+const PLACE_KEYS: [&str; 9] = [
+    "crs",
+    "epsg",
+    "srid",
+    "wkt",
+    "georef",
+    "georeference",
+    "projection_string",
+    "datum",
+    "proj",
+];
+
+/// Keys whose number is a coordinate.
+const COORD_KEYS: [&str; 10] = [
+    "x",
+    "y",
+    "z",
+    "lat",
+    "lon",
+    "lng",
+    "latitude",
+    "longitude",
+    "easting",
+    "northing",
+];
+
+fn crs_text(s: &str) -> bool {
+    let l = s.to_ascii_lowercase();
+    l.contains("epsg:") || l.contains("projcs") || l.contains("geogcs") || l.contains("+proj=")
+}
+
+/// Replaces `[1.0, 2.0]` and `(1, 2, 3)` in a text by a note. A group needs a comma and numbers only.
+pub fn hide_coordinates_in_text(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if matches!(c, '[' | '(')
+            && let Some(len) = chars[i + 1..]
+                .iter()
+                .take(120)
+                .position(|x| matches!(x, ']' | ')'))
+        {
+            let inner: String = chars[i + 1..i + 1 + len].iter().collect();
+            let numbers = inner
+                .split(',')
+                .filter(|p| !p.trim().is_empty())
+                .all(|p| p.trim().parse::<f64>().is_ok());
+            if inner.contains(',') && numbers {
+                out.push(c);
+                out.push_str("<coordinates removed>");
+                out.push(chars[i + 1 + len]);
+                i += len + 2;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+fn is_point(a: &[Value]) -> bool {
+    (2..=3).contains(&a.len()) && a.iter().all(Value::is_number)
+}
+
+fn private_value(v: &mut Value, p: Privacy) {
+    match v {
+        Value::String(s) => {
+            if p.remove_georef && crs_text(s) {
+                *s = "<crs removed>".into();
+            } else if p.move_to_origin {
+                *s = hide_coordinates_in_text(s);
+            }
+        }
+        Value::Array(a) => {
+            if p.move_to_origin && is_point(a) {
+                *v = Value::String("<coordinates removed>".into());
+            } else {
+                a.iter_mut().for_each(|x| private_value(x, p));
+            }
+        }
+        Value::Object(o) => {
+            for (k, x) in o.iter_mut() {
+                let key = k.to_ascii_lowercase();
+                if p.remove_georef && PLACE_KEYS.contains(&key.as_str()) {
+                    *x = Value::String("<crs removed>".into());
+                } else if p.move_to_origin && COORD_KEYS.contains(&key.as_str()) && x.is_number() {
+                    *x = Value::String("<coordinates removed>".into());
+                } else {
+                    private_value(x, p);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The call log with the options applied: georeference and CRS calls and values go, coordinate
+/// pairs are hidden, and with `remove_names` the free texts are blank. A call about the place is
+/// dropped.
+pub fn calls_privacy(json: &str, p: Privacy) -> String {
+    let Ok(Value::Array(calls)) = serde_json::from_str::<Value>(json) else {
+        return json.to_string();
+    };
+    let mut kept = Vec::new();
+    for mut c in calls {
+        let method = c["method"].as_str().unwrap_or("").to_ascii_lowercase();
+        if p.remove_georef && (method.contains("georef") || method.contains("crs")) {
+            continue;
+        }
+        private_value(&mut c, p);
+        if p.remove_names {
+            blank_names(&mut c);
+        }
+        kept.push(c);
+    }
+    Value::Array(kept).to_string()
+}
+
+/// The log lines with the options applied: lines about the place go, coordinate pairs are hidden.
+pub fn log_privacy(text: &str, p: Privacy) -> String {
+    text.lines()
+        .filter(|l| {
+            if !p.remove_georef {
+                return true;
+            }
+            let l = l.to_ascii_lowercase();
+            !(l.contains("georef") || l.contains("crs") || l.contains("epsg") || l.contains("srid"))
+        })
+        .map(|l| {
+            if p.move_to_origin {
+                hide_coordinates_in_text(l)
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// What the review shows about one object.

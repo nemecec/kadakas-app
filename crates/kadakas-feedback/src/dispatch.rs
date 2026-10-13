@@ -7,13 +7,25 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender as Tx, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender as Tx, channel};
+use std::time::{Duration, Instant};
 
 use crate::hub::{Hub, Outgoing};
 use crate::send::{Delivery, RetryPolicy, Sender, Sleeper, deliver};
 
 /// Reports in one start of sending.
 const BATCH: usize = 10;
+
+/// How long the end of a program waits for sends that run. A report that is not done stays in
+/// the outbox (its claim ends after a while) and goes out at the next start.
+pub const FINISH_WAIT: Duration = Duration::from_secs(2);
+
+/// Seconds since 1970.
+fn system_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
 
 pub struct Dispatcher {
     sender: Arc<dyn Sender>,
@@ -22,6 +34,8 @@ pub struct Dispatcher {
     tx: Tx<(String, Delivery)>,
     rx: Receiver<(String, Delivery)>,
     in_flight: HashSet<String>,
+    /// The clock of the outbox (seconds since 1970). Tests give a fixed one.
+    now: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
 impl Dispatcher {
@@ -34,7 +48,14 @@ impl Dispatcher {
             tx,
             rx,
             in_flight: HashSet::new(),
+            now: Arc::new(system_now),
         }
+    }
+
+    /// Another clock, for tests.
+    pub fn with_clock(mut self, now: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
+        self.now = now;
+        self
     }
 
     /// The real transport with the default retry policy.
@@ -70,7 +91,7 @@ impl Dispatcher {
         let n = done.len();
         for (id, d) in done {
             self.in_flight.remove(&id);
-            let _ = hub.record(&id, &d);
+            let _ = hub.record(&id, &d, (self.now)());
         }
         n
     }
@@ -82,7 +103,7 @@ impl Dispatcher {
         let done: Vec<_> = self.rx.try_iter().collect();
         let n = self.record(hub, done);
         let items: Vec<Outgoing> = hub
-            .outgoing(include_text, BATCH)
+            .outgoing(include_text, BATCH, (self.now)())
             .into_iter()
             .filter(|o| !self.in_flight.contains(&o.id))
             .collect();
@@ -93,14 +114,22 @@ impl Dispatcher {
         n
     }
 
-    /// Waits until every started send has finished, and records them. For the end of a program.
+    /// Waits for the started sends, at most [`FINISH_WAIT`], and records those that finish. For
+    /// the end of a program.
     pub fn finish(&mut self, hub: &mut Hub) {
+        self.finish_within(hub, FINISH_WAIT);
+    }
+
+    /// Like [`Dispatcher::finish`], with another limit.
+    pub fn finish_within(&mut self, hub: &mut Hub, limit: Duration) {
+        let end = Instant::now() + limit;
         while !self.in_flight.is_empty() {
-            match self.rx.recv() {
+            let left = end.saturating_duration_since(Instant::now());
+            match self.rx.recv_timeout(left) {
                 Ok(d) => {
                     self.record(hub, vec![d]);
                 }
-                Err(_) => break,
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
             }
         }
     }
@@ -209,6 +238,43 @@ mod tests {
         d.finish(&mut h);
         assert_eq!(fake.requests()[0].1, p);
         assert_eq!(h.get("fb-1").unwrap().status, Status::Sent);
+    }
+
+    /// A sender that waits for a signal, like a slow server.
+    struct Gate(std::sync::Mutex<std::sync::mpsc::Receiver<()>>);
+
+    impl Sender for Gate {
+        fn send(&self, _url: &str, _payload: &str) -> Result<Reply, SendError> {
+            let _ = self.0.lock().unwrap().recv();
+            Ok(Reply {
+                id: "late".into(),
+                status: "received".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn the_end_of_a_program_waits_a_short_time_only() {
+        let (open, gate) = std::sync::mpsc::channel();
+        let mut h = hub_with(1);
+        h.set_send_override(Some(true));
+        let mut d = Dispatcher::new(
+            Arc::new(Gate(std::sync::Mutex::new(gate))),
+            Arc::new(NoSleep::default()),
+            RetryPolicy::default(),
+        );
+        d.pump(&mut h, true);
+        assert_eq!(d.in_flight(), 1);
+        // The server is slow: the wait ends, the report stays in the outbox.
+        d.finish_within(&mut h, Duration::from_millis(30));
+        assert_eq!(d.in_flight(), 1);
+        assert_eq!(h.get("fb-1").unwrap().status, Status::Pending);
+        // It answers later, and the next wait records it.
+        open.send(()).unwrap();
+        d.finish_within(&mut h, Duration::from_secs(10));
+        assert_eq!(d.in_flight(), 0);
+        assert_eq!(h.get("fb-1").unwrap().status, Status::Sent);
+        assert_eq!(FINISH_WAIT, Duration::from_secs(2));
     }
 
     #[test]

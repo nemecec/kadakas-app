@@ -251,6 +251,10 @@ fn path_start(w: &str) -> bool {
     if w.starts_with("\\\\") {
         return w.len() > 2;
     }
+    // A file address names a path too.
+    if w.starts_with("file://") {
+        return w.len() > 7;
+    }
     (w.starts_with('/') && w.len() > 1 && b[1] != b'/')
         || w.starts_with("~/")
         || w.starts_with("~\\")
@@ -347,6 +351,80 @@ pub fn scrub(s: &str) -> String {
     let s = bearer(&s);
     let s = emails(&s);
     words(&s)
+}
+
+/// File extensions that `harsh` takes for file names.
+const FILE_EXTS: [&str; 20] = [
+    "kad", "json", "dxf", "dwg", "ifc", "shp", "geojson", "png", "jpg", "jpeg", "svg", "pdf",
+    "csv", "py", "wasm", "txt", "gltf", "glb", "obj", "xml",
+];
+
+/// True for a short lower case word like an API option or method name (`bogus`, `edit.fillet`).
+fn api_word(w: &str) -> bool {
+    w.len() <= 40
+        && w.chars().next().is_some_and(|f| f.is_ascii_lowercase())
+        && w.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.'))
+}
+
+/// A harder scrub for texts that Kadakas fills in from the session, such as the error of the
+/// last failed call. It does what `scrub` does, and then:
+///
+/// - a file name loses its stem and keeps its extension (`<path>/garden.kad` becomes `<file>.kad`);
+/// - a name in quotes (`'Smith house'`) becomes `<name>`, unless it looks like an API word.
+///
+/// Layer and object names in error messages are in quotes, so this removes most of them.
+pub fn harsh(s: &str) -> String {
+    let s = scrub(s);
+    let chars: Vec<char> = s.chars().collect();
+    let mut quoted = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if matches!(c, '\'' | '"' | '`')
+            && let Some(len) = chars[i + 1..].iter().take(81).position(|x| *x == c)
+        {
+            let inner: String = chars[i + 1..i + 1 + len].iter().collect();
+            if len > 0 && !api_word(&inner) && !inner.starts_with('<') {
+                quoted.push(c);
+                quoted.push_str("<name>");
+                quoted.push(c);
+                i += len + 2;
+                continue;
+            }
+        }
+        quoted.push(c);
+        i += 1;
+    }
+    // File names, word by word.
+    let mut res = String::with_capacity(quoted.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, res: &mut String| {
+        let core = word.trim_end_matches(['.', ',', ';', ':', '!', '?', ')']);
+        let tail = &word[core.len()..];
+        let name = core.rsplit(['/', '\\']).next().unwrap_or("");
+        match name.rsplit_once('.') {
+            Some((stem, ext))
+                if !stem.is_empty() && FILE_EXTS.contains(&ext.to_ascii_lowercase().as_str()) =>
+            {
+                res.push_str("<file>.");
+                res.push_str(ext);
+                res.push_str(tail);
+            }
+            _ => res.push_str(word),
+        }
+        word.clear();
+    };
+    for c in quoted.chars() {
+        if c.is_whitespace() || matches!(c, '\'' | '"' | '`' | '(' | '[' | '{' | '=' | ',') {
+            flush(&mut word, &mut res);
+            res.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    flush(&mut word, &mut res);
+    res
 }
 
 /// Scrubs a text of any size: cuts to a few times `max` first, scrubs, then cuts to `max`.
@@ -463,6 +541,43 @@ mod tests {
     }
 
     #[test]
+    fn file_addresses_are_paths() {
+        assert_eq!(
+            scrub("open file:///Users/ann/g.kad now"),
+            "open <path>/g.kad now"
+        );
+        assert!(!scrub("file:///home/secretname/x").contains("secretname"));
+    }
+
+    #[test]
+    fn harsh_keeps_the_extension_and_drops_names() {
+        assert_eq!(
+            harsh("cannot open /Users/ann/Plans/garden.kad"),
+            "cannot open <file>.kad"
+        );
+        assert_eq!(
+            harsh("cannot read garden.dxf: bad"),
+            "cannot read <file>.dxf: bad"
+        );
+        assert_eq!(
+            harsh("layer 'Smith house' does not exist"),
+            "layer '<name>' does not exist"
+        );
+        assert_eq!(harsh("unknown field `bogus`"), "unknown field `bogus`");
+        assert_eq!(
+            harsh("no method edit.fillet here"),
+            "no method edit.fillet here"
+        );
+        assert_eq!(
+            harsh(r#"class "Elm Road 4" is locked"#),
+            r#"class "<name>" is locked"#
+        );
+        // An unmatched quote is left alone.
+        assert_eq!(harsh("it's fine"), "it's fine");
+        assert_eq!(harsh(""), "");
+    }
+
+    #[test]
     fn text_is_bounded_and_clean() {
         let long = "x ".repeat(10_000);
         let t = text(&long, 100);
@@ -511,6 +626,12 @@ mod tests {
             };
             let out = scrub(&format!("{pre} {planted} {post}"));
             prop_assert!(!out.contains(&s), "leaked {} in {}", s, out);
+        }
+
+        #[test]
+        fn harsh_never_leaks_a_quoted_name(name in "[A-Z][a-z]{3,8} [A-Z][a-z]{3,8}") {
+            let out = harsh(&format!("layer '{name}' and file /home/x/{name}.kad"));
+            prop_assert!(!out.contains(&name), "{}", out);
         }
 
         #[test]

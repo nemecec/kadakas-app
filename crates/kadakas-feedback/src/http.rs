@@ -77,7 +77,25 @@ impl Sender for HttpSender {
             .post(url)
             .content_type("application/json")
             .send(payload)
-            .map_err(|e| SendError::Transient(e.to_string()))?;
+            .map_err(|e| match e {
+                // Offline or a wrong name: not the fault of the report.
+                ureq::Error::HostNotFound | ureq::Error::ConnectionFailed => {
+                    SendError::Unreachable(e.to_string())
+                }
+                ureq::Error::Io(ref io)
+                    if matches!(
+                        io.kind(),
+                        std::io::ErrorKind::ConnectionRefused
+                            | std::io::ErrorKind::NotFound
+                            | std::io::ErrorKind::AddrNotAvailable
+                            | std::io::ErrorKind::NetworkUnreachable
+                            | std::io::ErrorKind::HostUnreachable
+                    ) =>
+                {
+                    SendError::Unreachable(e.to_string())
+                }
+                _ => SendError::Transient(e.to_string()),
+            })?;
         let status = resp.status().as_u16();
         match status {
             200..=202 => {
@@ -98,9 +116,19 @@ impl Sender for HttpSender {
                     status: v["status"].as_str().unwrap_or("received").to_string(),
                 })
             }
-            408 | 425 | 429 | 500..=599 => {
-                Err(SendError::Transient(format!("server answered {status}")))
+            429 | 503 => {
+                // `Retry-After` in seconds. A date is not read: the back-off applies.
+                let retry_after = resp
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.trim().parse::<u64>().ok());
+                Err(SendError::Busy {
+                    message: format!("server answered {status}"),
+                    retry_after,
+                })
             }
+            408 | 425 | 500..=599 => Err(SendError::Transient(format!("server answered {status}"))),
             _ => Err(SendError::Permanent(format!("server answered {status}"))),
         }
     }
@@ -179,13 +207,24 @@ mod tests {
     fn statuses_map_to_retry_or_refusal() {
         let (r, _) = post("200 OK", r#"{"id":"a"}"#);
         assert_eq!(r.unwrap().status, "received");
-        for s in [
-            "429 Too Many Requests",
-            "503 Service Unavailable",
-            "408 Request Timeout",
-        ] {
+        for s in ["500 Internal Server Error", "408 Request Timeout"] {
             assert!(
                 matches!(post(s, "{}").0, Err(SendError::Transient(_))),
+                "{s}"
+            );
+        }
+        // A busy server may say when to come back. The header is part of the status text here.
+        for (s, after) in [
+            ("429 Too Many Requests\r\nRetry-After: 90", Some(90)),
+            ("503 Service Unavailable", None),
+            ("429 Too Many Requests\r\nRetry-After: soon", None),
+        ] {
+            assert_eq!(
+                post(s, "{}").0,
+                Err(SendError::Busy {
+                    message: format!("server answered {}", &s[..3]),
+                    retry_after: after
+                }),
                 "{s}"
             );
         }
@@ -206,14 +245,14 @@ mod tests {
     }
 
     #[test]
-    fn an_unreachable_server_is_transient() {
+    fn an_unreachable_server_is_not_counted() {
         let free = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = free.local_addr().unwrap().port();
         drop(free);
         let r = HttpSender::default()
             .allow_loopback_http()
             .send(&format!("http://127.0.0.1:{port}/v1/feedback"), "{}");
-        assert!(matches!(r, Err(SendError::Transient(_))));
+        assert!(matches!(r, Err(SendError::Unreachable(_))), "{r:?}");
     }
 
     #[test]

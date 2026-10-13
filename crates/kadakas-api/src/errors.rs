@@ -157,10 +157,15 @@ pub fn error_response_with(
     kind: &str,
     message: &str,
     feedback: Option<Value>,
+    tainted: bool,
 ) -> String {
     let mut data = json!({"kind": kind});
     if let Some(f) = feedback {
         data["feedback"] = f;
+    }
+    // A method panicked in this session. The document may not be what the agent expects.
+    if tainted {
+        data["tainted"] = json!(true);
     }
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message, "data": data}})
         .to_string()

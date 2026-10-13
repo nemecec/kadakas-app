@@ -30,7 +30,7 @@ fn unknown_method_has_a_feedback_hint_with_a_draft() {
     let d = &f["draft"];
     assert_eq!(d["kind"], "feature_request");
     assert_eq!(d["method"], "plants.teleport");
-    assert!(d["error"].as_str().unwrap().contains("unknown method"));
+    assert!(d.get("error").is_none());
     assert!(d["title"].as_str().unwrap().contains("plants.teleport"));
     // The draft goes to feedback.submit as it is.
     let r = line(&mut s, "feedback.submit", d.clone());
@@ -205,14 +205,28 @@ fn a_failing_server_keeps_the_report_and_counts_the_tries() {
         max_ms: 1,
     };
     let sleeper = Arc::new(NoSleep::default());
-    let mut d = Dispatcher::new(fake.clone(), sleeper.clone(), policy);
+    // A clock that the test moves, so the back-off does not depend on the machine.
+    let clock = Arc::new(std::sync::atomic::AtomicU64::new(1_000_000));
+    let c2 = clock.clone();
+    let mut d =
+        Dispatcher::new(fake.clone(), sleeper.clone(), policy).with_clock(Arc::new(move || {
+            c2.load(std::sync::atomic::Ordering::SeqCst)
+        }));
     d.pump(&mut s.feedback.hub, true);
     d.finish(&mut s.feedback.hub);
     let r = s.feedback.hub.get("fb-1").unwrap();
-    assert_eq!((r.status, r.attempts), (Status::Pending, 2));
+    assert_eq!((r.status, r.attempts, r.retries), (Status::Pending, 1, 1));
     assert_eq!(r.last_error.as_deref(), Some("down"));
     assert_eq!(*sleeper.0.lock().unwrap(), vec![1]);
-    // The next pump succeeds.
+    // The report waits for its back-off: an immediate pump sends nothing.
+    d.pump(&mut s.feedback.hub, true);
+    d.finish(&mut s.feedback.hub);
+    assert_eq!(fake.requests().len(), 2);
+    // After the wait, the next pump succeeds.
+    clock.store(
+        1_000_000 + r.next_try - 1_000_000 + 1,
+        std::sync::atomic::Ordering::SeqCst,
+    );
     d.pump(&mut s.feedback.hub, true);
     d.finish(&mut s.feedback.hub);
     let r = s.feedback.hub.get("fb-1").unwrap();

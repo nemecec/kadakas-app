@@ -392,7 +392,11 @@ impl FeedbackUi {
                         }
                     }
                 }
-                ui.weak(tr!("feedback-ui-scrub-note"));
+                if f.want_screenshot && f.screenshot.is_some() {
+                    ui.weak(tr!("feedback-ui-scrub-note-screenshot"));
+                } else {
+                    ui.weak(tr!("feedback-ui-scrub-note"));
+                }
                 ui.horizontal(|ui| {
                     if ui
                         .add_enabled(f.can_send(), egui::Button::new(tr!("feedback-ui-send")))
@@ -467,24 +471,30 @@ impl FeedbackUi {
             .default_width(520.0)
             .default_height(380.0)
             .show(ctx, |ui| {
-                let mut on = self.send_on;
-                if ui
-                    .checkbox(&mut on, tr!("feedback-ui-send-reports"))
-                    .changed()
+                // The browser build cannot send yet: no switch, no address, and a note.
+                #[cfg(not(target_arch = "wasm32"))]
                 {
-                    send_choice = Some(on);
-                }
-                if !self.asked {
-                    ui.weak(tr!("feedback-ui-not-asked"));
-                }
-                ui.horizontal(|ui| {
-                    ui.label(tr!("feedback-ui-server"));
-                    let edit = self.url_edit.get_or_insert_with(|| self.url.clone());
-                    let r = ui.add(egui::TextEdit::singleline(edit).desired_width(280.0));
-                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        new_url = Some(edit.clone());
+                    let mut on = self.send_on;
+                    if ui
+                        .checkbox(&mut on, tr!("feedback-ui-send-reports"))
+                        .changed()
+                    {
+                        send_choice = Some(on);
                     }
-                });
+                    if !self.asked {
+                        ui.weak(tr!("feedback-ui-not-asked"));
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label(tr!("feedback-ui-server"));
+                        let edit = self.url_edit.get_or_insert_with(|| self.url.clone());
+                        let r = ui.add(egui::TextEdit::singleline(edit).desired_width(280.0));
+                        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            new_url = Some(edit.clone());
+                        }
+                    });
+                }
+                #[cfg(target_arch = "wasm32")]
+                ui.weak(tr!("feedback-ui-web-not-sent"));
                 if !persistent {
                     ui.weak(tr!("feedback-ui-memory-only"));
                 }
@@ -652,6 +662,10 @@ impl FeedbackUi {
     // ---- the consent
 
     fn consent_window(&mut self, ctx: &egui::Context, hub: &mut Hub) {
+        // The browser build does not send, so it has nothing to ask.
+        if cfg!(target_arch = "wasm32") {
+            return;
+        }
         if !self.flow.consent_due(self.asked, &self.reports) {
             return;
         }
@@ -763,10 +777,14 @@ fn review_body(ui: &mut egui::Ui, st: &mut ReviewState) {
                     show_texture(ui, t, 420.0);
                 }
             }
-            AttachmentKind::Calls => {
-                text_box(ui, ("calls", 0), st.review.calls_text().unwrap_or(""))
+            AttachmentKind::Calls => text_box(
+                ui,
+                ("calls", 0),
+                &st.review.calls_text().unwrap_or_default(),
+            ),
+            AttachmentKind::Log => {
+                text_box(ui, ("log", 0), &st.review.log_text().unwrap_or_default())
             }
-            AttachmentKind::Log => text_box(ui, ("log", 0), st.review.log_text().unwrap_or("")),
         });
     }
     ui.separator();
@@ -822,6 +840,7 @@ fn excerpt_view(ui: &mut egui::Ui, st: &mut ReviewState) {
     );
     ui.checkbox(&mut p.remove_names, tr!("feedback-ui-review-remove-names"));
     st.review.privacy = p;
+    ui.weak(tr!("feedback-ui-review-options-note"));
     if let Some(Err(e)) = st.review.excerpt_text() {
         ui.colored_label(
             ui.visuals().warn_fg_color,
@@ -1003,10 +1022,10 @@ mod tests {
         assert_eq!(s.id, "fb-1");
         // The person has not been asked: the dialog is due, nothing goes out.
         assert!(ui.consent_is_due());
-        assert!(hub.outgoing(true, 5).is_empty());
+        assert!(hub.outgoing(true, 5, 1_000).is_empty());
         ui.answer_consent(&mut hub, Some(true));
         assert!(!ui.consent_is_due());
-        assert_eq!(hub.outgoing(true, 5).len(), 1);
+        assert_eq!(hub.outgoing(true, 5, 1_000).len(), 1);
         let r = hub.get("fb-1").unwrap();
         assert_eq!(r.method, "edit.fillet");
         assert!(r.body.contains("<path>/garden.kad") && !r.body.contains("ann"));

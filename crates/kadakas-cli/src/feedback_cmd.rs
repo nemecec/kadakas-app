@@ -5,8 +5,21 @@
 //! excerpt with a small plan, and the raw JSON. They untick what they do not want to share, set
 //! the privacy options, and send. Nothing here runs without a terminal: the command refuses
 //! when stdin or stdout is a pipe, so a script or an agent cannot approve its own report.
+//!
+//! **What this protects, and what it does not.** The guarantee holds for an agent that is limited
+//! to the MCP tools and to JSON-RPC: nothing in them approves or sends an attachment, and a
+//! restricted session cannot write into the folder of the outbox. An agent that has a shell, or
+//! that is allowed to run scripts (`--allow-agent-scripts`) or converters, runs as the same user
+//! as the person. It can read and write the same files, and it can type into a terminal that it
+//! started itself. A terminal check cannot stop such an agent, and this program does not claim to.
+//! Do not give a shell to an agent that you do not trust with your drawings.
+//!
+//! The pictures of a report are written to private temporary files (owner only) before the
+//! question about them, and the path is printed, so the person can open them in a viewer. The
+//! default answer for a picture is no.
 
 use std::io::{BufRead, Write};
+use std::path::Path;
 
 use kadakas_api::feedback_api::excerpt::ObjectBrief;
 use kadakas_api::feedback_api::review::Review;
@@ -92,6 +105,13 @@ fn kb(n: usize) -> String {
 }
 
 /// Reviews one report. Returns true if it was sent.
+/// Seconds since 1970.
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 fn review_one(
     hub: &mut Hub,
     id: &str,
@@ -99,6 +119,7 @@ fn review_one(
     out: &mut dyn Write,
     sender: &dyn Sender,
     sleeper: &dyn Sleeper,
+    images: &Path,
 ) -> Result<bool, String> {
     let mut r = Review::open(hub, id).map_err(|e| e.to_string())?;
     let io = |e: std::io::Error| e.to_string();
@@ -156,6 +177,11 @@ fn review_one(
             r.privacy.remove_names,
         )
         .map_err(io)?;
+        writeln!(
+            out,
+            "These options also hide coordinates and CRS values in the recent calls and log lines."
+        )
+        .map_err(io)?;
     }
     for kind in AttachmentKind::ALL {
         if !r.attachments().iter().any(|a| a.0 == kind) {
@@ -195,22 +221,38 @@ fn review_one(
                 None => {}
             },
             AttachmentKind::Screenshot | AttachmentKind::Render => {
-                let n = r.image(kind).map_or(0, <[u8]>::len);
-                writeln!(out, "\nPicture ({}): {}", kind.id(), kb(n)).map_err(io)?;
+                let png = r.image(kind).unwrap_or_default();
+                let file = images.join(format!("{id}-{}.png", kind.id()));
+                kadakas_sys::fsio::write_private(&file, png).map_err(|e| e.to_string())?;
+                writeln!(
+                    out,
+                    "\nPicture ({}): {}. Open it to look at it: {}",
+                    kind.id(),
+                    kb(png.len()),
+                    file.display()
+                )
+                .map_err(io)?;
             }
             AttachmentKind::Calls => {
                 writeln!(
                     out,
                     "\nRecent calls (names and scrubbed parameters):\n{}",
-                    r.calls_text().unwrap_or("")
+                    r.calls_text().unwrap_or_default()
                 )
                 .map_err(io)?;
             }
             AttachmentKind::Log => {
-                writeln!(out, "\nRecent log lines:\n{}", r.log_text().unwrap_or("")).map_err(io)?;
+                writeln!(
+                    out,
+                    "\nRecent log lines:\n{}",
+                    r.log_text().unwrap_or_default()
+                )
+                .map_err(io)?;
             }
         }
-        let on = ask(input, out, &format!("Send the {}?", kind.id()), true).map_err(io)?;
+        // A picture can show more than the person expects: the default answer is no.
+        let default_yes = !matches!(kind, AttachmentKind::Screenshot | AttachmentKind::Render);
+        let on = ask(input, out, &format!("Send the {}?", kind.id()), default_yes).map_err(io)?;
         r.set_included(kind, on);
     }
     loop {
@@ -235,15 +277,23 @@ fn review_one(
         }
         match line.trim().to_ascii_lowercase().as_str() {
             "s" | "send" => {
-                r.approve(hub).map_err(|e| e.to_string())?;
-                let out_item = hub.outgoing(false, 20).into_iter().find(|o| o.id == id);
-                let Some(item) = out_item else {
-                    return Err("the approved report is not ready to send".into());
+                if let Err(e) = r.approve(hub) {
+                    // For example: the person turned sending off. Nothing changed.
+                    writeln!(out, "Not approved: {e}.").map_err(io)?;
+                    return Ok(false);
+                }
+                let Some(item) = hub.claim(id, now()) else {
+                    writeln!(
+                        out,
+                        "The report is approved. Another program is sending it, or sending is off."
+                    )
+                    .map_err(io)?;
+                    return Ok(false);
                 };
                 let url = hub.url();
                 writeln!(out, "Sending to {url} ...").map_err(io)?;
                 let d = deliver(sender, sleeper, &url, &item.payload, RetryPolicy::default());
-                hub.record(id, &d).map_err(|e| e.to_string())?;
+                hub.record(id, &d, now()).map_err(|e| e.to_string())?;
                 match d {
                     Delivery::Sent(reply) => {
                         writeln!(out, "Sent. Server id {} ({}).", reply.id, reply.status)
@@ -270,7 +320,8 @@ fn review_one(
     }
 }
 
-/// Reviews one report, or all that wait. Returns how many were sent.
+/// Reviews one report, or all that wait. Returns how many were sent. The pictures go to a private
+/// temporary folder that is removed at the end.
 pub fn review(
     hub: &mut Hub,
     only: Option<&str>,
@@ -278,6 +329,21 @@ pub fn review(
     out: &mut dyn Write,
     sender: &dyn Sender,
     sleeper: &dyn Sleeper,
+) -> Result<usize, String> {
+    let dir = kadakas_sys::tmp::PrivateTempDir::new("kadakas-feedback-review")
+        .map_err(|e| format!("cannot make a private temporary folder: {e}"))?;
+    review_in(hub, only, input, out, sender, sleeper, dir.path())
+}
+
+/// Like [`review`], with the folder for the pictures given.
+pub fn review_in(
+    hub: &mut Hub,
+    only: Option<&str>,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+    sender: &dyn Sender,
+    sleeper: &dyn Sleeper,
+    images: &Path,
 ) -> Result<usize, String> {
     let ids: Vec<String> = match only {
         Some(id) => vec![id.to_string()],
@@ -294,11 +360,23 @@ pub fn review(
     }
     let mut sent = 0;
     for id in ids {
-        if review_one(hub, &id, input, out, sender, sleeper)? {
+        if review_one(hub, &id, input, out, sender, sleeper, images)? {
             sent += 1;
         }
     }
     Ok(sent)
+}
+
+/// `kadakas feedback retry [id]`: gives a report (or every unsent one) a fresh start after
+/// failures: no tries counted, no waiting.
+pub fn retry(hub: &mut Hub, id: Option<&str>, out: &mut dyn Write) -> Result<(), String> {
+    hub.reset_tries(id).map_err(|e| e.to_string())?;
+    writeln!(
+        out,
+        "{} will be tried again at the next start of sending.",
+        id.unwrap_or("Every unsent report")
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// `kadakas feedback list`: one line per report.
@@ -321,6 +399,13 @@ pub fn list(hub: &mut Hub, out: &mut dyn Write) -> std::io::Result<()> {
             r.count,
             r.title
         )?;
+        if let Some(e) = &r.last_error {
+            writeln!(
+                out,
+                "\tlast error: {e} (tries {}, next try at {})",
+                r.attempts, r.next_try
+            )?;
+        }
     }
     writeln!(
         out,
@@ -382,8 +467,9 @@ mod tests {
     fn a_person_reviews_and_sends() {
         let mut s = session();
         let fake = FakeSender::new(vec![]);
-        // Privacy: keep the defaults (Enter x3); excerpt Y, render Y, calls n; raw JSON y; send.
-        let (r, text) = run(&mut s, None, "\n\n\n\n\nn\ny\ns\n", &fake);
+        // Privacy: keep the defaults (Enter x3); excerpt Enter, render y (the default is no),
+        // calls n; raw JSON y; send.
+        let (r, text) = run(&mut s, None, "\n\n\n\ny\nn\ny\ns\n", &fake);
         assert_eq!(r, Ok(1), "{text}");
         assert!(text.contains("Model excerpt: 1 objects"), "{text}");
         assert!(text.contains("+----") && text.contains('#'));
@@ -397,6 +483,106 @@ mod tests {
             "the place is removed by default"
         );
         assert_eq!(s.feedback.hub.get("fb-1").unwrap().status, Status::Sent);
+    }
+
+    #[test]
+    fn a_picture_is_written_to_a_private_file_before_the_question_and_the_default_is_no() {
+        let mut s = session();
+        let fake = FakeSender::new(vec![]);
+        let dir = kadakas_sys::tmp::PrivateTempDir::new("kadakas-fb-images").unwrap();
+        let mut out = Vec::new();
+        // Privacy Enter x3, excerpt Enter, picture Enter (= no), calls Enter, raw JSON Enter, send.
+        let r = review_in(
+            &mut s.feedback.hub,
+            None,
+            &mut Cursor::new("\n\n\n\n\n\n\ns\n".to_string()),
+            &mut out,
+            &fake,
+            &NoSleep::default(),
+            dir.path(),
+        );
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(r, Ok(1), "{text}");
+        let file = dir.path().join("fb-1-render.png");
+        assert!(text.contains(&file.display().to_string()), "{text}");
+        let bytes = std::fs::read(&file).unwrap();
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        // The path comes before the question about the picture.
+        let at_path = text.find(&file.display().to_string()).unwrap();
+        let at_question = text.find("Send the render?").unwrap();
+        assert!(at_path < at_question);
+        // The answer was no: the message has no picture.
+        assert!(!fake.requests()[0].1.contains("\"render\""));
+    }
+
+    #[test]
+    fn a_refused_approval_changes_nothing() {
+        let mut s = session();
+        s.feedback.hub.set_send(Some(false)).unwrap();
+        let fake = FakeSender::new(vec![]);
+        let (r, text) = run(&mut s, None, "\n\n\n\n\n\n\ns\n", &fake);
+        assert_eq!(r, Ok(0), "{text}");
+        assert!(text.contains("Not approved: sending is off"), "{text}");
+        assert!(fake.requests().is_empty());
+        assert_eq!(
+            s.feedback.hub.get("fb-1").unwrap().status,
+            Status::NeedsReview
+        );
+    }
+
+    #[test]
+    fn retry_gives_a_fresh_start() {
+        let mut s = session();
+        s.feedback.hub.set_send(Some(true)).unwrap();
+        s.feedback
+            .hub
+            .submit(
+                kadakas_feedback::Draft::new(
+                    kadakas_feedback::Kind::Question,
+                    "Q",
+                    "",
+                    kadakas_feedback::Origin::User,
+                ),
+                vec![],
+                0,
+            )
+            .unwrap();
+        let failed = Delivery::Failed {
+            message: "down".into(),
+            permanent: false,
+            unreachable: false,
+            retry_after: None,
+            attempts: 1,
+        };
+        s.feedback.hub.record("fb-2", &failed, 1_000).unwrap();
+        let mut out = Vec::new();
+        list(&mut s.feedback.hub, &mut out).unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("last error: down"));
+        let mut out = Vec::new();
+        retry(&mut s.feedback.hub, Some("fb-2"), &mut out).unwrap();
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .contains("fb-2 will be tried again")
+        );
+        let r = s.feedback.hub.get("fb-2").unwrap();
+        assert_eq!((r.attempts, r.next_try, r.last_error), (0, 0, None));
+        let mut out = Vec::new();
+        retry(&mut s.feedback.hub, None, &mut out).unwrap();
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .contains("Every unsent report")
+        );
+        assert!(retry(&mut s.feedback.hub, Some("fb-77"), &mut Vec::new()).is_err());
     }
 
     #[test]
@@ -478,6 +664,7 @@ mod tests {
                     id: "s".into(),
                     status: "received".into(),
                 }),
+                1_000,
             )
             .unwrap();
         let mut out = Vec::new();
