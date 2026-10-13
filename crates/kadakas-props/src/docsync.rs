@@ -321,7 +321,19 @@ pub fn diff_replicas(base: &Replica, target: &Replica) -> Vec<Op> {
 
 /// Reads a whole document into a replica. All content has the baseline writer.
 pub fn replica_of(doc: &Document) -> Replica {
-    let keys = document_keys(doc);
+    replica_with_keys(doc, false)
+}
+
+/// Reads a document that was built from a replica (the shadow of a client). Like [`replica_of`],
+/// but every key the document carries stays, also two equal keys of concurrent inserts (the list
+/// is sorted by key, then by ID): the shadow must hold the keys that the view holds, or the keys
+/// of the next local edit are made between the wrong neighbours.
+pub fn shadow_of(doc: &Document) -> Replica {
+    replica_with_keys(doc, true)
+}
+
+fn replica_with_keys(doc: &Document, keep_ties: bool) -> Replica {
+    let keys = document_keys(doc, keep_ties);
     let mut r = Replica::new();
     for t in all_targets(doc) {
         if let Some(mut props) = props_of(doc, t) {
@@ -344,11 +356,18 @@ fn stored_key(extra: &Map<String, Value>) -> Option<String> {
 }
 
 /// The stacking keys of a document: the keys that its objects and layers carry, if every one of a
-/// list has a key and the keys are increasing; else new keys by position.
-fn document_keys(doc: &Document) -> BTreeMap<Target, String> {
-    fn lists_keys(items: Vec<(Target, Option<String>)>, out: &mut BTreeMap<Target, String>) {
+/// list has a key and the keys are increasing (`keep_ties`: or equal); else new keys by position.
+fn document_keys(doc: &Document, keep_ties: bool) -> BTreeMap<Target, String> {
+    fn lists_keys(
+        items: Vec<(Target, Option<String>)>,
+        keep_ties: bool,
+        out: &mut BTreeMap<Target, String>,
+    ) {
         let given: Vec<Option<String>> = items.iter().map(|(_, k)| k.clone()).collect();
-        let sorted = given.iter().all(Option::is_some) && given.windows(2).all(|w| w[0] < w[1]);
+        let sorted = given.iter().all(Option::is_some)
+            && given
+                .windows(2)
+                .all(|w| w[0] < w[1] || keep_ties && w[0] == w[1]);
         let keys: Vec<String> = if sorted {
             given.into_iter().flatten().collect()
         } else {
@@ -364,6 +383,7 @@ fn document_keys(doc: &Document) -> BTreeMap<Target, String> {
             .iter()
             .map(|l| (Target::new(Kind::Layer, l.id.0), stored_key(&l.extra)))
             .collect(),
+        keep_ties,
         &mut out,
     );
     let mut per_layer: BTreeMap<kadakas_core::model::LayerId, Vec<(Target, Option<String>)>> =
@@ -375,7 +395,7 @@ fn document_keys(doc: &Document) -> BTreeMap<Target, String> {
             .push((Target::new(Kind::Object, o.id.0), stored_key(&o.extra)));
     }
     for items in per_layer.into_values() {
-        lists_keys(items, &mut out);
+        lists_keys(items, keep_ties, &mut out);
     }
     out
 }
@@ -595,6 +615,28 @@ mod tests {
         assert!(r.alive(Target::new(Kind::Layer, FIRST_LAYER.0)).is_some());
         assert!(r.alive(Target::new(Kind::Class, NONE_CLASS.0)).is_some());
         assert_eq!(r.alive_of(Kind::Object).count(), 0);
+    }
+
+    #[test]
+    fn the_shadow_keeps_equal_keys_but_a_new_replica_renumbers_them() {
+        let mut ed = editor();
+        let ids = [add_line(&mut ed, 0.0), add_line(&mut ed, 20.0)];
+        // Two inserts at the same time give the same key (the list is sorted by ID).
+        let mut doc = ed.doc().clone();
+        for id in ids {
+            doc.object_mut(id)
+                .unwrap()
+                .extra
+                .insert("order".into(), Value::String("a0".into()));
+        }
+        let key = |r: &Replica, id: ObjectId| key_in(r, Target::new(Kind::Object, id.0)).unwrap();
+        let shadow = shadow_of(&doc);
+        assert!(ids.iter().all(|id| key(&shadow, *id) == "a0"));
+        let fresh = replica_of(&doc);
+        assert_eq!(
+            (key(&fresh, ids[0]), key(&fresh, ids[1])),
+            ("a0".into(), "a1".into())
+        );
     }
 
     #[test]
