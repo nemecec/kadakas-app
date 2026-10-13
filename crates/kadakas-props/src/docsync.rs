@@ -114,7 +114,7 @@ fn all_targets(doc: &Document) -> Vec<Target> {
 }
 
 /// Cuts the JSON of a thing into properties (see the module text).
-pub(crate) fn flatten(kind: Kind, whole: Map<String, Value>) -> Map<String, Value> {
+pub fn flatten(kind: Kind, whole: Map<String, Value>) -> Map<String, Value> {
     let mut out = Map::new();
     for (k, v) in whole {
         match (kind, k.as_str(), v) {
@@ -180,7 +180,7 @@ pub(crate) fn flatten(kind: Kind, whole: Map<String, Value>) -> Map<String, Valu
 }
 
 /// The opposite of `flatten`: puts the properties together to the JSON of a thing.
-pub(crate) fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Value> {
+pub fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Value> {
     fn sub<'a>(m: &'a mut Map<String, Value>, key: &str) -> &'a mut Map<String, Value> {
         let e = m
             .entry(key.to_string())

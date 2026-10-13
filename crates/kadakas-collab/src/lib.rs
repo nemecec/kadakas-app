@@ -7,10 +7,10 @@
 //!
 //! The parts, from the bottom:
 //!
-//! - [`op`]: operations (create, delete, restore, set, unset) on things named by a [`Uid`].
-//! - [`replica`]: the document as things with properties, and the merge rules.
-//! - [`docsync`]: turns a document change (`ChangeSet`) into operations, and a replica back into
-//!   a document.
+//! - the property model (`kadakas-props`, re-exported): [`op`] (operations on things named by a
+//!   [`Uid`]), [`replica`] (the document as things with properties, and the merge rules),
+//!   [`docsync`] (document changes into operations) and `materialize` (a replica back into a
+//!   document).
 //! - [`protocol`]: the messages between a client and a server, with a version number.
 //! - [`presence`]: cursors, selections and viewports of the users (never saved).
 //! - [`client`]: the client state machine: optimistic apply, pending queue, rebase, per-user undo
@@ -20,21 +20,14 @@
 //!
 //! [`Uid`]: kadakas_core::uid::Uid
 
-pub mod blob;
 pub mod chain;
 pub mod client;
-pub mod docsync;
-pub mod materialize;
-pub mod op;
-pub mod order;
 pub mod presence;
 pub mod protocol;
-pub mod replica;
 pub mod store;
 pub mod transport;
 pub mod undo;
 pub mod url;
-pub mod validate;
 
 #[cfg(test)]
 mod tests;
@@ -42,8 +35,11 @@ mod tests;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 
+// The property model lives in `kadakas-props`; it is re-exported under the old paths.
+pub use kadakas_props::{blob, docsync, materialize, op, order, replica, validate};
+
 pub use client::{Client, ClientConfig, ClientEvent, ConnState};
-pub use materialize::{Materialized, Quarantined, materialize, materialize_with};
+pub use kadakas_props::{Materialized, Quarantined, materialize_with};
 pub use op::{Kind, Op, Target, Txn, Writer};
 pub use protocol::{ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg};
-pub use replica::Replica;
+pub use kadakas_props::Replica;

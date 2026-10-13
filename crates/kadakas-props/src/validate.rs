@@ -27,7 +27,7 @@ use crate::op::{Kind, Op, Target};
 use crate::replica::Replica;
 
 /// Reads a thing from its properties and its ID.
-pub(crate) fn with_id(id: Uid, props: &Map<String, Value>) -> Value {
+pub fn with_id(id: Uid, props: &Map<String, Value>) -> Value {
     let mut m = props.clone();
     m.insert("id".into(), id.into());
     Value::Object(m)
@@ -291,7 +291,7 @@ pub fn check_entities(
 }
 
 /// Finds the first ID (UUID text) in a message.
-pub(crate) fn find_uid(msg: &str) -> Option<Uid> {
+pub fn find_uid(msg: &str) -> Option<Uid> {
     let b = msg.as_bytes();
     (0..b.len().saturating_sub(35)).find_map(|i| {
         if b[i + 8] == b'-' && msg.is_char_boundary(i) && msg.is_char_boundary(i + 36) {

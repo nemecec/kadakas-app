@@ -21,7 +21,8 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 | `kadakas-sys` | Platform helpers without document data: atomic and private file writes, process groups and pid checks, config, data, state, runtime and cache folders, private temp folders, the agent runtime file (native only) | none of ours |
 | `kadakas-crs` | Coordinate systems: EPSG lookup, transformers, axis order (proj4rs; wasm-compatible) | core |
 | `kadakas-plants` | Plant placement algorithms, the plant catalog and its CSV, plant schedules and the plant list worksheet (pure, wasm-compatible) | core |
-| `kadakas-collab` | Collaboration client (PLAT-07, PLAT-08): wire protocol, merge rules, client state machine, per-user undo, offline log, presence, transport trait. No network code and no server (the server is the separate `kadakas-server` repository). `testkit` feature: an in-memory reference sequencer for tests | core |
+| `kadakas-props` | The property model of a document (PLAT-07, REV-02): things by `Uid` with properties, operations (`op`), the replica and its merge rules, `docsync` (document changes and whole documents into operations; `attrs`, `data` and `drawing` cut into sub-properties), `materialize` (a total build of a valid document), stacking keys, checks and blobs. Shared by collab and review, so a diff and a sync agree (pure, wasm-compatible) | core |
+| `kadakas-collab` | Collaboration client (PLAT-07, PLAT-08): wire protocol, client state machine (the property model and merge rules are in `props`, re-exported), per-user undo, offline log, presence, transport trait. No network code and no server (the server is the separate `kadakas-server` repository). `testkit` feature: an in-memory reference sequencer for tests | core, props |
 | `kadakas-collab-ws` | The WebSocket for the collaboration client: `WsEndpoint` and `WsTransport` (native: a blocking client with one reader thread, `ws` and `wss` with rustls and webpki roots, token in the `Authorization` header with a fall back to the `kadakas.token.<jwt>` sub-protocol; browser: a `web-sys` WebSocket behind `cfg(wasm32)`). `test-server` feature: an in-process WebSocket server on the reference sequencer, for tests | collab, core |
 | `kadakas-render` | Camera, standard views, picking, CPU rasterizer, texture and picture decoding (`picture`: safe import of PNG and JPEG files with size and pixel limits, thumbnails for plant pictures) | core |
 | `kadakas-sheet` | Worksheets: spreadsheet grid, formulas, database rows over objects (pure, wasm-compatible) | core, plants, units |
@@ -113,7 +114,7 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p kadakas-units -p kadakas-l10n -p kadakas-core -p kadakas-crs -p kadakas-plants -p kadakas-collab -p kadakas-collab-ws -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-app --target wasm32-unknown-unknown
+cargo check -p kadakas-units -p kadakas-l10n -p kadakas-core -p kadakas-crs -p kadakas-plants -p kadakas-props -p kadakas-review -p kadakas-collab -p kadakas-collab-ws -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-app --target wasm32-unknown-unknown
 cargo build -p kadakas-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
 uv run --no-project --with pytest pytest python/tests -q   # the Python package (set KADAKAS_BIN as for the behavior tests). Both folders also run in one command: pytest tests/behavior python/tests
 ```
