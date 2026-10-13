@@ -19,10 +19,11 @@
 //! hash. A move of a 10 MiB underlay therefore changes a few bytes in a delta, not 10 MiB, and a
 //! diff shows the reference. [`State::build`] puts the pictures back.
 //!
-//! The stacking order is the property `order` (a key that sorts, see `kadakas_props::order`). A
-//! document has no keys unless it was shared, so [`State::of`] gives keys relative to the state
-//! before: a thing that kept its place keeps its key, and only things that moved get a new one.
-//! Adding an object does not change the keys of the others.
+//! The stacking order is the property `order` (a key that sorts, see `kadakas_props::order`).
+//! [`State::of`] takes the key of a thing from the state before (`prev`) if it has one there, else
+//! from the key that the document itself carries (the field `order` in `extra`, see
+//! [`State::stamp_keys`]), else it makes one that fits between the neighbors. A thing that kept
+//! its place keeps its key, and adding an object does not change the keys of the others.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -150,7 +151,64 @@ impl State {
             .collect()
     }
 
+    /// Writes the stacking keys of this state into the objects and layers of a document (the
+    /// field `order` in `extra`), so that `State::of(doc, None)` gives this state back. A file
+    /// that keeps its versions as a change from the document needs the keys in the document.
+    pub fn stamp_keys(&self, doc: &mut Document) {
+        let key = |t: &Target| {
+            self.things
+                .get(t)
+                .and_then(|p| p.get("order"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        for o in doc.objects.values_mut() {
+            if let Some(k) = key(&Target::new(Kind::Object, o.id.0)) {
+                o.extra.insert("order".into(), Value::String(k));
+            }
+        }
+        for l in &mut doc.layers {
+            if let Some(k) = key(&Target::new(Kind::Layer, l.id.0)) {
+                l.extra.insert("order".into(), Value::String(k));
+            }
+        }
+    }
+
+    /// True if two states have the same things with the same properties and the same stacking
+    /// order in each list, whatever the keys are.
+    pub fn same_content(&self, other: &State) -> bool {
+        let strip = |s: &State| {
+            let mut s = s.clone();
+            for p in s.things.values_mut() {
+                p.remove("order");
+            }
+            s
+        };
+        strip(self) == strip(other) && crate::diff::moved_things(self, other).is_empty()
+    }
+
     fn stamp_order(&mut self, doc: &Document, prev: Option<&State>) {
+        let stored = |t: &Target, extra: &Props| {
+            let _ = t;
+            extra
+                .get("order")
+                .and_then(Value::as_str)
+                .filter(|k| valid_key(k))
+                .map(str::to_string)
+        };
+        let mut carried: std::collections::HashMap<Target, String> = Default::default();
+        for o in doc.objects.values() {
+            let t = Target::new(Kind::Object, o.id.0);
+            if let Some(k) = stored(&t, &o.extra) {
+                carried.insert(t, k);
+            }
+        }
+        for l in &doc.layers {
+            let t = Target::new(Kind::Layer, l.id.0);
+            if let Some(k) = stored(&t, &l.extra) {
+                carried.insert(t, k);
+            }
+        }
         let mut lists: Vec<Vec<Target>> = vec![
             doc.layers
                 .iter()
@@ -174,6 +232,7 @@ impl State {
                         .and_then(Value::as_str)
                         .filter(|k| valid_key(k))
                         .map(str::to_string)
+                        .or_else(|| carried.get(t).cloned())
                 })
                 .collect();
             let mut keys = keys;

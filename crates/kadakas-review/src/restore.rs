@@ -20,8 +20,6 @@ pub struct Restore {
     /// The automatic version that holds the state from before the restore: `Some((id, true))` for
     /// a new one, `Some((id, false))` for the newest version, which had the same content.
     pub saved: Option<(u64, bool)>,
-    /// IDs of versions that the caps pushed out when the automatic version was added.
-    pub dropped: Vec<u64>,
     /// Things of the version that do not fit the file format of this program and were left out or
     /// repaired (short texts).
     pub notes: Vec<String>,
@@ -37,12 +35,14 @@ pub fn prepare(
 ) -> Result<Restore, ReviewError> {
     let state = history.state_of(id)?;
     let mut next = history.clone();
-    let (saved, dropped) = if next.document_is_tip(current)? {
+    // The state before is saved first. If that would go over a limit, the restore is refused with
+    // the same error as a save: nothing is lost and nothing is deleted.
+    let saved = if next.document_is_tip(current)? {
         let tip = next.versions().last().map(|m| m.id);
-        (tip.map(|t| (t, false)), Vec::new())
+        tip.map(|t| (t, false))
     } else {
         let added = next.add(current, auto, limits)?;
-        (Some((added.id, true)), added.dropped)
+        Some((added.id, true))
     };
     let built = state.build(current);
     let mut notes: Vec<String> = built
@@ -63,7 +63,6 @@ pub fn prepare(
         doc,
         history: next,
         saved,
-        dropped,
         notes,
     })
 }
@@ -148,7 +147,7 @@ fn align_global_order(doc: &mut Document, current: &Document) {
 /// same stacking order in each layer. Their histories, the active layer and class, and the order
 /// of classes and resources do not count.
 pub fn same_content(a: &Document, b: &Document) -> bool {
-    State::of(a, None) == State::of(b, None)
+    State::of(a, None).same_content(&State::of(b, None))
 }
 
 #[cfg(test)]

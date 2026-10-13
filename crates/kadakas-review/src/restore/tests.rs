@@ -36,28 +36,18 @@ fn restore_saves_the_current_state_first_and_goes_back() {
     )
     .unwrap();
     let (saved, is_new) = r.saved.unwrap();
-    assert!(
-        is_new && r.dropped.is_empty() && r.notes.is_empty(),
-        "{:?}",
-        r.notes
-    );
+    assert!(is_new && r.notes.is_empty(), "{:?}", r.notes);
     assert_eq!(r.history.len(), 2);
     assert!(same_content(&r.doc, &at_v1));
     apply(&mut ed, &r);
     assert!(same_content(ed.doc(), &at_v1));
     // The history of the document is the new one, in the same undo step.
-    let kept = History::load(
-        ed.doc().history.as_ref().unwrap().value(),
-        Limits::default(),
-    );
+    let kept = History::load(ed.doc().history.as_ref().unwrap().value(), ed.doc());
     assert_eq!(kept.history.unwrap().len(), 2);
     // Restoring the automatic version brings the work back.
-    let h2 = History::load(
-        ed.doc().history.as_ref().unwrap().value(),
-        Limits::default(),
-    )
-    .history
-    .unwrap();
+    let h2 = History::load(ed.doc().history.as_ref().unwrap().value(), ed.doc())
+        .history
+        .unwrap();
     let r2 = prepare(&h2, ed.doc(), saved, new_version("auto"), Limits::default()).unwrap();
     assert!(same_content(&r2.doc, &before));
     // Undo takes the whole restore back, the version too.
@@ -90,7 +80,7 @@ fn a_document_that_equals_the_newest_version_needs_no_new_one() {
 }
 
 #[test]
-fn the_caps_apply_to_the_automatic_version() {
+fn a_restore_whose_automatic_version_would_break_a_limit_is_refused() {
     let mut ed = editor();
     circle(&mut ed, 0.0);
     let mut h = History::new();
@@ -100,14 +90,20 @@ fn the_caps_apply_to_the_automatic_version() {
     };
     let v1 = h.add(ed.doc(), new_version("one"), lim).unwrap().id;
     circle(&mut ed, 3.0);
-    let r = prepare(&h, ed.doc(), v1, new_version("auto"), lim).unwrap();
-    assert_eq!(r.dropped, vec![v1]);
-    assert_eq!(r.history.len(), 1);
-    assert!(same_content(&r.doc, &{
-        let mut e = editor();
-        circle(&mut e, 0.0);
-        e.doc().clone()
-    }));
+    let before = h.clone();
+    let err = prepare(&h, ed.doc(), v1, new_version("auto"), lim).unwrap_err();
+    let ReviewError::LimitReached(info) = err else {
+        panic!("a limit error")
+    };
+    assert_eq!(info.versions.len(), 1);
+    assert_eq!(h, before, "nothing was deleted");
+    // A person deletes nothing but raises the limit: the restore goes on.
+    let lim2 = Limits {
+        max_versions: 2,
+        max_bytes: usize::MAX,
+    };
+    let r = prepare(&h, ed.doc(), v1, new_version("auto"), lim2).unwrap();
+    assert_eq!(r.history.len(), 2);
 }
 
 #[test]
@@ -118,13 +114,13 @@ fn what_does_not_fit_is_left_out_and_reported() {
     h.add(ed.doc(), new_version("one"), Limits::default())
         .unwrap();
     let mut json = h.to_value();
-    let mut base = json["base"].as_array().unwrap().clone();
+    let mut base = json["newest"]["snapshot"].as_array().unwrap().clone();
     base.push(json!({"op": "create",
         "target": {"kind": "object", "id": "00000000-0000-0000-0000-0000000000aa"},
         "props": {"shape": 5, "layer": "00000000-0000-0000-0000-000000000001",
                   "class": "00000000-0000-0000-0000-000000000000"}}));
-    json["base"] = json!(base);
-    let h = History::load(&json, Limits::default()).history.unwrap();
+    json["newest"]["snapshot"] = json!(base);
+    let h = History::load(&json, ed.doc()).history.unwrap();
     let r = prepare(&h, ed.doc(), 1, new_version("auto"), Limits::default()).unwrap();
     assert!(
         r.notes.iter().any(|n| n.contains("left out")),

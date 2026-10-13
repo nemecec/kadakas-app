@@ -1,23 +1,17 @@
-//! Pictures in a history, and the work of folds and loads.
+//! Pictures in a history, and the work of loads and saves.
 
 use kadakas_core::command::Editor;
 use kadakas_core::model::{ObjectId, Shape};
 use kadakas_props::blob::{MAX_BLOB_BYTES, sha256_hex};
 use serde_json::{Value, json};
 
+use super::tests::{limits, through_file};
 use super::*;
 use crate::state::APPLIED;
 use crate::testutil::{circle, cmd, editor, new_version};
 
-fn limits(max_versions: usize, max_bytes: usize) -> Limits {
-    Limits {
-        max_versions,
-        max_bytes,
-    }
-}
-
-fn load(v: &Value) -> Loaded {
-    History::load(v, Limits::default())
+fn load(v: &Value, doc: &Document) -> Loaded {
+    History::load(v, doc)
 }
 
 /// A document with an underlay whose picture text is about `megabytes` MiB.
@@ -31,11 +25,9 @@ fn editor_with_underlay(megabytes: usize) -> (Editor, ObjectId) {
     let png = kadakas_core::underlay::base64_encode(&bytes);
     let mut ed = editor();
     let out = ed
-        .execute(&cmd(
-            json!({"op": "add_object", "shape": {"kind": "underlay",
+        .execute(&cmd(json!({"op": "add_object", "shape": {"kind": "underlay",
             "min": [0, 0], "max": [6400, 6400], "width": 64, "height": 64,
-            "png": png, "opacity": 1.0}}),
-        ))
+            "png": png, "opacity": 1.0}})))
         .unwrap();
     (ed, ObjectId(out.created[0]))
 }
@@ -73,10 +65,10 @@ fn a_picture_is_stored_once_however_many_versions_move_it() {
         h.bytes()
     );
     assert!(h.bytes() <= Limits::default().max_bytes);
-    for v in h.versions().skip(1) {
+    for v in h.versions().take(3) {
         assert!(h.delta_bytes(v.id).unwrap() < 2000);
     }
-    // Every version builds the document with the picture, and the file round trips.
+    // Every version builds the document with the picture.
     for (v, state) in &states {
         assert_eq!(&h.state_of(*v).unwrap(), state);
         let built = h.state_of(*v).unwrap().build(ed.doc());
@@ -86,10 +78,20 @@ fn a_picture_is_stored_once_however_many_versions_move_it() {
         };
         assert!(u.png.0.len() > 7 * 1024 * 1024);
     }
-    let again = load(&h.to_value());
+    // The memory form round trips; the file form leaves out the picture that the drawing holds.
+    let again = load(&h.to_value(), ed.doc());
     assert!(again.notes.is_empty(), "{:?}", again.notes);
     assert_eq!(again.history.unwrap(), h);
-    // The count of references: a picture stays while a version uses it.
+    let (value, read) = through_file(&h, ed.doc());
+    assert!(read.notes.is_empty(), "{:?}", read.notes);
+    assert_eq!(read.history.unwrap(), h);
+    assert!(value["blobs"].as_object().unwrap().is_empty());
+    assert!(
+        value.to_string().len() < 20_000,
+        "the file form is {} bytes",
+        value.to_string().len()
+    );
+    // A picture stays while a version uses it.
     let mut fold = h.clone();
     fold.remove(2).unwrap();
     assert_eq!(fold.blobs().len(), 1);
@@ -101,13 +103,13 @@ fn a_picture_is_stored_once_however_many_versions_move_it() {
         .unwrap();
     assert_eq!(gone.blobs().len(), 1);
     gone.remove(1).unwrap();
-    assert_eq!(gone.blobs().len(), 1, "the base now holds the picture");
+    assert_eq!(gone.blobs().len(), 1, "the newest version holds the picture");
     gone.remove(2).unwrap();
     assert!(gone.is_empty() && gone.blobs().is_empty());
 }
 
 #[test]
-fn folding_frees_a_picture_that_no_kept_version_uses() {
+fn deleting_the_only_version_with_a_picture_frees_it() {
     let (mut ed, id) = editor_with_underlay(6);
     let mut h = History::new();
     h.add(ed.doc(), new_version("with picture"), Limits::default())
@@ -116,14 +118,14 @@ fn folding_frees_a_picture_that_no_kept_version_uses() {
         .unwrap();
     h.add(ed.doc(), new_version("without"), Limits::default())
         .unwrap();
+    // Version 1 holds the picture as a reverse delta.
     assert_eq!(h.blobs().len(), 1);
-    let before = h.bytes();
-    let added = h
-        .add(ed.doc(), new_version("again"), limits(1, usize::MAX))
-        .unwrap();
-    assert_eq!(added.dropped.len(), 2);
+    let sizes = h.infos();
+    assert!(sizes[0].bytes > 6 * 1024 * 1024, "{sizes:?}");
+    assert!(sizes[1].bytes < 1000);
+    h.remove(1).unwrap();
     assert!(h.blobs().is_empty());
-    assert!(h.bytes() < before / 10, "{} vs {before}", h.bytes());
+    assert!(h.bytes() < 1000);
 }
 
 #[test]
@@ -133,8 +135,8 @@ fn pictures_in_a_file_are_checked() {
     h.add(ed.doc(), new_version("one"), Limits::default())
         .unwrap();
     let good = h.to_value();
-    assert!(load(&good).notes.is_empty());
-    // A picture that does not match its hash is left out, and the base then lacks it.
+    assert!(load(&good, ed.doc()).notes.is_empty());
+    // A picture that does not match its hash is left out, and the newest version then lacks it.
     let mut bad = good.clone();
     let hash = bad["blobs"]
         .as_object()
@@ -144,100 +146,100 @@ fn pictures_in_a_file_are_checked() {
         .unwrap()
         .clone();
     bad["blobs"][&hash] = json!("tampered");
-    let l = load(&bad);
+    let l = load(&bad, ed.doc());
     assert!(l.history.is_none());
     assert!(l.notes.iter().any(|n| n.contains("hash")), "{:?}", l.notes);
-    assert!(
-        l.notes.iter().any(|n| n.contains("missing")),
-        "{:?}",
-        l.notes
-    );
+    assert!(l.notes.iter().any(|n| n.contains("missing")), "{:?}", l.notes);
     let mut bad = good.clone();
     bad["blobs"][&hash] = json!(5);
-    assert!(load(&bad).history.is_none());
+    assert!(load(&bad, ed.doc()).history.is_none());
     let mut bad = good.clone();
     bad.as_object_mut().unwrap().remove("blobs");
-    assert!(load(&bad).history.is_none());
+    assert!(load(&bad, ed.doc()).history.is_none());
     // A picture that no version uses is dropped when the file is read.
     let mut extra = good.clone();
     let text = "extra picture";
     extra["blobs"][sha256_hex(text.as_bytes())] = json!(text);
-    assert_eq!(load(&extra).history.unwrap().blobs().len(), 1);
-    // A delta that needs a picture that the table lacks drops that version and the later ones.
+    assert_eq!(load(&extra, ed.doc()).history.unwrap().blobs().len(), 1);
+    // A delta that needs a picture that the table lacks leaves that version and older ones out.
     let mut two = h.clone();
     two.add(ed.doc(), new_version("two"), Limits::default())
         .unwrap();
     let mut v = two.to_value();
-    v["versions"][1]["delta"] = json!([{"op": "create",
+    v["versions"][0]["delta"] = json!([{"op": "create",
         "target": {"kind": "object", "id": "00000000-0000-0000-0000-0000000000aa"},
         "props": {"shape": {"kind": "underlay", "png": {"$blob": "ab".repeat(32)}}}}]);
-    let l = load(&v);
+    let l = load(&v, ed.doc());
     assert_eq!(l.history.unwrap().len(), 1);
     assert!(l.notes.iter().any(|n| n.contains("missing")));
     // A picture above the largest blob is left out.
     let mut huge = good;
     huge["blobs"]["00"] = json!("x".repeat(MAX_BLOB_BYTES + 1));
-    assert!(load(&huge).notes.iter().any(|n| n.contains("too large")));
+    assert!(
+        load(&huge, ed.doc())
+            .notes
+            .iter()
+            .any(|n| n.contains("too large"))
+    );
 }
 
-fn hostile_file(base: u64, versions: u64) -> Value {
+fn hostile_file(snapshot: u64, versions: u64) -> Value {
     let id = |n: u64| format!("00000000-0000-0000-0000-{n:012x}");
-    let base_ops: Vec<Value> = (1..=base)
+    let ops: Vec<Value> = (1..=snapshot)
         .map(|n| json!({"op": "create", "target": {"kind": "object", "id": id(n)}, "props": {"n": n}}))
         .collect();
     let list: Vec<Value> = (1..=versions)
         .map(|v| {
             let mut m = json!({"id": v, "name": format!("v{v}"), "author": "a"});
             if v > 1 {
+                m["parents"] = json!([v - 1]);
+            }
+            if v < versions {
+                m["via"] = json!(v + 1);
                 m["delta"] = json!([{"op": "set", "prop": "n", "value": v,
-                    "target": {"kind": "object", "id": id(1 + v % base)}}]);
+                    "target": {"kind": "object", "id": id(1 + v % snapshot)}}]);
             }
             m
         })
         .collect();
-    json!({"format": 1, "next_id": versions + 1, "base": base_ops, "versions": list})
+    json!({"format": 2, "next_id": versions + 1, "head": versions,
+        "newest": {"id": versions, "snapshot": ops}, "versions": list})
 }
 
-/// A large base and many tiny versions under strict limits: the oldest versions fold in one pass,
-/// so the work is about the size of the file, not versions times base.
+/// A large newest version and many tiny versions: one pass over the file, nothing is dropped.
 #[test]
-fn the_hostile_shape_of_a_big_base_and_many_tiny_versions_is_one_pass() {
-    const BASE: u64 = 3000;
+fn the_hostile_shape_of_a_big_drawing_and_many_tiny_versions_is_one_pass() {
+    const BIG: u64 = 3000;
     const VERSIONS: u64 = 400;
-    let file = hostile_file(BASE, VERSIONS);
-    let strict = limits(20, 16 * 1024 * 1024);
+    let file = hostile_file(BIG, VERSIONS);
+    let doc = Document::default();
     APPLIED.with(|c| c.set(0));
-    let l = History::load(&file, strict);
+    let l = History::load(&file, &doc);
     let work = APPLIED.with(std::cell::Cell::get) as u64;
     let h = l.history.unwrap();
-    assert_eq!(h.len(), 20);
-    assert!(
-        l.notes.iter().any(|n| n.contains("folded")),
-        "{:?}",
-        l.notes
-    );
-    // One replay to check the file and one to fold. One version at a time would be 380 times
-    // the base.
-    assert!(
-        work <= 2 * (BASE + VERSIONS) + 100,
-        "{work} operations applied"
-    );
-    // The result needs no fold when it is read again.
+    assert_eq!(h.len(), VERSIONS as usize, "no version is lost");
+    assert!(l.notes.is_empty(), "{:?}", l.notes);
+    // The snapshot and each delta once.
+    assert!(work <= BIG + VERSIONS + 100, "{work} operations applied");
+    // Opening the oldest version replays the snapshot and every delta once.
     APPLIED.with(|c| c.set(0));
-    let again = History::load(&h.to_value(), strict);
-    assert_eq!(again.history.unwrap(), h);
-    assert!(APPLIED.with(std::cell::Cell::get) as u64 <= BASE + 30);
-    // A base above the byte cap is dropped before any version is replayed.
-    APPLIED.with(|c| c.set(0));
-    let l = History::load(&file, limits(20, 10_000));
-    assert!(l.history.is_none());
-    assert!(l.notes[0].contains("limit"), "{:?}", l.notes);
-    assert_eq!(APPLIED.with(std::cell::Cell::get), 0);
+    h.state_of(1).unwrap();
+    assert!(APPLIED.with(std::cell::Cell::get) as u64 <= BIG + VERSIONS);
+    // The limits do not change the reading.
+    let strict = limits(20, 16 * 1024 * 1024);
+    let ed = editor();
+    let mut over = h;
+    let err = over
+        .add(ed.doc(), new_version("x"), strict)
+        .expect_err("over the limit");
+    assert!(matches!(err, ReviewError::LimitReached(_)));
+    assert_eq!(over.len(), VERSIONS as usize);
 }
 
-/// The same for `add`: a cap of two versions after many versions folds in one pass.
+/// A save makes the newest version again from the drawing: the work is the size of the drawing,
+/// not of the history.
 #[test]
-fn add_folds_many_versions_in_one_pass() {
+fn a_save_and_a_save_after_many_versions_cost_the_drawing() {
     let mut ed = editor();
     for i in 0..200 {
         circle(&mut ed, f64::from(i));
@@ -252,11 +254,14 @@ fn add_folds_many_versions_in_one_pass() {
         h.add(ed.doc(), new_version("v"), Limits::default())
             .unwrap();
     }
+    let tip = h.tip_state().unwrap().unwrap();
     APPLIED.with(|c| c.set(0));
-    let added = h
-        .add(ed.doc(), new_version("last"), limits(2, usize::MAX))
+    let _ = h.to_disk(ed.doc(), &tip);
+    assert_eq!(APPLIED.with(std::cell::Cell::get), 0, "a save replays nothing");
+    // A new version makes the old newest a delta: the snapshot is applied once.
+    APPLIED.with(|c| c.set(0));
+    h.add(ed.doc(), new_version("last"), Limits::default())
         .unwrap();
-    assert_eq!(added.dropped.len(), 29);
     let work = APPLIED.with(std::cell::Cell::get);
-    assert!(work < 3 * (200 + 30 + 10), "{work}");
+    assert!(work < 2 * (200 + 10), "{work}");
 }

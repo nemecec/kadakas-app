@@ -20,7 +20,10 @@ pub mod restore;
 pub mod state;
 
 pub use diff::{Diff, DiffOptions, Group};
-pub use history::{Added, History, Limits, Loaded, NewVersion, ReviewError, VersionMeta};
+pub use history::{
+    Added, History, LimitInfo, LimitKind, Limits, Loaded, NewVersion, ReviewError, VersionInfo,
+    VersionMeta,
+};
 pub use state::State;
 
 #[cfg(test)]

@@ -323,7 +323,7 @@ fn longest_run(seq: &[usize]) -> Vec<bool> {
 
 /// The things that moved in the stacking order, with their old and new position among the things
 /// that both states have in the same list (the objects of a layer, or the layers).
-fn moved_things(old: &State, new: &State) -> HashMap<Target, (usize, usize)> {
+pub(crate) fn moved_things(old: &State, new: &State) -> HashMap<Target, (usize, usize)> {
     let key = |p: &Props| {
         p.get("order")
             .and_then(Value::as_str)
