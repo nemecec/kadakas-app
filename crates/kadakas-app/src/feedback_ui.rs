@@ -463,8 +463,10 @@ impl FeedbackUi {
         let mut review_id = None;
         let mut withdraw = None;
         let mut retry = None;
-        let mut send_choice = None;
-        let mut new_url = None;
+        #[allow(unused_mut)]
+        let mut send_choice: Option<bool> = None;
+        #[allow(unused_mut)]
+        let mut new_url: Option<String> = None;
         egui::Window::new(tr!("feedback-ui-window-title"))
             .id(egui::Id::new("win-feedback"))
             .open(&mut open)

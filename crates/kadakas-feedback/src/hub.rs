@@ -1233,7 +1233,7 @@ mod tests {
             }
             last = w;
         }
-        assert_eq!(backoff_secs(u32::MAX, "x") / 3600 >= 4, true);
+        assert!(backoff_secs(u32::MAX, "x") / 3600 >= 4);
         // Another report gets another wait.
         assert_ne!(backoff_secs(3, "fb-1"), backoff_secs(3, "fb-2"));
     }

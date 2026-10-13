@@ -43,12 +43,11 @@ fn a_new_document_keeps_the_outbox_the_flags_and_the_rate_limit() {
     let mut n = 0;
     let mut submit = |s: &mut Session| {
         n += 1;
-        let r = line(
+        line(
             s,
             "feedback.submit",
             json!({"kind": "question", "title": format!("q{n}"), "attach": false}),
-        );
-        r
+        )
     };
     assert!(submit(&mut s).get("error").is_none());
 
