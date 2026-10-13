@@ -9,8 +9,10 @@ use kadakas_core::ground::GroundSource;
 use kadakas_core::mesh::SceneSink;
 use kadakas_core::model::{Color, Document, Object, Shape};
 use kadakas_core::site::{Display3d, SurfaceDisplay, SurfaceLook};
+use kadakas_core::texture_bed::Bed;
 
 use crate::contour::Contour;
+use crate::bed;
 use crate::elevation;
 use crate::grading::{self, analysis::AnalysisResult};
 use crate::model::{SiteCache, SiteResult, Surface};
@@ -62,6 +64,20 @@ pub fn draw_3d_with(
     analysis: Option<&AnalysisResult>,
     sink: &mut SceneSink<'_>,
 ) {
+    draw_3d_beds(site, analysis, &[], sink);
+}
+
+/// Like `draw_3d_with`, with the texture beds that act on the site model (3D-05), from the back
+/// to the front. The proposed surface is cut along the outlines of the beds; the triangles of a
+/// bed have the part `bed.part`, so that the material of the bed gives their texture. A site
+/// model without a proposed surface shows its existing surface in its place, so the beds act on
+/// that. The surface with the analysis colors has no beds.
+pub fn draw_3d_beds(
+    site: &SiteResult,
+    analysis: Option<&AnalysisResult>,
+    beds: &[Bed],
+    sink: &mut SceneSink<'_>,
+) {
     let display = site.settings.display_3d;
     let colored = analysis.map(|a| {
         if site.proposed.is_none() {
@@ -97,14 +113,35 @@ pub fn draw_3d_with(
                 );
             }
         } else if let Some((_, vertices, idx)) = meshes.iter().find(|m| m.0 == which) {
+            let color = mesh_color(site, which);
+            let acts = !beds.is_empty() && (which == Surface::Proposed || site.proposed.is_none());
+            let (base, in_beds) = if acts {
+                let outlines: Vec<&[glam::DVec2]> =
+                    beds.iter().map(|b| b.outline.as_slice()).collect();
+                let cut = bed::cut_by_beds(vertices, idx, &outlines);
+                (Some((cut.base.vertices, cut.base.indices)), cut.beds)
+            } else {
+                (None, Vec::new())
+            };
+            let (vertices, idx) = base
+                .as_ref()
+                .map_or((vertices.as_slice(), idx.as_slice()), |(v, i)| {
+                    (v.as_slice(), i.as_slice())
+                });
             if let Some(plan) = &plan {
                 // Colors by elevation: one mesh per band, each with the color of its band.
                 for part in elevation::split_bands(vertices, idx, plan) {
                     sink.mesh(&part.vertices, &part.indices, plan.colors[part.band]);
                 }
             } else {
-                sink.mesh(vertices, idx, mesh_color(site, which));
+                sink.mesh(vertices, idx, color);
             }
+            // The triangles of each bed, with the part that selects its material.
+            for (bed, mesh) in beds.iter().zip(&in_beds).filter(|(_, m)| !m.is_empty()) {
+                sink.set_part(bed.part);
+                sink.mesh(&mesh.vertices, &mesh.indices, color);
+            }
+            sink.set_part(kadakas_core::present::PART_MAIN);
         }
         if matches!(display, Display3d::Contours | Display3d::Both) {
             let color = line_color(site, which).0;
@@ -154,7 +191,10 @@ pub fn scene_ext<'a>(
             if let Ok(site) = cache.get(revision, doc, obj.id) {
                 let analysis = grading::analysis::spec_of(obj)
                     .and_then(|s| grading::analysis::for_site(cache, &site, &s));
-                draw_3d_with(&site, analysis.as_deref(), sink);
+                let beds = kadakas_core::texture_bed::beds_for(doc, obj, &|bed| {
+                    kadakas_core::present::bed_material(doc, bed)
+                });
+                draw_3d_beds(&site, analysis.as_deref(), &beds, sink);
             }
         } else if matches!(
             obj.shape,

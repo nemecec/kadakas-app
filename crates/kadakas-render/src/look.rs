@@ -198,7 +198,9 @@ impl Look {
         let mut mappings: Vec<TextureMapping> = Vec::new();
         // Objects that force their own mapping (a site model with the texture look), with the
         // whole repeats to take away from their texture coordinates.
-        let mut forced: HashMap<ObjectId, Option<(TextureMapping, [f64; 2])>> = HashMap::new();
+        // A texture bed has its own mapping, so this is by object and part.
+        let mut forced: HashMap<(ObjectId, u8), Option<(TextureMapping, [f64; 2])>> =
+            HashMap::new();
         for t in 0..mesh.triangle_count() {
             let (object, part) = (
                 mesh.tri_object[t],
@@ -251,8 +253,8 @@ impl Look {
             let frame = *frames
                 .entry(object)
                 .or_insert_with(|| frame_of(scene, object));
-            let forced = *forced.entry(object).or_insert_with(|| {
-                let m = present::mapping_override(doc.object(object)?)?;
+            let forced = *forced.entry((object, part)).or_insert_with(|| {
+                let m = slots.mapping_override(doc.object(object)?, part)?;
                 Some(bounded_mapping(m, frame))
             });
             let mapping = forced.map_or(mappings[index as usize], |f| f.0);

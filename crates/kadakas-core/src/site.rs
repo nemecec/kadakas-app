@@ -329,6 +329,17 @@ pub enum ModifierKind {
     },
     /// The edge of the modified area: outside it, the proposed surface stays the existing one.
     GradeLimit,
+    /// A region of the terrain surface with its own texture (3D-05). It does not change the
+    /// grade. See [`crate::texture_bed`].
+    TextureBed {
+        /// The material resource whose texture the region shows. `None`: the material of the
+        /// slot of the bed object or of its class ("by class").
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        texture: Option<ResourceId>,
+        /// The mapping of the texture. `None`: the mapping of the site model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mapping: Option<crate::texture_bed::BedMapping>,
+    },
 }
 
 impl ModifierKind {
@@ -339,6 +350,9 @@ impl ModifierKind {
                     && slope.is_none_or(|s| s.direction.is_finite() && s.percent.is_finite())
             }
             ModifierKind::GradeLimit => true,
+            ModifierKind::TextureBed { mapping, .. } => {
+                mapping.is_none_or(|m| m.is_finite())
+            }
         }
     }
 
@@ -351,7 +365,15 @@ impl ModifierKind {
                 v
             }
             ModifierKind::GradeLimit => Vec::new(),
+            ModifierKind::TextureBed { mapping, .. } => {
+                mapping.map(|m| m.numbers()).unwrap_or_default()
+            }
         }
+    }
+
+    /// True for the kinds that change the proposed surface (pads and grade limits).
+    pub fn changes_grade(&self) -> bool {
+        !matches!(self, ModifierKind::TextureBed { .. })
     }
 }
 

@@ -78,6 +78,9 @@ pub use wasm_plugin_api::{
     module_review as review_wasm_plugin, take_store_warning as wasm_plugin_warning,
     tool_step_raw as wasm_tool_step, trust_module as trust_wasm_plugin,
 };
+mod bed_api;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod bed_api_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod io_tests;
 mod limits;
@@ -529,6 +532,10 @@ pub const METHODS: &[(&str, &str)] = &[
         "Change a site model. params: {id, settings?, add_source_ids?, remove_points?: [index], remove_lines?: [index]}. settings has the same fields as in site.create, including the 3D look: surface_look (color | texture | elevation), texture (material resource id or null), texture_tile (mm), texture_offset ([x, y] mm), texture_rotation (degrees), elevation_bands (1 to 64), elevation_ramp ([[r, g, b, a]], 1 to 16 colors), elevation_range ([low, high] mm or null), elevation_bands_at_contours (bool); null puts a field back to its default. site.texture sets the look with its own checks. Returns {id, points, lines}.",
     ),
     site_texture::SITE_TEXTURE,
+    bed_api::BED_ADD,
+    bed_api::BED_SET,
+    bed_api::BED_GET,
+    bed_api::BED_LIST,
     (
         "site.elevation",
         "Ground height at a point. params: {id, x, y, surface?: existing | proposed}. Returns {z, slope, aspect}; z is null outside the model. aspect is in radians clockwise from +Y.",
@@ -962,6 +969,9 @@ impl Session {
         if grading_api::knows(method) {
             return self.handle_grading(method, p);
         }
+        if bed_api::knows(method) {
+            return self.handle_bed(method, p);
+        }
         if let Some(r) = survey_api::handle(self, method, p.clone()) {
             return r;
         }
@@ -1011,6 +1021,7 @@ impl Session {
                 "solids": solid_api::describe(),
                 "irrigation": irrigation_api::describe(),
                 "grading": grading_api::describe(),
+                "texture_beds": bed_api::describe(),
                     "sheets": sheets_api::describe(),
                 "resources": symbols_api::describe(),
                 "editing": edit2d_api::describe(),

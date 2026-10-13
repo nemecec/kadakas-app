@@ -36,6 +36,7 @@ pub mod schema;
 pub mod section;
 pub mod sheets;
 pub mod site;
+pub mod texture_bed;
 pub mod snapping;
 pub mod solid3d;
 pub mod solid_batch;

@@ -37,6 +37,9 @@ pub const PART_CANOPY: u8 = 2;
 pub const PART_SIDE: u8 = 3;
 /// Triangle part of layer `i` of a hardscape solid: `PART_LAYER + i`. Layer 0 is the surface.
 pub const PART_LAYER: u8 = 10;
+/// Triangle part of texture bed `i` on a site model: `PART_BED + i` (3D-05). The number counts
+/// from the back of the stacking order. At most `texture_bed::MAX_TEXTURE_BEDS` beds.
+pub const PART_BED: u8 = 100;
 
 // --- Render modes -----------------------------------------------------------------------
 
@@ -742,12 +745,32 @@ pub fn part_slot(obj: &Object, part: u8) -> Option<String> {
     match (&obj.shape, part) {
         (Shape::Plant { .. } | Shape::ExistingTree { .. }, PART_TRUNK) => Some("trunk".into()),
         (Shape::Plant { .. } | Shape::ExistingTree { .. }, PART_CANOPY) => Some("canopy".into()),
+        (Shape::SiteModel { .. }, p) if p >= PART_BED => Some(format!("bed:{}", p - PART_BED)),
         (Shape::Hardscape { .. }, p) if p >= PART_LAYER => Some(match p - PART_LAYER {
             0 => "surface".into(),
             i => format!("component:{}", i - 1),
         }),
         _ => None,
     }
+}
+
+/// The material that a texture bed gets from a slot: the slot of the bed object, else the slot of
+/// its class. The `texture` field of the bed is checked before (see `texture_bed::beds_for`).
+pub fn bed_material(doc: &Document, bed: &Object) -> Option<ResourceId> {
+    let slots = &doc.drawing.presentation.slots;
+    let find = |want: &dyn Fn(&SlotTarget) -> bool| {
+        slots
+            .iter()
+            .rev()
+            .find(|e| want(&e.target) && material(doc, e.material).is_some())
+            .map(|e| e.material)
+    };
+    find(&|t| matches!(t, SlotTarget::Object { object, slot: None } if *object == bed.id))
+        .or_else(|| find(&|t| matches!(t, SlotTarget::Class { class } if *class == bed.class)))
+}
+
+fn part_slot_name(part: u8) -> Option<String> {
+    Some(format!("bed:{}", part - PART_BED))
 }
 
 /// The style resource of an object that has slots in its style (a plant style or hardscape style).
@@ -772,6 +795,8 @@ pub struct SlotIndex {
     objects: HashMap<(ObjectId, Option<String>), ResourceId>,
     styles: HashMap<(ResourceId, String), ResourceId>,
     classes: HashMap<ClassId, ResourceId>,
+    /// The texture beds of each site model that has some (3D-05).
+    beds: HashMap<ObjectId, Vec<crate::texture_bed::Bed>>,
 }
 
 impl SlotIndex {
@@ -780,6 +805,7 @@ impl SlotIndex {
             objects: HashMap::new(),
             styles: HashMap::new(),
             classes: HashMap::new(),
+            beds: HashMap::new(),
         };
         for e in &doc.drawing.presentation.slots {
             if material(doc, e.material).is_none() {
@@ -807,7 +833,45 @@ impl SlotIndex {
                 ix.objects.insert((obj.id, None), m);
             }
         }
+        // The texture beds of each site model: the material of a bed is a slot of the site model.
+        let mut beds = HashMap::new();
+        for obj in doc.objects.values() {
+            if matches!(obj.shape, Shape::SiteModel { .. }) {
+                let list = crate::texture_bed::beds_for(doc, obj, &|bed| bed_material(doc, bed));
+                if !list.is_empty() {
+                    beds.insert(obj.id, list);
+                }
+            }
+        }
+        for (site, list) in &beds {
+            for b in list {
+                ix.objects.insert(
+                    (*site, part_slot_name(b.part)),
+                    b.material,
+                );
+            }
+        }
+        ix.beds = beds;
         ix
+    }
+
+    /// The texture beds that act on a site model, from the back to the front.
+    pub fn beds_of(&self, site: ObjectId) -> &[crate::texture_bed::Bed] {
+        self.beds.get(&site).map_or(&[], Vec::as_slice)
+    }
+
+    /// The mapping that an object forces on its material for a part, if it does: a site model
+    /// with the texture look maps its texture from above in world units, and a texture bed has
+    /// its own mapping or the one of the site model.
+    pub fn mapping_override(&self, obj: &Object, part: u8) -> Option<TextureMapping> {
+        if part >= PART_BED && matches!(obj.shape, Shape::SiteModel { .. }) {
+            return self
+                .beds_of(obj.id)
+                .iter()
+                .find(|b| b.part == part)
+                .map(|b| b.mapping);
+        }
+        mapping_override(obj)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -817,8 +881,9 @@ impl SlotIndex {
     /// The material for a part of an object. The order is: the part of the object, the whole
     /// object, the part of its style, its class. `None`: the object keeps its own color.
     pub fn resolve(&self, obj: &Object, part: u8) -> Option<ResourceId> {
-        // Colors by elevation are vertex colors: no material covers them.
-        if matches!(&obj.shape, Shape::SiteModel { settings, .. } if settings.surface_look == SurfaceLook::Elevation)
+        // Colors by elevation are vertex colors: no material covers them (the texture beds do).
+        if part < PART_BED
+            && matches!(&obj.shape, Shape::SiteModel { settings, .. } if settings.surface_look == SurfaceLook::Elevation)
         {
             return None;
         }

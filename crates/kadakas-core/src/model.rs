@@ -614,6 +614,7 @@ impl Shape {
             Shape::Extrude(e) => e.problem(),
             Shape::Sweep(s) => s.problem(),
             Shape::SiteModel { settings, .. } => settings.problem().map(String::from),
+            Shape::SiteModifier { .. } => crate::texture_bed::problem(self).map(String::from),
             _ => None,
         }
     }
@@ -715,12 +716,20 @@ impl Shape {
             | Shape::LandscapeArea {
                 boundary: points, ..
             }
-            | Shape::SiteModifier {
-                boundary: points, ..
-            }
             | Shape::Hardscape {
                 boundary: points, ..
             } => points.iter_mut().for_each(|x| mv(&mut x.p)),
+            Shape::SiteModifier { modifier, boundary } => {
+                boundary.iter_mut().for_each(|x| mv(&mut x.p));
+                // The texture of a bed with its own mapping is anchored to the ground.
+                if let ModifierKind::TextureBed {
+                    mapping: Some(m), ..
+                } = modifier
+                {
+                    m.offset[0] += d.x;
+                    m.offset[1] += d.y;
+                }
+            }
         }
     }
 
@@ -1217,6 +1226,12 @@ impl Document {
         self.load_notes.clear();
         let mut notes = Vec::new();
         for o in self.objects.values_mut() {
+            if crate::texture_bed::repair(&mut o.shape) {
+                notes.push(format!(
+                    "texture bed {}: the mapping was not valid and was reset to the mapping of the site model",
+                    o.id
+                ));
+            }
             if let Shape::SiteModel { settings, .. } = &mut o.shape
                 && settings.problem().is_some()
             {
