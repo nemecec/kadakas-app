@@ -444,8 +444,8 @@ fn io_call(
 }
 
 fn save(doc: &Document, path: &std::path::Path) -> Result<(), String> {
-    let text = serde_json::to_string_pretty(doc).map_err(|e| e.to_string())?;
-    fsio::write_atomic(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+    fsio::write_atomic_with(path, |w| doc.write_pretty(w))
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn import_command(

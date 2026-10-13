@@ -10,6 +10,9 @@ use std::time::Duration;
 
 use crate::{RpcError, Session};
 
+/// The default for [`SessionLimits::document_file_bytes`]: 2 GiB.
+pub const DEFAULT_DOCUMENT_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 /// The limits of one session. `Default` gives the limits that Kadakas always had, and no limit
 /// for the number of objects, the memory and the time of a request.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,6 +37,9 @@ pub struct SessionLimits {
     pub raster_pixels: u64,
     /// The most text that an import reads, in bytes.
     pub import_text_bytes: u64,
+    /// The largest document file that `file.open` reads, in bytes. The size is checked before the
+    /// file is read.
+    pub document_file_bytes: u64,
     /// Time limit of one script reset.
     pub script_timeout: Duration,
     /// Time limit of one request to a map service.
@@ -60,6 +66,7 @@ impl Default for SessionLimits {
             render_pixels: 4_000_000,
             raster_pixels: 64_000_000,
             import_text_bytes: 256 * 1024 * 1024,
+            document_file_bytes: DEFAULT_DOCUMENT_FILE_BYTES,
             script_timeout: Duration::from_secs(5),
             gis_timeout: Duration::from_secs(20),
             gis_cache_bytes: 256 * 1024 * 1024,
@@ -80,6 +87,7 @@ impl SessionLimits {
             render_pixels: 1_000_000,
             raster_pixels: 8_000_000,
             import_text_bytes: 16 * 1024 * 1024,
+            document_file_bytes: 128 * 1024 * 1024,
             script_timeout: Duration::from_secs(2),
             gis_cache_bytes: 32 * 1024 * 1024,
             picture_bytes: 2 * 1024 * 1024,

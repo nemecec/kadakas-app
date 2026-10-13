@@ -107,7 +107,7 @@ fn meta_name(id: &str) -> String {
     format!("{id}.meta.json")
 }
 
-use kadakas_sys::fsio::{Access, create_private_dir, write_durable};
+use kadakas_sys::fsio::{Access, create_private_dir, write_durable, write_durable_with};
 
 /// The versions of a session in the folder, oldest first, as (sequence number, path).
 pub(crate) fn list_versions(dir: &Path, id: &str) -> Vec<(u64, PathBuf)> {
@@ -165,12 +165,11 @@ pub enum Over {
 /// Writes one version, its meta file, and rotates. Runs on the writer thread.
 pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Over> {
     create_private_dir(dir)?;
-    let bytes = serde_json::to_vec(&job.doc).map_err(io::Error::other)?;
-    write_durable(
+    write_durable_with(
         &dir.join(version_name(id, seq)),
-        &bytes,
         Access::Private,
         ".tmp",
+        |w| job.doc.write_compact(w),
     )?;
     let secs = now_unix();
     let meta = json!({
@@ -187,7 +186,6 @@ pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Ov
     let Some(path) = &job.over else {
         return Ok(Over::NotAsked);
     };
-    let pretty = serde_json::to_vec_pretty(&job.doc).map_err(io::Error::other)?;
     // The same lock as `manual_save`: the two writes never run at the same time.
     let all = MANUAL_SAVES.lock().unwrap_or_else(|e| e.into_inner());
     let now = all
@@ -197,7 +195,9 @@ pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Ov
     if now != job.manual_seen {
         return Ok(Over::Stale);
     }
-    write_durable(path, &pretty, Access::KeepExisting, ".autosave.tmp")?;
+    write_durable_with(path, Access::KeepExisting, ".autosave.tmp", |w| {
+        job.doc.write_pretty(w)
+    })?;
     drop(all);
     Ok(Over::Written)
 }

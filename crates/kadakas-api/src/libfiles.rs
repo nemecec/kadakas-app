@@ -240,9 +240,7 @@ pub(crate) fn run(
             if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
                 std::fs::create_dir_all(dir).map_err(app)?;
             }
-            let text = serde_json::to_string_pretty(out.doc()).map_err(app)?;
-            kadakas_sys::fsio::write_atomic(&path, text.as_bytes())
-                .map_err(|e| app(format!("cannot write {}: {e}", path.display())))?;
+            crate::files::write_document_file(&path, out.doc()).map_err(app)?;
             Ok(json!({ "path": path, "count": plan.items.len() }))
         }
         "library.list" => {
@@ -254,9 +252,7 @@ pub(crate) fn run(
                     let name = e.file_name().to_string_lossy().to_string();
                     if is_library_name(&name)
                         && !name.eq_ignore_ascii_case("favorites.json")
-                        && let Ok(doc) = std::fs::read_to_string(e.path())
-                            .map_err(|e| e.to_string())
-                            .and_then(|t| Document::from_json(&t).map_err(|e| e.to_string()))
+                        && let Ok(doc) = load(&e.path())
                     {
                         files.push(json!({"file": name, "resources": doc.resources.len()}));
                     }

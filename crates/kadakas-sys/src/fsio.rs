@@ -21,13 +21,18 @@ pub enum Access {
     KeepExisting,
 }
 
-/// Writes `bytes` to a temporary file in the same folder, flushes it, and
-/// renames it over `path`. A crash never leaves a half-written file.
+/// The content of a streamed write: it writes everything into a buffered writer on the
+/// temporary file. The caller flushes, syncs and renames.
+type Fill<'a> = Box<dyn FnOnce(&mut dyn Write) -> std::io::Result<()> + 'a>;
+
+/// Writes the content that `fill` makes to a temporary file in the same folder, flushes it, and
+/// renames it over `path`. A crash never leaves a half-written file, and a failure of `fill`
+/// leaves the old file as it was and removes the temporary file.
 /// With `keep_backup`, the previous file is first copied to `<path>.bak`.
 /// With `private`, the file is readable by the owner only (Unix).
 fn write_replacing(
     path: &Path,
-    bytes: &[u8],
+    fill: Fill<'_>,
     keep_backup: bool,
     private: bool,
 ) -> std::io::Result<()> {
@@ -45,8 +50,9 @@ fn write_replacing(
             opts.mode(0o600);
         }
         let _ = private;
-        let mut f = opts.open(&tmp)?;
-        f.write_all(bytes)?;
+        let mut w = std::io::BufWriter::new(opts.open(&tmp)?);
+        fill(&mut w)?;
+        let f = w.into_inner().map_err(|e| e.into_error())?;
         f.sync_all()?;
         if let Some(p) = &old_perms {
             f.set_permissions(p.clone())?;
@@ -76,12 +82,22 @@ pub fn replace_with_backup(tmp: &Path, target: &Path) -> std::io::Result<()> {
 
 /// Saves a file atomically and keeps the previous version as `<path>.bak`.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    write_replacing(path, bytes, true, false)
+    write_atomic_with(path, |w| w.write_all(bytes))
+}
+
+/// Like [`write_atomic`], for content that `fill` streams into a buffered writer on the
+/// temporary file: write, flush, fsync, rename. No copy of the whole content is held. If `fill`
+/// fails, the old file stays and the temporary file is deleted.
+pub fn write_atomic_with(
+    path: &Path,
+    fill: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    write_replacing(path, Box::new(fill), true, false)
 }
 
 /// Like [`write_atomic`], with no backup and owner-only permissions (Unix).
 pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    write_replacing(path, bytes, false, true)
+    write_replacing(path, Box::new(|w| w.write_all(bytes)), false, true)
 }
 
 /// Creates the folder (and parents). The last folder gets mode 0700 on Unix.
@@ -126,6 +142,16 @@ pub fn write_durable(
     access: Access,
     tmp_suffix: &str,
 ) -> std::io::Result<()> {
+    write_durable_with(path, access, tmp_suffix, |w| w.write_all(bytes))
+}
+
+/// Like [`write_durable`], for content that `fill` streams into a buffered writer.
+pub fn write_durable_with(
+    path: &Path,
+    access: Access,
+    tmp_suffix: &str,
+    fill: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(tmp_suffix);
     let tmp = PathBuf::from(tmp);
@@ -137,13 +163,15 @@ pub fn write_durable(
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
-        let mut f = opts.open(&tmp)?;
+        let f = opts.open(&tmp)?;
         if access == Access::KeepExisting
             && let Ok(m) = std::fs::metadata(path)
         {
             f.set_permissions(m.permissions())?;
         }
-        f.write_all(bytes)?;
+        let mut w = std::io::BufWriter::new(f);
+        fill(&mut w)?;
+        let f = w.into_inner().map_err(|e| e.into_error())?;
         f.sync_all()?;
         // Close the file before the rename (Windows needs it). On wasm `File` has no drop code.
         #[allow(clippy::drop_non_drop)]
@@ -231,6 +259,55 @@ mod tests {
         assert_eq!(names.len(), 1, "{names:?}");
         // A missing folder is an error too.
         assert!(write_atomic(&dir.join("missing").join("f"), b"x").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_streamed_write_flushes_replaces_and_keeps_a_backup() {
+        let dir = temp_dir("stream");
+        let f = dir.join("s.kad");
+        write_atomic_with(&f, |w| {
+            // Many small writes, more than one buffer.
+            for _ in 0..10_000 {
+                w.write_all(b"0123456789")?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(std::fs::metadata(&f).unwrap().len(), 100_000);
+        write_atomic_with(&f, |w| w.write_all(b"two")).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"two");
+        assert_eq!(
+            std::fs::metadata(dir.join("s.kad.bak")).unwrap().len(),
+            100_000
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failing_stream_keeps_the_old_file_and_removes_the_temporary_file() {
+        let dir = temp_dir("stream-fail");
+        let f = dir.join("s.kad");
+        std::fs::write(&f, "old").unwrap();
+        let e = write_atomic_with(&f, |w| {
+            w.write_all(&[7u8; 50_000])?;
+            Err(std::io::Error::other("disk full"))
+        })
+        .unwrap_err();
+        assert!(e.to_string().contains("disk full"));
+        assert_eq!(std::fs::read(&f).unwrap(), b"old");
+        let e = write_durable_with(&f, Access::KeepExisting, ".tmp", |w| {
+            w.write_all(b"half")?;
+            Err(std::io::Error::other("disk full"))
+        })
+        .unwrap_err();
+        assert!(e.to_string().contains("disk full"));
+        assert_eq!(std::fs::read(&f).unwrap(), b"old");
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
