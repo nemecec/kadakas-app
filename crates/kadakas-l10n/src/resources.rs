@@ -67,7 +67,8 @@ pub(crate) const FILES_EN_US: &[(&str, &str)] = files!(
     "uic-profile.ftl",
     "uic-snap.ftl",
     "uic-style-edit.ftl",
-    "uic-tools.ftl"
+    "uic-tools.ftl",
+    "versions-ui.ftl"
 );
 
 pub(crate) const FILES_ET: &[(&str, &str)] = files!(
@@ -126,7 +127,8 @@ pub(crate) const FILES_ET: &[(&str, &str)] = files!(
     "uic-profile.ftl",
     "uic-snap.ftl",
     "uic-style-edit.ftl",
-    "uic-tools.ftl"
+    "uic-tools.ftl",
+    "versions-ui.ftl"
 );
 
 /// The files of a language as (file name, content), or `None` for an unknown tag.

@@ -41,6 +41,8 @@ commands! {
     Scripts => "file.scripts", msg!("panels-scripts"), true;
     // The window that lists installed WebAssembly plug-ins: install, review, trust, remove.
     PlugIns => "file.plugins", msg!("panels-plug-ins"), false;
+    // The window of named versions: save, restore, delete and compare (REV-01, REV-02).
+    Versions => "file.versions", msg!("panels-versions"), false;
     // A block: the submenu File > Collaboration (Connect, Disconnect, People).
     Collaboration => "file.collaboration", msg!("panels-collaboration"), false;
     Preferences => "file.preferences", msg!("panels-preferences"), false;
@@ -291,6 +293,7 @@ pub fn default_menus() -> Vec<Menu> {
                 "-",
                 "file.scripts",
                 "file.plugins",
+                "file.versions",
                 "-",
                 "file.collaboration",
                 "-",

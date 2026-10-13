@@ -3,7 +3,11 @@
 This document describes how Kadakas clients share one document. It is written so that the
 collaboration server, which lives in a separate repository (`kadakas-server`), can implement
 the server side. The client side is the crate `kadakas-collab`. The server may depend on that
-crate for the merge rules and the checks, or it may follow this text and write its own code.
+crate for the merge rules and the checks, or it may follow this text and write its own code. The
+property model (operations, replica, `docsync`, `materialize`, stacking keys, the checks and the
+blobs) is in the small crate `kadakas-props`, which `kadakas-collab` re-exports under the old paths
+(`kadakas_collab::op`, `::replica`, ...). The version store of `kadakas-review` uses the same crate,
+so a diff and a sync agree.
 
 Protocol version: **1**.
 
@@ -919,6 +923,15 @@ the login name of the operating system (empty in the browser) or from the dialog
 - Cutting other big values (a long polyline, a worksheet) into parts.
 - Comments and chat.
 - Compression of the log and of snapshots.
+- Shared versions (REV-09). The named versions of a file (`version.*`, `docs/feature-spec.md`
+  section 4.22) are **local to the file**. They are not properties of any thing, so no operation
+  carries them and a snapshot does not hold them. Joining a shared document keeps the versions of
+  the open file (`Editor::apply_remote` leaves `Document::history` alone), and other users have
+  their own. A `version.restore` is an ordinary edit for the others: they get the creates, deletes
+  and sets that it made. The model is shared, though: `kadakas-props` holds the properties and the
+  operations that both collaboration and the version store use, so a diff between two versions and
+  the operations of a sync name the same property paths. A version store on the server would build
+  its history from the edit log.
 
 Attribution: the design uses the ideas of the last-writer-wins register and of operation logs with a
 central sequencer, which are common knowledge in the field of replicated data. IDs follow RFC 9562

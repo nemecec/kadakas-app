@@ -25,6 +25,7 @@ pub mod profile;
 pub mod snap;
 pub mod style_edit;
 pub mod tools;
+pub mod versions;
 pub mod view;
 pub mod view_history;
 

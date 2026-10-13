@@ -41,6 +41,8 @@ pub enum MenuAction {
     Scripts,
     /// File > Plug-ins: install, review and trust WebAssembly plug-ins.
     PlugIns,
+    /// File > Versions: the window of named versions and the comparison.
+    Versions,
     Undo,
     Redo,
     Delete,
@@ -141,6 +143,7 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         Cmd::ChangeCrs => M::ChangeCrs,
         Cmd::Scripts => M::Scripts,
         Cmd::PlugIns => M::PlugIns,
+        Cmd::Versions => M::Versions,
         Cmd::Preferences => M::Preferences,
         Cmd::Undo => M::Undo,
         Cmd::Redo => M::Redo,
@@ -557,6 +560,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         | MenuAction::ChangeCrs
         | MenuAction::Scripts
         | MenuAction::PlugIns
+        | MenuAction::Versions
         | MenuAction::CreateSiteModel
         | MenuAction::Preferences
         | MenuAction::CollabConnect

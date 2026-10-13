@@ -119,6 +119,7 @@ The language list in Preferences comes from `LANGUAGES`. It shows the native nam
 | Irrigation, Outlet, POC | Kastmine, Pihusti, Ühenduspunkt | |
 | Data bar, Tool bar | Andmeriba, Tööriistariba | |
 | Object Info | Objekti info | |
+| Version (a saved state of the drawing) | Versioon | File > Versions; "Restore" is Taasta, "Compare" is Võrdle |
 | Plug-in | Lisamoodul | WebAssembly plug-ins and Python plug-in objects |
 | Design layer, Sheet layer, Class | Joonestuskiht, Lehekiht, Klass | |
 | Snapping | Haaramine | |

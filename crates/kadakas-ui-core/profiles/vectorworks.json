@@ -325,6 +325,7 @@
         "-",
         "file.scripts",
         "file.plugins",
+        "file.versions",
         "-",
         "file.collaboration",
         "-",

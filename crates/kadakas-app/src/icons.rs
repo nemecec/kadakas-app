@@ -57,6 +57,13 @@ pub const ICONS: &[(&str, &[u8])] = &[
         )),
     ),
     (
+        "versions",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/icons/kadakas/versions.svg"
+        )),
+    ),
+    (
         "compose",
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -702,6 +709,7 @@ pub fn menu_icon(a: MenuAction) -> &'static str {
         MenuAction::ChangeCrs => "world-latitude",
         MenuAction::Scripts => "code",
         MenuAction::PlugIns => "plug",
+        MenuAction::Versions => "versions",
         MenuAction::Undo => "arrow-back-up",
         MenuAction::Redo => "arrow-forward-up",
         MenuAction::Delete => "trash",
@@ -1031,6 +1039,7 @@ mod tests {
             ChangeCrs,
             Scripts,
             PlugIns,
+            Versions,
             Undo,
             Redo,
             Delete,

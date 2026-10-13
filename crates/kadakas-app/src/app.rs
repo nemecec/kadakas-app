@@ -116,6 +116,7 @@ pub struct KadakasApp {
     script_ui: crate::script_ui::ScriptUi,
     /// WebAssembly plug-ins: the Plug-ins window, the trust dialog, the form and the tool.
     plugin_ui: crate::plugin_ui::PluginUi,
+    versions_ui: crate::versions_ui::VersionsUi,
     /// The coordinate readout of the Data bar.
     readout: crate::gis_ui::ReadoutState,
     /// Autosave, crash recovery and the Preferences dialog.
@@ -429,6 +430,7 @@ impl KadakasApp {
             #[cfg(not(target_arch = "wasm32"))]
             script_ui: Default::default(),
             plugin_ui: Default::default(),
+            versions_ui: Default::default(),
             readout: Default::default(),
             autosave: crate::autosave_ui::AutosaveUi::inert(),
             about: crate::about::About::default(),
@@ -794,6 +796,7 @@ impl KadakasApp {
                 }
             }
             MenuAction::PlugIns => self.plugin_ui.open(),
+            MenuAction::Versions => self.versions_ui.open(&mut self.session),
             MenuAction::CollabConnect => self.collab.open_dialog(),
             MenuAction::CollabDisconnect => {
                 let now = crate::collab_ui::now_ms();
@@ -1909,6 +1912,7 @@ impl KadakasApp {
         }
         for (label, m) in [
             (tr!("panels-plug-ins"), MenuAction::PlugIns),
+            (tr!("panels-versions"), MenuAction::Versions),
             (tr!("app-preferences"), MenuAction::Preferences),
             (tr!("app-export-svg"), MenuAction::ExportSvg),
             (tr!("app-select-all"), MenuAction::SelectAll),
@@ -2474,6 +2478,8 @@ impl eframe::App for KadakasApp {
             self.needs_fit = true;
         }
         self.plugin_ui
+            .show(&ctx, &mut self.session, &mut self.status);
+        self.versions_ui
             .show(&ctx, &mut self.session, &mut self.status);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(script) = self

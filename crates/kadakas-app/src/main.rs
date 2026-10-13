@@ -57,6 +57,7 @@ mod style_ui;
 mod tess;
 mod theme;
 mod units_ui;
+mod versions_ui;
 mod vertex;
 mod view;
 mod view3d;
