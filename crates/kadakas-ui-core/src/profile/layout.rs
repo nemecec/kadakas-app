@@ -63,6 +63,7 @@ commands! {
     Sweep => "cmd.sweep", msg!("panels-sweep"), false;
     CreateSiteModel => "site.create_model", msg!("panels-create-site-model-from-selection"), false;
     UpdateSiteModel => "site.update_model", msg!("panels-update-site-model"), false;
+    CreateTextureBed => "site.create_texture_bed", msg!("panels-create-texture-bed-from-selection"), false;
     ZoomFit => "view.zoom_fit", msg!("panels-zoom-to-fit"), false;
     PreviousView => "view.history_previous", msg!("panels-previous-view"), false;
     NextView => "view.history_next", msg!("panels-next-view"), false;
@@ -329,7 +330,14 @@ pub fn default_menus() -> Vec<Menu> {
             "model",
             &["cmd.extrude", "cmd.sweep", "-", "tool.polygon3d"],
         ),
-        menu("site", &["site.create_model", "site.update_model"]),
+        menu(
+            "site",
+            &[
+                "site.create_model",
+                "site.update_model",
+                "site.create_texture_bed",
+            ],
+        ),
         menu(
             "view",
             &[

@@ -4,6 +4,7 @@ uic-tools-rectangle = Rectangle
 uic-tools-lasso = Lasso
 uic-tools-pad = Pad
 uic-tools-grade-limits = Grade Limits
+uic-tools-texture-bed = Texture Bed
 uic-tools-selection = Selection
 uic-tools-line = Line
 uic-tools-circle = Circle

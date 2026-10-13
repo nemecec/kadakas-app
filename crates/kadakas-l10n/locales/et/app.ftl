@@ -20,6 +20,7 @@ app-editing-the-symbol-exit-to-apply-the = Sümboli muutmine. Välju, et rakenda
 app-you-are-not-in-a-group = Sa ei ole rühmas
 app-symbol-updated = Sümbol uuendatud
 app-created-site-model = Maapinnamudel loodud: { $id }
+app-created-texture-beds = Loodi { $count } tekstuuriala
 app-cannot-start-the-session-for-scripts = Skriptide seanssi ei saa käivitada: { $e }
 app-untitled = Nimetu
 app-kadakas = { $name } - Kadakas

@@ -36,6 +36,7 @@ panels-compose = Koosta
 panels-site = Maapind
 panels-create-site-model-from-selection = Loo valikust maapinnamudel
 panels-update-site-model = Uuenda maapinnamudelit
+panels-create-texture-bed-from-selection = Loo valikust tekstuuriala
 panels-view = Vaade
 panels-zoom-to-fit = Sobita vaatesse
 panels-previous-view = Eelmine vaade

@@ -8,12 +8,14 @@ use kadakas_api::Session;
 use kadakas_core::curve::Vertex;
 use kadakas_core::model::{Document, ModifierKind, Object, ObjectId, Shape, SiteSettings};
 use kadakas_core::resource::ResourceId;
+use kadakas_core::texture_bed::BedMapping;
 use kadakas_core::site::{
     Display3d, MAX_ELEVATION_BANDS, MAX_RAMP_STOPS, PadSlope, SurfaceDisplay, SurfaceLook,
     boundary_points, end_elevation, slope_from_end_elevation,
 };
 use kadakas_l10n::tr;
 use kadakas_site::draw::shown_surfaces;
+use kadakas_ui_core::tools::ToolSettings;
 use kadakas_site::{SiteCache, Surface};
 use serde_json::json;
 
@@ -22,6 +24,74 @@ use crate::view::{View, ViewExt as _};
 
 const EXISTING_LINE: Color32 = Color32::from_rgb(150, 104, 60);
 const PROPOSED_LINE: Color32 = Color32::from_rgb(30, 120, 50);
+
+/// The mapping of the first site model on a layer: where a texture bed starts when it gets its
+/// own mapping. The defaults if the layer has no site model.
+pub fn site_mapping(doc: &Document, layer: kadakas_core::model::LayerId) -> BedMapping {
+    doc.objects
+        .values()
+        .find_map(|o| match &o.shape {
+            Shape::SiteModel { settings, .. } if o.layer == layer => {
+                Some(BedMapping::of_site(settings))
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// The materials of a document, for a combo box.
+pub fn material_list(doc: &Document) -> Vec<(ResourceId, String)> {
+    doc.resources
+        .iter()
+        .filter(|r| kadakas_core::present::material(doc, r.id).is_some())
+        .map(|r| (r.id, r.name.clone()))
+        .collect()
+}
+
+/// The options of the Site Modifiers tool in the Texture Bed mode: the material of new beds.
+pub fn bed_tool_options(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) {
+    ui.label(tr!("site-ui-texture-material"));
+    material_combo(
+        ui,
+        "bed_tool_material",
+        &mut settings.bed_texture,
+        &material_list(doc),
+    );
+}
+
+/// Makes texture beds from the selected closed shapes (Site > Create Texture Bed). A closed
+/// polyline, rectangle or circle is replaced by the bed. Returns the number of beds made, or the
+/// message to show.
+pub fn create_texture_beds(session: &mut Session) -> Result<usize, String> {
+    let ids = bed_source_ids(session.editor.doc(), &session.selection);
+    if ids.is_empty() {
+        return Err(tr!("site-ui-select-closed-shapes-first"));
+    }
+    let r = session
+        .handle("bed.add", json!({ "from": ids }))
+        .map_err(|e| e.message)?;
+    session.selection = r["ids"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| kadakas_core::uid::AsUid::as_uid(v).map(ObjectId))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(session.selection.len())
+}
+
+/// The selected objects that a texture bed can be made from: closed shapes with an outline.
+pub fn bed_source_ids(doc: &Document, selection: &[ObjectId]) -> Vec<ObjectId> {
+    selection
+        .iter()
+        .copied()
+        .filter(|id| {
+            doc.object(*id)
+                .is_some_and(|o| kadakas_core::solid_batch::closed_profile_of(o).is_ok())
+        })
+        .collect()
+}
 
 /// The selected objects that can be site model source data (3D loci and 3D polylines).
 pub fn source_ids(doc: &Document, selection: &[ObjectId]) -> Vec<ObjectId> {
@@ -179,6 +249,75 @@ fn look_label(v: SurfaceLook) -> String {
     }
 }
 
+/// The combo box of a material: "By class" or one of the materials. True when it changed.
+fn material_combo(
+    ui: &mut Ui,
+    salt: &str,
+    value: &mut Option<ResourceId>,
+    materials: &[(ResourceId, String)],
+) -> bool {
+    let before = *value;
+    let name = value
+        .and_then(|t| materials.iter().find(|(m, _)| *m == t))
+        .map_or_else(|| tr!("site-ui-by-class"), |(_, n)| n.clone());
+    egui::ComboBox::from_id_salt(salt)
+        .selected_text(name)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, None, tr!("site-ui-by-class"));
+            for (id, name) in materials {
+                ui.selectable_value(value, Some(*id), name);
+            }
+        });
+    *value != before
+}
+
+/// The rows of a planar texture mapping: tile size, offset and rotation. `effective_tile` is the
+/// tile that renderers use, when it is larger than the one set.
+fn mapping_rows(
+    ui: &mut Ui,
+    tile: &mut f64,
+    offset: &mut [f64; 2],
+    rotation: &mut f64,
+    effective_tile: Option<f64>,
+) -> bool {
+    let mut commit = length_row(
+        ui,
+        &tr!("site-ui-tile-size"),
+        tile,
+        10.0,
+        kadakas_core::site::MIN_TEXTURE_TILE..=kadakas_core::site::MAX_TEXTURE_TILE,
+    );
+    // A very big terrain makes the tile larger (the texture would be too fine to draw).
+    if let Some(used) = effective_tile.filter(|u| *u > *tile * 1.001) {
+        ui.label("");
+        ui.label(tr!(
+            "site-ui-tile-grew",
+            size = kadakas_units::current().length_text(used)
+        ));
+        ui.end_row();
+    }
+    let limit = kadakas_core::site::MAX_TEXTURE_OFFSET;
+    commit |= length_row(
+        ui,
+        &tr!("site-ui-texture-offset-x"),
+        &mut offset[0],
+        10.0,
+        -limit..=limit,
+    );
+    commit |= length_row(
+        ui,
+        &tr!("site-ui-texture-offset-y"),
+        &mut offset[1],
+        10.0,
+        -limit..=limit,
+    );
+    ui.label(tr!("site-ui-texture-rotation"));
+    let r = ui.add(DragValue::new(rotation).speed(1.0).direction());
+    commit |= r.drag_stopped() || r.lost_focus();
+    ui.end_row();
+    commit
+}
+
 /// The rows of the 3D look of a site model: the surface color, a texture (a material with a
 /// planar top projection) or colors by elevation. `materials` are the material resources of the
 /// document.
@@ -204,60 +343,15 @@ fn look_fields(
         SurfaceLook::Color => {}
         SurfaceLook::Texture => {
             ui.label(tr!("site-ui-texture-material"));
-            let before = s.texture;
-            let name = s
-                .texture
-                .and_then(|t| materials.iter().find(|(m, _)| *m == t))
-                .map_or_else(|| tr!("site-ui-by-class"), |(_, n)| n.clone());
-            egui::ComboBox::from_id_salt("site_texture_material")
-                .selected_text(name)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut s.texture, None, tr!("site-ui-by-class"));
-                    for (id, name) in materials {
-                        ui.selectable_value(&mut s.texture, Some(*id), name);
-                    }
-                });
-            commit |= s.texture != before;
+            commit |= material_combo(ui, "site_texture_material", &mut s.texture, materials);
             ui.end_row();
-            commit |= length_row(
+            commit |= mapping_rows(
                 ui,
-                &tr!("site-ui-tile-size"),
                 &mut s.texture_tile,
-                10.0,
-                kadakas_core::site::MIN_TEXTURE_TILE..=kadakas_core::site::MAX_TEXTURE_TILE,
+                &mut s.texture_offset,
+                &mut s.texture_rotation,
+                effective_tile,
             );
-            // A very big terrain makes the tile larger (the texture would be too fine to draw).
-            if let Some(used) = effective_tile.filter(|u| *u > s.texture_tile * 1.001) {
-                ui.label("");
-                ui.label(tr!(
-                    "site-ui-tile-grew",
-                    size = kadakas_units::current().length_text(used)
-                ));
-                ui.end_row();
-            }
-            let limit = kadakas_core::site::MAX_TEXTURE_OFFSET;
-            commit |= length_row(
-                ui,
-                &tr!("site-ui-texture-offset-x"),
-                &mut s.texture_offset[0],
-                10.0,
-                -limit..=limit,
-            );
-            commit |= length_row(
-                ui,
-                &tr!("site-ui-texture-offset-y"),
-                &mut s.texture_offset[1],
-                10.0,
-                -limit..=limit,
-            );
-            ui.label(tr!("site-ui-texture-rotation"));
-            let r = ui.add(
-                DragValue::new(&mut s.texture_rotation)
-                    .speed(1.0)
-                    .direction(),
-            );
-            commit |= r.drag_stopped() || r.lost_focus();
-            ui.end_row();
         }
         SurfaceLook::Elevation => {
             ui.label(tr!("site-ui-elevation-bands"));
@@ -416,7 +510,13 @@ pub fn model_fields(
 }
 
 /// The Object Info rows of a site modifier. Returns true when an edit is finished.
-pub fn modifier_fields(ui: &mut Ui, modifier: &mut ModifierKind, boundary: &[Vertex]) -> bool {
+pub fn modifier_fields(
+    ui: &mut Ui,
+    modifier: &mut ModifierKind,
+    boundary: &[Vertex],
+    materials: &[(ResourceId, String)],
+    site_mapping: BedMapping,
+) -> bool {
     let vertices = boundary.len();
     let mut commit = false;
     match modifier {
@@ -477,6 +577,24 @@ pub fn modifier_fields(ui: &mut Ui, modifier: &mut ModifierKind, boundary: &[Ver
             ui.label(tr!("site-ui-type"));
             ui.label(tr!("site-ui-grade-limits"));
             ui.end_row();
+        }
+        ModifierKind::TextureBed { texture, mapping } => {
+            ui.label(tr!("site-ui-type"));
+            ui.label(tr!("site-ui-texture-bed"));
+            ui.end_row();
+            ui.label(tr!("site-ui-texture-material"));
+            commit |= material_combo(ui, "bed_texture_material", texture, materials);
+            ui.end_row();
+            ui.label(tr!("site-ui-own-mapping"));
+            let mut own = mapping.is_some();
+            if ui.checkbox(&mut own, "").changed() {
+                *mapping = own.then_some(site_mapping);
+                commit = true;
+            }
+            ui.end_row();
+            if let Some(m) = mapping {
+                commit |= mapping_rows(ui, &mut m.tile, &mut m.offset, &mut m.rotation, None);
+            }
         }
     }
     ui.label(tr!("site-ui-vertices"));
@@ -651,8 +769,17 @@ mod tests {
                     glam::DVec2::X * 1000.0,
                     glam::DVec2::ONE * 1000.0,
                 ]);
-                assert!(!modifier_fields(ui, &mut kind, &b));
-                assert!(!modifier_fields(ui, &mut grade, &b));
+                let none = BedMapping::default();
+                assert!(!modifier_fields(ui, &mut kind, &b, &mats, none));
+                assert!(!modifier_fields(ui, &mut grade, &b, &mats, none));
+                // A texture bed draws its rows with and without its own mapping.
+                for mapping in [None, Some(BedMapping::default())] {
+                    let mut bed = ModifierKind::TextureBed {
+                        texture: Some(ResourceId::from_num(3)),
+                        mapping,
+                    };
+                    assert!(!modifier_fields(ui, &mut bed, &b, &mats, none));
+                }
             });
             cut_fill_readout(ui, &s, id);
             cut_fill_readout(ui, &s, ObjectId::from_num(4242));

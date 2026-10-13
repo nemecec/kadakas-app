@@ -20,6 +20,11 @@ app-editing-the-symbol-exit-to-apply-the = Editing the symbol. Exit to apply the
 app-you-are-not-in-a-group = You are not in a group
 app-symbol-updated = Symbol updated
 app-created-site-model = Created site model { $id }
+app-created-texture-beds =
+    Created { $count ->
+        [one] { $count } texture bed
+       *[other] { $count } texture beds
+    }
 app-cannot-start-the-session-for-scripts = Cannot start the session for scripts: { $e }
 app-untitled = Untitled
 app-kadakas = { $name } - Kadakas

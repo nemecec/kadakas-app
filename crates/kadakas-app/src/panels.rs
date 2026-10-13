@@ -48,6 +48,8 @@ pub enum MenuAction {
     ZoomFit,
     CreateSiteModel,
     UpdateSiteModel,
+    /// Site > Create Texture Bed: closed shapes become texture beds.
+    CreateTextureBed,
     Preferences,
     /// Modify > Duplicate Array.
     DuplicateArray,
@@ -159,6 +161,7 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         Cmd::Sweep => M::Sweep,
         Cmd::CreateSiteModel => M::CreateSiteModel,
         Cmd::UpdateSiteModel => M::UpdateSiteModel,
+        Cmd::CreateTextureBed => M::CreateTextureBed,
         Cmd::ZoomFit => M::ZoomFit,
         Cmd::PreviousView => M::PreviousView,
         Cmd::NextView => M::NextView,
@@ -178,6 +181,8 @@ pub struct MenuState {
     pub can_undo: bool,
     pub can_redo: bool,
     pub can_site: bool,
+    /// Closed shapes are selected: Create Texture Bed works.
+    pub can_texture_bed: bool,
     pub can_update_site: bool,
 }
 
@@ -282,6 +287,7 @@ fn command_item(
             Cmd::Redo => state.can_redo,
             Cmd::CreateSiteModel => state.can_site,
             Cmd::UpdateSiteModel => state.can_update_site,
+            Cmd::CreateTextureBed => state.can_texture_bed,
             Cmd::PreviousView => extras.can_back,
             Cmd::NextView => extras.can_forward,
             c if needs_selection(c) => extras.has_selection,
@@ -555,6 +561,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         | MenuAction::Preferences
         | MenuAction::CollabConnect
         | MenuAction::CollabDisconnect
+        | MenuAction::CreateTextureBed
         | MenuAction::UpdateSiteModel => return None,
     })
 }
@@ -683,6 +690,11 @@ fn tool_extras(
     }
     if kadakas_ui_core::tools::is_modify(m.tool()) {
         modify_options(ui, m, settings);
+    }
+    if m.tool() == Tool::SiteModifier
+        && settings.modifier_mode == kadakas_ui_core::tools::ModifierMode::TextureBed
+    {
+        crate::site_ui::bed_tool_options(ui, settings, doc);
     }
     if m.tool() == Tool::Irrigation && crate::irrigation_ui::tool_options(ui, settings, doc) {
         // A new mode starts a new object.
@@ -1175,6 +1187,7 @@ fn edit_shape(
     shape: &mut Shape,
     materials: &[(kadakas_core::resource::ResourceId, String)],
     effective_tile: Option<f64>,
+    site_mapping: kadakas_core::texture_bed::BedMapping,
 ) -> bool {
     let mut f = Fields { commit: false };
     egui::Grid::new("shape_fields")
@@ -1386,7 +1399,8 @@ fn edit_shape(
                 )
             }
             Shape::SiteModifier { modifier, boundary } => {
-                f.commit |= crate::site_ui::modifier_fields(ui, modifier, boundary)
+                f.commit |=
+                    crate::site_ui::modifier_fields(ui, modifier, boundary, materials, site_mapping)
             }
         });
     f.commit
@@ -1455,7 +1469,14 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     ui.label(tr!("panels-id", name = obj.shape.kind(), id = id));
     let edited = edit.edited.as_mut().expect("edit buffer");
     let materials: Vec<(kadakas_core::resource::ResourceId, String)> =
-        if matches!(edited, Shape::SiteModel { .. }) {
+        if matches!(
+            edited,
+            Shape::SiteModel { .. }
+                | Shape::SiteModifier {
+                    modifier: kadakas_core::site::ModifierKind::TextureBed { .. },
+                    ..
+                }
+        ) {
             let doc = session.editor.doc();
             doc.resources
                 .iter()
@@ -1476,7 +1497,8 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
         }
         _ => None,
     };
-    let commit = edit_shape(ui, edited, &materials, effective_tile);
+    let site_mapping = crate::site_ui::site_mapping(session.editor.doc(), obj.layer);
+    let commit = edit_shape(ui, edited, &materials, effective_tile, site_mapping);
     // Vertex edits are sent as `set_vertex` commands, one per changed vertex.
     if edited.vertices().is_some() {
         let base_vertices = edit
@@ -1843,6 +1865,7 @@ mod tests {
             can_undo: false,
             can_redo: false,
             can_site: false,
+            can_texture_bed: false,
             can_update_site: false,
         };
         let mut snap = kadakas_core::snapping::Settings::default();

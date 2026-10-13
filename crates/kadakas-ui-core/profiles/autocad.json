@@ -264,7 +264,10 @@
       ]
     },
     { "id": "model", "items": ["cmd.extrude", "cmd.sweep", "-", "tool.polygon3d"] },
-    { "id": "site", "items": ["site.create_model", "site.update_model"] },
+    {
+      "id": "site",
+      "items": ["site.create_model", "site.update_model", "site.create_texture_bed"]
+    },
     {
       "id": "view",
       "items": [

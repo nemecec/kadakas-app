@@ -373,7 +373,8 @@
       "id": "site",
       "items": [
         "site.create_model",
-        "site.update_model"
+        "site.update_model",
+        "site.create_texture_bed"
       ]
     },
     {

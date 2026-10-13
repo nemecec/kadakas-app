@@ -4,6 +4,7 @@ uic-tools-rectangle = Ristkülik
 uic-tools-lasso = Lasso
 uic-tools-pad = Tasand
 uic-tools-grade-limits = Planeerimispiir
+uic-tools-texture-bed = Tekstuuriala
 uic-tools-selection = Valik
 uic-tools-line = Joon
 uic-tools-circle = Ring

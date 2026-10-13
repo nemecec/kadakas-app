@@ -90,15 +90,22 @@ pub enum ModifierMode {
     Pad,
     /// The edge of the modified area.
     GradeLimits,
+    /// A region of the terrain with its own texture (3D-05).
+    TextureBed,
 }
 
 impl ModifierMode {
-    pub const ALL: [ModifierMode; 2] = [ModifierMode::Pad, ModifierMode::GradeLimits];
+    pub const ALL: [ModifierMode; 3] = [
+        ModifierMode::Pad,
+        ModifierMode::GradeLimits,
+        ModifierMode::TextureBed,
+    ];
 
     pub fn name(self) -> String {
         match self {
             ModifierMode::Pad => tr!("uic-tools-pad"),
             ModifierMode::GradeLimits => tr!("uic-tools-grade-limits"),
+            ModifierMode::TextureBed => tr!("uic-tools-texture-bed"),
         }
     }
 }
@@ -279,6 +286,8 @@ pub struct ToolSettings {
     pub pad_end_elevation: Option<f64>,
     /// The direction in which a sloped pad falls, in degrees counterclockwise from +X.
     pub pad_direction_deg: f64,
+    /// The material of new texture beds. `None`: by class.
+    pub bed_texture: Option<kadakas_core::resource::ResourceId>,
     /// Style, path and width options of the Hardscape and Landscape Area tools.
     pub areas: crate::area::AreaToolSettings,
     /// Height, floors and roof of the Massing Model tool.
@@ -314,6 +323,7 @@ impl Default for ToolSettings {
             modifier_mode: ModifierMode::Pad,
             pad_end_elevation: None,
             pad_direction_deg: 0.0,
+            bed_texture: None,
             areas: Default::default(),
             massing: Default::default(),
             polygon3d: Default::default(),
@@ -623,6 +633,15 @@ impl ToolMachine {
                     modifier: ModifierKind::Pad {
                         elevation: s.pad_elevation,
                         slope,
+                    },
+                    boundary: pts,
+                }
+            }
+            Tool::SiteModifier if pts.len() >= 3 && s.modifier_mode == ModifierMode::TextureBed => {
+                Shape::SiteModifier {
+                    modifier: ModifierKind::TextureBed {
+                        texture: s.bed_texture,
+                        mapping: None,
                     },
                     boundary: pts,
                 }
@@ -1219,6 +1238,22 @@ mod tests {
                 ..
             }
         ));
+        // Texture bed mode: a closed outline with the chosen material, or by class.
+        let mut t = Fixture::new(Tool::SiteModifier);
+        t.settings.modifier_mode = ModifierMode::TextureBed;
+        t.settings.bed_texture = Some(kadakas_core::resource::ResourceId::from_num(5));
+        for (x, y) in [(0.0, 0.0), (900.0, 0.0), (900.0, 700.0)] {
+            t.click(x, y);
+        }
+        t.send(Input::DoubleClick);
+        assert!(matches!(
+            &t.shapes()[0],
+            Shape::SiteModifier {
+                modifier: ModifierKind::TextureBed { texture: Some(_), mapping: None },
+                boundary,
+            } if boundary.len() == 3
+        ));
+        assert_eq!(ModifierMode::TextureBed.name(), "Texture Bed");
         // A sloped pad: the elevation at its end sets the percent.
         let mut k = Fixture::new(Tool::SiteModifier);
         k.settings.pad_elevation = 1000.0;

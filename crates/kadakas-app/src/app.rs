@@ -708,6 +708,13 @@ impl KadakasApp {
         };
     }
 
+    fn create_texture_bed(&mut self) {
+        self.status = match crate::site_ui::create_texture_beds(&mut self.session) {
+            Ok(n) => tr!("app-created-texture-beds", count = n),
+            Err(e) => tr!("app-error", e = e),
+        };
+    }
+
     fn update_site_model(&mut self) {
         self.status = crate::site_ui::update_site_models(&mut self.session);
     }
@@ -764,6 +771,7 @@ impl KadakasApp {
             MenuAction::ZoomFit => self.zoom_fit(),
             MenuAction::CreateSiteModel => self.create_site_model(),
             MenuAction::UpdateSiteModel => self.update_site_model(),
+            MenuAction::CreateTextureBed => self.create_texture_bed(),
             MenuAction::Preferences => self.prefs_ui.open(),
             MenuAction::Tool(t) => self.run_action(ctx, Action::for_tool(t)),
             MenuAction::DuplicateArray
@@ -2417,6 +2425,9 @@ impl eframe::App for KadakasApp {
             let can_site =
                 !crate::site_ui::source_ids(self.session.editor.doc(), &self.session.selection)
                     .is_empty();
+            let can_texture_bed =
+                !crate::site_ui::bed_source_ids(self.session.editor.doc(), &self.session.selection)
+                    .is_empty();
             let can_update = !crate::site_ui::selected_site_models(
                 self.session.editor.doc(),
                 &self.session.selection,
@@ -2439,6 +2450,7 @@ impl eframe::App for KadakasApp {
                 can_undo,
                 can_redo,
                 can_site,
+                can_texture_bed,
                 can_update_site: can_update,
             };
             actions = panels::menu_bar(

@@ -36,6 +36,7 @@ panels-compose = Compose
 panels-site = Site
 panels-create-site-model-from-selection = Create Site Model from Selection
 panels-update-site-model = Update Site Model
+panels-create-texture-bed-from-selection = Create Texture Bed from Selection
 panels-view = View
 panels-zoom-to-fit = Zoom to Fit
 panels-previous-view = Previous View
