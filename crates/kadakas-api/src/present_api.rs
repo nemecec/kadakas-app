@@ -166,7 +166,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
 // --- Lookups ----------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     Material,
     Style,
 }
@@ -180,7 +180,7 @@ impl Kind {
     }
 }
 
-fn ref_of(doc: &Document, v: &Value, kind: Kind) -> Result<ResourceId, RpcError> {
+pub(crate) fn ref_of(doc: &Document, v: &Value, kind: Kind) -> Result<ResourceId, RpcError> {
     let ok = |id: ResourceId| match kind {
         Kind::Material => present::material(doc, id).is_some(),
         Kind::Style => present::render_style(doc, id).is_some(),

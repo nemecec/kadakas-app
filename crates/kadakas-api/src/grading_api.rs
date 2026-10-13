@@ -117,6 +117,8 @@ pub fn describe() -> Value {
             {"method": "grade.add", "params": {"a": [0, 0], "b": [12000, 0], "elevation_a": 10000, "slope": {"ratio": -50}}},
             {"method": "grade.add", "params": {"a": [0, 2000], "b": [12000, 2500], "snap": "existing"}},
             {"method": "site.analysis", "params": {"id": 3, "mode": "slope", "breaks": [2, 5, 10], "legend": {"rect": [[12000, 0], [16000, 6000]], "show_areas": true}}},
+            {"method": "site.texture", "params": {"id": 3, "look": "texture", "material": "Grass", "tile_size": 2000, "rotation": 15}},
+            {"method": "site.texture", "params": {"id": 3, "look": "elevation", "bands": 8, "ramp": [[60, 130, 70], [240, 240, 235]]}},
             {"method": "spot.add", "params": {"at": [3000, 4000], "show": "both", "prefix": "TC"}},
             {"method": "spot.add", "params": {"at": [3000, 5000], "kind": "stake", "name": "S1"}},
             {"method": "section.add", "params": {"a": [0, 5000], "b": [20000, 5000], "name": "A", "exaggeration": 3}},

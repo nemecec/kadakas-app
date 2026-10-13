@@ -10,8 +10,8 @@ use std::sync::Arc;
 use kadakas_core::mesh::Scene;
 use kadakas_core::model::{Document, ObjectId};
 use kadakas_core::present::{self, SlotIndex, Texture, TextureMapping};
-use kadakas_core::site::MAX_TEXTURE_REPEATS;
 use kadakas_core::resource::ResourceId;
+use kadakas_core::site::MAX_TEXTURE_REPEATS;
 
 use crate::texture::{TextureImage, downscale, load};
 
@@ -607,6 +607,187 @@ mod tests {
         // A plain look has zero keys.
         let plain = Look::plain(&scene);
         assert_eq!((plain.materials_key, plain.layout_key), (0, 0));
+    }
+
+    // --- Terrain texture (3D-05) ---
+
+    /// A site model that is drawn as a flat grid of `n` by `n` cells of `cell` mm at (x0, y0),
+    /// by a stand-in for the extension of the site crate.
+    fn terrain_scene(
+        ed: &mut Editor,
+        x0: f64,
+        cell: f64,
+        n: usize,
+        settings: kadakas_core::site::SiteSettings,
+    ) -> (ObjectId, Scene) {
+        let id = add(
+            ed,
+            Shape::SiteModel {
+                points: vec![],
+                lines: vec![],
+                settings,
+            },
+            None,
+        );
+        let mut pos = Vec::new();
+        let mut idx = Vec::new();
+        for j in 0..=n {
+            for i in 0..=n {
+                pos.push(glam::DVec3::new(
+                    x0 + i as f64 * cell,
+                    j as f64 * cell,
+                    (i + j) as f64 * 10.0,
+                ));
+            }
+        }
+        for j in 0..n {
+            for i in 0..n {
+                let a = (j * (n + 1) + i) as u32;
+                let b = a + 1;
+                let c = a + (n + 1) as u32;
+                idx.extend([a, b, c + 1, a, c + 1, c]);
+            }
+        }
+        let ext = move |_: &Document,
+                        obj: &kadakas_core::model::Object,
+                        sink: &mut kadakas_core::mesh::SceneSink<'_>| {
+            if matches!(obj.shape, Shape::SiteModel { .. }) {
+                sink.mesh(&pos, &idx, [10, 20, 30, 255]);
+            }
+        };
+        let scene = kadakas_core::mesh::build_with(ed.doc(), glam::DVec3::ZERO, Some(&ext));
+        (id, scene)
+    }
+
+    fn grass() -> Material {
+        Material {
+            texture: Some(Texture::Procedural {
+                kind: Procedural::Grass,
+                seed: 1,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn texture_settings(m: ResourceId) -> kadakas_core::site::SiteSettings {
+        kadakas_core::site::SiteSettings {
+            surface_look: kadakas_core::site::SurfaceLook::Texture,
+            texture: Some(m),
+            texture_tile: 1000.0,
+            texture_offset: [500.0, 0.0],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_terrain_texture_maps_from_above_in_world_units() {
+        let mut ed = Editor::default();
+        let m = add_material(&mut ed, grass());
+        let (_, scene) = terrain_scene(&mut ed, 0.0, 1000.0, 4, texture_settings(m));
+        let look = Look::build(ed.doc(), &scene, true);
+        assert_eq!(look.materials.len(), 1);
+        assert!(look.materials[0].texture.is_some());
+        assert!(look.tri_material.iter().all(|i| *i == 0));
+        // Neighbors 1000 mm apart differ by exactly one repeat; the offset shifts U by half.
+        let u = |x: usize| look.uvs[x][0];
+        for i in 0..4 {
+            assert!((u(i + 1) - u(i) - 1.0).abs() < 1e-5);
+        }
+        assert!((u(0) - u(0).round()).abs() - 0.5 < 1e-5);
+        let v = |j: usize| look.uvs[j * 5][1];
+        assert!((v(1) - v(0) - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_terrain_texture_turns() {
+        let mut ed = Editor::default();
+        let m = add_material(&mut ed, grass());
+        let mut s = texture_settings(m);
+        s.texture_offset = [0.0, 0.0];
+        s.texture_rotation = 90.0;
+        let (_, scene) = terrain_scene(&mut ed, 0.0, 1000.0, 2, s);
+        let look = Look::build(ed.doc(), &scene, true);
+        // A step along +X is now a step along -V.
+        assert!((look.uvs[1][1] - look.uvs[0][1] + 1.0).abs() < 1e-5);
+        assert!((look.uvs[1][0] - look.uvs[0][0]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn terrain_material_comes_from_the_slot_when_no_texture_is_set() {
+        let mut ed = Editor::default();
+        let m = add_material(&mut ed, grass());
+        let mut s = texture_settings(m);
+        s.texture = None;
+        let (id, _) = terrain_scene(&mut ed, 0.0, 1000.0, 2, s);
+        assign(&mut ed, id, None, m);
+        let (_, scene) = terrain_scene(&mut ed, 0.0, 1000.0, 2, {
+            let mut s = texture_settings(m);
+            s.texture = None;
+            s
+        });
+        let look = Look::build(ed.doc(), &scene, true);
+        assert!(!look.is_plain());
+        // The mapping of the site model is used, not the box mapping of the material.
+        assert!((look.uvs[1][0] - look.uvs[0][0] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_elevation_look_and_the_color_look_use_no_forced_mapping() {
+        let mut ed = Editor::default();
+        let m = add_material(&mut ed, grass());
+        let mut s = texture_settings(m);
+        s.surface_look = kadakas_core::site::SurfaceLook::Elevation;
+        let (id, _) = terrain_scene(&mut ed, 0.0, 1000.0, 2, s);
+        assign(&mut ed, id, None, m);
+        let scene = scene_of(&ed);
+        // Elevation colors are vertex colors: the slot does not cover them.
+        let _ = scene;
+        let obj = ed.doc().object(id).unwrap();
+        assert!(present::mapping_override(obj).is_none());
+        assert!(SlotIndex::new(ed.doc()).resolve(obj, 0).is_none());
+    }
+
+    #[test]
+    fn a_tiny_tile_on_a_big_terrain_stays_precise() {
+        let mut ed = Editor::default();
+        let m = add_material(&mut ed, grass());
+        let mut s = texture_settings(m);
+        s.texture_tile = 10.0;
+        s.texture_offset = [0.0, 0.0];
+        // 40 km wide, far from the origin: 4 million repeats without the bound.
+        let (_, scene) = terrain_scene(&mut ed, 50.0e6, 10.0e6, 4, s);
+        let look = Look::build(ed.doc(), &scene, true);
+        let limit = kadakas_core::site::MAX_TEXTURE_REPEATS as f32 * 2.0;
+        assert!(look.uvs.iter().all(|uv| uv[0].is_finite()
+            && uv[1].is_finite()
+            && uv[0].abs() <= limit
+            && uv[1].abs() <= limit));
+        let again = Look::build(ed.doc(), &scene, true);
+        assert_eq!(look.layout_key, again.layout_key);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn terrain_uvs_are_finite_and_deterministic(
+            tile in 10.0f64..1.0e7,
+            ox in -1.0e9f64..1.0e9,
+            oy in -1.0e9f64..1.0e9,
+            rot in -720.0f64..720.0,
+            x0 in -1.0e8f64..1.0e8,
+            cell in 1.0f64..1.0e6,
+        ) {
+            let mut ed = Editor::default();
+            let m = add_material(&mut ed, grass());
+            let mut s = texture_settings(m);
+            s.texture_tile = tile;
+            s.texture_offset = [ox, oy];
+            s.texture_rotation = rot;
+            let (_, scene) = terrain_scene(&mut ed, x0, cell, 3, s);
+            let a = Look::build(ed.doc(), &scene, true);
+            let b = Look::build(ed.doc(), &scene, true);
+            proptest::prop_assert_eq!(&a.uvs, &b.uvs);
+            proptest::prop_assert!(a.uvs.iter().all(|uv| uv[0].is_finite() && uv[1].is_finite()));
+        }
     }
 
     /// An empty editor: a stand-in so that `scene_key` of equal content can be compared.

@@ -208,6 +208,7 @@ impl Session {
                 self.prune_selection();
                 Ok(json!({ "id": id, "points": np, "lines": nl }))
             }
+            "site.texture" => self.site_texture(p),
             "site.refresh" => {
                 // "Update Site Model": rebuild the surfaces now, even when the site model does not update by itself.
                 let q: Query = params(p)?;

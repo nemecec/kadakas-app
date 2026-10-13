@@ -389,6 +389,68 @@ mod tests {
     }
 
     #[test]
+    fn terrain_look_settings_are_checked() {
+        let ok = SiteSettings::default();
+        let bad = |f: &dyn Fn(&mut SiteSettings), word: &str| {
+            let mut s = ok.clone();
+            f(&mut s);
+            assert!(s.problem().expect(word).contains(word), "{word}");
+        };
+        bad(&|s| s.texture_tile = 1.0, "tile");
+        bad(&|s| s.texture_tile = 1e12, "tile");
+        bad(&|s| s.texture_tile = f64::NAN, "finite");
+        bad(&|s| s.texture_offset = [2e9, 0.0], "offset");
+        bad(&|s| s.texture_offset = [0.0, f64::INFINITY], "finite");
+        bad(&|s| s.texture_rotation = f64::NAN, "finite");
+        bad(&|s| s.elevation_bands = 0, "bands");
+        bad(&|s| s.elevation_bands = 65, "bands");
+        bad(&|s| s.elevation_ramp = vec![], "ramp");
+        bad(&|s| s.elevation_ramp = vec![Color([0; 4]); 17], "ramp");
+        bad(&|s| s.elevation_range = Some([5.0, 5.0]), "range");
+        bad(&|s| s.elevation_range = Some([0.0, f64::NAN]), "finite");
+    }
+
+    #[test]
+    fn terrain_look_settings_round_trip_and_stay_out_of_old_files() {
+        let plain = serde_json::to_value(SiteSettings::default()).unwrap();
+        for k in [
+            "surface_look",
+            "texture",
+            "texture_tile",
+            "texture_offset",
+            "texture_rotation",
+            "elevation_bands",
+            "elevation_ramp",
+            "elevation_range",
+        ] {
+            assert!(plain.get(k).is_none(), "{k}");
+        }
+        let s = SiteSettings {
+            surface_look: SurfaceLook::Texture,
+            texture: Some(ResourceId::from_num(7)),
+            texture_tile: 750.0,
+            texture_offset: [1.0, 2.0],
+            texture_rotation: 30.0,
+            elevation_bands: 5,
+            elevation_ramp: vec![Color([1, 2, 3, 255])],
+            elevation_range: Some([0.0, 9.0]),
+            ..Default::default()
+        };
+        let back: SiteSettings = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
+        let m = s.texture_mapping();
+        assert_eq!(m.kind, MappingKind::Planar);
+        assert_eq!(
+            (m.scale, m.rotation, m.offset),
+            ([750.0; 2], 30.0, [1.0, 2.0])
+        );
+        assert_eq!(
+            SurfaceLook::ALL.map(SurfaceLook::id),
+            ["color", "texture", "elevation"]
+        );
+    }
+
+    #[test]
     fn settings_read_with_missing_fields() {
         let s: SiteSettings =
             serde_json::from_str(r#"{"minor_interval": 250.0, "display_2d": "both"}"#).unwrap();
