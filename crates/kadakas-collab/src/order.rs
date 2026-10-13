@@ -344,6 +344,22 @@ mod tests {
     }
 
     #[test]
+    fn rekey_resolves_equal_keys_around_a_new_item() {
+        let k = |x: &str| Some(x.to_string());
+        // The new item sits between two items with the same key: the run before the last tied
+        // item gets keys below it, so the list is sorted again.
+        let keys = [k("a0"), None, k("a0")];
+        let new = rekey(&keys);
+        let mut all = keys.to_vec();
+        for (i, key) in new {
+            all[i] = Some(key);
+        }
+        let all: Vec<String> = all.into_iter().map(Option::unwrap).collect();
+        assert!(all.windows(2).all(|w| w[0] < w[1]), "{all:?}");
+        assert_eq!(all[2], "a0");
+    }
+
+    #[test]
     fn keys_between_neighbours() {
         let first = between(None, None).unwrap();
         let after = between(Some(&first), None).unwrap();

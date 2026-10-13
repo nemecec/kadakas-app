@@ -1349,6 +1349,54 @@ mod real_commands {
         );
     }
 
+    /// Two objects of two users tie on their key. One user then puts a new object between them: the
+    /// tied run gets new keys, so the order is the same on both sides.
+    #[test]
+    fn an_object_between_two_tied_keys_converges() {
+        let a = seeded(1);
+        let hub = Hub::new(Sequencer::new(docsync::replica_of(a.editor.doc())));
+        let mut sessions = [a, seeded(2)];
+        for s in &mut sessions {
+            s.set_collab_endpoint(Box::new(hub.endpoint()));
+            s.handle("collab.connect", json!({"now_ms": 1})).unwrap();
+        }
+        let mut now = 1_000;
+        // Both add at the same time (no sync between): the same key.
+        apply(
+            &mut sessions,
+            &hub,
+            &mut now,
+            &Act::AddRect { s: false, x: 0 },
+        );
+        apply(
+            &mut sessions,
+            &hub,
+            &mut now,
+            &Act::AddRect { s: true, x: 500 },
+        );
+        settle(&mut sessions, &hub, &mut now);
+        assert!(same(&sessions[0], &sessions[1]));
+        // Both sides try a new object one step behind the top, between the tied pair.
+        for s in [false, true] {
+            let ss = &mut sessions[usize::from(s)];
+            let before = object_ids(ss);
+            apply(&mut sessions, &hub, &mut now, &Act::AddRect { s, x: 900 });
+            let ss = &mut sessions[usize::from(s)];
+            let new: Vec<String> = object_ids(ss)
+                .into_iter()
+                .filter(|i| !before.contains(i))
+                .collect();
+            let placed = ss.handle(
+                "execute",
+                json!({"command": {"op": "arrange", "ids": new, "how": "backward"}}),
+            );
+            assert!(placed.is_ok());
+            settle(&mut sessions, &hub, &mut now);
+            assert!(same(&sessions[0], &sessions[1]));
+        }
+        assert_eq!(object_count(&mut sessions[0]), 4);
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(30))]
 
