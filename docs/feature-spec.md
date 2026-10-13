@@ -155,6 +155,7 @@ Non-goals
 | UI-10 | Light and dark themes: View > Theme (System, Light, Dark), saved per user. The panels use the egui theme. The canvas has a white or a dark paper, and in the dark theme nearly black pens are drawn light. The document does not change. | P1 | done |
 | UI-11 | Tool modes in tool bar. Keys jump between mode groups. Done for the vertex modes of the path tools (group 1, key U). | P1 | done |
 | UI-13 | Undo history list. | P2 | planned |
+| UI-14 | Feedback for humans, as easy as for agents (API-47, API-48). A Feedback button in the status bar and Help > Report a Bug... and Help > Request a Feature... open one short form: kind, title, text, and an optional screenshot of the window, which the user sees before sending. An error message in the app has a "Report this" link that fills the form with the command and the error. When the quick search finds no command, it offers "Request this feature" with the search text. The crash recovery dialog (SHIP-02) offers a report of the crash. Reports from humans and agents go to the same outbox, and the user sees both in Help > Feedback.... en-US and et. | P1 | planned |
 
 ### 4.5 Site model and grading
 
