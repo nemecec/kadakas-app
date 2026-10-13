@@ -62,11 +62,7 @@ fn a_bed_is_added_read_changed_and_listed() {
         "site.texture",
         json!({"id": site, "tile_size": 700, "rotation": 12}),
     );
-    let r = ok(
-        &mut s,
-        "bed.set",
-        json!({"id": a, "offset": [10, 20]}),
-    );
+    let r = ok(&mut s, "bed.set", json!({"id": a, "offset": [10, 20]}));
     assert_eq!(r["own_mapping"], true);
     assert_eq!(r["tile_size"], 700.0);
     assert_eq!(r["offset"], json!([10.0, 20.0]));
@@ -95,7 +91,12 @@ fn a_bed_is_added_read_changed_and_listed() {
     // Order follows the drawing order; arrange changes it.
     let b = bed(&mut s, square(), "Grass");
     let list = ok(&mut s, "bed.list", json!({}));
-    let order: Vec<Value> = list["beds"].as_array().unwrap().iter().map(|r| r["id"].clone()).collect();
+    let order: Vec<Value> = list["beds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].clone())
+        .collect();
     assert_eq!(order, vec![json!(a), json!(b)]);
     ok(
         &mut s,
@@ -103,7 +104,12 @@ fn a_bed_is_added_read_changed_and_listed() {
         json!({"command": {"op": "arrange", "ids": [a], "how": "front"}}),
     );
     let list = ok(&mut s, "bed.list", json!({"site": site}));
-    let order: Vec<Value> = list["beds"].as_array().unwrap().iter().map(|r| r["id"].clone()).collect();
+    let order: Vec<Value> = list["beds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].clone())
+        .collect();
     assert_eq!(order, vec![json!(b), json!(a)]);
     assert_eq!(list["beds"][1]["order"], 1);
     // A change of the boundary and one undo step per call.
@@ -142,7 +148,12 @@ fn closed_shapes_become_beds_and_keep_their_class_and_layer() {
     let mut s = Session::with_sequential_ids();
     terrain(&mut s);
     ok(&mut s, "material.add_defaults", json!({}));
-    let class = ok(&mut s, "execute", json!({"command": {"op": "add_class", "name": "Lawn"}}))["created"][0].clone();
+    let class = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_class", "name": "Lawn"}}),
+    )["created"][0]
+        .clone();
     let add = |s: &mut Session, shape: Value| {
         ok(
             s,
@@ -151,10 +162,22 @@ fn closed_shapes_become_beds_and_keep_their_class_and_layer() {
         )["created"][0]
             .clone()
     };
-    let poly = add(&mut s, json!({"kind": "polyline", "points": square(), "closed": true}));
-    let rect = add(&mut s, json!({"kind": "rect", "min": [0, 0], "max": [900, 900]}));
-    let circle = add(&mut s, json!({"kind": "circle", "center": [4000, 4000], "radius": 800}));
-    let area = add(&mut s, json!({"kind": "landscape_area", "boundary": square(), "name": "Meadow"}));
+    let poly = add(
+        &mut s,
+        json!({"kind": "polyline", "points": square(), "closed": true}),
+    );
+    let rect = add(
+        &mut s,
+        json!({"kind": "rect", "min": [0, 0], "max": [900, 900]}),
+    );
+    let circle = add(
+        &mut s,
+        json!({"kind": "circle", "center": [4000, 4000], "radius": 800}),
+    );
+    let area = add(
+        &mut s,
+        json!({"kind": "landscape_area", "boundary": square(), "name": "Meadow"}),
+    );
     let r = ok(
         &mut s,
         "bed.add",
@@ -167,7 +190,10 @@ fn closed_shapes_become_beds_and_keep_their_class_and_layer() {
     let _ = doc;
     // The polyline, rectangle and circle are replaced; the landscape area stays.
     for gone in [&poly, &rect, &circle] {
-        assert!(s.handle("objects.get", json!({"id": gone})).is_err(), "{gone}");
+        assert!(
+            s.handle("objects.get", json!({"id": gone})).is_err(),
+            "{gone}"
+        );
     }
     assert!(s.handle("objects.get", json!({"id": area})).is_ok());
     for bed in &ids {
@@ -215,32 +241,100 @@ fn bed_requests_with_bad_values_are_refused() {
         .clone();
     for (method, p, word) in [
         ("bed.add", json!({}), "either"),
-        ("bed.add", json!({"boundary": square(), "from": line}), "either"),
-        ("bed.add", json!({"boundary": [[0, 0], [1, 1]]}), "3 or more"),
+        (
+            "bed.add",
+            json!({"boundary": square(), "from": line}),
+            "either",
+        ),
+        (
+            "bed.add",
+            json!({"boundary": [[0, 0], [1, 1]]}),
+            "3 or more",
+        ),
         ("bed.add", json!({"boundary": "x"}), "bad boundary"),
-        ("bed.add", json!({"boundary": square(), "texture": "Nothing"}), "no material"),
-        ("bed.add", json!({"boundary": square(), "tile_size": 1}), "tile"),
-        ("bed.add", json!({"boundary": square(), "tile_size": "big"}), "tile_size"),
-        ("bed.add", json!({"boundary": square(), "offset": [1]}), "offset"),
-        ("bed.add", json!({"boundary": square(), "offset": [1, null]}), "offset"),
-        ("bed.add", json!({"boundary": square(), "rotation": null}), "rotation"),
-        ("bed.add", json!({"boundary": square(), "own_mapping": 3}), "own_mapping"),
-        ("bed.add", json!({"boundary": square(), "keep_source": 3}), "keep_source"),
-        ("bed.add", json!({"boundary": square(), "colour": 1}), "unknown parameter"),
-        ("bed.add", json!({"boundary": square(), "layer": 5}), "layer"),
-        ("bed.add", json!({"boundary": square(), "class": 5}), "class"),
+        (
+            "bed.add",
+            json!({"boundary": square(), "texture": "Nothing"}),
+            "no material",
+        ),
+        (
+            "bed.add",
+            json!({"boundary": square(), "tile_size": 1}),
+            "tile",
+        ),
+        (
+            "bed.add",
+            json!({"boundary": square(), "tile_size": "big"}),
+            "tile_size",
+        ),
+        (
+            "bed.add",
+            json!({"boundary": square(), "offset": [1]}),
+            "offset",
+        ),
+        (
+            "bed.add",
+            json!({"boundary": square(), "offset": [1, null]}),
+            "offset",
+        ),
+        (
+            "bed.add",
+            json!({"boundary": square(), "rotation": null}),
+            "rotation",
+        ),
+        (
+            "bed.add",
+            json!({"boundary": square(), "own_mapping": 3}),
+            "own_mapping",
+        ),
+        (
+            "bed.add",
+            json!({"boundary": square(), "keep_source": 3}),
+            "keep_source",
+        ),
+        (
+            "bed.add",
+            json!({"boundary": square(), "colour": 1}),
+            "unknown parameter",
+        ),
+        (
+            "bed.add",
+            json!({"boundary": square(), "layer": 5}),
+            "layer",
+        ),
+        (
+            "bed.add",
+            json!({"boundary": square(), "class": 5}),
+            "class",
+        ),
         ("bed.add", json!({"from": 5}), "'from'"),
         ("bed.add", json!({"from": []}), "no IDs"),
         ("bed.add", json!({"from": line}), "not a closed shape"),
         ("bed.add", json!({"from": open}), "not closed"),
-        ("bed.add", json!({"from": "00000000-0000-0000-0000-0000000003e7"}), "does not exist"),
+        (
+            "bed.add",
+            json!({"from": "00000000-0000-0000-0000-0000000003e7"}),
+            "does not exist",
+        ),
         ("bed.get", json!({}), "missing 'id'"),
         ("bed.get", json!({"id": line}), "not a texture bed"),
         ("bed.get", json!({"id": site}), "not a texture bed"),
-        ("bed.get", json!({"id": "00000000-0000-0000-0000-0000000003e7"}), "does not exist"),
+        (
+            "bed.get",
+            json!({"id": "00000000-0000-0000-0000-0000000003e7"}),
+            "does not exist",
+        ),
         ("bed.set", json!({"id": a, "tile_size": 1}), "tile"),
-        ("bed.set", json!({"id": a, "texture": "Nothing"}), "no material"),
-        ("bed.set", json!({"id": a, "boundary": [[0, 0]]}), "3 or more"),
+        (
+            "bed.set",
+            json!({"id": a, "texture": "Nothing"}),
+            "no material",
+        ),
+        (
+            "bed.set",
+            json!({"id": a, "boundary": [[0, 0]]}),
+            "3 or more",
+        ),
         ("bed.set", json!({"id": a, "boundary": 5}), "bad boundary"),
         ("bed.set", json!({"id": a, "mood": 5}), "unknown parameter"),
         ("bed.list", json!({"site": line}), "not a site model"),
@@ -257,7 +351,13 @@ fn bed_requests_with_bad_values_are_refused() {
     assert!(s.handle("bed.list", Value::Null).is_ok());
     assert!(s.handle("bed.list", json!(5)).is_err());
     // Nothing changed.
-    assert_eq!(ok(&mut s, "bed.list", json!({}))["beds"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        ok(&mut s, "bed.list", json!({}))["beds"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -311,9 +411,17 @@ fn a_bed_texture_reaches_the_render_and_the_exports() {
     ok(&mut s, "material.add_defaults", json!({}));
     let plain_png = ok(&mut s, "render.png", json!({"width": 240, "height": 180}));
     let plain_glb = dir.join("plain.glb");
-    ok(&mut s, "export.file", json!({"path": plain_glb, "format": "glb"}));
+    ok(
+        &mut s,
+        "export.file",
+        json!({"path": plain_glb, "format": "glb"}),
+    );
     let plain = glb_json(&std::fs::read(&plain_glb).unwrap());
-    assert!(plain.get("images").is_none_or(|i| i.as_array().unwrap().is_empty()));
+    assert!(
+        plain
+            .get("images")
+            .is_none_or(|i| i.as_array().unwrap().is_empty())
+    );
     let a = bed(&mut s, square(), "Grass");
     let with_bed = ok(&mut s, "render.png", json!({"width": 240, "height": 180}));
     assert_ne!(plain_png["png_base64"], with_bed["png_base64"]);
@@ -323,7 +431,11 @@ fn a_bed_texture_reaches_the_render_and_the_exports() {
     assert_eq!(r["report"]["textures"], 1);
     let j = glb_json(&std::fs::read(&glb).unwrap());
     assert_eq!(j["images"].as_array().unwrap().len(), 1);
-    assert!(material_names(&j).iter().any(|n| n.contains("Grass")), "{:?}", material_names(&j));
+    assert!(
+        material_names(&j).iter().any(|n| n.contains("Grass")),
+        "{:?}",
+        material_names(&j)
+    );
     assert!(
         primitives(&j)
             .iter()
@@ -343,7 +455,11 @@ fn a_bed_texture_reaches_the_render_and_the_exports() {
     assert!(text.contains("usemtl Grass"));
     // The same input gives the same file.
     let again = dir.join("bed2.glb");
-    ok(&mut s, "export.file", json!({"path": again, "format": "glb"}));
+    ok(
+        &mut s,
+        "export.file",
+        json!({"path": again, "format": "glb"}),
+    );
     assert_eq!(std::fs::read(&glb).unwrap(), std::fs::read(&again).unwrap());
     // A second material in front: a second texture.
     let front = bed(
@@ -352,7 +468,11 @@ fn a_bed_texture_reaches_the_render_and_the_exports() {
         "Gravel",
     );
     let both = dir.join("both.glb");
-    let r = ok(&mut s, "export.file", json!({"path": both, "format": "glb"}));
+    let r = ok(
+        &mut s,
+        "export.file",
+        json!({"path": both, "format": "glb"}),
+    );
     assert_eq!(r["report"]["textures"], 2);
     let _ = (a, front);
     // IFC has no textures: the bed is reported as skipped, the terrain stays.
@@ -412,7 +532,10 @@ fn a_texture_look_site_keeps_its_own_texture_outside_the_beds() {
     assert_eq!(r["report"]["textures"], 2);
     let j = glb_json(&std::fs::read(&glb).unwrap());
     let names = material_names(&j);
-    assert!(names.iter().any(|n| n.contains("Grass")) && names.iter().any(|n| n.contains("Gravel")), "{names:?}");
+    assert!(
+        names.iter().any(|n| n.contains("Grass")) && names.iter().any(|n| n.contains("Gravel")),
+        "{names:?}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -446,7 +569,10 @@ fn a_moved_bed_takes_its_own_mapping_along_and_old_documents_load() {
     }
     let r = ok(&mut s, "document.load", json!({"document": doc}));
     assert_eq!(r["notes"].as_array().unwrap().len(), 1, "{r}");
-    assert_eq!(ok(&mut s, "bed.get", json!({"id": a}))["own_mapping"], false);
+    assert_eq!(
+        ok(&mut s, "bed.get", json!({"id": a}))["own_mapping"],
+        false
+    );
     // A command with the same bad value is refused.
     let e = fail(&mut s, "bed.set", json!({"id": a, "tile_size": 0.001}));
     assert!(e.message.contains("tile"), "{}", e.message);

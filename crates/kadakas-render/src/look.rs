@@ -199,8 +199,7 @@ impl Look {
         // Objects that force their own mapping (a site model with the texture look), with the
         // whole repeats to take away from their texture coordinates.
         // A texture bed has its own mapping, so this is by object and part.
-        let mut forced: HashMap<(ObjectId, u8), Option<(TextureMapping, [f64; 2])>> =
-            HashMap::new();
+        let mut forced: HashMap<(ObjectId, u8), Option<BoundedMapping>> = HashMap::new();
         for t in 0..mesh.triangle_count() {
             let (object, part) = (
                 mesh.tri_object[t],
@@ -334,11 +333,14 @@ fn frame_of(scene: &Scene, object: ObjectId) -> ([f64; 3], f64) {
         })
 }
 
+/// A mapping, and the whole repeats to take away from the texture coordinates.
+type BoundedMapping = (TextureMapping, [f64; 2]);
+
 /// The mapping of a terrain texture, made safe for a big terrain, and the whole repeats at the
 /// middle of the object. The tile grows when the terrain would hold more than
 /// [`MAX_TEXTURE_REPEATS`] of them. Taking the repeats at the middle away changes no pixel (a
 /// texture repeats), and keeps the coordinates small, so single precision is enough.
-fn bounded_mapping(mut m: TextureMapping, frame: ([f64; 3], f64)) -> (TextureMapping, [f64; 2]) {
+fn bounded_mapping(mut m: TextureMapping, frame: ([f64; 3], f64)) -> BoundedMapping {
     for s in &mut m.scale {
         *s = effective_tile(*s, 2.0 * frame.1);
     }
@@ -908,7 +910,11 @@ mod tests {
             if matches!(obj.shape, Shape::SiteModel { .. }) {
                 sink.mesh(&quad(0.0, 1000.0), &[0, 1, 2, 0, 2, 3], [10, 20, 30, 255]);
                 sink.set_part(PART_BED);
-                sink.mesh(&quad(1000.0, 3000.0), &[0, 1, 2, 0, 2, 3], [10, 20, 30, 255]);
+                sink.mesh(
+                    &quad(1000.0, 3000.0),
+                    &[0, 1, 2, 0, 2, 3],
+                    [10, 20, 30, 255],
+                );
                 sink.set_part(PART_MAIN);
             }
         };

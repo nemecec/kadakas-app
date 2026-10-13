@@ -1468,24 +1468,23 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     }
     ui.label(tr!("panels-id", name = obj.shape.kind(), id = id));
     let edited = edit.edited.as_mut().expect("edit buffer");
-    let materials: Vec<(kadakas_core::resource::ResourceId, String)> =
-        if matches!(
-            edited,
-            Shape::SiteModel { .. }
-                | Shape::SiteModifier {
-                    modifier: kadakas_core::site::ModifierKind::TextureBed { .. },
-                    ..
-                }
-        ) {
-            let doc = session.editor.doc();
-            doc.resources
-                .iter()
-                .filter(|r| kadakas_core::present::material(doc, r.id).is_some())
-                .map(|r| (r.id, r.name.clone()))
-                .collect()
-        } else {
-            Vec::new()
-        };
+    let materials: Vec<(kadakas_core::resource::ResourceId, String)> = if matches!(
+        edited,
+        Shape::SiteModel { .. }
+            | Shape::SiteModifier {
+                modifier: kadakas_core::site::ModifierKind::TextureBed { .. },
+                ..
+            }
+    ) {
+        let doc = session.editor.doc();
+        doc.resources
+            .iter()
+            .filter(|r| kadakas_core::present::material(doc, r.id).is_some())
+            .map(|r| (r.id, r.name.clone()))
+            .collect()
+    } else {
+        Vec::new()
+    };
     // The tile that the renderers use for the terrain texture (larger on a very big terrain).
     let effective_tile = match edited {
         Shape::SiteModel { settings, .. }

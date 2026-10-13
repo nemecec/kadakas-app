@@ -17,12 +17,7 @@ fn square(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<Vertex> {
     ])
 }
 
-fn bed_shape(
-    texture: Option<ResourceId>,
-    mapping: Option<BedMapping>,
-    x0: f64,
-    x1: f64,
-) -> Shape {
+fn bed_shape(texture: Option<ResourceId>, mapping: Option<BedMapping>, x0: f64, x1: f64) -> Shape {
     Shape::SiteModifier {
         modifier: ModifierKind::TextureBed { texture, mapping },
         boundary: square(x0, 0.0, x1, 1000.0),
@@ -308,7 +303,10 @@ fn beds_are_found_in_stacking_order_with_the_material_rules() {
     })
     .unwrap();
     let doc = ed.doc();
-    assert_eq!(crate::present::bed_material(doc, doc.object(b).unwrap()), Some(grass));
+    assert_eq!(
+        crate::present::bed_material(doc, doc.object(b).unwrap()),
+        Some(grass)
+    );
     // Arrange moves the front bed to the back: the order follows the document.
     ed.execute(&Command::Arrange {
         ids: vec![c],
@@ -343,7 +341,10 @@ fn beds_must_be_on_the_layer_visible_and_near_the_site() {
     );
     let doc = ed.doc();
     let find = |doc: &Document| beds_for(doc, doc.object(site_id).unwrap(), &none_material);
-    assert_eq!(find(doc).iter().map(|b| b.object).collect::<Vec<_>>(), vec![near]);
+    assert_eq!(
+        find(doc).iter().map(|b| b.object).collect::<Vec<_>>(),
+        vec![near]
+    );
     // A bed on another layer does not act.
     ed.execute(&Command::AddLayer {
         name: "Other".into(),
@@ -473,7 +474,10 @@ fn the_slot_index_gives_the_bed_parts_their_material_and_mapping() {
     assert_eq!(ix.beds_of(site_id).len(), 1);
     assert_eq!(ix.resolve(obj, PART_BED), Some(grass));
     assert_eq!(ix.resolve(obj, PART_MAIN), None);
-    assert_eq!(ix.mapping_override(obj, PART_BED).unwrap().scale, [300.0; 2]);
+    assert_eq!(
+        ix.mapping_override(obj, PART_BED).unwrap().scale,
+        [300.0; 2]
+    );
     assert_eq!(ix.mapping_override(obj, PART_BED + 1), None);
     assert_eq!(ix.mapping_override(obj, PART_MAIN), None);
     assert!(ix.beds_of(ObjectId::from_num(999)).is_empty());

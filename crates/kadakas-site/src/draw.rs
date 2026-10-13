@@ -11,8 +11,8 @@ use kadakas_core::model::{Color, Document, Object, Shape};
 use kadakas_core::site::{Display3d, SurfaceDisplay, SurfaceLook};
 use kadakas_core::texture_bed::Bed;
 
-use crate::contour::Contour;
 use crate::bed;
+use crate::contour::Contour;
 use crate::elevation;
 use crate::grading::{self, analysis::AnalysisResult};
 use crate::model::{SiteCache, SiteResult, Surface};
@@ -698,7 +698,10 @@ mod tests {
         assert!(scene.mesh.tri_object.iter().all(|o| *o == id));
         let (base, in_bed) = (part_area(&scene, PART_MAIN), part_area(&scene, PART_BED));
         assert!((in_bed - 2000.0 * 4000.0).abs() < 100.0, "{in_bed}");
-        assert!((base + in_bed - plain_area).abs() < 100.0, "{base} {in_bed} {plain_area}");
+        assert!(
+            (base + in_bed - plain_area).abs() < 100.0,
+            "{base} {in_bed} {plain_area}"
+        );
         // The grade did not change.
         let before = SiteResult::compute(ed.doc(), id).unwrap();
         assert_eq!(before.modifiers.len(), 1, "only the pad is a modifier");

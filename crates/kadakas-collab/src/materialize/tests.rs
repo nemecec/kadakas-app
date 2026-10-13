@@ -1018,7 +1018,11 @@ fn a_texture_bed_syncs_as_a_shape_property_and_bad_values_are_quarantined() {
     assert!(m.quarantined.is_empty(), "{:?}", m.quarantined);
     match &m.doc.object(id).unwrap().shape {
         Shape::SiteModifier {
-            modifier: ModifierKind::TextureBed { texture: t, mapping },
+            modifier:
+                ModifierKind::TextureBed {
+                    texture: t,
+                    mapping,
+                },
             ..
         } => {
             assert_eq!(*t, Some(ResourceId(texture)));
@@ -1049,6 +1053,9 @@ fn a_texture_bed_syncs_as_a_shape_property_and_bad_values_are_quarantined() {
             value,
         );
         let m = materialize(&replica, ed.doc());
-        assert!(m.quarantined.iter().any(|q| q.target.id == id.0), "case {n}");
+        assert!(
+            m.quarantined.iter().any(|q| q.target.id == id.0),
+            "case {n}"
+        );
     }
 }

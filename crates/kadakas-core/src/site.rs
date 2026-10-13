@@ -350,9 +350,7 @@ impl ModifierKind {
                     && slope.is_none_or(|s| s.direction.is_finite() && s.percent.is_finite())
             }
             ModifierKind::GradeLimit => true,
-            ModifierKind::TextureBed { mapping, .. } => {
-                mapping.is_none_or(|m| m.is_finite())
-            }
+            ModifierKind::TextureBed { mapping, .. } => mapping.is_none_or(|m| m.is_finite()),
         }
     }
 

@@ -845,10 +845,8 @@ impl SlotIndex {
         }
         for (site, list) in &beds {
             for b in list {
-                ix.objects.insert(
-                    (*site, part_slot_name(b.part)),
-                    b.material,
-                );
+                ix.objects
+                    .insert((*site, part_slot_name(b.part)), b.material);
             }
         }
         ix.beds = beds;

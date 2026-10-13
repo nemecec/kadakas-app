@@ -1526,6 +1526,30 @@ class Api:
         JSON-RPC method ``site.texture``."""
         return self._call("site.texture", params or None)
 
+    def bed_add(self, **params: Any) -> Any:
+        """Add texture beds: site modifiers that give a region of the terrain its own texture without changing the grade (Site Modifiers tool, Texture Bed mode). params: {boundary: [vertices] (arcs allowed) | from: id or [ids] of closed shapes (a closed polyline, rectangle, circle, landscape area or hardscape; the first three are replaced by the bed unless keep_source is true; the bed takes the layer and the class of the shape), texture? (name or id of a material; omit or null: the material of the bed object's slot or of its class), tile_size? (mm, 10 to 1e8), offset? ([x, y] mm), rotation? (degrees): any of the three gives the bed its own mapping, which starts from the mapping of the site model on the layer; without them the bed uses the mapping of the site model, keep_source?, layer?, class?}. The bed acts on the site models on its layer whose box touches it. Where beds overlap, the one in front (later in the drawing order, see arrange) wins; a bed without a material has no effect. One undo step. Returns {id, ids}.
+
+        JSON-RPC method ``bed.add``."""
+        return self._call("bed.add", params or None)
+
+    def bed_set(self, **params: Any) -> Any:
+        """Change a texture bed. params: {id, texture? (name or id of a material, null for by class), tile_size?, offset?, rotation? (they give the bed its own mapping), own_mapping? (false: use the mapping of the site model), boundary? ([vertices])}. One undo step. Returns the row of bed.get.
+
+        JSON-RPC method ``bed.set``."""
+        return self._call("bed.set", params or None)
+
+    def bed_get(self, **params: Any) -> Any:
+        """Read a texture bed. params: {id}. Returns {id, layer, class, texture (material name or null), texture_id, by_class, material (the material that is used: the texture, or else the slot of the bed or of its class; null: the bed has no effect), own_mapping, tile_size, offset, rotation (of the bed, or else of the first site model it acts on, or the defaults), order (0 is the back of all beds), points, acts_on: [site model IDs], active}.
+
+        JSON-RPC method ``bed.get``."""
+        return self._call("bed.get", params or None)
+
+    def bed_list(self, **params: Any) -> Any:
+        """List the texture beds from the back to the front of the stacking order. params: {site? (a site model ID: only the beds that act on it)}. Returns {beds: [row of bed.get]}.
+
+        JSON-RPC method ``bed.list``."""
+        return self._call("bed.list", params or None)
+
     def site_elevation(self, **params: Any) -> Any:
         """Ground height at a point. params: {id, x, y, surface?: existing | proposed}. Returns {z, slope, aspect}; z is null outside the model. aspect is in radians clockwise from +Y.
 
@@ -2415,6 +2439,10 @@ METHOD_NAMES: tuple[str, ...] = (
     "site.create",
     "site.update",
     "site.texture",
+    "bed.add",
+    "bed.set",
+    "bed.get",
+    "bed.list",
     "site.elevation",
     "site.cut_fill",
     "site.drape",

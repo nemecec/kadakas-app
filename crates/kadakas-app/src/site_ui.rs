@@ -8,15 +8,15 @@ use kadakas_api::Session;
 use kadakas_core::curve::Vertex;
 use kadakas_core::model::{Document, ModifierKind, Object, ObjectId, Shape, SiteSettings};
 use kadakas_core::resource::ResourceId;
-use kadakas_core::texture_bed::BedMapping;
 use kadakas_core::site::{
     Display3d, MAX_ELEVATION_BANDS, MAX_RAMP_STOPS, PadSlope, SurfaceDisplay, SurfaceLook,
     boundary_points, end_elevation, slope_from_end_elevation,
 };
+use kadakas_core::texture_bed::BedMapping;
 use kadakas_l10n::tr;
 use kadakas_site::draw::shown_surfaces;
-use kadakas_ui_core::tools::ToolSettings;
 use kadakas_site::{SiteCache, Surface};
+use kadakas_ui_core::tools::ToolSettings;
 use serde_json::json;
 
 use crate::canvas::color32;
@@ -666,6 +666,61 @@ mod tests {
                 p: DVec3::new(x, y, z),
             },
         )
+    }
+
+    #[test]
+    fn closed_shapes_become_texture_beds() {
+        let mut s = Session::default();
+        let line = add(
+            &mut s,
+            Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::X,
+            },
+        );
+        let rect = add(
+            &mut s,
+            Shape::Rect {
+                min: DVec2::ZERO,
+                max: DVec2::new(900.0, 700.0),
+            },
+        );
+        let circle = add(
+            &mut s,
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 500.0,
+            },
+        );
+        // Nothing closed selected: a message, and the menu item is off.
+        s.selection = vec![line];
+        assert!(bed_source_ids(s.editor.doc(), &s.selection).is_empty());
+        assert!(create_texture_beds(&mut s).unwrap_err().contains("closed"));
+        s.selection = vec![line, rect, circle];
+        assert_eq!(
+            bed_source_ids(s.editor.doc(), &s.selection),
+            vec![rect, circle]
+        );
+        assert_eq!(create_texture_beds(&mut s).unwrap(), 2);
+        // The beds are selected, the shapes are replaced, the line stays.
+        assert_eq!(s.selection.len(), 2);
+        let doc = s.editor.doc();
+        assert!(doc.object(rect).is_none() && doc.object(line).is_some());
+        assert!(s.selection.iter().all(|id| matches!(
+            doc.object(*id).map(|o| &o.shape),
+            Some(Shape::SiteModifier {
+                modifier: ModifierKind::TextureBed { .. },
+                ..
+            })
+        )));
+        // The mapping of a layer without a site model is the default one.
+        assert_eq!(site_mapping(doc, doc.active_layer), BedMapping::default());
+        assert!(material_list(doc).is_empty());
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let mut settings = ToolSettings::default();
+            bed_tool_options(ui, &mut settings, doc);
+        });
     }
 
     #[test]

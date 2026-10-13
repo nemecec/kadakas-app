@@ -292,7 +292,10 @@ impl Cutter<'_> {
                     (&mut right, &mut left)
                 };
                 c_side.push(Corner { edge: None, ..cut });
-                e_side.push(Corner { edge: c.edge, ..cut });
+                e_side.push(Corner {
+                    edge: c.edge,
+                    ..cut
+                });
             }
         }
         (left, right)

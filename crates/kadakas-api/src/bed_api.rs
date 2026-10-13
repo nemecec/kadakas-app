@@ -79,6 +79,15 @@ fn is_bed(o: &Object) -> bool {
     )
 }
 
+/// The outline of one new bed, with the layer and class of the shape it comes from and the shape
+/// that it replaces.
+struct Source {
+    boundary: Vec<Vertex>,
+    layer: Option<LayerId>,
+    class: Option<ClassId>,
+    remove: Option<ObjectId>,
+}
+
 /// The mapping fields of the parameters, applied to a starting mapping.
 struct MappingEdit {
     own: Option<bool>,
@@ -300,18 +309,17 @@ impl Session {
                 .as_bool()
                 .ok_or_else(|| bad("'keep_source' must be true or false"))?,
         };
-        // The outlines: (boundary, layer, class, shape to remove).
-        let mut outlines: Vec<(
-            Vec<Vertex>,
-            Option<LayerId>,
-            Option<ClassId>,
-            Option<ObjectId>,
-        )> = Vec::new();
+        let mut outlines: Vec<Source> = Vec::new();
         match (m.remove("boundary"), m.remove("from")) {
             (Some(b), None) => {
                 let b: Vec<Vertex> =
                     serde_json::from_value(b).map_err(|e| bad(format!("bad boundary: {e}")))?;
-                outlines.push((b, None, None, None));
+                outlines.push(Source {
+                    boundary: b,
+                    layer: None,
+                    class: None,
+                    remove: None,
+                });
             }
             (None, Some(f)) => {
                 let ids: Vec<ObjectId> = match f {
@@ -335,7 +343,12 @@ impl Session {
                         o.shape,
                         Shape::Polyline { .. } | Shape::Rect { .. } | Shape::Circle { .. }
                     ) && !keep;
-                    outlines.push((b, Some(o.layer), Some(o.class), consumed.then_some(id)));
+                    outlines.push(Source {
+                        boundary: b,
+                        layer: Some(o.layer),
+                        class: Some(o.class),
+                        remove: consumed.then_some(id),
+                    });
                 }
             }
             _ => return Err(bad("give either 'boundary' or 'from'")),
@@ -345,7 +358,13 @@ impl Session {
         }
         let mut commands = Vec::new();
         let mut remove = Vec::new();
-        for (boundary, layer, class, source) in outlines {
+        for Source {
+            boundary,
+            layer,
+            class,
+            remove: source,
+        } in outlines
+        {
             let layer = layer_arg.or(layer);
             let on = layer.unwrap_or(doc.active_layer);
             let mapping = edit.apply(None, site_mapping(doc, on).unwrap_or_default());
