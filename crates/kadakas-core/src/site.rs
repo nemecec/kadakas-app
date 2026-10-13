@@ -603,6 +603,91 @@ mod tests {
     }
 
     #[test]
+    fn a_textured_site_model_takes_its_texture_along_when_it_moves() {
+        use crate::model::Shape;
+        let mut textured = Shape::SiteModel {
+            points: vec![DVec3::new(1.0, 2.0, 3.0)],
+            lines: vec![],
+            settings: SiteSettings {
+                surface_look: SurfaceLook::Texture,
+                texture_offset: [10.0, 20.0],
+                ..Default::default()
+            },
+        };
+        textured.translate(DVec2::new(100.0, -5.0));
+        let Shape::SiteModel {
+            settings, points, ..
+        } = &textured
+        else {
+            panic!()
+        };
+        assert_eq!(settings.texture_offset, [110.0, 15.0]);
+        assert_eq!(points[0].x, 101.0);
+        // Another look keeps its settings as they are.
+        let mut plain = Shape::SiteModel {
+            points: vec![],
+            lines: vec![],
+            settings: SiteSettings::default(),
+        };
+        plain.translate(DVec2::new(100.0, 0.0));
+        assert!(
+            matches!(plain, Shape::SiteModel { settings, .. } if settings == SiteSettings::default())
+        );
+    }
+
+    #[test]
+    fn a_file_with_a_bad_look_loads_with_the_look_reset() {
+        use crate::model::{Document, Shape};
+        let mut doc = Document::default();
+        let mut s = SiteSettings {
+            surface_look: SurfaceLook::Elevation,
+            minor_interval: 250.0,
+            ..Default::default()
+        };
+        s.texture_tile = 0.0;
+        s.elevation_bands = 900;
+        let id = crate::model::ObjectId(doc.alloc_id());
+        doc.objects.insert(
+            id,
+            crate::model::Object::new(
+                id,
+                crate::model::FIRST_LAYER,
+                crate::model::NONE_CLASS,
+                Shape::SiteModel {
+                    points: vec![],
+                    lines: vec![],
+                    settings: s,
+                },
+            ),
+        );
+        let text = serde_json::to_string(&doc).unwrap();
+        let loaded = Document::from_json(&text).expect("the file opens");
+        let Shape::SiteModel { settings, .. } = &loaded.object(id).unwrap().shape else {
+            panic!()
+        };
+        assert_eq!(settings.surface_look, SurfaceLook::Color);
+        assert_eq!(settings.texture_tile, 2000.0);
+        assert_eq!(settings.minor_interval, 250.0, "the rest is kept");
+        assert_eq!(loaded.load_notes().len(), 1);
+        assert!(loaded.load_notes()[0].contains("reset"));
+        // A problem outside the look still refuses the file.
+        let mut bad = doc.clone();
+        if let Shape::SiteModel { settings, .. } = &mut bad.object_mut(id).unwrap().shape {
+            settings.minor_interval = -1.0;
+        }
+        assert!(Document::from_json(&serde_json::to_string(&bad).unwrap()).is_err());
+        // A good file has no notes.
+        assert!(Document::default().load_notes().is_empty());
+    }
+
+    #[test]
+    fn the_tile_grows_on_a_very_big_terrain() {
+        assert_eq!(effective_tile(1000.0, 1.0e6), 1000.0);
+        assert_eq!(effective_tile(10.0, 8192.0 * 100.0), 100.0);
+        assert!(effective_tile(0.0, 0.0) > 0.0);
+    }
+
+    #[test]
     fn boundary_flattens_to_points() {
         let b = curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::ONE]);
         assert_eq!(boundary_points(&b).len(), 3);

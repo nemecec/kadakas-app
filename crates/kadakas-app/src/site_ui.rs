@@ -182,7 +182,12 @@ fn look_label(v: SurfaceLook) -> String {
 /// The rows of the 3D look of a site model: the surface color, a texture (a material with a
 /// planar top projection) or colors by elevation. `materials` are the material resources of the
 /// document.
-fn look_fields(ui: &mut Ui, s: &mut SiteSettings, materials: &[(ResourceId, String)]) -> bool {
+fn look_fields(
+    ui: &mut Ui,
+    s: &mut SiteSettings,
+    materials: &[(ResourceId, String)],
+    effective_tile: Option<f64>,
+) -> bool {
     let mut commit = false;
     ui.label(tr!("site-ui-3d-look"));
     let before = s.surface_look;
@@ -221,6 +226,15 @@ fn look_fields(ui: &mut Ui, s: &mut SiteSettings, materials: &[(ResourceId, Stri
                 10.0,
                 kadakas_core::site::MIN_TEXTURE_TILE..=kadakas_core::site::MAX_TEXTURE_TILE,
             );
+            // A very big terrain makes the tile larger (the texture would be too fine to draw).
+            if let Some(used) = effective_tile.filter(|u| *u > s.texture_tile * 1.001) {
+                ui.label("");
+                ui.label(tr!(
+                    "site-ui-tile-grew",
+                    size = kadakas_units::current().length_text(used)
+                ));
+                ui.end_row();
+            }
             let limit = kadakas_core::site::MAX_TEXTURE_OFFSET;
             commit |= length_row(
                 ui,
@@ -258,22 +272,29 @@ fn look_fields(ui: &mut Ui, s: &mut SiteSettings, materials: &[(ResourceId, Stri
             }
             ui.end_row();
             if let Some(range) = &mut s.elevation_range {
-                let low_limit = range[0] + 1.0;
+                // The low end stays below the high end and the other way round.
+                let high_now = range[1];
                 commit |= length_row(
                     ui,
                     &tr!("site-ui-range-low"),
                     &mut range[0],
                     10.0,
-                    -1.0e8..=1.0e8,
+                    -1.0e8..=(high_now - 1.0),
                 );
+                let low_after = range[0];
                 commit |= length_row(
                     ui,
                     &tr!("site-ui-range-high"),
                     &mut range[1],
                     10.0,
-                    low_limit..=1.0e8,
+                    (low_after + 1.0)..=1.0e8,
                 );
             }
+            ui.label(tr!("site-ui-bands-at-contours"));
+            commit |= ui
+                .checkbox(&mut s.elevation_bands_at_contours, "")
+                .changed();
+            ui.end_row();
             ui.label(tr!("site-ui-ramp"));
             ui.horizontal(|ui| {
                 for c in &mut s.elevation_ramp {
@@ -320,6 +341,7 @@ pub fn model_fields(
     lines: usize,
     s: &mut SiteSettings,
     materials: &[(ResourceId, String)],
+    effective_tile: Option<f64>,
 ) -> bool {
     let mut commit = false;
     ui.label(tr!("site-ui-source-data"));
@@ -389,7 +411,7 @@ pub fn model_fields(
         });
     commit |= s.display_3d != before;
     ui.end_row();
-    commit |= look_fields(ui, s, materials);
+    commit |= look_fields(ui, s, materials, effective_tile);
     commit
 }
 
@@ -614,14 +636,14 @@ mod tests {
         let mut grade = ModifierKind::GradeLimit;
         let _ = ctx.run_ui(Default::default(), |ui| {
             egui::Grid::new("g").show(ui, |ui| {
-                assert!(!model_fields(ui, 3, 0, &mut settings, &[]));
+                assert!(!model_fields(ui, 3, 0, &mut settings, &[], None));
                 // Every look draws its rows without an edit.
                 let mats = [(ResourceId::from_num(3), "Grass".to_string())];
                 for look in SurfaceLook::ALL {
                     settings.surface_look = look;
                     settings.texture = Some(ResourceId::from_num(3));
                     settings.elevation_range = Some([0.0, 100.0]);
-                    assert!(!model_fields(ui, 3, 0, &mut settings, &mats));
+                    assert!(!model_fields(ui, 3, 0, &mut settings, &mats, Some(1.0e6)));
                 }
                 settings = SiteSettings::default();
                 let b = kadakas_core::curve::corners(&[

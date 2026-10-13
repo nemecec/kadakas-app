@@ -1174,6 +1174,7 @@ fn edit_shape(
     ui: &mut Ui,
     shape: &mut Shape,
     materials: &[(kadakas_core::resource::ResourceId, String)],
+    effective_tile: Option<f64>,
 ) -> bool {
     let mut f = Fields { commit: false };
     egui::Grid::new("shape_fields")
@@ -1375,8 +1376,14 @@ fn edit_shape(
                 lines,
                 settings,
             } => {
-                f.commit |=
-                    crate::site_ui::model_fields(ui, points.len(), lines.len(), settings, materials)
+                f.commit |= crate::site_ui::model_fields(
+                    ui,
+                    points.len(),
+                    lines.len(),
+                    settings,
+                    materials,
+                    effective_tile,
+                )
             }
             Shape::SiteModifier { modifier, boundary } => {
                 f.commit |= crate::site_ui::modifier_fields(ui, modifier, boundary)
@@ -1458,7 +1465,18 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
         } else {
             Vec::new()
         };
-    let commit = edit_shape(ui, edited, &materials);
+    // The tile that the renderers use for the terrain texture (larger on a very big terrain).
+    let effective_tile = match edited {
+        Shape::SiteModel { settings, .. }
+            if settings.surface_look == kadakas_core::site::SurfaceLook::Texture =>
+        {
+            let tile = settings.texture_tile;
+            let scene = session.scene();
+            Some(kadakas_render::look::terrain_tile(&scene, id, tile))
+        }
+        _ => None,
+    };
+    let commit = edit_shape(ui, edited, &materials, effective_tile);
     // Vertex edits are sent as `set_vertex` commands, one per changed vertex.
     if edited.vertices().is_some() {
         let base_vertices = edit

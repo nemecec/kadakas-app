@@ -60,5 +60,7 @@ site-ui-fixed-range = Fixed range
 site-ui-range-low = Lowest elevation
 site-ui-range-high = Highest elevation
 site-ui-ramp = Color ramp
+site-ui-bands-at-contours = Bands at contour levels
+site-ui-tile-grew = The tile is { $size } on this big terrain
 site-ui-add-color = Add color
 site-ui-remove-color = Remove color

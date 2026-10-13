@@ -14,7 +14,7 @@ use crate::{RpcError, Session, params};
 
 pub const SITE_TEXTURE: (&str, &str) = (
     "site.texture",
-    "Set or read the look of the 3D terrain mesh of a site model. params: {id, look? (color | texture | elevation), material? (name or id of a material resource whose texture is used; null: the material of the class or of the object slot), tile_size? (mm, 10 to 1e8: the size of one repeat of the texture on the ground; the mapping is a planar projection from above), offset? ([x, y] mm), rotation? (degrees, counterclockwise), bands? (1 to 64 elevation bands), ramp? ([[r, g, b, a]], 1 to 16 colors from low to high ground), range? ([low, high] mm elevation of the ramp; null: the range of the shown surface)}. Give only id to read. With look color the surface keeps its color (or the material of a slot); with texture the terrain shows the texture in the 3D view, render.png and the glTF, GLB and OBJ exports (texture coordinates and the image); with elevation each band is a mesh of one color from the ramp. Returns {id, look, material, tile_size, offset, rotation, bands, ramp, range}.",
+    "Set or read the look of the 3D terrain mesh of a site model. params: {id, look? (color | texture | elevation), material? (name or id of a material resource whose texture is used; null: the material of the class or of the object slot), tile_size? (mm, 10 to 1e8: the size of one repeat of the texture on the ground; the mapping is a planar projection from above), offset? ([x, y] mm), rotation? (degrees, counterclockwise), bands? (1 to 64 elevation bands), ramp? ([[r, g, b, a]], 1 to 16 colors from low to high ground), range? ([low, high] mm elevation of the ramp; null: the range of the shown surfaces together, existing and proposed), bands_at_contours? (true: cut the bands at the datum plus whole major contour intervals instead of equal parts of the range; equal parts if that would give more than 64 bands)}. The bands are cut at their planes, so their edges are straight lines at one height. Give only id to read. With look color the surface keeps its color (or the material of a slot); with texture the terrain shows the texture in the 3D view, render.png and the glTF, GLB and OBJ exports (texture coordinates and the image); with elevation each band is a mesh of one color from the ramp. A very big terrain makes the tile larger so that it holds at most 8192 repeats: effective_tile is the size that renderers use. Moving a site model with the texture look moves the texture with it. Returns {id, look, material, tile_size, effective_tile, offset, rotation, bands, ramp, range, bands_at_contours}.",
 );
 
 #[derive(Deserialize)]
@@ -53,9 +53,16 @@ fn ramp_of(v: &Value) -> Result<Value, RpcError> {
     Ok(Value::Array(out))
 }
 
-fn view(id: ObjectId, s: &SiteSettings, material_name: Option<String>) -> Value {
+fn view(
+    id: ObjectId,
+    s: &SiteSettings,
+    material_name: Option<String>,
+    effective_tile: f64,
+) -> Value {
     json!({
         "id": id,
+        "effective_tile": effective_tile,
+        "bands_at_contours": s.elevation_bands_at_contours,
         "look": s.surface_look.id(),
         "material": material_name,
         "tile_size": s.texture_tile,
@@ -85,6 +92,7 @@ impl Session {
                 "bands" => ("elevation_bands", value.clone()),
                 "ramp" => ("elevation_ramp", ramp_of(value)?),
                 "range" => ("elevation_range", value.clone()),
+                "bands_at_contours" => ("elevation_bands_at_contours", value.clone()),
                 other => {
                     return Err(RpcError::invalid_params(format!(
                         "unknown parameter '{other}'"
@@ -109,6 +117,11 @@ impl Session {
             .texture
             .and_then(|r| doc.resources.get(r))
             .map(|r| r.name.clone());
-        Ok(view(id, settings, name))
+        let tile = settings.texture_tile;
+        let settings = settings.clone();
+        // The size that the renderers use: the scene knows how big the terrain is.
+        let scene = self.scene();
+        let effective = kadakas_render::look::terrain_tile(&scene, id, tile);
+        Ok(view(id, &settings, name, effective))
     }
 }

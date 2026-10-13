@@ -460,6 +460,8 @@ Every error code has a class. The client acts on the class:
 | any other code (the client reads it as `unknown`) | retry when the error has an `op_id`; otherwise the client reports it and goes on | as for a retry error, or reports it |
 | `op_id_reused` | renumber | goes offline; at the next sign-in the waiting transactions get new numbers above everything the server knows |
 
+The 3D look of a site model (3D-05: `surface_look`, `texture`, `texture_tile`, `texture_offset`, `texture_rotation`, `elevation_bands`, `elevation_ramp`, `elevation_range`, `elevation_bands_at_contours`) is part of the `settings` in the `shape` base property of the object, so a change of the look is one small operation and a change of the points is not sent with it. A peer of an older version does not know these fields and drops them when it reads the object; its next edit of the same `shape` property (any setting of that site model) writes the shape without them, and the look is lost for everybody. Use the same version in a session that edits site model looks. A peer or a file with a value that the checks refuse (a tile size outside 10 mm to 100 000 m, more than 64 bands and so on) puts the object in quarantine.
+
 ### 4.7 Blobs
 
 The picture of an underlay (the base64 text of a PNG, 4 KiB or more) and the file of a plant picture (the key `data` in the body of an `image` resource, 4 KiB or more; its small thumbnail stays in the operation) are *blobs*. The client

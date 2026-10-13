@@ -192,7 +192,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ("document.get", "The full document as JSON."),
     (
         "document.load",
-        "Replace the document. params: {document}. Clears history.",
+        "Replace the document. params: {document}. Clears history. Returns {ok, notes?}; notes lists values that were repaired instead of refusing the document (an invalid 3D look of a site model goes back to its defaults).",
     ),
     ("objects.list", "Objects. params: {layer?, class?, kind?}."),
     ("objects.get", "One object. params: {id}."),
@@ -522,11 +522,11 @@ pub const METHODS: &[(&str, &str)] = &[
     symbols_api::LIBRARY_FAVORITE_REMOVE,
     (
         "site.create",
-        "Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh), and the 3D look surface_look (color | texture | elevation), texture (material resource id), texture_tile (mm), texture_offset ([x, y]), texture_rotation (degrees), elevation_bands, elevation_ramp ([[r, g, b, a]]), elevation_range ([low, high]); site.texture sets them with checks. Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}.",
+        "Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh), and the 3D look surface_look (color | texture | elevation), texture (material resource id), texture_tile (mm), texture_offset ([x, y]), texture_rotation (degrees), elevation_bands, elevation_ramp ([[r, g, b, a]]), elevation_range ([low, high]), elevation_bands_at_contours; site.texture sets them with checks. Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}.",
     ),
     (
         "site.update",
-        "Change a site model. params: {id, settings?, add_source_ids?, remove_points?: [index], remove_lines?: [index]}. Returns {id, points, lines}.",
+        "Change a site model. params: {id, settings?, add_source_ids?, remove_points?: [index], remove_lines?: [index]}. settings has the same fields as in site.create, including the 3D look: surface_look (color | texture | elevation), texture (material resource id or null), texture_tile (mm), texture_offset ([x, y] mm), texture_rotation (degrees), elevation_bands (1 to 64), elevation_ramp ([[r, g, b, a]], 1 to 16 colors), elevation_range ([low, high] mm or null), elevation_bands_at_contours (bool); null puts a field back to its default. site.texture sets the look with its own checks. Returns {id, points, lines}.",
     ),
     site_texture::SITE_TEXTURE,
     (
@@ -1098,8 +1098,14 @@ impl Session {
                     e => RpcError::app(e),
                 })?;
                 self.check_document_fits(&document)?;
+                let notes = document.load_notes().to_vec();
                 self.replace_document(document);
-                json!({ "ok": true })
+                if notes.is_empty() {
+                    json!({ "ok": true })
+                } else {
+                    // Values that were repaired instead of refusing the file.
+                    json!({ "ok": true, "notes": notes })
+                }
             }
             "objects.list" => {
                 let f: ObjectFilter = params(p)?;

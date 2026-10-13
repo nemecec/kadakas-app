@@ -214,8 +214,96 @@ fn a_textured_terrain_renders_differently_from_a_plain_one() {
     );
     let textured = ok(&mut s, "render.png", json!({"width": 200, "height": 150}));
     assert_ne!(plain["png_base64"], textured["png_base64"]);
+    // The tile that renderers use is reported; a small tile on a small terrain is as set.
+    let r = ok(&mut s, "site.texture", json!({"id": id}));
+    assert_eq!(r["effective_tile"], r["tile_size"]);
     // A smaller tile gives a different picture again.
     ok(&mut s, "site.texture", json!({"id": id, "tile_size": 4000}));
     let big = ok(&mut s, "render.png", json!({"width": 200, "height": 150}));
     assert_ne!(big["png_base64"], textured["png_base64"]);
+}
+
+#[test]
+fn a_huge_terrain_reports_the_larger_tile() {
+    let mut s = Session::with_sequential_ids();
+    let mut ids = Vec::new();
+    for (x, y) in [
+        (0, 0),
+        (1_000_000_000i64, 0),
+        (0, 1_000_000_000),
+        (1_000_000_000, 1_000_000_000),
+    ] {
+        let r = ok(
+            &mut s,
+            "execute",
+            json!({"command": {"op": "add_object", "shape": {"kind": "locus3d", "p": [x, y, 0]}}}),
+        );
+        ids.push(r["created"][0].clone());
+    }
+    let id = ok(&mut s, "site.create", json!({"source_ids": ids}))["id"]
+        .as_uid()
+        .unwrap();
+    let r = ok(&mut s, "site.texture", json!({"id": id, "tile_size": 100}));
+    let used = r["effective_tile"].as_f64().unwrap();
+    assert!((used - 1.0e9 / 8192.0).abs() < 1.0, "{used}");
+}
+
+#[test]
+fn bands_can_follow_the_contour_levels_and_a_move_takes_the_texture_along() {
+    let mut s = Session::with_sequential_ids();
+    let id = terrain(&mut s);
+    ok(&mut s, "material.add_defaults", json!({}));
+    let r = ok(
+        &mut s,
+        "site.texture",
+        json!({"id": id, "look": "elevation", "bands_at_contours": true}),
+    );
+    assert_eq!(r["bands_at_contours"], true);
+    ok(
+        &mut s,
+        "site.texture",
+        json!({"id": id, "look": "texture", "material": "Grass", "offset": [10, 20]}),
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "move_objects", "ids": [id], "delta": [3000, -500]}}),
+    );
+    let r = ok(&mut s, "site.texture", json!({"id": id}));
+    assert_eq!(r["offset"], json!([3010.0, -480.0]));
+    // Undo takes it back with the points.
+    assert!(s.editor.undo());
+    let r = ok(&mut s, "site.texture", json!({"id": id}));
+    assert_eq!(r["offset"], json!([10.0, 20.0]));
+}
+
+#[test]
+fn a_document_with_a_bad_look_loads_and_says_what_it_repaired() {
+    let mut s = Session::with_sequential_ids();
+    let id = terrain(&mut s);
+    ok(
+        &mut s,
+        "site.texture",
+        json!({"id": id, "look": "elevation"}),
+    );
+    let mut doc = ok(&mut s, "document.get", json!({}));
+    for o in doc["objects"].as_array_mut().unwrap() {
+        if o["shape"]["kind"] == "site_model" {
+            o["shape"]["settings"]["texture_tile"] = json!(0.001);
+        }
+    }
+    let r = ok(&mut s, "document.load", json!({"document": doc}));
+    assert_eq!(r["ok"], true);
+    assert_eq!(r["notes"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(
+        ok(&mut s, "site.texture", json!({"id": id}))["look"],
+        "color"
+    );
+    // A command with the same bad value is refused.
+    let e = fail(
+        &mut s,
+        "site.texture",
+        json!({"id": id, "tile_size": 0.001}),
+    );
+    assert!(e.message.contains("tile"), "{}", e.message);
 }

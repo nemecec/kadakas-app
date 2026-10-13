@@ -181,10 +181,28 @@ impl Mapper<'_> {
             Shape::Locus3d { p } => *p = self.point3(*p)?,
             Shape::Mesh3d(m) => self.vec3(&mut m.vertices)?,
             Shape::Polyline3d { points, .. } => self.vec3(points)?,
-            Shape::SiteModel { points, lines, .. } => {
+            Shape::SiteModel {
+                points,
+                lines,
+                settings,
+            } => {
                 self.vec3(points)?;
                 for l in lines {
                     self.vec3(&mut l.points)?;
+                }
+                // The texture is anchored to the ground: its origin moves, it turns as the map
+                // turns there, and its tile follows the scale of the CRS change.
+                if settings.surface_look == kadakas_core::site::SurfaceLook::Texture {
+                    let step = 1000.0;
+                    let at = DVec2::from(settings.texture_offset);
+                    let o = self.point(at)?;
+                    let dx = (self.point(at + DVec2::new(step, 0.0))? - o) / step;
+                    settings.texture_rotation += dx.y.atan2(dx.x).to_degrees();
+                    settings.texture_tile = (settings.texture_tile * self.scale).clamp(
+                        kadakas_core::site::MIN_TEXTURE_TILE,
+                        kadakas_core::site::MAX_TEXTURE_TILE,
+                    );
+                    settings.texture_offset = o.to_array();
                 }
             }
             Shape::Symbol { at, .. } => *at = self.point(*at)?,
@@ -1066,6 +1084,22 @@ mod tests {
             panic!()
         };
         assert_eq!((points[0].z, lines[0].points[0].z), (3.0, 7.0));
+        // A texture moves with the ground: its origin, its turn and its tile follow the map.
+        let Shape::SiteModel { settings, .. } = moved(Shape::SiteModel {
+            points: vec![DVec3::new(1.0, 2.0, 3.0)],
+            lines: vec![],
+            settings: kadakas_core::site::SiteSettings {
+                surface_look: kadakas_core::site::SurfaceLook::Texture,
+                texture_tile: 1000.0,
+                texture_offset: [500.0, 700.0],
+                ..Default::default()
+            },
+        }) else {
+            panic!()
+        };
+        assert_eq!(settings.texture_tile, 1500.0);
+        assert_ne!(settings.texture_offset, [500.0, 700.0]);
+        assert!(settings.texture_rotation.is_finite() && settings.texture_rotation.abs() < 5.0);
         moved(Shape::Symbol {
             symbol: Default::default(),
             at: p,
