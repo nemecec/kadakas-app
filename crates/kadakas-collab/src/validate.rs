@@ -18,6 +18,7 @@
 use kadakas_core::model::{
     Class, Document, Layer, MAX_COORD, Object, Shape, VertexKind, arc_sweep,
 };
+use kadakas_core::provenance;
 use kadakas_core::resource::Resource;
 use kadakas_core::uid::Uid;
 use serde_json::{Map, Value};
@@ -54,6 +55,10 @@ pub fn object_problem(o: &Object) -> Option<String> {
                 .unwrap_or_else(|| "the object has an invalid shape".into()),
         );
     }
+    // The source tag of an imported object (IOP-22) comes from other users, so it is checked.
+    if let Some(Err(why)) = o.data.get(provenance::KEY).map(provenance::check) {
+        return Some(why);
+    }
     None
 }
 
@@ -64,6 +69,11 @@ pub fn layer_problem(l: &Layer) -> Option<String> {
     }
     if !l.scale.is_finite() {
         return Some("the scale must be a finite number".into());
+    }
+    if let Some(v) = l.extra.get(provenance::LAYER_KEY)
+        && provenance::LayerSource::of(v).is_none()
+    {
+        return Some("the import source of the layer is not valid".into());
     }
     None
 }
