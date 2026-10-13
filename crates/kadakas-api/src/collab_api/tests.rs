@@ -200,6 +200,73 @@ fn versions_are_local_and_a_restore_is_an_ordinary_edit() {
     assert_eq!(call(&mut a, "version.list", json!({}))["count"], 2);
 }
 
+/// A restore that brings back an object which the same user deleted before: the object is
+/// restored with its ID (not made again), the others get it, and it survives the next build.
+#[test]
+fn restoring_a_version_revives_an_object_deleted_in_the_shared_document() {
+    let (_hub, mut a, mut b) = pair();
+    let x = add_rect(&mut a, 0);
+    call(&mut a, "collab.sync", json!({"now_ms": 2_000}));
+    call(&mut b, "collab.sync", json!({"now_ms": 2_000}));
+    assert!(has(&b, &x));
+    call(
+        &mut a,
+        "version.create",
+        json!({"name": "With X", "now_ms": 1}),
+    );
+    call(
+        &mut a,
+        "execute",
+        json!({"command": {"op": "delete_objects", "ids": [x]}}),
+    );
+    call(&mut a, "collab.sync", json!({"now_ms": 2_100}));
+    call(&mut b, "collab.sync", json!({"now_ms": 2_100}));
+    assert!(!has(&a, &x) && !has(&b, &x));
+    let r = call(&mut a, "version.restore", json!({"id": 1, "now_ms": 2}));
+    assert_eq!(r["changed"], true);
+    assert!(has(&a, &x), "the restore brought the object back");
+    let id_before = a.editor.doc().objects.keys().next().copied();
+    call(&mut a, "collab.sync", json!({"now_ms": 2_200}));
+    call(&mut b, "collab.sync", json!({"now_ms": 2_200}));
+    assert!(has(&b, &x), "the other user has the same object");
+    // The next build keeps it on both sides, with the same ID.
+    call(&mut a, "collab.sync", json!({"now_ms": 2_300}));
+    call(&mut b, "collab.sync", json!({"now_ms": 2_300}));
+    call(&mut a, "collab.sync", json!({"now_ms": 2_400}));
+    assert!(has(&a, &x) && has(&b, &x));
+    assert_eq!(object_count(&mut a), 1);
+    assert_eq!(a.editor.doc().objects.keys().next().copied(), id_before);
+    assert!(same(&a, &b));
+}
+
+/// If another user deleted the object, the restore does not bring it back: delete wins.
+#[test]
+fn a_restore_does_not_revive_what_another_user_deleted() {
+    let (_hub, mut a, mut b) = pair();
+    let x = add_rect(&mut a, 0);
+    call(&mut a, "collab.sync", json!({"now_ms": 2_000}));
+    call(&mut b, "collab.sync", json!({"now_ms": 2_000}));
+    call(
+        &mut a,
+        "version.create",
+        json!({"name": "With X", "now_ms": 1}),
+    );
+    call(
+        &mut b,
+        "execute",
+        json!({"command": {"op": "delete_objects", "ids": [x]}}),
+    );
+    call(&mut b, "collab.sync", json!({"now_ms": 2_100}));
+    call(&mut a, "collab.sync", json!({"now_ms": 2_100}));
+    assert!(!has(&a, &x));
+    call(&mut a, "version.restore", json!({"id": 1, "now_ms": 2}));
+    for t in [2_200, 2_300, 2_400] {
+        call(&mut a, "collab.sync", json!({"now_ms": t}));
+        call(&mut b, "collab.sync", json!({"now_ms": t}));
+    }
+    assert!(!has(&b, &x) && !has(&a, &x), "the other deletion stands");
+}
+
 #[test]
 fn undo_is_per_user() {
     let (_hub, mut a, mut b) = pair();

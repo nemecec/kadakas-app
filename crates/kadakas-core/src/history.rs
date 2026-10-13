@@ -24,7 +24,13 @@ pub const MAX_HISTORY_BYTES: usize = 512 * 1024 * 1024;
 pub struct HistoryData {
     value: Arc<Value>,
     bytes: usize,
+    /// A number that is new for each value that is made (a clone keeps it). Caches compare it
+    /// instead of the value, which can be tens of megabytes.
+    serial: u64,
 }
+
+/// The source of serial numbers (an id allocator, like the editor revision).
+static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// A writer that counts the bytes and keeps none.
 struct Counter(usize);
@@ -48,7 +54,14 @@ impl HistoryData {
         HistoryData {
             value: Arc::new(value),
             bytes: count.0,
+            serial: SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
+    }
+
+    /// Identifies this value for a cache: a clone has the same serial, and every value that was
+    /// made by `new` (or read from a file) has another one, whatever its content.
+    pub fn serial(&self) -> u64 {
+        self.serial
     }
 
     pub fn value(&self) -> &Value {
@@ -77,7 +90,9 @@ impl HistoryData {
 
 impl PartialEq for HistoryData {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.value, &other.value) || self.value == other.value
+        self.serial == other.serial
+            || Arc::ptr_eq(&self.value, &other.value)
+            || self.value == other.value
     }
 }
 
@@ -104,6 +119,14 @@ mod tests {
         assert_eq!(a.bytes(), a.value().to_string().len());
         let b = a.clone();
         assert_eq!(a, b);
+        assert_eq!(a.serial(), b.serial());
+        let same_text = HistoryData::new(json!({"format": 1, "versions": []}));
+        assert_ne!(
+            a.serial(),
+            same_text.serial(),
+            "a new value has a new serial"
+        );
+        assert_eq!(a, same_text, "the content is still equal");
         assert_eq!(a, HistoryData::new(json!({"versions": [], "format": 1})));
         assert_ne!(a, HistoryData::new(json!({"format": 2})));
         assert!(a.problem().is_none());

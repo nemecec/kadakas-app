@@ -224,3 +224,34 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn a_big_history_does_not_shrink_the_undo_stack_of_other_edits() {
+    // Strict limits: 64 MiB of undo steps. A 16 MiB history sits in the document.
+    let mut ed = Editor::with_sequential_ids();
+    ed.set_history_limit(64 * 1024 * 1024);
+    let big = HistoryData::new(json!({"blob": "x".repeat(16 * 1024 * 1024)}));
+    ed.set_history(Some(big));
+    let after_history = ed.history_bytes();
+    assert!(
+        (16 * 1024 * 1024..20 * 1024 * 1024).contains(&after_history),
+        "the new value counts once: {after_history}"
+    );
+    for i in 0..100 {
+        ed.execute(&cmd(json!({"op": "add_layer", "name": format!("L{i}")})))
+            .unwrap();
+        ed.execute(&cmd(json!({"op": "add_class", "name": format!("C{i}")})))
+            .unwrap();
+    }
+    assert!(
+        ed.undo_depth() >= 200,
+        "layer and class edits stay in the undo stack: {}",
+        ed.undo_depth()
+    );
+    // Changing the history again counts the new value only.
+    let again = ed.history_bytes();
+    ed.set_history(Some(HistoryData::new(
+        json!({"blob": "y".repeat(1024 * 1024)}),
+    )));
+    assert!(ed.history_bytes() < again + 2 * 1024 * 1024);
+}

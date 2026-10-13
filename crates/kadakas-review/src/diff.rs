@@ -12,7 +12,9 @@
 //! - A thing lists at most [`MAX_PATHS`] paths.
 //! - A value longer than [`MAX_VALUE_CHARS`] characters of JSON is replaced by a cut preview, its
 //!   length and a hash of the whole text, so a change of a big value is still visible.
-//! - After [`MAX_WORK`] compared properties the diff stops; `exact` is then false and the counts
+//! - A value is measured as it is written, into a writer that keeps the first 160 characters and
+//!   a hash, never as one big text, and the bytes written count against [`MAX_VALUE_WORK`].
+//! - After [`MAX_WORK`] compared properties (or [`MAX_VALUE_WORK`] bytes of values) the diff stops; `exact` is then false and the counts
 //!   cover only what was compared.
 //!
 //! [`Uid`]: kadakas_core::uid::Uid
@@ -20,11 +22,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kadakas_core::uid::Uid;
-use kadakas_props::blob::sha256_hex;
 use kadakas_props::op::{Kind, Target};
 use kadakas_props::replica::same_json;
 use serde::Serialize;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::state::{Props, State, same_props};
 
@@ -38,6 +40,8 @@ pub const MAX_PATHS: usize = 50;
 pub const MAX_VALUE_CHARS: usize = 160;
 /// The most properties that one diff compares.
 pub const MAX_WORK: usize = 5_000_000;
+/// The most bytes of values that one diff measures (to cut and to hash them).
+pub const MAX_VALUE_WORK: usize = 256 * 1024 * 1024;
 
 /// A part of the document that a diff covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -125,24 +129,87 @@ pub enum Shown {
     },
 }
 
+/// A writer for the text of a value: it hashes everything, counts the characters and the bytes,
+/// and keeps only the first [`MAX_VALUE_CHARS`] characters. The value is never held as one text.
+struct Gauge {
+    hasher: Sha256,
+    chars: usize,
+    bytes: usize,
+    head: Vec<u8>,
+}
+
+impl Gauge {
+    fn new() -> Gauge {
+        Gauge {
+            hasher: Sha256::new(),
+            chars: 0,
+            bytes: 0,
+            head: Vec::new(),
+        }
+    }
+}
+
+impl std::io::Write for Gauge {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.hasher.update(buf);
+        self.bytes += buf.len();
+        for &b in buf {
+            // A byte that starts a character (not a continuation byte of UTF-8).
+            if b & 0xC0 != 0x80 {
+                self.chars += 1;
+            }
+            if self.chars <= MAX_VALUE_CHARS {
+                self.head.push(b);
+            }
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 impl Shown {
     pub fn of(v: &Value) -> Shown {
-        // Short scalars and small values are the common case: measure without a full text first.
-        let text = match v {
-            Value::String(s) if s.len() <= MAX_VALUE_CHARS => return Shown::Whole(v.clone()),
-            Value::Null | Value::Bool(_) | Value::Number(_) => return Shown::Whole(v.clone()),
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
+        Shown::measure(v).0
+    }
+
+    /// The value as the diff shows it, and the bytes that were written to measure it.
+    fn measure(v: &Value) -> (Shown, usize) {
+        match v {
+            Value::Null | Value::Bool(_) | Value::Number(_) => return (Shown::Whole(v.clone()), 8),
+            Value::String(s) if s.len() <= MAX_VALUE_CHARS => {
+                return (Shown::Whole(v.clone()), s.len());
+            }
+            _ => {}
+        }
+        let mut gauge = Gauge::new();
+        // A text is measured as it is; other values as their compact JSON.
+        let _ = match v {
+            Value::String(s) => std::io::Write::write_all(&mut gauge, s.as_bytes()),
+            other => serde_json::to_writer(&mut gauge, other).map_err(std::io::Error::other),
         };
-        let len = text.chars().count();
-        if len <= MAX_VALUE_CHARS {
-            return Shown::Whole(v.clone());
+        let bytes = gauge.bytes;
+        if gauge.chars <= MAX_VALUE_CHARS {
+            return (Shown::Whole(v.clone()), bytes);
         }
-        Shown::Cut {
-            cut: text.chars().take(MAX_VALUE_CHARS).collect(),
-            len,
-            hash: sha256_hex(text.as_bytes())[..16].to_string(),
-        }
+        let hash: String = gauge
+            .hasher
+            .clone()
+            .finalize()
+            .iter()
+            .take(8)
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        (
+            Shown::Cut {
+                cut: String::from_utf8_lossy(&gauge.head).into_owned(),
+                len: gauge.chars,
+                hash,
+            },
+            bytes,
+        )
     }
 }
 
@@ -224,10 +291,11 @@ fn info(target: &Target, props: &Props) -> Map<String, Value> {
 }
 
 /// The changed properties of a thing, at most [`MAX_PATHS`]; true if there are more.
-fn changes(old: &Props, new: &Props) -> (Vec<PropChange>, bool) {
+fn changes(old: &Props, new: &Props) -> (Vec<PropChange>, bool, usize) {
     let paths: BTreeSet<&String> = old.keys().chain(new.keys()).collect();
     let mut out = Vec::new();
     let mut more = false;
+    let mut written = 0;
     for p in paths {
         let (o, n) = (old.get(p), new.get(p));
         let same = match (o, n) {
@@ -242,21 +310,36 @@ fn changes(old: &Props, new: &Props) -> (Vec<PropChange>, bool) {
             more = true;
             break;
         }
+        let (old, a) = o.map_or((None, 0), |v| {
+            let (s, b) = Shown::measure(v);
+            (Some(s), b)
+        });
+        let (new, b) = n.map_or((None, 0), |v| {
+            let (s, b) = Shown::measure(v);
+            (Some(s), b)
+        });
+        written += a + b;
         out.push(PropChange {
             path: p.clone(),
-            old: o.map(Shown::of),
-            new: n.map(Shown::of),
+            old,
+            new,
         });
     }
-    (out, more)
+    (out, more, written)
 }
 
 /// Compares two states.
 pub fn diff(old: &State, new: &State, opts: &DiffOptions) -> Diff {
-    diff_with_budget(old, new, opts, MAX_WORK)
+    diff_with_budget(old, new, opts, MAX_WORK, MAX_VALUE_WORK)
 }
 
-fn diff_with_budget(old: &State, new: &State, opts: &DiffOptions, max_work: usize) -> Diff {
+fn diff_with_budget(
+    old: &State,
+    new: &State,
+    opts: &DiffOptions,
+    max_work: usize,
+    max_value_work: usize,
+) -> Diff {
     let want = |g: Group| opts.kinds.is_empty() || opts.kinds.contains(&g);
     let limit = opts.limit.min(MAX_LIMIT);
     let mut out = Diff {
@@ -281,6 +364,7 @@ fn diff_with_budget(old: &State, new: &State, opts: &DiffOptions, max_work: usiz
         .collect();
     let mut listed = 0usize;
     let mut work = 0usize;
+    let mut value_work = 0usize;
     for t in targets {
         let g = Group::of(t.kind);
         if !want(g) {
@@ -325,7 +409,13 @@ fn diff_with_budget(old: &State, new: &State, opts: &DiffOptions, max_work: usiz
                 out.counts.get_mut(name).expect("a wanted group").changed += 1;
                 out.totals.changed += 1;
                 if room {
-                    let (properties, properties_truncated) = changes(a, b);
+                    let (properties, properties_truncated, written) = changes(a, b);
+                    value_work += written;
+                    if value_work > max_value_work {
+                        out.exact = false;
+                        out.truncated = true;
+                        break;
+                    }
                     out.groups
                         .get_mut(name)
                         .expect("a wanted group")

@@ -204,3 +204,63 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn restoring_equal_content_changes_nothing_even_with_layers_interleaved() {
+    let mut ed = editor();
+    ed.execute(&cmd(json!({"op": "add_layer", "name": "B"})))
+        .unwrap();
+    let layers: Vec<_> = ed.doc().layers.iter().map(|l| l.id).collect();
+    for (i, layer) in [0usize, 1, 1, 0, 1, 0, 0, 1].iter().enumerate() {
+        ed.execute(&cmd(json!({"op": "add_object", "layer": layers[*layer],
+            "shape": {"kind": "circle", "center": [i as f64 * 5.0, 0.0], "radius": 1.0}})))
+            .unwrap();
+    }
+    let mut h = History::new();
+    h.add(ed.doc(), new_version("one"), Limits::default())
+        .unwrap();
+    ed.set_history(Some(HistoryData::new(h.to_value())));
+    let before = ed.doc().clone();
+    let (rev, depth) = (ed.revision(), ed.undo_depth());
+    let r = prepare(&h, ed.doc(), 1, new_version("auto"), Limits::default()).unwrap();
+    assert_eq!(r.saved, Some((1, false)));
+    assert_eq!(
+        r.doc.objects.keys().collect::<Vec<_>>(),
+        before.objects.keys().collect::<Vec<_>>(),
+        "the interleave of the layers is kept"
+    );
+    let changed = ed
+        .restore_content(&r.doc, Some(HistoryData::new(r.history.to_value())))
+        .unwrap();
+    assert!(!changed);
+    assert_eq!((ed.revision(), ed.undo_depth()), (rev, depth));
+    assert!(ed.changes_since(rev).changes.is_empty());
+    assert_eq!(ed.doc(), &before);
+
+    // A change inside one layer: the objects of the other layer stay where they are.
+    let first_b = ed
+        .doc()
+        .objects
+        .values()
+        .find(|o| o.layer == layers[1])
+        .unwrap()
+        .id;
+    ed.execute(&cmd(
+        json!({"op": "arrange", "ids": [first_b], "how": "front"}),
+    ))
+    .unwrap();
+    let moved = ed.doc().clone();
+    let r = prepare(&h, ed.doc(), 1, new_version("auto"), Limits::default()).unwrap();
+    apply(&mut ed, &r);
+    assert!(same_content(ed.doc(), &before));
+    let of_layer = |d: &Document, l| {
+        d.objects
+            .values()
+            .filter(|o| o.layer == l)
+            .map(|o| o.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(of_layer(ed.doc(), layers[0]), of_layer(&moved, layers[0]));
+    assert!(ed.undo());
+    assert_eq!(ed.doc(), &moved);
+}

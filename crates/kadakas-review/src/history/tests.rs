@@ -452,7 +452,7 @@ fn a_delta_is_relative_to_the_first_parent() {
         .iter()
         .map(|i| folded.state_of(*i).unwrap())
         .collect();
-    folded.drop_first().unwrap();
+    folded.drop_oldest(1).unwrap();
     assert_eq!(folded.meta(alt).unwrap().parents, vec![2]);
     assert!(folded.meta(2).unwrap().parents.is_empty());
     for (id, want) in [2, 3, alt].iter().zip(before) {

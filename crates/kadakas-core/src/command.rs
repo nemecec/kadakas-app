@@ -701,11 +701,7 @@ impl Meta {
                 _ => serde_json::to_vec(r).map_or(META_PART_BYTES, |v| v.len() as u64),
             })
             .sum();
-        let history = self.history.as_ref().map_or(0, |h| h.bytes() as u64);
-        (self.layers.len() + self.classes.len()) as u64 * META_PART_BYTES
-            + resources
-            + history
-            + 512
+        (self.layers.len() + self.classes.len()) as u64 * META_PART_BYTES + resources + 512
     }
 }
 
@@ -1637,9 +1633,17 @@ impl<'a> Tx<'a> {
                 .iter()
                 .map(|(b, a): &(Object, Object)| object_bytes(b) + object_bytes(a))
                 .sum::<u64>()
-            + meta
-                .as_ref()
-                .map_or(0, |(b, a)| b.approx_bytes() + a.approx_bytes());
+            + meta.as_ref().map_or(0, |(b, a)| {
+                // The history is large and shared (a clone is a pointer). A step counts the
+                // new value once, and only if the step changed it: a layer edit with a 16 MiB
+                // history in the document does not cost 32 MiB of undo budget.
+                let history = if b.history == a.history {
+                    0
+                } else {
+                    a.history.as_ref().map_or(0, |h| h.bytes() as u64)
+                };
+                b.approx_bytes() + a.approx_bytes() + history
+            });
         Patch {
             removed,
             added,

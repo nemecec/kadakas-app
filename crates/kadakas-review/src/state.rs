@@ -11,16 +11,26 @@
 //! ID (an undo) is just a thing that exists again. So the operations between two states use the
 //! `Op` type of `kadakas-props`, but are applied with the plain rules of [`State::apply`].
 //!
+//! # Pictures
+//!
+//! A big picture (the PNG of an underlay, the file of an image resource) is not a value of a
+//! property. Like in collaboration (`kadakas_props::blob`), the property holds a reference
+//! `{"$blob": "<sha256>"}` and the text of the picture is in a table of the state, once for each
+//! hash. A move of a 10 MiB underlay therefore changes a few bytes in a delta, not 10 MiB, and a
+//! diff shows the reference. [`State::build`] puts the pictures back.
+//!
 //! The stacking order is the property `order` (a key that sorts, see `kadakas_props::order`). A
 //! document has no keys unless it was shared, so [`State::of`] gives keys relative to the state
 //! before: a thing that kept its place keeps its key, and only things that moved get a new one.
 //! Adding an object does not change the keys of the others.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use kadakas_core::model::{Document, LayerId};
+use kadakas_props::blob::{BLOB_PROPS, blob_ref, externalize};
 use kadakas_props::docsync::replica_of;
-use kadakas_props::materialize::{Materialized, materialize};
+use kadakas_props::materialize::{Materialized, materialize_with};
 use kadakas_props::op::{Kind, Op, Target, op_size, validate_ops};
 use kadakas_props::order::{rekey, valid_key};
 use kadakas_props::replica::{Replica, same_json};
@@ -45,6 +55,15 @@ pub enum ApplyError {
 #[derive(Clone, Debug)]
 pub struct State {
     things: BTreeMap<Target, Props>,
+    /// The pictures that the properties refer to, by the SHA-256 of their text. The table can hold
+    /// more than the things use (a history keeps the pictures of all its versions in one table).
+    blobs: BTreeMap<String, Arc<str>>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many operations this thread applied to states, for tests of the work.
+    pub(crate) static APPLIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl Default for State {
@@ -76,6 +95,7 @@ impl State {
     pub fn new() -> State {
         State {
             things: BTreeMap::from([(Target::DOCUMENT, Props::new())]),
+            blobs: BTreeMap::new(),
         }
     }
 
@@ -88,9 +108,46 @@ impl State {
             props.remove("order");
             things.insert(*t, props);
         }
-        let mut state = State { things };
+        let mut state = State {
+            things,
+            blobs: BTreeMap::new(),
+        };
+        state.take_pictures();
         state.stamp_order(doc, prev);
         state
+    }
+
+    /// Replaces the big pictures in the properties by references and keeps their texts.
+    fn take_pictures(&mut self) {
+        for props in self.things.values_mut() {
+            for key in BLOB_PROPS {
+                if let Some(v) = props.get_mut(key)
+                    && let Some((reference, hash, text)) = externalize(v)
+                {
+                    *v = reference;
+                    self.blobs.insert(hash, Arc::from(text));
+                }
+            }
+        }
+    }
+
+    /// The pictures of the state, by hash.
+    pub fn blobs(&self) -> &BTreeMap<String, Arc<str>> {
+        &self.blobs
+    }
+
+    /// Gives the state a table of pictures (the one of a history).
+    pub fn set_blobs(&mut self, blobs: BTreeMap<String, Arc<str>>) {
+        self.blobs = blobs;
+    }
+
+    /// The hashes of the pictures that the things of the state use.
+    pub fn used_blobs(&self) -> Vec<&str> {
+        self.things
+            .values()
+            .flat_map(|p| BLOB_PROPS.iter().filter_map(|k| p.get(*k)))
+            .filter_map(blob_ref)
+            .collect()
     }
 
     fn stamp_order(&mut self, doc: &Document, prev: Option<&State>) {
@@ -158,6 +215,8 @@ impl State {
     /// Applies one operation with the plain rules: `Create` needs a new thing, the others need an
     /// existing one. `Restore` does not exist in a history.
     pub fn apply(&mut self, op: &Op) -> Result<(), ApplyError> {
+        #[cfg(test)]
+        APPLIED.with(|c| c.set(c.get() + 1));
         match op {
             Op::Create { target, props, .. } => {
                 if target.kind == Kind::Document || props.contains_key("id") {
@@ -250,9 +309,18 @@ impl State {
         State::new().diff(self)
     }
 
-    /// The size in bytes of the JSON of the snapshot, estimated.
+    /// The size in bytes of the JSON of the snapshot, estimated, with the pictures that the
+    /// things use (each once).
     pub fn bytes(&self) -> usize {
-        self.snapshot().iter().map(op_size).sum()
+        let mut used = self.used_blobs();
+        used.sort_unstable();
+        used.dedup();
+        let pictures: usize = used
+            .iter()
+            .filter_map(|h| self.blobs.get(*h))
+            .map(|t| t.len())
+            .sum();
+        self.snapshot().iter().map(op_size).sum::<usize>() + pictures
     }
 
     /// The replica for the build of a document. Everything has the baseline writer.
@@ -269,7 +337,12 @@ impl State {
     /// The build is total: a thing that does not fit the file format is left out (see
     /// `Materialized::quarantined`).
     pub fn build(&self, base: &Document) -> Materialized {
-        materialize(&self.to_replica(), base)
+        materialize_with(
+            &self.to_replica(),
+            base,
+            &|hash| self.blobs.get(hash).cloned(),
+            &mut |_, image| image.verify_data(),
+        )
     }
 }
 

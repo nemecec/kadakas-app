@@ -621,6 +621,7 @@ impl Client {
         if let Some(shadow) = &mut self.shadow {
             shadow.apply_all(Writer::BASELINE, &ops);
         }
+        let ops = self.real_restores(ops);
         for chunk in docsync::split(ops) {
             match self.edit(chunk) {
                 Ok(id) => out.op_ids.push(id),
@@ -629,6 +630,25 @@ impl Client {
             }
         }
         out
+    }
+
+    /// The shadow knows one writer for every deletion. A `Restore` must name the writer that
+    /// deleted the thing in the view. If this client deleted it, the real writer goes in. If
+    /// another user deleted it, the deletion stands (delete wins): the `Restore` is left out, and
+    /// the thing leaves the document at the next build.
+    fn real_restores(&self, ops: Vec<Op>) -> Vec<Op> {
+        ops.into_iter()
+            .filter_map(|op| match op {
+                Op::Restore { target, .. } => {
+                    let by = self.view.get(target).and_then(|e| e.deleted_by)?;
+                    (by.client == self.client).then_some(Op::Restore {
+                        target,
+                        deleted_by: by,
+                    })
+                }
+                other => Some(other),
+            })
+            .collect()
     }
 
     /// Applies the operations to the view, queues the transaction, and returns its number and

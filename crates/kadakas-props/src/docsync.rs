@@ -456,47 +456,60 @@ fn order_ops(
     ops
 }
 
+/// The operations that change the properties of `e` into `props`.
+fn prop_ops(target: Target, e: &crate::replica::Entity, props: &Map<String, Value>) -> Vec<Op> {
+    let mut ops = Vec::new();
+    for (k, v) in props {
+        if !e.get(k).is_some_and(|old| same_json(old, v)) {
+            ops.push(Op::Set {
+                target,
+                prop: k.clone(),
+                value: v.clone(),
+            });
+        }
+    }
+    for k in e.visible().keys() {
+        if !(props.contains_key(k) || k == "order" && target.kind != Kind::Class) {
+            ops.push(Op::Unset {
+                target,
+                prop: k.clone(),
+            });
+        }
+    }
+    ops
+}
+
 /// The operations that turn the thing in the replica into the thing in the document.
 /// `new` is the properties in the document, or `None` if the document does not have the thing.
+///
+/// A thing that the replica has deleted and the document has again (a restore of a version, or an
+/// undo outside the per-user undo) is brought back with `Restore`, as the per-user undo does, and
+/// then its properties are set. Its ID is the same. The `Restore` names the writer that the
+/// replica holds for the deletion; a client that diffs against a shadow (which has one baseline
+/// writer for everything) must name the real writer of its own deletion (see
+/// `Client::edit_from_change`), and does not revive a thing that another user deleted.
 fn diff_thing(view: &Replica, target: Target, new: Option<Map<String, Value>>) -> Vec<Op> {
     let old = view.alive(target);
     match (old, new) {
-        (None, Some(props)) => {
-            // A deleted thing stays deleted: its ID is never made again.
-            if view.contains(target) {
-                Vec::new()
-            } else {
-                vec![Op::Create {
-                    target,
-                    props: props.into_iter().collect(),
-                    // Shapes of a plug-in object have derived IDs, and two users may make them.
-                    merge: target.kind == Kind::Object && target.id.is_derived(),
-                }]
-            }
-        }
+        (None, Some(props)) => match view.get(target) {
+            None => vec![Op::Create {
+                target,
+                props: props.into_iter().collect(),
+                // Shapes of a plug-in object have derived IDs, and two users may make them.
+                merge: target.kind == Kind::Object && target.id.is_derived(),
+            }],
+            Some(e) => match e.deleted_by {
+                Some(deleted_by) => {
+                    let mut ops = vec![Op::Restore { target, deleted_by }];
+                    ops.extend(prop_ops(target, e, &props));
+                    ops
+                }
+                None => Vec::new(),
+            },
+        },
         (Some(_), None) => vec![Op::Delete { target }],
         (None, None) => Vec::new(),
-        (Some(e), Some(props)) => {
-            let mut ops = Vec::new();
-            for (k, v) in &props {
-                if !e.get(k).is_some_and(|old| same_json(old, v)) {
-                    ops.push(Op::Set {
-                        target,
-                        prop: k.clone(),
-                        value: v.clone(),
-                    });
-                }
-            }
-            for k in e.visible().keys() {
-                if !(props.contains_key(k) || k == "order" && target.kind != Kind::Class) {
-                    ops.push(Op::Unset {
-                        target,
-                        prop: k.clone(),
-                    });
-                }
-            }
-            ops
-        }
+        (Some(e), Some(props)) => prop_ops(target, e, &props),
     }
 }
 
@@ -504,7 +517,7 @@ fn diff_thing(view: &Replica, target: Target, new: Option<Map<String, Value>>) -
 /// (objects before the things they refer to).
 fn order(mut ops: Vec<Op>) -> Vec<Op> {
     let rank = |op: &Op| match op {
-        Op::Create { target, .. } => (0, target.kind),
+        Op::Create { target, .. } | Op::Restore { target, .. } => (0, target.kind),
         Op::Delete { target } => (
             2,
             match target.kind {
@@ -679,10 +692,19 @@ mod tests {
         );
         view.apply_all(crate::op::Writer::BASELINE, &ops);
         assert!(view.alive(Target::new(Kind::Object, id.0)).is_none());
-        // A deleted ID is not created again, also if the document has it (an undo).
+        // A deleted ID is not created again, also if the document has it (an undo or a restore of
+        // a version): the thing is restored, with the same ID, and its properties are set.
         assert!(ed.undo());
         let ops = ops_from_diff(&view, ed.doc());
-        assert!(ops.is_empty());
+        assert!(matches!(
+            ops.first(),
+            Some(Op::Restore { target, deleted_by })
+                if target.id == id.0 && *deleted_by == crate::op::Writer::BASELINE
+        ));
+        assert!(!ops.iter().any(|o| matches!(o, Op::Create { .. })));
+        view.apply_all(crate::op::Writer::BASELINE, &ops);
+        assert!(view.alive(Target::new(Kind::Object, id.0)).is_some());
+        assert!(ops_from_diff(&view, ed.doc()).is_empty());
     }
 
     #[test]

@@ -8,6 +8,15 @@
 //! The state of a version is rebuilt by applying the deltas in order (see [`History::state_at`]).
 //! No version holds a full copy, so a history of many small edits is small.
 //!
+//! # Pictures
+//!
+//! A big picture (the PNG of an underlay, the file of an image resource) is not stored in the
+//! operations. As in collaboration, the property holds a reference `{"$blob": "<sha256>"}`, and
+//! the history keeps a table `blobs` with the text of each picture once, by hash. A move of a
+//! 10 MiB underlay in three versions costs 10 MiB once, not three times. A picture stays while a
+//! base or a delta refers to it (a count of references that is made again after a fold or a
+//! delete), and the byte cap counts each picture once.
+//!
 //! # Parents and branches
 //!
 //! The versions are a graph, not a list, so branches can come later (REV-10). Each version has
@@ -15,16 +24,21 @@
 //! the root has none) and a `branch` name (default `main`). A delta is always relative to the
 //! **first parent**, and the state of a version is the base with the deltas along the chain of
 //! first parents applied. The history has a current `branch` and its `head`, the version that the
-//! next one is made from. Today every version has the previous one as its only parent; there are no
-//! calls that make a branch or a merge yet. Folding and deleting keep the graph whole: a version
+//! next one is made from. Today every version has the previous one as its only parent, and there
+//! are no calls that make a branch or a merge yet. [`History::load`] makes the first-parent chain
+//! linear: it sets the first parent of every version to the version before it in the file (and
+//! says so in a note), because it replays the file in order; it keeps the other parents that
+//! point at earlier versions. The rest of the code (state, fold, delete) already works on the
+//! graph. Folding and deleting keep the graph whole: a version
 //! that is the first parent of a kept version is never lost, the kept version is cut loose from it
 //! with a delta against the new first parent instead.
 //!
 //! # Caps
 //!
 //! [`Limits`] caps the number of versions and the bytes of the history. When a new version breaks
-//! a cap, the oldest version goes first and is folded into the base: the base becomes the state of
-//! the next version, so every version that stays keeps its state exactly. Deleting a version from
+//! a cap, the oldest versions go first and are folded into the base in one pass (the file is
+//! replayed once and the snapshot is made once, however many versions go): the base becomes the
+//! state of the first version that stays, so every version that stays keeps its state exactly. Deleting a version from
 //! the middle joins its delta to the next one by comparing the states on both sides.
 //!
 //! # The file
@@ -34,6 +48,8 @@
 //! ```json
 //! {"format": 1, "next_id": 4,
 //!  "base": [<Create and Set operations that make the first version from nothing>],
+//!  "branch": "main", "head": 3,
+//!  "blobs": {"<sha256>": "<text of a picture>"},
 //!  "versions": [{"id": 1, "name": "...", "note": "...", "author": "...", "time_ms": 0,
 //!                "origin": "user", "base_revision": 7, "auto": false, "delta": [<ops>]}, ...]}
 //! ```
@@ -52,8 +68,12 @@
 //! document keeps the versions of the open file (`Editor::apply_remote` leaves them alone), and
 //! the other users have their own. A server that shares versions is REV-09.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
 use kadakas_core::change::Origin;
 use kadakas_core::model::Document;
+use kadakas_props::blob::{BLOB_PROPS, MAX_BLOB_BYTES, blob_ref, sha256_hex};
 use kadakas_props::op::{Op, op_size};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -214,6 +234,8 @@ pub struct History {
     branch: String,
     /// The version that the next one is made from: the newest on the current branch.
     head: Option<u64>,
+    /// The pictures that the base and the deltas refer to, once each, by the SHA-256 of the text.
+    blobs: BTreeMap<String, Arc<str>>,
 }
 
 /// The result of [`History::load`]: the history that could be kept, and what was repaired.
@@ -244,6 +266,7 @@ impl History {
             versions: Vec::new(),
             branch: main_branch(),
             head: None,
+            blobs: BTreeMap::new(),
         }
     }
 
@@ -283,9 +306,43 @@ impl History {
         self.versions.iter().position(|v| v.meta.id == id)
     }
 
-    /// The size of the history in bytes, estimated from its operations and texts.
+    /// The size of the history in bytes, estimated from its operations, texts and pictures (each
+    /// picture once).
     pub fn bytes(&self) -> usize {
-        self.base_bytes + self.versions.iter().map(|v| v.bytes).sum::<usize>()
+        self.base_bytes
+            + self.versions.iter().map(|v| v.bytes).sum::<usize>()
+            + self.blobs.values().map(|t| t.len()).sum::<usize>()
+    }
+
+    /// The pictures of the history, by hash.
+    pub fn blobs(&self) -> &BTreeMap<String, Arc<str>> {
+        &self.blobs
+    }
+
+    /// Keeps only the pictures that the base or a delta still refers to.
+    fn collect_blobs(&mut self) {
+        let mut used = BTreeSet::new();
+        for op in self
+            .base
+            .iter()
+            .chain(self.versions.iter().flat_map(|v| &v.delta))
+        {
+            op_refs(op, &mut |h| {
+                used.insert(h.to_string());
+            });
+        }
+        self.blobs.retain(|h, _| used.contains(h));
+    }
+
+    /// Takes the pictures that these operations refer to from the state that made them.
+    fn take_blobs(&mut self, ops: &[Op], from: &State) {
+        for op in ops {
+            op_refs(op, &mut |h| {
+                if let Some(t) = from.blobs().get(h) {
+                    self.blobs.insert(h.to_string(), t.clone());
+                }
+            });
+        }
     }
 
     /// The size of the delta of a version in bytes, estimated.
@@ -317,6 +374,7 @@ impl History {
             ));
         }
         let mut state = State::new();
+        state.set_blobs(self.blobs.clone());
         state.apply_all(&self.base)?;
         for &i in chain.iter().rev().skip(1) {
             state.apply_all(&self.versions[i].delta)?;
@@ -421,9 +479,15 @@ impl History {
             None => {
                 next.base = state.snapshot();
                 next.base_bytes = ops_bytes(&next.base);
+                let base = next.base.clone();
+                next.take_blobs(&base, &state);
                 Vec::new()
             }
-            Some(tip) => tip.diff(&state),
+            Some(tip) => {
+                let delta = tip.diff(&state);
+                next.take_blobs(&delta, &state);
+                delta
+            }
         };
         let bytes = ops_bytes(&delta) + meta_bytes(&meta);
         next.versions.push(Version { meta, delta, bytes });
@@ -434,14 +498,34 @@ impl History {
 
     /// Folds the oldest versions into the base until the caps hold. Returns the IDs that went. It
     /// keeps at least one version; if that one alone is above the byte cap, the call fails.
+    ///
+    /// The versions that go are folded in one pass: the count is chosen first (from the cap on the
+    /// count and from the bytes that the deltas of the oldest versions hold), then the file is
+    /// replayed once up to the first version that stays, and the snapshot is made once. A loop
+    /// is needed only when the estimate was too low, because a delta that adds things does not
+    /// free its bytes when it joins the base.
     pub fn enforce(&mut self, limits: Limits) -> Result<Vec<u64>, ReviewError> {
         let limits = limits.clamped();
         let mut dropped = Vec::new();
-        while self.versions.len() > 1
-            && (self.versions.len() > limits.max_versions || self.bytes() > limits.max_bytes)
-        {
-            dropped.push(self.versions[0].meta.id);
-            self.drop_first()?;
+        loop {
+            let n = self.versions.len();
+            if n <= 1 {
+                break;
+            }
+            let bytes = self.bytes();
+            let mut k = n.saturating_sub(limits.max_versions.max(1));
+            let mut freed = 0usize;
+            let mut j = 0;
+            while j + 1 < n && bytes.saturating_sub(freed) > limits.max_bytes {
+                freed += self.versions[j].bytes;
+                j += 1;
+            }
+            k = k.max(j).min(n - 1);
+            if k == 0 {
+                break;
+            }
+            dropped.extend(self.versions[..k].iter().map(|v| v.meta.id));
+            self.drop_oldest(k)?;
         }
         if self.bytes() > limits.max_bytes {
             return Err(ReviewError::TooLarge {
@@ -452,30 +536,38 @@ impl History {
         Ok(dropped)
     }
 
-    /// Removes the oldest version: the base becomes the state of the next one.
-    fn drop_first(&mut self) -> Result<(), ReviewError> {
-        if self.versions.len() < 2 {
+    /// Removes the `k` oldest versions: the base becomes the state of the version after them.
+    /// A version that was made from a removed one, other than that version, is cut loose with a
+    /// delta against it.
+    fn drop_oldest(&mut self, k: usize) -> Result<(), ReviewError> {
+        if k >= self.versions.len() {
             self.versions.clear();
             self.base.clear();
             self.base_bytes = 0;
             self.head = None;
+            self.blobs.clear();
             return Ok(());
         }
-        let gone = self.versions[0].meta.id;
-        let new_root = self.versions[1].meta.id;
-        let next = self.state_at(1)?;
-        // A version that was made from the root, other than the new root, gets a delta against
-        // the new root.
-        let cut_loose: Vec<(u64, State)> = (2..self.versions.len())
-            .filter(|&i| self.versions[i].meta.parents.first() == Some(&gone))
+        let gone: Vec<u64> = self.versions[..k].iter().map(|v| v.meta.id).collect();
+        let new_root = self.versions[k].meta.id;
+        let root_state = self.state_at(k)?;
+        let cut_loose: Vec<(u64, State)> = (k + 1..self.versions.len())
+            .filter(|&i| {
+                self.versions[i]
+                    .meta
+                    .parents
+                    .first()
+                    .is_some_and(|p| gone.contains(p))
+            })
             .map(|i| Ok((self.versions[i].meta.id, self.state_at(i)?)))
             .collect::<Result<_, ReviewError>>()?;
-        self.base = next.snapshot();
+        self.base = root_state.snapshot();
         self.base_bytes = ops_bytes(&self.base);
-        self.versions.remove(0);
+        self.versions.drain(..k);
         for (id, state) in cut_loose {
             if let Some(i) = self.index_of(id) {
-                let delta = next.diff(&state);
+                let delta = root_state.diff(&state);
+                self.take_blobs(&delta, &state);
                 let v = &mut self.versions[i];
                 v.meta.parents[0] = new_root;
                 v.bytes = ops_bytes(&delta) + meta_bytes(&v.meta);
@@ -483,14 +575,16 @@ impl History {
             }
         }
         for v in &mut self.versions {
-            v.meta.parents.retain(|p| *p != gone);
+            v.meta.parents.retain(|p| !gone.contains(p));
         }
         let first = &mut self.versions[0];
+        first.meta.parents.clear();
         first.delta.clear();
         first.bytes = meta_bytes(&first.meta);
-        if self.head == Some(gone) {
+        if self.head.is_some_and(|h| gone.contains(&h)) {
             self.head = self.versions.last().map(|v| v.meta.id);
         }
+        self.collect_blobs();
         Ok(())
     }
 
@@ -501,7 +595,7 @@ impl History {
         let i = self.index_of(id).ok_or(ReviewError::NotFound(id))?;
         let mut next = self.clone();
         if i == 0 {
-            next.drop_first()?;
+            next.drop_oldest(1)?;
         } else {
             let parent = next.versions[i]
                 .meta
@@ -520,6 +614,7 @@ impl History {
             for (cid, state) in children {
                 if let Some(c) = next.index_of(cid) {
                     let delta = parent_state.diff(&state);
+                    next.take_blobs(&delta, &state);
                     let v = &mut next.versions[c];
                     v.meta.parents[0] = parent;
                     v.bytes = ops_bytes(&delta) + meta_bytes(&v.meta);
@@ -545,6 +640,7 @@ impl History {
             if next.head == Some(id) {
                 next.head = Some(parent);
             }
+            next.collect_blobs();
         }
         *self = next;
         Ok(self.versions.is_empty())
@@ -563,12 +659,18 @@ impl History {
                 m
             })
             .collect();
+        let blobs: serde_json::Map<String, Value> = self
+            .blobs
+            .iter()
+            .map(|(h, t)| (h.clone(), Value::String(t.to_string())))
+            .collect();
         json!({
             "format": FORMAT,
             "next_id": self.next_id,
             "branch": self.branch,
             "head": self.head,
             "base": self.base,
+            "blobs": blobs,
             "versions": versions,
         })
     }
@@ -577,7 +679,7 @@ impl History {
     /// and says what it repaired or dropped (see the module text).
     pub fn load(value: &Value, limits: Limits) -> Loaded {
         let mut notes = Vec::new();
-        let history = read(value, &mut notes).and_then(|mut h| {
+        let history = read(value, &mut notes, limits.clamped()).and_then(|mut h| {
             match h.enforce(limits) {
                 Ok(dropped) if !dropped.is_empty() => notes.push(format!(
                     "the history had more than the limits allow: the {} oldest versions were folded into the base",
@@ -626,7 +728,70 @@ fn read_ops(value: Option<&Value>, total: &mut usize, what: &str) -> Result<Vec<
     Ok(out)
 }
 
-fn read(value: &Value, notes: &mut Vec<String>) -> Option<History> {
+/// The hashes of the pictures that an operation refers to.
+fn op_refs(op: &Op, found: &mut dyn FnMut(&str)) {
+    match op {
+        Op::Create { props, .. } => {
+            for key in BLOB_PROPS {
+                if let Some(h) = props.get(key).and_then(blob_ref) {
+                    found(h);
+                }
+            }
+        }
+        Op::Set { prop, value, .. } if BLOB_PROPS.contains(&prop.as_str()) => {
+            if let Some(h) = blob_ref(value) {
+                found(h);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Names the first picture that the operations need and the table lacks.
+fn missing_blob(ops: &[Op], blobs: &BTreeMap<String, Arc<str>>) -> Option<String> {
+    let mut missing = None;
+    for op in ops {
+        op_refs(op, &mut |h| {
+            if missing.is_none() && !blobs.contains_key(h) {
+                missing = Some(h.to_string());
+            }
+        });
+    }
+    missing
+}
+
+/// Reads the table of pictures. A picture whose text does not fit its hash, or is too large, is
+/// left out with a note.
+fn read_blobs(
+    value: Option<&Value>,
+    total: &mut usize,
+    notes: &mut Vec<String>,
+) -> BTreeMap<String, Arc<str>> {
+    let mut out = BTreeMap::new();
+    let Some(map) = value.and_then(Value::as_object) else {
+        return out;
+    };
+    for (hash, text) in map {
+        let Some(text) = text.as_str() else {
+            notes.push("a picture of the history is not text and was left out".into());
+            continue;
+        };
+        *total = total.saturating_add(text.len());
+        if text.len() > MAX_BLOB_BYTES || *total > HARD_MAX_BYTES {
+            notes.push("a picture of the history is too large and was left out".into());
+            *total = total.saturating_sub(text.len());
+            continue;
+        }
+        if sha256_hex(text.as_bytes()) != *hash {
+            notes.push("a picture of the history did not match its hash and was left out".into());
+            continue;
+        }
+        out.insert(hash.clone(), Arc::from(text));
+    }
+    out
+}
+
+fn read(value: &Value, notes: &mut Vec<String>, limits: Limits) -> Option<History> {
     let drop_all = |notes: &mut Vec<String>, why: String| {
         notes.push(format!("the history of versions was dropped: {why}"));
         None
@@ -639,10 +804,40 @@ fn read(value: &Value, notes: &mut Vec<String>) -> Option<History> {
         other => return drop_all(notes, format!("its format {other:?} is not known")),
     }
     let mut total = 0usize;
+    let blobs = read_blobs(obj.get("blobs"), &mut total, notes);
     let base = match read_ops(obj.get("base"), &mut total, "the base") {
         Ok(b) => b,
         Err(e) => return drop_all(notes, e),
     };
+    // The base can never be made smaller. If it is above the cap, nothing can be kept, and the
+    // versions are not replayed at all.
+    let mut base_pictures = BTreeSet::new();
+    for op in &base {
+        op_refs(op, &mut |h| {
+            base_pictures.insert(h.to_string());
+        });
+    }
+    let base_size = ops_bytes(&base)
+        + base_pictures
+            .iter()
+            .filter_map(|h| blobs.get(h))
+            .map(|t| t.len())
+            .sum::<usize>();
+    if base_size > limits.max_bytes {
+        return drop_all(
+            notes,
+            format!(
+                "the base needs {base_size} bytes and the limit is {}",
+                limits.max_bytes
+            ),
+        );
+    }
+    if let Some(h) = missing_blob(&base, &blobs) {
+        return drop_all(
+            notes,
+            format!("the base needs the picture {h}, which is missing"),
+        );
+    }
     let mut state = State::new();
     if let Err(e) = state.apply_all(&base) {
         return drop_all(notes, format!("the base does not fit: {e}"));
@@ -663,6 +858,7 @@ fn read(value: &Value, notes: &mut Vec<String>) -> Option<History> {
         versions: Vec::new(),
         branch: main_branch(),
         head: obj.get("head").and_then(Value::as_u64),
+        blobs,
     };
     if let Some(b) = obj.get("branch").and_then(Value::as_str) {
         let b = cut(b.trim(), BRANCH_MAX);
@@ -689,6 +885,9 @@ fn read(value: &Value, notes: &mut Vec<String>) -> Option<History> {
                 Ok((meta, delta))
             })
             .and_then(|(meta, delta)| {
+                if let Some(h) = missing_blob(&delta, &history.blobs) {
+                    return Err(format!("it needs the picture {h}, which is missing"));
+                }
                 state
                     .apply_all(&delta)
                     .map_err(|e| format!("its changes do not fit: {e}"))?;
@@ -752,6 +951,7 @@ fn read(value: &Value, notes: &mut Vec<String>) -> Option<History> {
     {
         history.head = history.versions.last().map(|v| v.meta.id);
     }
+    history.collect_blobs();
     if repaired_texts {
         notes.push("some names, notes, numbers or parents of versions were repaired".into());
     }
@@ -760,3 +960,6 @@ fn read(value: &Value, notes: &mut Vec<String>) -> Option<History> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod work_tests;

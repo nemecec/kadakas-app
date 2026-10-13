@@ -5,7 +5,7 @@
 //! so a restore never loses work. If the document already has the content of the newest version,
 //! it is saved already and no new version is made.
 
-use kadakas_core::model::Document;
+use kadakas_core::model::{Document, LayerId, ObjectId};
 
 use crate::history::{History, Limits, NewVersion, ReviewError};
 use crate::state::State;
@@ -58,6 +58,7 @@ pub fn prepare(
     notes.extend(built.repairs);
     let mut doc = built.doc;
     keep_stacking_extras(&mut doc, current);
+    align_global_order(&mut doc, current);
     Ok(Restore {
         doc,
         history: next,
@@ -105,6 +106,41 @@ fn keep_stacking_extras(doc: &mut Document, current: &Document) {
                 .find(|c| c.id == l.id)
                 .map(|c| &c.extra),
         );
+    }
+}
+
+/// The build sorts all objects by their stacking key, which interleaves the layers in a new way.
+/// The order inside a layer is what counts (layers are drawn one after the other), but a changed
+/// interleave would make the editor move objects that did not change. So the objects keep the
+/// interleave of the current document: the places of the layers in the current list stay, and
+/// each place takes the next object of its layer in the order of the restored document. Objects
+/// that have no place (more objects on a layer than before) follow, in the restored order. For a
+/// document with the same content, the result is the current order exactly.
+fn align_global_order(doc: &mut Document, current: &Document) {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    let target: Vec<ObjectId> = doc.objects.keys().copied().collect();
+    let mut queues: HashMap<LayerId, VecDeque<ObjectId>> = HashMap::new();
+    for id in &target {
+        queues
+            .entry(doc.objects[id].layer)
+            .or_default()
+            .push_back(*id);
+    }
+    let mut order: Vec<ObjectId> = Vec::with_capacity(target.len());
+    for id in current.objects.keys() {
+        if let Some(o) = doc.objects.get(id)
+            && let Some(next) = queues.get_mut(&o.layer).and_then(VecDeque::pop_front)
+        {
+            order.push(next);
+        }
+    }
+    let placed: HashSet<ObjectId> = order.iter().copied().collect();
+    order.extend(target.into_iter().filter(|id| !placed.contains(id)));
+    let mut objects: HashMap<ObjectId, _> = std::mem::take(&mut doc.objects).into_iter().collect();
+    for id in order {
+        if let Some(o) = objects.remove(&id) {
+            doc.objects.insert(id, o);
+        }
     }
 }
 

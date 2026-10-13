@@ -265,10 +265,10 @@ fn the_work_is_bounded() {
     for n in 1..=50 {
         put(&mut b, obj(n), json!({"a": 1, "b": 2}));
     }
-    let d = diff_with_budget(&a, &b, &all(), 40);
+    let d = diff_with_budget(&a, &b, &all(), 40, usize::MAX);
     assert!(!d.exact && d.truncated);
     assert!(d.counts["objects"].added < 50);
-    let d = diff_with_budget(&a, &b, &all(), 10_000);
+    let d = diff_with_budget(&a, &b, &all(), 10_000, usize::MAX);
     assert!(d.exact && d.counts["objects"].added == 50);
 }
 
@@ -355,4 +355,43 @@ proptest! {
         // And the report is empty exactly when the states are equal.
         prop_assert_eq!(diff(&a, &b, &all()).totals.total() == 0, a == b);
     }
+}
+
+#[test]
+fn values_are_measured_without_one_big_text_and_count_in_the_work() {
+    let mut a = State::new();
+    let mut b = State::new();
+    // A long list and a long text with multi-byte characters.
+    put(
+        &mut a,
+        obj(1),
+        json!({"list": vec![1; 2000], "text": "é".repeat(500)}),
+    );
+    put(
+        &mut b,
+        obj(1),
+        json!({"list": vec![2; 2000], "text": "é".repeat(499)}),
+    );
+    let d = diff(&a, &b, &all());
+    let props = &d.groups["objects"].changed[0].properties;
+    let text = props.iter().find(|p| p.path == "text").unwrap();
+    let Some(Shown::Cut { cut, len, hash }) = &text.old else {
+        panic!("{text:?}")
+    };
+    assert_eq!((cut.chars().count(), *len), (MAX_VALUE_CHARS, 500));
+    assert_eq!(hash.len(), 16);
+    let list = props.iter().find(|p| p.path == "list").unwrap();
+    let Some(Shown::Cut { len, hash, .. }) = &list.new else {
+        panic!("{list:?}")
+    };
+    // 2000 numbers "2" and 1999 commas and two brackets.
+    assert_eq!(*len, 2000 + 1999 + 2);
+    assert_eq!(
+        *hash,
+        kadakas_props::blob::sha256_hex(serde_json::to_string(&vec![2; 2000]).unwrap().as_bytes())
+            [..16]
+    );
+    // The bytes of values count: a small budget stops the diff.
+    let d = diff_with_budget(&a, &b, &all(), MAX_WORK, 100);
+    assert!(!d.exact && d.truncated && d.groups["objects"].changed.is_empty());
 }
