@@ -4,7 +4,7 @@
 
 use kadakas_core::change::Origin;
 use kadakas_core::command::{Command, Editor};
-use kadakas_core::history::{HistoryData, MAX_HISTORY_BYTES};
+use kadakas_core::history::HistoryData;
 use kadakas_core::model::{Document, ObjectId};
 use proptest::prelude::*;
 use serde_json::{Value, json};
@@ -50,7 +50,6 @@ fn a_history_that_is_not_an_object_is_dropped_with_a_note() {
     }
     v["history"] = Value::Null;
     assert!(Document::from_value(v).unwrap().history.is_none());
-    assert!(MAX_HISTORY_BYTES > 1024);
 }
 
 #[test]

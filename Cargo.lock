@@ -2974,6 +2974,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kadakas-review"
+version = "0.1.0"
+dependencies = [
+ "kadakas-core",
+ "kadakas-props",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "kadakas-script"
 version = "0.1.0"
 dependencies = [
