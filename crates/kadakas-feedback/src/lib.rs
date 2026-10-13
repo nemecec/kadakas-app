@@ -33,5 +33,6 @@ pub use model::*;
 pub use payload::PayloadParts;
 pub use send::{
     DEFAULT_URL, Delivery, FakeSender, NoSleep, Reply, RetryPolicy, SendError, Sender, Sleeper,
+    deliver,
 };
 pub use store::{MemStorage, Storage};

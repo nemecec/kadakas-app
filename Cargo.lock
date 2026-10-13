@@ -2743,6 +2743,7 @@ dependencies = [
  "kadakas-collab",
  "kadakas-collab-ws",
  "kadakas-core",
+ "kadakas-feedback",
  "kadakas-sys",
  "serde_json",
 ]

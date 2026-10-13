@@ -2186,6 +2186,30 @@ class Api:
         JSON-RPC method ``events.poll``."""
         return self._call("events.poll", params or None)
 
+    def feedback_submit(self, **params: Any) -> Any:
+        """File a feature request or a bug report. Do it when a task needs a feature that Kadakas lacks (kind feature_request), and when a method fails in a way it must not (kind bug). params: {kind: bug|feature_request|question, title, body?, wanted?, tried?, method?, error?, severity?: low|medium|high, attach?}. A bug report attaches the failing objects, a picture of the view and the recent calls by default; attach {excerpt?, screenshot?, calls?, log?: false} removes one, attach {objects: [id]} or {selection: true} names objects, attach {view: {render.png params}} sets the picture. Attachments never leave the computer until a human approves them (status needs_review). Returns {id, merged, count, status, attachments}.
+
+        JSON-RPC method ``feedback.submit``."""
+        return self._call("feedback.submit", params or None)
+
+    def feedback_list(self, **params: Any) -> Any:
+        """The reports in the outbox. params: {status?, limit?}. Returns {reports: [{id, kind, title, status, count, ...}], needs_review, sending}.
+
+        JSON-RPC method ``feedback.list``."""
+        return self._call("feedback.list", params or None)
+
+    def feedback_get(self, **params: Any) -> Any:
+        """One report with its attachments (kinds and sizes). params: {id}.
+
+        JSON-RPC method ``feedback.get``."""
+        return self._call("feedback.get", params or None)
+
+    def feedback_withdraw(self, **params: Any) -> Any:
+        """Take back a report that has not been sent. params: {id}. Returns the report.
+
+        JSON-RPC method ``feedback.withdraw``."""
+        return self._call("feedback.withdraw", params or None)
+
 
 METHOD_NAMES: tuple[str, ...] = (
     "describe",
@@ -2549,6 +2573,10 @@ METHOD_NAMES: tuple[str, ...] = (
     "events.subscribe",
     "events.unsubscribe",
     "events.poll",
+    "feedback.submit",
+    "feedback.list",
+    "feedback.get",
+    "feedback.withdraw",
 )
 
 COMMAND_OPS_EXAMPLED: tuple[str, ...] = ('add_layer', 'add_object', 'add_resource', 'add_sheet', 'add_worksheet_table', 'arrange', 'attach_record', 'batch', 'detach_record', 'move_layer', 'move_objects', 'restore_view', 'set_project', 'set_record_fields', 'set_vertex', 'set_worksheet_table')

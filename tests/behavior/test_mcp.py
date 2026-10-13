@@ -34,7 +34,8 @@ def test_initialize_without_a_version_answers_with_the_latest(mcp_raw):
 
 
 def listed(mcp):
-    return {tool["name"]: tool for tool in mcp.request("tools/list")["result"]["tools"]}
+    # The `feedback` tool has its own schema (no method enum); test_feedback.py covers it.
+    return {tool["name"]: tool for tool in mcp.request("tools/list")["result"]["tools"] if tool["name"] != "feedback"}
 
 
 def test_tools_list_has_about_twenty_domain_tools(mcp):
@@ -54,6 +55,8 @@ def test_every_api_method_is_in_exactly_one_domain_tool(mcp):
     # The methods that need a message stream are not tools: a tool call returns one result.
     stream = {"events.subscribe", "events.unsubscribe"}
     assert stream <= api
+    # The feedback methods are behind the top-level `feedback` tool (see test_feedback.py).
+    api = {m for m in api if not m.startswith("feedback.")}
     assert (api - stream) | {"file.save", "file.open"} == set(seen)
     for tool in tools.values():
         for method in tool["inputSchema"]["properties"]["method"]["enum"]:
