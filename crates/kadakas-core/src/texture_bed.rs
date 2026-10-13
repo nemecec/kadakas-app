@@ -252,7 +252,7 @@ pub fn beds_for(doc: &Document, site: &Object) -> Vec<Bed> {
                 return None;
             };
             let outline = outline(boundary);
-            (outline.len() >= 3).then(|| (o.id, material, mapping, outline))
+            (outline.len() >= 3).then_some((o.id, material, mapping, outline))
         })
         .enumerate()
         .map(|(i, (object, material, mapping, outline))| Bed {
