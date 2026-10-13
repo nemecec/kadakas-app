@@ -587,7 +587,7 @@ impl Client {
     /// Tells the client what the host's document shows. Call it after the host built its document
     /// from the view, and when the client starts with a document that equals the state.
     pub fn set_shadow(&mut self, doc: &Document) {
-        self.shadow = Some(docsync::replica_of(doc));
+        self.shadow = Some(docsync::shadow_of(doc));
     }
 
     /// Turns a change set of the local document into edits (see `docsync::ops_from_change`). Big

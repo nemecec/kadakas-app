@@ -1292,6 +1292,63 @@ mod real_commands {
         }
     }
 
+    /// Two users add an object to an empty list at the same time: both get the key `a0` and the
+    /// list is sorted by ID. The next local insert of one user must go after both, not between
+    /// keys that the shadow renumbered (a shrunk proptest case).
+    #[test]
+    fn an_insert_after_a_tie_of_keys_keeps_the_shared_order() {
+        let acts = [
+            Act::AddRect { s: false, x: 0 },
+            Act::Place { s: false, x: 0 },
+            Act::Underlay {
+                s: true,
+                x: 0,
+                v: 0,
+            },
+            Act::Underlay {
+                s: false,
+                x: 0,
+                v: 0,
+            },
+            Act::Undo { s: false },
+            Act::Sync { s: true },
+            Act::Arrange {
+                s: false,
+                i: 0,
+                j: 197,
+                how: 2,
+            },
+            Act::AddRect { s: false, x: 314 },
+            Act::Delete { s: true, i: 191 },
+            Act::Redo { s: false },
+            Act::Sync { s: true },
+            Act::Underlay {
+                s: true,
+                x: -148,
+                v: 1,
+            },
+        ];
+        let a = seeded(1);
+        let hub = Hub::new(Sequencer::new(docsync::replica_of(a.editor.doc())));
+        let mut sessions = [a, seeded(2)];
+        for s in &mut sessions {
+            s.handle("plugins.install", json!({"path": PLANTER}))
+                .unwrap();
+            s.set_collab_endpoint(Box::new(hub.endpoint()));
+            s.handle("collab.connect", json!({"now_ms": 1})).unwrap();
+        }
+        let mut now = 1_000;
+        for a in &acts {
+            apply(&mut sessions, &hub, &mut now, a);
+        }
+        settle(&mut sessions, &hub, &mut now);
+        assert!(same(&sessions[0], &sessions[1]));
+        assert_eq!(
+            object_count(&mut sessions[0]),
+            object_count(&mut sessions[1])
+        );
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(30))]
 
