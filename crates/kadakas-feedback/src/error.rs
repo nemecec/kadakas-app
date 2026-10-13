@@ -27,3 +27,21 @@ impl std::fmt::Display for FeedbackError {
 }
 
 impl std::error::Error for FeedbackError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_error_shows_its_text() {
+        for e in [
+            FeedbackError::Invalid("a".into()),
+            FeedbackError::Limit("a".into()),
+            FeedbackError::NotFound("a".into()),
+            FeedbackError::State("a".into()),
+            FeedbackError::Store("a".into()),
+        ] {
+            assert_eq!(e.to_string(), "a");
+        }
+    }
+}
