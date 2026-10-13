@@ -2804,6 +2804,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kadakas-feedback"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "kadakas-sys",
+ "proptest",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "kadakas-gis"
 version = "0.1.0"
 dependencies = [
