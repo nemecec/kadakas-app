@@ -513,3 +513,6 @@ mod tests;
 
 #[cfg(test)]
 mod cache_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod props;

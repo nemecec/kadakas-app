@@ -6,6 +6,15 @@
 //! of collaboration (`shape`, `attrs.pen`, `data.Soil.Depth`, `drawing.project.name`), so the
 //! paths of a diff are the properties that a sync of the same two states would write.
 //!
+//! # The stacking order
+//!
+//! A state keeps the stacking order as keys (`order`) that are made relative to the version
+//! before, so the same order can have other keys in two versions. The diff does not compare keys.
+//! A thing that both sides have is *moved* if it is not in the longest run of things (on its layer;
+//! or among the layers) that keep their relative order. A moved thing has the path `order`, with
+//! its position among the things that both sides have on the layer as the old and the new value.
+//! Things that were added or removed do not count as moves of the others.
+//!
 //! The work and the size of the answer are bounded:
 //!
 //! - At most `limit` things are listed (counts are complete). `truncated` says that more exist.
@@ -19,7 +28,7 @@
 //!
 //! [`Uid`]: kadakas_core::uid::Uid
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use kadakas_core::uid::Uid;
 use kadakas_props::op::{Kind, Target};
@@ -28,7 +37,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::state::{Props, State, same_props};
+use crate::state::{Props, State};
 
 /// The most things that a diff lists when the caller gives no limit.
 pub const DEFAULT_LIMIT: usize = 100;
@@ -290,9 +299,95 @@ fn info(target: &Target, props: &Props) -> Map<String, Value> {
     m
 }
 
-/// The changed properties of a thing, at most [`MAX_PATHS`]; true if there are more.
-fn changes(old: &Props, new: &Props) -> (Vec<PropChange>, bool, usize) {
-    let paths: BTreeSet<&String> = old.keys().chain(new.keys()).collect();
+/// The index of the items that stay in the longest increasing run of `seq` (patience sorting).
+fn longest_run(seq: &[usize]) -> Vec<bool> {
+    let mut tails: Vec<usize> = Vec::new();
+    let mut prev: Vec<Option<usize>> = vec![None; seq.len()];
+    for (i, v) in seq.iter().enumerate() {
+        let k = tails.partition_point(|t| seq[*t] < *v);
+        prev[i] = k.checked_sub(1).map(|j| tails[j]);
+        if k == tails.len() {
+            tails.push(i);
+        } else {
+            tails[k] = i;
+        }
+    }
+    let mut keep = vec![false; seq.len()];
+    let mut at = tails.last().copied();
+    while let Some(i) = at {
+        keep[i] = true;
+        at = prev[i];
+    }
+    keep
+}
+
+/// The things that moved in the stacking order, with their old and new position among the things
+/// that both states have in the same list (the objects of a layer, or the layers).
+fn moved_things(old: &State, new: &State) -> HashMap<Target, (usize, usize)> {
+    let key = |p: &Props| {
+        p.get("order")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    // The list of a thing: its kind and, for an object, its layer in both states.
+    let list_of = |t: &Target, p: &Props| match t.kind {
+        Kind::Layer => Some("layers".to_string()),
+        Kind::Object => p
+            .get("layer")
+            .and_then(Value::as_str)
+            .map(|l| format!("objects {l}")),
+        _ => None,
+    };
+    let mut lists: BTreeMap<String, Vec<(String, String, Target)>> = BTreeMap::new();
+    for (t, a) in old.things() {
+        if let Some(b) = new.get(t)
+            && let (Some(la), Some(lb)) = (list_of(t, a), list_of(t, b))
+            && la == lb
+        {
+            lists.entry(la).or_default().push((key(a), key(b), *t));
+        }
+    }
+    let mut out = HashMap::new();
+    for items in lists.values_mut() {
+        items.sort_by(|x, y| (&x.0, x.2).cmp(&(&y.0, y.2)));
+        let mut by_new: Vec<usize> = (0..items.len()).collect();
+        by_new.sort_by(|a, b| (&items[*a].1, items[*a].2).cmp(&(&items[*b].1, items[*b].2)));
+        let mut new_rank = vec![0usize; items.len()];
+        for (rank, i) in by_new.iter().enumerate() {
+            new_rank[*i] = rank;
+        }
+        let keep = longest_run(&new_rank);
+        for (i, (_, _, t)) in items.iter().enumerate() {
+            if !keep[i] {
+                out.insert(*t, (i, new_rank[i]));
+            }
+        }
+    }
+    out
+}
+
+/// True if the properties are the same, not looking at the stacking key.
+fn same_without_order(a: &Props, b: &Props) -> bool {
+    let n = |p: &Props| p.len() - usize::from(p.contains_key("order"));
+    n(a) == n(b)
+        && a.iter()
+            .filter(|(k, _)| *k != "order")
+            .all(|(k, v)| b.get(k).is_some_and(|w| same_json(v, w)))
+}
+
+/// The changed properties of a thing, at most [`MAX_PATHS`]; true if there are more. `moved` is
+/// the old and new position of a thing that moved in the stacking order.
+fn changes(
+    old: &Props,
+    new: &Props,
+    moved: Option<(usize, usize)>,
+) -> (Vec<PropChange>, bool, usize) {
+    let paths: BTreeSet<&String> = old
+        .keys()
+        .chain(new.keys())
+        .filter(|k| *k != "order")
+        .collect();
     let mut out = Vec::new();
     let mut more = false;
     let mut written = 0;
@@ -324,6 +419,17 @@ fn changes(old: &Props, new: &Props) -> (Vec<PropChange>, bool, usize) {
             old,
             new,
         });
+    }
+    if let Some((was, is)) = moved {
+        if out.len() >= MAX_PATHS {
+            more = true;
+        } else {
+            out.push(PropChange {
+                path: "order".into(),
+                old: Some(Shown::Whole(Value::from(was))),
+                new: Some(Shown::Whole(Value::from(is))),
+            });
+        }
     }
     (out, more, written)
 }
@@ -362,6 +468,7 @@ fn diff_with_budget(
         .map(|(t, _)| *t)
         .chain(new.things().map(|(t, _)| *t))
         .collect();
+    let moved = moved_things(old, new);
     let mut listed = 0usize;
     let mut work = 0usize;
     let mut value_work = 0usize;
@@ -403,13 +510,14 @@ fn diff_with_budget(
                 }
             }
             (Some(a), Some(b)) => {
-                if same_props(a, b) {
+                let moved_by = moved.get(&t).copied();
+                if moved_by.is_none() && same_without_order(a, b) {
                     continue;
                 }
                 out.counts.get_mut(name).expect("a wanted group").changed += 1;
                 out.totals.changed += 1;
                 if room {
-                    let (properties, properties_truncated, written) = changes(a, b);
+                    let (properties, properties_truncated, written) = changes(a, b, moved_by);
                     value_work += written;
                     if value_work > max_value_work {
                         out.exact = false;
