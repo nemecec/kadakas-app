@@ -9,6 +9,7 @@ mod collab_api;
 pub use collab_api::EndpointFactory;
 mod errors;
 pub mod events;
+pub mod feedback_api;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
 pub use errors::{REASON_ALREADY_CONNECTED, REASON_EDITS_WAIT, REASON_UNSAVED_CHANGES, RpcError};
@@ -152,6 +153,8 @@ pub struct Session {
     pub scripting: ScriptingState,
     /// WebAssembly plug-ins: the installed modules and their trust (see `wasm_plugin_api`).
     pub wasm_plugins: WasmPluginState,
+    /// Feedback reports: the outbox, the recent calls and the last failure (see `feedback_api`).
+    pub feedback: feedback_api::FeedbackState,
 }
 
 /// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
@@ -676,6 +679,11 @@ pub const METHODS: &[(&str, &str)] = &[
         "events.poll",
         "Change sets after a revision. params: {since_revision, kinds?}. Returns {revision, truncated, changes}. If truncated is true, older changes were dropped: read the document again.",
     ),
+    // Feedback (see feedback_api.rs).
+    feedback_api::FEEDBACK_SUBMIT,
+    feedback_api::FEEDBACK_LIST,
+    feedback_api::FEEDBACK_GET,
+    feedback_api::FEEDBACK_WITHDRAW,
 ];
 
 impl Default for Session {
@@ -754,6 +762,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             scripting: ScriptingState::default(),
             wasm_plugins: WasmPluginState::default(),
+            feedback: feedback_api::FeedbackState::default(),
         }
     }
 
@@ -942,7 +951,9 @@ impl Session {
         let revision = self.editor.revision();
         #[cfg(not(target_arch = "wasm32"))]
         let start = std::time::Instant::now();
+        let note = feedback_api::begin(method, &p);
         let mut result = self.dispatch(method, p);
+        feedback_api::finish(self, note, &result);
         #[cfg(not(target_arch = "wasm32"))]
         let elapsed = Some(start.elapsed());
         #[cfg(target_arch = "wasm32")]
@@ -963,6 +974,9 @@ impl Session {
     }
 
     fn dispatch(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
+        if let Some(r) = feedback_api::handle(self, method, p.clone()) {
+            return r;
+        }
         if let Some(r) = events::handle(self, method, p.clone()) {
             return r;
         }
@@ -1031,6 +1045,7 @@ impl Session {
                 "display_rules": rules_api::describe(),
                 "collaboration": collab_api::describe(),
                 "errors": errors::describe(),
+                "feedback": feedback_api::describe(),
                 "unknown_shapes": "A file from a newer Kadakas may hold shapes of a kind that this version does not know. They load as kind 'unknown' (the original kind is in shape.kind of objects.get). They are listed in document.summary (objects_by_kind.unknown and unknown_shapes), they are not drawn, they save back unchanged, and only delete_objects can change them.",
                 });
                 #[cfg(not(target_arch = "wasm32"))]
@@ -1455,11 +1470,23 @@ impl Session {
             ));
         };
         let params = req.get("params").cloned().unwrap_or(Value::Null);
-        let result = self.handle_as(conn, kadakas_core::change::Origin::Agent, method, params);
+        // A panic in a method becomes an internal error with a hint to file a bug, so a long
+        // session survives it. The document may be in a state the method did not expect.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.handle_as(conn, kadakas_core::change::Origin::Agent, method, params)
+        }))
+        .unwrap_or_else(|_| {
+            let e = RpcError::internal(format!("internal error in {method}"));
+            self.feedback.log(&e.message);
+            Err(e)
+        });
         let id = id?;
         Some(match result {
             Ok(v) => json!({"jsonrpc": "2.0", "id": id, "result": v}).to_string(),
-            Err(e) => errors::error_response(id, e.code, e.kind, &e.message),
+            Err(e) => {
+                let hint = feedback_api::hint(method, e.kind, &e.message);
+                errors::error_response_with(id, e.code, e.kind, &e.message, hint)
+            }
         })
     }
 }
