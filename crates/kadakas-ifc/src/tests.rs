@@ -1125,9 +1125,26 @@ fn degenerate_objects_are_skipped_with_a_reason() {
             boundary: square(0.0, 0.0, 10.0),
         },
     );
+    // A texture bed has no IFC form: IFC has no textures.
+    add(
+        &mut ed,
+        Shape::SiteModifier {
+            modifier: kadakas_core::model::ModifierKind::TextureBed {
+                texture: None,
+                mapping: None,
+            },
+            boundary: square(0.0, 0.0, 10.0),
+        },
+    );
     let (text, report) = export(ed.doc(), &IfcOptions::default());
     let f = step::parse(&text).unwrap();
     assert!(f.dangling().is_empty());
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.reason.starts_with("texture bed"))
+    );
     assert_eq!(count(&f)["IFCGEOGRAPHICELEMENT"], 1, "only the plant");
     assert!(
         report
