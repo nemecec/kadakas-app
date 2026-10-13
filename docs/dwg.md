@@ -12,6 +12,12 @@ It has no DWG code of its own. It does not link any DWG library.
 - All options of the DXF import and export apply (`layer_mode`, `unit`, `origin`, and so on).
   Two options are for DWG only. `converter_timeout_s` sets the time limit. `dwg_version` sets the file version of an export. Only the ODA File Converter uses it, and the default is `ACAD2018`.
 
+An import keeps the source of each object (IOP-22), as for DXF.
+The object data `import` holds the DWG file name, a hash of the header, the handle of the entity in the converted DXF, and a hash of the entity.
+The objects go to a layer named after the DWG file. The option `track_source: false` turns this off.
+The handles come from the converter. Another converter, or another version of it, can number the same drawing in a different way.
+The matching of two revisions (IOP-23) then uses the geometry.
+
 Because a DWG file becomes DXF first, anything that DXF cannot hold is lost.
 The DXF importer reads 2D geometry, text, blocks and hatches. It skips 3D solids and proxy objects. The report lists them.
 
