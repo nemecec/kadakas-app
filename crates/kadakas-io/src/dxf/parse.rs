@@ -50,6 +50,14 @@ impl Entity {
             .collect()
     }
 
+    /// The handle (group code 5), trimmed and in upper case. None if the entity has none, or the
+    /// handle is not a plain word of at most 32 letters and digits.
+    pub fn handle(&self) -> Option<String> {
+        self.get(5)
+            .and_then(super::revision::normal_handle)
+            .filter(|h| h.len() <= 32 && h.bytes().all(|b| b.is_ascii_alphanumeric()))
+    }
+
     pub fn layer(&self) -> &str {
         self.get(8).unwrap_or("0")
     }
@@ -91,6 +99,8 @@ pub struct LayerDef {
 
 #[derive(Clone, Debug, Default)]
 pub struct Block {
+    /// Handle of the BLOCK entity (group code 5), in normal form.
+    pub handle: Option<String>,
     pub base: [f64; 3],
     pub entities: Vec<Entity>,
 }
@@ -329,6 +339,7 @@ fn read_blocks(dxf: &mut Dxf, body: &[(i32, String)]) {
                 current = Some((
                     name,
                     Block {
+                        handle: r.handle(),
                         base,
                         entities: vec![],
                     },

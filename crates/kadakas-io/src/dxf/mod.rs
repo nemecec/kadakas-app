@@ -4,6 +4,7 @@ mod export;
 mod import;
 pub mod parse;
 pub mod revision;
+mod source;
 
 use kadakas_core::model::{Color, Document};
 

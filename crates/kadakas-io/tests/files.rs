@@ -29,8 +29,9 @@ fn site_dxf_as_classes() {
     assert_eq!(doc.objects.len(), 7);
     assert_eq!(report.skipped_total(), 1);
     assert_eq!(report.skipped[0].entity, "DIMENSION");
-    // One design layer, DXF layers are classes with their colors.
-    assert_eq!(doc.layers.len(), 1);
+    // One layer for the file (apart from the design layer), DXF layers are classes with their colors.
+    assert_eq!(doc.layers.len(), 2);
+    assert_eq!(doc.layers[1].name, "site.dxf");
     let names: Vec<&str> = doc.classes.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["None", "Walls", "Planting", "Survey"]);
     let walls = doc.classes.iter().find(|c| c.name == "Walls").unwrap();

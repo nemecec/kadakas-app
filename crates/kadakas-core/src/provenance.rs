@@ -46,6 +46,9 @@ pub struct InsertRef {
     pub handle: Option<String>,
     /// Hash of the INSERT entity (position, scale and rotation).
     pub hash: String,
+    /// The copy of an array INSERT, counted from 0 (rows after columns). None for a single INSERT.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy: Option<u32>,
 }
 
 /// The block definition that holds the entity of an object.
@@ -77,9 +80,6 @@ pub struct ImportTag {
     /// The INSERTs from the model to the entity, the outer one first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via: Vec<InsertRef>,
-    /// The copy of an array INSERT, counted from 0 (rows after columns).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub copy: Option<u32>,
     /// The part, when one entity makes several objects (the loops of a HATCH), counted from 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub part: Option<u32>,
@@ -264,8 +264,7 @@ mod tests {
     fn block_tags_are_checked() {
         let mut v = tag_value();
         v["block"] = json!({"name": "TREE", "handle": "A1"});
-        v["via"] = json!([{"handle": "B2", "hash": "0123456789abcdef"}]);
-        v["copy"] = json!(3);
+        v["via"] = json!([{"handle": "B2", "hash": "0123456789abcdef", "copy": 3}]);
         assert!(check(&v).is_ok());
         v["via"] = json!([{"handle": "B 2", "hash": "0123456789abcdef"}]);
         assert!(check(&v).is_err());

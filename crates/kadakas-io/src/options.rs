@@ -139,6 +139,12 @@ pub struct ImportOptions {
     pub class_field: Option<String>,
     /// Import stops after this many objects.
     pub max_objects: usize,
+    /// DXF and DWG: keep the source of each object (the DXF handle, the file and a hash of the
+    /// entity) in its data, and put the objects on layers of their own, apart from the design
+    /// work (IOP-22). With `layer` set, the objects go to that layer, but keep the tags.
+    pub track_source: bool,
+    /// DXF and DWG: the file name that the tags record. Default: the name of the file.
+    pub source_name: Option<String>,
 }
 
 impl Default for ImportOptions {
@@ -159,6 +165,8 @@ impl Default for ImportOptions {
             target_crs: None,
             class_field: None,
             max_objects: 500_000,
+            track_source: true,
+            source_name: None,
         }
     }
 }

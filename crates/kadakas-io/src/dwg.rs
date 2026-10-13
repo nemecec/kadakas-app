@@ -484,8 +484,16 @@ pub fn import_file(
         data,
         extra: Default::default(),
     };
+    // The tags of the objects name the DWG file, not the temporary DXF file.
+    let named = ImportOptions {
+        source_name: opts
+            .source_name
+            .clone()
+            .or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned())),
+        ..opts.clone()
+    };
     let mut result = importer(Format::Dxf)
-        .import(&src, &crate::Context::of(doc), opts)
+        .import(&src, &crate::Context::of(doc), &named)
         .map_err(|e| DwgError::Format(format!("the converted DXF could not be read: {e}")))?;
     result.report.format = "dwg".into();
     result.report.notes.push(format!(
@@ -654,6 +662,26 @@ mod tests {
         let mut ed = kadakas_core::command::Editor::new(Document::with_sequential_ids());
         ed.execute(&r.command).unwrap();
         assert_eq!(ed.doc().objects.len(), 1);
+        // The tag names the DWG file, not the temporary DXF file (IOP-22).
+        let source = r.report.source.clone().unwrap();
+        assert!(source.starts_with("site.dwg#"), "{source}");
+        let o = ed.doc().objects.values().next().unwrap();
+        let tag = kadakas_core::provenance::tag(&o.data).unwrap();
+        assert_eq!((tag.source, tag.kind.as_str()), (source, "LINE"));
+        // The caller can name the source.
+        let named = ImportOptions {
+            source_name: Some("renamed.dwg".into()),
+            ..ImportOptions::default()
+        };
+        let r = import_file(
+            &dwg,
+            &named,
+            &RunOptions::default(),
+            &Document::with_sequential_ids(),
+            &s.search(),
+        )
+        .unwrap();
+        assert!(r.report.source.unwrap().starts_with("renamed.dwg#"));
     }
 
     #[test]

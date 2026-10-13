@@ -16,10 +16,12 @@ use kadakas_core::mesh3d::Mesh3d;
 use kadakas_core::model::{Attributes, ClassId, Color, LayerId, Shape};
 
 use super::parse::{self, Dxf, Entity, LayerDef};
+use super::source::{Path, Tracking};
 use super::{aci_rgb, true_color};
 use crate::builder::Builder;
 use crate::options::{LayerMode, OriginMode, PointMode, Unit};
 use crate::{Context, ImportOptions, ImportResult, IoError, Source};
+use kadakas_core::provenance;
 
 /// Most entities that one import visits, counting every copy of an exploded block.
 const MAX_VISITS: usize = 5_000_000;
@@ -55,6 +57,11 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
             .note("the file ends early: imported what could be read");
     }
     let scale = unit.mm_per_unit();
+    let tracking = opts
+        .track_source
+        .then(|| Tracking::new(opts.source_name.as_deref().unwrap_or(&src.name), &dxf));
+    let tracking = tracking.as_ref();
+    b.report.source = tracking.map(|t| t.id.clone());
 
     // Real-world drawings (survey grids in meters) are far from (0, 0). A probe pass finds the extent,
     // and the shift goes into the document georeference so that the geometry stays near the origin.
@@ -80,13 +87,13 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
         b.report.note(&format!(
             "the file has a GEODATA object: the drawing is placed in {crs}"
         ));
-        walk(&dxf, opts, &mut b, scale)?;
+        walk(&dxf, opts, &mut b, scale, tracking)?;
         return Ok(b.finish());
     }
     if doc_has_georef || opts.origin == OriginMode::Center {
         let mut probe = Builder::new(ctx, "dxf", opts.max_objects);
         probe.set_probe();
-        walk(&dxf, opts, &mut probe, scale)?;
+        walk(&dxf, opts, &mut probe, scale, tracking)?;
         if let Some((lo, hi)) = probe.bounds() {
             let center = (lo + hi) / 2.0;
             if center.is_finite() && center.abs().max_element() > FAR_MM {
@@ -111,7 +118,7 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
             }
         }
     }
-    walk(&dxf, opts, &mut b, scale)?;
+    walk(&dxf, opts, &mut b, scale, tracking)?;
     Ok(b.finish())
 }
 
@@ -119,15 +126,25 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
 const FAR_MM: f64 = 1_000_000.0;
 
 /// Converts all entities of the drawing into `b`.
-fn walk(dxf: &Dxf, opts: &ImportOptions, b: &mut Builder, scale: f64) -> Result<(), IoError> {
-    let target_layer = match &opts.layer {
-        Some(name) => b.layer(name, true),
-        None => b.default_layer,
+fn walk(
+    dxf: &Dxf,
+    opts: &ImportOptions,
+    b: &mut Builder,
+    scale: f64,
+    tracking: Option<&Tracking>,
+) -> Result<(), IoError> {
+    // With source tracking, the objects of a file go to a layer of their own, named after the
+    // file, unless the caller names a layer. In `layers` mode each DXF layer gets its own layer.
+    let target_layer = match (&opts.layer, tracking, opts.layer_mode) {
+        (Some(name), ..) => b.layer(name, true),
+        (None, Some(t), LayerMode::Classes) => b.source_layer(&t.name, true, &t.layer_source("")),
+        _ => b.default_layer,
     };
     let mut w = Walker {
         dxf,
         opts,
         b,
+        tracking,
         defs: dxf.layers.iter().map(|l| (l.name.as_str(), l)).collect(),
         mapped: HashMap::new(),
         target_layer,
@@ -142,6 +159,7 @@ fn walk(dxf: &Dxf, opts: &ImportOptions, b: &mut Builder, scale: f64) -> Result<
         pen: None,
         weight: None,
         depth: 0,
+        path: Path::default(),
     };
     for e in &dxf.entities {
         w.entity(e, &root);
@@ -227,6 +245,8 @@ struct Cx {
     pen: Option<Color>,
     weight: Option<f64>,
     depth: usize,
+    /// The block and the INSERTs that led here, for the source tags.
+    path: Path,
 }
 
 struct Item {
@@ -252,6 +272,7 @@ struct Walker<'a> {
     dxf: &'a Dxf,
     opts: &'a ImportOptions,
     b: &'a mut Builder,
+    tracking: Option<&'a Tracking>,
     defs: HashMap<&'a str, &'a LayerDef>,
     /// DXF layer name to (design layer, class, attributes that the layer gives its objects).
     mapped: HashMap<String, (LayerId, ClassId, Attributes)>,
@@ -422,7 +443,11 @@ impl Walker<'_> {
                 (self.target_layer, class, Attributes::default())
             }
             LayerMode::Layers => {
-                let layer = self.b.layer(&decode_percent(name), visible);
+                let shown = decode_percent(name);
+                let layer = match self.tracking {
+                    Some(t) => self.b.source_layer(&shown, visible, &t.layer_source(name)),
+                    None => self.b.layer(&shown, visible),
+                };
                 (
                     layer,
                     self.b.default_class,
@@ -474,10 +499,17 @@ impl Walker<'_> {
         };
         let (layer, class, defaults) = self.target(&layer_name);
         let attrs = self.attrs(e, cx, &defaults);
-        for item in items {
+        let parts = items.len();
+        for (n, mut item) in items.into_iter().enumerate() {
             let mut a = attrs.clone();
             if item.fill.is_some() {
                 a.fill = item.fill;
+            }
+            if let Some(t) = self.tracking {
+                let part = (parts > 1).then_some(n as u32);
+                if let Some(tag) = t.tag(e, &cx.path, part) {
+                    item.data.insert(provenance::KEY.into(), tag);
+                }
             }
             self.b.add(&e.kind, item.shape, layer, class, a, item.data);
         }
@@ -600,12 +632,20 @@ impl Walker<'_> {
                     zs: sz,
                     zt: e.fd(30, 0.0) - sz * block.base[2],
                 };
+                let path = match self.tracking {
+                    Some(_) => {
+                        let copy = (cols_n * rows_n > 1).then_some((r * cols_n + c) as u32);
+                        cx.path.enter(e, name, block.handle.as_deref(), copy)
+                    }
+                    None => Path::default(),
+                };
                 let inner = Cx {
                     xf: cx.xf.after(&local),
                     layer: layer.clone(),
                     pen: own_pen,
                     weight: cx.weight,
                     depth: cx.depth + 1,
+                    path,
                 };
                 for sub in &block.entities {
                     self.entity(sub, &inner);
@@ -1470,8 +1510,10 @@ mod tests {
         );
         assert!(matches!(s[4], Shape::Locus3d { p } if p.z == 3.0));
         assert!(matches!(s[5], Shape::Locus3d { p } if p.z == 0.0));
-        // Layers become classes on the active layer.
-        assert_eq!(doc.layers.len(), 1);
+        // Layers become classes on one layer of their own, apart from the design work.
+        assert_eq!(doc.layers.len(), 2);
+        assert_eq!(doc.layers[1].name, "t");
+        assert!(doc.objects.values().all(|o| o.layer == doc.layers[1].id));
         let names: Vec<_> = doc.classes.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["None", "Walls", "Trees", "0"]);
         let walls = doc.classes.iter().find(|c| c.name == "Walls").unwrap().id;

@@ -225,6 +225,18 @@ pub fn import_file(
         IoError::Format("unknown file type: give a format (dxf, shp or geojson)".into())
     })?;
     let src = Source::read(path)?;
+    // The tags of imported objects name the file with its extension.
+    let named;
+    let opts = match path.file_name() {
+        Some(n) if opts.source_name.is_none() => {
+            named = ImportOptions {
+                source_name: Some(n.to_string_lossy().into_owned()),
+                ..opts.clone()
+            };
+            &named
+        }
+        _ => opts,
+    };
     importer(format).import(&src, &Context::of(doc), opts)
 }
 
