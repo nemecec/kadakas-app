@@ -76,6 +76,11 @@ commands! {
     WindowPanels => "window.panels", msg!("panels-window"), false;
     WindowLayouts => "window.layouts", msg!("panels-saved-layouts"), false;
     About => "help.about", msg!("panels-about-kadakas"), false;
+    // Feedback (API-47, UI-14): one short form for a bug report or a feature request, and the
+    // window with the outbox.
+    ReportBug => "help.report_bug", msg!("panels-report-a-bug"), false;
+    RequestFeature => "help.request_feature", msg!("panels-request-a-feature"), false;
+    Feedback => "help.feedback", msg!("panels-feedback"), false;
 }
 
 impl Cmd {
@@ -352,7 +357,16 @@ pub fn default_menus() -> Vec<Menu> {
             ],
         ),
         menu("window", &["window.panels", "-", "window.layouts"]),
-        menu("help", &["help.about"]),
+        menu(
+            "help",
+            &[
+                "help.report_bug",
+                "help.request_feature",
+                "help.feedback",
+                "-",
+                "help.about",
+            ],
+        ),
     ]
 }
 

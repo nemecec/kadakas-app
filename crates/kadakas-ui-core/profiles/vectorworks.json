@@ -401,6 +401,10 @@
     {
       "id": "help",
       "items": [
+        "help.report_bug",
+        "help.request_feature",
+        "help.feedback",
+        "-",
         "help.about"
       ]
     }

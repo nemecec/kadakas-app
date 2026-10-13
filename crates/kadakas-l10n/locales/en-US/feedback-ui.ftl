@@ -1,0 +1,77 @@
+## feedback-ui: feedback_ui.rs (bug reports and feature requests, UI-14)
+
+feedback-ui-feedback = Feedback
+feedback-ui-feedback-waiting = Feedback ({ $count })
+feedback-ui-reports-wait-for-your-review = Reports wait for your review
+feedback-ui-report-this = Report this
+feedback-ui-form-title-bug = Report a Bug
+feedback-ui-form-title-feature = Request a Feature
+feedback-ui-form-title-question = Feedback
+feedback-ui-kind = Kind
+feedback-ui-kind-bug = Bug
+feedback-ui-kind-feature-request = Feature request
+feedback-ui-kind-question = Question
+feedback-ui-title = Title
+feedback-ui-text = What happened, or what do you need?
+feedback-ui-error-line = Message: { $text }
+feedback-ui-include-screenshot = Include a screenshot of the window
+feedback-ui-screenshot-preview = This picture will be sent.
+feedback-ui-scrub-note = Paths, tokens and e-mail addresses are removed from the text. Nothing else about your drawing is sent.
+feedback-ui-send = Send
+feedback-ui-cancel = Cancel
+feedback-ui-saved = Thank you. The report is in the outbox.
+feedback-ui-merged = The same report exists already. Its counter went up.
+feedback-ui-send-failed = Cannot save the report: { $e }
+feedback-ui-review-approved = Approved. The report is being sent.
+feedback-ui-window-title = Feedback
+feedback-ui-send-reports = Send my reports to the Kadakas team
+feedback-ui-not-asked = You have not decided yet.
+feedback-ui-server = Server address
+feedback-ui-memory-only = Reports are kept until you close this window.
+feedback-ui-write-a-report = Write a report...
+feedback-ui-outbox = Outbox
+feedback-ui-empty = No reports yet.
+feedback-ui-status-pending = Waiting to be sent
+feedback-ui-status-needs-review = Needs your review
+feedback-ui-status-approved = Approved, being sent
+feedback-ui-status-sent = Sent
+feedback-ui-status-withdrawn = Withdrawn
+feedback-ui-from-agent = from an agent
+feedback-ui-from-you = by you
+feedback-ui-from-crash = after a crash
+feedback-ui-count = { $count } times
+feedback-ui-server-id = Server id: { $id }
+feedback-ui-last-error = Last error: { $e }
+feedback-ui-review = Review...
+feedback-ui-withdraw = Withdraw
+feedback-ui-try-again = Try again
+feedback-ui-review-title = Review of report { $id }
+feedback-ui-review-intro = Nothing leaves this computer until you press Send. Untick what you do not want to share.
+feedback-ui-review-excerpt =
+    Model excerpt: { $count ->
+        [one] { $count } object
+       *[other] { $count } objects
+    }
+feedback-ui-review-move-to-origin = Move the model to the origin (hides where it is)
+feedback-ui-review-remove-georef = Remove the georeference
+feedback-ui-review-remove-names = Remove names, notes and record data
+feedback-ui-review-excerpt-failed = The excerpt cannot be made with these options: { $e }
+feedback-ui-review-objects = Objects of the excerpt
+feedback-ui-review-picture = Picture of the view
+feedback-ui-review-screenshot = Screenshot of the window
+feedback-ui-review-calls = Recent calls (names and cleaned parameters)
+feedback-ui-review-log = Recent log lines
+feedback-ui-review-json = Show the exact message (JSON)
+feedback-ui-review-json-note = Pictures are shortened on the screen only.
+feedback-ui-review-send = Send
+feedback-ui-review-keep = Keep for later
+feedback-ui-consent-title = Send reports to the Kadakas team?
+feedback-ui-consent-text = Reports help us fix bugs and add features. A report has the text that you or an agent wrote, the Kadakas version and your system. Pictures and model excerpts are sent only after you have reviewed them, one report at a time. Paths, tokens and e-mail addresses are removed.
+feedback-ui-consent-server = Server: { $url }
+feedback-ui-consent-change = You can change this in Help > Feedback.
+feedback-ui-consent-allow = Send reports
+feedback-ui-consent-deny = Do not send
+feedback-ui-consent-later = Ask me later
+feedback-ui-review-context = Kadakas { $version } on { $os }, client { $client }
+feedback-ui-review-heading = { $kind }: { $title }
+feedback-ui-review-object = { $kind } on { $layer }

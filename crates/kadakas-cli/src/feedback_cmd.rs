@@ -91,24 +91,6 @@ fn kb(n: usize) -> String {
     format!("{:.1} KB", n as f64 / 1024.0)
 }
 
-/// Shows the raw JSON. Long base64 texts are shortened on screen only; the payload is not.
-fn show_json(payload: &str) -> String {
-    match serde_json::from_str::<serde_json::Value>(payload) {
-        Ok(mut v) => {
-            for k in ["screenshot", "render"] {
-                if let Some(b) = v["attachments"][k]["base64"].as_str() {
-                    let n = b.len();
-                    v["attachments"][k]["base64"] = serde_json::json!(format!(
-                        "<{n} characters of base64, shown in full in the sent message>"
-                    ));
-                }
-            }
-            serde_json::to_string_pretty(&v).unwrap_or_default()
-        }
-        Err(_) => payload.to_string(),
-    }
-}
-
 /// Reviews one report. Returns true if it was sent.
 fn review_one(
     hub: &mut Hub,
@@ -234,7 +216,12 @@ fn review_one(
     loop {
         if ask(input, out, "\nShow the raw JSON that will be sent?", false).map_err(io)? {
             let p = r.payload().map_err(|e| e.to_string())?;
-            writeln!(out, "{}", show_json(&p)).map_err(io)?;
+            writeln!(
+                out,
+                "{}",
+                kadakas_api::feedback_api::review::display_json(&p)
+            )
+            .map_err(io)?;
         }
         write!(
             out,

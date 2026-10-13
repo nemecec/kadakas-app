@@ -27,6 +27,7 @@ kadakas-units = { version = "0.1.0", path = "../kadakas-units" }
 kadakas-ui-core = { version = "0.1.0", path = "../kadakas-ui-core" }
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
 kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
+kadakas-feedback = { version = "0.1.0", path = "../kadakas-feedback" }
 kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }
 kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
 eframe = { version = "0.35.0", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }

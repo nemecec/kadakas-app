@@ -13,6 +13,7 @@ pub mod area;
 pub mod collab;
 pub mod databar;
 pub mod effects;
+pub mod feedback;
 pub mod grading;
 pub mod hit;
 pub mod keymap;

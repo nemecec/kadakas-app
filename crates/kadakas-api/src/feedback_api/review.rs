@@ -11,6 +11,25 @@ use kadakas_feedback::{
 
 use super::excerpt::{self, ObjectBrief};
 
+/// The payload as text for the screen: pretty JSON. A long base64 picture is replaced by a note
+/// about its length on the screen only; the message that goes out holds the whole picture.
+pub fn display_json(payload: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(payload) {
+        Ok(mut v) => {
+            for k in ["screenshot", "render"] {
+                if let Some(b) = v["attachments"][k]["base64"].as_str() {
+                    let n = b.len();
+                    v["attachments"][k]["base64"] = serde_json::json!(format!(
+                        "<{n} characters of base64, shown in full in the sent message>"
+                    ));
+                }
+            }
+            serde_json::to_string_pretty(&v).unwrap_or_default()
+        }
+        Err(_) => payload.to_string(),
+    }
+}
+
 pub struct Review {
     pub report: Report,
     /// Which attachments go. They start ticked.
@@ -194,6 +213,18 @@ mod tests {
         assert_eq!(out[0].payload, text);
         assert!(Review::open(&mut s.feedback.hub, &id).is_err());
         assert!(Review::open(&mut s.feedback.hub, "fb-77").is_err());
+    }
+
+    #[test]
+    fn the_screen_text_hides_only_the_base64() {
+        let (mut s, id) = session_with_report();
+        let r = Review::open(&mut s.feedback.hub, &id).unwrap();
+        let p = r.payload().unwrap();
+        let shown = display_json(&p);
+        assert!(shown.contains("characters of base64") && !shown.contains("iVBOR"));
+        assert!(p.contains("iVBOR"));
+        assert!(shown.contains("\"title\": \"T\""));
+        assert_eq!(display_json("nope"), "nope");
     }
 
     #[test]

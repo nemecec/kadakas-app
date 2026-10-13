@@ -1,0 +1,77 @@
+## feedback-ui: feedback_ui.rs (veateated ja funktsioonisoovid, UI-14)
+
+feedback-ui-feedback = Tagasiside
+feedback-ui-feedback-waiting = Tagasiside ({ $count })
+feedback-ui-reports-wait-for-your-review = Teated ootavad ülevaatust
+feedback-ui-report-this = Teata sellest
+feedback-ui-form-title-bug = Teata veast
+feedback-ui-form-title-feature = Palu uut funktsiooni
+feedback-ui-form-title-question = Tagasiside
+feedback-ui-kind = Liik
+feedback-ui-kind-bug = Viga
+feedback-ui-kind-feature-request = Funktsioonisoov
+feedback-ui-kind-question = Küsimus
+feedback-ui-title = Pealkiri
+feedback-ui-text = Mis juhtus või mida on vaja?
+feedback-ui-error-line = Teade: { $text }
+feedback-ui-include-screenshot = Lisa aknast ekraanipilt
+feedback-ui-screenshot-preview = Saadetakse see pilt.
+feedback-ui-scrub-note = Tekstist eemaldatakse failiteed, load ja e-posti aadressid. Joonise muid andmeid kaasa ei panda.
+feedback-ui-send = Saada
+feedback-ui-cancel = Loobu
+feedback-ui-saved = Aitäh! Teade on saatmisjärjekorras.
+feedback-ui-merged = Sama teade on juba olemas. Selle loendur kasvas.
+feedback-ui-send-failed = Teadet ei saa salvestada: { $e }
+feedback-ui-review-approved = Kinnitatud. Teade saadetakse.
+feedback-ui-window-title = Tagasiside
+feedback-ui-send-reports = Saada minu teated Kadaka meeskonnale
+feedback-ui-not-asked = Otsust pole veel tehtud.
+feedback-ui-server = Serveri aadress
+feedback-ui-memory-only = Teated jäävad alles, kuni see aken suletakse.
+feedback-ui-write-a-report = Kirjuta teade...
+feedback-ui-outbox = Saatmisjärjekord
+feedback-ui-empty = Teateid pole veel.
+feedback-ui-status-pending = Ootab saatmist
+feedback-ui-status-needs-review = Vajab ülevaatust
+feedback-ui-status-approved = Kinnitatud, saadetakse
+feedback-ui-status-sent = Saadetud
+feedback-ui-status-withdrawn = Tagasi võetud
+feedback-ui-from-agent = agendilt
+feedback-ui-from-you = kasutajalt
+feedback-ui-from-crash = pärast kokkujooksmist
+feedback-ui-count = { $count } korda
+feedback-ui-server-id = Serveri id: { $id }
+feedback-ui-last-error = Viimane viga: { $e }
+feedback-ui-review = Vaata üle...
+feedback-ui-withdraw = Võta tagasi
+feedback-ui-try-again = Proovi uuesti
+feedback-ui-review-title = Teate { $id } ülevaatus
+feedback-ui-review-intro = Midagi ei lahku sellest arvutist enne, kui vajutatakse Saada. Märkeruut tuleb tühjendada sellelt, mida ei soovita jagada.
+feedback-ui-review-excerpt =
+    Mudeli väljavõte: { $count ->
+        [one] { $count } objekt
+       *[other] { $count } objekti
+    }
+feedback-ui-review-move-to-origin = Nihuta mudel nullpunkti (peidab asukoha)
+feedback-ui-review-remove-georef = Eemalda georeferents
+feedback-ui-review-remove-names = Eemalda nimed, märkused ja kirjeandmed
+feedback-ui-review-excerpt-failed = Väljavõtet ei saa neil valikutel teha: { $e }
+feedback-ui-review-objects = Väljavõtte objektid
+feedback-ui-review-picture = Vaate pilt
+feedback-ui-review-screenshot = Akna ekraanipilt
+feedback-ui-review-calls = Viimased kutsed (nimed ja puhastatud parameetrid)
+feedback-ui-review-log = Viimased logiread
+feedback-ui-review-json = Näita täpset saadetavat teadet (JSON)
+feedback-ui-review-json-note = Pildid on lühendatud ainult ekraanil.
+feedback-ui-review-send = Saada
+feedback-ui-review-keep = Jäta hiljemaks
+feedback-ui-consent-title = Kas saata teateid Kadaka meeskonnale?
+feedback-ui-consent-text = Teated aitavad vigu parandada ja funktsioone lisada. Teade sisaldab kirjutatud teksti (kasutaja või agendi oma), Kadaka versiooni ja süsteemi. Pildid ja mudeli väljavõtted saadetakse alles pärast ülevaatust, iga teade eraldi. Failiteed, load ja e-posti aadressid eemaldatakse.
+feedback-ui-consent-server = Server: { $url }
+feedback-ui-consent-change = Seda saab muuta menüüst Abi > Tagasiside.
+feedback-ui-consent-allow = Saada teateid
+feedback-ui-consent-deny = Ära saada
+feedback-ui-consent-later = Küsi hiljem
+feedback-ui-review-context = Kadakas { $version }, süsteem { $os }, klient { $client }
+feedback-ui-review-heading = { $kind }: { $title }
+feedback-ui-review-object = { $kind } kihil { $layer }

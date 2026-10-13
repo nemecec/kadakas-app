@@ -33,3 +33,4 @@ autosave-ui-show-location = Show location
 autosave-ui-this-browser-kept-an-autosaved-copy-from = This browser kept an autosaved copy from an earlier visit.
 autosave-ui-recovered-the-browser-copy-save-it-to = Recovered the browser copy. Save it to keep it.
 autosave-ui-versions-label = versions
+autosave-ui-report-this-crash = Report this crash
