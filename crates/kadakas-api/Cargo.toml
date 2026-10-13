@@ -17,6 +17,7 @@ kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
 kadakas-plugin = { version = "0.1.0", path = "../kadakas-plugin" }
 kadakas-plugin-abi = { version = "0.1.0", path = "../kadakas-plugin-abi" }
 kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
+kadakas-review = { version = "0.1.0", path = "../kadakas-review" }
 kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }
 kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
 glam = { version = "0.34.1", features = ["serde"] }

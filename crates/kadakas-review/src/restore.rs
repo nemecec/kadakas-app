@@ -67,14 +67,23 @@ pub fn prepare(
     })
 }
 
-/// The build writes a stacking key into every object and layer (the field `order` in `extra`).
-/// A document that is not shared has none. Give the document the extras that the current one has,
-/// so the objects that did not change compare equal and the undo step stays small.
+type Extra = serde_json::Map<String, serde_json::Value>;
+
+/// Removes the stacking keys that the build writes into every object and layer (the field `order`
+/// in `extra`). A document that is not shared has none.
+pub fn without_stacking_keys(doc: &mut Document) {
+    for o in doc.objects.values_mut() {
+        o.extra.remove("order");
+    }
+    for l in &mut doc.layers {
+        l.extra.remove("order");
+    }
+}
+
+/// Gives the document the stacking keys that the current one has (and none for new things), so
+/// the objects that did not change compare equal and the undo step stays small.
 fn keep_stacking_extras(doc: &mut Document, current: &Document) {
-    fn copy(
-        to: &mut serde_json::Map<String, serde_json::Value>,
-        from: Option<&serde_json::Map<String, serde_json::Value>>,
-    ) {
+    fn copy(to: &mut Extra, from: Option<&Extra>) {
         match from.and_then(|m| m.get("order")) {
             Some(k) => {
                 to.insert("order".into(), k.clone());

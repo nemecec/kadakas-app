@@ -22,6 +22,12 @@ pub struct SessionLimits {
     pub max_memory_bytes: u64,
     /// Most bytes that the undo steps may hold. The oldest steps are dropped first.
     pub max_history_bytes: u64,
+    /// Most named versions in the history of the document (REV-01). Past it, the oldest versions
+    /// are folded into the base snapshot. 0 turns versions off.
+    pub max_versions: usize,
+    /// Most bytes of the history of versions (an estimate of its JSON). Past it, the oldest
+    /// versions are folded into the base snapshot.
+    pub max_version_bytes: u64,
     /// Time budget of one call. A call that takes longer fails with a limit error; if it changed
     /// the document, the change is undone. The check runs after the call, so it does not stop a
     /// long calculation: it keeps its result from the document. `None`: no budget. Native only.
@@ -55,6 +61,8 @@ impl Default for SessionLimits {
             max_objects: usize::MAX,
             max_memory_bytes: u64::MAX,
             max_history_bytes: u64::MAX,
+            max_versions: 100,
+            max_version_bytes: 64 * 1024 * 1024,
             request_time: None,
             render_side: 2048,
             render_pixels: 4_000_000,
@@ -76,6 +84,8 @@ impl SessionLimits {
             max_objects: 50_000,
             max_memory_bytes: 512 * 1024 * 1024,
             max_history_bytes: 64 * 1024 * 1024,
+            max_versions: 20,
+            max_version_bytes: 16 * 1024 * 1024,
             request_time: Some(Duration::from_secs(10)),
             render_pixels: 1_000_000,
             raster_pixels: 8_000_000,
@@ -137,7 +147,11 @@ fn document_bytes(doc: &kadakas_core::model::Document) -> u64 {
         })
         .sum();
     let pictures = underlays + plant_pictures;
-    doc.objects.len() as u64 * OBJECT_BYTES + doc.resources.len() as u64 * RESOURCE_BYTES + pictures
+    let versions = doc.history.as_ref().map_or(0, |h| h.bytes() as u64);
+    doc.objects.len() as u64 * OBJECT_BYTES
+        + doc.resources.len() as u64 * RESOURCE_BYTES
+        + pictures
+        + versions
 }
 
 impl Session {

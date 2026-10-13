@@ -33,6 +33,7 @@ mod plugin_api;
 mod plugin_util;
 mod present_api;
 mod query_api;
+mod review_api;
 mod rules_api;
 mod sheets_api;
 mod solid_api;
@@ -152,6 +153,8 @@ pub struct Session {
     pub scripting: ScriptingState,
     /// WebAssembly plug-ins: the installed modules and their trust (see `wasm_plugin_api`).
     pub wasm_plugins: WasmPluginState,
+    /// The parsed history of versions of the open document (see `review_api`).
+    review: review_api::ReviewCache,
 }
 
 /// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
@@ -656,6 +659,13 @@ pub const METHODS: &[(&str, &str)] = &[
     annotation_api::ANNOTATION_EVALUATE,
     annotation_api::ANNOTATION_APPLY_TEXT_STYLE,
     annotation_api::REVISION_LIST,
+    // Versions and the diff (see review_api.rs).
+    review_api::VERSION_CREATE,
+    review_api::VERSION_LIST,
+    review_api::VERSION_GET,
+    review_api::VERSION_RESTORE,
+    review_api::VERSION_DELETE,
+    review_api::VERSION_DIFF,
     // Collaboration (see collab_api.rs).
     collab_api::STATUS,
     collab_api::CONNECT,
@@ -754,6 +764,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             scripting: ScriptingState::default(),
             wasm_plugins: WasmPluginState::default(),
+            review: Default::default(),
         }
     }
 
@@ -780,6 +791,12 @@ impl Session {
 
     /// A session for an opened document, with empty history and selection.
     pub fn with_document(mut doc: Document) -> Self {
+        review_api::vet_document(&mut doc, &SessionLimits::default());
+        Session::with_vetted_document(doc)
+    }
+
+    /// Like `with_document`, for a document whose history was checked already.
+    fn with_vetted_document(mut doc: Document) -> Self {
         // An old file has no project GUID. It gets one in memory, and the next save writes it.
         doc.ensure_project_guid();
         Session {
@@ -788,8 +805,12 @@ impl Session {
         }
     }
 
-    /// Replaces the document, as `document.load` does. Sets the `replaced` flag.
-    pub fn replace_document(&mut self, doc: Document) {
+    /// Replaces the document, as `document.load` does. Sets the `replaced` flag. The history of
+    /// versions of the new document is checked against the limits of the session; what was
+    /// repaired or dropped is returned as notes (they are also the load notes of the document).
+    pub fn replace_document(&mut self, mut doc: Document) -> Vec<String> {
+        review_api::vet_document(&mut doc, &self.limits);
+        let notes = doc.load_notes().to_vec();
         #[cfg(not(target_arch = "wasm32"))]
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
         #[cfg(not(target_arch = "wasm32"))]
@@ -806,7 +827,7 @@ impl Session {
             replaced: true,
             view: self.view,
             snap: self.snap,
-            ..Session::with_document(doc)
+            ..Session::with_vetted_document(doc)
         };
         self.events = hub;
         self.collab = collab;
@@ -823,6 +844,7 @@ impl Session {
             self.gis.epoch += 1;
         }
         self.set_limits(limits);
+        notes
     }
 
     /// The canonical path for a file request, if the path policy allows it. `exts` are the allowed
@@ -978,6 +1000,9 @@ impl Session {
         if let Some(r) = rules_api::handle(self, method, p.clone()) {
             return r;
         }
+        if let Some(r) = review_api::handle(self, method, p.clone()) {
+            return r;
+        }
         if let Some(r) = collab_api::handle(self, method, p.clone()) {
             return r;
         }
@@ -1030,6 +1055,7 @@ impl Session {
                 "survey": survey_api::describe(),
                 "display_rules": rules_api::describe(),
                 "collaboration": collab_api::describe(),
+                "review": review_api::describe(),
                 "errors": errors::describe(),
                 "unknown_shapes": "A file from a newer Kadakas may hold shapes of a kind that this version does not know. They load as kind 'unknown' (the original kind is in shape.kind of objects.get). They are listed in document.summary (objects_by_kind.unknown and unknown_shapes), they are not drawn, they save back unchanged, and only delete_objects can change them.",
                 });
@@ -1097,7 +1123,14 @@ impl Session {
                     "can_redo": self.editor.can_redo(),
                 })
             }
-            "document.get" => serde_json::to_value(doc).unwrap(),
+            "document.get" => {
+                // The versions have their own methods (version.*) and can be large.
+                let mut v = serde_json::to_value(doc).unwrap();
+                if let Some(m) = v.as_object_mut() {
+                    m.remove("history");
+                }
+                v
+            }
             "document.load" => {
                 #[derive(Deserialize)]
                 struct P {
@@ -1109,8 +1142,7 @@ impl Session {
                     e => RpcError::app(e),
                 })?;
                 self.check_document_fits(&document)?;
-                let notes = document.load_notes().to_vec();
-                self.replace_document(document);
+                let notes = self.replace_document(document);
                 if notes.is_empty() {
                     json!({ "ok": true })
                 } else {

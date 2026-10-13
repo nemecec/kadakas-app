@@ -299,6 +299,11 @@ fn quarantined_json(q: &[Quarantined]) -> Value {
     )
 }
 
+/// The name that the person gave to the collaboration client, if the session is connected.
+pub(crate) fn display_name(s: &Session) -> Option<String> {
+    s.collab.link.as_ref().map(|l| l.client.name().to_string())
+}
+
 fn status(s: &Session) -> Value {
     let endpoint = s.collab.endpoint.as_ref().map(|e| e.describe());
     let reconnecting = s.collab.reconnect.enabled

@@ -168,6 +168,38 @@ fn edits_travel_between_sessions() {
     assert!(same(&a, &b));
 }
 
+/// Versions belong to the file (REV-01): they are not shared, they stay when other users change
+/// the document, and a restore travels to the others as an ordinary edit.
+#[test]
+fn versions_are_local_and_a_restore_is_an_ordinary_edit() {
+    let (_hub, mut a, mut b) = pair();
+    let first = add_rect(&mut a, 0);
+    call(&mut a, "collab.sync", json!({"now_ms": 2_000}));
+    call(&mut b, "collab.sync", json!({"now_ms": 2_000}));
+    call(
+        &mut a,
+        "version.create",
+        json!({"name": "Mine", "now_ms": 1}),
+    );
+    // B edits; A hears of it. A keeps its version, B has none.
+    let second = add_rect(&mut b, 5_000);
+    call(&mut b, "collab.sync", json!({"now_ms": 2_100}));
+    call(&mut a, "collab.sync", json!({"now_ms": 2_100}));
+    assert!(has(&a, &second));
+    assert_eq!(call(&mut a, "version.list", json!({}))["count"], 1);
+    assert_eq!(call(&mut b, "version.list", json!({}))["count"], 0);
+    let d = call(&mut a, "version.diff", json!({"from": 1, "to": "current"}));
+    assert_eq!(d["totals"]["added"], 1);
+    // A restores. B sees the object go, and still has no version.
+    call(&mut a, "version.restore", json!({"id": 1, "now_ms": 2}));
+    assert!(!has(&a, &second) && has(&a, &first));
+    call(&mut a, "collab.sync", json!({"now_ms": 2_200}));
+    call(&mut b, "collab.sync", json!({"now_ms": 2_200}));
+    assert!(!has(&b, &second) && has(&b, &first));
+    assert_eq!(call(&mut b, "version.list", json!({}))["count"], 0);
+    assert_eq!(call(&mut a, "version.list", json!({}))["count"], 2);
+}
+
 #[test]
 fn undo_is_per_user() {
     let (_hub, mut a, mut b) = pair();

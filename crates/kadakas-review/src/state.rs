@@ -139,6 +139,14 @@ impl State {
         self.things.iter()
     }
 
+    /// How many things of a part of the document the state has.
+    pub fn count(&self, group: crate::diff::Group) -> usize {
+        self.things
+            .keys()
+            .filter(|t| crate::diff::Group::of(t.kind) == group)
+            .count()
+    }
+
     pub fn len(&self) -> usize {
         self.things.len()
     }

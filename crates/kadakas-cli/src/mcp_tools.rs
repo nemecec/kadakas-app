@@ -188,6 +188,13 @@ pub const DOMAINS: &[Domain] = &[
         open_world: false,
     },
     Domain {
+        name: "review",
+        summary: "Named versions of the document and the diff between them: save a version, list, read, restore (one undo step, the current state is saved first), delete, and compare two versions or a version and the current document (added, removed and changed things by ID, with the changed property paths and old and new values).",
+        prefixes: &["version"],
+        read_only: false,
+        open_world: false,
+    },
+    Domain {
         name: "io",
         summary: "Import and export files: DXF, DWG (needs a converter), Shapefile, GeoJSON, IFC (IFC2x3, IFC4 and IFC4x3 import, IFC4 export), glTF, GLB, OBJ, and PDF, SVG and PNG of sheets.",
         prefixes: &["import", "export"],

@@ -2678,6 +2678,7 @@ dependencies = [
  "kadakas-plugin-abi",
  "kadakas-print",
  "kadakas-render",
+ "kadakas-review",
  "kadakas-script",
  "kadakas-sheet",
  "kadakas-site",

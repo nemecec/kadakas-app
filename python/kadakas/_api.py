@@ -2126,6 +2126,42 @@ class Api:
         JSON-RPC method ``revision.list``."""
         return self._call("revision.list", params or None)
 
+    def version_create(self, **params: Any) -> Any:
+        """Save the document as a named version. One undo step. params: {name, note?, author?, now_ms?}. The version keeps the author (default: the collaboration name, else the origin: user, agent or script), the time, the origin and the editor revision. The oldest versions are folded into the base when the count or the size passes the session limits (max_versions, max_version_bytes). Returns {version, dropped: [ids of versions the limits pushed out], count, bytes}.
+
+        JSON-RPC method ``version.create``."""
+        return self._call("version.create", params or None)
+
+    def version_list(self, **params: Any) -> Any:
+        """The versions, oldest first. Returns {versions: [{id, name, note?, author, time_ms, origin, base_revision, auto?, delta_bytes}], count, bytes, limits: {max_versions, max_bytes}, current_is_newest (true: the document has the content of the newest version, null: there is no version)}.
+
+        JSON-RPC method ``version.list``."""
+        return self._call("version.list", params or None)
+
+    def version_get(self, **params: Any) -> Any:
+        """One version. params: {id, document? (true: also the document as it was, read only; at most 8 MiB, else use version.diff)}. Returns {version, things (how many objects, layers, classes, resources there were), document?, notes?}. The document is JSON of the file format without its history.
+
+        JSON-RPC method ``version.get``."""
+        return self._call("version.get", params or None)
+
+    def version_restore(self, **params: Any) -> Any:
+        """Make the document equal to a version. The current state is saved first as an automatic version (not if it equals the newest version), then the content is replaced in one undo step; undo gives back the work, the versions stay. params: {id, now_ms?}. The active layer and class stay if they exist. Returns {restored, saved_version: {id, new} or null, dropped, changed, notes (things of the version that did not fit and were left out)}.
+
+        JSON-RPC method ``version.restore``."""
+        return self._call("version.restore", params or None)
+
+    def version_delete(self, **params: Any) -> Any:
+        """Delete a version. One undo step. The other versions keep their content. params: {id}. Returns {deleted, count}.
+
+        JSON-RPC method ``version.delete``."""
+        return self._call("version.delete", params or None)
+
+    def version_diff(self, **params: Any) -> Any:
+        """Compare two versions, or a version and the current document. params: {from, to (a version ID or "current"), kinds? (objects, layers, classes, resources, document; default all), limit? (most things listed, default 100, at most 1000)}. Returns {from, to, counts: {<kind>: {added, removed, changed}}, totals, truncated (more things than listed), exact (false: the work limit stopped the diff and the counts are partial), objects|layers|classes|resources|document: {added: [{id, ...}], removed: [{id, ...}], changed: [{id, ..., properties: [{path, old?, new?}], properties_truncated?}]}}. Property paths are those of collaboration (shape, attrs.pen, data.<key>, drawing.project.name, order = stacking). A value longer than 160 characters is {cut, len, hash}.
+
+        JSON-RPC method ``version.diff``."""
+        return self._call("version.diff", params or None)
+
     def collab_status(self, **params: Any) -> Any:
         """State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text without a token, or null if there is none), reconnecting (true: the session connects again by itself after a loss), last_error (why the last try to connect failed, or null), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), waiting_for_snapshot (true: the first snapshot has not arrived, also in the wait between two tries of a first connection, so the document will be replaced and an edit now would be lost; edits are refused with a conflict error), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.
 
@@ -2539,6 +2575,12 @@ METHOD_NAMES: tuple[str, ...] = (
     "annotation.evaluate",
     "annotation.apply_text_style",
     "revision.list",
+    "version.create",
+    "version.list",
+    "version.get",
+    "version.restore",
+    "version.delete",
+    "version.diff",
     "collab.status",
     "collab.connect",
     "collab.disconnect",

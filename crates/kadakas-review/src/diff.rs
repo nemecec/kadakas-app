@@ -72,7 +72,7 @@ impl Group {
         Group::ALL.into_iter().find(|g| g.name() == name)
     }
 
-    fn of(kind: Kind) -> Group {
+    pub(crate) fn of(kind: Kind) -> Group {
         match kind {
             Kind::Object => Group::Objects,
             Kind::Layer => Group::Layers,

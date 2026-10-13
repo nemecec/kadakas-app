@@ -472,6 +472,56 @@ class Collab:
         return self._doc.api.collab_disconnect()
 
 
+class Versions:
+    """Named versions of the document and the diff between them (``doc.versions``).
+
+    A version is a saved state of the whole document. The file keeps the first version in full and
+    each later one as a list of property changes, so many versions stay small. The oldest versions
+    go first when the limits of the session are reached. Versions belong to the file: collaboration
+    does not share them. ``create``, ``restore`` and ``delete`` are one undo step each."""
+
+    def __init__(self, doc: "Document") -> None:
+        self._doc = doc
+
+    def create(self, name: str, note: str | None = None, *, author: str | None = None,
+               **params: Any) -> JsonDict:
+        """Save the document as a version. Returns ``{version, dropped, count, bytes}``."""
+        given = {"name": name, "note": note, "author": author}
+        p: JsonDict = {k: v for k, v in given.items() if v is not None}
+        p.update(params)
+        return self._doc.api.version_create(**p)
+
+    def list(self) -> JsonDict:
+        """The versions, oldest first, with the limits and ``current_is_newest``."""
+        return self._doc.api.version_list()
+
+    def get(self, id: int, *, document: bool = False) -> JsonDict:
+        """One version. With ``document=True`` also the document as it was (read only)."""
+        if document:
+            return self._doc.api.version_get(id=id, document=True)
+        return self._doc.api.version_get(id=id)
+
+    def restore(self, id: int, **params: Any) -> JsonDict:
+        """Make the document equal to a version. The state before is saved as a version first."""
+        return self._doc.api.version_restore(id=id, **params)
+
+    def delete(self, id: int) -> JsonDict:
+        return self._doc.api.version_delete(id=id)
+
+    def diff(self, from_: int | str, to: int | str = "current", *, kinds: Sequence[str] | None = None,
+             limit: int | None = None) -> JsonDict:
+        """What differs between two versions, or between a version and the current document
+        (``"current"``): things added, removed and changed by ID, with the changed property paths
+        and the old and new values. ``kinds`` limits the answer to some of ``objects``, ``layers``,
+        ``classes``, ``resources`` and ``document``; ``limit`` is the most things to list."""
+        p: JsonDict = {"from": from_, "to": to}
+        if kinds is not None:
+            p["kinds"] = list(kinds)
+        if limit is not None:
+            p["limit"] = limit
+        return self._doc.api.version_diff(**p)
+
+
 class Document:
     """A session with a document. Make one with ``kadakas.open()`` or ``kadakas.connect()``."""
 
@@ -485,6 +535,7 @@ class Document:
         self.worksheets = Worksheets(self)
         self.events = Events(self)
         self.collab = Collab(self)
+        self.versions = Versions(self)
         from .plugins import Plugins, Scripts  # late: plugins import this module
 
         self.plugins = Plugins(self)
