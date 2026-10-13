@@ -83,9 +83,11 @@ pub fn build(doc: &Document, ids: &[ObjectId]) -> Option<Excerpt> {
     let mut omitted = 0;
     let mut kept: Vec<&Object> = Vec::new();
     for o in doc.objects.values().filter(|o| want.contains(&o.id)) {
-        if matches!(o.shape, Shape::Unknown { .. } | Shape::Underlay(_)) {
-            omitted += 1;
-        } else if kept.len() >= MAX_EXCERPT_OBJECTS {
+        // Unknown shapes may hold coordinates that no option can move, and an underlay is a
+        // picture of the place. Both stay out, and so do objects over the cap.
+        let left_out = matches!(o.shape, Shape::Unknown { .. } | Shape::Underlay(_))
+            || kept.len() >= MAX_EXCERPT_OBJECTS;
+        if left_out {
             omitted += 1;
         } else {
             kept.push(o);

@@ -28,7 +28,7 @@ The code is in these places:
 ```
 
   The draft is a valid `feedback.submit` call. Over MCP, the text of the failed tool call ends with the hint and the draft, because a client shows the text only. Other errors have no hint, so the token budget stays small.
-- A panic inside a method does not end `kadakas serve`. The JSON-RPC layer turns it into an internal error with this hint. The document may be in a state that the method did not expect.
+- A panic inside a method does not end `kadakas serve`. The JSON-RPC layer turns it into an internal error with this hint. The document can be in a state that the method did not expect.
 
 ## Methods
 
@@ -36,7 +36,7 @@ The code is in these places:
 
 - `kind`: `bug`, `feature_request` or `question`. `severity`: `low`, `medium`, `high`.
 - A bug report without `method` and `error` takes them from the last failed call of the session.
-- Kadakas adds: version, operating system, the MCP client name and version (from `initialize`; the CLI adds them to the call), and the origin (`agent`, `user`, `crash`).
+- Kadakas adds: version, operating system, the MCP client name and version (from `initialize`. The CLI adds them to the call), and the origin (`agent`, `user`, `crash`).
 - The result is `{id, merged, count, status, attachments, note}`. The id is local (`fb-12`).
 - `feedback.list {status?, limit?}` gives `{reports, needs_review, sending: {enabled, asked}}`.
 - `feedback.get {id}` gives the report, the kinds and sizes of its attachments, and the status. It never gives the attachment content.
@@ -91,7 +91,7 @@ By default a report attaches as much useful context as it can:
 
 **Consent.**
 
-1. A text-only report goes to the server only if sending is on: the person said yes once (the app asks at the first report; the choice is in `settings.json` of the outbox folder), or the run has `--feedback-send`.
+1. A text-only report goes to the server only if sending is on: the person said yes once (the app asks at the first report. The choice is in `settings.json` of the outbox folder), or the run has `--feedback-send`.
 2. A report with attachments gets the status `needs_review`. It stays in the outbox until a person approves it. The person sees the exact message, unticks what they do not want to share, sets the privacy options and presses Send:
    - in the app: the badge on the Feedback button, then Help > Feedback > Review;
    - in a terminal: `kadakas feedback review`. It refuses when stdin or stdout is not a terminal.
@@ -102,7 +102,7 @@ By default a report attaches as much useful context as it can:
 
 - *Move to the origin* (default on): the objects move so that the middle of their bounds is at (0, 0), including the data of hardscape objects.
 - *Remove the georeference* (default on).
-- *Remove names, notes and record data*: layer, class and resource names become `Layer 1`, `Class 2`, `Resource 3`; the fields `name`, `note`, `notes`, `text`, `label`, `description`, `comment`, `title`, `tag` and `remarks` become empty in objects, the drawing data and the call log; the record data of objects is deleted.
+- *Remove names, notes and record data*: layer, class and resource names become `Layer 1`, `Class 2`, `Resource 3`. The fields `name`, `note`, `notes`, `text`, `label`, `description`, `comment`, `title`, `tag` and `remarks` become empty in objects, the drawing data and the call log. The record data of objects is deleted.
 
 ## The outbox
 
@@ -113,7 +113,7 @@ A folder of files, owner-only on Unix:
 - `fb-N.excerpt.kad.json`, `fb-N.render.png`, `fb-N.screenshot.png`, `fb-N.calls.json`, `fb-N.log.txt`: the attachments.
 - `fb-N.payload.json`: the approved message.
 
-The folder is `KADAKAS_FEEDBACK_DIR` if that is set, else `feedback` in the data folder of the user (`kadakas-sys` `dirs::data_dir`). Tests always set the variable or use memory. A `Session` keeps its outbox in memory until the host calls `session.feedback.hub.set_storage(...)`; the CLI and the app do that. The web build keeps the outbox in `localStorage` (keys `kadakas.feedback/...`, base64, at most 2 MB), or in memory if the browser refuses.
+The folder is `KADAKAS_FEEDBACK_DIR` if that is set, else `feedback` in the data folder of the user (`kadakas-sys` `dirs::data_dir`). Tests always set the variable or use memory. A `Session` keeps its outbox in memory until the host calls `session.feedback.hub.set_storage(...)`. The CLI and the app do that. The web build keeps the outbox in `localStorage` (keys `kadakas.feedback/...`, base64, at most 2 MB), or in memory if the browser refuses.
 
 Every call reads and writes the files, so the app and a headless run that share the folder see each other's reports.
 
@@ -140,7 +140,7 @@ Content-Type: application/json
 User-Agent: Kadakas/<version>
 ```
 
-The body is one JSON object, at most 6 MiB (the server may answer 413 above its own limit):
+The body is one JSON object, at most 6 MiB (the server can answer 413 above its own limit):
 
 ```json
 {
@@ -164,9 +164,9 @@ The body is one JSON object, at most 6 MiB (the server may answer 413 above its 
 }
 ```
 
-- `wanted`, `tried`, `method`, `error`, `severity` and each attachment are missing when empty. `attachments` is `{}` for a text-only report. A person may have removed any attachment in the review.
+- `wanted`, `tried`, `method`, `error`, `severity` and each attachment are missing when empty. `attachments` is `{}` for a text-only report. A person can have removed any attachment in the review.
 - `client_id` is local to one installation and one outbox. The server uses it together with the sender (address and token, once the server has accounts) to make a repeat of the same request harmless.
-- All texts are UTF-8, scrubbed, and within the limits above. The server must still treat everything as untrusted input.
+- All texts are UTF-8, scrubbed, and within the limits above. The server still has to treat everything as untrusted input.
 - Images are PNG, at most 1 MiB each before base64. The excerpt is at most 512 KiB.
 
 Answers:
@@ -177,9 +177,9 @@ Answers:
 | 408, 425, 429, 5xx | Try later | any | Transient: retry with the back-off |
 | other 4xx (400, 401, 403, 404, 413, 422) | The server refuses the report | any | Permanent: no more tries until a person presses "Try again" |
 
-A 3xx answer counts as a refusal (the client follows no redirects). The server should rate-limit by address and answer 429 with `Retry-After`; the client treats 429 as transient. The server stores the report and may later copy it to an issue tracker. A `DELETE` to withdraw a sent report is not part of version 1: `feedback.withdraw` works on unsent reports only.
+A 3xx answer counts as a refusal (the client follows no redirects). The server needs to rate-limit by address and answer 429 with `Retry-After`. The client treats 429 as transient. The server stores the report and can later copy it to an issue tracker. A `DELETE` to withdraw a sent report is not part of version 1: `feedback.withdraw` works on unsent reports only.
 
-A new version of the protocol uses a new path (`/v2/feedback`); version 1 stays.
+A new version of the protocol uses a new path (`/v2/feedback`). Version 1 stays.
 
 ## Where things are not done
 

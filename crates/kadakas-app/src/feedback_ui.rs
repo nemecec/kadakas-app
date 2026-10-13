@@ -185,6 +185,7 @@ impl FeedbackUi {
         self.shot_next
     }
 
+    #[cfg(test)]
     pub fn is_form_open(&self) -> bool {
         self.form.is_some()
     }
@@ -194,6 +195,7 @@ impl FeedbackUi {
         self.form.as_ref().map(|f| &f.form)
     }
 
+    #[cfg(test)]
     pub fn is_window_open(&self) -> bool {
         self.window
     }

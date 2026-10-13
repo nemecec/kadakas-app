@@ -80,7 +80,7 @@ impl Sender for HttpSender {
             .map_err(|e| SendError::Transient(e.to_string()))?;
         let status = resp.status().as_u16();
         match status {
-            200 | 201 | 202 => {
+            200..=202 => {
                 let mut text = String::new();
                 resp.into_body()
                     .into_reader()
