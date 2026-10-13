@@ -26,6 +26,9 @@
 //! [`Options`]; an input over a limit gives a result with `truncated` set, never an error.
 
 mod matching;
+#[cfg(test)]
+mod more;
+mod objects;
 mod rec;
 #[cfg(test)]
 mod tests;
@@ -33,9 +36,8 @@ mod tests;
 use serde::Serialize;
 
 pub use matching::{changes, diff};
-pub use rec::{
-    Hasher, MAX_POINTS, MODEL, PAPER, Rec, entity_hash, header_hash, hex, normal_handle, records,
-};
+pub use objects::objects_of;
+pub use rec::{MAX_POINTS, MAX_STORED_POINTS, MODEL, PAPER, Rec, records};
 
 /// What happened to an entity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -120,6 +122,10 @@ pub struct Options {
     /// The largest distance (drawing units) for the nearest match. 0 means a part of the size of
     /// the drawing (0.5 percent of the diagonal of the box around the centers).
     pub tolerance: f64,
+    /// The largest tolerance of the nearest match, in drawing units. 0 means no limit. The default
+    /// is 1000, which is one meter for a drawing in millimeters. `Options::for_unit` gives one
+    /// meter for any unit.
+    pub max_tolerance: f64,
     /// Most entities of each side. More are left out, in the order of their handles and hashes.
     pub max_entities: usize,
     /// Most work units of the nearest match: one for each candidate and one for each point pair
@@ -130,10 +136,26 @@ pub struct Options {
     pub proximity: bool,
 }
 
+impl Options {
+    /// The default options for a drawing whose unit is `mm_per_unit` millimeters: the tolerance is
+    /// at most one meter.
+    pub fn for_unit(mm_per_unit: f64) -> Options {
+        Options {
+            max_tolerance: if mm_per_unit.is_finite() && mm_per_unit > 0.0 {
+                1000.0 / mm_per_unit
+            } else {
+                1000.0
+            },
+            ..Options::default()
+        }
+    }
+}
+
 impl Default for Options {
     fn default() -> Self {
         Options {
             tolerance: 0.0,
+            max_tolerance: 1000.0,
             max_entities: 1_000_000,
             work_budget: 50_000_000,
             proximity: true,

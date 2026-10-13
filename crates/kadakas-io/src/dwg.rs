@@ -341,15 +341,31 @@ fn find_output(dir: &Path, ext: &str) -> Option<PathBuf> {
         .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)))
 }
 
-/// Converts a DWG file to DXF and returns the DXF bytes.
+/// Checks the size of a file before it is read or copied.
+fn check_size(path: &Path, max_bytes: u64, what: &str) -> Result<(), DwgError> {
+    let len = fs::metadata(path)
+        .map_err(|e| DwgError::Io(format!("cannot read {}: {e}", path.display())))?
+        .len();
+    if len > max_bytes {
+        return Err(DwgError::Io(format!(
+            "{what} is {len} bytes, more than the limit of {max_bytes} (option max_bytes)"
+        )));
+    }
+    Ok(())
+}
+
+/// Converts a DWG file to DXF and returns the DXF bytes. Neither the DWG file nor the DXF file
+/// may be bigger than `max_bytes`.
 pub fn dwg_to_dxf(
     dwg: &Path,
     conv: &Converter,
     run_opts: &RunOptions,
+    max_bytes: u64,
 ) -> Result<Vec<u8>, DwgError> {
     if !dwg.is_file() {
         return Err(DwgError::Io(format!("cannot read {}", dwg.display())));
     }
+    check_size(dwg, max_bytes, "the DWG file")?;
     let tmp = temp_dir()?;
     let input = tmp.path().join("in");
     let output = tmp.path().join("out");
@@ -390,6 +406,7 @@ pub fn dwg_to_dxf(
         tool: conv.name().into(),
         detail: "it finished but made no DXF file. The DWG file may be damaged or of a version that the converter does not know".into(),
     })?;
+    check_size(&dxf, max_bytes, "the converted DXF file")?;
     fs::read(&dxf).map_err(|e| DwgError::Io(format!("cannot read the converted file: {e}")))
 }
 
@@ -474,7 +491,7 @@ pub fn import_file(
     search: &Search,
 ) -> Result<ImportResult, DwgError> {
     let conv = detect(search).ok_or_else(|| no_converter(search))?;
-    let data = dwg_to_dxf(path, &conv, run_opts)?;
+    let data = dwg_to_dxf(path, &conv, run_opts, opts.max_bytes)?;
     let name = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -663,11 +680,11 @@ mod tests {
         ed.execute(&r.command).unwrap();
         assert_eq!(ed.doc().objects.len(), 1);
         // The tag names the DWG file, not the temporary DXF file (IOP-22).
-        let source = r.report.source.clone().unwrap();
-        assert!(source.starts_with("site.dwg#"), "{source}");
+        let drawing = r.report.drawing.clone().unwrap();
+        assert!(drawing.starts_with("site.dwg"), "{drawing}");
         let o = ed.doc().objects.values().next().unwrap();
         let tag = kadakas_core::provenance::tag(&o.data).unwrap();
-        assert_eq!((tag.source, tag.kind.as_str()), (source, "LINE"));
+        assert_eq!((tag.drawing, tag.kind.as_str()), (drawing, "LINE"));
         // The caller can name the source.
         let named = ImportOptions {
             source_name: Some("renamed.dwg".into()),
@@ -681,7 +698,35 @@ mod tests {
             &s.search(),
         )
         .unwrap();
-        assert!(r.report.source.unwrap().starts_with("renamed.dwg#"));
+        assert!(r.report.drawing.unwrap().starts_with("renamed.dwg"));
+    }
+
+    #[test]
+    fn a_file_over_the_size_limit_is_refused_before_and_after_the_converter() {
+        let s = Stubs::new();
+        libre_stub(&s);
+        let work = Stubs::new();
+        let dwg = dwg_file(work.0.path());
+        let doc = Document::with_sequential_ids();
+        let run = |max_bytes: u64| {
+            let opts = ImportOptions {
+                max_bytes,
+                ..ImportOptions::default()
+            };
+            import_file(&dwg, &opts, &RunOptions::default(), &doc, &s.search())
+                .err()
+                .map(|e| e.to_string())
+        };
+        // The DWG file is 8 bytes: it is refused before the converter starts.
+        let e = run(4).unwrap();
+        assert!(e.contains("the DWG file") && e.contains("max_bytes"), "{e}");
+        // The converted DXF is bigger than the limit.
+        let e = run(60).unwrap();
+        assert!(
+            e.contains("converted DXF") && e.contains("max_bytes"),
+            "{e}"
+        );
+        assert!(run(1_000_000).is_none());
     }
 
     #[test]

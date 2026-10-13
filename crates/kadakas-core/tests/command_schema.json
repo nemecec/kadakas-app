@@ -261,18 +261,40 @@
       "additionalProperties": false,
       "description": "The source of an imported layer.",
       "properties": {
+        "drawing": {
+          "description": "The drawing (lineage), as in `ImportTag::drawing`. Layers are matched on it.",
+          "type": "string"
+        },
         "dxf_layer": {
           "default": "",
           "description": "The name of the DXF layer, when the layer maps one. Empty for a layer that holds the\nwhole file.",
           "type": "string"
         },
-        "source": {
-          "description": "The same text as `ImportTag::source`.",
+        "revision": {
+          "description": "The revision that was imported last.",
           "type": "string"
+        },
+        "shift": {
+          "description": "The shift in mm that the import took off the coordinates of the file (the model is the file\ntimes `unit_scale` minus `shift`).",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "unit_scale": {
+          "description": "Millimeters per unit of the file, as the import used it.",
+          "format": "double",
+          "type": "number"
         }
       },
       "required": [
-        "source"
+        "drawing",
+        "revision",
+        "unit_scale",
+        "shift"
       ],
       "type": "object"
     },

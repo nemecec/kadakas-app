@@ -1,6 +1,6 @@
 //! The matching itself. See the module text of `revision` for the rules.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::rec::Rec;
 use super::{Change, Counts, Diff, Entry, Options, Status, Via};
@@ -10,8 +10,12 @@ use super::{Change, Counts, Diff, Entry, Options, Status, Via};
 const MAX_CANDIDATES: usize = 4_000_000;
 /// The part of the size of the drawing that the automatic tolerance uses.
 const AUTO_TOLERANCE: f64 = 0.005;
+/// How far an entity may move, as a multiple of its own size. A small entity does not jump as far
+/// as a large one (but never less than a twentieth of the tolerance).
+const SIZE_FACTOR: f64 = 2.0;
+const MIN_PART: f64 = 0.05;
 
-type Key<'a> = (&'a str, u64, &'a str);
+type Key<'a> = (&'a str, u64, &'a str, &'a str);
 
 struct Matcher<'a> {
     base: &'a [Rec],
@@ -52,20 +56,26 @@ pub fn diff(base: &[Rec], new: &[Rec], opts: &Options) -> Diff {
         budget: opts.work_budget,
         truncated: cut_b || cut_n,
     };
-    let renumbered = m.by_handle();
-    m.by_hash(|r| (&r.scope, r.hash, ""), Via::Hash);
-    m.by_hash(|r| (&r.scope, r.geo_hash, &r.layer), Via::Hash);
-    m.by_hash(|r| (&r.scope, r.geo_hash, ""), Via::Hash);
     let tolerance = if opts.proximity {
-        m.tolerance(opts.tolerance)
+        m.tolerance(opts.tolerance, opts.max_tolerance)
     } else {
         0.0
     };
+    let renumbered = m.by_handle(tolerance);
+    m.by_hash(|r| (&r.scope, r.hash, "", ""), Via::Hash);
+    m.by_hash(|r| (&r.scope, r.geo_hash, &r.layer, &r.color), Via::Hash);
+    m.by_hash(|r| (&r.scope, r.geo_hash, &r.layer, ""), Via::Hash);
+    m.by_hash(|r| (&r.scope, r.geo_hash, "", ""), Via::Hash);
     if tolerance > 0.0 {
         m.nearest(tolerance, true);
         m.nearest(tolerance, false);
     }
     m.finish(renumbered, tolerance)
+}
+
+/// How often a hash is in a count map.
+fn count<'a>(m: &HashMap<(&'a str, u64), usize>, scope: &'a str, h: u64) -> usize {
+    m.get(&(scope, h)).copied().unwrap_or(0)
 }
 
 impl Matcher<'_> {
@@ -89,9 +99,14 @@ impl Matcher<'_> {
         }
     }
 
-    /// Pairs entities that have the same handle. Returns true if the handles look renumbered, and
-    /// then no handle pair is kept.
-    fn by_handle(&mut self) -> bool {
+    /// Pairs entities that have the same handle, and judges each pair on its own. Returns true if
+    /// the handles of some scope look renumbered; no handle pair of that scope is kept then.
+    ///
+    /// A pair whose content differs is dropped when the content or the geometry of the base entity
+    /// is still unpaired in the new file (a better partner exists), or when the two are farther
+    /// apart than the tolerance and the geometry differs. A scope in which most pairs differ in
+    /// content that is found elsewhere, or in which most pairs were dropped, is renumbered.
+    fn by_handle(&mut self, tol: f64) -> bool {
         let (base, new) = (self.base, self.new);
         let mut nh: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
         for &j in &self.ni {
@@ -119,28 +134,77 @@ impl Matcher<'_> {
                 found.push((i, *j));
             }
         }
-        // Renumbered handles: most handle pairs differ in content, and the content of those
-        // entities is somewhere else in the new file.
-        let mut new_hashes: HashMap<(&str, u64), usize> = HashMap::new();
+        let mut new_hash: HashMap<(&str, u64), usize> = HashMap::new();
+        let mut new_geo: HashMap<(&str, u64), usize> = HashMap::new();
         for &j in &self.ni {
-            *new_hashes.entry((&new[j].scope, new[j].hash)).or_default() += 1;
+            *new_hash.entry((&new[j].scope, new[j].hash)).or_default() += 1;
+            *new_geo.entry((&new[j].scope, new[j].geo_hash)).or_default() += 1;
         }
-        let differ: Vec<usize> = found
+        // What the pairs themselves explain: equal content, equal geometry.
+        let mut used_hash: HashMap<(&str, u64), usize> = HashMap::new();
+        let mut used_geo: HashMap<(&str, u64), usize> = HashMap::new();
+        for &(i, j) in &found {
+            if base[i].hash == new[j].hash {
+                *used_hash.entry((&base[i].scope, base[i].hash)).or_default() += 1;
+            }
+            if base[i].geo_hash == new[j].geo_hash {
+                *used_geo
+                    .entry((&base[i].scope, base[i].geo_hash))
+                    .or_default() += 1;
+            }
+        }
+        struct Tally {
+            found: usize,
+            differ: usize,
+            elsewhere: usize,
+            dropped: usize,
+        }
+        let mut tally: HashMap<&str, Tally> = HashMap::new();
+        let mut kept: Vec<(usize, usize)> = Vec::new();
+        for &(i, j) in &found {
+            let (a, b) = (&base[i], &new[j]);
+            let t = tally.entry(&a.scope).or_insert(Tally {
+                found: 0,
+                differ: 0,
+                elsewhere: 0,
+                dropped: 0,
+            });
+            t.found += 1;
+            if a.hash == b.hash {
+                kept.push((i, j));
+                continue;
+            }
+            t.differ += 1;
+            let free_hash =
+                count(&new_hash, &a.scope, a.hash) > count(&used_hash, &a.scope, a.hash);
+            let free_geo =
+                count(&new_geo, &a.scope, a.geo_hash) > count(&used_geo, &a.scope, a.geo_hash);
+            if count(&new_hash, &a.scope, a.hash) > 0 {
+                t.elsewhere += 1;
+            }
+            let far = tol > 0.0
+                && a.geo_hash != b.geo_hash
+                && matches!((a.center, b.center), (Some(p), Some(q))
+                    if (p[0] - q[0]).hypot(p[1] - q[1]) > tol);
+            if free_hash || free_geo || far {
+                t.dropped += 1;
+            } else {
+                kept.push((i, j));
+            }
+        }
+        let renumbered: HashSet<&str> = tally
             .iter()
-            .filter(|(i, j)| base[*i].hash != new[*j].hash)
-            .map(|(i, _)| *i)
+            .filter(|(_, t)| {
+                (2 * t.differ > t.found && 2 * t.elsewhere > t.differ) || 2 * t.dropped > t.found
+            })
+            .map(|(s, _)| *s)
             .collect();
-        let elsewhere = differ
-            .iter()
-            .filter(|&&i| new_hashes.contains_key(&(base[i].scope.as_str(), base[i].hash)))
-            .count();
-        if 2 * differ.len() > found.len() && 2 * elsewhere > differ.len() {
-            return true;
+        for (i, j) in kept {
+            if !renumbered.contains(base[i].scope.as_str()) {
+                self.pair(i, j, Via::Handle);
+            }
         }
-        for (i, j) in found {
-            self.pair(i, j, Via::Handle);
-        }
-        false
+        !renumbered.is_empty()
     }
 
     /// Pairs the entities that are left and have the same key. Equal entities are exchangeable,
@@ -167,31 +231,53 @@ impl Matcher<'_> {
         }
     }
 
-    /// The tolerance of the nearest match: the option, or a part of the size of the drawing.
-    fn tolerance(&self, wanted: f64) -> f64 {
+    /// The tolerance of the nearest match: the option, or a part of the size of the drawing. The
+    /// size is the box around the middle 90 percent of the centers, so a stray entity far from the
+    /// drawing does not widen it. It is at most `cap`. A drawing whose centers all coincide uses the
+    /// size of its entities.
+    fn tolerance(&self, wanted: f64, cap: f64) -> f64 {
         if wanted.is_finite() && wanted > 0.0 {
             return wanted;
         }
-        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-        for r in self
+        let cap = if cap.is_finite() && cap > 0.0 {
+            cap
+        } else {
+            f64::INFINITY
+        };
+        let recs: Vec<&Rec> = self
             .bi
             .iter()
             .map(|&i| &self.base[i])
             .chain(self.ni.iter().map(|&j| &self.new[j]))
-        {
-            if let Some(c) = r.center {
-                for k in 0..2 {
-                    lo[k] = lo[k].min(c[k]);
-                    hi[k] = hi[k].max(c[k]);
-                }
-            }
+            .collect();
+        let mut axes: [Vec<f64>; 2] = [vec![], vec![]];
+        for c in recs.iter().filter_map(|r| r.center) {
+            axes[0].push(c[0]);
+            axes[1].push(c[1]);
         }
-        let d = ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2)).sqrt();
-        if d.is_finite() && d > 0.0 {
-            d * AUTO_TOLERANCE
+        let n = axes[0].len();
+        if n == 0 {
+            return 0.0;
+        }
+        let mut span = [0.0; 2];
+        for (k, a) in axes.iter_mut().enumerate() {
+            a.sort_by(f64::total_cmp);
+            let lo = ((n - 1) as f64 * 0.05).floor() as usize;
+            let hi = ((n - 1) as f64 * 0.95).ceil() as usize;
+            span[k] = a[hi] - a[lo];
+        }
+        let diag = span[0].hypot(span[1]);
+        let mut tol = if diag.is_finite() {
+            diag * AUTO_TOLERANCE
         } else {
             0.0
+        };
+        if tol <= 0.0 {
+            let mut sizes: Vec<f64> = recs.iter().map(|r| r.size()).filter(|s| *s > 0.0).collect();
+            sizes.sort_by(f64::total_cmp);
+            tol = sizes.get(sizes.len() / 2).map_or(0.0, |s| s * 0.5);
         }
+        if tol.is_finite() { tol.min(cap) } else { 0.0 }
     }
 
     /// Pairs the entities that are left by distance, nearest first. Entities have to be of the
@@ -225,7 +311,9 @@ impl Matcher<'_> {
                     let at = (g, cx.saturating_add(dx), cy.saturating_add(dy));
                     for &j in grid.get(&at).into_iter().flatten() {
                         let s = &new[j];
-                        if !self.spend(1) {
+                        // The cost is charged before the point loop of `distance`.
+                        let cost = 1 + r.points.len().min(s.points.len()) as u64;
+                        if !self.spend(cost) {
                             break 'outer;
                         }
                         if same_layer && s.layer != r.layer {
@@ -234,9 +322,6 @@ impl Matcher<'_> {
                         let Some(d) = distance(r, s, tol) else {
                             continue;
                         };
-                        if !self.spend(r.points.len().min(s.points.len()) as u64) {
-                            break 'outer;
-                        }
                         if cands.len() >= MAX_CANDIDATES {
                             self.truncated = true;
                             break 'outer;
@@ -265,7 +350,6 @@ impl Matcher<'_> {
         let mut entries = Vec::new();
         for &(i, j, via) in &self.pairs {
             let (a, b) = (&base[i], &new[j]);
-            let changes = changes(a, b);
             let status = if a.hash == b.hash {
                 Status::Unchanged
             } else {
@@ -282,7 +366,7 @@ impl Matcher<'_> {
                 changes: if status == Status::Unchanged {
                     vec![]
                 } else {
-                    changes
+                    changes(a, b)
                 },
                 distance,
             });
@@ -361,10 +445,12 @@ pub fn changes(a: &Rec, b: &Rec) -> Vec<Change> {
 }
 
 /// How far two records of the same type are apart, in drawing units, or None if they are farther
-/// apart than `tol`. The distance is the largest of: the mean distance of the points (the distance
-/// of the centers when the point counts differ), the change of the size of the box, and the change
-/// of the sizes (radius, height). So a moved entity has its move as distance, and an edited one a
-/// small number.
+/// apart than they may be. They may be at most `tol` apart, and at most a few times the size of
+/// the entity (`SIZE_FACTOR`, but never less than a twentieth of `tol`).
+///
+/// The distance is the largest of: the mean distance of the points (the distance of the centers
+/// when the point counts differ), the change of the size of the box, and the change of the sizes
+/// (radius, height). So a moved entity has its move as distance, and an edited one a small number.
 fn distance(a: &Rec, b: &Rec, tol: f64) -> Option<f64> {
     let (ca, cb) = (a.center?, b.center?);
     let center = (ca[0] - cb[0]).hypot(ca[1] - cb[1]);
@@ -394,5 +480,6 @@ fn distance(a: &Rec, b: &Rec, tol: f64) -> Option<f64> {
         0.0
     };
     let d = mean.max(size).max(scalar);
-    (d.is_finite() && d <= tol).then_some(d)
+    let allowed = tol.min((SIZE_FACTOR * a.size().max(b.size())).max(tol * MIN_PART));
+    (d.is_finite() && d <= allowed).then_some(d)
 }

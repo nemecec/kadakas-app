@@ -22,8 +22,14 @@ pub struct Builder {
     layers: Vec<(String, LayerId)>,
     /// Names of all layers of the document, and of the layers that this import adds.
     names: HashSet<String>,
-    /// Layers that an import made and that name their source (see `source_layer`).
+    /// Layers that an import made and that name their source (see `source_layer`), also the locked
+    /// ones.
     sourced: Vec<(LayerSource, LayerId)>,
+    /// The sources that the document had before this import.
+    known: Vec<LayerSource>,
+    /// Locked layers that the import unlocked to put objects on them. `finish` locks them again.
+    relock: Vec<LayerId>,
+    locked: HashSet<LayerId>,
     classes: Vec<(String, ClassId)>,
     pub report: Report,
     max_objects: usize,
@@ -92,11 +98,23 @@ impl Builder {
             sourced: ctx
                 .layers
                 .iter()
-                .filter(|l| !l.locked && l.kind == kadakas_core::model::LayerKind::Design)
+                .filter(|l| l.kind == kadakas_core::model::LayerKind::Design)
                 .filter_map(|l| {
                     let src = LayerSource::of(l.extra.get(provenance::LAYER_KEY)?)?;
                     Some((src, l.id))
                 })
+                .collect(),
+            known: ctx
+                .layers
+                .iter()
+                .filter_map(|l| LayerSource::of(l.extra.get(provenance::LAYER_KEY)?))
+                .collect(),
+            relock: Vec::new(),
+            locked: ctx
+                .layers
+                .iter()
+                .filter(|l| l.locked)
+                .map(|l| l.id)
                 .collect(),
             classes: ctx.classes.iter().map(|(id, n)| (n.clone(), *id)).collect(),
             report: Report::new(format),
@@ -142,25 +160,53 @@ impl Builder {
         id
     }
 
-    /// The layer of an import source (IOP-22). It is a layer that an earlier import of the same
-    /// source made, else a new layer that names the source (`SetLayerSource`). The new layer never
-    /// reuses a design layer, so imported objects stay apart from the design work: if a layer has
-    /// the name already, the new one is `name (file)`, then `name (file) 2` and so on.
-    pub fn source_layer(&mut self, name: &str, visible: bool, src: &LayerSource) -> LayerId {
-        if let Some((_, id)) = self.sourced.iter().find(|(s, _)| s == src) {
-            return *id;
+    /// The layer of an import source (IOP-22). Layers are matched on the drawing and the DXF
+    /// layer. It is a layer that an earlier import of the same drawing made, locked or not (a
+    /// locked one is unlocked for the import and locked again at the end), else a new layer that
+    /// names the source (`SetLayerSource`). When the revision or the transform differ, the source
+    /// of the layer is renewed. The new layer never reuses a design layer, so imported objects stay
+    /// apart from the design work: if a layer has the name already, the new one is
+    /// `name (label)`, then `name (label) 2` and so on. `label` is the file name.
+    pub fn source_layer(
+        &mut self,
+        name: &str,
+        visible: bool,
+        src: &LayerSource,
+        label: &str,
+    ) -> LayerId {
+        if let Some(at) = self
+            .sourced
+            .iter()
+            .position(|(s, _)| s.drawing == src.drawing && s.dxf_layer == src.dxf_layer)
+        {
+            let id = self.sourced[at].1;
+            if self.sourced[at].0 != *src {
+                self.cmds.push(Command::SetLayerSource {
+                    id,
+                    source: Some(src.clone()),
+                });
+                self.sourced[at].0 = src.clone();
+            }
+            if self.locked.remove(&id) {
+                self.cmds.push(Command::ModifyLayer {
+                    id,
+                    name: None,
+                    visible: None,
+                    locked: Some(false),
+                    elevation: None,
+                    scale: None,
+                });
+                self.relock.push(id);
+            }
+            return id;
         }
-        let file = src
-            .source
-            .rsplit_once('#')
-            .map_or(src.source.as_str(), |(f, _)| f);
         let mut unique = name.to_string();
         if self.names.contains(&unique) {
-            unique = format!("{name} ({file})");
+            unique = format!("{name} ({label})");
         }
         let mut n = 2;
         while self.names.contains(&unique) {
-            unique = format!("{name} ({file}) {n}");
+            unique = format!("{name} ({label}) {n}");
             n += 1;
         }
         let id = LayerId(self.take_id());
@@ -188,6 +234,28 @@ impl Builder {
         self.sourced.push((src.clone(), id));
         self.report.layers_created.push(unique);
         id
+    }
+
+    /// True if the document had a layer of this drawing before the import.
+    pub fn knows_drawing(&self, drawing: &str) -> bool {
+        self.known.iter().any(|s| s.drawing == drawing)
+    }
+
+    /// True if the document had a layer of this drawing and revision before the import.
+    pub fn knows_revision(&self, drawing: &str, revision: &str) -> bool {
+        self.known
+            .iter()
+            .any(|s| s.drawing == drawing && s.revision == revision)
+    }
+
+    /// The shift (mm) that every added shape gets.
+    pub fn offset(&self) -> DVec2 {
+        self.offset
+    }
+
+    /// True in probe mode: nothing is stored, so nothing needs a tag.
+    pub fn is_probe(&self) -> bool {
+        self.probe.is_some()
     }
 
     /// The class with this name. A class is created, with `attrs`, if there is none.
@@ -279,7 +347,7 @@ impl Builder {
         layer: LayerId,
         class: ClassId,
         attrs: Attributes,
-        data: BTreeMap<String, Value>,
+        mut data: BTreeMap<String, Value>,
     ) -> bool {
         if self.report.total() >= self.max_objects {
             if !self.full {
@@ -310,6 +378,13 @@ impl Builder {
         let id = ObjectId(self.take_id());
         self.last_id = id.0;
         let kind = shape.kind();
+        // The tag of an import says what the object was right after the import (`provenance`).
+        if let Some(Value::Object(t)) = data.get_mut(provenance::KEY)
+            && t.get("obj").and_then(Value::as_str) == Some(provenance::PENDING_OBJ)
+        {
+            let h = provenance::state_hash(&shape, &attrs, layer, class);
+            t.insert("obj".into(), Value::from(h));
+        }
         self.cmds.push(Command::AddObject {
             shape,
             layer: Some(layer),
@@ -327,7 +402,17 @@ impl Builder {
         true
     }
 
-    pub fn finish(self) -> ImportResult {
+    pub fn finish(mut self) -> ImportResult {
+        for id in std::mem::take(&mut self.relock) {
+            self.cmds.push(Command::ModifyLayer {
+                id,
+                name: None,
+                visible: None,
+                locked: Some(true),
+                elevation: None,
+                scale: None,
+            });
+        }
         ImportResult {
             command: Command::Batch {
                 commands: self.cmds,

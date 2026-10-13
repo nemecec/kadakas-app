@@ -50,6 +50,7 @@ pub const OVERLAYABLE: &[&str] = &[
     "io-dialog-design-layer",
     "io-dialog-design-layers-become-building-storeys-default-everyt",
     "io-dialog-dxf-layers-become-design-layers-default-classes",
+    "io-dialog-empty-a-new-layer-named-after-the-file",
     "io-dialog-one-dxf-layer-per-design-layer-default",
     "io-dialog-only-visible-layers-and-classes",
     "panels-add-class",

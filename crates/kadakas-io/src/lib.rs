@@ -96,6 +96,21 @@ pub struct Source {
 impl Source {
     /// Reads a file, and for a shapefile its `dbf`, `prj` and `cpg` parts.
     pub fn read(path: &Path) -> Result<Source, IoError> {
+        Source::read_limited(path, u64::MAX)
+    }
+
+    /// Like [`Source::read`], but refuses a file bigger than `max_bytes`. The size is checked
+    /// before the file is read.
+    pub fn read_limited(path: &Path, max_bytes: u64) -> Result<Source, IoError> {
+        let len = std::fs::metadata(path)
+            .map_err(|e| IoError::File(format!("cannot read {}: {e}", path.display())))?
+            .len();
+        if len > max_bytes {
+            return Err(IoError::File(format!(
+                "{} is {len} bytes, more than the limit of {max_bytes} (option max_bytes)",
+                path.display()
+            )));
+        }
         let data = std::fs::read(path)
             .map_err(|e| IoError::File(format!("cannot read {}: {e}", path.display())))?;
         let name = path
@@ -224,7 +239,7 @@ pub fn import_file(
     let format = format.or_else(|| Format::from_path(path)).ok_or_else(|| {
         IoError::Format("unknown file type: give a format (dxf, shp or geojson)".into())
     })?;
-    let src = Source::read(path)?;
+    let src = Source::read_limited(path, opts.max_bytes)?;
     // The tags of imported objects name the file with its extension.
     let named;
     let opts = match path.file_name() {
@@ -280,6 +295,28 @@ mod tests {
         }
         assert!(exporter(Format::Shapefile).is_none());
         assert_eq!(exporter(Format::Dxf).unwrap().format(), Format::Dxf);
+    }
+
+    #[test]
+    fn a_file_over_the_size_limit_is_refused_before_it_is_read() {
+        let dir = kadakas_sys::tmp::PrivateTempDir::new("kadakas-io-size").unwrap();
+        let path = dir.path().join("big.dxf");
+        std::fs::write(&path, "0\nSECTION\n").unwrap();
+        let doc = Document::with_sequential_ids();
+        let small = ImportOptions {
+            max_bytes: 4,
+            ..ImportOptions::default()
+        };
+        let e = import_file(&path, None, &small, &doc).unwrap_err();
+        assert!(
+            matches!(&e, IoError::File(m) if m.contains("max_bytes")),
+            "{e}"
+        );
+        assert!(Source::read_limited(&path, 4).is_err());
+        assert_eq!(Source::read_limited(&path, 100).unwrap().data.len(), 10);
+        // The name with its extension goes to the tags unless the caller names the source.
+        let r = import_file(&path, None, &ImportOptions::default(), &doc).unwrap();
+        assert!(r.report.drawing.unwrap().starts_with("big.dxf#"));
     }
 
     #[test]

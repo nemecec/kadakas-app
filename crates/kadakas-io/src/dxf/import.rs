@@ -18,10 +18,12 @@ use kadakas_core::model::{Attributes, ClassId, Color, LayerId, Shape};
 use super::parse::{self, Dxf, Entity, LayerDef};
 use super::source::{Path, Tracking};
 use super::{aci_rgb, true_color};
+use super::{hash, revision};
 use crate::builder::Builder;
 use crate::options::{LayerMode, OriginMode, PointMode, Unit};
 use crate::{Context, ImportOptions, ImportResult, IoError, Source};
 use kadakas_core::provenance;
+use kadakas_core::resource::ResourceBody;
 
 /// Most entities that one import visits, counting every copy of an exploded block.
 const MAX_VISITS: usize = 5_000_000;
@@ -31,6 +33,13 @@ const MAX_DEPTH: usize = 12;
 const MAX_ARRAY: i64 = 10_000;
 
 pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<ImportResult, IoError> {
+    if src.data.len() as u64 > opts.max_bytes {
+        return Err(IoError::Format(format!(
+            "the DXF data is {} bytes, more than the limit of {} (option max_bytes)",
+            src.data.len(),
+            opts.max_bytes
+        )));
+    }
     let dxf = parse::parse(&src.data)?;
     let mut b = Builder::new(ctx, "dxf", opts.max_objects);
     let unit = match (
@@ -61,7 +70,13 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
         .track_source
         .then(|| Tracking::new(opts.source_name.as_deref().unwrap_or(&src.name), &dxf));
     let tracking = tracking.as_ref();
-    b.report.source = tracking.map(|t| t.id.clone());
+    b.report.drawing = tracking.map(|t| t.drawing.clone());
+    b.report.revision = tracking.map(|t| t.revision.clone());
+    if let Some(t) = tracking
+        && t.headerless
+    {
+        b.report.note("the file has no header, so nothing says which drawing it is: it is a drawing of its own, and an update of another file with it asks you to confirm");
+    }
 
     // Real-world drawings (survey grids in meters) are far from (0, 0). A probe pass finds the extent,
     // and the shift goes into the document georeference so that the geometry stays near the origin.
@@ -88,6 +103,7 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
             "the file has a GEODATA object: the drawing is placed in {crs}"
         ));
         walk(&dxf, opts, &mut b, scale, tracking)?;
+        store_base(&mut b, &dxf, tracking, scale);
         return Ok(b.finish());
     }
     if doc_has_georef || opts.origin == OriginMode::Center {
@@ -119,7 +135,46 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
         }
     }
     walk(&dxf, opts, &mut b, scale, tracking)?;
+    store_base(&mut b, &dxf, tracking, scale);
     Ok(b.finish())
+}
+
+/// The biggest base resource that an import makes, in bytes of JSON. A bigger one is left out and
+/// the report says so.
+const MAX_BASE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Keeps the summaries of the entities of this revision in the document (a resource of type
+/// `import_base`), so that an update can diff the old file against the new one without the old
+/// file. A revision that the document has is not stored again.
+fn store_base(b: &mut Builder, dxf: &Dxf, tracking: Option<&Tracking>, scale: f64) {
+    let Some(t) = tracking else { return };
+    if b.is_probe() || b.knows_revision(&t.drawing, &t.revision) {
+        return;
+    }
+    let (mut recs, cut) = revision::records(dxf, provenance::MAX_BASE_RECS);
+    if cut {
+        b.report.note("the file has too many entities to keep for an update: an update will need the old file");
+        return;
+    }
+    recs.iter_mut().for_each(revision::Rec::compact);
+    let body = serde_json::json!({
+        "type": provenance::BASE_TYPE,
+        "drawing": t.drawing,
+        "revision": t.revision,
+        "unit_scale": scale,
+        "recs": recs.iter().map(revision::Rec::to_value).collect::<Vec<_>>(),
+    });
+    if provenance::check_base(&body).is_err() || body.to_string().len() > MAX_BASE_BYTES {
+        b.report.note(
+            "the entities are too big to keep for an update: an update will need the old file",
+        );
+        return;
+    }
+    let name = format!(
+        "import base {}",
+        hash::hex(hash::content_hash_of(&t.drawing, &t.revision))
+    );
+    b.resource(&name, ResourceBody::ImportBase(body));
 }
 
 /// A drawing whose center is farther from (0, 0) than this (mm) is shifted. This is 1 km.
@@ -133,11 +188,24 @@ fn walk(
     scale: f64,
     tracking: Option<&Tracking>,
 ) -> Result<(), IoError> {
+    // A probe stores nothing, so it needs no tags and no source layers.
+    let tracking = tracking.filter(|_| !b.is_probe());
+    let xform = (scale, [b.offset().x, b.offset().y]);
+    if let Some(t) = tracking
+        && b.knows_drawing(&t.drawing)
+    {
+        b.report.note("this drawing was imported before: use Update to bring in its changes (the objects of this import are added next to the old ones)");
+    }
     // With source tracking, the objects of a file go to a layer of their own, named after the
     // file, unless the caller names a layer. In `layers` mode each DXF layer gets its own layer.
     let target_layer = match (&opts.layer, tracking, opts.layer_mode) {
         (Some(name), ..) => b.layer(name, true),
-        (None, Some(t), LayerMode::Classes) => b.source_layer(&t.name, true, &t.layer_source("")),
+        (None, Some(t), LayerMode::Classes) => b.source_layer(
+            &t.name,
+            true,
+            &t.layer_source("", xform.0, xform.1),
+            &t.name,
+        ),
         _ => b.default_layer,
     };
     let mut w = Walker {
@@ -145,6 +213,7 @@ fn walk(
         opts,
         b,
         tracking,
+        xform,
         defs: dxf.layers.iter().map(|l| (l.name.as_str(), l)).collect(),
         mapped: HashMap::new(),
         target_layer,
@@ -273,6 +342,8 @@ struct Walker<'a> {
     opts: &'a ImportOptions,
     b: &'a mut Builder,
     tracking: Option<&'a Tracking>,
+    /// Millimeters per unit, and the shift in mm, for the source of layers.
+    xform: (f64, [f64; 2]),
     defs: HashMap<&'a str, &'a LayerDef>,
     /// DXF layer name to (design layer, class, attributes that the layer gives its objects).
     mapped: HashMap<String, (LayerId, ClassId, Attributes)>,
@@ -445,7 +516,10 @@ impl Walker<'_> {
             LayerMode::Layers => {
                 let shown = decode_percent(name);
                 let layer = match self.tracking {
-                    Some(t) => self.b.source_layer(&shown, visible, &t.layer_source(name)),
+                    Some(t) => {
+                        let src = t.layer_source(name, self.xform.0, self.xform.1);
+                        self.b.source_layer(&shown, visible, &src, &t.name)
+                    }
                     None => self.b.layer(&shown, visible),
                 };
                 (
@@ -633,9 +707,9 @@ impl Walker<'_> {
                     zt: e.fd(30, 0.0) - sz * block.base[2],
                 };
                 let path = match self.tracking {
-                    Some(_) => {
+                    Some(t) => {
                         let copy = (cols_n * rows_n > 1).then_some((r * cols_n + c) as u32);
-                        cx.path.enter(e, name, block.handle.as_deref(), copy)
+                        t.enter(&cx.path, e, name, block, copy)
                     }
                     None => Path::default(),
                 };
@@ -1864,8 +1938,9 @@ mod tests {
         );
         assert!(matches!(shapes(&doc)[0], Shape::Line { b, .. } if b.x == 1000.0));
         assert!(report.notes.is_empty());
+        // No header: no unit, and nothing says which drawing it is.
         let (_, report) = run(&dxf_text("", "", "", ents), &ImportOptions::default());
-        assert_eq!(report.notes.len(), 1);
+        assert_eq!(report.notes.len(), 2);
         let (_, report) = run(
             &dxf_text("9\n$INSUNITS\n70\n0\n", "", "", ents),
             &ImportOptions::default(),

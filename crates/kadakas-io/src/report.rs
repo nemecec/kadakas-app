@@ -24,9 +24,11 @@ pub struct Report {
     pub notes: Vec<String>,
     /// True if the import set or used a georeference.
     pub georeferenced: bool,
-    /// DXF and DWG: the source id that the objects carry in `data.import.source` (IOP-22).
+    /// DXF and DWG: the drawing and revision that the objects carry in `data.import` (IOP-22).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
+    pub drawing: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
 }
 
 impl Report {

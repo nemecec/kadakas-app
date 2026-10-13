@@ -1,6 +1,7 @@
 //! DXF import and export (ASCII).
 
 mod export;
+pub mod hash;
 mod import;
 pub mod parse;
 pub mod revision;

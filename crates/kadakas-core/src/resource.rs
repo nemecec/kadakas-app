@@ -32,6 +32,9 @@ pub enum ResourceBody {
     /// An irrigation catalog (head models, pipe sizes, pipe materials). The core keeps it as JSON.
     /// `kadakas-irrigation` reads and writes it.
     IrrigationCatalog(serde_json::Value),
+    /// The entity summaries of one imported revision of a DXF drawing (see `crate::provenance`).
+    /// The core keeps it as JSON and checks its size. `kadakas-io` reads and writes it.
+    ImportBase(serde_json::Value),
     /// A text style, dimension style, tag style or notes database (see `crate::annot::style`).
     Annot(Box<crate::annot::style::AnnotResource>),
     /// A material or a render style (see `crate::present`).
@@ -64,6 +67,7 @@ impl Serialize for ResourceBody {
             }
             ResourceBody::Graphic(g) => g.serialize(s),
             ResourceBody::IrrigationCatalog(v) => v.serialize(s),
+            ResourceBody::ImportBase(v) => v.serialize(s),
             ResourceBody::Annot(a) => a.serialize(s),
             ResourceBody::Render(r) => r.serialize(s),
             ResourceBody::Image(i) => tagged(i.as_ref(), "image", s),
@@ -115,6 +119,7 @@ impl<'de> Deserialize<'de> for ResourceBody {
                 }))
             }
             Some("irrigation_catalog") => Ok(ResourceBody::IrrigationCatalog(v)),
+            Some(crate::provenance::BASE_TYPE) => Ok(ResourceBody::ImportBase(v)),
             Some("hardscape_style") => serde_json::from_value::<HardscapeStyle>(v)
                 .map(|s| ResourceBody::HardscapeStyle(Box::new(s)))
                 .map_err(serde::de::Error::custom),
@@ -165,6 +170,7 @@ impl ResourceBody {
             ResourceBody::LandscapeAreaStyle(_) => "landscape_area_style",
             ResourceBody::Graphic(g) => g.type_name(),
             ResourceBody::IrrigationCatalog(_) => "irrigation_catalog",
+            ResourceBody::ImportBase(_) => crate::provenance::BASE_TYPE,
             ResourceBody::Annot(a) => a.type_name(),
             ResourceBody::Render(r) => r.type_name(),
             ResourceBody::Image(_) => "image",
@@ -199,6 +205,7 @@ impl ResourceBody {
                 Err("an irrigation catalog is a JSON object".into())
             }
             ResourceBody::IrrigationCatalog(_) => Ok(()),
+            ResourceBody::ImportBase(v) => crate::provenance::check_base(v),
             ResourceBody::Annot(a) => a.validate(),
             ResourceBody::Render(r) => r.validate(),
             ResourceBody::Image(i) => i.validate(),

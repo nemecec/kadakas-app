@@ -1,10 +1,13 @@
 //! One DXF entity as the matching engine sees it: identity (handle, scope, type), the properties
 //! that a diff reports, a geometry summary for the nearest match, and stable hashes.
 //!
-//! The hashes use FNV-1a with 64 bits. They are not a security check: a file that makes two
-//! entities collide only gets a wrong diff. They do not depend on the platform or the build, so
-//! the importer can save them in the document and read them again later.
+//! The hashes are in `dxf::hash`. A record can be saved (`to_value`, `from_value`) as the base
+//! side of a later update.
 
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::dxf::hash::{Hasher, anonymous, block_keys, entity_hash, hash_value};
 use crate::dxf::parse::{self, Dxf, Entity};
 
 /// Most points that a record keeps for the nearest match. Longer entities are summarized by the
@@ -13,62 +16,8 @@ pub const MAX_POINTS: usize = 4096;
 /// Most size values (group codes 40 to 48) that a record keeps.
 const MAX_SIZES: usize = 64;
 
-/// A 64-bit FNV-1a hash. Each part is written with a length or a tag, so `"ab" + "c"` and
-/// `"a" + "bc"` differ.
-#[derive(Clone, Copy)]
-pub struct Hasher(u64);
-
-impl Hasher {
-    pub fn new() -> Hasher {
-        Hasher(0xcbf2_9ce4_8422_2325)
-    }
-
-    fn byte(&mut self, b: u8) {
-        self.0 ^= u64::from(b);
-        self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-
-    pub fn u64(&mut self, v: u64) {
-        v.to_le_bytes().into_iter().for_each(|b| self.byte(b));
-    }
-
-    pub fn str(&mut self, s: &str) {
-        self.u64(s.len() as u64);
-        s.bytes().for_each(|b| self.byte(b));
-    }
-
-    /// A number by its bits. Minus zero counts as zero.
-    pub fn f64(&mut self, v: f64) {
-        self.u64((v + 0.0).to_bits());
-    }
-
-    pub fn finish(&self) -> u64 {
-        self.0
-    }
-}
-
-impl Default for Hasher {
-    fn default() -> Self {
-        Hasher::new()
-    }
-}
-
-/// A hash as 16 lower-case hexadecimal digits.
-pub fn hex(h: u64) -> String {
-    format!("{h:016x}")
-}
-
-/// Group codes whose values are numbers in the hash. Other values are hashed as trimmed text.
-fn numeric_code(c: i32) -> bool {
-    matches!(c, 10..=59 | 110..=149 | 210..=239 | 460..=469 | 1010..=1059)
-}
-
-/// Group codes that name other objects or give the writer's own bookkeeping: handles (5, 105),
-/// owners and pointers (330 to 369) and the markers of subclasses and groups (100, 102). They
-/// change when a program writes the same drawing again, so the content hash leaves them out.
-fn bookkeeping_code(c: i32) -> bool {
-    matches!(c, 5 | 100 | 102 | 105 | 330..=369)
-}
+/// Most points that a stored summary keeps (the same as the core check).
+pub const MAX_STORED_POINTS: usize = kadakas_core::provenance::MAX_BASE_POINTS;
 
 /// Group codes of the geometry: coordinates, sizes, angles and the extrusion direction.
 fn geometry_code(c: i32) -> bool {
@@ -80,60 +29,18 @@ fn shape_flags(kind: &str) -> bool {
     matches!(kind, "LWPOLYLINE" | "POLYLINE" | "SPLINE" | "HATCH")
 }
 
-fn hash_value(h: &mut Hasher, code: i32, value: &str) {
-    h.u64(code as u64);
-    match numeric_code(code)
-        .then(|| parse::parse_f64(value))
-        .flatten()
-    {
-        Some(v) => {
-            h.u64(1);
-            h.f64(v);
-        }
-        None => {
-            h.u64(0);
-            h.str(value.trim());
-        }
-    }
-}
+/// A hash in JSON: 16 hexadecimal digits, because JSON numbers lose bits above 2^53.
+mod hex_u64 {
+    use serde::{Deserialize, Deserializer, Serializer};
 
-/// The hash of the content of an entity: its type, all its values and the content of its
-/// children (the vertices of a POLYLINE). It leaves out the handle and the bookkeeping codes.
-pub fn entity_hash(e: &Entity) -> u64 {
-    let mut h = Hasher::new();
-    h.str(&e.kind);
-    for (c, v) in e.items.iter().filter(|(c, _)| !bookkeeping_code(*c)) {
-        hash_value(&mut h, *c, v);
+    pub fn serialize<S: Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&kadakas_core::provenance::hex(*v))
     }
-    h.u64(e.children.len() as u64);
-    for ch in &e.children {
-        h.u64(entity_hash(ch));
-    }
-    h.finish()
-}
 
-/// The hash of a file header: all variables, in order of name. A different file with the same name
-/// has a different header (the time stamps, the extents and the GUIDs differ).
-pub fn header_hash(dxf: &Dxf) -> u64 {
-    let mut names: Vec<&String> = dxf.header.keys().collect();
-    names.sort();
-    let mut h = Hasher::new();
-    h.u64(names.len() as u64);
-    for n in names {
-        h.str(n);
-        let vals = &dxf.header[n];
-        h.u64(vals.len() as u64);
-        for (c, v) in vals {
-            hash_value(&mut h, *c, v);
-        }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+        let t = String::deserialize(d)?;
+        u64::from_str_radix(&t, 16).map_err(serde::de::Error::custom)
     }
-    h.finish()
-}
-
-/// The normal form of a handle: trimmed, upper case. None for an empty one.
-pub fn normal_handle(s: &str) -> Option<String> {
-    let t = s.trim();
-    (!t.is_empty()).then(|| t.to_ascii_uppercase())
 }
 
 /// The scope of entities in the model.
@@ -142,12 +49,14 @@ pub const MODEL: &str = "";
 pub const PAPER: &str = "*paper";
 
 /// One entity, summarized.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Rec {
     /// DXF handle (normal form), if the entity has one.
     pub handle: Option<String>,
-    /// `MODEL`, `PAPER`, or `block:<name>` for an entity inside a block definition. Matching never
-    /// crosses scopes.
+    /// `MODEL`, `PAPER`, or `block:<key>` for an entity inside a block definition (the key is
+    /// `hash::block_keys`: the BLOCK_RECORD handle, the name, or a content hash for an anonymous
+    /// block). Matching never crosses scopes.
     pub scope: String,
     /// The entity type, for example `LINE`.
     pub kind: String,
@@ -160,8 +69,10 @@ pub struct Rec {
     /// The text of TEXT, MTEXT and ATTRIB entities, and the name of an INSERT.
     pub text: String,
     /// Hash of all content, without the handle.
+    #[serde(with = "hex_u64")]
     pub hash: u64,
     /// Hash of the type and the geometry only: it stays equal when the layer, color or text change.
+    #[serde(with = "hex_u64")]
     pub geo_hash: u64,
     /// Points in drawing units (the first `MAX_POINTS`).
     pub points: Vec<[f64; 2]>,
@@ -176,7 +87,7 @@ impl Rec {
     /// A record of an entity in `scope`.
     pub fn from_entity(e: &Entity, scope: &str) -> Rec {
         let mut r = Rec {
-            handle: e.get(5).and_then(normal_handle),
+            handle: e.handle(),
             scope: scope.to_string(),
             kind: e.kind.clone(),
             layer: e.layer().to_string(),
@@ -200,7 +111,11 @@ impl Rec {
                 .filter(|(c, _)| matches!(c, 1 | 3))
                 .map(|(_, v)| v.as_str())
                 .collect(),
-            "INSERT" => e.get(2).unwrap_or("").to_string(),
+            // The name of an anonymous block is not content.
+            "INSERT" => Some(e.get(2).unwrap_or("").trim())
+                .filter(|n| !anonymous(n))
+                .unwrap_or("")
+                .to_string(),
             _ => String::new(),
         };
         let mut g = Hasher::new();
@@ -273,6 +188,43 @@ impl Rec {
         self.diag = if d.is_finite() { d } else { 0.0 };
     }
 
+    /// The size of the entity: the diagonal of its box, or twice its largest size value (a radius,
+    /// a text height).
+    pub fn size(&self) -> f64 {
+        let s = self
+            .sizes
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(0.0, f64::max);
+        self.diag.max(2.0 * s)
+    }
+
+    /// Cuts the points to what a stored summary keeps. The center and diagonal stay.
+    pub fn compact(&mut self) {
+        self.points.truncate(MAX_STORED_POINTS);
+    }
+
+    pub fn to_value(&self) -> Value {
+        serde_json::to_value(self).expect("a record is plain data")
+    }
+
+    /// Reads a stored summary. None if it is not one, or a number in it is not finite.
+    pub fn from_value(v: &Value) -> Option<Rec> {
+        let mut r: Rec = serde_json::from_value(v.clone()).ok()?;
+        r.points.truncate(MAX_STORED_POINTS);
+        r.sizes.truncate(MAX_SIZES);
+        let finite = r
+            .points
+            .iter()
+            .flatten()
+            .chain(&r.sizes)
+            .all(|v| v.is_finite())
+            && r.diag.is_finite()
+            && r.center.is_none_or(|c| c.iter().all(|v| v.is_finite()));
+        finite.then_some(r)
+    }
+
     /// The order key: the same for the same entity in any order of the input.
     pub(super) fn key(&self) -> (&str, Option<&str>, u64, &str, &str) {
         (
@@ -288,6 +240,7 @@ impl Rec {
 /// The records of a parsed file: the model, paper space and the entities of block definitions.
 /// Stops at `max` records and says so with the second value.
 pub fn records(dxf: &Dxf, max: usize) -> (Vec<Rec>, bool) {
+    let keys = block_keys(dxf);
     let mut out = Vec::new();
     let mut names: Vec<&String> = dxf.blocks.keys().collect();
     names.sort();
@@ -306,7 +259,7 @@ pub fn records(dxf: &Dxf, max: usize) -> (Vec<Rec>, bool) {
             return (out, true);
         }
         let scope = match block {
-            Some(n) => format!("block:{n}"),
+            Some(n) => format!("block:{}", keys[n]),
             None if e.int(67) == Some(1) => PAPER.to_string(),
             None => MODEL.to_string(),
         };
@@ -325,49 +278,6 @@ mod tests {
             items: items.iter().map(|(c, v)| (*c, v.to_string())).collect(),
             children: vec![],
         }
-    }
-
-    #[test]
-    fn the_hash_ignores_handles_and_number_formats() {
-        let a = ent(
-            "LINE",
-            &[(5, "1A"), (8, "W"), (10, "1.0"), (20, "2"), (330, "7")],
-        );
-        let b = ent(
-            "LINE",
-            &[(5, "2B"), (8, "W"), (10, "1"), (20, "2.0000"), (330, "9")],
-        );
-        assert_eq!(entity_hash(&a), entity_hash(&b));
-        let c = ent("LINE", &[(5, "1A"), (8, "V"), (10, "1"), (20, "2")]);
-        assert_ne!(entity_hash(&a), entity_hash(&c));
-        let z = ent("LINE", &[(10, "-0.0")]);
-        assert_eq!(entity_hash(&z), entity_hash(&ent("LINE", &[(10, "0")])));
-        // Text values are trimmed but keep their case.
-        assert_eq!(
-            entity_hash(&ent("TEXT", &[(1, " Oak ")])),
-            entity_hash(&ent("TEXT", &[(1, "Oak")]))
-        );
-        assert_ne!(
-            entity_hash(&ent("TEXT", &[(1, "oak")])),
-            entity_hash(&ent("TEXT", &[(1, "Oak")]))
-        );
-        // Parts are not glued together.
-        assert_ne!(
-            entity_hash(&ent("T", &[(1, "ab"), (3, "c")])),
-            entity_hash(&ent("T", &[(1, "a"), (3, "bc")]))
-        );
-    }
-
-    #[test]
-    fn children_count_in_the_hash() {
-        let mut p = ent("POLYLINE", &[(70, "0")]);
-        let h0 = entity_hash(&p);
-        p.children.push(ent("VERTEX", &[(10, "1"), (20, "2")]));
-        let h1 = entity_hash(&p);
-        p.children[0].items[0].1 = "3".into();
-        assert!(h0 != h1 && h1 != entity_hash(&p));
-        assert_eq!(hex(0xab), "00000000000000ab");
-        assert_eq!(Hasher::default().finish(), Hasher::new().finish());
     }
 
     #[test]
@@ -470,16 +380,9 @@ mod tests {
         let (recs, cut) = records(&d, 100);
         assert!(!cut);
         let scopes: Vec<&str> = recs.iter().map(|r| r.scope.as_str()).collect();
-        assert_eq!(scopes, vec![MODEL, PAPER, "block:B"]);
+        assert_eq!(scopes, vec![MODEL, PAPER, "block:name:B"]);
         let (recs, cut) = records(&d, 2);
         assert!(cut && recs.len() == 2);
         // The header hash does not depend on the map order, and it sees the variables.
-        assert_eq!(
-            header_hash(&d),
-            header_hash(&parse::parse(text.as_bytes()).unwrap())
-        );
-        let other = parse::parse(text.replace("$A", "$B").as_bytes()).unwrap();
-        assert_ne!(header_hash(&d), header_hash(&other));
-        assert_eq!(normal_handle("  "), None);
     }
 }

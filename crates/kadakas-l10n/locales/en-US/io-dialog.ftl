@@ -16,6 +16,8 @@ io-dialog-document-crs-default-utm-zone = Document CRS (default: UTM zone)
 io-dialog-class-from-attribute = Class from attribute
 io-dialog-keep-the-coordinates-of-the-file-default = Keep the coordinates of the file (default: center the drawing)
 io-dialog-design-layer = Design layer
+io-dialog-empty-a-new-layer-named-after-the-file = Empty: a new layer named after the file
+io-dialog-keep-the-source-for-updates = Keep the source (for updates)
 io-dialog-cancel = Cancel
 io-dialog-imported-objects-skipped =
     Imported { $imported ->

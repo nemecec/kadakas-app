@@ -106,6 +106,9 @@ pub enum FaceMode {
     Mesh,
 }
 
+/// The default of `ImportOptions::max_bytes`.
+pub const DEFAULT_MAX_BYTES: u64 = 512 * 1024 * 1024;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ImportOptions {
@@ -145,6 +148,9 @@ pub struct ImportOptions {
     pub track_source: bool,
     /// DXF and DWG: the file name that the tags record. Default: the name of the file.
     pub source_name: Option<String>,
+    /// DXF and DWG: the largest file to read, in bytes. The size is checked before the file is
+    /// read. Default 512 MiB.
+    pub max_bytes: u64,
 }
 
 impl Default for ImportOptions {
@@ -167,6 +173,7 @@ impl Default for ImportOptions {
             max_objects: 500_000,
             track_source: true,
             source_name: None,
+            max_bytes: DEFAULT_MAX_BYTES,
         }
     }
 }

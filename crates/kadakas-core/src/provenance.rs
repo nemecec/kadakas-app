@@ -1,9 +1,25 @@
 //! Where imported objects came from (IOP-22).
 //!
 //! An importer of DXF or DWG files keeps, for each object, a small tag in `Object::data[KEY]`:
-//! the source file, the DXF handle of the entity, and a hash of the entity content. A layer that
-//! the import made keeps the source in `Layer::extra[LAYER_KEY]`. A later import of a new revision
-//! of the file uses the tags to match its entities to the objects (see `kadakas_io::dxf::revision`).
+//! the drawing and revision it came from, the DXF handle of the entity, a hash of the entity
+//! content, and a hash of the object right after the import. A layer that the import made keeps
+//! the source in `Layer::extra[LAYER_KEY]`. A later import of a new revision of the file uses the
+//! tags to match its entities to the objects (see `kadakas_io::dxf::revision`). Other importers
+//! (Shapefile, IFC) can use the same tag: only `kind` and `hash` are about DXF entities.
+//!
+//! **Identity.** `drawing` is the lineage: the same drawing in all its revisions and under any
+//! file name. `revision` is one saved state of it. The importer takes `drawing` from
+//! `$FINGERPRINTGUID` (else the file name; a file without a header gets the name and a hash of its
+//! entities) and `revision` from `$VERSIONGUID` (else a hash of the header). Layers and objects are
+//! matched on `drawing`. The layer source records the `revision` and the import transform (unit
+//! scale and origin shift), which an update needs to put a new file in the same place.
+//!
+//! **Base side.** The summaries of the entities of one revision (not the file) are kept in a
+//! document resource of type `import_base`, keyed by `drawing` and `revision` (`check_base`). An
+//! update diffs these summaries with the new file and maps the result to objects by handle or
+//! hash, `via` and `part`. A changed block definition fans out: one changed entity in the
+//! definition maps to every object whose `block.key` is that definition and whose `via` leads
+//! to it.
 //!
 //! Why object data: it is the place where importers already keep per-object facts (the GeoJSON
 //! and Shapefile importers, the rotation of imported text). It is saved with the object, copied
@@ -11,8 +27,10 @@
 //! the file format. A record format is for fields that people edit, so it does not fit.
 //!
 //! The tag says where the object came from, not what it is now. A copy is new work, so the
-//! commands that copy objects drop the tag (`strip_copy`). A moved object keeps it: the hash
-//! then differs from the entity, and that tells an update that the user edited the object.
+//! commands that copy objects drop the tag (`strip_copy`). A moved object keeps it. `hash` is
+//! the hash of the source entity and never changes. `obj` is the hash of the object state
+//! (shape, attributes, layer, class) right after the import: if it differs from `state_hash` of
+//! the object now, the user edited the object (`is_edited`).
 //!
 //! The tag comes from files and from other users, so it is checked (`check`) when a command sets
 //! it and when a document is loaded (`repair`).
@@ -22,7 +40,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::model::Document;
+use crate::model::{Attributes, ClassId, Document, LayerId, Object, Shape};
 
 /// The key in `Object::data` that holds the tag.
 pub const KEY: &str = "import";
@@ -55,7 +73,11 @@ pub struct InsertRef {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BlockRef {
+    /// The block name, for people. An anonymous block (`*U12`) has a name that changes at each save.
     pub name: String,
+    /// The key of the definition: the BLOCK_RECORD handle, else the name, else for an anonymous
+    /// block a hash of its content. Matching uses the key.
+    pub key: String,
     /// Handle of the BLOCK entity of the definition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<String>,
@@ -65,8 +87,10 @@ pub struct BlockRef {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImportTag {
-    /// The source: file name, `#`, and the hash of the file header.
-    pub source: String,
+    /// The drawing (lineage) that the object came from.
+    pub drawing: String,
+    /// The revision of the drawing that the object came from.
+    pub revision: String,
     /// DXF handle (group code 5) of the entity. None for files that have no handles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<String>,
@@ -74,6 +98,8 @@ pub struct ImportTag {
     pub kind: String,
     /// Hash of the entity content in the file (16 hexadecimal digits). It does not use the handle.
     pub hash: String,
+    /// Hash of the object state right after the import (`state_hash`).
+    pub obj: String,
     /// The block definition, for an entity that is inside a block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block: Option<BlockRef>,
@@ -86,15 +112,22 @@ pub struct ImportTag {
 }
 
 /// The source of an imported layer.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LayerSource {
-    /// The same text as `ImportTag::source`.
-    pub source: String,
+    /// The drawing (lineage), as in `ImportTag::drawing`. Layers are matched on it.
+    pub drawing: String,
+    /// The revision that was imported last.
+    pub revision: String,
     /// The name of the DXF layer, when the layer maps one. Empty for a layer that holds the
     /// whole file.
     #[serde(default)]
     pub dxf_layer: String,
+    /// Millimeters per unit of the file, as the import used it.
+    pub unit_scale: f64,
+    /// The shift in mm that the import took off the coordinates of the file (the model is the file
+    /// times `unit_scale` minus `shift`).
+    pub shift: [f64; 2],
 }
 
 fn text_ok(s: &str, max: usize) -> bool {
@@ -114,20 +147,20 @@ fn hash_ok(h: &str) -> bool {
 impl ImportTag {
     /// Why the tag is not valid, if it is not.
     pub fn problem(&self) -> Option<&'static str> {
-        if !text_ok(&self.source, MAX_TEXT) {
-            return Some("the source is empty, too long or has control characters");
+        if !text_ok(&self.drawing, MAX_TEXT) || !text_ok(&self.revision, MAX_TEXT) {
+            return Some("the drawing or revision is empty, too long or has control characters");
         }
         if !text_ok(&self.kind, 32) {
             return Some("the entity type is not valid");
         }
-        if !hash_ok(&self.hash) {
-            return Some("the hash is not 16 hexadecimal digits");
+        if !hash_ok(&self.hash) || !hash_ok(&self.obj) {
+            return Some("a hash is not 16 hexadecimal digits");
         }
         if !handle_ok(&self.handle) {
             return Some("the handle is not valid");
         }
         if let Some(b) = &self.block
-            && !(text_ok(&b.name, MAX_TEXT) && handle_ok(&b.handle))
+            && !(text_ok(&b.name, MAX_TEXT) && text_ok(&b.key, MAX_TEXT) && handle_ok(&b.handle))
         {
             return Some("the block is not valid");
         }
@@ -157,8 +190,16 @@ impl ImportTag {
 
 impl LayerSource {
     pub fn problem(&self) -> Option<&'static str> {
-        if !text_ok(&self.source, MAX_TEXT) {
-            return Some("the source is empty, too long or has control characters");
+        if !text_ok(&self.drawing, MAX_TEXT) || !text_ok(&self.revision, MAX_TEXT) {
+            return Some("the drawing or revision is empty, too long or has control characters");
+        }
+        if !(self.unit_scale.is_finite() && self.unit_scale > 0.0)
+            || self
+                .shift
+                .iter()
+                .any(|v| !v.is_finite() || v.abs() > 1.0e12)
+        {
+            return Some("the import transform is not valid");
         }
         if self.dxf_layer.chars().count() > MAX_TEXT || self.dxf_layer.chars().any(char::is_control)
         {
@@ -186,6 +227,143 @@ pub fn check(v: &Value) -> Result<(), String> {
 /// The tag of an object's data, if it has a valid one.
 pub fn tag(data: &BTreeMap<String, Value>) -> Option<ImportTag> {
     data.get(KEY).and_then(ImportTag::of)
+}
+
+/// A 64-bit FNV-1a hash that is the same on every platform and build, so hashes can be saved.
+/// Every part is written with a length or a tag, so `"ab" + "c"` and `"a" + "bc"` differ. It is
+/// not a security check.
+#[derive(Clone, Copy)]
+pub struct Hasher(u64);
+
+impl Hasher {
+    pub fn new() -> Hasher {
+        Hasher(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn byte(&mut self, b: u8) {
+        self.0 ^= u64::from(b);
+        self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+
+    pub fn u64(&mut self, v: u64) {
+        v.to_le_bytes().into_iter().for_each(|b| self.byte(b));
+    }
+
+    pub fn str(&mut self, s: &str) {
+        self.u64(s.len() as u64);
+        s.bytes().for_each(|b| self.byte(b));
+    }
+
+    /// A number by its bits. Minus zero counts as zero.
+    pub fn f64(&mut self, v: f64) {
+        self.u64((v + 0.0).to_bits());
+    }
+
+    pub fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+impl Default for Hasher {
+    fn default() -> Self {
+        Hasher::new()
+    }
+}
+
+/// A hash as 16 lower-case hexadecimal digits.
+pub fn hex(h: u64) -> String {
+    format!("{h:016x}")
+}
+
+/// The value of `ImportTag::obj` that an importer writes before it knows the object. The builder
+/// replaces it with `state_hash`.
+pub const PENDING_OBJ: &str = "0000000000000000";
+
+/// The hash of the state of an object that an update must not overwrite without asking: shape,
+/// attributes, layer and class. The data is not in it.
+pub fn state_hash(shape: &Shape, attrs: &Attributes, layer: LayerId, class: ClassId) -> String {
+    let mut h = Hasher::new();
+    h.str(&serde_json::to_string(shape).unwrap_or_default());
+    h.str(&serde_json::to_string(attrs).unwrap_or_default());
+    h.str(&layer.0.to_string());
+    h.str(&class.0.to_string());
+    hex(h.finish())
+}
+
+/// True if the object has a tag and its state differs from the state at the import: the user
+/// (or a script) edited it. None if it has no valid tag.
+pub fn is_edited(o: &Object) -> Option<bool> {
+    let t = tag(&o.data)?;
+    Some(t.obj != state_hash(&o.shape, &o.attrs, o.layer, o.class))
+}
+
+/// The type name of the resource that keeps the base summaries of one revision.
+pub const BASE_TYPE: &str = "import_base";
+/// Most entity summaries in one base resource.
+pub const MAX_BASE_RECS: usize = 200_000;
+/// Most points in one stored summary.
+pub const MAX_BASE_POINTS: usize = 64;
+
+/// Checks the body of an `import_base` resource: `{type, drawing, revision, unit_scale, recs}`.
+/// `recs` is a list of summaries (JSON objects; `kadakas_io::dxf::revision::Rec` reads them).
+/// The check bounds the size and the shape; the content is checked when the summaries are read.
+pub fn check_base(v: &Value) -> Result<(), String> {
+    let o = v.as_object().ok_or("an import base is a JSON object")?;
+    for k in ["drawing", "revision"] {
+        let ok = o
+            .get(k)
+            .and_then(Value::as_str)
+            .is_some_and(|t| text_ok(t, MAX_TEXT));
+        if !ok {
+            return Err(format!("the import base needs a valid {k}"));
+        }
+    }
+    let recs = o
+        .get("recs")
+        .and_then(Value::as_array)
+        .ok_or("the import base needs a list of recs")?;
+    if recs.len() > MAX_BASE_RECS {
+        return Err(format!(
+            "the import base has more than {MAX_BASE_RECS} recs"
+        ));
+    }
+    for r in recs {
+        let r = r.as_object().ok_or("a rec is a JSON object")?;
+        let long = |k: &&str| {
+            r.get(*k)
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.chars().count() > 1024)
+        };
+        let texts = [
+            "handle",
+            "scope",
+            "kind",
+            "layer",
+            "color",
+            "linetype",
+            "lineweight",
+            "text",
+        ];
+        let many = r
+            .get("points")
+            .and_then(Value::as_array)
+            .is_some_and(|p| p.len() > MAX_BASE_POINTS);
+        if r.len() > 20 || texts.iter().any(long) || many {
+            return Err("a rec is too big".into());
+        }
+    }
+    Ok(())
+}
+
+/// The base resource of a revision, if the document has one.
+pub fn base_of<'a>(doc: &'a Document, drawing: &str, revision: &str) -> Option<&'a Value> {
+    use crate::resource::ResourceBody;
+    doc.resources.iter().find_map(|r| match &r.body {
+        ResourceBody::ImportBase(v) if v["drawing"] == drawing && v["revision"] == revision => {
+            Some(v)
+        }
+        _ => None,
+    })
 }
 
 /// Drops the tag from the data of a copy: a copy is new work and does not come from the file.
@@ -216,6 +394,20 @@ pub fn repair(doc: &mut Document) -> Vec<String> {
             );
         }
     }
+    // A base that is not valid would make the file unreadable, so it goes (an update then asks
+    // for the old file).
+    let bad: Vec<_> = doc
+        .resources
+        .iter()
+        .filter_map(|r| match &r.body {
+            crate::resource::ResourceBody::ImportBase(v) => check_base(v).err().map(|e| (r.id, e)),
+            _ => None,
+        })
+        .collect();
+    for (id, why) in bad {
+        doc.resources.remove(id);
+        note(&mut notes, format!("resource {id}: {why}; it was removed"));
+    }
     for l in doc.layers.iter_mut() {
         if let Some(v) = l.extra.get(LAYER_KEY)
             && LayerSource::of(v).is_none()
@@ -244,7 +436,7 @@ mod tests {
     use serde_json::json;
 
     fn tag_value() -> Value {
-        json!({"source": "plan.dxf#00ff00ff00ff00ff", "handle": "2F", "kind": "LINE", "hash": "0123456789abcdef"})
+        json!({"drawing": "plan.dxf", "revision": "00ff00ff00ff00ff", "handle": "2F", "kind": "LINE", "hash": "0123456789abcdef", "obj": "fedcba9876543210"})
     }
 
     #[test]
@@ -263,7 +455,7 @@ mod tests {
     #[test]
     fn block_tags_are_checked() {
         let mut v = tag_value();
-        v["block"] = json!({"name": "TREE", "handle": "A1"});
+        v["block"] = json!({"name": "TREE", "key": "rec:A1", "handle": "A1"});
         v["via"] = json!([{"handle": "B2", "hash": "0123456789abcdef", "copy": 3}]);
         assert!(check(&v).is_ok());
         v["via"] = json!([{"handle": "B 2", "hash": "0123456789abcdef"}]);
@@ -278,9 +470,10 @@ mod tests {
     #[test]
     fn bad_tags_are_refused() {
         for (field, bad) in [
-            ("source", json!("")),
-            ("source", json!("a\nb")),
-            ("source", json!("x".repeat(MAX_TEXT + 1))),
+            ("drawing", json!("")),
+            ("revision", json!("a\nb")),
+            ("drawing", json!("x".repeat(MAX_TEXT + 1))),
+            ("obj", json!("zz")),
             ("kind", json!("")),
             ("hash", json!("XYZ")),
             ("hash", json!("0123456789ABCDEF")),
@@ -303,12 +496,22 @@ mod tests {
 
     #[test]
     fn layer_sources_are_checked() {
-        assert!(LayerSource::of(&json!({"source": "a#0123456789abcdef"})).is_some());
-        assert!(LayerSource::of(&json!({"source": "a", "dxf_layer": "Walls"})).is_some());
-        assert!(LayerSource::of(&json!({"source": ""})).is_none());
-        assert!(LayerSource::of(&json!({"source": "a", "dxf_layer": "x\u{7}"})).is_none());
-        assert!(LayerSource::of(&json!({"source": "a", "dxf_layer": "x".repeat(300)})).is_none());
-        assert!(LayerSource::of(&json!({"source": "a", "other": 1})).is_none());
+        let ls = |extra: Value| {
+            let mut v =
+                json!({"drawing": "a", "revision": "r", "unit_scale": 1000.0, "shift": [0.0, 5.0]});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            v
+        };
+        assert!(LayerSource::of(&ls(json!({}))).is_some());
+        assert!(LayerSource::of(&ls(json!({"dxf_layer": "Walls"}))).is_some());
+        assert!(LayerSource::of(&ls(json!({"drawing": ""}))).is_none());
+        assert!(LayerSource::of(&ls(json!({"dxf_layer": "x\u{7}"}))).is_none());
+        assert!(LayerSource::of(&ls(json!({"dxf_layer": "x".repeat(300)}))).is_none());
+        assert!(LayerSource::of(&ls(json!({"other": 1}))).is_none());
+        assert!(LayerSource::of(&ls(json!({"unit_scale": 0.0}))).is_none());
+        assert!(LayerSource::of(&ls(json!({"shift": [1e13, 0.0]}))).is_none());
     }
 
     #[test]
@@ -325,7 +528,7 @@ mod tests {
                     p: Default::default(),
                 },
             );
-            o.data.insert(KEY.into(), json!({"source": 1}));
+            o.data.insert(KEY.into(), json!({"drawing": 1}));
             doc.objects.insert(o.id, o);
         }
         let mut good = Object::new(
@@ -376,7 +579,7 @@ mod tests {
             set: [(KEY.to_string(), v)].into(),
             remove: vec![],
         };
-        let bad = ed.execute(&set(json!({"source": 5})));
+        let bad = ed.execute(&set(json!({"drawing": 5})));
         assert!(matches!(bad, Err(CommandError::Invalid(m)) if m.contains("import tag")));
         ed.execute(&set(tag_value())).unwrap();
         assert!(tag(&ed.doc().object(id).unwrap().data).is_some());
@@ -424,8 +627,11 @@ mod tests {
         let mut ed = Editor::default();
         let layer = ed.doc().layers[0].id;
         let src = LayerSource {
-            source: "a.dxf#0123456789abcdef".into(),
+            drawing: "a.dxf".into(),
+            revision: "r1".into(),
             dxf_layer: "Walls".into(),
+            unit_scale: 1000.0,
+            shift: [0.0, 0.0],
         };
         ed.execute(&Command::SetLayerSource {
             id: layer,
@@ -451,8 +657,11 @@ mod tests {
         .unwrap();
         assert!(!ed.doc().layers[0].extra.contains_key(LAYER_KEY));
         let bad = LayerSource {
-            source: String::new(),
+            drawing: String::new(),
+            revision: "r1".into(),
             dxf_layer: String::new(),
+            unit_scale: 1.0,
+            shift: [0.0, 0.0],
         };
         assert!(matches!(
             ed.execute(&Command::SetLayerSource {
@@ -468,5 +677,80 @@ mod tests {
             }),
             Err(CommandError::NoLayer(_))
         ));
+    }
+
+    #[test]
+    fn the_state_hash_sees_shape_attributes_layer_and_class_but_not_data() {
+        use crate::model::{ClassId, Color, ObjectId};
+        let shape = Shape::Circle {
+            center: Default::default(),
+            radius: 5.0,
+        };
+        let layer = LayerId::from_num(1);
+        let class = ClassId::from_num(0);
+        let attrs = Attributes::default();
+        let h = state_hash(&shape, &attrs, layer, class);
+        assert_eq!(h.len(), 16);
+        assert_eq!(h, state_hash(&shape, &attrs, layer, class));
+        let bigger = Shape::Circle {
+            center: Default::default(),
+            radius: 6.0,
+        };
+        assert_ne!(h, state_hash(&bigger, &attrs, layer, class));
+        let pen = Attributes {
+            pen: Some(Color::BLACK),
+            ..Attributes::default()
+        };
+        assert_ne!(h, state_hash(&shape, &pen, layer, class));
+        assert_ne!(h, state_hash(&shape, &attrs, LayerId::from_num(2), class));
+        assert_ne!(h, state_hash(&shape, &attrs, layer, ClassId::from_num(3)));
+        // An object is edited when its state differs from the tag.
+        let mut o = Object::new(ObjectId::from_num(7), layer, class, shape);
+        assert_eq!(is_edited(&o), None, "no tag");
+        let mut v = tag_value();
+        v["obj"] = json!(h);
+        o.data.insert(KEY.into(), v);
+        assert_eq!(is_edited(&o), Some(false));
+        o.data.insert("note".into(), json!("data is not state"));
+        assert_eq!(is_edited(&o), Some(false));
+        o.shape = bigger;
+        assert_eq!(is_edited(&o), Some(true));
+        assert_eq!(Hasher::default().finish(), Hasher::new().finish());
+    }
+
+    #[test]
+    fn import_bases_are_checked_stored_and_found() {
+        use crate::resource::{ResourceBody, ResourceId};
+        let rec = json!({"handle": "2F", "scope": "", "kind": "LINE", "points": [[0.0, 0.0]]});
+        let base = json!({"type": BASE_TYPE, "drawing": "d", "revision": "r", "unit_scale": 1.0, "recs": [rec]});
+        assert!(check_base(&base).is_ok());
+        let bad = |f: &dyn Fn(&mut Value)| {
+            let mut v = base.clone();
+            f(&mut v);
+            assert!(check_base(&v).is_err(), "{v}");
+        };
+        bad(&|v| *v = json!([]));
+        bad(&|v| v["drawing"] = json!(""));
+        bad(&|v| v["revision"] = json!(5));
+        bad(&|v| v["recs"] = json!("x"));
+        bad(&|v| v["recs"] = json!([5]));
+        bad(&|v| v["recs"][0]["layer"] = json!("x".repeat(2000)));
+        bad(&|v| v["recs"][0]["points"] = json!(vec![[0.0, 0.0]; MAX_BASE_POINTS + 1]));
+        bad(&|v| v["recs"] = json!(vec![json!({}); MAX_BASE_RECS + 1]));
+        // As a resource: it saves and loads, a command refuses a bad one, and the lookup finds it.
+        let mut doc = Document::with_sequential_ids();
+        let body = ResourceBody::ImportBase(base.clone());
+        assert_eq!(body.type_name(), BASE_TYPE);
+        assert!(body.validate().is_ok());
+        assert!(ResourceBody::ImportBase(json!(1)).validate().is_err());
+        doc.resources.push(crate::resource::Resource {
+            id: ResourceId::from_num(900),
+            name: "import base".into(),
+            body,
+        });
+        assert!(base_of(&doc, "d", "r").is_some());
+        assert!(base_of(&doc, "d", "other").is_none());
+        let loaded = Document::from_json(&serde_json::to_string(&doc).unwrap()).unwrap();
+        assert!(base_of(&loaded, "d", "r").is_some());
     }
 }

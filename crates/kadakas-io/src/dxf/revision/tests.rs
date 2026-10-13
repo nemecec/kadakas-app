@@ -101,7 +101,7 @@ fn a_file_matches_itself() {
 fn edits_are_found_by_handle() {
     let base = lattice(10, true);
     let mut new = base.clone();
-    new[1] = line(Some(0x101), "A", (1000.0, 1000.0), (1010.0, 1005.0)); // moved far away
+    new[1] = line(Some(0x101), "A", (120.0, 0.0), (130.0, 5.0)); // moved
     new[2] = line(
         Some(0x102),
         "B",
@@ -114,7 +114,11 @@ fn edits_are_found_by_handle() {
     new.remove(6); // deleted
     new.push(line(Some(0x999), "A", (5000.0, 0.0), (5010.0, 0.0))); // added
     let (b, n) = (recs(&base), recs(&new));
-    let d = diff(&b, &n, &Options::default());
+    let o = Options {
+        tolerance: 100.0,
+        ..Options::default()
+    };
+    let d = diff(&b, &n, &o);
     assert_eq!(
         (
             d.counts.unchanged,
@@ -158,17 +162,21 @@ fn text_and_other_changes_are_named() {
             ],
         )
     };
+    let o = Options {
+        tolerance: 10.0,
+        ..Options::default()
+    };
     let (b, n) = (recs(&[t("Oak", "0")]), recs(&[t("Elm", "0")]));
-    let d = diff(&b, &n, &Options::default());
+    let d = diff(&b, &n, &o);
     assert_eq!(d.entries[0].changes, vec![Change::Text]);
     // A flag is no named property.
     let n = recs(&[t("Oak", "2")]);
-    let d = diff(&b, &n, &Options::default());
+    let d = diff(&b, &n, &o);
     assert_eq!(d.entries[0].changes, vec![Change::Other]);
     // The same text moved and renamed names both.
     let mut moved = t("Elm", "0");
     moved.items[3].1 = s(1);
-    let d = diff(&b, &recs(&[moved]), &Options::default());
+    let d = diff(&b, &recs(&[moved]), &o);
     assert_eq!(d.entries[0].changes, vec![Change::Geometry, Change::Text]);
 }
 
@@ -185,7 +193,11 @@ fn without_handles_the_rest_matches_by_layer_type_and_geometry() {
     new.remove(4);
     new.push(line(None, "A", (9000.0, 0.0), (9010.0, 0.0)));
     let (b, n) = (recs(&base), recs(&new));
-    let d = diff(&b, &n, &Options::default());
+    let o = Options {
+        tolerance: 30.0,
+        ..Options::default()
+    };
+    let d = diff(&b, &n, &o);
     assert_eq!(
         (
             d.counts.unchanged,

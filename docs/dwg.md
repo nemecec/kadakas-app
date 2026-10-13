@@ -13,7 +13,8 @@ It has no DWG code of its own. It does not link any DWG library.
   Two options are for DWG only. `converter_timeout_s` sets the time limit. `dwg_version` sets the file version of an export. Only the ODA File Converter uses it, and the default is `ACAD2018`.
 
 An import keeps the source of each object (IOP-22), as for DXF.
-The object data `import` holds the DWG file name, a hash of the header, the handle of the entity in the converted DXF, and a hash of the entity.
+The object data `import` holds the drawing and revision (from the GUIDs of the converted DXF, else the DWG file name), the handle of the entity in the converted DXF, and hashes of the entity and of the object.
+The option `max_bytes` limits the DWG file and the converted DXF file.
 The objects go to a layer named after the DWG file. The option `track_source: false` turns this off.
 The handles come from the converter. Another converter, or another version of it, can number the same drawing in a different way.
 The matching of two revisions (IOP-23) then uses the geometry.

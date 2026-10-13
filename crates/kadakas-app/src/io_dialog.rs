@@ -44,6 +44,8 @@ pub struct ImportForm {
     pub explode_blocks: bool,
     pub only_points_with_z: bool,
     pub hatches: bool,
+    /// DXF and DWG: keep the source of each object, for updates (IOP-22).
+    pub track_source: bool,
     pub source_crs: String,
     pub target_crs: String,
     pub class_field: String,
@@ -65,6 +67,7 @@ impl ImportForm {
             explode_blocks: true,
             only_points_with_z: false,
             hatches: true,
+            track_source: true,
             source_crs: String::new(),
             target_crs: String::new(),
             class_field: String::new(),
@@ -103,6 +106,10 @@ impl ImportForm {
                 }
                 o.insert("explode_blocks".into(), json!(self.explode_blocks));
                 o.insert("hatches".into(), json!(self.hatches));
+                // The default is on, so the option is only sent to turn it off.
+                if !self.track_source {
+                    o.insert("track_source".into(), json!(false));
+                }
                 if self.only_points_with_z {
                     o.insert("points".into(), json!("with_z"));
                 }
@@ -272,6 +279,10 @@ impl IoUi {
                                 &mut form.only_points_with_z,
                                 tr!("io-dialog-only-points-with-a-z-value"),
                             );
+                            ui.checkbox(
+                                &mut form.track_source,
+                                tr!("io-dialog-keep-the-source-for-updates"),
+                            );
                         }
                         Kind::Ifc => {
                             ui.label(tr!("io-dialog-ifc2x3-ifc4-or-ifc4x3"));
@@ -310,7 +321,14 @@ impl IoUi {
                         );
                         ui.horizontal(|ui| {
                             ui.label(tr!("io-dialog-design-layer"));
-                            ui.text_edit_singleline(&mut form.layer);
+                            let mut edit = egui::TextEdit::singleline(&mut form.layer);
+                            // For DXF and DWG an empty name makes a layer named after the file.
+                            if kind_of(&form.path) == Kind::Dxf && form.track_source {
+                                edit = edit.hint_text(tr!(
+                                    "io-dialog-empty-a-new-layer-named-after-the-file"
+                                ));
+                            }
+                            ui.add(edit);
                         });
                     }
                     ui.horizontal(|ui| {
@@ -415,6 +433,12 @@ mod tests {
             f.params()["options"],
             json!({"explode_blocks": true, "hatches": true})
         );
+        f.track_source = false;
+        assert_eq!(
+            f.params()["options"],
+            json!({"explode_blocks": true, "hatches": true, "track_source": false})
+        );
+        f.track_source = true;
         f.layers_as_layers = true;
         f.unit = Some(2);
         f.layer = " Site ".into();

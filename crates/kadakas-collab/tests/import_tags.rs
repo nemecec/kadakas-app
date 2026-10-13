@@ -13,10 +13,12 @@ use serde_json::json;
 
 fn tag() -> ImportTag {
     ImportTag {
-        source: "plan.dxf#0123456789abcdef".into(),
+        drawing: "plan.dxf".into(),
+        revision: "0123456789abcdef".into(),
         handle: Some("2F".into()),
         kind: "LINE".into(),
         hash: "fedcba9876543210".into(),
+        obj: "0011223344556677".into(),
         block: None,
         via: vec![],
         part: None,
@@ -36,8 +38,11 @@ fn document() -> Document {
     ed.execute(&Command::SetLayerSource {
         id: layer,
         source: Some(LayerSource {
-            source: tag().source,
+            drawing: tag().drawing,
+            revision: tag().revision,
             dxf_layer: String::new(),
+            unit_scale: 1000.0,
+            shift: [0.0, 0.0],
         }),
     })
     .unwrap();
@@ -73,8 +78,8 @@ fn tags_and_layer_sources_round_trip_through_the_replica() {
     assert_eq!(
         LayerSource::of(&l.extra[provenance::LAYER_KEY])
             .unwrap()
-            .source,
-        tag().source
+            .drawing,
+        tag().drawing
     );
 }
 
@@ -89,7 +94,7 @@ fn another_user_can_not_set_a_bad_tag() {
     props.insert("shape".into(), serde_json::to_value(&o.shape).unwrap());
     props.insert("data.import".into(), tag().to_value());
     assert!(validate_entity(Kind::Object, id.0, &props).is_ok());
-    props.insert("data.import".into(), json!({"source": "", "kind": "x"}));
+    props.insert("data.import".into(), json!({"drawing": "", "kind": "x"}));
     assert!(
         validate_entity(Kind::Object, id.0, &props)
             .unwrap_err()
@@ -105,7 +110,7 @@ fn another_user_can_not_set_a_bad_tag() {
         &Op::Set {
             target: Target::new(Kind::Object, id.0),
             prop: "data.import".into(),
-            value: json!({"source": 5}),
+            value: json!({"drawing": 5}),
         },
     );
     let m = materialize(&replica, &doc);
@@ -118,8 +123,11 @@ fn another_user_can_not_set_a_bad_tag() {
     lp.insert("locked".into(), json!(false));
     lp.insert("elevation".into(), json!(0.0));
     lp.insert("scale".into(), json!(100.0));
-    lp.insert("import_source".into(), json!({"source": ""}));
+    lp.insert("import_source".into(), json!({"drawing": ""}));
     assert!(validate_entity(Kind::Layer, layer.id.0, &lp).is_err());
-    lp.insert("import_source".into(), json!({"source": "a"}));
+    lp.insert(
+        "import_source".into(),
+        json!({"drawing": "a", "revision": "r", "unit_scale": 1.0, "shift": [0.0, 0.0]}),
+    );
     assert!(validate_entity(Kind::Layer, layer.id.0, &lp).is_ok());
 }

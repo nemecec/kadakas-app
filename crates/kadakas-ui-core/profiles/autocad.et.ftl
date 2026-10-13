@@ -18,6 +18,7 @@ io-dialog-dxf-layers-become-design-layers-default-classes = DXF-i kihid muutuvad
 io-dialog-building-storeys-become-design-layers-off-all = Hoone korrused muutuvad joonisteks (väljas: kõik aktiivsele joonisele)
 io-dialog-class-from-attribute = Kiht atribuudist
 io-dialog-design-layer = Joonis
+io-dialog-empty-a-new-layer-named-after-the-file = Tühi: uus joonis faili nime järgi
 io-dialog-classes-become-ifc-presentation-layers = Kihid muutuvad IFC esituskihtideks
 io-dialog-design-layers-become-building-storeys-default-everyt = Joonised muutuvad hoone korrusteks (vaikimisi: kõik asub ühe ala all)
 io-dialog-one-dxf-layer-per-design-layer-default = Üks DXF-i kiht joonise kohta (vaikimisi: kihi kohta)
