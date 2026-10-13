@@ -558,7 +558,8 @@ fn a_moved_bed_takes_its_own_mapping_along_and_old_documents_load() {
     );
     assert_eq!(
         ok(&mut s, "bed.get", json!({"id": a}))["offset"],
-        json!([3010.0, -480.0])
+        json!([1010.0, 1520.0]),
+        "moved with the ground, then reduced to one tile (2000 mm)"
     );
     // A document with a bad mapping loads, and says what it repaired.
     let mut doc = ok(&mut s, "document.get", json!({}));
@@ -587,4 +588,76 @@ fn a_moved_bed_takes_its_own_mapping_along_and_old_documents_load() {
         .filter(|n| n.starts_with("bed."))
         .collect();
     assert_eq!(names, vec!["bed.add", "bed.set", "bed.get", "bed.list"]);
+}
+
+#[test]
+fn a_bed_from_a_landscape_area_with_holes_is_refused_and_a_closed_3d_polyline_is_accepted() {
+    let mut s = Session::with_sequential_ids();
+    terrain(&mut s);
+    ok(&mut s, "material.add_defaults", json!({}));
+    let ring = square();
+    let area = ok(
+        &mut s,
+        "landscape_area.add",
+        json!({"boundary": ring, "holes": [[[2000, 2000], [3000, 2000], [3000, 3000]]]}),
+    )["id"]
+        .clone();
+    let e = fail(&mut s, "bed.add", json!({"from": area, "texture": "Grass"}));
+    assert!(e.message.contains("holes"), "{}", e.message);
+    assert!(
+        ok(&mut s, "bed.list", json!({}))["beds"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // Without holes it works, and the area stays.
+    let plain = ok(&mut s, "landscape_area.add", json!({"boundary": ring}))["id"].clone();
+    ok(
+        &mut s,
+        "bed.add",
+        json!({"from": plain, "texture": "Grass"}),
+    );
+    // A closed 3D polyline gives its outline in plan.
+    let poly3 = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "polyline3d", "closed": true,
+            "points": [[0, 0, 0], [3000, 0, 100], [3000, 3000, 200], [0, 3000, 50]]}}}),
+    )["created"][0]
+        .clone();
+    let r = ok(
+        &mut s,
+        "bed.add",
+        json!({"from": poly3, "texture": "Gravel"}),
+    );
+    assert_eq!(ok(&mut s, "bed.get", json!({"id": r["id"]}))["points"], 4);
+}
+
+#[test]
+fn the_mapping_flags_must_agree() {
+    let mut s = Session::with_sequential_ids();
+    terrain(&mut s);
+    ok(&mut s, "material.add_defaults", json!({}));
+    let a = bed(&mut s, square(), "Grass");
+    for p in [
+        json!({"id": a, "own_mapping": false, "tile_size": 500}),
+        json!({"id": a, "own_mapping": false, "offset": [1, 2]}),
+        json!({"id": a, "own_mapping": false, "rotation": 5}),
+    ] {
+        let e = fail(&mut s, "bed.set", p);
+        assert_eq!(e.code, 3, "{}", e.message);
+        assert!(e.message.contains("own_mapping"));
+    }
+    let e = fail(
+        &mut s,
+        "bed.add",
+        json!({"boundary": square(), "own_mapping": false, "tile_size": 500}),
+    );
+    assert_eq!(e.code, 3);
+    // Alone, own_mapping false and true both work.
+    ok(&mut s, "bed.set", json!({"id": a, "own_mapping": false}));
+    assert_eq!(
+        ok(&mut s, "bed.set", json!({"id": a, "own_mapping": true}))["own_mapping"],
+        true
+    );
 }

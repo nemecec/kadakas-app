@@ -25,20 +25,6 @@ use crate::view::{View, ViewExt as _};
 const EXISTING_LINE: Color32 = Color32::from_rgb(150, 104, 60);
 const PROPOSED_LINE: Color32 = Color32::from_rgb(30, 120, 50);
 
-/// The mapping of the first site model on a layer: where a texture bed starts when it gets its
-/// own mapping. The defaults if the layer has no site model.
-pub fn site_mapping(doc: &Document, layer: kadakas_core::model::LayerId) -> BedMapping {
-    doc.objects
-        .values()
-        .find_map(|o| match &o.shape {
-            Shape::SiteModel { settings, .. } if o.layer == layer => {
-                Some(BedMapping::of_site(settings))
-            }
-            _ => None,
-        })
-        .unwrap_or_default()
-}
-
 /// The materials of a document, for a combo box.
 pub fn material_list(doc: &Document) -> Vec<(ResourceId, String)> {
     doc.resources
@@ -81,14 +67,24 @@ pub fn create_texture_beds(session: &mut Session) -> Result<usize, String> {
     Ok(session.selection.len())
 }
 
-/// The selected objects that a texture bed can be made from: closed shapes with an outline.
+/// The selected objects that a texture bed can be made from: closed shapes with an outline. Only
+/// the kind is checked (cheap, for every frame); `bed.add` refuses a landscape area with holes.
 pub fn bed_source_ids(doc: &Document, selection: &[ObjectId]) -> Vec<ObjectId> {
     selection
         .iter()
         .copied()
         .filter(|id| {
-            doc.object(*id)
-                .is_some_and(|o| kadakas_core::solid_batch::closed_profile_of(o).is_ok())
+            doc.object(*id).is_some_and(|o| {
+                matches!(
+                    o.shape,
+                    Shape::Polyline { closed: true, .. }
+                        | Shape::Polyline3d { closed: true, .. }
+                        | Shape::Rect { .. }
+                        | Shape::Circle { .. }
+                        | Shape::LandscapeArea { .. }
+                        | Shape::Hardscape { .. }
+                )
+            })
         })
         .collect()
 }
@@ -714,7 +710,10 @@ mod tests {
             })
         )));
         // The mapping of a layer without a site model is the default one.
-        assert_eq!(site_mapping(doc, doc.active_layer), BedMapping::default());
+        assert_eq!(
+            kadakas_core::texture_bed::site_mapping(doc, doc.active_layer),
+            BedMapping::default()
+        );
         assert!(material_list(doc).is_empty());
         let ctx = egui::Context::default();
         let _ = ctx.run_ui(Default::default(), |ui| {

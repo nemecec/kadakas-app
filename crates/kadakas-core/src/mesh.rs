@@ -222,16 +222,37 @@ impl SceneSink<'_> {
     /// Adds a triangle mesh with one color. Indices are three per triangle. Normals are smooth.
     /// Triangles that are not counterclockwise seen from above are flipped to face up.
     pub fn mesh(&mut self, positions: &[DVec3], indices: &[u32], color: [u8; 4]) {
-        self.mesh_with(positions, indices, color, true);
+        self.mesh_with(positions, None, indices, color, true);
+    }
+
+    /// Like `mesh`, with the normals given (one unit normal per position) instead of computed
+    /// from the triangles. Pieces of a cut surface use it to keep the shading of the whole
+    /// surface. A list of the wrong length is ignored.
+    pub fn mesh_with_normals(
+        &mut self,
+        positions: &[DVec3],
+        normals: &[DVec3],
+        indices: &[u32],
+        color: [u8; 4],
+    ) {
+        let given = (normals.len() == positions.len()).then_some(normals);
+        self.mesh_with(positions, given, indices, color, true);
     }
 
     /// Like `mesh`, but keeps the winding of the triangles: counterclockwise seen from outside.
     /// Use it for faces that look down, such as the floor of a closed solid.
     pub fn mesh_oriented(&mut self, positions: &[DVec3], indices: &[u32], color: [u8; 4]) {
-        self.mesh_with(positions, indices, color, false);
+        self.mesh_with(positions, None, indices, color, false);
     }
 
-    fn mesh_with(&mut self, positions: &[DVec3], indices: &[u32], color: [u8; 4], face_up: bool) {
+    fn mesh_with(
+        &mut self,
+        positions: &[DVec3],
+        given: Option<&[DVec3]>,
+        indices: &[u32],
+        color: [u8; 4],
+        face_up: bool,
+    ) {
         let pts: Vec<Vec3> = positions.iter().map(|p| self.local(*p)).collect();
         let mut normals = vec![Vec3::ZERO; pts.len()];
         let mut tris = Vec::with_capacity(indices.len() / 3);
@@ -246,10 +267,17 @@ impl SceneSink<'_> {
             } else {
                 (b, c, n)
             };
-            for i in [a, b, c] {
-                normals[i] += n;
+            if given.is_none() {
+                for i in [a, b, c] {
+                    normals[i] += n;
+                }
             }
             tris.push([a, b, c]);
+        }
+        if let Some(g) = given {
+            for (n, g) in normals.iter_mut().zip(g) {
+                *n = Vec3::new(g.x as f32, g.y as f32, g.z as f32);
+            }
         }
         let base = self.scene.mesh.positions.len() as u32;
         for (p, n) in pts.iter().zip(&normals) {

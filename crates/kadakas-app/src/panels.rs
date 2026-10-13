@@ -1496,7 +1496,7 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
         }
         _ => None,
     };
-    let site_mapping = crate::site_ui::site_mapping(session.editor.doc(), obj.layer);
+    let site_mapping = kadakas_core::texture_bed::site_mapping(session.editor.doc(), obj.layer);
     let commit = edit_shape(ui, edited, &materials, effective_tile, site_mapping);
     // Vertex edits are sent as `set_vertex` commands, one per changed vertex.
     if edited.vertices().is_some() {

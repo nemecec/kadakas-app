@@ -5,7 +5,7 @@
 //!
 //! The rules:
 //! - A bed acts on the site models on its layer whose box touches the box of the bed. It must be
-//!   visible (layer and class).
+//!   displayed (layer, class and the phase display rules).
 //! - The texture is the material in `texture`, else the material of the slot of the bed object,
 //!   else the material of its class ("by class"). A bed without a material has no effect: the
 //!   beds behind it, or the look of the site model, show.
@@ -90,6 +90,27 @@ impl BedMapping {
         }
     }
 
+    /// The mapping after the ground under it moved by `d`. The offset moves with the ground and
+    /// is reduced to one repeat in the frame of the texture (a shift by a whole tile along its
+    /// axes changes no pixel), so it stays small however often a bed is moved.
+    pub fn translated(&self, d: DVec2) -> BedMapping {
+        let o = DVec2::from(self.offset) + d;
+        if !(self.tile.is_finite() && self.tile > 0.0 && o.is_finite()) {
+            return BedMapping {
+                offset: o.to_array(),
+                ..*self
+            };
+        }
+        let (s, c) = self.rotation.to_radians().sin_cos();
+        let (e1, e2) = (DVec2::new(c, s), DVec2::new(-s, c));
+        let a = o.dot(e1).rem_euclid(self.tile);
+        let b = o.dot(e2).rem_euclid(self.tile);
+        BedMapping {
+            offset: (e1 * a + e2 * b).to_array(),
+            ..*self
+        }
+    }
+
     /// Why the mapping is not usable, if it is not.
     pub fn problem(&self) -> Option<&'static str> {
         if !self.is_finite() {
@@ -123,18 +144,32 @@ pub fn problem(shape: &Shape) -> Option<&'static str> {
     }
 }
 
-/// Puts a bad mapping of a texture bed back to "the mapping of the site model". True if it did.
-pub fn repair(shape: &mut Shape) -> bool {
-    match shape {
-        Shape::SiteModifier {
-            modifier: ModifierKind::TextureBed { mapping, .. },
-            ..
-        } if mapping.is_some_and(|m| m.problem().is_some()) => {
-            *mapping = None;
-            true
-        }
-        _ => false,
+/// Repairs a texture bed that was read from a file: a bad mapping goes back to "the mapping of
+/// the site model", and a boundary with more than [`MAX_BED_VERTICES`] points is thinned to
+/// corners (every n-th point). Returns what it did, for the load notes.
+pub fn repair(shape: &mut Shape) -> Option<&'static str> {
+    let Shape::SiteModifier {
+        modifier: ModifierKind::TextureBed { mapping, .. },
+        boundary,
+    } = shape
+    else {
+        return None;
+    };
+    let mut done = None;
+    if mapping.is_some_and(|m| m.problem().is_some()) {
+        *mapping = None;
+        done = Some("the mapping was not valid and was reset to the mapping of the site model");
     }
+    if boundary.len() > MAX_BED_VERTICES {
+        let step = boundary.len().div_ceil(MAX_BED_VERTICES);
+        *boundary = boundary
+            .iter()
+            .step_by(step)
+            .map(|v| Vertex::corner(v.p))
+            .collect();
+        done = Some("the boundary had too many points and was thinned to corners");
+    }
+    done
 }
 
 /// A texture bed that acts on a site model.
@@ -153,42 +188,39 @@ pub struct Bed {
     pub outline: Vec<DVec2>,
 }
 
-/// The flattened outline of a boundary. Curves are flattened coarser when the outline would have
-/// more than [`MAX_BED_EDGES`] points. Empty if a number is not finite.
+/// The flattened outline of a boundary: at most [`MAX_BED_EDGES`] points. Curves are flattened
+/// coarser until they fit; each try stops as soon as it passes the limit, so the work is
+/// bounded. Empty if a number is not finite or the boundary has too many vertices.
 pub fn outline(boundary: &[Vertex]) -> Vec<DVec2> {
-    if !boundary.iter().all(Vertex::is_finite) {
+    if boundary.len() > MAX_BED_VERTICES || !boundary.iter().all(Vertex::is_finite) {
         return Vec::new();
     }
     let mut tol = 2.0;
-    let mut pts = curve::flatten(boundary, true, tol);
-    while pts.len() > MAX_BED_EDGES && tol < 1.0e9 {
-        tol *= 2.0;
-        pts = curve::flatten(boundary, true, tol);
+    for _ in 0..12 {
+        if let Some(pts) = curve::flatten_limited(boundary, true, tol, MAX_BED_EDGES) {
+            return pts;
+        }
+        tol *= 8.0;
     }
-    if pts.len() > MAX_BED_EDGES {
-        let step = pts.len().div_ceil(MAX_BED_EDGES);
-        pts = pts.into_iter().step_by(step).collect();
-    }
-    pts
+    // Still too fine (a huge arc): the corners alone.
+    boundary.iter().map(|v| v.p).collect()
 }
 
 /// The texture beds that act on a site model, from the back to the front of the stacking order.
-/// `material_of` gives the material of the slot of an object or of its class. Beds without a
-/// material are left out. If there are more than [`MAX_TEXTURE_BEDS`], the frontmost remain.
-pub fn beds_for(
-    doc: &Document,
-    site: &Object,
-    material_of: &dyn Fn(&Object) -> Option<ResourceId>,
-) -> Vec<Bed> {
+/// A bed counts if it is displayed, on the layer of the site model, has a box that touches the
+/// box of the site model, and has a material (see the module text). If there are more than
+/// [`MAX_TEXTURE_BEDS`], the frontmost remain. The boxes are checked first, and only the beds
+/// that remain are flattened.
+pub fn beds_for(doc: &Document, site: &Object) -> Vec<Bed> {
     let Shape::SiteModel { settings, .. } = &site.shape else {
         return Vec::new();
     };
     let (lo, hi) = site.shape.bounds();
     let site_mapping = settings.texture_mapping();
-    let mut found: Vec<Bed> = doc
+    let mut found: Vec<(&Object, ResourceId, Option<BedMapping>)> = doc
         .objects
         .values()
-        .filter(|o| o.layer == site.layer && doc.is_visible(o))
+        .filter(|o| o.layer == site.layer && doc.is_displayed(o))
         .filter_map(|o| {
             let Shape::SiteModifier {
                 modifier: ModifierKind::TextureBed { texture, mapping },
@@ -197,30 +229,79 @@ pub fn beds_for(
             else {
                 return None;
             };
+            if boundary.len() < 3 || boundary.len() > MAX_BED_VERTICES {
+                return None;
+            }
             let (a, b) = o.shape.bounds();
             if a.x > hi.x || b.x < lo.x || a.y > hi.y || b.y < lo.y {
                 return None;
             }
             let material = texture
                 .filter(|t| crate::present::material(doc, *t).is_some())
-                .or_else(|| material_of(o))?;
-            let outline = outline(boundary);
-            (outline.len() >= 3).then(|| Bed {
-                object: o.id,
-                part: 0,
-                material,
-                mapping: mapping.map_or(site_mapping, |m| m.mapping()),
-                outline,
-            })
+                .or_else(|| crate::present::bed_material(doc, o))?;
+            Some((o, material, *mapping))
         })
         .collect();
     if found.len() > MAX_TEXTURE_BEDS {
         found.drain(..found.len() - MAX_TEXTURE_BEDS);
     }
-    for (i, b) in found.iter_mut().enumerate() {
-        b.part = PART_BED + i as u8;
-    }
     found
+        .into_iter()
+        .filter_map(|(o, material, mapping)| {
+            let Shape::SiteModifier { boundary, .. } = &o.shape else {
+                return None;
+            };
+            let outline = outline(boundary);
+            (outline.len() >= 3).then(|| (o.id, material, mapping, outline))
+        })
+        .enumerate()
+        .map(|(i, (object, material, mapping, outline))| Bed {
+            object,
+            part: PART_BED + i as u8,
+            material,
+            mapping: mapping.map_or(site_mapping, |m| m.mapping()),
+            outline,
+        })
+        .collect()
+}
+
+/// The texture beds of every site model that has some, by site model.
+pub fn all_beds(doc: &Document) -> Vec<(ObjectId, Vec<Bed>)> {
+    doc.objects
+        .values()
+        .filter(|o| matches!(o.shape, Shape::SiteModel { .. }))
+        .filter_map(|o| {
+            let list = beds_for(doc, o);
+            (!list.is_empty()).then_some((o.id, list))
+        })
+        .collect()
+}
+
+/// The mapping of the first site model on a layer: where a bed starts when it gets its own
+/// mapping. The defaults if the layer has no site model.
+pub fn site_mapping(doc: &Document, layer: crate::model::LayerId) -> BedMapping {
+    doc.objects
+        .values()
+        .find_map(|o| match &o.shape {
+            Shape::SiteModel { settings, .. } if o.layer == layer => {
+                Some(BedMapping::of_site(settings))
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// The material resource that a shape names itself: the texture of a site model with the texture
+/// look, or of a texture bed. For the use count of resources.
+pub fn texture_of(shape: &Shape) -> Option<ResourceId> {
+    match shape {
+        Shape::SiteModel { settings, .. } => settings.texture,
+        Shape::SiteModifier {
+            modifier: ModifierKind::TextureBed { texture, .. },
+            ..
+        } => *texture,
+        _ => None,
+    }
 }
 
 #[cfg(test)]

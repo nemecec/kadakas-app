@@ -11,13 +11,19 @@
 //! cover it exactly once and the area is kept.
 //!
 //! A cut point on an edge of the source mesh is computed from the two source vertices, so the two
-//! triangles that share the edge get the same point and share the vertex (no cracks, smooth
-//! shading).
+//! triangles that share the edge get the same point and share the vertex. A T-junction (a vertex
+//! on one side of an edge and none on the other) can remain where an outline corner lies exactly
+//! on a mesh edge; the point is on the edge, so there is no gap. With the normals of the source
+//! mesh given, the pieces get interpolated normals, so shading is smooth across the outlines.
 //!
-//! The work is bounded. A grid per bed finds the outline edges near a triangle, and a triangle
-//! far from all outlines is classified at once. The whole work has a budget of steps
-//! ([`MAX_WORK`]), and the output is capped at [`MAX_CUT_TRIANGLES`]. When a bound is reached,
-//! the remaining triangles go whole to the base and `truncated` is set.
+//! The work is bounded:
+//! - A grid per bed finds the outline edges near a triangle. Its entries are counted and capped
+//!   per outline ([`MAX_GRID_ENTRIES`]); a segment is registered in the cells it crosses.
+//! - The cutting uses an explicit stack, not recursion.
+//! - Every step counts in a budget ([`MAX_WORK`]); the output is capped at [`MAX_CUT_TRIANGLES`]
+//!   and one triangle at [`MAX_PIECES_PER_TRIANGLE`] cuts.
+//! - When a bound is reached while a triangle is cut, the whole source triangle goes to the base
+//!   (no half-cut pieces) and `truncated` is set.
 
 use std::collections::HashMap;
 
@@ -25,19 +31,21 @@ use glam::{DVec2, DVec3};
 
 /// The most triangles that the cut may output for one mesh.
 pub const MAX_CUT_TRIANGLES: usize = 2_000_000;
-/// The most steps (tests of an edge against a piece or a point) of one cut.
+/// The most steps (tests of an edge against a piece, grid entries, points) of one cut.
 pub const MAX_WORK: u64 = 200_000_000;
-/// The most pieces that one source triangle may be cut into.
-const MAX_PIECES_PER_TRIANGLE: usize = 4096;
+/// The most cuts of one source triangle.
+pub const MAX_PIECES_PER_TRIANGLE: usize = 4096;
+/// The most grid entries of one outline.
+pub const MAX_GRID_ENTRIES: usize = 1 << 17;
 /// Pieces with an area (mm squared) below this are dropped.
 const MIN_AREA: f64 = 1e-9;
-/// A distance (mm) below this is "on the line".
-const ON_LINE: f64 = 1e-7;
 
 /// The triangles of one part of the cut: their own vertices, and indices into them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PartMesh {
     pub vertices: Vec<DVec3>,
+    /// One unit normal per vertex, interpolated from the source normals. Empty if none were given.
+    pub normals: Vec<DVec3>,
     pub indices: Vec<u32>,
 }
 
@@ -69,6 +77,30 @@ pub struct BedCut {
     pub beds: Vec<PartMesh>,
     /// True if a bound stopped the cutting and some triangles went whole to the base.
     pub truncated: bool,
+    /// The steps of work that the cut counted (for tests of the bounds).
+    pub work: u64,
+}
+
+/// The normals of a triangle mesh as the scene sink computes them: smooth, with the triangles
+/// turned to face up.
+pub fn smooth_normals(vertices: &[DVec3], indices: &[u32]) -> Vec<DVec3> {
+    let mut n = vec![DVec3::ZERO; vertices.len()];
+    for t in indices.as_chunks::<3>().0 {
+        let [a, b, c] = t.map(|i| i as usize);
+        if a >= vertices.len() || b >= vertices.len() || c >= vertices.len() {
+            continue;
+        }
+        let mut f = (vertices[b] - vertices[a]).cross(vertices[c] - vertices[a]);
+        if f.z < 0.0 {
+            f = -f;
+        }
+        for i in [a, b, c] {
+            n[i] += f;
+        }
+    }
+    n.into_iter()
+        .map(|v| v.try_normalize().unwrap_or(DVec3::Z))
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -86,6 +118,7 @@ enum Key {
 struct Corner {
     key: Key,
     p: DVec3,
+    n: DVec3,
     edge: Option<(u32, u32)>,
 }
 
@@ -101,37 +134,86 @@ struct Outline<'a> {
     grid: Vec<Vec<u32>>,
     /// Is the middle of an empty cell inside? Worked out when first needed.
     inside: Vec<Option<bool>>,
+    /// The round in which an edge was last listed by `near` (one slot per edge).
+    stamp: Vec<u32>,
+    round: u32,
 }
 
 impl<'a> Outline<'a> {
-    fn new(pts: &'a [DVec2]) -> Outline<'a> {
+    /// The outline with its grid, and the steps that building it took.
+    fn new(pts: &'a [DVec2]) -> (Outline<'a>, u64) {
         let (lo, hi) = pts.iter().fold(
             (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
             |(lo, hi), p| (lo.min(*p), hi.max(*p)),
         );
         let n = pts.len();
-        let cells = ((n as f64).sqrt() / 2.0).ceil().clamp(1.0, 32.0) as usize;
-        let cell = ((hi - lo) / cells as f64).max(DVec2::splat(1e-9));
-        let mut o = Outline {
-            pts,
-            lo,
-            hi,
-            cells,
-            cell,
-            grid: vec![Vec::new(); cells * cells],
-            inside: vec![None; cells * cells],
-        };
-        for i in 0..n {
-            let (a, b) = o.edge(i);
-            let (x0, y0) = o.cell_of(a.min(b));
-            let (x1, y1) = o.cell_of(a.max(b));
-            for y in y0..=y1 {
-                for x in x0..=x1 {
-                    o.grid[y * cells + x].push(i as u32);
+        let mut cells = ((n as f64).sqrt() / 2.0).ceil().clamp(1.0, 32.0) as usize;
+        let mut work = 0u64;
+        loop {
+            let cell = ((hi - lo) / cells as f64).max(DVec2::splat(1e-9));
+            let mut o = Outline {
+                pts,
+                lo,
+                hi,
+                cells,
+                cell,
+                grid: vec![Vec::new(); cells * cells],
+                inside: vec![None; cells * cells],
+                stamp: vec![0; n],
+                round: 0,
+            };
+            let mut entries = 0usize;
+            let mut fits = true;
+            for i in 0..n {
+                let (a, b) = o.edge(i);
+                work += 1;
+                if !o.add_segment(i as u32, a, b, &mut entries) {
+                    fits = false;
+                    break;
                 }
             }
+            work += entries as u64;
+            if fits || cells == 1 {
+                return (o, work);
+            }
+            // Too many entries (long zigzag edges): a coarser grid has fewer.
+            cells /= 2;
         }
-        o
+    }
+
+    /// Lists edge `i` in the cells that the segment crosses. False if the entries pass the cap.
+    fn add_segment(&mut self, i: u32, a: DVec2, b: DVec2, entries: &mut usize) -> bool {
+        let (a, b) = if a.x <= b.x { (a, b) } else { (b, a) };
+        let (cx0, _) = self.cell_of(a);
+        let (cx1, _) = self.cell_of(b);
+        let slop = self.cell.y * 1e-6;
+        for cx in cx0..=cx1 {
+            // The part of the segment in this column of cells.
+            let x0 = a.x.max(self.lo.x + cx as f64 * self.cell.x);
+            let x1 = b.x.min(self.lo.x + (cx + 1) as f64 * self.cell.x);
+            let at = |x: f64| {
+                if b.x > a.x {
+                    a.y + (x.clamp(a.x, b.x) - a.x) * (b.y - a.y) / (b.x - a.x)
+                } else {
+                    a.y
+                }
+            };
+            let (ya, yb) = if b.x > a.x {
+                (at(x0), at(x1))
+            } else {
+                (a.y, b.y)
+            };
+            let (_, cy0) = self.cell_of(DVec2::new(self.lo.x, ya.min(yb) - slop));
+            let (_, cy1) = self.cell_of(DVec2::new(self.lo.x, ya.max(yb) + slop));
+            for cy in cy0..=cy1 {
+                *entries += 1;
+                if *entries > MAX_GRID_ENTRIES {
+                    return false;
+                }
+                self.grid[cy * self.cells + cx].push(i);
+            }
+        }
+        true
     }
 
     fn edge(&self, i: usize) -> (DVec2, DVec2) {
@@ -148,18 +230,28 @@ impl<'a> Outline<'a> {
         lo.x <= self.hi.x && hi.x >= self.lo.x && lo.y <= self.hi.y && hi.y >= self.lo.y
     }
 
-    /// The edges whose cells the box touches, in ascending order.
-    fn near(&self, lo: DVec2, hi: DVec2) -> Vec<u32> {
+    /// The edges whose cells the box touches, each once. Every entry visited counts as work.
+    fn near(&mut self, lo: DVec2, hi: DVec2, work: &mut u64) -> Vec<u32> {
         let (x0, y0) = self.cell_of(lo);
         let (x1, y1) = self.cell_of(hi);
-        let mut v: Vec<u32> = Vec::new();
+        self.round = self.round.wrapping_add(1);
+        if self.round == 0 {
+            self.stamp.fill(0);
+            self.round = 1;
+        }
+        let mut v = Vec::new();
         for y in y0..=y1 {
             for x in x0..=x1 {
-                v.extend_from_slice(&self.grid[y * self.cells + x]);
+                let list = &self.grid[y * self.cells + x];
+                *work += 1 + list.len() as u64;
+                for &e in list {
+                    if self.stamp[e as usize] != self.round {
+                        self.stamp[e as usize] = self.round;
+                        v.push(e);
+                    }
+                }
             }
         }
-        v.sort_unstable();
-        v.dedup();
         v
     }
 
@@ -204,9 +296,15 @@ fn side(a: DVec2, dir: DVec2, len: f64, p: DVec2) -> f64 {
 
 struct Cutter<'a> {
     vertices: &'a [DVec3],
+    normals: Option<&'a [DVec3]>,
     outlines: Vec<Outline<'a>>,
     work: u64,
+    max_work: u64,
     pieces: usize,
+    max_pieces: usize,
+    /// A distance below this is "on the line": relative to the size and the place of the
+    /// triangle that is cut.
+    eps: f64,
 }
 
 impl Cutter<'_> {
@@ -219,12 +317,13 @@ impl Cutter<'_> {
         if len == 0.0 {
             return None;
         }
+        let eps = self.eps;
         let d: Vec<f64> = piece
             .iter()
             .map(|c| side(a, dir, len, c.p.truncate()))
             .collect();
         let has = |f: &dyn Fn(f64) -> bool| d.iter().any(|v| f(*v));
-        if !(has(&|v| v > ON_LINE) && has(&|v| v < -ON_LINE)) {
+        if !(has(&|v| v > eps) && has(&|v| v < -eps)) {
             return None;
         }
         // Where the line meets the boundary of the piece, as distances along the edge.
@@ -234,9 +333,9 @@ impl Cutter<'_> {
         for i in 0..n {
             let (p, q) = (piece[i].p.truncate(), piece[(i + 1) % n].p.truncate());
             let (dp, dq) = (d[i], d[(i + 1) % n]);
-            let t = if dp.abs() <= ON_LINE {
+            let t = if dp.abs() <= eps {
                 Some(along(p))
-            } else if (dp > 0.0) != (dq > 0.0) && dq.abs() > ON_LINE {
+            } else if (dp > 0.0) != (dq > 0.0) && dq.abs() > eps {
                 Some(along(p + (q - p) * (dp / (dp - dq))))
             } else {
                 None
@@ -255,10 +354,11 @@ impl Cutter<'_> {
     fn split(&mut self, piece: &Piece, d: &[f64], a: DVec2, b: DVec2, line: u32) -> (Piece, Piece) {
         let dir = b - a;
         let len = dir.length();
+        let eps = self.eps;
         let sign = |v: f64| {
-            if v > ON_LINE {
+            if v > eps {
                 1
-            } else if v < -ON_LINE {
+            } else if v < -eps {
                 -1
             } else {
                 0
@@ -326,9 +426,13 @@ impl Cutter<'_> {
                 } else {
                     (dp / (dp - dq)).clamp(0.0, 1.0)
                 };
+                let n = self.normals.map_or(DVec3::ZERO, |ns| {
+                    ns[lo as usize] + (ns[hi as usize] - ns[lo as usize]) * t
+                });
                 Corner {
                     key: Key::Cut(lo, hi, line),
                     p: p + (q - p) * t,
+                    n,
                     edge: None,
                 }
             }
@@ -337,55 +441,63 @@ impl Cutter<'_> {
                 // of the edge get the same point.
                 let bits = |p: DVec3| [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()];
                 let (u, w, du, dw) = if bits(c.p) <= bits(e.p) {
-                    (c.p, e.p, dc, de)
+                    (c, e, dc, de)
                 } else {
-                    (e.p, c.p, de, dc)
+                    (e, c, de, dc)
                 };
                 let t = (du / (du - dw)).clamp(0.0, 1.0);
-                let p = u + (w - u) * t;
+                let p = u.p + (w.p - u.p) * t;
                 Corner {
                     key: Key::At(bits(p)),
                     p,
+                    n: u.n + (w.n - u.n) * t,
                     edge: None,
                 }
             }
         }
     }
 
-    /// Cuts a piece by the edges `edges` of outline `bed` (from position `from`) until no edge
-    /// crosses it, and calls `leaf` for each piece.
-    fn cut(
-        &mut self,
-        piece: Piece,
-        bed: usize,
-        edges: &[u32],
-        from: usize,
-        leaves: &mut Vec<Piece>,
-    ) {
-        let (lo, hi) = bounds(&piece);
-        for (k, &e) in edges.iter().enumerate().skip(from) {
-            let (a, b) = self.outlines[bed].edge(e as usize);
-            self.work += 1;
-            if a.max(b).x < lo.x || a.min(b).x > hi.x || a.max(b).y < lo.y || a.min(b).y > hi.y {
-                continue;
-            }
-            if self.pieces >= MAX_PIECES_PER_TRIANGLE {
+    /// Cuts a piece by the edges `edges` of outline `bed` until no edge crosses it, and adds the
+    /// pieces to `leaves`. Uses a stack of (piece, next edge to try). Returns false if the work
+    /// budget or the number of cuts of the triangle is used up; `leaves` is then not complete.
+    fn cut(&mut self, piece: Piece, bed: usize, edges: &[u32], leaves: &mut Vec<Piece>) -> bool {
+        let mut stack = vec![(piece, 0usize)];
+        while let Some((piece, from)) = stack.pop() {
+            let (lo, hi) = bounds(&piece);
+            let mut cut_here = false;
+            for (k, &e) in edges.iter().enumerate().skip(from) {
+                let (a, b) = self.outlines[bed].edge(e as usize);
+                self.work += 1;
+                if self.work > self.max_work {
+                    return false;
+                }
+                if a.max(b).x < lo.x || a.min(b).x > hi.x || a.max(b).y < lo.y || a.min(b).y > hi.y
+                {
+                    continue;
+                }
+                let Some(d) = self.crossing(&piece, a, b) else {
+                    continue;
+                };
+                if self.pieces >= self.max_pieces {
+                    return false;
+                }
+                let line = (bed * LINES_PER_BED) as u32 + e;
+                let (l, r) = self.split(&piece, &d, a, b, line);
+                self.pieces += 1;
+                // The left piece is handled first.
+                for half in [r, l] {
+                    if half.len() >= 3 {
+                        stack.push((half, k + 1));
+                    }
+                }
+                cut_here = true;
                 break;
             }
-            let Some(d) = self.crossing(&piece, a, b) else {
-                continue;
-            };
-            let line = (bed * LINES_PER_BED) as u32 + e;
-            let (l, r) = self.split(&piece, &d, a, b, line);
-            self.pieces += 1;
-            for half in [l, r] {
-                if half.len() >= 3 {
-                    self.cut(half, bed, edges, k + 1, leaves);
-                }
+            if !cut_here {
+                leaves.push(piece);
             }
-            return;
         }
-        leaves.push(piece);
+        true
     }
 }
 
@@ -423,12 +535,18 @@ fn area(piece: &Piece) -> f64 {
 struct Builder {
     map: HashMap<Key, u32>,
     mesh: PartMesh,
+    normals: bool,
 }
 
 impl Builder {
     fn point(&mut self, c: &Corner) -> u32 {
         *self.map.entry(c.key).or_insert_with(|| {
             self.mesh.vertices.push(c.p);
+            if self.normals {
+                self.mesh
+                    .normals
+                    .push(c.n.try_normalize().unwrap_or(DVec3::Z));
+            }
             (self.mesh.vertices.len() - 1) as u32
         })
     }
@@ -446,9 +564,34 @@ impl Builder {
 /// the stacking order (at most 64); each has at least 3 points. Indices that point outside
 /// `vertices` are skipped. See the module text for the bounds.
 pub fn cut_by_beds(vertices: &[DVec3], indices: &[u32], outlines: &[&[DVec2]]) -> BedCut {
-    cut_capped(vertices, indices, outlines, MAX_CUT_TRIANGLES, MAX_WORK)
+    cut_with_normals(vertices, indices, outlines, None)
 }
 
+/// Like [`cut_by_beds`]. With one normal per source vertex (see [`smooth_normals`]), the pieces
+/// get normals interpolated from them (`PartMesh::normals`).
+pub fn cut_with_normals(
+    vertices: &[DVec3],
+    indices: &[u32],
+    outlines: &[&[DVec2]],
+    normals: Option<&[DVec3]>,
+) -> BedCut {
+    let limits = Limits {
+        cap: MAX_CUT_TRIANGLES,
+        max_work: MAX_WORK,
+        max_pieces: MAX_PIECES_PER_TRIANGLE,
+    };
+    run(vertices, indices, outlines, normals, limits)
+}
+
+/// The bounds of one cut (the constants, or smaller ones in tests).
+#[derive(Clone, Copy)]
+struct Limits {
+    cap: usize,
+    max_work: u64,
+    max_pieces: usize,
+}
+
+#[cfg(test)]
 fn cut_capped(
     vertices: &[DVec3],
     indices: &[u32],
@@ -456,29 +599,58 @@ fn cut_capped(
     cap: usize,
     max_work: u64,
 ) -> BedCut {
+    let limits = Limits {
+        cap,
+        max_work,
+        max_pieces: MAX_PIECES_PER_TRIANGLE,
+    };
+    run(vertices, indices, outlines, None, limits)
+}
+
+fn run(
+    vertices: &[DVec3],
+    indices: &[u32],
+    outlines: &[&[DVec2]],
+    normals: Option<&[DVec3]>,
+    limits: Limits,
+) -> BedCut {
+    let normals = normals.filter(|n| n.len() == vertices.len());
     let outlines: Vec<&[DVec2]> = outlines
         .iter()
         .copied()
         .take(64)
         .map(|o| if o.len() >= 3 { o } else { &[][..] })
         .collect();
+    let mut work = 0u64;
+    let built: Vec<Outline> = outlines
+        .iter()
+        .map(|o| {
+            let (o, w) = Outline::new(if o.is_empty() { &ZERO3 } else { o });
+            work += w;
+            o
+        })
+        .collect();
     let mut cutter = Cutter {
         vertices,
-        outlines: outlines
-            .iter()
-            .map(|o| Outline::new(if o.is_empty() { &ZERO3 } else { o }))
-            .collect(),
-        work: 0,
+        normals,
+        outlines: built,
+        work,
+        max_work: limits.max_work,
         pieces: 0,
+        max_pieces: limits.max_pieces,
+        eps: 0.0,
     };
     let usable: Vec<bool> = outlines.iter().map(|o| !o.is_empty()).collect();
-    let mut base = Builder::default();
-    let mut beds: Vec<Builder> = outlines.iter().map(|_| Builder::default()).collect();
+    let new_builder = || Builder {
+        normals: normals.is_some(),
+        ..Builder::default()
+    };
+    let mut base = new_builder();
+    let mut beds: Vec<Builder> = outlines.iter().map(|_| new_builder()).collect();
     let mut produced = 0usize;
     let mut truncated = false;
     for tri in indices.as_chunks::<3>().0 {
-        let ids = tri.map(|i| i as usize);
-        if ids.iter().any(|&i| i >= vertices.len()) {
+        if tri.iter().any(|&i| i as usize >= vertices.len()) {
             continue;
         }
         let corners: Piece = (0..3)
@@ -487,44 +659,63 @@ fn cut_capped(
                 Corner {
                     key: Key::Source(i),
                     p: vertices[i as usize],
+                    n: normals.map_or(DVec3::ZERO, |n| n[i as usize]),
                     edge: Some((i.min(j), i.max(j))),
                 }
             })
             .collect();
-        if truncated || produced >= cap || cutter.work >= max_work {
+        if produced >= limits.cap || cutter.work >= limits.max_work {
             truncated = true;
             produced += base.polygon(&corners);
             continue;
         }
         let (lo, hi) = bounds(&corners);
+        let mag = lo.abs().max(hi.abs()).max_element();
+        cutter.eps = (1e-9 * (hi - lo).max_element() + 1e-14 * mag).max(1e-12);
         cutter.pieces = 0;
-        let mut pieces: Vec<(Piece, u64)> = vec![(corners, 0)];
-        for (b, usable) in usable.iter().enumerate() {
+        let mut pieces: Vec<(Piece, u64)> = vec![(corners.clone(), 0)];
+        let mut complete = true;
+        'beds: for (b, usable) in usable.iter().enumerate() {
             if !usable || !cutter.outlines[b].overlaps(lo, hi) {
                 continue;
             }
-            let edges = cutter.outlines[b].near(lo, hi);
+            if cutter.work >= limits.max_work {
+                complete = false;
+                break;
+            }
+            let mut w = 0;
+            let edges = cutter.outlines[b].near(lo, hi, &mut w);
+            cutter.work += w;
             let mut next = Vec::with_capacity(pieces.len());
-            for (piece, bits) in pieces {
+            for (piece, bits) in std::mem::take(&mut pieces) {
                 let mut leaves = Vec::new();
-                cutter.cut(piece, b, &edges, 0, &mut leaves);
+                if !cutter.cut(piece, b, &edges, &mut leaves) {
+                    complete = false;
+                    break 'beds;
+                }
                 for leaf in leaves {
                     let mid = centroid(&leaf);
+                    let mut w = 0;
                     let inside = if edges.is_empty() {
-                        let mut w = 0;
-                        let v = cutter.outlines[b].cell_inside(mid, &mut w);
-                        cutter.work += w;
-                        v
+                        cutter.outlines[b].cell_inside(mid, &mut w)
                     } else {
-                        let mut w = 0;
-                        let v = cutter.outlines[b].contains(mid, &mut w);
-                        cutter.work += w;
-                        v
+                        cutter.outlines[b].contains(mid, &mut w)
                     };
+                    cutter.work += w;
                     next.push((leaf, bits | (u64::from(inside) << b)));
                 }
             }
             pieces = next;
+            if cutter.work > limits.max_work {
+                complete = false;
+                break;
+            }
+        }
+        if !complete {
+            // A bound was reached in the middle of this triangle: it goes whole to the base.
+            truncated = true;
+            produced += base.polygon(&corners);
+            continue;
         }
         for (piece, bits) in pieces {
             if piece.len() < 3 || area(&piece) < MIN_AREA {
@@ -541,6 +732,7 @@ fn cut_capped(
         base: base.mesh,
         beds: beds.into_iter().map(|b| b.mesh).collect(),
         truncated,
+        work: cutter.work,
     }
 }
 

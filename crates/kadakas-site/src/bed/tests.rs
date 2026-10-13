@@ -37,6 +37,7 @@ fn total_area(c: &BedCut) -> f64 {
 fn mesh_area(v: &[DVec3], idx: &[u32]) -> f64 {
     PartMesh {
         vertices: v.to_vec(),
+        normals: Vec::new(),
         indices: idx.to_vec(),
     }
     .area()
@@ -198,7 +199,7 @@ fn an_outline_with_many_edges_is_cut_with_its_grid() {
 
 fn contains(poly: &[DVec2], p: DVec2) -> bool {
     let mut w = 0;
-    Outline::new(poly).contains(p, &mut w)
+    Outline::new(poly).0.contains(p, &mut w)
 }
 
 fn dist_to_outline(poly: &[DVec2], p: DVec2) -> f64 {
@@ -268,4 +269,224 @@ proptest! {
             }
         }
     }
+}
+
+/// A zigzag outline of `teeth` teeth across a square of `size` mm: every edge is long.
+fn zigzag(teeth: usize, size: f64) -> Vec<DVec2> {
+    let mut pts = Vec::new();
+    for i in 0..teeth {
+        let x = size * i as f64 / teeth as f64;
+        pts.push(DVec2::new(x, if i % 2 == 0 { 0.0 } else { size }));
+    }
+    pts.push(DVec2::new(size, size / 2.0));
+    pts
+}
+
+fn grid_entries(o: &Outline) -> usize {
+    o.grid.iter().map(Vec::len).sum()
+}
+
+#[test]
+fn a_zigzag_outline_has_a_capped_grid_and_counted_work() {
+    // 4095 teeth, each edge as long as the square: a bounding box grid would hold a copy of
+    // every edge in nearly every cell (about 4 million entries).
+    let z = zigzag(4095, 40_000.0);
+    let (o, work) = Outline::new(&z);
+    assert!(grid_entries(&o) <= MAX_GRID_ENTRIES, "{}", grid_entries(&o));
+    assert!(work >= z.len() as u64 && work < 3 * MAX_GRID_ENTRIES as u64 + z.len() as u64);
+    // The cut with it keeps the area, does not truncate, and reports its work.
+    let (v, idx) = grid(4, 10_000.0);
+    let cut = cut_by_beds(&v, &idx, &[&z]);
+    assert!(!cut.truncated);
+    assert!((total_area(&cut) - 16.0e8).abs() < 1.0);
+    assert!(cut.work > work && cut.work < MAX_WORK);
+    // The two parts together are the whole, and the bed has a share.
+    assert!(cut.beds[0].area() > 0.0 && cut.base.area() > 0.0);
+}
+
+#[test]
+fn near_lists_each_edge_once_and_counts_every_entry_it_visits() {
+    let z = zigzag(400, 40_000.0);
+    let (mut o, _) = Outline::new(&z);
+    let mut work = 0;
+    let all = o.near(DVec2::splat(-1.0), DVec2::splat(50_000.0), &mut work);
+    let mut sorted = all.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), all.len(), "an edge twice");
+    assert_eq!(all.len(), z.len(), "every edge is somewhere in the box");
+    assert!(work >= (grid_entries(&o) + o.cells * o.cells) as u64);
+    // A small box finds only the edges near it, and a second call starts fresh.
+    let mut w2 = 0;
+    let few = o.near(DVec2::new(100.0, 100.0), DVec2::new(200.0, 200.0), &mut w2);
+    assert!(few.len() < all.len() && !few.is_empty());
+    assert_eq!(
+        few,
+        o.near(DVec2::new(100.0, 100.0), DVec2::new(200.0, 200.0), &mut w2)
+    );
+}
+
+#[test]
+fn a_deep_chain_of_cuts_uses_a_stack_not_the_call_stack() {
+    // One big triangle, and 400 long edges that all cross it: a long chain of cuts. With
+    // recursion this overflows a small stack; the work stack does not.
+    let v = vec![
+        DVec3::new(0.0, 0.0, 0.0),
+        DVec3::new(100_000.0, 0.0, 0.0),
+        DVec3::new(0.0, 100_000.0, 0.0),
+    ];
+    let z = zigzag(400, 90_000.0);
+    let big = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            let cut = cut_by_beds(&v, &[0, 1, 2], &[&z]);
+            (cut.truncated, total_area(&cut), cut.base.area())
+        })
+        .unwrap()
+        .join()
+        .expect("no stack overflow");
+    assert!(!big.0);
+    assert!((big.1 - 5.0e9).abs() < 5.0e9 * 1e-9, "{}", big.1);
+    assert!(big.2 > 0.0);
+}
+
+#[test]
+fn a_triangle_that_needs_too_many_cuts_goes_whole_to_the_base() {
+    let v = vec![
+        DVec3::new(0.0, 0.0, 0.0),
+        DVec3::new(100_000.0, 0.0, 0.0),
+        DVec3::new(0.0, 100_000.0, 0.0),
+    ];
+    let z = zigzag(300, 90_000.0);
+    // Three triangles: the big one overshoots a small limit; the tiny one far away does not.
+    let mut verts = v.clone();
+    verts.extend([
+        DVec3::new(500_000.0, 0.0, 0.0),
+        DVec3::new(500_100.0, 0.0, 0.0),
+        DVec3::new(500_000.0, 100.0, 0.0),
+    ]);
+    let idx = [0, 1, 2, 3, 4, 5];
+    let limits = Limits {
+        cap: MAX_CUT_TRIANGLES,
+        max_work: MAX_WORK,
+        max_pieces: 20,
+    };
+    let cut = run(&verts, &idx, &[&z], None, limits);
+    assert!(cut.truncated);
+    // The big triangle is in the base as one whole triangle, not as half-cut pieces.
+    assert!(cut.beds[0].is_empty());
+    assert_eq!(cut.base.indices.len(), 6);
+    assert!((total_area(&cut) - (5.0e9 + 5_000.0)).abs() < 1e-3);
+    // The same input with the normal limit cuts.
+    let full = cut_by_beds(&verts, &idx, &[&z]);
+    assert!(!full.truncated && !full.beds[0].is_empty());
+    assert!((total_area(&full) - (5.0e9 + 5_000.0)).abs() < 1.0);
+}
+
+#[test]
+fn running_out_of_work_in_the_middle_of_a_triangle_sends_it_whole_to_the_base() {
+    let (v, idx) = grid(3, 10_000.0);
+    let z = zigzag(500, 30_000.0);
+    let full = cut_by_beds(&v, &idx, &[&z]);
+    assert!(!full.truncated);
+    // Half of the work: some triangles are done, the rest go whole to the base.
+    let half = run(
+        &v,
+        &idx,
+        &[&z],
+        None,
+        Limits {
+            cap: MAX_CUT_TRIANGLES,
+            max_work: full.work / 2,
+            max_pieces: MAX_PIECES_PER_TRIANGLE,
+        },
+    );
+    assert!(half.truncated);
+    assert!((total_area(&half) - 9.0e8).abs() < 1e-3);
+    assert!(half.beds[0].area() < full.beds[0].area());
+    // Every triangle of the base that came from a stopped triangle is a source triangle: none
+    // of its vertices is a cut point. All source vertices are in the grid at multiples of 10 m.
+    let whole = half
+        .base
+        .indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .filter(|t| {
+            t.iter().all(|i| {
+                let p = half.base.vertices[*i as usize];
+                p.x % 10_000.0 == 0.0 && p.y % 10_000.0 == 0.0
+            })
+        })
+        .count();
+    assert!(whole > 0);
+    // The budget counts work, not time: the same limit gives the same result.
+    let again = run(
+        &v,
+        &idx,
+        &[&z],
+        None,
+        Limits {
+            cap: MAX_CUT_TRIANGLES,
+            max_work: full.work / 2,
+            max_pieces: MAX_PIECES_PER_TRIANGLE,
+        },
+    );
+    assert_eq!(half, again);
+}
+
+#[test]
+fn the_pieces_get_normals_interpolated_from_the_source_mesh() {
+    // A bumpy surface, so the normals differ from vertex to vertex.
+    let (mut v, idx) = grid(3, 1000.0);
+    for (i, p) in v.iter_mut().enumerate() {
+        p.z = ((i * 7) % 5) as f64 * 120.0;
+    }
+    let normals = smooth_normals(&v, &idx);
+    assert!(
+        normals
+            .iter()
+            .all(|n| (n.length() - 1.0).abs() < 1e-9 && n.z > 0.0)
+    );
+    let bed = vec![
+        DVec2::new(300.0, 400.0),
+        DVec2::new(2700.0, 500.0),
+        DVec2::new(2200.0, 2600.0),
+    ];
+    let cut = cut_with_normals(&v, &idx, &[&bed], Some(&normals));
+    let parts = [&cut.base, &cut.beds[0]];
+    let mut at_source = 0;
+    for part in parts {
+        assert_eq!(part.normals.len(), part.vertices.len());
+        for (p, n) in part.vertices.iter().zip(&part.normals) {
+            assert!((n.length() - 1.0).abs() < 1e-9 && n.is_finite());
+            // Source vertices keep their normal.
+            if let Some(i) = v.iter().position(|q| (*q - *p).length() < 1e-9) {
+                assert!((*n - normals[i]).length() < 1e-9);
+                at_source += 1;
+            }
+        }
+    }
+    assert!(at_source > 4);
+    // The same point on the two sides of an outline has the same normal: no shading seam.
+    for p in &cut.beds[0]
+        .vertices
+        .iter()
+        .zip(&cut.beds[0].normals)
+        .collect::<Vec<_>>()
+    {
+        for (q, m) in cut.base.vertices.iter().zip(&cut.base.normals) {
+            if (*p.0 - *q).length() < 1e-9 {
+                assert!((*p.1 - *m).length() < 1e-9, "seam at {q}");
+            }
+        }
+    }
+    // Without normals, or with the wrong number of them, the parts have none.
+    assert!(cut_by_beds(&v, &idx, &[&bed]).base.normals.is_empty());
+    assert!(
+        cut_with_normals(&v, &idx, &[&bed], Some(&normals[1..]))
+            .base
+            .normals
+            .is_empty()
+    );
 }

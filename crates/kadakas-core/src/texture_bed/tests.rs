@@ -68,10 +68,6 @@ fn material(ed: &mut Editor, name: &str) -> ResourceId {
     ResourceId(out.created[0])
 }
 
-fn none_material(_: &Object) -> Option<ResourceId> {
-    None
-}
-
 #[test]
 fn the_mapping_is_checked_and_turns_into_a_planar_projection() {
     let m = BedMapping::default();
@@ -189,7 +185,7 @@ fn problems_are_found_and_repaired() {
         None
     );
     let mut fix = bad_map.clone();
-    assert!(repair(&mut fix));
+    assert!(repair(&mut fix).is_some());
     assert_eq!(fix.problem(), None);
     assert!(matches!(
         fix,
@@ -198,7 +194,7 @@ fn problems_are_found_and_repaired() {
             ..
         }
     ));
-    assert!(!repair(&mut fix) && !repair(&mut ok.clone()));
+    assert!(repair(&mut fix).is_none() && repair(&mut ok.clone()).is_none());
 }
 
 #[test]
@@ -219,13 +215,6 @@ fn a_file_with_a_bad_mapping_loads_with_the_mapping_reset() {
     assert_eq!(loaded.object(id).unwrap().shape.problem(), None);
     assert_eq!(loaded.load_notes().len(), 1);
     assert!(loaded.load_notes()[0].contains("texture bed"));
-    // Too many points cannot be repaired: the file is refused.
-    if let Shape::SiteModifier { boundary, .. } = &mut doc.object_mut(id).unwrap().shape {
-        *boundary = (0..=MAX_BED_VERTICES)
-            .map(|i| Vertex::corner(DVec2::new(i as f64, (i * i % 7) as f64)))
-            .collect();
-    }
-    assert!(Document::from_json(&serde_json::to_string(&doc).unwrap()).is_err());
 }
 
 #[test]
@@ -273,7 +262,7 @@ fn beds_are_found_in_stacking_order_with_the_material_rules() {
     let doc = ed.doc();
     let site_obj = doc.object(site_id).unwrap();
     // The middle bed has no material: it has no effect.
-    let list = beds_for(doc, site_obj, &none_material);
+    let list = beds_for(doc, site_obj);
     assert_eq!(
         list.iter().map(|b| (b.object, b.part)).collect::<Vec<_>>(),
         vec![(a, PART_BED), (c, PART_BED + 1)]
@@ -287,9 +276,7 @@ fn beds_are_found_in_stacking_order_with_the_material_rules() {
     })
     .unwrap();
     let doc = ed.doc();
-    let by_class = beds_for(doc, doc.object(site_id).unwrap(), &|o| {
-        crate::present::bed_material(doc, o)
-    });
+    let by_class = beds_for(doc, doc.object(site_id).unwrap());
     assert_eq!(by_class.len(), 3);
     assert_eq!(by_class[1].object, b);
     assert_eq!(by_class[1].material, gravel);
@@ -314,12 +301,10 @@ fn beds_are_found_in_stacking_order_with_the_material_rules() {
     })
     .unwrap();
     let doc = ed.doc();
-    let order: Vec<ObjectId> = beds_for(doc, doc.object(site_id).unwrap(), &|o| {
-        crate::present::bed_material(doc, o)
-    })
-    .iter()
-    .map(|b| b.object)
-    .collect();
+    let order: Vec<ObjectId> = beds_for(doc, doc.object(site_id).unwrap())
+        .iter()
+        .map(|b| b.object)
+        .collect();
     assert_eq!(order, vec![c, a, b]);
 }
 
@@ -340,7 +325,7 @@ fn beds_must_be_on_the_layer_visible_and_near_the_site() {
         },
     );
     let doc = ed.doc();
-    let find = |doc: &Document| beds_for(doc, doc.object(site_id).unwrap(), &none_material);
+    let find = |doc: &Document| beds_for(doc, doc.object(site_id).unwrap());
     assert_eq!(
         find(doc).iter().map(|b| b.object).collect::<Vec<_>>(),
         vec![near]
@@ -365,7 +350,7 @@ fn beds_must_be_on_the_layer_visible_and_near_the_site() {
     assert!(find(ed.doc()).is_empty());
     // The site model gives none for another shape.
     let doc = ed.doc();
-    assert!(beds_for(doc, doc.object(near).unwrap(), &none_material).is_empty());
+    assert!(beds_for(doc, doc.object(near).unwrap()).is_empty());
 }
 
 #[test]
@@ -382,7 +367,7 @@ fn only_the_frontmost_64_beds_act() {
         })
         .collect();
     let doc = ed.doc();
-    let list = beds_for(doc, doc.object(site_id).unwrap(), &none_material);
+    let list = beds_for(doc, doc.object(site_id).unwrap());
     assert_eq!(list.len(), MAX_TEXTURE_BEDS);
     assert_eq!(list[0].object, ids[6]);
     assert_eq!(list[63].object, ids[69]);
@@ -414,7 +399,7 @@ fn the_mapping_of_a_bed_is_its_own_or_that_of_the_site() {
         ),
     );
     let doc = ed.doc();
-    let list = beds_for(doc, doc.object(site_id).unwrap(), &none_material);
+    let list = beds_for(doc, doc.object(site_id).unwrap());
     assert_eq!(list[0].mapping.scale, [1234.0; 2]);
     assert_eq!(list[0].mapping.rotation, 30.0);
     assert_eq!(list[0].mapping.offset, [5.0, 6.0]);
@@ -503,4 +488,213 @@ fn the_slot_index_gives_the_bed_parts_their_material_and_mapping() {
         Some("bed:3")
     );
     assert_eq!(crate::present::part_slot(o2, PART_MAIN), None);
+}
+
+#[test]
+fn a_moved_mapping_stays_small_and_shows_the_same_texture() {
+    use crate::present::texture_uv_f64;
+    let m = BedMapping {
+        tile: 700.0,
+        offset: [100.0, 50.0],
+        rotation: 30.0,
+    };
+    let d = DVec2::new(123_456.0, -98_765.0);
+    let moved = m.translated(d);
+    assert!(
+        moved.offset.iter().all(|v| v.abs() < 1000.0),
+        "{:?}",
+        moved.offset
+    );
+    // The texture of the moved ground is the texture of the old ground: the same fraction of a
+    // repeat at every point.
+    for q in [DVec2::new(5.0, 9.0), DVec2::new(-4000.0, 777.0)] {
+        let old = texture_uv_f64(
+            &m.mapping(),
+            [q.x, q.y, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0; 3],
+            1.0,
+        );
+        let new = texture_uv_f64(
+            &moved.mapping(),
+            [q.x + d.x, q.y + d.y, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0; 3],
+            1.0,
+        );
+        for k in 0..2 {
+            let diff = (new[k] - old[k]).rem_euclid(1.0);
+            assert!(diff < 1e-6 || diff > 1.0 - 1e-6, "{diff}");
+        }
+    }
+    // Moving again and again keeps the offset in range.
+    let mut again = m;
+    for _ in 0..1000 {
+        again = again.translated(DVec2::new(9.0e5, 1.1e5));
+    }
+    assert!(again.offset.iter().all(|v| v.abs() < 1000.0));
+    // A mapping that cannot wrap is only shifted.
+    let odd = BedMapping { tile: 0.0, ..m }.translated(DVec2::X);
+    assert_eq!(odd.offset, [101.0, 50.0]);
+}
+
+#[test]
+fn rotate_mirror_and_scale_are_refused_for_beds_and_a_move_is_not() {
+    let mut ed = Editor::with_sequential_ids();
+    for mapping in [None, Some(BedMapping::default())] {
+        let id = add(&mut ed, bed_shape(None, mapping, 0.0, 1000.0));
+        let before = ed.doc().object(id).unwrap().shape.clone();
+        for transform in [
+            serde_json::json!({"type": "rotate", "center": [0, 0], "angle": 0.5}),
+            serde_json::json!({"type": "scale", "center": [0, 0], "sx": 2.0}),
+            serde_json::json!({"type": "mirror", "a": [0, 0], "b": [1, 0]}),
+        ] {
+            let cmd: Command = serde_json::from_value(
+                serde_json::json!({"op": "transform_objects", "ids": [id], "transform": transform}),
+            )
+            .unwrap();
+            let err = ed.execute(&cmd).unwrap_err().to_string();
+            assert!(err.contains("site_modifier"), "{err}");
+            assert_eq!(ed.doc().object(id).unwrap().shape, before);
+        }
+        let cmd: Command = serde_json::from_value(serde_json::json!(
+            {"op": "transform_objects", "ids": [id], "transform": {"type": "move", "delta": [5, 6]}}
+        ))
+        .unwrap();
+        ed.execute(&cmd).unwrap();
+        assert_ne!(ed.doc().object(id).unwrap().shape, before);
+    }
+}
+
+#[test]
+fn a_file_with_too_many_boundary_points_is_thinned_and_opens() {
+    let mut ed = Editor::with_sequential_ids();
+    let id = add(&mut ed, bed_shape(None, None, 0.0, 1000.0));
+    let mut doc = ed.doc().clone();
+    if let Shape::SiteModifier { boundary, .. } = &mut doc.object_mut(id).unwrap().shape {
+        *boundary = (0..3 * MAX_BED_VERTICES)
+            .map(|i| {
+                let a = i as f64 / (3 * MAX_BED_VERTICES) as f64 * std::f64::consts::TAU;
+                Vertex::corner(DVec2::new(1000.0 * a.cos(), 1000.0 * a.sin()))
+            })
+            .collect();
+    }
+    let loaded = Document::from_json(&serde_json::to_string(&doc).unwrap()).expect("opens");
+    let Shape::SiteModifier { boundary, .. } = &loaded.object(id).unwrap().shape else {
+        panic!()
+    };
+    assert!(boundary.len() <= MAX_BED_VERTICES && boundary.len() > MAX_BED_VERTICES / 2);
+    assert_eq!(loaded.object(id).unwrap().shape.problem(), None);
+    assert!(loaded.load_notes()[0].contains("thinned"));
+}
+
+#[test]
+fn a_bed_of_a_kind_that_this_version_does_not_know_is_kept_as_unknown() {
+    let mut ed = Editor::with_sequential_ids();
+    let id = add(&mut ed, bed_shape(None, None, 0.0, 1000.0));
+    let mut json = serde_json::to_value(ed.doc()).unwrap();
+    for o in json["objects"].as_array_mut().unwrap() {
+        if o["id"] == serde_json::json!(id) {
+            o["shape"]["modifier"] = serde_json::json!({"type": "shiny_bed", "gloss": 3});
+        }
+    }
+    let loaded = Document::from_json(&json.to_string()).expect("opens");
+    assert!(matches!(
+        &loaded.object(id).unwrap().shape,
+        Shape::Unknown { kind, .. } if kind == "site_modifier"
+    ));
+    // It saves back unchanged.
+    let again = serde_json::to_value(&loaded).unwrap();
+    let saved = again["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["id"] == serde_json::json!(id))
+        .unwrap();
+    assert_eq!(saved["shape"]["modifier"]["type"], "shiny_bed");
+    // A known kind with bad fields is still an error.
+    let mut bad = serde_json::to_value(ed.doc()).unwrap();
+    for o in bad["objects"].as_array_mut().unwrap() {
+        if o["id"] == serde_json::json!(id) {
+            o["shape"]["modifier"]["mapping"] = serde_json::json!("x");
+        }
+    }
+    assert!(Document::from_json(&bad.to_string()).is_err());
+}
+
+#[test]
+fn a_purge_keeps_the_material_of_a_bed_and_of_a_textured_site() {
+    use crate::library::{purge_plan, usage};
+    let mut ed = Editor::with_sequential_ids();
+    let used_by_bed = material(&mut ed, "Bed");
+    let used_by_site = material(&mut ed, "Site");
+    let spare = material(&mut ed, "Spare");
+    add(&mut ed, bed_shape(Some(used_by_bed), None, 0.0, 1000.0));
+    site(
+        &mut ed,
+        SiteSettings {
+            surface_look: SurfaceLook::Texture,
+            texture: Some(used_by_site),
+            ..Default::default()
+        },
+    );
+    assert_eq!(usage(ed.doc(), used_by_bed).objects.len(), 1);
+    assert_eq!(usage(ed.doc(), used_by_site).objects.len(), 1);
+    assert_eq!(purge_plan(ed.doc(), &["material"]), vec![spare]);
+    let listed = crate::library::list(ed.doc(), None, None);
+    let used = |id| listed.iter().find(|r| r.id == id).unwrap().used_by;
+    assert_eq!(
+        (used(used_by_bed), used(used_by_site), used(spare)),
+        (1, 1, 0)
+    );
+}
+
+#[test]
+fn many_arc_heavy_beds_are_cut_to_64_and_flattened_within_bounds() {
+    let mut ed = Editor::with_sequential_ids();
+    let site_id = site(&mut ed, SiteSettings::default());
+    let grass = material(&mut ed, "Grass");
+    // 70 beds of 4000 large arcs: flattened at 2 mm each would be millions of points.
+    let big_arcs = |k: usize| -> Vec<Vertex> {
+        (0..4000)
+            .map(|i| {
+                let a = i as f64 / 4000.0 * std::f64::consts::TAU;
+                Vertex {
+                    p: DVec2::new(
+                        5000.0 + 4000.0 * a.cos() + k as f64,
+                        5000.0 + 4000.0 * a.sin(),
+                    ),
+                    kind: VertexKind::Arc { radius: 1.0e7 },
+                }
+            })
+            .collect()
+    };
+    for k in 0..70 {
+        add(
+            &mut ed,
+            Shape::SiteModifier {
+                modifier: ModifierKind::TextureBed {
+                    texture: Some(grass),
+                    mapping: None,
+                },
+                boundary: big_arcs(k),
+            },
+        );
+    }
+    let doc = ed.doc();
+    let list = beds_for(doc, doc.object(site_id).unwrap());
+    assert_eq!(list.len(), MAX_TEXTURE_BEDS);
+    assert!(
+        list.iter()
+            .all(|b| b.outline.len() >= 3 && b.outline.len() <= MAX_BED_EDGES)
+    );
+    // The outline itself: the limit holds for one huge boundary, whatever the arcs ask for.
+    let o = outline(&big_arcs(0));
+    assert!(!o.is_empty() && o.len() <= MAX_BED_EDGES, "{}", o.len());
+    // Beds that are not displayed are not flattened and do not count toward the 64.
+    assert!(
+        beds_for(doc, doc.object(site_id).unwrap())
+            .iter()
+            .all(|b| doc.is_displayed(doc.object(b.object).unwrap()))
+    );
 }

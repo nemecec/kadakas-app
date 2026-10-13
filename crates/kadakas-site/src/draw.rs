@@ -118,28 +118,32 @@ pub fn draw_3d_beds(
             let (base, in_beds) = if acts {
                 let outlines: Vec<&[glam::DVec2]> =
                     beds.iter().map(|b| b.outline.as_slice()).collect();
-                let cut = bed::cut_by_beds(vertices, idx, &outlines);
-                (Some((cut.base.vertices, cut.base.indices)), cut.beds)
+                // The normals of the whole surface go to the pieces: no seam along an outline.
+                let normals = bed::smooth_normals(vertices, idx);
+                let cut = bed::cut_with_normals(vertices, idx, &outlines, Some(&normals));
+                (Some(cut.base), cut.beds)
             } else {
                 (None, Vec::new())
             };
             let (vertices, idx) = base
                 .as_ref()
-                .map_or((vertices.as_slice(), idx.as_slice()), |(v, i)| {
-                    (v.as_slice(), i.as_slice())
+                .map_or((vertices.as_slice(), idx.as_slice()), |m| {
+                    (m.vertices.as_slice(), m.indices.as_slice())
                 });
             if let Some(plan) = &plan {
                 // Colors by elevation: one mesh per band, each with the color of its band.
                 for part in elevation::split_bands(vertices, idx, plan) {
                     sink.mesh(&part.vertices, &part.indices, plan.colors[part.band]);
                 }
+            } else if let Some(m) = &base {
+                sink.mesh_with_normals(&m.vertices, &m.normals, &m.indices, color);
             } else {
                 sink.mesh(vertices, idx, color);
             }
             // The triangles of each bed, with the part that selects its material.
             for (bed, mesh) in beds.iter().zip(&in_beds).filter(|(_, m)| !m.is_empty()) {
                 sink.set_part(bed.part);
-                sink.mesh(&mesh.vertices, &mesh.indices, color);
+                sink.mesh_with_normals(&mesh.vertices, &mesh.normals, &mesh.indices, color);
             }
             sink.set_part(kadakas_core::present::PART_MAIN);
         }
@@ -191,9 +195,7 @@ pub fn scene_ext<'a>(
             if let Ok(site) = cache.get(revision, doc, obj.id) {
                 let analysis = grading::analysis::spec_of(obj)
                     .and_then(|s| grading::analysis::for_site(cache, &site, &s));
-                let beds = kadakas_core::texture_bed::beds_for(doc, obj, &|bed| {
-                    kadakas_core::present::bed_material(doc, bed)
-                });
+                let beds = kadakas_core::texture_bed::beds_for(doc, obj);
                 draw_3d_beds(&site, analysis.as_deref(), &beds, sink);
             }
         } else if matches!(

@@ -65,6 +65,7 @@ fn object_uses(o: &Object, id: ResourceId, tag: &Value) -> bool {
         || crate::landscape::style_id(o) == Some(id)
         || o.attrs.fill_pattern == Some(id)
         || o.attrs.line_type == Some(id)
+        || crate::texture_bed::texture_of(&o.shape) == Some(id)
         || crate::worksheet_table::data(o).is_some_and(|d| d.worksheet == id)
         || o.data
             .values()
@@ -150,6 +151,7 @@ pub fn list(doc: &Document, type_filter: Option<&str>, search: Option<&str>) -> 
             hit(o.attrs.fill_pattern);
             hit(o.attrs.line_type);
             hit(crate::worksheet_table::data(o).map(|d| d.worksheet));
+            hit(crate::texture_bed::texture_of(&o.shape));
             match o.shape {
                 Shape::PlantTag { style, .. } => hit(Some(style)),
                 Shape::Symbol { symbol, .. } => hit(Some(symbol)),

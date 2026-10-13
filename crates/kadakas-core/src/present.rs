@@ -834,15 +834,8 @@ impl SlotIndex {
             }
         }
         // The texture beds of each site model: the material of a bed is a slot of the site model.
-        let mut beds = HashMap::new();
-        for obj in doc.objects.values() {
-            if matches!(obj.shape, Shape::SiteModel { .. }) {
-                let list = crate::texture_bed::beds_for(doc, obj, &|bed| bed_material(doc, bed));
-                if !list.is_empty() {
-                    beds.insert(obj.id, list);
-                }
-            }
-        }
+        let beds: HashMap<ObjectId, Vec<crate::texture_bed::Bed>> =
+            crate::texture_bed::all_beds(doc).into_iter().collect();
         for (site, list) in &beds {
             for b in list {
                 ix.objects

@@ -13,7 +13,7 @@ use kadakas_core::curve::Vertex;
 use kadakas_core::model::{Attributes, ClassId, Document, LayerId, Object, ObjectId, Shape};
 use kadakas_core::present;
 use kadakas_core::site::ModifierKind;
-use kadakas_core::texture_bed::BedMapping;
+use kadakas_core::texture_bed::{self, BedMapping};
 
 use crate::errors::bad;
 use crate::present_api::{Kind, ref_of};
@@ -21,7 +21,7 @@ use crate::{RpcError, Session};
 
 pub const BED_ADD: (&str, &str) = (
     "bed.add",
-    "Add texture beds: site modifiers that give a region of the terrain its own texture without changing the grade (Site Modifiers tool, Texture Bed mode). params: {boundary: [vertices] (arcs allowed) | from: id or [ids] of closed shapes (a closed polyline, rectangle, circle, landscape area or hardscape; the first three are replaced by the bed unless keep_source is true; the bed takes the layer and the class of the shape), texture? (name or id of a material; omit or null: the material of the bed object's slot or of its class), tile_size? (mm, 10 to 1e8), offset? ([x, y] mm), rotation? (degrees): any of the three gives the bed its own mapping, which starts from the mapping of the site model on the layer; without them the bed uses the mapping of the site model, keep_source?, layer?, class?}. The bed acts on the site models on its layer whose box touches it. Where beds overlap, the one in front (later in the drawing order, see arrange) wins; a bed without a material has no effect. One undo step. Returns {id, ids}.",
+    "Add texture beds: site modifiers that give a region of the terrain its own texture without changing the grade (Site Modifiers tool, Texture Bed mode). params: {boundary: [vertices] (arcs allowed) | from: id or [ids] of closed shapes (a closed polyline, closed 3D polyline, rectangle, circle, landscape area without holes or hardscape; the first three are replaced by the bed unless keep_source is true; the bed takes the layer and the class of the shape), texture? (name or id of a material; omit or null: the material of the bed object's slot or of its class), tile_size? (mm, 10 to 1e8), offset? ([x, y] mm), rotation? (degrees): any of the three gives the bed its own mapping, which starts from the mapping of the site model on the layer; without them the bed uses the mapping of the site model, keep_source?, layer?, class?}. The bed acts on the site models on its layer whose box touches it. Where beds overlap, the one in front (later in the drawing order, see arrange) wins; a bed without a material has no effect. One undo step. Returns {id, ids}.",
 );
 pub const BED_SET: (&str, &str) = (
     "bed.set",
@@ -129,6 +129,11 @@ impl MappingEdit {
                 Ok::<_, RpcError>([number(&a[0], "offset")?, number(&a[1], "offset")?])
             })
             .transpose()?;
+        if own == Some(false) && (tile.is_some() || offset.is_some() || rotation.is_some()) {
+            return Err(RpcError::validation(
+                "own_mapping false uses the mapping of the site model: do not give tile_size, offset or rotation with it",
+            ));
+        }
         Ok(MappingEdit {
             own,
             tile,
@@ -160,16 +165,6 @@ impl MappingEdit {
     }
 }
 
-/// The mapping of the first site model on a layer, if there is one.
-fn site_mapping(doc: &Document, layer: LayerId) -> Option<BedMapping> {
-    doc.objects.values().find_map(|o| match &o.shape {
-        Shape::SiteModel { settings, .. } if o.layer == layer => {
-            Some(BedMapping::of_site(settings))
-        }
-        _ => None,
-    })
-}
-
 fn texture_of(
     doc: &Document,
     v: &Value,
@@ -181,8 +176,14 @@ fn texture_of(
     }
 }
 
-/// The row of a bed. `order` counts from the back of all beds.
-fn row(doc: &Document, obj: &Object, order: usize) -> Value {
+/// The row of a bed. `order` counts from the back of all beds; `acting` has the beds that act on
+/// each site model (see `texture_bed::all_beds`).
+fn row(
+    doc: &Document,
+    obj: &Object,
+    order: usize,
+    acting: &[(ObjectId, Vec<texture_bed::Bed>)],
+) -> Value {
     let Shape::SiteModifier {
         modifier: ModifierKind::TextureBed { texture, mapping },
         boundary,
@@ -193,26 +194,15 @@ fn row(doc: &Document, obj: &Object, order: usize) -> Value {
     let name = |r: kadakas_core::resource::ResourceId| doc.resources.get(r).map(|x| x.name.clone());
     let texture_ok = texture.filter(|t| present::material(doc, *t).is_some());
     let material = texture_ok.or_else(|| present::bed_material(doc, obj));
-    // The sites it acts on: those on its layer whose box touches the box of the bed.
-    let (lo, hi) = obj.shape.bounds();
-    let sites: Vec<&Object> = doc
-        .objects
-        .values()
-        .filter(|s| {
-            let (a, b) = s.shape.bounds();
-            matches!(s.shape, Shape::SiteModel { .. })
-                && s.layer == obj.layer
-                && doc.is_visible(s)
-                && a.x <= hi.x
-                && b.x >= lo.x
-                && a.y <= hi.y
-                && b.y >= lo.y
-        })
+    // The sites it acts on: the same rule as the 3D view (box, layer, display, material, cap).
+    let sites: Vec<ObjectId> = acting
+        .iter()
+        .filter(|(_, list)| list.iter().any(|b| b.object == obj.id))
+        .map(|(site, _)| *site)
         .collect();
-    let first = sites.first().and_then(|s| match &s.shape {
-        Shape::SiteModel { settings, .. } => Some(BedMapping::of_site(settings)),
-        _ => None,
-    });
+    let first = sites
+        .first()
+        .map(|_| texture_bed::site_mapping(doc, obj.layer));
     let shown = mapping.or(first).unwrap_or_default();
     json!({
         "id": obj.id,
@@ -228,17 +218,18 @@ fn row(doc: &Document, obj: &Object, order: usize) -> Value {
         "rotation": shown.rotation,
         "order": order,
         "points": boundary.len(),
-        "acts_on": sites.iter().map(|s| s.id).collect::<Vec<_>>(),
-        "active": material.is_some() && !sites.is_empty() && doc.is_visible(obj),
+        "acts_on": sites,
+        "active": !sites.is_empty(),
     })
 }
 
 fn rows(doc: &Document, site: Option<ObjectId>) -> Vec<Value> {
+    let acting = texture_bed::all_beds(doc);
     doc.objects
         .values()
         .filter(|o| is_bed(o))
         .enumerate()
-        .map(|(i, o)| row(doc, o, i))
+        .map(|(i, o)| row(doc, o, i, &acting))
         .filter(|r| {
             site.is_none_or(|s| {
                 r["acts_on"]
@@ -268,7 +259,8 @@ impl Session {
                     .filter(|o| is_bed(o))
                     .position(|o| o.id == id)
                     .unwrap_or(0);
-                Ok(row(doc, doc.object(id).expect("checked"), order))
+                let acting = texture_bed::all_beds(doc);
+                Ok(row(doc, doc.object(id).expect("checked"), order, &acting))
             }
             "bed.list" => {
                 let site = match m.get("site").filter(|v| !v.is_null()) {
@@ -337,8 +329,13 @@ impl Session {
                     let o = doc.object(id).ok_or_else(|| {
                         RpcError::not_found(format!("object {id} does not exist"))
                     })?;
-                    let (b, _) = kadakas_core::solid_batch::closed_profile_of(o)
+                    let (b, holes) = kadakas_core::solid_batch::closed_profile_of(o)
                         .map_err(|why| bad(format!("object {id}: {why}")))?;
+                    if !holes.is_empty() {
+                        return Err(bad(format!(
+                            "object {id}: a landscape area with holes cannot become a texture bed (a bed has no holes): remove the holes or give the boundary"
+                        )));
+                    }
                     let consumed = matches!(
                         o.shape,
                         Shape::Polyline { .. } | Shape::Rect { .. } | Shape::Circle { .. }
@@ -367,7 +364,7 @@ impl Session {
         {
             let layer = layer_arg.or(layer);
             let on = layer.unwrap_or(doc.active_layer);
-            let mapping = edit.apply(None, site_mapping(doc, on).unwrap_or_default());
+            let mapping = edit.apply(None, texture_bed::site_mapping(doc, on));
             commands.push(Command::AddObject {
                 shape: Shape::SiteModifier {
                     modifier: ModifierKind::TextureBed { texture, mapping },
@@ -408,7 +405,7 @@ impl Session {
             texture = texture_of(doc, &v)?;
         }
         let edit = MappingEdit::take(&mut m)?;
-        let mapping = edit.apply(*mapping, site_mapping(doc, obj.layer).unwrap_or_default());
+        let mapping = edit.apply(*mapping, texture_bed::site_mapping(doc, obj.layer));
         let boundary = match m.remove("boundary") {
             None => boundary.clone(),
             Some(b) => serde_json::from_value::<Vec<Vertex>>(b)

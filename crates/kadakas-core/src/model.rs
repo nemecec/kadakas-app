@@ -605,7 +605,8 @@ impl Shape {
         ok
     }
 
-    /// The first problem of a massing model or an underlay (their values are checked as a whole).
+    /// The first problem of a shape whose values are checked as a whole: a massing model, an
+    /// underlay, a mesh, a solid, a site model or a texture bed. `None` for the other shapes.
     pub fn problem(&self) -> Option<String> {
         match self {
             Shape::Massing(m) => m.problem(),
@@ -726,8 +727,7 @@ impl Shape {
                     mapping: Some(m), ..
                 } = modifier
                 {
-                    m.offset[0] += d.x;
-                    m.offset[1] += d.y;
+                    *m = m.translated(d);
                 }
             }
         }
@@ -968,10 +968,26 @@ mod shape_serde {
             Err(e) => {
                 // Only a kind that we do not know becomes `Unknown`. A known kind with bad fields is an error.
                 let kind = raw.get("kind").and_then(Value::as_str);
+                let message = e.to_string();
+                // A site modifier of a kind that we do not know (a newer version) stays as it is.
+                let modifier = raw
+                    .get("modifier")
+                    .and_then(|m| m.get("type"))
+                    .and_then(Value::as_str);
                 match kind {
-                    Some(k) if e.to_string().starts_with(&format!("unknown variant `{k}`")) => {
+                    Some(k) if message.starts_with(&format!("unknown variant `{k}`")) => {
                         Ok(Shape::Unknown {
                             kind: k.to_string(),
+                            raw,
+                        })
+                    }
+                    Some("site_modifier")
+                        if modifier.is_some_and(|t| {
+                            message.starts_with(&format!("unknown variant `{t}`"))
+                        }) =>
+                    {
+                        Ok(Shape::Unknown {
+                            kind: "site_modifier".to_string(),
                             raw,
                         })
                     }
@@ -1226,11 +1242,8 @@ impl Document {
         self.load_notes.clear();
         let mut notes = Vec::new();
         for o in self.objects.values_mut() {
-            if crate::texture_bed::repair(&mut o.shape) {
-                notes.push(format!(
-                    "texture bed {}: the mapping was not valid and was reset to the mapping of the site model",
-                    o.id
-                ));
+            if let Some(what) = crate::texture_bed::repair(&mut o.shape) {
+                notes.push(format!("texture bed {}: {what}", o.id));
             }
             if let Shape::SiteModel { settings, .. } = &mut o.shape
                 && settings.problem().is_some()
