@@ -57,7 +57,9 @@ pub(crate) fn describe() -> Value {
             "origin": "center (default) | file. A drawing whose center is more than 1 km from (0, 0) is shifted to the origin, and the shift is saved as the document georeference (empty CRS if the file has none). file keeps the numbers of the file (objects beyond 1e9 mm are skipped). A document that has a georeference keeps its own origin",
             "faces": "DXF: polygons (default: each 3DFACE is a closed polyline3d, source data for a site model) | mesh (all faces of a DXF layer become one mesh3d). POLYFACE and POLYGON MESH polylines always become mesh3d",
             "max_exploded": "DXF: most objects that exploded blocks may make. Default 100000. The import fails above it",
-            "max_objects": "stop after this many objects. Default 500000"
+            "max_objects": "stop after this many objects. Default 500000",
+            "track_source": "DXF and DWG: true (default). Each object keeps its source in data.import: {source: 'file name#hash of the file header', handle: DXF handle (group code 5), kind: DXF type, hash: hash of the entity, block, via, part}. The objects go to a layer of their own named after the file (classes mode), or to one layer per DXF layer (layers mode). These layers never reuse a design layer, and they carry the source too (layer.import_source). false: the objects go to the active layer without tags. A copy of an object does not keep the tag",
+            "source_name": "DXF and DWG: the file name that the tags record. Default: the name of the file"
         },
         "export_options": {
             "layer_mode": "classes (default: one DXF layer per class) | layers (one per design layer)",

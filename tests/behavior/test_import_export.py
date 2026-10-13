@@ -36,7 +36,8 @@ def test_import_dxf_as_classes_with_report_and_undo(cad):
     assert r["georeference"] is None
     summary = cad.result("document.summary")
     assert summary["object_count"] == 7
-    assert len(summary["layers"]) == 1
+    # The file has a layer of its own, apart from the design layer (IOP-22).
+    assert [la["name"] for la in summary["layers"]] == ["Layer 1", "site.dxf"]
     classes = class_names(cad)
     assert {"Walls", "Planting", "Survey"} <= set(classes)
     assert classes["Walls"]["attrs"]["pen"] == [255, 0, 0, 255]
