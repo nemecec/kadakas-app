@@ -131,6 +131,8 @@ The language list in Preferences comes from `LANGUAGES`. It shows the native nam
 | Dimension standard, Notes database | Mõõtmestamise standard, Märkuste andmebaas | style editors |
 | Area (dimension) | Pindala | the Area mode of the Dimension tool |
 | Picture (of a plant style) | Pilt | PNG or JPEG file in a plant style |
+| Texture, Tile size (of a texture) | Tekstuur, Mustri suurus | the terrain look of a site model |
+| Elevation bands, Color ramp | Kõrgusvööndid, Värviskaala | colors by elevation on the terrain |
 
 ## Terminology overlays (PLAT-04)
 

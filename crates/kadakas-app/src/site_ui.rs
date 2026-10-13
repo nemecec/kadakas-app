@@ -7,8 +7,10 @@ use egui::{Color32, DragValue, Painter, Ui};
 use kadakas_api::Session;
 use kadakas_core::curve::Vertex;
 use kadakas_core::model::{Document, ModifierKind, Object, ObjectId, Shape, SiteSettings};
+use kadakas_core::resource::ResourceId;
 use kadakas_core::site::{
-    Display3d, PadSlope, SurfaceDisplay, boundary_points, end_elevation, slope_from_end_elevation,
+    Display3d, MAX_ELEVATION_BANDS, MAX_RAMP_STOPS, PadSlope, SurfaceDisplay, SurfaceLook,
+    boundary_points, end_elevation, slope_from_end_elevation,
 };
 use kadakas_l10n::tr;
 use kadakas_site::draw::shown_surfaces;
@@ -169,8 +171,156 @@ fn length_row(
     r.drag_stopped() || r.lost_focus()
 }
 
+fn look_label(v: SurfaceLook) -> String {
+    match v {
+        SurfaceLook::Color => tr!("site-ui-look-color"),
+        SurfaceLook::Texture => tr!("site-ui-look-texture"),
+        SurfaceLook::Elevation => tr!("site-ui-look-elevation"),
+    }
+}
+
+/// The rows of the 3D look of a site model: the surface color, a texture (a material with a
+/// planar top projection) or colors by elevation. `materials` are the material resources of the
+/// document.
+fn look_fields(ui: &mut Ui, s: &mut SiteSettings, materials: &[(ResourceId, String)]) -> bool {
+    let mut commit = false;
+    ui.label(tr!("site-ui-3d-look"));
+    let before = s.surface_look;
+    egui::ComboBox::from_id_salt("site_3d_look")
+        .selected_text(look_label(s.surface_look))
+        .show_ui(ui, |ui| {
+            for v in SurfaceLook::ALL {
+                ui.selectable_value(&mut s.surface_look, v, look_label(v));
+            }
+        });
+    commit |= s.surface_look != before;
+    ui.end_row();
+    match s.surface_look {
+        SurfaceLook::Color => {}
+        SurfaceLook::Texture => {
+            ui.label(tr!("site-ui-texture-material"));
+            let before = s.texture;
+            let name = s
+                .texture
+                .and_then(|t| materials.iter().find(|(m, _)| *m == t))
+                .map_or_else(|| tr!("site-ui-by-class"), |(_, n)| n.clone());
+            egui::ComboBox::from_id_salt("site_texture_material")
+                .selected_text(name)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut s.texture, None, tr!("site-ui-by-class"));
+                    for (id, name) in materials {
+                        ui.selectable_value(&mut s.texture, Some(*id), name);
+                    }
+                });
+            commit |= s.texture != before;
+            ui.end_row();
+            commit |= length_row(
+                ui,
+                &tr!("site-ui-tile-size"),
+                &mut s.texture_tile,
+                10.0,
+                kadakas_core::site::MIN_TEXTURE_TILE..=kadakas_core::site::MAX_TEXTURE_TILE,
+            );
+            let limit = kadakas_core::site::MAX_TEXTURE_OFFSET;
+            commit |= length_row(
+                ui,
+                &tr!("site-ui-texture-offset-x"),
+                &mut s.texture_offset[0],
+                10.0,
+                -limit..=limit,
+            );
+            commit |= length_row(
+                ui,
+                &tr!("site-ui-texture-offset-y"),
+                &mut s.texture_offset[1],
+                10.0,
+                -limit..=limit,
+            );
+            ui.label(tr!("site-ui-texture-rotation"));
+            let r = ui.add(
+                DragValue::new(&mut s.texture_rotation)
+                    .speed(1.0)
+                    .direction(),
+            );
+            commit |= r.drag_stopped() || r.lost_focus();
+            ui.end_row();
+        }
+        SurfaceLook::Elevation => {
+            ui.label(tr!("site-ui-elevation-bands"));
+            let r = ui.add(DragValue::new(&mut s.elevation_bands).range(1..=MAX_ELEVATION_BANDS));
+            commit |= r.drag_stopped() || r.lost_focus();
+            ui.end_row();
+            ui.label(tr!("site-ui-fixed-range"));
+            let mut fixed = s.elevation_range.is_some();
+            if ui.checkbox(&mut fixed, "").changed() {
+                s.elevation_range = fixed.then_some([0.0, 10_000.0]);
+                commit = true;
+            }
+            ui.end_row();
+            if let Some(range) = &mut s.elevation_range {
+                let low_limit = range[0] + 1.0;
+                commit |= length_row(
+                    ui,
+                    &tr!("site-ui-range-low"),
+                    &mut range[0],
+                    10.0,
+                    -1.0e8..=1.0e8,
+                );
+                commit |= length_row(
+                    ui,
+                    &tr!("site-ui-range-high"),
+                    &mut range[1],
+                    10.0,
+                    low_limit..=1.0e8,
+                );
+            }
+            ui.label(tr!("site-ui-ramp"));
+            ui.horizontal(|ui| {
+                for c in &mut s.elevation_ramp {
+                    let mut c32 = color32(*c);
+                    if ui.color_edit_button_srgba(&mut c32).changed() {
+                        *c = kadakas_core::model::Color(c32.to_srgba_unmultiplied());
+                        commit = true;
+                    }
+                }
+                if s.elevation_ramp.len() < MAX_RAMP_STOPS
+                    && ui
+                        .button("+")
+                        .on_hover_text(tr!("site-ui-add-color"))
+                        .clicked()
+                {
+                    let last = s
+                        .elevation_ramp
+                        .last()
+                        .copied()
+                        .unwrap_or(kadakas_core::model::Color([128, 128, 128, 255]));
+                    s.elevation_ramp.push(last);
+                    commit = true;
+                }
+                if s.elevation_ramp.len() > 1
+                    && ui
+                        .button("-")
+                        .on_hover_text(tr!("site-ui-remove-color"))
+                        .clicked()
+                {
+                    s.elevation_ramp.pop();
+                    commit = true;
+                }
+            });
+            ui.end_row();
+        }
+    }
+    commit
+}
+
 /// The Object Info rows of a site model. Returns true when an edit is finished.
-pub fn model_fields(ui: &mut Ui, points: usize, lines: usize, s: &mut SiteSettings) -> bool {
+pub fn model_fields(
+    ui: &mut Ui,
+    points: usize,
+    lines: usize,
+    s: &mut SiteSettings,
+    materials: &[(ResourceId, String)],
+) -> bool {
     let mut commit = false;
     ui.label(tr!("site-ui-source-data"));
     ui.label(tr!(
@@ -239,6 +389,7 @@ pub fn model_fields(ui: &mut Ui, points: usize, lines: usize, s: &mut SiteSettin
         });
     commit |= s.display_3d != before;
     ui.end_row();
+    commit |= look_fields(ui, s, materials);
     commit
 }
 

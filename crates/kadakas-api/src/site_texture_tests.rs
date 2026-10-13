@@ -60,7 +60,10 @@ fn site_texture_sets_reads_and_checks() {
     assert_eq!(r["range"], json!([0.0, 800.0]));
     // One undo step per change.
     assert!(s.editor.undo());
-    assert_eq!(ok(&mut s, "site.texture", json!({"id": id}))["look"], "texture");
+    assert_eq!(
+        ok(&mut s, "site.texture", json!({"id": id}))["look"],
+        "texture"
+    );
 
     for (p, word) in [
         (json!({"look": "shiny"}), "look must be"),
@@ -147,7 +150,11 @@ fn the_terrain_texture_reaches_glb_gltf_and_obj() {
     assert!(text.lines().any(|l| l.starts_with("vt ")));
     // Same input, same file.
     let again = dir.join("t2.glb");
-    ok(&mut s, "export.file", json!({"path": again, "format": "glb"}));
+    ok(
+        &mut s,
+        "export.file",
+        json!({"path": again, "format": "glb"}),
+    );
     assert_eq!(std::fs::read(&glb).unwrap(), std::fs::read(&again).unwrap());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -167,7 +174,10 @@ fn elevation_bands_reach_the_exports_as_colored_primitives() {
     let glb = dir.join("b.glb");
     ok(&mut s, "export.file", json!({"path": glb, "format": "glb"}));
     let j = glb_json(&std::fs::read(&glb).unwrap());
-    assert!(j.get("images").is_none_or(|i| i.as_array().unwrap().is_empty()));
+    assert!(
+        j.get("images")
+            .is_none_or(|i| i.as_array().unwrap().is_empty())
+    );
     let colors: std::collections::BTreeSet<String> = j["materials"]
         .as_array()
         .unwrap()
@@ -176,9 +186,17 @@ fn elevation_bands_reach_the_exports_as_colored_primitives() {
         .collect();
     assert!(colors.len() >= 3, "{colors:?}");
     // A render of the bands differs from a render of the plain terrain.
-    let banded = ok(&mut s, "render.png", json!({"width": 200, "height": 150, "view": "left_isometric"}));
+    let banded = ok(
+        &mut s,
+        "render.png",
+        json!({"width": 200, "height": 150, "view": "left_isometric"}),
+    );
     ok(&mut s, "site.texture", json!({"id": id, "look": "color"}));
-    let plain = ok(&mut s, "render.png", json!({"width": 200, "height": 150, "view": "left_isometric"}));
+    let plain = ok(
+        &mut s,
+        "render.png",
+        json!({"width": 200, "height": 150, "view": "left_isometric"}),
+    );
     assert_ne!(banded["png_base64"], plain["png_base64"]);
     let _ = std::fs::remove_dir_all(&dir);
 }

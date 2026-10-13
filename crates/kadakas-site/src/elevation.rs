@@ -18,7 +18,11 @@ pub fn ramp_color(ramp: &[Color], t: f64) -> [u8; 4] {
         [] => [128, 128, 128, 255],
         [one] => one.0,
         _ => {
-            let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+            let t = if t.is_finite() {
+                t.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
             let at = t * (ramp.len() - 1) as f64;
             let i = (at.floor() as usize).min(ramp.len() - 2);
             let f = at - i as f64;
@@ -131,7 +135,10 @@ mod tests {
     #[test]
     fn band_colors_use_the_middle_of_each_band() {
         let c = band_colors(&ramp(), 2);
-        assert_eq!(c, vec![ramp_color(&ramp(), 0.25), ramp_color(&ramp(), 0.75)]);
+        assert_eq!(
+            c,
+            vec![ramp_color(&ramp(), 0.25), ramp_color(&ramp(), 0.75)]
+        );
         assert_eq!(band_colors(&ramp(), 0).len(), 1);
     }
 

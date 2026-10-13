@@ -1170,7 +1170,11 @@ pub fn vertex_edit_commands(id: ObjectId, base: &[Vertex], edited: &[Vertex]) ->
         .collect()
 }
 
-fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
+fn edit_shape(
+    ui: &mut Ui,
+    shape: &mut Shape,
+    materials: &[(kadakas_core::resource::ResourceId, String)],
+) -> bool {
     let mut f = Fields { commit: false };
     egui::Grid::new("shape_fields")
         .num_columns(2)
@@ -1370,7 +1374,10 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                 points,
                 lines,
                 settings,
-            } => f.commit |= crate::site_ui::model_fields(ui, points.len(), lines.len(), settings),
+            } => {
+                f.commit |=
+                    crate::site_ui::model_fields(ui, points.len(), lines.len(), settings, materials)
+            }
             Shape::SiteModifier { modifier, boundary } => {
                 f.commit |= crate::site_ui::modifier_fields(ui, modifier, boundary)
             }
@@ -1440,7 +1447,18 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     }
     ui.label(tr!("panels-id", name = obj.shape.kind(), id = id));
     let edited = edit.edited.as_mut().expect("edit buffer");
-    let commit = edit_shape(ui, edited);
+    let materials: Vec<(kadakas_core::resource::ResourceId, String)> =
+        if matches!(edited, Shape::SiteModel { .. }) {
+            let doc = session.editor.doc();
+            doc.resources
+                .iter()
+                .filter(|r| kadakas_core::present::material(doc, r.id).is_some())
+                .map(|r| (r.id, r.name.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+    let commit = edit_shape(ui, edited, &materials);
     // Vertex edits are sent as `set_vertex` commands, one per changed vertex.
     if edited.vertices().is_some() {
         let base_vertices = edit

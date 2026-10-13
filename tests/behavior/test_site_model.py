@@ -128,3 +128,66 @@ def test_site_methods_reach_mcp(mcp):
     site = mcp.method_json("site", "site.create", {"source_ids": ids})["id"]
     z = mcp.method_json("site", "site.elevation", {"id": site, "x": 5000, "y": 5000})["z"]
     assert z == approx(1500)
+
+
+# --- 3D-05: terrain texture and colors by elevation ---
+
+
+def test_terrain_texture_shows_in_the_render_and_in_exports(cad, tmp_path):
+    import statistics
+
+    from test_render_png import render
+
+    site, _ = make_site(cad)
+    cad.result("material.add_defaults")
+
+    def spread(rows):
+        lum = [sum(px[:3]) for px in rows[80][40:120]]
+        return statistics.pstdev(lum)
+
+    flat = render(cad, view="top", width=160, height=160)[1]
+    r = cad.result("site.texture", {"id": site, "look": "texture", "material": "Gravel", "tile_size": 400, "rotation": 20})
+    assert r["look"] == "texture" and r["material"] == "Gravel"
+    textured = render(cad, view="top", width=160, height=160)[1]
+    assert spread(textured) > spread(flat) + 5
+    # Settings are in the shape of the object and survive an undo.
+    assert cad.result("objects.get", {"id": site})["shape"]["settings"]["texture_tile"] == 400
+    # Exports: the image and the texture coordinates.
+    glb = tmp_path / "terrain.glb"
+    assert cad.result("export.file", {"path": str(glb), "format": "glb"})["report"]["textures"] == 1
+    obj = tmp_path / "terrain.obj"
+    cad.result("export.file", {"path": str(obj)})
+    assert "map_Kd Gravel_0.png" in (tmp_path / "terrain.mtl").read_text()
+    assert (tmp_path / "Gravel_0.png").read_bytes().startswith(b"\x89PNG")
+    assert any(line.startswith("vt ") for line in obj.read_text().splitlines())
+    # A bad tile size is refused and changes nothing.
+    assert "tile" in cad.error("site.texture", {"id": site, "tile_size": 1})["message"]
+    assert cad.result("site.texture", {"id": site})["tile_size"] == 400
+    assert cad.result("undo")["done"]
+    assert cad.result("site.texture", {"id": site})["tile_size"] == 2000
+
+
+def test_terrain_colors_by_elevation(cad, tmp_path):
+    import json
+    import struct
+
+    site, _ = make_site(cad)
+    cad.result(
+        "site.texture",
+        {"id": site, "look": "elevation", "bands": 4, "ramp": [[0, 0, 255], [255, 0, 0]]},
+    )
+    glb = tmp_path / "bands.glb"
+    cad.result("export.file", {"path": str(glb), "format": "glb"})
+    data = glb.read_bytes()
+    n = struct.unpack("<I", data[12:16])[0]
+    doc = json.loads(data[20 : 20 + n])
+    colors = {json.dumps(m["pbrMetallicRoughness"]["baseColorFactor"]) for m in doc["materials"]}
+    assert len(colors) >= 3
+    assert not doc.get("images")
+
+
+def test_python_api_has_site_texture(cad):
+    site, _ = make_site(cad)
+    r = cad.result("site.texture", {"id": site, "bands": 6, "range": [0, 800]})
+    assert r["bands"] == 6 and r["range"] == [0, 800]
+    assert "site.texture" in {m["name"] for m in cad.result("describe")["methods"]}

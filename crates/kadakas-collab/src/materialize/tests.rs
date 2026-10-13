@@ -909,11 +909,7 @@ fn a_hostile_key_is_refused_by_the_check_and_counts_as_no_key() {
 fn the_terrain_look_of_a_site_model_syncs_as_one_small_property() {
     use kadakas_core::command::{Command, Editor};
     use kadakas_core::model::Shape;
-    let pts = || {
-        (0..500)
-            .map(|i| json!([i, i % 9, 0]))
-            .collect::<Vec<_>>()
-    };
+    let pts = || (0..500).map(|i| json!([i, i % 9, 0])).collect::<Vec<_>>();
     let mut ed = Editor::with_sequential_ids();
     let cmd: Command = serde_json::from_value(json!({
         "op": "add_object",
