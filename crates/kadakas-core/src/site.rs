@@ -81,8 +81,18 @@ pub const MAX_TEXTURE_OFFSET: f64 = 1.0e9;
 pub const MAX_ELEVATION_BANDS: u32 = 64;
 pub const MAX_RAMP_STOPS: usize = 16;
 /// The most repeats of a texture across a terrain. A smaller tile is made larger to stay under
-/// it, so the texture coordinates stay precise in single precision.
-pub const MAX_TEXTURE_REPEATS: f64 = 100_000.0;
+/// it, so the texture coordinates stay precise in single precision (a coordinate of 8192 repeats
+/// has a step of 0.001 repeats, which is a fraction of a texel).
+pub const MAX_TEXTURE_REPEATS: f64 = 8192.0;
+/// Largest turn of a terrain texture, in degrees (the mapping uses the turn modulo 360).
+pub const MAX_TEXTURE_ROTATION: f64 = 1.0e6;
+
+/// The tile size that renderers use for a terrain of the given extent (its longest side, mm):
+/// the tile of the settings, or a larger one when the terrain would hold more than
+/// [`MAX_TEXTURE_REPEATS`] repeats.
+pub fn effective_tile(tile: f64, extent: f64) -> f64 {
+    tile.max(extent / MAX_TEXTURE_REPEATS).max(1e-6)
+}
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()
@@ -170,6 +180,11 @@ pub struct SiteSettings {
     /// Lowest and highest elevation of the ramp. `None`: the range of the shown surface.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elevation_range: Option<[f64; 2]>,
+    /// Cut the bands at the contour levels: at the datum plus whole major intervals, instead of
+    /// at equal parts of the range. Falls back to equal parts when that would give more than
+    /// `MAX_ELEVATION_BANDS` bands.
+    #[serde(skip_serializing_if = "is_default")]
+    pub elevation_bands_at_contours: bool,
 }
 
 /// The most contour levels a site model may ask for.
@@ -198,6 +213,7 @@ impl Default for SiteSettings {
             elevation_bands: default_bands(),
             elevation_ramp: default_elevation_ramp(),
             elevation_range: None,
+            elevation_bands_at_contours: false,
         }
     }
 }
@@ -222,9 +238,34 @@ impl SiteSettings {
         TextureMapping {
             kind: MappingKind::Planar,
             scale: [self.texture_tile, self.texture_tile],
-            rotation: self.texture_rotation,
+            rotation: self.texture_rotation.rem_euclid(360.0),
             offset: self.texture_offset,
         }
+    }
+
+    /// Puts the fields of the 3D look back to their defaults.
+    pub fn reset_look(&mut self) {
+        let d = SiteSettings::default();
+        self.surface_look = d.surface_look;
+        self.texture = d.texture;
+        self.texture_tile = d.texture_tile;
+        self.texture_offset = d.texture_offset;
+        self.texture_rotation = d.texture_rotation;
+        self.elevation_bands = d.elevation_bands;
+        self.elevation_ramp = d.elevation_ramp;
+        self.elevation_range = d.elevation_range;
+        self.elevation_bands_at_contours = d.elevation_bands_at_contours;
+    }
+
+    /// The numbers of the 3D look, for the range check of a shape.
+    pub fn look_numbers(&self) -> Vec<f64> {
+        let mut v = vec![
+            self.texture_tile,
+            self.texture_offset[0],
+            self.texture_offset[1],
+        ];
+        v.extend(self.elevation_range.into_iter().flatten());
+        v
     }
 
     /// Why the settings are not usable, if they are not.
@@ -253,6 +294,13 @@ impl SiteSettings {
             Some("elevation bands must be from 1 to 64")
         } else if !(1..=MAX_RAMP_STOPS).contains(&self.elevation_ramp.len()) {
             Some("the elevation ramp needs 1 to 16 colors")
+        } else if self.texture_rotation.abs() > MAX_TEXTURE_ROTATION {
+            Some("texture rotation must be within a million degrees")
+        } else if self
+            .elevation_range
+            .is_some_and(|r| r.iter().any(|v| v.abs() > crate::model::MAX_COORD))
+        {
+            Some("the elevation range is out of range")
         } else if self.elevation_range.is_some_and(|r| r[1] <= r[0]) {
             Some("the elevation range must have its high end above its low end")
         } else {
@@ -407,6 +455,8 @@ mod tests {
         bad(&|s| s.elevation_ramp = vec![], "ramp");
         bad(&|s| s.elevation_ramp = vec![Color([0; 4]); 17], "ramp");
         bad(&|s| s.elevation_range = Some([5.0, 5.0]), "range");
+        bad(&|s| s.elevation_range = Some([0.0, 2e9]), "out of range");
+        bad(&|s| s.texture_rotation = 2e6, "rotation");
         bad(&|s| s.elevation_range = Some([0.0, f64::NAN]), "finite");
     }
 
@@ -422,6 +472,7 @@ mod tests {
             "elevation_bands",
             "elevation_ramp",
             "elevation_range",
+            "elevation_bands_at_contours",
         ] {
             assert!(plain.get(k).is_none(), "{k}");
         }
@@ -434,6 +485,7 @@ mod tests {
             elevation_bands: 5,
             elevation_ramp: vec![Color([1, 2, 3, 255])],
             elevation_range: Some([0.0, 9.0]),
+            elevation_bands_at_contours: true,
             ..Default::default()
         };
         let back: SiteSettings = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
@@ -444,6 +496,13 @@ mod tests {
             (m.scale, m.rotation, m.offset),
             ([750.0; 2], 30.0, [1.0, 2.0])
         );
+        // A turn is taken modulo 360 and reset puts the look back.
+        let mut t = s.clone();
+        t.texture_rotation = -90.0;
+        assert_eq!(t.texture_mapping().rotation, 270.0);
+        assert_eq!(t.look_numbers().len(), 5);
+        t.reset_look();
+        assert_eq!(t, SiteSettings::default());
         assert_eq!(
             SurfaceLook::ALL.map(SurfaceLook::id),
             ["color", "texture", "elevation"]

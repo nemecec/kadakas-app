@@ -11,7 +11,7 @@ use kadakas_core::mesh::Scene;
 use kadakas_core::model::{Document, ObjectId};
 use kadakas_core::present::{self, SlotIndex, Texture, TextureMapping};
 use kadakas_core::resource::ResourceId;
-use kadakas_core::site::MAX_TEXTURE_REPEATS;
+use kadakas_core::site::effective_tile;
 
 use crate::texture::{TextureImage, downscale, load};
 
@@ -312,6 +312,12 @@ impl Look {
     }
 }
 
+/// The tile size that a renderer uses for the terrain texture of a site model in this scene:
+/// the tile of the settings, or a larger one on a very big terrain.
+pub fn terrain_tile(scene: &Scene, object: ObjectId, tile: f64) -> f64 {
+    effective_tile(tile, 2.0 * frame_of(scene, object).1)
+}
+
 fn frame_of(scene: &Scene, object: ObjectId) -> ([f64; 3], f64) {
     scene
         .object_bounds(object)
@@ -331,10 +337,8 @@ fn frame_of(scene: &Scene, object: ObjectId) -> ([f64; 3], f64) {
 /// [`MAX_TEXTURE_REPEATS`] of them. Taking the repeats at the middle away changes no pixel (a
 /// texture repeats), and keeps the coordinates small, so single precision is enough.
 fn bounded_mapping(mut m: TextureMapping, frame: ([f64; 3], f64)) -> (TextureMapping, [f64; 2]) {
-    let extent = 2.0 * frame.1;
-    let min_tile = extent / MAX_TEXTURE_REPEATS;
     for s in &mut m.scale {
-        *s = s.max(min_tile).max(1e-6);
+        *s = effective_tile(*s, 2.0 * frame.1);
     }
     let mid = present::texture_uv_f64(&m, frame.0, [0.0, 0.0, 1.0], frame.0, frame.1);
     (m, [mid[0].floor(), mid[1].floor()])
@@ -620,6 +624,18 @@ mod tests {
         n: usize,
         settings: kadakas_core::site::SiteSettings,
     ) -> (ObjectId, Scene) {
+        terrain_scene_with(ed, x0, cell, n, settings, |_, _| {})
+    }
+
+    /// Like `terrain_scene`, with a step between the site model and its scene.
+    fn terrain_scene_with(
+        ed: &mut Editor,
+        x0: f64,
+        cell: f64,
+        n: usize,
+        settings: kadakas_core::site::SiteSettings,
+        prep: impl FnOnce(&mut Editor, ObjectId),
+    ) -> (ObjectId, Scene) {
         let id = add(
             ed,
             Shape::SiteModel {
@@ -655,6 +671,7 @@ mod tests {
                 sink.mesh(&pos, &idx, [10, 20, 30, 255]);
             }
         };
+        prep(ed, id);
         let scene = kadakas_core::mesh::build_with(ed.doc(), glam::DVec3::ZERO, Some(&ext));
         (id, scene)
     }
@@ -693,7 +710,7 @@ mod tests {
         for i in 0..4 {
             assert!((u(i + 1) - u(i) - 1.0).abs() < 1e-5);
         }
-        assert!((u(0) - u(0).round()).abs() - 0.5 < 1e-5);
+        assert!(((u(0) - u(0).floor()) - 0.5).abs() < 1e-5, "{}", u(0));
         let v = |j: usize| look.uvs[j * 5][1];
         assert!((v(1) - v(0) - 1.0).abs() < 1e-5);
     }
@@ -718,30 +735,25 @@ mod tests {
         let m = add_material(&mut ed, grass());
         let mut s = texture_settings(m);
         s.texture = None;
-        let (id, _) = terrain_scene(&mut ed, 0.0, 1000.0, 2, s);
-        assign(&mut ed, id, None, m);
-        let (_, scene) = terrain_scene(&mut ed, 0.0, 1000.0, 2, {
-            let mut s = texture_settings(m);
-            s.texture = None;
-            s
-        });
+        let (_, scene) =
+            terrain_scene_with(&mut ed, 0.0, 1000.0, 2, s, |ed, id| assign(ed, id, None, m));
         let look = Look::build(ed.doc(), &scene, true);
         assert!(!look.is_plain());
         // The mapping of the site model is used, not the box mapping of the material.
         assert!((look.uvs[1][0] - look.uvs[0][0] - 1.0).abs() < 1e-5);
+        assert_eq!(ed.doc().objects.len(), 1);
     }
 
     #[test]
-    fn the_elevation_look_and_the_color_look_use_no_forced_mapping() {
+    fn the_elevation_look_takes_no_material_and_no_forced_mapping() {
         let mut ed = Editor::default();
         let m = add_material(&mut ed, grass());
         let mut s = texture_settings(m);
         s.surface_look = kadakas_core::site::SurfaceLook::Elevation;
-        let (id, _) = terrain_scene(&mut ed, 0.0, 1000.0, 2, s);
-        assign(&mut ed, id, None, m);
-        let scene = scene_of(&ed);
+        let (id, scene) =
+            terrain_scene_with(&mut ed, 0.0, 1000.0, 2, s, |ed, id| assign(ed, id, None, m));
         // Elevation colors are vertex colors: the slot does not cover them.
-        let _ = scene;
+        assert!(Look::build(ed.doc(), &scene, true).is_plain());
         let obj = ed.doc().object(id).unwrap();
         assert!(present::mapping_override(obj).is_none());
         assert!(SlotIndex::new(ed.doc()).resolve(obj, 0).is_none());
@@ -754,16 +766,72 @@ mod tests {
         let mut s = texture_settings(m);
         s.texture_tile = 10.0;
         s.texture_offset = [0.0, 0.0];
-        // 40 km wide, far from the origin: 4 million repeats without the bound.
-        let (_, scene) = terrain_scene(&mut ed, 50.0e6, 10.0e6, 4, s);
+        // 40 000 km wide, far from the origin: 4 million repeats without the bound.
+        let (id, scene) = terrain_scene(&mut ed, 50.0e6, 10.0e6, 4, s);
         let look = Look::build(ed.doc(), &scene, true);
-        let limit = kadakas_core::site::MAX_TEXTURE_REPEATS as f32 * 2.0;
+        let limit = kadakas_core::site::MAX_TEXTURE_REPEATS as f32;
         assert!(look.uvs.iter().all(|uv| uv[0].is_finite()
             && uv[1].is_finite()
             && uv[0].abs() <= limit
             && uv[1].abs() <= limit));
         let again = Look::build(ed.doc(), &scene, true);
         assert_eq!(look.layout_key, again.layout_key);
+        // The tile that was used is reported.
+        let used = terrain_tile(&scene, id, 10.0);
+        assert!((used - 4.0 * 10.0e6 / kadakas_core::site::MAX_TEXTURE_REPEATS).abs() < 1e-6);
+        assert_eq!(terrain_tile(&scene, id, 1.0e9), 1.0e9);
+    }
+
+    /// A thin strip of cells, one tile wide, that is exactly `MAX_TEXTURE_REPEATS` tiles long
+    /// (the limit where the tile is not made larger yet). Neighbors one tile apart must differ by
+    /// one repeat, up to the precision of single numbers.
+    #[test]
+    fn neighbors_one_tile_apart_differ_by_one_repeat_at_the_limit() {
+        let tile = 1000.0;
+        let n = kadakas_core::site::MAX_TEXTURE_REPEATS as usize;
+        for x0 in [0.0, 123_456_789.5, -4.0e8] {
+            let mut ed = Editor::default();
+            let m = add_material(&mut ed, grass());
+            let mut s = texture_settings(m);
+            s.texture_tile = tile;
+            s.texture_offset = [250.0, 0.0];
+            s.texture_rotation = 0.0;
+            let id = add(
+                &mut ed,
+                Shape::SiteModel {
+                    points: vec![],
+                    lines: vec![],
+                    settings: s,
+                },
+                None,
+            );
+            let mut pos = Vec::new();
+            let mut idx = Vec::new();
+            for i in 0..=n {
+                pos.push(glam::DVec3::new(x0 + i as f64 * tile, 0.0, 0.0));
+                pos.push(glam::DVec3::new(x0 + i as f64 * tile, tile, 0.0));
+            }
+            for i in 0..n as u32 {
+                let a = 2 * i;
+                idx.extend([a, a + 2, a + 3, a, a + 3, a + 1]);
+            }
+            let ext = move |_: &Document,
+                            obj: &kadakas_core::model::Object,
+                            sink: &mut kadakas_core::mesh::SceneSink<'_>| {
+                if matches!(obj.shape, Shape::SiteModel { .. }) {
+                    sink.mesh(&pos, &idx, [1, 2, 3, 255]);
+                }
+            };
+            // The scene origin is in the middle of the strip, as in a real scene.
+            let origin = glam::DVec3::new(x0 + 0.5 * n as f64 * tile, 0.0, 0.0);
+            let scene = kadakas_core::mesh::build_with(ed.doc(), origin, Some(&ext));
+            assert!((terrain_tile(&scene, id, tile) - tile).abs() < 1e-3);
+            let look = Look::build(ed.doc(), &scene, true);
+            for i in 0..n {
+                let du = look.uvs[2 * (i + 1)][0] - look.uvs[2 * i][0];
+                assert!((du - 1.0).abs() < 1e-3, "x0 {x0}, cell {i}: {du}");
+            }
+        }
     }
 
     proptest::proptest! {

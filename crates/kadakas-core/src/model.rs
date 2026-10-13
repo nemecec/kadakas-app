@@ -520,6 +520,7 @@ impl Shape {
                     settings.datum,
                 ]
                 .into_iter()
+                .chain(settings.look_numbers())
                 .for_each(&mut *f);
             }
             Shape::SiteModifier { modifier, boundary } => {
@@ -676,7 +677,11 @@ impl Shape {
                 p.x += d.x;
                 p.y += d.y;
             }),
-            Shape::SiteModel { points, lines, .. } => {
+            Shape::SiteModel {
+                points,
+                lines,
+                settings,
+            } => {
                 points
                     .iter_mut()
                     .chain(lines.iter_mut().flat_map(|l| l.points.iter_mut()))
@@ -684,6 +689,11 @@ impl Shape {
                         p.x += d.x;
                         p.y += d.y;
                     });
+                // The texture is anchored to the ground: it moves with the model.
+                if settings.surface_look == crate::site::SurfaceLook::Texture {
+                    settings.texture_offset[0] += d.x;
+                    settings.texture_offset[1] += d.y;
+                }
             }
             Shape::Line { a, b } => {
                 mv(a);
@@ -1010,6 +1020,9 @@ pub struct Document {
     /// The generator of new IDs (see `crate::uid`). It is not saved.
     #[serde(skip)]
     ids: IdGen,
+    /// What the last load repaired (see `validate`). It is not saved.
+    #[serde(skip)]
+    load_notes: Vec<String>,
     /// Fields that this version does not know (from a newer file). They are saved again unchanged.
     #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, Value>,
@@ -1094,6 +1107,7 @@ impl Default for Document {
             resources: Resources::default(),
             drawing: Default::default(),
             ids: IdGen::default(),
+            load_notes: Vec::new(),
             extra: Default::default(),
         }
     }
@@ -1192,7 +1206,32 @@ impl Document {
 
     /// Checks a loaded document: IDs must be unique, and every object must
     /// refer to an existing layer and class.
+    /// What `validate` repaired instead of refusing the file, in plain English.
+    pub fn load_notes(&self) -> &[String] {
+        &self.load_notes
+    }
+
     pub fn validate(&mut self) -> Result<(), String> {
+        // A bad value in the 3D look of a site model (from a hand-edited file or a newer
+        // version) must not make the file unreadable: the look goes back to its defaults.
+        self.load_notes.clear();
+        let mut notes = Vec::new();
+        for o in self.objects.values_mut() {
+            if let Shape::SiteModel { settings, .. } = &mut o.shape
+                && settings.problem().is_some()
+            {
+                let mut fixed = settings.clone();
+                fixed.reset_look();
+                if fixed.problem().is_none() && fixed.look_numbers().iter().all(|v| v.is_finite()) {
+                    notes.push(format!(
+                        "site model {}: the 3D look settings were not valid and were reset",
+                        o.id
+                    ));
+                    *settings = fixed;
+                }
+            }
+        }
+        self.load_notes = notes;
         let mut seen = std::collections::HashSet::new();
         let ids = self
             .objects

@@ -70,7 +70,23 @@ pub fn draw_3d_with(
             a.surface
         }
     });
-    for which in shown_surfaces(site, site.settings.surface_3d) {
+    let shown = shown_surfaces(site, site.settings.surface_3d);
+    let wants_mesh = matches!(display, Display3d::Mesh | Display3d::Both);
+    // The meshes (with the pad walls) of the surfaces that are drawn without the analysis colors.
+    let meshes: Vec<(Surface, Vec<DVec3>, Vec<u32>)> = shown
+        .iter()
+        .filter(|w| wants_mesh && !(analysis.is_some() && colored == Some(**w)))
+        .map(|w| {
+            let (v, i) = surface_mesh(site.surface(*w));
+            (*w, v, i)
+        })
+        .collect();
+    // One plan for all shown surfaces: the same height has the same color on the existing and on
+    // the proposed surface.
+    let plan = (site.settings.surface_look == SurfaceLook::Elevation)
+        .then(|| shared_plan(&site.settings, meshes.iter().map(|m| m.1.as_slice())))
+        .flatten();
+    for which in shown {
         if let (Some(a), true) = (analysis, colored == Some(which)) {
             let tin = site.surface(which);
             for band in a.bands.iter().filter(|b| b.triangles > 0) {
@@ -80,27 +96,14 @@ pub fn draw_3d_with(
                     band.color,
                 );
             }
-        } else if matches!(display, Display3d::Mesh | Display3d::Both) {
-            let tin = site.surface(which);
-            let mut idx: Vec<u32> = tin.triangles.iter().flatten().copied().collect();
-            // Vertical pad edges are drawn as walls.
-            let mut vertices = tin.vertices.clone();
-            for q in tin.walls() {
-                let n = vertices.len() as u32;
-                vertices.extend(q);
-                idx.extend([n, n + 1, n + 2, n, n + 2, n + 3]);
-            }
-            if site.settings.surface_look == SurfaceLook::Elevation
-                && let Some((lo, hi)) = elevation::range_of(&site.settings, &vertices)
-            {
+        } else if let Some((_, vertices, idx)) = meshes.iter().find(|m| m.0 == which) {
+            if let Some(plan) = &plan {
                 // Colors by elevation: one mesh per band, each with the color of its band.
-                let bands = site.settings.elevation_bands;
-                let colors = elevation::band_colors(&site.settings.elevation_ramp, bands);
-                for part in elevation::split_bands(&vertices, &idx, lo, hi, bands) {
-                    sink.mesh(&part.vertices, &part.indices, colors[part.band]);
+                for part in elevation::split_bands(vertices, idx, plan) {
+                    sink.mesh(&part.vertices, &part.indices, plan.colors[part.band]);
                 }
             } else {
-                sink.mesh(&vertices, &idx, mesh_color(site, which));
+                sink.mesh(vertices, idx, mesh_color(site, which));
             }
         }
         if matches!(display, Display3d::Contours | Display3d::Both) {
@@ -111,6 +114,32 @@ pub fn draw_3d_with(
             }
         }
     }
+}
+
+/// The mesh of a surface: its triangles, and the vertical pad edges as walls.
+fn surface_mesh(tin: &crate::tin::Tin) -> (Vec<DVec3>, Vec<u32>) {
+    let mut idx: Vec<u32> = tin.triangles.iter().flatten().copied().collect();
+    let mut vertices = tin.vertices.clone();
+    for q in tin.walls() {
+        let n = vertices.len() as u32;
+        vertices.extend(q);
+        idx.extend([n, n + 1, n + 2, n, n + 2, n + 3]);
+    }
+    (vertices, idx)
+}
+
+/// The band plan of the elevation look for all shown surfaces: the range is the range of the
+/// settings, or else the lowest and highest height over every shown mesh (walls included).
+fn shared_plan<'a>(
+    settings: &kadakas_core::model::SiteSettings,
+    meshes: impl Iterator<Item = &'a [DVec3]>,
+) -> Option<elevation::BandPlan> {
+    let all = meshes.flatten().map(|v| v.z);
+    let (lo, hi) = match settings.elevation_range {
+        Some([lo, hi]) => (lo, hi),
+        None => elevation::min_max(all)?,
+    };
+    Some(elevation::BandPlan::new(settings, lo, hi))
 }
 
 /// Draws the whole 3D part of one object, if it is a site model. For `mesh::build_with`.
@@ -436,16 +465,40 @@ mod tests {
             s.elevation_bands = 4;
         });
         let banded = build(&ed);
-        let colors: std::collections::BTreeSet<[u8; 4]> = banded
-            .mesh
-            .colors
-            .iter()
-            .zip(&banded.mesh.tri_object)
-            .map(|(c, _)| *c)
-            .collect();
+        let colors: std::collections::BTreeSet<[u8; 4]> =
+            banded.mesh.colors.iter().copied().collect();
         assert!(colors.len() > 1 && colors.len() <= 4, "{}", colors.len());
-        // The triangles are the same ones.
-        assert_eq!(banded.mesh.triangle_count(), plain.mesh.triangle_count());
+        // The triangles are cut at the band planes, so there are at least as many.
+        assert!(banded.mesh.triangle_count() >= plain.mesh.triangle_count());
+        // The band edges are straight: every triangle lies inside the band of its color.
+        let plan = {
+            let site = SiteResult::compute(ed.doc(), id).unwrap();
+            let v: Vec<f64> = site
+                .surface(Surface::Proposed)
+                .vertices
+                .iter()
+                .map(|v| v.z)
+                .collect();
+            let (lo, hi) = elevation::min_max(v).unwrap();
+            elevation::BandPlan::new(&site.settings, lo, hi)
+        };
+        for t in 0..banded.mesh.triangle_count() {
+            let band = plan
+                .colors
+                .iter()
+                .position(|c| *c == banded.mesh.colors[banded.mesh.indices[t * 3] as usize])
+                .unwrap();
+            for q in banded.mesh.triangle(t) {
+                let z = q.z as f64;
+                let lo = if band == 0 {
+                    f64::MIN
+                } else {
+                    plan.levels[band - 1]
+                };
+                let hi = plan.levels.get(band).copied().unwrap_or(f64::MAX);
+                assert!(z >= lo - 1e-3 && z <= hi + 1e-3, "{z} not in band {band}");
+            }
+        }
         // An explicit range puts everything into the first band.
         set_settings(&mut ed, id, |s| {
             s.surface_look = SurfaceLook::Elevation;
@@ -454,6 +507,83 @@ mod tests {
         let flat = build(&ed);
         let one: std::collections::BTreeSet<[u8; 4]> = flat.mesh.colors.iter().copied().collect();
         assert_eq!(one.len(), 1);
+        // Bands at the contour levels: the datum plus whole major intervals.
+        set_settings(&mut ed, id, |s| {
+            s.surface_look = SurfaceLook::Elevation;
+            s.elevation_range = None;
+            s.elevation_bands_at_contours = true;
+            s.major_interval = 250.0;
+            s.minor_interval = 50.0;
+        });
+        let at_contours = build(&ed);
+        let zs: std::collections::BTreeSet<i64> = at_contours
+            .mesh
+            .positions
+            .iter()
+            .map(|p| p.z.round() as i64)
+            .filter(|z| z % 250 == 0)
+            .collect();
+        assert!(zs.contains(&250) && zs.contains(&500), "{zs:?}");
+    }
+
+    #[test]
+    fn both_surfaces_share_one_elevation_range() {
+        // The ground rises to 800 mm. A pad at 2000 mm lifts the proposed surface far above it.
+        let mut ed = Editor::default();
+        let id = add(&mut ed, grid_site(9, 1000.0, |x, _| x / 10.0));
+        let b = kadakas_core::curve::corners(&[
+            DVec2::new(2000.0, 2000.0),
+            DVec2::new(4000.0, 2000.0),
+            DVec2::new(4000.0, 4000.0),
+            DVec2::new(2000.0, 4000.0),
+        ]);
+        add(
+            &mut ed,
+            Shape::SiteModifier {
+                modifier: kadakas_core::model::ModifierKind::Pad {
+                    elevation: 2000.0,
+                    slope: None,
+                },
+                boundary: b,
+            },
+        );
+        set_settings(&mut ed, id, |s| {
+            s.surface_look = SurfaceLook::Elevation;
+            s.surface_3d = SurfaceDisplay::Both;
+            s.elevation_bands = 2;
+        });
+        let cache = SiteCache::default();
+        let ext = scene_ext(&cache, ed.revision());
+        let scene = mesh::build_with(ed.doc(), glam::DVec3::ZERO, Some(&ext));
+        let site = SiteResult::compute(ed.doc(), id).unwrap();
+        let top = site
+            .surface(Surface::Proposed)
+            .vertices
+            .iter()
+            .map(|v| v.z)
+            .fold(f64::MIN, f64::max);
+        assert!(top >= 2000.0 - 1e-6);
+        // One range of 0 to 2000 mm, one plane at 1000 mm: the existing ground (up to 800) is
+        // all in the low band. With a range per surface, its upper half would be in the high band.
+        let plan = elevation::BandPlan::new(&site.settings, 0.0, top);
+        assert_eq!(plan.levels.len(), 1);
+        let mut low_checked = 0;
+        for t in 0..scene.mesh.triangle_count() {
+            let tri = scene.mesh.triangle(t);
+            let color = scene.mesh.colors[scene.mesh.indices[t * 3] as usize];
+            let (zmin, zmax) = tri
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(a, b), q| (a.min(q.z), b.max(q.z)));
+            if zmax <= 800.5 {
+                assert_eq!(color, plan.colors[0], "low triangle in the high band");
+                low_checked += 1;
+            }
+            if zmin >= 1000.0 {
+                assert_eq!(color, plan.colors[1]);
+            }
+        }
+        assert!(low_checked > 50);
+        assert!(scene.mesh.colors.contains(&plan.colors[1]));
     }
 
     #[test]
