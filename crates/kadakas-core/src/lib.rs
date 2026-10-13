@@ -30,6 +30,7 @@ pub mod picture;
 pub mod plants;
 pub mod present;
 pub mod props;
+pub mod provenance;
 pub mod record;
 pub mod resource;
 pub mod schema;

@@ -257,6 +257,25 @@
       ],
       "type": "string"
     },
+    "LayerSource": {
+      "additionalProperties": false,
+      "description": "The source of an imported layer.",
+      "properties": {
+        "dxf_layer": {
+          "default": "",
+          "description": "The name of the DXF layer, when the layer maps one. Empty for a layer that holds the\nwhole file.",
+          "type": "string"
+        },
+        "source": {
+          "description": "The same text as `ImportTag::source`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
     "ObjectId": {
       "description": "An ID: a UUID text such as 0190f1c2-7a3b-7c1d-8e2f-123456789abc.",
       "maxLength": 36,
@@ -1478,6 +1497,34 @@
             "boolean",
             "null"
           ]
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Set or clear the import source of a layer (`provenance::LayerSource`). Importers use it for\nthe layers that they make.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LayerId"
+        },
+        "op": {
+          "const": "set_layer_source",
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [

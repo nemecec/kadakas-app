@@ -1259,6 +1259,7 @@ impl Document {
                 }
             }
         }
+        notes.extend(crate::provenance::repair(self));
         self.load_notes = notes;
         let mut seen = std::collections::HashSet::new();
         let ids = self
