@@ -372,7 +372,7 @@ fn remote_call(
 
 /// MiB to bytes. A number that does not fit means no limit.
 fn mib_bytes(mib: u64) -> u64 {
-    mib.checked_mul(1024 * 1024).unwrap_or(u64::MAX)
+    mib.saturating_mul(1024 * 1024)
 }
 
 /// Loads a `.kad` file of at most `max` bytes (default: the limit of a session).
