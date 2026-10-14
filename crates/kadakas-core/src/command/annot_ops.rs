@@ -80,13 +80,13 @@ impl Tx<'_> {
                     .filter(|o| o.layer == *id && matches!(o.shape, Shape::Annotation(_)))
                     .map(|o| o.id)
                     .collect();
-                self.annot_sync(&ids, false);
+                self.annot_sync(&ids, false, false);
             }
             Command::MoveObjects { ids, .. } => {
-                self.annot_sync(&ids.iter().copied().collect(), true)
+                self.annot_sync(&ids.iter().copied().collect(), false, true)
             }
             Command::ModifyObject { id, .. } | Command::SetVertex { id, .. } => {
-                self.annot_sync(&[*id].into_iter().collect(), false)
+                self.annot_sync(&[*id].into_iter().collect(), false, false)
             }
             Command::DeleteObjects { ids } => {
                 let gone: HashSet<ObjectId> = ids.iter().copied().collect();
@@ -106,23 +106,16 @@ impl Tx<'_> {
                     )?;
                 }
                 // The other annotations lose their anchors and keep their places.
-                self.annot_sync(&HashSet::new(), false);
+                self.annot_sync(&HashSet::new(), false, false);
             }
-            // The data of an object that this very command made: nothing follows a new object yet,
-            // and a batch of thousands of imported objects with data must not cost a pass over all
-            // of them for each one.
-            Command::SetData { id, .. } if self.added_set.contains(id) => {}
             // Any other command (rotate, scale, mirror, copy, array, a new landscape area or
             // hardscape, a group move...): annotations follow every object the command changed.
             _ => {
-                let changed: HashSet<ObjectId> = self
-                    .before
-                    .keys()
-                    .copied()
-                    .chain(self.added_set.iter().copied())
-                    .collect();
-                if !changed.is_empty() {
-                    self.annot_sync(&changed, false);
+                // Everything the transaction changed so far, looked up in the sets that it keeps
+                // (a copy for each command would cost a pass over all added objects, and a batch
+                // of thousands of commands would be quadratic).
+                if !(self.before.is_empty() && self.added_set.is_empty()) {
+                    self.annot_sync(&HashSet::new(), true, false);
                 }
             }
         }
@@ -130,31 +123,27 @@ impl Tx<'_> {
     }
 
     /// Updates annotations that follow one of the `changed` objects, or that are in `changed`
-    /// themselves (`moved`: they were moved by hand).
-    fn annot_sync(&mut self, changed: &HashSet<ObjectId>, moved: bool) {
+    /// themselves (`moved`: they were moved by hand). With `all`, every object that the
+    /// transaction changed so far (`before` and `added_set`) counts as changed too.
+    fn annot_sync(&mut self, changed: &HashSet<ObjectId>, all: bool, moved: bool) {
         // The objects the command touched count too: a group move changes its members, not only
         // the ids it names.
-        let touched: HashSet<ObjectId> = if changed.is_empty() {
-            HashSet::new()
-        } else {
-            self.before
-                .keys()
-                .copied()
-                .chain(self.added_set.iter().copied())
-                .collect()
-        };
+        let with_touched = all || !changed.is_empty();
+        let (before, added) = (&self.before, &self.added_set);
+        let touched =
+            |id: &ObjectId| with_touched && (before.contains_key(id) || added.contains(id));
         let mut updates: Vec<(ObjectId, Annot)> = Vec::new();
         for o in self.doc.objects.values() {
             let Shape::Annotation(a) = &o.shape else {
                 continue;
             };
-            let own = changed.contains(&o.id);
+            let own = changed.contains(&o.id) || (all && touched(&o.id));
             let follows = a
                 .depends_on()
                 .iter()
-                .any(|d| changed.contains(d) || touched.contains(d));
+                .any(|d| changed.contains(d) || touched(d));
             // With nothing changed (a delete) every annotation is looked at.
-            if !(changed.is_empty() || own || follows) {
+            if !(changed.is_empty() && !all || own || follows) {
                 continue;
             }
             let paper = self.doc.layer(o.layer).map_or(1.0, |l| l.scale);
@@ -168,5 +157,112 @@ impl Tx<'_> {
                 o.shape = Shape::Annotation(Box::new(new));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::annot::DataTag;
+    use crate::annot::style::{AnnotResource, TagStyle};
+    use crate::resource::ResourceBody;
+    use glam::DVec2;
+
+    /// An object, a data tag on it, and the data of the object, in one batch or one by one.
+    fn world(batch: bool) -> Document {
+        let mut ed = Editor::new(Document::with_sequential_ids());
+        ed.execute(&Command::AddResource {
+            name: "Tags".into(),
+            body: ResourceBody::Annot(Box::new(AnnotResource::TagStyle(TagStyle::default()))),
+        })
+        .unwrap();
+        let style = ed.doc().resources.iter().next().unwrap().id;
+        let circle = ObjectId(ed.doc().id_plan().take());
+        let add = |shape| Command::AddObject {
+            shape,
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        };
+        let tag = DataTag {
+            style,
+            object: circle,
+            offset: DVec2::new(1.0, 1.0),
+            at: DVec2::ZERO,
+            anchor: DVec2::ZERO,
+        };
+        let cmds = vec![
+            add(Shape::Circle {
+                center: DVec2::new(100.0, 50.0),
+                radius: 5.0,
+            }),
+            add(Shape::Annotation(Box::new(Annot::DataTag(tag)))),
+            Command::SetData {
+                id: circle,
+                set: [("note".to_string(), serde_json::json!("x"))].into(),
+                remove: vec![],
+            },
+            Command::MoveObjects {
+                ids: vec![circle],
+                delta: DVec2::new(10.0, 0.0),
+            },
+        ];
+        if batch {
+            ed.execute(&Command::Batch { commands: cmds }).unwrap();
+        } else {
+            for c in &cmds {
+                ed.execute(c).unwrap();
+            }
+        }
+        ed.doc().clone()
+    }
+
+    #[test]
+    fn a_batch_syncs_annotations_like_the_same_commands_one_by_one() {
+        let (batch, single) = (world(true), world(false));
+        assert_eq!(batch.objects, single.objects);
+        let tag = batch
+            .objects
+            .values()
+            .find_map(|o| match &o.shape {
+                Shape::Annotation(a) => match &**a {
+                    Annot::DataTag(t) => Some(t.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap();
+        // The tag follows the object that was added, given data and moved in the same batch.
+        assert_eq!(tag.anchor, DVec2::new(110.0, 50.0));
+        assert_ne!(tag.at, tag.anchor);
+    }
+
+    #[test]
+    fn many_commands_in_a_batch_do_not_cost_a_pass_over_the_added_objects_each() {
+        // 3000 objects with data in one batch. The work grows with the number of commands, not with
+        // its square: the sets of the transaction are looked up, not copied for each command.
+        let mut ed = Editor::new(Document::with_sequential_ids());
+        let mut plan = ed.doc().id_plan();
+        let mut cmds = Vec::new();
+        for k in 0..3000 {
+            let id = ObjectId(plan.take());
+            cmds.push(Command::AddObject {
+                shape: Shape::Circle {
+                    center: DVec2::new(k as f64, 0.0),
+                    radius: 1.0,
+                },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            });
+            cmds.push(Command::SetData {
+                id,
+                set: [("k".to_string(), serde_json::json!(k))].into(),
+                remove: vec![],
+            });
+        }
+        ed.execute(&Command::Batch { commands: cmds }).unwrap();
+        assert_eq!(ed.doc().objects.len(), 3000);
+        assert!(ed.doc().objects.values().all(|o| o.data.contains_key("k")));
     }
 }

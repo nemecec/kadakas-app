@@ -681,9 +681,9 @@ fn a_base_that_the_document_keeps_is_not_stored_again_even_without_its_layers() 
 
 #[test]
 fn a_big_base_is_split_in_parts_that_fit_a_frame() {
-    // About 5 MiB of summaries: two parts of at most 4 MiB.
+    // About 8 MiB of summaries: two parts of at most 4 MiB.
     let mut lines = String::new();
-    for k in 0..20_000 {
+    for k in 0..36_000 {
         lines.push_str(&format!(
             "0\nLINE\n5\n{k:X}\n8\nWalls\n10\n{k}\n20\n0\n11\n{}\n21\n5\n",
             k + 10
@@ -711,7 +711,7 @@ fn a_big_base_is_split_in_parts_that_fit_a_frame() {
     );
     assert!(sizes.iter().sum::<usize>() > 4 * 1024 * 1024);
     let recs = provenance::base_recs(ed.doc(), "guid:{A-1}", "guid:{B-1}").unwrap();
-    assert_eq!(recs.len(), 20_000);
+    assert_eq!(recs.len(), 36_000);
     // The parts load again, and a base that lost a part is not a base.
     let text = serde_json::to_string(ed.doc()).unwrap();
     let loaded = Document::from_json(&text).unwrap();
@@ -719,7 +719,7 @@ fn a_big_base_is_split_in_parts_that_fit_a_frame() {
         provenance::base_recs(&loaded, "guid:{A-1}", "guid:{B-1}")
             .unwrap()
             .len(),
-        20_000
+        36_000
     );
     let mut fewer = loaded.clone();
     let first = fewer.resources.iter().next().unwrap().id;
