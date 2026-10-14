@@ -142,6 +142,10 @@ pub struct Context {
     pub active_layer: LayerId,
     pub active_class: ClassId,
     pub georef: Option<kadakas_core::georef::Georeference>,
+    /// Layers that are grey (an import onto one lets it go visible and makes it grey again).
+    pub grey_layers: Vec<LayerId>,
+    /// The (drawing, revision) of the import bases that the document keeps.
+    pub bases: Vec<(String, String)>,
 }
 
 impl Context {
@@ -153,6 +157,18 @@ impl Context {
             active_layer: doc.active_layer,
             active_class: doc.active_class,
             georef: doc.georef.clone(),
+            grey_layers: doc.drawing.grey.layers.iter().copied().collect(),
+            bases: doc
+                .resources
+                .iter()
+                .filter_map(|r| match &r.body {
+                    kadakas_core::resource::ResourceBody::ImportBase(v) => Some((
+                        v["drawing"].as_str()?.to_string(),
+                        v["revision"].as_str()?.to_string(),
+                    )),
+                    _ => None,
+                })
+                .collect(),
         }
     }
 }

@@ -77,7 +77,9 @@ impl Session {
         if checked && !self.paths.converters_allowed() {
             return Err(converters_off());
         }
-        let opts = ImportOptions::from_json(options).map_err(io_rpc)?;
+        let mut opts = ImportOptions::from_json(options).map_err(io_rpc)?;
+        // A client cannot raise the limit of the session.
+        opts.max_bytes = opts.max_bytes.min(self.limits.import_text_bytes);
         let run = RunOptions::from_json(options).map_err(rpc)?;
         let path = if checked {
             self.check_path(&path, false, &["dwg"])

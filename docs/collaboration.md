@@ -466,6 +466,17 @@ A texture bed (3D-05, a site modifier of the kind `texture_bed`) keeps its mater
 
 ### 4.7 Blobs
 
+**The base of a DXF import** (IOP-22) is a third holder. An imported revision keeps the summaries of
+its entities in resources of type `import_base`. The key `recs` of the body is a list; if its JSON
+text is 4 KiB or more, the client sends that text as a blob and puts `{"$blob": hash}` in the
+operation. A reader parses the text back into the list. The importer splits a big base into parts
+of about 4 MiB (`provenance::BASE_PART_BYTES`; at most 16 parts, a resource each, with the keys
+`part` and `parts`), so every blob is far below the smallest frame that a server takes (8 MiB), and
+a base of any allowed size reaches a peer as several `blob_put` frames. `base_recs` joins the parts
+and gives nothing until all of them have arrived. A server and a client check each part with
+`provenance::check_base` (unknown keys, sizes and counts), also when the part comes from another
+user.
+
 The picture of an underlay (the base64 text of a PNG, 4 KiB or more) and the file of a plant picture (the key `data` in the body of an `image` resource, 4 KiB or more; its small thumbnail stays in the operation) are *blobs*. The client
 replaces it in the operation by `{"$blob": "<sha256 hex>"}` (the SHA-256 of the text), keeps the text,
 and sends `blob_put` first. The server checks that the hash is the SHA-256 of `data` (`bad_message`

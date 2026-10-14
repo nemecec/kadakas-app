@@ -178,20 +178,71 @@ fn the_cost_is_charged_before_the_point_loop() {
 }
 
 #[test]
-fn a_far_move_with_the_same_handle_is_a_removal_and_an_addition() {
+fn a_far_move_with_the_same_handle_is_a_move_when_the_scope_is_clean() {
     let a = recs(&[line_at(Some(1), "A", (0.0, 0.0), (10.0, 0.0))]);
     let b = recs(&[line_at(Some(1), "A", (5000.0, 0.0), (5010.0, 0.0))]);
     let o = Options {
         tolerance: 100.0,
         ..Options::default()
     };
-    assert_eq!(counts(&diff(&a, &b, &o)), (0, 0, 1, 1));
-    // With the proximity rules off there is no tolerance, and the handle decides.
-    let off = Options {
-        proximity: false,
-        ..o
+    let d = diff(&a, &b, &o);
+    assert_eq!(counts(&d), (0, 1, 0, 0));
+    assert_eq!(d.counts.by_handle, 1);
+    assert_eq!(d.entries[0].changes, vec![Change::Geometry]);
+    assert!(!d.renumbered);
+}
+
+#[test]
+fn a_survey_that_moved_as_a_whole_has_every_entity_moved() {
+    // A re-base: every coordinate is a million units away. Nothing is added or removed.
+    let make = |dx: f64| -> Vec<Rec> {
+        recs(
+            &(0..20)
+                .map(|k| {
+                    let (x, y) = spot(k);
+                    line_at(
+                        Some(0x100 + k as u32),
+                        "A",
+                        (x + dx, y),
+                        (x + dx + 10.0, y + 5.0),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
     };
-    assert_eq!(counts(&diff(&a, &b, &off)), (0, 1, 0, 0));
+    let d = diff(&make(0.0), &make(1.0e6), &Options::default());
+    assert_eq!(counts(&d), (0, 20, 0, 0));
+    assert_eq!((d.counts.by_handle, d.renumbered), (20, false));
+    assert!(
+        d.entries
+            .iter()
+            .all(|e| e.changes == vec![Change::Geometry])
+    );
+}
+
+#[test]
+fn the_distance_counts_only_where_renumbering_is_suspected() {
+    // Two entities swapped their handles (each has a better partner), so the scope is suspected
+    // but not renumbered; a third entity with a handle moved far.
+    let base: Vec<Entity> = (0..10)
+        .map(|k| {
+            let (x, y) = spot(k);
+            line_at(Some(0x100 + k as u32), "A", (x, y), (x + 10.0, y + 5.0))
+        })
+        .collect();
+    let mut new = base.clone();
+    new[0].items[0].1 = "101".into();
+    new[1].items[0].1 = "100".into();
+    let (x, y) = spot(5);
+    new[5] = line_at(Some(0x105), "A", (x + 5000.0, y), (x + 5010.0, y + 5.0));
+    let o = Options {
+        tolerance: 50.0,
+        ..Options::default()
+    };
+    let d = diff(&recs(&base), &recs(&new), &o);
+    assert!(!d.renumbered);
+    // The far pair is dropped (removed and added); the swapped pair is found again by content.
+    assert_eq!(counts(&d), (9, 0, 1, 1));
 }
 
 #[test]
@@ -266,10 +317,26 @@ fn anonymous_block_names_do_not_make_changes() {
     let load = |t: &str| records(&parse::parse(t.as_bytes()).unwrap(), 1000).0;
     // The same drawing saved twice: the program numbers the anonymous block again.
     let (a, b) = (load(&file_with_block("*U1")), load(&file_with_block("*U9")));
-    assert!(a.iter().any(|r| r.scope.starts_with("block:anon:")));
+    // The BLOCK_RECORD handle names the block first.
+    assert!(a.iter().any(|r| r.scope == "block:rec:1F"));
     assert!(a.iter().all(|r| !r.text.contains('*')));
     let d = diff(&a, &b, &Options::default());
     assert_eq!(counts(&d), (2, 0, 0, 0), "{:?}", d.entries);
+    // Without a handle the content names an anonymous block, so an edit inside it shows.
+    let bare = |name: &str, len: &str| {
+        load(
+            &file_with_block(name)
+                .replace("\n330\n1F", "")
+                .replace("11\n5\n", &format!("11\n{len}\n")),
+        )
+    };
+    let (a, b) = (bare("*U1", "5"), bare("*U9", "5"));
+    assert!(a.iter().any(|r| r.scope.starts_with("block:anon:")));
+    assert_eq!(counts(&diff(&a, &b, &Options::default())), (2, 0, 0, 0));
+    let edited = bare("*U9", "6");
+    let d = diff(&a, &edited, &Options::default());
+    // The block has a new key, so its entity is removed and added; the INSERT does not change.
+    assert_eq!(counts(&d), (1, 0, 1, 1), "{:?}", d.entries);
     // A named block that is renamed is a change of the INSERT, and its content keeps its scope
     // by the record handle.
     let (a, b) = (

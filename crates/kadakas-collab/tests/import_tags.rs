@@ -131,3 +131,48 @@ fn another_user_can_not_set_a_bad_tag() {
     );
     assert!(validate_entity(Kind::Layer, layer.id.0, &lp).is_ok());
 }
+
+#[test]
+fn an_edit_is_still_an_edit_after_the_sync() {
+    // The object hash of the tag is the state of the object right after the import. It must
+    // survive the replica: a moved object is edited, an untouched one is not, for every client.
+    let mut ed = Editor::with_sequential_ids();
+    let mut ids = Vec::new();
+    for x in [0.0, 100.0] {
+        let id = ObjectId(
+            ed.execute(&Command::AddObject {
+                shape: Shape::Circle {
+                    center: kadakas_core::DVec2::new(x, 0.0),
+                    radius: 5.0,
+                },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let o = ed.doc().object(id).unwrap();
+        let mut t = tag();
+        t.obj = provenance::state_hash(&o.shape, &o.attrs, o.layer, o.class);
+        ed.execute(&Command::SetData {
+            id,
+            set: [(provenance::KEY.to_string(), t.to_value())].into(),
+            remove: vec![],
+        })
+        .unwrap();
+        ids.push(id);
+    }
+    ed.execute(&Command::MoveObjects {
+        ids: vec![ids[1]],
+        delta: kadakas_core::DVec2::new(1.0, 0.0),
+    })
+    .unwrap();
+    let m = materialize(&replica_of(ed.doc()), &Document::default());
+    assert!(m.quarantined.is_empty(), "{:?}", m.quarantined);
+    let edited: Vec<_> = ids
+        .iter()
+        .map(|id| provenance::is_edited(m.doc.object(*id).unwrap()))
+        .collect();
+    assert_eq!(edited, vec![Some(false), Some(true)]);
+}

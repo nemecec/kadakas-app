@@ -30,6 +30,10 @@ pub struct Builder {
     /// Locked layers that the import unlocked to put objects on them. `finish` locks them again.
     relock: Vec<LayerId>,
     locked: HashSet<LayerId>,
+    /// Grey layers of the document, and the ones this import made visible for a while.
+    grey: HashSet<LayerId>,
+    regrey: Vec<LayerId>,
+    bases: HashSet<(String, String)>,
     classes: Vec<(String, ClassId)>,
     pub report: Report,
     max_objects: usize,
@@ -110,6 +114,9 @@ impl Builder {
                 .filter_map(|l| LayerSource::of(l.extra.get(provenance::LAYER_KEY)?))
                 .collect(),
             relock: Vec::new(),
+            grey: ctx.grey_layers.iter().copied().collect(),
+            regrey: Vec::new(),
+            bases: ctx.bases.iter().cloned().collect(),
             locked: ctx
                 .layers
                 .iter()
@@ -187,7 +194,19 @@ impl Builder {
                 });
                 self.sourced[at].0 = src.clone();
             }
+            if self.grey.remove(&id) {
+                // A grey layer cannot take objects: it is visible for the import and grey again
+                // at the end.
+                self.cmds.push(Command::SetVisibility {
+                    layers: vec![id],
+                    classes: vec![],
+                    mode: kadakas_core::visibility::VisMode::Visible,
+                });
+                self.regrey.push(id);
+                self.report.note("the layer of this drawing was grey: the objects went onto it, and it is grey again");
+            }
             if self.locked.remove(&id) {
+                self.report.note("the layer of this drawing was locked: the objects went onto it, and it is locked again");
                 self.cmds.push(Command::ModifyLayer {
                     id,
                     name: None,
@@ -246,6 +265,12 @@ impl Builder {
         self.known
             .iter()
             .any(|s| s.drawing == drawing && s.revision == revision)
+    }
+
+    /// True if the document keeps the import base of this revision.
+    pub fn has_base(&self, drawing: &str, revision: &str) -> bool {
+        self.bases
+            .contains(&(drawing.to_string(), revision.to_string()))
     }
 
     /// The shift (mm) that every added shape gets.
@@ -411,6 +436,13 @@ impl Builder {
                 locked: Some(true),
                 elevation: None,
                 scale: None,
+            });
+        }
+        for id in std::mem::take(&mut self.regrey) {
+            self.cmds.push(Command::SetVisibility {
+                layers: vec![id],
+                classes: vec![],
+                mode: kadakas_core::visibility::VisMode::Grey,
             });
         }
         ImportResult {

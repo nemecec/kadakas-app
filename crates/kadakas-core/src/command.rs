@@ -701,7 +701,7 @@ impl Meta {
             .resources
             .iter()
             .map(|r| match &r.body {
-                ResourceBody::Image(_) => IMAGE_PART_BYTES,
+                ResourceBody::Image(_) | ResourceBody::ImportBase(_) => IMAGE_PART_BYTES,
                 _ => serde_json::to_vec(r).map_or(META_PART_BYTES, |v| v.len() as u64),
             })
             .sum();

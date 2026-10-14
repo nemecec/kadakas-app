@@ -145,13 +145,14 @@ pub fn block_keys(dxf: &Dxf) -> HashMap<String, String> {
     dxf.blocks
         .iter()
         .map(|(name, b)| {
-            let key = if anonymous(name) {
+            let key = if let Some(r) = &b.record {
+                format!("rec:{r}")
+            } else if anonymous(name) {
+                // No handle to go by: the content names an anonymous block.
                 let mut h = Hasher::new();
                 h.u64(b.entities.len() as u64);
                 b.entities.iter().for_each(|e| h.u64(entity_hash(e)));
                 format!("anon:{}", hex(h.finish()))
-            } else if let Some(r) = &b.record {
-                format!("rec:{r}")
             } else {
                 format!("name:{}", clean_name(name, 200, "unnamed"))
             };

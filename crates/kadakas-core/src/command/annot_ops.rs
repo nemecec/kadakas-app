@@ -108,6 +108,10 @@ impl Tx<'_> {
                 // The other annotations lose their anchors and keep their places.
                 self.annot_sync(&HashSet::new(), false);
             }
+            // The data of an object that this very command made: nothing follows a new object yet,
+            // and a batch of thousands of imported objects with data must not cost a pass over all
+            // of them for each one.
+            Command::SetData { id, .. } if self.added_set.contains(id) => {}
             // Any other command (rotate, scale, mirror, copy, array, a new landscape area or
             // hardscape, a group move...): annotations follow every object the command changed.
             _ => {

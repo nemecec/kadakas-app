@@ -33,8 +33,9 @@ pub enum ResourceBody {
     /// `kadakas-irrigation` reads and writes it.
     IrrigationCatalog(serde_json::Value),
     /// The entity summaries of one imported revision of a DXF drawing (see `crate::provenance`).
-    /// The core keeps it as JSON and checks its size. `kadakas-io` reads and writes it.
-    ImportBase(serde_json::Value),
+    /// The core keeps it as JSON and checks its size. `kadakas-io` reads and writes it. The body is
+    /// shared (`Arc`): the undo steps hold the same text, and a clone costs a pointer.
+    ImportBase(std::sync::Arc<serde_json::Value>),
     /// A text style, dimension style, tag style or notes database (see `crate::annot::style`).
     Annot(Box<crate::annot::style::AnnotResource>),
     /// A material or a render style (see `crate::present`).
@@ -67,7 +68,7 @@ impl Serialize for ResourceBody {
             }
             ResourceBody::Graphic(g) => g.serialize(s),
             ResourceBody::IrrigationCatalog(v) => v.serialize(s),
-            ResourceBody::ImportBase(v) => v.serialize(s),
+            ResourceBody::ImportBase(v) => (**v).serialize(s),
             ResourceBody::Annot(a) => a.serialize(s),
             ResourceBody::Render(r) => r.serialize(s),
             ResourceBody::Image(i) => tagged(i.as_ref(), "image", s),
@@ -119,7 +120,9 @@ impl<'de> Deserialize<'de> for ResourceBody {
                 }))
             }
             Some("irrigation_catalog") => Ok(ResourceBody::IrrigationCatalog(v)),
-            Some(crate::provenance::BASE_TYPE) => Ok(ResourceBody::ImportBase(v)),
+            Some(crate::provenance::BASE_TYPE) => {
+                Ok(ResourceBody::ImportBase(std::sync::Arc::new(v)))
+            }
             Some("hardscape_style") => serde_json::from_value::<HardscapeStyle>(v)
                 .map(|s| ResourceBody::HardscapeStyle(Box::new(s)))
                 .map_err(serde::de::Error::custom),

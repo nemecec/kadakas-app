@@ -410,13 +410,8 @@ fn the_stored_base_maps_back_to_objects_and_a_changed_definition_fans_out() {
     import(&mut ed, "plan.dxf", &v1, &ImportOptions::default());
     // One base resource, keyed by drawing and revision, that the document keeps.
     assert_eq!(ed.doc().resources.len(), 1);
-    let stored = provenance::base_of(ed.doc(), "guid:{A-1}", "guid:{B-1}").unwrap();
-    let old: Vec<Rec> = stored["recs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| Rec::from_value(v).unwrap())
-        .collect();
+    let stored = provenance::base_recs(ed.doc(), "guid:{A-1}", "guid:{B-1}").unwrap();
+    let old: Vec<Rec> = stored.iter().map(|v| Rec::from_value(v).unwrap()).collect();
     let parsed = kadakas_io::dxf::parse::parse(v1.as_bytes()).unwrap();
     let (mut made, _) = revision::records(&parsed, 1000);
     made.iter_mut().for_each(Rec::compact);
@@ -444,12 +439,12 @@ fn the_stored_base_maps_back_to_objects_and_a_changed_definition_fans_out() {
     let all = tags(ed.doc());
     let tagged = || all.iter().map(|(t, o)| (o.id, t));
     let circle = changed.iter().find(|r| r.kind == "CIRCLE").unwrap();
-    let hit = revision::objects_of(circle, tagged());
+    let hit = revision::objects_of(circle, "guid:{A-1}", tagged());
     // The circle is in TREE, which is placed by A1, twice by A2 and once through GROVE.
     assert_eq!(hit.len(), 4);
     let insert = changed.iter().find(|r| r.kind == "INSERT").unwrap();
     assert_eq!(insert.handle.as_deref(), Some("A1"));
-    let hit = revision::objects_of(insert, tagged());
+    let hit = revision::objects_of(insert, "guid:{A-1}", tagged());
     assert_eq!(hit.len(), 2, "the line and the circle of that INSERT");
     // None of them was edited by the user, so an update may change them.
     assert!(
@@ -553,7 +548,7 @@ fn tags_and_the_base_survive_a_save_and_a_copy_drops_the_tag() {
     assert_eq!(&loaded, ed.doc());
     assert!(loaded.load_notes().is_empty());
     assert_eq!(tags(&loaded).len(), 3);
-    assert!(provenance::base_of(&loaded, "guid:{A-1}", "guid:{B-1}").is_some());
+    assert!(provenance::base_recs(&loaded, "guid:{A-1}", "guid:{B-1}").is_some());
 
     let id = ed.doc().objects.values().next().unwrap().id;
     let out = ed
@@ -662,5 +657,189 @@ fn a_hidden_dxf_layer_makes_a_hidden_source_layer() {
             .find(|c| c.name == "Walls")
             .unwrap()
             .visible
+    );
+}
+
+#[test]
+fn a_base_that_the_document_keeps_is_not_stored_again_even_without_its_layers() {
+    let mut ed = fresh();
+    let text = file(&header("A-1", "B-1"), "", "", LINES);
+    import(&mut ed, "plan.dxf", &text, &ImportOptions::default());
+    // Delete the objects and the layer: only the resource is left.
+    let ids: Vec<_> = ed.doc().objects.keys().copied().collect();
+    ed.execute(&Command::DeleteObjects { ids }).unwrap();
+    let layer = layer_named(ed.doc(), "plan.dxf").id;
+    ed.execute(&Command::DeleteLayer { id: layer }).unwrap();
+    assert_eq!(ed.doc().resources.len(), 1);
+    import(&mut ed, "plan.dxf", &text, &ImportOptions::default());
+    assert_eq!(
+        ed.doc().resources.len(),
+        1,
+        "the base of the revision is kept once"
+    );
+}
+
+#[test]
+fn a_big_base_is_split_in_parts_that_fit_a_frame() {
+    // About 5 MiB of summaries: two parts of at most 4 MiB.
+    let mut lines = String::new();
+    for k in 0..20_000 {
+        lines.push_str(&format!(
+            "0\nLINE\n5\n{k:X}\n8\nWalls\n10\n{k}\n20\n0\n11\n{}\n21\n5\n",
+            k + 10
+        ));
+    }
+    let mut ed = fresh();
+    import(
+        &mut ed,
+        "big.dxf",
+        &file(&header("A-1", "B-1"), "", "", &lines),
+        &ImportOptions::default(),
+    );
+    let sizes: Vec<usize> = ed
+        .doc()
+        .resources
+        .iter()
+        .map(|r| serde_json::to_string(r).unwrap().len())
+        .collect();
+    assert!(sizes.len() >= 2, "{sizes:?}");
+    assert!(
+        sizes
+            .iter()
+            .all(|n| *n < provenance::BASE_PART_BYTES + 64 * 1024),
+        "{sizes:?}"
+    );
+    assert!(sizes.iter().sum::<usize>() > 4 * 1024 * 1024);
+    let recs = provenance::base_recs(ed.doc(), "guid:{A-1}", "guid:{B-1}").unwrap();
+    assert_eq!(recs.len(), 20_000);
+    // The parts load again, and a base that lost a part is not a base.
+    let text = serde_json::to_string(ed.doc()).unwrap();
+    let loaded = Document::from_json(&text).unwrap();
+    assert_eq!(
+        provenance::base_recs(&loaded, "guid:{A-1}", "guid:{B-1}")
+            .unwrap()
+            .len(),
+        20_000
+    );
+    let mut fewer = loaded.clone();
+    let first = fewer.resources.iter().next().unwrap().id;
+    fewer.resources.remove(first);
+    assert!(provenance::base_recs(&fewer, "guid:{A-1}", "guid:{B-1}").is_none());
+}
+
+#[test]
+fn a_grey_or_locked_source_layer_takes_the_next_revision_and_goes_back() {
+    let mut ed = fresh();
+    import(
+        &mut ed,
+        "plan.dxf",
+        &file(&header("A-1", "B-1"), "", "", LINES),
+        &ImportOptions::default(),
+    );
+    let id = layer_named(ed.doc(), "plan.dxf").id;
+    ed.execute(&Command::SetVisibility {
+        layers: vec![id],
+        classes: vec![],
+        mode: kadakas_core::visibility::VisMode::Grey,
+    })
+    .unwrap();
+    let r = import(
+        &mut ed,
+        "plan.dxf",
+        &file(&header("A-1", "B-2"), "", "", LINES),
+        &ImportOptions::default(),
+    );
+    assert!(r.notes.iter().any(|n| n.contains("grey")), "{:?}", r.notes);
+    assert_eq!(
+        ed.doc().objects.values().filter(|o| o.layer == id).count(),
+        6
+    );
+    assert!(ed.doc().drawing.grey.layers.contains(&id), "grey again");
+    // Locked and grey together.
+    ed.execute(&Command::ModifyLayer {
+        id,
+        name: None,
+        visible: None,
+        locked: Some(true),
+        elevation: None,
+        scale: None,
+    })
+    .unwrap();
+    let r = import(
+        &mut ed,
+        "plan.dxf",
+        &file(&header("A-1", "B-3"), "", "", LINES),
+        &ImportOptions::default(),
+    );
+    assert!(
+        r.notes.iter().any(|n| n.contains("grey")) && r.notes.iter().any(|n| n.contains("locked"))
+    );
+    assert_eq!(
+        ed.doc().objects.values().filter(|o| o.layer == id).count(),
+        9
+    );
+    assert!(ed.doc().layer(id).unwrap().locked && ed.doc().drawing.grey.layers.contains(&id));
+}
+
+/// One entity of every kind that the importer reads.
+const EVERYTHING: &str = "0\nLINE\n5\n10\n8\nA\n10\n0\n20\n0\n11\n10\n21\n5\n\
+0\nLINE\n5\n11\n8\nA\n10\n0\n20\n0\n30\n2\n11\n10\n21\n5\n31\n4\n\
+0\nCIRCLE\n5\n12\n8\nA\n10\n5\n20\n5\n40\n3\n\
+0\nARC\n5\n13\n8\nA\n10\n5\n20\n5\n40\n3\n50\n10\n51\n120\n\
+0\nLWPOLYLINE\n5\n14\n8\nA\n90\n3\n70\n1\n10\n0\n20\n0\n42\n0.5\n10\n10\n20\n0\n10\n10\n20\n10\n\
+0\nELLIPSE\n5\n15\n8\nA\n10\n0\n20\n0\n11\n10\n21\n0\n40\n0.5\n41\n0\n42\n6.283185307\n\
+0\nSPLINE\n5\n16\n8\nA\n70\n8\n71\n3\n72\n8\n73\n4\n40\n0\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n40\n1\n10\n0\n20\n0\n10\n5\n20\n5\n10\n10\n20\n0\n10\n15\n20\n5\n\
+0\nTEXT\n5\n17\n8\nA\n10\n1\n20\n1\n40\n2\n50\n30\n1\nOak\n\
+0\nMTEXT\n5\n18\n8\nA\n10\n1\n20\n1\n40\n2\n1\n{\\\\fArial;Hello}\n\
+0\nPOINT\n5\n19\n8\nA\n10\n3\n20\n3\n30\n4\n\
+0\n3DFACE\n5\n1A\n8\nA\n10\n0\n20\n0\n30\n0\n11\n1\n21\n0\n31\n0\n12\n1\n22\n1\n32\n1\n13\n1\n23\n1\n33\n1\n\
+0\nHATCH\n5\n1B\n8\nH\n70\n1\n420\n255\n91\n1\n92\n7\n72\n0\n73\n1\n93\n3\n10\n0\n20\n0\n10\n10\n20\n0\n10\n10\n20\n10\n97\n0\n\
+0\nPOLYLINE\n5\n1C\n8\nA\n70\n64\n71\n3\n72\n1\n0\nVERTEX\n8\nA\n10\n0\n20\n0\n30\n0\n70\n192\n0\nVERTEX\n8\nA\n10\n1\n20\n0\n30\n0\n70\n192\n0\nVERTEX\n8\nA\n10\n0\n20\n1\n30\n0\n70\n192\n0\nVERTEX\n8\nA\n10\n0\n20\n0\n30\n0\n70\n128\n71\n1\n72\n2\n73\n3\n0\nSEQEND\n";
+
+#[test]
+fn no_object_of_any_kind_counts_as_edited_right_after_the_import() {
+    for mode in [LayerMode::Classes, LayerMode::Layers] {
+        let mut ed = fresh();
+        let opts = ImportOptions {
+            layer_mode: mode,
+            faces: kadakas_io::FaceMode::Polygons,
+            ..ImportOptions::default()
+        };
+        let text = file(
+            &header("A-1", "B-1"),
+            "",
+            BLOCKS,
+            &format!("{EVERYTHING}{INSERTS}"),
+        );
+        let report = import(&mut ed, "all.dxf", &text, &opts);
+        let kinds: std::collections::BTreeSet<String> = report.objects.keys().cloned().collect();
+        assert!(kinds.len() >= 8, "{kinds:?} {:?}", report.skipped);
+        let all = tags(ed.doc());
+        assert!(all.len() >= 14, "{} {:?}", all.len(), report.skipped);
+        for (_, o) in &all {
+            assert_eq!(
+                provenance::is_edited(o),
+                Some(false),
+                "{:?}",
+                o.shape.kind()
+            );
+        }
+    }
+    // The merged 3D faces have no tag; the rest is not edited.
+    let mut ed = fresh();
+    let faces = ImportOptions {
+        faces: kadakas_io::FaceMode::Mesh,
+        ..ImportOptions::default()
+    };
+    import(
+        &mut ed,
+        "all.dxf",
+        &file(&header("A-1", "B-1"), "", "", EVERYTHING),
+        &faces,
+    );
+    assert!(
+        tags(ed.doc())
+            .iter()
+            .all(|(_, o)| provenance::is_edited(o) == Some(false))
     );
 }

@@ -8,7 +8,8 @@
 //! The order of the rules:
 //!
 //! 1. **Handle.** Entities with the same DXF handle (group code 5), scope and type are a pair.
-//!    A handle that two entities of one file share is ignored.
+//!    A handle that two entities of one file share is ignored. A pair stays a pair, whatever the
+//!    distance, unless the scope is suspected of renumbered handles (see `by_handle`).
 //! 2. **Renumbered handles.** Some programs write new handles when they export a drawing. Then
 //!    most handle pairs differ in content, while the content of those entities is found
 //!    elsewhere in the new file. The handle pairs are dropped and `renumbered` is set, so the
@@ -151,6 +152,21 @@ impl Options {
     }
 }
 
+impl Options {
+    /// The options for a parsed file: the tolerance is at most one meter in the unit of the file
+    /// (`$INSUNITS`, else millimeters).
+    pub fn for_dxf(dxf: &crate::dxf::parse::Dxf) -> Options {
+        let unit = dxf
+            .header_value("$INSUNITS")
+            .and_then(crate::dxf::parse::parse_int)
+            .and_then(crate::options::Unit::from_insunits);
+        Options::for_unit(unit.map_or(1.0, crate::options::Unit::mm_per_unit))
+    }
+}
+
+/// **A trap:** the default `max_tolerance` is 1000 drawing units. That is one meter only for a
+/// drawing in millimeters; for a drawing in meters it is a kilometer. Use [`Options::for_unit`] or
+/// [`Options::for_dxf`] unless the unit is known to be the millimeter.
 impl Default for Options {
     fn default() -> Self {
         Options {

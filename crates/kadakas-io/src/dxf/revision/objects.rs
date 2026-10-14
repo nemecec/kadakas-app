@@ -14,6 +14,9 @@
 //!
 //! `part` tells the objects of one entity apart (the loops of a hatch). The caller maps all of
 //! them.
+//!
+//! The tags of one document can come from several drawings: `drawing` limits the answer to the
+//! objects of the drawing whose records are asked about.
 
 use kadakas_core::model::ObjectId;
 use kadakas_core::provenance::ImportTag;
@@ -32,10 +35,11 @@ fn same_entity(rec: &Rec, tag: &ImportTag) -> bool {
 /// The objects that `rec` made, among the tagged objects. The result is sorted by ID.
 pub fn objects_of<'a>(
     rec: &Rec,
+    drawing: &str,
     tagged: impl IntoIterator<Item = (ObjectId, &'a ImportTag)>,
 ) -> Vec<ObjectId> {
     let mut out: Vec<ObjectId> = Vec::new();
-    for (id, tag) in tagged {
+    for (id, tag) in tagged.into_iter().filter(|(_, t)| t.drawing == drawing) {
         let hit = if rec.kind == "INSERT" {
             // The INSERT is one of the references on the way to the object.
             tag.via.iter().any(|v| match (&rec.handle, &v.handle) {
@@ -125,40 +129,45 @@ mod tests {
         let view = || tags.iter().map(|(i, t)| (*i, t));
 
         assert_eq!(
-            objects_of(&rec(Some("A"), "LINE", MODEL, 1), view()),
+            objects_of(&rec(Some("A"), "LINE", MODEL, 1), "d", view()),
             vec![id(1)]
         );
         // The block entity: all three instances, none of the other block with the same handle.
         let def = rec(Some("B2"), "LINE", "block:rec:B1", 2);
-        assert_eq!(objects_of(&def, view()), vec![id(10), id(11), id(12)]);
+        assert_eq!(objects_of(&def, "d", view()), vec![id(10), id(11), id(12)]);
         // The INSERT I1: its two copies. It made no object itself.
         let ins = rec(Some("I1"), "INSERT", MODEL, 7);
-        assert_eq!(objects_of(&ins, view()), vec![id(10), id(11)]);
+        assert_eq!(objects_of(&ins, "d", view()), vec![id(10), id(11)]);
         // A record without a handle is found by its hash; another type or scope does not match.
         let anon = rec(None, "LINE", MODEL, 1);
-        assert_eq!(objects_of(&anon, view()), vec![id(1)]);
-        assert_eq!(objects_of(&rec(None, "LINE", MODEL, 99), view()), vec![]);
+        assert_eq!(objects_of(&anon, "d", view()), vec![id(1)]);
         assert_eq!(
-            objects_of(&rec(Some("A"), "CIRCLE", MODEL, 1), view()),
+            objects_of(&rec(None, "LINE", MODEL, 99), "d", view()),
             vec![]
         );
         assert_eq!(
-            objects_of(&rec(Some("A"), "LINE", PAPER, 1), view()),
+            objects_of(&rec(Some("A"), "CIRCLE", MODEL, 1), "d", view()),
+            vec![]
+        );
+        assert_eq!(
+            objects_of(&rec(Some("A"), "LINE", PAPER, 1), "d", view()),
             vec![]
         );
         let mut no_handle = tags.clone();
         no_handle[0].1.handle = None;
         assert_eq!(
-            objects_of(&anon, no_handle.iter().map(|(i, t)| (*i, t))),
+            objects_of(&anon, "d", no_handle.iter().map(|(i, t)| (*i, t))),
             vec![id(1)]
         );
+        // Only the objects of the drawing that is asked about.
+        assert_eq!(objects_of(&def, "other", view()), vec![]);
         // An INSERT without a handle is found by its hash.
         let mut by_hash = tags.clone();
         by_hash[1].1.via[0].handle = None;
         by_hash[1].1.via[0].hash = hex(5);
         let ins = rec(None, "INSERT", MODEL, 5);
         assert_eq!(
-            objects_of(&ins, by_hash.iter().map(|(i, t)| (*i, t))),
+            objects_of(&ins, "d", by_hash.iter().map(|(i, t)| (*i, t))),
             vec![id(10)]
         );
     }

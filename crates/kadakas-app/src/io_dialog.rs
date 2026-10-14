@@ -324,9 +324,11 @@ impl IoUi {
                             let mut edit = egui::TextEdit::singleline(&mut form.layer);
                             // For DXF and DWG an empty name makes a layer named after the file.
                             if kind_of(&form.path) == Kind::Dxf && form.track_source {
-                                edit = edit.hint_text(tr!(
-                                    "io-dialog-empty-a-new-layer-named-after-the-file"
-                                ));
+                                edit = edit.hint_text(if form.layers_as_layers {
+                                    tr!("io-dialog-each-dxf-layer-becomes-its-own-layer")
+                                } else {
+                                    tr!("io-dialog-empty-a-new-layer-named-after-the-file")
+                                });
                             }
                             ui.add(edit);
                         });

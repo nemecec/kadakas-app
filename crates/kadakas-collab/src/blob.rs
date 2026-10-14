@@ -19,11 +19,16 @@
 //! server keeps blobs as long as the log refers to them. The checkpoint and the journal of a
 //! client hold the blobs they need.
 //!
-//! Two places hold a blob:
+//! Three places hold a blob:
 //!
 //! - the key `png` in the property `shape` of an object of kind `underlay`;
 //! - the key `data` in the property `body` of a resource of type `image` (the picture of a plant
-//!   style, PLT-16). Its small thumbnail stays in the operation.
+//!   style, PLT-16). Its small thumbnail stays in the operation;
+//! - the key `recs` in the property `body` of a resource of type `import_base` (the entity
+//!   summaries of an imported DXF revision, IOP-22). It is a list, so the blob is its JSON text.
+//!   The importer splits a big base into parts of about 4 MiB (`provenance::BASE_PART_BYTES`),
+//!   one resource each, so every blob is far below the smallest frame of a server (8 MiB) and a
+//!   base of any allowed size reaches a peer as several `blob_put` frames.
 //!
 //! A text of at least [`MIN_BLOB_BYTES`] is replaced.
 
@@ -50,13 +55,17 @@ pub fn sha256_hex(data: &[u8]) -> String {
 /// The properties that can hold a blob.
 pub const BLOB_PROPS: [&str; 2] = ["shape", "body"];
 
-/// The key that holds the picture text in a value of a property, if the value is one that has a
-/// picture: an underlay shape or an image resource body.
-fn holder(v: &Value) -> Option<&'static str> {
+/// The key that holds the blob text in a value of a property, if the value is one that has a blob:
+/// an underlay shape, an image resource body or an import base. The flag is true when the value
+/// under the key is JSON that becomes the text of the blob (the blob of a picture is its text
+/// already).
+fn holder(v: &Value) -> Option<(&'static str, bool)> {
     if v.get("kind").and_then(Value::as_str) == Some("underlay") {
-        Some("png")
+        Some(("png", false))
     } else if v.get("type").and_then(Value::as_str) == Some("image") {
-        Some("data")
+        Some(("data", false))
+    } else if v.get("type").and_then(Value::as_str) == Some(kadakas_core::provenance::BASE_TYPE) {
+        Some(("recs", true))
     } else {
         None
     }
@@ -65,18 +74,23 @@ fn holder(v: &Value) -> Option<&'static str> {
 /// If this value is the shape of an underlay or the body of an image resource with a big picture,
 /// the value with a reference instead, and the blob (hash and text).
 pub fn externalize(value: &Value) -> Option<(Value, String, String)> {
-    let key = holder(value)?;
-    let text = value
-        .get(key)?
-        .as_str()
-        .filter(|p| p.len() >= MIN_BLOB_BYTES)?;
+    let (key, json) = holder(value)?;
+    let text = if json {
+        let list = value.get(key)?.as_array()?;
+        serde_json::to_string(list).ok()?
+    } else {
+        value.get(key)?.as_str()?.to_string()
+    };
+    if text.len() < MIN_BLOB_BYTES {
+        return None;
+    }
     let hash = sha256_hex(text.as_bytes());
     let mut v = value.clone();
     v[key] = Value::Object(Map::from_iter([(
         REF_KEY.to_string(),
         Value::String(hash.clone()),
     )]));
-    Some((v, hash, text.to_string()))
+    Some((v, hash, text))
 }
 
 /// The hash in a reference value (`{"$blob": hash}`).
@@ -89,7 +103,7 @@ fn ref_of(v: &Value) -> Option<&str> {
 
 /// The hash of the blob that a value (a shape or a resource body) refers to, if it does.
 pub fn blob_ref(value: &Value) -> Option<&str> {
-    ref_of(value.get(holder(value)?)?)
+    ref_of(value.get(holder(value)?.0)?)
 }
 
 /// The properties with the pictures put back. `Err(hash)` names a blob that `resolve` does not
@@ -103,9 +117,13 @@ pub fn inline_props(
         if let Some(value) = out.get_mut(key)
             && let Some(hash) = blob_ref(value).map(str::to_string)
         {
-            let text = resolve(&hash).ok_or(hash)?;
-            let holder = holder(value).expect("a reference has a holder");
-            value[holder] = Value::String(text);
+            let text = resolve(&hash).ok_or_else(|| hash.clone())?;
+            let (key, json) = holder(value).expect("a reference has a holder");
+            value[key] = if json {
+                serde_json::from_str(&text).map_err(|_| hash)?
+            } else {
+                Value::String(text)
+            };
         }
     }
     Ok(out)
@@ -128,8 +146,14 @@ pub fn take_image_blob(
         return Ok((out, None));
     };
     let text = resolve(&hash).ok_or_else(|| hash.clone())?;
-    if let Some(holder) = holder(body) {
-        body[holder] = Value::String(String::new());
+    match holder(body) {
+        // A list is read back into the body, as it was.
+        Some((key, true)) => {
+            body[key] = serde_json::from_str(&text).map_err(|_| hash)?;
+            return Ok((out, None));
+        }
+        Some((key, false)) => body[key] = Value::String(String::new()),
+        None => {}
     }
     Ok((out, Some((hash, text))))
 }
@@ -247,5 +271,37 @@ mod tests {
         let by_key: BTreeMap<String, Value> = props.into_iter().collect();
         assert_eq!(refs_in(&by_key), vec![hash]);
         assert!(refs_in(&BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn the_recs_of_an_import_base_are_a_blob_of_json() {
+        let recs: Vec<Value> = (0..200)
+            .map(|i| json!({"kind": "LINE", "handle": format!("{i:X}"), "text": "t".repeat(40)}))
+            .collect();
+        let body = json!({"type": "import_base", "drawing": "d", "revision": "r", "recs": recs});
+        let (v, hash, text) = externalize(&body).unwrap();
+        assert_eq!(v["drawing"], "d");
+        assert_eq!(blob_ref(&v), Some(hash.as_str()));
+        assert_eq!(sha256_hex(text.as_bytes()), hash);
+        // It comes back as a list, whichever way the properties are read.
+        let mut map = Map::new();
+        map.insert("body".into(), v.clone());
+        let back = inline_props(&map, &|h| (h == hash).then(|| text.clone())).unwrap();
+        assert_eq!(back["body"], body);
+        let (taken, image) = take_image_blob(&map, &|h| {
+            (h == hash).then(|| std::sync::Arc::from(text.as_str()))
+        })
+        .unwrap();
+        assert!(image.is_none(), "an import base is not a picture");
+        assert_eq!(taken["body"], body);
+        // A blob that is not JSON, or a missing blob, is an error that names the hash.
+        let bad = |_: &str| Some("not json".to_string());
+        assert_eq!(inline_props(&map, &bad).unwrap_err(), hash);
+        let bad = |_: &str| Some(std::sync::Arc::<str>::from("not json"));
+        assert_eq!(take_image_blob(&map, &bad).unwrap_err(), hash);
+        // A short list stays in the operation, and so does a body whose recs are not a list.
+        let small = json!({"type": "import_base", "recs": [1, 2]});
+        assert!(externalize(&small).is_none());
+        assert!(externalize(&json!({"type": "import_base", "recs": "x"})).is_none());
     }
 }

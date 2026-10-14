@@ -20,11 +20,13 @@ pub struct Usage {
     pub classes: Vec<ClassId>,
     /// Other resources that refer to it (a tile that uses a symbol, a landscape style with a plant).
     pub resources: Vec<ResourceId>,
+    /// Layers that name an imported revision whose base this resource keeps.
+    pub layers: Vec<crate::model::LayerId>,
 }
 
 impl Usage {
     pub fn total(&self) -> usize {
-        self.objects.len() + self.classes.len() + self.resources.len()
+        self.objects.len() + self.classes.len() + self.resources.len() + self.layers.len()
     }
 
     pub fn is_unused(&self) -> bool {
@@ -74,8 +76,24 @@ fn object_uses(o: &Object, id: ResourceId, tag: &Value) -> bool {
 
 /// Who uses the resource. A resource that does not exist has no users.
 pub fn usage(doc: &Document, id: ResourceId) -> Usage {
+    // The base of an imported revision is used by the objects and layers of that revision.
+    if let Some(Resource {
+        body: ResourceBody::ImportBase(v),
+        ..
+    }) = doc.resources.get(id)
+    {
+        let d = v["drawing"].as_str().unwrap_or_default();
+        let r = v["revision"].as_str().unwrap_or_default();
+        let (objects, layers) = crate::provenance::base_users(doc, d, r);
+        return Usage {
+            objects,
+            layers,
+            ..Usage::default()
+        };
+    }
     let tag = Value::from(id.0);
     Usage {
+        layers: Vec::new(),
         objects: doc
             .objects
             .values()
@@ -169,6 +187,21 @@ pub fn list(doc: &Document, type_filter: Option<&str>, search: Option<&str>) -> 
             }
         }
     }
+    // A base is used by the objects and layers of its revision (parts of one base count alike).
+    let mut bases: HashMap<(String, String), usize> = HashMap::new();
+    for r in doc.resources.iter() {
+        if let ResourceBody::ImportBase(v) = &r.body {
+            let key = (
+                v["drawing"].as_str().unwrap_or_default().to_string(),
+                v["revision"].as_str().unwrap_or_default().to_string(),
+            );
+            let n = *bases.entry(key.clone()).or_insert_with(|| {
+                let (o, l) = crate::provenance::base_users(doc, &key.0, &key.1);
+                o.len() + l.len()
+            });
+            uses.insert(r.id, n);
+        }
+    }
     doc.resources
         .iter()
         .filter(|r| type_filter.is_none_or(|t| r.body.type_name() == t))
@@ -190,7 +223,8 @@ pub fn list(doc: &Document, type_filter: Option<&str>, search: Option<&str>) -> 
 
 /// The types that a purge removes when you name none. Worksheets and data maps are work of their own,
 /// so they stay unless you name them.
-pub const PURGE_TYPES: [&str; 10] = [
+pub const PURGE_TYPES: [&str; 11] = [
+    "import_base",
     "image",
     "symbol",
     "hatch",
@@ -218,6 +252,7 @@ pub fn purge_plan(doc: &Document, types: &[&str]) -> Vec<ResourceId> {
             let u = usage(doc, r.id);
             if u.objects.is_empty()
                 && u.classes.is_empty()
+                && u.layers.is_empty()
                 && u.resources.iter().all(|x| gone.contains(x))
             {
                 gone.insert(r.id);

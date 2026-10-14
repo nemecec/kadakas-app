@@ -103,9 +103,13 @@ impl Matcher<'_> {
     /// the handles of some scope look renumbered; no handle pair of that scope is kept then.
     ///
     /// A pair whose content differs is dropped when the content or the geometry of the base entity
-    /// is still unpaired in the new file (a better partner exists), or when the two are farther
-    /// apart than the tolerance and the geometry differs. A scope in which most pairs differ in
-    /// content that is found elsewhere, or in which most pairs were dropped, is renumbered.
+    /// is still unpaired in the new file (a better partner exists). A scope in which most pairs
+    /// differ in content that is found elsewhere, or in which most pairs have a better partner, is
+    /// renumbered. The distance counts only in a scope where some pair has a better partner (so
+    /// renumbering is suspected): there a pair that is farther apart than the tolerance, with other
+    /// geometry, is dropped too. In any other scope a pair with a handle is the same entity,
+    /// whatever the distance, so a drawing that moved as a whole (a new survey base) has every
+    /// entity moved, none removed and added. A far pair never counts for the vote.
     fn by_handle(&mut self, tol: f64) -> bool {
         let (base, new) = (self.base, self.new);
         let mut nh: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
@@ -153,55 +157,72 @@ impl Matcher<'_> {
                     .or_default() += 1;
             }
         }
+        // What each pair says. A pair of equal content is fine. For the others: is a better partner
+        // still free (`suspect`), is the content found elsewhere (`elsewhere`), and are the two far
+        // apart with other geometry (`far`)?
+        struct Judged {
+            i: usize,
+            j: usize,
+            same: bool,
+            suspect: bool,
+            elsewhere: bool,
+            far: bool,
+        }
+        let judged: Vec<Judged> = found
+            .iter()
+            .map(|&(i, j)| {
+                let (a, b) = (&base[i], &new[j]);
+                let same = a.hash == b.hash;
+                let free_hash =
+                    count(&new_hash, &a.scope, a.hash) > count(&used_hash, &a.scope, a.hash);
+                let free_geo =
+                    count(&new_geo, &a.scope, a.geo_hash) > count(&used_geo, &a.scope, a.geo_hash);
+                let far = tol > 0.0
+                    && a.geo_hash != b.geo_hash
+                    && matches!((a.center, b.center), (Some(p), Some(q))
+                        if (p[0] - q[0]).hypot(p[1] - q[1]) > tol);
+                Judged {
+                    i,
+                    j,
+                    same,
+                    suspect: !same && (free_hash || free_geo),
+                    elsewhere: !same && count(&new_hash, &a.scope, a.hash) > 0,
+                    far,
+                }
+            })
+            .collect();
+        #[derive(Default)]
         struct Tally {
             found: usize,
             differ: usize,
             elsewhere: usize,
-            dropped: usize,
+            suspect: usize,
         }
         let mut tally: HashMap<&str, Tally> = HashMap::new();
-        let mut kept: Vec<(usize, usize)> = Vec::new();
-        for &(i, j) in &found {
-            let (a, b) = (&base[i], &new[j]);
-            let t = tally.entry(&a.scope).or_insert(Tally {
-                found: 0,
-                differ: 0,
-                elsewhere: 0,
-                dropped: 0,
-            });
+        for p in &judged {
+            let t = tally.entry(&base[p.i].scope).or_default();
             t.found += 1;
-            if a.hash == b.hash {
-                kept.push((i, j));
-                continue;
-            }
-            t.differ += 1;
-            let free_hash =
-                count(&new_hash, &a.scope, a.hash) > count(&used_hash, &a.scope, a.hash);
-            let free_geo =
-                count(&new_geo, &a.scope, a.geo_hash) > count(&used_geo, &a.scope, a.geo_hash);
-            if count(&new_hash, &a.scope, a.hash) > 0 {
-                t.elsewhere += 1;
-            }
-            let far = tol > 0.0
-                && a.geo_hash != b.geo_hash
-                && matches!((a.center, b.center), (Some(p), Some(q))
-                    if (p[0] - q[0]).hypot(p[1] - q[1]) > tol);
-            if free_hash || free_geo || far {
-                t.dropped += 1;
-            } else {
-                kept.push((i, j));
-            }
+            t.differ += usize::from(!p.same);
+            t.elsewhere += usize::from(p.elsewhere);
+            t.suspect += usize::from(p.suspect);
         }
+        // A scope is renumbered when most pairs differ with their content found elsewhere, or when
+        // most pairs have a better partner. A "far" pair never counts for this.
         let renumbered: HashSet<&str> = tally
             .iter()
             .filter(|(_, t)| {
-                (2 * t.differ > t.found && 2 * t.elsewhere > t.differ) || 2 * t.dropped > t.found
+                (2 * t.differ > t.found && 2 * t.elsewhere > t.differ) || 2 * t.suspect > t.found
             })
             .map(|(s, _)| *s)
             .collect();
-        for (i, j) in kept {
-            if !renumbered.contains(base[i].scope.as_str()) {
-                self.pair(i, j, Via::Handle);
+        for p in &judged {
+            let scope = base[p.i].scope.as_str();
+            // The distance counts only in a scope where some pair is suspect. Elsewhere a pair with
+            // its handle is the same entity, whatever the distance: a survey that moved as a whole
+            // moves every entity.
+            let suspected = tally[scope].suspect > 0;
+            if !renumbered.contains(scope) && !p.suspect && !(suspected && p.far) {
+                self.pair(p.i, p.j, Via::Handle);
             }
         }
         !renumbered.is_empty()

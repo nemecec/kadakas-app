@@ -3023,3 +3023,66 @@ fn a_reader_quarantines_a_picture_whose_blob_does_not_fit_its_fields() {
     );
     assert!(m.quarantined.iter().any(|q| q.reason.contains("hash")));
 }
+
+/// One part of the import base of a revision, with `n` summaries of about 1 KB each.
+fn base_part(part: u64, parts: u64, n: usize) -> serde_json::Value {
+    let recs: Vec<_> = (0..n)
+        .map(|i| {
+            json!({"kind": "LINE", "handle": format!("{part:X}{i:X}"), "layer": "Walls",
+                   "text": "t".repeat(1000), "points": [[0.0, 0.0], [1.0, 1.0]]})
+        })
+        .collect();
+    json!({"type": "import_base", "drawing": "guid:{A}", "revision": "r1",
+           "part": part, "parts": parts, "recs": recs})
+}
+
+#[test]
+fn an_import_base_bigger_than_a_frame_travels_as_blobs_in_parts() {
+    // Three parts of about 3 MB: 9 MB in all, more than the smallest frame of a server (8 MiB),
+    // and every blob far below it.
+    let mut net = Net::new(2);
+    net.seq.check_entities(true);
+    net.connect(0);
+    net.connect(1);
+    net.settle();
+    let parts: Vec<_> = (0..3).map(|p| base_part(p, 3, 3000)).collect();
+    let mut hashes = Vec::new();
+    let mut total = 0;
+    for body in &parts {
+        let (reference, hash, text) = crate::blob::externalize(body).expect("a blob");
+        assert!(text.len() < 8 * 1024 * 1024, "{}", text.len());
+        assert!(reference["recs"]["$blob"].is_string());
+        total += text.len();
+        hashes.push(hash);
+    }
+    assert!(total > 8 * 1024 * 1024, "{total}");
+    for (p, body) in parts.iter().enumerate() {
+        net.clients[0]
+            .edit(vec![Op::Create {
+                target: Target::new(Kind::Resource, Uid::from_num(80 + p as u64)),
+                props: [
+                    ("name".to_string(), json!(format!("import base part {p}"))),
+                    ("body".to_string(), body.clone()),
+                ]
+                .into(),
+                merge: false,
+            }])
+            .unwrap();
+    }
+    // The operations hold references, not the summaries.
+    let sent = serde_json::to_string(&net.clients[0].journal().pending).unwrap();
+    assert!(
+        sent.len() < 4_000 && sent.contains("$blob"),
+        "{}",
+        sent.len()
+    );
+    net.settle();
+    assert!(hashes.iter().all(|h| net.seq.has_blob(h)));
+    // Both clients, also the one that only received them, build the complete base.
+    for i in 0..2 {
+        let m = net.clients[i].materialize(&Document::default());
+        assert!(m.quarantined.is_empty(), "client {i}: {:?}", m.quarantined);
+        let recs = kadakas_core::provenance::base_recs(&m.doc, "guid:{A}", "r1").unwrap();
+        assert_eq!(recs.len(), 9000, "client {i}");
+    }
+}

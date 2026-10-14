@@ -139,16 +139,13 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
     Ok(b.finish())
 }
 
-/// The biggest base resource that an import makes, in bytes of JSON. A bigger one is left out and
-/// the report says so.
-const MAX_BASE_BYTES: usize = 64 * 1024 * 1024;
-
-/// Keeps the summaries of the entities of this revision in the document (a resource of type
+/// Keeps the summaries of the entities of this revision in the document (resources of type
 /// `import_base`), so that an update can diff the old file against the new one without the old
-/// file. A revision that the document has is not stored again.
+/// file. A big base is split in parts of about `BASE_PART_BYTES`, so that each part is a blob of
+/// the collaboration that fits in a frame. A revision that the document keeps is not stored again.
 fn store_base(b: &mut Builder, dxf: &Dxf, tracking: Option<&Tracking>, scale: f64) {
     let Some(t) = tracking else { return };
-    if b.is_probe() || b.knows_revision(&t.drawing, &t.revision) {
+    if b.is_probe() || b.has_base(&t.drawing, &t.revision) {
         return;
     }
     let (mut recs, cut) = revision::records(dxf, provenance::MAX_BASE_RECS);
@@ -157,24 +154,58 @@ fn store_base(b: &mut Builder, dxf: &Dxf, tracking: Option<&Tracking>, scale: f6
         return;
     }
     recs.iter_mut().for_each(revision::Rec::compact);
-    let body = serde_json::json!({
-        "type": provenance::BASE_TYPE,
-        "drawing": t.drawing,
-        "revision": t.revision,
-        "unit_scale": scale,
-        "recs": recs.iter().map(revision::Rec::to_value).collect::<Vec<_>>(),
-    });
-    if provenance::check_base(&body).is_err() || body.to_string().len() > MAX_BASE_BYTES {
+    let mut parts: Vec<Vec<serde_json::Value>> = vec![vec![]];
+    let mut bytes = 0usize;
+    for r in &recs {
+        let v = r.to_value();
+        let n = v.to_string().len();
+        if bytes + n > provenance::BASE_PART_BYTES && !parts.last().is_some_and(Vec::is_empty) {
+            parts.push(vec![]);
+            bytes = 0;
+        }
+        parts.last_mut().expect("a part").push(v);
+        bytes += n;
+    }
+    if parts.len() as u64 > provenance::MAX_BASE_PARTS {
         b.report.note(
             "the entities are too big to keep for an update: an update will need the old file",
         );
         return;
     }
-    let name = format!(
-        "import base {}",
-        hash::hex(hash::content_hash_of(&t.drawing, &t.revision))
-    );
-    b.resource(&name, ResourceBody::ImportBase(body));
+    let count = parts.len();
+    let bodies: Vec<serde_json::Value> = parts
+        .into_iter()
+        .enumerate()
+        .map(|(n, recs)| {
+            let mut body = serde_json::json!({
+                "type": provenance::BASE_TYPE,
+                "drawing": t.drawing,
+                "revision": t.revision,
+                "unit_scale": scale,
+                "recs": recs,
+            });
+            if count > 1 {
+                body["part"] = n.into();
+                body["parts"] = count.into();
+            }
+            body
+        })
+        .collect();
+    if bodies.iter().any(|v| provenance::check_base(v).is_err()) {
+        b.report.note(
+            "the entities are too big to keep for an update: an update will need the old file",
+        );
+        return;
+    }
+    let key = hash::hex(hash::content_hash_of(&t.drawing, &t.revision));
+    for (n, body) in bodies.into_iter().enumerate() {
+        let name = if count > 1 {
+            format!("import base {key} part {} of {count}", n + 1)
+        } else {
+            format!("import base {key}")
+        };
+        b.resource(&name, ResourceBody::ImportBase(std::sync::Arc::new(body)));
+    }
 }
 
 /// A drawing whose center is farther from (0, 0) than this (mm) is shifted. This is 1 km.

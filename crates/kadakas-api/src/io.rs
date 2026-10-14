@@ -60,7 +60,7 @@ pub(crate) fn describe() -> Value {
             "max_objects": "stop after this many objects. Default 500000",
             "track_source": "DXF and DWG: true (default). Each object keeps its origin in data.import: {drawing: the lineage, $FINGERPRINTGUID else the file name (a file without a header: the name and a hash of its entities), revision: $VERSIONGUID else a hash of the header, handle: DXF handle (group code 5), kind: DXF type, hash: hash of the entity, obj: hash of the object right after the import (a different hash now means the object was edited), block, via, part}. The objects go to a layer of their own named after the file (classes mode), or to one layer per DXF layer (layers mode). Layers are matched on the drawing, so a new revision of the same drawing reuses them. These layers never reuse a design layer, and they carry the origin, the revision and the import transform too (layer.import_source). The entity summaries of the revision are kept in a resource of type import_base for later updates. false: the objects go to the active layer without tags. A copy of an object does not keep the tag",
             "source_name": "DXF and DWG: the file name that the tags record. Default: the name of the file",
-            "max_bytes": "the largest file to read, in bytes, checked before the file is read (DXF, DWG after the conversion, and GIS files). Default 536870912 (512 MiB)"
+            "max_bytes": "the largest file to read, in bytes, checked before the file is read (DXF, DWG after the conversion, and GIS files). Default 536870912 (512 MiB), and never above the limit import_text_bytes of the session"
         },
         "export_options": {
             "layer_mode": "classes (default: one DXF layer per class) | layers (one per design layer)",
@@ -147,7 +147,9 @@ impl Session {
         if crate::ifc_api::is_ifc(format.as_deref(), &path) {
             return self.import_ifc_file(path, &options, checked);
         }
-        let opts = ImportOptions::from_json(&options).map_err(rpc)?;
+        let mut opts = ImportOptions::from_json(&options).map_err(rpc)?;
+        // A client cannot raise the limit of the session.
+        opts.max_bytes = opts.max_bytes.min(self.limits.import_text_bytes);
         let format = format_of(format.as_deref())?;
         let path = if checked {
             self.file_path(path, format, false)?
