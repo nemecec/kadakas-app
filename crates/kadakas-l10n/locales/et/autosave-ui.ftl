@@ -33,3 +33,4 @@ autosave-ui-show-location = Näita asukohta
 autosave-ui-this-browser-kept-an-autosaved-copy-from = See brauser säilitas varasemast külastusest automaatselt salvestatud koopia.
 autosave-ui-recovered-the-browser-copy-save-it-to = Brauseri koopia on taastatud. Salvesta see, et see alles jääks.
 autosave-ui-versions-label = versiooni
+autosave-ui-report-this-crash = Teata sellest kokkujooksmisest

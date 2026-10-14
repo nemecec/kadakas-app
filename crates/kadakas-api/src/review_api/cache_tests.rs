@@ -97,7 +97,7 @@ fn a_history_that_the_check_did_not_see_is_read_once_and_stays_read_only() {
     create(&mut donor, "Two");
     // The file form of the donor, put into the editor without the check at load.
     let mut doc = (*donor.document_for_save().unwrap()).clone();
-    let mut file = doc.history.as_ref().unwrap().value().clone();
+    let mut file = doc.history.as_ref().unwrap().to_value();
     file["versions"][0]["name"] = json!("n".repeat(500));
     doc.history = Some(HistoryData::new(file.clone()));
     let mut s = Session::with_sequential_ids();
@@ -113,7 +113,7 @@ fn a_history_that_the_check_did_not_see_is_read_once_and_stays_read_only() {
     // A change is refused, and the history is what the file had.
     let e = fail(&mut s, "version.create", json!({"name": "Three"}));
     assert_eq!(e.reason, Some(REASON_HISTORY_READONLY));
-    assert_eq!(s.editor.doc().history.as_ref().unwrap().value(), &file);
+    assert_eq!(&s.editor.doc().history.as_ref().unwrap().to_value(), &file);
 }
 
 #[test]

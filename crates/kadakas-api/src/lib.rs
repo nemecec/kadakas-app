@@ -9,6 +9,7 @@ mod collab_api;
 pub use collab_api::EndpointFactory;
 mod errors;
 pub mod events;
+pub mod feedback_api;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
 pub use errors::{
@@ -160,6 +161,11 @@ pub struct Session {
     review: review_api::ReviewCache,
     /// What the load of the open document repaired (see `Session::load_notes`).
     load_notes: Vec<String>,
+    /// Feedback reports: the outbox, the recent calls and the last failure (see `feedback_api`).
+    pub feedback: feedback_api::FeedbackState,
+    /// True after a method panicked (see `Session::guarded`). Error replies say so
+    /// (`data.tainted`), and a new document clears it.
+    tainted: bool,
 }
 
 /// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
@@ -692,6 +698,11 @@ pub const METHODS: &[(&str, &str)] = &[
         "events.poll",
         "Change sets after a revision. params: {since_revision, kinds?}. Returns {revision, truncated, changes}. If truncated is true, older changes were dropped: read the document again.",
     ),
+    // Feedback (see feedback_api.rs).
+    feedback_api::FEEDBACK_SUBMIT,
+    feedback_api::FEEDBACK_LIST,
+    feedback_api::FEEDBACK_GET,
+    feedback_api::FEEDBACK_WITHDRAW,
 ];
 
 impl Default for Session {
@@ -772,6 +783,8 @@ impl Session {
             wasm_plugins: WasmPluginState::default(),
             review: Default::default(),
             load_notes: Vec::new(),
+            feedback: feedback_api::FeedbackState::default(),
+            tainted: false,
         }
     }
 
@@ -804,7 +817,7 @@ impl Session {
 
     /// A session for an opened document, with empty history and selection.
     pub fn with_document(mut doc: Document) -> Self {
-        let cache = review_api::vet_document(&mut doc);
+        let cache = review_api::vet_document(&mut doc, SessionLimits::default().read_caps());
         let notes = doc.load_notes().to_vec();
         let mut s = Session::with_vetted_document(doc);
         s.load_notes = notes;
@@ -826,7 +839,7 @@ impl Session {
     /// versions of the new document is checked against the limits of the session; what was
     /// repaired or dropped is returned as notes (they are also the load notes of the document).
     pub fn replace_document(&mut self, mut doc: Document) -> Vec<String> {
-        let cache = review_api::vet_document(&mut doc);
+        let cache = review_api::vet_document(&mut doc, self.limits.read_caps());
         let notes = doc.load_notes().to_vec();
         #[cfg(not(target_arch = "wasm32"))]
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
@@ -837,6 +850,10 @@ impl Session {
         let wasm_plugins = std::mem::take(&mut self.wasm_plugins);
         let limits = self.limits.clone();
         let collab = std::mem::take(&mut self.collab);
+        // The outbox, the consent, the rate limit and the flags of the run belong to the program,
+        // not to the document. The calls and the last failure belong to the old document.
+        let mut feedback = std::mem::take(&mut self.feedback);
+        feedback.clear_context();
         let mut hub = std::mem::take(&mut self.events);
         hub.document_replaced();
         let sequential = self.sequential_ids;
@@ -848,6 +865,7 @@ impl Session {
         };
         self.events = hub;
         self.review = cache;
+        self.feedback = feedback;
         self.collab = collab;
         self.collab_mark_saved();
         self.set_sequential_ids(sequential);
@@ -983,7 +1001,9 @@ impl Session {
         let revision = self.editor.revision();
         #[cfg(not(target_arch = "wasm32"))]
         let start = std::time::Instant::now();
+        let note = feedback_api::begin(method, &p);
         let mut result = self.dispatch(method, p);
+        feedback_api::finish(self, note, &result);
         #[cfg(not(target_arch = "wasm32"))]
         let elapsed = Some(start.elapsed());
         #[cfg(target_arch = "wasm32")]
@@ -1004,6 +1024,9 @@ impl Session {
     }
 
     fn dispatch(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
+        if feedback_api::knows(method) {
+            return feedback_api::handle(self, method, p).expect("a feedback method");
+        }
         if let Some(r) = events::handle(self, method, p.clone()) {
             return r;
         }
@@ -1076,6 +1099,7 @@ impl Session {
                 "collaboration": collab_api::describe(),
                 "review": review_api::describe(),
                 "errors": errors::describe(),
+                "feedback": feedback_api::describe(),
                 "unknown_shapes": "A file from a newer Kadakas may hold shapes of a kind that this version does not know. They load as kind 'unknown' (the original kind is in shape.kind of objects.get). They are listed in document.summary (objects_by_kind.unknown and unknown_shapes), they are not drawn, they save back unchanged, and only delete_objects can change them.",
                 });
                 #[cfg(not(target_arch = "wasm32"))]
@@ -1506,12 +1530,25 @@ impl Session {
             ));
         };
         let params = req.get("params").cloned().unwrap_or(Value::Null);
-        let result = self.handle_as(conn, kadakas_core::change::Origin::Agent, method, params);
+        // A panic in a method becomes an internal error with a hint to file a bug, so a long
+        // session survives it. The document may be in a state the method did not expect.
+        let result = self.guarded(method, |s| {
+            s.handle_as(conn, kadakas_core::change::Origin::Agent, method, params)
+        });
         let id = id?;
         Some(match result {
             Ok(v) => json!({"jsonrpc": "2.0", "id": id, "result": v}).to_string(),
             Err(e) => {
-                errors::error_response_with(id, e.code, e.kind, &e.message, e.details.as_ref())
+                let hint = feedback_api::hint(method, e.kind, &e.message);
+                errors::error_response_with(
+                    id,
+                    e.code,
+                    e.kind,
+                    &e.message,
+                    hint,
+                    self.tainted,
+                    e.details.as_ref(),
+                )
             }
         })
     }

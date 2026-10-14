@@ -19,7 +19,7 @@ pub const CODE_CONFLICT: i64 = 5;
 pub const CODE_LIMIT: i64 = 6;
 
 /// `(code, kind, meaning)` of every code, for `describe`.
-pub const CODES: [(i64, &str, &str); 10] = [
+pub const CODES: [(i64, &str, &str); 11] = [
     (-32700, "parse_error", "The request is not valid JSON."),
     (
         -32600,
@@ -31,6 +31,11 @@ pub const CODES: [(i64, &str, &str); 10] = [
         -32602,
         "invalid_params",
         "The parameters are missing or have the wrong type.",
+    ),
+    (
+        -32603,
+        "internal",
+        "Kadakas failed in a way it must not. This is a bug: file it with the feedback tool.",
     ),
     (1, "error", "Any other failure."),
     (
@@ -110,6 +115,9 @@ impl RpcError {
             format!("unknown method: {method}"),
         )
     }
+    pub fn internal(e: impl std::fmt::Display) -> Self {
+        Self::new(-32603, "internal", e)
+    }
     pub fn app(e: impl std::fmt::Display) -> Self {
         Self::new(CODE_GENERIC, "error", e)
     }
@@ -153,18 +161,29 @@ pub fn app(e: impl std::fmt::Display) -> RpcError {
 
 /// The JSON text of an error response.
 pub fn error_response(id: Value, code: i64, kind: &str, message: &str) -> String {
-    error_response_with(id, code, kind, message, None)
+    error_response_with(id, code, kind, message, None, false, None)
 }
 
-/// Like [`error_response`], with the facts of `RpcError::details` in `data` next to `kind`.
+/// Like [`error_response`], with a `feedback` hint in `data` (see `feedback_api::hint`), the mark
+/// that a method panicked in this session, and the facts of `RpcError::details` in `data` next
+/// to `kind` (they never replace `kind`, `feedback` or `tainted`).
 pub fn error_response_with(
     id: Value,
     code: i64,
     kind: &str,
     message: &str,
+    feedback: Option<Value>,
+    tainted: bool,
     details: Option<&Value>,
 ) -> String {
     let mut data = json!({"kind": kind});
+    if let Some(f) = feedback {
+        data["feedback"] = f;
+    }
+    // A method panicked in this session. The document may not be what the agent expects.
+    if tainted {
+        data["tainted"] = json!(true);
+    }
     if let (Some(Value::Object(extra)), Some(map)) = (details, data.as_object_mut()) {
         for (k, v) in extra {
             map.entry(k.clone()).or_insert_with(|| v.clone());

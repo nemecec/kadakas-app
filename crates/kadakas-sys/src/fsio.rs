@@ -21,13 +21,18 @@ pub enum Access {
     KeepExisting,
 }
 
-/// Writes `bytes` to a temporary file in the same folder, flushes it, and
-/// renames it over `path`. A crash never leaves a half-written file.
+/// The content of a streamed write: it writes everything into a buffered writer on the
+/// temporary file. The caller flushes, syncs and renames.
+type Fill<'a> = Box<dyn FnOnce(&mut dyn Write) -> std::io::Result<()> + 'a>;
+
+/// Writes the content that `fill` makes to a temporary file in the same folder, flushes it, and
+/// renames it over `path`. A crash never leaves a half-written file, and a failure of `fill`
+/// leaves the old file as it was and removes the temporary file.
 /// With `keep_backup`, the previous file is first copied to `<path>.bak`.
 /// With `private`, the file is readable by the owner only (Unix).
 fn write_replacing(
     path: &Path,
-    bytes: &[u8],
+    fill: Fill<'_>,
     keep_backup: bool,
     private: bool,
 ) -> std::io::Result<()> {
@@ -45,8 +50,9 @@ fn write_replacing(
             opts.mode(0o600);
         }
         let _ = private;
-        let mut f = opts.open(&tmp)?;
-        f.write_all(bytes)?;
+        let mut w = std::io::BufWriter::new(opts.open(&tmp)?);
+        fill(&mut w)?;
+        let f = w.into_inner().map_err(|e| e.into_error())?;
         f.sync_all()?;
         if let Some(p) = &old_perms {
             f.set_permissions(p.clone())?;
@@ -57,7 +63,11 @@ fn write_replacing(
         if keep_backup && path.is_file() {
             std::fs::copy(path, sibling(path, "", ".bak"))?;
         }
-        std::fs::rename(&tmp, path)
+        std::fs::rename(&tmp, path)?;
+        if let Some(dir) = path.parent() {
+            sync_dir(dir);
+        }
+        Ok(())
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -76,12 +86,22 @@ pub fn replace_with_backup(tmp: &Path, target: &Path) -> std::io::Result<()> {
 
 /// Saves a file atomically and keeps the previous version as `<path>.bak`.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    write_replacing(path, bytes, true, false)
+    write_atomic_with(path, |w| w.write_all(bytes))
+}
+
+/// Like [`write_atomic`], for content that `fill` streams into a buffered writer on the
+/// temporary file: write, flush, fsync, rename. No copy of the whole content is held. If `fill`
+/// fails, the old file stays and the temporary file is deleted.
+pub fn write_atomic_with(
+    path: &Path,
+    fill: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    write_replacing(path, Box::new(fill), true, false)
 }
 
 /// Like [`write_atomic`], with no backup and owner-only permissions (Unix).
 pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    write_replacing(path, bytes, false, true)
+    write_replacing(path, Box::new(|w| w.write_all(bytes)), false, true)
 }
 
 /// Creates the folder (and parents). The last folder gets mode 0700 on Unix.
@@ -126,38 +146,165 @@ pub fn write_durable(
     access: Access,
     tmp_suffix: &str,
 ) -> std::io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(tmp_suffix);
-    let tmp = PathBuf::from(tmp);
-    let result = (|| {
-        let mut opts = std::fs::File::options();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        if access == Access::Private {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&tmp)?;
-        if access == Access::KeepExisting
-            && let Ok(m) = std::fs::metadata(path)
-        {
-            f.set_permissions(m.permissions())?;
-        }
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        // Close the file before the rename (Windows needs it). On wasm `File` has no drop code.
-        #[allow(clippy::drop_non_drop)]
-        drop(f);
-        std::fs::rename(&tmp, path)?;
-        if let Some(dir) = path.parent() {
+    write_durable_with(path, access, tmp_suffix, |w| w.write_all(bytes))
+}
+
+/// Like [`write_durable`], for content that `fill` streams into a buffered writer.
+pub fn write_durable_with(
+    path: &Path,
+    access: Access,
+    tmp_suffix: &str,
+    fill: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    stage_durable(path, access, tmp_suffix, fill)?.commit()
+}
+
+/// A finished temporary file that waits for its rename. Dropping it deletes the temporary file.
+/// The caller may take a lock between `stage_durable` (the slow part, the write) and
+/// [`Staged::commit`] (the rename), so the lock is short.
+#[must_use = "a staged file is deleted when it is dropped"]
+pub struct Staged {
+    tmp: PathBuf,
+    target: PathBuf,
+    done: bool,
+}
+
+impl Staged {
+    /// Renames the temporary file over the target and flushes the folder.
+    pub fn commit(mut self) -> std::io::Result<()> {
+        std::fs::rename(&self.tmp, &self.target)?;
+        self.done = true;
+        if let Some(dir) = self.target.parent() {
             sync_dir(dir);
         }
         Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
     }
-    result
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        if !self.done {
+            let _ = std::fs::remove_file(&self.tmp);
+        }
+    }
+}
+
+/// The first half of [`write_durable_with`]: writes and flushes the temporary file
+/// `<path><tmp_suffix>`. It is deleted again if `fill` or the flush fails.
+pub fn stage_durable(
+    path: &Path,
+    access: Access,
+    tmp_suffix: &str,
+    fill: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
+) -> std::io::Result<Staged> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(tmp_suffix);
+    let staged = Staged {
+        tmp: PathBuf::from(tmp),
+        target: path.to_path_buf(),
+        done: false,
+    };
+    let mut opts = std::fs::File::options();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if access == Access::Private {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let f = opts.open(&staged.tmp)?;
+    if access == Access::KeepExisting
+        && let Ok(m) = std::fs::metadata(path)
+    {
+        f.set_permissions(m.permissions())?;
+    }
+    let mut w = std::io::BufWriter::new(f);
+    fill(&mut w)?;
+    let f = w.into_inner().map_err(|e| e.into_error())?;
+    f.sync_all()?;
+    // Close the file before the rename (Windows needs it). On wasm `File` has no drop code.
+    #[allow(clippy::drop_non_drop)]
+    drop(f);
+    Ok(staged)
+}
+
+/// Why [`open_regular`] refused a file.
+#[derive(Debug)]
+pub enum OpenError {
+    /// The file cannot be opened or read (the kind says if it is missing).
+    Io(std::io::Error),
+    /// A folder, a pipe, a device: only a regular file is read.
+    NotRegular,
+    /// The file is larger than the limit.
+    TooLarge { len: u64, max: u64 },
+}
+
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenError::Io(e) => e.fmt(f),
+            OpenError::NotRegular => f.write_str("it is not a regular file"),
+            OpenError::TooLarge { len, max } => {
+                write!(f, "the file is {len} bytes; the limit is {max} bytes")
+            }
+        }
+    }
+}
+
+/// A reader that never gives more than `max` bytes of the file. A file that grows after the size
+/// check ends with a read error and not with more data.
+pub struct Capped<R> {
+    inner: R,
+    max: u64,
+    pos: u64,
+}
+
+impl<R: std::io::Read> std::io::Read for Capped<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        // One byte more than the limit, so that the end of a file of exactly `max` bytes is a
+        // normal end and a longer file is an error.
+        let room = (self.max + 1).saturating_sub(self.pos);
+        if room == 0 {
+            return Err(std::io::Error::other(format!(
+                "the file grew beyond the limit of {} bytes",
+                self.max
+            )));
+        }
+        let n = buf.len().min(usize::try_from(room).unwrap_or(usize::MAX));
+        let got = self.inner.read(&mut buf[..n])?;
+        self.pos += got as u64;
+        Ok(got)
+    }
+}
+
+impl<R: std::io::Seek> std::io::Seek for Capped<R> {
+    fn seek(&mut self, from: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.pos = self.inner.seek(from)?;
+        Ok(self.pos)
+    }
+}
+
+/// Opens a regular file of at most `max` bytes for a streamed read. The kind and the size are
+/// checked before anything is read, and the reader is capped as well.
+pub fn open_regular(
+    path: &Path,
+    max: u64,
+) -> Result<std::io::BufReader<Capped<std::fs::File>>, OpenError> {
+    let file = std::fs::File::open(path).map_err(OpenError::Io)?;
+    let meta = file.metadata().map_err(OpenError::Io)?;
+    if !meta.is_file() {
+        return Err(OpenError::NotRegular);
+    }
+    if meta.len() > max {
+        return Err(OpenError::TooLarge {
+            len: meta.len(),
+            max,
+        });
+    }
+    Ok(std::io::BufReader::new(Capped {
+        inner: file,
+        max,
+        pos: 0,
+    }))
 }
 
 #[cfg(test)]
@@ -231,6 +378,112 @@ mod tests {
         assert_eq!(names.len(), 1, "{names:?}");
         // A missing folder is an error too.
         assert!(write_atomic(&dir.join("missing").join("f"), b"x").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_streamed_write_flushes_replaces_and_keeps_a_backup() {
+        let dir = temp_dir("stream");
+        let f = dir.join("s.kad");
+        write_atomic_with(&f, |w| {
+            // Many small writes, more than one buffer.
+            for _ in 0..10_000 {
+                w.write_all(b"0123456789")?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(std::fs::metadata(&f).unwrap().len(), 100_000);
+        write_atomic_with(&f, |w| w.write_all(b"two")).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"two");
+        assert_eq!(
+            std::fs::metadata(dir.join("s.kad.bak")).unwrap().len(),
+            100_000
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failing_stream_keeps_the_old_file_and_removes_the_temporary_file() {
+        let dir = temp_dir("stream-fail");
+        let f = dir.join("s.kad");
+        std::fs::write(&f, "old").unwrap();
+        let e = write_atomic_with(&f, |w| {
+            w.write_all(&[7u8; 50_000])?;
+            Err(std::io::Error::other("disk full"))
+        })
+        .unwrap_err();
+        assert!(e.to_string().contains("disk full"));
+        assert_eq!(std::fs::read(&f).unwrap(), b"old");
+        let e = write_durable_with(&f, Access::KeepExisting, ".tmp", |w| {
+            w.write_all(b"half")?;
+            Err(std::io::Error::other("disk full"))
+        })
+        .unwrap_err();
+        assert!(e.to_string().contains("disk full"));
+        assert_eq!(std::fs::read(&f).unwrap(), b"old");
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn open_regular_checks_kind_size_and_growth() {
+        use std::io::{Read, Seek, SeekFrom};
+        let dir = temp_dir("open");
+        let f = dir.join("a.kad");
+        std::fs::write(&f, b"0123456789").unwrap();
+        let mut r = open_regular(&f, 10).unwrap();
+        let mut s = String::new();
+        r.read_to_string(&mut s).unwrap();
+        assert_eq!(s, "0123456789");
+        r.seek(SeekFrom::Start(2)).unwrap();
+        let mut two = [0u8; 2];
+        r.read_exact(&mut two).unwrap();
+        assert_eq!(&two, b"23");
+        let e = open_regular(&f, 9).err().unwrap();
+        assert!(matches!(e, OpenError::TooLarge { len: 10, max: 9 }));
+        assert!(e.to_string().contains("10 bytes") && e.to_string().contains("9 bytes"));
+        assert!(matches!(open_regular(&dir, 10), Err(OpenError::NotRegular)));
+        let e = open_regular(&dir.join("missing"), 10).err().unwrap();
+        assert!(matches!(&e, OpenError::Io(x) if x.kind() == std::io::ErrorKind::NotFound));
+        assert!(!e.to_string().is_empty());
+        assert!(!OpenError::NotRegular.to_string().is_empty());
+        // A file that grew after the check: the read stops with an error.
+        let mut r = open_regular(&f, 10).unwrap();
+        std::fs::write(&f, b"0123456789ABCDEF").unwrap();
+        let e = r.read_to_end(&mut Vec::new()).unwrap_err();
+        assert!(e.to_string().contains("grew"), "{e}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_staged_file_commits_or_vanishes() {
+        let dir = temp_dir("staged");
+        let f = dir.join("s.kad");
+        std::fs::write(&f, "old").unwrap();
+        let staged =
+            stage_durable(&f, Access::KeepExisting, ".st", |w| w.write_all(b"new")).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"old");
+        assert!(dir.join("s.kad.st").exists());
+        drop(staged);
+        assert!(!dir.join("s.kad.st").exists(), "a dropped file is deleted");
+        assert_eq!(std::fs::read(&f).unwrap(), b"old");
+        stage_durable(&f, Access::KeepExisting, ".st", |w| w.write_all(b"new"))
+            .unwrap()
+            .commit()
+            .unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"new");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        // A commit that fails (the target is a folder) deletes the temporary file too.
+        let folder = dir.join("d");
+        std::fs::create_dir(&folder).unwrap();
+        let staged = stage_durable(&folder, Access::Private, ".st", |w| w.write_all(b"x")).unwrap();
+        assert!(staged.commit().is_err());
+        assert!(!dir.join("d.st").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 

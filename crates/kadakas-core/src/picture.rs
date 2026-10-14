@@ -107,7 +107,21 @@ impl Serialize for SharedText {
 
 impl<'de> Deserialize<'de> for SharedText {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        String::deserialize(d).map(SharedText::from)
+        // The text goes from the parser's buffer into the shared text. There is no `String` between.
+        struct TextVisitor;
+        impl serde::de::Visitor<'_> for TextVisitor {
+            type Value = SharedText;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("text")
+            }
+            fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<SharedText, E> {
+                Ok(SharedText::from(text))
+            }
+            fn visit_string<E: serde::de::Error>(self, text: String) -> Result<SharedText, E> {
+                Ok(SharedText::from(text))
+            }
+        }
+        d.deserialize_str(TextVisitor)
     }
 }
 

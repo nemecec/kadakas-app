@@ -10,6 +10,9 @@ use std::time::Duration;
 
 use crate::{RpcError, Session};
 
+/// The default for [`SessionLimits::document_file_bytes`]: 2 GiB.
+pub const DEFAULT_DOCUMENT_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 /// The limits of one session. `Default` gives the limits that Kadakas always had, and no limit
 /// for the number of objects, the memory and the time of a request.
 #[derive(Clone, Debug, PartialEq)]
@@ -22,12 +25,19 @@ pub struct SessionLimits {
     pub max_memory_bytes: u64,
     /// Most bytes that the undo steps may hold. The oldest steps are dropped first.
     pub max_history_bytes: u64,
-    /// Most named versions in the history of the document (REV-01). Past it, the oldest versions
-    /// are folded into the base snapshot. 0 turns versions off.
+    /// Most named versions in the history of the document (REV-01). A version that would go over
+    /// it is refused, and no version is deleted for it. 0 turns versions off.
     pub max_versions: usize,
-    /// Most bytes of the history of versions (an estimate of its JSON). Past it, the oldest
-    /// versions are folded into the base snapshot.
+    /// Most bytes of the history of versions (an estimate of its JSON). Handled like
+    /// `max_versions`.
     pub max_version_bytes: u64,
+    /// Most versions that a file may hold for the session to read its history. A file with more is
+    /// opened with its history kept as it is (read only, and written back with the drawing it
+    /// belongs to); raise the limit and open the file again to read it.
+    pub history_read_versions: usize,
+    /// Most bytes of changes and pictures that a file's history may hold for the session to read
+    /// it (see `history_read_versions`).
+    pub history_read_bytes: u64,
     /// Time budget of one call. A call that takes longer fails with a limit error; if it changed
     /// the document, the change is undone. The check runs after the call, so it does not stop a
     /// long calculation: it keeps its result from the document. `None`: no budget. Native only.
@@ -40,6 +50,9 @@ pub struct SessionLimits {
     pub raster_pixels: u64,
     /// The most text that an import reads, in bytes.
     pub import_text_bytes: u64,
+    /// The largest document file that `file.open` reads, in bytes. The size is checked before the
+    /// file is read.
+    pub document_file_bytes: u64,
     /// Time limit of one script reset.
     pub script_timeout: Duration,
     /// Time limit of one request to a map service.
@@ -63,11 +76,14 @@ impl Default for SessionLimits {
             max_history_bytes: u64::MAX,
             max_versions: 100,
             max_version_bytes: 64 * 1024 * 1024,
+            history_read_versions: kadakas_review::history::HARD_MAX_VERSIONS,
+            history_read_bytes: kadakas_review::history::HARD_MAX_BYTES as u64,
             request_time: None,
             render_side: 2048,
             render_pixels: 4_000_000,
             raster_pixels: 64_000_000,
             import_text_bytes: 256 * 1024 * 1024,
+            document_file_bytes: DEFAULT_DOCUMENT_FILE_BYTES,
             script_timeout: Duration::from_secs(5),
             gis_timeout: Duration::from_secs(20),
             gis_cache_bytes: 256 * 1024 * 1024,
@@ -90,6 +106,7 @@ impl SessionLimits {
             render_pixels: 1_000_000,
             raster_pixels: 8_000_000,
             import_text_bytes: 16 * 1024 * 1024,
+            document_file_bytes: 128 * 1024 * 1024,
             script_timeout: Duration::from_secs(2),
             gis_cache_bytes: 32 * 1024 * 1024,
             picture_bytes: 2 * 1024 * 1024,

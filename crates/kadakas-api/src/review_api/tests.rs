@@ -590,8 +590,7 @@ fn document_get_leaves_the_history_out_and_a_save_writes_the_file_form() {
     let mut w = Session::with_sequential_ids();
     rect(&mut w, 0);
     let one = create(&mut w, "One");
-    let text = crate::files::document_text(&w.document_for_save().unwrap()).unwrap();
-    std::fs::write(&path, &text).unwrap();
+    crate::files::write_document_file(&path, &w.document_for_save().unwrap()).unwrap();
     let read = crate::files::read_document(&path).unwrap();
     assert!(Session::with_document(read).editor.doc().history.is_some());
     let _ = std::fs::remove_dir_all(&dir);
@@ -616,7 +615,10 @@ fn a_history_that_cannot_be_read_stays_as_it_is_and_is_read_only() {
     assert!(!r["notes"].as_array().unwrap().is_empty(), "{r}");
     assert!(r["notes"].to_string().contains("read only"));
     // The history is the file's history, not a repaired one.
-    assert_eq!(t.editor.doc().history.as_ref().unwrap().value(), &original);
+    assert_eq!(
+        &t.editor.doc().history.as_ref().unwrap().to_value(),
+        &original
+    );
     // Reading works on what could be read; the list says what is the matter.
     let l = ok(&mut t, "version.list", json!({}));
     assert_eq!(l["read_only"], true);
@@ -635,7 +637,10 @@ fn a_history_that_cannot_be_read_stays_as_it_is_and_is_read_only() {
         );
         assert!(e.details.as_ref().unwrap()["notes"].is_array());
     }
-    assert_eq!(t.editor.doc().history.as_ref().unwrap().value(), &original);
+    assert_eq!(
+        &t.editor.doc().history.as_ref().unwrap().to_value(),
+        &original
+    );
     // A save writes it back as it is.
     let saved = serde_json::to_value(&*t.document_for_save().unwrap()).unwrap();
     assert_eq!(saved["history"], original);
@@ -665,7 +670,10 @@ fn a_history_that_cannot_be_read_stays_as_it_is_and_is_read_only() {
     // One undo brings the unreadable history back, untouched.
     assert!(t.editor.undo());
     assert!(t.editor.undo());
-    assert_eq!(t.editor.doc().history.as_ref().unwrap().value(), &original);
+    assert_eq!(
+        &t.editor.doc().history.as_ref().unwrap().to_value(),
+        &original
+    );
     assert_eq!(ok(&mut t, "version.list", json!({}))["read_only"], true);
 }
 
@@ -688,7 +696,10 @@ fn a_drawing_that_changed_after_the_versions_were_saved_keeps_the_history_unread
             .contains("changed after the versions"),
         "{r}"
     );
-    assert_eq!(t.editor.doc().history.as_ref().unwrap().value(), &original);
+    assert_eq!(
+        &t.editor.doc().history.as_ref().unwrap().to_value(),
+        &original
+    );
     let l = ok(&mut t, "version.list", json!({}));
     assert_eq!(
         (l["read_only"].clone(), l["count"].clone()),
@@ -710,7 +721,7 @@ fn a_history_of_another_form_is_kept_as_it_is() {
         let mut t = Session::with_sequential_ids();
         let r = ok(&mut t, "document.load", json!({"document": file.clone()}));
         assert!(r["notes"].as_array().unwrap().len() >= 2, "{r}");
-        assert_eq!(t.editor.doc().history.as_ref().unwrap().value(), &bad);
+        assert_eq!(&t.editor.doc().history.as_ref().unwrap().to_value(), &bad);
         assert_eq!(ok(&mut t, "version.list", json!({}))["read_only"], true);
         assert_eq!(
             serde_json::to_value(&*t.document_for_save().unwrap()).unwrap()["history"],

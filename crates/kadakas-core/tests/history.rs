@@ -31,7 +31,7 @@ fn a_file_without_history_loads_and_one_with_history_keeps_it() {
     assert!(Document::from_value(v.clone()).unwrap().history.is_none());
     v["history"] = json!({"format": 1, "versions": []});
     let loaded = Document::from_value(v.clone()).unwrap();
-    assert_eq!(loaded.history.as_ref().unwrap().value(), &v["history"]);
+    assert_eq!(&loaded.history.as_ref().unwrap().to_value(), &v["history"]);
     assert!(loaded.load_notes().is_empty());
     assert_eq!(
         serde_json::to_value(&loaded).unwrap()["history"],
@@ -46,7 +46,7 @@ fn a_history_that_is_not_an_object_is_kept_unchanged_with_a_note() {
         v["history"] = bad.clone();
         let loaded = Document::from_value(v.clone()).unwrap();
         // Nothing is thrown away: the person decides about the versions.
-        assert_eq!(loaded.history.as_ref().unwrap().value(), &bad);
+        assert_eq!(&loaded.history.as_ref().unwrap().to_value(), &bad);
         assert_eq!(loaded.load_notes().len(), 1);
         assert!(loaded.load_notes()[0].contains("read only"));
         assert_eq!(serde_json::to_value(&loaded).unwrap()["history"], bad);

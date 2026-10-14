@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# A test can make the next command panic after its first change (`fault::arm`). Not for release.
+fault-injection = []
+
 [dependencies]
 glam = { version = "0.34.1", features = ["serde"] }
 i_overlay = "9.0.1"

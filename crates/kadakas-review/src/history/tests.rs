@@ -517,6 +517,7 @@ fn with_branch(h: &mut History, from: u64, state: &State) -> u64 {
         via: Some(from),
         delta,
         bytes,
+        json: Memo::default(),
     });
     id
 }

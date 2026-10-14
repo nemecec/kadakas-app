@@ -107,7 +107,7 @@ fn meta_name(id: &str) -> String {
     format!("{id}.meta.json")
 }
 
-use kadakas_sys::fsio::{Access, create_private_dir, write_durable};
+use kadakas_sys::fsio::{Access, create_private_dir, write_durable, write_durable_with};
 
 /// The versions of a session in the folder, oldest first, as (sequence number, path).
 pub(crate) fn list_versions(dir: &Path, id: &str) -> Vec<(u64, PathBuf)> {
@@ -165,12 +165,11 @@ pub enum Over {
 /// Writes one version, its meta file, and rotates. Runs on the writer thread.
 pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Over> {
     create_private_dir(dir)?;
-    let bytes = serde_json::to_vec(&job.doc).map_err(io::Error::other)?;
-    write_durable(
+    write_durable_with(
         &dir.join(version_name(id, seq)),
-        &bytes,
         Access::Private,
         ".tmp",
+        |w| job.doc.write_compact(w),
     )?;
     let secs = now_unix();
     let meta = json!({
@@ -187,17 +186,31 @@ pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Ov
     let Some(path) = &job.over else {
         return Ok(Over::NotAsked);
     };
-    let pretty = serde_json::to_vec_pretty(&job.doc).map_err(io::Error::other)?;
-    // The same lock as `manual_save`: the two writes never run at the same time.
+    // The slow part, the write of the copy, runs outside the lock, so a manual Save never waits
+    // for it. Only the check and the rename run under the lock of `manual_save`: a manual save
+    // that came after the job was made makes the job stale, and the two renames never overlap.
+    if manual_saves(path) != job.manual_seen {
+        return Ok(Over::Stale); // No need to write a copy that is stale already.
+    }
+    let staged = fsio::stage_durable(path, Access::KeepExisting, ".autosave.tmp", |w| {
+        job.doc.write_pretty(w)
+    })?;
+    commit_if_fresh(staged, path, job.manual_seen)
+}
+
+/// The rename of a staged copy, under the lock of `manual_save`: it happens only if no manual
+/// save of the file came after the job was made (`seen`). Otherwise the copy is deleted.
+fn commit_if_fresh(staged: fsio::Staged, path: &Path, seen: u64) -> io::Result<Over> {
     let all = MANUAL_SAVES.lock().unwrap_or_else(|e| e.into_inner());
     let now = all
         .as_ref()
         .and_then(|m| m.get(&file_key(path)).copied())
         .unwrap_or(0);
-    if now != job.manual_seen {
+    if now != seen {
+        // `staged` is dropped here and deletes the temporary file.
         return Ok(Over::Stale);
     }
-    write_durable(path, &pretty, Access::KeepExisting, ".autosave.tmp")?;
+    staged.commit()?;
     drop(all);
     Ok(Over::Written)
 }
@@ -767,5 +780,32 @@ mod tests {
         if let Some(f) = preferences_file() {
             assert_eq!(f.file_name().unwrap(), "preferences.json");
         }
+    }
+
+    #[test]
+    fn a_manual_save_during_the_write_of_the_copy_makes_the_copy_stale() {
+        let dir = temp("late-manual");
+        let target = dir.join("late.kad");
+        std::fs::write(&target, "mine").unwrap();
+        let seen = manual_saves(&target);
+        let staged = fsio::stage_durable(&target, Access::KeepExisting, ".autosave.tmp", |w| {
+            w.write_all(b"copy")
+        })
+        .unwrap();
+        // The manual save comes after the copy was staged and before its rename.
+        manual_save(&target, || std::fs::write(&target, "newer save").unwrap());
+        assert_eq!(commit_if_fresh(staged, &target, seen).unwrap(), Over::Stale);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "newer save");
+        assert!(!dir.join("late.kad.autosave.tmp").exists());
+        let staged = fsio::stage_durable(&target, Access::KeepExisting, ".autosave.tmp", |w| {
+            w.write_all(b"copy")
+        })
+        .unwrap();
+        let seen = manual_saves(&target);
+        assert_eq!(
+            commit_if_fresh(staged, &target, seen).unwrap(),
+            Over::Written
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "copy");
     }
 }

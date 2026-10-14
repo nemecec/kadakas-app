@@ -14,8 +14,12 @@
 //! `max_version_bytes`) stop a save with an error that lists the versions. A history that could
 //! not be read completely is kept as it is and is read only (`version.repair` is the explicit
 //! choice to keep only the readable part). While a file is open, the history in the document is in
-//! the self contained memory form. A save writes the file form: the newest version as a change
-//! from the drawing (see `Session::document_for_save`).
+//! the memory form: the newest version as a change from the anchor (the drawing when the history
+//! was opened or started, which the session keeps), in parts that the undo steps share. A save
+//! writes the file form: the newest version as a change from the drawing (see
+//! `Session::document_for_save`). A history that is kept as it is also gets the way back from the
+//! drawing to the drawing it belongs to (the `base` entry), so that no version is lost when the
+//! drawing is edited and saved.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -25,7 +29,9 @@ use serde_json::{Map, Value, json};
 use kadakas_core::history::HistoryData;
 use kadakas_core::model::Document;
 use kadakas_review::diff::{DEFAULT_LIMIT, DiffOptions, Group, MAX_LIMIT};
-use kadakas_review::history::{AUTHOR_MAX, HARD_MAX_BYTES, LimitInfo, NAME_MAX, NewVersion};
+use kadakas_review::history::{
+    AUTHOR_MAX, LimitInfo, NAME_MAX, NewVersion, ReadCaps, rebase_for_save, written_against,
+};
 use kadakas_review::restore::{self, without_stacking_keys};
 use kadakas_review::{History, Limits, ReviewError, State, VersionInfo};
 
@@ -101,6 +107,10 @@ pub struct ReviewCache {
     /// `kadakas_review::history`): the JSON of a history names its anchor, and the session gives
     /// the state back when it reads the JSON again (after an undo, for example).
     anchors: Vec<(String, Arc<State>)>,
+    /// For a history that is kept as it is: the drawing that the file's history was written
+    /// against (as loaded). A save writes the changes from the current drawing back to it (the
+    /// `base` entry), so that the versions can be rebuilt after the drawing was edited.
+    opaque_base: Option<Arc<State>>,
     /// How often the JSON was parsed, and how often the newest state was rebuilt by replay. Tests
     /// count them.
     pub(crate) parses: u32,
@@ -136,6 +146,14 @@ impl ReviewCache {
 }
 
 impl SessionLimits {
+    /// What a file may hold for its history to be read.
+    pub fn read_caps(&self) -> ReadCaps {
+        ReadCaps {
+            max_versions: self.history_read_versions,
+            max_bytes: usize::try_from(self.history_read_bytes).unwrap_or(usize::MAX),
+        }
+    }
+
     /// The thresholds of the history.
     pub fn version_limits(&self) -> Limits {
         Limits {
@@ -148,14 +166,14 @@ impl SessionLimits {
 /// Checks the history of a document that comes from a file or a peer. It does not change the
 /// history in the file: a history that could not be read completely stays as it is, and every
 /// problem is a load note of the document (the history is then read only). A history in the file
-/// form is read now, while the drawing is as it was saved, and replaced by its self contained
-/// memory form, which has the same versions.
-pub fn vet_document(doc: &mut Document) -> ReviewCache {
+/// form is read now, while the drawing is as it was saved, and the session keeps that drawing as
+/// the anchor of the history in memory.
+pub fn vet_document(doc: &mut Document, caps: ReadCaps) -> ReviewCache {
     let mut cache = ReviewCache::default();
     let Some(data) = doc.history.clone() else {
         return cache;
     };
-    let (history, notes) = read_history(doc, &data, &[]);
+    let (history, notes) = read_history(doc, &data, &[], caps);
     cache.parses += 1;
     // The drawing is the anchor of the history now: the session keeps it, because the drawing
     // changes with the first edit.
@@ -170,6 +188,9 @@ pub fn vet_document(doc: &mut Document) -> ReviewCache {
             "The versions of this file are kept as they are and are read only until you choose to keep only the part that could be read."
                 .into(),
         );
+        // Keep the drawing that the versions belong to, so that a save can write the way back to
+        // it (see `Session::document_for_save`).
+        cache.opaque_base = written_against(data.top(), data.blob_list(), doc);
     }
     cache.keep(&data, Arc::new(history.unwrap_or_default()), notes);
     cache
@@ -180,11 +201,12 @@ fn read_history(
     doc: &Document,
     data: &HistoryData,
     anchors: &[(String, Arc<State>)],
+    caps: ReadCaps,
 ) -> (Option<History>, Vec<String>) {
     if let Some(problem) = data.problem() {
         return (None, vec![problem]);
     }
-    if data.bytes() > HARD_MAX_BYTES * 2 {
+    if data.bytes() > caps.max_bytes.saturating_mul(2) {
         return (
             None,
             vec![format!(
@@ -193,7 +215,7 @@ fn read_history(
             )],
         );
     }
-    let loaded = History::load_with(data.value(), doc, anchors);
+    let loaded = History::load_with_caps(&data.to_value(), doc, anchors, caps);
     (loaded.history, loaded.notes)
 }
 
@@ -238,7 +260,8 @@ fn read(s: &mut Session) -> Arc<History> {
     {
         return c.history.clone();
     }
-    let (history, notes) = read_history(s.editor.doc(), &data, &s.review.anchors);
+    let caps = s.limits.read_caps();
+    let (history, notes) = read_history(s.editor.doc(), &data, &s.review.anchors, caps);
     s.review.parses += 1;
     if let Some(h) = &history {
         s.review.remember(h.anchor_pair());
@@ -299,7 +322,7 @@ fn store(s: &mut Session, h: &History, op: &str, detail: Value) {
         return;
     }
     s.editor
-        .set_history_with(Some(HistoryData::new(h.to_value())), op, Some(detail));
+        .set_history_with(Some(h.to_data()), op, Some(detail));
     if let Some(data) = s.editor.doc().history.clone() {
         s.review.remember(h.anchor_pair());
         s.review.keep(&data, Arc::new(h.clone()), Vec::new());
@@ -318,7 +341,7 @@ impl Session {
         }
         let h = read(self);
         if !notes(self).is_empty() || h.is_empty() {
-            return Ok(Cow::Borrowed(self.editor.doc()));
+            return Ok(self.opaque_for_save());
         }
         let Some(tip) = tip(self, &h)? else {
             return Ok(Cow::Borrowed(self.editor.doc()));
@@ -330,11 +353,33 @@ impl Session {
         Ok(Cow::Owned(out))
     }
 
+    /// The document for a save when the history is kept as it is. If the drawing that the history
+    /// was written against is known, the history gets the changes from the current drawing back
+    /// to it (the `base` entry), so that a reader can rebuild every version after the drawing was
+    /// edited. The versions themselves are not changed.
+    fn opaque_for_save(&mut self) -> Cow<'_, Document> {
+        let (Some(base), Some(data)) = (
+            self.review.opaque_base.clone(),
+            self.editor.doc().history.clone(),
+        ) else {
+            return Cow::Borrowed(self.editor.doc());
+        };
+        let now = State::of(self.editor.doc(), Some(&base));
+        let (entry, blobs) = rebase_for_save(&now, &base);
+        if entry.is_none() && data.top().get("base").is_none() {
+            return Cow::Borrowed(self.editor.doc());
+        }
+        let mut out = self.editor.doc().clone();
+        now.stamp_keys(&mut out);
+        out.history = Some(data.with_entry("base", entry, blobs));
+        Cow::Owned(out)
+    }
+
     /// Puts a loaded document into the editor of this session, with its history checked (see
     /// `vet_document`), without the other changes that `replace_document` makes. For a host that
     /// starts a session with a file.
     pub fn adopt_document(&mut self, mut doc: Document) {
-        let cache = vet_document(&mut doc);
+        let cache = vet_document(&mut doc, self.limits.read_caps());
         self.load_notes = doc.load_notes().to_vec();
         self.editor = kadakas_core::command::Editor::new(doc);
         self.review = cache;
@@ -566,7 +611,7 @@ fn restore_version(s: &mut Session, m: &Map<String, Value>) -> Result<Value, Rpc
         .editor
         .restore_content_with(
             &r.doc,
-            Some(HistoryData::new(r.history.to_value())),
+            Some(r.history.to_data()),
             "version_restore",
             Some(detail),
         )
@@ -626,11 +671,8 @@ fn repair(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             .set_history_with(None, "version_repair", Some(detail));
         s.review.forget();
     } else {
-        s.editor.set_history_with(
-            Some(HistoryData::new(h.to_value())),
-            "version_repair",
-            Some(detail),
-        );
+        s.editor
+            .set_history_with(Some(h.to_data()), "version_repair", Some(detail));
         if let Some(data) = s.editor.doc().history.clone() {
             s.review.remember(h.anchor_pair());
             s.review.keep(&data, h.clone(), Vec::new());
@@ -722,6 +764,12 @@ mod tests;
 
 #[cfg(test)]
 mod cache_tests;
+
+#[cfg(test)]
+mod opaque_tests;
+
+#[cfg(test)]
+mod memory_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod props;

@@ -11,14 +11,64 @@
 //! ```
 //!
 //! `KADAKAS_BENCH_OBJECTS` and `KADAKAS_BENCH_VERSIONS` (comma separated) choose other sizes.
-//! Memory is the resident size of the process (`ps`), sampled after each step, so it is the peak
-//! of the samples; the process keeps what earlier rows freed, so read it as an upper bound.
+//! Memory is counted two ways. "heap peak" is the most that the program held on the heap since
+//! the row started, and "heap +ver." is what the versions added to the heap (after the last
+//! `version.create`, minus the heap before the first one): both come from a counting allocator
+//! and are exact. "rss peak" is the resident size of the process (`ps`), sampled after each step;
+//! the process keeps what earlier rows freed, so read it as an upper bound.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use kadakas_api::Session;
 use kadakas_core::model::{Document, Object, ObjectId, Shape};
 use serde_json::{Value, json};
+
+/// Counts the bytes that the program holds on the heap now and at most, so that a row can say how
+/// much memory the versions cost, without the noise of the resident size.
+struct Counting;
+
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+static PEAK: AtomicUsize = AtomicUsize::new(0);
+
+// SAFETY: every call goes to the system allocator unchanged. Only counters are added.
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let p = unsafe { System.alloc(layout) };
+        if !p.is_null() {
+            let now = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
+            PEAK.fetch_max(now, Ordering::Relaxed);
+        }
+        p
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) };
+        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let p = unsafe { System.realloc(ptr, layout, new_size) };
+        if !p.is_null() {
+            if new_size >= layout.size() {
+                let now = LIVE.fetch_add(new_size - layout.size(), Ordering::Relaxed)
+                    + (new_size - layout.size());
+                PEAK.fetch_max(now, Ordering::Relaxed);
+            } else {
+                LIVE.fetch_sub(layout.size() - new_size, Ordering::Relaxed);
+            }
+        }
+        p
+    }
+}
+
+#[global_allocator]
+static ALLOC: Counting = Counting;
+
+fn live() -> u64 {
+    LIVE.load(Ordering::Relaxed) as u64
+}
 
 fn call(s: &mut Session, m: &str, p: Value) -> Value {
     match s.handle(m, p) {
@@ -85,6 +135,11 @@ struct Row {
     file_bytes_without_history: usize,
     history_bytes: u64,
     peak_rss: u64,
+    /// The heap of the drawing and the session before the first version, and after the last.
+    heap_before: u64,
+    heap_after_create: u64,
+    /// The most heap held since the row started.
+    heap_peak: u64,
     versions_after: usize,
 }
 
@@ -97,6 +152,7 @@ fn measure(objects: usize, versions: usize) -> Row {
         objects,
         ..Row::default()
     };
+    PEAK.store(live() as usize, Ordering::Relaxed);
     let mut s = Session::with_document(drawing(objects));
     let mut limits = s.limits().clone();
     limits.max_versions = 5_000;
@@ -111,6 +167,7 @@ fn measure(objects: usize, versions: usize) -> Row {
         .map(|k| k.0.to_string())
         .collect();
     let mut peak = rss();
+    row.heap_before = live();
     let mut total = 0.0;
     for v in 0..versions {
         // A small edit between versions: three objects move.
@@ -134,6 +191,7 @@ fn measure(objects: usize, versions: usize) -> Row {
         }
     }
     row.create_avg_ms = total / versions as f64;
+    row.heap_after_create = live();
     let list = call(&mut s, "version.list", json!({}));
     row.history_bytes = list["bytes"].as_u64().unwrap_or(0);
     row.versions_after = list["count"].as_u64().unwrap_or(0) as usize;
@@ -147,17 +205,23 @@ fn measure(objects: usize, versions: usize) -> Row {
 
     // Save: the file form, and its size with and without the versions.
     let t = Instant::now();
-    let text = kadakas_api::files::document_text(&s.document_for_save().unwrap()).unwrap();
+    let mut text = Vec::new();
+    s.document_for_save()
+        .unwrap()
+        .write_pretty(&mut text)
+        .unwrap();
     row.save_ms = ms(t);
     row.file_bytes = text.len();
     let mut plain = s.editor.doc().clone();
     plain.history = None;
-    row.file_bytes_without_history = serde_json::to_string_pretty(&plain).unwrap().len();
+    let mut plain_text = Vec::new();
+    plain.write_pretty(&mut plain_text).unwrap();
+    row.file_bytes_without_history = plain_text.len();
     peak = peak.max(rss());
 
     // Open: the drawing first (it never needs the history), then the history.
     let t = Instant::now();
-    let doc = Document::from_json(&text).unwrap();
+    let doc = Document::from_json(std::str::from_utf8(&text).unwrap()).unwrap();
     row.open_ms = ms(t);
     let t = Instant::now();
     let mut opened = Session::with_document(doc);
@@ -177,6 +241,7 @@ fn measure(objects: usize, versions: usize) -> Row {
     row.restore_ms = ms(t);
     peak = peak.max(rss());
     row.peak_rss = peak;
+    row.heap_peak = PEAK.load(Ordering::Relaxed) as u64;
     row
 }
 
@@ -186,7 +251,7 @@ fn mib(b: u64) -> f64 {
 
 fn print_table(rows: &[Row]) {
     println!(
-        "{:>8} {:>8} | {:>10} {:>10} {:>10} {:>10} | {:>9} {:>9} {:>9} | {:>10} {:>10} {:>10} | {:>9}",
+        "{:>8} {:>8} | {:>10} {:>10} {:>10} {:>10} | {:>9} {:>9} {:>9} | {:>10} {:>10} {:>10} | {:>9} {:>9} {:>9}",
         "objects",
         "versions",
         "create avg",
@@ -199,10 +264,12 @@ fn print_table(rows: &[Row]) {
         "file MiB",
         "no hist.",
         "history MiB",
-        "peak MiB"
+        "heap peak",
+        "heap +ver.",
+        "rss peak"
     );
     println!(
-        "{:>8} {:>8} | {:>10} {:>10} {:>10} {:>10} | {:>9} {:>9} {:>9} | {:>10} {:>10} {:>10} | {:>9}",
+        "{:>8} {:>8} | {:>10} {:>10} {:>10} {:>10} | {:>9} {:>9} {:>9} | {:>10} {:>10} {:>10} | {:>9} {:>9} {:>9}",
         "",
         "",
         "ms",
@@ -215,11 +282,13 @@ fn print_table(rows: &[Row]) {
         "",
         "file MiB",
         "(estimate)",
-        ""
+        "MiB",
+        "MiB",
+        "MiB"
     );
     for r in rows {
         println!(
-            "{:>8} {:>8} | {:>10.1} {:>10.1} {:>10.1} {:>10.1} | {:>9.1} {:>9.1} {:>9.1} | {:>10.2} {:>10.2} {:>10.2} | {:>9.0}",
+            "{:>8} {:>8} | {:>10.1} {:>10.1} {:>10.1} {:>10.1} | {:>9.1} {:>9.1} {:>9.1} | {:>10.2} {:>10.2} {:>10.2} | {:>9.0} {:>9.1} {:>9.0}",
             r.objects,
             r.versions_after,
             r.create_avg_ms,
@@ -232,6 +301,8 @@ fn print_table(rows: &[Row]) {
             mib(r.file_bytes as u64),
             mib(r.file_bytes_without_history as u64),
             mib(r.history_bytes),
+            mib(r.heap_peak),
+            mib(r.heap_after_create.saturating_sub(r.heap_before)),
             mib(r.peak_rss),
         );
     }
@@ -278,4 +349,80 @@ fn the_measuring_works_on_a_tiny_table() {
         r.file_bytes_without_history
     );
     print_table(&[r]);
+}
+
+/// The heap that the same edits cost without any version, so that "heap +ver." can be read as
+/// what the versions add on top of the undo steps of the edits.
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn the_cost_of_the_edits_alone() {
+    for objects in sizes("KADAKAS_BENCH_OBJECTS", &[1_000, 10_000]) {
+        let mut s = Session::with_document(drawing(objects));
+        let ids: Vec<String> = s
+            .editor
+            .doc()
+            .objects
+            .keys()
+            .take(50)
+            .map(|k| k.0.to_string())
+            .collect();
+        let before = live();
+        let edits = 1000;
+        for v in 0..edits {
+            let pick: Vec<&String> = (0..3).map(|k| &ids[(v * 3 + k) % ids.len()]).collect();
+            call(
+                &mut s,
+                "execute",
+                json!({"command": {"op": "move_objects", "ids": pick, "delta": [1.0, 0.0]}}),
+            );
+        }
+        println!(
+            "{objects} objects, {edits} edits, no versions: heap +{:.1} MiB",
+            mib(live().saturating_sub(before))
+        );
+    }
+}
+
+/// Where the heap of the versions is: the same run with a version for each edit, and then with
+/// the undo steps dropped. What stays is the history itself (and the caches).
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn where_the_heap_of_the_versions_is() {
+    let objects = sizes("KADAKAS_BENCH_OBJECTS", &[1_000])[0];
+    let versions = sizes("KADAKAS_BENCH_VERSIONS", &[1_000])[0];
+    let mut s = Session::with_document(drawing(objects));
+    let mut limits = s.limits().clone();
+    limits.max_versions = 5_000;
+    limits.max_version_bytes = 4 * 1024 * 1024 * 1024;
+    s.set_limits(limits);
+    let ids: Vec<String> = s
+        .editor
+        .doc()
+        .objects
+        .keys()
+        .take(50)
+        .map(|k| k.0.to_string())
+        .collect();
+    let before = live();
+    for v in 0..versions {
+        let pick: Vec<&String> = (0..3).map(|k| &ids[(v * 3 + k) % ids.len()]).collect();
+        call(
+            &mut s,
+            "execute",
+            json!({"command": {"op": "move_objects", "ids": pick, "delta": [1.0, 0.0]}}),
+        );
+        call(
+            &mut s,
+            "version.create",
+            json!({"name": format!("v{v}"), "now_ms": 1000 + v}),
+        );
+    }
+    let all = live().saturating_sub(before);
+    s.editor.set_history_limit(0);
+    let kept = live().saturating_sub(before);
+    println!(
+        "{objects} objects, {versions} edits with a version each: heap +{:.1} MiB, +{:.1} MiB after the undo steps are dropped",
+        mib(all),
+        mib(kept)
+    );
 }

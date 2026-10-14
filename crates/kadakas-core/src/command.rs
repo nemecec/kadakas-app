@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::change::{self, ChangeLog, ChangeSet, DocumentChanged, IdsByKind, Origin};
+use crate::history::HistoryData;
 use crate::model::*;
 use crate::resource::{Resource, ResourceBody, ResourceId, Resources};
 use crate::uid::Uid;
@@ -591,7 +592,6 @@ struct Meta {
     active_layer: LayerId,
     active_class: ClassId,
     georef: Option<crate::georef::Georeference>,
-    history: Option<crate::history::HistoryData>,
 }
 
 impl Command {
@@ -626,7 +626,6 @@ impl Meta {
             active_layer: doc.active_layer,
             active_class: doc.active_class,
             georef: doc.georef.clone(),
-            history: doc.history.clone(),
         }
     }
 
@@ -638,7 +637,6 @@ impl Meta {
         doc.active_layer = self.active_layer;
         doc.active_class = self.active_class;
         doc.georef = self.georef.clone();
-        doc.history = self.history.clone();
     }
 
     fn is_finite(&self) -> bool {
@@ -669,6 +667,9 @@ pub struct Patch {
     /// Objects that changed in place, as (before, after).
     modified: Vec<(Object, Object)>,
     meta: Option<(Meta, Meta)>,
+    /// The history of versions before and after, if the step changed it. It is apart from `meta`
+    /// so that a new version does not copy the layers, classes and resources into the step.
+    history: Option<(Option<HistoryData>, Option<HistoryData>)>,
     /// A rough size in bytes, for the history limit (see [`Editor::set_history_limit`]).
     bytes: u64,
 }
@@ -724,7 +725,10 @@ impl Patch {
             objects: gone,
             ..Default::default()
         };
-        let mut document = DocumentChanged::default();
+        let mut document = DocumentChanged {
+            history: self.history.is_some(),
+            ..DocumentChanged::default()
+        };
         if let Some((before, after)) = &self.meta {
             let (old, new) = if forward {
                 (before, after)
@@ -751,7 +755,7 @@ impl Patch {
                 active_class: old.active_class != new.active_class,
                 georef: old.georef != new.georef,
                 drawing: old.drawing != new.drawing,
-                history: old.history != new.history,
+                history: self.history.is_some(),
             };
         }
         ChangeSet {
@@ -771,6 +775,7 @@ impl Patch {
             && self.added.is_empty()
             && self.modified.is_empty()
             && self.meta.is_none()
+            && self.history.is_none()
     }
 
     fn apply(&self, doc: &mut Document, forward: bool) {
@@ -797,6 +802,9 @@ impl Patch {
         }
         if let Some((before, after)) = &self.meta {
             if forward { after } else { before }.restore(doc);
+        }
+        if let Some((before, after)) = &self.history {
+            doc.history = if forward { after } else { before }.clone();
         }
     }
 }
@@ -1091,6 +1099,10 @@ impl<'a> Tx<'a> {
                 self.doc.objects.insert(id, o);
                 self.sync_title_block(id);
                 out.created.push(id.0);
+                #[cfg(feature = "fault-injection")]
+                if crate::fault::take() {
+                    panic!("injected fault after the first change");
+                }
             }
             Command::DeleteObjects { ids } => {
                 let ids = unique(ids);
@@ -1603,7 +1615,7 @@ impl<'a> Tx<'a> {
         }
     }
 
-    fn finish(self, meta_before: Meta) -> Patch {
+    fn finish(self, meta_before: Meta, history_before: Option<HistoryData>) -> Patch {
         let doc = &*self.doc;
         let removed: Vec<(usize, Object)> = self
             .removed
@@ -1627,6 +1639,8 @@ impl<'a> Tx<'a> {
             .collect();
         let meta_after = Meta::of(doc);
         let meta = (meta_before != meta_after).then_some((meta_before, meta_after));
+        let history =
+            (history_before != doc.history).then(|| (history_before, doc.history.clone()));
         let objects = |l: &[(usize, Object)]| l.iter().map(|(_, o)| object_bytes(o)).sum::<u64>();
         let bytes = objects(&removed)
             + objects(&added)
@@ -1634,22 +1648,23 @@ impl<'a> Tx<'a> {
                 .iter()
                 .map(|(b, a): &(Object, Object)| object_bytes(b) + object_bytes(a))
                 .sum::<u64>()
-            + meta.as_ref().map_or(0, |(b, a)| {
-                // The history is large and shared (a clone is a pointer). A step counts the
-                // new value once, and only if the step changed it: a layer edit with a 16 MiB
-                // history in the document does not cost 32 MiB of undo budget.
-                let history = if b.history == a.history {
-                    0
-                } else {
-                    a.history.as_ref().map_or(0, |h| h.bytes() as u64)
-                };
-                b.approx_bytes() + a.approx_bytes() + history
+            + meta
+                .as_ref()
+                .map_or(0, |(b, a)| b.approx_bytes() + a.approx_bytes())
+            // The history is large and its parts are shared: a step counts what the new value
+            // holds that the old one does not, and only if the step changed it. A layer edit
+            // with a 16 MiB history in the document does not cost 32 MiB of undo budget, and a
+            // new version costs its own change, not the whole history again.
+            + history.as_ref().map_or(0, |(b, a)| {
+                a.as_ref()
+                    .map_or(0, |h| h.bytes_not_in(b.as_ref()) as u64)
             });
         Patch {
             removed,
             added,
             modified,
             meta,
+            history,
             bytes,
         }
     }
@@ -1850,6 +1865,10 @@ impl Editor {
     }
 
     /// Runs a command as one undo step. On error the document is unchanged.
+    ///
+    /// If the command panics, the changes it made so far are taken back before the panic goes on:
+    /// the document, the revision and the history are what they were. (A program built with
+    /// `panic = "abort"`, such as the web build, never gets here.)
     pub fn execute(&mut self, cmd: &Command) -> Result<Outcome, CommandError> {
         self.check_pictures(cmd)?;
         self.transact(
@@ -1868,10 +1887,23 @@ impl Editor {
         body: impl FnOnce(&mut Tx, &mut Outcome) -> Result<(), CommandError>,
     ) -> Result<Outcome, CommandError> {
         let meta_before = Meta::of(&self.doc);
+        let history_before = self.doc.history.clone();
         let mut tx = Tx::new(&mut self.doc);
         let mut out = Outcome::default();
-        let result = body(&mut tx, &mut out).and_then(|()| tx.check_result());
-        let patch = tx.finish(meta_before);
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            body(&mut tx, &mut out).and_then(|()| tx.check_result())
+        }));
+        let result = match ran {
+            Ok(r) => r,
+            Err(payload) => {
+                // Every change was recorded by `touch` and the lists of the transaction, so the
+                // patch of a failed command undoes it.
+                let patch = tx.finish(meta_before, history_before);
+                patch.apply(&mut self.doc, false);
+                std::panic::resume_unwind(payload);
+            }
+        };
+        let patch = tx.finish(meta_before, history_before);
         let result = result.and_then(|()| match &patch.meta {
             Some((_, after)) if !after.is_finite() => Err(CommandError::Invalid(NOT_FINITE.into())),
             _ => Ok(()),

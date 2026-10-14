@@ -6,8 +6,9 @@
 //! - [`state`]: the document as things with flat properties (the property model of
 //!   `kadakas-props`, which collaboration shares), the operations between two states, and the
 //!   build of a document from a state.
-//! - [`history`]: the version store. One base snapshot and a delta of operations per version,
-//!   caps on the count and the bytes, and a checked load of untrusted JSON.
+//! - [`history`]: the version store. A change from an anchor drawing for the newest version and a
+//!   reverse delta of operations for each older one, thresholds on the count and the bytes (a
+//!   save over one is refused, nothing is dropped), and a checked load of untrusted JSON.
 //! - [`diff`]: the diff between two states, grouped by kind, bounded in work and size.
 //! - [`restore`]: the document and the history for a restore of a version.
 //!

@@ -1,5 +1,4 @@
 use kadakas_core::command::Editor;
-use kadakas_core::history::HistoryData;
 use proptest::prelude::*;
 use serde_json::json;
 
@@ -8,7 +7,7 @@ use crate::testutil::{circle, cmd, editor, new_version, run, steps};
 
 /// Applies a restore to the editor as the API does.
 fn apply(ed: &mut Editor, r: &Restore) {
-    ed.restore_content(&r.doc, Some(HistoryData::new(r.history.to_value())))
+    ed.restore_content(&r.doc, Some(r.history.to_data()))
         .unwrap();
 }
 
@@ -42,10 +41,10 @@ fn restore_saves_the_current_state_first_and_goes_back() {
     apply(&mut ed, &r);
     assert!(same_content(ed.doc(), &at_v1));
     // The history of the document is the new one, in the same undo step.
-    let kept = History::load(ed.doc().history.as_ref().unwrap().value(), ed.doc());
+    let kept = History::load(&ed.doc().history.as_ref().unwrap().to_value(), ed.doc());
     assert_eq!(kept.history.unwrap().len(), 2);
     // Restoring the automatic version brings the work back.
-    let h2 = History::load(ed.doc().history.as_ref().unwrap().value(), ed.doc())
+    let h2 = History::load(&ed.doc().history.as_ref().unwrap().to_value(), ed.doc())
         .history
         .unwrap();
     let r2 = prepare(&h2, ed.doc(), saved, new_version("auto"), Limits::default()).unwrap();
@@ -168,7 +167,7 @@ proptest! {
         let v1 = h.add(ed.doc(), new_version("one"), Limits::default()).unwrap().id;
         let at_v1 = ed.doc().clone();
         run(&mut ed, &second);
-        ed.set_history(Some(HistoryData::new(h.to_value())));
+        ed.set_history(Some(h.to_data()));
         run(&mut ed, &third);
         let before = ed.doc().clone();
         let r = prepare(&h, ed.doc(), v1, new_version("auto"), Limits::default()).unwrap();
@@ -217,7 +216,7 @@ fn restoring_equal_content_changes_nothing_even_with_layers_interleaved() {
     let mut h = History::new();
     h.add(ed.doc(), new_version("one"), Limits::default())
         .unwrap();
-    ed.set_history(Some(HistoryData::new(h.to_value())));
+    ed.set_history(Some(h.to_data()));
     let before = ed.doc().clone();
     let (rev, depth) = (ed.revision(), ed.undo_depth());
     let r = prepare(&h, ed.doc(), 1, new_version("auto"), Limits::default()).unwrap();
@@ -228,7 +227,7 @@ fn restoring_equal_content_changes_nothing_even_with_layers_interleaved() {
         "the interleave of the layers is kept"
     );
     let changed = ed
-        .restore_content(&r.doc, Some(HistoryData::new(r.history.to_value())))
+        .restore_content(&r.doc, Some(r.history.to_data()))
         .unwrap();
     assert!(!changed);
     assert_eq!((ed.revision(), ed.undo_depth()), (rev, depth));

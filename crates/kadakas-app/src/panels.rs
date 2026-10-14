@@ -104,6 +104,8 @@ pub struct MenuExtras<'a> {
 pub enum MenuRequest {
     /// Help > About.
     About,
+    /// Help > Report a Bug..., Request a Feature... and Feedback... (see `feedback_ui`).
+    Feedback(crate::feedback_ui::Open),
     ShowTab(crate::layout::Tab),
     SaveLayoutAs,
     LoadLayout(String),
@@ -175,6 +177,9 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         | Cmd::WindowPanels
         | Cmd::WindowLayouts
         | Cmd::Collaboration
+        | Cmd::ReportBug
+        | Cmd::RequestFeature
+        | Cmd::Feedback
         | Cmd::About => return None,
     })
 }
@@ -381,6 +386,12 @@ fn command_item(
         }
         Cmd::About if ui.button(c.label()).clicked() => {
             extras.requests.push(MenuRequest::About);
+            ui.close();
+        }
+        Cmd::ReportBug | Cmd::RequestFeature | Cmd::Feedback if ui.button(c.label()).clicked() => {
+            extras
+                .requests
+                .push(MenuRequest::Feedback(crate::feedback_ui::Open::of(c)));
             ui.close();
         }
         _ => {}

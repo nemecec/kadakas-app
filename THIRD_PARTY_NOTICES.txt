@@ -7,7 +7,7 @@ named for it. This file is made by scripts/notices.sh (cargo-about). Do not edit
 ================================================================================
 SUMMARY
 ================================================================================
-446 crates: MIT License
+447 crates: MIT License
 43 crates: Apache License 2.0
 19 crates: ISC License
 19 crates: Unicode License v3
@@ -7447,6 +7447,7 @@ Used by:
   - kadakas-collab-ws 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-core 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-crs 0.1.0 (https://github.com/kadakas/kadakas)
+  - kadakas-feedback 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-gis 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-ifc 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-io 0.1.0 (https://github.com/kadakas/kadakas)

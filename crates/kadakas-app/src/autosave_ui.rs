@@ -29,6 +29,8 @@ pub struct AutosaveUi {
     keep_until: Option<u64>,
     /// Save at the next frame, whatever the schedule says (after a recovery).
     force: bool,
+    /// The person asked to report a crash: the number of versions that were recovered.
+    report: Option<usize>,
     /// The browser holds an autosaved copy from an earlier visit.
     #[cfg(target_arch = "wasm32")]
     web_copy: Option<String>,
@@ -51,6 +53,7 @@ impl AutosaveUi {
             #[cfg(not(target_arch = "wasm32"))]
             keep_until: None,
             force: false,
+            report: None,
             #[cfg(target_arch = "wasm32")]
             web_copy: None,
         }
@@ -237,6 +240,16 @@ impl AutosaveUi {
         }
     }
 
+    #[cfg(test)]
+    pub fn request_report_for_test(&mut self, versions: usize) {
+        self.report = Some(versions);
+    }
+
+    /// The number of versions of a crashed session that the person wants to report, once.
+    pub fn take_report_request(&mut self) -> Option<usize> {
+        self.report.take()
+    }
+
     /// True once after the recovery dialog failed: the error shows in the Preferences dialog.
     pub fn take_prefs_request(&mut self) -> bool {
         std::mem::take(&mut self.want_prefs)
@@ -281,6 +294,7 @@ impl AutosaveUi {
         enum Choice {
             Open(usize),
             Discard(usize),
+            Report(usize),
         }
         let mut choice = None;
         egui::Window::new(tr!("autosave-ui-recover-unsaved-work"))
@@ -321,12 +335,19 @@ impl AutosaveUi {
                         if ui.button(tr!("autosave-ui-show-location")).clicked() {
                             let _ = crate::autosave::reveal(c.folder());
                         }
+                        if ui.button(tr!("autosave-ui-report-this-crash")).clicked() {
+                            choice = Some(Choice::Report(i));
+                        }
                     });
                 }
             });
         match choice? {
             Choice::Discard(i) => {
                 self.crashed.remove(i).discard();
+                None
+            }
+            Choice::Report(i) => {
+                self.report = Some(self.crashed[i].versions.len());
                 None
             }
             Choice::Open(i) => {

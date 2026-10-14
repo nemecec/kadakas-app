@@ -22,6 +22,8 @@ pub enum QuickCommand {
     ShowTab(Tab),
     SaveLayout,
     ResetLayout,
+    /// Nothing matched: file a feature request with the search text (`take_request`).
+    RequestFeature,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,6 +96,8 @@ pub fn search(items: &[QuickItem], query: &str, limit: usize) -> Vec<usize> {
 pub struct QuickSearch {
     open: bool,
     query: String,
+    /// The search text of a "Request this feature" choice, until the app takes it.
+    request: String,
     selected: usize,
     focus: bool,
 }
@@ -111,6 +115,16 @@ impl QuickSearch {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    #[cfg(test)]
+    pub fn set_query_for_test(&mut self, q: &str) {
+        self.query = q.to_string();
+    }
+
+    /// The search text of the last "Request this feature" choice.
+    pub fn take_request(&mut self) -> String {
+        std::mem::take(&mut self.request)
     }
 
     #[cfg(test)]
@@ -143,8 +157,12 @@ impl QuickSearch {
         if up && !hits.is_empty() {
             self.selected = (self.selected + hits.len() - 1) % hits.len();
         }
+        let can_request = hits.is_empty() && !self.query.trim().is_empty();
         if enter && let Some(i) = hits.get(self.selected) {
             chosen = Some(items[*i].command);
+        } else if enter && can_request {
+            self.request = self.query.trim().to_string();
+            chosen = Some(QuickCommand::RequestFeature);
         }
         egui::Window::new(tr!("quick-search-quick-search"))
             .id(egui::Id::new("win-quick-search"))
@@ -169,6 +187,20 @@ impl QuickSearch {
                 ui.add_space(4.0);
                 if hits.is_empty() {
                     ui.weak(tr!("quick-search-no-command-matches"));
+                    if can_request
+                        && ui
+                            .selectable_label(
+                                true,
+                                tr!(
+                                    "quick-search-request-this-feature",
+                                    query = self.query.trim()
+                                ),
+                            )
+                            .clicked()
+                    {
+                        self.request = self.query.trim().to_string();
+                        chosen = Some(QuickCommand::RequestFeature);
+                    }
                 }
                 for (row, i) in hits.iter().enumerate() {
                     let it = &items[*i];

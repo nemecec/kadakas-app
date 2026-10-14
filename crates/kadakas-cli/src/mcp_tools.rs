@@ -232,13 +232,14 @@ pub fn domain_of(method: &str) -> Option<&'static Domain> {
 const STREAM_METHODS: &[&str] = &["events.subscribe", "events.unsubscribe"];
 
 /// Every method that the server offers as a tool: the API methods and the file methods of the
-/// CLI, except the ones that need a message stream.
+/// CLI, except the ones that need a message stream and the feedback methods (the `feedback`
+/// tool covers them in both modes).
 pub fn all_methods() -> impl Iterator<Item = (&'static str, &'static str)> {
     METHODS
         .iter()
         .chain(FILE_METHODS.iter())
         .copied()
-        .filter(|(m, _)| !STREAM_METHODS.contains(m))
+        .filter(|(m, _)| !STREAM_METHODS.contains(m) && !m.starts_with("feedback."))
 }
 
 /// The methods of one domain with their descriptions.
@@ -300,7 +301,7 @@ pub fn flat_name(method: &str) -> String {
 pub fn flat_tools() -> Vec<Value> {
     let mut tools: Vec<Value> = METHODS
         .iter()
-        .filter(|(m, _)| !STREAM_METHODS.contains(m))
+        .filter(|(m, _)| !STREAM_METHODS.contains(m) && !m.starts_with("feedback."))
         .map(|(m, d)| json!({"name": flat_name(m), "description": d, "inputSchema": {"type": "object", "additionalProperties": true}}))
         .collect();
     for (m, d) in FILE_METHODS {
@@ -309,9 +310,37 @@ pub fn flat_tools() -> Vec<Value> {
     tools
 }
 
+/// The `feedback` tool (API-47). It is in both modes, right after `describe`, so an agent sees it
+/// before it has a reason to give up on a task.
+pub fn feedback_tool() -> Value {
+    json!({
+        "name": "feedback",
+        "description": "Tell the Kadakas team what is missing or broken. You must call this with kind feature_request when a task needs a feature that Kadakas lacks, and with kind bug when a method fails in a way it must not. Do not work around it silently. Give a short title, and in body what you wanted and what happened. A bug report attaches the failing objects, a picture of the view and the recent calls by default (attach: {excerpt?, screenshot?, calls?, log?: false} removes one; attach: {objects: [id]} or {selection: true} names objects). Attachments stay on this computer until a human approves them (status needs_review); you cannot send them. Texts are scrubbed of paths, tokens and e-mail addresses. Equal reports merge into a counter. action: submit (default), list, get (needs id) or withdraw (needs id).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["submit", "list", "get", "withdraw"], "description": "Default: submit."},
+                "kind": {"type": "string", "enum": ["bug", "feature_request", "question"], "description": "submit: bug, feature_request or question."},
+                "title": {"type": "string", "maxLength": 120, "description": "submit: one short line."},
+                "body": {"type": "string", "maxLength": 4000, "description": "submit: what happened, or what you need."},
+                "wanted": {"type": "string", "maxLength": 2000, "description": "submit: what you wanted to do."},
+                "tried": {"type": "string", "maxLength": 2000, "description": "submit: what you did."},
+                "method": {"type": "string", "description": "submit: the API method. A bug report takes the last failed call if you leave it out."},
+                "error": {"type": "string", "description": "submit: the error text."},
+                "severity": {"type": "string", "enum": ["low", "medium", "high"]},
+                "attach": {"type": "object", "additionalProperties": true, "description": "submit: what to attach. Fields excerpt, screenshot, calls, log (false removes), objects (ids), selection (bool), view (render.png params)."},
+                "id": {"type": "string", "description": "get, withdraw: the report id, for example fb-1."}
+            }
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
+    })
+}
+
 /// The tool listing for `tools/list`.
 pub fn tools(flat: bool) -> Value {
-    json!(if flat { flat_tools() } else { domain_tools() })
+    let mut list = if flat { flat_tools() } else { domain_tools() };
+    list.insert(1.min(list.len()), feedback_tool());
+    json!(list)
 }
 
 /// What a `tools/call` asks for.
@@ -325,8 +354,36 @@ pub enum Call {
     Method(&'static str, Value),
 }
 
+/// The `feedback` tool: `action` picks the method (default: submit); the other arguments are its
+/// params.
+fn resolve_feedback(args: &Value) -> Call {
+    let action = args
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("submit");
+    let method = match action {
+        "submit" => "feedback.submit",
+        "list" => "feedback.list",
+        "get" => "feedback.get",
+        "withdraw" => "feedback.withdraw",
+        other => {
+            return Call::Invalid(format!(
+                "feedback has no action '{other}'. Actions: submit, list, get, withdraw"
+            ));
+        }
+    };
+    let mut params = args.clone();
+    if let Some(o) = params.as_object_mut() {
+        o.remove("action");
+    }
+    Call::Method(method, params)
+}
+
 /// Decides which API method a tool call runs.
 pub fn resolve(flat: bool, name: &str, args: &Value) -> Call {
+    if name == "feedback" {
+        return resolve_feedback(args);
+    }
     if flat {
         return match all_methods().map(|(m, _)| m).find(|m| flat_name(m) == name) {
             Some(m) => Call::Method(m, args.clone()),
@@ -436,6 +493,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_feedback_tool_is_in_both_modes_and_resolves() {
+        for flat in [false, true] {
+            let list = tools(flat);
+            let t = &list.as_array().unwrap()[1];
+            assert_eq!(t["name"], "feedback", "flat={flat}");
+            let d = t["description"].as_str().unwrap();
+            assert!(d.contains("feature_request") && d.contains("bug"));
+            assert!(
+                t["inputSchema"]["properties"]["kind"]["enum"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+                    == 3
+            );
+            // Only one tool of that name, and the methods are not tools of their own.
+            let names: Vec<&str> = list
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(names.iter().filter(|n| **n == "feedback").count(), 1);
+            assert!(!names.contains(&"feedback_submit"));
+        }
+        // The domain listing has no domain for the feedback methods.
+        assert!(domain_tools().iter().all(|t| t["name"] != "feedback"));
+        let args = json!({"kind": "bug", "title": "t"});
+        for flat in [false, true] {
+            assert_eq!(
+                resolve(flat, "feedback", &args),
+                Call::Method("feedback.submit", args.clone())
+            );
+        }
+        assert_eq!(
+            resolve(false, "feedback", &json!({"action": "get", "id": "fb-1"})),
+            Call::Method("feedback.get", json!({"id": "fb-1"}))
+        );
+        assert_eq!(
+            resolve(true, "feedback", &json!({"action": "list"})),
+            Call::Method("feedback.list", json!({}))
+        );
+        assert_eq!(
+            resolve(false, "feedback", &json!({"action": "withdraw", "id": "x"})),
+            Call::Method("feedback.withdraw", json!({"id": "x"}))
+        );
+        assert!(matches!(
+            resolve(false, "feedback", &json!({"action": "approve"})),
+            Call::Invalid(t) if t.contains("no action")
+        ));
+        assert_eq!(
+            resolve(true, "feedback_submit", &json!({})),
+            Call::UnknownTool
+        );
     }
 
     #[test]
