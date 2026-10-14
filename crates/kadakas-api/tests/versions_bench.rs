@@ -187,12 +187,35 @@ fn mib(b: u64) -> f64 {
 fn print_table(rows: &[Row]) {
     println!(
         "{:>8} {:>8} | {:>10} {:>10} {:>10} {:>10} | {:>9} {:>9} {:>9} | {:>10} {:>10} {:>10} | {:>9}",
-        "objects", "versions", "create avg", "create end", "restore", "diff", "save", "open", "history",
-        "file MiB", "no hist.", "history MiB", "peak MiB"
+        "objects",
+        "versions",
+        "create avg",
+        "create end",
+        "restore",
+        "diff",
+        "save",
+        "open",
+        "history",
+        "file MiB",
+        "no hist.",
+        "history MiB",
+        "peak MiB"
     );
     println!(
         "{:>8} {:>8} | {:>10} {:>10} {:>10} {:>10} | {:>9} {:>9} {:>9} | {:>10} {:>10} {:>10} | {:>9}",
-        "", "", "ms", "ms", "ms", "ms", "ms", "ms (drawing)", "ms (read)", "", "file MiB", "(estimate)", ""
+        "",
+        "",
+        "ms",
+        "ms",
+        "ms",
+        "ms",
+        "ms",
+        "ms (drawing)",
+        "ms (read)",
+        "",
+        "file MiB",
+        "(estimate)",
+        ""
     );
     for r in rows {
         println!(

@@ -10,10 +10,6 @@ use super::*;
 use crate::state::APPLIED;
 use crate::testutil::{circle, cmd, editor, new_version};
 
-fn load(v: &Value, doc: &Document) -> Loaded {
-    History::load(v, doc)
-}
-
 /// A document with an underlay whose picture text is about `megabytes` MiB.
 fn editor_with_underlay(megabytes: usize) -> (Editor, ObjectId) {
     let mut ed = editor();

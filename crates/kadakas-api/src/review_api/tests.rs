@@ -590,13 +590,10 @@ fn document_get_leaves_the_history_out_and_a_save_writes_the_file_form() {
     let mut w = Session::with_sequential_ids();
     rect(&mut w, 0);
     let one = create(&mut w, "One");
-    let text = crate::files::document_text(&*w.document_for_save().unwrap()).unwrap();
+    let text = crate::files::document_text(&w.document_for_save().unwrap()).unwrap();
     std::fs::write(&path, &text).unwrap();
     let read = crate::files::read_document(&path).unwrap();
-    assert_eq!(
-        Session::with_document(read).editor.doc().history.is_some(),
-        true
-    );
+    assert!(Session::with_document(read).editor.doc().history.is_some());
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(one, 1);
 }
