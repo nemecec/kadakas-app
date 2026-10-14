@@ -65,11 +65,17 @@ impl PrefsDialog {
                 ui.heading(tr!("prefs-ui-versions"));
                 ui.horizontal(|ui| {
                     ui.label(tr!("prefs-ui-max-versions"));
-                    ui.add(egui::DragValue::new(edit.max_versions).range(1..=1000));
+                    ui.add(
+                        egui::DragValue::new(edit.max_versions)
+                            .range(1..=kadakas_api::VERSIONS_MAX as u32),
+                    );
                 });
                 ui.horizontal(|ui| {
                     ui.label(tr!("prefs-ui-max-version-size"));
-                    ui.add(egui::DragValue::new(edit.max_version_mib).range(1..=256));
+                    ui.add(
+                        egui::DragValue::new(edit.max_version_mib)
+                            .range(1..=(kadakas_api::VERSION_BYTES_MAX / (1024 * 1024)) as u32),
+                    );
                 });
                 ui.small(tr!("prefs-ui-versions-hint"));
                 ui.add_space(6.0);

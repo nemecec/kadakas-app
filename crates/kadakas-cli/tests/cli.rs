@@ -161,6 +161,43 @@ fn mcp_session(args: &[&str], reqs: &[Value], dir: &Path) -> Vec<Value> {
     lines(&out)
 }
 
+/// A save of a version that would go over the limit fails, and the text of the failed tool call
+/// carries the reason and the list of versions, so that an agent can pass it to the person (an MCP
+/// client shows the text only).
+#[test]
+fn mcp_gives_the_reason_and_the_versions_of_a_refused_version() {
+    let dir = temp("mcp-limit");
+    let call = |id: u64, tool: &str, args: Value| {
+        rpc(id, "tools/call", json!({"name": tool, "arguments": args}))
+    };
+    let mut reqs = vec![
+        rpc(1, "initialize", json!({"protocolVersion": "2025-03-26"})),
+        call(
+            2,
+            "document",
+            json!({"method": "execute", "params": {"command": {"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [100, 50]}}}}),
+        ),
+    ];
+    // The default limit is 100 versions.
+    for i in 0..101u64 {
+        reqs.push(call(
+            10 + i,
+            "review",
+            json!({"method": "version.create", "params": {"name": format!("v{i}"), "now_ms": 1}}),
+        ));
+    }
+    let l = mcp_session(&["mcp"], &reqs, &dir);
+    assert_eq!(l[101]["result"]["isError"], false, "the 100th version");
+    let last = &l[102]["result"];
+    assert_eq!(last["isError"], true);
+    let text = last["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("\"reason\":\"version_limit\""), "{text}");
+    assert!(text.contains("\"versions\":["), "{text}");
+    assert!(text.contains("\"v0\""), "the versions are named: {text}");
+    assert!(text.contains("ask_the_person"), "{text}");
+    assert!(text.len() < 12_000, "the facts are capped: {}", text.len());
+}
+
 #[test]
 fn mcp_lists_domain_tools_and_runs_methods() {
     let dir = temp("mcp");

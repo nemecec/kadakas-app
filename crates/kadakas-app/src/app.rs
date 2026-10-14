@@ -149,6 +149,15 @@ pub struct KadakasApp {
 
 /// A name to show to the others: the user name of the operating system. Empty if unknown (the
 /// browser build, or a program without a login name).
+/// The bytes of a save as a file: the document as `Session::document_for_save` writes it (the
+/// versions in the file form against the drawing), never the memory form of the open document.
+/// The web save downloads them.
+#[cfg(any(target_arch = "wasm32", test))]
+fn save_bytes(session: &mut Session) -> Result<Vec<u8>, String> {
+    let doc = session.document_for_save().map_err(|e| e.message)?;
+    serde_json::to_vec_pretty(&*doc).map_err(|e| e.to_string())
+}
+
 fn default_user_name() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -541,7 +550,15 @@ impl KadakasApp {
 
     /// The limits of the versions of a file follow the preferences.
     fn sync_limits(&mut self) {
-        let limits = (self.prefs.max_versions, self.prefs.max_version_mib);
+        // A choice from an older version of the program may be above what a reader reads.
+        let limits = (
+            self.prefs
+                .max_versions
+                .min(kadakas_api::VERSIONS_MAX as u32),
+            self.prefs
+                .max_version_mib
+                .min((kadakas_api::VERSION_BYTES_MAX / (1024 * 1024)) as u32),
+        );
         if self.limits_applied != Some(limits) {
             self.limits_applied = Some(limits);
             let mut l = self.session.limits().clone();
@@ -927,9 +944,9 @@ impl KadakasApp {
             .map_or("drawing.kad".into(), |n| n.to_string_lossy().into_owned());
         // The download takes time: the save holds the document as it is now.
         self.web_save_rev = Some(self.session.editor.revision());
-        match serde_json::to_vec_pretty(self.session.editor.doc()) {
+        match save_bytes(&mut self.session) {
             Ok(bytes) => self.download(&name, bytes, Some(self.web_saved.clone())),
-            Err(e) => self.status = e.to_string(),
+            Err(e) => self.status = e,
         }
     }
 
@@ -2421,11 +2438,10 @@ impl eframe::App for KadakasApp {
             self.session.editor.revision(),
             self.path.as_deref(),
             || {
-                let session = &mut self.session;
-                match session.document_for_save() {
-                    Ok(doc) => doc.into_owned(),
-                    Err(_) => session.editor.doc().clone(),
-                }
+                self.session
+                    .document_for_save()
+                    .map(std::borrow::Cow::into_owned)
+                    .map_err(|e| e.message)
             },
         );
         self.about.show(&ctx);
@@ -2778,6 +2794,48 @@ mod tests {
         let _ = ctx.run_ui(Default::default(), |ui| {
             egui::CentralPanel::no_frame().show(ui, |ui| app.show_dock(ui));
         });
+    }
+
+    #[test]
+    fn the_web_save_writes_the_file_form_that_reads_back_without_notes() {
+        let mut session = kadakas_api::Session::with_sequential_ids();
+        for i in 0..4 {
+            session
+                .handle(
+                    "execute",
+                    serde_json::json!({"command": {"op": "add_object", "shape":
+                        {"kind": "rect", "min": [i * 20, 0], "max": [i * 20 + 10, 10]}}}),
+                )
+                .unwrap();
+            session
+                .handle(
+                    "version.create",
+                    serde_json::json!({"name": format!("v{i}")}),
+                )
+                .unwrap();
+        }
+        // An edit after the last version: the file must still give every version back.
+        session
+            .handle(
+                "execute",
+                serde_json::json!({"command": {"op": "add_object", "shape":
+                    {"kind": "rect", "min": [500, 0], "max": [510, 10]}}}),
+            )
+            .unwrap();
+        let bytes = super::save_bytes(&mut session).unwrap();
+        let doc =
+            kadakas_core::model::Document::from_json(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        let mut reopened = kadakas_api::Session::with_document(doc);
+        assert!(
+            reopened.load_notes().is_empty(),
+            "{:?}",
+            reopened.load_notes()
+        );
+        let list = reopened
+            .handle("version.list", serde_json::json!({}))
+            .unwrap();
+        assert_eq!(list["count"], 4);
+        assert_eq!(list["read_only"], false);
     }
 
     #[test]

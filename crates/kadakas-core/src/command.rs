@@ -793,13 +793,9 @@ impl Patch {
                 }
             }
             remove_at(&mut doc.objects, &self.removed);
-            for (index, o) in &self.added {
-                doc.objects.shift_insert(*index, o.id, o.clone());
-            }
+            insert_at(&mut doc.objects, &self.added);
         } else {
-            for (index, _) in self.added.iter().rev() {
-                doc.objects.shift_remove_index(*index);
-            }
+            remove_at(&mut doc.objects, &self.added);
             insert_at(&mut doc.objects, &self.removed);
             for (before, _) in &self.modified {
                 if let Some(slot) = doc.objects.get_mut(&before.id) {
@@ -816,10 +812,19 @@ impl Patch {
     }
 }
 
+// Counts the calls that move all later entries of the list (`shift_insert`, `shift_remove`): each
+// costs the size of the list, so a restore must make few of them. Tests read it.
+#[cfg(test)]
+thread_local! {
+    static SHIFTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Removes the objects at these (ascending) indices.
 fn remove_at(objects: &mut Objects, items: &[(usize, Object)]) {
     if items.len() <= FEW {
         for (index, _) in items.iter().rev() {
+            #[cfg(test)]
+            SHIFTS.with(|c| c.set(c.get() + 1));
             objects.shift_remove_index(*index);
         }
         return;
@@ -839,6 +844,8 @@ fn remove_at(objects: &mut Objects, items: &[(usize, Object)]) {
 fn insert_at(objects: &mut Objects, items: &[(usize, Object)]) {
     if items.len() <= FEW {
         for (index, o) in items {
+            #[cfg(test)]
+            SHIFTS.with(|c| c.set(c.get() + 1));
             objects.shift_insert(*index, o.id, o.clone());
         }
         return;
@@ -1060,13 +1067,23 @@ impl<'a> Tx<'a> {
             .filter(|id| !keep.contains(id))
             .collect();
         self.remove_objects(remove);
-        for (i, (id, o)) in target.objects.iter().enumerate() {
-            if !keep.contains(id) {
-                self.doc.objects.shift_insert(i, *id, o.clone());
+        // The new list in the order of `target`, made in one pass: the kept objects come from the
+        // old list (they are in the same relative order), the others from `target`.
+        let mut kept: HashMap<ObjectId, Object> =
+            std::mem::take(&mut self.doc.objects).into_iter().collect();
+        let mut objects = Objects::with_capacity(target.objects.len());
+        for (id, o) in &target.objects {
+            if keep.contains(id)
+                && let Some(old) = kept.remove(id)
+            {
+                objects.insert(*id, old);
+            } else {
+                objects.insert(*id, o.clone());
                 self.added.push(*id);
                 self.added_set.insert(*id);
             }
         }
+        self.doc.objects = objects;
         let doc = &mut *self.doc;
         doc.layers = target.layers.clone();
         doc.classes = target.classes.clone();
@@ -2266,6 +2283,52 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
+
+    /// A restore of a big drawing, its undo and its redo move the entries of the list a few times,
+    /// not once for each object (that was quadratic).
+    #[test]
+    fn a_restore_of_many_objects_does_not_shift_the_list_for_each_one() {
+        let mut ed = Editor::with_sequential_ids();
+        for i in 0..3000 {
+            ed.execute(&Command::AddObject {
+                shape: Shape::Circle {
+                    center: DVec2::new(f64::from(i), 0.0),
+                    radius: 1.0,
+                },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
+        }
+        let before = ed.doc().clone();
+        // The target: every second object changed, and the order reversed for the others.
+        let mut target = before.clone();
+        let mut items: Vec<_> = target.objects.drain(..).collect();
+        items.reverse();
+        for (n, (id, mut o)) in items.into_iter().enumerate() {
+            if n % 2 == 0 {
+                o.shape = Shape::Circle {
+                    center: DVec2::new(5.0, f64::from(n as u32)),
+                    radius: 2.0,
+                };
+            }
+            target.objects.insert(id, o);
+        }
+        SHIFTS.with(|c| c.set(0));
+        assert!(ed.restore_content(&target, None).unwrap());
+        assert_eq!(
+            ed.doc().objects.keys().collect::<Vec<_>>(),
+            target.objects.keys().collect::<Vec<_>>()
+        );
+        assert!(ed.doc().objects.values().eq(target.objects.values()));
+        assert!(ed.undo());
+        assert_eq!(ed.doc(), &before);
+        assert!(ed.redo());
+        assert!(ed.doc().objects.values().eq(target.objects.values()));
+        let shifts = SHIFTS.with(std::cell::Cell::get);
+        assert!(shifts <= 3 * FEW, "{shifts} shifts of a list of 3000");
+    }
     use super::*;
 
     fn line(x: f64) -> Command {

@@ -1,0 +1,236 @@
+{
+  "format_version": 3,
+  "layers": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "name": "Layer 1",
+      "kind": "design",
+      "visible": true,
+      "locked": false,
+      "elevation": 0.0,
+      "scale": 100.0,
+      "order": "a0"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000004",
+      "name": "Planting",
+      "kind": "design",
+      "visible": true,
+      "locked": false,
+      "elevation": 0.0,
+      "scale": 100.0,
+      "order": "a1"
+    }
+  ],
+  "classes": [
+    {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "name": "None",
+      "visible": true,
+      "attrs": {
+        "pen": [
+          0,
+          0,
+          0,
+          255
+        ],
+        "fill": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "line_weight": 0.25
+      }
+    }
+  ],
+  "objects": [
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "layer": "00000000-0000-0000-0000-000000000001",
+      "class": "00000000-0000-0000-0000-000000000000",
+      "shape": {
+        "kind": "rect",
+        "min": [
+          50.0,
+          20.0
+        ],
+        "max": [
+          450.0,
+          320.0
+        ]
+      },
+      "attrs": {},
+      "order": "a0"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000005",
+      "layer": "00000000-0000-0000-0000-000000000001",
+      "class": "00000000-0000-0000-0000-000000000000",
+      "shape": {
+        "kind": "line",
+        "a": [
+          0.0,
+          500.0
+        ],
+        "b": [
+          1200.0,
+          500.0
+        ]
+      },
+      "attrs": {},
+      "order": "a2"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000006",
+      "layer": "00000000-0000-0000-0000-000000000001",
+      "class": "00000000-0000-0000-0000-000000000000",
+      "shape": {
+        "kind": "rect",
+        "min": [
+          2000.0,
+          0.0
+        ],
+        "max": [
+          2100.0,
+          100.0
+        ]
+      },
+      "attrs": {},
+      "order": "a3"
+    }
+  ],
+  "active_layer": "00000000-0000-0000-0000-000000000001",
+  "active_class": "00000000-0000-0000-0000-000000000000",
+  "drawing": {
+    "sheets": [],
+    "project": {
+      "name": "",
+      "client": "",
+      "address": "",
+      "drawn_by": "",
+      "date": "",
+      "revision": "",
+      "guid": "1fPm6kRcns6DEKpN8alizm"
+    },
+    "saved_views": [],
+    "presentation": {},
+    "grey": {}
+  },
+  "history": {
+    "blobs": {},
+    "branch": "main",
+    "format": 2,
+    "head": 3,
+    "newest": {
+      "anchor": "f3cfa688f5fa70f09dd8b5d6c06111c4b3fad30f63408db742ab57e64fde65e8",
+      "delta": [
+        {
+          "op": "delete",
+          "target": {
+            "id": "00000000-0000-0000-0000-000000000006",
+            "kind": "object"
+          }
+        }
+      ],
+      "id": 3,
+      "things": "95537d0048e1169302b3584e4caafab89c22d0b1b77df13403a201f13c040d49"
+    },
+    "next_id": 4,
+    "versions": [
+      {
+        "author": "user",
+        "base_revision": 4,
+        "branch": "main",
+        "delta": [
+          {
+            "op": "delete",
+            "target": {
+              "id": "00000000-0000-0000-0000-000000000005",
+              "kind": "object"
+            }
+          },
+          {
+            "op": "delete",
+            "target": {
+              "id": "00000000-0000-0000-0000-000000000004",
+              "kind": "layer"
+            }
+          }
+        ],
+        "id": 1,
+        "name": "Start",
+        "note": "first",
+        "origin": "user",
+        "time_ms": 1700000000000,
+        "via": 2
+      },
+      {
+        "author": "user",
+        "base_revision": 7,
+        "branch": "main",
+        "delta": [
+          {
+            "op": "create",
+            "props": {
+              "class": "00000000-0000-0000-0000-000000000000",
+              "layer": "00000000-0000-0000-0000-000000000001",
+              "order": "a1",
+              "shape": {
+                "center": [
+                  900.0,
+                  400.0
+                ],
+                "kind": "circle",
+                "radius": 150.0
+              }
+            },
+            "target": {
+              "id": "00000000-0000-0000-0000-000000000003",
+              "kind": "object"
+            }
+          },
+          {
+            "op": "set",
+            "prop": "shape",
+            "target": {
+              "id": "00000000-0000-0000-0000-000000000002",
+              "kind": "object"
+            },
+            "value": {
+              "kind": "rect",
+              "max": [
+                400.0,
+                300.0
+              ],
+              "min": [
+                0.0,
+                0.0
+              ]
+            }
+          }
+        ],
+        "id": 2,
+        "name": "Planting layer",
+        "origin": "user",
+        "parents": [
+          1
+        ],
+        "time_ms": 1700000100000,
+        "via": 3
+      },
+      {
+        "author": "user",
+        "base_revision": 10,
+        "branch": "main",
+        "id": 3,
+        "name": "Moved and deleted",
+        "origin": "user",
+        "parents": [
+          2
+        ],
+        "time_ms": 1700000200000
+      }
+    ]
+  }
+}

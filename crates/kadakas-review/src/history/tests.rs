@@ -310,13 +310,33 @@ fn a_file_whose_drawing_changed_cannot_rebuild_the_newest_version() {
         .unwrap()
         .shape
         .translate(kadakas_core::DVec2::new(1.0, 0.0));
+    // The same things, other properties: the versions are rebuilt from the drawing as it is.
     let l = History::load(&value, &saved);
+    assert!(l.notes.is_empty(), "{:?}", l.notes);
+    assert!(
+        l.info.iter().any(|n| n.contains("not exactly the one")),
+        "{:?}",
+        l.info
+    );
+    let kept = l.history.expect("the versions are usable");
+    assert_eq!(kept.len(), 2);
+    assert_eq!(
+        kept.tip_state().unwrap().unwrap(),
+        State::of(&saved, None),
+        "the newest version is the drawing as it is"
+    );
+    // Other things (an object that the other program deleted): no way to rebuild.
+    let mut fewer = saved.clone();
+    let gone = *fewer.objects.keys().next().unwrap();
+    fewer.objects.shift_remove(&gone);
+    let l = History::load(&value, &fewer);
     assert!(l.history.is_none());
     assert!(
-        l.notes[0].contains("changed after the versions"),
+        l.notes[0].contains("does not match the one that the 2 versions"),
         "{:?}",
         l.notes
     );
+    assert!(l.info.is_empty());
     // A file form without an anchor fails the same way.
     let mut no_anchor = value.clone();
     no_anchor["newest"]
@@ -484,7 +504,7 @@ fn too_many_versions_are_not_all_read_and_say_so() {
 fn limits_are_clamped_and_errors_have_texts() {
     let l = limits(usize::MAX, usize::MAX).clamped();
     assert_eq!(l.max_versions, HARD_MAX_VERSIONS);
-    assert_eq!(l.max_bytes, HARD_MAX_BYTES);
+    assert_eq!(l.max_bytes, WRITE_MAX_BYTES);
     assert_eq!(Limits::default().clamped(), Limits::default());
     for e in [
         ReviewError::NotFound(1),

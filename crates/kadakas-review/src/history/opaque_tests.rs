@@ -54,7 +54,7 @@ fn with_base(h: &History, anchor: &Document, edited: &mut Document) -> Value {
     let now = State::of(edited, Some(&written));
     let (entry, blobs) = rebase_for_save(&now, &written);
     now.stamp_keys(edited);
-    data.with_entry("base", entry, blobs).to_value()
+    data.with_entry("base", entry, blobs, &[]).to_value()
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn an_edited_drawing_gets_the_way_back_to_the_drawing_of_the_versions() {
         let now = State::of(&d, Some(&written));
         let (entry, blobs) = rebase_for_save(&now, &written);
         now.stamp_keys(&mut d);
-        (data.with_entry("base", entry, blobs).to_value(), d)
+        (data.with_entry("base", entry, blobs, &[]).to_value(), d)
     };
     let l = History::load(&value2, &edited2);
     assert!(l.notes.is_empty(), "{:?}", l.notes);

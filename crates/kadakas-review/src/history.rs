@@ -32,8 +32,8 @@
 //!
 //! # Pictures
 //!
-//! A big picture (the PNG of an underlay, the file of an image resource) is not stored in the
-//! operations. As in collaboration, the property holds a reference `{"$blob": "<sha256>"}`, and
+//! A big value that collaboration keeps as a blob (the PNG of an underlay, the file of an image
+//! resource, the summaries of a DXF import base) is not stored in the operations. As in collaboration, the property holds a reference `{"$blob": "<sha256>"}`, and
 //! the history keeps a table `blobs` with the text of each picture once, by hash. A move of a
 //! 10 MiB underlay in three versions costs 10 MiB once, not three times. A picture stays while the
 //! newest delta or a delta refers to it (a count of references that is made again after a delete),
@@ -100,8 +100,9 @@
 //! [`HARD_MAX_BYTES`] bytes of operations, checks every operation with the rules of collaboration,
 //! replays the whole chain from the newest version, cuts long texts, gives a repeated ID a new
 //! one, and leaves out a version (and the older ones, which depend on it) whose delta does not
-//! fit. Each repair is a note. A JSON whose `anchor` is the digest of no known drawing (the drawing
-//! was changed by a program that did not update the versions) cannot be read at all.
+//! fit. Each repair is a note. A JSON whose `anchor` is the digest of no known drawing is read
+//! against the drawing as it is if the drawing has the same things (a newer program reads a file in
+//! another way: [`Loaded::info`] says so); with other things it cannot be read at all.
 //!
 //! The result is a *reading* of the file, not a replacement for it. The caller keeps the JSON of
 //! the file as it is, shows the notes, and treats the history as read only while there are notes:
@@ -131,8 +132,16 @@ use crate::state::{ApplyError, State, check_op};
 pub const FORMAT: u64 = 2;
 /// The most versions that [`History::load`] reads.
 pub const HARD_MAX_VERSIONS: usize = 1000;
-/// The most bytes of operations that [`History::load`] reads.
-pub const HARD_MAX_BYTES: usize = 256 * 1024 * 1024;
+/// The most bytes of operations and pictures that [`History::load`] reads (the estimate of
+/// [`History::bytes`], which counts the same things).
+pub const HARD_MAX_BYTES: usize = 512 * 1024 * 1024;
+/// The most bytes that a history may have when a version is saved: the thresholds of [`Limits`]
+/// are cut to it. It is half of what a reader reads, because the JSON text of the history is
+/// bigger than the estimate, and a file within the limits must never open read only.
+pub const WRITE_MAX_BYTES: usize = HARD_MAX_BYTES / 2;
+/// How many times the estimate a reader allows for the size of the JSON text (a guard against a
+/// text that is far bigger than the operations in it).
+pub const JSON_FACTOR: usize = 4;
 
 /// How much a file may hold for [`History::load_with_caps`] to read it. A history over a cap is
 /// not cut: the document opens, the history stays as the file has it, and the load notes say why
@@ -189,7 +198,7 @@ impl Limits {
     pub fn clamped(self) -> Limits {
         Limits {
             max_versions: self.max_versions.min(HARD_MAX_VERSIONS),
-            max_bytes: self.max_bytes.min(HARD_MAX_BYTES),
+            max_bytes: self.max_bytes.min(WRITE_MAX_BYTES),
         }
     }
 }
@@ -410,6 +419,8 @@ pub struct History {
     anchor: Arc<State>,
     /// The digest of the anchor.
     anchor_digest: String,
+    /// The digest of the identities of the things of the anchor (see [`things_digest`]).
+    anchor_things: String,
     /// The operations that turn the anchor into the newest version.
     newest_delta: Vec<Op>,
     /// The JSON of `newest_delta`, one operation each.
@@ -431,7 +442,12 @@ pub struct History {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Loaded {
     pub history: Option<History>,
+    /// What could not be read or was repaired. A history with notes is read only for a host.
     pub notes: Vec<String>,
+    /// What was adjusted without losing a version, so that the history is usable and can be
+    /// changed (a drawing that is not exactly the one the versions were saved with: see the
+    /// module text). A host shows it to the person.
+    pub info: Vec<String>,
 }
 
 /// The result of [`History::add`].
@@ -442,6 +458,18 @@ pub struct Added {
 
 fn cut(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
+}
+
+/// The digest of the identities of the things of a state (their kinds and IDs, not their
+/// properties). The JSON of a history names it next to the digest of its anchor: a drawing that
+/// has the same things but other properties is the same drawing read in another way (see
+/// `tolerant_anchor`).
+pub fn things_digest(state: &State) -> String {
+    let mut text = String::new();
+    for t in state.things_keys() {
+        text.push_str(&format!("{:?}/{}\n", t.kind, t.id));
+    }
+    sha256_hex(text.as_bytes())
 }
 
 /// The digest of a state, as text. The JSON of a history names its anchor by it.
@@ -459,6 +487,7 @@ impl History {
             next_id: 1,
             anchor: Arc::new(State::new()),
             anchor_digest: anchor_digest(&State::new()),
+            anchor_things: things_digest(&State::new()),
             newest_delta: Vec::new(),
             newest_json: OpsJson::default(),
             newest: None,
@@ -501,10 +530,12 @@ impl History {
     }
 
     /// The size of the history in bytes, estimated from its changes, texts and pictures (each
-    /// picture once). The change of the newest version is not counted: a file stores that version
-    /// as a change from the drawing. A picture that the anchor holds is not counted either.
+    /// picture once), the way a reader counts them: the change of every version, the change of the
+    /// newest version from the anchor, and the pictures. A picture that the anchor holds is not
+    /// counted.
     pub fn bytes(&self) -> usize {
         self.versions.iter().map(|v| v.bytes).sum::<usize>()
+            + ops_bytes(&self.newest_delta)
             + self
                 .blobs
                 .iter()
@@ -696,6 +727,7 @@ impl History {
         }
         if let Some(a) = first_anchor {
             next.anchor_digest = anchor_digest(&a);
+            next.anchor_things = things_digest(&a);
             next.anchor = a;
         }
         next.set_newest_delta(next.anchor.diff(&state));
@@ -835,7 +867,10 @@ impl History {
                 } else {
                     v.via = Some(first);
                     v.delta = head_state.diff(s);
+                    let joined = v.delta.clone();
+                    next.take_blobs(&joined, s);
                 }
+                let v = &mut next.versions[k];
                 v.bytes = ops_bytes(&v.delta) + meta_bytes(&v.meta);
                 v.json = Memo::default();
             }
@@ -901,13 +936,129 @@ impl History {
             .filter(|v| ids.contains(&v.id))
             .collect();
         let mut next = self.clone();
-        for v in &gone {
-            if next.index_of(v.id).is_some() {
-                next.remove(v.id)?;
+        if next.is_linear() {
+            next.remove_linear(ids)?;
+        } else {
+            for v in &gone {
+                if next.index_of(v.id).is_some() {
+                    next.remove(v.id)?;
+                }
             }
         }
         *self = next;
         Ok(gone)
+    }
+
+    /// True if every version starts from the one after it in the list (what the loader and `add`
+    /// make), so that one pass from the newest version to the oldest reaches every state.
+    fn is_linear(&self) -> bool {
+        self.newest == self.versions.last().map(|v| v.meta.id)
+            && self
+                .versions
+                .iter()
+                .enumerate()
+                .all(|(k, v)| v.via == self.versions.get(k + 1).map(|n| n.meta.id))
+    }
+
+    /// Deletes several versions with one replay of the chain, from the newest version to the
+    /// oldest. A state is copied only where a run of deleted versions starts, and the delta of the
+    /// kept version after the run is the difference of two states.
+    fn remove_linear(&mut self, ids: &[u64]) -> Result<(), ReviewError> {
+        let gone: HashSet<u64> = ids.iter().copied().collect();
+        let n = self.versions.len();
+        if self.versions.iter().all(|v| gone.contains(&v.meta.id)) {
+            *self = History {
+                next_id: self.next_id,
+                branch: self.branch.clone(),
+                ..History::new()
+            };
+            return Ok(());
+        }
+        // Where each deleted version took its parents from, to give them to the versions that
+        // named it.
+        let first_parent: BTreeMap<u64, Option<u64>> = self
+            .versions
+            .iter()
+            .filter(|v| gone.contains(&v.meta.id))
+            .map(|v| (v.meta.id, v.meta.parents.first().copied()))
+            .collect();
+        let mut state = self.newest_state()?;
+        let mut pending: Option<(u64, State)> = None;
+        let mut top_done = false;
+        let mut new_newest = self.newest;
+        for i in (0..n).rev() {
+            if i + 1 < n {
+                let delta = self.versions[i].delta.clone();
+                state.apply_all(&delta)?;
+            }
+            let id = self.versions[i].meta.id;
+            if gone.contains(&id) {
+                continue;
+            }
+            if !top_done {
+                top_done = true;
+                if i + 1 != n {
+                    // The newest version was deleted: this one is the newest now.
+                    let delta = self.anchor.diff(&state);
+                    self.take_blobs(&delta, &state);
+                    self.set_newest_delta(delta);
+                    new_newest = Some(id);
+                    let v = &mut self.versions[i];
+                    v.via = None;
+                    v.delta.clear();
+                    v.bytes = meta_bytes(&v.meta);
+                    v.json = Memo::default();
+                }
+            } else if let Some((newer, base)) = pending.take() {
+                let delta = base.diff(&state);
+                self.take_blobs(&delta, &state);
+                let v = &mut self.versions[i];
+                v.via = Some(newer);
+                v.bytes = ops_bytes(&delta) + meta_bytes(&v.meta);
+                v.delta = delta;
+                v.json = Memo::default();
+            }
+            if i > 0 && gone.contains(&self.versions[i - 1].meta.id) {
+                pending = Some((id, state.clone()));
+            }
+        }
+        self.versions.retain(|v| !gone.contains(&v.meta.id));
+        self.newest = new_newest;
+        // A name of a deleted version becomes the first parent of that version, and so on.
+        let resolve = |mut p: u64| {
+            let mut guard = 0;
+            while let Some(next) = first_parent.get(&p) {
+                match next {
+                    Some(q) if guard < n => {
+                        p = *q;
+                        guard += 1;
+                    }
+                    _ => return None,
+                }
+            }
+            Some(p)
+        };
+        for v in &mut self.versions {
+            if v.meta.parents.iter().any(|p| gone.contains(p)) {
+                let mut seen = Vec::new();
+                for p in v.meta.parents.iter().filter_map(|p| resolve(*p)) {
+                    if !seen.contains(&p) {
+                        seen.push(p);
+                    }
+                }
+                v.meta.parents = seen;
+                v.json = Memo::default();
+            }
+        }
+        if let Some(h) = self.head
+            && gone.contains(&h)
+        {
+            self.head = resolve(h)
+                .filter(|p| self.index_of(*p).is_some())
+                .or(self.newest);
+        }
+        self.collect_blobs();
+        Ok(())
     }
 
     /// The JSON of each version. A version that did not change since it was last asked for gives
@@ -934,8 +1085,8 @@ impl History {
     }
 
     /// The parts of the JSON that are not versions or pictures.
-    fn top_json(&self, anchor: &str, newest_delta: Option<&[Op]>) -> Value {
-        let mut newest = json!({"id": self.newest, "anchor": anchor});
+    fn top_json(&self, anchor: &str, things: &str, newest_delta: Option<&[Op]>) -> Value {
+        let mut newest = json!({"id": self.newest, "anchor": anchor, "things": things});
         if let Some(d) = newest_delta {
             newest["delta"] = json!(d);
         }
@@ -951,6 +1102,7 @@ impl History {
     fn json_with(
         &self,
         anchor: &str,
+        things: &str,
         newest_delta: &[Op],
         blobs: &BTreeMap<String, Arc<str>>,
     ) -> Value {
@@ -958,7 +1110,7 @@ impl History {
             .iter()
             .map(|(h, t)| (h.clone(), Value::String(t.to_string())))
             .collect();
-        let mut top = self.top_json(anchor, Some(newest_delta));
+        let mut top = self.top_json(anchor, things, Some(newest_delta));
         top["blobs"] = Value::Object(blobs);
         top["versions"] =
             Value::Array(self.versions_json().iter().map(|v| (**v).clone()).collect());
@@ -975,12 +1127,15 @@ impl History {
             .filter(|(h, _)| !self.anchor.blobs().contains_key(*h))
             .map(|(h, t)| (h.clone(), t.clone()))
             .collect();
+        // The anchor lives as long as any value that is written against it: an undo step that
+        // holds the value holds the drawing too.
         HistoryData::from_parts(
-            self.top_json(&self.anchor_digest, None),
+            self.top_json(&self.anchor_digest, &self.anchor_things, None),
             self.versions_json(),
             self.newest_json.0.to_vec(),
             blobs,
         )
+        .with_keepalive(self.anchor.clone())
     }
 
     /// The JSON against the anchor of this history (what the open document holds). The pictures
@@ -992,7 +1147,12 @@ impl History {
             .filter(|(h, _)| !self.anchor.blobs().contains_key(*h))
             .map(|(h, t)| (h.clone(), t.clone()))
             .collect();
-        self.json_with(&self.anchor_digest, &self.newest_delta, &blobs)
+        self.json_with(
+            &self.anchor_digest,
+            &self.anchor_things,
+            &self.newest_delta,
+            &blobs,
+        )
     }
 
     /// The JSON for a file that holds this document: the newest version as a change from the
@@ -1010,7 +1170,10 @@ impl History {
             }
         }
         table.retain(|h, _| !a.blobs().contains_key(h));
-        (self.json_with(&anchor_digest(&a), &delta, &table), a)
+        (
+            self.json_with(&anchor_digest(&a), &things_digest(&a), &delta, &table),
+            a,
+        )
     }
 
     /// Reads the JSON form of a file or a peer. `doc` is the drawing that the file holds, which
@@ -1035,10 +1198,12 @@ impl History {
         caps: ReadCaps,
     ) -> Loaded {
         let mut notes = Vec::new();
-        let history = read(value, doc, known, caps, &mut notes);
+        let mut info = Vec::new();
+        let history = read(value, doc, known, caps, &mut notes, &mut info);
         Loaded {
             history: history.filter(|h| !h.is_empty()),
             notes,
+            info,
         }
     }
 }
@@ -1159,7 +1324,7 @@ fn against_drawing(
     if anchor_digest(&drawing) == digest {
         return Ok(drawing);
     }
-    let changed = "the drawing was changed after the versions were saved (by a program that did not update them), so the newest version cannot be rebuilt";
+    let changed = "the drawing does not match the one that the versions were saved with, so the newest version cannot be rebuilt";
     let Some(base) = base.and_then(Value::as_object) else {
         return Err(changed.into());
     };
@@ -1230,12 +1395,46 @@ pub fn rebase_for_save(now: &State, written: &State) -> (Option<Value>, Vec<(Str
     )
 }
 
+/// The drawing as the anchor when it is not exactly the drawing that a history was written
+/// against. It must have the same things (`things` is the digest the history names): a program
+/// that reads a file in another way changes the properties of things, not which things there
+/// are, while a drawing that was changed by hand or by another program has other things.
+/// The newest change is applied to the drawing as it is, and the operations that do not fit are
+/// left out. Gives the drawing, the operations that fit, and how many did not. `None` if the
+/// things differ, more than a tenth of the operations do not fit, or a picture is missing. The
+/// older versions are checked by the caller: each of their deltas must fit exactly.
+fn tolerant_anchor(
+    doc: &Document,
+    table: &BTreeMap<String, Arc<str>>,
+    ops: &[Op],
+    things: &str,
+) -> Option<(State, Vec<Op>, usize)> {
+    let drawing = State::of(doc, None);
+    // The same objects, layers, classes and resources: only their properties can differ.
+    if things_digest(&drawing) != things {
+        return None;
+    }
+    let mut all = drawing.blobs().clone();
+    all.extend(table.iter().map(|(h, t)| (h.clone(), t.clone())));
+    let mut state = drawing.clone();
+    state.set_blobs(all.clone());
+    let mut applied = Vec::with_capacity(ops.len());
+    for op in ops {
+        if missing_blob(std::slice::from_ref(op), &all).is_none() && state.apply(op).is_ok() {
+            applied.push(op.clone());
+        }
+    }
+    let skipped = ops.len() - applied.len();
+    (skipped * 10 <= ops.len()).then_some((drawing, applied, skipped))
+}
+
 fn read(
     value: &Value,
     doc: &Document,
     known: &[(String, Arc<State>)],
     caps: ReadCaps,
     notes: &mut Vec<String>,
+    info: &mut Vec<String>,
 ) -> Option<History> {
     let drop_all = |notes: &mut Vec<String>, why: String| {
         notes.push(format!("the history of versions cannot be read: {why}"));
@@ -1262,16 +1461,13 @@ fn read(
         return drop_all(notes, "it has no versions".into());
     }
 
-    // The anchor: a known one, or the drawing.
-    let digest = newest.get("anchor").and_then(Value::as_str).unwrap_or("");
-    let anchor: Arc<State> = match known.iter().find(|(d, _)| d == digest) {
-        Some((_, a)) => a.clone(),
-        None => match against_drawing(obj.get("base"), digest, doc, &table, caps.max_bytes) {
-            Ok(a) => Arc::new(a),
-            Err(why) => return drop_all(notes, why),
-        },
-    };
-    let newest_delta = match read_ops(
+    if list.last().is_some_and(|v| {
+        v.get("delta")
+            .is_some_and(|d| d.as_array().is_none_or(|a| !a.is_empty()))
+    }) {
+        notes.push("the newest version has a change of its own in the list of versions, which is not used: its change is in the entry newest".into());
+    }
+    let mut newest_delta = match read_ops(
         newest.get("delta"),
         &mut total,
         caps.max_bytes,
@@ -1279,6 +1475,56 @@ fn read(
     ) {
         Ok(o) => o,
         Err(e) => return drop_all(notes, e),
+    };
+    // The anchor: a known one, or the drawing.
+    let mut digest = newest
+        .get("anchor")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let mut tolerant = false;
+    // The JSON names the things of its anchor too; a name that is wrong is repaired.
+    let mut things_named = true;
+    let anchor: Arc<State> = match known.iter().find(|(d, _)| *d == digest) {
+        Some((_, a)) => a.clone(),
+        None => match against_drawing(obj.get("base"), &digest, doc, &table, caps.max_bytes) {
+            Ok(a) => Arc::new(a),
+            Err(why) => {
+                // The drawing is not exactly the one the versions were saved with. A newer
+                // program reads and repairs a file in ways that the old one did not, so this is
+                // often no more than a changed detail. Try the newest change on the drawing as it
+                // is: the versions are rebuilt from there if the change fits well enough.
+                let n = list.len();
+                let well_formed =
+                    digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit());
+                let things = newest.get("things").and_then(Value::as_str).unwrap_or("");
+                match tolerant_anchor(doc, &table, &newest_delta, things).filter(|_| well_formed) {
+                    Some((drawing, applied, skipped)) => {
+                        info.push(format!(
+                            "the drawing is not exactly the one that the {n} versions were saved with (a newer program may read a file in another way); the versions were rebuilt from the drawing as it is now, and {skipped} of {} details of the newest version did not fit and were left out",
+                            newest_delta.len()
+                        ));
+                        digest = anchor_digest(&drawing);
+                        newest_delta = applied;
+                        tolerant = true;
+                        Arc::new(drawing)
+                    }
+                    None => {
+                        let detail = if obj.get("base").is_some() {
+                            format!(" ({why})")
+                        } else {
+                            String::new()
+                        };
+                        return drop_all(
+                            notes,
+                            format!(
+                                "the drawing does not match the one that the {n} versions were saved with, so they cannot be rebuilt from it{detail}"
+                            ),
+                        );
+                    }
+                }
+            }
+        },
     };
     for (h, t) in anchor.blobs() {
         table.entry(h.clone()).or_insert_with(|| t.clone());
@@ -1294,6 +1540,9 @@ fn read(
     if let Err(e) = state.apply_all(&newest_delta) {
         return drop_all(notes, format!("the newest version does not fit: {e}"));
     }
+
+    things_named &=
+        newest.get("things").and_then(Value::as_str) == Some(things_digest(&anchor).as_str());
 
     // The versions, newest first: each delta turns the state of the newer version into this one.
     if list.len() > caps.max_versions {
@@ -1335,6 +1584,17 @@ fn read(
         }
     }
     kept.reverse();
+    if tolerant && kept.len() < list.len() {
+        // The older versions must fit the drawing exactly, or it is not their drawing.
+        info.clear();
+        return drop_all(
+            notes,
+            format!(
+                "the drawing does not match the one that the {} versions were saved with, so they cannot be rebuilt from it",
+                list.len()
+            ),
+        );
+    }
     if kept.is_empty() {
         return None;
     }
@@ -1346,8 +1606,9 @@ fn read(
             .and_then(Value::as_u64)
             .unwrap_or(1)
             .max(1),
-        anchor,
-        anchor_digest: digest.to_string(),
+        anchor: anchor.clone(),
+        anchor_digest: digest,
+        anchor_things: things_digest(&anchor),
         newest_json: OpsJson(Arc::new(ops_json(&newest_delta, &[], &[]))),
         newest_delta,
         newest: None,
@@ -1356,21 +1617,11 @@ fn read(
         head: obj.get("head").and_then(Value::as_u64),
         blobs: table,
     };
-    let mut repaired = false;
     // A value of the wrong type is replaced by the default, and that is a repair.
-    for (key, ok) in [
-        ("branch", obj.get("branch").is_none_or(|v| v.is_string())),
-        ("next_id", obj.get("next_id").is_none_or(|v| v.is_u64())),
-        (
-            "head",
-            obj.get("head").is_none_or(|v| v.is_null() || v.is_u64()),
-        ),
-    ] {
-        if !ok {
-            let _ = key;
-            repaired = true;
-        }
-    }
+    let mut repaired = !things_named
+        || !(obj.get("branch").is_none_or(|v| v.is_string())
+            && obj.get("next_id").is_none_or(|v| v.is_u64())
+            && obj.get("head").is_none_or(|v| v.is_null() || v.is_u64()));
     if let Some(b) = obj.get("branch").and_then(Value::as_str) {
         let c = cut(b.trim(), BRANCH_MAX);
         if !c.is_empty() {
@@ -1469,3 +1720,6 @@ mod memory_tests;
 
 #[cfg(test)]
 mod opaque_tests;
+
+#[cfg(test)]
+mod limit_tests;

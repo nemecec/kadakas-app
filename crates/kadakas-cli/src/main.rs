@@ -456,13 +456,32 @@ fn instructions(flat: bool) -> String {
     )
 }
 
-/// The text of a failed tool call: the message, and the feedback hint with its draft if the
-/// error has one. An MCP client shows the text only, so the hint must be in it.
+/// The most characters of the facts of an error that go into the text of a failed tool call.
+const FACTS_MAX_CHARS: usize = 8000;
+
+/// The text of a failed tool call: the message, the feedback hint with its draft if the error has
+/// one, and the other facts of the error as compact JSON (the reason, the versions of a refused
+/// save). An MCP client shows the text only, so these must be in it.
 fn error_text(error: &Value) -> String {
     let mut text = error["message"].as_str().unwrap_or("error").to_string();
     let f = &error["data"]["feedback"];
     if let Some(hint) = f["hint"].as_str() {
         text.push_str(&format!("\n{hint} Draft: {}", f["draft"]));
+    }
+    // The facts of the error (the versions of a refused save, the reason) are in the text too: an
+    // MCP client shows the text only. The size is capped.
+    if let Some(data) = error["data"].as_object() {
+        let facts: serde_json::Map<String, Value> = data
+            .iter()
+            .filter(|(k, _)| !["kind", "feedback", "tainted"].contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        if !facts.is_empty() {
+            let json = Value::Object(facts).to_string();
+            let cut: String = json.chars().take(FACTS_MAX_CHARS).collect();
+            let more = if cut.len() < json.len() { "..." } else { "" };
+            text.push_str(&format!("\n{cut}{more}"));
+        }
     }
     text
 }

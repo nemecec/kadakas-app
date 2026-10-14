@@ -42,6 +42,8 @@ pub struct VersionList {
     pub read_only: bool,
     /// What could not be read.
     pub notes: Vec<String>,
+    /// With `read_only`: how many versions `version.repair` would delete. `None`: not known.
+    pub unreadable: Option<usize>,
 }
 
 impl VersionList {
@@ -76,6 +78,9 @@ impl VersionList {
                 .flatten()
                 .filter_map(|n| n.as_str().map(str::to_string))
                 .collect(),
+            unreadable: v["unreadable_versions"]
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok()),
         }
     }
 
@@ -450,6 +455,12 @@ mod tests {
         assert!(l.read_only);
         assert_eq!(l.notes, vec!["a", "b"]);
         assert!(!VersionList::parse(&json!({})).read_only);
+        let l = VersionList::parse(&json!({"read_only": true, "unreadable_versions": 7}));
+        assert_eq!(l.unreadable, Some(7));
+        assert_eq!(
+            VersionList::parse(&json!({"read_only": true})).unreadable,
+            None
+        );
     }
 
     #[test]

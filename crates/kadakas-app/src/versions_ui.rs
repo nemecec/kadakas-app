@@ -374,7 +374,13 @@ impl VersionsUi {
                 }
                 ui.horizontal_wrapped(|ui| {
                     if ui
-                        .add_enabled(ticked, egui::Button::new(tr!("versions-ui-limit-delete")))
+                        .add_enabled(
+                            ticked,
+                            egui::Button::new(tr!(
+                                "versions-ui-limit-delete",
+                                count = info.ticked().len()
+                            )),
+                        )
                         .clicked()
                     {
                         action = Some(0);
@@ -501,10 +507,18 @@ impl VersionsUi {
         for note in &self.list.notes {
             ui.small(note);
         }
+        // The button says how many versions it deletes, when that is known.
+        let button = match self.list.unreadable {
+            Some(n) => tr!("versions-ui-readable-only-count", count = n),
+            None => tr!("versions-ui-readable-only"),
+        };
         if self.confirm == Some(Confirm::Repair) {
-            ui.label(tr!("versions-ui-confirm-repair"));
+            ui.label(match self.list.unreadable {
+                Some(n) => tr!("versions-ui-confirm-repair-count", count = n),
+                None => tr!("versions-ui-confirm-repair"),
+            });
             ui.horizontal(|ui| {
-                if ui.button(tr!("versions-ui-readable-only")).clicked() {
+                if ui.button(&button).clicked() {
                     self.confirm = None;
                     self.repair(session, status);
                 }
@@ -512,7 +526,7 @@ impl VersionsUi {
                     self.confirm = None;
                 }
             });
-        } else if ui.button(tr!("versions-ui-readable-only")).clicked() {
+        } else if ui.button(&button).clicked() {
             self.confirm = Some(Confirm::Repair);
         }
     }

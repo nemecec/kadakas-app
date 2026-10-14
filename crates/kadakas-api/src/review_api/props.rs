@@ -21,27 +21,86 @@ const PLANTER: &str = concat!(
 
 #[derive(Clone, Debug)]
 enum Act {
-    AddRect { x: i32, layer: u8 },
-    AddLayer { n: u8 },
-    AddClass { n: u8 },
-    Delete { i: u8 },
-    Move { i: u8 },
-    Group { i: u8, j: u8 },
-    Ungroup { i: u8 },
-    ToLayer { i: u8, l: u8 },
-    Arrange { i: u8, how: u8 },
-    Resource { n: u8 },
-    Underlay { x: i32, v: u8 },
-    PlantPicture { v: u8 },
-    Site { n: u16 },
-    EditSite { i: u8, k: u16 },
-    Georef { e: u8 },
-    Bed { x: i32 },
-    Place { x: i32 },
-    Params { i: u8, w: u16 },
-    Data { i: u8, v: u8 },
+    AddRect {
+        x: i32,
+        layer: u8,
+    },
+    AddLayer {
+        n: u8,
+    },
+    AddClass {
+        n: u8,
+    },
+    Delete {
+        i: u8,
+    },
+    Move {
+        i: u8,
+    },
+    Group {
+        i: u8,
+        j: u8,
+    },
+    Ungroup {
+        i: u8,
+    },
+    ToLayer {
+        i: u8,
+        l: u8,
+    },
+    Arrange {
+        i: u8,
+        how: u8,
+    },
+    Resource {
+        n: u8,
+    },
+    Underlay {
+        x: i32,
+        v: u8,
+    },
+    PlantPicture {
+        v: u8,
+    },
+    Site {
+        n: u16,
+    },
+    EditSite {
+        i: u8,
+        k: u16,
+    },
+    Georef {
+        e: u8,
+    },
+    Bed {
+        x: i32,
+    },
+    Place {
+        x: i32,
+    },
+    Params {
+        i: u8,
+        w: u16,
+    },
+    Data {
+        i: u8,
+        v: u8,
+    },
+    /// A DXF import: a tag on an object, a source on a layer, and an import base (a big list of
+    /// summaries, which becomes a blob).
+    Import {
+        i: u8,
+        rev: u8,
+        recs: u16,
+    },
     Version,
-    Restore { pick: u8 },
+    Restore {
+        pick: u8,
+    },
+    /// Deletes a version; every other version must keep its exact content.
+    DeleteVersion {
+        pick: u8,
+    },
 }
 
 fn act() -> impl Strategy<Value = Act> {
@@ -65,8 +124,10 @@ fn act() -> impl Strategy<Value = Act> {
         1 => (-500i32..500).prop_map(|x| Act::Place { x }),
         1 => (any::<u8>(), 50u16..200).prop_map(|(i, w)| Act::Params { i, w }),
         1 => (any::<u8>(), 0u8..3).prop_map(|(i, v)| Act::Data { i, v }),
+        2 => (any::<u8>(), 0u8..3, 1u16..400).prop_map(|(i, rev, recs)| Act::Import { i, rev, recs }),
         3 => Just(Act::Version),
         3 => any::<u8>().prop_map(|pick| Act::Restore { pick }),
+        2 => any::<u8>().prop_map(|pick| Act::DeleteVersion { pick }),
     ]
 }
 
@@ -108,6 +169,13 @@ fn layers(s: &Session) -> Vec<String> {
 
 fn pick(v: &[String], i: u8) -> Option<String> {
     (!v.is_empty()).then(|| v[i as usize % v.len()].clone())
+}
+
+/// The content of a version as `version.get` gives it.
+fn version_content(s: &mut Session, id: u64) -> Value {
+    s.handle("version.get", json!({"id": id, "document": true}))
+        .map(|v| v["document"].clone())
+        .unwrap_or(Value::Null)
 }
 
 fn exec(s: &mut Session, cmd: Value) {
@@ -262,6 +330,57 @@ fn run(s: &mut Session, saved: &mut Vec<(u64, Document)>, a: &Act, now: u64) -> 
                 );
             }
         }
+        Act::Import { i, rev, recs } => {
+            let revision = format!("r{rev}");
+            if let Some(id) = pick(&ids(s), *i) {
+                exec(
+                    s,
+                    json!({"op": "set_data", "id": id, "set": {"import": {
+                        "drawing": "guid:{A}", "revision": revision, "handle": format!("{i:X}"),
+                        "kind": "LINE", "hash": "00000000000000ab", "obj": "00000000000000cd"}}}),
+                );
+            }
+            let recs: Vec<Value> = (0..*recs)
+                .map(|n| {
+                    json!({"kind": "LINE", "handle": format!("{n:X}{rev}"), "layer": "Walls",
+                           "text": "t".repeat(300)})
+                })
+                .collect();
+            exec(
+                s,
+                json!({"op": "add_resource", "name": format!("import base {rev}"),
+                    "body": {"type": "import_base", "drawing": "guid:{A}", "revision": revision,
+                             "part": 0, "parts": 1, "recs": recs}}),
+            );
+        }
+        Act::DeleteVersion { pick: p } => {
+            let listed = s.handle("version.list", json!({})).map_err(|e| e.message)?;
+            let live: Vec<u64> = listed["versions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v["id"].as_u64())
+                .collect();
+            if live.is_empty() {
+                return Ok(());
+            }
+            let gone = live[usize::from(*p) % live.len()];
+            let before: Vec<(u64, Value)> = live
+                .iter()
+                .filter(|id| **id != gone)
+                .map(|id| (*id, version_content(s, *id)))
+                .collect();
+            s.handle("version.delete", json!({"id": gone}))
+                .map_err(|e| e.message)?;
+            saved.retain(|(id, _)| *id != gone);
+            // Every other version is exactly what it was.
+            for (id, doc) in before {
+                if version_content(s, id) != doc {
+                    return Err(format!("deleting version {gone} changed version {id}"));
+                }
+            }
+            // And the document is not touched by it.
+        }
         Act::Version => {
             let r = s
                 .handle("version.create", json!({"name": "v", "now_ms": now}))
@@ -354,11 +473,26 @@ proptest! {
                 .unwrap();
             prop_assert_eq!(&d["totals"], &json!({"added": 0, "removed": 0, "changed": 0}));
         }
-        // The file form of the document keeps the versions.
-        let file = serde_json::to_value(&*s.document_for_save().unwrap()).unwrap();
+        // The file form of the document keeps the versions, and each one has the same content
+        // after the file is read again (through the text, as a file is).
+        let contents: Vec<(u64, Value)> = listed["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| {
+                let id = v["id"].as_u64().unwrap();
+                (id, version_content(&mut s, id))
+            })
+            .collect();
+        let mut text = Vec::new();
+        s.document_for_save().unwrap().write_pretty(&mut text).unwrap();
+        let file: Value = serde_json::from_slice(&text).unwrap();
         let mut t = Session::with_sequential_ids();
         let loaded = t.handle("document.load", json!({"document": file})).unwrap();
         prop_assert!(loaded.get("notes").is_none(), "{loaded}");
+        for (id, doc) in &contents {
+            prop_assert_eq!(&version_content(&mut t, *id), doc, "version {} after the reload", id);
+        }
         prop_assert_eq!(
             t.handle("version.list", json!({})).unwrap()["count"].clone(),
             listed["count"].clone()

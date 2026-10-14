@@ -153,15 +153,7 @@ pub fn file_reply(
         Ok(_) => json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}}).to_string(),
         Err(e) => {
             let hint = crate::feedback_api::hint(method, e.kind, &e.message);
-            crate::errors::error_response_with(
-                id,
-                e.code,
-                e.kind,
-                &e.message,
-                hint,
-                s.is_tainted(),
-                e.details.as_ref(),
-            )
+            crate::errors::error_response_with(id, &e, hint, s.is_tainted())
         }
     }
 }

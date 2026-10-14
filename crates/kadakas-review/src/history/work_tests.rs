@@ -228,7 +228,8 @@ fn hostile_file(snapshot: u64, versions: u64) -> Value {
         .collect();
     json!({"format": 2, "next_id": versions + 1, "head": versions,
         "newest": {"id": versions, "delta": ops,
-        "anchor": anchor_digest(&State::of(&Document::default(), None))}, "versions": list})
+        "anchor": anchor_digest(&State::of(&Document::default(), None)),
+        "things": things_digest(&State::of(&Document::default(), None))}, "versions": list})
 }
 
 /// A large newest version and many tiny versions: one pass over the file, nothing is dropped.

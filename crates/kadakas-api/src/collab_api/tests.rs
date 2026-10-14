@@ -259,7 +259,11 @@ fn a_restore_does_not_revive_what_another_user_deleted() {
     call(&mut b, "collab.sync", json!({"now_ms": 2_100}));
     call(&mut a, "collab.sync", json!({"now_ms": 2_100}));
     assert!(!has(&a, &x));
-    call(&mut a, "version.restore", json!({"id": 1, "now_ms": 2}));
+    let r = call(&mut a, "version.restore", json!({"id": 1, "now_ms": 2}));
+    assert!(
+        r["notes"].to_string().contains("deleted by other users"),
+        "a restore that cannot revive an object says so: {r}"
+    );
     for t in [2_200, 2_300, 2_400] {
         call(&mut a, "collab.sync", json!({"now_ms": t}));
         call(&mut b, "collab.sync", json!({"now_ms": t}));

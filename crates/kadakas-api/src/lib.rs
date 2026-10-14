@@ -38,6 +38,7 @@ mod plugin_util;
 mod present_api;
 mod query_api;
 mod review_api;
+pub use review_api::{VERSION_BYTES_MAX, VERSIONS_MAX};
 mod rules_api;
 mod sheets_api;
 mod solid_api;
@@ -206,10 +207,13 @@ pub const METHODS: &[(&str, &str)] = &[
         "document.summary",
         "Layers, classes, object counts and drawing bounds.",
     ),
-    ("document.get", "The full document as JSON."),
+    (
+        "document.get",
+        "The full document as JSON, without its versions (they have their own methods: version.*).",
+    ),
     (
         "document.load",
-        "Replace the document. params: {document}. Clears history. Returns {ok, notes?}; notes lists values that were repaired instead of refusing the document (an invalid 3D look of a site model goes back to its defaults).",
+        "Replace the document. params: {document}. Clears the undo history. If the document has no `history` field (document.get leaves it out), the versions of the current document stay: they are written for the new drawing. A document with a `history` field brings its own versions. Returns {ok, notes?}; notes lists values that were repaired instead of refusing the document (an invalid 3D look of a site model goes back to its defaults) and what could not be read of its versions.",
     ),
     ("objects.list", "Objects. params: {layer?, class?, kind?}."),
     ("objects.get", "One object. params: {id}."),
@@ -1180,10 +1184,13 @@ impl Session {
                     document: Value,
                 }
                 let P { document } = params(p)?;
-                let document = Document::from_value(document).map_err(|e| match e {
+                let mut document = Document::from_value(document).map_err(|e| match e {
                     LoadError::Parse(_) => RpcError::invalid_params(e),
                     e => RpcError::app(e),
                 })?;
+                // `document.get` leaves the versions out: a document without them keeps the
+                // versions of the session.
+                self.keep_versions_for(&mut document)?;
                 self.check_document_fits(&document)?;
                 let notes = self.replace_document(document);
                 if notes.is_empty() {
@@ -1540,15 +1547,7 @@ impl Session {
             Ok(v) => json!({"jsonrpc": "2.0", "id": id, "result": v}).to_string(),
             Err(e) => {
                 let hint = feedback_api::hint(method, e.kind, &e.message);
-                errors::error_response_with(
-                    id,
-                    e.code,
-                    e.kind,
-                    &e.message,
-                    hint,
-                    self.tainted,
-                    e.details.as_ref(),
-                )
+                errors::error_response_with(id, &e, hint, self.tainted)
             }
         })
     }

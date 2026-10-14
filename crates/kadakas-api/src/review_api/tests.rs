@@ -685,15 +685,33 @@ fn a_drawing_that_changed_after_the_versions_were_saved_keeps_the_history_unread
     rect(&mut donor, 20);
     create(&mut donor, "Two");
     let mut file = serde_json::to_value(&*donor.document_for_save().unwrap()).unwrap();
-    // Another program moved an object and left the history alone.
-    file["objects"][0]["shape"]["min"] = json!([1.0, 0.0]);
+    // A property of an object is not what the versions have (a newer program reads a file in
+    // another way): the same things, so the versions are rebuilt from the drawing as it is.
+    let mut moved = file.clone();
+    moved["objects"][0]["shape"]["min"] = json!([1.0, 0.0]);
+    let mut t = Session::with_sequential_ids();
+    let r = ok(&mut t, "document.load", json!({"document": moved}));
+    assert!(
+        r["notes"].to_string().contains("not exactly the one"),
+        "{r}"
+    );
+    let l = ok(&mut t, "version.list", json!({}));
+    assert_eq!(
+        (l["read_only"].clone(), l["count"].clone()),
+        (json!(false), json!(2))
+    );
+    create(&mut t, "after");
+    // Another program deleted an object: other things, no way to rebuild the versions.
+    let mut fewer = file.clone();
+    fewer["objects"].as_array_mut().unwrap().remove(0);
     let original = file["history"].clone();
     let mut t = Session::with_sequential_ids();
+    file = fewer;
     let r = ok(&mut t, "document.load", json!({"document": file}));
     assert!(
         r["notes"]
             .to_string()
-            .contains("changed after the versions"),
+            .contains("does not match the one that the 2 versions"),
         "{r}"
     );
     assert_eq!(
@@ -705,6 +723,7 @@ fn a_drawing_that_changed_after_the_versions_were_saved_keeps_the_history_unread
         (l["read_only"].clone(), l["count"].clone()),
         (json!(true), json!(0))
     );
+    assert_eq!(l["unreadable_versions"], 2, "what a repair would delete");
     // The file is saved with the history as it was.
     let saved = serde_json::to_value(&*t.document_for_save().unwrap()).unwrap();
     assert_eq!(saved["history"], original);

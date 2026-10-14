@@ -161,22 +161,23 @@ pub fn app(e: impl std::fmt::Display) -> RpcError {
 
 /// The JSON text of an error response.
 pub fn error_response(id: Value, code: i64, kind: &str, message: &str) -> String {
-    error_response_with(id, code, kind, message, None, false, None)
+    response(id, code, message, json!({"kind": kind}))
 }
 
-/// Like [`error_response`], with a `feedback` hint in `data` (see `feedback_api::hint`), the mark
-/// that a method panicked in this session, and the facts of `RpcError::details` in `data` next
-/// to `kind` (they never replace `kind`, `feedback` or `tainted`).
+/// The JSON text of the response to a failed call: the `data` has the `kind`, the stable `reason`
+/// (`version_limit`, `history_read_only`, ...), a `feedback` hint (see `feedback_api::hint`), the
+/// mark that a method panicked in this session, and the facts of `RpcError::details` next to
+/// them (the facts never replace `kind`, `reason`, `feedback` or `tainted`).
 pub fn error_response_with(
     id: Value,
-    code: i64,
-    kind: &str,
-    message: &str,
+    e: &RpcError,
     feedback: Option<Value>,
     tainted: bool,
-    details: Option<&Value>,
 ) -> String {
-    let mut data = json!({"kind": kind});
+    let mut data = json!({"kind": e.kind});
+    if let Some(r) = e.reason {
+        data["reason"] = json!(r);
+    }
     if let Some(f) = feedback {
         data["feedback"] = f;
     }
@@ -184,11 +185,15 @@ pub fn error_response_with(
     if tainted {
         data["tainted"] = json!(true);
     }
-    if let (Some(Value::Object(extra)), Some(map)) = (details, data.as_object_mut()) {
+    if let (Some(Value::Object(extra)), Some(map)) = (&e.details, data.as_object_mut()) {
         for (k, v) in extra {
             map.entry(k.clone()).or_insert_with(|| v.clone());
         }
     }
+    response(id, e.code, &e.message, data)
+}
+
+fn response(id: Value, code: i64, message: &str, data: Value) -> String {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message, "data": data}})
         .to_string()
 }

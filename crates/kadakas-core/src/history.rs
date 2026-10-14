@@ -30,7 +30,7 @@ type Blobs = Arc<Vec<(String, Arc<str>)>>;
 /// each text on its own) and the rest of the object. The JSON is the same
 /// as if the history were one `serde_json::Value`: `to_value` makes that value, and the
 /// serialization writes the same text.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HistoryData {
     /// The value without `versions` and `blobs` when those are split off; else the whole value.
     top: Arc<Value>,
@@ -42,6 +42,19 @@ pub struct HistoryData {
     /// A number that is new for each value that is made (a clone keeps it). Caches compare it
     /// instead of the value, which can be tens of megabytes.
     serial: u64,
+    /// Something that the owner of the value wants to live as long as the value (and every clone
+    /// of it, so every undo step that holds it). `kadakas-review` keeps the anchor drawing that
+    /// the JSON is written against in it. It plays no part in equality or in the text.
+    keep: Option<Arc<dyn std::any::Any + Send + Sync>>,
+}
+
+impl std::fmt::Debug for HistoryData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HistoryData")
+            .field("bytes", &self.bytes)
+            .field("serial", &self.serial)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The source of serial numbers (an id allocator, like the editor revision).
@@ -140,6 +153,7 @@ impl HistoryData {
             blobs,
             bytes: 0,
             serial: next_serial(),
+            keep: None,
         };
         h.bytes = json_bytes(&h);
         h
@@ -189,19 +203,32 @@ impl HistoryData {
         &self.top
     }
 
+    /// The same value, which keeps `thing` alive as long as it (and every clone of it) lives.
+    pub fn with_keepalive(mut self, thing: Arc<dyn std::any::Any + Send + Sync>) -> HistoryData {
+        self.keep = Some(thing);
+        self
+    }
+
+    /// How many versions the list has, if it is split off the value (it is an array).
+    pub fn version_count(&self) -> Option<usize> {
+        self.versions.as_ref().map(|v| v.len())
+    }
+
     /// The pictures of the history (empty if `blobs` is not a table of texts).
     pub fn blob_list(&self) -> &[(String, Arc<str>)] {
         self.blobs.as_ref().map_or(&[], |b| b.as_slice())
     }
 
-    /// The same history with the entry `key` of the object set to `value` (removed for `None`)
-    /// and the pictures `add` that the table lacks. The versions and the other pictures are
-    /// shared, not copied. A history that is not an object stays as it is.
+    /// The same history with the entry `key` of the object set to `value` (removed for `None`),
+    /// the pictures `remove` taken out of the table, and the pictures `add` that the table lacks.
+    /// The versions and the other pictures are shared, not copied. A history that is not an
+    /// object stays as it is.
     pub fn with_entry(
         &self,
         key: &str,
         value: Option<Value>,
         add: Vec<(String, Arc<str>)>,
+        remove: &[String],
     ) -> HistoryData {
         let mut top = (*self.top).clone();
         let Value::Object(map) = &mut top else {
@@ -215,10 +242,11 @@ impl HistoryData {
                 map.remove(key);
             }
         }
-        let blobs = if add.is_empty() {
+        let blobs = if add.is_empty() && remove.is_empty() {
             self.blobs.clone()
         } else {
             let mut list = self.blobs.as_deref().cloned().unwrap_or_default();
+            list.retain(|(h, _)| !remove.contains(h));
             for (h, t) in add {
                 if list.iter().all(|(k, _)| *k != h) {
                     list.push((h, t));
@@ -227,12 +255,14 @@ impl HistoryData {
             list.sort_by(|a, b| a.0.cmp(&b.0));
             Some(Arc::new(list))
         };
-        HistoryData::assemble(
+        let mut out = HistoryData::assemble(
             Arc::new(top),
             self.versions.clone(),
             self.newest_delta.clone(),
             blobs,
-        )
+        );
+        out.keep = self.keep.clone();
+        out
     }
 
     /// The size of the JSON text in bytes.
@@ -507,13 +537,20 @@ mod tests {
             "base",
             Some(json!({"anchor": "cd"})),
             vec![("h3".into(), Arc::from("text three"))],
+            &[],
         );
         let v = with.to_value();
         assert_eq!(v["base"]["anchor"], "cd");
         assert_eq!(v["blobs"].as_object().unwrap().len(), 3);
         assert_eq!(v["versions"], big()["versions"]);
         // An existing picture is not added twice.
-        let again = with.with_entry("base", None, vec![("h3".into(), Arc::from("other"))]);
+        let again = with.with_entry(
+            "base",
+            None,
+            vec![("h3".into(), Arc::from("other"))],
+            &["h1".to_string()],
+        );
+        assert!(again.blob_list().iter().all(|(h, _)| h != "h1"));
         assert_eq!(again.to_value()["blobs"]["h3"], "text three");
         assert!(again.to_value().get("base").is_none());
         assert_eq!(again.versions.as_ref().unwrap().len(), 3);
@@ -523,7 +560,7 @@ mod tests {
         ));
         // A value that is not an object has no entries.
         let odd = HistoryData::new(json!([1]));
-        assert_eq!(odd.with_entry("base", Some(json!(1)), vec![]), odd);
+        assert_eq!(odd.with_entry("base", Some(json!(1)), vec![], &[]), odd);
     }
 
     #[test]

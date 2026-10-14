@@ -53,10 +53,11 @@
 
 use kadakas_collab::client::{Client, ClientConfig, ClientEvent, ConnState};
 use kadakas_collab::materialize::{Materialized, Quarantined};
+use kadakas_collab::op::{Kind, Target};
 use kadakas_collab::presence::{PresenceState, Viewport};
 use kadakas_collab::transport::{Endpoint, Link, Reconnector};
 use kadakas_collab::url::CollabUrl;
-use kadakas_core::model::Document;
+use kadakas_core::model::{Document, ObjectId};
 use kadakas_core::uid::Uid;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -229,6 +230,23 @@ pub(crate) fn awaiting_snapshot(s: &Session) -> bool {
                 ConnState::Online | ConnState::Failed => false,
             }
     })
+}
+
+/// How many of these objects another user deleted in the shared document. A restore that brings
+/// them back cannot revive them there (delete wins), and the person is told.
+pub(crate) fn deleted_by_others(s: &Session, ids: impl Iterator<Item = ObjectId>) -> usize {
+    let Some(l) = &s.collab.link else {
+        return 0;
+    };
+    let me = l.client.client_id();
+    ids.filter(|id| {
+        l.client
+            .view()
+            .get(Target::new(Kind::Object, id.0))
+            .and_then(|e| e.deleted_by)
+            .is_some_and(|w| w.client != me)
+    })
+    .count()
 }
 
 pub(crate) fn is_connected(s: &Session) -> bool {
