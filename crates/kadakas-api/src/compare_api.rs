@@ -21,7 +21,9 @@ use serde_json::{Map, Value, json};
 
 use kadakas_core::history::HistoryData;
 use kadakas_core::model::Document;
-use kadakas_review::overlay::{CompareOverlay, CompareStyle, Palette, Status, UnchangedMode};
+use kadakas_review::overlay::{
+    CompareOverlay, CompareStyle, GhostReport, Palette, Status, UnchangedMode,
+};
 use kadakas_review::{History, State};
 
 use crate::errors::bad;
@@ -179,7 +181,11 @@ pub struct CompareCache {
     /// Least recently used first.
     states: Vec<(StateKey, Arc<State>, usize)>,
     overlays: Vec<(OverlayKey, Arc<CompareOverlay>)>,
-    built: Option<(StateKey, Arc<Document>)>,
+    /// Built documents of versions, least recently used first. Two are kept: the old and the new
+    /// side of a step.
+    built: Vec<(StateKey, Arc<Document>)>,
+    /// A copy of the open drawing for the ghosts of a comparison that has it as the old side.
+    live_copy: Option<(u64, Arc<Document>)>,
     /// How many states were made (replayed from the history), and how many came from the cache.
     /// Tests count them.
     pub(crate) state_builds: u32,
@@ -194,17 +200,21 @@ impl CompareCache {
     pub fn approx_bytes(&self) -> u64 {
         let states: usize = self.states.iter().map(|(_, _, b)| *b).sum();
         let overlays: usize = self.overlays.iter().map(|(_, o)| o.bytes()).sum();
-        let doc = self
+        let doc: usize = self
             .built
-            .as_ref()
-            .map_or(0, |(_, d)| crate::limits::document_bytes(d) as usize);
+            .iter()
+            .map(|(_, d)| d)
+            .chain(self.live_copy.iter().map(|(_, d)| d))
+            .map(|d| crate::limits::document_bytes(d) as usize)
+            .sum();
         (states + overlays + doc) as u64
     }
 
     pub fn clear(&mut self) {
         self.states.clear();
         self.overlays.clear();
-        self.built = None;
+        self.built.clear();
+        self.live_copy = None;
     }
 
     pub fn state_count(&self) -> usize {
@@ -220,16 +230,16 @@ impl CompareCache {
         Some(state)
     }
 
-    fn put_state(&mut self, key: StateKey, state: Arc<State>) {
+    fn put_state(&mut self, key: StateKey, state: Arc<State>, cap: usize) {
         let bytes = state.bytes();
-        if bytes > STATE_CACHE_BYTES {
+        if bytes > cap {
             return;
         }
         self.states.retain(|(k, _, _)| *k != key);
         self.states.push((key, state, bytes));
         // Drop the least recently used until the count and the bytes fit.
         while self.states.len() > STATE_CACHE_ENTRIES
-            || self.states.iter().map(|(_, _, b)| *b).sum::<usize>() > STATE_CACHE_BYTES
+            || self.states.iter().map(|(_, _, b)| *b).sum::<usize>() > cap
         {
             self.states.remove(0);
         }
@@ -254,6 +264,15 @@ impl CompareCache {
 }
 
 impl Session {
+    /// The most bytes of states that the cache keeps: [`STATE_CACHE_BYTES`], and under a limit of
+    /// memory a quarter of it, so that the cache never uses the room of the document.
+    fn state_cache_cap(&self) -> usize {
+        match self.limits.max_memory_bytes {
+            u64::MAX => STATE_CACHE_BYTES,
+            m => STATE_CACHE_BYTES.min(usize::try_from(m / 4).unwrap_or(usize::MAX)),
+        }
+    }
+
     fn history_serial(&self) -> u64 {
         self.editor
             .doc()
@@ -289,7 +308,8 @@ impl Session {
         };
         self.compare.state_builds += 1;
         let state = Arc::new(state);
-        self.compare.put_state(key, state.clone());
+        let cap = self.state_cache_cap();
+        self.compare.put_state(key, state.clone(), cap);
         Ok(state)
     }
 
@@ -314,17 +334,18 @@ impl Session {
         Ok(overlay)
     }
 
-    /// The document of a side: the open drawing, or the version built from its state (one such
-    /// document is kept).
+    /// The document of a side: the open drawing, or the version built from its state (the two
+    /// last ones are kept).
     pub fn compare_doc(&mut self, side: Side) -> Result<ShownDoc, RpcError> {
         if side == Side::Current {
             return Ok(ShownDoc::Live);
         }
         let key = self.state_key(side);
-        if let Some((k, d)) = &self.compare.built
-            && *k == key
-        {
-            return Ok(ShownDoc::Built(d.clone()));
+        if let Some(i) = self.compare.built.iter().position(|(k, _)| *k == key) {
+            let entry = self.compare.built.remove(i);
+            let doc = entry.1.clone();
+            self.compare.built.push(entry);
+            return Ok(ShownDoc::Built(doc));
         }
         let state = self.compare_state(side)?;
         let mut doc = state.build(self.editor.doc()).doc;
@@ -332,13 +353,48 @@ impl Session {
         kadakas_review::restore::without_stacking_keys(&mut doc);
         let doc = Arc::new(doc);
         self.compare.doc_builds += 1;
-        self.compare.built = Some((key, doc.clone()));
+        self.compare.built.push((key, doc.clone()));
+        while self.compare.built.len() > 2 {
+            self.compare.built.remove(0);
+        }
         Ok(ShownDoc::Built(doc))
+    }
+
+    /// The document of the old side, for drawing ghosts: it has the resources of that side
+    /// (symbols, styles, materials), so a removed object has its own geometry. `None` if the
+    /// overlay has no ghost to draw. The open drawing is copied once for each revision.
+    pub fn compare_old_doc(
+        &mut self,
+        overlay: &CompareOverlay,
+        from: Side,
+    ) -> Result<Option<Arc<Document>>, RpcError> {
+        if overlay.ghosts().next().is_none() && overlay.previous().next().is_none() {
+            return Ok(None);
+        }
+        Ok(Some(match self.compare_doc(from)? {
+            ShownDoc::Built(d) => d,
+            ShownDoc::Live => {
+                let revision = self.editor.revision();
+                match &self.compare.live_copy {
+                    Some((r, d)) if *r == revision => d.clone(),
+                    _ => {
+                        let d = Arc::new(self.editor.doc().clone());
+                        self.compare.live_copy = Some((revision, d.clone()));
+                        d
+                    }
+                }
+            }
+        }))
     }
 
     /// The facts about a comparison for an answer: the sides, the counts, the legend and what the
     /// picture does not show completely.
-    pub fn compare_info(&mut self, spec: &CompareSpec, overlay: Option<&CompareOverlay>) -> Value {
+    pub fn compare_info(
+        &mut self,
+        spec: &CompareSpec,
+        overlay: Option<&CompareOverlay>,
+        ghosts: Option<GhostReport>,
+    ) -> Value {
         let h = review_api::read(self);
         let mut out = json!({
             "from": review_api::side_ref(&h, &spec.from),
@@ -359,6 +415,13 @@ impl Session {
             out["summary"] = serde_json::to_value(o.summary()).unwrap_or(Value::Null);
             out["notes"] = serde_json::to_value(o.notes()).unwrap_or(Value::Null);
             out["legend"] = legend(&spec.style);
+            // What became of the ghosts of removed objects in this picture.
+            let report = ghosts.unwrap_or(GhostReport {
+                capped: o.omitted_ghosts(),
+                not_drawable: o.unreadable_ghosts(),
+                ..GhostReport::default()
+            });
+            out["ghosts"] = serde_json::to_value(report).unwrap_or(Value::Null);
         }
         out
     }

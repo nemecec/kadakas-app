@@ -22,7 +22,7 @@ use kadakas_core::uid::Uid;
 use kadakas_l10n::tr;
 use kadakas_render::look::Look;
 use kadakas_review::overlay::{
-    CompareOverlay, CompareStyle, Palette, Status, UnchangedMode, ghosts_in, tint_scene,
+    CompareOverlay, CompareStyle, GhostReport, Palette, Status, UnchangedMode, ghosts_in,
 };
 use kadakas_ui_core::compare::{
     ClickAction, CompareForm, HistorySlider, RowFilter, SliderMode, click_action, frame_box,
@@ -68,7 +68,11 @@ struct Shown {
     overlay: Arc<CompareOverlay>,
     /// The document of the new side, when it is not the open drawing.
     doc: Option<Arc<Document>>,
+    /// The document of the old side, for drawing the ghosts (`None`: there is no ghost).
+    old: Option<Arc<Document>>,
     ghosts: Vec<(kadakas_core::model::Object, &'static str)>,
+    /// What became of the ghosts of removed objects in the plan.
+    report: GhostReport,
     diff: DiffView,
     /// The revision of the open drawing, when the pair involves it.
     revision: Option<u64>,
@@ -95,6 +99,10 @@ pub struct CompareUi {
     shown: Option<Shown>,
     /// The comparison is old: the next frame makes it again.
     dirty: bool,
+    /// The style changed: the ghosts and the 3D scene are made again (the overlay stays).
+    style_dirty: bool,
+    /// Gives each 3D scene that is made its own key, so that the GPU uploads it again.
+    scene_serial: u64,
     /// When the drawing was last seen to change (the time of egui), for the quiet time.
     changed_at: Option<f64>,
     error: Option<String>,
@@ -133,6 +141,8 @@ impl Default for CompareUi {
             filter: RowFilter::default(),
             shown: None,
             dirty: false,
+            style_dirty: false,
+            scene_serial: 1 << 40,
             changed_at: None,
             error: None,
             focus: None,
@@ -178,13 +188,68 @@ impl CompareUi {
 
     fn refresh(&mut self, session: &mut Session) {
         self.list_revision = session.editor.revision();
-        self.list = session
+        let list = session
             .handle("version.list", json!({"current": false}))
             .map(|v| VersionList::parse(&v))
             .unwrap_or_default();
+        // An edit of the drawing alone does not make the comparison old, unless it involves the
+        // drawing (the revision check of `update` sees that). A changed list does.
+        if list != self.list {
+            self.dirty = true;
+        }
+        self.list = list;
         self.form.retain(&self.list);
         self.slider.update(&self.list, self.branch.as_deref());
-        self.dirty = true;
+    }
+
+    /// Forgets what is shown, for a new document. The window stays open (if it was), with the
+    /// versions of the new document.
+    pub fn reset(&mut self, session: &mut Session) {
+        self.shown = None;
+        self.form = CompareForm::default();
+        self.slider = HistorySlider::new(Vec::new());
+        self.branch = None;
+        self.focus = None;
+        self.zoom = None;
+        self.scene3d = None;
+        self.prefetch.clear();
+        self.error = None;
+        self.dirty = false;
+        self.style_dirty = false;
+        self.changed_at = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.sheets = SheetsPart::default();
+        }
+        self.list = VersionList::default();
+        if self.open {
+            self.refresh(session);
+        }
+    }
+
+    /// True while the drawing is read only: the plan shows a version, or the 3D view shows a
+    /// compare (`plan`: the plan is shown).
+    pub fn read_only(&self, plan: bool) -> bool {
+        self.shown
+            .as_ref()
+            .filter(|_| self.open && self.show_on_drawing)
+            .is_some_and(|s| s.doc.is_some() || !plan)
+    }
+
+    #[cfg(test)]
+    pub fn close(&mut self) {
+        self.open = false;
+    }
+
+    #[cfg(test)]
+    pub fn show_pair(&mut self, session: &mut Session, from: Side, to: Side) {
+        self.open(session);
+        self.form.from = Some(from);
+        self.form.to = to;
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |u| {
+            self.update(u.ctx(), session);
+        });
     }
 
     /// The pair of sides that the window compares now.
@@ -206,6 +271,8 @@ impl CompareUi {
             overlay: &s.overlay,
             style: &self.style,
             ghosts: &s.ghosts,
+            ghost_doc: s.old.as_deref(),
+            report: s.report,
             focus: self.focus,
         })
     }
@@ -222,7 +289,7 @@ impl CompareUi {
     pub fn set_dark(&mut self, dark: bool) {
         if self.style.dark != dark {
             self.style.dark = dark;
-            self.dirty = true;
+            self.style_dirty = true;
         }
     }
 
@@ -250,24 +317,21 @@ impl CompareUi {
         {
             return Some(scene.clone());
         }
-        let side = if shown.doc.is_some() {
-            session.compare_doc(api_side(shown.pair.1)).ok()?
-        } else {
-            ShownDoc::Live
-        };
-        let scene = session.compare_scene(&side, None);
         let overlay = shown.overlay.clone();
+        let pair = shown.pair;
         let style = self.style;
-        let (tinted, ghosts) = match &side {
-            ShownDoc::Live => tint_scene(&scene, session.editor.doc(), &overlay, &style),
-            ShownDoc::Built(d) => tint_scene(&scene, d, &overlay, &style),
-        };
-        let ghosts: HashSet<ObjectId> = ghosts.into_iter().collect();
+        let t = session
+            .compare_tinted(&overlay, api_side(pair.0), api_side(pair.1), &style)
+            .ok()?;
+        let ghosts: HashSet<ObjectId> = t.ghosts.iter().copied().collect();
         let [r, g, b] = style.color(Status::Removed);
-        let look = Look::ghosted(&tinted, &|id| ghosts.contains(&id), [r, g, b], style.ghost);
+        let look = Look::ghosted(&t.scene, &|id| ghosts.contains(&id), [r, g, b], style.ghost);
+        // Each scene has a key of its own: a change of the palette, the theme or the pair
+        // gives other geometry, which the GPU must upload again.
+        self.scene_serial += 1;
         let made = Arc::new(Compare3d {
-            key: look.layout_key ^ u64::from(tinted.mesh.indices.len() as u32),
-            scene: Arc::new(tinted),
+            key: self.scene_serial,
+            scene: Arc::new(t.scene),
             look: Arc::new(look),
         });
         self.scene3d = Some((key, made.clone()));
@@ -292,6 +356,10 @@ impl CompareUi {
                 ctx.request_repaint_after(std::time::Duration::from_secs_f64(QUIET - (now - t)));
                 return;
             }
+        }
+        if self.style_dirty {
+            self.style_dirty = false;
+            self.restyle(session);
         }
         let want = self.wanted_pair();
         let stale = match (&self.shown, want) {
@@ -325,13 +393,47 @@ impl CompareUi {
         }
     }
 
+    /// Makes the ghosts again for a new style (the overlay stays).
+    fn restyle(&mut self, session: &mut Session) {
+        self.scene3d = None;
+        let style = self.style;
+        let Some(shown) = &mut self.shown else { return };
+        let found = match &shown.doc {
+            Some(d) => ghosts_in(d, shown.old.as_ref().unwrap_or(d), &shown.overlay, &style),
+            None => {
+                let live = session.editor.doc();
+                ghosts_in(
+                    live,
+                    shown.old.as_deref().unwrap_or(live),
+                    &shown.overlay,
+                    &style,
+                )
+            }
+        };
+        shown.ghosts = found.items;
+        shown.report = found.report;
+    }
+
     fn make(&self, session: &mut Session, pair: (Side, Side)) -> Result<Shown, String> {
         let (from, to) = (api_side(pair.0), api_side(pair.1));
         let overlay = session.compare_overlay(from, to).map_err(|e| e.message)?;
         let shown = session.compare_doc(to).map_err(|e| e.message)?;
-        let (doc, ghosts) = match &shown {
-            ShownDoc::Live => (None, ghosts_in(session.editor.doc(), &overlay, &self.style)),
-            ShownDoc::Built(d) => (Some(d.clone()), ghosts_in(d, &overlay, &self.style)),
+        // The old side has the resources that the ghosts need.
+        let old = session
+            .compare_old_doc(&overlay, from)
+            .map_err(|e| e.message)?;
+        let (doc, found) = match &shown {
+            ShownDoc::Live => {
+                let live = session.editor.doc();
+                (
+                    None,
+                    ghosts_in(live, old.as_deref().unwrap_or(live), &overlay, &self.style),
+                )
+            }
+            ShownDoc::Built(d) => (
+                Some(d.clone()),
+                ghosts_in(d, old.as_deref().unwrap_or(d), &overlay, &self.style),
+            ),
         };
         let params = json!({"from": pair.0.to_json(), "to": pair.1.to_json(),
             "kinds": ["objects"], "limit": LIST_LIMIT});
@@ -344,7 +446,9 @@ impl CompareUi {
             pair,
             overlay,
             doc,
-            ghosts,
+            old,
+            ghosts: found.items,
+            report: found.report,
             diff,
             revision: involves_drawing.then(|| session.editor.revision()),
         })
@@ -352,6 +456,20 @@ impl CompareUi {
 
     /// Makes the next pair next to the slider, so that a step is quick.
     fn prefetch_one(&mut self, ctx: &egui::Context, session: &mut Session) {
+        if self.prefetch.is_empty() {
+            return;
+        }
+        // The next steps are made only when the window is idle: no key, no pointer move, no scroll.
+        // Else a drag of the slider would wait for them.
+        let idle = ctx.input(|i| {
+            i.events.is_empty()
+                && !i.pointer.is_moving()
+                && i.smooth_scroll_delta == egui::Vec2::ZERO
+        });
+        if !idle {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+            return;
+        }
         let Some((from, to)) = self.prefetch.pop() else {
             return;
         };
@@ -599,7 +717,7 @@ impl CompareUi {
             ui.checkbox(&mut self.style.show_previous, tr!("compare-ui-previous"));
         });
         if (self.style, self.show_on_drawing) != before {
-            self.dirty = true;
+            self.style_dirty = true;
         }
     }
 
@@ -610,7 +728,7 @@ impl CompareUi {
             ui.label(tr!("compare-ui-no-changes"));
             return;
         }
-        let (diff_exact, notes) = (shown.diff.exact, shown.overlay.notes());
+        let diff_exact = shown.diff.exact;
         // The legend: the swatch, the mark and the count of each status.
         ui.horizontal_wrapped(|ui| {
             for (status, n) in [
@@ -627,11 +745,33 @@ impl CompareUi {
                 ui.label(text);
             }
         });
+        let overlay_exact = self.shown.as_ref().is_some_and(|s| s.overlay.exact());
+        let amber = Color32::from_rgb(200, 120, 0);
         if !diff_exact {
-            ui.colored_label(Color32::from_rgb(200, 120, 0), tr!("compare-ui-partial"));
+            ui.colored_label(amber, tr!("compare-ui-partial"));
         }
-        for note in &notes {
-            ui.small(compare_draw::note_text(note));
+        if !overlay_exact {
+            ui.colored_label(amber, tr!("compare-ui-overlay-partial"));
+        }
+        if diff_exact != overlay_exact {
+            // The list and the overlay have their own work limits.
+            ui.small(tr!("compare-ui-partial-differ"));
+        }
+        if let Some(shown) = &self.shown {
+            let c = CompareDraw {
+                overlay: &shown.overlay,
+                style: &self.style,
+                ghosts: &shown.ghosts,
+                ghost_doc: None,
+                report: shown.report,
+                focus: None,
+            };
+            let partial = tr!("compare-ui-note-partial");
+            for line in compare_draw::legend_notes(&c) {
+                if line != partial {
+                    ui.small(line);
+                }
+            }
         }
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.filter.added, tr!("compare-ui-filter-added"));
@@ -744,14 +884,20 @@ impl CompareUi {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn sheets_section(&mut self, ui: &mut Ui, session: &mut Session) {
-        let sheets: Vec<(LayerId, String)> = session
-            .editor
-            .doc()
-            .layers
-            .iter()
-            .filter(|l| l.kind == LayerKind::Sheet)
-            .map(|l| (l.id, l.name.clone()))
-            .collect();
+        // The sheets of the open drawing and of both sides, each once.
+        let mut sheets: Vec<(LayerId, String)> = Vec::new();
+        let mut add = |doc: &Document| {
+            for l in doc.layers.iter().filter(|l| l.kind == LayerKind::Sheet) {
+                if !sheets.iter().any(|s| s.0 == l.id) {
+                    sheets.push((l.id, l.name.clone()));
+                }
+            }
+        };
+        add(session.editor.doc());
+        if let Some(shown) = &self.shown {
+            shown.doc.iter().for_each(|d| add(d));
+            shown.old.iter().for_each(|d| add(d));
+        }
         egui::CollapsingHeader::new(tr!("compare-ui-sheets"))
             .id_salt("compare-sheets")
             .show(ui, |ui| {
@@ -1051,5 +1197,97 @@ mod tests {
         // Texts exist for the labels.
         assert!(!side_text(&ui.list, Side::Current).is_empty());
         assert!(!compare_draw::note_text(&kadakas_review::overlay::Note::Partial).is_empty());
+    }
+
+    #[test]
+    fn a_new_style_makes_a_new_scene_with_its_own_key_and_a_new_document_resets_the_window() {
+        let (mut s, _) = session();
+        let mut ui = CompareUi::default();
+        let mut status = String::new();
+        ui.show_pair(&mut s, Side::Version(1), Side::Current);
+        let a = ui.scene_3d(&mut s).unwrap();
+        // The same state and style: the same scene, the same key.
+        assert!(Arc::ptr_eq(&a, &ui.scene_3d(&mut s).unwrap()));
+        // Each change gives geometry with a key that no earlier scene had.
+        let mut keys = vec![a.key];
+        for change in 0..3 {
+            match change {
+                0 => ui.style.palette = Palette::ColorBlind,
+                1 => ui.style.dim = 0.5,
+                _ => ui.style.dark = true,
+            }
+            ui.style_dirty = true;
+            frame(&mut ui, &mut s, &mut status);
+            let b = ui.scene_3d(&mut s).unwrap();
+            assert!(!keys.contains(&b.key), "{keys:?} {}", b.key);
+            keys.push(b.key);
+        }
+        // Another pair gives another key too.
+        ui.form.to = Side::Version(2);
+        frame(&mut ui, &mut s, &mut status);
+        let c = ui.scene_3d(&mut s).unwrap();
+        assert!(!keys.contains(&c.key));
+        // An edit of the drawing alone does not make a pair of two versions old.
+        ui.show_pair(&mut s, Side::Version(1), Side::Version(2));
+        ui.dirty = false;
+        rect(&mut s, 40000);
+        ui.refresh(&mut s);
+        assert!(!ui.dirty, "the list of versions is the same");
+        s.handle("version.create", json!({"name": "Three", "now_ms": 3}))
+            .unwrap();
+        ui.refresh(&mut s);
+        assert!(ui.dirty, "a new version changes the list");
+        // A new document: nothing is kept.
+        ui.reset(&mut s);
+        assert!(ui.shown.is_none() && ui.form.from.is_none() && ui.scene3d.is_none());
+        assert!(!ui.read_only(false));
+    }
+
+    #[test]
+    fn the_next_steps_wait_for_an_idle_window_and_notes_name_what_was_left_out() {
+        let (mut s, _) = session();
+        let mut ui = CompareUi::default();
+        let mut status = String::new();
+        ui.open(&mut s);
+        ui.tab = Tab::History;
+        frame(&mut ui, &mut s, &mut status);
+        ui.prefetch = vec![
+            (Side::Version(1), Side::Version(2)),
+            (Side::Version(2), Side::Current),
+        ];
+        let before = ui.prefetch.len();
+        // A key in the frame: no step is made.
+        let busy = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: Some(egui::Key::A),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(busy, |u| ui.prefetch_one(u.ctx(), &mut s));
+        assert_eq!(ui.prefetch.len(), before, "a busy frame makes no step");
+        // An idle frame makes one.
+        let _ = ctx.run_ui(Default::default(), |u| ui.prefetch_one(u.ctx(), &mut s));
+        assert_eq!(ui.prefetch.len(), before - 1, "an idle frame makes one");
+        // The banners and notes of a shown overlay have texts.
+        let c = CompareDraw {
+            overlay: &CompareOverlay::default(),
+            style: &ui.style,
+            ghosts: &[],
+            ghost_doc: None,
+            report: GhostReport {
+                drawn: 0,
+                hidden: 2,
+                not_drawable: 3,
+                capped: 4,
+            },
+            focus: None,
+        };
+        let lines = compare_draw::legend_notes(&c);
+        assert_eq!(lines.len(), 2, "{lines:?}");
     }
 }

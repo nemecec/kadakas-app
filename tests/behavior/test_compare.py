@@ -50,7 +50,8 @@ def test_the_compare_png_tints_what_changed(cad, tmp_path):
     assert (r["width"], r["height"]) == (600, 200)
     info = r["compare"]
     assert info["counts"] == {"added": 1, "removed": 1, "changed": 1}
-    assert info["summary"]["ghosts_drawn"] == 1 and info["summary"]["exact"] is True
+    assert info["summary"]["ghosts_kept"] == 1 and info["summary"]["exact"] is True
+    assert info["ghosts"] == {"drawn": 1, "hidden": 0, "not_drawable": 0, "capped": 0}
     assert info["notes"] == []
     assert [(l["status"], l["symbol"], l["pattern"]) for l in info["legend"]] == [
         ("added", "+", "solid"), ("removed", "-", "dashed"), ("changed", "~", "dotted")]

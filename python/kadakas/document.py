@@ -559,10 +559,11 @@ class Versions:
                    path: str | Path | None = None, *, mode: str | None = None,
                    hide_unchanged: bool | None = None, palette: str | None = None,
                    **params: Any) -> bytes:
-        """A PNG of the 3D model, or of the plan with ``view="top"``, with the changes since
-        ``from_`` tinted (see ``compare_option``). Other keyword arguments go to ``render.png``
-        (``view``, ``width``, ``height``, ``projection``). ``mode`` here is the compare mode, not
-        the render mode. Returns the PNG bytes, and writes them to ``path`` if given."""
+        """A PNG of the 3D model with the changes since ``from_`` tinted (see ``compare_option``).
+        ``view="top"`` is the 3D top view, drawn from above, not the 2D plan (use ``render_svg``
+        for the plan). Other keyword arguments go to ``render.png`` (``view``, ``width``,
+        ``height``, ``projection``). ``mode`` here is the compare mode, not the render mode.
+        Returns the PNG bytes, and writes them to ``path`` if given."""
         option = self.compare_option(from_, to, mode=mode, hide_unchanged=hide_unchanged,
                                      palette=palette)
         return self._doc.render_png(path, compare=option, **params)

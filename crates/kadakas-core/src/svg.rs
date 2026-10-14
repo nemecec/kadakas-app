@@ -10,7 +10,7 @@ use crate::plants::graphic::{self, GraphicPath};
 use crate::plants::style::PlantGraphic;
 use crate::plants::tag as schedule;
 use crate::plants::tree::{self, TreeAction};
-use crate::svg_overlay::{SvgLegendRow, SvgLook, SvgOverlay, SvgPattern, SvgTint};
+use crate::svg_overlay::{SvgGhost, SvgLegendRow, SvgLook, SvgOverlay, SvgPattern, SvgTint};
 
 /// Bounds of all visible objects, or `None` for an empty drawing.
 pub fn drawing_bounds(doc: &Document) -> Option<(DVec2, DVec2)> {
@@ -186,7 +186,21 @@ pub fn render_overlay(
 ",
         );
     }
+    if overlay.is_some_and(|o| o.dark()) {
+        let _ = writeln!(
+            s,
+            r#"<rect x="{}" y="{}" width="{}" height="{}" fill="rgb(30,32,36)" data-compare-paper="dark"/>"#,
+            lo.x,
+            -hi.y,
+            hi.x - lo.x,
+            hi.y - lo.y
+        );
+    }
     let tag_counts = schedule::tag_counts(doc);
+    // The tag counts of the old side, for ghosts that are drawn against its document.
+    let ghost_counts = overlay
+        .and_then(|o| o.ghosts().iter().find_map(|g| g.doc.as_deref()))
+        .map(schedule::tag_counts);
     // 1 mm of line weight on paper is `scale` mm in the model.
     // Underlays (map backgrounds) go below everything else.
     let look_of = |o: &Object| overlay.map_or(SvgLook::Keep, |ov| ov.look(o.id));
@@ -219,33 +233,33 @@ pub fn render_overlay(
             s.push_str("</g>\n");
         }
     };
+    let ghosts = overlay.map(|o| o.ghosts()).unwrap_or_default();
+    let ghost = |g: &SvgGhost, s: &mut String| match (&g.doc, &ghost_counts) {
+        (Some(d), Some(c)) => tinted_object(d, &g.object, &g.tint, g.kind, s, c, None, mark_h),
+        _ => tinted_object(doc, &g.object, &g.tint, g.kind, s, &tag_counts, ext, mark_h),
+    };
     for o in visible().filter(|o| matches!(o.shape, Shape::Underlay(_))) {
         one(o, &mut s);
+    }
+    // The old places of changed objects go behind the live objects.
+    for g in ghosts.iter().filter(|g| g.below) {
+        ghost(g, &mut s);
     }
     for o in visible().filter(|o| !matches!(o.shape, Shape::Underlay(_))) {
         one(o, &mut s);
     }
-    for g in overlay.map(|o| o.ghosts()).unwrap_or_default() {
-        tinted_object(
-            doc,
-            &g.object,
-            &g.tint,
-            g.kind,
-            &mut s,
-            &tag_counts,
-            ext,
-            mark_h,
-        );
+    for g in ghosts.iter().filter(|g| !g.below) {
+        ghost(g, &mut s);
     }
     if let Some(ov) = overlay {
-        legend_svg(ov.legend(), lo, hi, &mut s);
+        legend_svg(ov.legend(), lo, hi, ov.dark(), &mut s);
     }
     s.push_str("</svg>\n");
     s
 }
 
 /// The legend of an overlay: a swatch with the pattern and the mark of each tint, and its text.
-fn legend_svg(rows: &[SvgLegendRow], lo: DVec2, hi: DVec2, s: &mut String) {
+fn legend_svg(rows: &[SvgLegendRow], lo: DVec2, hi: DVec2, dark: bool, s: &mut String) {
     if rows.is_empty() {
         return;
     }
@@ -263,9 +277,14 @@ fn legend_svg(rows: &[SvgLegendRow], lo: DVec2, hi: DVec2, s: &mut String) {
         * 0.6
         + h * 3.5;
     let height = rows.len() as f64 * h * 1.5 + h * 0.5;
+    let (paper, ink) = if dark {
+        ("rgb(30,32,36)", "rgb(230,230,230)")
+    } else {
+        ("white", "black")
+    };
     let _ = writeln!(
         s,
-        r#"<rect x="{}" y="{}" width="{width}" height="{height}" fill="white" fill-opacity="0.85" stroke="gray" stroke-width="{}"/>"#,
+        r#"<rect x="{}" y="{}" width="{width}" height="{height}" fill="{paper}" fill-opacity="0.85" stroke="gray" stroke-width="{}"/>"#,
         lo.x + m,
         -hi.y + m,
         h * 0.05
@@ -296,7 +315,7 @@ fn legend_svg(rows: &[SvgLegendRow], lo: DVec2, hi: DVec2, s: &mut String) {
         x += h * 2.4;
         let _ = writeln!(
             s,
-            r#"<text x="{x}" y="{y}" fill="black">{}</text>"#,
+            r#"<text x="{x}" y="{y}" fill="{ink}">{}</text>"#,
             esc(&r.text)
         );
     }
@@ -316,10 +335,10 @@ fn tinted_object(
     ext: Option<SvgExt<'_>>,
     mark_h: f64,
 ) {
-    let ghost_attr = if ghost.is_empty() {
-        String::new()
-    } else {
-        format!(r#" data-ghost="{ghost}""#)
+    let ghost_attr = match ghost {
+        "" => String::new(),
+        "previous" => format!(r#" data-ghost="previous" data-ghost-of="{}""#, o.id),
+        other => format!(r#" data-ghost="{other}""#),
     };
     let _ = writeln!(
         s,
@@ -1669,6 +1688,8 @@ mod tests {
                     ..tint([200, 30, 45], SvgPattern::Dashed, "removed")
                 },
                 kind: "removed",
+                doc: None,
+                below: false,
             }],
             view: None,
             legend: vec![
@@ -1742,5 +1763,45 @@ mod tests {
         assert!(with(SvgPattern::Dashed).contains("stroke-dasharray=\"300 200"));
         assert!(with(SvgPattern::Dotted).contains("stroke-dasharray=\"75 150"));
         assert!(!with(SvgPattern::Solid).contains("dasharray"));
+    }
+
+    struct Dark;
+
+    impl SvgOverlay for Dark {
+        fn look(&self, _: ObjectId) -> SvgLook {
+            SvgLook::Keep
+        }
+        fn ghosts(&self) -> &[crate::svg_overlay::SvgGhost] {
+            &[]
+        }
+        fn dark(&self) -> bool {
+            true
+        }
+        fn legend(&self) -> &[SvgLegendRow] {
+            static ROWS: std::sync::OnceLock<Vec<SvgLegendRow>> = std::sync::OnceLock::new();
+            ROWS.get_or_init(|| {
+                vec![SvgLegendRow {
+                    tint: None,
+                    text: "a note".into(),
+                }]
+            })
+        }
+    }
+
+    #[test]
+    fn a_dark_overlay_has_a_dark_paper_and_a_light_legend_text() {
+        let mut ed = Editor::default();
+        add(
+            &mut ed,
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 5.0,
+            },
+        );
+        let svg = render_overlay(ed.doc(), 200, None, Some(&Dark));
+        assert!(svg.contains(r#"data-compare-paper="dark""#), "{svg}");
+        assert!(svg.contains(r#"fill="rgb(230,230,230)">a note"#), "{svg}");
+        // The paper is drawn first, so the drawing stays on top of it.
+        assert!(svg.find("data-compare-paper").unwrap() < svg.find("<circle").unwrap());
     }
 }

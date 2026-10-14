@@ -640,3 +640,181 @@ fn sheets_compare_side_by_side() {
     );
     assert!(e.message.contains("svg or png"));
 }
+
+#[test]
+fn ghosts_are_drawn_against_the_old_side_and_reported() {
+    let mut s = Session::with_sequential_ids();
+    let layer = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Fine", "scale": 50}}),
+    )["created"][0]
+        .clone();
+    let gone = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "layer": layer,
+            "shape": {"kind": "rect", "min": [0, 0], "max": [3000, 3000]}}}),
+    )["created"][0]
+        .clone();
+    save(&mut s, "With layer");
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "delete_objects", "ids": [gone]}}),
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "delete_layer", "id": layer}}),
+    );
+    let r = ok(
+        &mut s,
+        "render.svg",
+        json!({"compare": compare(json!(1), json!("current"))}),
+    );
+    let svg = r["svg"].as_str().unwrap();
+    // The layer of the old side gives the scale of the line: 0.25 mm * 1.5 * 50.
+    let ghost = svg.split("data-ghost=\"removed\"").nth(1).unwrap();
+    assert!(ghost.contains("stroke-width=\"18.75\""), "{ghost}");
+    assert_eq!(
+        r["compare"]["ghosts"],
+        json!({"drawn": 1, "hidden": 0, "not_drawable": 0, "capped": 0})
+    );
+    assert_eq!(r["compare"]["summary"]["ghosts_kept"], 1);
+    // The same in 3D: the ghost has geometry.
+    let png = ok(
+        &mut s,
+        "render.png",
+        json!({"view": "top", "width": 64, "height": 64,
+            "compare": compare(json!(1), json!("current"))}),
+    );
+    assert_eq!(png["compare"]["ghosts"]["drawn"], 1);
+    // A ghost on a hidden layer is reported as hidden, not as drawn.
+    let (mut s, _) = fixture();
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "modify_layer", "id": "00000000-0000-0000-0000-000000000001",
+            "visible": false}}),
+    );
+    let r = ok(
+        &mut s,
+        "render.svg",
+        json!({"compare": compare(json!(1), json!("current"))}),
+    );
+    assert_eq!(r["compare"]["ghosts"]["hidden"], 1);
+    assert_eq!(r["compare"]["ghosts"]["drawn"], 0);
+}
+
+#[test]
+fn a_dark_svg_has_a_dark_paper_and_legend_and_previous_ghosts_go_below() {
+    let (mut s, _) = fixture();
+    let light = ok(
+        &mut s,
+        "render.svg",
+        json!({"compare": compare(json!(1), json!("current"))}),
+    )["svg"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(!light.contains("data-compare-paper"));
+    let dark = ok(
+        &mut s,
+        "render.svg",
+        json!({"compare": {"from": 1, "to": "current", "dark": true}}),
+    )["svg"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(dark.contains("data-compare-paper=\"dark\""));
+    assert!(
+        dark.contains("fill=\"rgb(230,230,230)\""),
+        "a light text on the dark legend"
+    );
+    // The old place of the changed object comes before the live objects; the ghost of a removed
+    // object after them. The id of the object is in data-ghost-of.
+    let before = dark.find("data-ghost=\"previous\"").unwrap();
+    let live = dark.find("data-compare=\"added\"").unwrap();
+    let removed = dark.find("data-ghost=\"removed\"").unwrap();
+    assert!(before < live && live < removed);
+    assert!(dark.contains("data-ghost-of=\""));
+}
+
+#[test]
+fn the_state_cache_keeps_to_a_quarter_of_a_memory_limit_and_two_built_documents() {
+    let mut s = Session::with_sequential_ids();
+    for i in 0..3 {
+        rect(&mut s, i * 5000, 0, GRAY);
+        save(&mut s, &format!("V{i}"));
+    }
+    s.limits.max_memory_bytes = 400;
+    assert_eq!(s.state_cache_cap(), 100);
+    s.compare_overlay(Side::Version(1), Side::Version(2))
+        .unwrap();
+    assert_eq!(
+        s.compare.state_count(),
+        0,
+        "a state over the cap is not kept"
+    );
+    s.limits.max_memory_bytes = u64::MAX;
+    assert_eq!(s.state_cache_cap(), STATE_CACHE_BYTES);
+    // Built documents: the last two are kept.
+    for id in [1, 2, 3, 1] {
+        s.compare_doc(Side::Version(id)).unwrap();
+    }
+    assert_eq!(s.compare.built.len(), 2);
+    assert_eq!(s.compare.doc_builds, 4, "version 1 was dropped when 3 came");
+    // A copy of the open drawing for ghosts is made once for a revision.
+    let o = s.compare_overlay(Side::Current, Side::Version(1)).unwrap();
+    let a = s.compare_old_doc(&o, Side::Current).unwrap().unwrap();
+    let b = s.compare_old_doc(&o, Side::Current).unwrap().unwrap();
+    assert!(Arc::ptr_eq(&a, &b));
+    // No ghost, no old document.
+    let none = s
+        .compare_overlay(Side::Version(1), Side::Version(3))
+        .unwrap();
+    assert!(
+        s.compare_old_doc(&none, Side::Version(1))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn a_sheet_compare_checks_the_format_and_dpi_first_and_finds_the_sheet_on_either_side() {
+    let (mut s, _) = fixture();
+    let c = compare(json!(1), json!("current"));
+    let e = fail(
+        &mut s,
+        "sheet.render",
+        json!({"sheet": "Nope", "format": "pdf", "compare": c}),
+    );
+    assert!(e.message.contains("svg or png"), "{}", e.message);
+    let e = fail(
+        &mut s,
+        "sheet.render",
+        json!({"sheet": "Nope", "format": "png", "dpi": 5, "compare": c}),
+    );
+    assert!(e.message.contains("dpi"), "{}", e.message);
+    // A sheet that has another name now: the name of the old side finds it.
+    let layer = ok(&mut s, "sheet.create", json!({"name": "S"}))["layer"].clone();
+    let kept = save(&mut s, "With sheet");
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "modify_layer", "id": layer, "name": "T"}}),
+    );
+    let r = ok(
+        &mut s,
+        "sheet.render",
+        json!({"sheet": "S", "compare": {"from": kept, "to": "current"}}),
+    );
+    assert!(r["svg"].as_str().unwrap().contains("With sheet"));
+    let e = fail(
+        &mut s,
+        "sheet.render",
+        json!({"sheet": "Nobody", "compare": {"from": kept, "to": "current"}}),
+    );
+    assert!(e.message.contains("no layer"), "{}", e.message);
+}

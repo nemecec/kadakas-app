@@ -7,7 +7,9 @@
 
 use glam::DVec2;
 
-use crate::model::{Object, ObjectId};
+use std::sync::Arc;
+
+use crate::model::{Document, Object, ObjectId};
 
 /// The line pattern of a tinted outline. A pattern tells the status without color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +56,12 @@ pub struct SvgGhost {
     pub tint: SvgTint,
     /// `removed` for the ghost of a removed object, `previous` for the old shape of a changed one.
     pub kind: &'static str,
+    /// The document that the ghost is drawn against: the old side, with its resources (symbols,
+    /// styles, materials). `None`: the document that is drawn. A ghost with a document of its own
+    /// is drawn without the extensions for site models and annotations.
+    pub doc: Option<Arc<Document>>,
+    /// Drawn before the objects of the document, so that it never covers them.
+    pub below: bool,
 }
 
 /// One row of the legend that the SVG shows: a swatch in a tint, and a text.
@@ -75,6 +83,10 @@ pub trait SvgOverlay {
     /// line up (side by side) give the same box.
     fn view(&self) -> Option<(DVec2, DVec2)> {
         None
+    }
+    /// True: the picture is for a dark background. It gets a dark paper and a dark legend.
+    fn dark(&self) -> bool {
+        false
     }
     /// The rows of a legend, drawn at the top left corner of the picture. Empty: no legend.
     fn legend(&self) -> &[SvgLegendRow] {

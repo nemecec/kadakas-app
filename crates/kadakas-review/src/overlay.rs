@@ -43,7 +43,7 @@ use crate::state::{Props, State};
 mod apply;
 mod style;
 
-pub use apply::{SvgCompare, ghost_document, ghosts_in, tint_scene};
+pub use apply::{Ghosts, SvgCompare, Tinted, ghost_document, ghosts_in, tint_scene};
 pub use style::{CompareStyle, Palette, Pattern, Tint, UnchangedMode};
 
 /// The most ghosts (removed objects) that an overlay keeps.
@@ -112,8 +112,12 @@ pub struct Shapes {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "note", rename_all = "snake_case")]
 pub enum Note {
-    /// Only `drawn` of the removed objects are drawn as ghosts; `omitted` are not.
+    /// Only `drawn` of the removed objects are kept as ghosts; `omitted` are not, because there
+    /// are too many.
     GhostsCapped { drawn: usize, omitted: usize },
+    /// `count` removed objects cannot be drawn as ghosts: their shape is too long, or it cannot be
+    /// read (it needs a picture that the old state keeps as a reference).
+    GhostsNotDrawable { count: usize },
     /// `omitted` old or new shapes of changed and added objects are not kept.
     ShapesCapped { omitted: usize },
     /// `untracked` changes have no status by ID, but are in the counts.
@@ -147,12 +151,29 @@ pub struct Summary {
     pub removed: usize,
     pub changed: usize,
     pub total: usize,
-    /// Removed objects that are drawn as ghosts.
-    pub ghosts_drawn: usize,
-    /// Removed objects that are not drawn because of the cap.
-    pub ghosts_omitted: usize,
+    /// Removed objects that are kept as ghosts.
+    pub ghosts_kept: usize,
+    /// Removed objects that are not kept because there are too many.
+    pub ghosts_capped: usize,
+    /// Removed objects that cannot be drawn (a shape that is too long or cannot be read).
+    pub ghosts_not_drawable: usize,
     /// False: the work limit stopped the comparison and the counts are partial.
     pub exact: bool,
+}
+
+/// What became of the ghosts of removed objects in a picture. Every removed object is in one
+/// place: drawn, hidden, not drawable or not kept.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GhostReport {
+    /// Ghosts that the picture shows.
+    pub drawn: usize,
+    /// Ghosts on a layer or in a class that is not visible.
+    pub hidden: usize,
+    /// Ghosts that make no geometry: pictures and underlays, groups, shapes too long or not
+    /// readable.
+    pub not_drawable: usize,
+    /// Removed objects that were not kept as ghosts, because there are too many.
+    pub capped: usize,
 }
 
 /// The overlay. See the module text.
@@ -162,10 +183,13 @@ pub struct CompareOverlay {
     counts: Counts,
     shapes: BTreeMap<ObjectId, Shapes>,
     kept_ghosts: usize,
-    omitted_ghosts: usize,
+    capped_ghosts: usize,
+    unreadable_ghosts: usize,
     omitted_shapes: usize,
     untracked: usize,
     partial: bool,
+    /// The memory that the overlay holds, measured once when it is finished.
+    bytes: usize,
 }
 
 /// Collects changes into an overlay within limits.
@@ -174,6 +198,9 @@ pub struct Builder {
     limits: Limits,
     out: CompareOverlay,
     kept_shapes: usize,
+    /// Every ID that was noted, also past the cap of statuses, so that an ID that comes twice is
+    /// counted once.
+    seen: std::collections::HashSet<ObjectId>,
 }
 
 impl Builder {
@@ -182,13 +209,14 @@ impl Builder {
             limits,
             out: CompareOverlay::default(),
             kept_shapes: 0,
+            seen: std::collections::HashSet::new(),
         }
     }
 
     /// Notes the status of an object. Returns false if the object has a status already (the first
     /// one counts) and nothing changed.
     fn note(&mut self, id: ObjectId, status: Status) -> bool {
-        if self.out.status.contains_key(&id) {
+        if !self.seen.insert(id) {
             return false;
         }
         match status {
@@ -235,9 +263,17 @@ impl Builder {
         } else {
             self.shape_room()
         };
-        if !room || big(&old) || big(&new) {
+        if !room {
             if status == Status::Removed {
-                self.out.omitted_ghosts += 1;
+                self.out.capped_ghosts += 1;
+            } else {
+                self.out.omitted_shapes += 1;
+            }
+            return;
+        }
+        if big(&old) || big(&new) {
+            if status == Status::Removed {
+                self.out.unreadable_ghosts += 1;
             } else {
                 self.out.omitted_shapes += 1;
             }
@@ -265,8 +301,36 @@ impl Builder {
     }
 
     pub fn finish(self) -> CompareOverlay {
-        self.out
+        let mut out = self.out;
+        let per_status = std::mem::size_of::<(ObjectId, Status)>() + 16;
+        // The whole object counts: its shape, attributes and record data.
+        let shape_bytes: usize = out
+            .shapes
+            .values()
+            .flat_map(|s| [&s.old, &s.new])
+            .flatten()
+            .map(|o| json_len(o) + 256)
+            .sum();
+        out.bytes = out.status.len() * per_status + shape_bytes + 128;
+        out
     }
+}
+
+/// The length of a value as compact JSON, without writing it to memory.
+fn json_len<T: Serialize>(v: &T) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut c = Count(0);
+    let _ = serde_json::to_writer(&mut c, v);
+    c.0
 }
 
 /// True if the value is no longer than [`MAX_SHAPE_BYTES`] as compact JSON. The measure stops at
@@ -303,7 +367,9 @@ pub fn object_of(id: Uid, props: &Props) -> Option<Object> {
 }
 
 impl CompareOverlay {
-    /// An overlay from a list of changes, with the default limits.
+    /// An overlay from a list of changes, with the default limits. The IDs must be unique: the
+    /// first change of an ID counts, and later ones are ignored (a cheap set of the IDs seen is
+    /// kept even past the cap of statuses).
     pub fn from_changes(changes: impl IntoIterator<Item = Change>) -> CompareOverlay {
         CompareOverlay::from_changes_with(changes, Limits::default())
     }
@@ -379,8 +445,10 @@ impl CompareOverlay {
                             .flatten();
                         if old.is_some() {
                             b.keep(oid, Status::Removed, old, None);
+                        } else if b.ghost_room() {
+                            b.out.unreadable_ghosts += 1;
                         } else {
-                            b.out.omitted_ghosts += 1;
+                            b.out.capped_ghosts += 1;
                         }
                     }
                 }
@@ -474,9 +542,14 @@ impl CompareOverlay {
         self.kept_ghosts
     }
 
-    /// The number of removed objects that are not drawn because of the cap or the size.
+    /// The number of removed objects that are not kept because there are too many.
     pub fn omitted_ghosts(&self) -> usize {
-        self.omitted_ghosts
+        self.capped_ghosts
+    }
+
+    /// The number of removed objects whose shape is too long or cannot be read.
+    pub fn unreadable_ghosts(&self) -> usize {
+        self.unreadable_ghosts
     }
 
     /// Changes that have no status by ID because of the cap of statuses.
@@ -489,10 +562,15 @@ impl CompareOverlay {
         let mut notes = Vec::new();
         // A removed object that has no old object to draw (a caller gave none) is not a ghost
         // and not an omission.
-        if self.omitted_ghosts > 0 {
+        if self.capped_ghosts > 0 {
             notes.push(Note::GhostsCapped {
                 drawn: self.kept_ghosts,
-                omitted: self.omitted_ghosts,
+                omitted: self.capped_ghosts,
+            });
+        }
+        if self.unreadable_ghosts > 0 {
+            notes.push(Note::GhostsNotDrawable {
+                count: self.unreadable_ghosts,
             });
         }
         if self.omitted_shapes > 0 {
@@ -517,28 +595,17 @@ impl CompareOverlay {
             removed: self.counts.removed,
             changed: self.counts.changed,
             total: self.total(),
-            ghosts_drawn: self.kept_ghosts,
-            ghosts_omitted: self.omitted_ghosts,
+            ghosts_kept: self.kept_ghosts,
+            ghosts_capped: self.capped_ghosts,
+            ghosts_not_drawable: self.unreadable_ghosts,
             exact: self.exact(),
         }
     }
 
-    /// An estimate of the memory that the overlay holds, in bytes. A cache uses it to stay within
-    /// a budget.
+    /// The memory that the overlay holds, in bytes (about), measured once when it was made. A
+    /// cache uses it to stay within a budget.
     pub fn bytes(&self) -> usize {
-        let per_status = std::mem::size_of::<(ObjectId, Status)>() + 16;
-        let shape_bytes: usize = self
-            .shapes
-            .values()
-            .map(|s| {
-                [&s.old, &s.new]
-                    .into_iter()
-                    .flatten()
-                    .map(|o| serde_json::to_vec(&o.shape).map_or(512, |v| v.len()) + 256)
-                    .sum::<usize>()
-            })
-            .sum();
-        self.status.len() * per_status + shape_bytes + 128
+        self.bytes
     }
 }
 

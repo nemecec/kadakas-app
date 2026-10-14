@@ -9,7 +9,9 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape as EShape, Stroke
 use glam::DVec2;
 use kadakas_core::model::{Document, Object, ObjectId};
 use kadakas_l10n::tr;
-use kadakas_review::overlay::{CompareOverlay, CompareStyle, Pattern, Status, UnchangedMode};
+use kadakas_review::overlay::{
+    CompareOverlay, CompareStyle, GhostReport, Pattern, Status, UnchangedMode,
+};
 
 use crate::canvas::Style;
 use crate::view::{View, ViewExt as _};
@@ -23,6 +25,11 @@ pub struct CompareDraw<'a> {
     pub style: &'a CompareStyle,
     /// The ghosts to draw: removed objects, and the old shapes of changed ones.
     pub ghosts: &'a [(Object, &'static str)],
+    /// The document of the old side. The ghosts are drawn against it, so that a removed symbol or
+    /// styled plant has its own look. `None`: the drawing that is shown.
+    pub ghost_doc: Option<&'a Document>,
+    /// What became of the ghosts of removed objects, for the legend.
+    pub report: GhostReport,
     /// The object that the person clicked in the list. A ghost with this ID gets a frame.
     pub focus: Option<ObjectId>,
 }
@@ -99,7 +106,8 @@ fn pattern_box(painter: &Painter, r: Rect, stroke: Stroke, pattern: Pattern) {
 }
 
 /// The box with the pattern of the status and the mark of the status in its top right corner.
-/// Nothing is drawn for an object that is too small to see.
+/// An object that is too small to see gets a small mark of the minimum size. Returns false (and
+/// draws nothing) for an object that is off the screen.
 pub fn halo(
     painter: &Painter,
     view: &View,
@@ -107,9 +115,9 @@ pub fn halo(
     o: &Object,
     status: Status,
     style: &CompareStyle,
-) {
+) -> bool {
     let (lo, hi) = doc.object_bounds(o);
-    halo_box(painter, view, lo, hi, status, style);
+    halo_box(painter, view, lo, hi, status, style)
 }
 
 fn halo_box(
@@ -119,17 +127,31 @@ fn halo_box(
     hi: DVec2,
     status: Status,
     style: &CompareStyle,
-) {
+) -> bool {
     if !lo.is_finite() || !hi.is_finite() {
-        return;
+        return false;
     }
     let (a, b) = (view.to_screen(lo), view.to_screen(hi));
-    let r = Rect::from_two_pos(a, b).expand(4.0);
-    if r.width() < 6.0 || r.height() < 6.0 {
-        return;
+    let r = Rect::from_two_pos(a, b);
+    if !painter.clip_rect().intersects(r.expand(8.0)) {
+        return false;
     }
     let t = style.tint(status);
     let color = status_color(style, status);
+    if r.width() < 6.0 || r.height() < 6.0 {
+        // Too small for a box: a mark of the minimum size, so that the object is still found.
+        let c = r.center();
+        painter.rect_filled(Rect::from_center_size(c, egui::vec2(6.0, 6.0)), 1.0, color);
+        painter.text(
+            Pos2::new(c.x + 5.0, c.y - 3.0),
+            Align2::LEFT_BOTTOM,
+            t.symbol,
+            FontId::proportional(14.0),
+            color,
+        );
+        return true;
+    }
+    let r = r.expand(4.0);
     pattern_box(painter, r, Stroke::new(1.5, color), t.pattern);
     painter.text(
         Pos2::new(r.right() + 2.0, r.top()),
@@ -138,6 +160,7 @@ fn halo_box(
         FontId::proportional(14.0),
         color,
     );
+    true
 }
 
 /// The style of a ghost: the color of removed objects, see-through.
@@ -181,9 +204,12 @@ pub fn focus_frame(painter: &Painter, view: &View, lo: DVec2, hi: DVec2, style: 
 /// themselves, because a plant or a tag needs the document.
 pub fn ghost_marks(painter: &Painter, view: &View, doc: &Document, c: &CompareDraw) {
     let mut drawn = 0usize;
+    let gdoc = c.ghost_doc.unwrap_or(doc);
     for (o, kind) in c.ghosts {
-        if *kind == "removed" && drawn < MAX_HALOS {
-            halo(painter, view, doc, o, Status::Removed, c.style);
+        if *kind == "removed"
+            && drawn < MAX_HALOS
+            && halo(painter, view, gdoc, o, Status::Removed, c.style)
+        {
             drawn += 1;
         }
     }
@@ -195,43 +221,87 @@ pub fn ghost_marks(painter: &Painter, view: &View, doc: &Document, c: &CompareDr
             .map(|(o, _)| o)
             .or_else(|| doc.object(id));
         if let Some(o) = object {
-            let (lo, hi) = doc.object_bounds(o);
+            let (lo, hi) = gdoc.object_bounds(o);
             focus_frame(painter, view, lo, hi, c.style);
         }
     }
 }
 
+/// The lines of the legend that tell what the picture does not show completely: the notes of the
+/// overlay and what became of the ghosts.
+pub fn legend_notes(c: &CompareDraw) -> Vec<String> {
+    use kadakas_review::overlay::Note;
+    let mut out: Vec<String> = c
+        .overlay
+        .notes()
+        .iter()
+        .filter(|n| !matches!(n, Note::Partial))
+        .map(note_text)
+        .collect();
+    if c.report.hidden > 0 {
+        out.push(tr!(
+            "compare-ui-note-ghosts-hidden",
+            count = c.report.hidden
+        ));
+    }
+    // Ghosts that make no geometry: the overlay counts those it could not read; the picture adds
+    // pictures, groups and the like.
+    let extra = c
+        .report
+        .not_drawable
+        .saturating_sub(c.overlay.unreadable_ghosts());
+    if extra > 0 {
+        out.push(tr!("compare-ui-note-ghosts-none", count = extra));
+    }
+    if !c.overlay.exact() {
+        out.push(tr!("compare-ui-note-partial"));
+    }
+    out
+}
+
 /// The legend: a swatch with the pattern and the mark of each status, and its count. It sits at
-/// the top left corner of `rect`.
+/// the top left corner of `rect` and is as wide as its longest text.
 pub fn legend(painter: &Painter, rect: Rect, c: &CompareDraw, dark: bool) {
     let counts = c.overlay.counts();
     let rows = [
         (
             Status::Added,
-            counts.added,
             tr!("compare-ui-legend-added", count = counts.added),
         ),
         (
             Status::Removed,
-            counts.removed,
             tr!("compare-ui-legend-removed", count = counts.removed),
         ),
         (
             Status::Changed,
-            counts.changed,
             tr!("compare-ui-legend-changed", count = counts.changed),
         ),
     ];
-    let notes = c.overlay.notes();
+    let notes = legend_notes(c);
     let (bg, fg) = if dark {
         (Color32::from_black_alpha(190), Color32::from_gray(230))
     } else {
         (Color32::from_white_alpha(225), Color32::from_gray(30))
     };
     let font = FontId::proportional(13.0);
+    let small = FontId::proportional(11.0);
+    let width_of = |text: &str, f: &FontId| {
+        painter
+            .layout_no_wrap(text.to_string(), f.clone(), fg)
+            .size()
+            .x
+    };
+    let text_w = rows
+        .iter()
+        .map(|(_, t)| width_of(t, &font) + 64.0)
+        .chain(notes.iter().map(|n| width_of(n, &small) + 16.0))
+        .fold(120.0_f32, f32::max);
     let line = 20.0;
     let height = line * (rows.len() + notes.len()) as f32 + 12.0;
-    let r = Rect::from_min_size(rect.min + egui::vec2(10.0, 10.0), egui::vec2(230.0, height));
+    let r = Rect::from_min_size(
+        rect.min + egui::vec2(10.0, 10.0),
+        egui::vec2(text_w + 8.0, height),
+    );
     painter.rect_filled(r, 4.0, bg);
     painter.rect_stroke(
         r,
@@ -239,7 +309,7 @@ pub fn legend(painter: &Painter, rect: Rect, c: &CompareDraw, dark: bool) {
         Stroke::new(1.0, fg.gamma_multiply(0.5)),
         egui::StrokeKind::Inside,
     );
-    for (i, (status, _, text)) in rows.iter().enumerate() {
+    for (i, (status, text)) in rows.iter().enumerate() {
         let y = r.top() + 6.0 + line * i as f32 + line / 2.0;
         let t = c.style.tint(*status);
         let color = status_color(c.style, *status);
@@ -278,8 +348,8 @@ pub fn legend(painter: &Painter, rect: Rect, c: &CompareDraw, dark: bool) {
         painter.text(
             Pos2::new(r.left() + 8.0, y),
             Align2::LEFT_CENTER,
-            note_text(note),
-            FontId::proportional(11.0),
+            note,
+            small.clone(),
             fg.gamma_multiply(0.8),
         );
     }
@@ -295,6 +365,9 @@ pub fn note_text(note: &kadakas_review::overlay::Note) -> String {
                 drawn = drawn,
                 total = drawn + omitted
             )
+        }
+        Note::GhostsNotDrawable { count } => {
+            tr!("compare-ui-note-ghosts-unreadable", count = count)
         }
         Note::ShapesCapped { omitted } => tr!("compare-ui-note-shapes", omitted = omitted),
         Note::StatusesCapped { untracked } => {

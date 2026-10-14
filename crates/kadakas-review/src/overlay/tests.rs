@@ -1,7 +1,7 @@
 use glam::DVec2;
 use kadakas_core::command::Editor;
 use kadakas_core::mesh;
-use kadakas_core::model::{FIRST_LAYER, NONE_CLASS, Object, ObjectId, Shape};
+use kadakas_core::model::{Document, FIRST_LAYER, NONE_CLASS, Object, ObjectId, Shape};
 use kadakas_core::svg_overlay::{SvgLook, SvgOverlay};
 use serde_json::json;
 
@@ -82,8 +82,9 @@ fn the_overlay_of_two_states_has_added_removed_and_changed_objects() {
             removed: 1,
             changed: 1,
             total: 3,
-            ghosts_drawn: 1,
-            ghosts_omitted: 0,
+            ghosts_kept: 1,
+            ghosts_capped: 0,
+            ghosts_not_drawable: 0,
             exact: true
         }
     );
@@ -92,7 +93,7 @@ fn the_overlay_of_two_states_has_added_removed_and_changed_objects() {
     // The same state on both sides: nothing.
     let same = CompareOverlay::from_states(&s2, &s2);
     assert!(same.is_empty() && same.ghosts().next().is_none());
-    assert_eq!(same, CompareOverlay::default());
+    assert_eq!(same.counts(), Counts::default());
 }
 
 #[test]
@@ -213,8 +214,22 @@ fn a_diff_of_100k_objects_stays_within_the_caps() {
     );
     // Ghosts beyond the cap are counted as omitted, and the summary says so.
     let s = o.summary();
-    assert_eq!(s.ghosts_drawn, 50);
-    assert!(s.ghosts_omitted > 0 && s.removed > 50);
+    assert_eq!(s.ghosts_kept, 50);
+    assert!(s.ghosts_capped > 0 && s.removed > 50);
+    // The IDs are counted once, also past the cap of statuses.
+    let again = (1..=3000u64)
+        .chain(1..=3000)
+        .map(|i| change(i, Status::Added, false));
+    let o = CompareOverlay::from_changes_with(
+        again,
+        Limits {
+            ghosts: 1,
+            shapes: 1,
+            tracked: 10,
+        },
+    );
+    assert_eq!(o.counts().added, 3000);
+    assert!(o.bytes() > 0 && o.bytes() < 4096);
 }
 
 #[test]
@@ -277,7 +292,10 @@ fn a_huge_shape_is_not_kept_as_a_ghost() {
     let o = CompareOverlay::from_states(&s1, &s2);
     assert_eq!(o.status_of(big), Some(Status::Removed));
     assert_eq!(o.ghost_count(), 0);
-    assert_eq!(o.omitted_ghosts(), 1);
+    assert_eq!(o.omitted_ghosts(), 0, "not capped: too long");
+    assert_eq!(o.unreadable_ghosts(), 1);
+    assert!(o.notes().contains(&Note::GhostsNotDrawable { count: 1 }));
+    assert_eq!(o.summary().ghosts_not_drawable, 1);
     // The same object given as a change is refused the same way.
     let object = s1
         .things()
@@ -290,7 +308,7 @@ fn a_huge_shape_is_not_kept_as_a_ghost() {
         old: Some(object),
         new: None,
     }]);
-    assert_eq!(o.omitted_ghosts(), 1);
+    assert_eq!(o.unreadable_ghosts(), 1);
 }
 
 #[test]
@@ -370,7 +388,7 @@ fn the_svg_overlay_tints_by_status_and_dims_or_hides_the_rest() {
     let o = CompareOverlay::from_states(&s1, &s2);
     let doc = s2.build(&Editor::with_sequential_ids().doc().clone()).doc;
     let style = CompareStyle::default();
-    let svg = SvgCompare::new(&doc, &o, style);
+    let svg = SvgCompare::new(&doc, None, &o, style);
     for (id, name) in [(a, "changed"), (b, "removed"), (c, "added")] {
         let SvgLook::Tint(t) = svg.look(id) else {
             panic!("{name} is tinted")
@@ -381,6 +399,7 @@ fn the_svg_overlay_tints_by_status_and_dims_or_hides_the_rest() {
     assert_eq!(svg.look(d), SvgLook::Dim(0.25));
     let show = SvgCompare::new(
         &doc,
+        None,
         &o,
         CompareStyle {
             unchanged: UnchangedMode::Show,
@@ -390,6 +409,7 @@ fn the_svg_overlay_tints_by_status_and_dims_or_hides_the_rest() {
     assert_eq!(show.look(d), SvgLook::Keep);
     let hide = SvgCompare::new(
         &doc,
+        None,
         &o,
         CompareStyle {
             unchanged: UnchangedMode::Hide,
@@ -404,16 +424,43 @@ fn the_svg_overlay_tints_by_status_and_dims_or_hides_the_rest() {
     assert!(svg.ghosts()[1].tint.symbol.is_none());
     assert!(svg.view().is_none());
     let view = (DVec2::ZERO, DVec2::splat(5.0));
-    assert_eq!(svg.with_view(view).view(), Some(view));
-    // The plan canvas gets the same ghosts.
-    let listed = ghosts_in(&doc, &o, &style);
     assert_eq!(
-        listed.iter().map(|(g, k)| (g.id, *k)).collect::<Vec<_>>(),
+        SvgCompare::new(&doc, None, &o, style)
+            .with_view(view)
+            .view(),
+        Some(view)
+    );
+    // The plan canvas gets the same ghosts.
+    let listed = ghosts_in(&doc, &doc, &o, &style);
+    assert_eq!(
+        listed
+            .items
+            .iter()
+            .map(|(g, k)| (g.id, *k))
+            .collect::<Vec<_>>(),
         vec![(b, "removed"), (a, "previous")]
     );
+    assert_eq!(listed.report.drawn, 1);
+    // The old places go behind the live objects; the report names what became of each ghost.
+    assert_eq!(
+        svg.ghosts().iter().map(|g| g.below).collect::<Vec<_>>(),
+        vec![false, true]
+    );
+    assert_eq!(svg.report(), listed.report);
+    let dark = SvgCompare::new(
+        &doc,
+        None,
+        &o,
+        CompareStyle {
+            dark: true,
+            ..style
+        },
+    );
+    assert!(dark.dark() && !svg.dark());
     // Ghosts can be switched off.
     let none = SvgCompare::new(
         &doc,
+        None,
         &o,
         CompareStyle {
             show_ghosts: false,
@@ -425,26 +472,70 @@ fn the_svg_overlay_tints_by_status_and_dims_or_hides_the_rest() {
 }
 
 #[test]
-fn a_ghost_goes_to_the_first_layer_when_its_layer_is_gone_and_is_left_out_when_hidden() {
-    let mut ghost = rect_object(7, 0.0);
-    ghost.layer = kadakas_core::model::LayerId::from_num(99);
-    ghost.class = kadakas_core::model::ClassId::from_num(99);
-    let o = CompareOverlay::from_changes([Change {
-        id: ghost.id,
-        status: Status::Removed,
-        old: Some(ghost),
-        new: None,
-    }]);
+fn a_ghost_on_a_hidden_layer_is_reported_and_a_picture_is_not_drawable() {
+    let ghost = rect_object(7, 0.0);
+    let underlay = {
+        let mut u = rect_object(8, 0.0);
+        u.shape = Shape::Group { name: "g".into() };
+        u
+    };
+    let o = CompareOverlay::from_changes([
+        Change {
+            id: ghost.id,
+            status: Status::Removed,
+            old: Some(ghost),
+            new: None,
+        },
+        Change {
+            id: underlay.id,
+            status: Status::Removed,
+            old: Some(underlay),
+            new: None,
+        },
+    ]);
     let mut ed = Editor::with_sequential_ids();
-    let svg = SvgCompare::new(ed.doc(), &o, CompareStyle::default());
-    assert_eq!(svg.ghosts().len(), 1);
-    assert_eq!(svg.ghosts()[0].object.layer, FIRST_LAYER);
-    assert_eq!(svg.ghosts()[0].object.class, NONE_CLASS);
+    let found = ghosts_in(ed.doc(), ed.doc(), &o, &CompareStyle::default());
+    assert_eq!(found.items.len(), 1);
+    assert_eq!(
+        found.report,
+        GhostReport {
+            drawn: 1,
+            hidden: 0,
+            not_drawable: 1,
+            capped: 0
+        }
+    );
     ed.execute(&cmd(json!({"op": "modify_layer", "id": FIRST_LAYER,
         "visible": false})))
         .unwrap();
-    let svg = SvgCompare::new(ed.doc(), &o, CompareStyle::default());
-    assert!(svg.ghosts().is_empty(), "a hidden layer hides its ghosts");
+    let found = ghosts_in(ed.doc(), ed.doc(), &o, &CompareStyle::default());
+    assert!(found.items.is_empty());
+    assert_eq!((found.report.hidden, found.report.drawn), (1, 0));
+    // The same layer in the old drawing, which has no such layer in the new one, decides.
+    let new = Document::default();
+    let mut old = Document::default();
+    old.layers[0].id = kadakas_core::model::LayerId::from_num(55);
+    let mut g = rect_object(9, 0.0);
+    g.layer = kadakas_core::model::LayerId::from_num(55);
+    let o2 = CompareOverlay::from_changes([Change {
+        id: g.id,
+        status: Status::Removed,
+        old: Some(g),
+        new: None,
+    }]);
+    assert_eq!(
+        ghosts_in(&new, &old, &o2, &CompareStyle::default())
+            .report
+            .drawn,
+        1
+    );
+    old.layers[0].visible = false;
+    assert_eq!(
+        ghosts_in(&new, &old, &o2, &CompareStyle::default())
+            .report
+            .hidden,
+        1
+    );
 }
 
 #[test]
@@ -454,7 +545,9 @@ fn the_scene_gets_tints_dimmed_unchanged_objects_and_ghosts() {
     let doc = s2.build(&Editor::with_sequential_ids().doc().clone()).doc;
     let scene = mesh::build(&doc);
     let style = CompareStyle::default();
-    let (tinted, ghosts) = tint_scene(&scene, &doc, &o, &style);
+    let t = tint_scene(&scene, &doc, &doc, &o, &style, None);
+    let (tinted, ghosts) = (t.scene, t.ghosts);
+    assert_eq!(t.report.drawn, 1);
     assert_eq!(ghosts, vec![b], "the removed object is a ghost");
     let color_of = |s: &mesh::Scene, id: ObjectId| {
         let t = (0..s.mesh.triangle_count())
@@ -476,42 +569,55 @@ fn the_scene_gets_tints_dimmed_unchanged_objects_and_ghosts() {
     );
     assert_ne!(before, after);
     // The unchanged object can stay as it is, or go.
-    let (shown, _) = tint_scene(
+    let shown = tint_scene(
         &scene,
+        &doc,
         &doc,
         &o,
         &CompareStyle {
             unchanged: UnchangedMode::Show,
             ..style
         },
-    );
+        None,
+    )
+    .scene;
     assert_eq!(color_of(&shown, d), before);
-    let (hidden, _) = tint_scene(
+    let hidden = tint_scene(
         &scene,
+        &doc,
         &doc,
         &o,
         &CompareStyle {
             unchanged: UnchangedMode::Hide,
             ..style
         },
-    );
+        None,
+    )
+    .scene;
     assert!(hidden.object_bounds(d).is_none());
     assert!(hidden.object_bounds(a).is_some() && hidden.object_bounds(b).is_some());
     // Without ghosts the removed object is not in the scene.
-    let (plain, ghosts) = tint_scene(
+    let plain = tint_scene(
         &scene,
+        &doc,
         &doc,
         &o,
         &CompareStyle {
             show_ghosts: false,
             ..style
         },
+        None,
     );
-    assert!(ghosts.is_empty() && plain.object_bounds(b).is_none());
+    assert!(plain.ghosts.is_empty() && plain.scene.object_bounds(b).is_none());
     // A document that is not changed has no ghost document objects.
     let none = CompareOverlay::default();
-    assert!(ghost_document(&doc, &none, &style).objects.is_empty());
-    let g = ghost_document(&doc, &o, &style);
+    assert!(
+        ghost_document(&doc, &doc, &none, &style)
+            .0
+            .objects
+            .is_empty()
+    );
+    let g = ghost_document(&doc, &doc, &o, &style).0;
     assert_eq!(g.objects.len(), 1, "only removed objects, not old shapes");
     assert_eq!(g.layers.len(), doc.layers.len());
 }

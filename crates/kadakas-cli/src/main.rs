@@ -68,11 +68,11 @@ enum Cmd {
         /// orange, removed objects as red ghosts, with a legend (REV-03).
         #[arg(long)]
         compare_from: Option<u64>,
-        /// With --compare-from: the newer side, a version ID or "current" (the default).
-        #[arg(long, default_value = "current")]
-        compare_to: String,
-        /// With --compare-from: leave out the objects that did not change.
-        #[arg(long)]
+        /// The newer side, a version ID or "current" (the default). Needs --compare-from.
+        #[arg(long, requires = "compare_from")]
+        compare_to: Option<String>,
+        /// Leave out the objects that did not change. Needs --compare-from.
+        #[arg(long, requires = "compare_from")]
         hide_unchanged: bool,
     },
     /// Import a DXF, Shapefile (.shp) or GeoJSON file. Saves the document and prints the report.
@@ -841,7 +841,7 @@ fn main() {
             &file,
             &output,
             width,
-            compare_from.map(|from| (from, compare_to)),
+            compare_from.map(|from| (from, compare_to.unwrap_or_else(|| "current".into()))),
             hide_unchanged,
         ),
     };

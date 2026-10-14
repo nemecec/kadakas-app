@@ -671,6 +671,10 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     let visible = || f.doc.objects.values().filter(|o| f.doc.is_displayed(o));
     let is_under = |o: &&Object| matches!(o.shape, Shape::Underlay(_));
     let mut halos = 0usize;
+    // The old places of changed objects go behind the live objects.
+    if let Some(c) = &f.compare {
+        draw_ghosts(&painter, view, f, c, &counts, "previous");
+    }
     for o in visible()
         .filter(is_under)
         .chain(visible().filter(|o| !is_under(o)))
@@ -721,9 +725,9 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         set_grey(false);
         if let (ObjectLook::Status(s), Some(c)) = (look, f.compare.as_ref())
             && halos < crate::compare_draw::MAX_HALOS
+            && crate::compare_draw::halo(&painter, view, f.doc, o, s, c.style)
         {
             halos += 1;
-            crate::compare_draw::halo(&painter, view, f.doc, o, s, c.style);
         }
         #[cfg(not(target_arch = "wasm32"))]
         crate::script_ui::draw_badge(&painter, view, f.doc, o);
@@ -767,7 +771,8 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         }
     }
     if let Some(c) = &f.compare {
-        draw_ghosts(&painter, view, f, c, &counts);
+        draw_ghosts(&painter, view, f, c, &counts, "removed");
+        crate::compare_draw::ghost_marks(&painter, view, f.doc, c);
         crate::compare_draw::legend(&painter, rect, c, f.dark);
     }
     draw_preview(&painter, view, f);
@@ -785,23 +790,32 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     }
 }
 
-/// The ghosts of a compare: removed objects as they were (see-through, in the color of removed
-/// objects), and the old shapes of changed objects, fainter. Each has a box and a mark.
+/// The ghosts of a compare of one kind: removed objects as they were (see-through, in the color
+/// of removed objects), or the old shapes of changed objects, fainter. They are drawn against the
+/// document of the old side. The boxes and marks are drawn by `compare_draw::ghost_marks`.
 fn draw_ghosts(
     painter: &Painter,
     view: &View,
     f: &Frame,
     c: &crate::compare_draw::CompareDraw,
     counts: &TagCounts,
+    kind: &str,
 ) {
-    for (o, kind) in c.ghosts {
+    let gdoc = c.ghost_doc.unwrap_or(f.doc);
+    // The tag counts of the old side, for the tags that were removed.
+    let own;
+    let counts = if c.ghost_doc.is_some() && c.ghosts.iter().any(|g| g.1 == kind) {
+        own = tag_counts(gdoc);
+        &own
+    } else {
+        counts
+    };
+    for (o, k) in c.ghosts.iter().filter(|g| g.1 == kind) {
         set_grey(false);
-        let previous = *kind == "previous";
-        let base = object_style(f.doc, o, view.zoom);
-        let st = crate::compare_draw::ghost_style(base, c.style, previous);
-        draw_object(painter, view, f.doc, counts, o, st, DVec2::ZERO);
+        let base = object_style(gdoc, o, view.zoom);
+        let st = crate::compare_draw::ghost_style(base, c.style, *k == "previous");
+        draw_object(painter, view, gdoc, counts, o, st, DVec2::ZERO);
     }
-    crate::compare_draw::ghost_marks(painter, view, f.doc, c);
 }
 
 fn draw_preview(painter: &Painter, view: &View, f: &Frame) {
@@ -1076,7 +1090,7 @@ mod tests {
             ..View::default()
         };
         let colors = |style: &CompareStyle| {
-            let ghosts = kadakas_review::overlay::ghosts_in(ed.doc(), &overlay, style);
+            let ghosts = kadakas_review::overlay::ghosts_in(ed.doc(), ed.doc(), &overlay, style);
             let ctx = egui::Context::default();
             let mut cols = Vec::new();
             let out = ctx.run_ui(Default::default(), |ui| {
@@ -1096,7 +1110,9 @@ mod tests {
                     compare: Some(crate::compare_draw::CompareDraw {
                         overlay: &overlay,
                         style,
-                        ghosts: &ghosts,
+                        ghosts: &ghosts.items,
+                        ghost_doc: None,
+                        report: ghosts.report,
                         focus: Some(added),
                     }),
                 };
@@ -1127,6 +1143,8 @@ mod tests {
             overlay: &overlay,
             style: &style,
             ghosts: &[],
+            ghost_doc: None,
+            report: Default::default(),
             focus: None,
         };
         use crate::compare_draw::ObjectLook;

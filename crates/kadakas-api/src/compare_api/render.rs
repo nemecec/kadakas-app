@@ -11,7 +11,9 @@ use kadakas_core::svg_overlay::{SvgGhost, SvgLook, SvgOverlay};
 use kadakas_render::look::Look;
 use kadakas_render::shade::{self, Light, ShadeOptions};
 use kadakas_render::{BACKGROUND, Camera, Image, ViewSettings};
-use kadakas_review::overlay::{Status, SvgCompare, tint_scene};
+use kadakas_review::overlay::{
+    CompareOverlay, CompareStyle, Status, SvgCompare, Tinted, tint_scene,
+};
 
 use super::*;
 
@@ -177,6 +179,31 @@ impl Session {
         }
     }
 
+    /// The 3D scene of a comparison with the overlay (see `kadakas_review::overlay::tint_scene`).
+    /// The ghosts are made against the document of the old side, with its site models. The app
+    /// draws the same scene.
+    pub fn compare_tinted(
+        &mut self,
+        overlay: &CompareOverlay,
+        from: Side,
+        to: Side,
+        style: &CompareStyle,
+    ) -> Result<Tinted, RpcError> {
+        let shown = self.compare_doc(to)?;
+        let old = if style.show_ghosts {
+            self.compare_old_doc(overlay, from)?
+        } else {
+            None
+        };
+        let scene = self.compare_scene(&shown, None);
+        Ok(self.with_shown(&shown, |doc, _, _, _| {
+            let site = kadakas_site::SiteCache::default();
+            let ext = kadakas_site::draw::scene_ext(&site, 0);
+            let old_doc: &Document = old.as_deref().unwrap_or(doc);
+            tint_scene(&scene, doc, old_doc, overlay, style, Some(&ext))
+        }))
+    }
+
     /// `render.svg` with a `compare` option.
     pub(crate) fn render_svg_compare(
         &mut self,
@@ -186,11 +213,17 @@ impl Session {
         if spec.mode == CompareMode::Overlay {
             let overlay = self.compare_overlay(spec.from, spec.to)?;
             let shown = self.compare_doc(spec.to)?;
-            let svg = self.with_shown(&shown, |doc, revision, site, annot| {
-                let ov = SvgCompare::new(doc, &overlay, spec.style);
-                crate::svg_of(doc, width, revision, site, annot, Some(&ov))
+            let old = if spec.style.show_ghosts || spec.style.show_previous {
+                self.compare_old_doc(&overlay, spec.from)?
+            } else {
+                None
+            };
+            let (svg, report) = self.with_shown(&shown, |doc, revision, site, annot| {
+                let ov = SvgCompare::new(doc, old.as_ref(), &overlay, spec.style);
+                let svg = crate::svg_of(doc, width, revision, site, annot, Some(&ov));
+                (svg, ov.report())
             });
-            let info = self.compare_info(spec, Some(&overlay));
+            let info = self.compare_info(spec, Some(&overlay), Some(report));
             return Ok(json!({"svg": svg, "compare": info}));
         }
         let (a, b) = (self.compare_doc(spec.from)?, self.compare_doc(spec.to)?);
@@ -214,7 +247,7 @@ impl Session {
         let (sa, sb) = (svg_of(self, &a), svg_of(self, &b));
         let labels = [self.side_label(spec.from), self.side_label(spec.to)];
         let svg = side_by_side_svg(&sa, &sb, [&labels[0], &labels[1]]);
-        let info = self.compare_info(spec, None);
+        let info = self.compare_info(spec, None, None);
         Ok(json!({"svg": svg, "compare": info}))
     }
 
@@ -251,12 +284,9 @@ impl Session {
         };
         let (img, info) = if spec.mode == CompareMode::Overlay {
             let overlay = self.compare_overlay(spec.from, spec.to)?;
-            let shown = self.compare_doc(spec.to)?;
-            let scene = self.compare_scene(&shown, None);
-            let (tinted, ghosts) = self.with_shown(&shown, |doc, _, _, _| {
-                tint_scene(&scene, doc, &overlay, &spec.style)
-            });
-            let ghosts: HashSet<ObjectId> = ghosts.into_iter().collect();
+            let t = self.compare_tinted(&overlay, spec.from, spec.to, &spec.style)?;
+            let (tinted, report) = (t.scene, t.report);
+            let ghosts: HashSet<ObjectId> = t.ghosts.into_iter().collect();
             let [r, g, b] = spec.style.color(Status::Removed);
             let look = Look::ghosted(
                 &tinted,
@@ -266,7 +296,7 @@ impl Session {
             );
             let camera = camera_for(tinted.bounds, req.width, req.height);
             let img = draw(&tinted, &look, &camera, req.width, req.height);
-            (img, self.compare_info(spec, Some(&overlay)))
+            (img, self.compare_info(spec, Some(&overlay), Some(report)))
         } else {
             let b = self.compare_doc(spec.to)?;
             let a = self.compare_doc(spec.from)?;
@@ -276,7 +306,7 @@ impl Session {
             let camera = camera_for(union(scene_a.bounds, scene_b.bounds), half, req.height);
             let left = draw(&scene_a, &Look::plain(&scene_a), &camera, half, req.height);
             let right = draw(&scene_b, &Look::plain(&scene_b), &camera, half, req.height);
-            (join(&left, &right), self.compare_info(spec, None))
+            (join(&left, &right), self.compare_info(spec, None, None))
         };
         use base64::Engine;
         Ok(json!({
@@ -288,6 +318,28 @@ impl Session {
             "mode": req.settings.mode.id(),
             "compare": info,
         }))
+    }
+
+    /// The sheet that a name or an ID means: in the new side, else in the old one.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn compare_sheet_ref(
+        &mut self,
+        sheet: &Value,
+        spec: &CompareSpec,
+    ) -> Result<kadakas_core::model::LayerId, RpcError> {
+        let mut first = None;
+        for side in [spec.to, spec.from] {
+            let shown = self.compare_doc(side)?;
+            let found =
+                self.with_shown(&shown, |d, _, _, _| crate::sheets_api::sheet_ref(d, sheet));
+            match found {
+                Ok(l) => return Ok(l),
+                Err(e) => {
+                    first.get_or_insert(e);
+                }
+            }
+        }
+        Err(first.unwrap_or_else(|| bad("no such sheet")))
     }
 
     /// The sheet `layer` of two sides on one page, side by side, each with its label (the old
@@ -323,6 +375,12 @@ impl Session {
         format: &str,
         dpi: f64,
     ) -> Result<Value, RpcError> {
+        if !matches!(format, "svg" | "png") {
+            return Err(bad("format is svg or png"));
+        }
+        if format == "png" && !(10.0..=1200.0).contains(&dpi) {
+            return Err(bad("dpi must be 10 to 1200"));
+        }
         if spec.mode_given && spec.mode == CompareMode::Overlay {
             return Err(bad(
                 "sheets compare side by side: use compare.mode side_by_side, or leave mode out",
@@ -332,9 +390,9 @@ impl Session {
             mode: CompareMode::SideBySide,
             ..*spec
         };
-        let layer = crate::sheets_api::sheet_ref(self.editor.doc(), sheet)?;
+        let layer = self.compare_sheet_ref(sheet, spec)?;
         let page = self.compare_sheet_page(layer, spec.from, spec.to)?;
-        let info = self.compare_info(spec, None);
+        let info = self.compare_info(spec, None, None);
         match format {
             "svg" => Ok(json!({
                 "svg": kadakas_print::svg::page_svg(&page),

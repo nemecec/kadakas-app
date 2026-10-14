@@ -113,7 +113,9 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
             view3d.zoom_at(factor, local(h), size);
         }
     }
+    // A compare is read only: a click selects nothing.
     if resp.clicked()
+        && compare.is_none()
         && let Some(p) = resp.interact_pointer_pos()
     {
         let hit = view3d.pick(&scene, local(p), size);
