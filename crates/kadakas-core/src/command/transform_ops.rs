@@ -73,6 +73,7 @@ impl Tx<'_> {
             transform_object(&mut o, xf).map_err(invalid)?;
             o.data.remove(EDITING_KEY);
             o.data.remove(EDIT_GROUP_KEY);
+            crate::provenance::strip_copy(&mut o.data);
             self.remap_copy_refs(&mut o, &map);
             self.check_sheet_rules(o.layer, &o.shape, None)?;
             self.add_new(o);
@@ -186,6 +187,7 @@ impl Tx<'_> {
                 self.check_sheet_rules(layer, shape, None)?;
                 data.remove(EDITING_KEY);
                 data.remove(EDIT_GROUP_KEY);
+                crate::provenance::strip_copy(&mut data);
                 let id = ObjectId(self.alloc()?);
                 let mut o = Object::new(id, layer, class, shape.clone());
                 o.attrs = attrs;

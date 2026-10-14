@@ -341,15 +341,32 @@ fn find_output(dir: &Path, ext: &str) -> Option<PathBuf> {
         .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)))
 }
 
-/// Converts a DWG file to DXF and returns the DXF bytes.
+/// Checks the kind and the size of a file before it is copied: only a regular file, of at most
+/// `max_bytes` bytes.
+fn check_size(path: &Path, max_bytes: u64, what: &str) -> Result<(), DwgError> {
+    use kadakas_sys::fsio::{OpenError, open_regular};
+    open_regular(path, max_bytes)
+        .map(drop)
+        .map_err(|e| match e {
+            OpenError::TooLarge { len, max } => DwgError::Io(format!(
+                "{what} is {len} bytes, more than the limit of {max} (option max_bytes)"
+            )),
+            e => DwgError::Io(format!("cannot read {what}: {e}")),
+        })
+}
+
+/// Converts a DWG file to DXF and returns the DXF bytes. Neither the DWG file nor the DXF file
+/// may be bigger than `max_bytes`.
 pub fn dwg_to_dxf(
     dwg: &Path,
     conv: &Converter,
     run_opts: &RunOptions,
+    max_bytes: u64,
 ) -> Result<Vec<u8>, DwgError> {
     if !dwg.is_file() {
         return Err(DwgError::Io(format!("cannot read {}", dwg.display())));
     }
+    check_size(dwg, max_bytes, "the DWG file")?;
     let tmp = temp_dir()?;
     let input = tmp.path().join("in");
     let output = tmp.path().join("out");
@@ -390,7 +407,7 @@ pub fn dwg_to_dxf(
         tool: conv.name().into(),
         detail: "it finished but made no DXF file. The DWG file may be damaged or of a version that the converter does not know".into(),
     })?;
-    fs::read(&dxf).map_err(|e| DwgError::Io(format!("cannot read the converted file: {e}")))
+    crate::read_regular(&dxf, max_bytes, "the converted DXF file").map_err(DwgError::Io)
 }
 
 /// Converts DXF bytes to a DWG file at `dest`.
@@ -474,7 +491,7 @@ pub fn import_file(
     search: &Search,
 ) -> Result<ImportResult, DwgError> {
     let conv = detect(search).ok_or_else(|| no_converter(search))?;
-    let data = dwg_to_dxf(path, &conv, run_opts)?;
+    let data = dwg_to_dxf(path, &conv, run_opts, opts.max_bytes)?;
     let name = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -484,8 +501,16 @@ pub fn import_file(
         data,
         extra: Default::default(),
     };
+    // The tags of the objects name the DWG file, not the temporary DXF file.
+    let named = ImportOptions {
+        source_name: opts
+            .source_name
+            .clone()
+            .or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned())),
+        ..opts.clone()
+    };
     let mut result = importer(Format::Dxf)
-        .import(&src, &crate::Context::of(doc), opts)
+        .import(&src, &crate::Context::of(doc), &named)
         .map_err(|e| DwgError::Format(format!("the converted DXF could not be read: {e}")))?;
     result.report.format = "dwg".into();
     result.report.notes.push(format!(
@@ -654,6 +679,54 @@ mod tests {
         let mut ed = kadakas_core::command::Editor::new(Document::with_sequential_ids());
         ed.execute(&r.command).unwrap();
         assert_eq!(ed.doc().objects.len(), 1);
+        // The tag names the DWG file, not the temporary DXF file (IOP-22).
+        let drawing = r.report.drawing.clone().unwrap();
+        assert!(drawing.starts_with("site.dwg"), "{drawing}");
+        let o = ed.doc().objects.values().next().unwrap();
+        let tag = kadakas_core::provenance::tag(&o.data).unwrap();
+        assert_eq!((tag.drawing, tag.kind.as_str()), (drawing, "LINE"));
+        // The caller can name the source.
+        let named = ImportOptions {
+            source_name: Some("renamed.dwg".into()),
+            ..ImportOptions::default()
+        };
+        let r = import_file(
+            &dwg,
+            &named,
+            &RunOptions::default(),
+            &Document::with_sequential_ids(),
+            &s.search(),
+        )
+        .unwrap();
+        assert!(r.report.drawing.unwrap().starts_with("renamed.dwg"));
+    }
+
+    #[test]
+    fn a_file_over_the_size_limit_is_refused_before_and_after_the_converter() {
+        let s = Stubs::new();
+        libre_stub(&s);
+        let work = Stubs::new();
+        let dwg = dwg_file(work.0.path());
+        let doc = Document::with_sequential_ids();
+        let run = |max_bytes: u64| {
+            let opts = ImportOptions {
+                max_bytes,
+                ..ImportOptions::default()
+            };
+            import_file(&dwg, &opts, &RunOptions::default(), &doc, &s.search())
+                .err()
+                .map(|e| e.to_string())
+        };
+        // The DWG file is 8 bytes: it is refused before the converter starts.
+        let e = run(4).unwrap();
+        assert!(e.contains("the DWG file") && e.contains("max_bytes"), "{e}");
+        // The converted DXF is bigger than the limit.
+        let e = run(60).unwrap();
+        assert!(
+            e.contains("converted DXF") && e.contains("max_bytes"),
+            "{e}"
+        );
+        assert!(run(1_000_000).is_none());
     }
 
     #[test]

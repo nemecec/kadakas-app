@@ -344,3 +344,24 @@ fn ifc_export_follows_the_path_policy_and_never_changes_the_document() {
         .unwrap();
     assert!(free.exists());
 }
+
+#[test]
+fn a_client_cannot_raise_the_file_limit_of_the_session() {
+    let dxf = tmp("limit.dxf");
+    std::fs::write(&dxf, "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\nWalls\n10\n0\n20\n0\n11\n1000\n21\n0\n0\nENDSEC\n0\nEOF\n").unwrap();
+    let mut s = Session::with_sequential_ids();
+    s.set_limits(crate::SessionLimits {
+        import_text_bytes: 20,
+        ..crate::SessionLimits::default()
+    });
+    let e = call(
+        &mut s,
+        "import.file",
+        json!({"path": dxf, "options": {"max_bytes": 1_000_000_000u64}}),
+    )
+    .unwrap_err();
+    assert!(e.message.contains("max_bytes"), "{}", e.message);
+    assert!(s.editor.doc().objects.is_empty());
+    s.set_limits(crate::SessionLimits::default());
+    assert!(call(&mut s, "import.file", json!({"path": dxf})).is_ok());
+}

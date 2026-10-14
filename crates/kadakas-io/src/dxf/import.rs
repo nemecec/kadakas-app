@@ -16,10 +16,14 @@ use kadakas_core::mesh3d::Mesh3d;
 use kadakas_core::model::{Attributes, ClassId, Color, LayerId, Shape};
 
 use super::parse::{self, Dxf, Entity, LayerDef};
+use super::source::{Path, Tracking};
 use super::{aci_rgb, true_color};
+use super::{hash, revision};
 use crate::builder::Builder;
 use crate::options::{LayerMode, OriginMode, PointMode, Unit};
 use crate::{Context, ImportOptions, ImportResult, IoError, Source};
+use kadakas_core::provenance;
+use kadakas_core::resource::ResourceBody;
 
 /// Most entities that one import visits, counting every copy of an exploded block.
 const MAX_VISITS: usize = 5_000_000;
@@ -29,6 +33,13 @@ const MAX_DEPTH: usize = 12;
 const MAX_ARRAY: i64 = 10_000;
 
 pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<ImportResult, IoError> {
+    if src.data.len() as u64 > opts.max_bytes {
+        return Err(IoError::Format(format!(
+            "the DXF data is {} bytes, more than the limit of {} (option max_bytes)",
+            src.data.len(),
+            opts.max_bytes
+        )));
+    }
     let dxf = parse::parse(&src.data)?;
     let mut b = Builder::new(ctx, "dxf", opts.max_objects);
     let unit = match (
@@ -55,6 +66,17 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
             .note("the file ends early: imported what could be read");
     }
     let scale = unit.mm_per_unit();
+    let tracking = opts
+        .track_source
+        .then(|| Tracking::new(opts.source_name.as_deref().unwrap_or(&src.name), &dxf));
+    let tracking = tracking.as_ref();
+    b.report.drawing = tracking.map(|t| t.drawing.clone());
+    b.report.revision = tracking.map(|t| t.revision.clone());
+    if let Some(t) = tracking
+        && t.headerless
+    {
+        b.report.note("the file has no header, so nothing says which drawing it is: it is a drawing of its own, and an update of another file with it asks you to confirm");
+    }
 
     // Real-world drawings (survey grids in meters) are far from (0, 0). A probe pass finds the extent,
     // and the shift goes into the document georeference so that the geometry stays near the origin.
@@ -80,13 +102,14 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
         b.report.note(&format!(
             "the file has a GEODATA object: the drawing is placed in {crs}"
         ));
-        walk(&dxf, opts, &mut b, scale)?;
+        walk(&dxf, opts, &mut b, scale, tracking)?;
+        store_base(&mut b, &dxf, tracking, scale);
         return Ok(b.finish());
     }
     if doc_has_georef || opts.origin == OriginMode::Center {
         let mut probe = Builder::new(ctx, "dxf", opts.max_objects);
         probe.set_probe();
-        walk(&dxf, opts, &mut probe, scale)?;
+        walk(&dxf, opts, &mut probe, scale, tracking)?;
         if let Some((lo, hi)) = probe.bounds() {
             let center = (lo + hi) / 2.0;
             if center.is_finite() && center.abs().max_element() > FAR_MM {
@@ -111,23 +134,117 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
             }
         }
     }
-    walk(&dxf, opts, &mut b, scale)?;
+    walk(&dxf, opts, &mut b, scale, tracking)?;
+    store_base(&mut b, &dxf, tracking, scale);
     Ok(b.finish())
+}
+
+/// Keeps the summaries of the entities of this revision in the document (resources of type
+/// `import_base`), so that an update can diff the old file against the new one without the old
+/// file. A big base is split in parts of about `BASE_PART_BYTES`, so that each part is a blob of
+/// the collaboration that fits in a frame. A revision that the document keeps is not stored again.
+fn store_base(b: &mut Builder, dxf: &Dxf, tracking: Option<&Tracking>, scale: f64) {
+    let Some(t) = tracking else { return };
+    if b.is_probe() || b.has_base(&t.drawing, &t.revision) {
+        return;
+    }
+    let (mut recs, cut) = revision::records(dxf, provenance::MAX_BASE_RECS);
+    if cut {
+        b.report.note("the file has too many entities to keep for an update: an update will need the old file");
+        return;
+    }
+    recs.iter_mut().for_each(revision::Rec::compact);
+    let mut parts: Vec<Vec<serde_json::Value>> = vec![vec![]];
+    let mut bytes = 0usize;
+    for r in &recs {
+        let v = r.to_value();
+        let n = v.to_string().len();
+        if bytes + n > provenance::BASE_PART_BYTES && !parts.last().is_some_and(Vec::is_empty) {
+            parts.push(vec![]);
+            bytes = 0;
+        }
+        parts.last_mut().expect("a part").push(v);
+        bytes += n;
+    }
+    if parts.len() as u64 > provenance::MAX_BASE_PARTS {
+        b.report.note(
+            "the entities are too big to keep for an update: an update will need the old file",
+        );
+        return;
+    }
+    let count = parts.len();
+    let bodies: Vec<serde_json::Value> = parts
+        .into_iter()
+        .enumerate()
+        .map(|(n, recs)| {
+            let mut body = serde_json::json!({
+                "type": provenance::BASE_TYPE,
+                "drawing": t.drawing,
+                "revision": t.revision,
+                "unit_scale": scale,
+                "recs": recs,
+            });
+            if count > 1 {
+                body["part"] = n.into();
+                body["parts"] = count.into();
+            }
+            body
+        })
+        .collect();
+    if bodies.iter().any(|v| provenance::check_base(v).is_err()) {
+        b.report.note(
+            "the entities are too big to keep for an update: an update will need the old file",
+        );
+        return;
+    }
+    let key = hash::hex(hash::content_hash_of(&t.drawing, &t.revision));
+    for (n, body) in bodies.into_iter().enumerate() {
+        let name = if count > 1 {
+            format!("import base {key} part {} of {count}", n + 1)
+        } else {
+            format!("import base {key}")
+        };
+        b.resource(&name, ResourceBody::ImportBase(std::sync::Arc::new(body)));
+    }
 }
 
 /// A drawing whose center is farther from (0, 0) than this (mm) is shifted. This is 1 km.
 const FAR_MM: f64 = 1_000_000.0;
 
 /// Converts all entities of the drawing into `b`.
-fn walk(dxf: &Dxf, opts: &ImportOptions, b: &mut Builder, scale: f64) -> Result<(), IoError> {
-    let target_layer = match &opts.layer {
-        Some(name) => b.layer(name, true),
-        None => b.default_layer,
+fn walk(
+    dxf: &Dxf,
+    opts: &ImportOptions,
+    b: &mut Builder,
+    scale: f64,
+    tracking: Option<&Tracking>,
+) -> Result<(), IoError> {
+    // A probe stores nothing, so it needs no tags and no source layers.
+    let tracking = tracking.filter(|_| !b.is_probe());
+    let xform = (scale, [b.offset().x, b.offset().y]);
+    if let Some(t) = tracking
+        && b.knows_drawing(&t.drawing)
+    {
+        b.report.note("this drawing was imported before: use Update to bring in its changes (the objects of this import are added next to the old ones)");
+    }
+    // With source tracking, the objects of a file go to a layer of their own, named after the
+    // file, unless the caller names a layer. In `layers` mode each DXF layer gets its own layer.
+    let target_layer = match (&opts.layer, tracking, opts.layer_mode) {
+        (Some(name), ..) => b.layer(name, true),
+        (None, Some(t), LayerMode::Classes) => b.source_layer(
+            &t.name,
+            true,
+            &t.layer_source("", xform.0, xform.1),
+            &t.name,
+        ),
+        _ => b.default_layer,
     };
     let mut w = Walker {
         dxf,
         opts,
         b,
+        tracking,
+        xform,
         defs: dxf.layers.iter().map(|l| (l.name.as_str(), l)).collect(),
         mapped: HashMap::new(),
         target_layer,
@@ -142,6 +259,7 @@ fn walk(dxf: &Dxf, opts: &ImportOptions, b: &mut Builder, scale: f64) -> Result<
         pen: None,
         weight: None,
         depth: 0,
+        path: Path::default(),
     };
     for e in &dxf.entities {
         w.entity(e, &root);
@@ -227,6 +345,8 @@ struct Cx {
     pen: Option<Color>,
     weight: Option<f64>,
     depth: usize,
+    /// The block and the INSERTs that led here, for the source tags.
+    path: Path,
 }
 
 struct Item {
@@ -252,6 +372,9 @@ struct Walker<'a> {
     dxf: &'a Dxf,
     opts: &'a ImportOptions,
     b: &'a mut Builder,
+    tracking: Option<&'a Tracking>,
+    /// Millimeters per unit, and the shift in mm, for the source of layers.
+    xform: (f64, [f64; 2]),
     defs: HashMap<&'a str, &'a LayerDef>,
     /// DXF layer name to (design layer, class, attributes that the layer gives its objects).
     mapped: HashMap<String, (LayerId, ClassId, Attributes)>,
@@ -422,7 +545,14 @@ impl Walker<'_> {
                 (self.target_layer, class, Attributes::default())
             }
             LayerMode::Layers => {
-                let layer = self.b.layer(&decode_percent(name), visible);
+                let shown = decode_percent(name);
+                let layer = match self.tracking {
+                    Some(t) => {
+                        let src = t.layer_source(name, self.xform.0, self.xform.1);
+                        self.b.source_layer(&shown, visible, &src, &t.name)
+                    }
+                    None => self.b.layer(&shown, visible),
+                };
                 (
                     layer,
                     self.b.default_class,
@@ -474,10 +604,17 @@ impl Walker<'_> {
         };
         let (layer, class, defaults) = self.target(&layer_name);
         let attrs = self.attrs(e, cx, &defaults);
-        for item in items {
+        let parts = items.len();
+        for (n, mut item) in items.into_iter().enumerate() {
             let mut a = attrs.clone();
             if item.fill.is_some() {
                 a.fill = item.fill;
+            }
+            if let Some(t) = self.tracking {
+                let part = (parts > 1).then_some(n as u32);
+                if let Some(tag) = t.tag(e, &cx.path, part) {
+                    item.data.insert(provenance::KEY.into(), tag);
+                }
             }
             self.b.add(&e.kind, item.shape, layer, class, a, item.data);
         }
@@ -600,12 +737,20 @@ impl Walker<'_> {
                     zs: sz,
                     zt: e.fd(30, 0.0) - sz * block.base[2],
                 };
+                let path = match self.tracking {
+                    Some(t) => {
+                        let copy = (cols_n * rows_n > 1).then_some((r * cols_n + c) as u32);
+                        t.enter(&cx.path, e, name, block, copy)
+                    }
+                    None => Path::default(),
+                };
                 let inner = Cx {
                     xf: cx.xf.after(&local),
                     layer: layer.clone(),
                     pen: own_pen,
                     weight: cx.weight,
                     depth: cx.depth + 1,
+                    path,
                 };
                 for sub in &block.entities {
                     self.entity(sub, &inner);
@@ -1470,8 +1615,10 @@ mod tests {
         );
         assert!(matches!(s[4], Shape::Locus3d { p } if p.z == 3.0));
         assert!(matches!(s[5], Shape::Locus3d { p } if p.z == 0.0));
-        // Layers become classes on the active layer.
-        assert_eq!(doc.layers.len(), 1);
+        // Layers become classes on one layer of their own, apart from the design work.
+        assert_eq!(doc.layers.len(), 2);
+        assert_eq!(doc.layers[1].name, "t");
+        assert!(doc.objects.values().all(|o| o.layer == doc.layers[1].id));
         let names: Vec<_> = doc.classes.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["None", "Walls", "Trees", "0"]);
         let walls = doc.classes.iter().find(|c| c.name == "Walls").unwrap().id;
@@ -1822,8 +1969,9 @@ mod tests {
         );
         assert!(matches!(shapes(&doc)[0], Shape::Line { b, .. } if b.x == 1000.0));
         assert!(report.notes.is_empty());
+        // No header: no unit, and nothing says which drawing it is.
         let (_, report) = run(&dxf_text("", "", "", ents), &ImportOptions::default());
-        assert_eq!(report.notes.len(), 1);
+        assert_eq!(report.notes.len(), 2);
         let (_, report) = run(
             &dxf_text("9\n$INSUNITS\n70\n0\n", "", "", ents),
             &ImportOptions::default(),

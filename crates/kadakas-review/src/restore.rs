@@ -152,3 +152,6 @@ pub fn same_content(a: &Document, b: &Document) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod base_tests;

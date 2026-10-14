@@ -16,6 +16,9 @@ io-dialog-document-crs-default-utm-zone = Dokumendi koordinaatsüsteem (vaikimis
 io-dialog-class-from-attribute = Klass atribuudist
 io-dialog-keep-the-coordinates-of-the-file-default = Säilita faili koordinaadid (vaikimisi: joonis tsentreeritakse)
 io-dialog-design-layer = Joonestuskiht
+io-dialog-empty-a-new-layer-named-after-the-file = Tühi: uus kiht faili nime järgi
+io-dialog-each-dxf-layer-becomes-its-own-layer = Ei kasutata: iga DXF-i kiht saab oma kihi
+io-dialog-keep-the-source-for-updates = Säilita allikas (uuenduste jaoks)
 io-dialog-cancel = Katkesta
 io-dialog-imported-objects-skipped =
     Imporditi { $imported ->

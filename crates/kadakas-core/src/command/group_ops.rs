@@ -376,6 +376,7 @@ impl Tx<'_> {
                     crate::hardscape::translate_object_data(&mut o, *delta);
                     o.data.remove(EDITING_KEY);
                     o.data.remove(EDIT_GROUP_KEY);
+                    crate::provenance::strip_copy(&mut o.data);
                     self.remap_copy_refs(&mut o, &map);
                     self.check_sheet_rules(o.layer, &o.shape, None)?;
                     self.add_new(o);

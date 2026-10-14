@@ -96,8 +96,14 @@ pub struct Source {
 impl Source {
     /// Reads a file, and for a shapefile its `dbf`, `prj` and `cpg` parts.
     pub fn read(path: &Path) -> Result<Source, IoError> {
-        let data = std::fs::read(path)
-            .map_err(|e| IoError::File(format!("cannot read {}: {e}", path.display())))?;
+        Source::read_limited(path, u64::MAX)
+    }
+
+    /// Like [`Source::read`], but refuses a file bigger than `max_bytes`. The size is checked
+    /// before the file is read.
+    pub fn read_limited(path: &Path, max_bytes: u64) -> Result<Source, IoError> {
+        let data =
+            read_regular(path, max_bytes, &path.display().to_string()).map_err(IoError::File)?;
         let name = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -117,6 +123,25 @@ impl Source {
     }
 }
 
+/// Reads a regular file of at most `max_bytes` bytes (the capped reader of `kadakas_sys::fsio`):
+/// the kind and the size are checked before the file is read, and a file that grows while it is
+/// read ends in an error. `what` names the file in the message.
+pub(crate) fn read_regular(path: &Path, max_bytes: u64, what: &str) -> Result<Vec<u8>, String> {
+    use kadakas_sys::fsio::{OpenError, open_regular};
+    use std::io::Read;
+    let mut reader = open_regular(path, max_bytes).map_err(|e| match e {
+        OpenError::TooLarge { len, max } => {
+            format!("{what} is {len} bytes, more than the limit of {max} (option max_bytes)")
+        }
+        e => format!("cannot read {what}: {e}"),
+    })?;
+    let mut data = Vec::new();
+    reader
+        .read_to_end(&mut data)
+        .map_err(|e| format!("cannot read {what}: {e} (option max_bytes)"))?;
+    Ok(data)
+}
+
 /// What an importer needs to know about the document that receives the import.
 /// It lets the importer plan IDs and reuse layers and classes by name.
 #[derive(Clone, Debug)]
@@ -127,6 +152,10 @@ pub struct Context {
     pub active_layer: LayerId,
     pub active_class: ClassId,
     pub georef: Option<kadakas_core::georef::Georeference>,
+    /// Layers that are grey (an import onto one lets it go visible and makes it grey again).
+    pub grey_layers: Vec<LayerId>,
+    /// The (drawing, revision) of the import bases that the document keeps.
+    pub bases: Vec<(String, String)>,
 }
 
 impl Context {
@@ -138,6 +167,18 @@ impl Context {
             active_layer: doc.active_layer,
             active_class: doc.active_class,
             georef: doc.georef.clone(),
+            grey_layers: doc.drawing.grey.layers.iter().copied().collect(),
+            bases: doc
+                .resources
+                .iter()
+                .filter_map(|r| match &r.body {
+                    kadakas_core::resource::ResourceBody::ImportBase(v) => Some((
+                        v["drawing"].as_str()?.to_string(),
+                        v["revision"].as_str()?.to_string(),
+                    )),
+                    _ => None,
+                })
+                .collect(),
         }
     }
 }
@@ -224,7 +265,19 @@ pub fn import_file(
     let format = format.or_else(|| Format::from_path(path)).ok_or_else(|| {
         IoError::Format("unknown file type: give a format (dxf, shp or geojson)".into())
     })?;
-    let src = Source::read(path)?;
+    let src = Source::read_limited(path, opts.max_bytes)?;
+    // The tags of imported objects name the file with its extension.
+    let named;
+    let opts = match path.file_name() {
+        Some(n) if opts.source_name.is_none() => {
+            named = ImportOptions {
+                source_name: Some(n.to_string_lossy().into_owned()),
+                ..opts.clone()
+            };
+            &named
+        }
+        _ => opts,
+    };
     importer(format).import(&src, &Context::of(doc), opts)
 }
 
@@ -268,6 +321,35 @@ mod tests {
         }
         assert!(exporter(Format::Shapefile).is_none());
         assert_eq!(exporter(Format::Dxf).unwrap().format(), Format::Dxf);
+    }
+
+    #[test]
+    fn a_file_over_the_size_limit_is_refused_before_it_is_read() {
+        let dir = kadakas_sys::tmp::PrivateTempDir::new("kadakas-io-size").unwrap();
+        let path = dir.path().join("big.dxf");
+        std::fs::write(&path, "0\nSECTION\n").unwrap();
+        let doc = Document::with_sequential_ids();
+        let small = ImportOptions {
+            max_bytes: 4,
+            ..ImportOptions::default()
+        };
+        let e = import_file(&path, None, &small, &doc).unwrap_err();
+        assert!(
+            matches!(&e, IoError::File(m) if m.contains("max_bytes")),
+            "{e}"
+        );
+        assert!(Source::read_limited(&path, 4).is_err());
+        // Only a regular file is read.
+        let e = Source::read_limited(dir.path(), 100).unwrap_err();
+        assert!(
+            matches!(&e, IoError::File(m) if m.contains("regular file")),
+            "{e}"
+        );
+        assert!(Source::read_limited(&dir.path().join("none.dxf"), 100).is_err());
+        assert_eq!(Source::read_limited(&path, 100).unwrap().data.len(), 10);
+        // The name with its extension goes to the tags unless the caller names the source.
+        let r = import_file(&path, None, &ImportOptions::default(), &doc).unwrap();
+        assert!(r.report.drawing.unwrap().starts_with("big.dxf#"));
     }
 
     #[test]

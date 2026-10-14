@@ -412,6 +412,7 @@ impl Hub {
         let ctx = draft.context;
         let report = Report {
             id: id.clone(),
+            nonce: new_nonce(),
             kind: draft.kind,
             title,
             body: scrub::text(&draft.body, MAX_BODY),
@@ -511,13 +512,13 @@ impl Hub {
         payload: &str,
         privacy: Privacy,
     ) -> Result<(), FeedbackError> {
-        payload::check(payload, id)?;
         let _guard = self.lock()?;
         let mut ob = self.load();
         let r =
             ob.reports.iter_mut().find(|r| r.id == id).ok_or_else(|| {
                 FeedbackError::NotFound(format!("no report {}", scrub::text(id, 40)))
             })?;
+        payload::check(payload, &r.client_id())?;
         if r.status != Status::NeedsReview {
             return Err(FeedbackError::State(
                 "the report does not wait for review".into(),
@@ -728,6 +729,14 @@ fn new_installation_id() -> String {
         lo >> 48,
         lo & 0xffff_ffff_ffff
     )
+}
+
+/// 64 random bits as 16 hex characters, for the `client_id` of a report. It is made the same way
+/// as the installation id.
+fn new_nonce() -> String {
+    use std::hash::BuildHasher;
+    let n = std::collections::hash_map::RandomState::new().hash_one(0x6e6f_6e63_6531_u64);
+    format!("{n:016x}")
 }
 
 /// True if a new report with this key and origin would merge into `r`.
@@ -1056,7 +1065,7 @@ mod tests {
         let p = payload::build(&r, &PayloadParts::default()).unwrap();
         assert!(matches!(
             h.approve("fb-99", &p, Privacy::default()),
-            Err(FeedbackError::Invalid(_))
+            Err(FeedbackError::NotFound(_))
         ));
         assert!(matches!(
             h.approve(&s.id, "{", Privacy::default()),
@@ -1073,6 +1082,39 @@ mod tests {
             h.approve("fb-99", &p99, Privacy::default()),
             Err(FeedbackError::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn client_id_differs_between_fresh_outboxes() {
+        let mut a = Hub::in_memory();
+        let mut b = Hub::in_memory();
+        let ia = a.submit(draft("x"), vec![], 0).unwrap().id;
+        let ib = b.submit(draft("x"), vec![], 0).unwrap().id;
+        let ra = a.get(&ia).unwrap();
+        let rb = b.get(&ib).unwrap();
+        assert_eq!(ra.id, "fb-1");
+        assert_eq!(rb.id, "fb-1");
+        assert_eq!(ra.nonce.len(), 16);
+        assert!(ra.nonce.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(ra.client_id(), rb.client_id());
+        assert!(ra.client_id().starts_with("fb-1-"));
+    }
+
+    #[test]
+    fn old_report_without_nonce_builds_and_approves() {
+        let mut h = Hub::in_memory();
+        let s = h
+            .submit(draft("a"), vec![att(AttachmentKind::Log, b"x".to_vec())], 0)
+            .unwrap();
+        // Make it look like a report from an older outbox.
+        let mut ob = h.load();
+        ob.reports[0].nonce.clear();
+        h.save(&ob).unwrap();
+        let r = h.get(&s.id).unwrap();
+        assert_eq!(r.client_id(), "fb-1");
+        let p = payload::build(&r, &PayloadParts::default()).unwrap();
+        assert!(p.contains("\"client_id\":\"fb-1\""));
+        h.approve(&s.id, &p, Privacy::default()).unwrap();
     }
 
     #[test]

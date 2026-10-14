@@ -45,7 +45,7 @@ pub(crate) fn describe() -> Value {
         "export_formats": ["dxf (ASCII)", "geojson", "dwg (needs a converter that you install, see describe.io.dwg)", "ifc (IFC4, IFC2X3 or IFC4X3, see describe.io.ifc)", "gltf, glb, obj (3D, see describe.io.x3d)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
         "import_options": {
             "layer_mode": "classes (default: DXF layers become classes on one design layer) | layers (DXF layers become design layers)",
-            "layer": "name of the design layer that receives the objects (created if needed)",
+            "layer": "name of the design layer that receives the objects (created if needed). Default: for DXF and DWG with track_source (the default) a new layer named after the file, else the active layer; for GIS files the active layer",
             "unit": "mm | cm | m | km | inch | foot | yard | mile. DXF only. Default: $INSUNITS of the file, else mm",
             "explode_blocks": "true (default). DXF INSERT becomes objects",
             "points": "all (default) | with_z. DXF POINT becomes locus3d",
@@ -57,7 +57,10 @@ pub(crate) fn describe() -> Value {
             "origin": "center (default) | file. A drawing whose center is more than 1 km from (0, 0) is shifted to the origin, and the shift is saved as the document georeference (empty CRS if the file has none). file keeps the numbers of the file (objects beyond 1e9 mm are skipped). A document that has a georeference keeps its own origin",
             "faces": "DXF: polygons (default: each 3DFACE is a closed polyline3d, source data for a site model) | mesh (all faces of a DXF layer become one mesh3d). POLYFACE and POLYGON MESH polylines always become mesh3d",
             "max_exploded": "DXF: most objects that exploded blocks may make. Default 100000. The import fails above it",
-            "max_objects": "stop after this many objects. Default 500000"
+            "max_objects": "stop after this many objects. Default 500000",
+            "track_source": "DXF and DWG: true (default). Each object keeps its origin in data.import: {drawing: the lineage, $FINGERPRINTGUID else the file name (a file without a header: the name and a hash of its entities), revision: $VERSIONGUID else a hash of the header, handle: DXF handle (group code 5), kind: DXF type, hash: hash of the entity, obj: hash of the object right after the import (a different hash now means the object was edited), block, via, part}. The objects go to a layer of their own named after the file (classes mode), or to one layer per DXF layer (layers mode). Layers are matched on the drawing, so a new revision of the same drawing reuses them. These layers never reuse a design layer, and they carry the origin, the revision and the import transform too (layer.import_source). The entity summaries of the revision are kept in a resource of type import_base for later updates. false: the objects go to the active layer without tags. A copy of an object does not keep the tag",
+            "source_name": "DXF and DWG: the file name that the tags record. Default: the name of the file",
+            "max_bytes": "the largest file to read, in bytes, checked before the file is read (DXF, DWG after the conversion, and GIS files). Default 536870912 (512 MiB), and never above the limit import_text_bytes of the session"
         },
         "export_options": {
             "layer_mode": "classes (default: one DXF layer per class) | layers (one per design layer)",
@@ -144,7 +147,9 @@ impl Session {
         if crate::ifc_api::is_ifc(format.as_deref(), &path) {
             return self.import_ifc_file(path, &options, checked);
         }
-        let opts = ImportOptions::from_json(&options).map_err(rpc)?;
+        let mut opts = ImportOptions::from_json(&options).map_err(rpc)?;
+        // A client cannot raise the limit of the session.
+        opts.max_bytes = opts.max_bytes.min(self.limits.import_text_bytes);
         let format = format_of(format.as_deref())?;
         let path = if checked {
             self.file_path(path, format, false)?

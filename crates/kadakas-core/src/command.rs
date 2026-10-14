@@ -186,6 +186,13 @@ pub enum Command {
         #[serde(default)]
         scale: Option<f64>,
     },
+    /// Set or clear the import source of a layer (`provenance::LayerSource`). Importers use it for
+    /// the layers that they make.
+    SetLayerSource {
+        id: LayerId,
+        #[serde(default)]
+        source: Option<crate::provenance::LayerSource>,
+    },
     /// Delete an empty layer.
     DeleteLayer {
         id: LayerId,
@@ -698,7 +705,7 @@ impl Meta {
             .resources
             .iter()
             .map(|r| match &r.body {
-                ResourceBody::Image(_) => IMAGE_PART_BYTES,
+                ResourceBody::Image(_) | ResourceBody::ImportBase(_) => IMAGE_PART_BYTES,
                 _ => serde_json::to_vec(r).map_or(META_PART_BYTES, |v| v.len() as u64),
             })
             .sum();
@@ -1286,6 +1293,9 @@ impl<'a> Tx<'a> {
                         "the data key '{k}' is reserved. Use the style commands (plants, hardscapes, landscape areas)"
                     )));
                 }
+                if let Some(v) = set.get(crate::provenance::KEY) {
+                    crate::provenance::check(v).map_err(CommandError::Invalid)?;
+                }
                 self.editable(*id)?;
                 self.touch(*id);
                 let o = self.doc.object_mut(*id).expect("checked");
@@ -1351,6 +1361,26 @@ impl<'a> Tx<'a> {
                 if let Some(v) = scale {
                     l.scale = *v;
                 }
+            }
+            Command::SetLayerSource { id, source } => {
+                if let Some(why) = source.as_ref().and_then(|s| s.problem()) {
+                    return Err(CommandError::Invalid(format!(
+                        "the layer source is not valid: {why}"
+                    )));
+                }
+                let l = self
+                    .doc
+                    .layers
+                    .iter_mut()
+                    .find(|l| l.id == *id)
+                    .ok_or(CommandError::NoLayer(*id))?;
+                match source {
+                    Some(s) => l.extra.insert(
+                        crate::provenance::LAYER_KEY.into(),
+                        serde_json::to_value(s).expect("plain data"),
+                    ),
+                    None => l.extra.remove(crate::provenance::LAYER_KEY),
+                };
             }
             Command::DeleteLayer { id } => {
                 self.doc.layer(*id).ok_or(CommandError::NoLayer(*id))?;

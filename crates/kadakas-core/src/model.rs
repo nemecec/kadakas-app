@@ -1496,6 +1496,7 @@ impl Document {
         if let Some(problem) = self.history.as_ref().and_then(|h| h.problem()) {
             notes.push(problem);
         }
+        notes.extend(crate::provenance::repair(self));
         self.load_notes = notes;
         let mut seen = std::collections::HashSet::new();
         let ids = self

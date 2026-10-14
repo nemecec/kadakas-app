@@ -257,6 +257,47 @@
       ],
       "type": "string"
     },
+    "LayerSource": {
+      "additionalProperties": false,
+      "description": "The source of an imported layer.",
+      "properties": {
+        "drawing": {
+          "description": "The drawing (lineage), as in `ImportTag::drawing`. Layers are matched on it.",
+          "type": "string"
+        },
+        "dxf_layer": {
+          "default": "",
+          "description": "The name of the DXF layer, when the layer maps one. Empty for a layer that holds the\nwhole file.",
+          "type": "string"
+        },
+        "revision": {
+          "description": "The revision that was imported last.",
+          "type": "string"
+        },
+        "shift": {
+          "description": "The shift in mm that the import took off the coordinates of the file (the model is the file\ntimes `unit_scale` minus `shift`).",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "unit_scale": {
+          "description": "Millimeters per unit of the file, as the import used it.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "drawing",
+        "revision",
+        "unit_scale",
+        "shift"
+      ],
+      "type": "object"
+    },
     "ObjectId": {
       "description": "An ID: a UUID text such as 0190f1c2-7a3b-7c1d-8e2f-123456789abc.",
       "maxLength": 36,
@@ -1478,6 +1519,34 @@
             "boolean",
             "null"
           ]
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Set or clear the import source of a layer (`provenance::LayerSource`). Importers use it for\nthe layers that they make.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LayerId"
+        },
+        "op": {
+          "const": "set_layer_source",
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
