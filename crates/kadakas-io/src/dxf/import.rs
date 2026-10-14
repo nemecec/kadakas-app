@@ -19,10 +19,11 @@ use super::parse::{self, Dxf, Entity, LayerDef};
 use super::source::{Path, Tracking};
 use super::{aci_rgb, true_color};
 use super::{hash, revision};
+use crate::BaseMode;
 use crate::builder::Builder;
 use crate::options::{LayerMode, OriginMode, PointMode, Unit};
 use crate::{Context, ImportOptions, ImportResult, IoError, Source};
-use kadakas_core::provenance;
+use kadakas_core::provenance::{self, FileLink};
 use kadakas_core::resource::ResourceBody;
 
 /// Most entities that one import visits, counting every copy of an exploded block.
@@ -32,7 +33,24 @@ const MAX_DEPTH: usize = 12;
 /// Most copies that one array INSERT makes.
 const MAX_ARRAY: i64 = 10_000;
 
-pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<ImportResult, IoError> {
+pub fn import(
+    src: &Source,
+    ctx: &Context,
+    opts: &ImportOptions,
+    link: Option<&FileLink>,
+) -> Result<ImportResult, IoError> {
+    import_capped(src, ctx, opts, link, provenance::MAX_BASE_RECS)
+}
+
+/// [`import`] with the cap of the base as a parameter, so that the tests need not make 200000
+/// entities.
+pub(super) fn import_capped(
+    src: &Source,
+    ctx: &Context,
+    opts: &ImportOptions,
+    link: Option<&FileLink>,
+    cap: usize,
+) -> Result<ImportResult, IoError> {
     if src.data.len() as u64 > opts.max_bytes {
         return Err(IoError::Format(format!(
             "the DXF data is {} bytes, more than the limit of {} (option max_bytes)",
@@ -66,9 +84,24 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
             .note("the file ends early: imported what could be read");
     }
     let scale = unit.mm_per_unit();
-    let tracking = opts
+    let mut tracking = opts
         .track_source
         .then(|| Tracking::new(opts.source_name.as_deref().unwrap_or(&src.name), &dxf));
+    // What to keep for an update is decided now, before the walk: a drawing over the cap is
+    // refused here and not imported without a word (IOP-22).
+    let plan = match tracking.as_mut() {
+        Some(t) => plan_base(
+            opts.base,
+            &dxf,
+            t,
+            b.has_base(&t.drawing, &t.revision),
+            link,
+            cap,
+        )?,
+        None => BasePlan::Off,
+    };
+    b.report.base = plan.name().map(str::to_string);
+    plan.note(&mut b);
     let tracking = tracking.as_ref();
     b.report.drawing = tracking.map(|t| t.drawing.clone());
     b.report.revision = tracking.map(|t| t.revision.clone());
@@ -103,7 +136,7 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
             "the file has a GEODATA object: the drawing is placed in {crs}"
         ));
         walk(&dxf, opts, &mut b, scale, tracking)?;
-        store_base(&mut b, &dxf, tracking, scale);
+        store_base(&mut b, plan, tracking, scale)?;
         return Ok(b.finish());
     }
     if doc_has_georef || opts.origin == OriginMode::Center {
@@ -135,25 +168,113 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
         }
     }
     walk(&dxf, opts, &mut b, scale, tracking)?;
-    store_base(&mut b, &dxf, tracking, scale);
+    store_base(&mut b, plan, tracking, scale)?;
     Ok(b.finish())
+}
+
+/// What an import keeps for a later update.
+enum BasePlan {
+    /// No source tracking: nothing to decide.
+    Off,
+    /// The summaries of the entities (`base: "auto"`), made before the walk.
+    Summary(Vec<revision::Rec>),
+    /// The document keeps the summaries of this revision already.
+    Existing,
+    /// A link to the original file is on the layer source (`base: "link"`).
+    Link,
+    /// Nothing (`base: "none"`).
+    Nothing,
+}
+
+impl BasePlan {
+    /// The name in the report.
+    fn name(&self) -> Option<&'static str> {
+        match self {
+            BasePlan::Off => None,
+            BasePlan::Summary(_) | BasePlan::Existing => Some(BaseMode::Auto.name()),
+            BasePlan::Link => Some(BaseMode::Link.name()),
+            BasePlan::Nothing => Some(BaseMode::Off.name()),
+        }
+    }
+
+    /// Tells the person in the report what the update will use.
+    fn note(&self, b: &mut Builder) {
+        match self {
+            BasePlan::Link => b.report.note("the entities are not kept in the document: an update reads the original file from its path and checks that it has not changed"),
+            BasePlan::Nothing => b.report.note("no update data was kept (base: none): an update of this drawing will need the old file"),
+            _ => {}
+        }
+    }
+}
+
+/// Most entities of all blocks and the model: what `revision::records` counts.
+fn entity_count(dxf: &Dxf) -> usize {
+    dxf.entities.len()
+        + dxf
+            .blocks
+            .values()
+            .map(|block| block.entities.len())
+            .sum::<usize>()
+}
+
+/// The error for a base that cannot be kept in the document although it fits the cap by count.
+fn base_too_big() -> IoError {
+    IoError::Format("the entities of this drawing are too big to keep in the document for an update. Set the import option base to \"link\" (keep a link to the original file for updates) or \"none\" (import without update data)".into())
+}
+
+/// Decides what to keep. `auto` keeps the summaries when they fit the cap and refuses above it.
+fn plan_base(
+    mode: BaseMode,
+    dxf: &Dxf,
+    t: &mut Tracking,
+    has_base: bool,
+    link: Option<&FileLink>,
+    cap: usize,
+) -> Result<BasePlan, IoError> {
+    match mode {
+        BaseMode::Off => Ok(BasePlan::Nothing),
+        BaseMode::Link => {
+            let link = link.ok_or_else(|| {
+                IoError::Option(
+                    "base \"link\" needs a file on disk: the importer did not get one".into(),
+                )
+            })?;
+            t.link = Some(link.clone());
+            Ok(BasePlan::Link)
+        }
+        BaseMode::Auto if has_base => Ok(BasePlan::Existing),
+        BaseMode::Auto => {
+            let (mut recs, cut) = revision::records(dxf, cap);
+            if cut {
+                return Err(IoError::BaseChoice {
+                    entities: entity_count(dxf),
+                    cap,
+                });
+            }
+            recs.iter_mut().for_each(revision::Rec::compact);
+            Ok(BasePlan::Summary(recs))
+        }
+    }
 }
 
 /// Keeps the summaries of the entities of this revision in the document (resources of type
 /// `import_base`), so that an update can diff the old file against the new one without the old
 /// file. A big base is split in parts of about `BASE_PART_BYTES`, so that each part is a blob of
 /// the collaboration that fits in a frame. A revision that the document keeps is not stored again.
-fn store_base(b: &mut Builder, dxf: &Dxf, tracking: Option<&Tracking>, scale: f64) {
-    let Some(t) = tracking else { return };
-    if b.is_probe() || b.has_base(&t.drawing, &t.revision) {
-        return;
+/// Summaries that fit the cap by count but need more parts than a base may have are refused like a
+/// drawing over the cap: the import does not drop them without asking.
+fn store_base(
+    b: &mut Builder,
+    plan: BasePlan,
+    tracking: Option<&Tracking>,
+    scale: f64,
+) -> Result<(), IoError> {
+    let (BasePlan::Summary(recs), Some(t)) = (plan, tracking) else {
+        return Ok(());
+    };
+    if b.is_probe() {
+        return Ok(());
     }
-    let (mut recs, cut) = revision::records(dxf, provenance::MAX_BASE_RECS);
-    if cut {
-        b.report.note("the file has too many entities to keep for an update: an update will need the old file");
-        return;
-    }
-    recs.iter_mut().for_each(revision::Rec::compact);
     let mut parts: Vec<Vec<serde_json::Value>> = vec![vec![]];
     let mut bytes = 0usize;
     for r in &recs {
@@ -167,10 +288,7 @@ fn store_base(b: &mut Builder, dxf: &Dxf, tracking: Option<&Tracking>, scale: f6
         bytes += n;
     }
     if parts.len() as u64 > provenance::MAX_BASE_PARTS {
-        b.report.note(
-            "the entities are too big to keep for an update: an update will need the old file",
-        );
-        return;
+        return Err(base_too_big());
     }
     let count = parts.len();
     let bodies: Vec<serde_json::Value> = parts
@@ -191,11 +309,14 @@ fn store_base(b: &mut Builder, dxf: &Dxf, tracking: Option<&Tracking>, scale: f6
             body
         })
         .collect();
+    // A summary that fails the checks (odd names in a hand-made file) is not a question of size:
+    // it is dropped with a note, as a bad base always was, and the report says that nothing was kept.
     if bodies.iter().any(|v| provenance::check_base(v).is_err()) {
+        b.report.base = Some(BaseMode::Off.name().into());
         b.report.note(
-            "the entities are too big to keep for an update: an update will need the old file",
+            "the entities have values that cannot be kept for an update: an update will need the old file",
         );
-        return;
+        return Ok(());
     }
     let key = hash::hex(hash::content_hash_of(&t.drawing, &t.revision));
     for (n, body) in bodies.into_iter().enumerate() {
@@ -206,6 +327,7 @@ fn store_base(b: &mut Builder, dxf: &Dxf, tracking: Option<&Tracking>, scale: f6
         };
         b.resource(&name, ResourceBody::ImportBase(std::sync::Arc::new(body)));
     }
+    Ok(())
 }
 
 /// A drawing whose center is farther from (0, 0) than this (mm) is shifted. This is 1 km.
@@ -1580,7 +1702,7 @@ mod tests {
             data: text.as_bytes().to_vec(),
             extra: Default::default(),
         };
-        let r = import(&src, &Context::of(&doc), opts).unwrap();
+        let r = import(&src, &Context::of(&doc), opts, None).unwrap();
         let mut ed = Editor::new(doc);
         ed.execute(&r.command).unwrap();
         (ed.doc().clone(), r.report)
@@ -2083,7 +2205,7 @@ mod tests {
             data: text.into_bytes(),
             extra: Default::default(),
         };
-        let r = import(&src, &Context::of(&base), &ImportOptions::default()).unwrap();
+        let r = import(&src, &Context::of(&base), &ImportOptions::default(), None).unwrap();
         let mut ed = Editor::new(base.clone());
         ed.execute(&r.command).unwrap();
         assert_eq!(ed.doc().georef, base.georef);
@@ -2112,7 +2234,7 @@ mod tests {
             data: text.into_bytes(),
             extra: Default::default(),
         };
-        let err = import(&src, &Context::of(&doc), &ImportOptions::default()).unwrap_err();
+        let err = import(&src, &Context::of(&doc), &ImportOptions::default(), None).unwrap_err();
         assert!(err.to_string().contains("max_exploded"), "{err}");
         // A smaller drawing within the limit still works, and so does a higher limit.
         let small = dxf_text(
@@ -2132,6 +2254,14 @@ mod tests {
             data: small.into_bytes(),
             extra: Default::default(),
         };
-        assert!(import(&src, &Context::of(&Document::with_sequential_ids()), &opts).is_err());
+        assert!(
+            import(
+                &src,
+                &Context::of(&Document::with_sequential_ids()),
+                &opts,
+                None
+            )
+            .is_err()
+        );
     }
 }

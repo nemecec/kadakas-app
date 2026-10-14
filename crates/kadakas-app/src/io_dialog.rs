@@ -33,6 +33,43 @@ fn kind_of(path: &Path) -> Kind {
     }
 }
 
+/// What the person chose for a drawing with more entities than an import keeps for updates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BaseChoice {
+    /// Keep a link to the original file (`base: "link"`).
+    Link,
+    /// Import without update data (`base: "none"`).
+    NoUpdateData,
+}
+
+impl BaseChoice {
+    /// The value of the import option `base`.
+    fn option(self) -> &'static str {
+        match self {
+            BaseChoice::Link => "link",
+            BaseChoice::NoUpdateData => "none",
+        }
+    }
+}
+
+/// The question about a drawing over the cap: the form that waits, and the numbers for the text.
+#[derive(Clone, Debug, PartialEq)]
+struct BaseQuestion {
+    form: ImportForm,
+    entities: u64,
+    cap: u64,
+}
+
+/// The numbers of the question, when the error of the import is the refusal of a drawing over the
+/// cap (`entities`, `cap`).
+fn base_choice_of(e: &kadakas_api::RpcError) -> Option<(u64, u64)> {
+    if e.reason != Some(kadakas_api::REASON_BASE_CHOICE) {
+        return None;
+    }
+    let d = e.detail.as_ref()?;
+    Some((d["entities"].as_u64()?, d["cap"].as_u64()?))
+}
+
 /// Options of the import dialog.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImportForm {
@@ -46,6 +83,9 @@ pub struct ImportForm {
     pub hatches: bool,
     /// DXF and DWG: keep the source of each object, for updates (IOP-22).
     pub track_source: bool,
+    /// DXF and DWG: the answer to the question about a drawing with too many entities for an
+    /// update base. `None`: not asked yet (the API default, `auto`).
+    pub base: Option<BaseChoice>,
     pub source_crs: String,
     pub target_crs: String,
     pub class_field: String,
@@ -68,6 +108,7 @@ impl ImportForm {
             only_points_with_z: false,
             hatches: true,
             track_source: true,
+            base: None,
             source_crs: String::new(),
             target_crs: String::new(),
             class_field: String::new(),
@@ -112,6 +153,9 @@ impl ImportForm {
                 }
                 if self.only_points_with_z {
                     o.insert("points".into(), json!("with_z"));
+                }
+                if let Some(base) = self.base {
+                    o.insert("base".into(), json!(base.option()));
                 }
             }
             Kind::Ifc => {}
@@ -185,6 +229,8 @@ impl ExportForm {
 pub struct IoUi {
     import: Option<ImportForm>,
     export: Option<ExportForm>,
+    /// A drawing with too many entities for an update base waits for the choice of the person.
+    base_question: Option<BaseQuestion>,
 }
 
 /// What a dialog did.
@@ -226,6 +272,72 @@ impl IoUi {
         if let Some(p) = picked {
             self.export = Some(ExportForm::new(p));
         }
+    }
+
+    /// Runs `import.file` for the form. A drawing over the cap is not an error for the person: the
+    /// question comes next (`show_base_question`), and the import runs again with the answer.
+    fn run_import(
+        &mut self,
+        session: &mut Session,
+        form: ImportForm,
+        status: &mut String,
+    ) -> IoEvent {
+        match session.import_file_trusted(form.params()) {
+            Ok(r) => {
+                *status = tr!(
+                    "io-dialog-imported-objects-skipped",
+                    imported = r["imported"].as_u64().unwrap_or(0),
+                    skipped = r["skipped"].as_u64().unwrap_or(0)
+                );
+                IoEvent::Imported
+            }
+            Err(e) => {
+                if let Some((entities, cap)) = base_choice_of(&e) {
+                    self.base_question = Some(BaseQuestion {
+                        form,
+                        entities,
+                        cap,
+                    });
+                } else {
+                    *status = tr!("io-dialog-import-failed", message = e.message);
+                }
+                IoEvent::None
+            }
+        }
+    }
+
+    /// The question about a drawing with more entities than Kadakas keeps for updates. Returns
+    /// `Some(Some(choice))` for a choice, `Some(None)` for Cancel and `None` while it waits.
+    fn show_base_question(&self, ctx: &egui::Context) -> Option<Option<BaseChoice>> {
+        let q = self.base_question.as_ref()?;
+        let units = kadakas_units::current();
+        let text = tr!(
+            "io-dialog-base-question",
+            entities = units.number_text(q.entities as f64, 0),
+            cap = units.number_text(q.cap as f64, 0)
+        );
+        let mut answer = None;
+        egui::Window::new(tr!("io-dialog-base-question-title"))
+            .id(egui::Id::new("win-import-base"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.set_max_width(460.0);
+                ui.label(text);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button(tr!("io-dialog-base-keep-link")).clicked() {
+                        answer = Some(Some(BaseChoice::Link));
+                    }
+                    if ui.button(tr!("io-dialog-base-no-update-data")).clicked() {
+                        answer = Some(Some(BaseChoice::NoUpdateData));
+                    }
+                    if ui.button(tr!("io-dialog-cancel")).clicked() {
+                        answer = Some(None);
+                    }
+                });
+            });
+        answer
     }
 
     /// Draws the open dialogs. Runs the method when the user presses the button.
@@ -339,21 +451,23 @@ impl IoUi {
                     });
                 });
             if run {
-                let params = form.params();
-                match session.import_file_trusted(params) {
-                    Ok(r) => {
-                        *status = tr!(
-                            "io-dialog-imported-objects-skipped",
-                            imported = r["imported"].as_u64().unwrap_or(0),
-                            skipped = r["skipped"].as_u64().unwrap_or(0)
-                        );
-                        event = IoEvent::Imported;
-                    }
-                    Err(e) => *status = tr!("io-dialog-import-failed", message = e.message),
-                }
+                let form = form.clone();
+                event = self.run_import(session, form, status);
             }
             if run || close {
                 self.import = None;
+            }
+        }
+        match self.show_base_question(ctx) {
+            None => {}
+            // Cancel: the question is gone and nothing was imported.
+            Some(None) => self.base_question = None,
+            Some(Some(choice)) => {
+                if let Some(q) = self.base_question.take() {
+                    let mut form = q.form;
+                    form.base = Some(choice);
+                    event = self.run_import(session, form, status);
+                }
             }
         }
         if let Some(form) = self.export.as_mut() {
@@ -455,6 +569,83 @@ mod tests {
         assert_eq!(p["options"]["points"], "with_z");
         assert_eq!(p["options"]["origin"], "file");
         assert!(p["options"].get("source_crs").is_none());
+    }
+
+    #[test]
+    fn the_answer_about_a_big_drawing_goes_into_the_options() {
+        let mut f = ImportForm::new("/a/site.dxf".into());
+        assert!(f.params()["options"].get("base").is_none());
+        f.base = Some(BaseChoice::Link);
+        assert_eq!(f.params()["options"]["base"], "link");
+        f.base = Some(BaseChoice::NoUpdateData);
+        assert_eq!(f.params()["options"]["base"], "none");
+        // Files that have no update data ignore it.
+        let mut g = ImportForm::new("/a/trees.geojson".into());
+        g.base = Some(BaseChoice::Link);
+        assert!(g.params()["options"].get("base").is_none());
+    }
+
+    #[test]
+    fn a_drawing_over_the_cap_raises_the_question_and_cancel_imports_nothing() {
+        let dir = std::env::temp_dir().join(format!("kadakas-iodlg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.dxf");
+        let n = kadakas_core::provenance::MAX_BASE_RECS + 1;
+        let mut text = String::from("0\nSECTION\n2\nENTITIES\n");
+        for k in 0..n {
+            text.push_str(&format!("0\nPOINT\n10\n{k}\n20\n0\n"));
+        }
+        text.push_str("0\nENDSEC\n0\nEOF\n");
+        std::fs::write(&path, text).unwrap();
+        let mut ui = IoUi::default();
+        let mut session = Session::default();
+        let mut status = String::new();
+        let before = session.editor.doc().clone();
+        let event = ui.run_import(&mut session, ImportForm::new(path), &mut status);
+        assert_eq!(event, IoEvent::None);
+        assert!(status.is_empty(), "no error message: the person is asked");
+        let q = ui.base_question.clone().expect("the question waits");
+        assert_eq!((q.entities, q.cap), (n as u64, 200_000));
+        assert_eq!(session.editor.doc(), &before);
+        // The window shows the question in a frame and waits for a click.
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |u| {
+            assert_eq!(ui.show_base_question(u.ctx()), None);
+            let mut s = Session::default();
+            assert_eq!(ui.show(u.ctx(), &mut s, &mut String::new()), IoEvent::None);
+        });
+        assert!(ui.base_question.is_some());
+        let text = tr!(
+            "io-dialog-base-question",
+            entities = "200,001",
+            cap = "200,000"
+        );
+        assert!(
+            text.contains("200,001") && text.contains("200,000"),
+            "{text}"
+        );
+        let et = kadakas_l10n::with_language("et", || {
+            tr!(
+                "io-dialog-base-question",
+                entities = "200,001",
+                cap = "200,000"
+            )
+        });
+        assert!(et.contains("200,001") && et != text, "{et}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_the_refusal_of_a_big_drawing_is_a_question() {
+        let plain = kadakas_api::RpcError::validation("bad file");
+        assert_eq!(base_choice_of(&plain), None);
+        let no_numbers =
+            kadakas_api::RpcError::validation("x").with_reason(kadakas_api::REASON_BASE_CHOICE);
+        assert_eq!(base_choice_of(&no_numbers), None);
+        let ok = kadakas_api::RpcError::validation("x")
+            .with_reason(kadakas_api::REASON_BASE_CHOICE)
+            .with_detail(json!({"entities": 300000, "cap": 200000}));
+        assert_eq!(base_choice_of(&ok), Some((300_000, 200_000)));
     }
 
     #[test]

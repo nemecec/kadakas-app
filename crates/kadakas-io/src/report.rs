@@ -29,6 +29,11 @@ pub struct Report {
     pub drawing: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
+    /// DXF and DWG with source tracking: which update data the import kept. `auto` (the summaries
+    /// of the entities are in the document), `link` (a link to the original file is on the layer
+    /// source) or `none`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
 }
 
 impl Report {

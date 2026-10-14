@@ -25,6 +25,11 @@ fn tag() -> ImportTag {
     }
 }
 
+/// The link to the original file of a drawing that has too many entities for a base.
+fn link() -> provenance::FileLink {
+    provenance::FileLink::of_bytes("/data/plan.dxf", b"0\nEOF\n")
+}
+
 fn document() -> Document {
     let mut ed = Editor::with_sequential_ids();
     ed.execute(&Command::AddLayer {
@@ -43,6 +48,7 @@ fn document() -> Document {
             dxf_layer: String::new(),
             unit_scale: 1000.0,
             shift: [0.0, 0.0],
+            link: Some(link()),
         }),
     })
     .unwrap();
@@ -75,12 +81,45 @@ fn tags_and_layer_sources_round_trip_through_the_replica() {
     let o = m.doc.objects.values().next().unwrap();
     assert_eq!(provenance::tag(&o.data), Some(tag()));
     let l = m.doc.layers.last().unwrap();
-    assert_eq!(
-        LayerSource::of(&l.extra[provenance::LAYER_KEY])
-            .unwrap()
-            .drawing,
-        tag().drawing
+    let source = LayerSource::of(&l.extra[provenance::LAYER_KEY]).unwrap();
+    assert_eq!(source.drawing, tag().drawing);
+    // The link to the original file travels with the layer.
+    assert_eq!(source.link, Some(link()));
+}
+
+#[test]
+fn another_user_can_not_set_a_bad_link_path() {
+    // The path of a link is data from a peer and only a hint. It is checked like the other texts
+    // of the source: absolute, plain, no control characters and no `..`.
+    let doc = document();
+    let layer = doc.layers.last().unwrap();
+    let mut lp = serde_json::Map::new();
+    lp.insert("name".into(), json!("x"));
+    lp.insert("visible".into(), json!(true));
+    lp.insert("locked".into(), json!(false));
+    lp.insert("elevation".into(), json!(0.0));
+    lp.insert("scale".into(), json!(100.0));
+    let source = |link: serde_json::Value| json!({"drawing": "a", "revision": "r", "unit_scale": 1.0, "shift": [0.0, 0.0], "link": link});
+    let sha = "0".repeat(64);
+    lp.insert(
+        "import_source".into(),
+        source(json!({"path": "/data/plan.dxf", "bytes": 5, "sha256": sha})),
     );
+    assert!(validate_entity(Kind::Layer, layer.id.0, &lp).is_ok());
+    for bad in [
+        json!({"path": "plan.dxf", "bytes": 5, "sha256": sha}),
+        json!({"path": "/data/../etc/passwd", "bytes": 5, "sha256": sha}),
+        json!({"path": "/data/pl\u{7}n.dxf", "bytes": 5, "sha256": sha}),
+        json!({"path": "/data/plan.dxf", "bytes": 5, "sha256": "xyz"}),
+        json!({"path": "/data/plan.dxf", "bytes": 5, "sha256": sha, "mode": "open"}),
+        json!("/data/plan.dxf"),
+    ] {
+        lp.insert("import_source".into(), source(bad.clone()));
+        assert!(
+            validate_entity(Kind::Layer, layer.id.0, &lp).is_err(),
+            "{bad}"
+        );
+    }
 }
 
 #[test]

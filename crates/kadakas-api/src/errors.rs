@@ -65,6 +65,9 @@ pub struct RpcError {
     /// A stable reason for callers in the same process (a UI), for a case where `kind` is too
     /// coarse. It is not part of the JSON-RPC answer. See the `REASON_*` constants.
     pub reason: Option<&'static str>,
+    /// Facts for callers in the same process (a UI) that go with `reason`, for example a count to
+    /// show. Not part of the JSON-RPC answer: the message says the same in words.
+    pub detail: Option<Value>,
 }
 
 /// `collab.connect`: the open document has changes that nobody saved, and the shared document
@@ -75,6 +78,10 @@ pub const REASON_UNSAVED_CHANGES: &str = "unsaved_changes";
 pub const REASON_EDITS_WAIT: &str = "edits_wait";
 /// `collab.connect`: the session is connected already.
 pub const REASON_ALREADY_CONNECTED: &str = "already_connected";
+/// `import.file`: the drawing has more entities than an import keeps for updates and the option
+/// `base` is `auto`. `detail` has `{entities, cap}`. The caller may ask the person, then pass
+/// `base: "link"` or `base: "none"`.
+pub const REASON_BASE_CHOICE: &str = "base_choice";
 
 impl RpcError {
     pub fn new(code: i64, kind: &'static str, e: impl std::fmt::Display) -> Self {
@@ -83,7 +90,13 @@ impl RpcError {
             message: e.to_string(),
             kind,
             reason: None,
+            detail: None,
         }
+    }
+    /// Adds facts for a caller in the same process (see `detail`).
+    pub fn with_detail(mut self, detail: Value) -> Self {
+        self.detail = Some(detail);
+        self
     }
     /// Adds a stable reason (see the `REASON_*` constants).
     pub fn with_reason(mut self, reason: &'static str) -> Self {

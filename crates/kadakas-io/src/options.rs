@@ -106,6 +106,36 @@ pub enum FaceMode {
     Mesh,
 }
 
+/// What a tracked DXF or DWG import keeps for a later update (IOP-22, IOP-23).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BaseMode {
+    /// Keep the summaries of the entities in the document (the default). A drawing with more than
+    /// `MAX_BASE_RECS` entities is refused with an error that lists the other two choices: the
+    /// import never skips the base without asking.
+    #[default]
+    #[serde(rename = "auto")]
+    Auto,
+    /// Keep a link to the original file on the layer source instead of the summaries: the absolute
+    /// path, the size and the SHA-256. An update reads the old file from there, checks the hash and
+    /// diffs it against the new one.
+    #[serde(rename = "link")]
+    Link,
+    /// Keep no update data. An update of this drawing will need the old file.
+    #[serde(rename = "none")]
+    Off,
+}
+
+impl BaseMode {
+    /// The name in the options and in the report.
+    pub fn name(self) -> &'static str {
+        match self {
+            BaseMode::Auto => "auto",
+            BaseMode::Link => "link",
+            BaseMode::Off => "none",
+        }
+    }
+}
+
 /// The default of `ImportOptions::max_bytes`.
 pub const DEFAULT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -151,6 +181,8 @@ pub struct ImportOptions {
     /// DXF and DWG: the largest file to read, in bytes. The size is checked before the file is
     /// read. Default 512 MiB.
     pub max_bytes: u64,
+    /// DXF and DWG with `track_source`: what to keep for a later update (`auto`, `link` or `none`).
+    pub base: BaseMode,
 }
 
 impl Default for ImportOptions {
@@ -174,6 +206,7 @@ impl Default for ImportOptions {
             track_source: true,
             source_name: None,
             max_bytes: DEFAULT_MAX_BYTES,
+            base: BaseMode::Auto,
         }
     }
 }

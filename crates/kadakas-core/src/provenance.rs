@@ -21,6 +21,15 @@
 //! definition maps to every object whose `block.key` is that definition and whose `via` leads
 //! to it.
 //!
+//! **Link instead of base.** A drawing with more than `MAX_BASE_RECS` entities keeps no summary
+//! (the cap protects the document and the collaboration frames). The import then asks the person
+//! (`base: "auto"` refuses with the choices): `link` keeps a [`FileLink`] on the layer source
+//! instead of the summary (the absolute path, the size and the SHA-256 of the file), and `none`
+//! keeps no update data. An update reads the old file from the path, checks the size and the
+//! hash, and diffs it against the new file; if the file is gone or changed, the update says so. The
+//! path is a hint and data from files and other users: it is validated like the other texts of a
+//! tag (`FileLink::problem`), and reading it needs the normal path policy of the reader.
+//!
 //! Why object data: it is the place where importers already keep per-object facts (the GeoJSON
 //! and Shapefile importers, the rotation of imported text). It is saved with the object, copied
 //! with `Clone`, and synced by collaboration as the property `data.import`, with no new field in
@@ -118,6 +127,96 @@ pub struct ImportTag {
     pub part: Option<u32>,
 }
 
+/// Longest path in a [`FileLink`], in characters.
+pub const MAX_LINK_PATH: usize = 4096;
+
+/// A link to the original file of an import, instead of the summaries of its entities (see the
+/// module docs). It is a hint: the file may be gone or changed, and the hash tells.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileLink {
+    /// The absolute path of the file when it was imported.
+    pub path: String,
+    /// The size of the file in bytes.
+    pub bytes: u64,
+    /// The SHA-256 of the file as 64 lower-case hexadecimal digits.
+    pub sha256: String,
+}
+
+/// True for a path that is absolute by its text, on any platform (the file may come from another
+/// computer): `/x`, `\\server\x` or `C:\x`.
+fn absolute_text(p: &str) -> bool {
+    let b = p.as_bytes();
+    p.starts_with('/')
+        || p.starts_with('\\')
+        || (b.len() >= 3
+            && b[0].is_ascii_alphabetic()
+            && b[1] == b':'
+            && matches!(b[2], b'\\' | b'/'))
+}
+
+impl FileLink {
+    /// The link of a file whose bytes are `data`. `path` must be absolute.
+    pub fn of_bytes(path: &str, data: &[u8]) -> FileLink {
+        FileLink {
+            path: path.to_string(),
+            bytes: data.len() as u64,
+            sha256: crate::picture::sha256_hex(data),
+        }
+    }
+
+    /// The link of a file that is read from `reader` (the size and the hash are of what it gives).
+    /// The caller bounds the reader (`fsio::open_regular`).
+    pub fn of_reader(path: &str, mut reader: impl std::io::Read) -> std::io::Result<FileLink> {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut bytes = 0u64;
+        loop {
+            let n = reader.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            bytes += n as u64;
+        }
+        let sha256 = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        Ok(FileLink {
+            path: path.to_string(),
+            bytes,
+            sha256,
+        })
+    }
+
+    /// Why the link is not valid, if it is not. The path must be absolute and plain: no control
+    /// characters, no `..`, at most `MAX_LINK_PATH` characters.
+    pub fn problem(&self) -> Option<&'static str> {
+        let p = &self.path;
+        if p.is_empty() || p.chars().count() > MAX_LINK_PATH || p.chars().any(char::is_control) {
+            return Some("the link path is empty, too long or has control characters");
+        }
+        if !absolute_text(p) {
+            return Some("the link path is not absolute");
+        }
+        if p.split(['/', '\\']).any(|part| part == "..") {
+            return Some("the link path has a .. part");
+        }
+        if self.sha256.len() != 64
+            || !self
+                .sha256
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Some("the link hash is not 64 hexadecimal digits");
+        }
+        None
+    }
+}
+
 /// The source of an imported layer.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -135,6 +234,10 @@ pub struct LayerSource {
     /// The shift in mm that the import took off the coordinates of the file (the model is the file
     /// times `unit_scale` minus `shift`).
     pub shift: [f64; 2],
+    /// The original file, when the import kept no summaries of the entities because the drawing
+    /// has too many (`base: "link"`). An update reads the old file from here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<FileLink>,
 }
 
 fn text_ok(s: &str, max: usize) -> bool {
@@ -211,6 +314,9 @@ impl LayerSource {
         if self.dxf_layer.chars().count() > MAX_TEXT || self.dxf_layer.chars().any(char::is_control)
         {
             return Some("the DXF layer name is too long or has control characters");
+        }
+        if let Some(link) = &self.link {
+            return link.problem();
         }
         None
     }
@@ -648,6 +754,84 @@ mod tests {
     }
 
     #[test]
+    fn file_links_are_checked_like_other_paths() {
+        let link = |path: &str, sha: &str| {
+            json!({"drawing": "a", "revision": "r", "unit_scale": 1.0, "shift": [0.0, 0.0],
+                "link": {"path": path, "bytes": 7, "sha256": sha}})
+        };
+        let sha = "a".repeat(64);
+        for good in [
+            "/data/site.dxf",
+            "C:\\data\\site.dxf",
+            "D:/data/site.dxf",
+            "\\\\server\\share\\site.dxf",
+            "/data/..name/site.dxf",
+        ] {
+            let ok = LayerSource::of(&link(good, &sha));
+            assert_eq!(ok.and_then(|s| s.link).map(|l| l.path), Some(good.into()));
+        }
+        for bad in [
+            "",
+            "site.dxf",
+            "data/site.dxf",
+            "./site.dxf",
+            "/data/../etc/site.dxf",
+            "C:\\data\\..\\site.dxf",
+            "/data/\u{7}x",
+            "/data/x\ny",
+            "C:site.dxf",
+        ] {
+            assert!(LayerSource::of(&link(bad, &sha)).is_none(), "{bad:?}");
+        }
+        let long = format!("/{}", "x".repeat(MAX_LINK_PATH));
+        assert!(LayerSource::of(&link(&long, &sha)).is_none());
+        for bad_sha in ["", "abc", &"A".repeat(64), &"g".repeat(64), &"a".repeat(65)] {
+            assert!(
+                LayerSource::of(&link("/x", bad_sha)).is_none(),
+                "{bad_sha:?}"
+            );
+        }
+        // Unknown fields of the link are refused, and a link of the wrong type too.
+        let mut v = link("/x", &sha);
+        v["link"]["mode"] = json!(1);
+        assert!(LayerSource::of(&v).is_none());
+        v["link"] = json!("/x");
+        assert!(LayerSource::of(&v).is_none());
+        // A layer without a link has no `link` key in its JSON.
+        let plain = LayerSource::of(
+            &json!({"drawing": "a", "revision": "r", "unit_scale": 1.0, "shift": [0.0, 0.0]}),
+        )
+        .unwrap();
+        assert!(plain.link.is_none());
+        assert!(serde_json::to_value(&plain).unwrap().get("link").is_none());
+    }
+
+    #[test]
+    fn a_link_is_made_from_bytes_or_a_reader_with_the_same_hash() {
+        let data = b"0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n".repeat(5000);
+        let a = FileLink::of_bytes("/data/a.dxf", &data);
+        assert_eq!(a.bytes, data.len() as u64);
+        assert_eq!(a.problem(), None);
+        let b = FileLink::of_reader("/data/a.dxf", &data[..]).unwrap();
+        assert_eq!(a, b);
+        // The known hash of the empty input.
+        let empty = FileLink::of_reader("/x", &b""[..]).unwrap();
+        assert_eq!(empty.bytes, 0);
+        assert_eq!(
+            empty.sha256,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        // A reader that fails gives the error.
+        struct Broken;
+        impl std::io::Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("disk"))
+            }
+        }
+        assert!(FileLink::of_reader("/x", Broken).is_err());
+    }
+
+    #[test]
     fn repair_removes_bad_tags_and_bounds_the_notes() {
         use crate::model::{ClassId, Object, ObjectId, Shape};
         let mut doc = Document::with_sequential_ids();
@@ -765,6 +949,7 @@ mod tests {
             dxf_layer: "Walls".into(),
             unit_scale: 1000.0,
             shift: [0.0, 0.0],
+            link: Some(FileLink::of_bytes("/data/a.dxf", b"0\nEOF\n")),
         };
         ed.execute(&Command::SetLayerSource {
             id: layer,
@@ -795,6 +980,7 @@ mod tests {
             dxf_layer: String::new(),
             unit_scale: 1.0,
             shift: [0.0, 0.0],
+            link: None,
         };
         assert!(matches!(
             ed.execute(&Command::SetLayerSource {

@@ -30,6 +30,8 @@ pub struct Tracking {
     pub name: String,
     /// The file has no header, so nothing says which drawing it is.
     pub headerless: bool,
+    /// The link to the original file, when the import keeps it instead of the summaries.
+    pub link: Option<provenance::FileLink>,
     keys: HashMap<String, String>,
     /// The hash of each entity of this import, by address: an entity in a block is visited once
     /// for each INSERT.
@@ -55,6 +57,7 @@ impl Tracking {
             revision,
             name,
             headerless,
+            link: None,
             keys: block_keys(dxf),
             hashes: RefCell::default(),
         }
@@ -77,6 +80,7 @@ impl Tracking {
             dxf_layer: clean_name(dxf_layer, provenance::MAX_TEXT, ""),
             unit_scale: scale,
             shift,
+            link: self.link.clone(),
         }
     }
 

@@ -40,3 +40,9 @@ io-dialog-exported-objects-to =
     } to { $path }
 io-dialog-export-failed = Export failed: { $message }
 io-dialog-dwg-needs-a-converter = DWG (needs a converter, see docs/dwg.md)
+
+# { $entities } is the number of entities of the drawing, { $cap } the most that Kadakas keeps for updates.
+io-dialog-base-question = This drawing has { $entities } entities, more than Kadakas keeps for updates ({ $cap }). Keep a link to the original file for updates, or import without update data?
+io-dialog-base-question-title = Big drawing
+io-dialog-base-keep-link = Keep a link
+io-dialog-base-no-update-data = Import without update data

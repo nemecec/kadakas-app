@@ -19,10 +19,13 @@ struct FileParams {
     overwrite: bool,
 }
 
-fn rpc(e: IoError) -> RpcError {
+pub(crate) fn rpc(e: IoError) -> RpcError {
     match e {
         IoError::Option(_) => RpcError::invalid_params(e),
         IoError::Format(_) => RpcError::validation(e),
+        IoError::BaseChoice { entities, cap } => RpcError::validation(&e)
+            .with_reason(crate::errors::REASON_BASE_CHOICE)
+            .with_detail(json!({"entities": entities, "cap": cap})),
         e => RpcError::app(e),
     }
 }
@@ -58,6 +61,7 @@ pub(crate) fn describe() -> Value {
             "faces": "DXF: polygons (default: each 3DFACE is a closed polyline3d, source data for a site model) | mesh (all faces of a DXF layer become one mesh3d). POLYFACE and POLYGON MESH polylines always become mesh3d",
             "max_exploded": "DXF: most objects that exploded blocks may make. Default 100000. The import fails above it",
             "max_objects": "stop after this many objects. Default 500000",
+            "base": "DXF and DWG with track_source: what to keep for a later update. auto (default): the summaries of the entities go in the document, and a drawing with more than 200000 entities is refused with an error that lists the other two choices. link: a link to the original file goes on the layer source instead (layer.import_source.link: {path: the absolute path, bytes, sha256}); an update reads the old file from that path, checks the hash and diffs it against the new file, and says so if the file is gone or changed. none: no update data. The reply names the one that was used (base, also in report.base)",
             "track_source": "DXF and DWG: true (default). Each object keeps its origin in data.import: {drawing: the lineage, $FINGERPRINTGUID else the file name (a file without a header: the name and a hash of its entities), revision: $VERSIONGUID else a hash of the header, handle: DXF handle (group code 5), kind: DXF type, hash: hash of the entity, obj: hash of the object right after the import (a different hash now means the object was edited), block, via, part}. The objects go to a layer of their own named after the file (classes mode), or to one layer per DXF layer (layers mode). Layers are matched on the drawing, so a new revision of the same drawing reuses them. These layers never reuse a design layer, and they carry the origin, the revision and the import transform too (layer.import_source). The entity summaries of the revision are kept in a resource of type import_base for later updates. false: the objects go to the active layer without tags. A copy of an object does not keep the tag",
             "source_name": "DXF and DWG: the file name that the tags record. Default: the name of the file",
             "max_bytes": "the largest file to read, in bytes, checked before the file is read (DXF, DWG after the conversion, and GIS files). Default 536870912 (512 MiB), and never above the limit import_text_bytes of the session"
@@ -165,6 +169,7 @@ impl Session {
         Ok(json!({
             "imported": result.report.total(),
             "skipped": result.report.skipped_total(),
+            "base": result.report.base,
             "report": result.report,
             "georeference": self.editor.doc().georef,
         }))

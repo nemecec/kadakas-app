@@ -40,3 +40,9 @@ io-dialog-exported-objects-to =
     } faili { $path }
 io-dialog-export-failed = Eksport ebaõnnestus: { $message }
 io-dialog-dwg-needs-a-converter = DWG (vajab teisendajat, vaata docs/dwg.md)
+
+# { $entities } on joonise objektide arv, { $cap } on suurim arv, mida Kadakas uuenduste jaoks hoiab.
+io-dialog-base-question = Selles joonises on { $entities } objekti, rohkem kui Kadakas uuenduste jaoks hoiab ({ $cap }). Kas hoida viidet algsele failile uuenduste jaoks või importida ilma uuendusandmeteta?
+io-dialog-base-question-title = Suur joonis
+io-dialog-base-keep-link = Hoia viidet
+io-dialog-base-no-update-data = Impordi ilma uuendusandmeteta

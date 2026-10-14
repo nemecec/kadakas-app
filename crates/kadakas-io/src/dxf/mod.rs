@@ -1,8 +1,11 @@
 //! DXF import and export (ASCII).
 
+#[cfg(test)]
+mod base_tests;
 mod export;
 pub mod hash;
 mod import;
+pub mod link;
 pub mod parse;
 pub mod revision;
 mod source;
@@ -27,8 +30,20 @@ impl Importer for DxfFormat {
         ctx: &Context,
         opts: &ImportOptions,
     ) -> Result<ImportResult, IoError> {
-        import::import(src, ctx, opts)
+        import::import(src, ctx, opts, None)
     }
+}
+
+/// Like the DXF importer, with the link to the original file that `base: "link"` stores on the layer
+/// source (the caller made it from the file, see [`kadakas_core::provenance::FileLink`]). Without
+/// a link, `base: "link"` is an error: the importer cannot make it from bytes.
+pub fn import_linked(
+    src: &Source,
+    ctx: &Context,
+    opts: &ImportOptions,
+    link: Option<&kadakas_core::provenance::FileLink>,
+) -> Result<ImportResult, IoError> {
+    import::import(src, ctx, opts, link)
 }
 
 impl Exporter for DxfFormat {

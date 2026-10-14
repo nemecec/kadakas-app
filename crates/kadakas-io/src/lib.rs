@@ -24,10 +24,11 @@ use std::path::Path;
 
 use kadakas_core::command::Command;
 use kadakas_core::model::{ClassId, Document, Layer, LayerId};
+use kadakas_core::provenance::FileLink;
 
 pub use options::{
-    ExportOptions, ExportOrigin, FaceMode, ImportOptions, LayerMode, MeshEntity, OriginMode,
-    SiteMesh, Unit,
+    BaseMode, ExportOptions, ExportOrigin, FaceMode, ImportOptions, LayerMode, MeshEntity,
+    OriginMode, SiteMesh, Unit,
 };
 pub use report::{Report, Skipped};
 
@@ -81,6 +82,12 @@ pub enum IoError {
     /// An option has a bad value.
     #[error("{0}")]
     Option(String),
+    /// The drawing has more entities than an import keeps for updates, and the option `base` is
+    /// `auto`. The person (or the agent) must choose `link` or `none`.
+    #[error(
+        "this drawing has {entities} entities, more than the {cap} that Kadakas keeps for updates. Set the import option base to \"link\" (keep a link to the original file for updates) or \"none\" (import without update data)"
+    )]
+    BaseChoice { entities: usize, cap: usize },
 }
 
 /// The file to import: its name, its bytes, and files next to it (a shapefile has
@@ -266,6 +273,19 @@ pub fn import_file(
         IoError::Format("unknown file type: give a format (dxf, shp or geojson)".into())
     })?;
     let src = Source::read_limited(path, opts.max_bytes)?;
+    // A link to the original file is made only when it is asked for (it needs the hash).
+    let link = (format == Format::Dxf && opts.track_source && opts.base == BaseMode::Link)
+        .then(|| {
+            let abs = absolute_path_text(path)?;
+            let link = FileLink::of_bytes(&abs, &src.data);
+            match link.problem() {
+                Some(why) => Err(IoError::Option(format!(
+                    "cannot keep a link to the file: {why}"
+                ))),
+                None => Ok(link),
+            }
+        })
+        .transpose()?;
     // The tags of imported objects name the file with its extension.
     let named;
     let opts = match path.file_name() {
@@ -278,7 +298,29 @@ pub fn import_file(
         }
         _ => opts,
     };
-    importer(format).import(&src, &Context::of(doc), opts)
+    match (format, &link) {
+        (Format::Dxf, Some(_)) => dxf::import_linked(&src, &Context::of(doc), opts, link.as_ref()),
+        _ => importer(format).import(&src, &Context::of(doc), opts),
+    }
+}
+
+/// The absolute path of `path` as text, for a [`FileLink`]: the canonical path, else the path made
+/// absolute. A path that is not text cannot be kept.
+pub(crate) fn absolute_path_text(path: &Path) -> Result<String, IoError> {
+    let abs = std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .map_err(|e| {
+            IoError::Option(format!(
+                "cannot keep a link to {}: no absolute path ({e})",
+                path.display()
+            ))
+        })?;
+    abs.to_str().map(str::to_string).ok_or_else(|| {
+        IoError::Option(format!(
+            "cannot keep a link to {}: the path is not text",
+            path.display()
+        ))
+    })
 }
 
 /// Exports `doc` to a file. `format` defaults to the file extension.

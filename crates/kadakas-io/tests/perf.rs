@@ -15,7 +15,7 @@ use kadakas_core::model::Document;
 use kadakas_core::provenance;
 use kadakas_io::dxf::DxfFormat;
 use kadakas_io::dxf::revision::{self, Options, Rec};
-use kadakas_io::{Context, ImportOptions, Importer, Source};
+use kadakas_io::{BaseMode, Context, ImportOptions, Importer, Source};
 
 fn drawing(n: usize, version: &str, moved: usize) -> String {
     let mut s = String::with_capacity(n * 70);
@@ -49,9 +49,16 @@ fn import(text: &str, track: bool) -> (Editor, Duration, Duration, kadakas_io::R
         data: text.as_bytes().to_vec(),
         extra: Default::default(),
     };
+    // A drawing over the cap needs a choice; the timing is of an import without update data.
+    let base = if text.matches("\n0\nLINE\n").count() > provenance::MAX_BASE_RECS {
+        BaseMode::Off
+    } else {
+        BaseMode::Auto
+    };
     let opts = ImportOptions {
         track_source: track,
         max_objects: 10_000_000,
+        base,
         ..ImportOptions::default()
     };
     let t = Instant::now();

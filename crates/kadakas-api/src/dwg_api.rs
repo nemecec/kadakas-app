@@ -56,6 +56,7 @@ fn rpc(e: DwgError) -> RpcError {
         DwgError::Option(_) => RpcError::invalid_params(e),
         DwgError::Timeout { .. } => RpcError::limit(e),
         DwgError::Format(_) => RpcError::validation(e),
+        DwgError::Base(e) => crate::io::rpc(e),
         e => RpcError::app(e),
     }
 }
@@ -96,6 +97,7 @@ impl Session {
         Ok(json!({
             "imported": result.report.total(),
             "skipped": result.report.skipped_total(),
+            "base": result.report.base,
             "report": result.report,
             "georeference": self.editor.doc().georef,
         }))
