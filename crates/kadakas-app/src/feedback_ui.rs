@@ -112,6 +112,8 @@ pub struct FeedbackUi {
     reports: Vec<Report>,
     asked: bool,
     send_on: bool,
+    /// The outbox file is from a newer Kadakas: reports are in memory only.
+    newer_outbox: bool,
     url: String,
     url_edit: Option<String>,
     next_refresh: f64,
@@ -132,6 +134,7 @@ impl Default for FeedbackUi {
             reports: Vec::new(),
             asked: true,
             send_on: false,
+            newer_outbox: false,
             url: String::new(),
             url_edit: None,
             next_refresh: 0.0,
@@ -245,6 +248,7 @@ impl FeedbackUi {
         self.reports = hub.list();
         self.asked = hub.consent_asked();
         self.send_on = hub.send_enabled();
+        self.newer_outbox = hub.note().is_some();
         self.url = hub.url();
     }
 
@@ -497,7 +501,9 @@ impl FeedbackUi {
                 }
                 #[cfg(target_arch = "wasm32")]
                 ui.weak(tr!("feedback-ui-web-not-sent"));
-                if !persistent {
+                if self.newer_outbox {
+                    ui.colored_label(ui.visuals().warn_fg_color, tr!("feedback-ui-outbox-newer"));
+                } else if !persistent {
                     ui.weak(tr!("feedback-ui-memory-only"));
                 }
                 ui.separator();

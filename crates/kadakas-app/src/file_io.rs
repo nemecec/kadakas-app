@@ -103,7 +103,7 @@ pub fn agent_line(
         Err(_) => {}
     }
     let id = req.get("id")?.clone();
-    Some(kadakas_api::files::file_reply(id, result))
+    Some(kadakas_api::files::file_reply(session, method, id, result))
 }
 
 #[cfg(test)]

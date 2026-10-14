@@ -21,6 +21,9 @@ pub struct PayloadParts<'a> {
     /// The text of the JSON array of calls.
     pub calls: Option<&'a str>,
     pub log: Option<&'a str>,
+    /// The random id of this installation (not of the person). The server uses it with
+    /// `client_id` to drop a report that arrives twice.
+    pub installation: Option<&'a str>,
 }
 
 fn image(png: &[u8]) -> Value {
@@ -61,6 +64,9 @@ pub fn build(report: &Report, parts: &PayloadParts) -> Result<String, FeedbackEr
         "context": report.context,
         "attachments": att,
     });
+    if let Some(i) = parts.installation {
+        m["installation"] = json!(i);
+    }
     for (k, v) in [
         ("wanted", &report.wanted),
         ("tried", &report.tried),
@@ -167,6 +173,7 @@ mod tests {
             render: Some(&png),
             calls: Some(r#"[{"method":"a"}]"#),
             log: Some("line"),
+            installation: Some("0190a1b2-c3d4-4e5f-8a6b-0123456789ab"),
         };
         let v: Value = serde_json::from_str(&build(&report(), &parts).unwrap()).unwrap();
         let a = &v["attachments"];
@@ -177,6 +184,7 @@ mod tests {
         assert_eq!(a["render"]["base64"], "iVBORw==");
         assert_eq!(a["calls"][0]["method"], "a");
         assert_eq!(a["log"], "line");
+        assert_eq!(v["installation"], "0190a1b2-c3d4-4e5f-8a6b-0123456789ab");
     }
 
     #[test]

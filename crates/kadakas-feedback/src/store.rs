@@ -165,42 +165,43 @@ mod native {
             kadakas_sys::fsio::create_private_dir(&self.dir)
                 .or_else(|e| if self.dir.is_dir() { Ok(()) } else { Err(e) })
                 .map_err(|e| format!("cannot create the feedback folder: {e}"))?;
-            let path = self.dir.join("lock");
+            // The file `lock` stays where it is. The operating system holds the lock for the open
+            // file, and releases it when the file closes, also when the program dies. So no
+            // program ever has to decide that a lock is stale, and none removes the file.
+            let mut opts = std::fs::OpenOptions::new();
+            opts.read(true).write(true).create(true).truncate(false);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let file = opts
+                .open(self.dir.join("lock"))
+                .map_err(|e| format!("cannot open the lock of the feedback folder: {e}"))?;
             for _ in 0..STEPS {
-                match kadakas_sys::fsio::create_new_private(&path) {
-                    Ok(_) => return Ok(Box::new(Guard(path))),
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                        // A lock that a dead program left behind goes after a while.
-                        let old = std::fs::metadata(&path)
-                            .and_then(|m| m.modified())
-                            .ok()
-                            .and_then(|t| t.elapsed().ok())
-                            .is_some_and(|age| age > STALE);
-                        if old {
-                            let _ = std::fs::remove_file(&path);
-                        } else {
-                            std::thread::sleep(WAIT);
-                        }
+                match file.try_lock() {
+                    Ok(()) => return Ok(Box::new(Guard(file))),
+                    Err(std::fs::TryLockError::WouldBlock) => std::thread::sleep(WAIT),
+                    Err(std::fs::TryLockError::Error(e)) => {
+                        return Err(format!("cannot lock the feedback folder: {e}"));
                     }
-                    Err(e) => return Err(format!("cannot lock the feedback folder: {e}")),
                 }
             }
             Err("the feedback folder is locked by another program".into())
         }
     }
 
-    /// The lock file; it is removed when the guard is dropped.
-    struct Guard(PathBuf);
+    /// The open lock file; dropping it releases the lock.
+    struct Guard(std::fs::File);
 
     impl Drop for Guard {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
+            let _ = self.0.unlock();
         }
     }
 
     const STEPS: u32 = 250;
     const WAIT: std::time::Duration = std::time::Duration::from_millis(20);
-    const STALE: std::time::Duration = std::time::Duration::from_secs(30);
 }
 
 #[cfg(test)]
@@ -257,6 +258,33 @@ mod tests {
         d.remove("../evil");
         assert_eq!(d.read("a.json"), None);
         assert!(d.persistent() && d.dir().ends_with("fb"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_lock_is_an_os_lock_on_a_file_that_stays() {
+        let tmp = kadakas_sys::tmp::PrivateTempDir::new("kadakas-fb-lock").unwrap();
+        let dir = tmp.path().join("fb");
+        let d = DirStorage::new(dir.clone());
+        let guard = d.lock().unwrap();
+        let other = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(dir.join("lock"))
+            .unwrap();
+        assert!(matches!(
+            other.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(guard);
+        // Released, and the file is still there: nobody removes it.
+        other.try_lock().unwrap();
+        other.unlock().unwrap();
+        assert!(dir.join("lock").is_file());
+        d.lock().unwrap();
+        assert!(dir.join("lock").is_file());
+        // A memory store needs no lock.
+        assert!(MemStorage::new().lock().is_ok());
     }
 
     #[cfg(not(target_arch = "wasm32"))]

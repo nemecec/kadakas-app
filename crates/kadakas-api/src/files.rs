@@ -81,8 +81,16 @@ pub fn file_call(
     params: &Value,
     write: &mut WriteFn<'_>,
 ) -> Result<FileDone, RpcError> {
-    // A panic in a reader or a writer becomes an internal error, as for every other method.
-    s.guarded(method, |s| file_call_inner(s, method, params, write))
+    // A panic in a reader or a writer becomes an internal error, as for every other method. The
+    // call and its error go to the call log of the session, so a bug report has them.
+    let note = crate::feedback_api::begin(method, params);
+    let r = s.guarded(method, |s| file_call_inner(s, method, params, write));
+    let ring = match &r {
+        Ok(_) => Ok(Value::Null),
+        Err(e) => Err(RpcError::new(e.code, e.kind, &e.message)),
+    };
+    crate::feedback_api::finish(s, note, &ring);
+    r
 }
 
 fn file_call_inner(
@@ -120,11 +128,20 @@ pub fn write_document_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fsio::write_atomic(path, bytes).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
-/// The JSON-RPC response for the result of `file_call`.
-pub fn file_reply(id: Value, result: Result<FileDone, RpcError>) -> String {
+/// The JSON-RPC response for the result of `file_call`. An error carries the feedback hint and
+/// the `tainted` mark, like the errors of every other method.
+pub fn file_reply(
+    s: &Session,
+    method: &str,
+    id: Value,
+    result: Result<FileDone, RpcError>,
+) -> String {
     match result {
         Ok(_) => json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}}).to_string(),
-        Err(e) => crate::errors::error_response(id, e.code, e.kind, &e.message),
+        Err(e) => {
+            let hint = crate::feedback_api::hint(method, e.kind, &e.message);
+            crate::errors::error_response_with(id, e.code, e.kind, &e.message, hint, s.is_tainted())
+        }
     }
 }
 
@@ -135,7 +152,7 @@ pub fn handle_file_request(s: &mut Session, req: &Value) -> String {
     let method = req["method"].as_str().unwrap_or_default();
     let params = req.get("params").cloned().unwrap_or(Value::Null);
     let r = file_call(s, method, &params, &mut write_document_file);
-    file_reply(id, r)
+    file_reply(s, method, id, r)
 }
 
 /// True for the methods that `file_call` handles.

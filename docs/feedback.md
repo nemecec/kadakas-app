@@ -52,7 +52,8 @@ No method approves or sends an attachment. Extra fields such as `approve` or `st
 | Title / text / wanted / tried / error / method | 120 / 4000 / 2000 / 2000 / 2000 / 80 characters |
 | Reports in the outbox | 200 (the oldest sent or withdrawn report makes room, else the call fails) |
 | Reports one session of an agent may make (merged ones count) | 30. People are not limited. |
-| Attachments that wait for review | 64 MiB in all |
+| Reports in the outbox for each side | 100 for agents and 100 for people, so agents cannot fill the space of a person |
+| Attachments that wait for review | 32 MiB for agents and 32 MiB for people |
 | Picture (PNG) | 1 MiB |
 | Model excerpt | 512 KiB and 200 objects |
 | Call log | 40 calls, 32 KiB |
@@ -104,7 +105,11 @@ By default a report attaches as much useful context as it can:
 3. The only code that moves a report out of `needs_review` is `Hub::approve`. The review dialog and `kadakas feedback review` call it. The API, the MCP tools, the Python package and the flags do not. `approve` stores the exact payload that the person saw, and the sender sends those bytes. An approved report whose stored message is missing goes back to `needs_review` with a visible error.
 4. A form report with a screenshot is approved by the Send button of the form, because the person has seen the text and the picture. It waits for the answer of the consent dialog first. If the person said no, it stays in the outbox as `needs_review`.
 
+Errors of `file.open` and `file.save` have the same hint and the same `tainted` mark as the errors of every other method, and the calls are in the call log.
+
 **What this protects, and what it does not.** The guarantee holds for an agent that is limited to the MCP tools and to JSON-RPC. Nothing in them approves or sends an attachment, and a restricted session (`--allow-dir`, the app's agent server) cannot write into the config, data or feedback folders of the user, even if an allowed folder contains them, so it cannot forge the outbox. An agent that has a shell, or that is allowed to run scripts (`--allow-agent-scripts`) or converters (`--allow-converters`), runs as the same user as the person. It can read and write the same files, and it can type into a terminal that it started itself. A terminal check cannot stop such an agent, and Kadakas does not claim to. Do not give a shell to an agent that you do not trust with your drawings.
+
+**Approving is consent for that report.** When a person approves a report (the review, or the Send button of the form with a screenshot), that is their consent for that report, also when the global question ("send my reports?") was never answered. The one exception is a stored "no": then nothing is sent and the approval is refused. Approval does not turn the global switch on.
 
 **Privacy options of a model excerpt.** They apply to the message that is sent, and the review shows the result:
 
@@ -112,21 +117,21 @@ By default a report attaches as much useful context as it can:
 - *Remove the georeference* (default on).
 - *Remove names, notes and record data* (default off): layer, class and resource names become `Layer 1`, `Class 2`, `Resource 3`. The texts of resources go (worksheet cells, symbol texts, defaults of record fields), except object ids and structure words such as `type` and `kind`. Other texts of layers and classes go. The fields `name`, `note`, `notes`, `text`, `label`, `description`, `comment`, `title`, `tag` and `remarks` become empty in objects, the drawing data and the call log. The maps `fields`, `values`, `record`, `records`, `properties`, `props` and `data` (title block fields, record values) are emptied. The record data of objects is deleted. If a blank text breaks a rule of the document, the resources are left out.
 
-The first two options also apply to the call log and the log lines. A pair or triple of numbers (`[385000.5, 6672000.25]`, `(1, 2)`) becomes `<coordinates removed>`, numbers under keys such as `x`, `y`, `lat` and `lon` are hidden, a value under a key such as `crs`, `epsg` or `georef` or a text with `EPSG:` or `PROJCS` is hidden, and a call about the georeference (a method with `georef` or `crs` in its name) and a log line that names one are dropped. The review says so.
+With "move to origin" or "remove the georeference" on, the entries of record data that hold a place (`lat`, `lon`, `x`, `y`, `address`, `street`, `city`, `postcode` and similar keys, also inside other keys) are removed from the objects of the excerpt, also when the names stay. The first two options also apply to the call log and the log lines. The keys `bbox`, `extent` and `bounds` and four-number values (boxes) are removed from the calls. A pair or triple of numbers (`[385000.5, 6672000.25]`, `(1, 2)`) becomes `<coordinates removed>`, numbers under keys such as `x`, `y`, `lat` and `lon` are hidden, a value under a key such as `crs`, `epsg` or `georef` or a text with `EPSG:` or `PROJCS` is hidden, and a call about the georeference (a method with `georef` or `crs` in its name) and a log line that names one are dropped. The review says so.
 
 ## The outbox
 
 A folder of files, owner-only on Unix:
 
-- `outbox.json`: `{"version": 1, "next_seq": n, "reports": [...]}`. At most 2 MiB. A broken or newer file is copied to `outbox.bad.json` and the outbox starts again. A report has, among others, `attempts` (counted failed starts), `retries` (all failed starts), `next_try` and `claimed_until` (seconds since 1970).
-- `settings.json`: `{"send": true|false|null, "url": null|"https://..."}`.
+- `outbox.json`: `{"version": 1, "next_seq": n, "reports": [...]}`. At most 2 MiB. A broken file is copied to `outbox.bad.json` and the outbox starts again. A file with a newer `version` is never read, copied over or written: the reports of this run go to memory only, `feedback.list` has a `note`, and Help > Feedback says so. A report has, among others, `attempts` (counted failed starts), `retries` (all failed starts), `next_try` and `claimed_until` (seconds since 1970).
+- `settings.json`: `{"send": true|false|null, "url": null|"https://...", "installation": null|"<uuid>"}`. `installation` is a random version 4 UUID that is made at the first need. It identifies this installation of Kadakas, not a person, and it is not secret. It goes in every message (see the protocol), so that the server can drop a report that arrives twice. The consent text says so.
 - `fb-N.excerpt.kad.json`, `fb-N.render.png`, `fb-N.screenshot.png`, `fb-N.calls.json`, `fb-N.log.txt`: the attachments.
 - `fb-N.payload.json`: the approved message.
-- `lock`: exists while a program changes the outbox.
+- `lock`: an empty file that stays where it is. A program that changes the outbox holds an exclusive operating system lock on it (`File::lock`), and the system releases the lock when the program ends, also when it dies. No program removes the file or guesses that a lock is stale.
 
 The folder is `KADAKAS_FEEDBACK_DIR` if that is set, else `feedback` in the data folder of the user (`kadakas-sys` `dirs::data_dir`). Tests always set the variable or use memory. A `Session` keeps its outbox in memory until the host calls `session.feedback.hub.set_storage(...)`. The CLI and the app do that.
 
-**Two programs, one folder.** The app and a headless run can share the folder. Every change takes an exclusive lock (the file `lock`, created exclusively. A lock older than 30 seconds belongs to a dead program and is removed), then reads the outbox, changes it and writes it back. A program that wants to send a report claims it first (`claimed_until`, 5 minutes) under the same lock, so a report is not sent twice. A crashed program holds a claim for 5 minutes at most.
+**Two programs, one folder.** The app and a headless run can share the folder. Every change takes the exclusive lock on the file `lock` (it waits at most 5 seconds), then reads the outbox, changes it and writes it back. A program that wants to send a report claims it first (`claimed_until`, 5 minutes) under the same lock, so a report is not sent twice. A crashed program holds a claim for 5 minutes at most.
 
 Statuses: `pending` (text only, waits for sending), `needs_review`, `approved`, `sent`, `withdrawn`.
 
@@ -176,6 +181,7 @@ If the address has a query or a fragment, the path goes before it. The body is o
 {
   "protocol": 1,
   "client_id": "fb-12",
+  "installation": "0190a1b2-c3d4-4e5f-8a6b-0123456789ab",
   "kind": "bug",
   "title": "Fillet fails on a closed polyline",
   "body": "...",
@@ -195,7 +201,7 @@ If the address has a query or a fragment, the path goes before it. The body is o
 ```
 
 - `wanted`, `tried`, `method`, `error`, `severity` and each attachment are missing when empty. `attachments` is `{}` for a text-only report. A person can have removed any attachment in the review.
-- `client_id` is local to one installation and one outbox. The server uses it together with the sender (address and token, once the server has accounts) to make a repeat of the same request harmless.
+- `client_id` is local to one installation and one outbox. `installation` is the random UUID of the installation (it identifies the installation, not the person, and the consent text says so). The server keys a report on the pair (`installation`, `client_id`) and drops a repeat of it.
 - All texts are UTF-8, scrubbed, and within the limits above. The server still has to treat everything as untrusted input.
 - Images are PNG, at most 1 MiB each before base64. The excerpt is at most 512 KiB.
 

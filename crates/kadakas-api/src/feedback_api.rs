@@ -203,15 +203,26 @@ impl Session {
     /// of Kadakas, so the message and the place go to the log lines and the failure of the
     /// session, where a bug report finds them. In a program built with `panic = "abort"`, such as
     /// the web build, a panic ends the program and this function never sees it.
+    pub fn is_tainted(&self) -> bool {
+        self.tainted
+    }
+
     pub(crate) fn guarded<T>(
         &mut self,
         method: &str,
         f: impl FnOnce(&mut Session) -> Result<T, RpcError>,
     ) -> Result<T, RpcError> {
         install_panic_hook();
+        let depth = self.editor.undo_depth();
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
             Ok(r) => r,
             Err(_) => {
+                // The command that panicked took its own changes back. The steps that the method
+                // finished before it are taken back here, as `enforce_limits` does, so the
+                // method is all or nothing.
+                let steps = self.editor.undo_depth().saturating_sub(depth);
+                self.editor.rollback(steps);
+                self.prune_selection();
                 let detail = LAST_PANIC.with(|p| p.borrow_mut().take());
                 let detail = scrub::harsh(&detail.unwrap_or_else(|| "panic".into()));
                 self.tainted = true;
@@ -631,6 +642,7 @@ pub(crate) fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<V
                 "needs_review": waiting,
                 "reports_of_people": people,
                 "sending": {"enabled": hub.send_enabled(), "asked": hub.consent_asked()},
+                "note": hub.note(),
             }))
         })(),
         "feedback.get" => (|| {
@@ -1068,6 +1080,51 @@ mod tests {
         assert!(hint("x.y", "not_found", "object missing").is_none());
         assert!(hint("x.y", "invalid_params", "missing field `ids`").is_none());
         assert!(hint("feedback.get", "method_not_found", "x").is_none());
+    }
+
+    #[test]
+    fn a_method_that_panics_after_some_steps_is_taken_back_whole() {
+        let mut s = Session::with_sequential_ids();
+        s.handle(
+            "execute",
+            json!({"command": {"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [1, 1]}}}),
+        )
+        .unwrap();
+        let (depth, count) = (s.editor.undo_depth(), s.editor.doc().objects.len());
+        let add = |x: f64| kadakas_core::command::Command::AddObject {
+            shape: kadakas_core::model::Shape::Circle {
+                center: glam::DVec2::new(x, 0.0),
+                radius: 1.0,
+            },
+            layer: None,
+            class: None,
+            attrs: Default::default(),
+        };
+        // A method with two steps; it panics after the second.
+        let r: Result<(), RpcError> = s.guarded("many.steps", |s| {
+            s.editor.execute(&add(1.0)).unwrap();
+            s.editor.execute(&add(2.0)).unwrap();
+            assert_eq!(s.editor.doc().objects.len(), count + 2);
+            panic!("after two steps");
+        });
+        assert_eq!(r.unwrap_err().code, -32603);
+        assert_eq!(s.editor.undo_depth(), depth);
+        assert_eq!(s.editor.doc().objects.len(), count);
+        assert!(!s.editor.can_redo());
+        assert!(s.is_tainted());
+        let failure = s.feedback.failure.as_ref().unwrap();
+        assert!(
+            failure.error.contains("after two steps"),
+            "{}",
+            failure.error
+        );
+        // A method that does not panic keeps its steps.
+        let r: Result<(), RpcError> = s.guarded("fine", |s| {
+            s.editor.execute(&add(3.0)).unwrap();
+            Ok(())
+        });
+        assert!(r.is_ok());
+        assert_eq!(s.editor.undo_depth(), depth + 1);
     }
 
     #[test]

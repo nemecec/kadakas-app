@@ -89,6 +89,10 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 - Two process-wide values are explicit exceptions for the UI: the active language (`kadakas-l10n`) and the current units (`kadakas-units`). They are preferences of the person. They are not document data, and an API session never reads them.
 - New ids are UUIDv7 (`Document::alloc_id`). A web build must call `kadakas_core::uid::set_host_seed(ms, salt)` once before it makes a document (the app does this in `new_web` with `Date.now()` and `crypto.getRandomValues`), because `std` has no clock or process there. Tests and fixtures use `Document::with_sequential_ids()` or `kadakas serve --sequential-ids`.
 
+## Test-only features
+
+A feature that only tests need must never be in a program that we ship. `kadakas-core` has `fault-injection` (a command can be made to panic, see `kadakas_core::fault`); only the dev-dependencies of `kadakas-api` turn it on. `scripts/check-test-hook.sh` reads the feature tree of `kadakas-app`, `kadakas-cli` and `kadakas-launcher` and fails if a hook is in it (and fails if it cannot see the hook in the tree of the tests). CI runs it (job `test-hooks`). Add the name of each new test-only feature to `HOOKS` in the script.
+
 ## Toolchain
 
 - The minimum Rust version is 1.96 (`rust-version` in the workspace `Cargo.toml`). wasmtime 49 needs it. Use the current stable toolchain; CI uses `stable`.

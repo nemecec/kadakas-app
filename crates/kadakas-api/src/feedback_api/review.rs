@@ -40,6 +40,8 @@ pub struct Review {
     render: Option<Vec<u8>>,
     calls: Option<String>,
     log: Option<String>,
+    /// The random id of this installation, for the message.
+    installation: String,
 }
 
 impl Review {
@@ -65,6 +67,7 @@ impl Review {
             render: hub.attachment(id, AttachmentKind::Render),
             calls: text(AttachmentKind::Calls),
             log: text(AttachmentKind::Log),
+            installation: hub.installation_id(),
             report,
         })
     }
@@ -154,6 +157,7 @@ impl Review {
                     .filter(|_| on(AttachmentKind::Render)),
                 calls: calls.as_deref(),
                 log: log.as_deref(),
+                installation: Some(&self.installation),
             },
         )
     }

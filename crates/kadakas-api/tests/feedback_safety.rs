@@ -198,7 +198,8 @@ fn a_panic_in_a_command_leaves_the_document_the_revision_and_the_undo_as_they_we
 #[test]
 fn a_panic_inside_a_batch_takes_back_every_step() {
     let mut s = Session::with_sequential_ids();
-    kadakas_core::fault::arm();
+    // The second step of the batch panics, after the first one made its change.
+    kadakas_core::fault::arm_after(2);
     let r = line(
         &mut s,
         "execute",
@@ -530,4 +531,135 @@ fn the_review_shows_the_calls_and_the_log_as_they_will_be_sent() {
     review.privacy = privacy(false, true, false);
     assert!(review.calls_text().unwrap().contains("385000"));
     assert!(review.payload().unwrap().contains("385000"));
+}
+
+// ---- places in record data, boxes in calls, file errors, newer outbox
+
+#[test]
+fn record_data_loses_its_place_with_the_place_options_even_when_names_stay() {
+    let mut s = Session::with_sequential_ids();
+    let r = exec(
+        &mut s,
+        json!({"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [10, 10]}}),
+    );
+    let id = r["created"][0].clone();
+    exec(
+        &mut s,
+        json!({"op": "set_data", "id": id, "set": {"Site": {"lat": 60.17, "lon": 24.94, "site_address": "Elm Road 4", "owner_note": "Mrs Smith", "depth": 300, "nested": {"x": 385000.5, "kept": "yes"}}}}),
+    );
+    let doc = serde_json::to_string(s.editor.doc()).unwrap();
+    assert!(doc.contains("Elm Road 4") && doc.contains("60.17"));
+    let out = apply_privacy(&doc, privacy(true, false, false)).unwrap();
+    for gone in ["60.17", "24.94", "Elm Road 4", "385000.5"] {
+        assert!(!out.contains(gone), "{gone} in {out}");
+    }
+    // What is not a place stays: the names option is off.
+    for kept in ["Mrs Smith", "300", "\"kept\""] {
+        assert!(out.contains(kept), "{kept} in {out}");
+    }
+    let out = apply_privacy(&doc, privacy(false, true, false)).unwrap();
+    assert!(!out.contains("60.17") && out.contains("Mrs Smith"));
+    // With both place options off, the data stays.
+    let out = apply_privacy(&doc, privacy(false, false, false)).unwrap();
+    assert!(out.contains("60.17") && out.contains("Elm Road 4"));
+}
+
+#[test]
+fn boxes_and_extent_keys_leave_the_call_log() {
+    let calls = json!([
+        {"method": "gis.fetch", "params": {"bbox": [24.9, 60.1, 25.0, 60.2], "extent": {"a": 1}, "bounds": "x", "other": [1, 2, 3, 4], "layer": "roads"}},
+        {"method": "x.y", "params": {"area": [10, 20, 30, 40]}},
+    ]).to_string();
+    for p in [privacy(true, false, false), privacy(false, true, false)] {
+        let out = calls_privacy(&calls, p);
+        for gone in [
+            "bbox",
+            "extent",
+            "bounds",
+            "24.9",
+            "60.2",
+            "[10",
+            "[1,2,3,4]",
+        ] {
+            assert!(!out.contains(gone), "{gone} in {out}");
+        }
+        assert!(out.contains("roads") && out.contains("gis.fetch"));
+    }
+    assert!(calls_privacy(&calls, privacy(false, false, false)).contains("bbox"));
+}
+
+#[test]
+fn file_errors_have_the_hint_and_the_tainted_mark_and_are_in_the_call_log() {
+    let mut s = Session::with_sequential_ids();
+    s.paths = kadakas_api::PathPolicy::restricted([std::env::temp_dir()]);
+    let req = json!({"jsonrpc": "2.0", "id": 5, "method": "file.open", "params": {"path": "/nonexistent-dir/none.kad"}});
+    let r: Value =
+        serde_json::from_str(&kadakas_api::files::handle_file_request(&mut s, &req)).unwrap();
+    assert!(r["error"].is_object(), "{r}");
+    assert!(r["error"]["data"].get("tainted").is_none());
+    // The call and its error are in the log of the session, with no folder name.
+    let calls = s.feedback.recent_calls();
+    assert_eq!(calls.last().unwrap()["method"], "file.open");
+    assert!(calls.last().unwrap()["error"].is_string());
+    // A tainted session says so in a file reply as well.
+    kadakas_core::fault::arm();
+    exec_raw(&mut s);
+    let r: Value =
+        serde_json::from_str(&kadakas_api::files::handle_file_request(&mut s, &req)).unwrap();
+    assert_eq!(r["error"]["data"]["tainted"], true, "{r}");
+}
+
+fn exec_raw(s: &mut Session) {
+    let r = line(
+        s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [1, 1], "radius": 1}}}),
+    );
+    assert_eq!(r["error"]["code"], -32603);
+}
+
+#[test]
+fn a_newer_outbox_shows_a_note_and_keeps_its_file() {
+    let tmp = kadakas_sys::tmp::PrivateTempDir::new("kadakas-fb-newer-api").unwrap();
+    let dir = tmp.path().join("fb");
+    std::fs::create_dir_all(&dir).unwrap();
+    let newer = br#"{"version":99,"next_seq":1,"reports":[]}"#;
+    std::fs::write(dir.join("outbox.json"), newer).unwrap();
+    let mut s = Session::with_sequential_ids();
+    s.feedback
+        .hub
+        .set_storage(Box::new(DirStorage::new(dir.clone())));
+    let l = ok(&mut s, "feedback.list", json!({}));
+    assert!(l["note"].as_str().unwrap().contains("newer"), "{l}");
+    ok(
+        &mut s,
+        "feedback.submit",
+        json!({"kind": "question", "title": "memory", "attach": false}),
+    );
+    assert_eq!(std::fs::read(dir.join("outbox.json")).unwrap(), newer);
+}
+
+#[test]
+fn the_review_message_has_the_installation_id() {
+    let mut s = Session::with_sequential_ids();
+    exec(
+        &mut s,
+        json!({"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [10, 10]}}),
+    );
+    let r = ok(
+        &mut s,
+        "feedback.submit",
+        json!({"kind": "bug", "title": "id"}),
+    );
+    let review = kadakas_api::feedback_api::review::Review::open(
+        &mut s.feedback.hub,
+        r["id"].as_str().unwrap(),
+    )
+    .unwrap();
+    let p: Value = serde_json::from_str(&review.payload().unwrap()).unwrap();
+    assert_eq!(
+        p["installation"].as_str().unwrap(),
+        s.feedback.hub.installation_id()
+    );
+    assert_eq!(p["installation"].as_str().unwrap().len(), 36);
 }

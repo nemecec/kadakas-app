@@ -336,6 +336,17 @@ pub fn apply_privacy(json: &str, p: Privacy) -> Result<String, String> {
         }
     }
     let mut v = serde_json::to_value(&doc).map_err(|e| e.to_string())?;
+    // Record data can hold a place (an imported feature has its coordinates and its address in
+    // `data`). It goes with the place options, also when the names stay.
+    if (p.move_to_origin || p.remove_georef)
+        && let Some(list) = v.get_mut("objects").and_then(Value::as_array_mut)
+    {
+        for o in list {
+            if let Some(d) = o.get_mut("data") {
+                strip_place_data(d);
+            }
+        }
+    }
     if p.remove_names {
         strip_names(&mut v);
         // Texts in resources can break a rule (a name that must not be empty). Then the
@@ -350,6 +361,53 @@ pub fn apply_privacy(json: &str, p: Privacy) -> Result<String, String> {
     Document::from_value(v.clone())
         .map_err(|e| format!("the options leave an invalid document: {e}"))?;
     serde_json::to_string(&v).map_err(|e| e.to_string())
+}
+
+/// Keys of record data that hold a place: coordinates and address fields.
+const PLACE_DATA_KEYS: [&str; 22] = [
+    "lat",
+    "lon",
+    "lng",
+    "latitude",
+    "longitude",
+    "x",
+    "y",
+    "z",
+    "easting",
+    "northing",
+    "coordinates",
+    "geometry",
+    "location",
+    "address",
+    "street",
+    "city",
+    "town",
+    "postcode",
+    "postal_code",
+    "zip",
+    "zipcode",
+    "country",
+];
+
+/// Removes the entries of record data that hold a place, at any depth. The key is compared
+/// without case, and a key that ends in one of the words counts (`site_address`, `x_coord`).
+fn strip_place_data(v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            o.retain(|k, _| {
+                let k = k.to_ascii_lowercase();
+                !PLACE_DATA_KEYS.iter().any(|w| {
+                    k == *w
+                        || k.ends_with(&format!("_{w}"))
+                        || k.starts_with(&format!("{w}_"))
+                        || k.contains(&format!("_{w}_"))
+                })
+            });
+            o.values_mut().for_each(strip_place_data);
+        }
+        Value::Array(a) => a.iter_mut().for_each(strip_place_data),
+        _ => {}
+    }
 }
 
 fn strip_names(v: &mut Value) {
@@ -430,6 +488,9 @@ const PLACE_KEYS: [&str; 9] = [
     "proj",
 ];
 
+/// Keys that hold the box of a place.
+const BOX_KEYS: [&str; 3] = ["bbox", "extent", "bounds"];
+
 /// Keys whose number is a coordinate.
 const COORD_KEYS: [&str; 10] = [
     "x",
@@ -481,8 +542,9 @@ pub fn hide_coordinates_in_text(s: &str) -> String {
     out
 }
 
+/// A pair or triple of numbers (a point), or four numbers (a box).
 fn is_point(a: &[Value]) -> bool {
-    (2..=3).contains(&a.len()) && a.iter().all(Value::is_number)
+    (2..=4).contains(&a.len()) && a.iter().all(Value::is_number)
 }
 
 fn private_value(v: &mut Value, p: Privacy) {
@@ -495,13 +557,18 @@ fn private_value(v: &mut Value, p: Privacy) {
             }
         }
         Value::Array(a) => {
-            if p.move_to_origin && is_point(a) {
+            let point = (2..=3).contains(&a.len()) && is_point(a);
+            let boxed = a.len() == 4 && is_point(a);
+            if (p.move_to_origin && point) || ((p.move_to_origin || p.remove_georef) && boxed) {
                 *v = Value::String("<coordinates removed>".into());
             } else {
                 a.iter_mut().for_each(|x| private_value(x, p));
             }
         }
         Value::Object(o) => {
+            if p.move_to_origin || p.remove_georef {
+                o.retain(|k, _| !BOX_KEYS.contains(&k.to_ascii_lowercase().as_str()));
+            }
             for (k, x) in o.iter_mut() {
                 let key = k.to_ascii_lowercase();
                 if p.remove_georef && PLACE_KEYS.contains(&key.as_str()) {

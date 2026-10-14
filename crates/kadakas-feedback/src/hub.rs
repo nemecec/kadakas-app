@@ -29,8 +29,8 @@ use crate::store::Storage;
 const OUTBOX: &str = "outbox.json";
 const SETTINGS: &str = "settings.json";
 const VERSION: u32 = 1;
-/// The bytes of attachments that wait in the outbox (not yet sent).
-pub const MAX_WAITING_BYTES: usize = 64 << 20;
+/// The bytes of attachments that wait in the outbox (not yet sent), for agents and for people each.
+pub const MAX_WAITING_BYTES: usize = 32 << 20;
 /// Reports one session may make, merged ones included.
 pub const MAX_SUBMITS_PER_SESSION: u32 = 30;
 
@@ -60,6 +60,9 @@ pub struct Settings {
     /// Another feedback server.
     #[serde(default)]
     pub url: Option<String>,
+    /// A random id of this installation, made at the first need. It is not the id of a person.
+    #[serde(default)]
+    pub installation: Option<String>,
 }
 
 /// A report that is ready to go out.
@@ -86,8 +89,11 @@ pub struct Hub {
     /// Reports made by agents in this run, merged ones included (the rate limit).
     submitted: u32,
     max_submits: u32,
-    /// The ids of reports that this run made or merged into. `--feedback-send` covers these only.
+    /// The ids of reports that this run made. `--feedback-send` covers these only. A report that
+    /// this run only merged into is not in the list: its text is older.
     run_ids: HashSet<String>,
+    /// A note for the person, for example that the outbox is in memory only.
+    note: Option<String>,
 }
 
 impl Hub {
@@ -99,6 +105,7 @@ impl Hub {
             submitted: 0,
             max_submits: MAX_SUBMITS_PER_SESSION,
             run_ids: HashSet::new(),
+            note: None,
         }
     }
 
@@ -113,6 +120,32 @@ impl Hub {
 
     pub fn persistent(&self) -> bool {
         self.storage.persistent()
+    }
+
+    /// A note for the person, if the outbox needs one (see `keep_aside`).
+    pub fn note(&self) -> Option<&str> {
+        self.note.as_deref()
+    }
+
+    /// The random id of this installation. It is made once and stored in `settings.json`. It
+    /// tells the server that two reports come from one installation, so that it can drop a
+    /// duplicate. It does not name a person.
+    pub fn installation_id(&mut self) -> String {
+        if let Some(i) = self.settings().installation {
+            return i;
+        }
+        let Ok(_guard) = self.lock() else {
+            return new_installation_id();
+        };
+        let mut s = self.settings();
+        // Another program can have made it while we waited for the lock.
+        if let Some(i) = s.installation.clone() {
+            return i;
+        }
+        let id = new_installation_id();
+        s.installation = Some(id.clone());
+        let _ = self.save_settings(&s);
+        id
     }
 
     pub fn set_max_submits(&mut self, n: u32) {
@@ -203,10 +236,28 @@ impl Hub {
 
     // ---- the outbox file
 
+    /// The outbox file is from a newer Kadakas. It is not read and never written: the reports of
+    /// this run go to memory, and the person is told.
+    fn keep_aside(&mut self) {
+        self.storage = Box::new(crate::store::MemStorage::new());
+        self.note = Some(
+            "The outbox file is from a newer Kadakas. It was left as it is, and reports are kept in memory until the program ends."
+                .into(),
+        );
+    }
+
     fn load(&mut self) -> Outbox {
         let Some(bytes) = self.storage.read(OUTBOX) else {
             return Outbox::default();
         };
+        let newer = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|v| v["version"].as_u64())
+            .is_some_and(|n| n > u64::from(VERSION));
+        if newer {
+            self.keep_aside();
+            return Outbox::default();
+        }
         let parsed = (bytes.len() <= MAX_OUTBOX_BYTES)
             .then(|| serde_json::from_slice::<Outbox>(&bytes).ok())
             .flatten()
@@ -320,14 +371,15 @@ impl Hub {
             };
             self.save(&ob)?;
             self.submitted += u32::from(agent);
-            self.run_ids.insert(out.id.clone());
             return Ok(out);
         }
-        if ob.reports.len() >= MAX_REPORTS {
+        // Agents and people have their own room, so an agent cannot fill the space of a person.
+        let side = |r: &Report| (r.origin == Origin::Agent) == agent;
+        if ob.reports.iter().filter(|r| side(r)).count() >= MAX_REPORTS_PER_SIDE {
             let old = ob
                 .reports
                 .iter()
-                .position(|r| matches!(r.status, Status::Sent | Status::Withdrawn));
+                .position(|r| side(r) && matches!(r.status, Status::Sent | Status::Withdrawn));
             match old {
                 Some(i) => {
                     let r = ob.reports.remove(i);
@@ -335,7 +387,7 @@ impl Hub {
                 }
                 None => {
                     return Err(FeedbackError::Limit(format!(
-                        "the outbox holds {MAX_REPORTS} reports that wait; a person must send or withdraw some"
+                        "the outbox holds {MAX_REPORTS_PER_SIDE} reports of this kind that wait; a person must send or withdraw some"
                     )));
                 }
             }
@@ -343,7 +395,7 @@ impl Hub {
         let waiting = ob
             .reports
             .iter()
-            .filter(|r| !matches!(r.status, Status::Sent | Status::Withdrawn))
+            .filter(|r| side(r) && !matches!(r.status, Status::Sent | Status::Withdrawn))
             .flat_map(|r| &r.attachments)
             .fold(0usize, |n, a| n.saturating_add(a.bytes));
         let new_bytes = att
@@ -528,6 +580,8 @@ impl Hub {
         if stored == Some(false) {
             return Vec::new();
         }
+        // The id is made before the lock: the lock is not re-entrant.
+        let installation = self.installation_id();
         let Ok(_guard) = self.lock() else {
             return Vec::new();
         };
@@ -559,9 +613,14 @@ impl Hub {
                         None
                     }
                 },
-                Status::Pending if text_ok && r.attachments.is_empty() => {
-                    payload::build(r, &PayloadParts::default()).ok()
-                }
+                Status::Pending if text_ok && r.attachments.is_empty() => payload::build(
+                    r,
+                    &PayloadParts {
+                        installation: Some(&installation),
+                        ..Default::default()
+                    },
+                )
+                .ok(),
                 _ => None,
             };
             if let Some(payload) = payload {
@@ -650,6 +709,25 @@ impl Hub {
         }
         Ok(())
     }
+}
+
+/// A random id for an installation, in the form of a version 4 UUID. It needs to be unlikely to
+/// repeat, not secret: it is a key against duplicates. The two hashers of `RandomState` start
+/// with random keys from the operating system.
+fn new_installation_id() -> String {
+    use std::hash::BuildHasher;
+    let a = std::collections::hash_map::RandomState::new().hash_one(0x004b_6164_616b_6173_u64);
+    let b = std::collections::hash_map::RandomState::new().hash_one(0x6665_6564_6261_636bu64);
+    let hi = (a & !0xf000) | 0x4000;
+    let lo = (b & 0x3fff_ffff_ffff_ffff) | 0x8000_0000_0000_0000;
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        hi >> 32,
+        (hi >> 16) & 0xffff,
+        hi & 0xffff,
+        lo >> 48,
+        lo & 0xffff_ffff_ffff
+    )
 }
 
 /// True if a new report with this key and origin would merge into `r`.
@@ -908,7 +986,7 @@ mod tests {
     fn the_outbox_is_capped() {
         let mut h = Hub::in_memory();
         h.set_max_submits(1000);
-        for i in 0..MAX_REPORTS {
+        for i in 0..MAX_REPORTS_PER_SIDE {
             h.submit(draft(&format!("report {i}")), vec![], 0).unwrap();
         }
         let e = h.submit(draft("one more"), vec![], 0).unwrap_err();
@@ -916,7 +994,7 @@ mod tests {
         // A sent report makes room.
         h.record("fb-1", &sent("s1"), T0).unwrap();
         h.submit(draft("one more"), vec![], 0).unwrap();
-        assert_eq!(h.list().len(), MAX_REPORTS);
+        assert_eq!(h.list().len(), MAX_REPORTS_PER_SIDE);
         assert!(h.get("fb-1").is_none());
     }
 
@@ -1121,10 +1199,11 @@ mod tests {
         );
         // The flag is not stored.
         assert_eq!(this_run.settings().send, None);
-        // A report of this run that a merge touched counts as made in this run.
+        // A report that this run only merged into is not a report of this run: its text is older.
         let m = this_run.submit(draft("from before"), vec![], 0).unwrap();
         assert!(m.merged);
-        assert_eq!(this_run.outgoing(true, 10, T0 + 1).len(), 1);
+        assert!(this_run.outgoing(true, 10, T0 + 1).is_empty());
+        assert_eq!(this_run.get(&m.id).unwrap().count, 2);
     }
 
     #[test]
@@ -1323,6 +1402,97 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), 40);
+    }
+
+    #[test]
+    fn agents_cannot_fill_the_room_of_people() {
+        let mut h = Hub::in_memory();
+        h.set_max_submits(10_000);
+        for i in 0..MAX_REPORTS_PER_SIDE {
+            h.submit(draft(&format!("agent {i}")), vec![], 0).unwrap();
+        }
+        assert!(matches!(
+            h.submit(draft("one more agent"), vec![], 0),
+            Err(FeedbackError::Limit(_))
+        ));
+        // A person still has the whole room of people.
+        for i in 0..MAX_REPORTS_PER_SIDE {
+            let mut d = draft(&format!("person {i}"));
+            d.origin = Origin::User;
+            h.submit(d, vec![], 0).unwrap();
+        }
+        let mut d = draft("one more person");
+        d.origin = Origin::User;
+        assert!(matches!(
+            h.submit(d, vec![], 0),
+            Err(FeedbackError::Limit(_))
+        ));
+        assert_eq!(h.list().len(), MAX_REPORTS);
+        // The attachment room is separate as well.
+        let mut h = Hub::in_memory();
+        h.set_max_submits(10_000);
+        let mut p = png();
+        p.resize(MAX_IMAGE_BYTES, 0);
+        for i in 0..MAX_WAITING_BYTES / MAX_IMAGE_BYTES {
+            h.submit(
+                draft(&format!("big {i}")),
+                vec![att(AttachmentKind::Render, p.clone())],
+                0,
+            )
+            .unwrap();
+        }
+        assert!(
+            h.submit(
+                draft("big more"),
+                vec![att(AttachmentKind::Render, p.clone())],
+                0
+            )
+            .is_err()
+        );
+        let mut d = draft("a person");
+        d.origin = Origin::User;
+        h.submit(d, vec![att(AttachmentKind::Render, p)], 0)
+            .unwrap();
+    }
+
+    #[test]
+    fn the_installation_id_is_made_once_kept_and_sent_with_the_report() {
+        let (_tmp, mut a, mut b) = two_hubs();
+        let id = a.installation_id();
+        assert_eq!(id.len(), 36);
+        assert_eq!(id.as_bytes()[14], b'4');
+        assert_eq!(a.installation_id(), id);
+        // Another program on the same folder has the same id.
+        assert_eq!(b.installation_id(), id);
+        assert_eq!(a.settings().installation.as_deref(), Some(id.as_str()));
+        a.set_send(Some(true)).unwrap();
+        a.submit(draft("x"), vec![], 0).unwrap();
+        let out = a.outgoing(true, 5, T0);
+        let v: serde_json::Value = serde_json::from_str(&out[0].payload).unwrap();
+        assert_eq!(v["installation"], id.as_str());
+        // A memory store makes its own, and two of them differ.
+        let (mut m1, mut m2) = (Hub::in_memory(), Hub::in_memory());
+        assert_ne!(m1.installation_id(), m2.installation_id());
+    }
+
+    #[test]
+    fn an_outbox_from_a_newer_version_is_kept_aside_and_never_written() {
+        let tmp = kadakas_sys::tmp::PrivateTempDir::new("kadakas-fb-newer").unwrap();
+        let dir = tmp.path().join("fb");
+        std::fs::create_dir_all(&dir).unwrap();
+        let newer = br#"{"version":9,"next_seq":7,"reports":[{"secret":"future"}]}"#;
+        std::fs::write(dir.join("outbox.json"), newer).unwrap();
+        let mut h = Hub::new(Box::new(crate::store::DirStorage::new(dir.clone())));
+        assert!(h.note().is_none());
+        assert!(h.list().is_empty());
+        assert!(h.note().unwrap().contains("newer"));
+        // Reports go to memory and work; the file is not touched, and is not copied over either.
+        let s = h.submit(draft("while newer"), vec![], 0).unwrap();
+        assert_eq!(h.get(&s.id).unwrap().title, "while newer");
+        assert!(!h.persistent());
+        assert_eq!(std::fs::read(dir.join("outbox.json")).unwrap(), newer);
+        assert!(!dir.join("outbox.bad.json").exists());
+        assert!(h.withdraw(&s.id).is_ok());
     }
 
     #[test]

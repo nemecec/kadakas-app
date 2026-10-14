@@ -11,6 +11,9 @@ pub const MAX_ERROR: usize = 2000;
 pub const MAX_CLIENT: usize = 60;
 /// Reports in the outbox. When it is full, the oldest sent or withdrawn report goes.
 pub const MAX_REPORTS: usize = 200;
+/// The same outbox has room for 100 reports of agents and 100 of people, so agents cannot fill
+/// the space of a person.
+pub const MAX_REPORTS_PER_SIDE: usize = MAX_REPORTS / 2;
 /// A screenshot or a render, as PNG.
 pub const MAX_IMAGE_BYTES: usize = 1 << 20;
 /// A model excerpt, as a JSON document.
