@@ -951,6 +951,8 @@ pub struct Class {
 /// Reads and writes `Object::shape`, with the fallback for unknown kinds.
 mod shape_serde {
     use super::Shape;
+    use crate::underlay::PngData;
+    use serde::de::{MapAccess, SeqAccess, Visitor};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use serde_json::Value;
 
@@ -961,9 +963,84 @@ mod shape_serde {
         }
     }
 
+    /// Reads the text of a shape as a `Value`, because a kind that this version does not know must
+    /// stay as it is (`Shape::Unknown`). One field is the exception: the picture of an underlay can be
+    /// tens of MB of base64 text. When the `kind` is already known to be `underlay`, the `png`
+    /// text is decoded where the parser holds it and does not go into the `Value`.
+    struct RawShape;
+
+    impl<'de> Visitor<'de> for RawShape {
+        type Value = (Value, Option<PngData>);
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a shape")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
+            let mut map = serde_json::Map::new();
+            let (mut underlay, mut png) = (false, None);
+            while let Some(key) = access.next_key::<String>()? {
+                let v = if underlay && key == "png" {
+                    png = Some(access.next_value::<PngData>()?);
+                    Value::String(String::new())
+                } else {
+                    let v: Value = access.next_value()?;
+                    underlay |= key == "kind" && v.as_str() == Some("underlay");
+                    v
+                };
+                if map.insert(key.clone(), v).is_some() {
+                    return Err(serde::de::Error::custom(format!("duplicate field `{key}`")));
+                }
+            }
+            Ok((Value::Object(map), png))
+        }
+
+        // Anything that is not an object is no shape; `Shape` says so below.
+        fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E> {
+            Ok((Value::Bool(v), None))
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok((Value::Null, None))
+        }
+
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+            Ok((Value::from(v), None))
+        }
+
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
+            Ok((Value::from(v), None))
+        }
+
+        fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E> {
+            Ok((Value::from(v), None))
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> {
+            Ok((Value::from(v), None))
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut list = Vec::new();
+            while let Some(v) = seq.next_element::<Value>()? {
+                list.push(v);
+            }
+            Ok((Value::Array(list), None))
+        }
+    }
+
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Shape, D::Error> {
-        let raw = Value::deserialize(d)?;
+        let (raw, png) = d.deserialize_any(RawShape)?;
+        // The picture was taken out of `raw` only for a shape with the kind `underlay`, a kind that
+        // this version knows. It never becomes `Shape::Unknown`, so no text is lost.
         match Shape::deserialize(&raw) {
+            Ok(Shape::Underlay(mut u)) => {
+                if let Some(png) = png {
+                    u.png = png;
+                }
+                Ok(Shape::Underlay(u))
+            }
+            Err(e) if png.is_some() => Err(serde::de::Error::custom(e)),
             Ok(shape) => Ok(shape),
             Err(e) => {
                 // Only a kind that we do not know becomes `Unknown`. A known kind with bad fields is an error.
@@ -1004,23 +1081,35 @@ pub type Objects = IndexMap<ObjectId, Object>;
 
 mod objects_as_array {
     use super::{Object, Objects};
-    use serde::de::Error;
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::de::{Error, SeqAccess, Visitor};
+    use serde::{Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(map: &Objects, s: S) -> Result<S::Ok, S::Error> {
         s.collect_seq(map.values())
     }
 
+    /// Reads the array object by object straight into the map. There is no `Vec` of all objects
+    /// first, which would hold the objects twice at the end of a big load.
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Objects, D::Error> {
-        let list = Vec::<Object>::deserialize(d)?;
-        let mut map = Objects::with_capacity(list.len());
-        for o in list {
-            let id = o.id;
-            if map.insert(id, o).is_some() {
-                return Err(D::Error::custom(format!("duplicate id {id}")));
+        struct ObjectsVisitor;
+        impl<'de> Visitor<'de> for ObjectsVisitor {
+            type Value = Objects;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an array of objects")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Objects, A::Error> {
+                // A hostile size hint must not reserve memory: the map grows with the objects.
+                let mut map = Objects::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
+                while let Some(o) = seq.next_element::<Object>()? {
+                    let id = o.id;
+                    if map.insert(id, o).is_some() {
+                        return Err(A::Error::custom(format!("duplicate id {id}")));
+                    }
+                }
+                Ok(map)
             }
         }
-        Ok(map)
+        d.deserialize_seq(ObjectsVisitor)
     }
 }
 
@@ -1099,6 +1188,87 @@ pub enum LoadError {
     Invalid(String),
 }
 
+/// Refuses a `format_version` that this version cannot read.
+fn check_version(version: u64) -> Result<(), LoadError> {
+    let version = u32::try_from(version).unwrap_or(u32::MAX);
+    if version > FORMAT_VERSION {
+        Err(LoadError::Newer(version))
+    } else if version < OLDEST_FORMAT {
+        Err(LoadError::Unsupported(version))
+    } else {
+        Ok(())
+    }
+}
+
+/// Reads only `format_version` of a document. Every other field is skipped without storing it.
+/// It accepts a top-level object only, and refuses a second `format_version`.
+struct VersionProbe {
+    format_version: Option<Value>,
+}
+
+impl<'de> Deserialize<'de> for VersionProbe {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{Error, IgnoredAny, MapAccess, Visitor};
+        struct Probe;
+        impl<'de> Visitor<'de> for Probe {
+            type Value = VersionProbe;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a document")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<VersionProbe, A::Error> {
+                let mut version = None;
+                while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                    if key == "format_version" {
+                        if version.is_some() {
+                            return Err(A::Error::custom("duplicate key `format_version`"));
+                        }
+                        version = Some(map.next_value::<Value>()?);
+                    } else {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                }
+                Ok(VersionProbe {
+                    format_version: version,
+                })
+            }
+        }
+        d.deserialize_map(Probe)
+    }
+}
+
+/// The error for a text that does not parse as a document. `first` is the error of the typed
+/// parse. `probe` reads only the version, so a newer or older file says so, and a file without a
+/// version says that. A reader error (a failed read) is reported as it is.
+fn explain_failure(
+    first: serde_json::Error,
+    probe: impl FnOnce() -> Result<VersionProbe, serde_json::Error>,
+) -> LoadError {
+    if first.is_io() {
+        return LoadError::Parse(first.to_string());
+    }
+    match probe() {
+        Ok(VersionProbe {
+            format_version: Some(Value::Number(n)),
+        }) if n.is_u64() => match check_version(n.as_u64().unwrap_or_default()) {
+            Err(e) => e,
+            Ok(()) => LoadError::Parse(first.to_string()),
+        },
+        // JSON, but not a document: no version, or a version that is no number.
+        Ok(_) => LoadError::Parse("missing format_version".into()),
+        Err(p) if p.is_data() => {
+            let m = p.to_string();
+            if m.starts_with("duplicate key") {
+                LoadError::Parse(m)
+            } else {
+                // Not an object at the top.
+                LoadError::Parse("missing format_version".into())
+            }
+        }
+        // Not JSON at all, or a failed seek: the first error says where.
+        Err(_) => LoadError::Parse(first.to_string()),
+    }
+}
+
 impl Default for Document {
     fn default() -> Self {
         Document {
@@ -1139,11 +1309,50 @@ impl Default for Document {
 }
 
 impl Document {
-    /// The one way to load a document: parses the JSON, refuses newer
+    /// The one way to load a document from text: parses the JSON, refuses newer
     /// formats, migrates older ones, validates and repairs the ID counter.
     pub fn from_json(text: &str) -> Result<Document, LoadError> {
-        let value = serde_json::from_str(text).map_err(|e| LoadError::Parse(e.to_string()))?;
-        Document::from_value(value)
+        Document::from_slice(text.as_bytes())
+    }
+
+    /// Like `from_json`, for bytes that are already in memory (the browser's file picker). Use
+    /// this for bytes and `from_reader` for files: parsing a slice is faster than parsing a reader.
+    /// There is no `serde_json::Value` copy of the document: the typed parser reads the bytes.
+    pub fn from_slice(bytes: &[u8]) -> Result<Document, LoadError> {
+        match serde_json::from_slice::<Document>(bytes) {
+            Ok(doc) => doc.checked(),
+            Err(e) => Err(explain_failure(e, || {
+                serde_json::from_slice::<VersionProbe>(bytes)
+            })),
+        }
+    }
+
+    /// Like `from_json`, but reads the JSON from a reader (a buffered file). The text is never held
+    /// in memory as a whole, and there is no `serde_json::Value` copy of the document: the reader
+    /// feeds the typed parser directly. `Seek` is for the error path only: when the typed parse
+    /// fails, the reader goes back to the start and a second pass reads just `format_version`
+    /// (everything else is skipped without storing it), so a newer or an older file still gets its
+    /// own clear error and not a complaint about its shape. If the reader cannot seek, the error
+    /// of the first pass is the answer.
+    ///
+    /// A known field that appears twice in the file is an error (`duplicate field`), because
+    /// two readers could take different values. The old reading through a `Value` took the last one.
+    pub fn from_reader<R: std::io::Read + std::io::Seek>(
+        mut reader: R,
+    ) -> Result<Document, LoadError> {
+        match serde_json::from_reader::<_, Document>(&mut reader) {
+            Ok(doc) => doc.checked(),
+            Err(e) => Err(explain_failure(e, || {
+                reader.rewind().map_err(serde_json::Error::io)?;
+                serde_json::from_reader::<_, VersionProbe>(&mut reader)
+            })),
+        }
+    }
+
+    /// The version check and the repairs after a typed parse.
+    fn checked(self) -> Result<Document, LoadError> {
+        check_version(u64::from(self.format_version))?;
+        self.finish_load()
     }
 
     /// Like `from_json`, for JSON that is already parsed.
@@ -1152,20 +1361,31 @@ impl Document {
             .get("format_version")
             .and_then(Value::as_u64)
             .ok_or_else(|| LoadError::Parse("missing format_version".into()))?;
-        let version = u32::try_from(version).unwrap_or(u32::MAX);
-        if version > FORMAT_VERSION {
-            return Err(LoadError::Newer(version));
-        }
-        if version < OLDEST_FORMAT {
-            return Err(LoadError::Unsupported(version));
-        }
-        let mut doc: Document =
+        check_version(version)?;
+        let doc: Document =
             serde_json::from_value(value).map_err(|e| LoadError::Parse(e.to_string()))?;
-        doc.validate().map_err(LoadError::Invalid)?;
-        doc.resources
+        doc.finish_load()
+    }
+
+    /// The checks and repairs that follow the parse of every load.
+    fn finish_load(mut self) -> Result<Document, LoadError> {
+        self.validate().map_err(LoadError::Invalid)?;
+        self.resources
             .verify_pictures()
             .map_err(LoadError::Invalid)?;
-        Ok(doc)
+        Ok(self)
+    }
+
+    /// Writes the document as pretty-printed JSON (the text of a saved `.kad` file) straight into
+    /// `w`, without building the text. The bytes are those of `serde_json::to_string_pretty`.
+    /// Pass a buffered writer for a file.
+    pub fn write_pretty<W: std::io::Write>(&self, w: W) -> std::io::Result<()> {
+        serde_json::to_writer_pretty(w, self).map_err(std::io::Error::from)
+    }
+
+    /// Like `write_pretty`, with no white space (the autosave copies).
+    pub fn write_compact<W: std::io::Write>(&self, w: W) -> std::io::Result<()> {
+        serde_json::to_writer(w, self).map_err(std::io::Error::from)
     }
 
     /// The IDs that the next `n` new objects, layers, classes or resources get, in order. File
@@ -2299,6 +2519,73 @@ mod tests {
         assert!(
             matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains(&format!("object {} has an invalid shape", u(5))))
         );
+    }
+
+    #[test]
+    fn a_reader_loads_shapes_of_every_json_kind_and_pictures_in_any_key_order() {
+        let obj = |shape: serde_json::Value| serde_json::json!({"id": u(5), "layer": u(1), "class": u(0), "shape": shape});
+        // A shape that is no object is an error, never a panic.
+        for bad in [
+            serde_json::json!(5),
+            serde_json::json!(-5),
+            serde_json::json!(1.5),
+            serde_json::json!(true),
+            serde_json::json!(null),
+            serde_json::json!("circle"),
+            serde_json::json!([1, 2]),
+            serde_json::json!({"kind": "circle"}),
+        ] {
+            let mut v = doc_json();
+            v["objects"] = serde_json::json!([obj(bad.clone())]);
+            let text = v.to_string();
+            let e = Document::from_json(&text).unwrap_err();
+            assert!(matches!(e, LoadError::Parse(_)), "{bad}: {e:?}");
+        }
+        // The objects are an array.
+        let mut v = doc_json();
+        v["objects"] = serde_json::json!({"a": 1});
+        assert!(matches!(
+            Document::from_json(&v.to_string()),
+            Err(LoadError::Parse(_))
+        ));
+        // A picture loads whether `png` comes before `kind` or after it, and a bad one is refused.
+        let png = base64_for(&[0x89, b'P', b'N', b'G', 1, 2, 3, 4, 5]);
+        let after = format!(
+            r#"{{"kind":"underlay","name":"n","min":[0,0],"max":[1,1],"width":1,"height":1,"png":"{png}"}}"#
+        );
+        let before = format!(
+            r#"{{"png":"{png}","kind":"underlay","name":"n","min":[0,0],"max":[1,1],"width":1,"height":1}}"#
+        );
+        let load = |shape: &str| {
+            let mut v = doc_json();
+            v["objects"] = serde_json::json!([]);
+            let text = v.to_string().replace(
+                r#""objects":[]"#,
+                &format!(
+                    r#""objects":[{{"id":"{}","layer":"{}","class":"{}","shape":{shape}}}]"#,
+                    u(5),
+                    u(1),
+                    u(0)
+                ),
+            );
+            Document::from_json(&text)
+        };
+        let a = load(&after).unwrap();
+        let b = load(&before).unwrap();
+        assert_eq!(a, b);
+        assert!(matches!(
+            &a.objects.values().next().unwrap().shape,
+            Shape::Underlay(x) if x.png.0.len() == 9
+        ));
+        let broken = after.replace(&png, "!!!!");
+        let e = load(&broken).unwrap_err();
+        assert!(e.to_string().contains("not valid base64"), "{e}");
+        let e = load(&broken.replace("\"!!!!\"", "7")).unwrap_err();
+        assert!(matches!(e, LoadError::Parse(_)));
+    }
+
+    fn base64_for(bytes: &[u8]) -> String {
+        crate::underlay::base64_encode(bytes)
     }
 
     #[test]

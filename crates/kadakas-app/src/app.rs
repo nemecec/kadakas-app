@@ -959,9 +959,7 @@ impl KadakasApp {
         }
         let files: Vec<_> = self.web_inbox.borrow_mut().drain(..).collect();
         for (name, bytes) in files {
-            let parsed = String::from_utf8(bytes)
-                .map_err(|e| e.to_string())
-                .and_then(|t| file_io::parse_document(&t));
+            let parsed = file_io::parse_document_bytes(&bytes);
             match parsed {
                 Ok(doc) => {
                     self.status = tr!("app-opened", name = name);
