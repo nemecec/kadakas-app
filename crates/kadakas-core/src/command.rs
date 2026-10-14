@@ -1020,6 +1020,10 @@ impl<'a> Tx<'a> {
                 self.doc.objects.insert(id, o);
                 self.sync_title_block(id);
                 out.created.push(id.0);
+                #[cfg(feature = "fault-injection")]
+                if crate::fault::take() {
+                    panic!("injected fault after the first change");
+                }
             }
             Command::DeleteObjects { ids } => {
                 let ids = unique(ids);
@@ -1794,12 +1798,28 @@ impl Editor {
     }
 
     /// Runs a command as one undo step. On error the document is unchanged.
+    ///
+    /// If the command panics, the changes it made so far are taken back before the panic goes on:
+    /// the document, the revision and the history are what they were. (A program built with
+    /// `panic = "abort"`, such as the web build, never gets here.)
     pub fn execute(&mut self, cmd: &Command) -> Result<Outcome, CommandError> {
         self.check_pictures(cmd)?;
         let meta_before = Meta::of(&self.doc);
         let mut tx = Tx::new(&mut self.doc);
         let mut out = Outcome::default();
-        let result = tx.run(cmd, &mut out).and_then(|()| tx.check_result());
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tx.run(cmd, &mut out).and_then(|()| tx.check_result())
+        }));
+        let result = match ran {
+            Ok(r) => r,
+            Err(payload) => {
+                // Every change was recorded by `touch` and the lists of the transaction, so the
+                // patch of a failed command undoes it.
+                let patch = tx.finish(meta_before);
+                patch.apply(&mut self.doc, false);
+                std::panic::resume_unwind(payload);
+            }
+        };
         let patch = tx.finish(meta_before);
         let result = result.and_then(|()| match &patch.meta {
             Some((_, after)) if !after.is_finite() => Err(CommandError::Invalid(NOT_FINITE.into())),

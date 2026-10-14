@@ -18,6 +18,7 @@ mod collab_ui;
 mod data_ui;
 mod databar;
 mod enum_names;
+mod feedback_ui;
 mod file_io;
 #[cfg(not(target_arch = "wasm32"))]
 mod gis_dialogs;

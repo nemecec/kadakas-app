@@ -65,6 +65,18 @@ impl PathPolicy {
         doc_dir: Option<&Path>,
         write: bool,
     ) -> Result<PathBuf, String> {
+        self.resolve_with(path, doc_dir, write, &protected_folders())
+    }
+
+    /// Like [`PathPolicy::resolve`], with the list of folders that a restricted session never
+    /// writes to.
+    pub fn resolve_with(
+        &self,
+        path: &Path,
+        doc_dir: Option<&Path>,
+        write: bool,
+        protected: &[PathBuf],
+    ) -> Result<PathBuf, String> {
         let canonical = if write {
             canonical_for_write(path)?
         } else {
@@ -74,6 +86,15 @@ impl PathPolicy {
         let Some(roots) = &self.roots else {
             return Ok(canonical);
         };
+        // The folders of Kadakas hold the outbox of feedback (the proof that a person approved a
+        // report), the settings and the trust lists. An agent never writes there, even if an
+        // allowed folder contains them.
+        if write && protected.iter().any(|p| canonical.starts_with(p)) {
+            return Err(format!(
+                "{} is in a folder of Kadakas (settings, data or feedback). Agents cannot write there",
+                path.display()
+            ));
+        }
         let doc_dir = doc_dir.and_then(|d| std::fs::canonicalize(d).ok());
         if roots
             .iter()
@@ -97,6 +118,28 @@ impl PathPolicy {
             }
         ))
     }
+}
+
+/// The folders of Kadakas for the user: config, data (the feedback outbox is inside), state, and
+/// the folder named by `KADAKAS_FEEDBACK_DIR`. Each is listed as given and, if it exists,
+/// canonical.
+pub fn protected_folders() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let all = [
+        kadakas_sys::dirs::config_dir(),
+        kadakas_sys::dirs::data_dir(),
+        kadakas_sys::dirs::state_dir(),
+        kadakas_feedback::store::default_dir(),
+    ];
+    for d in all.into_iter().flatten() {
+        if let Ok(c) = std::fs::canonicalize(&d) {
+            out.push(c);
+        }
+        out.push(d);
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Canonical path of a file that may not exist yet: the folder is canonicalized, then the name is added.
@@ -144,6 +187,42 @@ mod tests {
                 .is_err()
         );
         let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_restricted_session_does_not_write_into_the_folders_of_kadakas() {
+        let root = dir("protect");
+        let data = root.join("data").join("feedback");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("outbox.json"), "{}").unwrap();
+        let protected = vec![std::fs::canonicalize(root.join("data")).unwrap()];
+        let p = PathPolicy::restricted([root.clone()]);
+        // Reading is not a risk; writing an old file, a new file or a new name is refused.
+        assert!(
+            p.resolve_with(&data.join("outbox.json"), None, false, &protected)
+                .is_ok()
+        );
+        for target in [
+            data.join("outbox.json"),
+            data.join("fb-1.payload.json"),
+            root.join("data").join("x.kad"),
+        ] {
+            let e = p.resolve_with(&target, None, true, &protected).unwrap_err();
+            assert!(e.contains("folder of Kadakas"), "{e}");
+        }
+        // Other places under the root are fine, and an unrestricted session is not limited.
+        assert!(
+            p.resolve_with(&root.join("plan.kad"), None, true, &protected)
+                .is_ok()
+        );
+        assert!(
+            PathPolicy::unrestricted()
+                .resolve_with(&data.join("x"), None, true, &protected)
+                .is_ok()
+        );
+        // The real list holds the folders that exist.
+        let _ = protected_folders();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

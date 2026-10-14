@@ -11,15 +11,18 @@
 //! app through its runtime file. `--connect HOST:PORT` needs `--token` (or the
 //! runtime file). The first message on the connection is always `auth`.
 
+mod feedback_cmd;
 mod mcp_tools;
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, IsTerminal, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use kadakas_api::Session;
 use kadakas_core::model::Document;
+use kadakas_feedback::dispatch::Dispatcher;
+use kadakas_feedback::store::DirStorage;
 use kadakas_sys::agent::{self as sys_agent, AgentInfo};
 use kadakas_sys::fsio;
 use serde_json::{Value, json};
@@ -48,6 +51,11 @@ enum Cmd {
         /// List one tool per API method (about 280) instead of one tool per domain (about 20).
         #[arg(long = "mcp-flat")]
         mcp_flat: bool,
+    },
+    /// Bug reports and feature requests (the outbox of `feedback.submit`).
+    Feedback {
+        #[command(subcommand)]
+        cmd: FeedbackCmd,
     },
     /// Render a document to SVG.
     Render {
@@ -85,6 +93,31 @@ enum Cmd {
         /// Export options as JSON, for example '{"unit": "m"}' or, for IFC, '{"layers_as_storeys": true}'.
         #[arg(long)]
         options: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum FeedbackCmd {
+    /// A person reviews reports with attachments, unticks what they do not want to share, and
+    /// sends them. Needs a terminal. Nothing with attachments leaves this computer without it.
+    Review {
+        /// Review this report only, for example fb-3. Default: all that wait.
+        id: Option<String>,
+        /// Another feedback server for this run.
+        #[arg(
+            long = "feedback-url",
+            value_name = "URL",
+            env = "KADAKAS_FEEDBACK_URL"
+        )]
+        feedback_url: Option<String>,
+    },
+    /// List the reports of the outbox.
+    List,
+    /// Give a report (or every unsent report) a fresh start after failed tries: no tries
+    /// counted, no waiting for the back-off.
+    Retry {
+        /// The report, for example fb-3. Default: every unsent report.
+        id: Option<String>,
     },
 }
 
@@ -146,11 +179,24 @@ struct RemoteArgs {
     /// not unique in the world. Default: off (new IDs are UUIDs).
     #[arg(long = "sequential-ids")]
     sequential_ids: bool,
+    /// Send text-only feedback reports (`feedback.submit`) to the feedback server in this run.
+    /// This is the consent of a headless run. Reports with attachments still wait for a person
+    /// (`kadakas feedback review`). Default: off, so reports stay in the outbox.
+    #[arg(long = "feedback-send")]
+    feedback_send: bool,
+    /// The feedback server for this run, for example `https://feedback.example.org`. Used by
+    /// `--feedback-send`. Must use `https://`.
+    #[arg(
+        long = "feedback-url",
+        value_name = "URL",
+        env = "KADAKAS_FEEDBACK_URL"
+    )]
+    feedback_url: Option<String>,
 }
 
 /// Where requests go: a local document, or a running app over TCP.
 enum Backend {
-    Local(Box<Session>),
+    Local(Box<Session>, Option<Box<Dispatcher>>),
     /// The connection, and the notifications (`events.change`) that came before a reply.
     Remote(BufReader<TcpStream>, Vec<Value>),
 }
@@ -164,6 +210,18 @@ impl Backend {
             return connect_remote(&addr, &token).map(|c| Backend::Remote(c, Vec::new()));
         }
         let mut session = Session::default();
+        // The outbox is in the data folder (KADAKAS_FEEDBACK_DIR overrides it).
+        if let Some(dir) = kadakas_feedback::store::default_dir() {
+            session
+                .feedback
+                .hub
+                .set_storage(Box::new(DirStorage::new(dir)));
+        }
+        session.feedback.hub.set_url_override(remote.feedback_url);
+        let dispatcher = remote.feedback_send.then(|| {
+            session.feedback.hub.set_send_override(Some(true));
+            Box::new(Dispatcher::http())
+        });
         let sequential = remote.sequential_ids;
         // Requests come from agents: they may only use the allowed folders.
         let dirs = if remote.allow_dir.is_empty() {
@@ -188,14 +246,29 @@ impl Backend {
             session.doc_dir = doc_dir_of(&f);
         }
         session.set_sequential_ids(sequential);
-        Ok(Backend::Local(Box::new(session)))
+        Ok(Backend::Local(Box::new(session), dispatcher))
+    }
+
+    /// Records the sends that finished and starts the next ones (`--feedback-send`).
+    fn pump(&mut self) {
+        if let Backend::Local(s, Some(d)) = self {
+            d.pump(&mut s.feedback.hub, true);
+        }
+    }
+
+    /// At the end of the run: waits for the sends that started.
+    fn finish(&mut self) {
+        if let Backend::Local(s, Some(d)) = self {
+            d.pump(&mut s.feedback.hub, true);
+            d.finish(&mut s.feedback.hub);
+        }
     }
 
     /// The change-event notifications that are ready (see `events.subscribe`), oldest first.
     /// A remote app sends them between replies, so they arrive with the next reply.
     fn notifications(&mut self) -> Vec<Value> {
         match self {
-            Backend::Local(s) => s.take_notifications(kadakas_api::events::LOCAL),
+            Backend::Local(s, _) => s.take_notifications(kadakas_api::events::LOCAL),
             Backend::Remote(_, pending) => std::mem::take(pending),
         }
     }
@@ -204,7 +277,7 @@ impl Backend {
     fn call(&mut self, id: Value, method: &str, params: Value) -> Value {
         let req = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         let line = match self {
-            Backend::Local(s) => match method {
+            Backend::Local(s, _) => match method {
                 "file.save" | "file.open" => Some(kadakas_api::files::handle_file_request(s, &req)),
                 _ => s.handle_line(&req.to_string()),
             },
@@ -332,7 +405,9 @@ fn serve(mut backend: Backend) {
             let _ = writeln!(out, "{resp}");
         }
         let _ = out.flush();
+        backend.pump();
     }
+    backend.finish();
 }
 
 /// MCP protocol versions that this server speaks, newest first.
@@ -360,7 +435,48 @@ fn tool_content(method: &str, response: &Value, text: String) -> Value {
     json!([{"type": "text", "text": text}])
 }
 
+/// The server instructions of `initialize`. The last sentence asks for feedback (API-47).
+fn instructions(flat: bool) -> String {
+    let base = if flat {
+        "Kadakas CAD. Call describe first. Units are mm, Y axis up. Most changes to the drawing go through the execute tool; many other tools change it too (plants, hardscape, annotation and so on)."
+    } else {
+        "Kadakas CAD. Call describe first. Units are mm, Y axis up. Each tool is a domain and takes {method, params}; its description lists the methods. The execute method of the document tool runs one command; many other methods change the drawing too."
+    };
+    format!(
+        "{base} If a task needs a feature that Kadakas lacks, you must file a feature request with the feedback tool. If a method fails in a way it must not, you must file a bug report with it."
+    )
+}
+
+/// The text of a failed tool call: the message, and the feedback hint with its draft if the
+/// error has one. An MCP client shows the text only, so the hint must be in it.
+fn error_text(error: &Value) -> String {
+    let mut text = error["message"].as_str().unwrap_or("error").to_string();
+    let f = &error["data"]["feedback"];
+    if let Some(hint) = f["hint"].as_str() {
+        text.push_str(&format!("\n{hint} Draft: {}", f["draft"]));
+    }
+    text
+}
+
+/// Adds the MCP client to `feedback.submit`, unless the call names one.
+fn with_client(method: &str, params: Value, client: &Option<(String, String)>) -> Value {
+    let Some((name, version)) = client else {
+        return params;
+    };
+    if method != "feedback.submit" {
+        return params;
+    }
+    let mut params = if params.is_null() { json!({}) } else { params };
+    if let Some(o) = params.as_object_mut()
+        && !o.contains_key("client")
+    {
+        o.insert("client".into(), json!({"name": name, "version": version}));
+    }
+    params
+}
+
 fn mcp(mut backend: Backend, flat: bool) {
+    let mut client: Option<(String, String)> = None;
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
     for line in stdin.lock().lines().map_while(Result::ok) {
@@ -383,12 +499,21 @@ fn mcp(mut backend: Backend, flat: bool) {
             continue;
         }; // notifications need no reply
         let result = match req["method"].as_str().unwrap_or("") {
-            "initialize" => Ok(json!({
+            "initialize" => {
+                let info = &req["params"]["clientInfo"];
+                client = info["name"].as_str().map(|n| {
+                    (
+                        n.to_string(),
+                        info["version"].as_str().unwrap_or("").to_string(),
+                    )
+                });
+                Ok(json!({
                 "protocolVersion": mcp_version(req["params"]["protocolVersion"].as_str()),
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "kadakas", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": if flat { "Kadakas CAD. Call describe first. Units are mm, Y axis up. Most changes to the drawing go through the execute tool; many other tools change it too (plants, hardscape, annotation and so on)." } else { "Kadakas CAD. Call describe first. Units are mm, Y axis up. Each tool is a domain and takes {method, params}; its description lists the methods. The execute method of the document tool runs one command; many other methods change the drawing too." }
-            })),
+                "instructions": instructions(flat)
+                }))
+            }
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": mcp_tools::tools(flat)})),
             "tools/call" => {
@@ -402,9 +527,10 @@ fn mcp(mut backend: Backend, flat: bool) {
                         Ok(json!({"content": [{"type": "text", "text": text}], "isError": true}))
                     }
                     mcp_tools::Call::Method(m, params) => {
+                        let params = with_client(m, params, &client);
                         let r = backend.call(json!(1), m, params);
                         let (text, is_error) = match r.get("error") {
-                            Some(e) => (e["message"].as_str().unwrap_or("error").to_string(), true),
+                            Some(e) => (error_text(e), true),
                             None => (r["result"].to_string(), false),
                         };
                         Ok(json!({"content": tool_content(m, &r, text), "isError": is_error}))
@@ -419,7 +545,9 @@ fn mcp(mut backend: Backend, flat: bool) {
         };
         let _ = writeln!(out, "{resp}");
         let _ = out.flush();
+        backend.pump();
     }
+    backend.finish();
 }
 
 /// Calls `import.file` or `export.file` on a session and returns the result.
@@ -444,8 +572,8 @@ fn io_call(
 }
 
 fn save(doc: &Document, path: &std::path::Path) -> Result<(), String> {
-    let text = serde_json::to_string_pretty(doc).map_err(|e| e.to_string())?;
-    fsio::write_atomic(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+    fsio::write_atomic_with(path, |w| doc.write_pretty(w))
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn import_command(
@@ -483,6 +611,38 @@ fn export_command(
     Ok(())
 }
 
+/// `kadakas feedback ...` on the outbox in the data folder.
+fn feedback_main(cmd: FeedbackCmd) -> Result<(), String> {
+    let dir = kadakas_feedback::store::default_dir()
+        .ok_or("no data folder for the feedback outbox (set KADAKAS_FEEDBACK_DIR)")?;
+    let mut hub = kadakas_feedback::Hub::new(Box::new(DirStorage::new(dir)));
+    match cmd {
+        FeedbackCmd::List => {
+            feedback_cmd::list(&mut hub, &mut std::io::stdout()).map_err(|e| e.to_string())
+        }
+        FeedbackCmd::Retry { id } => {
+            feedback_cmd::retry(&mut hub, id.as_deref(), &mut std::io::stdout())
+        }
+        FeedbackCmd::Review { id, feedback_url } => {
+            feedback_cmd::require_terminal(
+                std::io::stdin().is_terminal(),
+                std::io::stdout().is_terminal(),
+            )?;
+            hub.set_url_override(feedback_url);
+            let sender = kadakas_feedback::http::HttpSender::new();
+            feedback_cmd::review(
+                &mut hub,
+                id.as_deref(),
+                &mut std::io::stdin().lock(),
+                &mut std::io::stdout(),
+                &sender,
+                &kadakas_feedback::send::ThreadSleeper,
+            )
+            .map(|_| ())
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     // The flags (and their environment variables) are read. Remove the secrets from the
@@ -496,6 +656,7 @@ fn main() {
             remote,
             mcp_flat,
         } => Backend::new(file, remote).map(|b| mcp(b, mcp_flat)),
+        Cmd::Feedback { cmd } => feedback_main(cmd),
         Cmd::Import {
             file,
             output,
@@ -605,6 +766,50 @@ mod tests {
             tool_content("view.list", &ok, "x".into()),
             json!([{"type": "text", "text": "x"}])
         );
+    }
+
+    #[test]
+    fn instructions_ask_for_feedback_in_both_modes() {
+        for flat in [false, true] {
+            let t = instructions(flat);
+            assert!(t.contains("feedback tool"), "{t}");
+            assert!(t.contains("feature request") && t.contains("bug report"));
+            assert!(t.contains("Call describe first"));
+        }
+        assert!(instructions(true).contains("execute tool"));
+        assert!(instructions(false).contains("domain"));
+    }
+
+    #[test]
+    fn error_text_carries_the_hint_and_draft() {
+        let plain = json!({"message": "bad"});
+        assert_eq!(error_text(&plain), "bad");
+        assert_eq!(error_text(&json!({})), "error");
+        let e = json!({"message": "unknown method: x.y", "data": {"feedback": {"hint": "File it.", "draft": {"kind": "feature_request", "title": "t"}}}});
+        let t = error_text(&e);
+        assert!(
+            t.starts_with("unknown method: x.y\nFile it. Draft: {"),
+            "{t}"
+        );
+        assert!(t.contains("feature_request"));
+    }
+
+    #[test]
+    fn the_client_goes_to_feedback_submit_only() {
+        let c = Some(("claude-code".to_string(), "2.0".to_string()));
+        let p = with_client("feedback.submit", json!({"title": "t"}), &c);
+        assert_eq!(
+            p["client"],
+            json!({"name": "claude-code", "version": "2.0"})
+        );
+        assert_eq!(
+            with_client("feedback.submit", Value::Null, &c)["client"]["name"],
+            "claude-code"
+        );
+        let own = json!({"client": {"name": "mine"}});
+        assert_eq!(with_client("feedback.submit", own.clone(), &c), own);
+        assert_eq!(with_client("feedback.list", json!({}), &c), json!({}));
+        assert_eq!(with_client("feedback.submit", json!({}), &None), json!({}));
     }
 
     #[test]

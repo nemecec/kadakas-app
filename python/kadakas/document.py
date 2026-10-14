@@ -472,6 +472,54 @@ class Collab:
         return self._doc.api.collab_disconnect()
 
 
+class Feedback:
+    """Bug reports and feature requests for the Kadakas team (``doc.feedback``).
+
+    File a feature request when a task needs a feature that Kadakas lacks, and a bug report when a
+    method fails in a way it must not. Reports go to a local outbox. A report with attachments (a
+    model excerpt, a picture of the view, the recent calls) gets the status ``needs_review``: it
+    never leaves the computer until a human approves it in Help > Feedback or with
+    ``kadakas feedback review``. Nothing in this class can approve or send it."""
+
+    def __init__(self, doc: "Document") -> None:
+        self._doc = doc
+
+    def submit(self, kind: str, title: str, body: str = "", *, wanted: str | None = None,
+               tried: str | None = None, method: str | None = None, error: str | None = None,
+               severity: str | None = None, attach: JsonDict | bool | None = None,
+               **params: Any) -> JsonDict:
+        """File a report: ``kind`` is ``bug``, ``feature_request`` or ``question``. Returns
+        ``{id, merged, count, status, attachments}``. Equal reports merge into a counter.
+        ``attach`` changes what is attached: ``{"log": False}`` removes one part, ``False`` all,
+        ``{"objects": [id]}`` or ``{"selection": True}`` names objects."""
+        given = {"wanted": wanted, "tried": tried, "method": method, "error": error,
+                 "severity": severity, "attach": attach}
+        p: JsonDict = {"kind": kind, "title": title, "body": body}
+        p.update({k: v for k, v in given.items() if v is not None})
+        p.update(params)
+        return self._doc.api.feedback_submit(**p)
+
+    def bug(self, title: str, body: str = "", **params: Any) -> JsonDict:
+        """File a bug report (see ``submit``)."""
+        return self.submit("bug", title, body, **params)
+
+    def feature_request(self, title: str, body: str = "", **params: Any) -> JsonDict:
+        """File a feature request (see ``submit``)."""
+        return self.submit("feature_request", title, body, **params)
+
+    def list(self, **params: Any) -> JsonDict:
+        """The reports in the outbox: ``{reports, needs_review, sending}``."""
+        return self._doc.api.feedback_list(**params)
+
+    def get(self, id: str) -> JsonDict:
+        """One report with the kinds and sizes of its attachments."""
+        return self._doc.api.feedback_get(id=id)
+
+    def withdraw(self, id: str) -> JsonDict:
+        """Take back a report that was not sent."""
+        return self._doc.api.feedback_withdraw(id=id)
+
+
 class Document:
     """A session with a document. Make one with ``kadakas.open()`` or ``kadakas.connect()``."""
 
@@ -485,6 +533,7 @@ class Document:
         self.worksheets = Worksheets(self)
         self.events = Events(self)
         self.collab = Collab(self)
+        self.feedback = Feedback(self)
         from .plugins import Plugins, Scripts  # late: plugins import this module
 
         self.plugins = Plugins(self)

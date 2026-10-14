@@ -133,6 +133,13 @@ The language list in Preferences comes from `LANGUAGES`. It shows the native nam
 | Picture (of a plant style) | Pilt | PNG or JPEG file in a plant style |
 | Texture, Tile size (of a texture) | Tekstuur, Mustri kordus | the terrain look of a site model |
 | Elevation bands, Color ramp | Kõrgusvööndid, Värviskaala | colors by elevation on the terrain |
+| Kadakas (the name) | Kadakas, genitive Kadakase | the name is not translated, but it takes Estonian endings: "Kadakase meeskonnale", "Kadakase versioon" |
+| Token (secret that gives access), Path | Pääsuvõti, Failitee | in the feedback texts; the collaboration texts say "Luba" for the token that a server gives |
+| Bug report, Feature request | Veateade, Funktsioonisoov | the Help commands are "Teata veast..." and "Palu uut funktsiooni..." |
+| Feedback, Outbox | Tagasiside, Saatmisjärjekord | the window Help > Feedback |
+| Screenshot | Ekraanipilt | the picture of the window in a report |
+| Review (of a report before sending) | Ülevaatus | "Vaata üle..." |
+| Model excerpt, Georeference | Mudeli väljavõte, Georeferents | the part of a drawing in a report |
 | Texture bed | Tekstuuriala | a region of the terrain with its own texture; the plural stays "tekstuuriala" after a number |
 
 ## Terminology overlays (PLAT-04)

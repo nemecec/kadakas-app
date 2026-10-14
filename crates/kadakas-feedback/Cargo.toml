@@ -1,0 +1,20 @@
+[package]
+name = "kadakas-feedback"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Feedback reports of Kadakas (API-47, API-48): model, scrubbing, dedupe, the outbox, the wire payload and the sender behind a trait. Pure and wasm-compatible; the folder store, the HTTP sender and the sending thread are native only."
+
+[dependencies]
+base64 = "0.22.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
+[dev-dependencies]
+proptest = "1.11.0"

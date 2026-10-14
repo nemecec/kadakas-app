@@ -2669,6 +2669,7 @@ dependencies = [
  "kadakas-collab-ws",
  "kadakas-core",
  "kadakas-crs",
+ "kadakas-feedback",
  "kadakas-gis",
  "kadakas-ifc",
  "kadakas-io",
@@ -2708,6 +2709,7 @@ dependencies = [
  "kadakas-collab",
  "kadakas-collab-ws",
  "kadakas-core",
+ "kadakas-feedback",
  "kadakas-gis",
  "kadakas-irrigation",
  "kadakas-l10n",
@@ -2742,6 +2744,7 @@ dependencies = [
  "kadakas-collab",
  "kadakas-collab-ws",
  "kadakas-core",
+ "kadakas-feedback",
  "kadakas-sys",
  "serde_json",
 ]
@@ -2801,6 +2804,18 @@ dependencies = [
  "kadakas-core",
  "proj4rs",
  "proptest",
+]
+
+[[package]]
+name = "kadakas-feedback"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "kadakas-sys",
+ "proptest",
+ "serde",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]
@@ -3023,6 +3038,7 @@ dependencies = [
  "glam",
  "kadakas-annot",
  "kadakas-core",
+ "kadakas-feedback",
  "kadakas-irrigation",
  "kadakas-l10n",
  "kadakas-plants",

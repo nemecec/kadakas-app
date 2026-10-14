@@ -8,14 +8,41 @@ use kadakas_core::model::Document;
 use kadakas_sys::fsio;
 use serde_json::Value;
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // the browser build uses it
 pub fn parse_document(text: &str) -> Result<Document, String> {
-    Document::from_json(text).map_err(|e| e.to_string())
+    parse_document_bytes(text.as_bytes())
 }
 
+/// Parses the bytes of a document file (the browser has them from the file picker). The bytes are
+/// parsed in place (`Document::from_slice`): no copy as text and no `serde_json::Value`. The size
+/// limit is the same as for a file; there is no file to check before the read in the browser.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // the browser build uses it
+pub fn parse_document_bytes(bytes: &[u8]) -> Result<Document, String> {
+    parse_document_bytes_capped(
+        bytes,
+        kadakas_api::SessionLimits::default().document_file_bytes,
+    )
+}
+
+/// [`parse_document_bytes`] with a size limit.
+fn parse_document_bytes_capped(bytes: &[u8], max: u64) -> Result<Document, String> {
+    if bytes.len() as u64 > max {
+        return Err(format!(
+            "the file is {} bytes; the limit is {max} bytes",
+            bytes.len()
+        ));
+    }
+    Document::from_slice(bytes).map_err(|e| e.to_string())
+}
+
+/// Reads a document file from a buffered reader. Only a regular file is read, and a file above
+/// the size limit is refused before it is read.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn read_document(path: &Path) -> Result<Document, String> {
-    let text = std::fs::read_to_string(path)
+    let max = kadakas_api::SessionLimits::default().document_file_bytes;
+    let reader = fsio::open_regular(path, max)
         .map_err(|e| tr!("file-io-cannot-read", path = path.display(), e = e))?;
-    parse_document(&text)
+    Document::from_reader(reader).map_err(|e| e.to_string())
 }
 
 /// Saves atomically (temporary file, then rename) and keeps the old file as `.bak`.
@@ -28,8 +55,7 @@ pub fn write_document(path: &Path, doc: &Document) -> Result<(), String> {
 /// `write_document` without the manual save bookkeeping.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_document_raw(path: &Path, doc: &Document) -> Result<(), String> {
-    let text = serde_json::to_string_pretty(doc).map_err(|e| e.to_string())?;
-    fsio::write_atomic(path, text.as_bytes())
+    fsio::write_atomic_with(path, |w| doc.write_pretty(w))
         .map_err(|e| tr!("file-io-cannot-write", path = path.display(), e = e))
 }
 
@@ -87,8 +113,8 @@ pub fn agent_line(
     // An agent may only use the allowed folders (see `Session::paths`) and only document files.
     // The same handler serves `kadakas serve` and `kadakas mcp`. A save here counts as a manual save.
     let params = req.get("params").cloned().unwrap_or(Value::Null);
-    let result = kadakas_api::files::file_call(session, method, &params, &mut |p, bytes| {
-        crate::autosave::manual_save(p, || kadakas_api::files::write_document_file(p, bytes))
+    let result = kadakas_api::files::file_call(session, method, &params, &mut |p, doc| {
+        crate::autosave::manual_save(p, || kadakas_api::files::write_document_file(p, doc))
     });
     match &result {
         Ok(kadakas_api::files::FileDone::Saved(p)) => {
@@ -103,7 +129,7 @@ pub fn agent_line(
         Err(_) => {}
     }
     let id = req.get("id")?.clone();
-    Some(kadakas_api::files::file_reply(id, result))
+    Some(kadakas_api::files::file_reply(session, method, id, result))
 }
 
 #[cfg(test)]
@@ -149,6 +175,37 @@ mod tests {
                 .unwrap_err()
                 .contains("newer")
         );
+    }
+
+    #[test]
+    fn streamed_save_and_load_match_the_old_text_and_the_size_limit_holds() {
+        let dir = std::env::temp_dir().join(format!("kadakas-fileio-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc = Document::with_sequential_ids();
+        let path = dir.join("a.kad");
+        write_document(&path, &doc).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            serde_json::to_string_pretty(&doc).unwrap()
+        );
+        assert_eq!(
+            parse_document_bytes(&std::fs::read(&path).unwrap()).unwrap(),
+            doc
+        );
+        assert!(parse_document_bytes(b"{\"format_version\":").is_err());
+        let text = std::fs::read(&path).unwrap();
+        assert!(parse_document_bytes_capped(&text, text.len() as u64).is_ok());
+        let e = parse_document_bytes_capped(&text, text.len() as u64 - 1).unwrap_err();
+        assert!(e.contains("limit"), "{e}");
+        // The size is checked before the file is read: a hole of 3 GiB is refused at once.
+        let big = dir.join("big.kad");
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(3 * 1024 * 1024 * 1024)
+            .unwrap();
+        assert!(read_document(&big).is_err());
+        assert!(read_document(&dir.join("missing.kad")).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

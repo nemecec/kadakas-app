@@ -121,6 +121,10 @@ pub struct KadakasApp {
     /// Autosave, crash recovery and the Preferences dialog.
     autosave: crate::autosave_ui::AutosaveUi,
     about: crate::about::About,
+    /// Feedback: the button, the form, the outbox window, the review and the consent (UI-14).
+    feedback: crate::feedback_ui::FeedbackUi,
+    /// The id of the last key action, for "Report this" on an error message.
+    last_command: String,
     prefs_ui: crate::prefs_ui::PrefsDialog,
     /// Collaboration (PLAT-09): the Connect dialog, the status of the link, the other users.
     collab: crate::collab_ui::CollabUi,
@@ -267,6 +271,14 @@ impl KadakasApp {
         };
         app.status = key_note.clone();
         app.autosave.begin();
+        // Reports of people and agents wait in the data folder; the sending thread is on.
+        if let Some(dir) = kadakas_feedback::store::default_dir() {
+            app.session
+                .feedback
+                .hub
+                .set_storage(Box::new(kadakas_feedback::store::DirStorage::new(dir)));
+        }
+        app.feedback.start_sending();
         if let Some(port) = agent_port {
             let ctx = cc.egui_ctx.clone();
             let info_path = kadakas_sys::agent::agent_info_path();
@@ -323,6 +335,11 @@ impl KadakasApp {
         app.language = crate::locale::apply(prefs.language, &prefs.units);
         app.status = tr!("app-web-build-files-open-and-save-through");
         app.autosave.begin();
+        // The outbox lives in the browser storage, with a cap.
+        app.session
+            .feedback
+            .hub
+            .set_storage(Box::new(crate::feedback_ui::web_store::WebStorage));
         // `#collab=<ws url>&doc=<id>&token=<t>`: join at once. The token leaves the address bar.
         if let Some(fragment) = crate::collab_ui::web::take_fragment() {
             app.join_from_fragment(fragment);
@@ -432,6 +449,8 @@ impl KadakasApp {
             readout: Default::default(),
             autosave: crate::autosave_ui::AutosaveUi::inert(),
             about: crate::about::About::default(),
+            feedback: crate::feedback_ui::FeedbackUi::default(),
+            last_command: String::new(),
             prefs_ui: crate::prefs_ui::PrefsDialog::default(),
             collab: crate::collab_ui::CollabUi::new(Default::default()),
             own_cursor: None,
@@ -940,9 +959,7 @@ impl KadakasApp {
         }
         let files: Vec<_> = self.web_inbox.borrow_mut().drain(..).collect();
         for (name, bytes) in files {
-            let parsed = String::from_utf8(bytes)
-                .map_err(|e| e.to_string())
-                .and_then(|t| file_io::parse_document(&t));
+            let parsed = file_io::parse_document_bytes(&bytes);
             match parsed {
                 Ok(doc) => {
                     self.status = tr!("app-opened", name = name);
@@ -1118,6 +1135,7 @@ impl KadakasApp {
     }
 
     fn run_action(&mut self, ctx: &egui::Context, action: Action) {
+        self.last_command = action.id().to_string();
         // The dimension keys pick the mode too: N is a linear dimension, `.` angular and `,` radial.
         let linear = |m: DimToolMode| {
             matches!(
@@ -2002,6 +2020,11 @@ impl KadakasApp {
             QuickCommand::ShowTab(t) => self.layouts.show_tab(t),
             QuickCommand::SaveLayout => self.layout_name = Some(String::new()),
             QuickCommand::ResetLayout => self.layouts.reset(),
+            QuickCommand::RequestFeature => {
+                let query = self.quick.take_request();
+                self.feedback
+                    .open_form(crate::feedback_ui::Form::from_search(&query));
+            }
         }
     }
 
@@ -2021,6 +2044,7 @@ impl KadakasApp {
                 }
                 MenuRequest::ResetLayout => self.layouts.reset(),
                 MenuRequest::About => self.about.open(),
+                MenuRequest::Feedback(what) => self.feedback.open(what),
             }
         }
     }
@@ -2277,6 +2301,7 @@ impl eframe::App for KadakasApp {
         self.agent = None;
         // A clean exit: the recovery copies are not needed any more.
         self.autosave.finish();
+        self.feedback.finish(&mut self.session.feedback.hub);
         self.persist(f64::INFINITY);
         self.save_layouts();
     }
@@ -2396,6 +2421,10 @@ impl eframe::App for KadakasApp {
         {
             self.status = r.status;
         }
+        if let Some(versions) = self.autosave.take_report_request() {
+            self.feedback
+                .open_form(crate::feedback_ui::Form::from_crash(versions));
+        }
         self.entry.sync(
             self.machine.tool(),
             self.machine.anchor().is_some(),
@@ -2467,6 +2496,9 @@ impl eframe::App for KadakasApp {
             self.apply_menu(&ctx, a);
         }
         self.handle_requests(requests);
+        if let Some(line) = self.feedback.show(&ctx, &mut self.session) {
+            self.status = line;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if self.io_ui.show(&ctx, &mut self.session, &mut self.status)
             == crate::io_dialog::IoEvent::Imported
@@ -2503,6 +2535,8 @@ impl eframe::App for KadakasApp {
         }
         let mut alias = None;
         let mut collab_click = None;
+        let mut feedback_click = None;
+        let mut report_error = false;
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let d = &self.session.editor.doc();
@@ -2510,9 +2544,16 @@ impl eframe::App for KadakasApp {
                     alias = Some(outcome);
                 }
                 ui.label(&self.status);
+                if crate::feedback_ui::is_error_status(&self.status)
+                    && ui.link(tr!("feedback-ui-report-this")).clicked()
+                {
+                    report_error = true;
+                }
                 ui.separator();
                 ui.label(self.machine.hint_for(&self.settings));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    feedback_click = self.feedback.status_item(ui);
+                    ui.separator();
                     collab_click = self.collab.status_item(ui);
                     ui.separator();
                     if self.plan() {
@@ -2540,6 +2581,13 @@ impl eframe::App for KadakasApp {
                 });
             });
         });
+        if let Some(c) = feedback_click {
+            self.feedback.on_click(c);
+        }
+        if report_error {
+            let form = crate::feedback_ui::error_form(&self.status, &self.last_command);
+            self.feedback.open_form(form);
+        }
         match collab_click {
             Some(crate::collab_ui::StatusClick::OpenDialog) => self.collab.open_dialog(),
             Some(crate::collab_ui::StatusClick::ShowPeople) => self.layouts.show_tab(Tab::People),
@@ -3661,5 +3709,144 @@ mod tests {
         assert!(app.own_presence().viewport.is_some());
         app.session.view.view = StandardView::Front;
         assert!(app.own_presence().viewport.is_none());
+    }
+
+    #[test]
+    fn the_help_commands_open_the_feedback_form_and_window() {
+        use crate::feedback_ui::Open;
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.handle_requests(vec![MenuRequest::Feedback(Open::ReportBug)]);
+        assert_eq!(
+            app.feedback.form().unwrap().kind,
+            kadakas_feedback::Kind::Bug
+        );
+        app.handle_requests(vec![MenuRequest::Feedback(Open::RequestFeature)]);
+        assert_eq!(
+            app.feedback.form().unwrap().kind,
+            kadakas_feedback::Kind::FeatureRequest
+        );
+        app.handle_requests(vec![MenuRequest::Feedback(Open::Window)]);
+        assert!(app.feedback.is_window_open());
+        // Draw the form, the window and the consent dialog in both languages.
+        for language in ["en-US", "et"] {
+            kadakas_l10n::with_language(language, || {
+                app.feedback.open(Open::ReportBug);
+                app.feedback.skip_picture();
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    let c = ui.ctx().clone();
+                    let _ = app.feedback.show(&c, &mut app.session);
+                });
+                assert!(app.feedback.is_form_open());
+            });
+        }
+    }
+
+    #[test]
+    fn sending_a_form_files_the_report_and_asks_for_consent_once() {
+        use crate::feedback_ui::Open;
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.feedback.open(Open::RequestFeature);
+        app.feedback.skip_picture();
+        app.feedback.edit_form(|f| {
+            f.title = "Mirror along a line".into();
+            f.body = "I need it for a symmetric garden.".into();
+        });
+        let line = app
+            .feedback
+            .press_send(&mut app.session.feedback.hub)
+            .unwrap();
+        assert_eq!(line, "Thank you. The report is in the outbox.");
+        assert!(!app.feedback.is_form_open());
+        let r = app.session.feedback.hub.get("fb-1").unwrap();
+        assert_eq!(r.kind, kadakas_feedback::Kind::FeatureRequest);
+        assert_eq!(r.origin, kadakas_feedback::Origin::User);
+        assert!(r.attachments.is_empty());
+        // A frame reads the outbox, and the consent dialog is due; nothing is sent before it.
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let c = ui.ctx().clone();
+            let _ = app.feedback.show(&c, &mut app.session);
+        });
+        assert!(app.feedback.consent_is_due());
+        assert!(app.session.feedback.hub.outgoing(true, 5, 1_000).is_empty());
+        app.feedback
+            .answer_consent(&mut app.session.feedback.hub, Some(true));
+        assert_eq!(app.session.feedback.hub.outgoing(true, 5, 1_000).len(), 1);
+        // The same report again only raises the counter.
+        app.feedback.open(Open::RequestFeature);
+        app.feedback.skip_picture();
+        app.feedback
+            .edit_form(|f| f.title = "mirror along a LINE".into());
+        let line = app
+            .feedback
+            .press_send(&mut app.session.feedback.hub)
+            .unwrap();
+        assert!(line.contains("counter"), "{line}");
+        assert_eq!(app.session.feedback.hub.get("fb-1").unwrap().count, 2);
+    }
+
+    #[test]
+    fn an_error_message_gets_a_report_this_form_with_the_last_command() {
+        let mut app = KadakasApp::blank();
+        app.last_command = "tool.fillet".into();
+        app.status = tr!("app-error", e = "radius must be positive");
+        assert!(crate::feedback_ui::is_error_status(&app.status));
+        app.status = tr!("app-ready");
+        assert!(!crate::feedback_ui::is_error_status(&app.status));
+        let form =
+            crate::feedback_ui::error_form("Error: radius must be positive", &app.last_command);
+        app.feedback.open_form(form);
+        let f = app.feedback.form().unwrap();
+        assert_eq!(f.kind, kadakas_feedback::Kind::Bug);
+        assert_eq!(f.method, "tool.fillet");
+        assert!(f.error.contains("radius must be positive"));
+        // A key action remembers its id.
+        let ctx = egui::Context::default();
+        app.run_action(&ctx, Action::ToolFillet);
+        assert_eq!(app.last_command, Action::ToolFillet.id());
+    }
+
+    #[test]
+    fn quick_search_offers_to_request_a_missing_feature() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.quick.open();
+        app.quick.set_query_for_test("zzqx");
+        let items = app.quick_items();
+        // No command matches. Enter files a request with the search text.
+        let enter = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: Key::Enter,
+                physical_key: Some(Key::Enter),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut chosen = None;
+        let _ = ctx.run_ui(enter, |ui| {
+            let c = ui.ctx().clone();
+            chosen = app.quick.show(&c, &items);
+        });
+        assert_eq!(chosen, Some(QuickCommand::RequestFeature));
+        app.run_quick(&ctx, QuickCommand::RequestFeature);
+        let f = app.feedback.form().unwrap();
+        assert_eq!(f.kind, kadakas_feedback::Kind::FeatureRequest);
+        assert!(f.title.contains("zzqx"), "{}", f.title);
+    }
+
+    #[test]
+    fn the_crash_dialog_can_start_a_crash_report() {
+        let mut app = KadakasApp::blank();
+        app.autosave.request_report_for_test(3);
+        let n = app.autosave.take_report_request().unwrap();
+        app.feedback
+            .open_form(crate::feedback_ui::Form::from_crash(n));
+        let f = app.feedback.form().unwrap();
+        assert_eq!(f.origin, kadakas_feedback::Origin::Crash);
+        assert!(f.body.contains('3'));
+        assert!(app.autosave.take_report_request().is_none());
     }
 }

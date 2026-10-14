@@ -19,6 +19,8 @@ sys.path.insert(0, str(PYTHON_DIR))
 _EXE = "kadakas.exe" if sys.platform == "win32" else "kadakas"
 BIN = Path(os.environ.get("KADAKAS_BIN", REPO / "target" / "debug" / _EXE))
 os.environ["KADAKAS_BIN"] = str(BIN)
+# Feedback reports go to a temp folder, never to the data folder of the user.
+os.environ["KADAKAS_FEEDBACK_DIR"] = tempfile.mkdtemp(prefix="kadakas-feedback-test-")
 
 import kadakas  # noqa: E402
 

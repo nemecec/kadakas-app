@@ -18,8 +18,14 @@ fn temp(name: &str) -> PathBuf {
 
 /// Runs the program with these lines on stdin and returns the output.
 fn run(args: &[&str], input: &str, dir: &Path) -> Output {
+    run_env(args, input, dir, &[])
+}
+
+/// Like `run`, with more environment variables.
+fn run_env(args: &[&str], input: &str, dir: &Path, env: &[(&str, &Path)]) -> Output {
     let mut child = Command::new(BIN)
         .args(args)
+        .envs(env.iter().copied())
         .current_dir(dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -751,4 +757,188 @@ fn serve_refuses_a_server_that_is_not_on_this_computer() {
         json!({"url": "wss://collab.invalid", "doc": COLLAB_DOC}),
     );
     assert!(v.get("error").is_none(), "{v}");
+}
+
+fn tool(id: u64, name: &str, args: Value) -> Value {
+    rpc(id, "tools/call", json!({"name": name, "arguments": args}))
+}
+
+#[test]
+fn mcp_has_the_feedback_tool_and_instructions_in_both_modes() {
+    for flat in [false, true] {
+        let dir = temp(if flat { "fb-flat" } else { "fb-domain" });
+        let outbox = dir.join("outbox");
+        let args: &[&str] = if flat {
+            &["mcp", "--mcp-flat"]
+        } else {
+            &["mcp"]
+        };
+        let reqs = [
+            rpc(
+                1,
+                "initialize",
+                json!({"protocolVersion": "2025-06-18", "clientInfo": {"name": "test-agent", "version": "3.1"}}),
+            ),
+            rpc(2, "tools/list", json!({})),
+            tool(
+                3,
+                "feedback",
+                json!({"kind": "feature_request", "title": "Offset to both sides", "wanted": "x", "attach": false}),
+            ),
+            tool(4, "feedback", json!({"action": "get", "id": "fb-1"})),
+            tool(5, "feedback", json!({"action": "list"})),
+            tool(6, "feedback", json!({"action": "approve"})),
+            tool(
+                7,
+                if flat { "massing_add" } else { "site" },
+                if flat {
+                    json!({"footprint": [[0, 0], [1000, 0], [1000, 1000]], "bogus": 1})
+                } else {
+                    json!({"method": "site.nope"})
+                },
+            ),
+        ];
+        let out = run_env(
+            args,
+            &requests(&reqs),
+            &dir,
+            &[("KADAKAS_FEEDBACK_DIR", &outbox)],
+        );
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let l = lines(&out);
+        let text = l[0]["result"]["instructions"].as_str().unwrap();
+        assert!(text.contains("feedback tool"), "{text}");
+        assert!(text.contains("feature request") && text.contains("bug report"));
+        let tools = l[1]["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools[1]["name"], "feedback", "flat={flat}");
+        assert!(tools[1]["description"].as_str().unwrap().contains("must"));
+        assert_eq!(
+            tools[1]["inputSchema"]["properties"]["kind"]["enum"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        // Submit through the tool; the client name from initialize is in the report.
+        assert_eq!(l[2]["result"]["isError"], false, "{}", l[2]);
+        let r: Value =
+            serde_json::from_str(l[2]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            (r["id"].as_str(), r["status"].as_str()),
+            (Some("fb-1"), Some("pending"))
+        );
+        let g: Value =
+            serde_json::from_str(l[3]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(g["context"]["client_name"], "test-agent");
+        assert_eq!(g["context"]["client_version"], "3.1");
+        assert_eq!(g["origin"], "agent");
+        let list: Value =
+            serde_json::from_str(l[4]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(list["reports"].as_array().unwrap().len(), 1);
+        // There is no way to approve through the tool.
+        assert_eq!(l[5]["result"]["isError"], true);
+        assert!(
+            l[5]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("no action")
+        );
+        // The report is in the folder that the variable named.
+        assert!(outbox.join("outbox.json").is_file());
+        if flat {
+            // An error with a hint shows the hint and the draft in the text.
+            assert_eq!(l[6]["result"]["isError"], true);
+            let t = l[6]["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(
+                t.contains("Draft: {") && t.contains("feature_request"),
+                "{t}"
+            );
+        }
+    }
+}
+
+#[test]
+fn feedback_review_refuses_without_a_terminal() {
+    let dir = temp("fb-review");
+    let outbox = dir.join("outbox");
+    let out = run_env(
+        &["feedback", "review"],
+        "s\ny\n",
+        &dir,
+        &[("KADAKAS_FEEDBACK_DIR", &outbox)],
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("needs a terminal"));
+    assert!(!outbox.exists());
+}
+
+#[test]
+fn feedback_reports_wait_in_the_outbox_and_the_list_shows_them() {
+    let dir = temp("fb-list");
+    let outbox = dir.join("outbox");
+    let env = [("KADAKAS_FEEDBACK_DIR", outbox.as_path())];
+    let input = requests(&[
+        rpc(
+            1,
+            "feedback.submit",
+            json!({"kind": "question", "title": "Why?", "attach": false}),
+        ),
+        rpc(2, "plants.teleport", json!({})),
+    ]);
+    let out = run_env(&["serve"], &input, &dir, &env);
+    let l = lines(&out);
+    assert_eq!(l[0]["result"]["status"], "pending");
+    assert_eq!(
+        l[1]["error"]["data"]["feedback"]["draft"]["method"],
+        "plants.teleport"
+    );
+    let out = run_env(&["feedback", "list"], "", &dir, &env);
+    let t = String::from_utf8_lossy(&out.stdout);
+    assert!(t.contains("fb-1\tpending\tquestion\tx1\tWhy?"), "{t}");
+    assert!(t.contains("Sending of text reports is off"));
+}
+
+#[test]
+fn feedback_send_uses_only_https_addresses() {
+    // With --feedback-send the report is tried at once. An http address is refused before any
+    // connection, so the test never reaches a network.
+    let dir = temp("fb-send");
+    let outbox = dir.join("outbox");
+    let env = [("KADAKAS_FEEDBACK_DIR", outbox.as_path())];
+    let input = requests(&[rpc(
+        1,
+        "feedback.submit",
+        json!({"kind": "question", "title": "Send?", "attach": false}),
+    )]);
+    let out = run_env(
+        &[
+            "serve",
+            "--feedback-send",
+            "--feedback-url",
+            "http://127.0.0.1:1",
+        ],
+        &input,
+        &dir,
+        &env,
+    );
+    assert!(out.status.success());
+    assert_eq!(lines(&out)[0]["result"]["status"], "pending");
+    let file = std::fs::read_to_string(outbox.join("outbox.json")).unwrap();
+    let ob: Value = serde_json::from_str(&file).unwrap();
+    assert_eq!(ob["reports"][0]["status"], "pending");
+    assert!(
+        ob["reports"][0]["last_error"]
+            .as_str()
+            .unwrap()
+            .contains("address not allowed"),
+        "{file}"
+    );
+    assert_eq!(
+        ob["reports"][0]["attempts"], 8,
+        "a refusal is not retried: {file}"
+    );
 }

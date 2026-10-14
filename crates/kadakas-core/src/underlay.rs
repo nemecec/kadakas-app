@@ -18,22 +18,57 @@ pub const MAX_SIDE_PX: u32 = 4096;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PngData(pub Arc<Vec<u8>>);
 
+/// The base64 text of some bytes, written in pieces to a formatter. A serializer that streams
+/// (`collect_str`) never holds the whole text.
+struct Base64Text<'a>(&'a [u8]);
+
+impl std::fmt::Display for Base64Text<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 3 KiB of data is 4 KiB of text.
+        for piece in self.0.chunks(3 * 1024) {
+            f.write_str(&base64_encode(piece))?;
+        }
+        Ok(())
+    }
+}
+
 impl Serialize for PngData {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&base64_encode(&self.0))
+        s.collect_str(&Base64Text(&self.0))
     }
 }
 
 impl<'de> Deserialize<'de> for PngData {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(d)?;
-        base64_decode(&text)
-            .map(|b| PngData(Arc::new(b)))
-            .ok_or_else(|| serde::de::Error::custom("the image is not valid base64"))
+        // The visitor decodes the text where the parser holds it. No second copy of the text is made.
+        struct Base64Visitor;
+        impl serde::de::Visitor<'_> for Base64Visitor {
+            type Value = PngData;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("base64 text")
+            }
+            fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<PngData, E> {
+                base64_decode(text)
+                    .map(|b| PngData(Arc::new(b)))
+                    .ok_or_else(|| E::custom("the image is not valid base64"))
+            }
+        }
+        d.deserialize_str(Base64Visitor)
     }
 }
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// The value of each base64 letter, 255 for any other byte.
+const DECODE: [u8; 256] = {
+    let mut t = [255u8; 256];
+    let mut i = 0;
+    while i < 64 {
+        t[ALPHABET[i] as usize] = i as u8;
+        i += 1;
+    }
+    t
+};
 
 pub fn base64_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
@@ -59,8 +94,11 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
         if ch == b'=' || ch.is_ascii_whitespace() {
             continue;
         }
-        let v = ALPHABET.iter().position(|a| *a == ch)? as u32;
-        acc = (acc << 6) | v;
+        let v = DECODE[ch as usize];
+        if v == 255 {
+            return None;
+        }
+        acc = (acc << 6) | u32::from(v);
         bits += 6;
         if bits >= 8 {
             bits -= 8;

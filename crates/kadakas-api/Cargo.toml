@@ -13,6 +13,7 @@ kadakas-collab = { version = "0.1.0", path = "../kadakas-collab" }
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
 kadakas-crs = { version = "0.1.0", path = "../kadakas-crs" }
+kadakas-feedback = { version = "0.1.0", path = "../kadakas-feedback" }
 kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
 kadakas-plugin = { version = "0.1.0", path = "../kadakas-plugin" }
 kadakas-plugin-abi = { version = "0.1.0", path = "../kadakas-plugin-abi" }
@@ -34,6 +35,8 @@ kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
 tempfile = "3"
 
 [dev-dependencies]
+# The tests make a command panic (`kadakas_core::fault`). Not shipped.
+kadakas-core = { version = "0.1.0", path = "../kadakas-core", features = ["fault-injection"] }
 png = "0.18"
 proptest = "1.11.0"
 kadakas-collab = { version = "0.1.0", path = "../kadakas-collab", features = ["testkit"] }

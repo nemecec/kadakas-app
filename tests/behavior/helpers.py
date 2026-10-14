@@ -66,7 +66,7 @@ class StdioClient:
     A reader thread moves the output lines into a queue, so a read can time out on every system
     (select() works on pipes only on Unix)."""
 
-    def __init__(self, args, timeout=None):
+    def __init__(self, args, timeout=None, env=None):
         # A busy machine (a parallel build) makes calls slow: the limit is set by the environment.
         self.timeout = float(os.environ.get("KADAKAS_TEST_TIMEOUT", "60")) if timeout is None else timeout
         self.proc = subprocess.Popen(
@@ -75,7 +75,7 @@ class StdioClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
-            env=isolated_env(),
+            env={**isolated_env(), **(env or {})},
         )
         self._lines: queue.Queue = queue.Queue()
         self._err = bytearray()
