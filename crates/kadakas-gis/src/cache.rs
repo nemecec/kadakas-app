@@ -152,6 +152,16 @@ mod tests {
         d
     }
 
+    /// Sets the file time of a tile to `age` ago. The tests use this instead of sleeping.
+    fn set_age(c: &TileCache, key: &str, age: Duration) {
+        std::fs::File::options()
+            .write(true)
+            .open(c.path(key))
+            .unwrap()
+            .set_modified(SystemTime::now() - age)
+            .unwrap();
+    }
+
     #[test]
     fn stores_and_returns_tiles() {
         let d = dir("basic");
@@ -174,9 +184,9 @@ mod tests {
         let d = dir("limit");
         let c = TileCache::new(&d, 25);
         c.put("one", &[1; 10]);
-        std::thread::sleep(std::time::Duration::from_millis(30));
+        set_age(&c, "one", Duration::from_secs(300));
         c.put("two", &[2; 10]);
-        std::thread::sleep(std::time::Duration::from_millis(30));
+        set_age(&c, "two", Duration::from_secs(200));
         c.put("three", &[3; 10]);
         assert!(c.get("one").is_none(), "the oldest tile goes");
         assert!(c.get("two").is_some() && c.get("three").is_some());
@@ -194,25 +204,13 @@ mod tests {
         let c = TileCache::new(&d, 1000);
         c.put("a", b"data");
         // A tile of 8 days is older than the default 7 days.
-        let path = std::fs::read_dir(&d)
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path();
-        let old = SystemTime::now() - Duration::from_secs(8 * 24 * 3600);
-        std::fs::File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        set_age(&c, "a", Duration::from_secs(8 * 24 * 3600));
         assert!(c.get("a").is_none());
         assert_eq!(c.stats().0, 0, "the old file is deleted");
-        let short = TileCache::new(&d, 1000).with_max_age(Duration::from_millis(20));
+        let short = TileCache::new(&d, 1000).with_max_age(Duration::from_secs(3600));
         short.put("b", b"x");
         assert!(short.get("b").is_some());
-        std::thread::sleep(Duration::from_millis(60));
+        set_age(&short, "b", Duration::from_secs(7200));
         assert!(short.get("b").is_none());
         c.put("c", b"y");
         c.remove("c");
