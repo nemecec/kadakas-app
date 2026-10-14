@@ -33,6 +33,8 @@ mod irrigation_ui;
 mod keymap;
 mod layout;
 mod locale;
+#[cfg(not(target_arch = "wasm32"))]
+mod open_gate;
 mod panels;
 mod picture_ui;
 mod plant_draw;

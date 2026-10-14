@@ -149,14 +149,21 @@ fn max_document_mib_sets_the_size_limit_of_file_open() {
         if flags.len() > 1 {
             // The limit is in force: the error says so and says how to raise it.
             let m = e["message"].as_str().unwrap();
-            assert!(m.contains("limit") && m.contains("--max-document-mib"), "{m}");
+            assert!(
+                m.contains("limit") && m.contains("--max-document-mib"),
+                "{m}"
+            );
         } else {
             // The default is 512 MiB: the file is read, and it is not a document.
             assert!(!e["message"].as_str().unwrap().contains("limit"), "{e}");
         }
     }
     // The file at start follows the flag too.
-    let out = run(&["serve", "--max-document-mib", "2", big.to_str().unwrap()], "", &dir);
+    let out = run(
+        &["serve", "--max-document-mib", "2", big.to_str().unwrap()],
+        "",
+        &dir,
+    );
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("limit"));
     // Zero is not a limit.

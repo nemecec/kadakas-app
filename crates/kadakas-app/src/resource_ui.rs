@@ -37,6 +37,9 @@ pub struct ResourceUi {
     /// The style editor windows (ANN-12).
     pub styles: crate::style_ui::StyleWindows,
     import_path: String,
+    /// The question before a big library file is read (DOC-19). It holds the parameters of the call.
+    #[cfg(not(target_arch = "wasm32"))]
+    import_gate: crate::open_gate::OpenGate<Value>,
     /// Thumbnails by resource, for one revision of the document.
     thumbs: HashMap<ResourceId, Thumbnail>,
     revision: u64,
@@ -102,6 +105,27 @@ fn call(s: &mut Session, method: &str, params: Value, status: &mut String) -> Op
             *status = tr!("resource-ui-error", message = e.message);
             None
         }
+    }
+}
+
+/// `resource.import_from_file`. With `agreed` the person said yes to a big file, so the size limit
+/// of the session (a limit for agents) does not apply to this one call.
+fn import_from_file(session: &mut Session, params: Value, status: &mut String, agreed: bool) {
+    let limits = session.limits().clone();
+    if agreed {
+        let mut open = limits.clone();
+        open.document_file_bytes = u64::MAX;
+        session.set_limits(open);
+    }
+    let reply = call(session, "resource.import_from_file", params, status);
+    if agreed {
+        session.set_limits(limits);
+    }
+    if let Some(v) = reply {
+        *status = tr!(
+            "resource-ui-imported-resources",
+            count = v["imported"].as_array().map_or(0, Vec::len)
+        );
     }
 }
 
@@ -277,12 +301,60 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
             {
                 let params =
                     json!({"path": st.import_path.trim(), "all": true, "on_conflict": "rename"});
-                if let Some(v) = call(session, "resource.import_from_file", params, status) {
-                    *status = tr!(
-                        "resource-ui-imported-resources",
-                        count = v["imported"].as_array().map_or(0, Vec::len)
-                    );
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    // A big file of the person is asked about first; the session limit is for agents.
+                    let decision =
+                        crate::file_io::open_decision(std::path::Path::new(st.import_path.trim()));
+                    if let Some(params) = st.import_gate.check(params, decision) {
+                        import_from_file(session, params, status, false);
+                    }
                 }
+                #[cfg(target_arch = "wasm32")]
+                import_from_file(session, params, status, false);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(params) = st.import_gate.show(ui.ctx()) {
+                import_from_file(session, params, status, true);
             }
         });
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_big_library_file_that_the_person_agreed_to_is_read_over_the_session_limit() {
+        let dir = std::env::temp_dir().join(format!("kadakas-resui-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("lib.kad");
+        let mut source = Session::with_sequential_ids();
+        source
+            .handle(
+                "resource.create",
+                json!({"type": "texture", "name": "Bark", "color": [1, 2, 3, 255]}),
+            )
+            .unwrap();
+        crate::file_io::write_document_raw(&file, source.editor.doc()).unwrap();
+        let len = std::fs::metadata(&file).unwrap().len();
+
+        let mut s = Session::with_sequential_ids();
+        let limits = kadakas_api::SessionLimits {
+            document_file_bytes: len - 1,
+            ..Default::default()
+        };
+        s.set_limits(limits.clone());
+        let params = json!({"path": file, "all": true, "on_conflict": "rename"});
+        // Not agreed: the limit of the session (a limit for agents) holds.
+        let mut status = String::new();
+        import_from_file(&mut s, params.clone(), &mut status, false);
+        assert!(status.contains("limit"), "{status}");
+        // Agreed: the file is read, and the limit of the session is back afterwards.
+        import_from_file(&mut s, params, &mut status, true);
+        assert!(!status.contains("limit"), "{status}");
+        assert_eq!(s.limits(), &limits);
+        assert_eq!(s.editor.doc().resources.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

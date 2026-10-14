@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use kadakas_api::Session;
 use kadakas_core::model::Document;
 use kadakas_sys::fsio;
+#[cfg(not(target_arch = "wasm32"))]
+use kadakas_ui_core::open_limit::OpenDecision;
 use serde_json::Value;
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // the browser build uses it
@@ -35,14 +37,28 @@ fn parse_document_bytes_capped(bytes: &[u8], max: u64) -> Result<Document, Strin
     Document::from_slice(bytes).map_err(|e| e.to_string())
 }
 
-/// Reads a document file from a buffered reader. Only a regular file is read, and a file above
-/// the size limit is refused before it is read.
+/// Reads a document file from a buffered reader. Only a regular file is read. There is no fixed
+/// size limit for the file of a person: a big file is asked about before it gets here (see
+/// [`open_decision`]), so a caller that skips the question must not call this.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_document(path: &Path) -> Result<Document, String> {
-    let max = kadakas_api::SessionLimits::default().document_file_bytes;
-    let reader = fsio::open_regular(path, max)
+    let reader = fsio::open_regular(path, u64::MAX)
         .map_err(|e| tr!("file-io-cannot-read", path = path.display(), e = e))?;
     Document::from_reader(reader).map_err(|e| e.to_string())
+}
+
+/// How to open the file at `path`, from its size on disk: open it, ask the person first, or refuse
+/// it (DOC-19). Every way into a `.kad` file of the person goes through this: File > Open, a
+/// dropped file, a recent file, the library browser and the recovery of an autosave. When the size
+/// cannot be read the answer is `Open`, and the open reports its own error.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_decision(path: &Path) -> OpenDecision {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_file() => {
+            kadakas_ui_core::open_limit::decide(m.len(), kadakas_sys::sysinfo::physical_memory())
+        }
+        _ => OpenDecision::Open,
+    }
 }
 
 /// Saves atomically (temporary file, then rename) and keeps the old file as `.bak`.
@@ -197,13 +213,22 @@ mod tests {
         assert!(parse_document_bytes_capped(&text, text.len() as u64).is_ok());
         let e = parse_document_bytes_capped(&text, text.len() as u64 - 1).unwrap_err();
         assert!(e.contains("limit"), "{e}");
-        // The size is checked before the file is read: a hole of 3 GiB is refused at once.
+        // A file of a person has no fixed cap: a hole of 3 GiB is judged by `open_decision`
+        // (a question or a refusal, by the memory of the computer), and the read itself fails
+        // on the first byte because the file is not JSON.
         let big = dir.join("big.kad");
         std::fs::File::create(&big)
             .unwrap()
             .set_len(3 * 1024 * 1024 * 1024)
             .unwrap();
+        assert!(matches!(
+            open_decision(&big),
+            OpenDecision::Ask(_) | OpenDecision::Refuse(_)
+        ));
         assert!(read_document(&big).is_err());
+        assert_eq!(open_decision(&path), OpenDecision::Open);
+        assert_eq!(open_decision(&dir.join("missing.kad")), OpenDecision::Open);
+        assert_eq!(open_decision(&dir), OpenDecision::Open);
         assert!(read_document(&dir.join("missing.kad")).is_err());
         let _ = std::fs::remove_dir_all(dir);
     }

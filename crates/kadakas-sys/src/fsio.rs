@@ -262,7 +262,7 @@ impl<R: std::io::Read> std::io::Read for Capped<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         // One byte more than the limit, so that the end of a file of exactly `max` bytes is a
         // normal end and a longer file is an error.
-        let room = (self.max + 1).saturating_sub(self.pos);
+        let room = self.max.saturating_add(1).saturating_sub(self.pos);
         if room == 0 {
             return Err(std::io::Error::other(format!(
                 "the file grew beyond the limit of {} bytes",
@@ -457,6 +457,11 @@ mod tests {
         std::fs::write(&f, b"0123456789ABCDEF").unwrap();
         let e = r.read_to_end(&mut Vec::new()).unwrap_err();
         assert!(e.to_string().contains("grew"), "{e}");
+        // No limit at all (the app asks the person instead): the largest value must not overflow.
+        let mut r = open_regular(&f, u64::MAX).unwrap();
+        let mut all = Vec::new();
+        r.read_to_end(&mut all).unwrap();
+        assert_eq!(all.len(), 16);
         let _ = std::fs::remove_dir_all(dir);
     }
 

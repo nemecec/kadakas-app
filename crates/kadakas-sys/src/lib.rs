@@ -3,6 +3,7 @@
 //! - [`fsio`]: atomic file writes with a `.bak` copy and a flush to disk.
 //! - [`process`]: process groups, kill of a whole process tree, process liveness.
 //! - [`dirs`]: the per-user config, data, state, runtime and cache folders.
+//! - [`sysinfo`]: the physical memory of the computer.
 //! - [`tmp`]: private temporary folders.
 //! - [`agent`]: the runtime file that tells agent clients how to reach a running app.
 //!
@@ -13,4 +14,5 @@ pub mod agent;
 pub mod dirs;
 pub mod fsio;
 pub mod process;
+pub mod sysinfo;
 pub mod tmp;

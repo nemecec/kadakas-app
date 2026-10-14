@@ -942,7 +942,10 @@ mod tests {
         let len = std::fs::metadata(&good).unwrap().len();
         assert!(load(&good, Some(len)).is_ok());
         let e = load(&good, Some(len - 1)).unwrap_err();
-        assert!(e.contains("limit") && e.contains("--max-document-mib"), "{e}");
+        assert!(
+            e.contains("limit") && e.contains("--max-document-mib"),
+            "{e}"
+        );
         assert_eq!(mib_bytes(2), 2 * 1024 * 1024);
         assert_eq!(mib_bytes(u64::MAX), u64::MAX);
         let _ = std::fs::remove_dir_all(dir);
