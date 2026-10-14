@@ -170,6 +170,56 @@ impl Look {
         }
     }
 
+    /// A look in which the triangles of the objects chosen by `ghost` are see-through, in one
+    /// color, and all others keep their vertex colors. The compare overlay (REV-03) draws the
+    /// ghosts of removed objects this way.
+    pub fn ghosted(
+        scene: &Scene,
+        ghost: &dyn Fn(ObjectId) -> bool,
+        rgb: [u8; 3],
+        opacity: f32,
+    ) -> Look {
+        let mut look = Look::plain(scene);
+        let mesh = &scene.mesh;
+        for t in 0..mesh.triangle_count() {
+            if !ghost(mesh.tri_object[t]) {
+                continue;
+            }
+            if look.materials.is_empty() {
+                look.materials.push(LookMaterial {
+                    id: ResourceId::from_num(0),
+                    color: [rgb[0], rgb[1], rgb[2], 255],
+                    texture: None,
+                    roughness: 0.9,
+                    metallic: 0.0,
+                    opacity: opacity.clamp(0.0, 1.0),
+                });
+            }
+            look.tri_material[t] = 0;
+            for k in 0..3 {
+                look.vertex_material[mesh.indices[t * 3 + k] as usize] = 0;
+            }
+        }
+        look.materials_key = look.materials.iter().fold(7, |h, m| {
+            let mut h = hash_bytes(h, &m.color);
+            for f in [m.roughness, m.metallic, m.opacity] {
+                h = hash_bytes(h, &f.to_bits().to_le_bytes());
+            }
+            h
+        });
+        look.layout_key = {
+            let mut h = hash_bytes(11, &look.materials_key.to_le_bytes());
+            for m in &look.tri_material {
+                h = hash_bytes(h, &m.to_le_bytes());
+            }
+            for m in &look.vertex_material {
+                h = hash_bytes(h, &m.to_le_bytes());
+            }
+            h
+        };
+        look
+    }
+
     /// Resolves the materials of the document for the triangles of the scene. With `textures`
     /// off, materials give colors and opacity but no texture.
     pub fn build(doc: &Document, scene: &Scene, textures: bool) -> Look {
@@ -394,6 +444,58 @@ mod tests {
             material: Some(m),
         })
         .unwrap();
+    }
+
+    #[test]
+    fn a_ghosted_look_makes_the_chosen_objects_see_through() {
+        let mut ed = Editor::default();
+        let solid = add(&mut ed, square(300.0), Some([0, 0, 255, 255]));
+        let ghost = add(
+            &mut ed,
+            Shape::Rect {
+                min: DVec2::new(1000.0, -300.0),
+                max: DVec2::new(1600.0, 300.0),
+            },
+            Some([0, 0, 255, 255]),
+        );
+        let scene = scene_of(&ed);
+        let look = Look::ghosted(&scene, &|id| id == ghost, [255, 0, 0], 0.5);
+        assert_eq!(look.materials.len(), 1);
+        assert!(look.has_transparent() && !look.is_plain());
+        for t in 0..scene.mesh.triangle_count() {
+            let is_ghost = scene.mesh.tri_object[t] == ghost;
+            assert_eq!(look.material_of(t).is_some(), is_ghost);
+        }
+        // Nothing to ghost: a look without materials, and a layout key that tells them apart.
+        let none = Look::ghosted(&scene, &|_| false, [255, 0, 0], 0.5);
+        assert!(none.is_plain() && !none.has_transparent());
+        assert_ne!(none.layout_key, look.layout_key);
+        assert_eq!(
+            look.layout_key,
+            Look::ghosted(&scene, &|id| id == ghost, [255, 0, 0], 0.5).layout_key
+        );
+        // The picture: the ghost is red mixed with the background, the other square is blue.
+        let mut cam = top_ortho(1000.0);
+        cam.target = glam::Vec3::new(1300.0, 0.0, 0.0);
+        let img = crate::shade::render_scene(
+            &scene,
+            &look,
+            &cam,
+            &crate::shade::ShadeOptions {
+                width: 100,
+                height: 100,
+                edges: false,
+                ..Default::default()
+            },
+        );
+        let _ = solid;
+        let px = img.pixel(50, 50);
+        assert!(
+            px[0] > px[2] && px[0] > 150,
+            "red ghost, mixed with paper: {px:?}"
+        );
+        assert_ne!(px, crate::raster::BACKGROUND);
+        assert!(px[1] > 40, "see-through: paper shows through: {px:?}");
     }
 
     #[test]

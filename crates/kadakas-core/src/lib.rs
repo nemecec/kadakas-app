@@ -47,6 +47,7 @@ pub mod solid_batch;
 pub mod sun;
 pub mod survey;
 pub mod svg;
+pub mod svg_overlay;
 pub mod symbols;
 pub mod texture_bed;
 pub mod uid;

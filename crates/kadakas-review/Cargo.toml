@@ -10,6 +10,7 @@ description = "Review of a Kadakas document: named versions kept as a base snaps
 [dependencies]
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-props = { version = "0.1.0", path = "../kadakas-props" }
+glam = { version = "0.34.1", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.10.9"
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

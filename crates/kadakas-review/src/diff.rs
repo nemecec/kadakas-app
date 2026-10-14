@@ -368,7 +368,7 @@ pub(crate) fn moved_things(old: &State, new: &State) -> HashMap<Target, (usize, 
 }
 
 /// True if the properties are the same, not looking at the stacking key.
-fn same_without_order(a: &Props, b: &Props) -> bool {
+pub(crate) fn same_without_order(a: &Props, b: &Props) -> bool {
     let n = |p: &Props| p.len() - usize::from(p.contains_key("order"));
     n(a) == n(b)
         && a.iter()

@@ -30,6 +30,8 @@ use crate::plants::link;
 use crate::plants::style::PlantForm;
 use crate::present::{PART_CANOPY, PART_MAIN, PART_SIDE, PART_TRUNK};
 
+mod scene_edit;
+
 /// Thickness of a hardscape slab when the shape does not say.
 pub const DEFAULT_SLAB_THICKNESS: f64 = 150.0;
 

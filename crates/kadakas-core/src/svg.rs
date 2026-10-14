@@ -10,6 +10,7 @@ use crate::plants::graphic::{self, GraphicPath};
 use crate::plants::style::PlantGraphic;
 use crate::plants::tag as schedule;
 use crate::plants::tree::{self, TreeAction};
+use crate::svg_overlay::{SvgLook, SvgOverlay, SvgPattern, SvgTint};
 
 /// Bounds of all visible objects, or `None` for an empty drawing.
 pub fn drawing_bounds(doc: &Document) -> Option<(DVec2, DVec2)> {
@@ -106,7 +107,41 @@ pub type SvgExt<'a> = &'a dyn Fn(&Document, &Object, &str, &mut String);
 
 /// Like `render`, with an extension that draws site models (contours) after their outline.
 pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> String {
-    let (lo, hi) = drawing_bounds(doc).unwrap_or((DVec2::ZERO, DVec2::splat(1000.0)));
+    render_overlay(doc, width_px, ext, None)
+}
+
+/// The box around the visible objects and the ghosts of an overlay.
+fn overlay_bounds(doc: &Document, overlay: Option<&dyn SvgOverlay>) -> Option<(DVec2, DVec2)> {
+    let ghosts = overlay.map(|o| o.ghosts()).unwrap_or_default();
+    ghosts
+        .iter()
+        .map(|g| doc.object_bounds(&g.object))
+        .filter(|(a, b)| a.is_finite() && b.is_finite())
+        .chain(drawing_bounds(doc))
+        .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
+}
+
+/// The dash pattern of a tinted outline, for a line weight of `sw`.
+fn dash_attr(pattern: SvgPattern, sw: f64) -> String {
+    match pattern {
+        SvgPattern::Solid => String::new(),
+        SvgPattern::Dashed => format!(r#" stroke-dasharray="{} {}""#, 6.0 * sw, 4.0 * sw),
+        SvgPattern::Dotted => format!(r#" stroke-dasharray="{} {}""#, 1.5 * sw, 3.0 * sw),
+    }
+}
+
+/// Like `render_with`, with a change of the look of objects, and extra objects (the compare
+/// overlay, REV-03). Each tinted object is in a group with `data-compare` set to its status.
+pub fn render_overlay(
+    doc: &Document,
+    width_px: u32,
+    ext: Option<SvgExt<'_>>,
+    overlay: Option<&dyn SvgOverlay>,
+) -> String {
+    let (lo, hi) = overlay
+        .and_then(|o| o.view())
+        .or_else(|| overlay_bounds(doc, overlay))
+        .unwrap_or((DVec2::ZERO, DVec2::splat(1000.0)));
     let margin = ((hi - lo).max_element() * 0.05).max(1.0);
     let (lo, hi) = (lo - margin, hi + margin);
     let size = hi - lo;
@@ -153,14 +188,32 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
     let tag_counts = schedule::tag_counts(doc);
     // 1 mm of line weight on paper is `scale` mm in the model.
     // Underlays (map backgrounds) go below everything else.
-    let visible = || doc.objects.values().filter(|o| doc.is_displayed(o));
+    let look_of = |o: &Object| overlay.map_or(SvgLook::Keep, |ov| ov.look(o.id));
+    let visible = || {
+        doc.objects
+            .values()
+            .filter(|o| doc.is_displayed(o))
+            .filter(|o| look_of(o) != SvgLook::Hide)
+    };
+    // The size of the mark of a tinted object, and its distance from the corner.
+    let mark_h = (hi - lo).max_element() * 0.02;
     // An object of a grey layer or class is drawn faint and without colors, in a group.
     let one = |o: &Object, s: &mut String| {
         let grey = doc.is_grey(o);
         if grey {
             s.push_str(GREY_OPEN);
         }
-        draw_object(doc, o, s, &tag_counts, ext, 0);
+        match look_of(o) {
+            SvgLook::Tint(t) => {
+                tinted_object(doc, o, &t, "", s, &tag_counts, ext, mark_h);
+            }
+            SvgLook::Dim(a) => {
+                let _ = writeln!(s, r#"<g data-compare="unchanged" opacity="{a}">"#);
+                draw_object(doc, o, s, &tag_counts, ext, 0, None);
+                s.push_str("</g>\n");
+            }
+            SvgLook::Keep | SvgLook::Hide => draw_object(doc, o, s, &tag_counts, ext, 0, None),
+        }
         if grey {
             s.push_str("</g>\n");
         }
@@ -171,8 +224,60 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
     for o in visible().filter(|o| !matches!(o.shape, Shape::Underlay(_))) {
         one(o, &mut s);
     }
+    for g in overlay.map(|o| o.ghosts()).unwrap_or_default() {
+        tinted_object(
+            doc,
+            &g.object,
+            &g.tint,
+            g.kind,
+            &mut s,
+            &tag_counts,
+            ext,
+            mark_h,
+        );
+    }
     s.push_str("</svg>\n");
     s
+}
+
+/// Draws an object in a tint, in a group with `data-compare` (and `data-ghost` for a ghost), and
+/// its mark at the top right corner of its box.
+#[allow(clippy::too_many_arguments)]
+fn tinted_object(
+    doc: &Document,
+    o: &Object,
+    t: &SvgTint,
+    ghost: &str,
+    s: &mut String,
+    tag_counts: &schedule::TagCounts,
+    ext: Option<SvgExt<'_>>,
+    mark_h: f64,
+) {
+    let ghost_attr = if ghost.is_empty() {
+        String::new()
+    } else {
+        format!(r#" data-ghost="{ghost}""#)
+    };
+    let _ = writeln!(
+        s,
+        r#"<g data-compare="{}"{ghost_attr} data-id="{}" opacity="{}">"#,
+        t.status, o.id, t.opacity
+    );
+    draw_object(doc, o, s, tag_counts, ext, 0, Some(t));
+    if let Some(c) = t.symbol {
+        let (_, hi) = doc.object_bounds(o);
+        if hi.is_finite() {
+            let [r, g, b] = t.rgb;
+            let _ = writeln!(
+                s,
+                r#"<text x="{}" y="{}" font-size="{mark_h}" font-family="sans-serif" font-weight="bold" fill="rgb({r},{g},{b})" stroke="none" data-mark="{}">{c}</text>"#,
+                hi.x + mark_h * 0.2,
+                -hi.y - mark_h * 0.2,
+                t.status
+            );
+        }
+    }
+    s.push_str("</g>\n");
 }
 
 /// The start of the group around an object of a grey layer or class (see `crate::visibility`).
@@ -187,28 +292,49 @@ fn draw_object(
     tag_counts: &schedule::TagCounts,
     ext: Option<SvgExt<'_>>,
     depth: usize,
+    tint: Option<&SvgTint>,
 ) {
     if depth > crate::symbols::MAX_DEPTH + 2 {
         return;
     }
-    let a = crate::viewrules::display_attrs(
+    let mut a = crate::viewrules::display_attrs(
         doc,
         o,
         crate::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o)),
     );
+    if let Some(t) = tint {
+        // The tint replaces the pen and the fill of the object, whatever its class and rules say.
+        let [r, g, b] = t.rgb;
+        a.pen = Some(Color([r, g, b, 255]));
+        if a.fill.is_some_and(|c| c.0[3] > 0) {
+            a.fill = Some(Color([
+                r,
+                g,
+                b,
+                (t.fill_alpha.clamp(0.0, 1.0) * 255.0) as u8,
+            ]));
+        }
+        a.line_weight = Some(a.line_weight.unwrap_or(0.25) * t.weight_factor);
+    }
     let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
     let stroke = a.pen.unwrap_or(Color::BLACK).to_css();
     let fill = a.fill.unwrap_or(Color::NONE).to_css();
     let sw = a.line_weight.unwrap_or(0.25) * scale;
-    let decor = crate::pattern::decorate(doc, o, &a, scale);
+    // A tinted object draws its plain outline: patterns and line types would hide the tint.
+    let decor = if tint.is_some() {
+        None
+    } else {
+        crate::pattern::decorate(doc, o, &a, scale)
+    };
     // A line type draws the outline itself, in dashes.
     let line_stroke = if decor.as_ref().is_some_and(|d| d.replaces_outline) {
         "none".to_string()
     } else {
         stroke.clone()
     };
+    let dash = tint.map_or(String::new(), |t| dash_attr(t.pattern, sw));
     let style = format!(
-        r#"stroke="{line_stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}""#,
+        r#"stroke="{line_stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}"{dash}"#,
         o.id
     );
     let extra_style = (ext.is_some() && crate::site::carries_extra(o)).then(|| style.clone());
@@ -286,7 +412,7 @@ fn draw_object(
         }
         Shape::Symbol { .. } => {
             for v in crate::symbols::instance_objects(doc, o) {
-                draw_object(doc, &v, s, tag_counts, ext, depth + 1);
+                draw_object(doc, &v, s, tag_counts, ext, depth + 1, tint);
             }
             Ok(())
         }
@@ -414,7 +540,7 @@ fn draw_object(
         } => {
             // A plant with a style draws the outline of its style, in the style colors unless the object sets its own.
             let look = crate::viewrules::plant_look(doc, o);
-            let style = if o.attrs.fill.is_none() && o.attrs.pen.is_none() {
+            let style = if tint.is_none() && o.attrs.fill.is_none() && o.attrs.pen.is_none() {
                 let stroke = look.pen.map_or(stroke.clone(), |c| c.to_css());
                 let fill = look.fill.map_or(fill.clone(), |c| c.to_css());
                 format!(
@@ -440,7 +566,7 @@ fn draw_object(
                 .unwrap_or_default();
             if !parts.is_empty() {
                 for v in &parts {
-                    draw_object(doc, v, s, tag_counts, ext, depth + 1);
+                    draw_object(doc, v, s, tag_counts, ext, depth + 1, tint);
                 }
                 writeln!(
                     s,
@@ -651,7 +777,7 @@ fn decor_svg(
             m.angle,
             m.scale,
         );
-        draw_object(doc, &inst, s, tag_counts, ext, depth + 1);
+        draw_object(doc, &inst, s, tag_counts, ext, depth + 1, None);
     }
 }
 
