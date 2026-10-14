@@ -95,7 +95,7 @@ mod x3d_material_tests;
 mod x3d_tests;
 
 use kadakas_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
-pub use limits::SessionLimits;
+pub use limits::{DEFAULT_DOCUMENT_FILE_BYTES, STRICT_DOCUMENT_FILE_BYTES, SessionLimits};
 
 /// An open document with its history and selection.
 pub struct Session {

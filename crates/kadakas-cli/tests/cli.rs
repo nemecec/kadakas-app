@@ -133,6 +133,38 @@ fn serve_saves_and_opens_documents_inside_the_allowed_folder() {
 }
 
 #[test]
+fn max_document_mib_sets_the_size_limit_of_file_open() {
+    let dir = temp("maxdoc");
+    // A sparse file of 2 MiB + 1: over a limit of 2 MiB, whatever it holds.
+    let big = dir.join("big.kad");
+    std::fs::File::create(&big)
+        .unwrap()
+        .set_len(2 * 1024 * 1024 + 1)
+        .unwrap();
+    let input = requests(&[rpc(1, "file.open", json!({"path": big}))]);
+    for flags in [&["serve", "--max-document-mib", "2"][..], &["serve"][..]] {
+        let out = run(flags, &input, &dir);
+        let l = lines(&out);
+        let e = &l[0]["error"];
+        if flags.len() > 1 {
+            // The limit is in force: the error says so and says how to raise it.
+            let m = e["message"].as_str().unwrap();
+            assert!(m.contains("limit") && m.contains("--max-document-mib"), "{m}");
+        } else {
+            // The default is 512 MiB: the file is read, and it is not a document.
+            assert!(!e["message"].as_str().unwrap().contains("limit"), "{e}");
+        }
+    }
+    // The file at start follows the flag too.
+    let out = run(&["serve", "--max-document-mib", "2", big.to_str().unwrap()], "", &dir);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("limit"));
+    // Zero is not a limit.
+    let out = run(&["serve", "--max-document-mib", "0"], "", &dir);
+    assert!(!out.status.success());
+}
+
+#[test]
 fn serve_options_for_urls_and_scripts_are_accepted() {
     let dir = temp("opts");
     let out = run(

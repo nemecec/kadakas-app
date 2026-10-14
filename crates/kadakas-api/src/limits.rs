@@ -10,8 +10,14 @@ use std::time::Duration;
 
 use crate::{RpcError, Session};
 
-/// The default for [`SessionLimits::document_file_bytes`]: 2 GiB.
-pub const DEFAULT_DOCUMENT_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// The default for [`SessionLimits::document_file_bytes`]: 512 MiB, the document limit of the paid
+/// collaboration tier. A loaded drawing needs 1.1 to 1.7 times the file size in memory
+/// (`docs/doc-load-benchmark.md`).
+pub const DEFAULT_DOCUMENT_FILE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// The value of [`SessionLimits::document_file_bytes`] in `strict()`: 32 MiB, the snapshot limit of
+/// the free collaboration tier.
+pub const STRICT_DOCUMENT_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// The limits of one session. `Default` gives the limits that Kadakas always had, and no limit
 /// for the number of objects, the memory and the time of a request.
@@ -38,7 +44,9 @@ pub struct SessionLimits {
     /// The most text that an import reads, in bytes.
     pub import_text_bytes: u64,
     /// The largest document file that `file.open` reads, in bytes. The size is checked before the
-    /// file is read.
+    /// file is read. An agent cannot be asked, so this is a hard limit; the error says how to raise
+    /// it (`kadakas serve --max-document-mib`). The desktop app does not use it for the files of
+    /// the person: it asks (`kadakas_ui_core::open_limit`).
     pub document_file_bytes: u64,
     /// Time limit of one script reset.
     pub script_timeout: Duration,
@@ -87,7 +95,7 @@ impl SessionLimits {
             render_pixels: 1_000_000,
             raster_pixels: 8_000_000,
             import_text_bytes: 16 * 1024 * 1024,
-            document_file_bytes: 128 * 1024 * 1024,
+            document_file_bytes: STRICT_DOCUMENT_FILE_BYTES,
             script_timeout: Duration::from_secs(2),
             gis_cache_bytes: 32 * 1024 * 1024,
             picture_bytes: 2 * 1024 * 1024,

@@ -179,6 +179,17 @@ struct RemoteArgs {
     /// not unique in the world. Default: off (new IDs are UUIDs).
     #[arg(long = "sequential-ids")]
     sequential_ids: bool,
+    /// The largest `.kad` file that this run opens (the file at start and `file.open`), in MiB.
+    /// An agent cannot be asked, so this is a hard limit. Default: 512 (the paid collaboration
+    /// tier). A loaded drawing needs about 1.1 to 1.7 times the file size in memory. Not used
+    /// with --connect: the app asks the person.
+    #[arg(
+        long = "max-document-mib",
+        value_name = "MIB",
+        env = "KADAKAS_MAX_DOCUMENT_MIB",
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    max_document_mib: Option<u64>,
     /// Send text-only feedback reports (`feedback.submit`) to the feedback server in this run.
     /// This is the consent of a headless run. Reports with attachments still wait for a person
     /// (`kadakas feedback review`). Default: off, so reports stay in the outbox.
@@ -223,6 +234,12 @@ impl Backend {
             Box::new(Dispatcher::http())
         });
         let sequential = remote.sequential_ids;
+        let max_doc = remote.max_document_mib.map(mib_bytes);
+        if let Some(bytes) = max_doc {
+            let mut limits = session.limits().clone();
+            limits.document_file_bytes = bytes;
+            session.set_limits(limits);
+        }
         // Requests come from agents: they may only use the allowed folders.
         let dirs = if remote.allow_dir.is_empty() {
             vec![PathBuf::from(".")]
@@ -242,7 +259,7 @@ impl Backend {
         session.scripting.trust = kadakas_api::TrustStore::load_default();
         session.wasm_plugins.registry.trust = kadakas_api::ModuleTrust::load_default();
         if let Some(f) = file {
-            session.editor = kadakas_core::command::Editor::new(load(&f)?);
+            session.editor = kadakas_core::command::Editor::new(load(&f, max_doc)?);
             session.doc_dir = doc_dir_of(&f);
         }
         session.set_sequential_ids(sequential);
@@ -353,8 +370,15 @@ fn remote_call(
     }
 }
 
-fn load(path: &std::path::Path) -> Result<Document, String> {
-    let mut doc = kadakas_api::files::read_document(path).map_err(|e| e.message)?;
+/// MiB to bytes. A number that does not fit means no limit.
+fn mib_bytes(mib: u64) -> u64 {
+    mib.checked_mul(1024 * 1024).unwrap_or(u64::MAX)
+}
+
+/// Loads a `.kad` file of at most `max` bytes (default: the limit of a session).
+fn load(path: &std::path::Path, max: Option<u64>) -> Result<Document, String> {
+    let max = max.unwrap_or(kadakas_api::DEFAULT_DOCUMENT_FILE_BYTES);
+    let mut doc = kadakas_api::files::read_document_capped(path, max).map_err(|e| e.message)?;
     // An old file has no project GUID. It gets one in memory, and the next save writes it.
     doc.ensure_project_guid();
     Ok(doc)
@@ -585,7 +609,7 @@ fn import_command(
 ) -> Result<(), String> {
     let mut session = Session::default();
     if let Some(base) = base {
-        session.editor = kadakas_core::command::Editor::new(load(&base)?);
+        session.editor = kadakas_core::command::Editor::new(load(&base, None)?);
     }
     let result = io_call(&mut session, "import.file", file, format, options)?;
     save(session.editor.doc(), output)?;
@@ -602,7 +626,7 @@ fn export_command(
     format: Option<String>,
     options: Option<String>,
 ) -> Result<(), String> {
-    let mut session = Session::with_document(load(file)?);
+    let mut session = Session::with_document(load(file, None)?);
     let result = io_call(&mut session, "export.file", output, format, options)?;
     println!(
         "{}",
@@ -674,7 +698,7 @@ fn main() {
             file,
             output,
             width,
-        } => load(&file).and_then(|doc| {
+        } => load(&file, None).and_then(|doc| {
             let svg = Session::with_document(doc).render_svg(width);
             fsio::write_atomic(&output, svg.as_bytes())
                 .map_err(|e| format!("{}: {e}", output.display()))
@@ -877,7 +901,7 @@ mod tests {
         std::fs::write(&src, r#"{"type":"Point","coordinates":[24.9,60.1,3]}"#).unwrap();
         let doc = dir.join("doc.kad");
         import_command(&src, &doc, None, None, None).unwrap();
-        let loaded = load(&doc).unwrap();
+        let loaded = load(&doc, None).unwrap();
         assert_eq!(loaded.objects.len(), 1);
         assert!(loaded.georef.is_some());
         // Import a second time into the saved document.
@@ -889,7 +913,7 @@ mod tests {
             Some(r#"{"layer": "GIS"}"#.into()),
         )
         .unwrap();
-        assert_eq!(load(&doc).unwrap().objects.len(), 2);
+        assert_eq!(load(&doc, None).unwrap().objects.len(), 2);
         let out = dir.join("out.dxf");
         export_command(&doc, &out, None, Some(r#"{"unit": "m"}"#.into())).unwrap();
         assert!(std::fs::read_to_string(&out).unwrap().contains("ENTITIES"));
@@ -909,11 +933,18 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let bad = dir.join("bad.kad");
         std::fs::write(&bad, "{nope").unwrap();
-        assert!(load(&bad).unwrap_err().contains("bad.kad"));
-        assert!(load(&dir.join("missing")).is_err());
+        assert!(load(&bad, None).unwrap_err().contains("bad.kad"));
+        assert!(load(&dir.join("missing"), None).is_err());
         let good = dir.join("good.kad");
         std::fs::write(&good, serde_json::to_string(&Document::default()).unwrap()).unwrap();
-        assert!(load(&good).is_ok());
+        assert!(load(&good, None).is_ok());
+        // The limit is a number of bytes: one byte below the file refuses it, with the hint.
+        let len = std::fs::metadata(&good).unwrap().len();
+        assert!(load(&good, Some(len)).is_ok());
+        let e = load(&good, Some(len - 1)).unwrap_err();
+        assert!(e.contains("limit") && e.contains("--max-document-mib"), "{e}");
+        assert_eq!(mib_bytes(2), 2 * 1024 * 1024);
+        assert_eq!(mib_bytes(u64::MAX), u64::MAX);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
