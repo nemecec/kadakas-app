@@ -1071,8 +1071,10 @@ mod tests {
                 new: None,
             },
         ]);
-        let mut view = View::default();
-        view.zoom = 0.05;
+        let view = View {
+            zoom: 0.05,
+            ..View::default()
+        };
         let colors = |style: &CompareStyle| {
             let ghosts = kadakas_review::overlay::ghosts_in(ed.doc(), &overlay, style);
             let ctx = egui::Context::default();

@@ -18,6 +18,7 @@ use super::*;
 /// The gap between two pictures side by side, in pixels.
 const GAP_PX: u32 = 4;
 /// The gap between two sheets side by side, in mm.
+#[cfg(not(target_arch = "wasm32"))]
 const GAP_MM: f64 = 10.0;
 /// The background of a picture for the dark theme (the paper of the app).
 const DARK_BACKGROUND: [u8; 4] = [30, 32, 36, 255];

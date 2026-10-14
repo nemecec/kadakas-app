@@ -534,7 +534,7 @@ fn the_cache_is_bounded_and_follows_the_history() {
     save(&mut s, "Later");
     s.compare_overlay(Side::Version(first), Side::Version(id))
         .unwrap();
-    assert!(s.compare.overlay_builds >= before + 1);
+    assert!(s.compare.overlay_builds > before);
     // The drawing: an edit makes a new state of the current side.
     let a = s
         .compare_overlay(Side::Version(first), Side::Current)

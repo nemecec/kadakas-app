@@ -95,7 +95,6 @@ pub fn describe() -> Value {
             {"method": "version.diff", "params": {"from": 1, "to": "current", "kinds": ["objects"], "limit": 20}},
             {"method": "render.png", "params": {"view": "top", "compare": {"from": 1, "to": "current"}}},
             {"method": "render.svg", "params": {"compare": {"from": 1, "to": 2, "hide_unchanged": true}}},
-            {"method": "sheet.render", "params": {"sheet": "L-101", "compare": {"from": 1, "to": "current"}}},
             {"method": "version.get", "params": {"id": 1, "document": false}},
             {"method": "version.restore", "params": {"id": 1}},
             {"method": "version.delete", "params": {"ids": [2]}}
