@@ -27,8 +27,18 @@ fn placed(doc: &Document, o: &Object) -> Option<Object> {
     doc.is_visible(&g).then_some(g)
 }
 
-/// The objects to draw as ghosts of an overlay in a document: the removed objects, and, with
-/// `show_previous`, the old shapes of the changed ones.
+/// The objects to draw as ghosts of an overlay in a document: the removed objects (kind
+/// `removed`), and, with `show_previous`, the old shapes of the changed ones (kind `previous`).
+/// Each is on the layer and in the class of `doc`, and only if that layer is visible. A plan
+/// canvas draws them.
+pub fn ghosts_in(
+    doc: &Document,
+    overlay: &CompareOverlay,
+    style: &CompareStyle,
+) -> Vec<(Object, &'static str)> {
+    ghost_objects(doc, overlay, style).collect()
+}
+
 fn ghost_objects<'a>(
     doc: &'a Document,
     overlay: &'a CompareOverlay,

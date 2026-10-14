@@ -23,6 +23,11 @@ pub struct Canvas3d<'a> {
     pub pending_zoom: &'a mut f64,
     /// Pan from keys in points, not applied yet.
     pub pending_pan: &'a mut egui::Vec2,
+    /// The scene of a compare (REV-03): tinted objects, and the ghosts of removed ones. It is
+    /// drawn instead of the scene of the session, with its own look, and nothing is selected.
+    pub compare: Option<std::sync::Arc<crate::compare_ui::Compare3d>>,
+    /// An object to zoom to (a click in the Compare window).
+    pub frame: Option<kadakas_core::model::ObjectId>,
 }
 
 /// Draws the canvas and handles its input for one frame.
@@ -34,6 +39,8 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         gpu_ready,
         pending_zoom,
         pending_pan,
+        compare,
+        frame,
     } = c;
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     if !gpu_ready {
@@ -54,10 +61,20 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     let aspect = size.x / size.y;
     // Plants far from the camera turn into coarse meshes and billboards (`lod_for`).
     let pixel_size = f64::from(view3d.camera.half_height() * 2.0 / size.y);
-    let scene = session.scene_for_pixel_size(pixel_size);
-    let rev = session.editor.revision();
+    let (scene, rev) = match &compare {
+        Some(c) => (c.scene.clone(), c.key),
+        None => (
+            session.scene_for_pixel_size(pixel_size),
+            session.editor.revision(),
+        ),
+    };
     if view3d.fit_pending() {
         view3d.fit(scene.bounds, aspect);
+    }
+    if let Some(id) = frame
+        && let Some(b) = scene.object_bounds(id)
+    {
+        view3d.fit(Some(b), aspect);
     }
 
     let (hover, mods, space, scroll, pinch) = ui.input(|i| {
@@ -100,18 +117,28 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         && let Some(p) = resp.interact_pointer_pos()
     {
         let hit = view3d.pick(&scene, local(p), size);
+        // A ghost is not in the drawing: it cannot be selected.
+        let hit = hit.filter(|id| session.editor.doc().object(*id).is_some());
         session.selection = view3d::click_selection(&session.selection, hit, mods.shift);
     }
 
     let cam = view3d.camera;
     let bounds = scene.bounds;
-    let (overlay, overlay_rev) = view3d.selection_lines(&scene, rev, &session.selection);
+    let selection: &[kadakas_core::model::ObjectId] = if compare.is_some() {
+        &[]
+    } else {
+        &session.selection
+    };
+    let (overlay, overlay_rev) = view3d.selection_lines(&scene, rev, selection);
     // The look: the active render style of the document, with the mode of the view bar. Materials
     // are resolved again only when the document changes.
     let doc = session.editor.doc();
     let mut style = resolve_style(doc, None);
     style.mode = session.view.mode;
-    let look = view3d.look(doc, &scene, rev, style.textures);
+    let look = match &compare {
+        Some(c) => c.look.clone(),
+        None => view3d.look(doc, &scene, rev, style.textures),
+    };
     let geometry = view3d.geometry_key(&scene, rev);
     let light = light_for(doc, &style);
     let gpu_style = GpuStyle {
@@ -233,6 +260,8 @@ mod tests {
                             gpu_ready: self.gpu_ready,
                             pending_zoom: &mut self.pending_zoom,
                             pending_pan: &mut self.pending_pan,
+                            compare: None,
+                            frame: None,
                         },
                     );
                 });
@@ -396,6 +425,8 @@ mod tests {
                     gpu_ready: true,
                     pending_zoom: &mut h.pending_zoom,
                     pending_pan: &mut h.pending_pan,
+                    compare: None,
+                    frame: None,
                 },
             );
         });

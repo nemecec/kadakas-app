@@ -18,6 +18,7 @@ pub use errors::{
 };
 #[cfg(test)]
 mod care_api_tests;
+mod compare_api;
 mod data_api;
 mod edit2d_api;
 #[cfg(not(target_arch = "wasm32"))]
@@ -37,7 +38,6 @@ mod plugin_api;
 mod plugin_util;
 mod present_api;
 mod query_api;
-mod compare_api;
 mod review_api;
 pub use compare_api::{CompareCache, CompareMode, CompareSpec, ShownDoc};
 pub use review_api::{Side as CompareSide, VERSION_BYTES_MAX, VERSIONS_MAX};

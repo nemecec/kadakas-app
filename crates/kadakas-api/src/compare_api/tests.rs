@@ -88,7 +88,13 @@ fn mean_of(
             n += 1;
         }
     }
-    (n > 0).then(|| ([sum[0] / n as f64, sum[1] / n as f64, sum[2] / n as f64], col / n as f64, n))
+    (n > 0).then(|| {
+        (
+            [sum[0] / n as f64, sum[1] / n as f64, sum[2] / n as f64],
+            col / n as f64,
+            n,
+        )
+    })
 }
 
 /// `a - b` as a signed number.
@@ -110,8 +116,10 @@ fn the_compare_option_is_checked() {
     assert_eq!(s.mode, CompareMode::Overlay);
     assert!(!s.mode_given);
     assert_eq!(s.style, CompareStyle::default());
-    let s = spec(json!({"from": "CURRENT", "to": 2, "mode": "side_by_side", "palette":
-        "color_blind", "dark": true, "ghosts": false, "previous": false, "unchanged": "show"}))
+    let s = spec(
+        json!({"from": "CURRENT", "to": 2, "mode": "side_by_side", "palette":
+        "color_blind", "dark": true, "ghosts": false, "previous": false, "unchanged": "show"}),
+    )
     .unwrap()
     .unwrap();
     assert!(s.mode_given && s.mode == CompareMode::SideBySide);
@@ -142,11 +150,23 @@ fn the_compare_option_is_checked() {
         (json!({"from": 1}), "compare.to is missing"),
         (json!({"to": 1}), "compare.from is missing"),
         (json!({"from": 1, "to": "x"}), "number of a version"),
-        (json!({"from": 1, "to": 2, "mode": "both"}), "overlay or side_by_side"),
-        (json!({"from": 1, "to": 2, "palette": "pink"}), "standard or color_blind"),
-        (json!({"from": 1, "to": 2, "unchanged": "x"}), "show, dim or hide"),
+        (
+            json!({"from": 1, "to": 2, "mode": "both"}),
+            "overlay or side_by_side",
+        ),
+        (
+            json!({"from": 1, "to": 2, "palette": "pink"}),
+            "standard or color_blind",
+        ),
+        (
+            json!({"from": 1, "to": 2, "unchanged": "x"}),
+            "show, dim or hide",
+        ),
         (json!({"from": 1, "to": 2, "dark": "yes"}), "true or false"),
-        (json!({"from": 1, "to": 2, "colour": 1}), "unknown compare option 'colour'"),
+        (
+            json!({"from": 1, "to": 2, "colour": 1}),
+            "unknown compare option 'colour'",
+        ),
     ] {
         let e = spec(bad.clone()).unwrap_err();
         assert!(e.message.contains(what), "{bad}: {}", e.message);
@@ -165,7 +185,11 @@ fn render_svg_tints_added_removed_and_changed_and_the_pixels_agree() {
     let svg = r["svg"].as_str().unwrap();
     let counts = &r["compare"]["counts"];
     assert_eq!(
-        (counts["added"].as_u64(), counts["removed"].as_u64(), counts["changed"].as_u64()),
+        (
+            counts["added"].as_u64(),
+            counts["removed"].as_u64(),
+            counts["changed"].as_u64()
+        ),
         (Some(1), Some(1), Some(1))
     );
     // Each status has its group; the unchanged object is dimmed; the removed one is a ghost.
@@ -202,7 +226,11 @@ fn render_svg_tints_added_removed_and_changed_and_the_pixels_agree() {
     let size = tree.size();
     let mut pm = resvg::tiny_skia::Pixmap::new(size.width() as u32, size.height() as u32).unwrap();
     pm.fill(resvg::tiny_skia::Color::WHITE);
-    resvg::render(&tree, resvg::tiny_skia::Transform::identity(), &mut pm.as_mut());
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut pm.as_mut(),
+    );
     let view_box = svg
         .split("viewBox=\"")
         .nth(1)
@@ -222,9 +250,15 @@ fn render_svg_tints_added_removed_and_changed_and_the_pixels_agree() {
     // Added (x 100): green. Removed ghost (x 0): red. Changed (x 50, y 80 after the move):
     // orange. Unchanged (x 150): the gray, dimmed toward white.
     let green = at(11500.0, 1500.0);
-    assert!(d(green[1], green[0]) > 40 && d(green[1], green[2]) > 20, "added {green:?}");
+    assert!(
+        d(green[1], green[0]) > 40 && d(green[1], green[2]) > 20,
+        "added {green:?}"
+    );
     let red = at(1500.0, 1500.0);
-    assert!(d(red[0], red[1]) > 15 && d(red[0], red[2]) > 15, "removed {red:?}");
+    assert!(
+        d(red[0], red[1]) > 15 && d(red[0], red[2]) > 15,
+        "removed {red:?}"
+    );
     let orange = at(6500.0, 9500.0);
     assert!(
         d(orange[0], orange[1]) > 25 && d(orange[1], orange[2]) > 25,
@@ -261,7 +295,9 @@ fn the_unchanged_objects_can_be_shown_or_hidden_and_a_palette_chosen() {
     assert!(!shown.contains("data-compare=\"unchanged\""));
     // The color blind palette uses blue for added objects, in the dark theme a lighter blue.
     assert!(svg(json!({"palette": "color_blind"})).contains("rgba(0,114,178,1.000)"));
-    assert!(svg(json!({"palette": "color_blind", "dark": true})).contains("rgba(86,180,233,1.000)"));
+    assert!(
+        svg(json!({"palette": "color_blind", "dark": true})).contains("rgba(86,180,233,1.000)")
+    );
     // Ghosts can be switched off.
     let none = svg(json!({"ghosts": false, "previous": false}));
     assert!(!none.contains("data-ghost"));
@@ -317,24 +353,55 @@ fn render_png_tints_added_removed_and_changed_in_the_cpu_renderer() {
         json!({"view": "top", "projection": "ortho", "width": 600, "height": 200,
             "compare": compare(json!(1), json!("current"))}),
     );
-    assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(600), Some(200)));
+    assert_eq!(
+        (r["width"].as_u64(), r["height"].as_u64()),
+        (Some(600), Some(200))
+    );
     assert_eq!(r["compare"]["mode"], "overlay");
     assert_eq!(r["compare"]["counts"]["removed"], 1);
     let img = pixels(&r);
     // The colors after the flat shading of a top face (about 0.88 of the tint): added green,
     // changed orange, and the ghost of the removed object: red, mixed with the background.
     let green = mean_of(&img, |p| d(p[1], p[0]) > 60 && d(p[1], p[2]) > 40).unwrap();
-    assert!(near(green.0, [0.0, 112.0, 42.0], 10.0), "added {:?}", green.0);
-    let orange = mean_of(&img, |p| p[0] > 150 && d(p[0], p[1]) > 50 && d(p[1], p[2]) > 50).unwrap();
-    assert!(near(orange.0, [180.0, 90.0, 0.0], 14.0), "changed {:?}", orange.0);
-    let red = mean_of(&img, |p| d(p[0], p[1]) > 30 && d(p[0], p[2]) > 30 && p[1].abs_diff(p[2]) < 25 && p[1] > 90)
-        .unwrap();
-    assert!(red.0[0] > 200.0 && red.0[1] > 90.0, "the ghost is see-through: {:?}", red.0);
+    assert!(
+        near(green.0, [0.0, 112.0, 42.0], 10.0),
+        "added {:?}",
+        green.0
+    );
+    let orange = mean_of(&img, |p| {
+        p[0] > 150 && d(p[0], p[1]) > 50 && d(p[1], p[2]) > 50
+    })
+    .unwrap();
+    assert!(
+        near(orange.0, [180.0, 90.0, 0.0], 14.0),
+        "changed {:?}",
+        orange.0
+    );
+    let red = mean_of(&img, |p| {
+        d(p[0], p[1]) > 30 && d(p[0], p[2]) > 30 && p[1].abs_diff(p[2]) < 25 && p[1] > 90
+    })
+    .unwrap();
+    assert!(
+        red.0[0] > 200.0 && red.0[1] > 90.0,
+        "the ghost is see-through: {:?}",
+        red.0
+    );
     // From left to right: the ghost of the removed object (x 0), the changed one (x 50), the added one (x 100).
-    assert!(red.1 < orange.1 && orange.1 < green.1, "{} {} {}", red.1, orange.1, green.1);
+    assert!(
+        red.1 < orange.1 && orange.1 < green.1,
+        "{} {} {}",
+        red.1,
+        orange.1,
+        green.1
+    );
     // The unchanged object is faded to a light gray, with no hue.
-    let faint = mean_of(&img, |p| p[0].abs_diff(p[1]) < 4 && p[1].abs_diff(p[2]) < 6 && p[0] < 235 && p[0] > 160);
-    assert!(faint.is_some_and(|f| f.1 > green.1), "an unchanged object at the right");
+    let faint = mean_of(&img, |p| {
+        p[0].abs_diff(p[1]) < 4 && p[1].abs_diff(p[2]) < 6 && p[0] < 235 && p[0] > 160
+    });
+    assert!(
+        faint.is_some_and(|f| f.1 > green.1),
+        "an unchanged object at the right"
+    );
     // The dark theme has a dark background.
     let dark = ok(
         &mut s,
@@ -359,7 +426,10 @@ fn render_png_hides_unchanged_objects_and_the_ghosts() {
             json!({"view": "top", "width": 400, "height": 100, "compare": c}),
         );
         let img = pixels(&r);
-        img.2.chunks(4).filter(|p| p[..3] != [246, 247, 249]).count()
+        img.2
+            .chunks(4)
+            .filter(|p| p[..3] != [246, 247, 249])
+            .count()
     };
     let all = count(&mut s, json!({}));
     let hidden = count(&mut s, json!({"hide_unchanged": true}));
@@ -379,7 +449,10 @@ fn side_by_side_pictures_show_both_sides() {
     assert!(svg.contains(">Before</text>") && svg.contains(">current drawing</text>"));
     // The removed object is in the left picture only.
     assert_eq!(svg.matches(removed.as_str().unwrap()).count(), 1);
-    assert!(!svg.contains("data-compare=\"added\""), "no tints side by side");
+    assert!(
+        !svg.contains("data-compare=\"added\""),
+        "no tints side by side"
+    );
     assert!(r["compare"].get("counts").is_none());
     // PNG: two pictures of the same size with a line between.
     let r = ok(
@@ -415,7 +488,10 @@ fn the_cache_keeps_the_states_so_a_slider_replays_each_version_once() {
             .unwrap();
     }
     assert_eq!(s.compare.state_builds, 5);
-    assert_eq!(s.compare.state_hits, 3, "the shared neighbour comes from the cache");
+    assert_eq!(
+        s.compare.state_hits, 3,
+        "the shared neighbour comes from the cache"
+    );
     assert_eq!(s.compare.overlay_builds, 4);
     // Step back: every overlay is cached.
     for w in ids.windows(2).rev() {
@@ -460,9 +536,13 @@ fn the_cache_is_bounded_and_follows_the_history() {
         .unwrap();
     assert!(s.compare.overlay_builds >= before + 1);
     // The drawing: an edit makes a new state of the current side.
-    let a = s.compare_overlay(Side::Version(first), Side::Current).unwrap();
+    let a = s
+        .compare_overlay(Side::Version(first), Side::Current)
+        .unwrap();
     rect(&mut s, 9000, 0, GRAY);
-    let b = s.compare_overlay(Side::Version(first), Side::Current).unwrap();
+    let b = s
+        .compare_overlay(Side::Version(first), Side::Current)
+        .unwrap();
     assert_eq!(b.counts().added, a.counts().added + 1);
 }
 
@@ -522,7 +602,11 @@ fn sheets_compare_side_by_side() {
     let r = ok(&mut s, "sheet.render", json!({"sheet": "S", "compare": c}));
     let svg = r["svg"].as_str().unwrap();
     assert!(svg.contains("With sheet") && svg.contains("current drawing"));
-    assert_eq!(svg.matches("LIVE-MARK").count(), 1, "only the right page has it");
+    assert_eq!(
+        svg.matches("LIVE-MARK").count(),
+        1,
+        "only the right page has it"
+    );
     assert!(r["width_mm"].as_f64().unwrap() > 400.0);
     let png = ok(
         &mut s,

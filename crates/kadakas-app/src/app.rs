@@ -129,6 +129,8 @@ pub struct KadakasApp {
     /// WebAssembly plug-ins: the Plug-ins window, the trust dialog, the form and the tool.
     plugin_ui: crate::plugin_ui::PluginUi,
     versions_ui: crate::versions_ui::VersionsUi,
+    /// The Compare window and the overlay that it puts on the plan and on the 3D view (REV-03).
+    compare_ui: crate::compare_ui::CompareUi,
     /// The coordinate readout of the Data bar.
     readout: crate::gis_ui::ReadoutState,
     /// Autosave, crash recovery and the Preferences dialog.
@@ -471,6 +473,7 @@ impl KadakasApp {
             script_ui: Default::default(),
             plugin_ui: Default::default(),
             versions_ui: Default::default(),
+            compare_ui: Default::default(),
             readout: Default::default(),
             autosave: crate::autosave_ui::AutosaveUi::inert(),
             about: crate::about::About::default(),
@@ -864,6 +867,7 @@ impl KadakasApp {
             }
             MenuAction::PlugIns => self.plugin_ui.open(),
             MenuAction::Versions => self.versions_ui.open(&mut self.session),
+            MenuAction::Compare => self.compare_ui.open(&mut self.session),
             MenuAction::CollabConnect => self.collab.open_dialog(),
             MenuAction::CollabDisconnect => {
                 let now = crate::collab_ui::now_ms();
@@ -1607,6 +1611,13 @@ impl KadakasApp {
             self.fit_view(rect);
             self.needs_fit = false;
         }
+        // A click in the Compare window asks to zoom to an object.
+        if let Some(z) = self.compare_ui.take_zoom() {
+            self.view.fit(z.lo, z.hi, rect);
+        }
+        // The Compare window can show a version instead of the open drawing. That drawing is read
+        // only: only pan and zoom work.
+        let history = self.compare_ui.history_doc();
         let typing = ui.ctx().egui_wants_keyboard_input() || self.entry.active;
         let (latest, hover, mods, space, suspend, scroll, pinch, pressed, released) =
             ui.input(|i| {
@@ -1668,6 +1679,26 @@ impl KadakasApp {
                 .request_repaint_after(std::time::Duration::from_millis(450));
         }
 
+        if let Some(doc) = history.as_deref() {
+            self.own_cursor = None;
+            self.snap_hit = None;
+            let frame = canvas::Frame {
+                doc,
+                selection: &[],
+                preview: &kadakas_ui_core::tools::Preview::None,
+                snap: None,
+                cues: false,
+                dark: self.dark,
+                smart: &self.session.smart,
+                show_grid: self.show_grid,
+                site: None,
+                sheet: None,
+                plugin_preview: &[],
+                compare: self.compare_ui.draw(),
+            };
+            canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
+            return;
+        }
         // The pointer for presence: the raw position, not the snapped one.
         self.own_cursor = latest.filter(|p| rect.contains(*p)).map(|p| {
             let m = self.view.to_model(p);
@@ -1771,6 +1802,7 @@ impl KadakasApp {
             site: Some((self.session.site_cache(), self.session.editor.revision())),
             sheet: page.as_deref().map(|p| (&self.nav.sheets, p)),
             plugin_preview: self.plugin_ui.preview(),
+            compare: self.compare_ui.draw(),
         };
         canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
         // The cursors and selections of the other users. Presence is never in the document.
@@ -2049,6 +2081,8 @@ impl KadakasApp {
         for (label, m) in [
             (tr!("panels-plug-ins"), MenuAction::PlugIns),
             (tr!("panels-versions"), MenuAction::Versions),
+            (tr!("panels-compare"), MenuAction::Compare),
+            (tr!("panels-compare"), MenuAction::Compare),
             (tr!("app-preferences"), MenuAction::Preferences),
             (tr!("app-export-svg"), MenuAction::ExportSvg),
             (tr!("app-select-all"), MenuAction::SelectAll),
@@ -2331,6 +2365,8 @@ impl KadakasApp {
                 if self.plan() {
                     self.canvas(ui);
                 } else {
+                    let compare = self.compare_ui.scene_3d(&mut self.session);
+                    let frame = self.compare_ui.take_zoom().map(|z| z.id);
                     canvas3d::show(
                         ui,
                         canvas3d::Canvas3d {
@@ -2340,6 +2376,8 @@ impl KadakasApp {
                             gpu_ready: self.gpu_ready,
                             pending_zoom: &mut self.pending_zoom,
                             pending_pan: &mut self.pending_pan,
+                            compare,
+                            frame,
                         },
                     );
                 }
@@ -2652,6 +2690,9 @@ impl eframe::App for KadakasApp {
         self.plugin_ui
             .show(&ctx, &mut self.session, &mut self.status);
         self.versions_ui
+            .show(&ctx, &mut self.session, &mut self.status);
+        self.compare_ui.set_dark(self.dark);
+        self.compare_ui
             .show(&ctx, &mut self.session, &mut self.status);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(script) = self

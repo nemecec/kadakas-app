@@ -43,7 +43,7 @@ use crate::state::{Props, State};
 mod apply;
 mod style;
 
-pub use apply::{SvgCompare, ghost_document, tint_scene};
+pub use apply::{SvgCompare, ghost_document, ghosts_in, tint_scene};
 pub use style::{CompareStyle, Palette, Pattern, Tint, UnchangedMode};
 
 /// The most ghosts (removed objects) that an overlay keeps.

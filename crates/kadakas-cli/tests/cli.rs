@@ -1055,7 +1055,10 @@ fn render_can_compare_a_version_with_the_drawing() {
     );
     let text = std::fs::read_to_string(&svg).unwrap();
     assert!(text.contains("data-compare=\"added\"") && text.contains("data-compare-legend"));
-    assert!(text.contains("data-compare=\"unchanged\""), "the old object is dimmed");
+    assert!(
+        text.contains("data-compare=\"unchanged\""),
+        "the old object is dimmed"
+    );
     // Hide the unchanged objects, and name both sides.
     let out = run(
         &[

@@ -27,6 +27,8 @@ pub struct VersionRow {
     pub origin: String,
     /// A version that Kadakas saved by itself, before a restore.
     pub auto: bool,
+    /// The branch of the version (`main` unless the file has branches, REV-10).
+    pub branch: String,
 }
 
 /// The answer of `version.list`.
@@ -34,6 +36,8 @@ pub struct VersionRow {
 pub struct VersionList {
     /// Oldest first.
     pub rows: Vec<VersionRow>,
+    /// The current branch of the file.
+    pub branch: String,
     /// `None`: there is no version, or the answer was asked without the comparison.
     pub current_is_newest: Option<bool>,
     pub max_versions: usize,
@@ -62,11 +66,13 @@ impl VersionList {
                     time_ms: r["time_ms"].as_u64().unwrap_or(0),
                     origin: r["origin"].as_str().unwrap_or("user").to_string(),
                     auto: r["auto"].as_bool().unwrap_or(false),
+                    branch: r["branch"].as_str().unwrap_or("main").to_string(),
                 })
             })
             .collect();
         VersionList {
             rows,
+            branch: v["branch"].as_str().unwrap_or("main").to_string(),
             current_is_newest: v["current_is_newest"].as_bool(),
             max_versions: v["limits"]["max_versions"]
                 .as_u64()

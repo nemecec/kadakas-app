@@ -43,6 +43,8 @@ pub enum MenuAction {
     PlugIns,
     /// File > Versions: the window of named versions and the comparison.
     Versions,
+    /// File > Compare Versions: the colored overlay of two versions in the plan and in 3D.
+    Compare,
     Undo,
     Redo,
     Delete,
@@ -146,6 +148,7 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         Cmd::Scripts => M::Scripts,
         Cmd::PlugIns => M::PlugIns,
         Cmd::Versions => M::Versions,
+        Cmd::Compare => M::Compare,
         Cmd::Preferences => M::Preferences,
         Cmd::Undo => M::Undo,
         Cmd::Redo => M::Redo,
@@ -572,6 +575,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         | MenuAction::Scripts
         | MenuAction::PlugIns
         | MenuAction::Versions
+        | MenuAction::Compare
         | MenuAction::CreateSiteModel
         | MenuAction::Preferences
         | MenuAction::CollabConnect

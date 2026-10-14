@@ -294,7 +294,11 @@ fn legend_svg(rows: &[SvgLegendRow], lo: DVec2, hi: DVec2, s: &mut String) {
             }
         }
         x += h * 2.4;
-        let _ = writeln!(s, r#"<text x="{x}" y="{y}" fill="black">{}</text>"#, esc(&r.text));
+        let _ = writeln!(
+            s,
+            r#"<text x="{x}" y="{y}" fill="black">{}</text>"#,
+            esc(&r.text)
+        );
     }
     s.push_str("</g>\n");
 }
@@ -1647,7 +1651,10 @@ mod tests {
         );
         let overlay = Fixed {
             looks: vec![
-                (a, SvgLook::Tint(tint([0, 128, 48], SvgPattern::Solid, "added"))),
+                (
+                    a,
+                    SvgLook::Tint(tint([0, 128, 48], SvgPattern::Solid, "added")),
+                ),
                 (b, SvgLook::Dim(0.25)),
                 (c, SvgLook::Hide),
                 (

@@ -11,7 +11,7 @@ use kadakas_core::svg_overlay::{SvgGhost, SvgLook, SvgOverlay};
 use kadakas_render::look::Look;
 use kadakas_render::shade::{self, Light, ShadeOptions};
 use kadakas_render::{BACKGROUND, Camera, Image, ViewSettings};
-use kadakas_review::overlay::{SvgCompare, Status, tint_scene};
+use kadakas_review::overlay::{Status, SvgCompare, tint_scene};
 
 use super::*;
 
@@ -72,8 +72,13 @@ fn side_by_side_svg(a: &str, b: &str, labels: [&str; 2]) -> String {
     const STRIP: f64 = 24.0;
     let (wa, ha) = svg_size(a);
     let (wb, hb) = svg_size(b);
-    let (gap, width, height) = (f64::from(GAP_PX), wa + f64::from(GAP_PX) + wb, ha.max(hb) + STRIP);
-    let place = |svg: &str, x: f64| svg.replacen("<svg ", &format!("<svg x=\"{x}\" y=\"{STRIP}\" "), 1);
+    let (gap, width, height) = (
+        f64::from(GAP_PX),
+        wa + f64::from(GAP_PX) + wb,
+        ha.max(hb) + STRIP,
+    );
+    let place =
+        |svg: &str, x: f64| svg.replacen("<svg ", &format!("<svg x=\"{x}\" y=\"{STRIP}\" "), 1);
     let mut s = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" data-compare-mode=\"side_by_side\">\n"
     );
@@ -252,7 +257,12 @@ impl Session {
             });
             let ghosts: HashSet<ObjectId> = ghosts.into_iter().collect();
             let [r, g, b] = spec.style.color(Status::Removed);
-            let look = Look::ghosted(&tinted, &|id| ghosts.contains(&id), [r, g, b], spec.style.ghost);
+            let look = Look::ghosted(
+                &tinted,
+                &|id| ghosts.contains(&id),
+                [r, g, b],
+                spec.style.ghost,
+            );
             let camera = camera_for(tinted.bounds, req.width, req.height);
             let img = draw(&tinted, &look, &camera, req.width, req.height);
             (img, self.compare_info(spec, Some(&overlay)))
@@ -279,6 +289,30 @@ impl Session {
         }))
     }
 
+    /// The sheet `layer` of two sides on one page, side by side, each with its label (the old
+    /// side at the left). The sheet must exist in both. The app shows the page in its Compare
+    /// window; `sheet.render` with `compare` writes it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn compare_sheet_page(
+        &mut self,
+        layer: kadakas_core::model::LayerId,
+        from: Side,
+        to: Side,
+    ) -> Result<kadakas_print::Page, RpcError> {
+        let labels = [self.side_label(from), self.side_label(to)];
+        let mut pages = Vec::new();
+        for (side, label) in [from, to].into_iter().zip(&labels) {
+            let shown = self.compare_doc(side)?;
+            let page = match &shown {
+                ShownDoc::Live => self.sheet_page(layer)?.as_ref().clone(),
+                ShownDoc::Built(d) => kadakas_print::compose_page(d, layer)
+                    .map_err(|e| bad(format!("the sheet cannot be drawn for {label}: {e}")))?,
+            };
+            pages.push(page);
+        }
+        Ok(pages[0].beside(&pages[1], GAP_MM, [&labels[0], &labels[1]]))
+    }
+
     /// `sheet.render` with a `compare` option: the sheet of both sides on one page.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn sheet_compare(
@@ -298,19 +332,7 @@ impl Session {
             ..*spec
         };
         let layer = crate::sheets_api::sheet_ref(self.editor.doc(), sheet)?;
-        let labels = [self.side_label(spec.from), self.side_label(spec.to)];
-        let mut pages = Vec::new();
-        for (side, label) in [spec.from, spec.to].into_iter().zip(&labels) {
-            let shown = self.compare_doc(side)?;
-            let page = match &shown {
-                ShownDoc::Live => self.sheet_page(layer)?.as_ref().clone(),
-                ShownDoc::Built(d) => kadakas_print::compose_page(d, layer).map_err(|e| {
-                    bad(format!("the sheet cannot be drawn for {label}: {e}"))
-                })?,
-            };
-            pages.push(page);
-        }
-        let page = pages[0].beside(&pages[1], GAP_MM, [&labels[0], &labels[1]]);
+        let page = self.compare_sheet_page(layer, spec.from, spec.to)?;
         let info = self.compare_info(spec, None);
         match format {
             "svg" => Ok(json!({

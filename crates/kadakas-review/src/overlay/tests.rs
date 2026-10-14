@@ -1,7 +1,7 @@
 use glam::DVec2;
 use kadakas_core::command::Editor;
 use kadakas_core::mesh;
-use kadakas_core::model::{Attributes, FIRST_LAYER, NONE_CLASS, Object, ObjectId, Shape};
+use kadakas_core::model::{FIRST_LAYER, NONE_CLASS, Object, ObjectId, Shape};
 use kadakas_core::svg_overlay::{SvgLook, SvgOverlay};
 use serde_json::json;
 
@@ -405,6 +405,12 @@ fn the_svg_overlay_tints_by_status_and_dims_or_hides_the_rest() {
     assert!(svg.view().is_none());
     let view = (DVec2::ZERO, DVec2::splat(5.0));
     assert_eq!(svg.with_view(view).view(), Some(view));
+    // The plan canvas gets the same ghosts.
+    let listed = ghosts_in(&doc, &o, &style);
+    assert_eq!(
+        listed.iter().map(|(g, k)| (g.id, *k)).collect::<Vec<_>>(),
+        vec![(b, "removed"), (a, "previous")]
+    );
     // Ghosts can be switched off.
     let none = SvgCompare::new(
         &doc,
@@ -508,5 +514,4 @@ fn the_scene_gets_tints_dimmed_unchanged_objects_and_ghosts() {
     let g = ghost_document(&doc, &o, &style);
     assert_eq!(g.objects.len(), 1, "only removed objects, not old shapes");
     assert_eq!(g.layers.len(), doc.layers.len());
-    let _ = Attributes::default();
 }

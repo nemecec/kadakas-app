@@ -8,6 +8,7 @@ use kadakas_core::model::{Color, Document, Object, ObjectId, Shape, Vertex, arc_
 
 use kadakas_core::plants::tag::{TagCounts, tag_counts};
 
+use crate::compare_draw::ObjectLook;
 use crate::plant_draw;
 use crate::tess;
 use crate::view::{View, ViewExt as _, grid_step};
@@ -624,6 +625,8 @@ pub struct Frame<'a> {
     pub sheet: Option<(&'a crate::sheets_ui::SheetUi, &'a kadakas_print::Page)>,
     /// The preview of a running plug-in tool: shapes that are not in the document.
     pub plugin_preview: &'a [Shape],
+    /// The compare overlay of REV-03: tints, ghosts and a legend.
+    pub compare: Option<crate::compare_draw::CompareDraw<'a>>,
 }
 
 pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
@@ -667,13 +670,26 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     // Map underlays are drawn first, below the vector objects.
     let visible = || f.doc.objects.values().filter(|o| f.doc.is_displayed(o));
     let is_under = |o: &&Object| matches!(o.shape, Shape::Underlay(_));
+    let mut halos = 0usize;
     for o in visible()
         .filter(is_under)
         .chain(visible().filter(|o| !is_under(o)))
     {
+        // A compare can hide the objects that did not change, or tint the ones that did.
+        let look = f
+            .compare
+            .as_ref()
+            .map_or(ObjectLook::Normal, |c| c.look(o.id));
+        if look == ObjectLook::Hidden {
+            continue;
+        }
         let grey = f.doc.is_grey(o);
         set_grey(grey);
         let st = object_style(f.doc, o, view.zoom);
+        let st = match (look, f.compare.as_ref()) {
+            (ObjectLook::Status(s), Some(c)) => crate::compare_draw::tinted(st, s, c.style),
+            _ => st,
+        };
         let direct = f.selection.contains(&o.id);
         let via_group = !direct
             && o.parent.is_some()
@@ -697,9 +713,18 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
             if grey {
                 p.multiply_opacity(0.6);
             }
+            if let ObjectLook::Dim(k) = look {
+                p.multiply_opacity(k);
+            }
             draw_object(&p, view, f.doc, &counts, o, st, DVec2::ZERO);
         }
         set_grey(false);
+        if let (ObjectLook::Status(s), Some(c)) = (look, f.compare.as_ref())
+            && halos < crate::compare_draw::MAX_HALOS
+        {
+            halos += 1;
+            crate::compare_draw::halo(&painter, view, f.doc, o, s, c.style);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         crate::script_ui::draw_badge(&painter, view, f.doc, o);
         if let Some(t) = kadakas_core::worksheet_table::data(o) {
@@ -741,6 +766,10 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
             }
         }
     }
+    if let Some(c) = &f.compare {
+        draw_ghosts(&painter, view, f, c, &counts);
+        crate::compare_draw::legend(&painter, rect, c, f.dark);
+    }
     draw_preview(&painter, view, f);
     for shape in f.plugin_preview {
         let st = Style {
@@ -754,6 +783,25 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     if let Some(s) = f.snap {
         crate::snap_ui::draw_snap(&painter, view, s, f.cues, f.dark, rect);
     }
+}
+
+/// The ghosts of a compare: removed objects as they were (see-through, in the color of removed
+/// objects), and the old shapes of changed objects, fainter. Each has a box and a mark.
+fn draw_ghosts(
+    painter: &Painter,
+    view: &View,
+    f: &Frame,
+    c: &crate::compare_draw::CompareDraw,
+    counts: &TagCounts,
+) {
+    for (o, kind) in c.ghosts {
+        set_grey(false);
+        let previous = *kind == "previous";
+        let base = object_style(f.doc, o, view.zoom);
+        let st = crate::compare_draw::ghost_style(base, c.style, previous);
+        draw_object(painter, view, f.doc, counts, o, st, DVec2::ZERO);
+    }
+    crate::compare_draw::ghost_marks(painter, view, f.doc, c);
 }
 
 fn draw_preview(painter: &Painter, view: &View, f: &Frame) {
@@ -946,6 +994,7 @@ mod tests {
                     site: None,
                     sheet: None,
                     plugin_preview: &[],
+                    compare: None,
                 };
                 paint(&ui.painter_at(rect), rect, &view, &frame);
             });
@@ -965,9 +1014,121 @@ mod tests {
                 site: None,
                 sheet: None,
                 plugin_preview: &[],
+                compare: None,
             };
             paint(&ui.painter_at(rect), rect, &View::default(), &frame);
         });
         assert_eq!(draw_color(Color::BLACK), Color32::BLACK);
+    }
+
+    #[test]
+    fn a_compare_tints_hides_dims_and_adds_ghosts_and_a_legend() {
+        use kadakas_core::command::{Command, Editor};
+        use kadakas_core::snapping::Smart;
+        use kadakas_review::overlay::{
+            Change, CompareOverlay, CompareStyle, Status, UnchangedMode,
+        };
+        let mut ed = Editor::with_sequential_ids();
+        let add = |ed: &mut Editor, x: f64| {
+            ObjectId(
+                ed.execute(&Command::AddObject {
+                    shape: Shape::Rect {
+                        min: DVec2::new(x, 0.0),
+                        max: DVec2::new(x + 1000.0, 1000.0),
+                    },
+                    layer: None,
+                    class: None,
+                    attrs: kadakas_core::model::Attributes {
+                        fill: Some(Color([100, 100, 100, 255])),
+                        ..Default::default()
+                    },
+                })
+                .unwrap()
+                .created[0],
+            )
+        };
+        let (added, _same) = (add(&mut ed, 0.0), add(&mut ed, 3000.0));
+        let ghost = kadakas_core::model::Object::new(
+            ObjectId(kadakas_core::uid::Uid::from_num(900)),
+            kadakas_core::model::FIRST_LAYER,
+            kadakas_core::model::NONE_CLASS,
+            Shape::Rect {
+                min: DVec2::new(6000.0, 0.0),
+                max: DVec2::new(7000.0, 1000.0),
+            },
+        );
+        let overlay = CompareOverlay::from_changes([
+            Change {
+                id: added,
+                status: Status::Added,
+                old: None,
+                new: None,
+            },
+            Change {
+                id: ghost.id,
+                status: Status::Removed,
+                old: Some(ghost),
+                new: None,
+            },
+        ]);
+        let mut view = View::default();
+        view.zoom = 0.05;
+        let colors = |style: &CompareStyle| {
+            let ghosts = kadakas_review::overlay::ghosts_in(ed.doc(), &overlay, style);
+            let ctx = egui::Context::default();
+            let mut cols = Vec::new();
+            let out = ctx.run_ui(Default::default(), |ui| {
+                let rect = ui.max_rect();
+                let frame = Frame {
+                    doc: ed.doc(),
+                    selection: &[],
+                    preview: &Preview::None,
+                    snap: None,
+                    cues: false,
+                    dark: false,
+                    smart: &Smart::default(),
+                    show_grid: false,
+                    site: None,
+                    sheet: None,
+                    plugin_preview: &[],
+                    compare: Some(crate::compare_draw::CompareDraw {
+                        overlay: &overlay,
+                        style,
+                        ghosts: &ghosts,
+                        focus: Some(added),
+                    }),
+                };
+                paint(&ui.painter_at(rect), rect, &view, &frame);
+            });
+            let green = crate::compare_draw::status_color(style, Status::Added);
+            let red = crate::compare_draw::status_color(style, Status::Removed);
+            let n = out.shapes.len();
+            let has = |c: Color32| format!("{:?}", out.shapes).contains(&format!("{c:?}"));
+            cols.push((n, has(green), has(red)));
+            cols[0]
+        };
+        let style = CompareStyle::default();
+        let (shapes, green, red) = colors(&style);
+        assert!(green && red, "added in green, the ghost in red");
+        let (hidden_shapes, ..) = colors(&CompareStyle {
+            unchanged: UnchangedMode::Hide,
+            ..style
+        });
+        assert!(hidden_shapes < shapes, "the unchanged object is not drawn");
+        let (no_ghost_shapes, ..) = colors(&CompareStyle {
+            show_ghosts: false,
+            ..style
+        });
+        assert!(no_ghost_shapes < shapes);
+        // The look of an object, by status.
+        let draw = crate::compare_draw::CompareDraw {
+            overlay: &overlay,
+            style: &style,
+            ghosts: &[],
+            focus: None,
+        };
+        use crate::compare_draw::ObjectLook;
+        assert_eq!(draw.look(added), ObjectLook::Status(Status::Added));
+        assert_eq!(draw.look(_same), ObjectLook::Dim(style.dim));
     }
 }

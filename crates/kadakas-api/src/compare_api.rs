@@ -107,7 +107,9 @@ impl CompareSpec {
         }
         let side = |key: &str| {
             if !m.contains_key(key) {
-                return Err(bad(format!("compare.{key} is missing: a version ID or \"current\"")));
+                return Err(bad(format!(
+                    "compare.{key} is missing: a version ID or \"current\""
+                )));
             }
             review_api::side(m, key)
         };
@@ -192,9 +194,10 @@ impl CompareCache {
     pub fn approx_bytes(&self) -> u64 {
         let states: usize = self.states.iter().map(|(_, _, b)| *b).sum();
         let overlays: usize = self.overlays.iter().map(|(_, o)| o.bytes()).sum();
-        let doc = self.built.as_ref().map_or(0, |(_, d)| {
-            crate::limits::document_bytes(d) as usize
-        });
+        let doc = self
+            .built
+            .as_ref()
+            .map_or(0, |(_, d)| crate::limits::document_bytes(d) as usize);
         (states + overlays + doc) as u64
     }
 
@@ -335,11 +338,7 @@ impl Session {
 
     /// The facts about a comparison for an answer: the sides, the counts, the legend and what the
     /// picture does not show completely.
-    pub fn compare_info(
-        &mut self,
-        spec: &CompareSpec,
-        overlay: Option<&CompareOverlay>,
-    ) -> Value {
+    pub fn compare_info(&mut self, spec: &CompareSpec, overlay: Option<&CompareOverlay>) -> Value {
         let h = review_api::read(self);
         let mut out = json!({
             "from": review_api::side_ref(&h, &spec.from),
