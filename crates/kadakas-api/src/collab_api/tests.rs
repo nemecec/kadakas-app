@@ -1381,7 +1381,10 @@ mod real_commands {
                 } else {
                     ErrorCode::RateLimited
                 };
-                hub.with(|h| h.inject_errors(code, 1 + usize::from(*n)));
+                hub.with(|h| {
+                    h.inject_errors(code, 1 + usize::from(*n));
+                    h.inject_blob_errors(code, 1 + usize::from(*n));
+                });
             }
             Act::Offline { s } => {
                 let _ = sessions[idx(*s)].handle("collab.disconnect", json!({}));

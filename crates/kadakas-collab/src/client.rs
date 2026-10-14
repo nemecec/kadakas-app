@@ -66,12 +66,19 @@
 //! `internal`) keeps the transaction and sends it, and the ones after it, again after a time that
 //! doubles each time (250 ms, up to 30 s). The time is cut by a random part of up to half, so
 //! many clients that were refused together do not come back together (see
-//! [`Client::set_retry_jitter`]). The server answers one connection in order, so after a resend
-//! the retry errors that come before the first answer to the resend belong to the round before
-//! and are ignored; an `ack` of a transaction in the resent range ends the retry. A *reject* error drops the transaction and its undo
-//! step. A *renumber* error (`op_id_reused`) takes the client offline with a `Reconnect` event; at
-//! the next sign-in the waiting transactions that the server already has are dropped, and the
-//! others get new numbers above everything the server knows.
+//! [`Client::set_retry_jitter`]). While the client waits for the time of the next try, new
+//! transactions and pictures are held in the queue: the resend sends them in order. The server
+//! answers one connection in order, so after a resend the retry errors that come before the
+//! first answer to the resend belong to the round before and are ignored. After a resend, an
+//! `ack` of a transaction in the resent range ends the retry. A *reject* error drops the
+//! transaction and its undo step. A *renumber* error (`op_id_reused`) takes the client offline
+//! with a `Reconnect` event.
+//!
+//! At every sign-in, a waiting transaction is dropped only if the sync shows it in the log: an
+//! entry of this client with the same number and the same operations (a `snapshot` is compared
+//! by applying the transaction to it). The server may have a higher number than a waiting
+//! transaction without having that transaction. The waiting transactions that are not in the log
+//! get new numbers above everything the server knows, so none is sent twice and none is lost.
 //! A *fatal* error ends the client until the host connects again.
 //!
 //! # A server that goes back
@@ -101,7 +108,7 @@ use serde_json::Value;
 
 use crate::blob;
 use crate::docsync;
-use crate::op::{InvalidTxn, Op, Txn, Writer, validate_ops};
+use crate::op::{InvalidTxn, Op, Txn, Writer, ops_digest, validate_ops};
 use crate::presence::{self, Outgoing, Peer, Peers, PresenceError, PresenceState};
 use crate::protocol::{ClientMsg, Entry, ErrorClass, ErrorCode, PROTOCOL_VERSION, ServerMsg};
 use crate::replica::Replica;
@@ -303,6 +310,9 @@ pub struct Client {
     peers: Peers,
     changed: bool,
     retry: Option<Retry>,
+    /// The first transaction that was made while the client held its sends (see `commit`). It
+    /// goes out when the hold is over.
+    held_from: Option<u64>,
     /// The state of the generator for the jitter of the back-off, or `None` for no jitter.
     jitter: Option<u64>,
     /// The blobs (pictures) that this client has, by hash.
@@ -312,6 +322,9 @@ pub struct Client {
     facts: Mutex<PictureFacts>,
     /// The blobs that were sent on this connection. A blob is sent again on a new connection.
     put_on_conn: BTreeSet<String>,
+    /// The blobs whose `blob_put` the server refused with a retry error. The next resend puts
+    /// them before it sends any transaction.
+    refused: BTreeSet<String>,
     /// Blobs that were asked for, and blobs that the server does not have.
     asked: BTreeSet<String>,
     missing: BTreeSet<String>,
@@ -319,8 +332,9 @@ pub struct Client {
     blob_scan: bool,
     /// At the next sign-in, give the waiting transactions new numbers, whatever the server says.
     force_renumber: bool,
-    /// `your_last_op` of the last `welcome`, for the renumbering at the end of the sync.
-    server_last_op: u64,
+    /// `your_last_op` of the `welcome` of the sync that runs. At the end of the sync, waiting
+    /// transactions up to it that are not in the log get new numbers.
+    server_last_op: Option<u64>,
     store: Option<Box<dyn OpLogStore>>,
     saved_journal: String,
 }
@@ -352,14 +366,16 @@ impl Client {
             peers: Peers::default(),
             changed: false,
             retry: None,
+            held_from: None,
             blobs: BTreeMap::new(),
             facts: Mutex::new(PictureFacts::default()),
             put_on_conn: BTreeSet::new(),
+            refused: BTreeSet::new(),
             asked: BTreeSet::new(),
             missing: BTreeSet::new(),
             blob_scan: false,
             force_renumber: false,
-            server_last_op: 0,
+            server_last_op: None,
             store: None,
             saved_journal: String::new(),
         }
@@ -415,6 +431,9 @@ impl Client {
             match serde_json::from_str::<Journal>(&text) {
                 Ok(j) if j.user == c.cfg.user => {
                     c.client = j.client;
+                    c.jitter = Some(jitter_seed(c.client));
+                    c.force_renumber = j.force_renumber;
+                    c.server_last_op = j.server_last_op;
                     c.last_op = j.last_op;
                     c.pending = j.pending.into();
                     c.undo = j.undo;
@@ -611,7 +630,9 @@ impl Client {
         }
         self.peers.clear();
         self.retry = None;
+        self.held_from = None;
         self.put_on_conn.clear();
+        self.refused.clear();
         self.save_checkpoint();
     }
 
@@ -721,7 +742,16 @@ impl Client {
             return Err(EditError::NoEffect);
         }
         self.last_op = op_id;
-        if self.state == ConnState::Online {
+        // While the client waits for the time of the next try, and after the resend until the
+        // first answer to it, the transaction waits in the queue too. The server could take it
+        // before the refused ones: a refused `blob_put` is unblocked by a later put of the same
+        // blob (rule 7), and then the refused transaction would be too low. When the hold is
+        // over, the queue goes out in order (`release_held`).
+        let held = self.holding();
+        if self.state == ConnState::Online && held {
+            self.held_from.get_or_insert(op_id);
+        }
+        if self.state == ConnState::Online && !held {
             self.put_blobs(&applied, force_put);
             self.outbox.push(ClientMsg::Submit {
                 op_id,
@@ -773,6 +803,7 @@ impl Client {
                 if let Some(data) = self.blobs.get(&h)
                     && (self.put_on_conn.insert(h.clone()) || force)
                 {
+                    self.refused.remove(&h);
                     self.outbox.push(ClientMsg::BlobPut {
                         hash: h,
                         data: data.to_string(),
@@ -903,6 +934,8 @@ impl Client {
                     fresh: Some(f),
                     ..r
                 });
+                // The held transactions are in the range.
+                self.held_from = None;
                 self.resend_from(r.from_op);
             }
         }
@@ -934,6 +967,22 @@ impl Client {
         }
     }
 
+    /// True while new transactions must not go to the server (see `commit`).
+    fn holding(&self) -> bool {
+        self.retry
+            .is_some_and(|r| r.at.is_some() || r.fresh.is_some())
+    }
+
+    /// Sends the transactions that were held, when the hold is over.
+    fn release_held(&mut self) {
+        if self.state == ConnState::Online
+            && !self.holding()
+            && let Some(from) = self.held_from.take()
+        {
+            self.resend_from(from);
+        }
+    }
+
     fn resend_from(&mut self, from_op: u64) {
         let txns: Vec<Txn> = self
             .pending
@@ -941,6 +990,27 @@ impl Client {
             .filter(|t| t.op_id >= from_op)
             .cloned()
             .collect();
+        // The refused pictures first. A refused `blob_put` blocks the submits after it until the
+        // blob is put again (rule 7): a submit before that put would be refused again, and a
+        // later one that comes after the put would be taken before it.
+        let mut again: Vec<String> = Vec::new();
+        for t in &txns {
+            for h in t.ops.iter().flat_map(op_blob_refs) {
+                if self.refused.contains(&h) && !again.contains(&h) {
+                    again.push(h);
+                }
+            }
+        }
+        for h in again {
+            self.refused.remove(&h);
+            if let Some(data) = self.blobs.get(&h) {
+                self.put_on_conn.insert(h.clone());
+                self.outbox.push(ClientMsg::BlobPut {
+                    hash: h,
+                    data: data.to_string(),
+                });
+            }
+        }
         for t in txns {
             self.put_blobs(&t.ops, false);
             self.outbox.push(ClientMsg::Submit {
@@ -989,6 +1059,7 @@ impl Client {
             ServerMsg::Ack { op_id, seq, chain } => {
                 if self.state == ConnState::Online {
                     self.on_ack(op_id, seq, chain);
+                    self.release_held();
                 }
             }
             ServerMsg::Broadcast { entry } => {
@@ -1033,7 +1104,10 @@ impl Client {
                 message,
                 op_id,
                 hash,
-            } => self.on_error(code, message, op_id, hash, now_ms),
+            } => {
+                self.on_error(code, message, op_id, hash, now_ms);
+                self.release_held();
+            }
         }
     }
 
@@ -1069,15 +1143,14 @@ impl Client {
             self.force_renumber = false;
             self.last_op = your_last_op;
             self.renumber_waiting();
-        } else if self.force_renumber {
-            // The server refused a number (`op_id_reused`). Some waiting transactions may be
-            // ordered already: their answers were lost with the connection. Which ones, the
-            // entries of the sync tell (`apply_entries`). The others get new numbers at the end
-            // of the sync (`finish_sync`). Sent again under new numbers, a transaction that the
-            // server has would be applied twice.
-            self.server_last_op = your_last_op;
         } else {
-            self.pending.retain(|t| t.op_id > your_last_op);
+            // Some waiting transactions may be ordered already: their answers were lost with the
+            // connection. Which ones, the entries of the sync tell (`apply_entries`). A number up
+            // to `your_last_op` does not tell: the server may have taken a later transaction and
+            // not an earlier one (a refused blob that was put again). The waiting transactions
+            // that are not in the log get new numbers at the end of the sync (`finish_sync`). A
+            // transaction that the server has must not go out again, or it is applied twice.
+            self.server_last_op = Some(your_last_op);
         }
         self.peers.clear();
         for p in peers {
@@ -1122,10 +1195,22 @@ impl Client {
             self.events.push(ClientEvent::ServerRegressed { resent });
             self.save_journal();
         } else {
-            // No entries to compare with: the server has the transactions up to `your_last_op`.
-            if self.force_renumber {
-                let upto = self.server_last_op;
-                self.pending.retain(|t| t.op_id > upto);
+            // No entries to compare with. A waiting transaction up to `your_last_op` is in the
+            // snapshot if applying it changes nothing.
+            if let Some(upto) = self.server_last_op {
+                let client = self.client;
+                let base = self.confirmed.clone();
+                self.pending.retain(|t| {
+                    t.op_id > upto || {
+                        let mut scratch = base.clone();
+                        let w = Writer {
+                            client,
+                            op: t.op_id,
+                        };
+                        scratch.apply_all(w, &t.ops);
+                        scratch != base
+                    }
+                });
             }
             self.finish_sync();
         }
@@ -1147,7 +1232,18 @@ impl Client {
                 client: e.author,
                 op: e.op_id,
             };
-            if e.author == self.client {
+            // An entry of this client is one of the waiting transactions only if the number and
+            // the operations are the same. Another instance, or a lost journal, may have used the
+            // number for other content: the entry is then like an entry of another user. The
+            // operations are compared by their digest (rule 6): it is how the server tells one
+            // transaction from another, and it does not depend on the form in memory.
+            let mine = e.author == self.client
+                && self
+                    .pending
+                    .iter()
+                    .find(|t| t.op_id == e.op_id)
+                    .is_none_or(|t| ops_digest(&t.ops) == ops_digest(&e.ops));
+            if mine {
                 self.confirm_own(w, e.ops.clone());
             } else {
                 self.confirmed.apply_all(w, &e.ops);
@@ -1157,12 +1253,8 @@ impl Client {
             self.head_seq = self.head_seq.max(e.seq);
             // While syncing, `finish_sync` builds the view. Only live entries touch it here.
             let live = self.state == ConnState::Online;
-            if e.author == self.client {
-                // After `op_id_reused` the number may belong to other content: the transaction
-                // is ours only if the operations are the same.
-                let force = self.force_renumber;
-                self.pending
-                    .retain(|t| t.op_id != e.op_id || (force && t.ops != e.ops));
+            if mine {
+                self.pending.retain(|t| t.op_id != e.op_id);
                 rebuild |= live;
             } else if live && self.pending.is_empty() {
                 self.view.apply_all(w, &e.ops);
@@ -1183,8 +1275,13 @@ impl Client {
         let Some(i) = self.pending.iter().position(|t| t.op_id == op_id) else {
             return;
         };
-        // An answer for a transaction of the resent range: the server took it, the retry is over.
-        if self.retry.is_some_and(|r| op_id >= r.from_op) {
+        // After the resend, an ack of a transaction of the resent range: the server took it, the
+        // retry is over. Before the resend it ends nothing: the refused transaction is not sent
+        // yet (a refused blob can be unblocked by a later put, and a later transaction taken).
+        if self
+            .retry
+            .is_some_and(|r| r.at.is_none() && op_id >= r.from_op)
+        {
             self.retry = None;
         }
         if seq <= self.confirmed_seq {
@@ -1248,7 +1345,9 @@ impl Client {
         if let Some(h) = hash.as_deref()
             && class == ErrorClass::Retry
         {
-            self.put_on_conn.remove(h);
+            if self.put_on_conn.remove(h) {
+                self.refused.insert(h.to_string());
+            }
             if op_id.is_none() {
                 op_id = self
                     .pending
@@ -1300,6 +1399,7 @@ impl Client {
                 self.force_renumber = true;
                 self.events.push(ClientEvent::Reconnect(message));
                 self.connection_lost();
+                self.save_journal();
             }
             (Some(op_id), ErrorClass::Reject) => {
                 // The answer to the first resent transaction: later errors are from this round.
@@ -1365,6 +1465,7 @@ impl Client {
         self.outbox.clear();
         self.peers.clear();
         self.retry = None;
+        self.held_from = None;
         self.events.push(ClientEvent::Failed { code, message });
     }
 
@@ -1375,10 +1476,11 @@ impl Client {
 
     /// The end of the sync: replay the queue on the new base, send it, and go online.
     fn finish_sync(&mut self) {
-        if self.force_renumber {
+        let upto = self.server_last_op.take();
+        if self.force_renumber || upto.is_some_and(|u| self.pending.iter().any(|t| t.op_id <= u)) {
             // What is left was not ordered, or the number is used by other content.
             self.force_renumber = false;
-            self.last_op = self.last_op.max(self.server_last_op);
+            self.last_op = self.last_op.max(upto.unwrap_or(0));
             self.renumber_waiting();
         }
         let mut scratch = self.confirmed.clone();
@@ -1441,6 +1543,8 @@ impl Client {
             undo: self.undo.clone(),
             redo: self.redo.clone(),
             blobs: self.journal_blobs(),
+            force_renumber: self.force_renumber,
+            server_last_op: self.server_last_op,
         }
     }
 

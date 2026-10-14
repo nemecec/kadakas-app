@@ -62,6 +62,13 @@ pub struct Journal {
     /// The blobs (pictures) that the waiting transactions refer to, by hash.
     #[serde(default)]
     pub blobs: BTreeMap<String, String>,
+    /// The server refused a number (`op_id_reused`): at the next sync, the waiting transactions
+    /// that are not in the log get new numbers. A restart in between keeps the rule.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_renumber: bool,
+    /// `your_last_op` of the sync that runs, for the same check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_last_op: Option<u64>,
 }
 
 /// The confirmed state of a client.
