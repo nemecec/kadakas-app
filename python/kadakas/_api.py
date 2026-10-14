@@ -51,13 +51,13 @@ class Api:
         return self._call("document.summary", params or None)
 
     def document_get(self, **params: Any) -> Any:
-        """The full document as JSON.
+        """The full document as JSON, without its versions (they have their own methods: version.*).
 
         JSON-RPC method ``document.get``."""
         return self._call("document.get", params or None)
 
     def document_load(self, **params: Any) -> Any:
-        """Replace the document. params: {document}. Clears history. Returns {ok, notes?}; notes lists values that were repaired instead of refusing the document (an invalid 3D look of a site model goes back to its defaults).
+        """Replace the document. params: {document}. Clears the undo history. If the document has no `history` field (document.get leaves it out), the versions of the current document stay: they are written for the new drawing. A document with a `history` field brings its own versions. Returns {ok, notes?}; notes lists values that were repaired instead of refusing the document (an invalid 3D look of a site model goes back to its defaults) and what could not be read of its versions.
 
         JSON-RPC method ``document.load``."""
         return self._call("document.load", params or None)
@@ -2133,7 +2133,7 @@ class Api:
         return self._call("version.create", params or None)
 
     def version_list(self, **params: Any) -> Any:
-        """The versions, oldest first. params: {current? (false: leave out current_is_newest, which costs a pass over the drawing; default true)}. Returns {read_only (true: the history of the file could not be read completely; it is kept as it is until the person decides, see version.repair), notes? (what could not be read), versions: [{id, name, note?, author, time_ms, origin, parents (the IDs of the versions it was made from, first parent first), branch, base_revision, auto?, delta_bytes}], branch (the current branch, default main), head (the version that the next one is made from), count, bytes, limits: {max_versions, max_bytes} (the thresholds at which a save is refused), current_is_newest (true: the document has the content of the newest version, null: there is no version)}.
+        """The versions, oldest first. params: {current? (false: leave out current_is_newest, which costs a pass over the drawing; default true)}. Returns {read_only (true: the history of the file could not be read completely; it is kept as it is until the person decides, see version.repair), notes? (what could not be read), unreadable_versions? (with read_only: how many versions version.repair would delete; null if not known), versions: [{id, name, note?, author, time_ms, origin, parents (the IDs of the versions it was made from, first parent first), branch, base_revision, auto?, delta_bytes}], branch (the current branch, default main), head (the version that the next one is made from), count, bytes, limits: {max_versions, max_bytes} (the thresholds at which a save is refused), current_is_newest (true: the document has the content of the newest version, null: there is no version)}.
 
         JSON-RPC method ``version.list``."""
         return self._call("version.list", params or None)
@@ -2163,7 +2163,7 @@ class Api:
         return self._call("version.diff", params or None)
 
     def version_repair(self, **params: Any) -> Any:
-        """Keep only the part of the history that could be read. A file whose history could not be read completely (a damaged part, more than 1000 versions, a drawing that was changed by a program that did not update the versions) is opened as it is, and the history is read only: no version is changed or lost until the person decides. This call is that decision and it loses the versions that could not be read: call it only when the person has said so. params: {confirm: true}. One undo step. Returns {kept, notes (what was left out)}.
+        """Keep only the part of the history that could be read. A file whose history could not be read completely (a damaged part, more than 1000 versions, a drawing that does not match the one the versions were saved with) is opened as it is, and the history is read only: no version is changed or lost until the person decides. This call is that decision and it loses the versions that could not be read: call it only when the person has said so. params: {confirm: true}. One undo step. Returns {kept, notes (what was left out)}.
 
         JSON-RPC method ``version.repair``."""
         return self._call("version.repair", params or None)
