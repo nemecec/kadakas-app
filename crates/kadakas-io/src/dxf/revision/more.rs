@@ -111,6 +111,37 @@ fn the_tolerance_has_an_absolute_cap_for_the_unit() {
 }
 
 #[test]
+fn the_options_of_a_file_follow_its_unit() {
+    let load = |h: &str| {
+        parse::parse(
+            format!(
+                "0\nSECTION\n2\nHEADER\n{h}0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        Options::for_dxf(&load("9\n$INSUNITS\n70\n6\n")).max_tolerance,
+        1.0
+    );
+    assert_eq!(
+        Options::for_dxf(&load("9\n$INSUNITS\n70\n4\n")).max_tolerance,
+        1000.0
+    );
+    assert_eq!(
+        Options::for_dxf(&load("9\n$INSUNITS\n70\n1\n")).max_tolerance,
+        1000.0 / 25.4
+    );
+    // No unit, or a unit that means nothing: millimeters.
+    assert_eq!(Options::for_dxf(&load("")).max_tolerance, 1000.0);
+    assert_eq!(
+        Options::for_dxf(&load("9\n$INSUNITS\n70\n0\n")).max_tolerance,
+        1000.0
+    );
+}
+
+#[test]
 fn entities_that_share_a_center_use_the_size_for_the_tolerance() {
     let circle = |r: f64| {
         Rec::from_entity(
@@ -408,7 +439,8 @@ proptest! {
     ) {
         let base = lattice(n);
         let mut new = base.clone();
-        let m = at.min(n - 2);
+        // Two entities at least must come after the change: one shifted pair alone looks like an edit.
+        let m = at.min(n - 3);
         if delete {
             new.remove(m);
         } else {
