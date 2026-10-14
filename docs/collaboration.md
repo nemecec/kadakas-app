@@ -927,11 +927,14 @@ the login name of the operating system (empty in the browser) or from the dialog
   section 4.22) are **local to the file**. They are not properties of any thing, so no operation
   carries them and a snapshot does not hold them. Joining a shared document keeps the versions of
   the open file (`Editor::apply_remote` leaves `Document::history` alone), and other users have
-  their own. A `version.restore` is an ordinary edit for the others: they get the creates, deletes
-  and sets that it made. The model is shared, though: `kadakas-props` holds the properties and the
-  operations that both collaboration and the version store use, so a diff between two versions and
-  the operations of a sync name the same property paths. A version store on the server would build
-  its history from the edit log.
+  their own. A `version.restore` is an ordinary edit for the others: they get the sets, the
+  creates and the deletes that it made, and an object that the same user deleted before comes back
+  with `Restore` (the client names the real writer of its own deletion; a thing that another user
+  deleted stays deleted). The model is shared, though: `kadakas-props` holds the properties and
+  the operations that both collaboration and the version store use, so a diff between two versions
+  and the operations of a sync name the same property paths. The version store keeps the newest
+  version as a change from the current document and older versions as reverse deltas, so a
+  server that shares versions can build the same chain from its edit log.
 
 Attribution: the design uses the ideas of the last-writer-wins register and of operation logs with a
 central sequencer, which are common knowledge in the field of replicated data. IDs follow RFC 9562

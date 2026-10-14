@@ -80,7 +80,7 @@ impl AutosaveUi {
         ctx: &egui::Context,
         revision: u64,
         path: Option<&std::path::Path>,
-        doc: &Document,
+        doc: impl FnOnce() -> Document,
     ) {
         let now = ctx.input(|i| i.time);
         if self.settings.enabled {
@@ -94,7 +94,8 @@ impl AutosaveUi {
             return;
         }
         self.sched.mark(now, revision);
-        self.submit(doc, path);
+        // The document as a save writes it (the versions against the drawing), made only now.
+        self.submit(&doc(), path);
     }
 
     /// Deletes the files of a recovered session once the recovered document is safe in a new autosave.
@@ -456,12 +457,12 @@ mod tests {
 
         // The next frame saves the recovered document. Only then are the old files released.
         let ctx = egui::Context::default();
-        ui.tick(&ctx, 0, None, &r.doc);
+        ui.tick(&ctx, 0, None, || r.doc.clone());
         let seq = ui.keep_until.expect("a job is waiting");
         while ui.recovery.as_ref().unwrap().completed() < seq {
             std::thread::sleep(Duration::from_millis(5));
         }
-        ui.tick(&ctx, 0, None, &r.doc);
+        ui.tick(&ctx, 0, None, || r.doc.clone());
         assert!(ui.keep.is_none());
         assert!(find_crashed_with(&dir, Duration::ZERO).is_empty());
         ui.finish();

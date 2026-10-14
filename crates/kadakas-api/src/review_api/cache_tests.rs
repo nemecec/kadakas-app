@@ -95,10 +95,13 @@ fn a_history_that_the_check_did_not_see_is_read_once_and_stays_read_only() {
     create(&mut donor, "One");
     rect(&mut donor, 20);
     create(&mut donor, "Two");
-    let mut file = donor.editor.doc().history.as_ref().unwrap().value().clone();
+    // The file form of the donor, put into the editor without the check at load.
+    let mut doc = (*donor.document_for_save().unwrap()).clone();
+    let mut file = doc.history.as_ref().unwrap().value().clone();
     file["versions"][0]["name"] = json!("n".repeat(500));
+    doc.history = Some(HistoryData::new(file.clone()));
     let mut s = Session::with_sequential_ids();
-    s.editor.set_history(Some(HistoryData::new(file.clone())));
+    s.editor = kadakas_core::command::Editor::new(doc);
     let l = ok(&mut s, "version.list", json!({}));
     assert_eq!(l["read_only"], true);
     assert!(l["notes"][0].as_str().unwrap().contains("repaired"), "{l}");

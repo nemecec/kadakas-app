@@ -804,10 +804,11 @@ impl Session {
 
     /// A session for an opened document, with empty history and selection.
     pub fn with_document(mut doc: Document) -> Self {
-        review_api::vet_document(&mut doc);
+        let cache = review_api::vet_document(&mut doc);
         let notes = doc.load_notes().to_vec();
         let mut s = Session::with_vetted_document(doc);
         s.load_notes = notes;
+        s.review = cache;
         s
     }
 
@@ -825,7 +826,7 @@ impl Session {
     /// versions of the new document is checked against the limits of the session; what was
     /// repaired or dropped is returned as notes (they are also the load notes of the document).
     pub fn replace_document(&mut self, mut doc: Document) -> Vec<String> {
-        review_api::vet_document(&mut doc);
+        let cache = review_api::vet_document(&mut doc);
         let notes = doc.load_notes().to_vec();
         #[cfg(not(target_arch = "wasm32"))]
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
@@ -846,6 +847,7 @@ impl Session {
             ..Session::with_vetted_document(doc)
         };
         self.events = hub;
+        self.review = cache;
         self.collab = collab;
         self.collab_mark_saved();
         self.set_sequential_ids(sequential);

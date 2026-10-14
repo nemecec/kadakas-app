@@ -2395,7 +2395,13 @@ impl eframe::App for KadakasApp {
             &ctx,
             self.session.editor.revision(),
             self.path.as_deref(),
-            self.session.editor.doc(),
+            || {
+                let session = &mut self.session;
+                match session.document_for_save() {
+                    Ok(doc) => doc.into_owned(),
+                    Err(_) => session.editor.doc().clone(),
+                }
+            },
         );
         self.about.show(&ctx);
         self.collab_frame(&ctx);

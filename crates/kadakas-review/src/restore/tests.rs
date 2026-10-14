@@ -114,13 +114,15 @@ fn what_does_not_fit_is_left_out_and_reported() {
     h.add(ed.doc(), new_version("one"), Limits::default())
         .unwrap();
     let mut json = h.to_value();
-    let mut base = json["newest"]["snapshot"].as_array().unwrap().clone();
+    let mut base = json["newest"]["delta"].as_array().unwrap().clone();
     base.push(json!({"op": "create",
         "target": {"kind": "object", "id": "00000000-0000-0000-0000-0000000000aa"},
         "props": {"shape": 5, "layer": "00000000-0000-0000-0000-000000000001",
                   "class": "00000000-0000-0000-0000-000000000000"}}));
-    json["newest"]["snapshot"] = json!(base);
-    let h = History::load(&json, ed.doc()).history.unwrap();
+    json["newest"]["delta"] = json!(base);
+    let h = History::load_with(&json, ed.doc(), &[h.anchor_pair()])
+        .history
+        .unwrap();
     let r = prepare(&h, ed.doc(), 1, new_version("auto"), Limits::default()).unwrap();
     assert!(
         r.notes.iter().any(|n| n.contains("left out")),

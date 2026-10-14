@@ -1,31 +1,34 @@
 //! The version store, with reverse deltas.
 //!
 //! ```text
-//!                                   snapshot of the newest version
-//!  version 1 <--delta-- version 2 <--delta-- ... <--delta-- version n   (the newest)
+//!   anchor --newest_delta--> version n (the newest)
+//!   version 1 <--delta-- version 2 <--delta-- ... <--delta-- version n
 //! ```
 //!
 //! The current document is the only full copy of the drawing in a file. The newest version is
-//! stored as a *change from the current document* (it is made again at each save, which is a cheap
-//! comparison), and every older version is stored as a *reverse delta* from the next newer
-//! version on its chain of first parents: the list of property operations that turns the newer
-//! version into this one. To open version k, the code starts at the newest version and applies the
-//! deltas backwards (see [`History::state_at`]). A version of a drawing that changed a little is a
-//! few small operations, and there is no separate base snapshot of the oldest version.
+//! stored as a *change from a drawing*, the **anchor**, and every older version is stored as a
+//! *reverse delta* from the next newer version on its chain of first parents: the list of property
+//! operations that turns the newer version into this one. To open version k, the code starts at the
+//! newest version and applies the deltas backwards (see [`History::state_at`]). A version of a
+//! drawing that changed a little is a few small operations, and there is no separate base
+//! snapshot of the oldest version.
 //!
-//! # Two forms
+//! # The anchor
 //!
-//! - The **memory form** (`History::to_value`) is what the document holds while it is open, in
-//!   `Document::history`. It is self contained: the newest version is a snapshot (`newest.snapshot`,
-//!   the operations that make it from nothing). The undo steps hold it, and it does not depend on
-//!   the drawing, which changes with every edit.
-//! - The **file form** (`History::to_disk`) is what a save writes. The newest version is the change
-//!   from the drawing that the file holds (`newest.delta`) and a digest of that drawing
-//!   (`newest.anchor`). The pictures that the drawing holds are not repeated. [`History::load`]
-//!   reads both forms. The drawing never needs the history to load: it is read first, and the
-//!   history is read afterwards, from the drawing and the file form, and only when it is used. A
-//!   save also writes the stacking keys of the drawing (`State::stamp_keys`), so that the state of
-//!   the drawing is the same when it is read again.
+//! The JSON names the anchor by a digest (`newest.anchor`) and does not hold it. Which drawing it
+//! is depends on where the JSON is:
+//!
+//! - In a **file** the anchor is the drawing that the file holds. [`History::to_disk`] makes the
+//!   newest version again against the drawing at each save (one comparison of the drawing with
+//!   the newest version), and the save also writes the stacking keys of the drawing
+//!   (`State::stamp_keys`), so that the state of the drawing is the same when it is read again.
+//!   The drawing never needs the history to load: it is read first, and the history is read
+//!   afterwards, from the drawing and the JSON, and only when it is used.
+//! - In an **open document** (`Document::history`, held by the undo steps too) the anchor is the
+//!   drawing as it was when the file was opened, or when the first version was saved. The session
+//!   keeps that one state (a shared copy, see [`History::anchor_pair`]) and gives it to
+//!   [`History::load_with`]. Every state of the history in the undo steps is then a few
+//!   operations, not a copy of the drawing: the cost of a step is the changes since the anchor.
 //!
 //! # Pictures
 //!
@@ -33,9 +36,9 @@
 //! operations. As in collaboration, the property holds a reference `{"$blob": "<sha256>"}`, and
 //! the history keeps a table `blobs` with the text of each picture once, by hash. A move of a
 //! 10 MiB underlay in three versions costs 10 MiB once, not three times. A picture stays while the
-//! snapshot or a delta refers to it (a count of references that is made again after a delete), and
-//! the byte count counts each picture once. In the file form, a picture that the drawing holds is
-//! not repeated.
+//! newest delta or a delta refers to it (a count of references that is made again after a delete),
+//! and the byte count counts each picture once. A picture that the anchor holds is not repeated in
+//! the JSON, and the byte count does not count it.
 //!
 //! # Parents and branches
 //!
@@ -63,7 +66,7 @@
 //!
 //! ```json
 //! {"format": 2, "next_id": 4, "branch": "main", "head": 3,
-//!  "newest": {"id": 3, "delta": [<operations: the drawing -> the newest version>], "anchor": "<sha256>"},
+//!  "newest": {"id": 3, "delta": [<operations: the anchor -> the newest version>], "anchor": "<sha256>"},
 //!  "blobs": {"<sha256>": "<text of a picture>"},
 //!  "versions": [{"id": 1, "name": "...", "note": "...", "author": "...", "time_ms": 0,
 //!                "origin": "user", "base_revision": 7, "parents": [], "branch": "main",
@@ -78,8 +81,8 @@
 //! [`HARD_MAX_BYTES`] bytes of operations, checks every operation with the rules of collaboration,
 //! replays the whole chain from the newest version, cuts long texts, gives a repeated ID a new
 //! one, and leaves out a version (and the older ones, which depend on it) whose delta does not
-//! fit. Each repair is a note. A file form whose `anchor` is not the digest of the drawing (the
-//! drawing was changed by a program that did not update the versions) cannot be read at all.
+//! fit. Each repair is a note. A JSON whose `anchor` is the digest of no known drawing (the drawing
+//! was changed by a program that did not update the versions) cannot be read at all.
 //!
 //! The result is a *reading* of the file, not a replacement for it. The caller keeps the JSON of
 //! the file as it is, shows the notes, and treats the history as read only while there are notes:
@@ -302,9 +305,14 @@ fn meta_bytes(m: &VersionMeta) -> usize {
 #[derive(Clone, Debug, PartialEq)]
 pub struct History {
     next_id: u64,
-    /// The operations that make the state of the newest version from [`State::new`].
-    snapshot: Vec<Op>,
-    /// The ID of the newest version, which holds the snapshot.
+    /// The drawing that the newest version is stored against (see the module text). One shared
+    /// copy; it is not in the JSON.
+    anchor: Arc<State>,
+    /// The digest of the anchor.
+    anchor_digest: String,
+    /// The operations that turn the anchor into the newest version.
+    newest_delta: Vec<Op>,
+    /// The ID of the newest version.
     newest: Option<u64>,
     /// Oldest first.
     versions: Vec<Version>,
@@ -312,8 +320,8 @@ pub struct History {
     branch: String,
     /// The version that the next one is made from: the newest on the current branch.
     head: Option<u64>,
-    /// The pictures that the snapshot and the deltas refer to, once each, by the SHA-256 of the
-    /// text.
+    /// The pictures that the deltas refer to, once each, by the SHA-256 of the text (the anchor
+    /// has its own).
     blobs: BTreeMap<String, Arc<str>>,
 }
 
@@ -334,8 +342,8 @@ fn cut(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
 }
 
-/// The digest of a state, as text: the anchor of the file form.
-fn anchor_of(state: &State) -> String {
+/// The digest of a state, as text. The JSON of a history names its anchor by it.
+pub fn anchor_digest(state: &State) -> String {
     ops_digest(&state.snapshot())
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -347,7 +355,9 @@ impl History {
     pub fn new() -> History {
         History {
             next_id: 1,
-            snapshot: Vec::new(),
+            anchor: Arc::new(State::new()),
+            anchor_digest: anchor_digest(&State::new()),
+            newest_delta: Vec::new(),
             newest: None,
             versions: Vec::new(),
             branch: main_branch(),
@@ -388,11 +398,22 @@ impl History {
     }
 
     /// The size of the history in bytes, estimated from its changes, texts and pictures (each
-    /// picture once). The snapshot of the newest version is not counted: a file stores that
-    /// version as a change from the drawing.
+    /// picture once). The change of the newest version is not counted: a file stores that version
+    /// as a change from the drawing. A picture that the anchor holds is not counted either.
     pub fn bytes(&self) -> usize {
         self.versions.iter().map(|v| v.bytes).sum::<usize>()
-            + self.blobs.values().map(|t| t.len()).sum::<usize>()
+            + self
+                .blobs
+                .iter()
+                .filter(|(h, _)| !self.anchor.blobs().contains_key(*h))
+                .map(|(_, t)| t.len())
+                .sum::<usize>()
+    }
+
+    /// The digest and the state of the anchor. A session keeps the pair, so that it can read the
+    /// JSON of this history again (see the module text).
+    pub fn anchor_pair(&self) -> (String, Arc<State>) {
+        (self.anchor_digest.clone(), self.anchor.clone())
     }
 
     /// The pictures of the history, by hash.
@@ -406,11 +427,11 @@ impl History {
             .map(|i| ops_bytes(&self.versions[i].delta))
     }
 
-    /// Keeps only the pictures that the snapshot or a delta still refers to.
+    /// Keeps only the pictures that a delta still refers to.
     fn collect_blobs(&mut self) {
         let mut used = BTreeSet::new();
         for op in self
-            .snapshot
+            .newest_delta
             .iter()
             .chain(self.versions.iter().flat_map(|v| &v.delta))
         {
@@ -432,11 +453,13 @@ impl History {
         }
     }
 
-    /// The state of the newest version: the snapshot, applied.
+    /// The state of the newest version: the anchor with the change applied.
     fn newest_state(&self) -> Result<State, ReviewError> {
-        let mut state = State::new();
-        state.set_blobs(self.blobs.clone());
-        state.apply_all(&self.snapshot)?;
+        let mut state = (*self.anchor).clone();
+        let mut table = self.anchor.blobs().clone();
+        table.extend(self.blobs.iter().map(|(h, t)| (h.clone(), t.clone())));
+        state.set_blobs(table);
+        state.apply_all(&self.newest_delta)?;
         Ok(state)
     }
 
@@ -526,7 +549,12 @@ impl History {
             return Err(e);
         }
         let tip = self.tip_state()?;
-        let state = State::of(doc, tip.as_ref());
+        // The first version makes the drawing the anchor. The others are stored against it.
+        let first_anchor = tip.is_none().then(|| Arc::new(State::of(doc, None)));
+        let state = match &first_anchor {
+            Some(a) => (**a).clone(),
+            None => State::of(doc, tip.as_ref()),
+        };
         let id = self.next_id;
         let meta = VersionMeta {
             id,
@@ -555,9 +583,13 @@ impl History {
             v.bytes = ops_bytes(&delta) + meta_bytes(&v.meta);
             v.delta = delta;
         }
-        next.snapshot = state.snapshot();
-        let snapshot = next.snapshot.clone();
-        next.take_blobs(&snapshot, &state);
+        if let Some(a) = first_anchor {
+            next.anchor_digest = anchor_digest(&a);
+            next.anchor = a;
+        }
+        next.newest_delta = next.anchor.diff(&state);
+        let delta = next.newest_delta.clone();
+        next.take_blobs(&delta, &state);
         let bytes = meta_bytes(&meta);
         next.versions.push(Version {
             meta,
@@ -608,7 +640,7 @@ impl History {
             }
         };
         let mut all: BTreeMap<String, usize> = BTreeMap::new();
-        count(&self.snapshot, &mut all);
+        count(&self.newest_delta, &mut all);
         for v in &self.versions {
             count(&v.delta, &mut all);
         }
@@ -618,7 +650,7 @@ impl History {
                 let mut own: BTreeMap<String, usize> = BTreeMap::new();
                 count(&v.delta, &mut own);
                 if self.newest == Some(v.meta.id) {
-                    count(&self.snapshot, &mut own);
+                    count(&self.newest_delta, &mut own);
                 }
                 let pictures: usize = own
                     .iter()
@@ -659,7 +691,7 @@ impl History {
             .collect();
         let parent_of_removed = next.versions[i].meta.parents.first().copied();
         if next.newest == Some(id) {
-            // The version made from it becomes the newest: its state is the snapshot.
+            // The version made from it becomes the newest.
             let Some(&first) = children.last() else {
                 return Err(ReviewError::Damaged(format!(
                     "version {id} is the newest but nothing leads to it"
@@ -678,7 +710,9 @@ impl History {
                 .map(|(_, s)| s.clone())
                 .expect("the first child");
             next.versions.remove(i);
-            next.snapshot = head_state.snapshot();
+            next.newest_delta = next.anchor.diff(&head_state);
+            let delta = next.newest_delta.clone();
+            next.take_blobs(&delta, &head_state);
             next.newest = Some(first);
             for (c, s) in &states {
                 let k = next.index_of(*c).expect("a child");
@@ -777,7 +811,12 @@ impl History {
             .collect()
     }
 
-    fn json_with(&self, newest: Value, blobs: &BTreeMap<String, Arc<str>>) -> Value {
+    fn json_with(
+        &self,
+        anchor: &str,
+        newest_delta: &[Op],
+        blobs: &BTreeMap<String, Arc<str>>,
+    ) -> Value {
         let blobs: serde_json::Map<String, Value> = blobs
             .iter()
             .map(|(h, t)| (h.clone(), Value::String(t.to_string())))
@@ -787,36 +826,40 @@ impl History {
             "next_id": self.next_id,
             "branch": self.branch,
             "head": self.head,
-            "newest": newest,
+            "newest": {"id": self.newest, "delta": newest_delta, "anchor": anchor},
             "blobs": blobs,
             "versions": self.versions_json(),
         })
     }
 
-    /// The memory form: self contained, with the snapshot of the newest version (see the module
-    /// text).
+    /// The JSON against the anchor of this history (what the open document holds). The pictures
+    /// that the anchor holds are not in it.
     pub fn to_value(&self) -> Value {
-        self.json_with(
-            json!({"id": self.newest, "snapshot": self.snapshot}),
-            &self.blobs,
-        )
-    }
-
-    /// The file form for a document: the newest version as a change from the state of the
-    /// document, with the digest of that state, and without the pictures that the document holds.
-    /// `tip` is the state of the newest version. Returns the JSON and the state of the document
-    /// (`State::stamp_keys` writes its keys into the document that is saved).
-    pub fn to_disk(&self, doc: &Document, tip: &State) -> (Value, State) {
-        let a = State::of(doc, Some(tip));
-        let delta = a.diff(tip);
         let blobs: BTreeMap<String, Arc<str>> = self
             .blobs
             .iter()
-            .filter(|(h, _)| !a.blobs().contains_key(*h))
+            .filter(|(h, _)| !self.anchor.blobs().contains_key(*h))
             .map(|(h, t)| (h.clone(), t.clone()))
             .collect();
-        let newest = json!({"id": self.newest, "delta": delta, "anchor": anchor_of(&a)});
-        (self.json_with(newest, &blobs), a)
+        self.json_with(&self.anchor_digest, &self.newest_delta, &blobs)
+    }
+
+    /// The JSON for a file that holds this document: the newest version as a change from the
+    /// state of the document, with the digest of that state, and without the pictures that the
+    /// document holds. `tip` is the state of the newest version. Returns the JSON and the state of
+    /// the document (`State::stamp_keys` writes its keys into the document that is saved).
+    pub fn to_disk(&self, doc: &Document, tip: &State) -> (Value, State) {
+        let a = State::of(doc, Some(tip));
+        let delta = a.diff(tip);
+        // Every picture that a delta or the newest version needs, but the drawing.
+        let mut table: BTreeMap<String, Arc<str>> = self.blobs.clone();
+        for h in tip.used_blobs() {
+            if let Some(t) = tip.blobs().get(h) {
+                table.insert(h.to_string(), t.clone());
+            }
+        }
+        table.retain(|h, _| !a.blobs().contains_key(h));
+        (self.json_with(&anchor_digest(&a), &delta, &table), a)
     }
 
     /// Reads the JSON form of a file or a peer. `doc` is the drawing that the file holds, which
@@ -824,8 +867,14 @@ impl History {
     /// what it repaired or left out (see the module text). The caller keeps the JSON itself, and
     /// does not replace it with this reading without the consent of the person.
     pub fn load(value: &Value, doc: &Document) -> Loaded {
+        History::load_with(value, doc, &[])
+    }
+
+    /// Like [`History::load`], with anchors that the caller knows (see the module text): the
+    /// JSON is read against the one whose digest it names, else against the drawing.
+    pub fn load_with(value: &Value, doc: &Document, known: &[(String, Arc<State>)]) -> Loaded {
         let mut notes = Vec::new();
-        let history = read(value, doc, &mut notes);
+        let history = read(value, doc, known, &mut notes);
         Loaded {
             history: history.filter(|h| !h.is_empty()),
             notes,
@@ -929,7 +978,12 @@ fn read_ops(value: Option<&Value>, total: &mut usize, what: &str) -> Result<Vec<
     Ok(out)
 }
 
-fn read(value: &Value, doc: &Document, notes: &mut Vec<String>) -> Option<History> {
+fn read(
+    value: &Value,
+    doc: &Document,
+    known: &[(String, Arc<State>)],
+    notes: &mut Vec<String>,
+) -> Option<History> {
     let drop_all = |notes: &mut Vec<String>, why: String| {
         notes.push(format!("the history of versions cannot be read: {why}"));
         None
@@ -955,53 +1009,39 @@ fn read(value: &Value, doc: &Document, notes: &mut Vec<String>) -> Option<Histor
         return drop_all(notes, "it has no versions".into());
     }
 
-    // The state of the newest version, from its snapshot or from the drawing.
-    let mut state;
-    if let Some(snapshot) = newest.get("snapshot") {
-        let ops = match read_ops(Some(snapshot), &mut total, "the newest version") {
-            Ok(o) => o,
-            Err(e) => return drop_all(notes, e),
-        };
-        if let Some(h) = missing_blob(&ops, &table) {
-            return drop_all(
-                notes,
-                format!("the newest version needs the picture {h}, which is missing"),
-            );
+    // The anchor: a known one, or the drawing.
+    let digest = newest.get("anchor").and_then(Value::as_str).unwrap_or("");
+    let anchor: Arc<State> = match known.iter().find(|(d, _)| d == digest) {
+        Some((_, a)) => a.clone(),
+        None => {
+            let drawing = State::of(doc, None);
+            if anchor_digest(&drawing) != digest {
+                return drop_all(
+                    notes,
+                    "the drawing was changed after the versions were saved (by a program that did not update them), so the newest version cannot be rebuilt".into(),
+                );
+            }
+            Arc::new(drawing)
         }
-        state = State::new();
-        state.set_blobs(table.clone());
-        if let Err(e) = state.apply_all(&ops) {
-            return drop_all(notes, format!("the newest version does not fit: {e}"));
-        }
-    } else {
-        let drawing = State::of(doc, None);
-        let anchor = newest.get("anchor").and_then(Value::as_str).unwrap_or("");
-        if anchor_of(&drawing) != anchor {
-            return drop_all(
-                notes,
-                "the drawing was changed after the versions were saved (by a program that did not update them), so the newest version cannot be rebuilt".into(),
-            );
-        }
-        let ops = match read_ops(newest.get("delta"), &mut total, "the newest version") {
-            Ok(o) => o,
-            Err(e) => return drop_all(notes, e),
-        };
-        for (h, t) in drawing.blobs() {
-            table.entry(h.clone()).or_insert_with(|| t.clone());
-        }
-        if let Some(h) = missing_blob(&ops, &table) {
-            return drop_all(
-                notes,
-                format!("the newest version needs the picture {h}, which is missing"),
-            );
-        }
-        state = drawing;
-        state.set_blobs(table.clone());
-        if let Err(e) = state.apply_all(&ops) {
-            return drop_all(notes, format!("the newest version does not fit: {e}"));
-        }
+    };
+    let newest_delta = match read_ops(newest.get("delta"), &mut total, "the newest version") {
+        Ok(o) => o,
+        Err(e) => return drop_all(notes, e),
+    };
+    for (h, t) in anchor.blobs() {
+        table.entry(h.clone()).or_insert_with(|| t.clone());
     }
-    let snapshot = state.snapshot();
+    if let Some(h) = missing_blob(&newest_delta, &table) {
+        return drop_all(
+            notes,
+            format!("the newest version needs the picture {h}, which is missing"),
+        );
+    }
+    let mut state = (*anchor).clone();
+    state.set_blobs(table.clone());
+    if let Err(e) = state.apply_all(&newest_delta) {
+        return drop_all(notes, format!("the newest version does not fit: {e}"));
+    }
 
     // The versions, newest first: each delta turns the state of the newer version into this one.
     if list.len() > HARD_MAX_VERSIONS {
@@ -1053,7 +1093,9 @@ fn read(value: &Value, doc: &Document, notes: &mut Vec<String>) -> Option<Histor
             .and_then(Value::as_u64)
             .unwrap_or(1)
             .max(1),
-        snapshot,
+        anchor,
+        anchor_digest: digest.to_string(),
+        newest_delta,
         newest: None,
         versions: Vec::new(),
         branch: main_branch(),

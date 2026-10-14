@@ -16,6 +16,13 @@ fn load(v: &Value, doc: &Document) -> Loaded {
 
 /// A document with an underlay whose picture text is about `megabytes` MiB.
 fn editor_with_underlay(megabytes: usize) -> (Editor, ObjectId) {
+    let mut ed = editor();
+    let id = add_underlay(&mut ed, megabytes);
+    (ed, id)
+}
+
+/// Adds the underlay of `editor_with_underlay` to a document.
+fn add_underlay(ed: &mut Editor, megabytes: usize) -> ObjectId {
     let mut bytes = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
     let mut seed = 7u32;
     for _ in 0..megabytes * 1024 * 1024 * 3 / 4 {
@@ -23,7 +30,6 @@ fn editor_with_underlay(megabytes: usize) -> (Editor, ObjectId) {
         bytes.push((seed >> 24) as u8);
     }
     let png = kadakas_core::underlay::base64_encode(&bytes);
-    let mut ed = editor();
     let out = ed
         .execute(&cmd(
             json!({"op": "add_object", "shape": {"kind": "underlay",
@@ -31,15 +37,19 @@ fn editor_with_underlay(megabytes: usize) -> (Editor, ObjectId) {
             "png": png, "opacity": 1.0}}),
         ))
         .unwrap();
-    (ed, ObjectId(out.created[0]))
+    ObjectId(out.created[0])
 }
 
 #[test]
 fn a_picture_is_stored_once_however_many_versions_move_it() {
-    let (mut ed, id) = editor_with_underlay(10);
+    // The first version is the anchor: the picture is added after it, so the history holds it.
+    let mut ed = editor();
     let mut h = History::new();
+    h.add(ed.doc(), new_version("start"), Limits::default())
+        .unwrap();
+    let id = add_underlay(&mut ed, 10);
     let one = h
-        .add(ed.doc(), new_version("start"), Limits::default())
+        .add(ed.doc(), new_version("with picture"), Limits::default())
         .unwrap()
         .id;
     let mut states = vec![(one, h.state_of(one).unwrap())];
@@ -58,8 +68,8 @@ fn a_picture_is_stored_once_however_many_versions_move_it() {
             .id;
         states.push((v, h.state_of(v).unwrap()));
     }
-    // Four versions, one picture of 10 MiB: far under the default cap of 64 MiB.
-    assert_eq!(h.len(), 4);
+    // Five versions, one picture of 10 MiB: far under the default cap of 64 MiB.
+    assert_eq!(h.len(), 5);
     assert_eq!(h.blobs().len(), 1);
     assert!(
         h.bytes() > 10 * 1024 * 1024 && h.bytes() < 11 * 1024 * 1024,
@@ -67,7 +77,7 @@ fn a_picture_is_stored_once_however_many_versions_move_it() {
         h.bytes()
     );
     assert!(h.bytes() <= Limits::default().max_bytes);
-    for v in h.versions().take(3) {
+    for v in h.versions().take(4) {
         assert!(h.delta_bytes(v.id).unwrap() < 2000);
     }
     // Every version builds the document with the picture.
@@ -81,12 +91,15 @@ fn a_picture_is_stored_once_however_many_versions_move_it() {
         assert!(u.png.0.len() > 7 * 1024 * 1024);
     }
     // The memory form round trips; the file form leaves out the picture that the drawing holds.
-    let again = load(&h.to_value(), ed.doc());
+    let again = History::load_with(&h.to_value(), ed.doc(), &[h.anchor_pair()]);
     assert!(again.notes.is_empty(), "{:?}", again.notes);
     assert_eq!(again.history.unwrap(), h);
     let (value, read) = through_file(&h, ed.doc());
     assert!(read.notes.is_empty(), "{:?}", read.notes);
-    assert_eq!(read.history.unwrap(), h);
+    let read = read.history.unwrap();
+    for m in h.versions() {
+        assert_eq!(read.state_of(m.id).unwrap(), h.state_of(m.id).unwrap());
+    }
     assert!(value["blobs"].as_object().unwrap().is_empty());
     assert!(
         value.to_string().len() < 20_000,
@@ -95,7 +108,7 @@ fn a_picture_is_stored_once_however_many_versions_move_it() {
     );
     // A picture stays while a version uses it.
     let mut fold = h.clone();
-    fold.remove(2).unwrap();
+    fold.remove(3).unwrap();
     assert_eq!(fold.blobs().len(), 1);
     let mut gone = History::new();
     let plain = editor();
@@ -136,10 +149,15 @@ fn deleting_the_only_version_with_a_picture_frees_it() {
 
 #[test]
 fn pictures_in_a_file_are_checked() {
-    let (ed, _) = editor_with_underlay(1);
+    let mut ed = editor();
     let mut h = History::new();
     h.add(ed.doc(), new_version("one"), Limits::default())
         .unwrap();
+    add_underlay(&mut ed, 1);
+    h.add(ed.doc(), new_version("picture"), Limits::default())
+        .unwrap();
+    let known = [h.anchor_pair()];
+    let load = |v: &Value, d: &Document| History::load_with(v, d, &known);
     let good = h.to_value();
     assert!(load(&good, ed.doc()).notes.is_empty());
     // A picture that does not match its hash is left out, and the newest version then lacks it.
@@ -180,7 +198,7 @@ fn pictures_in_a_file_are_checked() {
         "target": {"kind": "object", "id": "00000000-0000-0000-0000-0000000000aa"},
         "props": {"shape": {"kind": "underlay", "png": {"$blob": "ab".repeat(32)}}}}]);
     let l = load(&v, ed.doc());
-    assert_eq!(l.history.unwrap().len(), 1);
+    assert_eq!(l.history.unwrap().len(), 2);
     assert!(l.notes.iter().any(|n| n.contains("missing")));
     // A picture above the largest blob is left out.
     let mut huge = good;
@@ -213,7 +231,8 @@ fn hostile_file(snapshot: u64, versions: u64) -> Value {
         })
         .collect();
     json!({"format": 2, "next_id": versions + 1, "head": versions,
-        "newest": {"id": versions, "snapshot": ops}, "versions": list})
+        "newest": {"id": versions, "delta": ops,
+        "anchor": anchor_digest(&State::of(&Document::default(), None))}, "versions": list})
 }
 
 /// A large newest version and many tiny versions: one pass over the file, nothing is dropped.

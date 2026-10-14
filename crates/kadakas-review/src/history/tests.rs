@@ -260,25 +260,31 @@ fn memory_and_file_forms_round_trip() {
         json!({"op": "move_objects", "ids": [first], "delta": [4.0, 4.0]}),
     ))
     .unwrap();
-    // The memory form needs no drawing.
+    // The JSON of the open document is against the anchor, which the session keeps.
     let json = h.to_value();
     assert_eq!(json["format"], 2);
-    assert!(json["newest"].get("snapshot").is_some());
+    assert!(json["newest"]["delta"].is_array() && json["newest"].get("snapshot").is_none());
+    assert_eq!(json["newest"]["anchor"].as_str().unwrap().len(), 64);
     let text = serde_json::to_string(&json).unwrap();
-    let loaded = History::load(&serde_json::from_str(&text).unwrap(), ed.doc());
+    let known = [h.anchor_pair()];
+    let loaded = History::load_with(&serde_json::from_str(&text).unwrap(), ed.doc(), &known);
     assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
     assert_eq!(loaded.history.unwrap(), h);
+    // Without the anchor, the drawing must be the anchor: it is not.
+    assert!(History::load(&json, ed.doc()).history.is_none());
     // The file form is relative to the drawing.
     let (value, loaded) = through_file(&h, ed.doc());
     assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
-    assert_eq!(loaded.history.as_ref(), Some(&h));
+    let back = loaded.history.as_ref().unwrap();
+    assert_eq!(back.infos(), h.infos());
+    for m in h.versions() {
+        assert_eq!(back.state_of(m.id).unwrap(), h.state_of(m.id).unwrap());
+    }
     assert!(value["newest"].get("snapshot").is_none());
     assert!(value["newest"]["anchor"].as_str().unwrap().len() == 64);
     assert_eq!(value["versions"].as_array().unwrap().len(), 4);
     assert!(value["versions"][3].get("delta").is_none());
     assert_eq!(value["versions"][0]["via"], 2);
-    // The file form of a drawing that changed since the versions: a small delta.
-    assert!(value.to_string().len() < json.to_string().len());
     // A history without versions is not stored: the field is left out. If it is there, it says so.
     let none = History::load(&History::new().to_value(), ed.doc());
     assert!(none.history.is_none() && !none.notes.is_empty());
@@ -320,14 +326,18 @@ fn a_file_whose_drawing_changed_cannot_rebuild_the_newest_version() {
     assert!(History::load(&no_anchor, ed.doc()).history.is_none());
 }
 
+/// Three versions. The JSON is against the drawing of the first one, which is returned: a file
+/// that holds that drawing reads it.
 fn sample() -> (Value, Document) {
     let mut ed = editor();
     let mut h = History::new();
+    let mut anchor = None;
     for i in 0..3 {
         circle(&mut ed, f64::from(i));
         add(&mut h, &ed, &format!("v{i}"));
+        anchor.get_or_insert_with(|| ed.doc().clone());
     }
-    (h.to_value(), ed.doc().clone())
+    (h.to_value(), anchor.unwrap())
 }
 
 fn load(v: &Value, doc: &Document) -> Loaded {
@@ -625,6 +635,7 @@ proptest! {
             h.add(ed.doc(), new_version("v"), Limits::default()).unwrap();
         }
         prop_assume!(!h.is_empty());
+        let known = [h.anchor_pair()];
         let (mut v, mut doc) = (h.to_value(), ed.doc().clone());
         if file_form {
             let tip = h.tip_state().unwrap().unwrap();
@@ -633,7 +644,7 @@ proptest! {
             v = value;
         }
         poke(&mut v, &path, with);
-        let l = History::load(&v, &doc);
+        let l = History::load_with(&v, &doc, &known);
         match &l.history {
             Some(kept) => {
                 prop_assert!(kept.len() <= HARD_MAX_VERSIONS);
@@ -653,7 +664,7 @@ proptest! {
                     prop_assert!(!l.notes.is_empty(), "changed without a note: {v}");
                 }
                 // What is read writes and reads again to the same history.
-                let again = History::load(&kept.to_value(), &doc);
+                let again = History::load_with(&kept.to_value(), &doc, &[kept.anchor_pair()]);
                 prop_assert_eq!(again.history.as_ref(), Some(kept));
                 prop_assert!(again.notes.is_empty());
             }

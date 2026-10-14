@@ -22,7 +22,7 @@ pub mod state;
 pub use diff::{Diff, DiffOptions, Group};
 pub use history::{
     Added, History, LimitInfo, LimitKind, Limits, Loaded, NewVersion, ReviewError, VersionInfo,
-    VersionMeta,
+    VersionMeta, anchor_digest,
 };
 pub use state::State;
 

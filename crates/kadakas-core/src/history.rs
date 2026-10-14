@@ -146,7 +146,7 @@ mod tests {
         );
         let mut big = HistoryData::new(json!({}));
         big.bytes = MAX_HISTORY_BYTES + 1;
-        assert!(big.problem().unwrap().contains("limit"));
+        assert!(big.problem().unwrap().contains("more than"));
     }
 
     #[test]
