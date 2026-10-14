@@ -286,3 +286,60 @@ def test_a_tag_that_is_not_valid_is_refused(cad, tmp_path):
     saved.write_text(text)
     cad.result("file.open", {"path": str(saved)})
     assert len(tags(cad)) == 5
+
+
+def test_the_import_says_which_update_data_it_kept(cad, tmp_path):
+    path = tmp_path / "plan_v1.dxf"
+    build_v1(path)
+    # The default keeps the summaries of the entities in the document.
+    first = cad.result("import.file", {"path": str(path)})
+    assert first["base"] == "auto" and first["report"]["base"] == "auto"
+    assert "link" not in imported_source(cad)
+
+
+def imported_source(cad):
+    """The import source of the first imported layer."""
+    return next(l["import_source"] for l in layers(cad) if "import_source" in l)
+
+
+def test_base_link_keeps_the_path_size_and_hash_and_survives_save_and_load(cad, make_serve, tmp_path):
+    import hashlib
+
+    path = tmp_path / "plan_v1.dxf"
+    build_v1(path)
+    r = cad.result("import.file", {"path": str(path), "options": {"base": "link"}})
+    assert r["base"] == "link"
+    source = imported_source(cad)
+    data = path.read_bytes()
+    assert source["link"] == {
+        "path": str(path.resolve()),
+        "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+    saved = tmp_path / "plan.kad"
+    cad.result("file.save", {"path": str(saved)})
+    other = make_serve(saved)
+    assert imported_source(other)["link"] == source["link"]
+
+
+def test_base_none_imports_without_update_data(cad, tmp_path):
+    path = tmp_path / "plan_v1.dxf"
+    build_v1(path)
+    r = cad.result("import.file", {"path": str(path), "options": {"base": "none"}})
+    assert r["base"] == "none"
+    assert len(tags(cad)) == 6, "the objects keep their tags"
+    assert "link" not in imported_source(cad)
+
+
+def test_a_bad_base_value_and_a_bad_link_path_are_refused(cad, tmp_path):
+    path = tmp_path / "plan_v1.dxf"
+    build_v1(path)
+    err = cad.error("import.file", {"path": str(path), "options": {"base": "sometimes"}})
+    assert "sometimes" in err["message"]
+    cad.result("import.file", {"path": str(path)})
+    layer = next(l["id"] for l in layers(cad) if "import_source" in l)
+    source = imported_source(cad)
+    for bad in ("relative/plan.dxf", "/data/../etc/passwd", "/data/\u0007plan.dxf"):
+        linked = {**source, "link": {"path": bad, "bytes": 1, "sha256": "0" * 64}}
+        err = cad.error("execute", {"command": {"op": "set_layer_source", "id": layer, "source": linked}})
+        assert err["code"] != 0, bad

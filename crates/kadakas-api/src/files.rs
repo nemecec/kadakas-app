@@ -46,6 +46,9 @@ fn load_error(path: &Path, e: LoadError) -> RpcError {
     }
 }
 
+/// What the error of a file over the size limit says about raising the limit.
+const RAISE_HINT: &str = ". To open it anyway, raise the limit: start `kadakas serve` or `kadakas mcp` with --max-document-mib <MiB> (or set KADAKAS_MAX_DOCUMENT_MIB), or set document_file_bytes in SessionLimits";
+
 /// Reads and checks a document file of at most [`DEFAULT_DOCUMENT_FILE_BYTES`].
 pub fn read_document(path: &Path) -> Result<Document, RpcError> {
     read_document_capped(path, DEFAULT_DOCUMENT_FILE_BYTES)
@@ -61,7 +64,8 @@ pub fn read_document_capped(path: &Path, max_bytes: u64) -> Result<Document, Rpc
         match e {
             OpenError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => RpcError::not_found(m),
             OpenError::Io(_) => RpcError::app(m),
-            OpenError::NotRegular | OpenError::TooLarge { .. } => RpcError::validation(m),
+            OpenError::NotRegular => RpcError::validation(m),
+            OpenError::TooLarge { .. } => RpcError::validation(format!("{m}{RAISE_HINT}")),
         }
     })?;
     Document::from_reader(reader).map_err(|e| load_error(path, e))
@@ -465,7 +469,19 @@ mod tests {
         file.set_len(DEFAULT_DOCUMENT_FILE_BYTES + 1).unwrap();
         let e = read_document(&big).unwrap_err();
         assert!(e.message.contains("limit"), "{}", e.message);
-        assert!(crate::SessionLimits::strict().document_file_bytes < DEFAULT_DOCUMENT_FILE_BYTES);
+        // The error says how to raise the limit.
+        assert!(e.message.contains("--max-document-mib"), "{}", e.message);
+        assert!(e.message.contains("document_file_bytes"), "{}", e.message);
+        // The two values of the decision.
+        assert_eq!(DEFAULT_DOCUMENT_FILE_BYTES, 512 * 1024 * 1024);
+        assert_eq!(
+            crate::SessionLimits::strict().document_file_bytes,
+            32 * 1024 * 1024
+        );
+        assert_eq!(
+            crate::SessionLimits::default().document_file_bytes,
+            DEFAULT_DOCUMENT_FILE_BYTES
+        );
     }
 
     #[test]

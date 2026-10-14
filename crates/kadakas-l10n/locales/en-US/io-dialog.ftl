@@ -40,3 +40,10 @@ io-dialog-exported-objects-to =
     } to { $path }
 io-dialog-export-failed = Export failed: { $message }
 io-dialog-dwg-needs-a-converter = DWG (needs a converter, see docs/dwg.md)
+
+# { $entities } is the number of entities of the drawing, { $cap } the most that Kadakas keeps for updates.
+io-dialog-base-question = This drawing has { $entities } entities, more than Kadakas keeps for updates ({ $cap }). Keep a link to the original file for updates, or import without update data? A link stores the full path of the file, which can contain your user name, and the people who share this document can see it.
+io-dialog-base-question-large = The update data of this drawing ({ $entities } entities) is { $size } MB, more than Kadakas keeps for updates ({ $cap } MB). Keep a link to the original file for updates, or import without update data? A link stores the full path of the file, which can contain your user name, and the people who share this document can see it.
+io-dialog-base-question-title = Big drawing
+io-dialog-base-keep-link = Keep a link
+io-dialog-base-no-update-data = Import without update data

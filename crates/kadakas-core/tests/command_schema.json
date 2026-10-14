@@ -227,6 +227,32 @@
       "minItems": 4,
       "type": "array"
     },
+    "FileLink": {
+      "additionalProperties": false,
+      "description": "A link to the original file of an import, instead of the summaries of its entities (see the\nmodule docs). It is a hint: the file may be gone or changed, and the hash tells.",
+      "properties": {
+        "bytes": {
+          "description": "The size of the file in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "The absolute path of the file when it was imported.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "The SHA-256 of the file as 64 lower-case hexadecimal digits.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "sha256"
+      ],
+      "type": "object"
+    },
     "Georeference": {
       "description": "Where the drawing sits on the earth: CRS and origin.",
       "type": "object"
@@ -269,6 +295,17 @@
           "default": "",
           "description": "The name of the DXF layer, when the layer maps one. Empty for a layer that holds the\nwhole file.",
           "type": "string"
+        },
+        "link": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileLink"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The original file, when the import kept no summaries of the entities because the drawing\nhas too many (`base: \"link\"`). An update reads the old file from here."
         },
         "revision": {
           "description": "The revision that was imported last.",

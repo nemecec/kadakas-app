@@ -13,8 +13,8 @@ pub mod feedback_api;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
 pub use errors::{
-    REASON_ALREADY_CONNECTED, REASON_EDITS_WAIT, REASON_HISTORY_READONLY, REASON_UNSAVED_CHANGES,
-    REASON_VERSION_LIMIT, RpcError,
+    REASON_ALREADY_CONNECTED, REASON_BASE_TOO_LARGE, REASON_BASE_TOO_MANY, REASON_EDITS_WAIT,
+    REASON_HISTORY_READONLY, REASON_UNSAVED_CHANGES, REASON_VERSION_LIMIT, RpcError,
 };
 #[cfg(test)]
 mod care_api_tests;
@@ -100,7 +100,7 @@ mod x3d_material_tests;
 mod x3d_tests;
 
 use kadakas_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
-pub use limits::SessionLimits;
+pub use limits::{DEFAULT_DOCUMENT_FILE_BYTES, STRICT_DOCUMENT_FILE_BYTES, SessionLimits};
 
 /// An open document with its history and selection.
 pub struct Session {

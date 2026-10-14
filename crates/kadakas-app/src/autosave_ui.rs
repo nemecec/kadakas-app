@@ -21,6 +21,9 @@ pub struct AutosaveUi {
     recovery: Option<crate::autosave::Recovery>,
     #[cfg(not(target_arch = "wasm32"))]
     crashed: Vec<crate::autosave::Crashed>,
+    /// The question before a big recovered copy opens (DOC-19). It holds the index in `crashed`.
+    #[cfg(not(target_arch = "wasm32"))]
+    gate: crate::open_gate::OpenGate<usize>,
     /// A recovered session whose files stay until the recovered document has been autosaved.
     #[cfg(not(target_arch = "wasm32"))]
     keep: Option<crate::autosave::Crashed>,
@@ -48,6 +51,8 @@ impl AutosaveUi {
             recovery: None,
             #[cfg(not(target_arch = "wasm32"))]
             crashed: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            gate: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             keep: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -295,6 +300,11 @@ impl AutosaveUi {
         if self.crashed.is_empty() {
             return None;
         }
+        // A big copy: the question comes first, and nothing else on this dialog can change the list.
+        if self.gate.is_pending() {
+            let (i, _) = self.gate.show(ctx)?;
+            return self.open_and_note(i);
+        }
         enum Choice {
             Open(usize),
             Discard(usize),
@@ -355,13 +365,23 @@ impl AutosaveUi {
                 None
             }
             Choice::Open(i) => {
-                let r = self.open_recovered(i);
-                if r.is_none() {
-                    self.want_prefs = true;
-                }
-                r
+                // The largest version decides: `load` falls back to an older version when the
+                // newest does not open, and any of them may be the one that is read.
+                let decision = crate::file_io::open_decision_for(&self.crashed[i].versions);
+                let i = self.gate.check(i, decision)?;
+                self.open_and_note(i)
             }
         }
+    }
+
+    /// Opens the recovered copy `i`. A copy that does not open shows the error in the Preferences.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_and_note(&mut self, i: usize) -> Option<Recovered> {
+        let r = self.open_recovered(i);
+        if r.is_none() {
+            self.want_prefs = true;
+        }
+        r
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -407,6 +427,7 @@ impl AutosaveUi {
 mod tests {
     use super::*;
     use crate::autosave::{Job, Recovery, find_crashed_with};
+    use kadakas_ui_core::open_limit::OpenDecision;
     use std::time::Duration;
 
     fn temp(name: &str) -> std::path::PathBuf {
@@ -460,6 +481,35 @@ mod tests {
             assert!(ui.show(u.ctx(), true).is_none());
         });
         assert_eq!(ui.crashed.len(), 1);
+    }
+
+    #[test]
+    fn a_big_recovered_copy_asks_first_and_cancel_keeps_the_files() {
+        let dir = temp("big");
+        crashed_session(&dir);
+        let mut ui = AutosaveUi::inert();
+        ui.crashed = find_crashed_with(&dir, Duration::ZERO);
+        // One version looks like 3 GB (a hole): the person is asked, or the computer is too small
+        // for it and the file is refused. The largest version decides, not the newest.
+        let versions = ui.crashed[0].versions.clone();
+        let biggest = versions.last().unwrap().clone();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&biggest)
+            .unwrap()
+            .set_len(3_000_000_000)
+            .unwrap();
+        let decision = crate::file_io::open_decision_for(&versions);
+        assert!(!matches!(decision, OpenDecision::Open));
+        assert!(ui.gate.check(0, decision).is_none());
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |u| {
+            assert!(ui.show(u.ctx(), true).is_none(), "waits for the answer");
+        });
+        assert!(ui.gate.is_pending());
+        assert_eq!(ui.gate.answer(false), None);
+        assert_eq!(ui.crashed.len(), 1, "cancel keeps the recovery session");
+        assert!(!ui.gate.is_pending());
     }
 
     #[test]

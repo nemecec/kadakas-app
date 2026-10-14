@@ -1659,6 +1659,7 @@ mod tests {
             &src,
             &crate::Context::of(&Document::with_sequential_ids()),
             &crate::ImportOptions::default(),
+            None,
         )
         .unwrap();
         let mut ed = kadakas_core::command::Editor::new(Document::with_sequential_ids());

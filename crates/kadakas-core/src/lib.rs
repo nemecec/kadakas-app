@@ -28,6 +28,7 @@ pub mod massing_batch;
 pub mod mesh;
 pub mod mesh3d;
 pub mod model;
+pub mod open_estimate;
 pub mod pattern;
 pub mod picture;
 pub mod plants;

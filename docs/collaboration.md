@@ -481,6 +481,12 @@ and gives nothing until all of them have arrived. A server and a client check ea
 `provenance::check_base` (unknown keys, sizes and counts), also when the part comes from another
 user.
 
+A drawing with more entities than the cap of a base (200000) has no base. It can keep a link to its
+original file instead, in the source of its layer (the property `import_source` of the layer, key
+`link`: `path`, `bytes`, `sha256`). The path is data from another user and is only a hint: the
+server and the client check it like the other texts of the source (`FileLink::problem`; absolute,
+plain, no `..`), and reading it needs the path policy of the reader (network and device paths are refused unless the person confirms). The path is the absolute path of the file on the computer of the importer. It can contain that person's user name, and every collaborator can see it; the import dialog tells the person before they choose a link.
+
 The picture of an underlay (the base64 text of a PNG, 4 KiB or more) and the file of a plant picture (the key `data` in the body of an `image` resource, 4 KiB or more; its small thumbnail stays in the operation) are *blobs*. The client
 replaces it in the operation by `{"$blob": "<sha256 hex>"}` (the SHA-256 of the text), keeps the text,
 and sends `blob_put` first. The server checks that the hash is the SHA-256 of `data` (`bad_message`

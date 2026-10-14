@@ -65,8 +65,9 @@ pub struct RpcError {
     /// A stable reason for callers in the same process (a UI), for a case where `kind` is too
     /// coarse. It is not part of the JSON-RPC answer. See the `REASON_*` constants.
     pub reason: Option<&'static str>,
-    /// More facts for the caller, in the answer as `data` next to `kind` (for example the list of
-    /// versions when a save is refused because of a limit). `None`: nothing more.
+    /// Facts that go with the error, for example the numbers of a limit. A JSON object. It is sent
+    /// in the `data` of the JSON-RPC error, next to `kind`, so that agents get the numbers too (for example the list of versions when a save is refused
+    /// because of a limit).
     pub details: Option<Value>,
 }
 
@@ -84,6 +85,13 @@ pub const REASON_VERSION_LIMIT: &str = "version_limit";
 /// `version.create`, `version.restore`, `version.delete`: the history of the file could not be
 /// read completely. It is kept as it is and read only, until the person calls `version.repair`.
 pub const REASON_HISTORY_READONLY: &str = "history_read_only";
+/// `import.file`: the drawing has more entities than an import keeps for updates and the option
+/// `base` is `auto`. `details` has `{entities, cap}`. The caller may ask the person, then pass
+/// `base: "link"` or `base: "none"`.
+pub const REASON_BASE_TOO_MANY: &str = "base_too_many";
+/// `import.file`: the summaries of the entities are too large for a base and the option `base` is
+/// `auto`. `details` has `{entities, bytes, cap}`. The choices are the same.
+pub const REASON_BASE_TOO_LARGE: &str = "base_too_large";
 
 impl RpcError {
     pub fn new(code: i64, kind: &'static str, e: impl std::fmt::Display) -> Self {
@@ -95,7 +103,7 @@ impl RpcError {
             details: None,
         }
     }
-    /// Adds facts that go into the answer as `data` (see `details`).
+    /// Adds facts to the error (see `details`).
     pub fn with_details(mut self, details: Value) -> Self {
         self.details = Some(details);
         self
@@ -164,17 +172,24 @@ pub fn error_response(id: Value, code: i64, kind: &str, message: &str) -> String
     response(id, code, message, json!({"kind": kind}))
 }
 
-/// The JSON text of the response to a failed call: the `data` has the `kind`, the stable `reason`
-/// (`version_limit`, `history_read_only`, ...), a `feedback` hint (see `feedback_api::hint`), the
-/// mark that a method panicked in this session, and the facts of `RpcError::details` next to
-/// them (the facts never replace `kind`, `reason`, `feedback` or `tainted`).
+/// The JSON text of the response to a failed call: the `data` has the facts of
+/// `RpcError::details` (for example the numbers of a limit, the versions of a refused save), and
+/// then the `kind`, the stable `reason` (`version_limit`, `history_read_only`, ...), a `feedback`
+/// hint (see `feedback_api::hint`) and the mark that a method panicked in this session. The
+/// facts come first, so that they cannot replace the others.
 pub fn error_response_with(
     id: Value,
     e: &RpcError,
     feedback: Option<Value>,
     tainted: bool,
 ) -> String {
-    let mut data = json!({"kind": e.kind});
+    let mut data = json!({});
+    if let Some(Value::Object(d)) = &e.details {
+        for (k, v) in d {
+            data[k] = v.clone();
+        }
+    }
+    data["kind"] = json!(e.kind);
     if let Some(r) = e.reason {
         data["reason"] = json!(r);
     }
@@ -184,11 +199,6 @@ pub fn error_response_with(
     // A method panicked in this session. The document may not be what the agent expects.
     if tainted {
         data["tainted"] = json!(true);
-    }
-    if let (Some(Value::Object(extra)), Some(map)) = (&e.details, data.as_object_mut()) {
-        for (k, v) in extra {
-            map.entry(k.clone()).or_insert_with(|| v.clone());
-        }
     }
     response(id, e.code, &e.message, data)
 }

@@ -24,10 +24,11 @@ use std::path::Path;
 
 use kadakas_core::command::Command;
 use kadakas_core::model::{ClassId, Document, Layer, LayerId};
+use kadakas_core::provenance::FileLink;
 
 pub use options::{
-    ExportOptions, ExportOrigin, FaceMode, ImportOptions, LayerMode, MeshEntity, OriginMode,
-    SiteMesh, Unit,
+    BaseCaps, BaseMode, ExportOptions, ExportOrigin, FaceMode, ImportOptions, LayerMode,
+    MeshEntity, OriginMode, SiteMesh, Unit,
 };
 pub use report::{Report, Skipped};
 
@@ -81,6 +82,34 @@ pub enum IoError {
     /// An option has a bad value.
     #[error("{0}")]
     Option(String),
+    /// The update data of the drawing does not fit the limits of the document, and the option
+    /// `base` is `auto`. The person (or the agent) must choose `link` or `none`.
+    #[error("{}", .limit.message(*.entities))]
+    BaseChoice { entities: usize, limit: BaseLimit },
+}
+
+/// Which limit of the update data a drawing is over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BaseLimit {
+    /// More entities than `cap`.
+    TooMany { cap: usize },
+    /// The summaries need `bytes` of JSON, more than the `cap` bytes that a base may hold.
+    TooLarge { bytes: u64, cap: u64 },
+}
+
+impl BaseLimit {
+    /// The message for the person or the agent, with the choices.
+    pub fn message(&self, entities: usize) -> String {
+        const CHOICES: &str = "Set the import option base to \"link\" (keep a link to the original file for updates) or \"none\" (import without update data)";
+        match self {
+            BaseLimit::TooMany { cap } => format!(
+                "this drawing has {entities} entities, more than the {cap} that Kadakas keeps for updates. {CHOICES}"
+            ),
+            BaseLimit::TooLarge { bytes, cap } => format!(
+                "the summaries of the {entities} entities of this drawing need {bytes} bytes, more than the {cap} bytes that Kadakas keeps for updates. {CHOICES}"
+            ),
+        }
+    }
 }
 
 /// The file to import: its name, its bytes, and files next to it (a shapefile has
@@ -266,6 +295,19 @@ pub fn import_file(
         IoError::Format("unknown file type: give a format (dxf, shp or geojson)".into())
     })?;
     let src = Source::read_limited(path, opts.max_bytes)?;
+    // A link to the original file is made only when it is asked for (it needs the hash).
+    let link = (format == Format::Dxf && opts.track_source && opts.base == BaseMode::Link)
+        .then(|| {
+            let abs = absolute_path_text(path)?;
+            let link = FileLink::of_bytes(&abs, &src.data);
+            match link.problem() {
+                Some(why) => Err(IoError::Option(format!(
+                    "cannot keep a link to the file: {why}"
+                ))),
+                None => Ok(link),
+            }
+        })
+        .transpose()?;
     // The tags of imported objects name the file with its extension.
     let named;
     let opts = match path.file_name() {
@@ -278,7 +320,44 @@ pub fn import_file(
         }
         _ => opts,
     };
-    importer(format).import(&src, &Context::of(doc), opts)
+    match (format, &link) {
+        (Format::Dxf, Some(_)) => dxf::import_linked(&src, &Context::of(doc), opts, link.as_ref()),
+        _ => importer(format).import(&src, &Context::of(doc), opts),
+    }
+}
+
+/// The absolute path of `path` as text, for a [`FileLink`]: the canonical path, else the path made
+/// absolute. A path that is not text cannot be kept.
+pub(crate) fn absolute_path_text(path: &Path) -> Result<String, IoError> {
+    let abs = std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .map_err(|e| {
+            IoError::Option(format!(
+                "cannot keep a link to {}: no absolute path ({e})",
+                path.display()
+            ))
+        })?;
+    abs.to_str().map(strip_verbatim).ok_or_else(|| {
+        IoError::Option(format!(
+            "cannot keep a link to {}: the path is not text",
+            path.display()
+        ))
+    })
+}
+
+/// The canonical path on Windows has the prefix `\\?\` (`\\?\C:\x`, `\\?\UNC\server\share`). The
+/// link keeps the usual form (`C:\x`, `\\server\share`), which a person can read and which the
+/// checks of a link know.
+pub(crate) fn strip_verbatim(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("\\\\?\\UNC\\") {
+        format!("\\\\{rest}")
+    } else if let Some(rest) = path.strip_prefix("\\\\?\\")
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        rest.to_string()
+    } else {
+        path.to_string()
+    }
 }
 
 /// Exports `doc` to a file. `format` defaults to the file extension.
@@ -303,6 +382,22 @@ pub fn export_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_verbatim_prefix_of_a_windows_path_is_taken_off() {
+        for (given, want) in [
+            ("\\\\?\\C:\\data\\a.dxf", "C:\\data\\a.dxf"),
+            (
+                "\\\\?\\UNC\\server\\share\\a.dxf",
+                "\\\\server\\share\\a.dxf",
+            ),
+            ("\\\\?\\Volume{1}\\a.dxf", "\\\\?\\Volume{1}\\a.dxf"),
+            ("C:\\data\\a.dxf", "C:\\data\\a.dxf"),
+            ("/data/a.dxf", "/data/a.dxf"),
+        ] {
+            assert_eq!(strip_verbatim(given), want, "{given}");
+        }
+    }
 
     #[test]
     fn formats_by_name_and_path() {

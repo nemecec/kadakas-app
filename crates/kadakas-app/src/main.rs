@@ -33,6 +33,7 @@ mod irrigation_ui;
 mod keymap;
 mod layout;
 mod locale;
+mod open_gate;
 mod panels;
 mod picture_ui;
 mod plant_draw;

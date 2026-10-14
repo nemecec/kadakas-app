@@ -56,6 +56,7 @@ fn rpc(e: DwgError) -> RpcError {
         DwgError::Option(_) => RpcError::invalid_params(e),
         DwgError::Timeout { .. } => RpcError::limit(e),
         DwgError::Format(_) => RpcError::validation(e),
+        DwgError::Base(e) => crate::io::rpc(e),
         e => RpcError::app(e),
     }
 }
@@ -80,6 +81,7 @@ impl Session {
         let mut opts = ImportOptions::from_json(options).map_err(io_rpc)?;
         // A client cannot raise the limit of the session.
         opts.max_bytes = opts.max_bytes.min(self.limits.import_text_bytes);
+        opts.base_caps = kadakas_io::BaseCaps::with_records(self.limits.base_records);
         let run = RunOptions::from_json(options).map_err(rpc)?;
         let path = if checked {
             self.check_path(&path, false, &["dwg"])
@@ -96,6 +98,7 @@ impl Session {
         Ok(json!({
             "imported": result.report.total(),
             "skipped": result.report.skipped_total(),
+            "base": result.report.base,
             "report": result.report,
             "georeference": self.editor.doc().georef,
         }))

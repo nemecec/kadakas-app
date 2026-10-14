@@ -23,9 +23,10 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use kadakas_core::model::Document;
+use kadakas_core::provenance::FileLink;
 
 use crate::{
-    ExportOptions, Format, ImportOptions, ImportResult, Report, Source, exporter, importer,
+    BaseMode, ExportOptions, Format, ImportOptions, ImportResult, IoError, Report, Source, exporter,
 };
 
 /// A converter program that is installed on this computer.
@@ -195,6 +196,9 @@ pub enum DwgError {
     Format(String),
     #[error("{0}")]
     Option(String),
+    /// The drawing has more entities than an import keeps for updates (`base` is `auto`).
+    #[error("{0}")]
+    Base(IoError),
 }
 
 /// Limits of one conversion.
@@ -363,6 +367,20 @@ pub fn dwg_to_dxf(
     run_opts: &RunOptions,
     max_bytes: u64,
 ) -> Result<Vec<u8>, DwgError> {
+    convert(dwg, conv, run_opts, max_bytes, None).map(|(data, _)| data)
+}
+
+/// Converts a DWG file to DXF like [`dwg_to_dxf`]. The file is copied into a private folder first
+/// (with the size cap), and the converter reads that copy. With `link_path`, the link of the file
+/// (its size and SHA-256) is made from the same copy, so the hash is of the bytes that were
+/// converted, and the file cannot change between the two.
+fn convert(
+    dwg: &Path,
+    conv: &Converter,
+    run_opts: &RunOptions,
+    max_bytes: u64,
+    link_path: Option<&str>,
+) -> Result<(Vec<u8>, Option<FileLink>), DwgError> {
     if !dwg.is_file() {
         return Err(DwgError::Io(format!("cannot read {}", dwg.display())));
     }
@@ -374,8 +392,18 @@ pub fn dwg_to_dxf(
         fs::create_dir(d).map_err(|e| DwgError::Io(e.to_string()))?;
     }
     let local = input.join("drawing.dwg");
-    fs::copy(dwg, &local)
-        .map_err(|e| DwgError::Io(format!("cannot read {}: {e}", dwg.display())))?;
+    let io_error =
+        |e: &dyn std::fmt::Display| DwgError::Io(format!("cannot read {}: {e}", dwg.display()));
+    let mut source = crate::dxf::link::open(dwg, max_bytes).map_err(|e| io_error(&e))?;
+    let mut copy = fs::File::create(&local).map_err(|e| io_error(&e))?;
+    std::io::copy(&mut source, &mut copy).map_err(|e| io_error(&e))?;
+    drop(copy);
+    let link = link_path
+        .map(|path| {
+            let copy = fs::File::open(&local).map_err(|e| io_error(&e))?;
+            FileLink::of_reader(path, copy).map_err(|e| io_error(&e))
+        })
+        .transpose()?;
     match conv {
         Converter::Oda(exe) => {
             let args: Vec<OsString> = [
@@ -407,7 +435,9 @@ pub fn dwg_to_dxf(
         tool: conv.name().into(),
         detail: "it finished but made no DXF file. The DWG file may be damaged or of a version that the converter does not know".into(),
     })?;
-    crate::read_regular(&dxf, max_bytes, "the converted DXF file").map_err(DwgError::Io)
+    let data =
+        crate::read_regular(&dxf, max_bytes, "the converted DXF file").map_err(DwgError::Io)?;
+    Ok((data, link))
 }
 
 /// Converts DXF bytes to a DWG file at `dest`.
@@ -491,7 +521,18 @@ pub fn import_file(
     search: &Search,
 ) -> Result<ImportResult, DwgError> {
     let conv = detect(search).ok_or_else(|| no_converter(search))?;
-    let data = dwg_to_dxf(path, &conv, run_opts, opts.max_bytes)?;
+    // The link names the DWG file, not the temporary DXF file; it is made only when asked for, from
+    // the private copy that is converted.
+    let link_path = (opts.track_source && opts.base == BaseMode::Link)
+        .then(|| crate::absolute_path_text(path))
+        .transpose()
+        .map_err(|e| DwgError::Option(e.to_string()))?;
+    let (data, link) = convert(path, &conv, run_opts, opts.max_bytes, link_path.as_deref())?;
+    if let Some(why) = link.as_ref().and_then(FileLink::problem) {
+        return Err(DwgError::Option(format!(
+            "cannot keep a link to the file: {why}"
+        )));
+    }
     let name = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -509,9 +550,13 @@ pub fn import_file(
             .or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned())),
         ..opts.clone()
     };
-    let mut result = importer(Format::Dxf)
-        .import(&src, &crate::Context::of(doc), &named)
-        .map_err(|e| DwgError::Format(format!("the converted DXF could not be read: {e}")))?;
+    let mut result =
+        crate::dxf::import_linked(&src, &crate::Context::of(doc), &named, link.as_ref()).map_err(
+            |e| match e {
+                e @ IoError::BaseChoice { .. } => DwgError::Base(e),
+                e => DwgError::Format(format!("the converted DXF could not be read: {e}")),
+            },
+        )?;
     result.report.format = "dwg".into();
     result.report.notes.push(format!(
         "read through {} ({}): the DWG file became DXF first, so entities that DXF cannot hold may be missing",
@@ -519,6 +564,40 @@ pub fn import_file(
         conv.program().display()
     ));
     Ok(result)
+}
+
+/// Rebuilds the base records from the linked DWG file, for an update (IOP-23). The path of the
+/// link is checked first (see [`crate::dxf::link::checked_path`]: the path policy, no network or
+/// device path unless the person allows it, a local absolute path). The file is copied to a private
+/// folder, and the size and the hash of that copy are compared with the link before the converter
+/// reads it. See [`crate::dxf::link::read_records`] for the errors.
+pub fn read_linked_records(
+    link: &FileLink,
+    policy: crate::dxf::link::PathPolicy<'_>,
+    read: &crate::dxf::link::ReadOptions,
+    run_opts: &RunOptions,
+    search: &Search,
+) -> Result<Vec<crate::dxf::revision::Rec>, crate::dxf::link::LinkError> {
+    use crate::dxf::link::{self, LinkError};
+    let path = link::checked_path(link, policy, read.allow_network_path)?;
+    let name = path.display().to_string();
+    // Gone, not a file, or too big: told before anything is copied.
+    link::open(&path, read.max_bytes)?;
+    let conv = detect(search).ok_or_else(|| LinkError::Unreadable {
+        path: name.clone(),
+        why: no_converter(search).to_string(),
+    })?;
+    let (data, now) =
+        convert(&path, &conv, run_opts, read.max_bytes, Some(&link.path)).map_err(|e| {
+            LinkError::Unreadable {
+                path: name.clone(),
+                why: e.to_string(),
+            }
+        })?;
+    if now.as_ref() != Some(link) {
+        return Err(LinkError::Changed(name));
+    }
+    link::records_of_dxf(&data, &name, read.max_recs)
 }
 
 /// Exports `doc` as DXF and converts it to DWG at `path`.
@@ -699,6 +778,186 @@ mod tests {
         )
         .unwrap();
         assert!(r.report.drawing.unwrap().starts_with("renamed.dwg"));
+    }
+
+    #[test]
+    fn a_linked_import_keeps_the_dwg_file_and_an_update_reads_it_back() {
+        use crate::dxf::link::{LinkError, ReadOptions};
+        let s = Stubs::new();
+        libre_stub(&s);
+        let work = Stubs::new();
+        let dwg = dwg_file(work.0.path());
+        let linked = ImportOptions {
+            base: BaseMode::Link,
+            ..ImportOptions::default()
+        };
+        let r = import_file(
+            &dwg,
+            &linked,
+            &RunOptions::default(),
+            &Document::with_sequential_ids(),
+            &s.search(),
+        )
+        .unwrap();
+        assert_eq!(r.report.base.as_deref(), Some("link"));
+        let mut ed = kadakas_core::command::Editor::new(Document::with_sequential_ids());
+        ed.execute(&r.command).unwrap();
+        let link = ed
+            .doc()
+            .layers
+            .iter()
+            .find_map(|l| {
+                kadakas_core::provenance::LayerSource::of(
+                    l.extra.get(kadakas_core::provenance::LAYER_KEY)?,
+                )?
+                .link
+            })
+            .expect("the link is on the layer source");
+        // It names the DWG file with its size and hash, not the temporary DXF file.
+        assert_eq!(link.path, fs::canonicalize(&dwg).unwrap().to_str().unwrap());
+        assert_eq!(link, FileLink::of_bytes(&link.path, b"FAKEDWG\n"));
+        let no_resources = ed
+            .doc()
+            .resources
+            .iter()
+            .all(|r| !matches!(r.body, kadakas_core::resource::ResourceBody::ImportBase(_)));
+        assert!(no_resources);
+
+        // An update converts the linked file again and gets the records back.
+        let anywhere = |p: &Path| -> Result<PathBuf, String> { Ok(p.to_path_buf()) };
+        let read = |max_recs: usize| {
+            read_linked_records(
+                &link,
+                &anywhere,
+                &ReadOptions::new(1 << 20, max_recs),
+                &RunOptions::default(),
+                &s.search(),
+            )
+        };
+        assert_eq!(read(10).unwrap().len(), 1);
+        assert!(matches!(read(0), Err(LinkError::TooMany { .. })));
+        // No converter: the update says so.
+        let none = Stubs::new();
+        let e = read_linked_records(
+            &link,
+            &anywhere,
+            &ReadOptions::new(1 << 20, 10),
+            &RunOptions::default(),
+            &none.search(),
+        )
+        .unwrap_err();
+        assert!(matches!(e, LinkError::Unreadable { .. }), "{e}");
+        // A converter that fails: the update says so.
+        let bad = Stubs::new();
+        bad.script("dwg2dxf", "echo broken >&2; exit 9");
+        let e = read_linked_records(
+            &link,
+            &anywhere,
+            &ReadOptions::new(1 << 20, 10),
+            &RunOptions::default(),
+            &bad.search(),
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("broken"), "{e}");
+        // A bad link, a path that the policy refuses, and a limit that the file does not fit.
+        let mut wrong = link.clone();
+        wrong.path = "relative.dwg".into();
+        assert!(matches!(
+            read_linked_records(
+                &wrong,
+                &anywhere,
+                &ReadOptions::new(1 << 20, 10),
+                &RunOptions::default(),
+                &s.search()
+            ),
+            Err(LinkError::BadLink(_))
+        ));
+        let refuse = |_: &Path| -> Result<PathBuf, String> { Err("outside".into()) };
+        assert!(matches!(
+            read_linked_records(
+                &link,
+                &refuse,
+                &ReadOptions::new(1 << 20, 10),
+                &RunOptions::default(),
+                &s.search()
+            ),
+            Err(LinkError::Policy(_))
+        ));
+        assert!(matches!(
+            read_linked_records(
+                &link,
+                &anywhere,
+                &ReadOptions::new(3, 10),
+                &RunOptions::default(),
+                &s.search()
+            ),
+            Err(LinkError::TooLarge { .. })
+        ));
+        // The file changed or is gone.
+        fs::write(&dwg, "FAKEDWG changed\n").unwrap();
+        assert!(matches!(read(10), Err(LinkError::Changed(_))));
+        fs::remove_file(&dwg).unwrap();
+        assert!(matches!(read(10), Err(LinkError::Gone(_))));
+        // A link needs a file that can be read.
+        let e = import_file(
+            &work.0.path().join("none.dwg"),
+            &linked,
+            &RunOptions::default(),
+            &Document::with_sequential_ids(),
+            &s.search(),
+        )
+        .unwrap_err();
+        assert!(matches!(e, DwgError::Io(_)), "{e}");
+    }
+
+    #[test]
+    fn a_dwg_over_the_cap_asks_for_a_choice_with_the_text_unchanged() {
+        let s = Stubs::new();
+        libre_stub(&s);
+        let work = Stubs::new();
+        let dwg = dwg_file(work.0.path());
+        // The stub makes a DXF of one line: with a cap of no entities the choice is asked.
+        let capped = ImportOptions {
+            base_caps: crate::BaseCaps::with_records(0),
+            ..ImportOptions::default()
+        };
+        let e = import_file(
+            &dwg,
+            &capped,
+            &RunOptions::default(),
+            &Document::with_sequential_ids(),
+            &s.search(),
+        )
+        .unwrap_err();
+        let DwgError::Base(IoError::BaseChoice { entities, limit }) = &e else {
+            panic!("{e:?}")
+        };
+        assert_eq!(
+            (*entities, *limit),
+            (1, crate::BaseLimit::TooMany { cap: 0 })
+        );
+        // The text is the one of the choice, with no "converted DXF" prefix.
+        let text = e.to_string();
+        assert!(text.starts_with("this drawing has 1 entities"), "{text}");
+        assert!(
+            text.contains("\"link\"") && text.contains("\"none\""),
+            "{text}"
+        );
+        // And with the choice, it imports.
+        let none = ImportOptions {
+            base: BaseMode::Off,
+            ..capped
+        };
+        assert!(
+            import_file(
+                &dwg,
+                &none,
+                &RunOptions::default(),
+                &Document::with_sequential_ids(),
+                &s.search()
+            )
+            .is_ok()
+        );
     }
 
     #[test]

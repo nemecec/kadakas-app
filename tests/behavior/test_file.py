@@ -98,3 +98,16 @@ def test_saving_into_a_missing_directory_is_an_application_error(cad, tmp_path):
     error = cad.error("file.save", {"path": str(tmp_path / "no" / "such" / "dir.kad")})
     assert error["code"] == 4
     assert not (tmp_path / "no").exists()
+
+
+def test_a_file_over_the_session_limit_is_refused_and_the_error_says_how_to_raise_it(make_serve, tmp_path):
+    big = tmp_path / "big.kad"
+    with open(big, "wb") as f:
+        f.truncate(2 * 1024 * 1024 + 1)
+    limited = make_serve("--max-document-mib", 2)
+    err = limited.error("file.open", {"path": str(big)})
+    assert "limit" in err["message"] and "--max-document-mib" in err["message"]
+    # The default limit is 512 MiB: the same file is read, and it is not a document.
+    default = make_serve()
+    err = default.error("file.open", {"path": str(big)})
+    assert "limit" not in err["message"]

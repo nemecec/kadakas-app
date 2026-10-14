@@ -33,6 +33,74 @@ fn kind_of(path: &Path) -> Kind {
     }
 }
 
+/// What the person chose for a drawing with more entities than an import keeps for updates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BaseChoice {
+    /// Keep a link to the original file (`base: "link"`).
+    Link,
+    /// Import without update data (`base: "none"`).
+    NoUpdateData,
+}
+
+impl BaseChoice {
+    /// The value of the import option `base`.
+    fn option(self) -> &'static str {
+        match self {
+            BaseChoice::Link => "link",
+            BaseChoice::NoUpdateData => "none",
+        }
+    }
+}
+
+/// The question about a drawing over the cap: the form that waits, and the numbers for the text.
+#[derive(Clone, Debug, PartialEq)]
+struct BaseQuestion {
+    form: ImportForm,
+    entities: u64,
+    cap: u64,
+    /// The size of the summaries in bytes, when the drawing is over the size limit and not over the
+    /// number of entities.
+    bytes: Option<u64>,
+}
+
+/// The numbers of the question, when the error of the import is the refusal of a drawing over the
+/// limits of the update data: `(entities, cap, bytes)`. The reason says which limit: too many
+/// entities (`cap` is a number of entities) or too large (`cap` and `bytes` are sizes).
+fn base_choice_of(e: &kadakas_api::RpcError) -> Option<(u64, u64, Option<u64>)> {
+    let d = e.details.as_ref()?;
+    let entities = d["entities"].as_u64()?;
+    let cap = d["cap"].as_u64()?;
+    match e.reason {
+        Some(kadakas_api::REASON_BASE_TOO_MANY) => Some((entities, cap, None)),
+        Some(kadakas_api::REASON_BASE_TOO_LARGE) => {
+            Some((entities, cap, Some(d["bytes"].as_u64()?)))
+        }
+        _ => None,
+    }
+}
+
+impl BaseQuestion {
+    /// The question for the person. A link keeps the full path of the file, which can contain the
+    /// user name and which the people who share the document can see (the text says so).
+    fn text(&self) -> String {
+        let units = kadakas_units::current();
+        let count = |v: u64| units.number_text(v as f64, 0);
+        match self.bytes {
+            None => tr!(
+                "io-dialog-base-question",
+                entities = count(self.entities),
+                cap = count(self.cap)
+            ),
+            Some(bytes) => tr!(
+                "io-dialog-base-question-large",
+                entities = count(self.entities),
+                size = count(bytes / 1_000_000),
+                cap = count(self.cap / 1_000_000)
+            ),
+        }
+    }
+}
+
 /// Options of the import dialog.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImportForm {
@@ -46,6 +114,9 @@ pub struct ImportForm {
     pub hatches: bool,
     /// DXF and DWG: keep the source of each object, for updates (IOP-22).
     pub track_source: bool,
+    /// DXF and DWG: the answer to the question about a drawing with too many entities for an
+    /// update base. `None`: not asked yet (the API default, `auto`).
+    pub base: Option<BaseChoice>,
     pub source_crs: String,
     pub target_crs: String,
     pub class_field: String,
@@ -68,6 +139,7 @@ impl ImportForm {
             only_points_with_z: false,
             hatches: true,
             track_source: true,
+            base: None,
             source_crs: String::new(),
             target_crs: String::new(),
             class_field: String::new(),
@@ -112,6 +184,9 @@ impl ImportForm {
                 }
                 if self.only_points_with_z {
                     o.insert("points".into(), json!("with_z"));
+                }
+                if let Some(base) = self.base {
+                    o.insert("base".into(), json!(base.option()));
                 }
             }
             Kind::Ifc => {}
@@ -185,6 +260,9 @@ impl ExportForm {
 pub struct IoUi {
     import: Option<ImportForm>,
     export: Option<ExportForm>,
+    /// Drawings with too much update data wait for the choice of the person, one question at a
+    /// time. A second one that comes meanwhile waits in the queue.
+    base_questions: std::collections::VecDeque<BaseQuestion>,
 }
 
 /// What a dialog did.
@@ -226,6 +304,64 @@ impl IoUi {
         if let Some(p) = picked {
             self.export = Some(ExportForm::new(p));
         }
+    }
+
+    /// Runs `import.file` for the form. A drawing over the cap is not an error for the person: the
+    /// question comes next (`show_base_question`), and the import runs again with the answer.
+    fn run_import(
+        &mut self,
+        session: &mut Session,
+        form: ImportForm,
+        status: &mut String,
+    ) -> IoEvent {
+        match session.import_file_trusted(form.params()) {
+            Ok(r) => {
+                *status = tr!(
+                    "io-dialog-imported-objects-skipped",
+                    imported = r["imported"].as_u64().unwrap_or(0),
+                    skipped = r["skipped"].as_u64().unwrap_or(0)
+                );
+                IoEvent::Imported
+            }
+            Err(e) => {
+                if let Some((entities, cap, bytes)) = base_choice_of(&e) {
+                    self.base_questions.push_back(BaseQuestion {
+                        form,
+                        entities,
+                        cap,
+                        bytes,
+                    });
+                } else {
+                    *status = tr!("io-dialog-import-failed", message = e.message);
+                }
+                IoEvent::None
+            }
+        }
+    }
+
+    /// The question about a drawing with more entities than Kadakas keeps for updates. Returns
+    /// `Some(Some(choice))` for a choice, `Some(None)` for Cancel and `None` while it waits.
+    fn show_base_question(&self, ctx: &egui::Context) -> Option<Option<BaseChoice>> {
+        let q = self.base_questions.front()?;
+        let text = q.text();
+        let mut answer = None;
+        egui::Modal::new(egui::Id::new("win-import-base")).show(ctx, |ui| {
+            ui.set_max_width(460.0);
+            ui.heading(tr!("io-dialog-base-question-title"));
+            ui.label(text);
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(tr!("io-dialog-base-keep-link")).clicked() {
+                    answer = Some(Some(BaseChoice::Link));
+                }
+                if ui.button(tr!("io-dialog-base-no-update-data")).clicked() {
+                    answer = Some(Some(BaseChoice::NoUpdateData));
+                }
+                if ui.button(tr!("io-dialog-cancel")).clicked() {
+                    answer = Some(None);
+                }
+            });
+        });
+        answer
     }
 
     /// Draws the open dialogs. Runs the method when the user presses the button.
@@ -339,21 +475,25 @@ impl IoUi {
                     });
                 });
             if run {
-                let params = form.params();
-                match session.import_file_trusted(params) {
-                    Ok(r) => {
-                        *status = tr!(
-                            "io-dialog-imported-objects-skipped",
-                            imported = r["imported"].as_u64().unwrap_or(0),
-                            skipped = r["skipped"].as_u64().unwrap_or(0)
-                        );
-                        event = IoEvent::Imported;
-                    }
-                    Err(e) => *status = tr!("io-dialog-import-failed", message = e.message),
-                }
+                let form = form.clone();
+                event = self.run_import(session, form, status);
             }
             if run || close {
                 self.import = None;
+            }
+        }
+        match self.show_base_question(ctx) {
+            None => {}
+            // Cancel: the question is gone and nothing was imported.
+            Some(None) => {
+                self.base_questions.pop_front();
+            }
+            Some(Some(choice)) => {
+                if let Some(q) = self.base_questions.pop_front() {
+                    let mut form = q.form;
+                    form.base = Some(choice);
+                    event = self.run_import(session, form, status);
+                }
             }
         }
         if let Some(form) = self.export.as_mut() {
@@ -455,6 +595,119 @@ mod tests {
         assert_eq!(p["options"]["points"], "with_z");
         assert_eq!(p["options"]["origin"], "file");
         assert!(p["options"].get("source_crs").is_none());
+    }
+
+    #[test]
+    fn the_answer_about_a_big_drawing_goes_into_the_options() {
+        let mut f = ImportForm::new("/a/site.dxf".into());
+        assert!(f.params()["options"].get("base").is_none());
+        f.base = Some(BaseChoice::Link);
+        assert_eq!(f.params()["options"]["base"], "link");
+        f.base = Some(BaseChoice::NoUpdateData);
+        assert_eq!(f.params()["options"]["base"], "none");
+        // Files that have no update data ignore it.
+        let mut g = ImportForm::new("/a/trees.geojson".into());
+        g.base = Some(BaseChoice::Link);
+        assert!(g.params()["options"].get("base").is_none());
+    }
+
+    #[test]
+    fn a_drawing_over_the_cap_raises_the_question_and_cancel_imports_nothing() {
+        let dir = std::env::temp_dir().join(format!("kadakas-iodlg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.dxf");
+        let mut text = String::from("0\nSECTION\n2\nENTITIES\n");
+        for k in 0..11 {
+            text.push_str(&format!("0\nPOINT\n10\n{k}\n20\n0\n"));
+        }
+        text.push_str("0\nENDSEC\n0\nEOF\n");
+        std::fs::write(&path, text).unwrap();
+        let mut ui = IoUi::default();
+        let mut session = Session::default();
+        // The session keeps the update data of at most 10 entities.
+        session.set_limits(kadakas_api::SessionLimits {
+            base_records: 10,
+            ..Default::default()
+        });
+        let mut status = String::new();
+        let before = session.editor.doc().clone();
+        let event = ui.run_import(&mut session, ImportForm::new(path.clone()), &mut status);
+        assert_eq!(event, IoEvent::None);
+        assert!(status.is_empty(), "no error message: the person is asked");
+        let q = ui
+            .base_questions
+            .front()
+            .cloned()
+            .expect("the question waits");
+        assert_eq!((q.entities, q.cap, q.bytes), (11, 10, None));
+        assert_eq!(session.editor.doc(), &before);
+        // A second question while one is on the screen waits in the queue.
+        ui.run_import(&mut session, ImportForm::new(path.clone()), &mut status);
+        assert_eq!(ui.base_questions.len(), 2);
+        // The window shows the question in a frame and waits for a click.
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |u| {
+            assert_eq!(ui.show_base_question(u.ctx()), None);
+            let mut s = Session::default();
+            assert_eq!(ui.show(u.ctx(), &mut s, &mut String::new()), IoEvent::None);
+        });
+        assert_eq!(ui.base_questions.len(), 2);
+        // The text names the numbers, says that a link has the full path and that others see it,
+        // and exists in Estonian.
+        let text = q.text();
+        assert!(text.contains("11") && text.contains("10"), "{text}");
+        assert!(text.contains("full path") && text.contains("see"), "{text}");
+        let et = kadakas_l10n::with_language("et", || q.text());
+        assert!(et.contains("11") && et != text, "{et}");
+        // The answer "without update data" imports, and the next question stays.
+        let answered = ui.base_questions.pop_front().unwrap();
+        let mut form = answered.form;
+        form.base = Some(BaseChoice::NoUpdateData);
+        assert_eq!(
+            ui.run_import(&mut session, form, &mut status),
+            IoEvent::Imported
+        );
+        assert_eq!(ui.base_questions.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_question_about_too_large_summaries_names_sizes() {
+        let q = BaseQuestion {
+            form: ImportForm::new("/a/b.dxf".into()),
+            entities: 150_000,
+            cap: 67_108_864,
+            bytes: Some(80_000_000),
+        };
+        let text = q.text();
+        assert!(
+            text.contains("150000") && text.contains("80") && text.contains("67"),
+            "{text}"
+        );
+        assert!(text.contains("full path"), "{text}");
+        let et = kadakas_l10n::with_language("et", || q.text());
+        assert!(et != text && et.contains("150000"), "{et}");
+    }
+
+    #[test]
+    fn only_the_refusal_of_a_big_drawing_is_a_question() {
+        let plain = kadakas_api::RpcError::validation("bad file");
+        assert_eq!(base_choice_of(&plain), None);
+        let no_numbers =
+            kadakas_api::RpcError::validation("x").with_reason(kadakas_api::REASON_BASE_TOO_MANY);
+        assert_eq!(base_choice_of(&no_numbers), None);
+        let many = kadakas_api::RpcError::validation("x")
+            .with_reason(kadakas_api::REASON_BASE_TOO_MANY)
+            .with_details(json!({"entities": 300000, "cap": 200000}));
+        assert_eq!(base_choice_of(&many), Some((300_000, 200_000, None)));
+        let large = kadakas_api::RpcError::validation("x")
+            .with_reason(kadakas_api::REASON_BASE_TOO_LARGE)
+            .with_details(json!({"entities": 5, "bytes": 99, "cap": 64}));
+        assert_eq!(base_choice_of(&large), Some((5, 64, Some(99))));
+        let no_bytes = kadakas_api::RpcError::validation("x")
+            .with_reason(kadakas_api::REASON_BASE_TOO_LARGE)
+            .with_details(json!({"entities": 5, "cap": 64}));
+        assert_eq!(base_choice_of(&no_bytes), None);
     }
 
     #[test]
