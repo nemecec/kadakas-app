@@ -55,7 +55,7 @@ pub fn build(report: &Report, parts: &PayloadParts) -> Result<String, FeedbackEr
     }
     let mut m = json!({
         "protocol": PROTOCOL,
-        "client_id": report.id,
+        "client_id": report.client_id(),
         "kind": report.kind,
         "title": report.title,
         "body": report.body,
@@ -91,13 +91,13 @@ pub fn build(report: &Report, parts: &PayloadParts) -> Result<String, FeedbackEr
 }
 
 /// Checks a stored payload before it is approved: JSON of protocol 1 for this report.
-pub fn check(payload: &str, id: &str) -> Result<(), FeedbackError> {
+pub fn check(payload: &str, client_id: &str) -> Result<(), FeedbackError> {
     if payload.len() > MAX_PAYLOAD_BYTES {
         return Err(FeedbackError::Invalid("the payload is too large".into()));
     }
     let v: Value = serde_json::from_str(payload)
         .map_err(|e| FeedbackError::Invalid(format!("the payload is not JSON: {e}")))?;
-    if v["protocol"] != PROTOCOL || v["client_id"] != id {
+    if v["protocol"] != PROTOCOL || v["client_id"] != client_id {
         return Err(FeedbackError::Invalid(
             "the payload is not for this report".into(),
         ));
@@ -113,6 +113,7 @@ mod tests {
     fn report() -> Report {
         Report {
             id: "fb-1".into(),
+            nonce: String::new(),
             kind: Kind::Bug,
             title: "t".into(),
             body: "b".into(),
@@ -145,6 +146,18 @@ mod tests {
     }
 
     #[test]
+    fn nonce_in_client_id() {
+        let mut r = report();
+        r.nonce = "00112233445566ff".into();
+        assert_eq!(r.client_id(), "fb-1-00112233445566ff");
+        let p = build(&r, &PayloadParts::default()).unwrap();
+        let v: Value = serde_json::from_str(&p).unwrap();
+        assert_eq!(v["client_id"], "fb-1-00112233445566ff");
+        check(&p, &r.client_id()).unwrap();
+        assert!(check(&p, "fb-1").is_err());
+    }
+
+    #[test]
     fn text_only_payload() {
         let p = build(&report(), &PayloadParts::default()).unwrap();
         let v: Value = serde_json::from_str(&p).unwrap();
@@ -158,7 +171,7 @@ mod tests {
         assert!(v.get("wanted").is_none());
         assert_eq!(v["context"]["client_name"], "c");
         assert_eq!(v["attachments"], json!({}));
-        check(&p, "fb-1").unwrap();
+        check(&p, &report().client_id()).unwrap();
         assert!(check(&p, "fb-2").is_err());
         assert!(check("{", "fb-1").is_err());
         assert!(check(&"x".repeat(MAX_PAYLOAD_BYTES + 1), "fb-1").is_err());

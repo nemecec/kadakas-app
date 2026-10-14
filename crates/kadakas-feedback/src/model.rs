@@ -231,6 +231,10 @@ impl Draft {
 pub struct Report {
     /// The local id (`fb-12`). It is also the key against double delivery at the server.
     pub id: String,
+    /// 16 random hex characters made with the report. They keep `client_id` unique when the
+    /// outbox restarts at `fb-1`. Empty in reports from older outboxes.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub nonce: String,
     pub kind: Kind,
     pub title: String,
     pub body: String,
@@ -278,6 +282,16 @@ pub struct Report {
 }
 
 impl Report {
+    /// The id on the wire: `fb-{seq}-{nonce}`, or just the local id for a report without a nonce.
+    /// The server keys a report on (installation, `client_id`).
+    pub fn client_id(&self) -> String {
+        if self.nonce.is_empty() {
+            self.id.clone()
+        } else {
+            format!("{}-{}", self.id, self.nonce)
+        }
+    }
+
     pub fn attachment(&self, kind: AttachmentKind) -> Option<&AttachmentMeta> {
         self.attachments.iter().find(|a| a.kind == kind)
     }

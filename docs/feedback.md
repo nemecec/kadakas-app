@@ -123,7 +123,7 @@ With "move to origin" or "remove the georeference" on, the entries of record dat
 
 A folder of files, owner-only on Unix:
 
-- `outbox.json`: `{"version": 1, "next_seq": n, "reports": [...]}`. At most 2 MiB. A broken file is copied to `outbox.bad.json` and the outbox starts again. A file with a newer `version` is never read, copied over or written: the reports of this run go to memory only, `feedback.list` has a `note`, and Help > Feedback says so. A report has, among others, `attempts` (counted failed starts), `retries` (all failed starts), `next_try` and `claimed_until` (seconds since 1970).
+- `outbox.json`: `{"version": 1, "next_seq": n, "reports": [...]}`. At most 2 MiB. A broken file is copied to `outbox.bad.json` and the outbox starts again; the numbers restart at `fb-1`, but each new report has a new nonce, so its `client_id` does not repeat an earlier one of the same installation. A file with a newer `version` is never read, copied over or written: the reports of this run go to memory only, `feedback.list` has a `note`, and Help > Feedback says so. A report has, among others, `nonce`, `attempts` (counted failed starts), `retries` (all failed starts), `next_try` and `claimed_until` (seconds since 1970).
 - `settings.json`: `{"send": true|false|null, "url": null|"https://...", "installation": null|"<uuid>"}`. `installation` is a random version 4 UUID that is made at the first need. It identifies this installation of Kadakas, not a person, and it is not secret. It goes in every message (see the protocol), so that the server can drop a report that arrives twice. The consent text says so.
 - `fb-N.excerpt.kad.json`, `fb-N.render.png`, `fb-N.screenshot.png`, `fb-N.calls.json`, `fb-N.log.txt`: the attachments.
 - `fb-N.payload.json`: the approved message.
@@ -180,7 +180,7 @@ If the address has a query or a fragment, the path goes before it. The body is o
 ```json
 {
   "protocol": 1,
-  "client_id": "fb-12",
+  "client_id": "fb-12-9f3a0c51d2e87b46",
   "installation": "0190a1b2-c3d4-4e5f-8a6b-0123456789ab",
   "kind": "bug",
   "title": "Fillet fails on a closed polyline",
@@ -201,7 +201,7 @@ If the address has a query or a fragment, the path goes before it. The body is o
 ```
 
 - `wanted`, `tried`, `method`, `error`, `severity` and each attachment are missing when empty. `attachments` is `{}` for a text-only report. A person can have removed any attachment in the review.
-- `client_id` is local to one installation and one outbox. `installation` is the random UUID of the installation (it identifies the installation, not the person, and the consent text says so). The server keys a report on the pair (`installation`, `client_id`) and drops a repeat of it.
+- `client_id` is `fb-{seq}-{nonce}`: the local id (`fb-12`) and a random nonce of 16 hex characters (64 random bits), made when the report is created. A report from an older outbox has no nonce; its `client_id` is just the local id. The nonce keeps `client_id` unique when the outbox starts again at `fb-1` (see the note on a broken `outbox.json`) while the installation stays the same. `installation` is the random UUID of the installation (it identifies the installation, not the person, and the consent text says so). The server keys a report on the pair (`installation`, `client_id`) and drops a repeat of it.
 - All texts are UTF-8, scrubbed, and within the limits above. The server still has to treat everything as untrusted input.
 - Images are PNG, at most 1 MiB each before base64. The excerpt is at most 512 KiB.
 
