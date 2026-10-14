@@ -980,13 +980,16 @@ mod shape_serde {
             let mut map = serde_json::Map::new();
             let (mut underlay, mut png) = (false, None);
             while let Some(key) = access.next_key::<String>()? {
-                if underlay && key == "png" {
+                let v = if underlay && key == "png" {
                     png = Some(access.next_value::<PngData>()?);
-                    map.insert(key, Value::String(String::new()));
+                    Value::String(String::new())
                 } else {
                     let v: Value = access.next_value()?;
                     underlay |= key == "kind" && v.as_str() == Some("underlay");
-                    map.insert(key, v);
+                    v
+                };
+                if map.insert(key.clone(), v).is_some() {
+                    return Err(serde::de::Error::custom(format!("duplicate field `{key}`")));
                 }
             }
             Ok((Value::Object(map), png))
@@ -1028,6 +1031,8 @@ mod shape_serde {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Shape, D::Error> {
         let (raw, png) = d.deserialize_any(RawShape)?;
+        // The picture was taken out of `raw` only for a shape with the kind `underlay`, a kind that
+        // this version knows. It never becomes `Shape::Unknown`, so no text is lost.
         match Shape::deserialize(&raw) {
             Ok(Shape::Underlay(mut u)) => {
                 if let Some(png) = png {
@@ -1035,6 +1040,7 @@ mod shape_serde {
                 }
                 Ok(Shape::Underlay(u))
             }
+            Err(e) if png.is_some() => Err(serde::de::Error::custom(e)),
             Ok(shape) => Ok(shape),
             Err(e) => {
                 // Only a kind that we do not know becomes `Unknown`. A known kind with bad fields is an error.
@@ -1194,10 +1200,73 @@ fn check_version(version: u64) -> Result<(), LoadError> {
     }
 }
 
-/// Reads only `format_version` of a document; serde skips every other field without storing it.
-#[derive(Deserialize)]
+/// Reads only `format_version` of a document. Every other field is skipped without storing it.
+/// It accepts a top-level object only, and refuses a second `format_version`.
 struct VersionProbe {
     format_version: Option<Value>,
+}
+
+impl<'de> Deserialize<'de> for VersionProbe {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{Error, IgnoredAny, MapAccess, Visitor};
+        struct Probe;
+        impl<'de> Visitor<'de> for Probe {
+            type Value = VersionProbe;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a document")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<VersionProbe, A::Error> {
+                let mut version = None;
+                while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                    if key == "format_version" {
+                        if version.is_some() {
+                            return Err(A::Error::custom("duplicate key `format_version`"));
+                        }
+                        version = Some(map.next_value::<Value>()?);
+                    } else {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                }
+                Ok(VersionProbe {
+                    format_version: version,
+                })
+            }
+        }
+        d.deserialize_map(Probe)
+    }
+}
+
+/// The error for a text that does not parse as a document. `first` is the error of the typed
+/// parse. `probe` reads only the version, so a newer or older file says so, and a file without a
+/// version says that. A reader error (a failed read) is reported as it is.
+fn explain_failure(
+    first: serde_json::Error,
+    probe: impl FnOnce() -> Result<VersionProbe, serde_json::Error>,
+) -> LoadError {
+    if first.is_io() {
+        return LoadError::Parse(first.to_string());
+    }
+    match probe() {
+        Ok(VersionProbe {
+            format_version: Some(Value::Number(n)),
+        }) if n.is_u64() => match check_version(n.as_u64().unwrap_or_default()) {
+            Err(e) => e,
+            Ok(()) => LoadError::Parse(first.to_string()),
+        },
+        // JSON, but not a document: no version, or a version that is no number.
+        Ok(_) => LoadError::Parse("missing format_version".into()),
+        Err(p) if p.is_data() => {
+            let m = p.to_string();
+            if m.starts_with("duplicate key") {
+                LoadError::Parse(m)
+            } else {
+                // Not an object at the top.
+                LoadError::Parse("missing format_version".into())
+            }
+        }
+        // Not JSON at all, or a failed seek: the first error says where.
+        Err(_) => LoadError::Parse(first.to_string()),
+    }
 }
 
 impl Default for Document {
@@ -1243,7 +1312,19 @@ impl Document {
     /// The one way to load a document from text: parses the JSON, refuses newer
     /// formats, migrates older ones, validates and repairs the ID counter.
     pub fn from_json(text: &str) -> Result<Document, LoadError> {
-        Document::from_reader(std::io::Cursor::new(text.as_bytes()))
+        Document::from_slice(text.as_bytes())
+    }
+
+    /// Like `from_json`, for bytes that are already in memory (the browser's file picker). Use
+    /// this for bytes and `from_reader` for files: parsing a slice is faster than parsing a reader.
+    /// There is no `serde_json::Value` copy of the document: the typed parser reads the bytes.
+    pub fn from_slice(bytes: &[u8]) -> Result<Document, LoadError> {
+        match serde_json::from_slice::<Document>(bytes) {
+            Ok(doc) => doc.checked(),
+            Err(e) => Err(explain_failure(e, || {
+                serde_json::from_slice::<VersionProbe>(bytes)
+            })),
+        }
     }
 
     /// Like `from_json`, but reads the JSON from a reader (a buffered file). The text is never held
@@ -1251,38 +1332,27 @@ impl Document {
     /// feeds the typed parser directly. `Seek` is for the error path only: when the typed parse
     /// fails, the reader goes back to the start and a second pass reads just `format_version`
     /// (everything else is skipped without storing it), so a newer or an older file still gets its
-    /// own clear error and not a complaint about its shape.
+    /// own clear error and not a complaint about its shape. If the reader cannot seek, the error
+    /// of the first pass is the answer.
+    ///
+    /// A known field that appears twice in the file is an error (`duplicate field`), because
+    /// two readers could take different values. The old reading through a `Value` took the last one.
     pub fn from_reader<R: std::io::Read + std::io::Seek>(
         mut reader: R,
     ) -> Result<Document, LoadError> {
         match serde_json::from_reader::<_, Document>(&mut reader) {
-            Ok(doc) => {
-                check_version(u64::from(doc.format_version))?;
-                doc.finish_load()
-            }
-            Err(e) => {
-                reader
-                    .rewind()
-                    .map_err(|e| LoadError::Parse(e.to_string()))?;
-                Err(
-                    match serde_json::from_reader::<_, VersionProbe>(&mut reader) {
-                        Ok(VersionProbe {
-                            format_version: Some(Value::Number(n)),
-                        }) if n.as_u64().is_some() => {
-                            match check_version(n.as_u64().unwrap_or_default()) {
-                                Err(v) => v,
-                                Ok(()) => LoadError::Parse(e.to_string()),
-                            }
-                        }
-                        // The text is JSON, but not a document: no version, or a version that is no number.
-                        Ok(_) => LoadError::Parse("missing format_version".into()),
-                        Err(p) if p.is_data() => LoadError::Parse("missing format_version".into()),
-                        // Not JSON at all: the first error says where.
-                        Err(_) => LoadError::Parse(e.to_string()),
-                    },
-                )
-            }
+            Ok(doc) => doc.checked(),
+            Err(e) => Err(explain_failure(e, || {
+                reader.rewind().map_err(serde_json::Error::io)?;
+                serde_json::from_reader::<_, VersionProbe>(&mut reader)
+            })),
         }
+    }
+
+    /// The version check and the repairs after a typed parse.
+    fn checked(self) -> Result<Document, LoadError> {
+        check_version(u64::from(self.format_version))?;
+        self.finish_load()
     }
 
     /// Like `from_json`, for JSON that is already parsed.

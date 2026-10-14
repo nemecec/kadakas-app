@@ -14,26 +14,35 @@ pub fn parse_document(text: &str) -> Result<Document, String> {
 }
 
 /// Parses the bytes of a document file (the browser has them from the file picker). The bytes are
-/// read as a stream, so there is no copy of them as text or as a `serde_json::Value`.
+/// parsed in place (`Document::from_slice`): no copy as text and no `serde_json::Value`. The size
+/// limit is the same as for a file; there is no file to check before the read in the browser.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // the browser build uses it
 pub fn parse_document_bytes(bytes: &[u8]) -> Result<Document, String> {
-    Document::from_reader(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())
+    parse_document_bytes_capped(
+        bytes,
+        kadakas_api::SessionLimits::default().document_file_bytes,
+    )
 }
 
-/// Reads a document file from a buffered reader. A file above the size limit is refused before
-/// it is read.
+/// [`parse_document_bytes`] with a size limit.
+fn parse_document_bytes_capped(bytes: &[u8], max: u64) -> Result<Document, String> {
+    if bytes.len() as u64 > max {
+        return Err(format!(
+            "the file is {} bytes; the limit is {max} bytes",
+            bytes.len()
+        ));
+    }
+    Document::from_slice(bytes).map_err(|e| e.to_string())
+}
+
+/// Reads a document file from a buffered reader. Only a regular file is read, and a file above
+/// the size limit is refused before it is read.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_document(path: &Path) -> Result<Document, String> {
-    let cannot = |e: std::io::Error| tr!("file-io-cannot-read", path = path.display(), e = e);
-    let file = std::fs::File::open(path).map_err(cannot)?;
-    let len = file.metadata().map_err(cannot)?.len();
     let max = kadakas_api::SessionLimits::default().document_file_bytes;
-    if len > max {
-        return Err(cannot(std::io::Error::other(format!(
-            "the file is {len} bytes; the limit is {max} bytes"
-        ))));
-    }
-    Document::from_reader(std::io::BufReader::new(file)).map_err(|e| e.to_string())
+    let reader = fsio::open_regular(path, max)
+        .map_err(|e| tr!("file-io-cannot-read", path = path.display(), e = e))?;
+    Document::from_reader(reader).map_err(|e| e.to_string())
 }
 
 /// Saves atomically (temporary file, then rename) and keeps the old file as `.bak`.
@@ -184,6 +193,10 @@ mod tests {
             doc
         );
         assert!(parse_document_bytes(b"{\"format_version\":").is_err());
+        let text = std::fs::read(&path).unwrap();
+        assert!(parse_document_bytes_capped(&text, text.len() as u64).is_ok());
+        let e = parse_document_bytes_capped(&text, text.len() as u64 - 1).unwrap_err();
+        assert!(e.contains("limit"), "{e}");
         // The size is checked before the file is read: a hole of 3 GiB is refused at once.
         let big = dir.join("big.kad");
         std::fs::File::create(&big)

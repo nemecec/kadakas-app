@@ -61,8 +61,9 @@ fn request_path(s: &Session, m: &Map<String, Value>, write: bool) -> Result<Path
         .map_err(RpcError::policy)
 }
 
-fn load(path: &Path) -> Result<Document, RpcError> {
-    crate::files::read_document(path)
+/// Reads a document file with the file size limit of the session.
+fn load(s: &Session, path: &Path) -> Result<Document, RpcError> {
+    crate::files::read_document_capped(path, s.limits.document_file_bytes)
 }
 
 /// Resource IDs of a source document for the `items` of a request.
@@ -167,7 +168,7 @@ pub(crate) fn run(
     match method {
         "resource.list_file" => {
             let path = request_path(s, m, false)?;
-            let src = load(&path)?;
+            let src = load(s, &path)?;
             let rows: Vec<Value> = library::list(&src, None, None).iter().map(|i| json!({"id": i.id, "name": i.name, "type": i.type_name, "depends_on": i.depends_on})).collect();
             Ok(json!({
                 "resources": rows,
@@ -177,7 +178,7 @@ pub(crate) fn run(
         }
         "resource.import_from_file" => {
             let path = request_path(s, m, false)?;
-            let src = load(&path)?;
+            let src = load(s, &path)?;
             let conflict = match m.get("on_conflict").and_then(Value::as_str) {
                 None => Conflict::Rename,
                 Some(c) => Conflict::from_name(c)
@@ -252,7 +253,7 @@ pub(crate) fn run(
                     let name = e.file_name().to_string_lossy().to_string();
                     if is_library_name(&name)
                         && !name.eq_ignore_ascii_case("favorites.json")
-                        && let Ok(doc) = load(&e.path())
+                        && let Ok(doc) = load(s, &e.path())
                     {
                         files.push(json!({"file": name, "resources": doc.resources.len()}));
                     }

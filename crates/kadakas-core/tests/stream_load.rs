@@ -66,13 +66,10 @@ fn measure<T>(run: impl FnOnce() -> T) -> Use<T> {
     }
 }
 
-const OBJECTS: u64 = 200_000;
-const PICTURE_BYTES: usize = 20 * 1000 * 1000;
-
-/// 200k circles and one 20 MB underlay picture (PNG signature, then bytes).
-fn big_document() -> Document {
+/// `objects` circles and one underlay picture (PNG signature, then `picture_bytes` bytes).
+fn big_document(objects: u64, picture_bytes: usize) -> Document {
     let mut doc = Document::with_sequential_ids();
-    for n in 0..OBJECTS {
+    for n in 0..objects {
         let shape = Shape::Circle {
             center: DVec2::new(n as f64, (n % 977) as f64),
             radius: 5.0 + (n % 13) as f64,
@@ -81,7 +78,7 @@ fn big_document() -> Document {
         doc.objects.insert(o.id, o);
     }
     let mut png = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
-    png.extend((0..PICTURE_BYTES).map(|i| (i.wrapping_mul(2_654_435_761) >> 7) as u8));
+    png.extend((0..picture_bytes).map(|i| (i.wrapping_mul(2_654_435_761) >> 7) as u8));
     let picture = Underlay {
         name: "survey".into(),
         min: DVec2::ZERO,
@@ -92,7 +89,7 @@ fn big_document() -> Document {
         opacity: 1.0,
         source: String::new(),
     };
-    let id = ObjectId::from_num(10 + OBJECTS);
+    let id = ObjectId::from_num(10 + objects);
     let o = Object::new(
         id,
         FIRST_LAYER,
@@ -103,75 +100,108 @@ fn big_document() -> Document {
     doc
 }
 
-fn temp_file(name: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("kad-stream-{name}-{}.kad", std::process::id()))
+/// A temporary file that is deleted when the test ends, also when it fails.
+struct TempFile(std::path::PathBuf);
+
+impl TempFile {
+    fn new(name: &str) -> TempFile {
+        TempFile(std::env::temp_dir().join(format!("kad-stream-{name}-{}.kad", std::process::id())))
+    }
 }
 
-#[test]
-fn a_large_document_streams_through_a_small_buffer() {
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Saves and loads a document of this size and checks the memory. With `old_way`, it also runs
+/// the old code (the whole text, then a `Value`) and checks that the new load needs a third of its
+/// transient memory.
+fn check_memory(name: &str, objects: u64, picture_bytes: usize, old_way: bool) {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let path = temp_file("big");
-    let doc = big_document();
+    let file = TempFile::new(name);
+    let path = &file.0;
+    let doc = big_document(objects, picture_bytes);
 
     // Save: the bytes go from the serializer to the file. Nothing near the file size is held.
     let save = measure(|| {
-        let mut w = BufWriter::new(std::fs::File::create(&path).unwrap());
+        let mut w = BufWriter::new(std::fs::File::create(path).unwrap());
         doc.write_pretty(&mut w).unwrap();
         w.flush().unwrap();
     });
-    let file_len = std::fs::metadata(&path).unwrap().len() as usize;
-    assert!(file_len > PICTURE_BYTES + 20_000_000, "{file_len}");
+    let file_len = std::fs::metadata(path).unwrap().len() as usize;
+    assert!(file_len > picture_bytes, "{file_len}");
     println!(
-        "save: file {file_len} bytes, peak extra {} bytes",
+        "{name} save: file {file_len} bytes, peak extra {} bytes",
         save.peak
     );
     assert!(save.peak < 1024 * 1024, "the save held {} bytes", save.peak);
-    // The old way: the whole text in a String.
-    let old_save = measure(|| serde_json::to_string_pretty(&doc).unwrap().len());
-    println!(
-        "save, before (to_string_pretty): peak extra {} bytes",
-        old_save.peak
-    );
-    assert_eq!(old_save.value, file_len);
-    assert!(old_save.peak > file_len);
 
     // Load: the reader feeds the typed parser. What is not kept in the document is the extra memory.
     let load = measure(|| {
-        let file = std::fs::File::open(&path).unwrap();
+        let file = std::fs::File::open(path).unwrap();
         Document::from_reader(BufReader::new(file)).unwrap()
     });
     let transient = load.peak - load.kept;
     println!(
-        "load: file {file_len} bytes, peak extra {} bytes, kept by the document {} bytes, transient {transient} bytes",
+        "{name} load: file {file_len} bytes, peak extra {} bytes, kept by the document {} bytes, transient {transient} bytes",
         load.peak, load.kept
     );
     assert_eq!(load.value, doc);
-    assert_eq!(load.value.objects.len(), OBJECTS as usize + 1);
-
-    // The old way: the text, then a `Value` tree of the whole document, then the document.
-    let old = measure(|| {
-        let text = std::fs::read_to_string(&path).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        drop(text);
-        Document::from_value(value).unwrap()
-    });
-    let old_transient = old.peak - old.kept;
-    println!(
-        "load, before (read_to_string + Value): peak extra {} bytes, transient {old_transient} bytes",
-        old.peak
-    );
-    assert_eq!(old.value, doc);
-
-    // The transient memory is below half of the file, and far below the old way.
+    assert_eq!(load.value.objects.len(), objects as usize + 1);
+    // The transient memory is below half of the file. It is the buffer of the parser for the one
+    // text of the picture.
     assert!(
         transient < file_len / 2,
         "the load held {transient} bytes besides the document; the file has {file_len}"
     );
-    assert!(
-        transient * 3 < old_transient,
-        "{transient} vs {old_transient}"
+
+    // The same bytes in memory.
+    let bytes = std::fs::read(path).unwrap();
+    let slice = measure(|| Document::from_slice(&bytes).unwrap());
+    assert_eq!(slice.value, doc);
+    println!(
+        "{name} from_slice: transient {} bytes",
+        slice.peak - slice.kept
     );
-    let _ = std::fs::remove_file(&path);
+
+    if old_way {
+        let old_save = measure(|| serde_json::to_string_pretty(&doc).unwrap().len());
+        println!("{name} save, before: peak extra {} bytes", old_save.peak);
+        assert_eq!(old_save.value, file_len);
+        assert!(old_save.peak > file_len);
+        let old = measure(|| {
+            let text = std::fs::read_to_string(path).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            drop(text);
+            Document::from_value(value).unwrap()
+        });
+        let old_transient = old.peak - old.kept;
+        println!(
+            "{name} load, before (read_to_string + Value): peak extra {} bytes, transient {old_transient} bytes",
+            old.peak
+        );
+        assert_eq!(old.value, doc);
+        assert!(
+            transient * 3 < old_transient,
+            "{transient} vs {old_transient}"
+        );
+    }
+}
+
+/// The same checks as the big test, with a small document (20k objects and a 2 MB picture).
+#[test]
+fn a_small_document_streams_through_a_small_buffer() {
+    check_memory("small", 20_000, 2_000_000, false);
+}
+
+/// 200k objects and a 20 MB picture, and the comparison with the old code. It takes a minute
+/// in a debug build: the perf job of CI runs it (`--ignored`).
+#[test]
+#[ignore = "large: takes about a minute in a debug build"]
+fn a_large_document_streams_through_a_small_buffer() {
+    check_memory("large", 200_000, 20_000_000, true);
 }
 
 #[test]

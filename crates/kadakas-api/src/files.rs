@@ -5,7 +5,6 @@
 //! is atomic. Both ways stream (DOC-19): a load parses from a buffered reader and a save writes
 //! through a buffered writer into the temporary file, so the text of the file is never in memory.
 
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use kadakas_core::model::{Document, LoadError};
@@ -51,31 +50,20 @@ pub fn read_document(path: &Path) -> Result<Document, RpcError> {
     read_document_capped(path, DEFAULT_DOCUMENT_FILE_BYTES)
 }
 
-/// Reads and checks a document file. A file larger than `max_bytes` is refused before it is read.
-/// The file is parsed from a buffered reader: the text is never held in memory as a whole.
+/// Reads and checks a document file. Only a regular file is read, and a file larger than
+/// `max_bytes` is refused before it is read. The file is parsed from a buffered reader: the text
+/// is never held in memory as a whole.
 pub fn read_document_capped(path: &Path, max_bytes: u64) -> Result<Document, RpcError> {
-    let cannot = |e: std::io::Error| {
+    use fsio::OpenError;
+    let reader = fsio::open_regular(path, max_bytes).map_err(|e| {
         let m = format!("cannot read {}: {e}", path.display());
-        if e.kind() == std::io::ErrorKind::NotFound {
-            RpcError::not_found(m)
-        } else {
-            RpcError::app(m)
+        match e {
+            OpenError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => RpcError::not_found(m),
+            OpenError::Io(_) => RpcError::app(m),
+            OpenError::NotRegular | OpenError::TooLarge { .. } => RpcError::validation(m),
         }
-    };
-    let file = std::fs::File::open(path).map_err(cannot)?;
-    let len = file.metadata().map_err(cannot)?.len();
-    if len > max_bytes {
-        return Err(RpcError::validation(format!(
-            "{}: the file is {len} bytes; the limit for a document file is {max_bytes} bytes",
-            path.display()
-        )));
-    }
-    Document::from_reader(BufReader::new(file)).map_err(|e| load_error(path, e))
-}
-
-/// The text of a document file.
-pub fn document_text(doc: &Document) -> Result<String, RpcError> {
-    serde_json::to_string_pretty(doc).map_err(RpcError::app)
+    })?;
+    Document::from_reader(reader).map_err(|e| load_error(path, e))
 }
 
 /// The folder of a document file, canonical if possible.
@@ -343,7 +331,7 @@ mod tests {
         let f = dir.join("a.kad");
         assert_eq!(call(&mut s, "file.save", &f)["result"]["ok"], true);
         let on_disk = std::fs::read(&f).unwrap();
-        let text = document_text(s.editor.doc()).unwrap();
+        let text = serde_json::to_string_pretty(s.editor.doc()).unwrap();
         assert_eq!(on_disk, text.as_bytes(), "byte for byte the old output");
         assert_eq!(
             on_disk,
