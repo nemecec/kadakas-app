@@ -56,15 +56,28 @@ pub struct SvgGhost {
     pub kind: &'static str,
 }
 
+/// One row of the legend that the SVG shows: a swatch in a tint, and a text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SvgLegendRow {
+    /// `None`: a row of text only (a note).
+    pub tint: Option<SvgTint>,
+    pub text: String,
+}
+
 /// The changes to the look of a drawing. See the module text.
 pub trait SvgOverlay {
     /// What to do with an object of the document.
     fn look(&self, id: ObjectId) -> SvgLook;
     /// Extra objects, drawn after the document.
     fn ghosts(&self) -> &[SvgGhost];
-    /// The part of the model to show (low and high corner). `None`: the box around the drawing
-    /// and the ghosts. Two renders that must line up (side by side) give the same box.
+    /// The part of the model to show (low and high corner, used as it is, without a margin).
+    /// `None`: the box around the drawing and the ghosts, with a margin. Two renders that must
+    /// line up (side by side) give the same box.
     fn view(&self) -> Option<(DVec2, DVec2)> {
         None
+    }
+    /// The rows of a legend, drawn at the top left corner of the picture. Empty: no legend.
+    fn legend(&self) -> &[SvgLegendRow] {
+        &[]
     }
 }

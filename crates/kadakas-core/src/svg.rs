@@ -10,7 +10,7 @@ use crate::plants::graphic::{self, GraphicPath};
 use crate::plants::style::PlantGraphic;
 use crate::plants::tag as schedule;
 use crate::plants::tree::{self, TreeAction};
-use crate::svg_overlay::{SvgLook, SvgOverlay, SvgPattern, SvgTint};
+use crate::svg_overlay::{SvgLegendRow, SvgLook, SvgOverlay, SvgPattern, SvgTint};
 
 /// Bounds of all visible objects, or `None` for an empty drawing.
 pub fn drawing_bounds(doc: &Document) -> Option<(DVec2, DVec2)> {
@@ -138,12 +138,13 @@ pub fn render_overlay(
     ext: Option<SvgExt<'_>>,
     overlay: Option<&dyn SvgOverlay>,
 ) -> String {
-    let (lo, hi) = overlay
-        .and_then(|o| o.view())
-        .or_else(|| overlay_bounds(doc, overlay))
-        .unwrap_or((DVec2::ZERO, DVec2::splat(1000.0)));
-    let margin = ((hi - lo).max_element() * 0.05).max(1.0);
-    let (lo, hi) = (lo - margin, hi + margin);
+    // A view that the overlay gives is the final box. Else the box is the drawing and the ghosts,
+    // with a margin.
+    let (lo, hi) = overlay.and_then(|o| o.view()).unwrap_or_else(|| {
+        let (lo, hi) = overlay_bounds(doc, overlay).unwrap_or((DVec2::ZERO, DVec2::splat(1000.0)));
+        let margin = ((hi - lo).max_element() * 0.05).max(1.0);
+        (lo - margin, hi + margin)
+    });
     let size = hi - lo;
     let height_px = (width_px as f64 * size.y / size.x).round().max(1.0);
     let mut s = String::new();
@@ -236,8 +237,66 @@ pub fn render_overlay(
             mark_h,
         );
     }
+    if let Some(ov) = overlay {
+        legend_svg(ov.legend(), lo, hi, &mut s);
+    }
     s.push_str("</svg>\n");
     s
+}
+
+/// The legend of an overlay: a swatch with the pattern and the mark of each tint, and its text.
+fn legend_svg(rows: &[SvgLegendRow], lo: DVec2, hi: DVec2, s: &mut String) {
+    if rows.is_empty() {
+        return;
+    }
+    let size = (hi - lo).max_element();
+    let (h, m) = (size * 0.025, size * 0.015);
+    let _ = writeln!(
+        s,
+        r#"<g data-compare-legend="true" font-family="sans-serif" font-size="{h}">"#
+    );
+    let width = rows
+        .iter()
+        .map(|r| r.text.chars().count() as f64)
+        .fold(0.0, f64::max)
+        * h
+        * 0.6
+        + h * 3.5;
+    let height = rows.len() as f64 * h * 1.5 + h * 0.5;
+    let _ = writeln!(
+        s,
+        r#"<rect x="{}" y="{}" width="{width}" height="{height}" fill="white" fill-opacity="0.85" stroke="gray" stroke-width="{}"/>"#,
+        lo.x + m,
+        -hi.y + m,
+        h * 0.05
+    );
+    for (i, r) in rows.iter().enumerate() {
+        let y = -hi.y + m + h * 1.5 * (i as f64 + 1.0);
+        let mut x = lo.x + m + h * 0.5;
+        if let Some(t) = &r.tint {
+            let [cr, cg, cb] = t.rgb;
+            let _ = writeln!(
+                s,
+                r#"<line x1="{x}" y1="{}" x2="{}" y2="{}" stroke="rgb({cr},{cg},{cb})" stroke-width="{}"{} data-status="{}"/>"#,
+                y - h * 0.3,
+                x + h * 1.2,
+                y - h * 0.3,
+                h * 0.2,
+                dash_attr(t.pattern, h * 0.2),
+                t.status
+            );
+            if let Some(c) = t.symbol {
+                let _ = writeln!(
+                    s,
+                    r#"<text x="{}" y="{y}" font-weight="bold" fill="rgb({cr},{cg},{cb})">{c}</text>"#,
+                    x + h * 1.4
+                );
+            }
+        }
+        x += h * 2.4;
+        let _ = writeln!(s, r#"<text x="{x}" y="{y}" fill="black">{}</text>"#, esc(&r.text));
+    }
+    s.push_str("</g>\n");
 }
 
 /// Draws an object in a tint, in a group with `data-compare` (and `data-ghost` for a ghost), and
@@ -1509,5 +1568,172 @@ mod tests {
         })
         .unwrap();
         assert!(!render(ed.doc(), 200).contains("<rect"));
+    }
+
+    /// An overlay for the tests: by object ID.
+    struct Fixed {
+        looks: Vec<(ObjectId, SvgLook)>,
+        ghosts: Vec<crate::svg_overlay::SvgGhost>,
+        view: Option<(DVec2, DVec2)>,
+        legend: Vec<SvgLegendRow>,
+    }
+
+    impl SvgOverlay for Fixed {
+        fn look(&self, id: ObjectId) -> SvgLook {
+            self.looks
+                .iter()
+                .find(|(i, _)| *i == id)
+                .map_or(SvgLook::Keep, |(_, l)| l.clone())
+        }
+        fn ghosts(&self) -> &[crate::svg_overlay::SvgGhost] {
+            &self.ghosts
+        }
+        fn view(&self) -> Option<(DVec2, DVec2)> {
+            self.view
+        }
+        fn legend(&self) -> &[SvgLegendRow] {
+            &self.legend
+        }
+    }
+
+    fn tint(rgb: [u8; 3], pattern: SvgPattern, status: &'static str) -> SvgTint {
+        SvgTint {
+            rgb,
+            pattern,
+            weight_factor: 2.0,
+            fill_alpha: 0.5,
+            opacity: 1.0,
+            symbol: Some('+'),
+            status,
+        }
+    }
+
+    fn only(look: SvgLook, id: ObjectId) -> Fixed {
+        Fixed {
+            looks: vec![(id, look)],
+            ghosts: vec![],
+            view: None,
+            legend: vec![],
+        }
+    }
+
+    #[test]
+    fn an_overlay_tints_dims_hides_and_adds_ghosts() {
+        let mut ed = Editor::default();
+        let rect = |x: f64| Shape::Rect {
+            min: DVec2::new(x, 0.0),
+            max: DVec2::new(x + 10.0, 10.0),
+        };
+        let a = ObjectId(add(&mut ed, rect(0.0)));
+        let b = ObjectId(add(&mut ed, rect(20.0)));
+        let c = ObjectId(add(&mut ed, rect(40.0)));
+        let d = ObjectId(add(
+            &mut ed,
+            Shape::Plant {
+                at: DVec2::new(60.0, 5.0),
+                species: "Oak".into(),
+                spread: 8.0,
+                height: 10.0,
+            },
+        ));
+        let ghost_object = Object::new(
+            ObjectId(crate::uid::Uid::from_num(900)),
+            FIRST_LAYER,
+            NONE_CLASS,
+            Shape::Circle {
+                center: DVec2::new(-30.0, 5.0),
+                radius: 4.0,
+            },
+        );
+        let overlay = Fixed {
+            looks: vec![
+                (a, SvgLook::Tint(tint([0, 128, 48], SvgPattern::Solid, "added"))),
+                (b, SvgLook::Dim(0.25)),
+                (c, SvgLook::Hide),
+                (
+                    d,
+                    SvgLook::Tint(tint([205, 102, 0], SvgPattern::Dotted, "changed")),
+                ),
+            ],
+            ghosts: vec![crate::svg_overlay::SvgGhost {
+                object: ghost_object,
+                tint: SvgTint {
+                    opacity: 0.5,
+                    ..tint([200, 30, 45], SvgPattern::Dashed, "removed")
+                },
+                kind: "removed",
+            }],
+            view: None,
+            legend: vec![
+                SvgLegendRow {
+                    tint: Some(tint([0, 128, 48], SvgPattern::Solid, "added")),
+                    text: "added 1 <b>".into(),
+                },
+                SvgLegendRow {
+                    tint: Some(SvgTint {
+                        symbol: None,
+                        ..tint([200, 30, 45], SvgPattern::Dashed, "removed")
+                    }),
+                    text: "removed 0".into(),
+                },
+                SvgLegendRow {
+                    tint: None,
+                    text: "a note".into(),
+                },
+            ],
+        };
+        let svg = render_overlay(ed.doc(), 400, None, Some(&overlay));
+        // The legend has a swatch, a mark and an escaped text for each row.
+        assert!(svg.contains(r#"<g data-compare-legend="true""#), "{svg}");
+        assert!(svg.contains("added 1 &lt;b&gt;") && svg.contains(">a note</text>"));
+        assert!(svg.contains(r#"data-status="removed""#) && svg.contains("stroke-dasharray"));
+        // The tinted object is in a group of its status, with its pen and a mark.
+        assert!(svg.contains(r#"<g data-compare="added""#), "{svg}");
+        assert!(svg.contains("rgba(0,128,48,1.000)"), "{svg}");
+        assert!(svg.contains(r#"data-mark="added">+</text>"#), "{svg}");
+        assert!(svg.contains(r#"<g data-compare="changed""#));
+        // A tinted plant draws in the tint, not in the colors of its style.
+        let plant = svg.split(r#"data-kind="plant""#).nth(1).unwrap();
+        assert!(plant.contains("rgba(205,102,0,1.000)"), "{plant}");
+        // The dimmed object is faint, the hidden one is gone, the ghost is drawn on top.
+        assert!(svg.contains(r#"<g data-compare="unchanged" opacity="0.25">"#));
+        assert!(!svg.contains(&format!(r#"data-id="{c}""#)));
+        assert!(svg.contains(r#"data-ghost="removed""#) && svg.contains(r#"opacity="0.5""#));
+        assert!(svg.contains(r#"<circle cx="-30""#));
+        // The view box covers the ghost, which is left of the drawing.
+        assert!(svg.contains(r#"viewBox="-"#), "{svg}");
+        // A given view wins over the bounds of the drawing.
+        let fixed = Fixed {
+            looks: vec![],
+            ghosts: vec![],
+            view: Some((DVec2::new(-100.0, -100.0), DVec2::new(100.0, 100.0))),
+            legend: vec![],
+        };
+        let svg = render_overlay(ed.doc(), 400, None, Some(&fixed));
+        assert!(svg.contains(r#"viewBox="-100 -100 200 200""#), "{svg}");
+        // No overlay: the same as `render_with`.
+        assert_eq!(
+            render_overlay(ed.doc(), 400, None, None),
+            render_with(ed.doc(), 400, None)
+        );
+    }
+
+    #[test]
+    fn the_line_pattern_of_a_tint_is_dashed_dotted_or_solid() {
+        let mut ed = Editor::default();
+        let line = ObjectId(add(
+            &mut ed,
+            Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::new(50.0, 0.0),
+            },
+        ));
+        let with = |p| {
+            let o = only(SvgLook::Tint(tint([1, 2, 3], p, "added")), line);
+            render_overlay(ed.doc(), 400, None, Some(&o))
+        };
+        assert!(with(SvgPattern::Dashed).contains("stroke-dasharray=\"300 200"));
+        assert!(with(SvgPattern::Dotted).contains("stroke-dasharray=\"75 150"));
+        assert!(!with(SvgPattern::Solid).contains("dasharray"));
     }
 }

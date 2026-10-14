@@ -538,6 +538,44 @@ class Versions:
             p["limit"] = limit
         return self._doc.api.version_diff(**p)
 
+    @staticmethod
+    def compare_option(from_: int | str, to: int | str = "current", *, mode: str | None = None,
+                       hide_unchanged: bool | None = None, unchanged: str | None = None,
+                       palette: str | None = None, dark: bool | None = None,
+                       ghosts: bool | None = None, previous: bool | None = None) -> JsonDict:
+        """The ``compare`` option of ``render.png``, ``render.svg`` and ``sheet.render``: the
+        picture shows ``to`` with the changes since ``from`` (a version ID or ``"current"``).
+        Added objects are green, changed ones orange, and removed ones are red ghosts drawn from
+        the old state. ``mode`` is ``"overlay"`` (default) or ``"side_by_side"``;
+        ``hide_unchanged`` leaves out what did not change (or ``unchanged`` is ``"show"``,
+        ``"dim"`` or ``"hide"``); ``palette`` is ``"standard"`` or ``"color_blind"``."""
+        given = {"mode": mode, "hide_unchanged": hide_unchanged, "unchanged": unchanged,
+                 "palette": palette, "dark": dark, "ghosts": ghosts, "previous": previous}
+        option: JsonDict = {"from": from_, "to": to}
+        option.update({k: v for k, v in given.items() if v is not None})
+        return option
+
+    def render_png(self, from_: int | str, to: int | str = "current",
+                   path: str | Path | None = None, *, mode: str | None = None,
+                   hide_unchanged: bool | None = None, palette: str | None = None,
+                   **params: Any) -> bytes:
+        """A PNG of the 3D model, or of the plan with ``view="top"``, with the changes since
+        ``from_`` tinted (see ``compare_option``). Other keyword arguments go to ``render.png``
+        (``view``, ``width``, ``height``, ``projection``). ``mode`` here is the compare mode, not
+        the render mode. Returns the PNG bytes, and writes them to ``path`` if given."""
+        option = self.compare_option(from_, to, mode=mode, hide_unchanged=hide_unchanged,
+                                     palette=palette)
+        return self._doc.render_png(path, compare=option, **params)
+
+    def render_svg(self, from_: int | str, to: int | str = "current",
+                   path: str | Path | None = None, *, width: int = 800, mode: str | None = None,
+                   hide_unchanged: bool | None = None, palette: str | None = None) -> str:
+        """The plan as SVG with the changes since ``from`` tinted, a legend with the counts and
+        a mark (+, ~, -) on each changed object (see ``compare_option``)."""
+        option = self.compare_option(from_, to, mode=mode, hide_unchanged=hide_unchanged,
+                                     palette=palette)
+        return self._doc.render_svg(path, width, compare=option)
+
 
 class Feedback:
     """Bug reports and feature requests for the Kadakas team (``doc.feedback``).
@@ -777,15 +815,21 @@ class Document:
 
     def render_png(self, path: str | Path | None = None, **params: Any) -> bytes:
         """Render the 3D model (``view``, ``width``, ``height``, ``projection``, ``mode``).
+        ``compare`` tints what changed since a version (see ``doc.versions.compare_option``).
         Returns the PNG bytes, and writes them to ``path`` if given."""
         data = base64.b64decode(self.api.render_png(**params)["png_base64"])
         if path is not None:
             Path(path).write_bytes(data)
         return data
 
-    def render_svg(self, path: str | Path | None = None, width: int = 800) -> str:
-        """Render the 2D drawing as SVG text. Writes it to ``path`` if given."""
-        svg = self.api.render_svg(width=width)["svg"]
+    def render_svg(self, path: str | Path | None = None, width: int = 800, *,
+                   compare: JsonDict | None = None) -> str:
+        """Render the 2D drawing as SVG text. Writes it to ``path`` if given. ``compare`` is the
+        option of ``doc.versions.compare_option``: the plan with the changes since a version."""
+        params: JsonDict = {"width": width}
+        if compare is not None:
+            params["compare"] = compare
+        svg = self.api.render_svg(**params)["svg"]
         if path is not None:
             Path(path).write_text(svg, encoding="utf-8")
         return svg

@@ -7,7 +7,7 @@
 use glam::DVec2;
 use kadakas_core::mesh::{self, Scene};
 use kadakas_core::model::{Document, FIRST_LAYER, NONE_CLASS, Object, ObjectId};
-use kadakas_core::svg_overlay::{SvgGhost, SvgLook, SvgOverlay, SvgPattern, SvgTint};
+use kadakas_core::svg_overlay::{SvgGhost, SvgLegendRow, SvgLook, SvgOverlay, SvgPattern, SvgTint};
 
 use super::style::{CompareStyle, Pattern, UnchangedMode};
 use super::{CompareOverlay, Status};
@@ -77,6 +77,7 @@ pub struct SvgCompare<'a> {
     overlay: &'a CompareOverlay,
     style: CompareStyle,
     ghosts: Vec<SvgGhost>,
+    legend: Vec<SvgLegendRow>,
     view: Option<(DVec2, DVec2)>,
 }
 
@@ -85,7 +86,7 @@ impl<'a> SvgCompare<'a> {
     pub fn new(doc: &Document, overlay: &'a CompareOverlay, style: CompareStyle) -> SvgCompare<'a> {
         let removed = SvgTint {
             opacity: f64::from(style.ghost),
-            fill_alpha: 0.15,
+            fill_alpha: 0.3,
             ..svg_tint(&style, Status::Removed)
         };
         let before = SvgTint {
@@ -105,10 +106,44 @@ impl<'a> SvgCompare<'a> {
                 kind,
             })
             .collect();
+        // The legend: the count of each status, and a note where the overlay is not complete.
+        let counts = overlay.counts();
+        let mut legend: Vec<SvgLegendRow> = Status::ALL
+            .iter()
+            .map(|s| SvgLegendRow {
+                tint: Some(svg_tint(&style, *s)),
+                text: format!(
+                    "{} {}",
+                    s.name(),
+                    match s {
+                        Status::Added => counts.added,
+                        Status::Removed => counts.removed,
+                        Status::Changed => counts.changed,
+                    }
+                ),
+            })
+            .collect();
+        if overlay.omitted_ghosts() > 0 {
+            legend.push(SvgLegendRow {
+                tint: None,
+                text: format!(
+                    "ghosts: {} of {} shown",
+                    overlay.ghost_count(),
+                    overlay.ghost_count() + overlay.omitted_ghosts()
+                ),
+            });
+        }
+        if !overlay.exact() {
+            legend.push(SvgLegendRow {
+                tint: None,
+                text: "partial: the work limit stopped the comparison".into(),
+            });
+        }
         SvgCompare {
             overlay,
             style,
             ghosts,
+            legend,
             view: None,
         }
     }
@@ -138,6 +173,10 @@ impl SvgOverlay for SvgCompare<'_> {
 
     fn view(&self) -> Option<(DVec2, DVec2)> {
         self.view
+    }
+
+    fn legend(&self) -> &[SvgLegendRow] {
+        &self.legend
     }
 }
 
