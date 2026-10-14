@@ -1015,29 +1015,118 @@ mod real_commands {
 
     #[derive(Clone, Debug)]
     enum Act {
-        AddRect { s: bool, x: i32 },
-        AddLayer { s: bool, n: u8 },
-        Delete { s: bool, i: u8 },
-        Move { s: bool, i: u8 },
-        Group { s: bool, i: u8, j: u8 },
-        Ungroup { s: bool, i: u8 },
-        ToLayer { s: bool, i: u8, l: u8 },
-        DeleteLayer { s: bool, l: u8 },
-        RenameLayer { s: bool, l: u8, n: u8 },
-        AddResource { s: bool, n: u8 },
-        Data { s: bool, i: u8, v: u8 },
-        Arrange { s: bool, i: u8, j: u8, how: u8 },
-        MoveLayer { s: bool, l: u8, at: u8 },
-        Undo { s: bool },
-        Redo { s: bool },
-        Place { s: bool, x: i32 },
-        SetParams { s: bool, i: u8, w: u16 },
-        Underlay { s: bool, x: i32, v: u8 },
-        AddSite { s: bool, n: u16 },
-        EditSite { s: bool, i: u8, k: u16 },
-        Sync { s: bool },
-        Offline { s: bool },
-        Online { s: bool },
+        AddRect {
+            s: bool,
+            x: i32,
+        },
+        AddLayer {
+            s: bool,
+            n: u8,
+        },
+        Delete {
+            s: bool,
+            i: u8,
+        },
+        Move {
+            s: bool,
+            i: u8,
+        },
+        Group {
+            s: bool,
+            i: u8,
+            j: u8,
+        },
+        Ungroup {
+            s: bool,
+            i: u8,
+        },
+        ToLayer {
+            s: bool,
+            i: u8,
+            l: u8,
+        },
+        DeleteLayer {
+            s: bool,
+            l: u8,
+        },
+        RenameLayer {
+            s: bool,
+            l: u8,
+            n: u8,
+        },
+        AddResource {
+            s: bool,
+            n: u8,
+        },
+        Data {
+            s: bool,
+            i: u8,
+            v: u8,
+        },
+        Arrange {
+            s: bool,
+            i: u8,
+            j: u8,
+            how: u8,
+        },
+        MoveLayer {
+            s: bool,
+            l: u8,
+            at: u8,
+        },
+        Undo {
+            s: bool,
+        },
+        Redo {
+            s: bool,
+        },
+        Place {
+            s: bool,
+            x: i32,
+        },
+        SetParams {
+            s: bool,
+            i: u8,
+            w: u16,
+        },
+        Underlay {
+            s: bool,
+            x: i32,
+            v: u8,
+        },
+        AddSite {
+            s: bool,
+            n: u16,
+        },
+        EditSite {
+            s: bool,
+            i: u8,
+            k: u16,
+        },
+        Sync {
+            s: bool,
+        },
+        Offline {
+            s: bool,
+        },
+        Online {
+            s: bool,
+        },
+        /// The server is busy: it refuses the next `n` submits (retry errors).
+        Refuse {
+            n: u8,
+            internal: bool,
+        },
+    }
+
+    /// Honest clients are never refused for a number they used (`reconnect` after
+    /// `op_id_reused`), and never for an object that exists (`duplicate_uid`).
+    fn assert_clean(r: &Result<Value, RpcError>) {
+        let Ok(r) = r else { return };
+        for e in r["events"].as_array().into_iter().flatten() {
+            assert_ne!(e["event"], "reconnect", "op_id_reused: {e}");
+            assert_ne!(e["code"], "duplicate_uid", "{e}");
+        }
     }
 
     fn act() -> impl Strategy<Value = Act> {
@@ -1066,6 +1155,7 @@ mod real_commands {
             5 => any::<bool>().prop_map(|s| Act::Sync { s }),
             1 => any::<bool>().prop_map(|s| Act::Offline { s }),
             2 => any::<bool>().prop_map(|s| Act::Online { s }),
+            2 => (0u8..4, any::<bool>()).prop_map(|(n, internal)| Act::Refuse { n, internal }),
         ]
     }
 
@@ -1282,7 +1372,16 @@ mod real_commands {
                 }
             }
             Act::Sync { s } => {
-                let _ = sessions[idx(*s)].handle("collab.sync", json!({"now_ms": *now}));
+                let r = sessions[idx(*s)].handle("collab.sync", json!({"now_ms": *now}));
+                assert_clean(&r);
+            }
+            Act::Refuse { n, internal } => {
+                let code = if *internal {
+                    ErrorCode::Internal
+                } else {
+                    ErrorCode::RateLimited
+                };
+                hub.with(|h| h.inject_errors(code, 1 + usize::from(*n)));
             }
             Act::Offline { s } => {
                 let _ = sessions[idx(*s)].handle("collab.disconnect", json!({}));
@@ -1522,12 +1621,31 @@ mod real_commands {
             for s in &mut sessions {
                 let _ = s.handle("collab.connect", json!({"now_ms": now}));
             }
+            // A busy server may still owe refusals: the waits are 30 s at most, so each round
+            // jumps over one. The refusals are finite.
+            for _ in 0..40 {
+                for s in &mut sessions {
+                    now += 31_000;
+                    hub.set_time(now);
+                    let r = s.handle("collab.sync", json!({"now_ms": now}));
+                    prop_assert!(r.is_ok());
+                    assert_clean(&r);
+                }
+                let waiting: usize = sessions
+                    .iter()
+                    .map(|s| s.collab_client().unwrap().pending().len())
+                    .sum();
+                if waiting == 0 {
+                    break;
+                }
+            }
             for _ in 0..8 {
                 for s in &mut sessions {
                     now += 100;
                     hub.set_time(now);
                     let r = s.handle("collab.sync", json!({"now_ms": now}));
                     prop_assert!(r.is_ok());
+                    assert_clean(&r);
                 }
             }
             for s in &mut sessions {

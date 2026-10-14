@@ -64,9 +64,14 @@
 //!
 //! Each error code has a class (see `protocol::ErrorClass`). A *retry* error (`rate_limited`,
 //! `internal`) keeps the transaction and sends it, and the ones after it, again after a time that
-//! doubles each time (250 ms, up to 30 s). A *reject* error drops the transaction and its undo
+//! doubles each time (250 ms, up to 30 s). The time is cut by a random part of up to half, so
+//! many clients that were refused together do not come back together (see
+//! [`Client::set_retry_jitter`]). The server answers one connection in order, so after a resend
+//! the retry errors that come before the first answer to the resend belong to the round before
+//! and are ignored; an `ack` of a transaction in the resent range ends the retry. A *reject* error drops the transaction and its undo
 //! step. A *renumber* error (`op_id_reused`) takes the client offline with a `Reconnect` event; at
-//! the next sign-in the waiting transactions get new numbers above everything the server knows.
+//! the next sign-in the waiting transactions that the server already has are dropped, and the
+//! others get new numbers above everything the server knows.
 //! A *fatal* error ends the client until the host connects again.
 //!
 //! # A server that goes back
@@ -238,6 +243,36 @@ struct Retry {
     /// When to send, or `None` if they were sent and an answer is awaited.
     at: Option<u64>,
     attempts: u32,
+    /// After a resend: the first transaction that was sent again. The server answers in order,
+    /// so a retry error that comes before the answer to this one is from the round before.
+    fresh: Option<u64>,
+}
+
+/// One step of splitmix64: a small deterministic generator, so the back-off needs no dependency.
+fn splitmix(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// The wait before try number `attempts` (0 for the first): 250 ms doubling up to 30 s. With a
+/// generator state the wait is cut by up to half, at random.
+fn retry_wait(attempts: u32, jitter: Option<&mut u64>) -> u64 {
+    let wait = RETRY_BASE_MS
+        .saturating_mul(1u64 << attempts.min(20))
+        .min(RETRY_MAX_MS);
+    match jitter {
+        Some(state) => wait - splitmix(state) % (wait / 2 + 1),
+        None => wait,
+    }
+}
+
+/// The default seed of the jitter: the halves of the client ID.
+fn jitter_seed(client: Uid) -> u64 {
+    let v = client.as_u128();
+    (v as u64) ^ ((v >> 64) as u64)
 }
 
 /// The state machine of one collaboration client.
@@ -268,6 +303,8 @@ pub struct Client {
     peers: Peers,
     changed: bool,
     retry: Option<Retry>,
+    /// The state of the generator for the jitter of the back-off, or `None` for no jitter.
+    jitter: Option<u64>,
     /// The blobs (pictures) that this client has, by hash.
     blobs: BTreeMap<String, Arc<str>>,
     /// What the files of the picture blobs say about themselves, by blob hash. A file is read once
@@ -282,6 +319,8 @@ pub struct Client {
     blob_scan: bool,
     /// At the next sign-in, give the waiting transactions new numbers, whatever the server says.
     force_renumber: bool,
+    /// `your_last_op` of the last `welcome`, for the renumbering at the end of the sync.
+    server_last_op: u64,
     store: Option<Box<dyn OpLogStore>>,
     saved_journal: String,
 }
@@ -290,6 +329,7 @@ impl Client {
     /// A client without state. It gets its state from the first sync.
     pub fn new(cfg: ClientConfig) -> Client {
         Client {
+            jitter: Some(jitter_seed(cfg.client)),
             client: cfg.client,
             cfg,
             state: ConnState::Offline,
@@ -319,9 +359,17 @@ impl Client {
             missing: BTreeSet::new(),
             blob_scan: false,
             force_renumber: false,
+            server_last_op: 0,
             store: None,
             saved_journal: String::new(),
         }
+    }
+
+    /// Sets the seed of the jitter of the back-off after a retry error, or turns the jitter off
+    /// (`None`). The default seed comes from the client ID, so two clients differ. Tests give a
+    /// seed to get the same waits in every run.
+    pub fn set_retry_jitter(&mut self, seed: Option<u64>) {
+        self.jitter = seed;
     }
 
     /// A client that starts from a known confirmed state, for example a document that the server
@@ -843,7 +891,18 @@ impl Client {
             if let Some(r) = self.retry
                 && r.at.is_some_and(|at| now_ms >= at)
             {
-                self.retry = Some(Retry { at: None, ..r });
+                // Only what still waits goes out: a transaction that was acknowledged is gone
+                // from the queue, and the server refuses a number that it has seen.
+                let first = self
+                    .pending
+                    .iter()
+                    .map(|t| t.op_id)
+                    .find(|&id| id >= r.from_op);
+                self.retry = first.map(|f| Retry {
+                    at: None,
+                    fresh: Some(f),
+                    ..r
+                });
                 self.resend_from(r.from_op);
             }
         }
@@ -1003,16 +1062,20 @@ impl Client {
             self.regress = true;
         }
         self.head_seq = head_seq;
-        if your_last_op > self.last_op || self.force_renumber {
+        if your_last_op > self.last_op {
             // The journal is behind what the server knows of this client: numbers up to
             // `your_last_op` are used, maybe by other content. Our waiting transactions get
             // numbers above, so the server cannot take them for old ones.
             self.force_renumber = false;
-            self.last_op = self.last_op.max(your_last_op);
-            let count = self.renumber_from(0);
-            if count > 0 {
-                self.events.push(ClientEvent::Renumbered { count });
-            }
+            self.last_op = your_last_op;
+            self.renumber_waiting();
+        } else if self.force_renumber {
+            // The server refused a number (`op_id_reused`). Some waiting transactions may be
+            // ordered already: their answers were lost with the connection. Which ones, the
+            // entries of the sync tell (`apply_entries`). The others get new numbers at the end
+            // of the sync (`finish_sync`). Sent again under new numbers, a transaction that the
+            // server has would be applied twice.
+            self.server_last_op = your_last_op;
         } else {
             self.pending.retain(|t| t.op_id > your_last_op);
         }
@@ -1059,6 +1122,11 @@ impl Client {
             self.events.push(ClientEvent::ServerRegressed { resent });
             self.save_journal();
         } else {
+            // No entries to compare with: the server has the transactions up to `your_last_op`.
+            if self.force_renumber {
+                let upto = self.server_last_op;
+                self.pending.retain(|t| t.op_id > upto);
+            }
             self.finish_sync();
         }
     }
@@ -1090,7 +1158,11 @@ impl Client {
             // While syncing, `finish_sync` builds the view. Only live entries touch it here.
             let live = self.state == ConnState::Online;
             if e.author == self.client {
-                self.pending.retain(|t| t.op_id != e.op_id);
+                // After `op_id_reused` the number may belong to other content: the transaction
+                // is ours only if the operations are the same.
+                let force = self.force_renumber;
+                self.pending
+                    .retain(|t| t.op_id != e.op_id || (force && t.ops != e.ops));
                 rebuild |= live;
             } else if live && self.pending.is_empty() {
                 self.view.apply_all(w, &e.ops);
@@ -1111,7 +1183,8 @@ impl Client {
         let Some(i) = self.pending.iter().position(|t| t.op_id == op_id) else {
             return;
         };
-        if self.retry.is_some_and(|r| r.at.is_none()) {
+        // An answer for a transaction of the resent range: the server took it, the retry is over.
+        if self.retry.is_some_and(|r| op_id >= r.from_op) {
             self.retry = None;
         }
         if seq <= self.confirmed_seq {
@@ -1194,18 +1267,31 @@ impl Client {
                 {
                     return;
                 }
+                // After a resend the server answers in order: an error that comes before the
+                // answer to the first resent transaction is from the round before.
+                if let Some(first) = self.retry.and_then(|r| r.fresh)
+                    && op_id != first
+                    && self.pending.iter().any(|t| t.op_id == first)
+                {
+                    return;
+                }
                 if self.pending.iter().any(|t| t.op_id == op_id) {
                     let prev = self.retry;
                     let attempts = prev.map_or(0, |r| r.attempts);
-                    let wait = RETRY_BASE_MS
-                        .saturating_mul(1u64 << attempts.min(20))
-                        .min(RETRY_MAX_MS);
+                    let wait = retry_wait(attempts, self.jitter.as_mut());
                     self.retry = Some(Retry {
                         from_op: prev.map_or(op_id, |r| r.from_op.min(op_id)),
                         at: Some(now_ms + wait),
                         attempts: attempts + 1,
+                        fresh: None,
                     });
                 }
+            }
+            (Some(op_id), ErrorClass::Renumber)
+                if !self.pending.iter().any(|t| t.op_id == op_id) =>
+            {
+                // The answer to a transaction that does not wait any more: the server took it
+                // before (the answers come in order), so the numbers are fine.
             }
             (Some(_), ErrorClass::Renumber) => {
                 // The server knows this number with other content. Later transactions may have
@@ -1216,6 +1302,12 @@ impl Client {
                 self.connection_lost();
             }
             (Some(op_id), ErrorClass::Reject) => {
+                // The answer to the first resent transaction: later errors are from this round.
+                if let Some(r) = self.retry.as_mut()
+                    && r.fresh == Some(op_id)
+                {
+                    r.fresh = None;
+                }
                 if self.pending.iter().any(|t| t.op_id == op_id) {
                     self.pending.retain(|t| t.op_id != op_id);
                     self.undo.retain(|u| u.of_op != op_id);
@@ -1234,6 +1326,14 @@ impl Client {
                 self.put_on_conn.clear();
                 self.events.push(ClientEvent::ServerError { code, message });
             }
+        }
+    }
+
+    /// Gives all waiting transactions new numbers and tells the host.
+    fn renumber_waiting(&mut self) {
+        let count = self.renumber_from(0);
+        if count > 0 {
+            self.events.push(ClientEvent::Renumbered { count });
         }
     }
 
@@ -1275,6 +1375,12 @@ impl Client {
 
     /// The end of the sync: replay the queue on the new base, send it, and go online.
     fn finish_sync(&mut self) {
+        if self.force_renumber {
+            // What is left was not ordered, or the number is used by other content.
+            self.force_renumber = false;
+            self.last_op = self.last_op.max(self.server_last_op);
+            self.renumber_waiting();
+        }
         let mut scratch = self.confirmed.clone();
         let client = self.client;
         for t in &mut self.pending {

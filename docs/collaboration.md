@@ -460,9 +460,9 @@ Every error code has a class. The client acts on the class:
 |---|---|---|
 | `unsupported_protocol`, `auth_failed` | fatal | stops; the host must connect again on purpose |
 | `bad_message`, `invalid_txn`, `duplicate_uid`, `document_full` | reject | drops the transaction and its undo step; its edit leaves the view |
-| `rate_limited`, `internal` | retry | keeps the transaction and sends it and all later ones again after 250 ms, then 500 ms, 1 s and so on up to 30 s. If the error has a `hash`, the client puts that blob again (`blob_put`) before it sends the transactions again |
+| `rate_limited`, `internal` | retry | keeps the transaction and sends it and all later ones again after 250 ms, then 500 ms, 1 s and so on up to 30 s. Each wait is cut by a random part of up to half, so clients that were refused together do not come back together. The server answers one connection in order: after the resend, the client ignores retry errors until the first answer to the resent transactions comes (they are from the round before), and an `ack` of a resent transaction ends the retry. If the error has a `hash`, the client puts that blob again (`blob_put`) before it sends the transactions again |
 | any other code (the client reads it as `unknown`) | retry when the error has an `op_id`; otherwise the client reports it and goes on | as for a retry error, or reports it |
-| `op_id_reused` | renumber | goes offline; at the next sign-in the waiting transactions get new numbers above everything the server knows |
+| `op_id_reused` | renumber | goes offline; at the next sign-in the waiting transactions that the server already has are dropped (the log entries of the sync show which), and the others get new numbers above everything the server knows. An `op_id_reused` for a transaction that is not waiting any more is ignored |
 
 The 3D look of a site model (3D-05: `surface_look`, `texture`, `texture_tile`, `texture_offset`, `texture_rotation`, `elevation_bands`, `elevation_ramp`, `elevation_range`, `elevation_bands_at_contours`) is part of the `settings` in the `shape` base property of the object, so a change of the look is one small operation and a change of the points is not sent with it. A peer of an older version does not know these fields and drops them when it reads the object; its next edit of the same `shape` property (any setting of that site model) writes the shape without them, and the look is lost for everybody. Use the same version in a session that edits site model looks. A peer or a file with a value that the checks refuse (a tile size outside 10 mm to 100 000 m, more than 64 bands and so on) puts the object in quarantine.
 
@@ -518,6 +518,11 @@ too), its waiting transactions and its undo and redo steps refer to, and drops t
 - On `welcome`: if `your_last_op` is above the client's counter, the journal is behind (it was lost
   or old). The client sets its counter to `your_last_op` and gives its waiting transactions new
   numbers above. Otherwise it drops waiting transactions up to `your_last_op`: the server has them.
+  After `op_id_reused` it does not drop or renumber at once. A waiting transaction is dropped when
+  the sync brings an entry of this client with the same number and the same operations (or, with a
+  `snapshot`, when its number is up to `your_last_op`). The ones left get new numbers when the sync
+  ends. A transaction that the server has must never go out again under a new number: it would be
+  applied twice.
 - If `log_id` differs from the client's state, or `head_seq` is below the client's sequence number,
   the server went back (a restore from a backup, another log). The client waits for the
   `snapshot` and then **throws away its queue and undo steps, compares the snapshot with the state

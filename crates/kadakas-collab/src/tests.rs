@@ -1,6 +1,6 @@
 //! Scenario tests for the client and the reference sequencer, and the convergence property test.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use kadakas_core::model::Document;
 use kadakas_core::uid::Uid;
@@ -73,7 +73,10 @@ impl Net {
             now: 1_000,
         };
         for i in 0..n {
-            net.clients.push(Client::new(cfg(i as u64 + 1)));
+            let mut c = Client::new(cfg(i as u64 + 1));
+            // Waits are exact in these tests; the jitter has its own tests.
+            c.set_retry_jitter(None);
+            net.clients.push(c);
             net.conns.push(None);
             net.inbox.push(VecDeque::new());
         }
@@ -3084,5 +3087,548 @@ fn an_import_base_bigger_than_a_frame_travels_as_blobs_in_parts() {
         assert!(m.quarantined.is_empty(), "client {i}: {:?}", m.quarantined);
         let recs = kadakas_core::provenance::base_recs(&m.doc, "guid:{A}", "r1").unwrap();
         assert_eq!(recs.len(), 9000, "client {i}");
+    }
+}
+
+// ----- the retry after a busy server, in order and with late answers -----
+
+impl Net {
+    /// Lets client `i` handle only the next message that waits for it.
+    fn deliver_one(&mut self, i: usize) {
+        if let Some(m) = self.inbox[i].pop_front() {
+            self.clients[i].handle(m, self.now);
+        }
+    }
+
+    /// True if no client waits for the server and nothing but presence is on the way.
+    fn quiet(&self) -> bool {
+        self.clients.iter().all(|c| c.pending().is_empty())
+            && self
+                .inbox
+                .iter()
+                .flatten()
+                .all(|m| matches!(m, ServerMsg::Presence { .. }))
+    }
+
+    /// The `code` of every `Rejected` event and the number of `Reconnect` events of client `i`.
+    fn trouble(&mut self, i: usize) -> (Vec<ErrorCode>, usize) {
+        let events = self.clients[i].take_events();
+        let rejected = events
+            .iter()
+            .filter_map(|e| match e {
+                ClientEvent::Rejected { code, .. } => Some(*code),
+                _ => None,
+            })
+            .collect();
+        let reconnects = events
+            .iter()
+            .filter(|e| matches!(e, ClientEvent::Reconnect(_)))
+            .count();
+        (rejected, reconnects)
+    }
+}
+
+/// A busy server: it refuses the first of three transactions, refuses the two after it as a
+/// cascade, and accepts the resend. The answers to the first round are late: only the first
+/// error arrives before the resend. Returns the client numbers of the three transactions.
+fn busy_round(net: &mut Net) -> Vec<u64> {
+    net.connect(0);
+    net.settle();
+    net.seq.inject_errors(ErrorCode::RateLimited, 1);
+    for n in 1..=3 {
+        net.clients[0].edit(vec![create(n, 1)]).unwrap();
+    }
+    let ids: Vec<u64> = net.clients[0].pending().iter().map(|t| t.op_id).collect();
+    net.flush(0);
+    // The first refusal arrives: the retry is set for 250 ms later. The cascade errors for the
+    // second and the third transaction are still on the way.
+    net.deliver_one(0);
+    net.now += 300;
+    net.clients[0].tick(net.now);
+    // The resend goes out and the server accepts it: the stale errors come first, then the acks.
+    net.flush(0);
+    assert_eq!(net.inbox[0].len(), 5, "2 stale errors and 3 acks");
+    ids
+}
+
+#[test]
+fn stale_retry_errors_after_a_resend_do_not_set_the_retry_again() {
+    let mut net = Net::new(1);
+    busy_round(&mut net);
+    // The two errors of the first round arrive. They are older than the resend.
+    net.deliver_one(0);
+    net.deliver_one(0);
+    // The acks are slow. A new edit goes out meanwhile, and the old retry time passes.
+    net.clients[0].edit(vec![create(4, 1)]).unwrap();
+    net.flush(0);
+    net.now += 700;
+    net.clients[0].tick(net.now);
+    net.flush(0);
+    // Nothing was sent twice: the server saw 4 numbers and answered 4 times (3 acks and the
+    // answer to the new one), with no refusal of a number that it knew.
+    assert_eq!(net.inbox[0].len(), 4);
+    net.settle();
+    net.all_equal();
+    assert_eq!(net.trouble(0), (vec![], 0));
+    assert_eq!(net.seq.seq(), 4);
+}
+
+#[test]
+fn an_ack_in_the_resent_range_ends_the_retry() {
+    let mut net = Net::new(1);
+    busy_round(&mut net);
+    // The acks arrive after the stale errors, in order.
+    for _ in 0..5 {
+        net.deliver_one(0);
+    }
+    assert!(net.clients[0].pending().is_empty());
+    // No retry is left: a long time later nothing is sent again.
+    net.now += 60_000;
+    net.clients[0].tick(net.now);
+    assert!(
+        !net.clients[0]
+            .take_outbox()
+            .iter()
+            .any(|m| matches!(m, ClientMsg::Submit { .. }))
+    );
+    net.settle();
+    net.all_equal();
+    assert_eq!(net.trouble(0), (vec![], 0));
+}
+
+#[test]
+fn a_fresh_refusal_after_a_resend_still_sets_the_retry() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.seq.inject_errors(ErrorCode::RateLimited, 2);
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.clients[0].edit(vec![create(2, 1)]).unwrap();
+    net.flush(0);
+    net.deliver_one(0);
+    net.now += 300;
+    net.clients[0].tick(net.now);
+    net.flush(0);
+    // The stale error for the second transaction comes first and is ignored. Then the answer
+    // to the first resent transaction: busy again, the wait doubles to 500 ms.
+    net.deliver_one(0);
+    net.deliver_one(0);
+    net.deliver_one(0);
+    net.now += 400;
+    net.clients[0].tick(net.now);
+    assert!(
+        !net.clients[0]
+            .take_outbox()
+            .iter()
+            .any(|m| matches!(m, ClientMsg::Submit { .. })),
+        "too early"
+    );
+    net.now += 200;
+    net.settle();
+    net.all_equal();
+    assert_eq!(net.seq.seq(), 2);
+    assert_eq!(net.trouble(0), (vec![], 0));
+}
+
+#[test]
+fn work_that_the_server_took_is_not_applied_twice_after_a_renumber() {
+    let mut net = Net::new(2);
+    net.connect(0);
+    net.connect(1);
+    net.settle();
+    net.clients[0].edit(vec![create(1, 0)]).unwrap();
+    net.settle();
+    // The server takes a set, but the answer is lost with the connection.
+    net.clients[0].edit(vec![set(1, "a", 5)]).unwrap();
+    net.flush(0);
+    net.inbox[0].clear();
+    let op = net.clients[0].pending()[0].op_id;
+    assert_eq!(net.seq.seq(), 2);
+    // Another client writes the same property afterwards.
+    net.deliver(1);
+    net.clients[1].edit(vec![set(1, "a", 7)]).unwrap();
+    net.flush(1);
+    assert_eq!(net.seq.seq(), 3);
+    // An old answer says that the number was used: the client goes offline and signs in again.
+    let reused = ServerMsg::Error {
+        code: ErrorCode::OpIdReused,
+        message: "late".into(),
+        op_id: Some(op),
+        hash: None,
+    };
+    net.clients[0].handle(reused, net.now);
+    assert!(
+        net.clients[0]
+            .take_events()
+            .iter()
+            .any(|e| matches!(e, ClientEvent::Reconnect(_)))
+    );
+    net.disconnect(0);
+    net.connect(0);
+    net.settle();
+    net.all_equal();
+    // The set was not sent again: it would come after the write of the other client and win.
+    assert_eq!(net.seq.seq(), 3, "no entry twice");
+    assert_eq!(net.value(0, 1, "a"), Some(json!(7)));
+}
+
+#[test]
+fn a_busy_server_with_late_answers_and_new_edits_is_clean() {
+    // The whole story: stale errors, slow acks, more edits, and one more busy round.
+    let mut net = Net::new(1);
+    busy_round(&mut net);
+    net.deliver_one(0);
+    net.deliver_one(0);
+    net.clients[0].edit(vec![set(1, "a", 2)]).unwrap();
+    net.flush(0);
+    net.now += 700;
+    net.clients[0].tick(net.now);
+    net.flush(0);
+    net.clients[0].edit(vec![set(1, "a", 3)]).unwrap();
+    net.settle();
+    net.all_equal();
+    assert_eq!(net.trouble(0), (vec![], 0));
+    assert_eq!(net.seq.seq(), 5);
+    assert_eq!(net.value(0, 1, "a"), Some(json!(3)));
+}
+
+/// The waits (in steps of 25 ms) that a client with this jitter seed shows over `rounds` refusals
+/// in a row.
+fn waits_of(user: u64, seed: Option<Option<u64>>, rounds: usize) -> Vec<u64> {
+    let mut net = Net::new(1);
+    net.clients[0] = Client::new(cfg(user));
+    if let Some(seed) = seed {
+        net.clients[0].set_retry_jitter(seed);
+    }
+    net.connect(0);
+    net.settle();
+    net.seq.inject_errors(ErrorCode::RateLimited, rounds);
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.flush(0);
+    let mut waits = Vec::new();
+    for _ in 0..rounds {
+        net.deliver_one(0);
+        let mut waited = 0;
+        loop {
+            net.now += 25;
+            waited += 25;
+            net.clients[0].tick(net.now);
+            let sent = net.clients[0].take_outbox();
+            if sent.iter().any(|m| matches!(m, ClientMsg::Submit { .. })) {
+                for m in sent {
+                    let outs = net.seq.receive(net.conns[0].unwrap(), m, net.now);
+                    net.route(outs);
+                }
+                break;
+            }
+            assert!(waited <= 31_000, "no resend");
+        }
+        waits.push(waited);
+    }
+    net.settle();
+    net.all_equal();
+    waits
+}
+
+#[test]
+fn the_backoff_doubles_up_to_30_seconds_without_jitter() {
+    let waits = waits_of(1, Some(None), 9);
+    assert_eq!(
+        waits,
+        [250, 500, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]
+    );
+}
+
+#[test]
+fn the_backoff_has_a_jitter_of_up_to_half_that_a_seed_repeats() {
+    let a = waits_of(1, Some(Some(7)), 9);
+    for (k, w) in a.iter().enumerate() {
+        let full = (250u64 << k).min(30_000);
+        assert!(
+            *w >= full / 2 && *w < full + 25,
+            "round {k}: {w} ms of {full} ms"
+        );
+    }
+    assert_eq!(
+        a,
+        waits_of(1, Some(Some(7)), 9),
+        "the same seed gives the same waits"
+    );
+    assert_ne!(
+        a,
+        waits_of(1, Some(Some(8)), 9),
+        "another seed gives other waits"
+    );
+    assert_ne!(a, waits_of(1, Some(None), 9));
+}
+
+#[test]
+fn clients_with_other_ids_have_other_default_jitter() {
+    let a = waits_of(1, None, 9);
+    assert_eq!(a, waits_of(1, None, 9), "the default is repeatable");
+    assert_ne!(a, waits_of(2, None, 9));
+    assert_ne!(a, waits_of(1, Some(None), 9), "the default has a jitter");
+}
+
+#[test]
+fn a_number_with_other_content_in_the_log_is_sent_again_under_a_new_number() {
+    // Another instance with the same client ID used number 1 for other work. The server refuses
+    // number 1 of this client as `op_id_reused` and takes number 2. After the sign-in, only the
+    // transaction that is really in the log is dropped; the other one goes out again.
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    let conn = net.seq.open();
+    let hello = ClientMsg::Hello {
+        protocol: PROTOCOL_VERSION,
+        user: Uid::from_num(1),
+        client: Uid::from_num(1),
+        name: "twin".into(),
+        token: String::new(),
+        last_seq: None,
+        log_id: None,
+        last_hash: None,
+    };
+    net.seq.receive(conn, hello, 0);
+    net.seq.receive(
+        conn,
+        ClientMsg::Submit {
+            op_id: 1,
+            ops: vec![create(50, 1)],
+        },
+        0,
+    );
+    net.seq.close(conn);
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.clients[0].edit(vec![create(2, 1)]).unwrap();
+    net.flush(0);
+    net.deliver(0);
+    assert_eq!(net.clients[0].state(), ConnState::Offline);
+    net.disconnect(0);
+    net.connect(0);
+    net.settle();
+    net.all_equal();
+    for n in [1, 2, 50] {
+        assert!(net.seq.replica().alive(obj(n)).is_some(), "object {n}");
+    }
+    assert_eq!(net.seq.seq(), 3);
+    assert_eq!(net.trouble(0).0, vec![]);
+}
+
+#[test]
+fn a_snapshot_after_op_id_reused_drops_what_the_server_has() {
+    let mut net = Net::new(2);
+    net.connect(0);
+    net.connect(1);
+    net.settle();
+    net.clients[0].edit(vec![create(1, 0)]).unwrap();
+    net.settle();
+    // The server takes a set, but the answer is lost.
+    net.clients[0].edit(vec![set(1, "a", 5)]).unwrap();
+    net.flush(0);
+    net.inbox[0].clear();
+    let op = net.clients[0].pending()[0].op_id;
+    for v in 0..4 {
+        net.clients[1].edit(vec![set(1, "b", v)]).unwrap();
+        net.flush(1);
+    }
+    net.deliver(1);
+    net.inbox[0].clear();
+    // The log is short: client 0 gets a snapshot when it signs in again.
+    net.seq.set_log_limit(1);
+    let reused = ServerMsg::Error {
+        code: ErrorCode::OpIdReused,
+        message: "late".into(),
+        op_id: Some(op),
+        hash: None,
+    };
+    net.clients[0].handle(reused, net.now);
+    let seq = net.seq.seq();
+    net.disconnect(0);
+    net.connect(0);
+    net.settle();
+    net.all_equal();
+    assert_eq!(net.seq.seq(), seq, "nothing was sent again");
+    assert_eq!(net.value(0, 1, "a"), Some(json!(5)));
+}
+
+#[test]
+fn an_answer_of_op_id_reused_for_a_transaction_that_is_gone_changes_nothing() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    let reused = ServerMsg::Error {
+        code: ErrorCode::OpIdReused,
+        message: "late".into(),
+        op_id: Some(77),
+        hash: None,
+    };
+    net.clients[0].handle(reused, net.now);
+    assert_eq!(net.clients[0].state(), ConnState::Online);
+    assert_eq!(net.trouble(0), (vec![], 0));
+}
+
+#[test]
+fn a_refusal_for_good_of_the_first_resent_transaction_ends_the_wait_for_it() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.seq.inject_errors(ErrorCode::RateLimited, 1);
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.clients[0].edit(vec![create(2, 1)]).unwrap();
+    net.flush(0);
+    net.deliver_one(0);
+    net.now += 300;
+    net.clients[0].tick(net.now);
+    // The resend of the first one is refused for good; the second one is taken.
+    net.seq.inject_errors(ErrorCode::InvalidTxn, 1);
+    net.flush(0);
+    net.settle();
+    net.all_equal();
+    assert!(net.seq.replica().alive(obj(1)).is_none());
+    assert!(net.seq.replica().alive(obj(2)).is_some());
+    assert_eq!(net.trouble(0), (vec![ErrorCode::InvalidTxn], 0));
+}
+
+/// Things that happen to clients of a busy server.
+#[derive(Clone, Debug)]
+enum Busy {
+    Create {
+        c: usize,
+    },
+    Set {
+        c: usize,
+        i: u8,
+        v: u8,
+    },
+    Delete {
+        c: usize,
+        i: u8,
+    },
+    /// The server refuses the next `count` submits.
+    Refuse {
+        code: bool,
+        count: usize,
+    },
+    Flush {
+        c: usize,
+    },
+    Deliver {
+        c: usize,
+    },
+    /// Only the next message arrives; the others are late.
+    DeliverOne {
+        c: usize,
+    },
+    Wait {
+        ms: u16,
+    },
+    /// The client looks at the clock and sends again what is due. Nothing arrives.
+    Tick {
+        c: usize,
+    },
+    Drop {
+        c: usize,
+    },
+    Connect {
+        c: usize,
+    },
+}
+
+fn busy_act() -> impl Strategy<Value = Busy> {
+    prop_oneof![
+        4 => (0usize..4).prop_map(|c| Busy::Create { c }),
+        4 => (0usize..4, any::<u8>(), 0u8..9).prop_map(|(c, i, v)| Busy::Set { c, i, v }),
+        1 => (0usize..4, any::<u8>()).prop_map(|(c, i)| Busy::Delete { c, i }),
+        3 => (any::<bool>(), 1usize..4).prop_map(|(code, count)| Busy::Refuse { code, count }),
+        4 => (0usize..4).prop_map(|c| Busy::Flush { c }),
+        3 => (0usize..4).prop_map(|c| Busy::Deliver { c }),
+        5 => (0usize..4).prop_map(|c| Busy::DeliverOne { c }),
+        5 => (0u16..1_500).prop_map(|ms| Busy::Wait { ms }),
+        5 => (0usize..4).prop_map(|c| Busy::Tick { c }),
+        1 => (0usize..4).prop_map(|c| Busy::Drop { c }),
+        2 => (0usize..4).prop_map(|c| Busy::Connect { c }),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(600))]
+
+    /// A server that is busy at random, with late answers, and honest clients: they converge,
+    /// the log holds every transaction once, and the server never has to refuse a number it
+    /// knows (`op_id_reused`) or an object it has (`duplicate_uid`).
+    #[test]
+    fn clients_converge_on_a_busy_server(
+        n in 2usize..4,
+        seed in any::<u64>(),
+        acts in prop::collection::vec(busy_act(), 1..100),
+    ) {
+        let mut net = Net::new(n);
+        for i in 0..n {
+            net.clients[i].set_retry_jitter(Some(seed.wrapping_add(i as u64)));
+        }
+        let mut made: Vec<u64> = Vec::new();
+        for a in acts {
+            match a {
+                Busy::Create { c } => {
+                    let id = 1_000 + made.len() as u64;
+                    if net.clients[c % n].edit(vec![create(id, 1)]).is_ok() {
+                        made.push(id);
+                    }
+                }
+                Busy::Set { c, i, v } => {
+                    if !made.is_empty() {
+                        let id = made[usize::from(i) % made.len()];
+                        let _ = net.clients[c % n].edit(vec![set(id, "a", i64::from(v))]);
+                    }
+                }
+                Busy::Delete { c, i } => {
+                    if !made.is_empty() {
+                        let id = made[usize::from(i) % made.len()];
+                        let _ = net.clients[c % n].edit(vec![del(id)]);
+                    }
+                }
+                Busy::Refuse { code, count } => {
+                    let code = if code { ErrorCode::RateLimited } else { ErrorCode::Internal };
+                    net.seq.inject_errors(code, count);
+                }
+                Busy::Flush { c } => net.flush(c % n),
+                Busy::Deliver { c } => net.deliver(c % n),
+                Busy::DeliverOne { c } => net.deliver_one(c % n),
+                Busy::Wait { ms } => net.now += u64::from(ms),
+                Busy::Tick { c } => {
+                    net.clients[c % n].tick(net.now);
+                    net.flush(c % n);
+                }
+                Busy::Drop { c } => net.disconnect(c % n),
+                Busy::Connect { c } => net.connect(c % n),
+            }
+        }
+        for i in 0..n {
+            net.connect(i);
+        }
+        // Every refusal is used up in the end. The waits are at most 30 s.
+        for _ in 0..400 {
+            net.now += 31_000;
+            for i in 0..n {
+                net.flush(i);
+                net.deliver(i);
+            }
+            if net.quiet() {
+                break;
+            }
+        }
+        prop_assert!(net.quiet());
+        net.all_equal();
+        // Every transaction is in the log once.
+        let mut seen = BTreeSet::new();
+        for e in net.seq.log() {
+            prop_assert!(seen.insert((e.author, e.op_id)), "twice: {:?}", (e.author, e.op_id));
+        }
+        for i in 0..n {
+            let (rejected, reconnects) = net.trouble(i);
+            prop_assert_eq!(rejected, vec![], "client {}", i);
+            prop_assert_eq!(reconnects, 0, "client {} had op_id_reused", i);
+        }
     }
 }
