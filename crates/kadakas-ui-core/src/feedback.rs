@@ -307,19 +307,21 @@ mod tests {
 
     #[test]
     fn error_messages_of_the_app_are_found() {
-        let _ = kadakas_l10n::set_language("en-US");
-        assert!(is_error_status("Error: object does not exist"));
-        assert!(is_error_status("Cannot open garden.kad: bad file"));
-        assert!(is_error_status("Import failed: no layer"));
-        assert!(!is_error_status("Ready"));
-        assert!(!is_error_status(""));
-        let _ = kadakas_l10n::set_language("et");
-        assert!(is_error_status(&translate(
-            "app-error",
-            &[("e", Arg::Text("x".into()))]
-        )));
-        assert!(!is_error_status("Error: x"));
-        let _ = kadakas_l10n::set_language("en-US");
+        // The language is set for this thread only: other tests run in parallel.
+        kadakas_l10n::with_language("en-US", || {
+            assert!(is_error_status("Error: object does not exist"));
+            assert!(is_error_status("Cannot open garden.kad: bad file"));
+            assert!(is_error_status("Import failed: no layer"));
+            assert!(!is_error_status("Ready"));
+            assert!(!is_error_status(""));
+        });
+        kadakas_l10n::with_language("et", || {
+            assert!(is_error_status(&translate(
+                "app-error",
+                &[("e", Arg::Text("x".into()))]
+            )));
+            assert!(!is_error_status("Error: x"));
+        });
     }
 
     #[test]
