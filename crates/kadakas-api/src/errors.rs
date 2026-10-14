@@ -65,9 +65,9 @@ pub struct RpcError {
     /// A stable reason for callers in the same process (a UI), for a case where `kind` is too
     /// coarse. It is not part of the JSON-RPC answer. See the `REASON_*` constants.
     pub reason: Option<&'static str>,
-    /// Facts for callers in the same process (a UI) that go with `reason`, for example a count to
-    /// show. Not part of the JSON-RPC answer: the message says the same in words.
-    pub detail: Option<Value>,
+    /// Facts that go with the error, for example the numbers of a limit. A JSON object. It is sent
+    /// in the `data` of the JSON-RPC error, next to `kind`, so that agents get the numbers too.
+    pub details: Option<Value>,
 }
 
 /// `collab.connect`: the open document has changes that nobody saved, and the shared document
@@ -79,9 +79,12 @@ pub const REASON_EDITS_WAIT: &str = "edits_wait";
 /// `collab.connect`: the session is connected already.
 pub const REASON_ALREADY_CONNECTED: &str = "already_connected";
 /// `import.file`: the drawing has more entities than an import keeps for updates and the option
-/// `base` is `auto`. `detail` has `{entities, cap}`. The caller may ask the person, then pass
+/// `base` is `auto`. `details` has `{entities, cap}`. The caller may ask the person, then pass
 /// `base: "link"` or `base: "none"`.
-pub const REASON_BASE_CHOICE: &str = "base_choice";
+pub const REASON_BASE_TOO_MANY: &str = "base_too_many";
+/// `import.file`: the summaries of the entities are too large for a base and the option `base` is
+/// `auto`. `details` has `{entities, bytes, cap}`. The choices are the same.
+pub const REASON_BASE_TOO_LARGE: &str = "base_too_large";
 
 impl RpcError {
     pub fn new(code: i64, kind: &'static str, e: impl std::fmt::Display) -> Self {
@@ -90,12 +93,12 @@ impl RpcError {
             message: e.to_string(),
             kind,
             reason: None,
-            detail: None,
+            details: None,
         }
     }
-    /// Adds facts for a caller in the same process (see `detail`).
-    pub fn with_detail(mut self, detail: Value) -> Self {
-        self.detail = Some(detail);
+    /// Adds facts to the error (see `details`).
+    pub fn with_details(mut self, details: Value) -> Self {
+        self.details = Some(details);
         self
     }
     /// Adds a stable reason (see the `REASON_*` constants).
@@ -171,8 +174,16 @@ pub fn error_response_with(
     message: &str,
     feedback: Option<Value>,
     tainted: bool,
+    details: Option<&Value>,
 ) -> String {
     let mut data = json!({"kind": kind});
+    // The facts of the error come first, so that `kind` and the hints cannot be replaced by them.
+    if let Some(Value::Object(d)) = details {
+        for (k, v) in d {
+            data[k] = v.clone();
+        }
+        data["kind"] = json!(kind);
+    }
     if let Some(f) = feedback {
         data["feedback"] = f;
     }

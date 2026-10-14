@@ -48,6 +48,10 @@ pub struct SessionLimits {
     /// it (`kadakas serve --max-document-mib`). The desktop app does not use it for the files of
     /// the person: it asks (`kadakas_ui_core::open_limit`).
     pub document_file_bytes: u64,
+    /// Most entities whose summaries a DXF or DWG import keeps for updates (`base: "auto"`). A
+    /// drawing over it is refused with the choices `link` and `none`. It can be lowered, never
+    /// raised above `provenance::MAX_BASE_RECS` (200,000).
+    pub base_records: usize,
     /// Time limit of one script reset.
     pub script_timeout: Duration,
     /// Time limit of one request to a map service.
@@ -75,6 +79,7 @@ impl Default for SessionLimits {
             raster_pixels: 64_000_000,
             import_text_bytes: 256 * 1024 * 1024,
             document_file_bytes: DEFAULT_DOCUMENT_FILE_BYTES,
+            base_records: kadakas_core::provenance::MAX_BASE_RECS,
             script_timeout: Duration::from_secs(5),
             gis_timeout: Duration::from_secs(20),
             gis_cache_bytes: 256 * 1024 * 1024,

@@ -42,7 +42,8 @@ io-dialog-export-failed = Eksport ebaõnnestus: { $message }
 io-dialog-dwg-needs-a-converter = DWG (vajab teisendajat, vaata docs/dwg.md)
 
 # { $entities } on joonise objektide arv, { $cap } on suurim arv, mida Kadakas uuenduste jaoks hoiab.
-io-dialog-base-question = Selles joonises on { $entities } objekti, rohkem kui Kadakas uuenduste jaoks hoiab ({ $cap }). Kas hoida viidet algsele failile uuenduste jaoks või importida ilma uuendusandmeteta?
+io-dialog-base-question = Selles joonises on { $entities } objekti, rohkem kui Kadakas uuenduste jaoks hoiab ({ $cap }). Kas hoida viidet algsele failile uuenduste jaoks või importida ilma uuendusandmeteta? Viide salvestab faili täispika tee, milles võib olla sinu kasutajanimi, ja seda näevad kõik, kellega see dokument on jagatud.
 io-dialog-base-question-title = Suur joonis
-io-dialog-base-keep-link = Hoia viidet
+io-dialog-base-keep-link = Hoia viide alles
 io-dialog-base-no-update-data = Impordi ilma uuendusandmeteta
+io-dialog-base-question-large = Selle joonise uuendusandmed ({ $entities } objekti) on { $size } MB, rohkem kui Kadakas uuenduste jaoks hoiab ({ $cap } MB). Kas hoida viidet algsele failile uuenduste jaoks või importida ilma uuendusandmeteta? Viide salvestab faili täispika tee, milles võib olla sinu kasutajanimi, ja seda näevad kõik, kellega see dokument on jagatud.

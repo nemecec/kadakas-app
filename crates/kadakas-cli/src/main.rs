@@ -181,8 +181,10 @@ struct RemoteArgs {
     sequential_ids: bool,
     /// The largest `.kad` file that this run opens (the file at start and `file.open`), in MiB.
     /// An agent cannot be asked, so this is a hard limit. Default: 512 (the paid collaboration
-    /// tier). A loaded drawing needs about 1.1 to 1.7 times the file size in memory. Not used
-    /// with --connect: the app asks the person.
+    /// tier). A loaded drawing needs about 1.1 to 1.7 times the file size in memory. The local
+    /// commands `import`, `export` and `render` have no such limit (the person runs them). With
+    /// --connect the app decides: `file.open` from an agent uses the limit of the app session
+    /// (512 MiB), and files that the person opens in the app are asked about.
     #[arg(
         long = "max-document-mib",
         value_name = "MIB",
@@ -375,7 +377,32 @@ fn mib_bytes(mib: u64) -> u64 {
     mib.saturating_mul(1024 * 1024)
 }
 
-/// Loads a `.kad` file of at most `max` bytes (default: the limit of a session).
+/// Loads a `.kad` file for a local command (`import --into`, `export`, `render`). The person runs
+/// these, so there is no fixed cap: the file is refused only when its memory estimate is more than
+/// the physical memory of the computer (the rule of the desktop app, without the question).
+fn load_own(path: &std::path::Path) -> Result<Document, String> {
+    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    own_file_fits(len, kadakas_sys::sysinfo::physical_memory())
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    load(path, Some(u64::MAX))
+}
+
+/// Says why a file of `len` bytes cannot be opened on a computer with `memory` bytes (None: unknown,
+/// so every file fits).
+fn own_file_fits(len: u64, memory: Option<u64>) -> Result<(), String> {
+    if len <= kadakas_core::open_estimate::largest_file_for(memory) {
+        return Ok(());
+    }
+    Err(format!(
+        "the file is {} MB and needs about {:.1} GB of memory to open, but this computer has only {:.1} GB",
+        len / 1_000_000,
+        kadakas_core::open_estimate::needed_bytes(len) as f64 / 1e9,
+        memory.unwrap_or(0) as f64 / 1e9
+    ))
+}
+
+/// Loads a `.kad` file of at most `max` bytes (default: the limit of a session). This is for a file
+/// that an agent session starts with. A file over the limit says how to raise it.
 fn load(path: &std::path::Path, max: Option<u64>) -> Result<Document, String> {
     let max = max.unwrap_or(kadakas_api::DEFAULT_DOCUMENT_FILE_BYTES);
     let mut doc = kadakas_api::files::read_document_capped(path, max).map_err(|e| e.message)?;
@@ -609,7 +636,7 @@ fn import_command(
 ) -> Result<(), String> {
     let mut session = Session::default();
     if let Some(base) = base {
-        session.editor = kadakas_core::command::Editor::new(load(&base, None)?);
+        session.editor = kadakas_core::command::Editor::new(load_own(&base)?);
     }
     let result = io_call(&mut session, "import.file", file, format, options)?;
     save(session.editor.doc(), output)?;
@@ -626,7 +653,7 @@ fn export_command(
     format: Option<String>,
     options: Option<String>,
 ) -> Result<(), String> {
-    let mut session = Session::with_document(load(file, None)?);
+    let mut session = Session::with_document(load_own(file)?);
     let result = io_call(&mut session, "export.file", output, format, options)?;
     println!(
         "{}",
@@ -698,7 +725,7 @@ fn main() {
             file,
             output,
             width,
-        } => load(&file, None).and_then(|doc| {
+        } => load_own(&file).and_then(|doc| {
             let svg = Session::with_document(doc).render_svg(width);
             fsio::write_atomic(&output, svg.as_bytes())
                 .map_err(|e| format!("{}: {e}", output.display()))
@@ -946,6 +973,16 @@ mod tests {
             e.contains("limit") && e.contains("--max-document-mib"),
             "{e}"
         );
+        // A local command has no cap, only the memory of the computer.
+        assert!(own_file_fits(10_000_000_000, None).is_ok());
+        assert!(own_file_fits(1_000_000_000, Some(2_000_000_000)).is_ok());
+        let e = own_file_fits(2_000_000_000, Some(2_000_000_000)).unwrap_err();
+        assert!(
+            e.contains("2000 MB") && e.contains("3.4 GB") && e.contains("2.0 GB"),
+            "{e}"
+        );
+        assert!(load_own(&good).is_ok());
+        assert!(load_own(&dir.join("missing")).is_err());
         assert_eq!(mib_bytes(2), 2 * 1024 * 1024);
         assert_eq!(mib_bytes(u64::MAX), u64::MAX);
         let _ = std::fs::remove_dir_all(dir);

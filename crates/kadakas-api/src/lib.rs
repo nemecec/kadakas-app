@@ -13,8 +13,8 @@ pub mod feedback_api;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
 pub use errors::{
-    REASON_ALREADY_CONNECTED, REASON_BASE_CHOICE, REASON_EDITS_WAIT, REASON_UNSAVED_CHANGES,
-    RpcError,
+    REASON_ALREADY_CONNECTED, REASON_BASE_TOO_LARGE, REASON_BASE_TOO_MANY, REASON_EDITS_WAIT,
+    REASON_UNSAVED_CHANGES, RpcError,
 };
 #[cfg(test)]
 mod care_api_tests;
@@ -1492,7 +1492,15 @@ impl Session {
             Ok(v) => json!({"jsonrpc": "2.0", "id": id, "result": v}).to_string(),
             Err(e) => {
                 let hint = feedback_api::hint(method, e.kind, &e.message);
-                errors::error_response_with(id, e.code, e.kind, &e.message, hint, self.tainted)
+                errors::error_response_with(
+                    id,
+                    e.code,
+                    e.kind,
+                    &e.message,
+                    hint,
+                    self.tainted,
+                    e.details.as_ref(),
+                )
             }
         })
     }

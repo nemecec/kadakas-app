@@ -7,7 +7,7 @@ file. The values are decided:
   `SessionLimits::document_file_bytes`: 512 MiB by default (the document limit of the paid
   collaboration tier) and 32 MiB for `strict()` (the snapshot limit of the free tier). The error
   names the CLI flag `--max-document-mib` that raises it.
-- **The desktop app** has no fixed cap for the files of the person. Above 500 MB it asks first,
+- **The desktop app** has no fixed cap for the files of the person. Above 500 MB (decimal) it asks first,
   with the memory estimate of 1.7 times the file size (the top of the range below). It refuses a
   file only when that estimate is more than the physical memory of the computer.
 

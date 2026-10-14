@@ -3,3 +3,7 @@
 open-gate-ask-title = Open a big file
 open-gate-refused-title = This file is too big
 open-gate-open = Open
+open-gate-more-questions = { $count ->
+    [one] One more file waits.
+   *[other] { $count } more files wait.
+}

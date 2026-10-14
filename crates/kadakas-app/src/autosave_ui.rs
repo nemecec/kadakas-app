@@ -4,8 +4,6 @@ use kadakas_core::model::Document;
 use kadakas_l10n::tr;
 
 use crate::autosave::{AutosaveSettings, Scheduler};
-#[cfg(not(target_arch = "wasm32"))]
-use kadakas_ui_core::open_limit::OpenDecision;
 
 /// What the user chose in the recovery dialog.
 pub struct Recovered {
@@ -299,7 +297,7 @@ impl AutosaveUi {
         }
         // A big copy: the question comes first, and nothing else on this dialog can change the list.
         if self.gate.is_pending() {
-            let i = self.gate.show(ctx)?;
+            let (i, _) = self.gate.show(ctx)?;
             return self.open_and_note(i);
         }
         enum Choice {
@@ -362,11 +360,9 @@ impl AutosaveUi {
                 None
             }
             Choice::Open(i) => {
-                // The newest version decides: the versions of one session have about one size.
-                let decision = self.crashed[i]
-                    .versions
-                    .first()
-                    .map_or(OpenDecision::Open, |p| crate::file_io::open_decision(p));
+                // The largest version decides: `load` falls back to an older version when the
+                // newest does not open, and any of them may be the one that is read.
+                let decision = crate::file_io::open_decision_for(&self.crashed[i].versions);
                 let i = self.gate.check(i, decision)?;
                 self.open_and_note(i)
             }
@@ -426,6 +422,7 @@ impl AutosaveUi {
 mod tests {
     use super::*;
     use crate::autosave::{Job, Recovery, find_crashed_with};
+    use kadakas_ui_core::open_limit::OpenDecision;
     use std::time::Duration;
 
     fn temp(name: &str) -> std::path::PathBuf {
@@ -487,16 +484,17 @@ mod tests {
         crashed_session(&dir);
         let mut ui = AutosaveUi::inert();
         ui.crashed = find_crashed_with(&dir, Duration::ZERO);
-        // The newest version looks like 3 GiB (a hole): the person is asked, or the computer is
-        // too small for it and the file is refused.
-        let newest = ui.crashed[0].versions[0].clone();
+        // One version looks like 3 GB (a hole): the person is asked, or the computer is too small
+        // for it and the file is refused. The largest version decides, not the newest.
+        let versions = ui.crashed[0].versions.clone();
+        let biggest = versions.last().unwrap().clone();
         std::fs::OpenOptions::new()
             .write(true)
-            .open(&newest)
+            .open(&biggest)
             .unwrap()
-            .set_len(3 * 1024 * 1024 * 1024)
+            .set_len(3_000_000_000)
             .unwrap();
-        let decision = crate::file_io::open_decision(&newest);
+        let decision = crate::file_io::open_decision_for(&versions);
         assert!(!matches!(decision, OpenDecision::Open));
         assert!(ui.gate.check(0, decision).is_none());
         let ctx = egui::Context::default();

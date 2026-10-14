@@ -44,6 +44,13 @@ const PAN_STEP_PX: f32 = 60.0;
 /// Snap and pick distance in screen px.
 const PICK_PX: f64 = 8.0;
 
+/// What waits for the answer to the question about a big file: the path of the file, or in the
+/// browser the name and the bytes of the picked file.
+#[cfg(not(target_arch = "wasm32"))]
+type Opening = std::path::PathBuf;
+#[cfg(target_arch = "wasm32")]
+type Opening = (String, Vec<u8>);
+
 pub struct KadakasApp {
     session: Session,
     view: View,
@@ -105,9 +112,9 @@ pub struct KadakasApp {
     canvas_rect: Option<egui::Rect>,
     #[cfg(not(target_arch = "wasm32"))]
     agent: Option<crate::agent::AgentServer>,
-    /// The question before a big `.kad` file opens (DOC-19): File > Open and dropped files.
-    #[cfg(not(target_arch = "wasm32"))]
-    open_gate: crate::open_gate::OpenGate<std::path::PathBuf>,
+    /// The question before a big `.kad` file opens (DOC-19): File > Open, and the browser's file
+    /// picker.
+    open_gate: crate::open_gate::OpenGate<Opening>,
     /// The File > Import and File > Export dialogs.
     #[cfg(not(target_arch = "wasm32"))]
     io_ui: crate::io_dialog::IoUi,
@@ -442,7 +449,6 @@ impl KadakasApp {
             canvas_rect: None,
             #[cfg(not(target_arch = "wasm32"))]
             agent: None,
-            #[cfg(not(target_arch = "wasm32"))]
             open_gate: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             io_ui: Default::default(),
@@ -963,15 +969,33 @@ impl KadakasApp {
             }
         }
         let files: Vec<_> = self.web_inbox.borrow_mut().drain(..).collect();
-        for (name, bytes) in files {
-            let parsed = file_io::parse_document_bytes(&bytes);
-            match parsed {
-                Ok(doc) => {
-                    self.status = tr!("app-opened", name = name);
-                    self.replace_document(doc, Some(name.into()));
-                }
-                Err(e) => self.status = tr!("app-cannot-open", name = name, e = e),
+        for file in files {
+            // The memory of the browser is unknown: a big file is asked about, never refused here.
+            let decision = kadakas_ui_core::open_limit::decide(file.1.len() as u64, None);
+            if let Some((name, bytes)) = self.open_gate.check(file, decision) {
+                self.open_web_file(name, bytes);
             }
+        }
+    }
+
+    /// Web: parses the bytes of a picked file and replaces the document. The person has agreed to
+    /// the size; `parse_document_bytes` keeps the guard of `file_io::WEB_GUARD_BYTES`.
+    #[cfg(target_arch = "wasm32")]
+    fn open_web_file(&mut self, name: String, bytes: Vec<u8>) {
+        match file_io::parse_document_bytes(&bytes) {
+            Ok(doc) => {
+                self.status = tr!("app-opened", name = name);
+                self.replace_document(doc, Some(name.into()));
+            }
+            Err(e) => self.status = tr!("app-cannot-open", name = name, e = e),
+        }
+    }
+
+    /// Web: shows the question about a big picked file until the person answers.
+    #[cfg(target_arch = "wasm32")]
+    fn open_gate_frame(&mut self, ctx: &egui::Context) {
+        if let Some(((name, bytes), _)) = self.open_gate.show(ctx) {
+            self.open_web_file(name, bytes);
         }
     }
 
@@ -991,9 +1015,9 @@ impl KadakasApp {
         self.open_path(ctx, path);
     }
 
-    /// Opens a `.kad` file of the person: from File > Open or a dropped file (a recent files list
-    /// must come here too). A big file is asked about first, and a file that the computer cannot
-    /// hold is refused (DOC-19, `file_io::open_decision`).
+    /// Opens a `.kad` file of the person from File > Open. A big file is asked about first, and a
+    /// file that the computer cannot hold is refused (DOC-19, `file_io::open_decision`). Every new
+    /// way to open a file of the person must come here.
     #[cfg(not(target_arch = "wasm32"))]
     fn open_path(&mut self, ctx: &egui::Context, path: std::path::PathBuf) {
         if self.collab.is_active() {
@@ -1002,15 +1026,27 @@ impl KadakasApp {
         }
         let decision = file_io::open_decision(&path);
         if let Some(path) = self.open_gate.check(path, decision) {
-            self.open_confirmed(ctx, path);
+            self.open_confirmed(ctx, path, None);
         }
     }
 
-    /// Reads the file and replaces the document. The person has agreed to the size.
+    /// Reads the file and replaces the document. The person has agreed to the size `agreed`. If
+    /// the file has grown since, the question is asked again with the new size.
     #[cfg(not(target_arch = "wasm32"))]
-    fn open_confirmed(&mut self, ctx: &egui::Context, path: std::path::PathBuf) {
+    fn open_confirmed(
+        &mut self,
+        ctx: &egui::Context,
+        path: std::path::PathBuf,
+        agreed: Option<u64>,
+    ) {
         if self.collab.is_active() {
             self.status = tr!("collab-ui-blocked-replace");
+            return;
+        }
+        if let Some(agreed) = agreed
+            && file_io::file_len(&path).is_some_and(|now| now > agreed)
+        {
+            self.open_path(ctx, path);
             return;
         }
         match file_io::read_document(&path) {
@@ -1023,22 +1059,14 @@ impl KadakasApp {
         }
     }
 
-    /// Each frame: a `.kad` file that was dropped on the window opens like File > Open, and the
-    /// question about a big file shows until the person answers.
+    /// Each frame: the question about a big file shows until the person answers.
+    ///
+    /// Open files by drag and drop is not supported yet. It needs a prompt for unsaved changes
+    /// first, because a drop replaces the open document.
     #[cfg(not(target_arch = "wasm32"))]
     fn open_gate_frame(&mut self, ctx: &egui::Context) {
-        let dropped = ctx.input(|i| {
-            i.raw
-                .dropped_files
-                .iter()
-                .filter_map(|f| f.path.clone())
-                .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("kad")))
-        });
-        if let Some(path) = dropped {
-            self.open_path(ctx, path);
-        }
-        if let Some(path) = self.open_gate.show(ctx) {
-            self.open_confirmed(ctx, path);
+        if let Some((path, agreed)) = self.open_gate.show(ctx) {
+            self.open_confirmed(ctx, path, Some(agreed));
         }
     }
 
@@ -2463,8 +2491,14 @@ impl eframe::App for KadakasApp {
         );
         crate::profiles::customize_window(&ctx, &mut self.profiles);
         self.sync_profile();
-        #[cfg(not(target_arch = "wasm32"))]
         self.open_gate_frame(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        resource_ui::question(
+            &ctx,
+            &mut self.session,
+            &mut self.resource_ui,
+            &mut self.status,
+        );
         // A recovered copy is offered only while no shared document is joined: it would replace
         // the open document, and the recovery files must stay until it is opened.
         if let Some(r) = self.autosave.show(&ctx, !self.collab.is_active())
@@ -3623,9 +3657,21 @@ mod tests {
         // Cancel opens nothing.
         assert_eq!(app.open_gate.answer(false), None);
         // The answer Open reads the file (it is not JSON, so the status tells).
-        app.open_confirmed(&ctx, big);
+        let agreed = file_io::file_len(&big).unwrap();
+        app.open_confirmed(&ctx, big.clone(), Some(agreed));
         assert!(!app.status.is_empty());
         assert_eq!(app.path.as_deref(), Some(small.as_path()));
+        // A file that grew after the answer is asked about again, and not read.
+        app.status.clear();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&big)
+            .unwrap()
+            .set_len(agreed + 1)
+            .unwrap();
+        app.open_confirmed(&ctx, big, Some(agreed));
+        assert!(app.status.is_empty(), "not read");
+        assert!(app.open_gate.is_pending(), "asked again");
         let _ = std::fs::remove_dir_all(dir);
     }
 

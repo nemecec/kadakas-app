@@ -5,8 +5,8 @@ use kadakas_core::command::Editor;
 use kadakas_core::model::Document;
 use kadakas_core::provenance::{self, FileLink};
 
-use super::import::import_capped;
-use crate::{BaseMode, Context, ImportOptions, IoError, Source};
+use super::import::import;
+use crate::{BaseCaps, BaseLimit, BaseMode, Context, ImportOptions, IoError, Source};
 
 fn drawing(n: usize, version: &str) -> Source {
     let mut s = format!(
@@ -26,9 +26,10 @@ fn drawing(n: usize, version: &str) -> Source {
     }
 }
 
-fn opts(base: BaseMode) -> ImportOptions {
+fn opts(base: BaseMode, caps: BaseCaps) -> ImportOptions {
     ImportOptions {
         base,
+        base_caps: caps,
         ..ImportOptions::default()
     }
 }
@@ -40,7 +41,8 @@ fn run(
     link: Option<&FileLink>,
     cap: usize,
 ) -> Result<crate::Report, IoError> {
-    let r = import_capped(src, &Context::of(ed.doc()), &opts(base), link, cap)?;
+    let o = opts(base, BaseCaps::with_records(cap));
+    let r = import(src, &Context::of(ed.doc()), &o, link)?;
     ed.execute(&r.command).unwrap();
     Ok(r.report)
 }
@@ -77,7 +79,7 @@ fn auto_stores_up_to_the_cap_and_refuses_above_it() {
         e,
         IoError::BaseChoice {
             entities: 11,
-            cap: 10
+            limit: BaseLimit::TooMany { cap: 10 }
         }
     );
     assert_eq!(ed.doc(), &before);
@@ -98,7 +100,7 @@ fn the_count_includes_the_entities_of_blocks() {
         e,
         IoError::BaseChoice {
             entities: 3,
-            cap: 2
+            limit: BaseLimit::TooMany { cap: 2 }
         }
     );
     assert!(run(&mut fresh(), &src, BaseMode::Auto, None, 3).is_ok());
@@ -143,4 +145,64 @@ fn a_revision_that_the_document_keeps_is_not_refused_again() {
     assert_eq!(base_count(ed.doc()), 1);
     // A new revision is a new base, and the cap applies.
     assert!(run(&mut ed, &drawing(5, "V2"), BaseMode::Auto, None, 3).is_err());
+}
+
+#[test]
+fn summaries_over_the_size_of_a_base_give_the_same_choice() {
+    // Parts of 100 bytes, at most 2 of them: 10 entities need more than that.
+    let caps = BaseCaps {
+        records: 100,
+        part_bytes: 100,
+        parts: 2,
+    };
+    let mut ed = fresh();
+    let before = ed.doc().clone();
+    let src = drawing(10, "V1");
+    let e = import(
+        &src,
+        &Context::of(ed.doc()),
+        &opts(BaseMode::Auto, caps),
+        None,
+    )
+    .unwrap_err();
+    let text = e.to_string();
+    let IoError::BaseChoice {
+        entities,
+        limit: BaseLimit::TooLarge { bytes, cap },
+    } = e
+    else {
+        panic!("{text}")
+    };
+    assert_eq!((entities, cap), (10, 200));
+    assert!(bytes > 200);
+    for want in ["10 entities", "bytes", "\"link\"", "\"none\""] {
+        assert!(text.contains(want), "{text}");
+    }
+    assert_eq!(ed.doc(), &before, "nothing was imported");
+    // The choices work for the same drawing.
+    let r = import(
+        &src,
+        &Context::of(ed.doc()),
+        &opts(BaseMode::Off, caps),
+        None,
+    )
+    .unwrap();
+    ed.execute(&r.command).unwrap();
+    assert_eq!(base_count(ed.doc()), 0);
+    // Parts that fit are stored in parts.
+    let roomy = BaseCaps {
+        records: 100,
+        part_bytes: 100,
+        parts: 100,
+    };
+    let mut ed = fresh();
+    let r = import(
+        &src,
+        &Context::of(ed.doc()),
+        &opts(BaseMode::Auto, roomy),
+        None,
+    )
+    .unwrap();
+    ed.execute(&r.command).unwrap();
+    assert!(base_count(ed.doc()) > 2);
 }

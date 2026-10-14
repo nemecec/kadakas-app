@@ -74,9 +74,9 @@ fn a_drawing_over_the_cap_is_refused_with_the_choices_and_the_import_is_not_done
     for want in [n.to_string(), "\"link\"".into(), "\"none\"".into()] {
         assert!(e.message.contains(&want), "{}", e.message);
     }
-    assert_eq!(e.reason, Some(kadakas_api::REASON_BASE_CHOICE));
+    assert_eq!(e.reason, Some(kadakas_api::REASON_BASE_TOO_MANY));
     assert_eq!(
-        e.detail,
+        e.details,
         Some(json!({"entities": n, "cap": provenance::MAX_BASE_RECS}))
     );
     assert_eq!(s.editor.doc(), &before, "nothing was imported");
@@ -113,4 +113,38 @@ fn a_link_survives_save_and_load_and_the_describe_text_names_the_option() {
         described.contains("\"base\""),
         "describe has the option base"
     );
+}
+
+#[test]
+fn a_lowered_session_limit_gives_the_same_choice_and_the_numbers_travel_in_data() {
+    let dir = temp("kadakas-api-base-low");
+    let path = dir.path().join("site.dxf");
+    std::fs::write(&path, drawing(11)).unwrap();
+    let mut s = Session::with_sequential_ids();
+    s.set_limits(kadakas_api::SessionLimits {
+        base_records: 10,
+        ..Default::default()
+    });
+    let req = json!({"jsonrpc": "2.0", "id": 1, "method": "import.file",
+        "params": {"path": path}});
+    let line = s.handle_line(&req.to_string()).unwrap();
+    let reply: Value = serde_json::from_str(&line).unwrap();
+    let data = &reply["error"]["data"];
+    assert_eq!(data["kind"], "validation");
+    assert_eq!(
+        (data["entities"].as_u64(), data["cap"].as_u64()),
+        (Some(11), Some(10))
+    );
+    // The choices work.
+    let ok = import(&mut s, &path, json!({"base": "none"})).unwrap();
+    assert_eq!(ok["base"], "none");
+    // The limit can be lowered but never raised above the cap of the document.
+    let mut high = Session::with_sequential_ids();
+    high.set_limits(kadakas_api::SessionLimits {
+        base_records: usize::MAX,
+        ..Default::default()
+    });
+    let big = dir.path().join("big.dxf");
+    std::fs::write(&big, drawing(provenance::MAX_BASE_RECS + 1)).unwrap();
+    assert!(import(&mut high, &big, json!({})).is_err());
 }

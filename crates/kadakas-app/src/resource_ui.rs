@@ -299,25 +299,47 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
             if ui.button(tr!("resource-ui-import-all-resources")).clicked()
                 && !st.import_path.trim().is_empty()
             {
-                let params =
-                    json!({"path": st.import_path.trim(), "all": true, "on_conflict": "rename"});
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    // A big file of the person is asked about first; the session limit is for agents.
-                    let decision =
-                        crate::file_io::open_decision(std::path::Path::new(st.import_path.trim()));
-                    if let Some(params) = st.import_gate.check(params, decision) {
-                        import_from_file(session, params, status, false);
+                    // The path goes through the path policy of the session before it is measured.
+                    // A big file of the person is asked about first; the session limit is for
+                    // agents.
+                    let given = std::path::Path::new(st.import_path.trim());
+                    match session.check_path(given, false, &["kad"]) {
+                        Ok(path) => {
+                            let params =
+                                json!({"path": path, "all": true, "on_conflict": "rename"});
+                            let decision = crate::file_io::open_decision(&path);
+                            if let Some(params) = st.import_gate.check(params, decision) {
+                                import_from_file(session, params, status, false);
+                            }
+                        }
+                        Err(e) => *status = tr!("resource-ui-error", message = e),
                     }
                 }
                 #[cfg(target_arch = "wasm32")]
-                import_from_file(session, params, status, false);
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(params) = st.import_gate.show(ui.ctx()) {
-                import_from_file(session, params, status, true);
+                import_from_file(
+                    session,
+                    json!({"path": st.import_path.trim(), "all": true, "on_conflict": "rename"}),
+                    status,
+                    false,
+                );
             }
         });
+}
+
+/// The question before a big library file is read. It is a modal window of the app, so the app
+/// calls it every frame, outside the (maybe closed) section of the palette.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn question(
+    ctx: &egui::Context,
+    session: &mut Session,
+    st: &mut ResourceUi,
+    status: &mut String,
+) {
+    if let Some((params, _)) = st.import_gate.show(ctx) {
+        import_from_file(session, params, status, true);
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

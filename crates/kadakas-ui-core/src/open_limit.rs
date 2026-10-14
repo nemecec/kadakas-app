@@ -3,29 +3,21 @@
 //! A limit on the data of a person must ask the person and not decide alone. So the desktop app has
 //! no fixed cap for the files that a person opens. Above [`ASK_ABOVE_BYTES`] it asks, with an
 //! estimate of the memory that the file needs. It refuses only when the estimate is more than
-//! the physical memory of the computer. When the memory is unknown it never refuses. Agents cannot
-//! be asked: they have the hard limit `SessionLimits::document_file_bytes`.
+//! the physical memory of the computer. When the memory is unknown it never refuses (the browser
+//! build always has unknown memory, so it only asks). Agents cannot be asked: they have the hard
+//! limit `SessionLimits::document_file_bytes`.
 //!
-//! [`decide`] is a pure function. Every way into a file (File > Open, a recent file, a dropped file,
-//! the library browser and the recovery of an autosave) calls it with the size of the file and
-//! `kadakas_sys::sysinfo::physical_memory()` (the app does this in `file_io::open_decision`), and shows [`Estimate::ask_text`] or
-//! [`Estimate::refuse_text`]. The sizes in the texts are binary (1 MB is 1 048 576 bytes).
+//! [`decide`] is a pure function. Every way into a file of the person (File > Open, the library
+//! browser, the recovery of an autosave, the browser's file picker) calls it with the size of the
+//! file and `kadakas_sys::sysinfo::physical_memory()` (the app does this in
+//! `file_io::open_decision`), and shows [`Estimate::ask_text`] or [`Estimate::refuse_text`].
+//! The sizes in the texts are decimal: 1 MB is 1 000 000 bytes and 1 GB is 1 000 000 000 bytes.
 
+use kadakas_core::open_estimate::needed_bytes;
 use kadakas_l10n::tr;
 
 /// Files above this size need a question first: 500 MB.
-pub const ASK_ABOVE_BYTES: u64 = 500 * 1024 * 1024;
-
-/// A loaded drawing needs 1.1 to 1.7 times the file size in memory (`docs/doc-load-benchmark.md`).
-/// The estimate takes the top of the range, as a fraction: 17 over 10.
-const FACTOR_NUM: u128 = 17;
-const FACTOR_DEN: u128 = 10;
-
-/// The memory that a file of `file_bytes` needs to open, in bytes (1.7 times the size).
-pub fn needed_bytes(file_bytes: u64) -> u64 {
-    let n = u128::from(file_bytes) * FACTOR_NUM / FACTOR_DEN;
-    u64::try_from(n).unwrap_or(u64::MAX)
-}
+pub const ASK_ABOVE_BYTES: u64 = 500_000_000;
 
 /// The numbers behind the question or the refusal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,11 +59,11 @@ pub fn decide(file_bytes: u64, physical_memory: Option<u64>) -> OpenDecision {
 }
 
 fn megabytes(bytes: u64) -> String {
-    kadakas_units::current().number_text((bytes as f64 / 1_048_576.0).round(), 0)
+    kadakas_units::current().number_text((bytes as f64 / 1_000_000.0).round(), 0)
 }
 
 fn gigabytes(bytes: u64) -> String {
-    kadakas_units::current().number_text(bytes as f64 / 1_073_741_824.0, 1)
+    kadakas_units::current().number_text(bytes as f64 / 1_000_000_000.0, 1)
 }
 
 impl Estimate {
@@ -99,17 +91,8 @@ impl Estimate {
 mod tests {
     use super::*;
 
-    const MB: u64 = 1024 * 1024;
-    const GB: u64 = 1024 * MB;
-
-    #[test]
-    fn the_estimate_is_one_point_seven_times_the_file() {
-        assert_eq!(needed_bytes(0), 0);
-        assert_eq!(needed_bytes(1000), 1700);
-        assert_eq!(needed_bytes(GB), GB / 10 * 17 + (GB % 10) * 17 / 10);
-        // No overflow at the top.
-        assert_eq!(needed_bytes(u64::MAX), u64::MAX);
-    }
+    const MB: u64 = 1_000_000;
+    const GB: u64 = 1_000 * MB;
 
     #[test]
     fn small_files_open_without_a_question() {
@@ -168,14 +151,14 @@ mod tests {
             panic!("asks")
         };
         let t = e.ask_text();
-        assert!(t.contains("1024") && t.contains("1.7"), "{t}");
+        assert!(t.contains("1000") && t.contains("1.7"), "{t}");
         assert!(t.contains("Open it?"), "{t}");
         let OpenDecision::Refuse(e) = decide(10 * GB, Some(4 * GB)) else {
             panic!("refuses")
         };
         let t = e.refuse_text();
         assert!(
-            t.contains("10240") && t.contains("17.0") && t.contains("4.0"),
+            t.contains("10000") && t.contains("17.0") && t.contains("4.0"),
             "{t}"
         );
     }
@@ -186,7 +169,7 @@ mod tests {
             panic!("asks")
         };
         let (ask, refuse) = kadakas_l10n::with_language("et", || (e.ask_text(), e.refuse_text()));
-        assert!(ask.contains("Kas"), "{ask}");
+        assert!(ask.contains("Kas avada see?"), "{ask}");
         assert!(refuse.contains("mälu"), "{refuse}");
     }
 }

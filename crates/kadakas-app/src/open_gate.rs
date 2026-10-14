@@ -4,7 +4,10 @@
 //! The decision is `kadakas_ui_core::open_limit::decide`. This module holds the state of the
 //! question and the window. One gate serves one way into a file. The way passes what it wants to open
 //! (`T`: a path, an index, a request) to [`OpenGate::check`], and opens it when `check` gives it
-//! back at once or when the person answers Open in [`OpenGate::show`].
+//! back at once or when the person answers Open in [`OpenGate::show`]. A second question that comes
+//! while one is on the screen waits in a queue; it is not lost.
+
+use std::collections::VecDeque;
 
 use kadakas_l10n::tr;
 use kadakas_ui_core::open_limit::{Estimate, OpenDecision};
@@ -18,12 +21,15 @@ struct Question<T> {
 }
 
 pub struct OpenGate<T> {
-    question: Option<Question<T>>,
+    /// The first question is the one on the screen.
+    questions: VecDeque<Question<T>>,
 }
 
 impl<T> Default for OpenGate<T> {
     fn default() -> Self {
-        OpenGate { question: None }
+        OpenGate {
+            questions: VecDeque::new(),
+        }
     }
 }
 
@@ -36,7 +42,7 @@ impl<T> OpenGate<T> {
             OpenDecision::Ask(e) => (e, false),
             OpenDecision::Refuse(e) => (e, true),
         };
-        self.question = Some(Question {
+        self.questions.push_back(Question {
             what,
             estimate,
             refused,
@@ -44,14 +50,20 @@ impl<T> OpenGate<T> {
         None
     }
 
-    /// True while a question or a refusal is on the screen.
+    /// True while a question or a refusal is on the screen or waits.
     pub fn is_pending(&self) -> bool {
-        self.question.is_some()
+        !self.questions.is_empty()
     }
 
-    /// The text of the question or the refusal.
+    /// How many questions wait, the one on the screen included.
+    #[cfg(test)]
+    pub fn queued(&self) -> usize {
+        self.questions.len()
+    }
+
+    /// The text of the question or the refusal that is on the screen.
     pub fn text(&self) -> Option<String> {
-        self.question.as_ref().map(|q| {
+        self.questions.front().map(|q| {
             if q.refused {
                 q.estimate.refuse_text()
             } else {
@@ -60,46 +72,49 @@ impl<T> OpenGate<T> {
         })
     }
 
-    /// The answer of the person. `open` true gives back what was asked about, but never for a
-    /// refusal. Either way the question is gone.
-    pub fn answer(&mut self, open: bool) -> Option<T> {
-        let q = self.question.take()?;
-        (open && !q.refused).then_some(q.what)
+    /// The answer of the person to the question on the screen. `open` true gives back what was asked
+    /// about and the size of the file that the person agreed to (the caller checks that the file did
+    /// not grow), but never for a refusal. Either way the question is gone, and the next one shows.
+    pub fn answer(&mut self, open: bool) -> Option<(T, u64)> {
+        let q = self.questions.pop_front()?;
+        (open && !q.refused).then_some((q.what, q.estimate.file_bytes))
     }
 
-    /// Shows the window. Returns what the person agreed to open.
-    pub fn show(&mut self, ctx: &egui::Context) -> Option<T> {
-        let q = self.question.as_ref()?;
-        let (title, refused) = if q.refused {
-            (tr!("open-gate-refused-title"), true)
+    /// Shows the window. Returns what the person agreed to open, with the size they agreed to.
+    pub fn show(&mut self, ctx: &egui::Context) -> Option<(T, u64)> {
+        let q = self.questions.front()?;
+        let refused = q.refused;
+        let title = if refused {
+            tr!("open-gate-refused-title")
         } else {
-            (tr!("open-gate-ask-title"), false)
+            tr!("open-gate-ask-title")
         };
         let text = self.text().unwrap_or_default();
+        let waiting = self.questions.len() - 1;
         let mut answer = None;
-        egui::Window::new(title)
-            .id(egui::Id::new("win-open-big-file"))
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(ctx, |ui| {
-                ui.set_max_width(420.0);
-                ui.label(text);
-                ui.horizontal(|ui| {
-                    if refused {
-                        if ui.button(tr!("common-ok")).clicked() {
-                            answer = Some(false);
-                        }
-                    } else {
-                        if ui.button(tr!("open-gate-open")).clicked() {
-                            answer = Some(true);
-                        }
-                        if ui.button(tr!("common-cancel")).clicked() {
-                            answer = Some(false);
-                        }
+        // A modal window: the rest of the app waits for the answer.
+        egui::Modal::new(egui::Id::new("win-open-big-file")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.heading(title);
+            ui.label(text);
+            if waiting > 0 {
+                ui.small(tr!("open-gate-more-questions", count = waiting));
+            }
+            ui.horizontal(|ui| {
+                if refused {
+                    if ui.button(tr!("common-ok")).clicked() {
+                        answer = Some(false);
                     }
-                });
+                } else {
+                    if ui.button(tr!("open-gate-open")).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button(tr!("common-cancel")).clicked() {
+                        answer = Some(false);
+                    }
+                }
             });
+        });
         self.answer(answer?)
     }
 }
@@ -109,7 +124,7 @@ mod tests {
     use super::*;
     use kadakas_ui_core::open_limit::{ASK_ABOVE_BYTES, decide};
 
-    const GB: u64 = 1024 * 1024 * 1024;
+    const GB: u64 = 1_000_000_000;
 
     #[test]
     fn a_small_file_opens_at_once() {
@@ -128,9 +143,9 @@ mod tests {
         // Cancel: gone, and nothing opens.
         assert_eq!(g.answer(false), None);
         assert!(!g.is_pending());
-        // Open: the file comes back once.
+        // Open: the file comes back once, with the size that was agreed to.
         g.check("big.kad", decide(GB, None));
-        assert_eq!(g.answer(true), Some("big.kad"));
+        assert_eq!(g.answer(true), Some(("big.kad", GB)));
         assert_eq!(g.answer(true), None, "answered already");
     }
 
@@ -141,6 +156,25 @@ mod tests {
         let t = g.text().unwrap();
         assert!(t.contains("cannot open"), "{t}");
         assert_eq!(g.answer(true), None);
+        assert!(!g.is_pending());
+    }
+
+    #[test]
+    fn a_second_question_waits_in_a_queue_and_is_not_lost() {
+        let mut g = OpenGate::default();
+        assert_eq!(g.check("one", decide(GB, None)), None);
+        assert_eq!(g.check("two", decide(2 * GB, None)), None);
+        assert_eq!(g.queued(), 2);
+        // A small file in the meantime opens at once; it does not disturb the queue.
+        assert_eq!(g.check("small", decide(10, None)), Some("small"));
+        assert_eq!(g.queued(), 2);
+        assert_eq!(g.answer(true), Some(("one", GB)));
+        assert!(g.is_pending());
+        assert!(
+            g.text().unwrap().contains("2000"),
+            "the second question shows now"
+        );
+        assert_eq!(g.answer(true), Some(("two", 2 * GB)));
         assert!(!g.is_pending());
     }
 
@@ -156,11 +190,12 @@ mod tests {
         let ctx = egui::Context::default();
         let mut g = OpenGate::default();
         g.check(7, decide(GB, None));
+        g.check(8, decide(GB, None));
         let _ = ctx.run_ui(Default::default(), |u| {
             let ctx = u.ctx();
             assert_eq!(g.show(ctx), None, "no click: still waiting");
         });
-        assert!(g.is_pending());
+        assert_eq!(g.queued(), 2);
         // A refusal shows the OK button; the question shows two.
         let mut r = OpenGate::default();
         r.check(1, decide(20 * GB, Some(GB)));

@@ -81,6 +81,7 @@ impl Session {
         let mut opts = ImportOptions::from_json(options).map_err(io_rpc)?;
         // A client cannot raise the limit of the session.
         opts.max_bytes = opts.max_bytes.min(self.limits.import_text_bytes);
+        opts.base_caps = kadakas_io::BaseCaps::with_records(self.limits.base_records);
         let run = RunOptions::from_json(options).map_err(rpc)?;
         let path = if checked {
             self.check_path(&path, false, &["dwg"])

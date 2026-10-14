@@ -15,15 +15,19 @@ pub fn parse_document(text: &str) -> Result<Document, String> {
     parse_document_bytes(text.as_bytes())
 }
 
+/// The largest document that the browser build parses, in bytes: 2 GiB. The memory of the browser
+/// is unknown, so the person is asked above 500 MB (`kadakas_ui_core::open_limit::decide` with
+/// unknown memory) and is never refused below this guard. A wasm page cannot hold more than 4 GiB
+/// in any case, and a file of 2 GiB needs about 3.4 GB to open.
+pub const WEB_GUARD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 /// Parses the bytes of a document file (the browser has them from the file picker). The bytes are
-/// parsed in place (`Document::from_slice`): no copy as text and no `serde_json::Value`. The size
-/// limit is the same as for a file; there is no file to check before the read in the browser.
+/// parsed in place (`Document::from_slice`): no copy as text and no `serde_json::Value`. The
+/// browser asks the person about a big file first (see `WEB_GUARD_BYTES`); there is no file to
+/// check before the read.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // the browser build uses it
 pub fn parse_document_bytes(bytes: &[u8]) -> Result<Document, String> {
-    parse_document_bytes_capped(
-        bytes,
-        kadakas_api::SessionLimits::default().document_file_bytes,
-    )
+    parse_document_bytes_capped(bytes, WEB_GUARD_BYTES)
 }
 
 /// [`parse_document_bytes`] with a size limit.
@@ -48,17 +52,40 @@ pub fn read_document(path: &Path) -> Result<Document, String> {
 }
 
 /// How to open the file at `path`, from its size on disk: open it, ask the person first, or refuse
-/// it (DOC-19). Every way into a `.kad` file of the person goes through this: File > Open, a
-/// dropped file, a recent file, the library browser and the recovery of an autosave. When the size
-/// cannot be read the answer is `Open`, and the open reports its own error.
+/// it (DOC-19). Every way into a `.kad` file of the person goes through this: File > Open, the
+/// library browser and the recovery of an autosave (the browser build asks with
+/// `open_limit::decide(len, None)`). When the size cannot be read the answer is `Open`, and the
+/// open reports its own error.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_decision(path: &Path) -> OpenDecision {
-    match std::fs::metadata(path) {
-        Ok(m) if m.is_file() => {
-            kadakas_ui_core::open_limit::decide(m.len(), kadakas_sys::sysinfo::physical_memory())
+    open_decision_for(&[path])
+}
+
+/// Like [`open_decision`] for several candidates (the versions of an autosave): the largest file
+/// decides, because any of them may be the one that opens.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_decision_for<P: AsRef<Path>>(paths: &[P]) -> OpenDecision {
+    let largest = paths
+        .iter()
+        .filter_map(|p| std::fs::metadata(p.as_ref()).ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .max();
+    match largest {
+        Some(len) => {
+            kadakas_ui_core::open_limit::decide(len, kadakas_sys::sysinfo::physical_memory())
         }
-        _ => OpenDecision::Open,
+        None => OpenDecision::Open,
     }
+}
+
+/// The size of the file in bytes, if it is a file.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn file_len(path: &Path) -> Option<u64> {
+    std::fs::metadata(path)
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
 }
 
 /// Saves atomically (temporary file, then rename) and keeps the old file as `.bak`.

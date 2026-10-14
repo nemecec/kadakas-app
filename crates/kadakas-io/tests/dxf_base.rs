@@ -6,7 +6,7 @@ use kadakas_core::command::Editor;
 use kadakas_core::model::Document;
 use kadakas_core::provenance::{self, FileLink, LayerSource};
 use kadakas_io::dxf::DxfFormat;
-use kadakas_io::dxf::link::{self, LinkError};
+use kadakas_io::dxf::link::{self, LinkError, ReadOptions};
 use kadakas_io::dxf::revision::{self, Rec};
 use kadakas_io::{BaseMode, Context, ImportOptions, Importer, IoError, Source};
 
@@ -67,6 +67,10 @@ fn run(
     Ok(r.report)
 }
 
+fn anywhere(p: &Path) -> Result<std::path::PathBuf, String> {
+    Ok(p.to_path_buf())
+}
+
 fn temp(name: &str) -> kadakas_sys::tmp::PrivateTempDir {
     kadakas_sys::tmp::PrivateTempDir::new(name).unwrap()
 }
@@ -94,7 +98,9 @@ fn a_drawing_over_the_cap_is_refused_in_auto_mode_with_the_choices() {
         err,
         IoError::BaseChoice {
             entities: n,
-            cap: provenance::MAX_BASE_RECS
+            limit: kadakas_io::BaseLimit::TooMany {
+                cap: provenance::MAX_BASE_RECS
+            }
         }
     );
     let text = err.to_string();
@@ -142,7 +148,7 @@ fn link_keeps_the_path_the_size_and_the_hash_instead_of_the_summaries() {
     assert_eq!(sources(&loaded)[0].link, Some(link.clone()));
 
     // An update gets the old summaries back from the file.
-    let recs = link::read_records(Path::new(&link.path), &link, 1 << 20, 1000).unwrap();
+    let recs = link::read_records(&link, &anywhere, &ReadOptions::new(1 << 20, 1000)).unwrap();
     let parsed = kadakas_io::dxf::parse::parse(text.as_bytes()).unwrap();
     let (mut want, _) = revision::records(&parsed, 1000);
     want.iter_mut().for_each(Rec::compact);
@@ -150,12 +156,12 @@ fn link_keeps_the_path_the_size_and_the_hash_instead_of_the_summaries() {
     // And says so when the file is gone or has changed.
     std::fs::write(&path, drawing(20, "V2")).unwrap();
     assert!(matches!(
-        link::read_records(Path::new(&link.path), &link, 1 << 20, 1000),
+        link::read_records(&link, &anywhere, &ReadOptions::new(1 << 20, 1000)),
         Err(LinkError::Changed(_))
     ));
     std::fs::remove_file(&path).unwrap();
     assert!(matches!(
-        link::read_records(Path::new(&link.path), &link, 1 << 20, 1000),
+        link::read_records(&link, &anywhere, &ReadOptions::new(1 << 20, 1000)),
         Err(LinkError::Gone(_))
     ));
 }

@@ -136,6 +136,39 @@ impl BaseMode {
     }
 }
 
+/// The limits of the update data of an import. The defaults are the limits of the document
+/// (`kadakas_core::provenance`). A program may lower them (the API session limit
+/// `base_records`, tests); they are not options of a client, so a client cannot raise them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BaseCaps {
+    /// Most entities whose summaries are kept.
+    pub records: usize,
+    /// The size that one part of the summaries aims at, in bytes of JSON.
+    pub part_bytes: usize,
+    /// Most parts.
+    pub parts: u64,
+}
+
+impl Default for BaseCaps {
+    fn default() -> Self {
+        BaseCaps {
+            records: kadakas_core::provenance::MAX_BASE_RECS,
+            part_bytes: kadakas_core::provenance::BASE_PART_BYTES,
+            parts: kadakas_core::provenance::MAX_BASE_PARTS,
+        }
+    }
+}
+
+impl BaseCaps {
+    /// The default limits with a lower number of entities (never a higher one).
+    pub fn with_records(records: usize) -> BaseCaps {
+        BaseCaps {
+            records: records.min(kadakas_core::provenance::MAX_BASE_RECS),
+            ..BaseCaps::default()
+        }
+    }
+}
+
 /// The default of `ImportOptions::max_bytes`.
 pub const DEFAULT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -183,6 +216,9 @@ pub struct ImportOptions {
     pub max_bytes: u64,
     /// DXF and DWG with `track_source`: what to keep for a later update (`auto`, `link` or `none`).
     pub base: BaseMode,
+    /// The limits of the update data. Not an option in JSON.
+    #[serde(skip)]
+    pub base_caps: BaseCaps,
 }
 
 impl Default for ImportOptions {
@@ -207,6 +243,7 @@ impl Default for ImportOptions {
             source_name: None,
             max_bytes: DEFAULT_MAX_BYTES,
             base: BaseMode::Auto,
+            base_caps: BaseCaps::default(),
         }
     }
 }
