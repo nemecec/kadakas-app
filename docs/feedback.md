@@ -139,7 +139,7 @@ Statuses: `pending` (text only, waits for sending), `needs_review`, `approved`, 
 
 ## Sending
 
-Sending runs in a helper thread (`kadakas_feedback::dispatch::Dispatcher`). The host calls `pump` after each request (CLI) or about every two seconds (app). The sender is a trait (`Sender`); `HttpSender` is the real one, `FakeSender` the one for tests. Tests never use the network. `HttpSender` accepts `https://` addresses only (and `http://127.0.0.1` in its own tests), follows no redirects, and has a 10 s connect and a 30 s total timeout.
+Sending runs in a helper thread (`kadakas_feedback::dispatch::Dispatcher`). The host calls `pump` after each request (CLI) or about every two seconds (app). The sender is a trait (`Sender`); `HttpSender` is the real one, `FakeSender` the one for tests. Tests never use the network. `HttpSender` accepts `https://` addresses only. Loopback `http://127.0.0.1` and `http://localhost` work in its own tests, and in the app and the CLI only when the variable `KADAKAS_FEEDBACK_ALLOW_LOOPBACK_HTTP` is `1` (for a local test server). It follows no redirects, and has a 10 s connect and a 30 s total timeout.
 
 - **Retry within a start:** a transient error (timeout, dropped connection, 408, 425, 5xx) is tried again at once, 4 tries with waits of 0.5 s, 1 s and 2 s.
 - **Back-off between starts:** a report that failed waits. The wait is 1 minute after the first failed start, then doubles, at most 6 hours, with a jitter of plus or minus 20 percent. The time of the next try is stored in the report (`next_try`).

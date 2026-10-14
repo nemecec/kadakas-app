@@ -61,7 +61,7 @@ impl Dispatcher {
     /// The real transport with the default retry policy.
     pub fn http() -> Self {
         Dispatcher::new(
-            Arc::new(crate::http::HttpSender::new()),
+            Arc::new(crate::http::HttpSender::from_env()),
             Arc::new(crate::send::ThreadSleeper),
             RetryPolicy::default(),
         )

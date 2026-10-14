@@ -46,6 +46,26 @@ impl HttpSender {
         self.allow_loopback_http = true;
         self
     }
+
+    /// The real sender. Loopback `http://` is allowed only when the variable
+    /// `KADAKAS_FEEDBACK_ALLOW_LOOPBACK_HTTP` is `1`, for a local server in tests.
+    pub fn from_env() -> HttpSender {
+        let sender = HttpSender::new();
+        if loopback_from(
+            std::env::var("KADAKAS_FEEDBACK_ALLOW_LOOPBACK_HTTP")
+                .ok()
+                .as_deref(),
+        ) {
+            sender.allow_loopback_http()
+        } else {
+            sender
+        }
+    }
+}
+
+/// Whether the value of `KADAKAS_FEEDBACK_ALLOW_LOOPBACK_HTTP` turns loopback `http://` on.
+fn loopback_from(value: Option<&str>) -> bool {
+    value == Some("1")
 }
 
 /// Accepts `https://host/...`, and loopback `http://` if `loopback`.
@@ -253,6 +273,14 @@ mod tests {
             .allow_loopback_http()
             .send(&format!("http://127.0.0.1:{port}/v1/feedback"), "{}");
         assert!(matches!(r, Err(SendError::Unreachable(_))), "{r:?}");
+    }
+
+    #[test]
+    fn loopback_http_needs_the_variable_set_to_one() {
+        assert!(loopback_from(Some("1")));
+        assert!(!loopback_from(None));
+        assert!(!loopback_from(Some("true")));
+        assert!(!loopback_from(Some("")));
     }
 
     #[test]

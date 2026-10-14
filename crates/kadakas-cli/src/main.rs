@@ -629,7 +629,7 @@ fn feedback_main(cmd: FeedbackCmd) -> Result<(), String> {
                 std::io::stdout().is_terminal(),
             )?;
             hub.set_url_override(feedback_url);
-            let sender = kadakas_feedback::http::HttpSender::new();
+            let sender = kadakas_feedback::http::HttpSender::from_env();
             feedback_cmd::review(
                 &mut hub,
                 id.as_deref(),
