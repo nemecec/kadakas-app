@@ -821,6 +821,10 @@ thread_local! {
 
 /// Removes the objects at these (ascending) indices.
 fn remove_at(objects: &mut Objects, items: &[(usize, Object)]) {
+    debug_assert!(
+        items.windows(2).all(|w| w[0].0 < w[1].0),
+        "indices must ascend"
+    );
     if items.len() <= FEW {
         for (index, _) in items.iter().rev() {
             #[cfg(test)]
@@ -842,6 +846,10 @@ fn remove_at(objects: &mut Objects, items: &[(usize, Object)]) {
 
 /// Inserts objects so that each ends up at its (ascending) index.
 fn insert_at(objects: &mut Objects, items: &[(usize, Object)]) {
+    debug_assert!(
+        items.windows(2).all(|w| w[0].0 < w[1].0),
+        "indices must ascend"
+    );
     if items.len() <= FEW {
         for (index, o) in items {
             #[cfg(test)]
@@ -1669,12 +1677,15 @@ impl<'a> Tx<'a> {
             .iter()
             .map(|(i, id)| (*i, self.before[id].clone()))
             .collect();
-        let added: Vec<(usize, Object)> = self
+        // In the order of the list, not in the order they were made: an object that was made and
+        // then arranged to the back comes first. `insert_at` and `remove_at` need this order.
+        let mut added: Vec<(usize, Object)> = self
             .added
             .iter()
             .filter_map(|id| doc.objects.get_full(id))
             .map(|(i, _, o)| (i, o.clone()))
             .collect();
+        added.sort_unstable_by_key(|(i, _)| *i);
         let modified: Vec<(Object, Object)> = self
             .before
             .iter()
@@ -2284,6 +2295,76 @@ impl Editor {
 #[cfg(test)]
 mod tests {
 
+    fn line_json(x: f64) -> serde_json::Value {
+        serde_json::json!({"op": "add_object", "shape":
+            {"kind": "line", "a": [x, 0.0], "b": [x + 1.0, 1.0]}})
+    }
+
+    /// A batch that makes `n` lines and then arranges the ones in `which` to the back or front:
+    /// the new objects are not made in the order they end up in. Redo and undo must give exactly
+    /// the document, whatever `n` is (the helpers have a path for few objects and one for many).
+    fn batch_with_arrange(n: usize, which: &[usize], how: &str) {
+        // Some objects that were there before.
+        let fresh = || {
+            let mut ed = Editor::with_sequential_ids();
+            for k in 0..3 {
+                ed.execute(&serde_json::from_value(line_json(100.0 + f64::from(k))).unwrap())
+                    .unwrap();
+            }
+            ed
+        };
+        let mut ed = fresh();
+        let before = ed.doc().clone();
+        // The ids of the new lines are the next ones in a sequential editor.
+        let mut probe = fresh();
+        let made: Vec<ObjectId> = (0..n)
+            .map(|k| {
+                let out = probe
+                    .execute(&serde_json::from_value(line_json(f64::from(k as u32))).unwrap())
+                    .unwrap();
+                ObjectId(out.created[0])
+            })
+            .collect();
+        let mut commands: Vec<serde_json::Value> = (0..n).map(|k| line_json(k as f64)).collect();
+        for &w in which {
+            commands.push(serde_json::json!({"op": "arrange", "ids": [made[w % n]], "how": how}));
+        }
+        let batch: Command =
+            serde_json::from_value(serde_json::json!({"op": "batch", "commands": commands}))
+                .unwrap();
+        ed.execute(&batch).unwrap();
+        let after = ed.doc().clone();
+        assert_eq!(after.objects.len(), 3 + n);
+        assert!(ed.undo(), "undo, n = {n}");
+        assert_eq!(ed.doc(), &before, "undo left something behind, n = {n}");
+        assert!(ed.redo(), "redo, n = {n}");
+        assert_eq!(ed.doc(), &after, "redo, n = {n}");
+        assert!(ed.undo());
+        assert_eq!(ed.doc(), &before);
+    }
+
+    #[test]
+    fn a_batch_that_arranges_what_it_made_undoes_and_redoes_exactly() {
+        for n in 1..=20 {
+            batch_with_arrange(n, &[n - 1], "back");
+            batch_with_arrange(n, &[0], "front");
+            batch_with_arrange(n, &[n - 1, 0], "back");
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn batches_with_arrange_undo_and_redo_exactly(
+            n in 1usize..30,
+            which in prop::collection::vec(0usize..30, 1..5),
+            how in prop::sample::select(vec!["back", "front", "forward", "backward"]),
+        ) {
+            batch_with_arrange(n, &which, how);
+        }
+    }
+
     /// A restore of a big drawing, its undo and its redo move the entries of the list a few times,
     /// not once for each object (that was quadratic).
     #[test]
@@ -2330,6 +2411,7 @@ mod tests {
         assert!(shifts <= 3 * FEW, "{shifts} shifts of a list of 3000");
     }
     use super::*;
+    use proptest::prelude::*;
 
     fn line(x: f64) -> Command {
         Command::AddObject {

@@ -75,7 +75,13 @@ fn a_document_taken_with_get_and_loaded_again_keeps_the_versions() {
     create(&mut other, "other");
     let with = serde_json::to_value(&*other.document_for_save().unwrap()).unwrap();
     assert!(with.get("history").is_some());
-    ok(&mut s, "document.load", json!({"document": with}));
+    let r = ok(&mut s, "document.load", json!({"document": with}));
+    assert!(
+        r["notes"]
+            .to_string()
+            .contains("5 versions of the document that was open are gone"),
+        "the reply says that the versions were replaced: {r}"
+    );
     let l = ok(&mut s, "version.list", json!({}));
     assert_eq!(l["count"], 1);
 }

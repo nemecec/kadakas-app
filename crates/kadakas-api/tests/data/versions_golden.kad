@@ -111,7 +111,7 @@
       "drawn_by": "",
       "date": "",
       "revision": "",
-      "guid": "1fPm6kRcns6DEKpN8alizm"
+      "guid": "0upYoayvsPYPJxzMC5i5Pi"
     },
     "saved_views": [],
     "presentation": {},
@@ -123,7 +123,7 @@
     "format": 2,
     "head": 3,
     "newest": {
-      "anchor": "f3cfa688f5fa70f09dd8b5d6c06111c4b3fad30f63408db742ab57e64fde65e8",
+      "anchor": "105b2b527fbaa6180aa059b7dd5b715b5b34b285143dd7df8039ca5ed93ab8d2",
       "delta": [
         {
           "op": "delete",
@@ -133,14 +133,13 @@
           }
         }
       ],
-      "id": 3,
-      "things": "95537d0048e1169302b3584e4caafab89c22d0b1b77df13403a201f13c040d49"
+      "id": 3
     },
     "next_id": 4,
     "versions": [
       {
         "author": "user",
-        "base_revision": 4,
+        "base_revision": 10,
         "branch": "main",
         "delta": [
           {
@@ -167,7 +166,7 @@
       },
       {
         "author": "user",
-        "base_revision": 7,
+        "base_revision": 13,
         "branch": "main",
         "delta": [
           {
@@ -221,7 +220,7 @@
       },
       {
         "author": "user",
-        "base_revision": 10,
+        "base_revision": 16,
         "branch": "main",
         "id": 3,
         "name": "Moved and deleted",

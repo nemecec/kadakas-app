@@ -310,22 +310,16 @@ fn a_file_whose_drawing_changed_cannot_rebuild_the_newest_version() {
         .unwrap()
         .shape
         .translate(kadakas_core::DVec2::new(1.0, 0.0));
-    // The same things, other properties: the versions are rebuilt from the drawing as it is.
+    // A property is not what the versions have: nothing is rebuilt from this drawing. The reading
+    // says so and gives no versions (the caller keeps the JSON as it is).
     let l = History::load(&value, &saved);
-    assert!(l.notes.is_empty(), "{:?}", l.notes);
+    assert!(l.history.is_none());
     assert!(
-        l.info.iter().any(|n| n.contains("not exactly the one")),
+        l.notes[0].contains("does not match the one that the 2 versions"),
         "{:?}",
-        l.info
+        l.notes
     );
-    let kept = l.history.expect("the versions are usable");
-    assert_eq!(kept.len(), 2);
-    assert_eq!(
-        kept.tip_state().unwrap().unwrap(),
-        State::of(&saved, None),
-        "the newest version is the drawing as it is"
-    );
-    // Other things (an object that the other program deleted): no way to rebuild.
+    // The same for other things (an object that the other program deleted).
     let mut fewer = saved.clone();
     let gone = *fewer.objects.keys().next().unwrap();
     fewer.objects.shift_remove(&gone);
@@ -336,7 +330,6 @@ fn a_file_whose_drawing_changed_cannot_rebuild_the_newest_version() {
         "{:?}",
         l.notes
     );
-    assert!(l.info.is_empty());
     // A file form without an anchor fails the same way.
     let mut no_anchor = value.clone();
     no_anchor["newest"]

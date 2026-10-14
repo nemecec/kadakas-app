@@ -151,6 +151,9 @@ pub struct Job {
     /// `manual_saves(over)` when the job was made. If a manual save of that file came later,
     /// `over` is skipped.
     pub manual_seen: u64,
+    /// Something the person must know about this copy (for example that the versions are not in
+    /// it). Saved in the meta file.
+    pub note: Option<String>,
 }
 
 /// What `write_version` did with the file of the user.
@@ -175,6 +178,7 @@ pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Ov
     let meta = json!({
         "original": job.original.as_ref().map(|p| p.display().to_string()),
         "saved_unix": secs,
+        "note": job.note,
     });
     write_durable(
         &dir.join(meta_name(id)),
@@ -509,6 +513,7 @@ mod tests {
             keep,
             over: None,
             manual_seen: 0,
+            note: None,
         }
     }
 

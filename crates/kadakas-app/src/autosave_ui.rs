@@ -88,7 +88,7 @@ impl AutosaveUi {
         ctx: &egui::Context,
         revision: u64,
         path: Option<&std::path::Path>,
-        doc: impl FnOnce() -> Result<Document, String>,
+        doc: impl FnOnce() -> (Document, Option<String>),
     ) {
         let now = ctx.input(|i| i.time);
         if self.settings.enabled {
@@ -103,10 +103,13 @@ impl AutosaveUi {
         }
         self.sched.mark(now, revision);
         // The document as a save writes it (the versions against the drawing), made only now. If
-        // it cannot be made, nothing is written: a copy in another form would not read back.
-        match doc() {
-            Ok(doc) => self.submit(&doc, path),
-            Err(e) => self.error = Some(tr!("autosave-ui-last-autosave-failed", e = e)),
+        // the versions cannot be written, the copy is the drawing without them, with a note in
+        // the meta file of the copy and a visible note: a copy in another form of the versions
+        // would not read back, and no copy at all would lose the drawing.
+        let (doc, note) = doc();
+        self.submit(&doc, path, note.clone());
+        if let Some(why) = note {
+            self.error = Some(tr!("autosave-ui-versions-left-out", e = why));
         }
     }
 
@@ -124,7 +127,7 @@ impl AutosaveUi {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn submit(&mut self, doc: &Document, path: Option<&std::path::Path>) {
+    fn submit(&mut self, doc: &Document, path: Option<&std::path::Path>, note: Option<String>) {
         if let Some(r) = &mut self.recovery {
             let over = path
                 .filter(|_| self.settings.save_over_file)
@@ -136,6 +139,7 @@ impl AutosaveUi {
                 keep: self.settings.keep as usize,
                 over,
                 manual_seen,
+                note,
             });
             if self.keep.is_some() {
                 self.keep_until = Some(seq);
@@ -148,7 +152,7 @@ impl AutosaveUi {
 
     /// The browser has no writer thread. Large documents are skipped: local storage holds about 5 MB.
     #[cfg(target_arch = "wasm32")]
-    fn submit(&mut self, doc: &Document, _path: Option<&std::path::Path>) {
+    fn submit(&mut self, doc: &Document, _path: Option<&std::path::Path>, _note: Option<String>) {
         self.error = match serde_json::to_string(doc) {
             Ok(text) if crate::autosave::fits_browser_storage(text.len()) => {
                 crate::autosave::web::put(&text)
@@ -444,6 +448,7 @@ mod tests {
             keep: 3,
             over: None,
             manual_seen: 0,
+            note: None,
         }
     }
 
@@ -532,16 +537,60 @@ mod tests {
 
         // The next frame saves the recovered document. Only then are the old files released.
         let ctx = egui::Context::default();
-        ui.tick(&ctx, 0, None, || Ok(r.doc.clone()));
+        ui.tick(&ctx, 0, None, || (r.doc.clone(), None));
         let seq = ui.keep_until.expect("a job is waiting");
         while ui.recovery.as_ref().unwrap().completed() < seq {
             std::thread::sleep(Duration::from_millis(5));
         }
-        ui.tick(&ctx, 0, None, || Ok(r.doc.clone()));
+        ui.tick(&ctx, 0, None, || (r.doc.clone(), None));
         assert!(ui.keep.is_none());
         assert!(find_crashed_with(&dir, Duration::ZERO).is_empty());
         ui.finish();
         assert_eq!(files(&dir), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_copy_without_the_versions_says_so_in_its_meta_file_and_on_screen() {
+        let dir = temp("note");
+        let mut ui = AutosaveUi::inert();
+        ui.recovery = Some(Recovery::start(dir.clone()).unwrap());
+        ui.force = true;
+        let ctx = egui::Context::default();
+        ui.tick(&ctx, 0, None, || {
+            (
+                Document::default(),
+                Some("the versions could not be written".to_string()),
+            )
+        });
+        for _ in 0..2000 {
+            if ui.recovery.as_ref().unwrap().completed() >= 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            ui.recovery.as_ref().unwrap().completed() >= 1,
+            "the copy was written"
+        );
+        assert!(
+            ui.error
+                .as_deref()
+                .is_some_and(|e| e.contains("could not be written")),
+            "{:?}",
+            ui.error
+        );
+        let metas: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".meta.json"))
+            .map(|e| std::fs::read_to_string(e.path()).unwrap())
+            .collect();
+        assert!(
+            metas.iter().any(|m| m.contains("could not be written")),
+            "{metas:?}"
+        );
+        ui.finish();
         let _ = std::fs::remove_dir_all(dir);
     }
 

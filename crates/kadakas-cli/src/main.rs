@@ -510,6 +510,45 @@ fn instructions(flat: bool) -> String {
 /// The most characters of the facts of an error that go into the text of a failed tool call.
 const FACTS_MAX_CHARS: usize = 8000;
 
+/// The facts as compact JSON of at most `max` characters, still valid JSON. The longest list is cut
+/// to the entries that fit, and the field `more` says how many were left out. If that is not
+/// enough, the lists are emptied and the field `more` says so.
+fn capped_facts(mut facts: serde_json::Map<String, Value>, max: usize) -> String {
+    let text = |f: &serde_json::Map<String, Value>| Value::Object(f.clone()).to_string();
+    let first = text(&facts);
+    if first.chars().count() <= max {
+        return first;
+    }
+    let longest = facts
+        .iter()
+        .filter_map(|(k, v)| v.as_array().map(|a| (k.clone(), a.len())))
+        .max_by_key(|(_, n)| *n);
+    let Some((key, total)) = longest else {
+        return json!({"more": "the facts are too long to show"}).to_string();
+    };
+    let list = facts[&key].as_array().cloned().unwrap_or_default();
+    // The most entries that fit (the entries are not all of one size).
+    let (mut lo, mut hi) = (0usize, total);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        facts.insert(key.clone(), Value::Array(list[..mid].to_vec()));
+        facts.insert("more".into(), json!(total - mid));
+        if text(&facts).chars().count() <= max {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    facts.insert(key, Value::Array(list[..lo].to_vec()));
+    facts.insert("more".into(), json!(total - lo));
+    let out = text(&facts);
+    if out.chars().count() <= max {
+        out
+    } else {
+        json!({"more": "the facts are too long to show"}).to_string()
+    }
+}
+
 /// The text of a failed tool call: the message, the feedback hint with its draft if the error has
 /// one, and the other facts of the error as compact JSON (the reason, the versions of a refused
 /// save). An MCP client shows the text only, so these must be in it.
@@ -520,7 +559,7 @@ fn error_text(error: &Value) -> String {
         text.push_str(&format!("\n{hint} Draft: {}", f["draft"]));
     }
     // The facts of the error (the versions of a refused save, the reason) are in the text too: an
-    // MCP client shows the text only. The size is capped.
+    // MCP client shows the text only. The size is capped, and a list is cut at an entry.
     if let Some(data) = error["data"].as_object() {
         let facts: serde_json::Map<String, Value> = data
             .iter()
@@ -528,10 +567,8 @@ fn error_text(error: &Value) -> String {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         if !facts.is_empty() {
-            let json = Value::Object(facts).to_string();
-            let cut: String = json.chars().take(FACTS_MAX_CHARS).collect();
-            let more = if cut.len() < json.len() { "..." } else { "" };
-            text.push_str(&format!("\n{cut}{more}"));
+            text.push('\n');
+            text.push_str(&capped_facts(facts, FACTS_MAX_CHARS));
         }
     }
     text
@@ -862,6 +899,34 @@ mod tests {
         }
         assert!(instructions(true).contains("execute tool"));
         assert!(instructions(false).contains("domain"));
+    }
+
+    #[test]
+    fn long_facts_are_cut_at_an_entry_and_stay_json() {
+        let versions: Vec<Value> = (0..400)
+            .map(|i| json!({"id": i, "name": format!("version {i}"), "bytes": 12345}))
+            .collect();
+        let e = json!({"message": "m", "data": {"kind": "limit", "reason": "version_limit",
+            "versions": versions, "ask_the_person": true}});
+        let t = error_text(&e);
+        let (head, facts) = t.split_once('\n').unwrap();
+        assert_eq!(head, "m");
+        assert!(facts.chars().count() <= FACTS_MAX_CHARS, "{}", facts.len());
+        let v: Value = serde_json::from_str(facts).expect("valid JSON");
+        let kept = v["versions"].as_array().unwrap().len();
+        assert!(kept > 50 && kept < 400, "{kept}");
+        assert_eq!(v["more"], 400 - kept);
+        assert_eq!(v["reason"], "version_limit");
+        assert_eq!(v["ask_the_person"], true);
+        // A short list is not cut; facts without a list that are too long say so.
+        let small = json!({"message": "m", "data": {"kind": "limit", "reason": "x"}});
+        assert_eq!(error_text(&small), "m\n{\"reason\":\"x\"}");
+        let long = capped_facts(
+            serde_json::from_value(json!({"text": "x".repeat(20_000)})).unwrap(),
+            FACTS_MAX_CHARS,
+        );
+        assert!(serde_json::from_str::<Value>(&long).is_ok());
+        assert!(long.chars().count() <= FACTS_MAX_CHARS);
     }
 
     #[test]

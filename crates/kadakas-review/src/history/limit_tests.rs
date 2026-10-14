@@ -42,7 +42,7 @@ fn a_history_at_the_limit_is_read_completely_by_a_reader_with_the_production_rat
     // The memory form and the file form both read completely.
     let json = h.to_value();
     let l = History::load_with_caps(&json, &anchor, &[], caps);
-    assert!(l.notes.is_empty() && l.info.is_empty(), "{:?}", l.notes);
+    assert!(l.notes.is_empty(), "{:?}", l.notes);
     assert_eq!(l.history.unwrap().len(), h.len());
     let (file, state) = {
         let tip = h.tip_state().unwrap().unwrap();
@@ -51,7 +51,7 @@ fn a_history_at_the_limit_is_read_completely_by_a_reader_with_the_production_rat
     let mut saved = ed.doc().clone();
     state.stamp_keys(&mut saved);
     let l = History::load_with_caps(&file, &saved, &[], caps);
-    assert!(l.notes.is_empty() && l.info.is_empty(), "{:?}", l.notes);
+    assert!(l.notes.is_empty(), "{:?}", l.notes);
     // The text is far above the estimate of the limit, and the guard of a reader allows for it.
     assert!(
         json.to_string().len() <= caps.max_bytes * JSON_FACTOR,

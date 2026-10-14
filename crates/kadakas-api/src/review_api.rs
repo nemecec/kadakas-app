@@ -187,7 +187,7 @@ pub fn vet_document(doc: &mut Document, caps: ReadCaps) -> ReviewCache {
     let Some(data) = doc.history.clone() else {
         return cache;
     };
-    let (history, notes, info) = read_history(doc, &data, &[], caps);
+    let (history, notes) = read_history(doc, &data, &[], caps);
     cache.parses += 1;
     // The drawing is the anchor of the history now: the session keeps it, because the drawing
     // changes with the first edit.
@@ -195,10 +195,9 @@ pub fn vet_document(doc: &mut Document, caps: ReadCaps) -> ReviewCache {
         cache.remember(h.anchor_pair());
         // The value of the file holds the anchor from now on, like every value that is made later
         // (so an undo back to it can read it, however the drawing was edited).
-        doc.history = Some(data.clone().with_keepalive(h.anchor_pair().1));
-    }
-    for n in &info {
-        doc.add_load_note(n.clone());
+        let anchor = h.anchor_pair().1;
+        let bytes = anchor.bytes();
+        doc.history = Some(data.clone().with_keepalive(anchor, bytes));
     }
     for n in &notes {
         doc.add_load_note(n.clone());
@@ -222,9 +221,9 @@ fn read_history(
     data: &HistoryData,
     anchors: &[(String, Arc<State>)],
     caps: ReadCaps,
-) -> (Option<History>, Vec<String>, Vec<String>) {
+) -> (Option<History>, Vec<String>) {
     if let Some(problem) = data.problem() {
-        return (None, vec![problem], Vec::new());
+        return (None, vec![problem]);
     }
     if data.bytes() > caps.max_bytes.saturating_mul(JSON_FACTOR) {
         return (
@@ -233,11 +232,10 @@ fn read_history(
                 "the history of versions has {} bytes, more than is read: it is kept as it is and read only",
                 data.bytes()
             )],
-            Vec::new(),
         );
     }
     let loaded = History::load_with_caps(&data.to_value(), doc, anchors, caps);
-    (loaded.history, loaded.notes, loaded.info)
+    (loaded.history, loaded.notes)
 }
 
 fn limit_error(e: ReviewError) -> RpcError {
@@ -283,7 +281,7 @@ fn read(s: &mut Session) -> Arc<History> {
     }
     let caps = s.limits.read_caps();
     let anchors = s.review.live_anchors();
-    let (history, notes, _) = read_history(s.editor.doc(), &data, &anchors, caps);
+    let (history, notes) = read_history(s.editor.doc(), &data, &anchors, caps);
     s.review.parses += 1;
     if let Some(h) = &history {
         s.review.remember(h.anchor_pair());

@@ -46,6 +46,9 @@ pub struct HistoryData {
     /// of it, so every undo step that holds it). `kadakas-review` keeps the anchor drawing that
     /// the JSON is written against in it. It plays no part in equality or in the text.
     keep: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    /// The estimated size of what `keep` holds, in bytes. An undo step that holds a different
+    /// thing than the step before counts it (see `bytes_not_in`).
+    keep_bytes: usize,
 }
 
 impl std::fmt::Debug for HistoryData {
@@ -154,6 +157,7 @@ impl HistoryData {
             bytes: 0,
             serial: next_serial(),
             keep: None,
+            keep_bytes: 0,
         };
         h.bytes = json_bytes(&h);
         h
@@ -204,8 +208,17 @@ impl HistoryData {
     }
 
     /// The same value, which keeps `thing` alive as long as it (and every clone of it) lives.
-    pub fn with_keepalive(mut self, thing: Arc<dyn std::any::Any + Send + Sync>) -> HistoryData {
+    ///
+    /// `bytes` estimates its size. The undo budget counts it for a step that holds another thing
+    /// than the step before (`bytes_not_in`), so that trimming the undo steps bounds the memory of
+    /// the things they keep.
+    pub fn with_keepalive(
+        mut self,
+        thing: Arc<dyn std::any::Any + Send + Sync>,
+        bytes: usize,
+    ) -> HistoryData {
         self.keep = Some(thing);
+        self.keep_bytes = bytes;
         self
     }
 
@@ -262,6 +275,7 @@ impl HistoryData {
             blobs,
         );
         out.keep = self.keep.clone();
+        out.keep_bytes = self.keep_bytes;
         out
     }
 
@@ -275,9 +289,17 @@ impl HistoryData {
     /// pictures that both hold are the same memory.
     pub fn bytes_not_in(&self, before: Option<&HistoryData>) -> usize {
         let Some(before) = before else {
-            return self.bytes;
+            return self.bytes + self.keep_bytes;
         };
         let mut n = json_bytes(&*self.top);
+        let other_keep = match (&self.keep, &before.keep) {
+            (Some(a), Some(b)) => Arc::as_ptr(a).cast::<()>() != Arc::as_ptr(b).cast::<()>(),
+            (Some(_), None) => true,
+            _ => false,
+        };
+        if other_keep {
+            n += self.keep_bytes;
+        }
         let new_items = |items: &Option<Items>, old: &Option<Items>| {
             let Some(items) = items else {
                 return 0;
@@ -528,6 +550,24 @@ mod tests {
         assert!(added > 20);
         assert_ne!(next, one);
         assert_eq!(next.bytes_not_in(Some(&next)), json_bytes(next.top()));
+    }
+
+    #[test]
+    fn a_step_that_holds_another_thing_counts_its_size() {
+        let anchor_a: Arc<dyn std::any::Any + Send + Sync> = Arc::new(1u8);
+        let anchor_b: Arc<dyn std::any::Any + Send + Sync> = Arc::new(2u8);
+        let one = HistoryData::new(big()).with_keepalive(anchor_a.clone(), 5_000_000);
+        // The first value of a document counts the thing.
+        assert!(one.bytes_not_in(None) >= 5_000_000);
+        // The same thing in the next value: not counted again.
+        let same = HistoryData::new(big()).with_keepalive(anchor_a, 5_000_000);
+        assert!(same.bytes_not_in(Some(&one)) < 1_000);
+        // Another thing: counted.
+        let other = HistoryData::new(big()).with_keepalive(anchor_b, 7_000_000);
+        assert!(other.bytes_not_in(Some(&one)) >= 7_000_000);
+        // A clone and `with_entry` keep it.
+        let kept = other.with_entry("x", Some(json!(1)), vec![], &[]);
+        assert!(kept.bytes_not_in(Some(&one)) >= 7_000_000);
     }
 
     #[test]

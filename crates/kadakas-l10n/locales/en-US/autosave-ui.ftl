@@ -34,3 +34,4 @@ autosave-ui-this-browser-kept-an-autosaved-copy-from = This browser kept an auto
 autosave-ui-recovered-the-browser-copy-save-it-to = Recovered the browser copy. Save it to keep it.
 autosave-ui-versions-label = versions
 autosave-ui-report-this-crash = Report this crash
+autosave-ui-versions-left-out = The autosave copy has the drawing but not its versions, because they could not be written: { $e }

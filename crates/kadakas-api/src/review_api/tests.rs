@@ -678,55 +678,49 @@ fn a_history_that_cannot_be_read_stays_as_it_is_and_is_read_only() {
 }
 
 #[test]
-fn a_drawing_that_changed_after_the_versions_were_saved_keeps_the_history_unread() {
+fn a_drawing_that_does_not_match_the_versions_keeps_the_history_unread_and_unchanged() {
     let mut donor = Session::with_sequential_ids();
     rect(&mut donor, 0);
     create(&mut donor, "One");
     rect(&mut donor, 20);
     create(&mut donor, "Two");
-    let mut file = serde_json::to_value(&*donor.document_for_save().unwrap()).unwrap();
-    // A property of an object is not what the versions have (a newer program reads a file in
-    // another way): the same things, so the versions are rebuilt from the drawing as it is.
+    let file = serde_json::to_value(&*donor.document_for_save().unwrap()).unwrap();
+    let original = file["history"].clone();
+    // A property of an object is not what the versions have, or an object is gone. In both cases
+    // nothing is rebuilt from the drawing (that would change the versions without the person),
+    // the history is read only, and a save writes it back as it was.
     let mut moved = file.clone();
     moved["objects"][0]["shape"]["min"] = json!([1.0, 0.0]);
-    let mut t = Session::with_sequential_ids();
-    let r = ok(&mut t, "document.load", json!({"document": moved}));
-    assert!(
-        r["notes"].to_string().contains("not exactly the one"),
-        "{r}"
-    );
-    let l = ok(&mut t, "version.list", json!({}));
-    assert_eq!(
-        (l["read_only"].clone(), l["count"].clone()),
-        (json!(false), json!(2))
-    );
-    create(&mut t, "after");
-    // Another program deleted an object: other things, no way to rebuild the versions.
     let mut fewer = file.clone();
     fewer["objects"].as_array_mut().unwrap().remove(0);
-    let original = file["history"].clone();
-    let mut t = Session::with_sequential_ids();
-    file = fewer;
-    let r = ok(&mut t, "document.load", json!({"document": file}));
-    assert!(
-        r["notes"]
-            .to_string()
-            .contains("does not match the one that the 2 versions"),
-        "{r}"
-    );
-    assert_eq!(
-        &t.editor.doc().history.as_ref().unwrap().to_value(),
-        &original
-    );
-    let l = ok(&mut t, "version.list", json!({}));
-    assert_eq!(
-        (l["read_only"].clone(), l["count"].clone()),
-        (json!(true), json!(0))
-    );
-    assert_eq!(l["unreadable_versions"], 2, "what a repair would delete");
-    // The file is saved with the history as it was.
-    let saved = serde_json::to_value(&*t.document_for_save().unwrap()).unwrap();
-    assert_eq!(saved["history"], original);
+    for changed in [moved, fewer] {
+        let mut t = Session::with_sequential_ids();
+        let r = ok(&mut t, "document.load", json!({"document": changed}));
+        assert!(
+            r["notes"]
+                .to_string()
+                .contains("does not match the one that the 2 versions"),
+            "{r}"
+        );
+        assert_eq!(
+            &t.editor.doc().history.as_ref().unwrap().to_value(),
+            &original
+        );
+        let l = ok(&mut t, "version.list", json!({}));
+        assert_eq!(
+            (l["read_only"].clone(), l["count"].clone()),
+            (json!(true), json!(0))
+        );
+        assert_eq!(l["unreadable_versions"], 2, "what a repair would delete");
+        // An edit and an undo of it read the history again: still nothing is rebuilt.
+        rect(&mut t, 500);
+        assert!(t.editor.undo());
+        let l = ok(&mut t, "version.list", json!({}));
+        assert_eq!(l["count"], 0);
+        // The file is saved with the history as it was.
+        let saved = serde_json::to_value(&*t.document_for_save().unwrap()).unwrap();
+        assert_eq!(saved["history"], original);
+    }
 }
 
 #[test]

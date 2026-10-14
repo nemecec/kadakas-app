@@ -362,11 +362,6 @@ impl State {
         creates
     }
 
-    /// The targets of the things of the state, in order.
-    pub fn things_keys(&self) -> impl Iterator<Item = &Target> {
-        self.things.keys()
-    }
-
     /// The operations that make this state from [`State::new`]: one `Create` for each thing but
     /// the settings, which get `Set` operations. It is the base snapshot of a history.
     pub fn snapshot(&self) -> Vec<Op> {

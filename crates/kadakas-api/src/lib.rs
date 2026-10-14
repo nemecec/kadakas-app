@@ -1190,9 +1190,26 @@ impl Session {
                 })?;
                 // `document.get` leaves the versions out: a document without them keeps the
                 // versions of the session.
+                let brings_versions = document.history.is_some();
                 self.keep_versions_for(&mut document)?;
                 self.check_document_fits(&document)?;
-                let notes = self.replace_document(document);
+                // A document that brings its own versions replaces the ones of the session.
+                let replaced = brings_versions
+                    .then(|| {
+                        self.editor
+                            .doc()
+                            .history
+                            .as_ref()
+                            .and_then(|h| h.version_count())
+                    })
+                    .flatten()
+                    .filter(|n| *n > 0);
+                let mut notes = self.replace_document(document);
+                if let Some(n) = replaced {
+                    notes.push(format!(
+                        "the {n} versions of the document that was open are gone: the loaded document has its own versions"
+                    ));
+                }
                 if notes.is_empty() {
                     json!({ "ok": true })
                 } else {

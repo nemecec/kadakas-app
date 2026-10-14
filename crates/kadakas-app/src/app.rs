@@ -157,8 +157,6 @@ pub struct KadakasApp {
     web_fragments: std::rc::Rc<std::cell::RefCell<Vec<kadakas_ui_core::collab::Fragment>>>,
 }
 
-/// A name to show to the others: the user name of the operating system. Empty if unknown (the
-/// browser build, or a program without a login name).
 /// The bytes of a save as a file: the document as `Session::document_for_save` writes it (the
 /// versions in the file form against the drawing), never the memory form of the open document.
 /// The web save downloads them.
@@ -168,6 +166,8 @@ fn save_bytes(session: &mut Session) -> Result<Vec<u8>, String> {
     serde_json::to_vec_pretty(&*doc).map_err(|e| e.to_string())
 }
 
+/// A name to show to the others: the user name of the operating system. Empty if unknown (the
+/// browser build, or a program without a login name).
 fn default_user_name() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -2515,10 +2515,16 @@ impl eframe::App for KadakasApp {
             self.session.editor.revision(),
             self.path.as_deref(),
             || {
-                self.session
-                    .document_for_save()
-                    .map(std::borrow::Cow::into_owned)
-                    .map_err(|e| e.message)
+                match self.session.document_for_save() {
+                    Ok(doc) => (doc.into_owned(), None),
+                    // The drawing is worth more than a copy that has nothing: write it without
+                    // the versions and say so.
+                    Err(e) => {
+                        let mut doc = self.session.editor.doc().clone();
+                        doc.history = None;
+                        (doc, Some(e.message))
+                    }
+                }
             },
         );
         self.about.show(&ctx);

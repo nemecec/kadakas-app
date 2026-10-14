@@ -34,3 +34,4 @@ autosave-ui-this-browser-kept-an-autosaved-copy-from = See brauser säilitas var
 autosave-ui-recovered-the-browser-copy-save-it-to = Brauseri koopia on taastatud. Salvesta see, et see alles jääks.
 autosave-ui-versions-label = versiooni
 autosave-ui-report-this-crash = Teata sellest kokkujooksmisest
+autosave-ui-versions-left-out = Automaatsalvestuse koopias on joonis, aga mitte selle versioonid, sest neid ei saanud kirjutada: { $e }
