@@ -102,17 +102,8 @@ impl Source {
     /// Like [`Source::read`], but refuses a file bigger than `max_bytes`. The size is checked
     /// before the file is read.
     pub fn read_limited(path: &Path, max_bytes: u64) -> Result<Source, IoError> {
-        let len = std::fs::metadata(path)
-            .map_err(|e| IoError::File(format!("cannot read {}: {e}", path.display())))?
-            .len();
-        if len > max_bytes {
-            return Err(IoError::File(format!(
-                "{} is {len} bytes, more than the limit of {max_bytes} (option max_bytes)",
-                path.display()
-            )));
-        }
-        let data = std::fs::read(path)
-            .map_err(|e| IoError::File(format!("cannot read {}: {e}", path.display())))?;
+        let data =
+            read_regular(path, max_bytes, &path.display().to_string()).map_err(IoError::File)?;
         let name = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -130,6 +121,25 @@ impl Source {
         }
         Ok(Source { name, data, extra })
     }
+}
+
+/// Reads a regular file of at most `max_bytes` bytes (the capped reader of `kadakas_sys::fsio`):
+/// the kind and the size are checked before the file is read, and a file that grows while it is
+/// read ends in an error. `what` names the file in the message.
+pub(crate) fn read_regular(path: &Path, max_bytes: u64, what: &str) -> Result<Vec<u8>, String> {
+    use kadakas_sys::fsio::{OpenError, open_regular};
+    use std::io::Read;
+    let mut reader = open_regular(path, max_bytes).map_err(|e| match e {
+        OpenError::TooLarge { len, max } => {
+            format!("{what} is {len} bytes, more than the limit of {max} (option max_bytes)")
+        }
+        e => format!("cannot read {what}: {e}"),
+    })?;
+    let mut data = Vec::new();
+    reader
+        .read_to_end(&mut data)
+        .map_err(|e| format!("cannot read {what}: {e} (option max_bytes)"))?;
+    Ok(data)
 }
 
 /// What an importer needs to know about the document that receives the import.
@@ -329,6 +339,13 @@ mod tests {
             "{e}"
         );
         assert!(Source::read_limited(&path, 4).is_err());
+        // Only a regular file is read.
+        let e = Source::read_limited(dir.path(), 100).unwrap_err();
+        assert!(
+            matches!(&e, IoError::File(m) if m.contains("regular file")),
+            "{e}"
+        );
+        assert!(Source::read_limited(&dir.path().join("none.dxf"), 100).is_err());
         assert_eq!(Source::read_limited(&path, 100).unwrap().data.len(), 10);
         // The name with its extension goes to the tags unless the caller names the source.
         let r = import_file(&path, None, &ImportOptions::default(), &doc).unwrap();

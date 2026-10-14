@@ -341,17 +341,18 @@ fn find_output(dir: &Path, ext: &str) -> Option<PathBuf> {
         .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)))
 }
 
-/// Checks the size of a file before it is read or copied.
+/// Checks the kind and the size of a file before it is copied: only a regular file, of at most
+/// `max_bytes` bytes.
 fn check_size(path: &Path, max_bytes: u64, what: &str) -> Result<(), DwgError> {
-    let len = fs::metadata(path)
-        .map_err(|e| DwgError::Io(format!("cannot read {}: {e}", path.display())))?
-        .len();
-    if len > max_bytes {
-        return Err(DwgError::Io(format!(
-            "{what} is {len} bytes, more than the limit of {max_bytes} (option max_bytes)"
-        )));
-    }
-    Ok(())
+    use kadakas_sys::fsio::{OpenError, open_regular};
+    open_regular(path, max_bytes)
+        .map(drop)
+        .map_err(|e| match e {
+            OpenError::TooLarge { len, max } => DwgError::Io(format!(
+                "{what} is {len} bytes, more than the limit of {max} (option max_bytes)"
+            )),
+            e => DwgError::Io(format!("cannot read {what}: {e}")),
+        })
 }
 
 /// Converts a DWG file to DXF and returns the DXF bytes. Neither the DWG file nor the DXF file
@@ -406,8 +407,7 @@ pub fn dwg_to_dxf(
         tool: conv.name().into(),
         detail: "it finished but made no DXF file. The DWG file may be damaged or of a version that the converter does not know".into(),
     })?;
-    check_size(&dxf, max_bytes, "the converted DXF file")?;
-    fs::read(&dxf).map_err(|e| DwgError::Io(format!("cannot read the converted file: {e}")))
+    crate::read_regular(&dxf, max_bytes, "the converted DXF file").map_err(DwgError::Io)
 }
 
 /// Converts DXF bytes to a DWG file at `dest`.
