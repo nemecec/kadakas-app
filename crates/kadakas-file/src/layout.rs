@@ -16,6 +16,14 @@ pub const HISTORY_VERSIONS: &str = "history/versions.json";
 pub const HISTORY_NEWEST: &str = "history/newest.json";
 /// ...and the list of the hashes of its pictures (the pictures are entries of `blobs/`).
 pub const HISTORY_BLOBS: &str = "history/blobs.json";
+/// The drawing that the history of the file is written against, when it is not the drawing of the
+/// file: a raw copy of the `document.json` of the file the versions were saved with. A save of an
+/// edited document whose history was not read writes it, so that the versions can be read against
+/// the drawing they belong to (REV-01). Its pictures are entries of `blobs/`, listed in the
+/// next entry.
+pub const HISTORY_ANCHOR: &str = "history/anchor.json";
+/// The hashes of the pictures that [`HISTORY_ANCHOR`] refers to.
+pub const HISTORY_ANCHOR_BLOBS: &str = "history/anchor-blobs.json";
 /// A history that does not have the usual shape is stored as one JSON value, pictures inline.
 pub const HISTORY_RAW: &str = "history/raw.json";
 

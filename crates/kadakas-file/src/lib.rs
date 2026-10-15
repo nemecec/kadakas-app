@@ -29,11 +29,11 @@ mod write;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 
-pub use error::FileError;
+pub use error::{FileError, Missing};
 pub use kadakas_container::{ContainerError, Limits};
 pub use layout::{
-    BLOB_DIR, DOCUMENT, Form, HISTORY_BLOBS, HISTORY_NEWEST, HISTORY_RAW, HISTORY_TOP,
-    HISTORY_VERSIONS, blob_name, sniff,
+    BLOB_DIR, DOCUMENT, Form, HISTORY_ANCHOR, HISTORY_ANCHOR_BLOBS, HISTORY_BLOBS, HISTORY_NEWEST,
+    HISTORY_RAW, HISTORY_TOP, HISTORY_VERSIONS, blob_name, sniff,
 };
 pub use lazy::FileHistory;
 pub use read::{Opened, ReadMode, read_bytes, read_source};

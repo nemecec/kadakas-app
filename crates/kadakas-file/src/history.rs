@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use kadakas_container::{Compression, Container, ContainerError};
+use kadakas_container::{Compression, Container, ContainerError, PartSource};
 use kadakas_core::blob::{is_hash, text_hash};
 use kadakas_core::history::HistoryData;
 use serde_json::Value;
@@ -24,6 +24,7 @@ use crate::error::FileError;
 use crate::layout::{
     HISTORY_BLOBS, HISTORY_NEWEST, HISTORY_RAW, HISTORY_TOP, HISTORY_VERSIONS, blob_name,
 };
+use crate::source::FileSource;
 
 /// The parts of a history, ready to be written.
 pub(crate) enum Plan {
@@ -107,8 +108,18 @@ pub(crate) fn present(c: &Container) -> bool {
     c.contains(HISTORY_RAW) || c.contains(HISTORY_TOP)
 }
 
-fn json_array(c: &Container, name: &str) -> Result<Vec<Arc<Value>>, FileError> {
-    let bytes = c.read(name)?;
+/// The hash of the blob that an entry name stands for, as bytes (the SHA-256 of the text).
+fn sha_of(hash: &str) -> Option<[u8; 32]> {
+    kadakas_container::parse_hash(hash)
+}
+
+/// Reads an entry of the history by name and the SHA-256 that the opened file gives it.
+fn read_part(source: &FileSource, name: &str) -> Result<Vec<u8>, FileError> {
+    Ok(source.parts().read_part(name)?)
+}
+
+fn json_array(source: &FileSource, name: &str) -> Result<Vec<Arc<Value>>, FileError> {
+    let bytes = read_part(source, name)?;
     let v: Value = serde_json::from_slice(&bytes).map_err(|e| ContainerError::Entry {
         name: name.to_string(),
         reason: format!("it cannot be read as JSON: {e}"),
@@ -123,11 +134,55 @@ fn json_array(c: &Container, name: &str) -> Result<Vec<Arc<Value>>, FileError> {
     }
 }
 
+/// The pictures that `history/blobs.json` lists. Each is a hash once: a list with a hash twice
+/// would make a reader read and keep the same picture again for each mention.
+pub(crate) fn listed_blobs(source: &FileSource) -> Result<Vec<String>, FileError> {
+    let c = source.container();
+    if !c.contains(HISTORY_BLOBS) {
+        return Ok(Vec::new());
+    }
+    let list = json_array(source, HISTORY_BLOBS)?;
+    let mut seen = std::collections::HashSet::with_capacity(list.len());
+    let mut out = Vec::with_capacity(list.len());
+    for h in &list {
+        let hash = h
+            .as_str()
+            .filter(|h| is_hash(h))
+            .ok_or_else(|| ContainerError::Entry {
+                name: HISTORY_BLOBS.to_string(),
+                reason: "it lists something that is not a hash".into(),
+            })?;
+        if !seen.insert(hash) {
+            return Err(ContainerError::Entry {
+                name: HISTORY_BLOBS.to_string(),
+                reason: format!("it lists the picture {hash} twice"),
+            }
+            .into());
+        }
+        out.push(hash.to_string());
+    }
+    Ok(out)
+}
+
+/// The bytes of the pictures that `history/blobs.json` lists, from the directory (nothing is read).
+/// Used to bound a read of the history before it is made.
+pub(crate) fn listed_blob_bytes(source: &FileSource) -> u64 {
+    let c = source.container();
+    listed_blobs(source)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|h| c.entry(&blob_name(h)).map(|e| e.size))
+        .sum()
+}
+
 /// Reads the history of a container, if it has one. The pictures are read now (the history is
-/// read when it is used, not with the drawing, see `kadakas_core::history`).
-pub(crate) fn read(c: &Container) -> Result<Option<HistoryData>, FileError> {
+/// read when it is used, not with the drawing, see `kadakas_core::history`). Every part is read
+/// by its name and hash from the file (or its `.bak`, if the file was replaced). A picture of the
+/// history is read once, and its entry must be the picture of its hash.
+pub(crate) fn read(source: &FileSource) -> Result<Option<HistoryData>, FileError> {
+    let c = source.container();
     if c.contains(HISTORY_RAW) {
-        let bytes = c.read(HISTORY_RAW)?;
+        let bytes = read_part(source, HISTORY_RAW)?;
         let v: Value = serde_json::from_slice(&bytes).map_err(|e| ContainerError::Entry {
             name: HISTORY_RAW.to_string(),
             reason: format!("it cannot be read as JSON: {e}"),
@@ -137,39 +192,52 @@ pub(crate) fn read(c: &Container) -> Result<Option<HistoryData>, FileError> {
     if !c.contains(HISTORY_TOP) {
         return Ok(None);
     }
-    let top: Value =
-        serde_json::from_slice(&c.read(HISTORY_TOP)?).map_err(|e| ContainerError::Entry {
+    let top: Value = serde_json::from_slice(&read_part(source, HISTORY_TOP)?).map_err(|e| {
+        ContainerError::Entry {
             name: HISTORY_TOP.to_string(),
             reason: format!("it cannot be read as JSON: {e}"),
-        })?;
-    let versions = json_array(c, HISTORY_VERSIONS)?;
-    let newest = json_array(c, HISTORY_NEWEST)?;
-    let hashes = json_array(c, HISTORY_BLOBS)?;
+        }
+    })?;
+    let versions = json_array(source, HISTORY_VERSIONS)?;
+    let newest = json_array(source, HISTORY_NEWEST)?;
+    let hashes = listed_blobs(source)?;
+    // The bytes of the pictures are known from the directory before one is read.
+    let mut budget = c.uncompressed_bytes();
     let mut blobs = Vec::with_capacity(hashes.len());
-    for h in &hashes {
-        let hash = h
-            .as_str()
-            .filter(|h| is_hash(h))
-            .ok_or_else(|| ContainerError::Entry {
-                name: HISTORY_BLOBS.to_string(),
-                reason: "it lists something that is not a hash".into(),
-            })?;
+    for hash in &hashes {
         let name = blob_name(hash);
-        if c.entry(&name)
-            .is_some_and(|e| e.size > kadakas_core::blob::MAX_BLOB_TEXT as u64)
-        {
+        let entry = c.entry(&name).ok_or_else(|| ContainerError::Entry {
+            name: name.clone(),
+            reason: "the history lists this picture, but it is not in the container".into(),
+        })?;
+        if entry.size > kadakas_core::blob::MAX_BLOB_TEXT as u64 {
             return Err(ContainerError::Entry {
                 name,
                 reason: "it is bigger than a picture of the history may be".into(),
             }
             .into());
         }
-        let bytes = c.read(&blob_name(hash))?;
+        budget = budget.checked_sub(entry.size).ok_or_else(|| ContainerError::Entry {
+            name: name.clone(),
+            reason: "the pictures of the history are bigger together than the file".into(),
+        })?;
+        let sha = sha_of(hash).ok_or_else(|| ContainerError::Entry {
+            name: name.clone(),
+            reason: "not a hash".into(),
+        })?;
+        if entry.sha256 != sha {
+            return Err(ContainerError::Entry {
+                name,
+                reason: "the entry is not the picture of its name (its SHA-256 is another)".into(),
+            }
+            .into());
+        }
+        let bytes = source.parts().read_by_content(&name, &sha)?;
         let text = String::from_utf8(bytes).map_err(|_| ContainerError::Entry {
-            name: blob_name(hash),
+            name: name.clone(),
             reason: "it is not text".into(),
         })?;
-        blobs.push((hash.to_string(), Arc::<str>::from(text)));
+        blobs.push((hash.clone(), Arc::<str>::from(text)));
     }
     Ok(Some(HistoryData::from_parts(top, versions, newest, blobs)))
 }

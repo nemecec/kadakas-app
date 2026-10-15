@@ -215,6 +215,16 @@ fn history_round_trips_in_parts() {
     assert_eq!(eager, doc);
 }
 
+/// An eager read of a container whose history is damaged: the drawing loads, there is no history,
+/// and the note of the load says what is wrong (REV-01: the drawing never needs the history).
+fn eager_note(bytes: Vec<u8>) -> String {
+    let opened = read_bytes(bytes, Limits::default(), ReadMode::Eager).unwrap();
+    assert!(opened.doc.history.is_none() && opened.doc.lazy_history.is_none());
+    let notes = opened.doc.load_notes().join(" ");
+    assert!(!notes.is_empty(), "a note says why there are no versions");
+    notes
+}
+
 #[test]
 fn a_damaged_history_is_not_found_at_open_but_when_it_is_used() {
     let mut doc = sample_doc();
@@ -246,9 +256,9 @@ fn a_damaged_history_is_not_found_at_open_but_when_it_is_used() {
         doc2.lazy_history.is_some() && doc2.history.is_none(),
         "still waiting"
     );
-    // An eager read says so at open.
-    let e = read_bytes(bytes, Limits::default(), ReadMode::Eager).unwrap_err();
-    assert!(e.to_string().contains(HISTORY_VERSIONS), "{e}");
+    // An eager read loads the drawing and says in a note that the versions are not part of the copy.
+    let note = eager_note(bytes);
+    assert!(note.contains(HISTORY_VERSIONS), "{note}");
 }
 
 #[test]
@@ -260,6 +270,7 @@ fn a_history_that_waits_is_copied_without_being_read_and_the_plain_form_needs_it
     let opts = WriteOptions {
         generator: "t".into(),
         keep: vec![source.clone()],
+        anchor: false,
     };
     let (bytes, report) = write_container(Vec::new(), &first.doc, &opts).unwrap();
     assert_eq!(report.parts_copied, 4, "{report:?}");
@@ -374,13 +385,16 @@ fn raw_copy_keeps_the_compressed_bytes_of_unchanged_entries() {
     let opts = WriteOptions {
         generator: "t".into(),
         keep: vec![source.clone()],
+        anchor: false,
     };
     let (bytes, report) = write_container(Vec::new(), &first.doc, &opts).unwrap();
     // Every blob is in the old file: the pictures and the import base are copied, and the picture
     // of the history waits there with the history.
-    assert_eq!(report.blobs_copied, 4, "{report:?}");
+    // The summaries of the import base are in memory (they are read with the drawing): they are
+    // written from there, not copied from a file that may have changed.
+    assert_eq!(report.blobs_copied, 3, "{report:?}");
     assert_eq!(report.blobs_kept, 1, "{report:?}");
-    assert_eq!(report.blobs_written, 0, "{report:?}");
+    assert_eq!(report.blobs_written, 1, "{report:?}");
     assert_eq!(report.parts_copied, 4);
     assert_eq!(
         resolved(open(b_bytes(
@@ -526,10 +540,9 @@ fn bad_history_entries_name_the_entry() {
                 w.copy_raw(good.raw(&e.name).unwrap()).unwrap();
             }
         }
-        // The history is read when it is used: an eager read finds the damage at once.
-        read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Eager)
-            .unwrap_err()
-            .to_string()
+        // The history is read when it is used: an eager read finds the damage at once, loads the
+        // drawing, and says it in a note.
+        eager_note(w.finish().unwrap())
     };
     assert!(build(HISTORY_TOP, b"{").contains(HISTORY_TOP));
     assert!(build(HISTORY_VERSIONS, b"{}").contains("not a list"));
@@ -698,11 +711,7 @@ fn container_with(entries: &[(&str, &[u8])]) -> Vec<u8> {
 
 #[test]
 fn damaged_raw_histories_and_pictures_of_the_history_are_errors_that_name_the_entry() {
-    let read = |bytes: Vec<u8>| {
-        read_bytes(bytes, Limits::default(), ReadMode::Eager)
-            .unwrap_err()
-            .to_string()
-    };
+    let read = eager_note;
     assert!(read(container_with(&[(HISTORY_RAW, b"{nope")])).contains(HISTORY_RAW));
     // A picture of the history that is not text.
     let binary = [0xFFu8, 0xFE, 0x00, 0x01];
@@ -724,7 +733,8 @@ fn damaged_raw_histories_and_pictures_of_the_history_are_errors_that_name_the_en
     assert!(loader.load().unwrap_err().contains("not text"));
     assert!(loader.bytes() > 10);
     assert!(loader.anchor().is_ok());
-    // A history that lists a picture whose entry is another picture: a save refuses to copy it.
+    // A history that lists a picture whose entry is another picture: the picture is not found, and
+    // a save does not copy the wrong one.
     let other = b"some other text".to_vec();
     let name2 = blob_name(&text_hash("expected text"));
     let listed2 = format!("[\"{}\"]", text_hash("expected text"));
@@ -737,10 +747,10 @@ fn damaged_raw_histories_and_pictures_of_the_history_are_errors_that_name_the_en
     ]);
     let o = open(bytes);
     let e = write_container(Vec::new(), &o.doc, &WriteOptions::default()).unwrap_err();
-    assert!(
-        e.to_string().contains("not the picture of this hash"),
-        "{e}"
-    );
+    let FileError::Missing(m) = &e else {
+        panic!("{e}")
+    };
+    assert_eq!(m.pictures, [text_hash("expected text")]);
     // Unreadable list of pictures: the save says so.
     let bytes = container_with(&[
         (HISTORY_TOP, br#"{"newest": {}}"#),
@@ -844,7 +854,7 @@ fn a_picture_of_another_source_is_read_and_written_like_a_new_one() {
         let source = Arc::new(Memory(table, failing));
         let json = serde_json::to_string(&with_refs(&image, &png)).unwrap();
         let doc: Document =
-            with_load_source(source, false, || serde_json::from_str(&json)).unwrap();
+            with_load_source(source, kadakas_core::blob::LoadKind::Lazy, || serde_json::from_str(&json)).unwrap();
         let out = write_container(Vec::new(), &doc, &WriteOptions::default());
         if failing {
             let e = out.unwrap_err();
@@ -942,10 +952,13 @@ fn a_history_that_was_read_copies_its_unchanged_parts_on_the_next_save() {
     let opts = WriteOptions {
         generator: "t".into(),
         keep: vec![source],
+        anchor: false,
     };
     let (bytes, report) = write_container(Vec::new(), &again, &opts).unwrap();
     assert_eq!(report.parts_copied, 4, "{report:?}");
-    assert_eq!(report.blobs_written, 0, "{report:?}");
+    // The picture of the history and the import base are in memory now: they are written from
+    // there.
+    assert_eq!(report.blobs_written, 2, "{report:?}");
     assert_eq!(resolved(open(bytes)).history, doc.history);
     // A part that changed is written, and the others are still copied.
     let mut changed = again.clone();
@@ -992,9 +1005,7 @@ fn a_picture_of_the_history_that_is_too_big_is_refused() {
         data: Box::new(std::io::Read::take(std::io::repeat(0), size)),
     })
     .unwrap();
-    let e = read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Eager)
-        .unwrap_err()
-        .to_string();
+    let e = eager_note(w.finish().unwrap());
     assert!(e.contains(&name) && e.contains("bigger than"), "{e}");
 }
 
@@ -1014,6 +1025,7 @@ mod disk {
         WriteOptions {
             generator: generator(),
             keep: o.source.iter().cloned().collect(),
+            anchor: false,
         }
     }
 
@@ -1064,7 +1076,8 @@ mod disk {
         let before = std::fs::read(&p).unwrap();
         let saved = save_path(&p, &o.doc, Form::Container, &opts(&o)).unwrap();
         let rep = saved.written.unwrap();
-        assert_eq!(rep.blobs_copied, 4, "{rep:?}");
+        assert_eq!(rep.blobs_copied, 3, "{rep:?}");
+        assert_eq!(rep.blobs_written, 1, "the import base is in memory: {rep:?}");
         assert!(saved.notes.is_empty());
         assert_eq!(
             std::fs::read(d.join("a.kad.bak")).unwrap(),
@@ -1079,7 +1092,7 @@ mod disk {
         assert_eq!(*u.png.bytes().unwrap(), png_bytes(1, 20_000));
         // And a third save works from the refreshed source.
         let again = save_path(&p, &o.doc, Form::Container, &opts(&o)).unwrap();
-        assert_eq!(again.written.unwrap().blobs_copied, 4);
+        assert_eq!(again.written.unwrap().blobs_copied, 3);
         let back = open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
         assert_eq!(back.doc, o.doc);
         assert_eq!(
@@ -1141,18 +1154,190 @@ mod disk {
         };
         let e = u.png.bytes().unwrap_err();
         assert!(e.to_string().contains("changed on disk"), "{e}");
-        // A save that needs the old pictures fails and leaves the other program's file alone.
+        // A save that needs the old pictures says which are missing, and leaves the other
+        // program's file alone.
         let e = save_path(&p, &o.doc, Form::Container, &opts(&o)).unwrap_err();
-        assert!(e.is_changed(), "{e}");
+        let FileError::Missing(m) = &e else {
+            panic!("{e}")
+        };
+        assert!(m.pictures.len() >= 2 && !m.history, "{m:?}");
+        assert!(e.to_string().contains("changed on disk"), "{e}");
         assert_eq!(std::fs::read(&p).unwrap(), other);
         assert_eq!(names(&d), ["a.kad"]);
         // The same save to another path fails too (the pictures cannot be read), and leaves no file.
         let e = save_path(&d.join("b.kad"), &o.doc, Form::Container, &opts(&o)).unwrap_err();
-        assert!(e.is_changed(), "{e}");
+        assert!(matches!(e, FileError::Missing(_)), "{e}");
         assert!(!d.join("b.kad").exists());
         // The JSON form needs the pictures as well.
         assert!(save_path(&d.join("c.json"), &o.doc, Form::Json, &opts(&o)).is_err());
         assert_eq!(names(&d), ["a.kad"]);
+    }
+
+    /// What happens to the file under an open document, for the matrix below.
+    #[derive(Clone, Copy, Debug)]
+    enum Change {
+        /// The same bytes written again: a new time of change.
+        Touch,
+        /// The file is renamed.
+        Rename,
+        /// Another file with the same pictures but other parts.
+        ReplaceWithTheSamePictures,
+        /// Another file with other pictures.
+        ReplaceWithOther,
+        /// The file is deleted.
+        Delete,
+        /// The file is deleted, and a `.bak` of the last save is next to it.
+        DeleteWithBak,
+    }
+
+    /// Opens a document, edits it, changes the file under it, and returns the open document.
+    fn changed_file(d: &std::path::Path, change: Change) -> Opened {
+        let p = d.join("a.kad");
+        let mut doc = sample_doc();
+        doc.history = Some(sample_history());
+        save_path(&p, &doc, Form::Container, &WriteOptions::default()).unwrap();
+        let mut o = open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
+        let obj = o.doc.objects.get_mut(&ObjectId::from_num(10)).unwrap();
+        obj.shape = Shape::Circle {
+            center: DVec2::new(9.0, 9.0),
+            radius: 2.0,
+        };
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let original = std::fs::read(&p).unwrap();
+        match change {
+            Change::Touch => std::fs::write(&p, &original).unwrap(),
+            Change::Rename => std::fs::rename(&p, d.join("moved.kad")).unwrap(),
+            Change::ReplaceWithTheSamePictures => {
+                let c = Container::from_bytes(original, Limits::default()).unwrap();
+                let mut w = Writer::new(Vec::new());
+                for e in c.entries().iter().filter(|e| e.name != DOCUMENT) {
+                    w.copy_raw(c.raw(&e.name).unwrap()).unwrap();
+                }
+                w.add_bytes(DOCUMENT, Compression::Deflate(1), b"{\"other\": true}")
+                    .unwrap();
+                std::fs::write(&p, w.finish().unwrap()).unwrap();
+            }
+            Change::ReplaceWithOther => {
+                let mut other = Document::with_sequential_ids();
+                let obj = Object::new(ObjectId::from_num(11), FIRST_LAYER, NONE_CLASS, underlay(5));
+                other.objects.insert(obj.id, obj);
+                std::fs::write(&p, container_bytes(&other)).unwrap();
+            }
+            Change::Delete => std::fs::remove_file(&p).unwrap(),
+            Change::DeleteWithBak => {
+                std::fs::write(d.join("a.kad.bak"), &original).unwrap();
+                std::fs::remove_file(&p).unwrap();
+            }
+        }
+        o
+    }
+
+    /// The pictures of the changed file are found by content, or the save says which are missing;
+    /// it never writes a wrong picture and never leaves a partial file.
+    #[test]
+    fn the_file_changing_under_an_open_document_is_handled_by_content() {
+        use Change::*;
+        for (change, finds) in [
+            (Touch, true),
+            (ReplaceWithTheSamePictures, true),
+            (DeleteWithBak, true),
+            (Rename, false),
+            (ReplaceWithOther, false),
+            (Delete, false),
+        ] {
+            let d = dir(&format!("matrix-{change:?}"));
+            let o = changed_file(&d, change);
+            for (to, form) in [
+                ("a.kad", Form::Container),
+                ("b.kad", Form::Container),
+                ("c.json", Form::Json),
+            ] {
+                let target = d.join(to);
+                let before = std::fs::read(&target).ok();
+                let r = if form == Form::Json {
+                    // The plain form needs the versions resolved, as the session does.
+                    let mut doc = o.doc.clone();
+                    resolve_history(&mut doc)
+                        .and_then(|()| save_path(&target, &doc, form, &opts(&o)).map(|_| ()))
+                } else {
+                    save_path(&target, &o.doc, form, &opts(&o)).map(|_| ())
+                };
+                if finds {
+                    r.unwrap_or_else(|e| panic!("{change:?} -> {to}: {e}"));
+                    let back = open_path(&target, u64::MAX, ReadMode::Eager).unwrap();
+                    let Shape::Circle { center, .. } =
+                        &back.doc.objects[&ObjectId::from_num(10)].shape
+                    else {
+                        panic!()
+                    };
+                    assert_eq!(*center, DVec2::new(9.0, 9.0), "{change:?} -> {to}");
+                    let Shape::Underlay(u) = &back.doc.objects[&ObjectId::from_num(11)].shape
+                    else {
+                        panic!()
+                    };
+                    assert_eq!(*u.png.bytes().unwrap(), png_bytes(1, 20_000));
+                } else {
+                    let e = r.expect_err(&format!("{change:?} -> {to}"));
+                    if form == Form::Container {
+                        assert!(
+                            matches!(e, FileError::Missing(_)),
+                            "{change:?} -> {to}: {e}"
+                        );
+                    }
+                    // Nothing was written: the target is what it was.
+                    assert_eq!(std::fs::read(&target).ok(), before, "{change:?} -> {to}");
+                }
+            }
+            // No temporary file is left in any case.
+            assert!(
+                names(&d).iter().all(|n| !n.contains(".tmp")),
+                "{change:?}: {:?}",
+                names(&d)
+            );
+            std::fs::remove_dir_all(&d).unwrap();
+        }
+    }
+
+    /// An edited document whose versions wait in the file: after a save over the file the versions
+    /// are still there, written against the drawing of the old file (the anchor entry).
+    #[test]
+    fn an_edited_document_keeps_waiting_versions_with_the_anchor_drawing() {
+        let d = dir("anchor");
+        let p = d.join("a.kad");
+        let mut doc = sample_doc();
+        doc.history = Some(sample_history());
+        save_path(&p, &doc, Form::Container, &WriteOptions::default()).unwrap();
+        let mut o = open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
+        let obj = o.doc.objects.get_mut(&ObjectId::from_num(10)).unwrap();
+        obj.shape = Shape::Circle {
+            center: DVec2::new(9.0, 9.0),
+            radius: 2.0,
+        };
+        let mut options = opts(&o);
+        options.anchor = true;
+        let saved = save_path(&p, &o.doc, Form::Container, &options).unwrap();
+        let rep = saved.written.unwrap();
+        assert!(rep.anchor_written && rep.parts_copied >= 4, "{rep:?}");
+        let c = Container::from_bytes(std::fs::read(&p).unwrap(), Limits::default()).unwrap();
+        assert!(c.contains(crate::HISTORY_ANCHOR) && c.contains(crate::HISTORY_ANCHOR_BLOBS));
+        // The anchor is the drawing of the old file: the circle is where it was.
+        let back = open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
+        let loader = back.doc.lazy_history.clone().unwrap();
+        assert!(loader.separate_anchor());
+        let anchor = loader.anchor().unwrap();
+        assert_eq!(anchor.objects, sample_doc().objects);
+        // The history itself is the same history.
+        let h = loader.load().unwrap();
+        assert_eq!(Some(h), doc.history);
+        // A second save (no edit) copies the anchor along, and the file stays readable.
+        let again = save_path(&p, &back.doc, Form::Container, &opts(&back)).unwrap();
+        assert!(!again.written.unwrap().anchor_written);
+        let back2 = open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
+        assert_eq!(
+            back2.doc.lazy_history.unwrap().anchor().unwrap().objects,
+            sample_doc().objects
+        );
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

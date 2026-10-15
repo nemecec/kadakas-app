@@ -2,20 +2,29 @@
 
 use std::sync::Arc;
 
+use kadakas_container::PartSource;
 use kadakas_core::history::{HistoryData, HistoryLoader};
 use kadakas_core::model::Document;
 
 use crate::history;
-use crate::layout::HISTORY_BLOBS;
-use crate::read::{ReadMode, read_source};
+use crate::layout::{HISTORY_ANCHOR, HISTORY_ANCHOR_BLOBS};
+use crate::read::{ReadMode, read_entry_document};
 use crate::source::FileSource;
 
 /// The history entries of an open container. A document that was opened from a container holds
 /// this as `Document::lazy_history`, and the session reads the history when a program uses it.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FileHistory {
     source: Arc<FileSource>,
+    /// The bytes of the parts and of the pictures that they list (known from the directory).
     bytes: usize,
+    /// The file has its own drawing for the history (see [`crate::HISTORY_ANCHOR`]).
+    anchored: bool,
+}
+
+/// True for the entries that are no part of the history value: the anchor drawing and its list.
+pub(crate) fn is_anchor_entry(name: &str) -> bool {
+    name == HISTORY_ANCHOR || name == HISTORY_ANCHOR_BLOBS
 }
 
 impl FileHistory {
@@ -25,15 +34,17 @@ impl FileHistory {
         if !history::present(&c) {
             return None;
         }
-        let bytes = c
+        let parts = c
             .entries()
             .iter()
-            .filter(|e| e.name.starts_with("history/"))
+            .filter(|e| e.name.starts_with("history/") && !is_anchor_entry(&e.name))
             .map(|e| e.size)
             .sum::<u64>();
+        let bytes = parts.saturating_add(history::listed_blob_bytes(source));
         Some(Arc::new(FileHistory {
             source: source.clone(),
             bytes: usize::try_from(bytes).unwrap_or(usize::MAX),
+            anchored: c.contains(HISTORY_ANCHOR),
         }))
     }
 
@@ -42,7 +53,7 @@ impl FileHistory {
         &self.source
     }
 
-    /// The names of the history entries, in order.
+    /// The names of the history entries, in order (the anchor drawing and its list included).
     pub fn entry_names(&self) -> Vec<String> {
         let c = self.source.container();
         c.entries()
@@ -52,31 +63,72 @@ impl FileHistory {
             .collect()
     }
 
-    /// The hashes of the pictures that the history holds (the entries of `blobs/` it refers to).
+    /// The hashes of the pictures that the history holds (the entries of `blobs/` it refers to),
+    /// and those of its anchor drawing.
     pub fn blob_hashes(&self) -> Result<Vec<String>, String> {
-        let c = self.source.container();
-        if !c.contains(HISTORY_BLOBS) {
-            return Ok(Vec::new());
+        let mut out = history::listed_blobs(&self.source).map_err(|e| e.to_string())?;
+        if self.source.container().contains(HISTORY_ANCHOR_BLOBS) {
+            let bytes = self
+                .source
+                .parts()
+                .read_part(HISTORY_ANCHOR_BLOBS)
+                .map_err(|e| e.to_string())?;
+            let more: Vec<String> = serde_json::from_slice(&bytes).map_err(|e| {
+                format!("the entry \"{HISTORY_ANCHOR_BLOBS}\" cannot be read: {e}")
+            })?;
+            for h in more {
+                if !out.contains(&h) {
+                    out.push(h);
+                }
+            }
         }
-        let bytes = c.read(HISTORY_BLOBS).map_err(|e| e.to_string())?;
-        serde_json::from_slice::<Vec<String>>(&bytes)
-            .map_err(|e| format!("the entry \"{HISTORY_BLOBS}\" cannot be read: {e}"))
+        Ok(out)
     }
 }
 
 impl HistoryLoader for FileHistory {
     fn load(&self) -> Result<HistoryData, String> {
-        history::read(&self.source.container())
+        history::read(&self.source)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "the file holds no history".to_string())
     }
 
     fn anchor(&self) -> Result<Document, String> {
-        read_source(&self.source, ReadMode::Lazy).map_err(|e| e.to_string())
+        // The drawing that the versions were saved with: the anchor drawing of the file, else the
+        // drawing of the file. It is read to be looked at, so its pictures are not noted as in
+        // use.
+        let entry = if self.anchored {
+            HISTORY_ANCHOR
+        } else {
+            crate::layout::DOCUMENT
+        };
+        read_entry_document(&self.source, entry, ReadMode::Untracked, false)
+            .map_err(|e| e.to_string())
     }
 
     fn bytes(&self) -> usize {
         self.bytes
+    }
+
+    fn separate_anchor(&self) -> bool {
+        self.anchored
+    }
+
+    fn state_key(&self) -> String {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(path) = self.source.path()
+                && let Ok(m) = std::fs::metadata(&path)
+            {
+                let t = m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_nanos());
+                return format!("{}:{}:{t}", path.display(), m.len());
+            }
+        }
+        String::new()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

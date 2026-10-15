@@ -30,6 +30,61 @@ pub enum FileError {
     /// A part of the document is too big for the form (the format limits of the container).
     #[error("{0}")]
     Limit(String),
+    /// Parts of the document that stay in the file it was opened from cannot be found any more
+    /// (the file changed on disk). Nothing was written.
+    #[error("{}", .0.message())]
+    Missing(Missing),
+}
+
+/// What a save could not find in the file that the document was opened from. A save with this
+/// error wrote nothing: the person decides (restore the file, or save without these parts).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Missing {
+    /// The file the parts were in.
+    pub file: String,
+    /// The hashes of the pictures (blobs) that cannot be found.
+    pub pictures: Vec<String>,
+    /// The versions (the history entries) cannot be found.
+    pub history: bool,
+    /// Other entries of the file that cannot be found.
+    pub other: Vec<String>,
+}
+
+impl Missing {
+    /// True if nothing is missing.
+    pub fn is_empty(&self) -> bool {
+        self.pictures.is_empty() && !self.history && self.other.is_empty()
+    }
+
+    /// The text for the person: what is missing and what to do.
+    pub fn message(&self) -> String {
+        let mut what: Vec<String> = Vec::new();
+        if !self.pictures.is_empty() {
+            let shown: Vec<String> = self
+                .pictures
+                .iter()
+                .take(3)
+                .map(|h| h.chars().take(8).collect())
+                .collect();
+            what.push(format!(
+                "{} picture(s) ({}{})",
+                self.pictures.len(),
+                shown.join(", "),
+                if self.pictures.len() > 3 { ", ..." } else { "" }
+            ));
+        }
+        if self.history {
+            what.push("the versions".into());
+        }
+        if !self.other.is_empty() {
+            what.push(format!("{} other part(s) of the file", self.other.len()));
+        }
+        format!(
+            "The file {} changed on disk, and it no longer has {}. Nothing was saved. Put the file (or its .bak) back and save again, or save without them: the pictures become small placeholders and the versions are left out",
+            self.file,
+            what.join(", ")
+        )
+    }
 }
 
 impl From<ContainerError> for FileError {

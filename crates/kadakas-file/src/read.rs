@@ -5,7 +5,7 @@ use std::io::{BufReader, Read};
 use std::sync::Arc;
 
 use kadakas_container::{Container, ContainerError, Limits};
-use kadakas_core::blob::{BlobSource, with_load_source};
+use kadakas_core::blob::{BlobSource, LoadKind, with_load_budget};
 use kadakas_core::model::{Document, LoadError};
 
 use crate::error::FileError;
@@ -23,6 +23,9 @@ pub enum ReadMode {
     /// Every picture is read into memory now. For a document that is only read from (a library,
     /// an import) and must not depend on its file after the read.
     Eager,
+    /// Like `Lazy`, but the file does not note the pictures as in use: for a copy of the drawing
+    /// that is read to be looked at and dropped (the anchor of the history).
+    Untracked,
 }
 
 /// A document that was read, and where from.
@@ -91,19 +94,37 @@ impl<R: Read> Read for Spy<'_, R> {
 /// Reads the document of an opened container. The pictures stay in the file (lazy); the history
 /// is read from its entries.
 pub fn read_source(source: &Arc<FileSource>, mode: ReadMode) -> Result<Document, FileError> {
-    let container = source.container();
-    if !container.contains(DOCUMENT) {
+    read_entry_document(source, DOCUMENT, mode, true)
+}
+
+/// Reads the drawing that is in the entry `entry` (`document.json`, or the anchor drawing of the
+/// history). `attach` puts the history of the container into the document.
+pub(crate) fn read_entry_document(
+    source: &Arc<FileSource>,
+    entry_name: &str,
+    mode: ReadMode,
+    attach: bool,
+) -> Result<Document, FileError> {
+    // The directory of the file as it was opened says what the file holds; the drawing is read
+    // from the file that has it (the same file, or the `.bak` if the file was replaced).
+    let dir = source.container();
+    if !dir.contains(entry_name) {
         return Err(ContainerError::Entry {
-            name: DOCUMENT.to_string(),
+            name: entry_name.to_string(),
             reason: "it is missing; this container holds no drawing".into(),
         }
         .into());
     }
+    let container = source.container_with_entry(entry_name)?;
     let error = RefCell::new(None);
-    let history_error: RefCell<Option<FileError>> = RefCell::new(None);
-    let mut entry = container.reader(DOCUMENT)?;
+    let mut entry = container.reader(entry_name)?;
     let blobs: Arc<dyn BlobSource> = source.clone();
-    let parsed = with_load_source(blobs, mode == ReadMode::Eager, || {
+    let kind = match mode {
+        ReadMode::Lazy => LoadKind::Lazy,
+        ReadMode::Untracked => LoadKind::LazyUntracked,
+        ReadMode::Eager => LoadKind::Eager,
+    };
+    let parsed = with_load_budget(blobs, kind, dir.uncompressed_bytes(), || {
         let spy = Spy {
             inner: &mut entry,
             error: &error,
@@ -112,7 +133,7 @@ pub fn read_source(source: &Arc<FileSource>, mode: ReadMode) -> Result<Document,
             BufReader::with_capacity(256 * 1024, spy),
             || {
                 container
-                    .reader(DOCUMENT)
+                    .reader(entry_name)
                     .map(|r| Spy {
                         inner: r,
                         error: &error,
@@ -120,30 +141,31 @@ pub fn read_source(source: &Arc<FileSource>, mode: ReadMode) -> Result<Document,
                     .map_err(std::io::Error::from)
             },
             |doc| {
-                if !history::present(&container) {
-                    return Ok(());
+                if !attach || !history::present(&dir) {
+                    return Ok(Vec::new());
                 }
                 if doc.history.is_some() {
                     return Err(LoadError::Invalid(
                         "the drawing and the container both hold a history of versions".into(),
                     ));
                 }
-                if mode == ReadMode::Lazy {
+                if mode != ReadMode::Eager {
                     // The history stays in the file until a program uses it (DOC-21).
                     doc.lazy_history = FileHistory::of(source)
                         .map(|h| h as Arc<dyn kadakas_core::history::HistoryLoader>);
-                    return Ok(());
+                    return Ok(Vec::new());
                 }
-                match history::read(&container) {
+                // A copy that is read to be used (a library, an import) has no use for the
+                // versions. If they cannot be read the drawing still loads, and a note says so
+                // (REV-01: a history that cannot be read does not stop the drawing).
+                match history::read(source) {
                     Ok(h) => {
                         doc.history = h;
-                        Ok(())
+                        Ok(Vec::new())
                     }
-                    Err(e) => {
-                        let m = e.to_string();
-                        *history_error.borrow_mut() = Some(e);
-                        Err(LoadError::Invalid(m))
-                    }
+                    Err(e) => Ok(vec![format!(
+                        "the versions of this file could not be read and are not part of this copy: {e}"
+                    )]),
                 }
             },
         )
@@ -157,9 +179,6 @@ pub fn read_source(source: &Arc<FileSource>, mode: ReadMode) -> Result<Document,
         Err(e) => {
             if let Some(c) = error.into_inner() {
                 return Err(c.into());
-            }
-            if let Some(h) = history_error.into_inner() {
-                return Err(h);
             }
             Err(e.into())
         }

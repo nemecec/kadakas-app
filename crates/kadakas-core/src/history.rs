@@ -28,8 +28,21 @@ pub trait HistoryLoader: Send + Sync + std::fmt::Debug {
     /// The drawing as the file holds it, read again. The history in a file is written against this
     /// drawing (its anchor), which the open document may have left by now.
     fn anchor(&self) -> Result<crate::model::Document, String>;
-    /// The size of the history in the file, uncompressed, in bytes.
+    /// The size of the history in the file, uncompressed, in bytes: its own entries and the
+    /// pictures that it lists (counted before anything is read, so a caller can refuse a history
+    /// that is too big).
     fn bytes(&self) -> usize;
+    /// True if the file holds a drawing of its own for the history (the anchor), apart from the
+    /// drawing of the file: a save of an edited document with a history that was not read writes
+    /// it. Then the open drawing is never the anchor.
+    fn separate_anchor(&self) -> bool {
+        false
+    }
+    /// A short text that changes when the file under the loader changes (its size and time). A
+    /// caller that failed to read the history asks again only when this text is another one.
+    fn state_key(&self) -> String {
+        String::new()
+    }
     /// For a program that knows the kind of the loader (the raw copy of the entries).
     fn as_any(&self) -> &dyn std::any::Any;
 }

@@ -155,6 +155,7 @@ pub fn convert(from: &Path, to: &Path, form: Form, max_bytes: u64) -> Result<Sav
     let opts = WriteOptions {
         generator: crate::generator(),
         keep: opened.source.iter().cloned().collect(),
+        anchor: false,
     };
     save_path(to, &opened.doc, form, &opts)
 }

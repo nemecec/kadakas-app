@@ -6,20 +6,33 @@
 //! that file without decoding it (`Writer::copy_raw`); so is a history part that did not change.
 //! A picture that the document no longer has, but that a live handle (an undo step) still uses,
 //! is kept in the new file too, so that an undo after a save finds it.
+//!
+//! Everything that is copied is found by its name and SHA-256 (see `kadakas_container`): the file
+//! may have a new stamp, or be replaced by a file that still has the part, or the part may be in
+//! the `.bak`. What cannot be found anywhere is reported before anything is written
+//! ([`FileError::Missing`]), and so are the limits of the format ([`FileError::Limit`]): a save
+//! writes the whole file or nothing, and a file that this code writes always opens.
 
-use std::collections::{BTreeMap, HashMap};
-use std::io::{BufWriter, Write};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io::{BufWriter, Read, Write};
 use std::sync::Arc;
 
-use kadakas_container::{Compression, ContainerError, PartSource, Writer, hex};
-use kadakas_core::blob::{BlobText, MIN_BLOB_TEXT, SaveRefs, text_hash, with_blob_refs};
+use kadakas_container::{
+    Compression, ContainerError, MANIFEST_NAME, MAX_ENTRIES, PartSource, Writer, check_entry_count,
+    hex, parse_hash,
+};
+use kadakas_core::blob::{
+    BlobText, MAX_BLOB_TEXT, MIN_BLOB_TEXT, SaveRefs, text_hash, with_blob_refs,
+};
 use kadakas_core::model::{DocBlob, Document};
 use kadakas_core::underlay::PngData;
 use serde_json::Value;
 
-use crate::error::FileError;
+use crate::error::{FileError, Missing};
 use crate::history::{self, Plan};
-use crate::layout::{DOCUMENT, blob_name};
+use crate::layout::{
+    BLOB_DIR, DOCUMENT, HISTORY_ANCHOR, HISTORY_ANCHOR_BLOBS, blob_name,
+};
 use crate::lazy::FileHistory;
 use crate::source::FileSource;
 
@@ -36,6 +49,11 @@ pub struct WriteOptions {
     /// The files the document was opened from. Their unchanged history parts are copied, and the
     /// pictures that their handles still use are kept.
     pub keep: Vec<Arc<FileSource>>,
+    /// The document was edited since it was read from the file, and its history waits in the
+    /// file (it was not read). The drawing of the file is written as the anchor of the history
+    /// (`history/anchor.json`), so that the versions can still be read against the drawing they
+    /// belong to.
+    pub anchor: bool,
 }
 
 /// What a container save did.
@@ -51,6 +69,11 @@ pub struct Written {
     pub blobs_kept: usize,
     /// History parts copied from an old file.
     pub parts_copied: usize,
+    /// Entries of the old file that this code does not know (from a newer program), copied as
+    /// they are.
+    pub unknown_copied: usize,
+    /// The drawing of the old file was written as the anchor of the history.
+    pub anchor_written: bool,
     /// The old files that were read from. After the rename of the save the caller moves them to
     /// the new file (`kadakas_file::native::rebind_sources`, `FileSource::rebind`).
     pub sources: Vec<Arc<FileSource>>,
@@ -95,7 +118,7 @@ enum Planned {
     Text(BlobText),
     Base(Arc<Value>),
     History(Arc<str>),
-    /// Only a live handle uses it; the old file has it.
+    /// Copied from a file: only a live handle uses it, or the history or its anchor.
     Kept(Arc<FileSource>),
 }
 
@@ -169,40 +192,321 @@ fn file_of(blob: &kadakas_core::blob::LazyBlob) -> Option<Arc<FileSource>> {
         .ok()
 }
 
+impl Planned {
+    /// The file that gives this blob, if it comes from a file. A text in memory (also one that a
+    /// file has too) is written from memory, because the file may have changed.
+    fn file(&self) -> Option<Arc<FileSource>> {
+        match self {
+            Planned::Picture(p) => p.lazy().and_then(|l| file_of(l)),
+            Planned::Text(t) => t.lazy().and_then(|l| file_of(l)),
+            Planned::Kept(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    /// The length of the text in bytes.
+    fn len(&self) -> usize {
+        match self {
+            Planned::Picture(p) => p.text_len(),
+            Planned::Text(t) => t.len(),
+            // An import base is at most 8 MiB (the limit of the resource).
+            Planned::Base(_) => 0,
+            Planned::History(t) => t.len(),
+            Planned::Kept(_) => 0,
+        }
+    }
+}
+
+/// The pictures that the drawing in `entry` refers to: every `{"$blob": "<hash>"}` of the text,
+/// found by a scan of the stream (the document is not parsed, so this costs no memory). A text
+/// that looks like a reference but is not one gives a hash that no entry has; the caller keeps
+/// only the hashes that the file has.
+pub(crate) fn scan_refs(
+    source: &FileSource,
+    entry: &str,
+) -> Result<BTreeSet<String>, FileError> {
+    let container = source.container_with_entry(entry)?;
+    let mut reader = container.reader(entry)?;
+    let mut out = BTreeSet::new();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = vec![0u8; 256 * 1024];
+    let key = b"\"$blob\"";
+    loop {
+        let n = reader.read(&mut chunk).map_err(FileError::from)?;
+        buf.extend_from_slice(&chunk[..n]);
+        let eof = n == 0;
+        let mut at = 0usize;
+        let mut keep_from = buf.len();
+        while let Some(i) = find(&buf[at..], key).map(|i| i + at) {
+            // After the key: white space, a colon, white space, a quote, 64 digits, a quote.
+            let mut j = i + key.len();
+            let skip = |j: &mut usize, b: &[u8]| {
+                while *j < b.len() && b[*j].is_ascii_whitespace() {
+                    *j += 1;
+                }
+            };
+            skip(&mut j, &buf);
+            if j >= buf.len() {
+                if !eof {
+                    keep_from = i;
+                    break;
+                }
+                break;
+            }
+            if buf[j] != b':' {
+                at = i + 1;
+                continue;
+            }
+            j += 1;
+            skip(&mut j, &buf);
+            if j + 66 > buf.len() {
+                if !eof {
+                    keep_from = i;
+                    break;
+                }
+                break;
+            }
+            if buf[j] == b'"' && buf[j + 65] == b'"' {
+                if let Ok(h) = std::str::from_utf8(&buf[j + 1..j + 65])
+                    && kadakas_core::blob::is_hash(h)
+                {
+                    out.insert(h.to_string());
+                }
+            }
+            at = i + 1;
+        }
+        if eof {
+            break;
+        }
+        // Keep the end of the buffer: a reference can be cut by the chunk.
+        let tail_from = keep_from.min(buf.len().saturating_sub(key.len() + 80));
+        buf.drain(..tail_from);
+    }
+    Ok(out)
+}
+
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+/// What a container save writes besides the drawing and the blobs: the entries of the history
+/// that wait in a file, the anchor, and the entries of the old file that this code does not know.
+struct Extras {
+    /// The history that waits in its file.
+    waiting: Option<Arc<FileHistory>>,
+    /// The drawing of the old file as the anchor of the waiting history, and the pictures it
+    /// refers to.
+    anchor: Option<(Arc<FileSource>, Vec<String>)>,
+    /// Entries of the old files with another name than the ones this code writes.
+    unknown: Vec<(Arc<FileSource>, String)>,
+}
+
+fn waiting_history(doc: &Document) -> Result<Option<Arc<FileHistory>>, FileError> {
+    match (&doc.history, &doc.lazy_history) {
+        (None, Some(loader)) => {
+            let h = loader.as_any().downcast_ref::<FileHistory>().cloned();
+            match h {
+                Some(h) => Ok(Some(Arc::new(h))),
+                None => Err(FileError::Io(
+                    "the versions of this document wait in a file that cannot be copied from"
+                        .into(),
+                )),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+/// The entries of the files that the document was opened from that this code does not write itself
+/// (a newer program may add entries): they are copied, not dropped.
+fn unknown_entries(sources: &[Arc<FileSource>], known: &dyn Fn(&str) -> bool) -> Vec<(Arc<FileSource>, String)> {
+    let mut out: Vec<(Arc<FileSource>, String)> = Vec::new();
+    for s in sources {
+        for e in s.container().entries() {
+            let n = e.name.as_str();
+            if n == DOCUMENT
+                || n == MANIFEST_NAME
+                || n.starts_with(BLOB_DIR)
+                || n.starts_with("history/")
+                || known(n)
+                || out.iter().any(|(_, o)| o == n)
+            {
+                continue;
+            }
+            out.push((s.clone(), e.name.clone()));
+        }
+    }
+    out
+}
+
+/// Checks the limits of the format and finds what cannot be copied, before anything is written.
+fn preflight(
+    plans: &Plans,
+    history_parts: usize,
+    extras: &Extras,
+    root: Option<&Arc<FileSource>>,
+) -> Result<(), FileError> {
+    // The size of the texts: a file that is written must be a file that can be read.
+    for (hash, planned) in &plans.blobs {
+        let len = planned.len();
+        if len > MAX_BLOB_TEXT {
+            let short: String = hash.chars().take(8).collect();
+            return Err(FileError::Limit(format!(
+                "a picture ({short}) has {len} bytes as text, more than the {MAX_BLOB_TEXT} that a container holds. Reduce the picture, or save the plain JSON form"
+            )));
+        }
+    }
+    let waiting = extras.waiting.as_ref().map_or(0, |h| h.entry_names().len());
+    let anchor = extras.anchor.as_ref().map_or(0, |_| 2);
+    let planned = 1 + plans.blobs.len() + history_parts + waiting + anchor + extras.unknown.len();
+    check_entry_count(planned).map_err(|_| {
+        FileError::Limit(format!(
+            "the document would have {planned} entries in a container, more than the {MAX_ENTRIES} that it holds. Save the plain JSON form instead"
+        ))
+    })?;
+    let mut missing = Missing {
+        file: root.map_or_else(String::new, |s| s.label()),
+        ..Missing::default()
+    };
+    for (hash, planned) in &plans.blobs {
+        if let Some(source) = planned.file()
+            && !source.has_blob(hash)
+        {
+            missing.pictures.push(hash.clone());
+            if missing.file.is_empty() {
+                missing.file = source.label();
+            }
+        }
+    }
+    if let Some(h) = &extras.waiting {
+        for name in h.entry_names() {
+            if !h.source().has_entry(&name) {
+                missing.history = true;
+            }
+        }
+    }
+    if let Some((source, hashes)) = &extras.anchor {
+        if !source.has_entry(DOCUMENT) {
+            missing.history = true;
+        }
+        for hash in hashes {
+            if !source.has_blob(hash) {
+                missing.pictures.push(hash.clone());
+            }
+        }
+    }
+    for (source, name) in &extras.unknown {
+        if !source.has_entry(name) {
+            missing.other.push(name.clone());
+        }
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        missing.pictures.sort();
+        missing.pictures.dedup();
+        Err(FileError::Missing(missing))
+    }
+}
+
+/// Copies an entry of an old file as it is. The entry is the one with this name and hash (it may
+/// be found in the file at the path, or in its `.bak`).
+fn copy_entry<W: Write>(
+    writer: &mut Writer<W>,
+    source: &FileSource,
+    name: &str,
+    new_name: Option<&str>,
+) -> Result<(), FileError> {
+    let sha = source
+        .parts()
+        .part_sha256(name)
+        .ok_or_else(|| ContainerError::Entry {
+            name: name.to_string(),
+            reason: "it is not in the file that was opened".into(),
+        })?;
+    let mut raw = source.parts().raw_by_content(name, &sha)?;
+    if let Some(n) = new_name {
+        raw.name = n.to_string();
+    }
+    writer.copy_raw(raw)?;
+    Ok(())
+}
+
 /// Writes the container form of a document into `w`.
 pub fn write_container<W: Write>(
     w: W,
     doc: &Document,
     opts: &WriteOptions,
 ) -> Result<(W, Written), FileError> {
-    let mut writer = Writer::new(w).generator(&opts.generator);
-    let mut report = Written::default();
     let history_plan = doc.history.as_ref().map(history::plan).transpose()?;
     let mut plans = plan_blobs(doc, history_plan.as_ref(), opts);
-    // A history that still waits in its file is copied from there, entry by entry.
-    let waiting: Option<&FileHistory> = match (&doc.history, &doc.lazy_history) {
-        (None, Some(loader)) => Some(loader.as_any().downcast_ref::<FileHistory>().ok_or_else(
-            || {
-                FileError::Io(
-                    "the versions of this document wait in a file that cannot be copied from"
-                        .into(),
-                )
-            },
-        )?),
-        _ => None,
+    let waiting = waiting_history(doc)?;
+    let mut extras = Extras {
+        waiting: waiting.clone(),
+        anchor: None,
+        unknown: Vec::new(),
     };
-    if let Some(h) = waiting {
-        for hash in h.blob_hashes().map_err(FileError::Io)? {
-            plans
-                .blobs
-                .entry(hash)
-                .or_insert_with(|| Planned::Kept(h.source().clone()));
+    if let Some(h) = &waiting {
+        // The history waits in a file: its entries and its pictures are copied from there.
+        match h.blob_hashes() {
+            Ok(hashes) => {
+                for hash in hashes {
+                    plans
+                        .blobs
+                        .entry(hash)
+                        .or_insert_with(|| Planned::Kept(h.source().clone()));
+                }
+            }
+            // The file is gone or another file: the versions cannot be found.
+            Err(e) if e.contains("changed on disk") => {
+                return Err(FileError::Missing(Missing {
+                    file: h.source().label(),
+                    history: true,
+                    ..Missing::default()
+                }));
+            }
+            // The list is damaged: the error names the entry.
+            Err(e) => return Err(FileError::Io(e)),
         }
         if !plans.sources.iter().any(|s| Arc::ptr_eq(s, h.source())) {
             plans.sources.push(h.source().clone());
         }
+        // An edited drawing: the drawing of the file is the anchor of the versions.
+        if opts.anchor && !h.source().container().contains(HISTORY_ANCHOR) {
+            let refs = scan_refs(h.source(), DOCUMENT)?;
+            let c = h.source().container();
+            let hashes: Vec<String> = refs
+                .into_iter()
+                .filter(|r| c.contains(&blob_name(r)))
+                .collect();
+            for hash in &hashes {
+                plans
+                    .blobs
+                    .entry(hash.clone())
+                    .or_insert_with(|| Planned::Kept(h.source().clone()));
+            }
+            extras.anchor = Some((h.source().clone(), hashes));
+        }
     }
+    let history_names: Vec<(&'static str, &[u8])> = history_plan
+        .as_ref()
+        .map(history::part_names)
+        .unwrap_or_default();
+    let all_sources = plans.sources.clone();
+    let known = |n: &str| history_names.iter().any(|(k, _)| *k == n);
+    extras.unknown = unknown_entries(&all_sources, &known);
+    preflight(
+        &plans,
+        history_names.len(),
+        &extras,
+        waiting
+            .as_ref()
+            .map(|h| h.source())
+            .or_else(|| opts.keep.first()),
+    )?;
 
+    let mut writer = Writer::new(w).generator(&opts.generator);
+    let mut report = Written::default();
     let refs = SaveRefs {
         skip_history: true,
         import_bases: std::mem::take(&mut plans.bases),
@@ -215,32 +519,15 @@ pub fn write_container<W: Write>(
 
     for (hash, planned) in &plans.blobs {
         let name = blob_name(hash);
-        let source = match planned {
-            Planned::Picture(p) => p.lazy().and_then(|l| file_of(l)),
-            Planned::Text(t) => t.lazy().and_then(|l| file_of(l)),
-            Planned::Kept(s) => Some(s.clone()),
-            _ => None,
-        }
-        // A text in memory that an old file has too (a picture of the history, the summaries of
-        // an import base) is copied from there.
-        .or_else(|| {
-            opts.keep
-                .iter()
-                .find(|s| {
-                    s.container()
-                        .entry(&name)
-                        .is_some_and(|e| hex(&e.sha256) == *hash)
-                })
-                .cloned()
-        });
-        if let Some(source) = source {
+        if let Some(source) = planned.file() {
             if !report.sources.iter().any(|s| Arc::ptr_eq(s, &source)) {
-                // The file must be the one that was opened: the size, the time of change and the
-                // manifest. A part is checked against its hash when it is copied as well.
-                source.check_unchanged()?;
                 report.sources.push(source.clone());
             }
-            let raw = source.parts().raw_part(&name)?;
+            let sha = parse_hash(hash).ok_or_else(|| ContainerError::Entry {
+                name: name.clone(),
+                reason: "not a hash".into(),
+            })?;
+            let raw = source.parts().raw_by_content(&name, &sha)?;
             if hex(&raw.sha256) != *hash {
                 return Err(ContainerError::Entry {
                     name,
@@ -273,31 +560,48 @@ pub fn write_container<W: Write>(
         report.blobs_written += 1;
     }
 
-    if let Some(h) = waiting {
-        if !report.sources.iter().any(|s| Arc::ptr_eq(s, h.source())) {
-            h.source().check_unchanged()?;
-        }
+    if let Some(h) = &waiting {
         for name in h.entry_names() {
-            writer.copy_raw(h.source().parts().raw_part(&name)?)?;
+            copy_entry(&mut writer, h.source(), &name, None)?;
             report.parts_copied += 1;
         }
     }
+    if let Some((source, hashes)) = &extras.anchor {
+        copy_entry(&mut writer, source, DOCUMENT, Some(HISTORY_ANCHOR))?;
+        let list = serde_json::to_vec(hashes)
+            .map_err(|e| FileError::Io(format!("the anchor list cannot be written: {e}")))?;
+        writer.add_bytes(HISTORY_ANCHOR_BLOBS, history::PART_COMPRESSION, &list)?;
+        report.anchor_written = true;
+    }
     if let Some(plan) = &history_plan {
         for (name, bytes) in history::part_names(plan) {
-            let old = opts.keep.iter().find_map(|s| {
-                let c = s.container();
-                let e = c.entry(name)?;
-                (hex(&e.sha256) == kadakas_container::sha256_hex(bytes)).then(|| s.clone())
+            // A part that is equal to the one of an old file is copied without deflating it
+            // again. The bytes in memory are the truth: if the old file cannot give the part,
+            // it is written from memory.
+            let want = kadakas_container::sha256_hex(bytes);
+            let old = opts.keep.iter().find(|s| {
+                s.container()
+                    .entry(name)
+                    .is_some_and(|e| hex(&e.sha256) == want)
             });
             match old.map(|s| s.parts().raw_part(name)) {
                 Some(Ok(raw)) => {
+                    if !report.sources.iter().any(|k| Arc::ptr_eq(k, old.unwrap())) {
+                        report.sources.push(old.unwrap().clone());
+                    }
                     writer.copy_raw(raw)?;
                     report.parts_copied += 1;
                 }
-                // Not in an old file, or it cannot be copied: write it.
                 _ => writer.add_bytes(name, history::PART_COMPRESSION, bytes)?,
             }
         }
+    }
+    for (source, name) in &extras.unknown {
+        copy_entry(&mut writer, source, name, None)?;
+        if !report.sources.iter().any(|s| Arc::ptr_eq(s, source)) {
+            report.sources.push(source.clone());
+        }
+        report.unknown_copied += 1;
     }
     report.entries = writer.len();
     for s in std::mem::take(&mut plans.sources) {

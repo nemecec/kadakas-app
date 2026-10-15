@@ -1383,17 +1383,24 @@ impl Document {
     /// Like `from_reader`, for a reader that cannot seek (an entry of a container). `reopen` gives
     /// the reader again for the second pass on the error path (see `from_reader`). `attach` runs
     /// after the parse and before the checks of the load: a container puts the history, which is
-    /// not in the text, into the document there.
+    /// not in the text, into the document there. It returns notes for the person, which the
+    /// document keeps after the notes of the checks.
     pub fn from_reader_with<R: std::io::Read, P: std::io::Read>(
         reader: R,
         reopen: impl FnOnce() -> std::io::Result<P>,
-        attach: impl FnOnce(&mut Document) -> Result<(), LoadError>,
+        attach: impl FnOnce(&mut Document) -> Result<Vec<String>, LoadError>,
     ) -> Result<Document, LoadError> {
         match crate::blob::with_intern_scope(|| serde_json::from_reader::<_, Document>(reader)) {
             Ok(mut doc) => {
                 check_version(u64::from(doc.format_version))?;
-                attach(&mut doc)?;
-                doc.finish_load()
+                // The notes of the attach come after the notes of the checks, which start the
+                // list again.
+                let notes = attach(&mut doc)?;
+                let mut doc = doc.finish_load()?;
+                for n in notes {
+                    doc.add_load_note(n);
+                }
+                Ok(doc)
             }
             Err(e) => Err(explain_failure(e, || {
                 let again = reopen().map_err(serde_json::Error::io)?;
