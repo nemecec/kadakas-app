@@ -850,3 +850,35 @@ proptest! {
         }
     }
 }
+
+/// How long it takes to write and to open a container with the most entries it can hold, and how
+/// big the directory and the manifest get. The numbers are in `docs/doc-load-benchmark.md`:
+/// `cargo test --release -p kadakas-container perf_ -- --ignored --nocapture`.
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn perf_the_most_entries() {
+    let n = MAX_ENTRIES - 1;
+    let started = std::time::Instant::now();
+    let mut w = Writer::new(Vec::new());
+    for i in 0..n {
+        let text = format!("picture number {i} {}", "x".repeat(40));
+        let name = format!("blobs/{}", sha256_hex(text.as_bytes()));
+        w.add_bytes(&name, Compression::Stored, text.as_bytes()).unwrap();
+    }
+    let bytes = w.finish().unwrap();
+    let written = started.elapsed();
+    let started = std::time::Instant::now();
+    let c = Container::from_bytes(bytes.clone(), Limits::default()).unwrap();
+    let opened = started.elapsed();
+    let directory = c.file_bytes() - c.entries().iter().map(|e| e.compressed + 30 + 70).sum::<u64>();
+    println!(
+        "{} entries: file {} bytes, written in {:?}, opened in {:?}, manifest {} bytes, directory about {} bytes",
+        c.entries().len(),
+        bytes.len(),
+        written,
+        opened,
+        c.manifest_size(),
+        directory
+    );
+    assert_eq!(c.entries().len(), n);
+}
