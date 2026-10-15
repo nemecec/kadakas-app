@@ -174,8 +174,9 @@ makes. In the plain form the pictures are read again and written again each time
 - **Many pictures.** A container with 20 000 pictures of 12 KB (247 MB) is written in 1.9 s and opened
   in 2.8 s (the best of the runs on a busy machine; `cargo test --release -p kadakas-file perf_ --
   --ignored --nocapture`). The open reads the first 8 characters of each picture, which is two small
-  reads of the file for each. The first version cloned the directory for each of them and took
-  minutes for 20 000: `Container` now shares its entries, so a copy costs a pointer.
+  reads of the file for each. The first version cloned the directory for each of them (a test with
+  4 100 pictures took 35 s in a debug build): `Container` now shares its entries, so a copy costs a
+  pointer, and the same test takes 1 s.
 - **A picture (a blob) is at most 32 MiB of text** (`MAX_BLOB_TEXT`, the bound of collaboration). A
   picture is at most 8 MiB, which is 11.2 MiB of base64 text.
 - **Not done: binary arrays** for the points of site models and for meshes. The measurement says
