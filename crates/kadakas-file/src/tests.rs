@@ -1278,6 +1278,80 @@ fn a_reference_amplification_file_cannot_make_a_load_read_more_than_the_file_has
     }
 }
 
+
+#[test]
+fn entries_of_a_newer_program_are_kept_not_dropped() {
+    // A newer program adds an entry. A save of this program copies it as it is.
+    let doc = sample_doc();
+    let good = Container::from_bytes(container_bytes(&doc), Limits::default()).unwrap();
+    let mut w = Writer::new(Vec::new());
+    for e in good.entries() {
+        w.copy_raw(good.raw(&e.name).unwrap()).unwrap();
+    }
+    w.add_bytes("extra/thumbnail.png", Compression::Stored, b"\x89PNG not really")
+        .unwrap();
+    let bytes = w.finish().unwrap();
+    let o = open(bytes);
+    let source = o.source.clone().unwrap();
+    let opts = WriteOptions {
+        keep: vec![source.clone()],
+        ..WriteOptions::default()
+    };
+    let (out, report) = write_container(Vec::new(), &o.doc, &opts).unwrap();
+    assert_eq!(report.unknown_copied, 1, "{report:?}");
+    let c = Container::from_bytes(out, Limits::default()).unwrap();
+    assert_eq!(c.read("extra/thumbnail.png").unwrap(), b"\x89PNG not really");
+    // A caller that does not name the old file has nothing to copy from.
+    let lone = WriteOptions::default();
+    let (out, report) = write_container(Vec::new(), &o.doc, &lone).unwrap();
+    assert_eq!(report.unknown_copied, 0);
+    assert!(!Container::from_bytes(out, Limits::default()).unwrap().contains("extra/thumbnail.png"));
+}
+
+#[test]
+fn a_picture_in_memory_is_written_from_memory_not_copied_from_a_file_that_may_have_changed() {
+    // S6: the picture is in memory and in the file the document was opened from. The file is gone.
+    // The save writes the picture from memory.
+    let dir = std::env::temp_dir().join(format!("kf-s6-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("a.kad");
+    crate::native::save_path(&p, &same_picture_doc(1), Form::Container, &WriteOptions::default())
+        .unwrap();
+    let mut o = crate::native::open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
+    for obj in o.doc.objects.values_mut() {
+        if let Shape::Underlay(u) = &mut obj.shape {
+            u.png = PngData::new(png_bytes(1, 20_000));
+        }
+    }
+    std::fs::remove_file(&p).unwrap();
+    let opts = WriteOptions {
+        keep: o.source.iter().cloned().collect(),
+        ..WriteOptions::default()
+    };
+    let (out, report) = write_container(Vec::new(), &o.doc, &opts).unwrap();
+    assert_eq!(report.blobs_written, 1, "{report:?}");
+    assert_eq!(report.blobs_copied, 0, "{report:?}");
+    assert_eq!(resolved(open(out)), o.doc);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_error_inside_the_encoder_is_not_lost() {
+    // S7: the error of a failing source reaches the caller with its text.
+    let doc = sample_doc();
+    #[derive(Debug)]
+    struct Failing;
+    impl std::io::Write for Failing {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("the disk is full"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let e = write_container(Failing, &doc, &WriteOptions::default()).unwrap_err();
+    assert!(e.to_string().contains("the disk is full"), "{e}");
+}
 #[cfg(not(target_arch = "wasm32"))]
 mod disk {
     use super::*;

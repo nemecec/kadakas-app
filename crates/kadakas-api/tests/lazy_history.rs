@@ -509,3 +509,40 @@ fn the_plain_json_form_round_trips_versions_with_a_picture() {
     let r = ok(&mut t, "file.open", json!({"path": j3}));
     assert!(r.get("notes").is_none(), "after a container open, edited: {r}");
 }
+
+/// The file of `make_file` with one history entry replaced.
+fn with_entry_replaced(dir: &Path, from: &Path, entry: &str, bytes: &[u8], to: &str) -> PathBuf {
+    let c = Container::from_bytes(std::fs::read(from).unwrap(), Default::default()).unwrap();
+    let mut w = kadakas_container::Writer::new(Vec::new());
+    for e in c.entries() {
+        if e.name == entry {
+            w.add_bytes(&e.name, kadakas_container::Compression::Stored, bytes)
+                .unwrap();
+        } else {
+            w.copy_raw(c.raw(&e.name).unwrap()).unwrap();
+        }
+    }
+    let out = dir.join(to);
+    std::fs::write(&out, w.finish().unwrap()).unwrap();
+    out
+}
+
+#[test]
+fn the_repair_of_a_history_that_waits_keeps_what_is_readable_and_is_one_undo_step() {
+    // S3: the entries can be read as a list, but the versions in them are not versions. The history
+    // is read as it is, checked, and the repair is the same step as for a history that was read
+    // with notes: undo brings the history back.
+    let dir = tmp("repair-waiting");
+    let f = make_file(&dir, "a.kad");
+    let bad = with_entry_replaced(&dir, &f, kadakas_file::HISTORY_VERSIONS, b"[1, 2]", "bad.kad");
+    let mut s = open(&dir, &bad);
+    let list = ok(&mut s, "version.list", json!({}));
+    assert_eq!(list["read_only"], true, "{list}");
+    let r = ok(&mut s, "version.repair", json!({"confirm": true}));
+    assert!(r["kept"].as_u64().is_some(), "{r}");
+    assert_eq!(ok(&mut s, "version.list", json!({}))["read_only"], false);
+    assert_eq!(ok(&mut s, "undo", json!({}))["done"], true, "one undo step");
+    assert_eq!(ok(&mut s, "version.list", json!({}))["read_only"], true);
+    // Nothing was lost by the repair that was taken back: the file still has the entries.
+    assert_eq!(entry_hashes(&bad, "history/").len(), 4);
+}

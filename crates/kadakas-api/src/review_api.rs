@@ -1179,7 +1179,9 @@ fn repair(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         let reasons = notes(s).to_vec();
         s.editor.adopt_history(None, Vec::new());
         s.review = ReviewCache::default();
-        return Ok(json!({"kept": 0, "notes": reasons}));
+        // There is nothing in memory to bring back, so this one is not an undo step. The file is
+        // not changed until the person saves.
+        return Ok(json!({"kept": 0, "notes": reasons, "undoable": false}));
     }
     let h = read(s);
     let mut reasons = notes(s).to_vec();

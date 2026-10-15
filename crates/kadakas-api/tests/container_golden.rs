@@ -157,3 +157,25 @@ fn a_container_with_versions_saves_and_reads_again_with_no_notes() {
     assert!(back.load_notes().is_empty(), "{:?}", back.load_notes());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn adopting_a_file_without_a_project_guid_marks_the_document_as_not_the_one_in_the_file() {
+    // S14: an old file has no project GUID; `adopt_document` gives it one in memory. The document
+    // is then not exactly the document of the file, and a save must write the drawing of the file
+    // as the anchor of the versions (they wait in the file), not copy them as if nothing changed.
+    let mut o =
+        files::open_document(&path("container_golden.kad"), u64::MAX, ReadMode::Lazy).unwrap();
+    // The file of an older build: no GUID in the drawing that was read.
+    o.doc.drawing.project.guid.clear();
+    let mut s = Session::default();
+    s.adopt_document(o.doc);
+    s.file_source = o.source;
+    assert!(!s.editor.doc().drawing.project.guid.is_empty());
+    assert!(s.needs_anchor(), "the document is not the one in the file");
+    // A document that has a GUID already is exact.
+    let again =
+        files::open_document(&path("container_golden.kad"), u64::MAX, ReadMode::Lazy).unwrap();
+    let mut t = Session::default();
+    t.adopt_document(again.doc);
+    assert!(!t.needs_anchor());
+}
