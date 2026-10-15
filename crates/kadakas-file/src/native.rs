@@ -89,6 +89,25 @@ pub struct Saved {
     pub notes: Vec<String>,
 }
 
+/// Moves the sources that a container save read from to the new file. Call it after the rename
+/// (`save_path` does). The pictures of the document are in the new file now (by hash): after a
+/// save over their file it is a new file, and after a save to a new path the document no longer
+/// depends on the old file. Returns the sources that could not be moved, as texts.
+pub fn rebind_sources(report: &Written, path: &Path) -> Vec<String> {
+    let mut notes = Vec::new();
+    for s in &report.sources {
+        if s.path().is_some()
+            && let Err(e) = s.rebind(path)
+        {
+            notes.push(format!(
+                "the saved file {} could not be opened again for the pictures: {e}",
+                path.display()
+            ));
+        }
+    }
+    notes
+}
+
 /// Saves the document to `path` in the given form, atomically. `opts.keep` names the files the
 /// document was opened from (unchanged entries are copied from them).
 pub fn save_path(
@@ -114,24 +133,10 @@ pub fn save_path(
         return Err(failure
             .unwrap_or_else(|| FileError::Io(format!("cannot write {}: {e}", path.display()))));
     }
-    // The pictures of the document are in the new file now (by hash). The sources that were read
-    // from move there: after a save over their file it is a new file, and after a save to a new
-    // path the document no longer depends on the old file.
-    let mut notes = Vec::new();
-    if form == Form::Container
-        && let Some(rep) = &written
-    {
-        for s in &rep.sources {
-            if s.path().is_some()
-                && let Err(e) = s.rebind(path)
-            {
-                notes.push(format!(
-                    "the saved file {} could not be opened again for the pictures: {e}",
-                    path.display()
-                ));
-            }
-        }
-    }
+    let notes = match (&written, form) {
+        (Some(rep), Form::Container) => rebind_sources(rep, path),
+        _ => Vec::new(),
+    };
     Ok(Saved {
         form,
         written,

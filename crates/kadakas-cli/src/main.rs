@@ -437,10 +437,7 @@ fn load(path: &std::path::Path, max: Option<u64>) -> Result<Document, String> {
 }
 
 /// Like [`load`], with the open file of a container: its pictures stay in the file (DOC-21).
-fn load_opened(
-    path: &std::path::Path,
-    max: Option<u64>,
-) -> Result<kadakas_file::Opened, String> {
+fn load_opened(path: &std::path::Path, max: Option<u64>) -> Result<kadakas_file::Opened, String> {
     let max = max.unwrap_or(kadakas_api::DEFAULT_DOCUMENT_FILE_BYTES);
     let mut opened = kadakas_api::files::open_document(path, max, kadakas_file::ReadMode::Lazy)
         .map_err(|e| e.message)?;
@@ -739,12 +736,7 @@ fn save(
     path: &std::path::Path,
     from: Option<&std::sync::Arc<kadakas_file::FileSource>>,
 ) -> Result<(), String> {
-    save_as(
-        doc,
-        path,
-        kadakas_file::Form::from_extension(path),
-        from,
-    )
+    save_as(doc, path, kadakas_file::Form::from_extension(path), from)
 }
 
 fn save_as(
@@ -777,7 +769,10 @@ fn convert_command(
     let opened = load_own(input)?;
     report_doc_notes(input, &opened.doc);
     save_as(&opened.doc, output, form, opened.source.as_ref())?;
-    println!("{}", json!({"input": input, "output": output, "format": form.name()}));
+    println!(
+        "{}",
+        json!({"input": input, "output": output, "format": form.name()})
+    );
     Ok(())
 }
 

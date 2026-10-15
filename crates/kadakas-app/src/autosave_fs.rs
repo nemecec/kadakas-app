@@ -168,11 +168,17 @@ pub enum Over {
 /// Writes one version, its meta file, and rotates. Runs on the writer thread.
 pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Over> {
     create_private_dir(dir)?;
+    // The copy for the recovery is a container, like the file of the person: the pictures that are
+    // still in the file of the person are copied from there without decoding them.
     write_durable_with(
         &dir.join(version_name(id, seq)),
         Access::Private,
         ".tmp",
-        |w| job.doc.write_compact(w),
+        |w| {
+            kadakas_file::write_container(w, &job.doc, &kadakas_file::WriteOptions::default())
+                .map(|_| ())
+                .map_err(|e| io::Error::other(e.to_string()))
+        },
     )?;
     let secs = now_unix();
     let meta = json!({
@@ -196,10 +202,32 @@ pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Ov
     if manual_saves(path) != job.manual_seen {
         return Ok(Over::Stale); // No need to write a copy that is stale already.
     }
-    let staged = fsio::stage_durable(path, Access::KeepExisting, ".autosave.tmp", |w| {
-        job.doc.write_pretty(w)
-    })?;
-    commit_if_fresh(staged, path, job.manual_seen)
+    // The form follows the extension of the file of the person, like Save.
+    let form = kadakas_file::Form::from_extension(path);
+    let mut report = None;
+    let staged = fsio::stage_durable(
+        path,
+        Access::KeepExisting,
+        ".autosave.tmp",
+        |w| match form {
+            kadakas_file::Form::Json => {
+                kadakas_file::write_json(w, &job.doc).map_err(|e| io::Error::other(e.to_string()))
+            }
+            kadakas_file::Form::Container => {
+                kadakas_file::write_container(w, &job.doc, &kadakas_file::WriteOptions::default())
+                    .map(|(_, r)| report = Some(r))
+                    .map_err(|e| io::Error::other(e.to_string()))
+            }
+        },
+    )?;
+    let over = commit_if_fresh(staged, path, job.manual_seen)?;
+    // The file under the pictures of the document is a new file now.
+    if over == Over::Written
+        && let Some(report) = &report
+    {
+        let _ = kadakas_file::native::rebind_sources(report, path);
+    }
+    Ok(over)
 }
 
 /// The rename of a staged copy, under the lock of `manual_save`: it happens only if no manual
@@ -541,8 +569,10 @@ mod tests {
         let doc = doc_with_circles(3);
         let out = write_version(&dir, "s1", 1, &job(&doc, Some("/a/b.kad".into()), 5)).unwrap();
         assert_eq!(out, Over::NotAsked);
-        let text = std::fs::read_to_string(dir.join("s1.000001.autosave.kad")).unwrap();
-        assert_eq!(Document::from_json(&text).unwrap(), doc);
+        // The copy is a container; it reads back through the same door as every other file.
+        let copy = dir.join("s1.000001.autosave.kad");
+        assert!(std::fs::read(&copy).unwrap().starts_with(b"PK"));
+        assert_eq!(file_io::read_document(&copy).unwrap(), doc);
         let meta: Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("s1.meta.json")).unwrap())
                 .unwrap();

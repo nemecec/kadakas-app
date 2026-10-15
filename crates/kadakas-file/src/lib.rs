@@ -29,7 +29,7 @@ mod write;
 pub mod native;
 
 pub use error::FileError;
-pub use kadakas_container::ContainerError;
+pub use kadakas_container::{ContainerError, Limits};
 pub use layout::{
     BLOB_DIR, DOCUMENT, Form, HISTORY_BLOBS, HISTORY_NEWEST, HISTORY_RAW, HISTORY_TOP,
     HISTORY_VERSIONS, blob_name, sniff,

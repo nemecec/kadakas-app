@@ -165,13 +165,12 @@ pub struct KadakasApp {
     web_fragments: std::rc::Rc<std::cell::RefCell<Vec<kadakas_ui_core::collab::Fragment>>>,
 }
 
-/// The bytes of a save as a file: the document as `Session::document_for_save` writes it (the
-/// versions in the file form against the drawing), never the memory form of the open document.
-/// The web save downloads them.
+/// The bytes of a save as a file: the container, with the document as
+/// `Session::document_for_save` writes it (the versions in the file form against the drawing),
+/// never the memory form of the open document. The web save downloads them.
 #[cfg(any(target_arch = "wasm32", test))]
 fn save_bytes(session: &mut Session) -> Result<Vec<u8>, String> {
-    let doc = session.document_for_save().map_err(|e| e.message)?;
-    serde_json::to_vec_pretty(&*doc).map_err(|e| e.to_string())
+    file_io::container_bytes(session)
 }
 
 /// A name to show to the others: the user name of the operating system. Empty if unknown (the
@@ -687,13 +686,32 @@ impl KadakasApp {
     /// document: a new or opened document would be pushed into it as thousands of edits. The
     /// caller must not drop what it holds (a recovered copy) when this says false.
     fn replace_document(&mut self, doc: Document, path: Option<std::path::PathBuf>) -> bool {
+        self.replace_opened(
+            kadakas_file::Opened {
+                doc,
+                form: kadakas_file::Form::Json,
+                source: None,
+            },
+            path,
+        )
+    }
+
+    /// Like `replace_document`, for a file that was opened: a container keeps its pictures in the
+    /// file, and the session keeps the file as the source for the next save (DOC-21).
+    fn replace_opened(
+        &mut self,
+        opened: kadakas_file::Opened,
+        path: Option<std::path::PathBuf>,
+    ) -> bool {
         if self.collab.is_active() {
             self.status = tr!("collab-ui-blocked-replace");
             return false;
         }
+        let kadakas_file::Opened { doc, source, .. } = opened;
         // Keep the rest of the session: the event subscriptions, the limits, the allowed folders
         // and addresses, and the scripting policy. `replace_document` keeps the view and snapping.
         let notes = self.session.replace_document(doc);
+        self.session.file_source = source;
         // The app handles this change itself: agents must not see it as a `document.load`.
         self.session.take_replaced();
         // A compare of the old document means nothing for the new one.
@@ -1057,7 +1075,7 @@ impl KadakasApp {
         let (inbox, ctx) = (self.web_inbox.clone(), ctx.clone());
         wasm_bindgen_futures::spawn_local(async move {
             if let Some(f) = rfd::AsyncFileDialog::new()
-                .add_filter("Kadakas", &["kad"])
+                .add_filter("Kadakas", &["kad", "json"])
                 .pick_file()
                 .await
             {
@@ -1145,10 +1163,10 @@ impl KadakasApp {
     /// the size; `parse_document_bytes` keeps the guard of `file_io::WEB_GUARD_BYTES`.
     #[cfg(target_arch = "wasm32")]
     fn open_web_file(&mut self, name: String, bytes: Vec<u8>) {
-        match file_io::parse_document_bytes(&bytes) {
-            Ok(doc) => {
+        match file_io::open_picked_bytes(bytes) {
+            Ok(opened) => {
                 self.status = tr!("app-opened", name = name);
-                self.replace_document(doc, Some(name.into()));
+                self.replace_opened(opened, Some(name.into()));
             }
             Err(e) => self.status = tr!("app-cannot-open", name = name, e = e),
         }
@@ -1170,7 +1188,7 @@ impl KadakasApp {
             return;
         }
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Kadakas", &["kad"])
+            .add_filter("Kadakas", &["kad", "json"])
             .pick_file()
         else {
             return;
@@ -1212,10 +1230,10 @@ impl KadakasApp {
             self.open_path(ctx, path);
             return;
         }
-        match file_io::read_document(&path) {
-            Ok(doc) => {
+        match file_io::open_file(&path) {
+            Ok(opened) => {
                 self.status = tr!("app-opened-2", name = path.display());
-                self.replace_document(doc, Some(path));
+                self.replace_opened(opened, Some(path));
                 self.set_title(ctx);
             }
             Err(e) => self.status = e,
@@ -1238,8 +1256,11 @@ impl KadakasApp {
         let path = match (&self.path, as_new) {
             (Some(p), false) => p.clone(),
             _ => {
+                // Two filters: the container (the default) and the plain JSON form. The extension
+                // of the name decides which one is written (DOC-22).
                 let Some(p) = rfd::FileDialog::new()
                     .add_filter("Kadakas", &["kad"])
+                    .add_filter("JSON", &["json"])
                     .set_file_name("drawing.kad")
                     .save_file()
                 else {
@@ -1248,8 +1269,12 @@ impl KadakasApp {
                 file_io::with_extension(&p)
             }
         };
+        let spec = file_io::SaveSpec::from_extension(
+            &path,
+            self.session.file_source.iter().cloned().collect(),
+        );
         let written = match self.session.document_for_save() {
-            Ok(doc) => file_io::write_document(&path, &doc),
+            Ok(doc) => file_io::write_document_as(&path, &doc, &spec),
             Err(e) => Err(e.message),
         };
         match written {
@@ -3101,8 +3126,8 @@ mod tests {
             )
             .unwrap();
         let bytes = super::save_bytes(&mut session).unwrap();
-        let doc =
-            kadakas_core::model::Document::from_json(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        assert!(bytes.starts_with(b"PK"), "the web save is a container");
+        let doc = file_io::open_picked_bytes(bytes).unwrap().doc;
         let mut reopened = kadakas_api::Session::with_document(doc);
         assert!(
             reopened.load_notes().is_empty(),

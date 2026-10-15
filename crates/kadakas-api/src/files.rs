@@ -34,6 +34,15 @@ pub struct SaveSpec {
 }
 
 impl SaveSpec {
+    /// The form of the extension of `path` (`.json` is the plain JSON form, anything else the
+    /// container), with the files to copy from.
+    pub fn from_extension(path: &Path, keep: Vec<Arc<FileSource>>) -> SaveSpec {
+        SaveSpec {
+            form: Form::from_extension(path),
+            keep,
+        }
+    }
+
     /// The container, with nothing to copy from.
     pub fn container() -> SaveSpec {
         SaveSpec {
@@ -276,9 +285,9 @@ mod tests {
     use super::*;
     use crate::PathPolicy;
     use glam::DVec2;
-    use kadakas_sys::fsio;
     use kadakas_core::command::Command;
     use kadakas_core::model::Shape;
+    use kadakas_sys::fsio;
 
     fn tmp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("kad-files-{name}-{}", std::process::id()));
@@ -483,10 +492,15 @@ mod tests {
         let req = json!({"jsonrpc":"2.0","id":1,"method":"file.save","params":{"path":k,"format":"zip2"}});
         let r: Value = serde_json::from_str(&handle_file_request(&mut s, &req)).unwrap();
         assert_eq!(r["error"]["code"], -32602, "{r}");
-        let req = json!({"jsonrpc":"2.0","id":1,"method":"file.save","params":{"path":k,"format":5}});
+        let req =
+            json!({"jsonrpc":"2.0","id":1,"method":"file.save","params":{"path":k,"format":5}});
         let r: Value = serde_json::from_str(&handle_file_request(&mut s, &req)).unwrap();
         assert_eq!(r["error"]["code"], -32602, "{r}");
-        assert_eq!(names(&dir), ["a.json", "a.kad", "b.kad"], "no temporary file is left");
+        assert_eq!(
+            names(&dir),
+            ["a.json", "a.kad", "b.kad"],
+            "no temporary file is left"
+        );
     }
 
     #[cfg(unix)]
@@ -700,7 +714,10 @@ mod tests {
         let r = call(&mut s, "file.open", &f);
         assert_eq!(r["error"]["code"], 3, "{r}");
         let m = r["error"]["message"].as_str().unwrap();
-        assert!(m.contains("together") && m.contains("--max-document-mib"), "{m}");
+        assert!(
+            m.contains("together") && m.contains("--max-document-mib"),
+            "{m}"
+        );
         s.limits.document_file_bytes = info.uncompressed_bytes;
         assert_eq!(call(&mut s, "file.open", &f)["result"]["ok"], true);
     }
@@ -722,11 +739,21 @@ mod tests {
         let r = call(&mut b, "file.save", &f);
         assert_eq!(r["error"]["code"], 5, "{r}");
         assert!(
-            r["error"]["message"].as_str().unwrap().contains("changed on disk"),
+            r["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("changed on disk"),
             "{r}"
         );
         assert_eq!(std::fs::read(&f).unwrap(), other_bytes);
-        assert_eq!(names(&dir), ["a.kad", "a.kad.bak"].map(String::from).into_iter().filter(|n| dir.join(n).exists()).collect::<Vec<_>>());
+        assert_eq!(
+            names(&dir),
+            ["a.kad", "a.kad.bak"]
+                .map(String::from)
+                .into_iter()
+                .filter(|n| dir.join(n).exists())
+                .collect::<Vec<_>>()
+        );
         assert!(!names(&dir).iter().any(|n| n.contains(".tmp")));
     }
 }

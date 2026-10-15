@@ -41,15 +41,29 @@ pub enum OpenDecision {
     Refuse(Estimate),
 }
 
-/// Decides how to open a file of `file_bytes`. `physical_memory` is the memory of the computer
+/// Decides how to open a file of `file_bytes` whose text is all loaded into memory (the plain JSON
+/// form). `physical_memory` is the memory of the computer
 /// (`kadakas_sys::sysinfo::physical_memory`). Unknown memory never refuses.
 pub fn decide(file_bytes: u64, physical_memory: Option<u64>) -> OpenDecision {
-    if file_bytes <= ASK_ABOVE_BYTES {
+    decide_sized(file_bytes, file_bytes, physical_memory)
+}
+
+/// Like [`decide`], for a file that loads only `resident_bytes` of JSON text into memory. A
+/// container (DOC-20) keeps its pictures in the file (DOC-21): what it loads is the drawing and the
+/// history, uncompressed, which the manifest names (`kadakas_file::native::Inspect::resident_bytes`).
+/// The question comes when that is above [`ASK_ABOVE_BYTES`], and the estimate of the memory is
+/// made from it. The question still names the size of the file.
+pub fn decide_sized(
+    file_bytes: u64,
+    resident_bytes: u64,
+    physical_memory: Option<u64>,
+) -> OpenDecision {
+    if resident_bytes <= ASK_ABOVE_BYTES {
         return OpenDecision::Open;
     }
     let est = Estimate {
         file_bytes,
-        needed_bytes: needed_bytes(file_bytes),
+        needed_bytes: needed_bytes(resident_bytes),
         memory_bytes: physical_memory,
     };
     match physical_memory {
@@ -118,6 +132,28 @@ mod tests {
             decide(1_083_000_000, Some(8 * GB)),
             OpenDecision::Ask(_)
         ));
+    }
+
+    #[test]
+    fn a_container_asks_by_what_it_loads_and_not_by_its_size_on_disk() {
+        // A file of 900 MB that is mostly pictures loads 100 MB: no question.
+        assert_eq!(
+            decide_sized(900 * MB, 100 * MB, Some(2 * GB)),
+            OpenDecision::Open
+        );
+        // A small file that expands to 2 GB of drawing asks (and the estimate follows the 2 GB).
+        match decide_sized(100 * MB, 2 * GB, Some(16 * GB)) {
+            OpenDecision::Ask(e) => {
+                assert_eq!(e.file_bytes, 100 * MB);
+                assert_eq!(e.needed_bytes, needed_bytes(2 * GB));
+            }
+            d => panic!("{d:?}"),
+        }
+        assert!(matches!(
+            decide_sized(100 * MB, 2 * GB, Some(3 * GB)),
+            OpenDecision::Refuse(_)
+        ));
+        assert_eq!(decide(10 * MB, None), decide_sized(10 * MB, 10 * MB, None));
     }
 
     #[test]
