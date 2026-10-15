@@ -1135,6 +1135,13 @@ pub struct Document {
     /// to the file: collaboration does not share it. Older files have none.
     #[serde(default, skip_serializing_if = "history_unwritten")]
     pub history: Option<crate::history::HistoryData>,
+    /// The history of versions that waits in the file this document was opened from, not read yet
+    /// (`crate::history::HistoryLoader`, DOC-21). While it is set, `history` is `None`. A host
+    /// resolves it before it uses the history or writes the document in any other way than a
+    /// copy of the container (`kadakas-api` does this in `Session`). It is not saved and takes no
+    /// part in equality.
+    #[serde(skip)]
+    pub lazy_history: Option<std::sync::Arc<dyn crate::history::HistoryLoader>>,
     /// The generator of new IDs (see `crate::uid`). It is not saved.
     #[serde(skip)]
     ids: IdGen,
@@ -1323,6 +1330,7 @@ impl Default for Document {
             resources: Resources::default(),
             drawing: Default::default(),
             history: None,
+            lazy_history: None,
             ids: IdGen::default(),
             load_notes: Vec::new(),
             extra: Default::default(),

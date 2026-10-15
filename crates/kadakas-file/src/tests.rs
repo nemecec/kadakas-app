@@ -115,6 +115,12 @@ fn open(bytes: Vec<u8>) -> Opened {
     read_bytes(bytes, Limits::default(), ReadMode::Lazy).unwrap()
 }
 
+/// The document with the history that waited in the file read into it.
+fn resolved(mut o: Opened) -> Document {
+    resolve_history(&mut o.doc).unwrap();
+    o.doc
+}
+
 #[test]
 fn a_container_round_trips_and_keeps_the_pictures_in_the_file() {
     let doc = sample_doc();
@@ -195,9 +201,81 @@ fn history_round_trips_in_parts() {
             .unwrap()
             .contains("\"history\"")
     );
-    let back = open(bytes).doc;
+    let opened = open(bytes.clone());
+    // The history waits in the file: it is not in the document and was not read.
+    assert!(opened.doc.history.is_none() && opened.doc.lazy_history.is_some());
+    let back = resolved(opened);
     assert_eq!(back.history, doc.history);
     assert_eq!(back, doc);
+    // An eager read has it at once.
+    let eager = read_bytes(bytes, Limits::default(), ReadMode::Eager)
+        .unwrap()
+        .doc;
+    assert!(eager.lazy_history.is_none());
+    assert_eq!(eager, doc);
+}
+
+#[test]
+fn a_damaged_history_is_not_found_at_open_but_when_it_is_used() {
+    let mut doc = sample_doc();
+    doc.history = Some(sample_history());
+    let good = Container::from_bytes(container_bytes(&doc), Limits::default()).unwrap();
+    // The same container with a damaged history entry (a wrong hash in the manifest).
+    let mut w = Writer::new(Vec::new());
+    for e in good.entries() {
+        if e.name == HISTORY_VERSIONS {
+            w.add_bytes(&e.name, Compression::Stored, b"[1, 2").unwrap();
+        } else {
+            w.copy_raw(good.raw(&e.name).unwrap()).unwrap();
+        }
+    }
+    let bytes = w.finish().unwrap();
+    let opened = open(bytes.clone());
+    let e = opened
+        .doc
+        .lazy_history
+        .as_ref()
+        .unwrap()
+        .load()
+        .unwrap_err();
+    assert!(e.contains(HISTORY_VERSIONS), "{e}");
+    let mut doc2 = opened.doc;
+    let e = resolve_history(&mut doc2).unwrap_err();
+    assert!(e.to_string().contains(HISTORY_VERSIONS), "{e}");
+    assert!(
+        doc2.lazy_history.is_some() && doc2.history.is_none(),
+        "still waiting"
+    );
+    // An eager read says so at open.
+    let e = read_bytes(bytes, Limits::default(), ReadMode::Eager).unwrap_err();
+    assert!(e.to_string().contains(HISTORY_VERSIONS), "{e}");
+}
+
+#[test]
+fn a_history_that_waits_is_copied_without_being_read_and_the_plain_form_needs_it_resolved() {
+    let mut doc = sample_doc();
+    doc.history = Some(sample_history());
+    let first = open(container_bytes(&doc));
+    let source = first.source.clone().unwrap();
+    let opts = WriteOptions {
+        generator: "t".into(),
+        keep: vec![source.clone()],
+    };
+    let (bytes, report) = write_container(Vec::new(), &first.doc, &opts).unwrap();
+    assert_eq!(report.parts_copied, 4, "{report:?}");
+    // The history blob came along (the picture of the history is an entry of blobs/).
+    let c = Container::from_bytes(bytes.clone(), Limits::default()).unwrap();
+    assert_eq!(
+        c.entries()
+            .iter()
+            .filter(|e| e.name.starts_with(BLOB_DIR))
+            .count(),
+        5
+    );
+    assert_eq!(resolved(open(bytes)).history, doc.history);
+    // The plain form cannot hold what was not read.
+    let e = write_json(Vec::new(), &first.doc).unwrap_err();
+    assert!(e.to_string().contains("resolve the history"), "{e}");
 }
 
 #[test]
@@ -213,7 +291,7 @@ fn a_history_of_any_other_shape_is_kept_whole() {
         let bytes = container_bytes(&doc);
         let c = Container::from_bytes(bytes.clone(), Limits::default()).unwrap();
         assert!(c.contains(HISTORY_RAW), "{v}");
-        let back = open(bytes).doc;
+        let back = resolved(open(bytes));
         assert_eq!(back.history.as_ref().unwrap().to_value(), v);
     }
 }
@@ -277,14 +355,14 @@ fn json_form_has_pictures_inline_and_history_inside_and_loads_the_same_model() {
 fn container_to_json_to_container_gives_the_same_document_and_history() {
     let mut doc = sample_doc();
     doc.history = Some(sample_history());
-    let a = open(container_bytes(&doc));
+    let a = resolved(open(container_bytes(&doc)));
     let mut json_bytes = Vec::new();
-    write_json(&mut json_bytes, &a.doc).unwrap();
+    write_json(&mut json_bytes, &a).unwrap();
     let b = read_bytes(json_bytes, Limits::default(), ReadMode::Lazy).unwrap();
-    let c = open(container_bytes(&b.doc));
-    assert_eq!(c.doc, doc);
-    assert_eq!(c.doc.history, doc.history);
-    assert_eq!(a.doc, b.doc);
+    let c = resolved(open(container_bytes(&b.doc)));
+    assert_eq!(c, doc);
+    assert_eq!(c.history, doc.history);
+    assert_eq!(a, b.doc);
 }
 
 #[test]
@@ -298,10 +376,22 @@ fn raw_copy_keeps_the_compressed_bytes_of_unchanged_entries() {
         keep: vec![source.clone()],
     };
     let (bytes, report) = write_container(Vec::new(), &first.doc, &opts).unwrap();
-    // Every blob is in the old file: the pictures, the import base and the picture of the history.
-    assert_eq!(report.blobs_copied, 5, "{report:?}");
+    // Every blob is in the old file: the pictures and the import base are copied, and the picture
+    // of the history waits there with the history.
+    assert_eq!(report.blobs_copied, 4, "{report:?}");
+    assert_eq!(report.blobs_kept, 1, "{report:?}");
     assert_eq!(report.blobs_written, 0, "{report:?}");
     assert_eq!(report.parts_copied, 4);
+    assert_eq!(
+        resolved(open(b_bytes(
+            &Container::from_bytes(
+                write_container(Vec::new(), &first.doc, &opts).unwrap().0,
+                Limits::default()
+            )
+            .unwrap()
+        ))),
+        doc
+    );
     let a = source.container();
     let b = Container::from_bytes(bytes, Limits::default()).unwrap();
     for e in a.entries().iter().filter(|e| e.name != DOCUMENT) {
@@ -314,7 +404,7 @@ fn raw_copy_keeps_the_compressed_bytes_of_unchanged_entries() {
         );
     }
     // The second file reads like the first.
-    assert_eq!(open(b_bytes(&b)).doc, doc);
+    assert_eq!(resolved(open(b_bytes(&b))), doc);
 }
 
 fn b_bytes(c: &Container) -> Vec<u8> {
@@ -436,7 +526,8 @@ fn bad_history_entries_name_the_entry() {
                 w.copy_raw(good.raw(&e.name).unwrap()).unwrap();
             }
         }
-        read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Lazy)
+        // The history is read when it is used: an eager read finds the damage at once.
+        read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Eager)
             .unwrap_err()
             .to_string()
     };
@@ -701,9 +792,9 @@ mod disk {
         convert(&k, &j, Form::Json, u64::MAX).unwrap();
         convert(&j, &k2, Form::Container, u64::MAX).unwrap();
         assert!(std::fs::read(&k2).unwrap().starts_with(b"PK"));
-        let a = open_path(&k, u64::MAX, ReadMode::Lazy).unwrap().doc;
-        let b = open_path(&j, u64::MAX, ReadMode::Lazy).unwrap().doc;
-        let c = open_path(&k2, u64::MAX, ReadMode::Lazy).unwrap().doc;
+        let a = resolved(open_path(&k, u64::MAX, ReadMode::Lazy).unwrap());
+        let b = resolved(open_path(&j, u64::MAX, ReadMode::Lazy).unwrap());
+        let c = resolved(open_path(&k2, u64::MAX, ReadMode::Lazy).unwrap());
         assert_eq!(a, doc);
         assert_eq!(a, b);
         assert_eq!(b, c);

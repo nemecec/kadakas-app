@@ -11,6 +11,7 @@ use kadakas_core::model::{Document, LoadError};
 use crate::error::FileError;
 use crate::history;
 use crate::layout::{DOCUMENT, Form, sniff};
+use crate::lazy::FileHistory;
 use crate::source::FileSource;
 
 /// How the pictures of a container are read.
@@ -118,19 +119,31 @@ pub fn read_source(source: &Arc<FileSource>, mode: ReadMode) -> Result<Document,
                     })
                     .map_err(std::io::Error::from)
             },
-            |doc| match history::read(&container) {
-                Ok(None) => Ok(()),
-                Ok(Some(_)) if doc.history.is_some() => Err(LoadError::Invalid(
-                    "the drawing and the container both hold a history of versions".into(),
-                )),
-                Ok(Some(h)) => {
-                    doc.history = Some(h);
-                    Ok(())
+            |doc| {
+                if !history::present(&container) {
+                    return Ok(());
                 }
-                Err(e) => {
-                    let m = e.to_string();
-                    *history_error.borrow_mut() = Some(e);
-                    Err(LoadError::Invalid(m))
+                if doc.history.is_some() {
+                    return Err(LoadError::Invalid(
+                        "the drawing and the container both hold a history of versions".into(),
+                    ));
+                }
+                if mode == ReadMode::Lazy {
+                    // The history stays in the file until a program uses it (DOC-21).
+                    doc.lazy_history = FileHistory::of(source)
+                        .map(|h| h as Arc<dyn kadakas_core::history::HistoryLoader>);
+                    return Ok(());
+                }
+                match history::read(&container) {
+                    Ok(h) => {
+                        doc.history = h;
+                        Ok(())
+                    }
+                    Err(e) => {
+                        let m = e.to_string();
+                        *history_error.borrow_mut() = Some(e);
+                        Err(LoadError::Invalid(m))
+                    }
                 }
             },
         )

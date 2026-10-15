@@ -147,7 +147,11 @@ pub fn save_path(
 /// Opens `from` and saves it as `to` in the given form (`kadakas convert`). The document is
 /// checked on the way in, so a convert is also a check of the file.
 pub fn convert(from: &Path, to: &Path, form: Form, max_bytes: u64) -> Result<Saved, FileError> {
-    let opened = open_path(from, max_bytes, ReadMode::Lazy)?;
+    let mut opened = open_path(from, max_bytes, ReadMode::Lazy)?;
+    if form == Form::Json {
+        // The plain JSON form holds the versions inside.
+        crate::resolve_history(&mut opened.doc)?;
+    }
     let opts = WriteOptions {
         generator: crate::generator(),
         keep: opened.source.iter().cloned().collect(),

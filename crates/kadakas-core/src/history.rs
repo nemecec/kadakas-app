@@ -18,6 +18,22 @@ use serde_json::Value;
 /// noted at load (the history is kept, and read only). `kadakas-review` reads far less than this.
 pub const MAX_HISTORY_BYTES: usize = 512 * 1024 * 1024;
 
+/// Where the history of a document that was opened from a container waits (DOC-21). The history
+/// stays in the file until a program uses it (the Versions window, a compare, a restore, a save
+/// that changes the drawing). `kadakas-file` implements it over the open file.
+pub trait HistoryLoader: Send + Sync + std::fmt::Debug {
+    /// Reads the history from the file: the parts and their pictures. An error says why not (the
+    /// file changed, an entry is damaged).
+    fn load(&self) -> Result<HistoryData, String>;
+    /// The drawing as the file holds it, read again. The history in a file is written against this
+    /// drawing (its anchor), which the open document may have left by now.
+    fn anchor(&self) -> Result<crate::model::Document, String>;
+    /// The size of the history in the file, uncompressed, in bytes.
+    fn bytes(&self) -> usize;
+    /// For a program that knows the kind of the loader (the raw copy of the entries).
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
 type Items = Arc<Vec<Arc<Value>>>;
 type Blobs = Arc<Vec<(String, Arc<str>)>>;
 

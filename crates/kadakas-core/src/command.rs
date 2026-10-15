@@ -2009,6 +2009,21 @@ impl Editor {
         }
     }
 
+    /// Puts the history that waited in the file into the document (DOC-21), with the notes of
+    /// the check. It is no change of the document: there is no undo step and the revision stays,
+    /// because the history was always the document's, only not read yet.
+    pub fn adopt_history(
+        &mut self,
+        history: Option<crate::history::HistoryData>,
+        notes: Vec<String>,
+    ) {
+        self.doc.history = history;
+        self.doc.lazy_history = None;
+        for n in notes {
+            self.doc.add_load_note(n);
+        }
+    }
+
     /// Sets or clears the history of the document (the named versions, see `crate::history`) as
     /// one undo step. Returns false if nothing changed.
     pub fn set_history(&mut self, history: Option<crate::history::HistoryData>) -> bool {

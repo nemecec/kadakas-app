@@ -20,6 +20,7 @@ use serde_json::Value;
 use crate::error::FileError;
 use crate::history::{self, Plan};
 use crate::layout::{DOCUMENT, blob_name};
+use crate::lazy::FileHistory;
 use crate::source::FileSource;
 
 /// The level of deflate for `document.json` and the history parts. Level 1 is the fastest; the
@@ -58,9 +59,32 @@ pub struct Written {
 /// history inside as the field `history`. A picture in a file is read when it is written, one at
 /// a time.
 pub fn write_json<W: Write>(w: W, doc: &Document) -> Result<(), FileError> {
+    if doc.history.is_none() && doc.lazy_history.is_some() {
+        return Err(FileError::Io(
+            "the versions of this document were not read from the file yet, and the plain JSON form needs them (resolve the history first)"
+                .into(),
+        ));
+    }
     let mut bw = BufWriter::with_capacity(256 * 1024, w);
     doc.write_pretty(&mut bw)?;
     bw.flush()?;
+    Ok(())
+}
+
+/// Reads the history that waits in the file into the document (`Document::lazy_history`), as it is:
+/// nothing is checked or changed. For a program that writes the plain JSON form of a document that
+/// it did not edit (`kadakas convert`). A session resolves the history through `kadakas-api`,
+/// which also checks it against the drawing.
+pub fn resolve_history(doc: &mut Document) -> Result<(), FileError> {
+    if let Some(loader) = doc.lazy_history.take() {
+        match loader.load() {
+            Ok(h) => doc.history = Some(h),
+            Err(e) => {
+                doc.lazy_history = Some(loader);
+                return Err(FileError::Io(e));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -154,6 +178,29 @@ pub fn write_container<W: Write>(
     let mut report = Written::default();
     let history_plan = doc.history.as_ref().map(history::plan).transpose()?;
     let mut plans = plan_blobs(doc, history_plan.as_ref(), opts);
+    // A history that still waits in its file is copied from there, entry by entry.
+    let waiting: Option<&FileHistory> = match (&doc.history, &doc.lazy_history) {
+        (None, Some(loader)) => Some(loader.as_any().downcast_ref::<FileHistory>().ok_or_else(
+            || {
+                FileError::Io(
+                    "the versions of this document wait in a file that cannot be copied from"
+                        .into(),
+                )
+            },
+        )?),
+        _ => None,
+    };
+    if let Some(h) = waiting {
+        for hash in h.blob_hashes().map_err(FileError::Io)? {
+            plans
+                .blobs
+                .entry(hash)
+                .or_insert_with(|| Planned::Kept(h.source().clone()));
+        }
+        if !plans.sources.iter().any(|s| Arc::ptr_eq(s, h.source())) {
+            plans.sources.push(h.source().clone());
+        }
+    }
 
     let refs = SaveRefs {
         skip_history: true,
@@ -222,6 +269,12 @@ pub fn write_container<W: Write>(
         report.blobs_written += 1;
     }
 
+    if let Some(h) = waiting {
+        for name in h.entry_names() {
+            writer.copy_raw(h.source().parts().raw_part(&name)?)?;
+            report.parts_copied += 1;
+        }
+    }
     if let Some(plan) = &history_plan {
         for (name, bytes) in history::part_names(plan) {
             let old = opts.keep.iter().find_map(|s| {

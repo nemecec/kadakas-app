@@ -21,6 +21,7 @@
 mod error;
 mod history;
 mod layout;
+mod lazy;
 mod read;
 mod source;
 mod write;
@@ -34,9 +35,12 @@ pub use layout::{
     BLOB_DIR, DOCUMENT, Form, HISTORY_BLOBS, HISTORY_NEWEST, HISTORY_RAW, HISTORY_TOP,
     HISTORY_VERSIONS, blob_name, sniff,
 };
+pub use lazy::FileHistory;
 pub use read::{Opened, ReadMode, read_bytes, read_source};
 pub use source::FileSource;
-pub use write::{DOCUMENT_LEVEL, WriteOptions, Written, write_container, write_json};
+pub use write::{
+    DOCUMENT_LEVEL, WriteOptions, Written, resolve_history, write_container, write_json,
+};
 
 /// The text for the `generator` field of the manifest.
 pub fn generator() -> String {

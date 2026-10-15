@@ -102,6 +102,11 @@ pub(crate) fn part_names(plan: &Plan) -> Vec<(&'static str, &[u8])> {
     }
 }
 
+/// True if the container holds a history.
+pub(crate) fn present(c: &Container) -> bool {
+    c.contains(HISTORY_RAW) || c.contains(HISTORY_TOP)
+}
+
 fn json_array(c: &Container, name: &str) -> Result<Vec<Arc<Value>>, FileError> {
     let bytes = c.read(name)?;
     let v: Value = serde_json::from_slice(&bytes).map_err(|e| ContainerError::Entry {
