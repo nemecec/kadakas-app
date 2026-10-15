@@ -101,7 +101,7 @@ fn the_list_and_get_describe_versions() {
         "the newest has no delta"
     );
     assert_eq!(l["current_is_newest"], true);
-    assert_eq!(l["limits"]["max_versions"], 100);
+    assert_eq!(l["limits"]["max_versions"], 1000);
     assert!(l["bytes"].as_u64().unwrap() > 100);
     rect(&mut s, 40);
     assert_eq!(
@@ -824,4 +824,20 @@ fn describe_lists_the_methods_and_examples() {
             .unwrap()
             .contains("without the person")
     );
+}
+
+#[test]
+fn the_defaults_have_no_practical_count_limit_and_a_note_comes_once_past_500() {
+    let d = SessionLimits::default();
+    assert_eq!(d.max_versions, VERSIONS_MAX);
+    assert_eq!(d.max_version_bytes, VERSION_BYTES_MAX);
+    let mut s = Session::default();
+    for i in 1..=VERSIONS_WARN + 2 {
+        let r = s
+            .handle("version.create", json!({"name": format!("v{i}")}))
+            .unwrap();
+        let crossed = i == VERSIONS_WARN + 1;
+        assert_eq!(r.get("many_versions").is_some(), crossed, "{i}");
+        assert_eq!(r.get("notes").is_some(), crossed, "{i}");
+    }
 }

@@ -2933,8 +2933,8 @@ mod tests {
     fn the_limits_of_the_versions_follow_the_preferences() {
         let mut app = KadakasApp::blank();
         app.sync_limits();
-        assert_eq!(app.session.limits().max_versions, 100);
-        assert_eq!(app.session.limits().max_version_bytes, 64 * 1024 * 1024);
+        assert_eq!(app.session.limits().max_versions, 1000);
+        assert_eq!(app.session.limits().max_version_bytes, 256 * 1024 * 1024);
         app.prefs.max_versions = 3;
         app.prefs.max_version_mib = 5;
         app.sync_limits();
@@ -2949,7 +2949,7 @@ mod tests {
         let back: Prefs = serde_json::from_str(&text).unwrap();
         assert_eq!((back.max_versions, back.max_version_mib), (3, 5));
         let old: Prefs = serde_json::from_str("{}").unwrap();
-        assert_eq!((old.max_versions, old.max_version_mib), (100, 64));
+        assert_eq!((old.max_versions, old.max_version_mib), (1000, 256));
     }
 
     #[test]

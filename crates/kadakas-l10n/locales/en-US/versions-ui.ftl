@@ -41,6 +41,7 @@ versions-ui-partial = The comparison stopped early. The counts are partial.
 versions-ui-click-to-select = Click an object to select it.
 versions-ui-gone = This object is not in the drawing.
 versions-ui-saved = Saved version "{ $name }".
+versions-ui-many = This document has more than { $count } versions. They stay; you can delete old ones in File > Versions.
 versions-ui-restored = Restored version "{ $name }". Undo goes back.
 versions-ui-restored-saved = Restored version "{ $name }". The drawing before is saved as version "{ $saved }". Undo goes back.
 versions-ui-deleted = Deleted version "{ $name }".

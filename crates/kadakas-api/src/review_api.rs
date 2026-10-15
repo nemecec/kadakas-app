@@ -42,6 +42,9 @@ use crate::{RpcError, Session, SessionLimits};
 /// The most versions the thresholds of a session can be set to (a file within them is never read
 /// only: it is what a reader reads).
 pub const VERSIONS_MAX: usize = HARD_MAX_VERSIONS;
+/// A document that passes this many versions gets a one-time note in the `version.create` reply.
+/// The note never blocks a save.
+pub const VERSIONS_WARN: usize = 500;
 /// The most bytes of history the thresholds of a session can be set to (see `VERSIONS_MAX`).
 pub const VERSION_BYTES_MAX: u64 = WRITE_MAX_BYTES as u64;
 
@@ -50,7 +53,7 @@ pub const GET_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 pub const VERSION_CREATE: (&str, &str) = (
     "version.create",
-    "Save the document as a named version. One undo step (undo removes the version again). params: {name, note?, author?, now_ms?}. The version keeps the author (default: the collaboration name, else the origin: user, agent or script), the time, the origin and the editor revision. If the version would go over a limit (max_versions or max_version_bytes of the session), nothing is saved and nothing is deleted: the call fails with a limit error whose data has `limit` {kind: versions|bytes, max, needed}, `versions` [{id, name, bytes, time_ms, auto}] and `options`. Pass this to the person and ask what to do: which versions to delete (version.delete {ids}), or raising the limit in Preferences. Never delete versions by yourself to make room. Fails with a conflict error (reason history_read_only) if the history of the file could not be read completely. Returns {version, count, bytes}.",
+    "Save the document as a named version. One undo step (undo removes the version again). params: {name, note?, author?, now_ms?}. The version keeps the author (default: the collaboration name, else the origin: user, agent or script), the time, the origin and the editor revision. If the version would go over a limit (max_versions or max_version_bytes of the session), nothing is saved and nothing is deleted: the call fails with a limit error whose data has `limit` {kind: versions|bytes, max, needed}, `versions` [{id, name, bytes, time_ms, auto}] and `options`. Pass this to the person and ask what to do: which versions to delete (version.delete {ids}), or raising the limit in Preferences. Never delete versions by yourself to make room. Fails with a conflict error (reason history_read_only) if the history of the file could not be read completely. Returns {version, count, bytes, notes?, many_versions?}. The defaults are 1000 versions and 256 MiB, so a limit is rarely reached. When this save makes the count pass 500, the reply has `notes` (a text) and `many_versions` (500): tell the person once. The save is not blocked.",
 );
 pub const VERSION_LIST: (&str, &str) = (
     "version.list",
@@ -588,11 +591,18 @@ fn create(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         .map_err(limit_error)?;
     let version = meta_json(&h, added.id);
     store(s, &h, "version_create", json!({"created": version}));
-    Ok(json!({
+    let mut out = json!({
         "version": version,
         "count": h.len(),
         "bytes": h.bytes(),
-    }))
+    });
+    if h.len() == VERSIONS_WARN + 1 {
+        out["notes"] = json!([format!(
+            "This document has more than {VERSIONS_WARN} versions. They stay; the person can delete old ones with version.delete (File > Versions)."
+        )]);
+        out["many_versions"] = json!(VERSIONS_WARN);
+    }
+    Ok(out)
 }
 
 fn list(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {

@@ -41,6 +41,7 @@ versions-ui-partial = Võrdlus katkes enne lõppu. Arvud on osalised.
 versions-ui-click-to-select = Klõpsa objektil, et see valida.
 versions-ui-gone = Seda objekti joonisel ei ole.
 versions-ui-saved = Salvestati versioon "{ $name }".
+versions-ui-many = Selles dokumendis on üle { $count } versiooni. Need jäävad alles; vanu saab kustutada menüüst Fail > Versioonid.
 versions-ui-restored = Taastati versioon "{ $name }". Tagasivõtmine toob töö tagasi.
 versions-ui-restored-saved = Taastati versioon "{ $name }". Eelnev joonis on salvestatud versioonina "{ $saved }". Tagasivõtmine toob töö tagasi.
 versions-ui-deleted = Kustutati versioon "{ $name }".

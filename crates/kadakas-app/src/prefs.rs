@@ -35,11 +35,35 @@ pub struct Prefs {
     pub language: crate::locale::LanguageChoice,
     /// Units and formats. What is not chosen follows the language.
     pub units: kadakas_units::Settings,
-    /// The most named versions in a file. A save over it is stopped and the person is asked which
-    /// versions to delete (REV-01). No version is dropped by itself.
+    /// The most named versions in a file (default: the most a reader reads, 1000). A save over it
+    /// is stopped and the person is asked which versions to delete (REV-01). No version is
+    /// dropped by itself.
     pub max_versions: u32,
-    /// The most size of the versions in a file, in MiB. The same.
+    /// The most size of the versions in a file, in MiB (default 256, the highest safe value). The
+    /// same.
     pub max_version_mib: u32,
+}
+
+/// The default of `Prefs::max_versions`: the most a reader reads (no practical limit).
+pub const DEFAULT_MAX_VERSIONS: u32 = kadakas_api::VERSIONS_MAX as u32;
+/// The default of `Prefs::max_version_mib`: the highest safe write limit.
+pub const DEFAULT_MAX_VERSION_MIB: u32 = (kadakas_api::VERSION_BYTES_MAX / (1024 * 1024)) as u32;
+/// The defaults of the versions in the earlier program. A stored value that equals one was never
+/// chosen by the person, so it moves to the new default when the prefs load.
+const OLD_MAX_VERSIONS: u32 = 100;
+const OLD_MAX_VERSION_MIB: u32 = 64;
+
+impl Prefs {
+    /// Moves the stored values that equal the old defaults to the new defaults.
+    fn migrate(mut self) -> Prefs {
+        if self.max_versions == OLD_MAX_VERSIONS {
+            self.max_versions = DEFAULT_MAX_VERSIONS;
+        }
+        if self.max_version_mib == OLD_MAX_VERSION_MIB {
+            self.max_version_mib = DEFAULT_MAX_VERSION_MIB;
+        }
+        self
+    }
 }
 
 impl Default for Prefs {
@@ -51,8 +75,8 @@ impl Default for Prefs {
             icon_size: IconSize::default(),
             language: crate::locale::LanguageChoice::SYSTEM,
             units: kadakas_units::Settings::default(),
-            max_versions: 100,
-            max_version_mib: 64,
+            max_versions: DEFAULT_MAX_VERSIONS,
+            max_version_mib: DEFAULT_MAX_VERSION_MIB,
         }
     }
 }
@@ -71,7 +95,7 @@ pub fn load_from(dir: &std::path::Path) -> (Prefs, Option<String>) {
     let path = dir.join("prefs.json");
     match std::fs::read_to_string(&path) {
         Ok(text) => match serde_json::from_str::<Prefs>(&text) {
-            Ok(p) if p.snap.problem().is_none() => (p, None),
+            Ok(p) if p.snap.problem().is_none() => (p.migrate(), None),
             Ok(_) => (
                 Prefs::default(),
                 Some(tr!(
@@ -132,6 +156,28 @@ mod tests {
         let d = std::env::temp_dir().join(format!("kadakas-prefs-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
+    }
+
+    #[test]
+    fn the_old_version_defaults_move_to_the_new_ones_and_chosen_values_stay() {
+        let d = temp("old-version-defaults");
+        write_file(
+            &d,
+            "prefs.json",
+            r#"{"max_versions": 100, "max_version_mib": 64}"#,
+        )
+        .unwrap();
+        let (p, _) = load_from(&d);
+        assert_eq!((p.max_versions, p.max_version_mib), (1000, 256));
+        write_file(
+            &d,
+            "prefs.json",
+            r#"{"max_versions": 7, "max_version_mib": 9}"#,
+        )
+        .unwrap();
+        let (p, _) = load_from(&d);
+        assert_eq!((p.max_versions, p.max_version_mib), (7, 9));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

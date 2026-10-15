@@ -38,7 +38,7 @@ mod plugin_util;
 mod present_api;
 mod query_api;
 mod review_api;
-pub use review_api::{VERSION_BYTES_MAX, VERSIONS_MAX};
+pub use review_api::{VERSION_BYTES_MAX, VERSIONS_MAX, VERSIONS_WARN};
 mod rules_api;
 mod sheets_api;
 mod solid_api;

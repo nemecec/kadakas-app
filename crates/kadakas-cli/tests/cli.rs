@@ -217,8 +217,8 @@ fn mcp_gives_the_reason_and_the_versions_of_a_refused_version() {
             json!({"method": "execute", "params": {"command": {"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [100, 50]}}}}),
         ),
     ];
-    // The default limit is 100 versions.
-    for i in 0..101u64 {
+    // The default limit is 1000 versions (the read cap).
+    for i in 0..1001u64 {
         reqs.push(call(
             10 + i,
             "review",
@@ -226,8 +226,8 @@ fn mcp_gives_the_reason_and_the_versions_of_a_refused_version() {
         ));
     }
     let l = mcp_session(&["mcp"], &reqs, &dir);
-    assert_eq!(l[101]["result"]["isError"], false, "the 100th version");
-    let last = &l[102]["result"];
+    assert_eq!(l[1001]["result"]["isError"], false, "the 1000th version");
+    let last = &l[1002]["result"];
     assert_eq!(last["isError"], true);
     let text = last["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("\"reason\":\"version_limit\""), "{text}");

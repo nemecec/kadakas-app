@@ -393,7 +393,7 @@ mod tests {
                 {"name": "no id"},
                 5
             ],
-            "limits": {"max_versions": 100, "max_bytes": 1},
+            "limits": {"max_versions": 1000, "max_bytes": 1},
             "current_is_newest": false
         })
     }
@@ -476,7 +476,7 @@ mod tests {
         assert_eq!(l.rows[0].note.as_deref(), Some("first"));
         assert!(l.rows[1].auto && l.rows[1].note.is_none());
         assert_eq!(l.current_is_newest, Some(false));
-        assert_eq!(l.max_versions, 100);
+        assert_eq!(l.max_versions, 1000);
         assert_eq!(l.find(2).unwrap().origin, "agent");
         assert_eq!(l.name_of(1), "Concept");
         assert_eq!(l.name_of(9), "9");

@@ -211,6 +211,10 @@ impl VersionsUi {
                     "versions-ui-saved",
                     name = v["version"]["name"].as_str().unwrap_or("")
                 );
+                if let Some(n) = v["many_versions"].as_u64() {
+                    status.push(' ');
+                    status.push_str(&tr!("versions-ui-many", count = n));
+                }
                 self.form.clear();
                 self.refresh(session);
                 self.form.name = self.default_name();
