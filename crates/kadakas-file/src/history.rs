@@ -154,6 +154,16 @@ pub(crate) fn read(c: &Container) -> Result<Option<HistoryData>, FileError> {
                 name: HISTORY_BLOBS.to_string(),
                 reason: "it lists something that is not a hash".into(),
             })?;
+        let name = blob_name(hash);
+        if c.entry(&name)
+            .is_some_and(|e| e.size > kadakas_core::blob::MAX_BLOB_TEXT as u64)
+        {
+            return Err(ContainerError::Entry {
+                name,
+                reason: "it is bigger than a picture of the history may be".into(),
+            }
+            .into());
+        }
         let bytes = c.read(&blob_name(hash))?;
         let text = String::from_utf8(bytes).map_err(|_| ContainerError::Entry {
             name: blob_name(hash),

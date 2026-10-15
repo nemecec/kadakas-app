@@ -33,6 +33,11 @@ use sha2::{Digest, Sha256};
 pub const REF_KEY: &str = "$blob";
 /// The smallest text that becomes a blob (the same as in collaboration, `MIN_BLOB_BYTES`).
 pub const MIN_BLOB_TEXT: usize = 4 * 1024;
+/// The largest text of a blob that a file may hold (the same as in collaboration,
+/// `MAX_BLOB_BYTES`). A picture is at most 8 MiB, which is 11.2 MiB of base64 text, and a part of
+/// an import base is at most 8 MiB of JSON. A bigger entry is refused when the reference is read,
+/// so a hostile file cannot make a read allocate more.
+pub const MAX_BLOB_TEXT: usize = 32 * 1024 * 1024;
 /// How many characters of the start of a blob a lazy handle keeps (to look at the type of a
 /// picture without reading it).
 pub const HEAD_CHARS: usize = 8;
@@ -85,7 +90,14 @@ impl LazyBlob {
                 "the file refers to the picture {hash}, which is not in the file"
             ))
         })?;
-        let len = usize::try_from(len).map_err(|_| BlobError("the picture is too big".into()))?;
+        let len = usize::try_from(len)
+            .ok()
+            .filter(|n| *n <= MAX_BLOB_TEXT)
+            .ok_or_else(|| {
+                BlobError(format!(
+                    "the picture {hash} has {len} bytes, more than the {MAX_BLOB_TEXT} that a picture may have"
+                ))
+            })?;
         let head = source.blob_head(hash)?;
         Ok(LazyBlob {
             hash: hash.to_string(),
@@ -647,6 +659,22 @@ mod tests {
         let t = BlobText::from("small");
         let out = with_blob_refs(SaveRefs::default(), || serde_json::to_string(&t)).unwrap();
         assert_eq!(out, "\"small\"");
+    }
+
+    #[test]
+    fn a_picture_over_the_bound_is_refused_when_the_reference_is_read() {
+        let src = Arc::new(MapSource::default());
+        let big = "A".repeat(MAX_BLOB_TEXT + 1);
+        let h = src.put(&big);
+        let json = format!("{{\"$blob\": \"{h}\"}}");
+        let e = with_load_source(src.clone(), false, || serde_json::from_str::<BlobText>(&json))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("more than"), "{e}");
+        let ok = "A".repeat(MAX_BLOB_TEXT);
+        let h = src.put(&ok);
+        let json = format!("{{\"$blob\": \"{h}\"}}");
+        assert!(with_load_source(src, false, || serde_json::from_str::<BlobText>(&json)).is_ok());
     }
 
     #[test]
