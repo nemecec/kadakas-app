@@ -825,16 +825,40 @@ class Api:
         return self._call("landscape_area_style.delete", params or None)
 
     def hardscape_add(self, **params: Any) -> Any:
-        """Add a hardscape in one undo step. A slab: {boundary: [vertices]}. A path: {center: [vertices] (curves are allowed), width? (mm, default 1200), join? (miter|round|bevel), closed? (a ring without ends), align? (center|left|right: which edge of the path the line is), offset? (mm, moves the path to the left of the line; negative to the right)}. Also: style? (ID or name), slope? ({type: none} | {type: edges, elevations: [..]} (a slab: one per corner; a path: start and end) | {type: cross, percent, angle_deg?} | {type: angle, degrees, angle_deg?} | {type: rise_run, rise, run, angle_deg?}; angle_deg is the direction of the fall, a path falls to its right), elevation? (top surface above the layer; above the ground when draped), drape? (follow the site model on the layer), site_modifier? (act as a pad on the site model; the formation level is the top minus the build-up), material? and thickness? (when there is no style), layer?, class?. Returns {id}.
+        """Add a hardscape in one undo step. A slab: {boundary: [vertices]}. A path: {center: [vertices] (curves are allowed), width? (mm, default 1200), join? (miter|round|bevel), closed? (a ring without ends), align? (center|left|right: which edge of the path the line is), offset? (mm, moves the path to the left of the line; negative to the right)}. Also: style? (ID or name), slope? ({type: none} | {type: edges, elevations: [..]} (a slab: one per corner; a path: start and end) | {type: cross, percent, angle_deg?} | {type: angle, degrees, angle_deg?} | {type: rise_run, rise, run, angle_deg?}; angle_deg is the direction of the fall, a path falls to its right), elevation? (top surface above the layer; above the ground when draped), drape? (follow the site model on the layer), site_modifier? (act as a pad on the site model; the formation level is the top minus the build-up), material? and thickness? (when there is no style), holes? ([[vertices]], open parts inside the boundary such as planting islands), exclude? ([object IDs] whose outline becomes a hole), origin? ([x, y]: where the joint pattern starts), angle? (degrees: the angle of the joint pattern, replaces the angle of the style), align_to_edge? (n: start the pattern at vertex n of the outline and run it along the edge to vertex n+1, sets origin and angle), layer?, class?. Returns {id}.
 
         JSON-RPC method ``hardscape.add``."""
         return self._call("hardscape.add", params or None)
 
     def hardscape_set(self, **params: Any) -> Any:
-        """Change hardscapes. params: {id | ids, ...settings as in hardscape.add (center, width, join, style (null removes it), slope, elevation, drape, site_modifier, material, thickness, mode)}. Giving a center line makes a slab into a path; mode slab keeps the outline and makes a path into a slab.
+        """Change hardscapes. params: {id | ids, ...settings as in hardscape.add (center, width, join, style (null removes it), slope, elevation, drape, site_modifier, material, thickness, mode, holes (replaces the old holes; [] or null clears them), exclude, origin (null clears it), angle (null clears it), align_to_edge)}. Giving a center line makes a slab into a path; mode slab keeps the outline and makes a path into a slab.
 
         JSON-RPC method ``hardscape.set``."""
         return self._call("hardscape.set", params or None)
+
+    def hardscape_from_shapes(self, **params: Any) -> Any:
+        """Create hardscapes from closed shapes (closed polylines, rectangles, circles; for example the outlines of a parking lot from a DXF file) in one undo step. A shape inside another one becomes a hole of it (a shape inside a hole becomes a hardscape again). params: {ids? (default: the selection), style? (ID or name), holes_from_inner? (default true; false makes every shape a hardscape of its own), delete_source? (default true), dry_run?}. The layer, class, look and data of a shape go to its hardscape. Returns {created: [{source, id, holes}], holes: [{source, host}], skipped: [{id, reason}], dry_run}. The new hardscapes become the selection.
+
+        JSON-RPC method ``hardscape.from_shapes``."""
+        return self._call("hardscape.from_shapes", params or None)
+
+    def pattern_layout(self, **params: Any) -> Any:
+        """Lay units (pavers, tiles, boards) in a bond over a closed shape and return the units and the gaps. params: {id | region: {outline: [vertices], holes?: [[vertices]]}, pattern?: {bond? (running_bond | stack | herringbone | basket_weave), unit_length, unit_width, gap? (the joint width, default 0)}, origin? ([x, y]: where the pattern starts), angle? (degrees, counterclockwise), align_to_edge? (n: start at vertex n of the outline and run along the edge to vertex n+1; sets origin and angle), include? (["units", "gaps"], default both), offset? and limit? (page of the lists, default 0 and 1000, at most 20000), tolerance? (curve flattening, mm, default 1)}. A closed polyline, rectangle, circle, landscape area or hardscape works as id. A hardscape with a style uses the joint pattern of the style with its own origin and angle unless you give pattern, origin, angle or align_to_edge. The pattern starts at the middle of the box of the region without an origin. The unit is the pattern unit with the gap taken off, cut exactly to the outline minus the holes (arcs are cut into lines within the tolerance). Returns {summary: {bond, origin, angle_deg, whole_units, cut_units, slivers, area_laid_m2, gap_area_m2, gap_length_m, order_units, ...}, units_total, units: [{whole, area_m2, share (part of a full unit), outline: [[x, y]], holes: [[[x, y]]]}], gaps_total, gaps: [[[x, y], [x, y]]] (gap center lines), next_offset (null at the end)}. A cut unit that the edge splits in two pieces counts as two units. A layout of more than 1,000,000 units is an error that says how many units it would make.
+
+        JSON-RPC method ``pattern.layout``."""
+        return self._call("pattern.layout", params or None)
+
+    def pattern_to_objects(self, **params: Any) -> Any:
+        """Turn the units (and, with include, the gap center lines) of a layout into ordinary objects in one undo step: a closed polyline for every unit and a line for every gap segment, in one group. params: as pattern.layout (id | region, pattern, origin, angle, align_to_edge, tolerance), plus include? (["units"] by default; add "gaps"), layer? (default: the layer of the object, else the active layer), class?, group? (default true), name? (name of the group). A hole inside a cut unit becomes a closed polyline of its own. At most 100,000 objects in one call. Returns {group, units, gaps, objects}.
+
+        JSON-RPC method ``pattern.to_objects``."""
+        return self._call("pattern.to_objects", params or None)
+
+    def report_pattern(self, **params: Any) -> Any:
+        """Counts and quantities of unit patterns. params: {ids? (default: every hardscape with a joint pattern), pattern?, origin?, angle?, align_to_edge? (as pattern.layout; with several ids they apply to each), sliver_share? (cut units under this part of a full unit are slivers, default 0.25), waste_percent? (no default: without it the order has no waste added), tolerance? (curve flattening in mm, default 1; the DXF export uses its own tolerance, default 1, and gives the same counts when the two are equal), format?: csv}. Returns {rows: [{id, name, whole_units, cut_units, slivers, area_laid_m2, region_area_m2, gap_area_m2, gap_length_m, order_units, order_units_with_waste, ...} or {id, error}], totals: {whole_units, cut_units, slivers, area_laid_m2, gap_length_m, order_units, order_units_with_waste}}. The order is the whole units plus the cut units, every cut unit counted as one unit; waste_percent adds that percent on top, rounded up. Slivers are part of the cut units. The counts match the polylines on the layers <layer>-UNITS-WHOLE and <layer>-UNITS-CUT of export.file with patterns: "units".
+
+        JSON-RPC method ``report.pattern``."""
+        return self._call("report.pattern", params or None)
 
     def landscape_area_add(self, **params: Any) -> Any:
         """Add a landscape area in one undo step. params: {boundary: [vertices], name?, style? (ID or name), holes? ([[vertices]], parts that stay empty and lie inside the boundary), exclude? ([object IDs] whose outline becomes a hole: rect, circle, closed polyline, hardscape, landscape area), show_plants?, drape?, layer?, class?}. Returns {id}.
@@ -849,7 +873,7 @@ class Api:
         return self._call("landscape_area.set", params or None)
 
     def report_hardscape(self, **params: Any) -> Any:
-        """Hardscape quantities. params: {format?: csv}. Returns {rows: [{id, name, style, style_name, material, mode, plan_area_m2, surface_area_m2, perimeter_m, thickness_mm, volume_m3, draped, partially_draped (part of it lies outside the site model and follows the nearest edge height), layers: [{kind, name, material, thickness_mm, area_m2, volume_m3}]}], materials: [{kind, material, area_m2, volume_m3}], totals}. The surface area follows a slope or the site model; the volume of a layer is its thickness times the surface area.
+        """Hardscape quantities. params: {format?: csv, pattern? (false leaves out the unit pattern block), sliver_share?, waste_percent? (for the pattern block, see report.pattern)}. Returns {rows: [{id, name, style, style_name, material, mode, plan_area_m2, surface_area_m2, perimeter_m (outline and holes), holes, holes_area_m2, thickness_mm, volume_m3, pattern? (the unit counts of report.pattern, when the style has a joint pattern: {whole_units, cut_units, slivers, area_laid_m2, gap_length_m, order_units, ...} or {error}), draped, partially_draped (part of it lies outside the site model and follows the nearest edge height), layers: [{kind, name, material, thickness_mm, area_m2, volume_m3}]}], materials: [{kind, material, area_m2, volume_m3}], totals}. The surface area follows a slope or the site model; the volume of a layer is its thickness times the surface area.
 
         JSON-RPC method ``report.hardscape``."""
         return self._call("report.hardscape", params or None)
@@ -2408,6 +2432,10 @@ METHOD_NAMES: tuple[str, ...] = (
     "landscape_area_style.delete",
     "hardscape.add",
     "hardscape.set",
+    "hardscape.from_shapes",
+    "pattern.layout",
+    "pattern.to_objects",
+    "report.pattern",
     "landscape_area.add",
     "landscape_area.set",
     "report.hardscape",

@@ -128,7 +128,7 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "hardscape_landscape",
-        summary: "Hardscape objects and styles, landscape areas and their styles.",
+        summary: "Hardscape objects and styles (holes, pattern origin and angle, hardscape.from_shapes for closed outlines), landscape areas and their styles. The unit pattern of a hardscape: pattern.layout, pattern.to_objects and report.pattern.",
         prefixes: &[
             "hardscape",
             "hardscape_style",
@@ -182,7 +182,7 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "resources_symbols",
-        summary: "Resources (the Resource Manager and library files), symbols, groups, and hatch patterns.",
+        summary: "Resources (the Resource Manager and library files), symbols, groups, hatch patterns, and the unit layout engine (pattern.layout lays pavers or tiles in a bond over a shape, pattern.to_objects turns the units into objects).",
         prefixes: &["resource", "symbol", "group", "pattern", "library"],
         read_only: false,
         open_world: false,

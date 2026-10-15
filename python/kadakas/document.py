@@ -287,8 +287,15 @@ class Reports:
     def areas(self) -> JsonDict:
         return self._doc.api.report_areas()
 
-    def hardscape(self) -> JsonDict:
-        return self._doc.api.report_hardscape()
+    def hardscape(self, **params: Any) -> JsonDict:
+        """Hardscape quantities. Each row has a ``pattern`` block (unit counts) when the style has
+        a joint pattern; ``pattern=False`` leaves it out."""
+        return self._doc.api.report_hardscape(**params)
+
+    def pattern(self, **params: Any) -> JsonDict:
+        """Unit pattern counts: whole, cut and sliver units, area laid, gap length and the order
+        quantity. ``waste_percent`` has no default. See ``report.pattern`` in ``describe``."""
+        return self._doc.api.report_pattern(**params)
 
 
 class Worksheets:
@@ -856,8 +863,27 @@ class Document:
             key = "png_base64" if "png_base64" in image else "pdf_base64"
             Path(path).write_bytes(base64.b64decode(image[key]))
 
+    def hardscape_from_shapes(self, ids: list[Id] | None = None, **params: Any) -> JsonDict:
+        """Turn closed outlines into hardscapes in one undo step. A shape inside another one becomes
+        a hole of it. ``style``, ``holes_from_inner``, ``delete_source`` and ``dry_run`` are the
+        options. Returns ``{created, holes, skipped, dry_run}``."""
+        if ids is not None:
+            params["ids"] = [str(i) for i in ids]
+        return self.api.hardscape_from_shapes(**params)
+
+    def pattern_layout(self, **params: Any) -> JsonDict:
+        """Lay units in a bond over a closed shape (``id``) or a ``region``: the units, the gaps
+        and the counts. See ``pattern.layout`` in ``describe``."""
+        return self.api.pattern_layout(**params)
+
+    def pattern_to_objects(self, **params: Any) -> JsonDict:
+        """Turn the units (and gaps) of a layout into ordinary objects in one group."""
+        return self.api.pattern_to_objects(**params)
+
     def export_file(self, path: str | Path, **options: Any) -> JsonDict:
-        """Export to DXF, GeoJSON (or IFC when the path ends in ``.ifc``)."""
+        """Export to DXF, GeoJSON (or IFC when the path ends in ``.ifc``). DXF options include
+        ``patterns`` (``"none"`` | ``"gaps"`` | ``"units"``): the unit pattern of hardscapes, with
+        the units as closed polylines on ``<layer>-UNITS-WHOLE`` and ``<layer>-UNITS-CUT``."""
         return self.api.export_file(path=str(path), **({"options": options} if options else {}))
 
     def render_png(self, path: str | Path | None = None, **params: Any) -> bytes:
