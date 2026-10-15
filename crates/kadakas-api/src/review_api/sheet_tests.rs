@@ -234,3 +234,32 @@ fn restoring_after_a_wipe_gives_back_every_kind_of_setting() {
         "objects with records and tables"
     );
 }
+
+#[test]
+fn a_sheet_that_was_deleted_can_be_compared_and_read_from_its_version() {
+    let mut s = Session::with_sequential_ids();
+    let layer = ok(&mut s, "sheet.create", json!({"name": "S", "paper": "a3"}))["layer"].clone();
+    let id = version(&mut s, "with sheet");
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "delete_layer", "id": layer}}),
+    );
+    // The document of the version carries its own layers and sheets.
+    let doc = ok(&mut s, "version.get", json!({"id": id, "document": true}))["document"].clone();
+    assert!(doc["layers"].to_string().contains("\"sheet\""), "{doc}");
+    assert!(doc["drawing"]["sheets"].to_string().contains("a3"), "{doc}");
+    // So does the document that the compare window and the history slider draw.
+    let shown = s.compare_doc(Side::Version(id)).unwrap();
+    let crate::compare_api::ShownDoc::Built(old) = shown else {
+        panic!("a version is built");
+    };
+    assert_eq!(old.drawing.sheets.len(), 1);
+    assert_eq!(old.sheet_layers().count(), 1);
+    let r = ok(
+        &mut s,
+        "sheet.render",
+        json!({"sheet": "S", "compare": {"from": id, "to": "current"}}),
+    );
+    assert!(r["svg"].as_str().unwrap().contains("<svg"));
+}
