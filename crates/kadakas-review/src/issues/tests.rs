@@ -176,8 +176,8 @@ fn doc_with(layers: &[(&str, bool)]) -> (Document, Vec<LayerId>) {
 fn visibility_is_captured_and_put_back() {
     let (doc, ids) = doc_with(&[("A", true), ("B", false), ("C", true)]);
     let (layers, classes) = capture_visibility(&doc);
-    assert_eq!(layers[&ids[0]], true);
-    assert_eq!(layers[&ids[1]], false);
+    assert!(layers[&ids[0]]);
+    assert!(!layers[&ids[1]]);
     assert_eq!(classes.len(), doc.classes.len());
     let vp = Viewpoint {
         layers: layers.clone(),

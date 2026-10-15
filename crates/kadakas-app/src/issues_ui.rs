@@ -372,7 +372,7 @@ impl IssuesUi {
         for p in &pins {
             let clip =
                 view_proj * glam::Vec4::new(p.at[0] as f32, p.at[1] as f32, p.at[2] as f32, 1.0);
-            if !(clip.w > 1e-6) {
+            if clip.w.partial_cmp(&1e-6) != Some(std::cmp::Ordering::Greater) {
                 continue;
             }
             let ndc = clip.truncate() / clip.w;
@@ -824,10 +824,10 @@ impl IssuesUi {
         self.new_issue_window(ctx, session);
         self.confirm_window(ctx, session, status);
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(dialog) = &mut self.bcf {
-            if !dialog.show(ctx, session, status) {
-                self.bcf = None;
-            }
+        if let Some(dialog) = &mut self.bcf
+            && !dialog.show(ctx, session, status)
+        {
+            self.bcf = None;
         }
     }
 
@@ -1009,10 +1009,9 @@ impl IssuesUi {
     /// The question about a deletion that waits, and why the person is asked.
     #[cfg(test)]
     pub fn pending_delete(&self) -> Option<(IssueId, Option<String>)> {
-        match &self.confirm {
-            Some(Confirm::Delete(id, _, why)) => Some((*id, why.clone())),
-            None => None,
-        }
+        self.confirm
+            .as_ref()
+            .map(|Confirm::Delete(id, _, why)| (*id, why.clone()))
     }
 
     #[cfg(test)]

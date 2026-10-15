@@ -253,7 +253,7 @@ fn issue_id(m: &Map<String, Value>, key: &str) -> Result<IssueId, RpcError> {
     serde_json::from_value(v.clone()).map_err(|e| bad(format!("{key}: {e}")))
 }
 
-fn find<'a>(doc: &'a Document, id: IssueId) -> Result<&'a Issue, RpcError> {
+fn find(doc: &Document, id: IssueId) -> Result<&Issue, RpcError> {
     doc.issues
         .get(id)
         .ok_or_else(|| RpcError::not_found(format!("issue {id} does not exist")))

@@ -336,7 +336,7 @@ fn opening_an_issue_selects_its_objects_and_restores_the_layers() {
         9,
         "Overview",
     );
-    assert_eq!(vp.layers[&layer], true);
+    assert!(vp.layers[&layer]);
     assert_eq!(vp.name, "Overview");
     let issue = Draft {
         title: "T".into(),

@@ -337,3 +337,34 @@ def test_a_path_outside_the_allowed_folders_is_refused(cad):
     assert error["data"]["kind"] == "policy"
     error = cad.error("issue.import_bcf", {"path": "/etc/hosts"})
     assert error["data"]["kind"] == "policy"
+
+
+CASES = Path(__file__).with_name("bcf_cases")
+
+
+def test_the_official_buildingsmart_test_files_import(cad, tmp_path):
+    """Real files from the BCF-XML repository of buildingSMART (BCF 2.1): the reader takes them."""
+    minimal = cad.result("issue.import_bcf", {"path": str(CASES / "MinimumInformation.bcf"), "now_ms": 5})
+    assert minimal["imported"] == 1 and minimal["topics_skipped"] == []
+    ortho = cad.result("issue.import_bcf", {"path": str(CASES / "OrthogonalCamera.bcf"), "now_ms": 5})
+    assert ortho["imported"] == 1 and ortho["pictures"] >= 1
+    full = cad.result("issue.import_bcf", {"path": str(CASES / "MaximumInformation.bcf"), "now_ms": 5})
+    assert full["imported"] == 2 and full["topics_skipped"] == [] and full["version"] == "2.1"
+    # What the reader does not take is counted, not hidden.
+    text = " ".join(full["warnings"])
+    for word in ("BIM snippets", "coloring", "clipping planes", "related topics"):
+        assert word in text, text
+    issues = {i["title"]: i for i in cad.result("issue.list", {"origin": "agent"})["issues"]}
+    big = issues["Maximum Content"]
+    assert big["status"] == "open" and big["priority"] == "High" and big["comments"] == 4
+    assert big["viewpoints"] == 3 and big["assignee"] == "linhard@iabi.eu"
+    assert big["labels"] == ["Structural", "IT Development"] and big["due"] == "2016-10-02"
+    # The same file again is the same content: no conflict.
+    again = cad.result("issue.import_bcf", {"path": str(CASES / "MaximumInformation.bcf")})
+    assert again["imported"] == 0 and again["unchanged"] == 2
+    # What came in goes out as a file that the schema accepts.
+    ours = tmp_path / "out.bcfzip"
+    cad.result("issue.export_bcf", {"path": str(ours), "version": "3.0"})
+    checked = validate_bcf(ours)
+    bad = {n: e for n, e in checked["files"].items() if e}
+    assert bad == {}, bad

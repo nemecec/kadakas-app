@@ -378,7 +378,7 @@ fn a_snapshot_needs_its_picture_and_must_be_small() {
     let mut bad = pic.clone();
     bad.sha256 = "0".repeat(64);
     assert!(ed.execute(&cmd(bad)).is_err());
-    assert!(ed.doc().issues.is_empty() && ed.doc().resources.len() == 0);
+    assert!(ed.doc().issues.is_empty() && ed.doc().resources.is_empty());
     // The good one works in one step.
     ed.execute(&cmd(pic.clone())).unwrap();
     assert_eq!(ed.doc().resources.len(), 1);
@@ -541,7 +541,7 @@ fn the_change_set_filter_knows_issues() {
     let only = cs.only(&["issues"]).unwrap();
     assert_eq!(only.added.issues.len(), 1);
     assert!(cs.only(&["objects"]).is_none());
-    assert!(cs.added.len() >= 1 && !cs.added.is_empty());
+    assert!(!cs.added.is_empty());
 }
 
 #[test]

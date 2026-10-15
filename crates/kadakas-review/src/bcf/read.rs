@@ -966,7 +966,7 @@ pub fn same_content(existing: &Issue, comments: &[&Comment], imported: &Imported
                 && (*s1 || near(*d1, *d2))
                 && (*s1 || t1.iter().zip(t2).all(|(a, b)| near(*a, *b)))
                 // The yaw does not count at the poles.
-                && (near(*y1, *y2) || p1.abs() > 1.5707)
+                && (near(*y1, *y2) || p1.abs() > std::f64::consts::FRAC_PI_2 - 1e-4)
         }
         // A view that BCF cannot hold (a viewpoint without a camera) comes back as a plan view.
         (None, Some(_)) => true,
