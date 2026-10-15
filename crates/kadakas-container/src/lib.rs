@@ -30,7 +30,9 @@ mod source;
 mod writer;
 
 pub use error::ContainerError;
-pub use limits::{Limits, MANIFEST_NAME, MAX_ENTRIES, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES, check_name};
+pub use limits::{
+    Limits, MANIFEST_NAME, MAX_ENTRIES, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES, check_name,
+};
 pub use manifest::{FORMAT, Manifest, ManifestEntry, VERSION, hex, parse_hash, sha256_hex};
 #[cfg(not(target_arch = "wasm32"))]
 pub use medium::FileMedium;

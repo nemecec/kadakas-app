@@ -156,8 +156,20 @@ mod tests {
             assert!(check_name(good, 255).is_ok(), "{good}");
         }
         for bad in [
-            "", "/abs", "../x", "a/../b", "a/./b", "a//b", "a/", "a\\b", "C:/x", "a\u{0}b", "a\nb",
-            "a\u{202E}b", "a\u{200B}b", "\u{FEFF}a",
+            "",
+            "/abs",
+            "../x",
+            "a/../b",
+            "a/./b",
+            "a//b",
+            "a/",
+            "a\\b",
+            "C:/x",
+            "a\u{0}b",
+            "a\nb",
+            "a\u{202E}b",
+            "a\u{200B}b",
+            "\u{FEFF}a",
         ] {
             assert!(check_name(bad, 255).is_err(), "{bad:?}");
         }

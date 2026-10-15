@@ -394,7 +394,10 @@ impl Container {
                     "its hash in the manifest is not 64 lowercase hex digits",
                 )
             })?;
-            if listed.insert(&e.name, (e.size, sha, e.role.clone())).is_some() {
+            if listed
+                .insert(&e.name, (e.size, sha, e.role.clone()))
+                .is_some()
+            {
                 return Err(ContainerError::entry(
                     &e.name,
                     "the manifest lists it twice",
@@ -531,8 +534,7 @@ impl Container {
             if comp == ZIP64_AT || size == ZIP64_AT {
                 let extra = read_exact(&*self.medium, e.offset + want, extra_len)
                     .map_err(|err| as_entry(err, &e.name))?;
-                let big =
-                    zip64_values(&extra, [true, true, false], &e.name)?;
+                let big = zip64_values(&extra, [true, true, false], &e.name)?;
                 size = big[0].unwrap_or(size);
                 comp = big[1].unwrap_or(comp);
             }

@@ -857,7 +857,12 @@ mod tests {
         assert_eq!(t.hash(), h);
         // An eager read of a blob that cannot be read is an error at once.
         src.0.lock().unwrap().clear();
-        assert!(with_load_source(src, LoadKind::Eager, || serde_json::from_str::<BlobText>(&json)).is_err());
+        assert!(
+            with_load_source(src, LoadKind::Eager, || serde_json::from_str::<BlobText>(
+                &json
+            ))
+            .is_err()
+        );
     }
 
     #[test]
@@ -902,8 +907,10 @@ mod tests {
         assert!(e.contains("more than"), "{e}");
         let at = Arc::new(Sized(MAX_BLOB_TEXT as u64, Default::default()));
         assert!(
-            with_load_source(at, LoadKind::Lazy, || serde_json::from_str::<BlobText>(&json))
-                .is_ok()
+            with_load_source(at, LoadKind::Lazy, || serde_json::from_str::<BlobText>(
+                &json
+            ))
+            .is_ok()
         );
     }
 
@@ -911,10 +918,16 @@ mod tests {
     fn the_reference_of_an_import_base_has_the_same_bound() {
         let json = format!("{{\"$blob\": \"{}\"}}", text_hash("x"));
         let over = Arc::new(Sized(MAX_BLOB_TEXT as u64 + 1, Default::default()));
-        let e = with_load_source(over.clone(), LoadKind::Lazy, || read_ref_text(&text_hash("x")))
-            .unwrap_err();
+        let e = with_load_source(over.clone(), LoadKind::Lazy, || {
+            read_ref_text(&text_hash("x"))
+        })
+        .unwrap_err();
         assert!(e.contains("more than"), "{e}");
-        assert_eq!(over.1.load(std::sync::atomic::Ordering::SeqCst), 0, "nothing was read");
+        assert_eq!(
+            over.1.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "nothing was read"
+        );
         let _ = json;
     }
 
@@ -942,11 +955,17 @@ mod tests {
         let h = src.put(&text);
         let json = format!("[{0},{0},{0}]", format!("{{\"$blob\": \"{h}\"}}"));
         let list: Vec<BlobText> =
-            with_load_source(src.clone(), LoadKind::Eager, || serde_json::from_str(&json))
-                .unwrap();
+            with_load_source(src.clone(), LoadKind::Eager, || serde_json::from_str(&json)).unwrap();
         let first = list[0].mem_text().unwrap();
-        assert!(list.iter().all(|t| Arc::ptr_eq(first, t.mem_text().unwrap())));
-        assert_eq!(*src.1.lock().unwrap(), 1, "the file was read once for 3 references");
+        assert!(
+            list.iter()
+                .all(|t| Arc::ptr_eq(first, t.mem_text().unwrap()))
+        );
+        assert_eq!(
+            *src.1.lock().unwrap(),
+            1,
+            "the file was read once for 3 references"
+        );
     }
 
     #[test]
@@ -974,12 +993,18 @@ mod tests {
         let text = "iVBORw0KGgo".repeat(1000);
         let item = format!("\"{text}\"");
         let json = format!("[{item},{item},{item},\"short\",\"short\"]");
-        let list: Vec<BlobText> =
-            with_intern_scope(|| serde_json::from_str(&json)).unwrap();
+        let list: Vec<BlobText> = with_intern_scope(|| serde_json::from_str(&json)).unwrap();
         let first = list[0].mem_text().unwrap();
-        assert!(list[..3].iter().all(|t| Arc::ptr_eq(first, t.mem_text().unwrap())));
+        assert!(
+            list[..3]
+                .iter()
+                .all(|t| Arc::ptr_eq(first, t.mem_text().unwrap()))
+        );
         // A text under the size of a blob is not merged.
-        assert!(!Arc::ptr_eq(list[3].mem_text().unwrap(), list[4].mem_text().unwrap()));
+        assert!(!Arc::ptr_eq(
+            list[3].mem_text().unwrap(),
+            list[4].mem_text().unwrap()
+        ));
         // The hash is known from the merge.
         assert_eq!(list[0].hash(), text_hash(&text));
         // Outside of a scope nothing is merged.
@@ -999,10 +1024,16 @@ mod tests {
         let json = format!("[{item},{item},{item}]");
         let list: Vec<PngData> = with_intern_scope(|| serde_json::from_str(&json)).unwrap();
         let first = list[0].mem_bytes().unwrap();
-        assert!(list.iter().all(|p| Arc::ptr_eq(first, p.mem_bytes().unwrap())));
+        assert!(
+            list.iter()
+                .all(|p| Arc::ptr_eq(first, p.mem_bytes().unwrap()))
+        );
         assert_eq!(**first, bytes);
         let plain: Vec<PngData> = serde_json::from_str(&json).unwrap();
-        assert!(!Arc::ptr_eq(plain[0].mem_bytes().unwrap(), plain[1].mem_bytes().unwrap()));
+        assert!(!Arc::ptr_eq(
+            plain[0].mem_bytes().unwrap(),
+            plain[1].mem_bytes().unwrap()
+        ));
     }
 
     #[test]

@@ -461,7 +461,10 @@ pub(crate) fn pictures_readable(s: &Session) -> Result<(), RpcError> {
             return RpcError::conflict(format!("{e}"));
         }
         missing_error(&kadakas_file::Missing {
-            file: s.file_source.as_ref().map_or_else(String::new, |f| f.label()),
+            file: s
+                .file_source
+                .as_ref()
+                .map_or_else(String::new, |f| f.label()),
             pictures,
             history: false,
             other: Vec::new(),

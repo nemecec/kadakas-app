@@ -1502,7 +1502,10 @@ impl Document {
     /// to save without them) by a small gray picture, and returns how many pictures were replaced.
     /// An underlay gets a raster of one pixel; an image resource gets a consistent one-pixel image
     /// (hash, size and thumbnail). It is no edit: there is no undo step.
-    pub fn replace_missing_pictures(&mut self, missing: &std::collections::HashSet<String>) -> usize {
+    pub fn replace_missing_pictures(
+        &mut self,
+        missing: &std::collections::HashSet<String>,
+    ) -> usize {
         use crate::underlay::{PngData, base64_encode, placeholder_png};
         let mut count = 0;
         let png = placeholder_png();
@@ -1540,9 +1543,8 @@ impl Document {
             .and_then(Value::as_u64)
             .ok_or_else(|| LoadError::Parse("missing format_version".into()))?;
         check_version(version)?;
-        let doc: Document =
-            crate::blob::with_intern_scope(|| serde_json::from_value(value))
-                .map_err(|e| LoadError::Parse(e.to_string()))?;
+        let doc: Document = crate::blob::with_intern_scope(|| serde_json::from_value(value))
+            .map_err(|e| LoadError::Parse(e.to_string()))?;
         doc.finish_load()
     }
 

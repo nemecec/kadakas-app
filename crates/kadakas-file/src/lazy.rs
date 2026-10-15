@@ -77,9 +77,8 @@ impl FileHistory {
                 .parts()
                 .read_part(HISTORY_ANCHOR_BLOBS)
                 .map_err(|e| e.to_string())?;
-            let more: Vec<String> = serde_json::from_slice(&bytes).map_err(|e| {
-                format!("the entry \"{HISTORY_ANCHOR_BLOBS}\" cannot be read: {e}")
-            })?;
+            let more: Vec<String> = serde_json::from_slice(&bytes)
+                .map_err(|e| format!("the entry \"{HISTORY_ANCHOR_BLOBS}\" cannot be read: {e}"))?;
             for h in more {
                 if !out.contains(&h) {
                     out.push(h);

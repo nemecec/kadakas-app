@@ -494,7 +494,14 @@ impl<W: Write> Writer<W> {
             let out = &mut self.out;
             put32(out, CENTRAL_SIG)?;
             put16(out, if extra_len > 0 { 45 } else { 20 })?;
-            put16(out, if extra_len > 0 || c.zip64_local { 45 } else { 20 })?;
+            put16(
+                out,
+                if extra_len > 0 || c.zip64_local {
+                    45
+                } else {
+                    20
+                },
+            )?;
             put16(out, c.flags | FLAG_UTF8)?;
             put16(out, c.method.code())?;
             put16(out, DOS_TIME)?;
@@ -541,7 +548,11 @@ impl<W: Write> Writer<W> {
         put32(out, END_SIG)?;
         put16(out, 0)?;
         put16(out, 0)?;
-        let c16 = if count >= 0xFFFF { 0xFFFF } else { count as u16 };
+        let c16 = if count >= 0xFFFF {
+            0xFFFF
+        } else {
+            count as u16
+        };
         put16(out, c16)?;
         put16(out, c16)?;
         put32(out, dir_size.min(ZIP64_AT) as u32)?;

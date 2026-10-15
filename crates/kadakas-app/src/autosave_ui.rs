@@ -602,13 +602,11 @@ mod tests {
         ui.recovery = Some(Recovery::start(dir.clone()).unwrap());
         ui.force = true;
         let ctx = egui::Context::default();
-        ui.tick(&ctx, 0, None, || {
-            SaveCopy {
-                doc: Document::default(),
-                note: Some("the versions could not be written".to_string()),
-                sources: Vec::new(),
-                anchor: false,
-            }
+        ui.tick(&ctx, 0, None, || SaveCopy {
+            doc: Document::default(),
+            note: Some("the versions could not be written".to_string()),
+            sources: Vec::new(),
+            anchor: false,
         });
         for _ in 0..2000 {
             if ui.recovery.as_ref().unwrap().completed() >= 1 {

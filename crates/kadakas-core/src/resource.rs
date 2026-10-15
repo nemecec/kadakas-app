@@ -136,7 +136,9 @@ fn read_import_base(mut v: serde_json::Value) -> Result<std::sync::Arc<serde_jso
             r.get(crate::blob::REF_KEY)
                 .and_then(serde_json::Value::as_str)
                 .filter(|_| r.as_object().is_some_and(|m| m.len() == 1))
-                .ok_or("the summaries of an import base are a list or a {\"$blob\": hash} reference")?
+                .ok_or(
+                    "the summaries of an import base are a list or a {\"$blob\": hash} reference",
+                )?
                 .to_string(),
         ),
         _ => None,

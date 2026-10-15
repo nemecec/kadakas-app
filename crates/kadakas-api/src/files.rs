@@ -65,7 +65,8 @@ impl SaveSpec {
 /// into the file (see [`write_document`]).
 /// It returns the notes for the person (a source that could not be opened again, parts that were
 /// left out).
-pub type WriteFn<'a> = dyn FnMut(&Path, &Document, &SaveSpec) -> Result<Vec<String>, FileError> + 'a;
+pub type WriteFn<'a> =
+    dyn FnMut(&Path, &Document, &SaveSpec) -> Result<Vec<String>, FileError> + 'a;
 
 /// What `file_call` did.
 #[derive(Debug, PartialEq)]
@@ -254,15 +255,26 @@ fn file_call_inner(
                 s.accept_missing(&m);
                 let mut what = Vec::new();
                 if !m.pictures.is_empty() {
-                    what.push(format!("{} picture(s) became placeholders", m.pictures.len()));
+                    what.push(format!(
+                        "{} picture(s) became placeholders",
+                        m.pictures.len()
+                    ));
                 }
                 if m.history {
                     what.push("the versions were left out".to_string());
                 }
                 notes.push(format!(
                     "Saved without what could not be found in {}: {}",
-                    if m.file.is_empty() { "the old file" } else { &m.file },
-                    if what.is_empty() { "other parts were left out".into() } else { what.join(", ") }
+                    if m.file.is_empty() {
+                        "the old file"
+                    } else {
+                        &m.file
+                    },
+                    if what.is_empty() {
+                        "other parts were left out".into()
+                    } else {
+                        what.join(", ")
+                    }
                 ));
                 notes
             }
@@ -909,7 +921,11 @@ mod tests {
         add_circle(&mut s);
         let f = dir.join("a.kad");
         let r = call(&mut s, "file.save", &f);
-        assert_eq!(r["result"], json!({"ok": true, "format": "container"}), "{r}");
+        assert_eq!(
+            r["result"],
+            json!({"ok": true, "format": "container"}),
+            "{r}"
+        );
         let done = FileDone::Saved(f.clone(), Form::Container, vec!["a note".into()]);
         let text = file_reply(&s, "file.save", json!(1), Ok(done));
         let v: Value = serde_json::from_str(&text).unwrap();

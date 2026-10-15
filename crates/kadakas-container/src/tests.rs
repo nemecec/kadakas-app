@@ -1272,13 +1272,20 @@ fn a_stored_entry_has_no_data_descriptor_and_a_streamed_one_has_32_bit_sizes() {
         .map(|(i, _)| i)
         .nth(1)
         .unwrap();
-    assert_eq!(u16::from_le_bytes([bytes[local + 6], bytes[local + 7]]) & 8, 8);
+    assert_eq!(
+        u16::from_le_bytes([bytes[local + 6], bytes[local + 7]]) & 8,
+        8
+    );
     assert_eq!(&bytes[local + 28..local + 30], &[0, 0], "no extra field");
     let data = local + 30 + "document.json".len();
     let desc = data + e.compressed as usize;
     assert_eq!(&bytes[desc..desc + 4], &0x0807_4b50u32.to_le_bytes());
     assert_eq!(&bytes[desc + 12..desc + 16], &[2, 0, 0, 0], "32 bit size");
-    assert_eq!(&bytes[desc + 16..desc + 20], &0x0403_4b50u32.to_le_bytes(), "the manifest is next");
+    assert_eq!(
+        &bytes[desc + 16..desc + 20],
+        &0x0403_4b50u32.to_le_bytes(),
+        "the manifest is next"
+    );
 }
 
 #[test]
@@ -1323,13 +1330,21 @@ fn other_zip_tools_read_what_the_writer_writes() {
         for f in [&small, &many] {
             let out = Command::new("unzip").arg("-tq").arg(f).output().unwrap();
             let text = String::from_utf8_lossy(&out.stdout).to_string();
-            assert!(out.status.success(), "unzip -t {f:?}: {text} {:?}", out.stderr);
+            assert!(
+                out.status.success(),
+                "unzip -t {f:?}: {text} {:?}",
+                out.stderr
+            );
             assert!(text.contains("No errors detected"), "{text}");
         }
         ran.push("unzip -t");
     }
     if have("bsdtar") {
-        let out = Command::new("bsdtar").arg("-tf").arg(&many).output().unwrap();
+        let out = Command::new("bsdtar")
+            .arg("-tf")
+            .arg(&many)
+            .output()
+            .unwrap();
         assert!(out.status.success(), "{:?}", out.stderr);
         assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 70_002);
         ran.push("bsdtar -tf");

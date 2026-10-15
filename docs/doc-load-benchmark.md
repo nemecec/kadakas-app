@@ -155,7 +155,12 @@ makes. In the plain form the pictures are read again and written again each time
   form keeps its 1.7: the largest footprint was 1.79 GB for 1 083 MB, 1.65 times.) The text of a
   container holds more objects and fewer pictures per byte than the plain file, so a byte costs
   more. The question of the app comes when this text is above 500 MB (decimal), and the refusal when
-  the estimate is above the physical memory.
+  the estimate is above the physical memory. **The margin is small**: the largest footprint (1.60 GB)
+  is 1.9 times the text and so is the estimate, so there is no room above the largest run. A document
+  with more small objects per byte can need more; the margin that is left is the physical memory that
+  the operating system and the other programs do not use. The estimate also counts the summaries of
+  the import bases (they are parsed at the open; the manifest says which blobs they are, `role`) and,
+  for a file with versions, the text of `document.json` once more (the anchor, next point).
 - **The size that counts for an agent (`SessionLimits::document_file_bytes`)** is checked against the
   file size and against the sum of the entry sizes of the manifest, and each entry against it too.
   A 36 MB container of the benchmark holds 106 MB of entries, so a limit of 64 MiB refuses it with a
@@ -166,19 +171,41 @@ makes. In the plain form the pictures are read again and written again each time
   inflate about 1 000 times. 200 is far above any real drawing and well below a bomb. The size of
   the entries (the memory) is bounded by the total limit anyway, and a read stops at the declared
   size.
-- **The entries of a container: at most 65 534** (the 16 bit field of ZIP; ZIP64 is not supported),
-  **each at most 4 GiB less 2 bytes**. The directory and the manifest of the most entries are 11.7 MB
-  and 13.2 MB, so their bounds are 32 MiB (`Limits::max_directory_bytes`, `max_manifest_bytes`). A
-  container of 65 533 entries is written in 0.33 s and opened in 0.18 s (`cargo test --release -p
-  kadakas-container perf_ -- --ignored --nocapture`).
+- **The entries of a container: at most 250 000** (above 65 534 entries, or an offset or a size above
+  4 GiB less 2 bytes, the file uses ZIP64), **each at most 16 GiB and all together at most 64 GiB** as
+  the default limits of the reader. The directory and the manifest of 65 533 entries are 11.7 MB and
+  13.2 MB, so of 250 000 entries about 45 MB and 50 MB; the bounds are 64 MiB
+  (`Limits::max_directory_bytes`) and 128 MiB (`max_manifest_bytes`). A container of 65 533 entries
+  is written in 0.33 s and opened in 0.18 s (`cargo test --release -p kadakas-container perf_ --
+  --ignored --nocapture`). A container of 70 000 entries (the ZIP64 end records) is read by Info-ZIP
+  `unzip -t`, `bsdtar -tf` and Python `zipfile` (a test of the crate); offsets and sizes above 4 GiB
+  are tested with a medium of zeros (no file of that size).
 - **Many pictures.** A container with 20 000 pictures of 12 KB (247 MB) is written in 1.9 s and opened
   in 2.8 s (the best of the runs on a busy machine; `cargo test --release -p kadakas-file perf_ --
   --ignored --nocapture`). The open reads the first 8 characters of each picture, which is two small
   reads of the file for each. The first version cloned the directory for each of them (a test with
   4 100 pictures took 35 s in a debug build): `Container` now shares its entries, so a copy costs a
   pointer, and the same test takes 1 s.
-- **A picture (a blob) is at most 32 MiB of text** (`MAX_BLOB_TEXT`, the bound of collaboration). A
-  picture is at most 8 MiB, which is 11.2 MiB of base64 text.
+- **A picture (a blob) is at most 128 MiB of text** (`MAX_BLOB_TEXT`). An image resource is at most
+  8 MiB, which is 11.2 MiB of base64 text. An underlay has at most 4096 x 4096 pixels (`MAX_SIDE_PX`):
+  the worst case is noise that does not compress, measured with `cargo test -p kadakas-core
+  the_worst_case -- --ignored --nocapture`: a PNG of 67 118 148 bytes (64.0 MiB), 89 490 864 bytes
+  (85.3 MiB) as base64 text. A save refuses a text over the bound before it writes anything, so a
+  file that Kadakas writes always opens. (A 16 bit picture would be twice as big; the programs of
+  Kadakas make 8 bit pictures.)
+- **Using the versions of a big drawing (measured, 300 MB test document with one version,
+  `doc_stream_bench genv|history|savehist`, release build).** The file is 110.2 MB; the lazy open has a
+  heap of 495.9 MB and takes 2.6 s. The first use of the versions (`version.list`) adds 2 890 MB of heap
+  and 27 s when the drawing was not edited (the drawing in memory is the anchor), and 3 372 MB and
+  28 s after an edit: **the second reading of `document.json` for the anchor costs 482 MB, the same
+  as the open**, and the estimate counts it (the text of `document.json` once more for a file with
+  versions). The rest, 6 times the heap of the open, is the state of the versions that
+  `kadakas-review` builds; it is not part of the estimate of the open (it is the cost of the Versions
+  window, and the question of the app is about the open). A **save of an edited drawing whose
+  versions were not used does not read the drawing again**: it copies the entries and writes the
+  drawing of the file as their anchor (`savehist`: 148.4 MB written in 5.5 s, heap peak 483 MB, the
+  same as the open). A failed try to read the versions is remembered with the revision and the state
+  of the file, so it is not repeated for each call.
 - **Not done: binary arrays** for the points of site models and for meshes. The measurement says
   where the bytes are: the site models of the benchmark are a quarter of the text and deflate 7 times
   in `document.json`, so binary arrays would save little on disk. They would save parse time

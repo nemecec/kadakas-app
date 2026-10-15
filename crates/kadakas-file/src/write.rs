@@ -30,9 +30,7 @@ use serde_json::Value;
 
 use crate::error::{FileError, Missing};
 use crate::history::{self, Plan};
-use crate::layout::{
-    BLOB_DIR, DOCUMENT, HISTORY_ANCHOR, HISTORY_ANCHOR_BLOBS, blob_name,
-};
+use crate::layout::{BLOB_DIR, DOCUMENT, HISTORY_ANCHOR, HISTORY_ANCHOR_BLOBS, blob_name};
 use crate::lazy::FileHistory;
 use crate::source::FileSource;
 
@@ -228,10 +226,7 @@ impl Planned {
 /// found by a scan of the stream (the document is not parsed, so this costs no memory). A text
 /// that looks like a reference but is not one gives a hash that no entry has; the caller keeps
 /// only the hashes that the file has.
-pub(crate) fn scan_refs(
-    source: &FileSource,
-    entry: &str,
-) -> Result<BTreeSet<String>, FileError> {
+pub(crate) fn scan_refs(source: &FileSource, entry: &str) -> Result<BTreeSet<String>, FileError> {
     let container = source.container_with_entry(entry)?;
     let mut reader = container.reader(entry)?;
     let mut out = BTreeSet::new();
@@ -326,7 +321,10 @@ fn waiting_history(doc: &Document) -> Result<Option<Arc<FileHistory>>, FileError
 
 /// The entries of the files that the document was opened from that this code does not write itself
 /// (a newer program may add entries): they are copied, not dropped.
-fn unknown_entries(sources: &[Arc<FileSource>], known: &dyn Fn(&str) -> bool) -> Vec<(Arc<FileSource>, String)> {
+fn unknown_entries(
+    sources: &[Arc<FileSource>],
+    known: &dyn Fn(&str) -> bool,
+) -> Vec<(Arc<FileSource>, String)> {
     let mut out: Vec<(Arc<FileSource>, String)> = Vec::new();
     for s in sources {
         for e in s.container().entries() {

@@ -217,10 +217,12 @@ pub(crate) fn read(source: &FileSource) -> Result<Option<HistoryData>, FileError
             }
             .into());
         }
-        budget = budget.checked_sub(entry.size).ok_or_else(|| ContainerError::Entry {
-            name: name.clone(),
-            reason: "the pictures of the history are bigger together than the file".into(),
-        })?;
+        budget = budget
+            .checked_sub(entry.size)
+            .ok_or_else(|| ContainerError::Entry {
+                name: name.clone(),
+                reason: "the pictures of the history are bigger together than the file".into(),
+            })?;
         let sha = sha_of(hash).ok_or_else(|| ContainerError::Entry {
             name: name.clone(),
             reason: "not a hash".into(),

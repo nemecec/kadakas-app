@@ -2271,7 +2271,15 @@ impl Editor {
         let mut found = Vec::new();
         cmd.pictures(&mut found);
         for p in found {
-            if p.byte_len() > bytes {
+            // A picture that stays in the file has a size up to 2 bytes too big (the padding is
+            // not known without reading it): give it that much room, so a file of exactly the
+            // limit is never refused for it.
+            let len = if p.data.is_lazy() {
+                p.byte_len().saturating_sub(2)
+            } else {
+                p.byte_len()
+            };
+            if len > bytes {
                 return Err(CommandError::Invalid(format!(
                     "the picture file is larger than {bytes} bytes"
                 )));

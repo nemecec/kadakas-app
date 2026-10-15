@@ -410,7 +410,9 @@ impl ImageResource {
     /// The file size in bytes, computed from the text without decoding it.
     pub fn byte_len(&self) -> usize {
         // A file that stays in the document's file is not read: the padding of the last quad is
-        // not known, so the size can be up to two bytes too big.
+        // not known, so the size can be up to two bytes too big. The only comparison with
+        // `MAX_PICTURE_BYTES` that reads this size is `Editor::check_pictures`, which allows for it;
+        // the other callers show the size.
         let pad = self
             .data
             .mem_text()

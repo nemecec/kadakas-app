@@ -254,7 +254,9 @@ fn write_json_copy(path: &Path, doc: &Document, report: &mut CopyReport) -> io::
     if let Err(e) = kadakas_file::resolve_history(&mut d) {
         d.lazy_history = None;
         d.history = None;
-        report.notes.push(format!("the versions are not in this copy: {e}"));
+        report
+            .notes
+            .push(format!("the versions are not in this copy: {e}"));
         report.missing.get_or_insert_with(Default::default).history = true;
     }
     write_durable_with(path, Access::Private, ".tmp", |w| {
@@ -1065,7 +1067,10 @@ mod tests {
         .unwrap();
         // The manual save comes after the copy was staged and before its rename.
         manual_save(&target, || std::fs::write(&target, "newer save").unwrap());
-        assert_eq!(commit_if_fresh(staged, &target, seen, || ()).unwrap(), Over::Stale);
+        assert_eq!(
+            commit_if_fresh(staged, &target, seen, || ()).unwrap(),
+            Over::Stale
+        );
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "newer save");
         assert!(!dir.join("late.kad.autosave.tmp").exists());
         let staged = fsio::stage_durable(&target, Access::KeepExisting, ".autosave.tmp", |w| {
@@ -1158,7 +1163,14 @@ mod tests {
     #[test]
     fn the_recovery_copy_and_the_autosave_over_my_file_survive_a_changed_file() {
         // B1: touch, rename, replace and delete the file under the open document, then autosave.
-        for change in ["touch", "rename", "replace", "replace-same", "delete", "delete-bak"] {
+        for change in [
+            "touch",
+            "rename",
+            "replace",
+            "replace-same",
+            "delete",
+            "delete-bak",
+        ] {
             let dir = temp(&format!("changed-{change}"));
             let target = dir.join("mine.kad");
             let original = doc_with_picture();
@@ -1182,7 +1194,10 @@ mod tests {
                 "replace-same" => {
                     let mut e = Editor::new(original.clone());
                     e.execute(&Command::AddObject {
-                        shape: Shape::Circle { center: DVec2::ZERO, radius: 9.0 },
+                        shape: Shape::Circle {
+                            center: DVec2::ZERO,
+                            radius: 9.0,
+                        },
                         layer: None,
                         class: None,
                         attrs: Attributes::default(),
@@ -1201,8 +1216,8 @@ mod tests {
             let job = session_job(&mut session, &target);
             let rec = dir.join("rec");
             // The recovery copy is always written, whatever happened to the file.
-            let out = write_version(&rec, "s1", 1, &job)
-                .unwrap_or_else(|e| panic!("{change}: {e}"));
+            let out =
+                write_version(&rec, "s1", 1, &job).unwrap_or_else(|e| panic!("{change}: {e}"));
             let copy = rec.join("s1.000001.autosave.kad");
             assert!(copy.exists(), "{change}");
             let meta: Value =
@@ -1246,7 +1261,10 @@ mod tests {
         write_json_copy(&json, &opened.doc, &mut report).unwrap();
         assert!(report.missing.is_none());
         let back = file_io::read_document(&json).unwrap();
-        assert_eq!(back.history.as_ref().and_then(|h| h.version_count()), Some(1));
+        assert_eq!(
+            back.history.as_ref().and_then(|h| h.version_count()),
+            Some(1)
+        );
         // The file goes away: the picture and the versions cannot be found.
         std::fs::remove_file(&target).unwrap();
         let mut report = CopyReport::default();
@@ -1292,7 +1310,10 @@ mod tests {
         let j = job(e.doc(), None, 2);
         write_version(&dir.join("rec"), "s1", 1, &j).unwrap();
         let copy = dir.join("rec").join("s1.000001.autosave.kad");
-        assert!(std::fs::read(&copy).unwrap().starts_with(b"{"), "plain JSON");
+        assert!(
+            std::fs::read(&copy).unwrap().starts_with(b"{"),
+            "plain JSON"
+        );
         let meta: Value =
             serde_json::from_slice(&std::fs::read(dir.join("rec").join("s1.meta.json")).unwrap())
                 .unwrap();

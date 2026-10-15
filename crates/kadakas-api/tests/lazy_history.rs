@@ -283,7 +283,10 @@ fn a_damaged_history_entry_is_found_when_the_history_is_used() {
     assert_eq!(list["read_only"], true, "{list}");
     // Only the person's choice repairs it, and that keeps what is readable.
     let r = ok(&mut t, "version.repair", json!({"confirm": true}));
-    assert!(r["notes"].to_string().contains("history/versions.json"), "{r}");
+    assert!(
+        r["notes"].to_string().contains("history/versions.json"),
+        "{r}"
+    );
 }
 
 #[test]
@@ -338,7 +341,10 @@ fn a_file_that_changes_under_a_document_never_makes_a_wrong_version_or_a_wrong_d
     ok(&mut other, "file.save", json!({"path": f}));
     assert!(dir.join("a.kad.bak").exists());
     let with_bak = rpc(&mut s, "objects.list", json!({}));
-    assert!(with_bak.get("error").is_none(), "the .bak has the picture: {with_bak}");
+    assert!(
+        with_bak.get("error").is_none(),
+        "the .bak has the picture: {with_bak}"
+    );
     std::fs::remove_file(dir.join("a.kad.bak")).unwrap();
     let changed = |r: &Value, what: &str| {
         assert_eq!(r["error"]["code"], 5, "{what}: {r}");
@@ -402,7 +408,13 @@ fn a_picture_held_only_by_an_undo_step_survives_the_read_of_the_anchor_and_every
     assert!(s.handle("undo", json!({})).is_ok());
     ok(&mut s, "file.save", json!({"path": f}));
     let mut t = open(&dir, &f);
-    assert_eq!(ok(&mut t, "objects.list", json!({"kind": "underlay"})).as_array().unwrap().len(), 1);
+    assert_eq!(
+        ok(&mut t, "objects.list", json!({"kind": "underlay"}))
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(names(&mut t), ["v0"]);
 }
 
@@ -454,8 +466,14 @@ fn a_file_that_is_touched_or_moved_is_followed_by_content() {
                 );
             } else {
                 assert_eq!(r["error"]["code"], 5, "{change} -> {to}: {r}");
-                assert_eq!(r["error"]["data"]["reason"], "parts_missing", "{change} -> {to}: {r}");
-                assert!(!dir.join(to).exists(), "{change} -> {to}: nothing is written");
+                assert_eq!(
+                    r["error"]["data"]["reason"], "parts_missing",
+                    "{change} -> {to}: {r}"
+                );
+                assert!(
+                    !dir.join(to).exists(),
+                    "{change} -> {to}: nothing is written"
+                );
             }
         }
         if !finds {
@@ -466,12 +484,18 @@ fn a_file_that_is_touched_or_moved_is_followed_by_content() {
                 "file.save",
                 json!({"path": dir.join("rest.kad"), "allow_missing": true}),
             );
-            assert!(r["notes"].to_string().contains("placeholder"), "{change}: {r}");
+            assert!(
+                r["notes"].to_string().contains("placeholder"),
+                "{change}: {r}"
+            );
             let mut t = session(&dir);
             ok(&mut t, "file.open", json!({"path": dir.join("rest.kad")}));
             assert_eq!(names(&mut t), Vec::<String>::new());
             assert_eq!(
-                ok(&mut t, "objects.list", json!({})).as_array().unwrap().len(),
+                ok(&mut t, "objects.list", json!({}))
+                    .as_array()
+                    .unwrap()
+                    .len(),
                 3,
                 "{change}: the circle, the new circle and the underlay with its placeholder"
             );
@@ -500,14 +524,20 @@ fn the_plain_json_form_round_trips_versions_with_a_picture() {
     ok(&mut s, "file.save", json!({"path": j2}));
     let mut t = session(&dir);
     let r = ok(&mut t, "file.open", json!({"path": j2}));
-    assert!(r.get("notes").is_none(), "after a container open, unedited: {r}");
+    assert!(
+        r.get("notes").is_none(),
+        "after a container open, unedited: {r}"
+    );
     let mut s = open(&dir, &f);
     circle(&mut s, 5.0);
     let j3 = dir.join("c.json");
     ok(&mut s, "file.save", json!({"path": j3}));
     let mut t = session(&dir);
     let r = ok(&mut t, "file.open", json!({"path": j3}));
-    assert!(r.get("notes").is_none(), "after a container open, edited: {r}");
+    assert!(
+        r.get("notes").is_none(),
+        "after a container open, edited: {r}"
+    );
 }
 
 /// The file of `make_file` with one history entry replaced.
@@ -534,7 +564,13 @@ fn the_repair_of_a_history_that_waits_keeps_what_is_readable_and_is_one_undo_ste
     // with notes: undo brings the history back.
     let dir = tmp("repair-waiting");
     let f = make_file(&dir, "a.kad");
-    let bad = with_entry_replaced(&dir, &f, kadakas_file::HISTORY_VERSIONS, b"[1, 2]", "bad.kad");
+    let bad = with_entry_replaced(
+        &dir,
+        &f,
+        kadakas_file::HISTORY_VERSIONS,
+        b"[1, 2]",
+        "bad.kad",
+    );
     let mut s = open(&dir, &bad);
     let list = ok(&mut s, "version.list", json!({}));
     assert_eq!(list["read_only"], true, "{list}");

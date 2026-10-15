@@ -4584,7 +4584,11 @@ mod tests {
         file_io::test_answer::set(Some(true));
         app.save(false, &ctx);
         file_io::test_answer::set(None);
-        assert!(app.status.contains("placeholder") || app.status.contains("left out"), "{}", app.status);
+        assert!(
+            app.status.contains("placeholder") || app.status.contains("left out"),
+            "{}",
+            app.status
+        );
         let back = file_io::read_document(&file).unwrap();
         assert_eq!(back.objects.len(), 2);
         let png = back

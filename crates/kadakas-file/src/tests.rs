@@ -855,8 +855,10 @@ fn a_picture_of_another_source_is_read_and_written_like_a_new_one() {
         table.insert(text_hash(&image_text), image_text.clone());
         let source = Arc::new(Memory(table, failing));
         let json = serde_json::to_string(&with_refs(&image, &png)).unwrap();
-        let doc: Document =
-            with_load_source(source, kadakas_core::blob::LoadKind::Lazy, || serde_json::from_str(&json)).unwrap();
+        let doc: Document = with_load_source(source, kadakas_core::blob::LoadKind::Lazy, || {
+            serde_json::from_str(&json)
+        })
+        .unwrap();
         let out = write_container(Vec::new(), &doc, &WriteOptions::default());
         if failing {
             let e = out.unwrap_err();
@@ -1017,7 +1019,12 @@ fn a_picture_of_the_history_that_is_too_big_is_refused() {
 fn same_picture_doc(n: u64) -> Document {
     let mut doc = Document::with_sequential_ids();
     for i in 0..n {
-        let o = Object::new(ObjectId::from_num(100 + i), FIRST_LAYER, NONE_CLASS, underlay(1));
+        let o = Object::new(
+            ObjectId::from_num(100 + i),
+            FIRST_LAYER,
+            NONE_CLASS,
+            underlay(1),
+        );
         doc.objects.insert(o.id, o);
     }
     doc
@@ -1040,7 +1047,10 @@ fn fifty_objects_with_one_picture_are_one_copy_in_memory_on_every_path() {
     let bytes = container_bytes(&doc);
     let c = Container::from_bytes(bytes.clone(), Limits::default()).unwrap();
     assert_eq!(
-        c.entries().iter().filter(|e| e.name.starts_with("blobs/")).count(),
+        c.entries()
+            .iter()
+            .filter(|e| e.name.starts_with("blobs/"))
+            .count(),
         1
     );
     // Eager container read: one copy of the bytes.
@@ -1197,7 +1207,10 @@ fn a_history_that_lists_a_picture_twice_is_refused() {
         (&name, blob.as_bytes()),
     ]);
     let note = eager_note(bytes.clone());
-    assert!(note.contains(HISTORY_BLOBS) && note.contains("twice"), "{note}");
+    assert!(
+        note.contains(HISTORY_BLOBS) && note.contains("twice"),
+        "{note}"
+    );
     let o = open(bytes);
     let e = o.doc.lazy_history.unwrap().load().unwrap_err();
     assert!(e.contains("twice"), "{e}");
@@ -1237,7 +1250,10 @@ fn a_picture_over_the_bound_is_refused_before_anything_is_written() {
     let mut out = Vec::new();
     let e = write_container(&mut out, &doc, &WriteOptions::default()).unwrap_err();
     assert!(matches!(e, FileError::Limit(_)), "{e}");
-    assert!(e.to_string().contains("128") || e.to_string().contains("134217728"), "{e}");
+    assert!(
+        e.to_string().contains("128") || e.to_string().contains("134217728"),
+        "{e}"
+    );
     assert!(out.is_empty(), "nothing was written");
 }
 
@@ -1261,7 +1277,10 @@ fn a_reference_amplification_file_cannot_make_a_load_read_more_than_the_file_has
         .unwrap()
         .size;
     // The document text has 100 references; the file is smaller than 100 times the blob.
-    assert!(c.uncompressed_bytes() < 3 * blob + 100_000, "one blob in the file");
+    assert!(
+        c.uncompressed_bytes() < 3 * blob + 100_000,
+        "one blob in the file"
+    );
     for mode in [ReadMode::Lazy, ReadMode::Eager] {
         let o = read_bytes(bytes.clone(), Limits::default(), mode).unwrap();
         let bases: Vec<_> = o
@@ -1278,7 +1297,6 @@ fn a_reference_amplification_file_cannot_make_a_load_read_more_than_the_file_has
     }
 }
 
-
 #[test]
 fn entries_of_a_newer_program_are_kept_not_dropped() {
     // A newer program adds an entry. A save of this program copies it as it is.
@@ -1288,8 +1306,12 @@ fn entries_of_a_newer_program_are_kept_not_dropped() {
     for e in good.entries() {
         w.copy_raw(good.raw(&e.name).unwrap()).unwrap();
     }
-    w.add_bytes("extra/thumbnail.png", Compression::Stored, b"\x89PNG not really")
-        .unwrap();
+    w.add_bytes(
+        "extra/thumbnail.png",
+        Compression::Stored,
+        b"\x89PNG not really",
+    )
+    .unwrap();
     let bytes = w.finish().unwrap();
     let o = open(bytes);
     let source = o.source.clone().unwrap();
@@ -1300,12 +1322,19 @@ fn entries_of_a_newer_program_are_kept_not_dropped() {
     let (out, report) = write_container(Vec::new(), &o.doc, &opts).unwrap();
     assert_eq!(report.unknown_copied, 1, "{report:?}");
     let c = Container::from_bytes(out, Limits::default()).unwrap();
-    assert_eq!(c.read("extra/thumbnail.png").unwrap(), b"\x89PNG not really");
+    assert_eq!(
+        c.read("extra/thumbnail.png").unwrap(),
+        b"\x89PNG not really"
+    );
     // A caller that does not name the old file has nothing to copy from.
     let lone = WriteOptions::default();
     let (out, report) = write_container(Vec::new(), &o.doc, &lone).unwrap();
     assert_eq!(report.unknown_copied, 0);
-    assert!(!Container::from_bytes(out, Limits::default()).unwrap().contains("extra/thumbnail.png"));
+    assert!(
+        !Container::from_bytes(out, Limits::default())
+            .unwrap()
+            .contains("extra/thumbnail.png")
+    );
 }
 
 #[test]
@@ -1315,8 +1344,13 @@ fn a_picture_in_memory_is_written_from_memory_not_copied_from_a_file_that_may_ha
     let dir = std::env::temp_dir().join(format!("kf-s6-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join("a.kad");
-    crate::native::save_path(&p, &same_picture_doc(1), Form::Container, &WriteOptions::default())
-        .unwrap();
+    crate::native::save_path(
+        &p,
+        &same_picture_doc(1),
+        Form::Container,
+        &WriteOptions::default(),
+    )
+    .unwrap();
     let mut o = crate::native::open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
     for obj in o.doc.objects.values_mut() {
         if let Shape::Underlay(u) = &mut obj.shape {
@@ -1369,7 +1403,7 @@ mod disk {
             generator: generator(),
             keep: o.source.iter().cloned().collect(),
             anchor: false,
-        skip_missing: false,
+            skip_missing: false,
         }
     }
 
@@ -1421,7 +1455,10 @@ mod disk {
         let saved = save_path(&p, &o.doc, Form::Container, &opts(&o)).unwrap();
         let rep = saved.written.unwrap();
         assert_eq!(rep.blobs_copied, 3, "{rep:?}");
-        assert_eq!(rep.blobs_written, 1, "the import base is in memory: {rep:?}");
+        assert_eq!(
+            rep.blobs_written, 1,
+            "the import base is in memory: {rep:?}"
+        );
         assert!(saved.notes.is_empty());
         assert_eq!(
             std::fs::read(d.join("a.kad.bak")).unwrap(),
