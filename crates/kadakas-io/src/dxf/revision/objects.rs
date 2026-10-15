@@ -262,4 +262,54 @@ mod tests {
             vec![id(10)]
         );
     }
+
+    #[test]
+    fn the_index_gives_the_answer_of_objects_of() {
+        let mut tags: Vec<(ObjectId, ImportTag)> = Vec::new();
+        tags.push((id(1), tag(Some("A"), "LINE", 1)));
+        tags.push((id(2), tag(None, "LINE", 2)));
+        tags.push((id(3), tag(Some("A"), "CIRCLE", 1)));
+        for (n, (insert, hash)) in [(Some("I1"), 9u64), (None, 5), (Some("I2"), 9)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut t = tag(Some("B2"), "LINE", 2);
+            t.block = Some(BlockRef {
+                name: "TREE".into(),
+                key: "rec:B1".into(),
+                handle: None,
+            });
+            t.via = vec![InsertRef {
+                handle: insert.map(str::to_string),
+                hash: hex(hash),
+                copy: None,
+            }];
+            tags.push((id(10 + n as u64), t));
+        }
+        let mut other = tag(Some("A"), "LINE", 1);
+        other.drawing = "other".into();
+        tags.push((id(20), other));
+        let view = || tags.iter().map(|(i, t)| (*i, t));
+        let ix = TagIndex::new("d", view());
+        assert_eq!(ix.len(), 6);
+        assert!(!ix.is_empty());
+        assert!(TagIndex::new("none", view()).is_empty());
+        let recs = [
+            rec(Some("A"), "LINE", MODEL, 1),
+            rec(Some("A"), "LINE", MODEL, 99),
+            rec(None, "LINE", MODEL, 2),
+            rec(Some("A"), "CIRCLE", MODEL, 7),
+            rec(Some("Z"), "LINE", MODEL, 1),
+            rec(Some("B2"), "LINE", "block:rec:B1", 2),
+            rec(Some("B2"), "LINE", "block:rec:other", 2),
+            rec(Some("A"), "LINE", PAPER, 1),
+            rec(Some("I1"), "INSERT", MODEL, 7),
+            rec(None, "INSERT", MODEL, 5),
+            rec(None, "INSERT", MODEL, 9),
+            rec(Some("I9"), "INSERT", MODEL, 1),
+        ];
+        for r in &recs {
+            assert_eq!(ix.objects_of(r), objects_of(r, "d", view()), "{r:?}");
+        }
+    }
 }

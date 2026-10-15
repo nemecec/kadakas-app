@@ -179,6 +179,9 @@ fn moved_changed_added_and_removed_entities_are_found_and_applied() {
     assert_eq!(built.applied.added, 1);
     assert_eq!(built.applied.replaced, 2);
     assert_eq!(built.applied.removed, 1);
+    // The update data of the old revision goes, and that of the new one comes.
+    assert_eq!(built.applied.dropped_base, 1);
+    assert!(provenance::base_recs(ed.doc(), &plan.drawing, &plan.old_revision).is_none());
     let doc = ed.doc();
     assert!((y_of(object_at(doc, 0x11).unwrap()) - 150.0).abs() < 1e-9);
     assert!(object_at(doc, 0x13).is_none());
@@ -212,6 +215,8 @@ fn moved_changed_added_and_removed_entities_are_found_and_applied() {
     assert!(ed.undo());
     assert_eq!(ed.doc().objects, before.objects);
     assert_eq!(ed.doc().layers, before.layers);
+    assert_eq!(ed.doc().resources, before.resources);
+    assert!(provenance::base_recs(ed.doc(), &plan.drawing, &plan.old_revision).is_some());
 }
 
 #[test]

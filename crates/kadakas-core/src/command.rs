@@ -4284,4 +4284,45 @@ mod arrange_tests {
             Err(CommandError::NoLayer(_))
         ));
     }
+
+    #[test]
+    fn a_command_and_the_history_are_one_undo_step() {
+        use crate::history::HistoryData;
+        let mut ed = Editor::new(Document::with_sequential_ids());
+        let add = Command::AddObject {
+            shape: Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 5.0,
+            },
+            layer: None,
+            class: None,
+            attrs: Default::default(),
+        };
+        let history = HistoryData::new(serde_json::json!({"versions": []}));
+        ed.execute_with_history(
+            &add,
+            Some(history.clone()),
+            "import_update",
+            Some(serde_json::json!({"x": 1})),
+        )
+        .unwrap();
+        assert_eq!(ed.doc().objects.len(), 1);
+        assert_eq!(ed.doc().history, Some(history.clone()));
+        // Undo takes back the object and the history together; redo brings both.
+        assert!(ed.undo());
+        assert!(ed.doc().objects.is_empty() && ed.doc().history.is_none());
+        assert!(ed.redo());
+        assert_eq!(ed.doc().objects.len(), 1);
+        assert_eq!(ed.doc().history, Some(history));
+        // A failing command changes nothing, also not the history.
+        let before = ed.doc().clone();
+        let bad = Command::DeleteObjects {
+            ids: vec![ObjectId::from_num(999)],
+        };
+        assert!(
+            ed.execute_with_history(&bad, None, "import_update", None)
+                .is_err()
+        );
+        assert_eq!(ed.doc(), &before);
+    }
 }

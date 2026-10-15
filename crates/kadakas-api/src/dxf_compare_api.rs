@@ -515,10 +515,12 @@ impl Session {
                 } else {
                     let rgb: Vec<u8> = img
                         .rgba
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .flat_map(|p| [p[0], p[1], p[2]])
                         .collect();
-                    let title = format!("{} compared with {}", c.name, "the old file");
+                    let title = format!("{} compared with {}", c.name, c.base_name);
                     let pdf = kadakas_print::image_pdf(rgb, img.width, img.height, PDF_DPI, &title)
                         .ok_or_else(|| RpcError::internal("the picture does not fit a page"))?;
                     use base64::Engine;

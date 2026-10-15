@@ -34,6 +34,7 @@ use kadakas_core::model::{
     Attributes, ClassId, Document, LayerId, LayerKind, NONE_CLASS, Object, ObjectId, Shape,
 };
 use kadakas_core::provenance::{self, FileLink, ImportTag, LayerSource};
+use kadakas_core::resource::ResourceBody;
 use serde::Serialize;
 
 use super::hash::{content_hash, hex};
@@ -100,7 +101,9 @@ pub struct DrawingInfo {
 
 /// The imported drawings of a document, sorted by lineage.
 pub fn drawings(doc: &Document) -> Vec<DrawingInfo> {
-    let mut by: BTreeMap<String, (Vec<(LayerId, String, LayerSource)>, usize)> = BTreeMap::new();
+    // The layers of each drawing, and how many objects carry its tag.
+    type Layers = Vec<(LayerId, String, LayerSource)>;
+    let mut by: BTreeMap<String, (Layers, usize)> = BTreeMap::new();
     for l in doc.layers.iter().filter(|l| l.kind == LayerKind::Design) {
         if let Some(src) = l.extra.get(provenance::LAYER_KEY).and_then(LayerSource::of) {
             by.entry(src.drawing.clone())
@@ -580,7 +583,7 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
             }
             continue;
         }
-        if !(b.is_some_and(&on_layer) || n.is_some_and(&on_layer)) {
+        if !(b.is_some_and(on_layer) || n.is_some_and(on_layer)) {
             continue;
         }
         let old_objs = b.map_or_else(Vec::new, |r| old_index.objects_of(r));
@@ -1026,6 +1029,8 @@ pub struct Applied {
     /// Objects the person edited, that a change would have replaced or removed, and that were kept
     /// (`Take::KeepEdits`).
     pub kept_edits: usize,
+    /// Parts of the update data of the old revision that the command deletes.
+    pub dropped_base: usize,
 }
 
 impl Plan {
@@ -1176,6 +1181,21 @@ impl Plan {
             b.push(Command::DeleteObjects {
                 ids: delete.iter().copied().collect(),
             });
+        }
+        // The update data moves to the new revision: the old summaries are of no use to the layers
+        // any more (an update reads the base of the revision of the layer), so they go in the same
+        // step, and undo brings them back. Untouched objects keep the revision they came from.
+        for r in doc.resources.iter() {
+            if let ResourceBody::ImportBase(v) = &r.body
+                && v["drawing"] == self.drawing.as_str()
+                && v["revision"] == self.old_revision.as_str()
+            {
+                b.push(Command::DeleteResource {
+                    id: r.id,
+                    reassign: None,
+                });
+                applied.dropped_base += 1;
+            }
         }
         if let NewBase::Plan(plan) = &self.new_base {
             import::store_base(&mut b, plan.clone());

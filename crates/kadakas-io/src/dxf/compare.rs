@@ -68,6 +68,8 @@ pub struct Compared {
     pub changes: Vec<ObjectChange>,
     /// The name of the new file, for the labels.
     pub name: String,
+    /// The name of the old file.
+    pub base_name: String,
 }
 
 fn scratch(
@@ -219,7 +221,7 @@ pub fn compare(req: &Request<'_>) -> Result<Compared, UpdateError> {
             }
             continue;
         }
-        if !(b.is_some_and(&on_layer) || n.is_some_and(&on_layer)) {
+        if !(b.is_some_and(on_layer) || n.is_some_and(on_layer)) {
             continue;
         }
         let old_objs = b.map_or_else(Vec::new, |r| old_index.objects_of(r));
@@ -295,6 +297,7 @@ pub fn compare(req: &Request<'_>) -> Result<Compared, UpdateError> {
         all_doc,
         changes,
         name: req.new.1.to_string(),
+        base_name: req.base.1.to_string(),
     })
 }
 

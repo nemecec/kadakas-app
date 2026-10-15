@@ -88,7 +88,9 @@ fn pixels(bytes: &[u8]) -> (usize, usize, Vec<u8>) {
 
 /// The smallest distance between `rgb` and any pixel color.
 fn nearest(rgba: &[u8], rgb: [u8; 3]) -> f64 {
-    rgba.chunks_exact(4)
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
         .map(|p| {
             (0..3)
                 .map(|i| (f64::from(p[i]) - f64::from(rgb[i])).powi(2))
