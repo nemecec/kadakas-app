@@ -614,6 +614,7 @@ fn create(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
 }
 
 /// What [`execute_between_versions`] did.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct Between {
     /// The version saved before the command.
     pub before: u64,
@@ -629,6 +630,7 @@ pub(crate) struct Between {
 /// "before", nothing changes and the error is that of `version.create`. If a limit refuses the
 /// version "after", the command still runs, with the version "before" only, and a note says so.
 /// A failing command changes nothing.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn execute_between_versions(
     s: &mut Session,
     cmd: &kadakas_core::command::Command,

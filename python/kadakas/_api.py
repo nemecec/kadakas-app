@@ -128,24 +128,6 @@ class Api:
         JSON-RPC method ``import.file``."""
         return self._call("import.file", params or None)
 
-    def import_update(self, **params: Any) -> Any:
-        """Update the document from a new revision of an imported DXF or DWG drawing (IOP-23). Reads the file and compares its entities with the drawing in the document; changes nothing. params: {path, drawing? (the lineage; needed when several drawings were imported and the file does not say which), old? (the old revision, when the document has no update data and no usable link), layers? (only entities on these DXF layers), tolerance? (largest distance of a moved entity, in units of the drawing; default automatic), dry_run? (true: no pending update is kept), limit? (most changes listed, default 200, at most 1000), options? (import options of the new file such as hatches or base: auto|link|none)}. Returns {update_id (not with dry_run), drawing, name, from_revision, to_revision, old_from (base|link|file), counts, changes, listed, conflicts (the IDs of changes that concern an object the person edited), notes, match}. See describe.io.update. Then call import.apply.
-
-        JSON-RPC method ``import.update``."""
-        return self._call("import.update", params or None)
-
-    def import_apply(self, **params: Any) -> Any:
-        """Apply the changes of the last import.update. params: {update_id, accept: "all" | [change ids], reject? [change ids], conflicts? (skip, the default, or overwrite: what accept "all" does with the changes that concern objects the person edited)}. Saves the version "Before update to <file>" (a limit of versions refuses it with the version_limit error and nothing changes), applies the accepted changes as ONE undo step (new objects with tags, changed objects replaced, removed objects deleted; objects of other sources are never touched), moves the layers and the update data to the new revision, and saves "After update to <file>". Fails with a conflict error if the document changed since import.update. Returns {applied: {added, replaced, removed, skipped_locked, kept_edits}, accepted, skipped_conflicts (the conflicts whose edited objects were kept), versions: {before, after}, drawing, revision, notes}.
-
-        JSON-RPC method ``import.apply``."""
-        return self._call("import.apply", params or None)
-
-    def dxf_compare(self, **params: Any) -> Any:
-        """Compare two DXF or DWG files without importing them (IOP-24). params: {base (the old file), new, options? {tolerance? (units of the drawing), layers? (only entities on these DXF layers), limit? (most changes listed, default 200, at most 1000), ...import options such as hatches}, render? {format: png|svg|pdf, revision_clouds? (draw revision clouds around the clusters of changes), width?, height?, palette?, unchanged?, dark?, ghosts?, previous?, view? (png, default top)}}. Returns {base, new, counts, changes: [{id, status: added|removed|changed, entity, handle?, layer, what?, via?, distance?, text?, objects, new_objects, object_ids}], listed, total_changes, notes, match, compare (the legend, counts and ghosts of the overlay, with render), image (with render: {format, svg | png_base64 | pdf_base64, width?, height?, clouds?})}. The matching is that of import.update: by handle first, else by content, geometry and nearest position. Nothing changes in the document. See describe.review.dxf_compare.
-
-        JSON-RPC method ``dxf.compare``."""
-        return self._call("dxf.compare", params or None)
-
     def export_file(self, **params: Any) -> Any:
         """Export the document to a DXF or GeoJSON file. params: {path, format?: dxf|geojson, options?}. Returns {path, exported, report}.
 
@@ -2186,6 +2168,24 @@ class Api:
         JSON-RPC method ``version.repair``."""
         return self._call("version.repair", params or None)
 
+    def import_update(self, **params: Any) -> Any:
+        """Update the document from a new revision of an imported DXF or DWG drawing (IOP-23). Reads the file and compares its entities with the drawing in the document; changes nothing. params: {path, drawing? (the lineage; needed when several drawings were imported and the file does not say which), old? (the old revision, when the document has no update data and no usable link), layers? (only entities on these DXF layers), tolerance? (largest distance of a moved entity, in units of the drawing; default automatic), dry_run? (true: no pending update is kept), limit? (most changes listed, default 200, at most 1000), options? (import options of the new file such as hatches or base: auto|link|none)}. Returns {update_id (not with dry_run), drawing, name, from_revision, to_revision, old_from (base|link|file), counts, changes, listed, conflicts (the IDs of changes that concern an object the person edited), notes, match}. See describe.io.update. Then call import.apply.
+
+        JSON-RPC method ``import.update``."""
+        return self._call("import.update", params or None)
+
+    def import_apply(self, **params: Any) -> Any:
+        """Apply the changes of the last import.update. params: {update_id, accept: "all" | [change ids], reject? [change ids], conflicts? (skip, the default, or overwrite: what accept "all" does with the changes that concern objects the person edited)}. Saves the version "Before update to <file>" (a limit of versions refuses it with the version_limit error and nothing changes), applies the accepted changes as ONE undo step (new objects with tags, changed objects replaced, removed objects deleted; objects of other sources are never touched), moves the layers and the update data to the new revision, and saves "After update to <file>". Fails with a conflict error if the document changed since import.update. Returns {applied: {added, replaced, removed, skipped_locked, kept_edits}, accepted, skipped_conflicts (the conflicts whose edited objects were kept), versions: {before, after}, drawing, revision, notes}.
+
+        JSON-RPC method ``import.apply``."""
+        return self._call("import.apply", params or None)
+
+    def dxf_compare(self, **params: Any) -> Any:
+        """Compare two DXF or DWG files without importing them (IOP-24). params: {base (the old file), new, options? {tolerance? (units of the drawing), layers? (only entities on these DXF layers), limit? (most changes listed, default 200, at most 1000), ...import options such as hatches}, render? {format: png|svg|pdf, revision_clouds? (draw revision clouds around the clusters of changes), width?, height?, palette?, unchanged?, dark?, ghosts?, previous?, view? (png, default top)}}. Returns {base, new, counts, changes: [{id, status: added|removed|changed, entity, handle?, layer, what?, via?, distance?, text?, objects, new_objects, object_ids}], listed, total_changes, notes, match, compare (the legend, counts and ghosts of the overlay, with render), image (with render: {format, svg | png_base64 | pdf_base64, width?, height?, clouds?})}. The matching is that of import.update: by handle first, else by content, geometry and nearest position. Nothing changes in the document. See describe.review.dxf_compare.
+
+        JSON-RPC method ``dxf.compare``."""
+        return self._call("dxf.compare", params or None)
+
     def collab_status(self, **params: Any) -> Any:
         """State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text without a token, or null if there is none), reconnecting (true: the session connects again by itself after a loss), last_error (why the last try to connect failed, or null), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), waiting_for_snapshot (true: the first snapshot has not arrived, also in the wait between two tries of a first connection, so the document will be replaced and an edit now would be lost; edits are refused with a conflict error), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.
 
@@ -2290,9 +2290,6 @@ METHOD_NAMES: tuple[str, ...] = (
     "report.plants",
     "report.areas",
     "import.file",
-    "import.update",
-    "import.apply",
-    "dxf.compare",
     "export.file",
     "plant_style.list",
     "plant_style.get",
@@ -2633,6 +2630,9 @@ METHOD_NAMES: tuple[str, ...] = (
     "version.delete",
     "version.diff",
     "version.repair",
+    "import.update",
+    "import.apply",
+    "dxf.compare",
     "collab.status",
     "collab.connect",
     "collab.disconnect",

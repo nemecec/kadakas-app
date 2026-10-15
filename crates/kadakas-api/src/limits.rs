@@ -218,12 +218,15 @@ impl Session {
     /// A rough figure for the memory of the session in bytes: the document, its pictures, the
     /// undo and redo steps, the change log and the cached scene.
     pub fn estimated_bytes(&self) -> u64 {
-        document_bytes(self.editor.doc())
+        let bytes = document_bytes(self.editor.doc())
             + self.editor.history_bytes()
             + self.editor.log_bytes()
             + self.mesh_cache.approx_bytes()
-            + self.compare.approx_bytes()
-            + self.update_bytes_held()
+            + self.compare.approx_bytes();
+        // The update from DXF that waits for `import.apply` (native only).
+        #[cfg(not(target_arch = "wasm32"))]
+        let bytes = bytes + self.update_bytes_held();
+        bytes
     }
 
     /// Refuses a document that does not fit the limits. A host calls it before it replaces the
@@ -252,6 +255,7 @@ impl Session {
         self.mesh_cache = Default::default();
         self.lod_scene = None;
         self.compare.clear();
+        #[cfg(not(target_arch = "wasm32"))]
         self.drop_update_preview();
         self.annot_cache = Default::default();
         self.worksheet_cache = Default::default();

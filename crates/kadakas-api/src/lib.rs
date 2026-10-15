@@ -290,12 +290,6 @@ pub const METHODS: &[(&str, &str)] = &[
         "Import a DXF, Shapefile or GeoJSON file as one undo step. params: {path, format?: dxf|shp|geojson, options?}. See describe.io for options. Returns {imported, skipped, report, georeference}.",
     ),
     #[cfg(not(target_arch = "wasm32"))]
-    update_api::IMPORT_UPDATE,
-    #[cfg(not(target_arch = "wasm32"))]
-    update_api::IMPORT_APPLY,
-    #[cfg(not(target_arch = "wasm32"))]
-    dxf_compare_api::DXF_COMPARE,
-    #[cfg(not(target_arch = "wasm32"))]
     (
         "export.file",
         "Export the document to a DXF or GeoJSON file. params: {path, format?: dxf|geojson, options?}. Returns {path, exported, report}.",
@@ -726,6 +720,12 @@ pub const METHODS: &[(&str, &str)] = &[
     review_api::VERSION_DELETE,
     review_api::VERSION_DIFF,
     review_api::VERSION_REPAIR,
+    #[cfg(not(target_arch = "wasm32"))]
+    update_api::IMPORT_UPDATE,
+    #[cfg(not(target_arch = "wasm32"))]
+    update_api::IMPORT_APPLY,
+    #[cfg(not(target_arch = "wasm32"))]
+    dxf_compare_api::DXF_COMPARE,
     // Collaboration (see collab_api.rs).
     collab_api::STATUS,
     collab_api::CONNECT,
