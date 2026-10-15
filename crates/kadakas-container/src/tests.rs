@@ -793,6 +793,62 @@ mod files {
     }
 
     #[test]
+    fn a_new_stamp_with_the_same_content_changes_nothing() {
+        let d = dir("touch");
+        let p = d.join("f.kad");
+        std::fs::write(&p, sample()).unwrap();
+        let s = ContainerSource::from_path(&p, Limits::default()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        // The same bytes, written again: a new time of change.
+        std::fs::write(&p, sample()).unwrap();
+        assert!(s.container().verify().is_err(), "the stamp is new");
+        assert!(s.has_part("blobs/aa"));
+        assert_eq!(s.read_part("blobs/aa").unwrap(), b"picture bytes");
+        assert!(s.check_unchanged().is_ok());
+        assert!(s.container().verify().is_ok(), "the stamp was taken again");
+        assert_eq!(s.raw_part("document.json").unwrap().name, "document.json");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_part_is_found_by_content_in_a_replaced_file_or_the_bak() {
+        let d = dir("bycontent");
+        let p = d.join("f.kad");
+        std::fs::write(&p, sample()).unwrap();
+        let s = ContainerSource::from_path(&p, Limits::default()).unwrap();
+        // Another file at the path: it has the picture, but other parts.
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let other = write(&[
+            ("blobs/aa", Compression::Stored, b"picture bytes"),
+            ("extra", Compression::Stored, b"more"),
+        ]);
+        std::fs::write(&p, &other).unwrap();
+        assert!(s.has_part("blobs/aa"));
+        assert_eq!(s.read_part("blobs/aa").unwrap(), b"picture bytes");
+        assert!(s.check_unchanged().is_err(), "the file is another file");
+        // The part that the other file does not have is not found.
+        assert!(!s.has_part("document.json"));
+        let e = s.read_part("document.json").unwrap_err();
+        assert!(matches!(e, ContainerError::Changed(_)), "{e}");
+        assert!(e.to_string().contains("document.json"), "{e}");
+        // The .bak of the last save has it.
+        std::fs::write(d.join("f.kad.bak"), sample()).unwrap();
+        assert!(s.has_part("document.json"));
+        assert!(s.read_part("document.json").is_ok());
+        assert!(s.raw_part("history/top.json").is_ok());
+        // The file is moved away: the .bak still gives the parts.
+        std::fs::remove_file(&p).unwrap();
+        assert_eq!(s.read_part("blobs/aa").unwrap(), b"picture bytes");
+        // Nothing is left: a clear error that names the part.
+        std::fs::remove_file(d.join("f.kad.bak")).unwrap();
+        assert!(!s.has_part("blobs/aa"));
+        let e = s.read_part("blobs/aa").unwrap_err();
+        assert!(matches!(e, ContainerError::Changed(_)), "{e}");
+        assert!(e.to_string().contains("blobs/aa"), "{e}");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
     fn open_path_of_a_missing_file_is_an_error() {
         let d = dir("missing");
         assert!(ContainerSource::from_path(&d.join("none"), Limits::default()).is_err());

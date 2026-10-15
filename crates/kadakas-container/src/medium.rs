@@ -123,6 +123,13 @@ mod file {
 
         /// Opens the file at `path`.
         pub fn open_path(path: &Path) -> std::io::Result<FileMedium> {
+            // A named pipe or a device would block or never end: only a regular file.
+            if !std::fs::metadata(path)?.is_file() {
+                return Err(std::io::Error::other(format!(
+                    "{} is not a regular file",
+                    path.display()
+                )));
+            }
             let file = std::fs::File::open(path)?;
             FileMedium::new(path, &file)
         }
@@ -246,6 +253,9 @@ mod tests {
         assert!(m.verify().unwrap_err().to_string().contains("gone"));
         assert!(m.open(0, 1).is_err());
         assert!(FileMedium::open_path(&p).is_err());
+        // A folder is not a file.
+        let e = FileMedium::open_path(&dir).unwrap_err().to_string();
+        assert!(e.contains("not a regular file"), "{e}");
         let _ = std::fs::remove_dir(&dir);
     }
 }
