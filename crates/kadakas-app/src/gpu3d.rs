@@ -354,6 +354,57 @@ struct BlendTri {
     center: Vec3,
 }
 
+/// Splits the triangles of a scene: the indices of the opaque ones (they draw in one call) and
+/// the see-through ones (a material with an opacity below 1, such as the ghosts of the compare
+/// view), which are sorted for the camera later.
+fn split_blend(scene: &Scene, look: Option<&Look>) -> (Vec<u32>, Vec<BlendTri>) {
+    let mesh = &scene.mesh;
+    let mut opaque: Vec<u32> = Vec::with_capacity(mesh.indices.len());
+    let mut blend_tris = Vec::new();
+    for t in 0..mesh.triangle_count() {
+        let idx = [
+            mesh.indices[t * 3],
+            mesh.indices[t * 3 + 1],
+            mesh.indices[t * 3 + 2],
+        ];
+        let see_through = look
+            .and_then(|l| l.material_of(t))
+            .is_some_and(|m| m.opacity < 0.999);
+        if see_through {
+            let p = mesh.triangle(t);
+            blend_tris.push(BlendTri {
+                indices: idx,
+                center: (p[0] + p[1] + p[2]) / 3.0,
+            });
+        } else {
+            opaque.extend_from_slice(&idx);
+        }
+    }
+    (opaque, blend_tris)
+}
+
+/// The indices of the see-through triangles, far to near for a camera at `eye` that looks along
+/// `dir` (`ortho`: by the depth along `dir`, else by the distance from the eye). Equal depths keep
+/// the order of the mesh, so the picture is stable.
+fn blend_order(tris: &[BlendTri], eye: [f32; 3], dir: [f32; 3], ortho: bool) -> Vec<u32> {
+    let (e, d) = (Vec3::from_array(eye), Vec3::from_array(dir));
+    let depth = |c: Vec3| {
+        if ortho {
+            -(c - e).dot(d)
+        } else {
+            (c - e).length()
+        }
+    };
+    let mut order: Vec<usize> = (0..tris.len()).collect();
+    order.sort_by(|a, c| {
+        depth(tris[*c].center)
+            .partial_cmp(&depth(tris[*a].center))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(c))
+    });
+    order.iter().flat_map(|i| tris[*i].indices).collect()
+}
+
 struct Buffers {
     rev: u64,
     layout_key: u64,
@@ -972,29 +1023,7 @@ impl Gpu3d {
         let scene = input.scene;
         let max = device.limits().max_buffer_size;
         let verts = surface_vertices(scene, look);
-        let mesh = &scene.mesh;
-        // Split the triangles: opaque ones draw in one call, see-through ones are sorted later.
-        let mut opaque: Vec<u32> = Vec::with_capacity(mesh.indices.len());
-        let mut blend_tris = Vec::new();
-        for t in 0..mesh.triangle_count() {
-            let idx = [
-                mesh.indices[t * 3],
-                mesh.indices[t * 3 + 1],
-                mesh.indices[t * 3 + 2],
-            ];
-            let see_through = look
-                .and_then(|l| l.material_of(t))
-                .is_some_and(|m| m.opacity < 0.999);
-            if see_through {
-                let p = mesh.triangle(t);
-                blend_tris.push(BlendTri {
-                    indices: idx,
-                    center: (p[0] + p[1] + p[2]) / 3.0,
-                });
-            } else {
-                opaque.extend_from_slice(&idx);
-            }
-        }
+        let (opaque, blend_tris) = split_blend(scene, look);
         let fits = (std::mem::size_of_val(verts.as_slice()) as u64) < max
             && (std::mem::size_of_val(opaque.as_slice()) as u64) < max;
         let vertices = (fits && !verts.is_empty()).then(|| {
@@ -1089,26 +1118,7 @@ impl Gpu3d {
             return;
         }
         b.sorted_for = Some(key);
-        let (e, d) = (Vec3::from_array(eye), Vec3::from_array(dir));
-        let depth = |c: Vec3| {
-            if ortho {
-                -(c - e).dot(d)
-            } else {
-                (c - e).length()
-            }
-        };
-        let mut order: Vec<usize> = (0..b.blend_tris.len()).collect();
-        // Far first. Equal depths keep the order of the mesh, so the picture is stable.
-        order.sort_by(|a, c| {
-            depth(b.blend_tris[*c].center)
-                .partial_cmp(&depth(b.blend_tris[*a].center))
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.cmp(c))
-        });
-        let data: Vec<u32> = order
-            .iter()
-            .flat_map(|i| b.blend_tris[*i].indices)
-            .collect();
+        let data = blend_order(&b.blend_tris, eye, dir, ortho);
         queue.write_buffer(ib, 0, bytemuck::cast_slice(&data));
     }
 
