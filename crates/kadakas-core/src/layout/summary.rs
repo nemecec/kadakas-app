@@ -60,6 +60,19 @@ pub struct UnitCount {
     pub unfillable_pieces: usize,
     pub area_laid_m2: f64,
     pub order_units: usize,
+    /// The lower bound of the order of this unit type: the whole units plus the rounded-up sum of
+    /// the shares of its cut units.
+    pub order_units_min: usize,
+    /// The sum of the shares of the cut units (not in the JSON; it is what rows are added up with).
+    #[serde(skip)]
+    pub cut_share: f64,
+}
+
+impl UnitCount {
+    /// Sets `order_units_min` from the whole units and the sum of the shares of the cut units.
+    pub fn set_min(&mut self) {
+        self.order_units_min = self.whole_units + (self.cut_share - 1e-9).max(0.0).ceil() as usize;
+    }
 }
 
 /// The numbers of a layout.
@@ -165,6 +178,7 @@ pub fn summarize(
                 u.unfillable_pieces += k.unfillable;
                 u.area_laid_m2 += k.area / 1e6;
                 u.order_units += order;
+                u.cut_share += k.cut_share;
             }
             None => by_unit.push(UnitCount {
                 name: name.clone(),
@@ -175,8 +189,13 @@ pub fn summarize(
                 unfillable_pieces: k.unfillable,
                 area_laid_m2: k.area / 1e6,
                 order_units: order,
+                order_units_min: 0,
+                cut_share: k.cut_share,
             }),
         }
+    }
+    for u in &mut by_unit {
+        u.set_min();
     }
     let (whole, cut) = (tally.whole(), tally.cut());
     let unfill = tally.unfillable();

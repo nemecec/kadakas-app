@@ -200,15 +200,21 @@ pub fn from_shapes(doc: &Document, ids: &[ObjectId], opts: &FromShapesOptions) -
         // A hole that leaves the outline by noise is cut to it.
         let holes: Vec<Vec<Vertex>> = host_holes[i]
             .iter()
-            .map(|&k| {
+            .flat_map(|&k| {
                 let h = &items[k];
                 if crate::layout::area_outside(&h.ring, &it.ring) <= 0.0 {
-                    h.outer.clone()
+                    vec![h.outer.clone()]
                 } else {
-                    crate::layout::clip_ring_to(&h.ring, &it.ring)
-                        .into_iter()
-                        .next()
-                        .map_or_else(|| h.outer.clone(), |r| curve::corners(&r))
+                    // All the pieces that stay inside, not only the first.
+                    let pieces: Vec<Vec<Vertex>> = crate::layout::clip_ring_to(&h.ring, &it.ring)
+                        .iter()
+                        .map(|r| curve::corners(r))
+                        .collect();
+                    if pieces.is_empty() {
+                        vec![h.outer.clone()]
+                    } else {
+                        pieces
+                    }
                 }
             })
             .collect();

@@ -646,3 +646,68 @@ fn session_limits_bound_the_pattern_work_and_errors_are_rows() {
         "{csv}"
     );
 }
+
+#[test]
+fn totals_never_add_different_products_together() {
+    let mut s = Session::with_sequential_ids();
+    for (name, l, w) in [("Small", 200, 100), ("Big", 300, 150)] {
+        ok(
+            &mut s,
+            "hardscape_style.create",
+            json!({"name": name, "joints": {"kind": "stack", "unit_length": l, "unit_width": w, "spacing": 5}}),
+        );
+    }
+    for (style, n) in [("Small", 2), ("Big", 1)] {
+        for k in 0..n {
+            ok(
+                &mut s,
+                "hardscape.add",
+                json!({"boundary": [[k * 10000, 0], [k * 10000 + 3050, 0], [k * 10000 + 3050, 2050], [k * 10000, 2050]], "style": style, "origin": [k * 10000, 0]}),
+            );
+        }
+    }
+    let rep = ok(&mut s, "report.unit_pattern", json!({}));
+    let by: Vec<(String, String, u64)> = rep["totals"]["by_unit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| {
+            (
+                u["pattern"].as_str().unwrap().to_string(),
+                u["name"].as_str().unwrap().to_string(),
+                u["whole_units"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(by.len(), 2, "{by:?}");
+    assert!(
+        by.iter()
+            .any(|(p, n, w)| p == "Small" && n == "200x100" && *w > 0)
+    );
+    assert!(by.iter().any(|(p, n, _)| p == "Big" && n == "300x150"));
+    // The same style twice is one line: the units of two lots of the same stone are added.
+    let small = by.iter().find(|(p, _, _)| p == "Small").unwrap().2;
+    let one = rep["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "Small")
+        .unwrap()["whole_units"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(small, 2 * one);
+    assert_eq!(rep["totals"]["mixed_products"], true);
+    // The lower bound is kept per unit type and rounds up per type.
+    for u in rep["totals"]["by_unit"].as_array().unwrap() {
+        assert!(u["order_units_min"].as_u64().unwrap() >= u["whole_units"].as_u64().unwrap());
+    }
+    // A pattern given in the call is one product.
+    let rep = ok(
+        &mut s,
+        "report.unit_pattern",
+        json!({"pattern": {"unit_length": 200, "unit_width": 100, "gap": 5}}),
+    );
+    assert_eq!(rep["totals"]["by_unit"].as_array().unwrap().len(), 1);
+    assert_eq!(rep["totals"]["by_unit"][0]["pattern"], "custom");
+    assert_eq!(rep["totals"]["mixed_products"], false);
+}

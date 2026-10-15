@@ -600,3 +600,12 @@ fn measure_export() {
         );
     }
 }
+
+#[test]
+fn a_dxf_file_without_an_entities_section_still_gives_its_block() {
+    use kadakas_io::dxf::block::block_outlines;
+    let text = "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n8\n0\n2\nB\n70\n0\n10\n0\n20\n0\n0\nLWPOLYLINE\n8\nA\n90\n4\n70\n1\n10\n0\n20\n0\n10\n10\n20\n0\n10\n10\n20\n10\n10\n0\n20\n10\n0\nENDBLK\n0\nENDSEC\n0\nEOF\n";
+    let o = block_outlines(text.as_bytes(), "B").unwrap();
+    assert_eq!(o.len(), 1);
+    assert_eq!(o[0].layer, "A");
+}

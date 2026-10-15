@@ -99,7 +99,7 @@ def test_agent_lays_pavers_on_a_parking_lot_and_exports_the_units(cad, tmp_path)
     assert row["area_laid_m2"] + row["gap_area_m2"] == pytest.approx(row["region_area_m2"], abs=1e-6)
     assert row["slivers"] <= row["cut_units"] and row["unfillable_pieces"] <= row["cut_units"]
     assert row["gap_length_m"] > 1000
-    assert row["by_unit"][0]["name"] == "unit" and row["by_unit"][0]["whole_units"] == row["whole_units"]
+    assert row["by_unit"][0]["name"] == "200x100" and row["by_unit"][0]["whole_units"] == row["whole_units"]
     # Without gap_length nothing is measured.
     assert cad.result("report.unit_pattern")["rows"][0]["gap_length_m"] is None
     # report.hardscape carries the same counts, and the area without the island.

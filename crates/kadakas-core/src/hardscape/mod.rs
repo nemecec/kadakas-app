@@ -218,7 +218,7 @@ pub fn svg_extras(doc: &Document, obj: &Object, scale: f64, stroke: &str) -> Str
         );
     }
     if let Some(j) = &s.joints {
-        let lines = drawn_joints(doc, obj, j, FLATTEN_TOLERANCE);
+        let lines = drawn_joints(doc, obj, j, crate::layout::TOLERANCE);
         if !lines.segments.is_empty() {
             let color = j.color.map_or_else(|| stroke.to_string(), Color::to_css);
             let width = j.spacing.max(0.1 * scale);

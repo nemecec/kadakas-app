@@ -338,6 +338,7 @@ fn layout_error(e: LayoutError) -> RpcError {
         LayoutError::TooMany(t) => RpcError::limit(format!(
             "{t}. Use larger units, a smaller region, or split the region"
         )),
+        LayoutError::Scan(why) => RpcError::limit(why),
         LayoutError::Invalid(why) => bad(why),
     }
 }
@@ -707,27 +708,48 @@ fn label(doc: &Document, o: &Object) -> String {
         .unwrap_or_else(|| o.shape.kind().to_string())
 }
 
-/// The sums of several summaries: one `Summary`-like JSON for the total row. The waste is applied
-/// to the total order, not to each row.
-pub fn totals_json(sums: &[&Summary], errors: usize, opts: &SummaryOptions) -> Value {
+/// The sums of several summaries: one JSON for the total row. The waste is applied to the total
+/// order, not to each row. `items` are the pattern label (the style, or `custom`) and the summary.
+/// The top-level counts add the units of different products, so they are for the order of one
+/// product only; `by_unit` never adds different products together: it is keyed by the pattern
+/// label and the unit type (a bond names its unit type by its size, `200x100`).
+pub fn totals_json(items: &[(String, &Summary)], errors: usize, opts: &SummaryOptions) -> Value {
+    let sums: Vec<&Summary> = items.iter().map(|(_, s)| *s).collect();
     let sum = |f: &dyn Fn(&Summary) -> usize| sums.iter().map(|s| f(s)).sum::<usize>();
     let order = sum(&|s| s.order_units);
-    let mut by_unit: Vec<summary::UnitCount> = Vec::new();
-    for s in sums {
+    let mut by_unit: Vec<(String, summary::UnitCount)> = Vec::new();
+    for (label, s) in items {
         for u in &s.by_unit {
-            match by_unit.iter_mut().find(|x| x.name == u.name) {
-                Some(x) => {
+            match by_unit
+                .iter_mut()
+                .find(|(l, x)| l == label && x.name == u.name)
+            {
+                Some((_, x)) => {
                     x.whole_units += u.whole_units;
                     x.cut_units += u.cut_units;
                     x.slivers += u.slivers;
                     x.unfillable_pieces += u.unfillable_pieces;
                     x.area_laid_m2 += u.area_laid_m2;
                     x.order_units += u.order_units;
+                    x.cut_share += u.cut_share;
                 }
-                None => by_unit.push(u.clone()),
+                None => by_unit.push((label.clone(), u.clone())),
             }
         }
     }
+    let by_unit: Vec<Value> = by_unit
+        .into_iter()
+        .map(|(label, mut u)| {
+            u.set_min();
+            let mut v = serde_json::to_value(&u).expect("json");
+            v["pattern"] = json!(label);
+            v
+        })
+        .collect();
+    let products: std::collections::BTreeSet<&str> = by_unit
+        .iter()
+        .filter_map(|u| u["pattern"].as_str())
+        .collect();
     let gap = sums.iter().map(|s| s.gap_length_m).collect::<Vec<_>>();
     json!({
         "whole_units": sum(&|s| s.whole_units),
@@ -742,6 +764,7 @@ pub fn totals_json(sums: &[&Summary], errors: usize, opts: &SummaryOptions) -> V
         "order_units_min": sum(&|s| s.order_units_min),
         "waste_percent": opts.waste_percent,
         "order_units_with_waste": opts.waste_percent.map(|w| with_waste(order, w)),
+        "mixed_products": products.len() > 1,
         "by_unit": by_unit,
         "complete": errors == 0,
         "errors": errors,
@@ -788,7 +811,7 @@ pub fn report_rows(
             .collect()
     });
     let mut rows = Vec::new();
-    let mut good: Vec<Summary> = Vec::new();
+    let mut good: Vec<(String, Summary)> = Vec::new();
     let mut errors = 0;
     for id in list {
         let Some(o) = doc.object(id) else {
@@ -802,7 +825,12 @@ pub fn report_rows(
                 row["id"] = json!(id);
                 row["name"] = json!(label(doc, o));
                 rows.push(row);
-                good.push(sum);
+                let product = if m.contains_key("pattern") {
+                    "custom".to_string()
+                } else {
+                    label(doc, o)
+                };
+                good.push((product, sum));
             }
             Err(e) => {
                 errors += 1;
@@ -810,7 +838,7 @@ pub fn report_rows(
             }
         }
     }
-    let refs: Vec<&Summary> = good.iter().collect();
+    let refs: Vec<(String, &Summary)> = good.iter().map(|(l, s)| (l.clone(), s)).collect();
     Ok((rows, totals_json(&refs, errors, opts)))
 }
 

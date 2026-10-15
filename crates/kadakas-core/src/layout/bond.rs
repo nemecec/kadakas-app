@@ -12,7 +12,7 @@
 //! - basket weave: blocks of n units side by side, n = the length divided by the width, rounded. A
 //!   block is as wide as the longer of `lp` and `n wp`. When the two differ, the difference goes into
 //!   the joints around the units (the units never change their size); `widest_joint` tells how wide
-//!   they get, and a difference of more than a quarter of the unit width is refused.
+//!   they get, and an extra joint of more than a tenth of the unit width (at least 10 mm) is refused.
 
 use glam::DVec2;
 
@@ -21,25 +21,32 @@ use super::{Bond, Pattern, Segment};
 
 /// A basket weave whose joints would get wider than the gap by more than this share of the unit
 /// width is refused.
-pub const BASKET_SLACK: f64 = 0.25;
+pub const BASKET_SLACK: f64 = 0.1;
+/// ... or this many mm, when that is more.
+pub const BASKET_SLACK_MM: f64 = 10.0;
 
 fn rect(lo: DVec2, hi: DVec2) -> Vec<DVec2> {
     vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)]
 }
 
-fn kind(lo: DVec2, hi: DVec2, gap: f64) -> Kind {
+fn kind(name: &str, lo: DVec2, hi: DVec2, gap: f64) -> Kind {
     let cell = rect(lo, hi);
     let h = DVec2::splat(gap / 2.0);
     let piece = rect(lo + h, hi - h);
     let size = hi - lo - 2.0 * h;
     Kind {
-        name: "unit".into(),
+        name: name.into(),
         cell,
         area: size.x * size.y,
         pieces: vec![piece],
         lo,
         hi,
     }
+}
+
+/// The name of a unit type of a bond: its size, `200x100`.
+pub fn size_name(length: f64, width: f64) -> String {
+    format!("{length}x{width}")
 }
 
 /// The long and the short side of a pattern, for the bonds that are the same turned by 90 degrees.
@@ -57,28 +64,34 @@ fn basket_dims(p: &Pattern) -> (usize, f64) {
     (n, block)
 }
 
-/// The widest joint of the pattern in mm.
+/// The widest joint of the pattern in mm. In a basket weave whose block is wider than the units
+/// need, the units sit in the middle of their slot, so the extra is shared by the two sides: the
+/// joint between a unit and the next block is the margin of the unit, `(block - length) / 2`, and
+/// the margin of the unit of the next block, `(block - n (width + gap) + gap) / 2`.
 pub fn widest_joint(p: &Pattern) -> f64 {
     if p.bond != Bond::BasketWeave {
         return p.gap;
     }
     let (l, w) = long_short(p);
     let (n, block) = basket_dims(p);
-    (block - l).max(p.gap + block - n as f64 * (w + p.gap))
+    let between_blocks = (block - l) / 2.0 + (block - n as f64 * (w + p.gap) + p.gap) / 2.0;
+    between_blocks.max(p.gap)
 }
 
 /// The cells of a bond as a lattice. Fails for a basket weave that does not fit.
 pub fn compile(p: &Pattern) -> Result<Compiled, String> {
     let g = p.gap;
     let (lp, wp) = (p.unit_length + g, p.unit_width + g);
+    // The unit type is named by its size, so counts of different stones are never added together.
+    let name = size_name(p.unit_length, p.unit_width);
     let (kinds, a, b) = match p.bond {
         Bond::Stack => (
-            vec![kind(DVec2::ZERO, DVec2::new(lp, wp), g)],
+            vec![kind(&name, DVec2::ZERO, DVec2::new(lp, wp), g)],
             DVec2::new(lp, 0.0),
             DVec2::new(0.0, wp),
         ),
         Bond::RunningBond => (
-            vec![kind(DVec2::ZERO, DVec2::new(lp, wp), g)],
+            vec![kind(&name, DVec2::ZERO, DVec2::new(lp, wp), g)],
             DVec2::new(lp, 0.0),
             DVec2::new(lp / 2.0, wp),
         ),
@@ -87,8 +100,8 @@ pub fn compile(p: &Pattern) -> Result<Compiled, String> {
             let (a, b) = (l + g, w + g);
             (
                 vec![
-                    kind(DVec2::ZERO, DVec2::new(a, b), g),
-                    kind(DVec2::new(a, b - a), DVec2::new(a + b, b), g),
+                    kind(&name, DVec2::ZERO, DVec2::new(a, b), g),
+                    kind(&name, DVec2::new(a, b - a), DVec2::new(a + b, b), g),
                 ],
                 DVec2::new(b, b),
                 DVec2::new(a + b, b - a),
@@ -97,7 +110,7 @@ pub fn compile(p: &Pattern) -> Result<Compiled, String> {
         Bond::BasketWeave => {
             let (l, w) = long_short(p);
             let (n, block) = basket_dims(p);
-            if widest_joint(p) - g > BASKET_SLACK * w {
+            if widest_joint(p) - g > (BASKET_SLACK * w).max(BASKET_SLACK_MM) {
                 return Err(format!(
                     "a basket weave of {l} by {w} mm units does not fit: {n} units of {w} mm side by side are {:.1} mm wide, one unit is {l} mm long. Use a length that is about {n} times the width",
                     n as f64 * (w + g) - g
@@ -109,11 +122,21 @@ pub fn compile(p: &Pattern) -> Result<Compiled, String> {
             let oy = (block - n as f64 * cw) / 2.0;
             for i in 0..n {
                 let y = oy + i as f64 * cw;
-                kinds.push(kind(DVec2::new(ox, y), DVec2::new(ox + cl, y + cw), g));
+                kinds.push(kind(
+                    &name,
+                    DVec2::new(ox, y),
+                    DVec2::new(ox + cl, y + cw),
+                    g,
+                ));
             }
             for i in 0..n {
                 let x = block + oy + i as f64 * cw;
-                kinds.push(kind(DVec2::new(x, ox), DVec2::new(x + cw, ox + cl), g));
+                kinds.push(kind(
+                    &name,
+                    DVec2::new(x, ox),
+                    DVec2::new(x + cw, ox + cl),
+                    g,
+                ));
             }
             (
                 kinds,

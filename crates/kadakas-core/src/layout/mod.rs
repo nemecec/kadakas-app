@@ -198,7 +198,8 @@ impl Pattern {
 /// Where the pattern starts and how it is turned.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Placement {
-    /// The corner of a unit that sits at the start of the pattern. `None`: the middle of the
+    /// The corner of the first cell of the pattern: the cells (unit plus half a gap on each side)
+    /// start here, so the first unit sits half a gap in from this point. `None`: the middle of the
     /// box of the region.
     pub origin: Option<DVec2>,
     /// Rotation about the origin, in degrees, counterclockwise.

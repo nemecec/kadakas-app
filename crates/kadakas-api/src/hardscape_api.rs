@@ -820,7 +820,8 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                         None => {}
                         Some(Ok(sum)) => {
                             row["pattern"] = serde_json::to_value(&sum).expect("json");
-                            sums.push(sum);
+                            let label = row["style_name"].as_str().unwrap_or("").to_string();
+                            sums.push((label, sum));
                         }
                         Some(Err(e)) => {
                             errors += 1;
@@ -829,7 +830,8 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     }
                 }
                 if !sums.is_empty() || errors > 0 {
-                    let refs: Vec<_> = sums.iter().collect();
+                    let refs: Vec<(String, &_)> =
+                        sums.iter().map(|(l, s)| (l.clone(), s)).collect();
                     v["totals"]["pattern"] = crate::pattern_api::totals_json(&refs, errors, &opts);
                 }
             }
