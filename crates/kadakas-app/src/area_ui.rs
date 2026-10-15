@@ -561,7 +561,7 @@ fn extras(doc: &Document, o: &Object) -> Rc<Extras> {
     match &o.shape {
         Shape::Hardscape { .. } => {
             if let Some(j) = hardscape::data::style_of(doc, o).and_then(|(_, s)| s.joints) {
-                e.joints = hardscape::drawn_joints(o, &j, 2.0).segments;
+                e.joints = hardscape::drawn_joints(doc, o, &j, 2.0).segments;
             }
         }
         Shape::LandscapeArea { .. } if landscape::shows_plants(doc, o) => {

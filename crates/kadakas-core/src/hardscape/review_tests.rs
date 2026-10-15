@@ -525,7 +525,7 @@ fn joints_of_a_huge_boundary_are_bounded() {
         &JointPattern {
             unit_length: 4000.0,
             unit_width: 2000.0,
-            ..pattern
+            ..pattern.clone()
         },
     );
     assert!(!j.truncated && j.segments.len() > 100);

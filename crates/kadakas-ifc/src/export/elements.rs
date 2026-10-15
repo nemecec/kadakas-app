@@ -177,15 +177,23 @@ impl<W: Write> Exporter<'_, W> {
         let Shape::Hardscape { boundary, .. } = &obj.shape else {
             return Err("not a hardscape");
         };
-        let ring = geom::clean_ring(&curve::flatten(boundary, true, 2.0));
+        // The holes are merged and cut to the outline. A hole that touches the outline is part of
+        // it then, so a void never touches the outer curve. Holes that split the slab in two
+        // are refused.
+        let hole_list = hardscape::data(obj).map(|d| d.holes).unwrap_or_default();
+        let region = kadakas_core::layout::Region::new(boundary, &hole_list, 2.0)
+            .map_err(|_| "the holes cover the whole slab")?;
+        if region.shapes.len() != 1 {
+            return Err("the holes split the slab into several parts");
+        }
+        let ring = geom::clean_ring(&region.shapes[0][0]);
         if ring.is_empty() {
             return Err("the outline has no area");
         }
-        let holes: Vec<Vec<DVec2>> = hardscape::data(obj)
-            .map(|d| d.holes)
-            .unwrap_or_default()
+        let holes: Vec<Vec<DVec2>> = region.shapes[0]
             .iter()
-            .map(|h| geom::clean_ring(&curve::flatten(h, true, 2.0)))
+            .skip(1)
+            .map(|h| geom::clean_ring(h))
             .filter(|h| !h.is_empty())
             .collect();
         let q =

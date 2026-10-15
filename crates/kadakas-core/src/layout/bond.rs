@@ -1,206 +1,134 @@
-//! The unit grids of the four bonds: the cells that units sit in, and the gap lines between them.
+//! The four bonds, built as modules (cells on a lattice), and the long gap lines of the two bonds
+//! whose gaps are straight rows.
 //!
-//! Everything here works in the frame of the pattern: the origin of the lattice is (0, 0) and the
-//! rows run along +X. A cell is the unit plus half a gap on every side.
-
-use std::collections::BTreeSet;
+//! A cell is a unit plus half a gap on every side; the unit is the cell moved inward by half a gap
+//! (see the module docs of `layout`). With `lp = unit_length + gap` and `wp = unit_width + gap`:
+//!
+//! - stack: one cell `lp` by `wp`, repeat vectors `(lp, 0)` and `(0, wp)`.
+//! - running bond: the same cell, repeat vectors `(lp, 0)` and `(lp / 2, wp)`.
+//! - herringbone: a flat cell `[0, lp] x [0, wp]` and a standing cell `[lp, lp + wp] x [wp - lp, wp]`
+//!   (with lp the longer side), repeat vectors `(wp, wp)` and `(lp + wp, wp - lp)`. Two cells
+//!   fill a lattice cell of `2 lp wp`, so the units keep their size for any ratio of length to width.
+//! - basket weave: blocks of n units side by side, n = the length divided by the width, rounded. A
+//!   block is as wide as the longer of `lp` and `n wp`. When the two differ, the difference goes into
+//!   the joints around the units (the units never change their size); `widest_joint` tells how wide
+//!   they get, and a difference of more than a quarter of the unit width is refused.
 
 use glam::DVec2;
 
+use super::module::{Compiled, Kind};
 use super::{Bond, Pattern, Segment};
 
-/// Most grid cells that a herringbone gap pattern covers.
-const MAX_CELLS: f64 = 80_000.0;
+/// A basket weave whose joints would get wider than the gap by more than this share of the unit
+/// width is refused.
+pub const BASKET_SLACK: f64 = 0.25;
 
-/// A cell of the lattice: the unit and half a gap around it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Cell {
-    pub lo: DVec2,
-    pub hi: DVec2,
+fn rect(lo: DVec2, hi: DVec2) -> Vec<DVec2> {
+    vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)]
 }
 
-/// The size of the herringbone cell and the number of cells in the long side of a unit.
-fn herringbone_dims(p: &Pattern) -> (f64, i64) {
-    let cell = p.unit_width + p.gap;
-    let k = ((p.unit_length / p.unit_width).round() as i64).max(2);
-    (cell, k)
+fn kind(lo: DVec2, hi: DVec2, gap: f64) -> Kind {
+    let cell = rect(lo, hi);
+    let h = DVec2::splat(gap / 2.0);
+    let piece = rect(lo + h, hi - h);
+    let size = hi - lo - 2.0 * h;
+    Kind {
+        name: "unit".into(),
+        cell,
+        area: size.x * size.y,
+        pieces: vec![piece],
+        lo,
+        hi,
+    }
 }
 
-/// The area of a full unit of the pattern, in square mm.
-pub fn full_unit_area(p: &Pattern) -> f64 {
-    let (lp, wp) = (p.unit_length + p.gap, p.unit_width + p.gap);
-    let (w, h) = match p.bond {
-        Bond::Stack | Bond::RunningBond => (lp, wp),
+/// The long and the short side of a pattern, for the bonds that are the same turned by 90 degrees.
+fn long_short(p: &Pattern) -> (f64, f64) {
+    (
+        p.unit_length.max(p.unit_width),
+        p.unit_length.min(p.unit_width),
+    )
+}
+
+fn basket_dims(p: &Pattern) -> (usize, f64) {
+    let (l, w) = long_short(p);
+    let n = ((l / w).round() as usize).clamp(1, 16);
+    let block = (l + p.gap).max(n as f64 * (w + p.gap));
+    (n, block)
+}
+
+/// The widest joint of the pattern in mm.
+pub fn widest_joint(p: &Pattern) -> f64 {
+    if p.bond != Bond::BasketWeave {
+        return p.gap;
+    }
+    let (l, w) = long_short(p);
+    let (n, block) = basket_dims(p);
+    (block - l).max(p.gap + block - n as f64 * (w + p.gap))
+}
+
+/// The cells of a bond as a lattice. Fails for a basket weave that does not fit.
+pub fn compile(p: &Pattern) -> Result<Compiled, String> {
+    let g = p.gap;
+    let (lp, wp) = (p.unit_length + g, p.unit_width + g);
+    let (kinds, a, b) = match p.bond {
+        Bond::Stack => (
+            vec![kind(DVec2::ZERO, DVec2::new(lp, wp), g)],
+            DVec2::new(lp, 0.0),
+            DVec2::new(0.0, wp),
+        ),
+        Bond::RunningBond => (
+            vec![kind(DVec2::ZERO, DVec2::new(lp, wp), g)],
+            DVec2::new(lp, 0.0),
+            DVec2::new(lp / 2.0, wp),
+        ),
         Bond::Herringbone => {
-            let (cell, k) = herringbone_dims(p);
-            (cell * k as f64, cell)
+            let (l, w) = long_short(p);
+            let (a, b) = (l + g, w + g);
+            (
+                vec![
+                    kind(DVec2::ZERO, DVec2::new(a, b), g),
+                    kind(DVec2::new(a, b - a), DVec2::new(a + b, b), g),
+                ],
+                DVec2::new(b, b),
+                DVec2::new(a + b, b - a),
+            )
         }
         Bond::BasketWeave => {
-            let block = lp.max(2.0 * wp);
-            (block, block / 2.0)
+            let (l, w) = long_short(p);
+            let (n, block) = basket_dims(p);
+            if widest_joint(p) - g > BASKET_SLACK * w {
+                return Err(format!(
+                    "a basket weave of {l} by {w} mm units does not fit: {n} units of {w} mm side by side are {:.1} mm wide, one unit is {l} mm long. Use a length that is about {n} times the width",
+                    n as f64 * (w + g) - g
+                ));
+            }
+            let (cl, cw) = (l + g, w + g);
+            let mut kinds = Vec::new();
+            let ox = (block - cl) / 2.0;
+            let oy = (block - n as f64 * cw) / 2.0;
+            for i in 0..n {
+                let y = oy + i as f64 * cw;
+                kinds.push(kind(DVec2::new(ox, y), DVec2::new(ox + cl, y + cw), g));
+            }
+            for i in 0..n {
+                let x = block + oy + i as f64 * cw;
+                kinds.push(kind(DVec2::new(x, ox), DVec2::new(x + cw, ox + cl), g));
+            }
+            (
+                kinds,
+                DVec2::new(2.0 * block, 0.0),
+                DVec2::new(block, block),
+            )
         }
+        Bond::Module => return Err("a module is not a bond".into()),
     };
-    ((w - p.gap) * (h - p.gap)).max(0.0)
+    let det = a.perp_dot(b);
+    Ok(Compiled { kinds, a, b, det })
 }
 
-/// How many loop steps `for_each_cell` makes over the box. Used to refuse a job before it starts.
-pub fn steps_in(p: &Pattern, lo: DVec2, hi: DVec2) -> f64 {
-    let span = hi - lo;
-    let (lp, wp) = (p.unit_length + p.gap, p.unit_width + p.gap);
-    match p.bond {
-        Bond::Stack => (span.x / lp + 2.0) * (span.y / wp + 2.0),
-        Bond::RunningBond => (span.x / lp + 3.0) * (span.y / wp + 2.0),
-        Bond::Herringbone => {
-            let (cell, k) = herringbone_dims(p);
-            (span.x / cell + 2.0 * k as f64 + 3.0) * (span.y / cell + 2.0 * k as f64 + 3.0)
-        }
-        Bond::BasketWeave => {
-            let block = lp.max(2.0 * wp);
-            (span.x / block + 3.0) * (span.y / block + 3.0)
-        }
-    }
-}
-
-fn touches(c: &Cell, lo: DVec2, hi: DVec2) -> bool {
-    c.hi.x >= lo.x && c.lo.x <= hi.x && c.hi.y >= lo.y && c.lo.y <= hi.y
-}
-
-/// Calls `f` for every cell that touches the box `lo`..`hi`, in rows from bottom to top.
-pub fn for_each_cell(p: &Pattern, lo: DVec2, hi: DVec2, f: &mut dyn FnMut(Cell)) {
-    let (lp, wp) = (p.unit_length + p.gap, p.unit_width + p.gap);
-    match p.bond {
-        Bond::Stack => {
-            let (i0, i1) = ((lo.x / lp).floor() as i64, (hi.x / lp).floor() as i64);
-            let (j0, j1) = ((lo.y / wp).floor() as i64, (hi.y / wp).floor() as i64);
-            for j in j0..=j1 {
-                for i in i0..=i1 {
-                    f(Cell {
-                        lo: DVec2::new(i as f64 * lp, j as f64 * wp),
-                        hi: DVec2::new((i + 1) as f64 * lp, (j + 1) as f64 * wp),
-                    });
-                }
-            }
-        }
-        Bond::RunningBond => {
-            let (j0, j1) = ((lo.y / wp).floor() as i64, (hi.y / wp).floor() as i64);
-            for j in j0..=j1 {
-                let shift = if j.rem_euclid(2) == 1 { 0.5 } else { 0.0 };
-                let (i0, i1) = (
-                    (lo.x / lp - shift).floor() as i64,
-                    (hi.x / lp - shift).floor() as i64,
-                );
-                for i in i0..=i1 {
-                    let x = (i as f64 + shift) * lp;
-                    f(Cell {
-                        lo: DVec2::new(x, j as f64 * wp),
-                        hi: DVec2::new(x + lp, (j + 1) as f64 * wp),
-                    });
-                }
-            }
-        }
-        Bond::Herringbone => {
-            let (cell, k) = herringbone_dims(p);
-            let a0 = (lo.x / cell).floor() as i64 - k;
-            let a1 = (hi.x / cell).floor() as i64 + 1;
-            let b0 = (lo.y / cell).floor() as i64 - k;
-            let b1 = (hi.y / cell).floor() as i64 + k;
-            for b in b0..=b1 {
-                for a in a0..=a1 {
-                    let c = match (a - b).rem_euclid(2 * k) {
-                        0 => Cell {
-                            lo: DVec2::new(a as f64, b as f64) * cell,
-                            hi: DVec2::new((a + k) as f64, (b + 1) as f64) * cell,
-                        },
-                        m if m == k => Cell {
-                            lo: DVec2::new(a as f64, (b - k + 1) as f64) * cell,
-                            hi: DVec2::new((a + 1) as f64, (b + 1) as f64) * cell,
-                        },
-                        _ => continue,
-                    };
-                    if touches(&c, lo, hi) {
-                        f(c);
-                    }
-                }
-            }
-        }
-        Bond::BasketWeave => {
-            let block = lp.max(2.0 * wp);
-            let (i0, i1) = ((lo.x / block).floor() as i64, (hi.x / block).floor() as i64);
-            let (j0, j1) = ((lo.y / block).floor() as i64, (hi.y / block).floor() as i64);
-            let half = block / 2.0;
-            for j in j0..=j1 {
-                for i in i0..=i1 {
-                    let (x, y) = (i as f64 * block, j as f64 * block);
-                    if (i + j).rem_euclid(2) == 0 {
-                        for s in 0..2 {
-                            f(Cell {
-                                lo: DVec2::new(x, y + s as f64 * half),
-                                hi: DVec2::new(x + block, y + (s + 1) as f64 * half),
-                            });
-                        }
-                    } else {
-                        for s in 0..2 {
-                            f(Cell {
-                                lo: DVec2::new(x + s as f64 * half, y),
-                                hi: DVec2::new(x + (s + 1) as f64 * half, y + block),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Merges unit edges on a grid (integer coordinates) into long lines.
-fn merge_grid_edges(edges: BTreeSet<(bool, i64, i64)>) -> Vec<((i64, i64), (i64, i64))> {
-    // An edge is (vertical, x, y): from (x, y) to (x + 1, y) or to (x, y + 1).
-    // Horizontal edges are grouped by y and run along x. Vertical edges are grouped by x and run along y.
-    let mut horizontals: Vec<(i64, i64)> = Vec::new();
-    let mut verticals: Vec<(i64, i64)> = Vec::new();
-    for (vertical, x, y) in edges {
-        if vertical {
-            verticals.push((x, y))
-        } else {
-            horizontals.push((y, x))
-        }
-    }
-    horizontals.sort_unstable();
-    verticals.sort_unstable();
-    let mut lines = Vec::new();
-    for (list, vertical) in [(horizontals, false), (verticals, true)] {
-        let mut i = 0;
-        while i < list.len() {
-            let (fixed, start) = list[i];
-            let mut end = start + 1;
-            i += 1;
-            while i < list.len() && list[i] == (fixed, end) {
-                end += 1;
-                i += 1;
-            }
-            lines.push(if vertical {
-                ((fixed, start), (fixed, end))
-            } else {
-                ((start, fixed), (end, fixed))
-            });
-        }
-    }
-    lines
-}
-
-fn rect_edges(set: &mut BTreeSet<(bool, i64, i64)>, x0: i64, y0: i64, x1: i64, y1: i64) {
-    for x in x0..x1 {
-        set.insert((false, x, y0));
-        set.insert((false, x, y1));
-    }
-    for y in y0..y1 {
-        set.insert((true, x0, y));
-        set.insert((true, x1, y));
-    }
-}
-
-/// Gap lines of the pattern in its own frame, over the box `lo`..`hi`. `None` if there would be
-/// more than `max` lines.
+/// Long gap lines of a stack or a running bond over the box `lo`..`hi` (in the frame of the
+/// pattern). `None` if there would be more than `max` lines, or for another bond.
 pub fn pattern_lines(p: &Pattern, lo: DVec2, hi: DVec2, max: usize) -> Option<Vec<Segment>> {
     let (lp, wp) = (p.unit_length + p.gap, p.unit_width + p.gap);
     let mut out: Vec<Segment> = Vec::new();
@@ -240,69 +168,7 @@ pub fn pattern_lines(p: &Pattern, lo: DVec2, hi: DVec2, max: usize) -> Option<Ve
                 }
             }
         }
-        Bond::Herringbone => {
-            let (cell, k) = herringbone_dims(p);
-            let (nx, ny) = (
-                (span.x / cell).ceil() as i64 + 2 * k + 2,
-                (span.y / cell).ceil() as i64 + 2 * k + 2,
-            );
-            if nx as f64 * ny as f64 > MAX_CELLS.max(max * 2.0) {
-                return None;
-            }
-            let (a0, b0) = (
-                (lo.x / cell).floor() as i64 - k,
-                (lo.y / cell).floor() as i64 - k,
-            );
-            let mut set = BTreeSet::new();
-            for a in a0..a0 + nx {
-                for b in b0..b0 + ny {
-                    match (a - b).rem_euclid(2 * k) {
-                        0 => rect_edges(&mut set, a, b, a + k, b + 1),
-                        m if m == k => rect_edges(&mut set, a, b - k + 1, a + 1, b + 1),
-                        _ => {}
-                    }
-                }
-            }
-            for ((x0, y0), (x1, y1)) in merge_grid_edges(set) {
-                out.push((
-                    DVec2::new(x0 as f64, y0 as f64) * cell,
-                    DVec2::new(x1 as f64, y1 as f64) * cell,
-                ));
-            }
-        }
-        Bond::BasketWeave => {
-            let block = lp.max(2.0 * wp);
-            let (nx, ny) = ((span.x / block).ceil() + 2.0, (span.y / block).ceil() + 2.0);
-            if nx * ny + nx + ny > max {
-                return None;
-            }
-            let (i0, j0) = ((lo.x / block).floor() as i64, (lo.y / block).floor() as i64);
-            for ii in 0..=nx as i64 {
-                let x = (i0 + ii) as f64 * block;
-                out.push((DVec2::new(x, lo.y), DVec2::new(x, hi.y)));
-            }
-            for jj in 0..=ny as i64 {
-                let y = (j0 + jj) as f64 * block;
-                out.push((DVec2::new(lo.x, y), DVec2::new(hi.x, y)));
-            }
-            for ii in 0..nx as i64 {
-                for jj in 0..ny as i64 {
-                    let (i, j) = (i0 + ii, j0 + jj);
-                    let (x, y) = (i as f64 * block, j as f64 * block);
-                    if (i + j).rem_euclid(2) == 0 {
-                        out.push((
-                            DVec2::new(x, y + block / 2.0),
-                            DVec2::new(x + block, y + block / 2.0),
-                        ));
-                    } else {
-                        out.push((
-                            DVec2::new(x + block / 2.0, y),
-                            DVec2::new(x + block / 2.0, y + block),
-                        ));
-                    }
-                }
-            }
-        }
+        _ => return None,
     }
     Some(out)
 }

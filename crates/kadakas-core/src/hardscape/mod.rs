@@ -131,22 +131,22 @@ pub fn emit_object(
         .filter(|c| c.0[3] > 0)
         .map_or(DEFAULT_COLOR, rgba);
     let edge = attrs.pen.filter(|c| c.0[3] > 0).map_or(EDGE_COLOR, rgba);
-    let ring = curve::flatten(boundary, true, FLATTEN_TOLERANCE);
-    let holes: Vec<Vec<DVec2>> = d.as_ref().map_or_else(Vec::new, |d| {
-        d.holes
-            .iter()
-            .map(|h| curve::flatten(h, true, FLATTEN_TOLERANCE))
-            .collect()
-    });
     let surf = surface::surface_of(obj, d.as_ref(), terrain);
-    surface::emit_solid(
-        sink,
-        &ring,
-        &holes,
-        &surf,
-        &layer_specs(doc, obj, base),
-        edge,
-    );
+    let specs = layer_specs(doc, obj, base);
+    // Holes are merged and cut to the outline. A hole that touches the outline is part of it, and a
+    // hole that splits the slab makes two solids.
+    let hole_list = d.as_ref().map_or(&[][..], |d| d.holes.as_slice());
+    match crate::layout::Region::new(boundary, hole_list, FLATTEN_TOLERANCE) {
+        Ok(region) => {
+            for shape in &region.shapes {
+                surface::emit_solid(sink, &shape[0], &shape[1..], &surf, &specs, edge);
+            }
+        }
+        Err(_) => {
+            let ring = curve::flatten(boundary, true, FLATTEN_TOLERANCE);
+            surface::emit_solid(sink, &ring, &[], &surf, &specs, edge);
+        }
+    }
 }
 
 /// Extra SVG elements of a hardscape or a landscape area, drawn after its outline.
@@ -158,24 +158,23 @@ pub fn object_svg_extras(doc: &Document, obj: &Object, scale: f64, stroke: &str)
     }
 }
 
-/// The joint lines of a hardscape for drawing: inside the outline and outside the holes, from the
-/// origin and the angle of the object. Curves are flattened to `tolerance`.
-pub fn drawn_joints(obj: &Object, j: &JointPattern, tolerance: f64) -> joints::Joints {
-    let Shape::Hardscape { boundary, .. } = &obj.shape else {
+/// The joint lines of a hardscape for drawing: inside the outline (less the kerb border), outside
+/// the holes, from the origin and the angle of the object. Curves are flattened to `tolerance`.
+pub fn drawn_joints(
+    doc: &Document,
+    obj: &Object,
+    j: &JointPattern,
+    tolerance: f64,
+) -> joints::Joints {
+    let d = data(obj).unwrap_or_default();
+    let Ok(region) = crate::layout::object::region_of(doc, obj, tolerance) else {
         return joints::Joints::default();
     };
-    let d = data(obj).unwrap_or_default();
-    let ring = curve::flatten(boundary, true, tolerance);
-    let holes: Vec<Vec<DVec2>> = d
-        .holes
-        .iter()
-        .map(|h| curve::flatten(h, true, tolerance))
-        .collect();
     let place = crate::layout::Placement {
         origin: d.origin,
         angle: d.angle.unwrap_or(j.angle),
     };
-    joints::joint_lines_in(&ring, &holes, j, &place)
+    crate::layout::gap_lines(&region, &j.layout(), &place, joints::MAX_SEGMENTS, true)
 }
 
 fn pts_attr(pts: &[DVec2]) -> String {
@@ -219,7 +218,7 @@ pub fn svg_extras(doc: &Document, obj: &Object, scale: f64, stroke: &str) -> Str
         );
     }
     if let Some(j) = &s.joints {
-        let lines = drawn_joints(obj, j, FLATTEN_TOLERANCE);
+        let lines = drawn_joints(doc, obj, j, FLATTEN_TOLERANCE);
         if !lines.segments.is_empty() {
             let color = j.color.map_or_else(|| stroke.to_string(), Color::to_css);
             let width = j.spacing.max(0.1 * scale);

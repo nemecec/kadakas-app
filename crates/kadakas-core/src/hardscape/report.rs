@@ -80,11 +80,13 @@ pub fn quantities(
         offset::length(r) + r.last().zip(r.first()).map_or(0.0, |(a, b)| a.distance(*b))
     };
     // The kerb runs round the holes too.
-    let closed_perimeter = closed_len(&ring)
-        + hole_list
-            .iter()
-            .map(|h| closed_len(&curve::flatten(h, true, TOLERANCE)))
-            .sum::<f64>();
+    let closed_perimeter = if hole_list.is_empty() {
+        closed_len(&ring)
+    } else {
+        // Holes that overlap are merged, and holes that touch the outline are part of it.
+        crate::layout::Region::new(boundary, hole_list, TOLERANCE)
+            .map_or_else(|_| closed_len(&ring), |r| r.perimeter())
+    };
     let m3 = |area: f64, t: f64| area * t / 1000.0;
     let mut layers: Vec<LayerQty> = Vec::new();
     match &style {

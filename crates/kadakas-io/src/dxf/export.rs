@@ -292,6 +292,11 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     // The entities of unit patterns come last and are not scanned for layer names: they are many.
     let mut pattern_text = String::new();
     let mut pattern_layers: BTreeSet<String> = BTreeSet::new();
+    let mut pattern_xdata = false;
+    let mut pattern_budget = opts
+        .pattern_budget
+        .unwrap_or(patterns::MAX_EXPORT_FILE_UNITS)
+        .min(patterns::MAX_EXPORT_FILE_UNITS);
     for o in doc.objects.values() {
         if opts.visible_only && !doc.is_visible(o) {
             continue;
@@ -300,7 +305,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         let hidden_layer = doc.layer(o.layer).is_some_and(|l| !l.visible);
         if opts.patterns != crate::options::PatternExport::None {
             let mark = ents.buf.len();
-            pattern_layers.extend(patterns::write(
+            let used = patterns::write(
                 &mut ents,
                 &cx,
                 o,
@@ -308,7 +313,10 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
                 hidden_layer,
                 opts.patterns,
                 &mut report,
-            )?);
+                &mut pattern_budget,
+            )?;
+            pattern_layers.extend(used.layers);
+            pattern_xdata |= used.xdata;
             pattern_text.push_str(&ents.buf.split_off(mark));
         }
         let shifted;
@@ -496,11 +504,18 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     tables.table("UCS", H_UCS_TABLE, 0);
     tables.pair(0, "ENDTAB");
     // APPID
-    tables.table("APPID", H_APPID_TABLE, 1);
+    tables.table("APPID", H_APPID_TABLE, 1 + usize::from(pattern_xdata));
     tables.record("APPID", H_APPID_ACAD, H_APPID_TABLE);
     tables.pair(100, "AcDbRegAppTableRecord");
     tables.pair(2, "ACAD");
     tables.pair(70, 0);
+    if pattern_xdata {
+        let h = tables.handle();
+        tables.record("APPID", &h, H_APPID_TABLE);
+        tables.pair(100, "AcDbRegAppTableRecord");
+        tables.pair(2, patterns::XDATA_APP);
+        tables.pair(70, 0);
+    }
     tables.pair(0, "ENDTAB");
     // DIMSTYLE (its handle is group 105, and the table has an extra subclass marker)
     tables.table("DIMSTYLE", H_DIMSTYLE_TABLE, 1);

@@ -82,7 +82,7 @@ pub const HARDSCAPE_SET: (&str, &str) = (
 );
 pub const HARDSCAPE_FROM_SHAPES: (&str, &str) = (
     "hardscape.from_shapes",
-    "Create hardscapes from closed shapes (closed polylines, rectangles, circles; for example the outlines of a parking lot from a DXF file) in one undo step. A shape inside another one becomes a hole of it (a shape inside a hole becomes a hardscape again). params: {ids? (default: the selection), style? (ID or name), holes_from_inner? (default true; false makes every shape a hardscape of its own), delete_source? (default true), dry_run?}. The layer, class, look and data of a shape go to its hardscape. Returns {created: [{source, id, holes}], holes: [{source, host}], skipped: [{id, reason}], dry_run}. The new hardscapes become the selection.",
+    "Create hardscapes from closed shapes (closed polylines, rectangles, circles; for example the outlines of a parking lot from a DXF file) in one undo step. A shape inside another one becomes a hole of it (a shape inside a hole becomes a hardscape again). params: {ids? (default: the selection), style? (ID or name), holes_from_inner? (default true; false makes every shape a hardscape of its own), delete_source? (default false: the outlines stay), dry_run?}. The layer, class, look and data of a shape go to its hardscape. A shape counts as inside another one by area (it may touch the outline or sit 0.01 mm outside it); a shape that overlaps another in part is left out and named in skipped, so the new hardscapes never overlap. Returns {created: [{source, id, holes}], holes: [{source, host}], skipped: [{id, reason}], dry_run}. The new hardscapes become the selection.",
 );
 pub const LANDSCAPE_AREA_ADD: (&str, &str) = (
     "landscape_area.add",
@@ -94,7 +94,7 @@ pub const LANDSCAPE_AREA_SET: (&str, &str) = (
 );
 pub const REPORT_HARDSCAPE: (&str, &str) = (
     "report.hardscape",
-    "Hardscape quantities. params: {format?: csv, pattern? (false leaves out the unit pattern block), sliver_share?, waste_percent? (for the pattern block, see report.pattern)}. Returns {rows: [{id, name, style, style_name, material, mode, plan_area_m2, surface_area_m2, perimeter_m (outline and holes), holes, holes_area_m2, thickness_mm, volume_m3, pattern? (the unit counts of report.pattern, when the style has a joint pattern: {whole_units, cut_units, slivers, area_laid_m2, gap_length_m, order_units, ...} or {error}), draped, partially_draped (part of it lies outside the site model and follows the nearest edge height), layers: [{kind, name, material, thickness_mm, area_m2, volume_m3}]}], materials: [{kind, material, area_m2, volume_m3}], totals}. The surface area follows a slope or the site model; the volume of a layer is its thickness times the surface area.",
+    "Hardscape quantities. params: {format?: csv, pattern? (false leaves out the unit pattern block), and the count options of report.unit_pattern (sliver_share, waste_percent, trim, ...) for the pattern block}. Returns {rows: [{id, name, style, style_name, material, mode, plan_area_m2, surface_area_m2, perimeter_m (outline and holes), holes, holes_area_m2, thickness_mm, volume_m3, pattern? (the unit counts of report.unit_pattern, when the style has a joint pattern: {whole_units, cut_units, slivers, area_laid_m2, gap_length_m, order_units, ...} or {error}), draped, partially_draped (part of it lies outside the site model and follows the nearest edge height), layers: [{kind, name, material, thickness_mm, area_m2, volume_m3}]}], materials: [{kind, material, area_m2, volume_m3}], totals}. The surface area follows a slope or the site model; the volume of a layer is its thickness times the surface area.",
 );
 pub const REPORT_LANDSCAPE_AREAS: (&str, &str) = (
     "report.landscape_areas",
@@ -734,7 +734,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     None => None,
                 },
                 holes_from_inner: flag("holes_from_inner", true),
-                delete_source: flag("delete_source", true),
+                delete_source: flag("delete_source", false),
             };
             let dry_run = flag("dry_run", false);
             let made = hardscape::batch::from_shapes(doc, &ids, &opts);
@@ -805,27 +805,32 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             let mut v = serde_json::to_value(&r).unwrap();
             v["totals"] = json!({ "plan_area_m2": r.total_plan_area_m2, "surface_area_m2": r.total_surface_area_m2, "volume_m3": r.total_volume_m3 });
             if m.get("pattern").and_then(Value::as_bool) != Some(false) {
-                // The unit pattern of each hardscape that has one, counted by the layout engine.
+                // The unit pattern of each hardscape that has one, counted once by the layout
+                // engine. The totals are the sums of the rows.
+                let opts = crate::pattern_api::summary_options(m, s.limits().pattern_units)?;
                 let doc = s.editor.doc();
-                let mut opts = Map::new();
-                for k in ["sliver_share", "waste_percent"] {
-                    if let Some(x) = m.get(k) {
-                        opts.insert(k.into(), x.clone());
-                    }
-                }
-                let mut any = false;
+                let mut sums = Vec::new();
+                let mut errors = 0;
                 for row in v["rows"].as_array_mut().into_iter().flatten() {
                     let id: Option<ObjectId> = serde_json::from_value(row["id"].clone()).ok();
-                    if let Some(o) = id.and_then(|id| doc.object(id))
-                        && let Some(b) = crate::pattern_api::block_for(doc, o, &opts)
-                    {
-                        row["pattern"] = b;
-                        any = true;
+                    let Some(o) = id.and_then(|id| doc.object(id)) else {
+                        continue;
+                    };
+                    match crate::pattern_api::block_for(doc, o, &opts) {
+                        None => {}
+                        Some(Ok(sum)) => {
+                            row["pattern"] = serde_json::to_value(&sum).expect("json");
+                            sums.push(sum);
+                        }
+                        Some(Err(e)) => {
+                            errors += 1;
+                            row["pattern"] = json!({ "error": e });
+                        }
                     }
                 }
-                if any {
-                    let (_, totals) = crate::pattern_api::report_rows(doc, None, &opts)?;
-                    v["totals"]["pattern"] = totals;
+                if !sums.is_empty() || errors > 0 {
+                    let refs: Vec<_> = sums.iter().collect();
+                    v["totals"]["pattern"] = crate::pattern_api::totals_json(&refs, errors, &opts);
                 }
             }
             if csv {

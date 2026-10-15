@@ -3,7 +3,8 @@
 use glam::DVec2;
 
 use super::bond::pattern_lines;
-use super::{Pattern, Placement, Region, Segment};
+use super::units::{Local, lattice_range};
+use super::{Bond, Pattern, Placement, Region, Segment};
 
 /// Most gap lines that the on-screen drawing makes. A pattern with more lines is left out.
 pub const MAX_DRAW_SEGMENTS: usize = 30_000;
@@ -134,9 +135,12 @@ impl<'a> EdgeIndex<'a> {
 }
 
 /// The gap center lines of `pattern` inside the region. The work is limited. With
-/// `coarse_fallback`, a pattern that is too fine for the limits is made with units four times
-/// larger (the on-screen drawing does this). Without it, the pattern is left out and `truncated`
-/// is true: an export or a report never changes the units on its own.
+/// `coarse_fallback`, a pattern of one of the four bonds that is too fine for the limits is made
+/// with units four times larger (the on-screen drawing does this). Without it, the pattern is left
+/// out and `truncated` is true: an export or a report never changes the units on its own.
+///
+/// The lines of a stack or a running bond are long rows. The other patterns give the outlines of
+/// their cells, each edge once. Lines that lie on the outline of the region are included.
 pub fn gap_lines(
     region: &Region,
     pattern: &Pattern,
@@ -147,6 +151,21 @@ pub fn gap_lines(
     if pattern.validate().is_err() || region.shapes.is_empty() {
         return Gaps::default();
     }
+    match pattern.bond {
+        Bond::Stack | Bond::RunningBond => {
+            row_lines(region, pattern, place, max_segments, coarse_fallback)
+        }
+        _ => cell_lines(region, pattern, place, max_segments, coarse_fallback),
+    }
+}
+
+fn row_lines(
+    region: &Region,
+    pattern: &Pattern,
+    place: &Placement,
+    max_segments: usize,
+    coarse_fallback: bool,
+) -> Gaps {
     let (origin, angle) = place.resolve(region);
     let turn = DVec2::from_angle(angle.to_radians());
     let unturn = DVec2::from_angle(-angle.to_radians());
@@ -168,11 +187,7 @@ pub fn gap_lines(
     let index = EdgeIndex::new(&edges, llo, lhi);
     let tries: &[f64] = if coarse_fallback { &[1.0, 4.0] } else { &[1.0] };
     for &coarse in tries {
-        let p = Pattern {
-            unit_length: pattern.unit_length * coarse,
-            unit_width: pattern.unit_width * coarse,
-            ..*pattern
-        };
+        let p = pattern.scaled(coarse);
         let Some(lines) = pattern_lines(&p, llo, lhi, max_segments) else {
             continue;
         };
@@ -211,6 +226,181 @@ pub fn gap_lines(
         truncated: true,
         coarsened: false,
     }
+}
+
+/// The outlines of the cells, clipped to the region, each edge once.
+fn cell_lines(
+    region: &Region,
+    pattern: &Pattern,
+    place: &Placement,
+    max_segments: usize,
+    coarse_fallback: bool,
+) -> Gaps {
+    let tries: &[f64] = if coarse_fallback && pattern.bond != Bond::Module {
+        &[1.0, 4.0]
+    } else {
+        &[1.0]
+    };
+    for &coarse in tries {
+        let p = pattern.scaled(coarse);
+        if let Some(segments) = cell_lines_once(region, &p, place, max_segments) {
+            return Gaps {
+                segments,
+                truncated: false,
+                coarsened: coarse > 1.0,
+            };
+        }
+    }
+    Gaps {
+        segments: Vec::new(),
+        truncated: true,
+        coarsened: false,
+    }
+}
+
+fn cell_lines_once(
+    region: &Region,
+    pattern: &Pattern,
+    place: &Placement,
+    max_segments: usize,
+) -> Option<Vec<Segment>> {
+    let comp = pattern.compile().ok()?;
+    let (origin, angle) = place.resolve(region);
+    let turn = DVec2::from_angle(angle.to_radians());
+    let extent = comp
+        .kinds
+        .iter()
+        .map(|k| (k.hi - k.lo).max_element())
+        .fold(0.0, f64::max);
+    let mut local = Local::new(region, origin, angle, extent);
+    let ((i0, i1), (j0, j1)) = lattice_range(&comp, local.lo, local.hi);
+    let cells = (i1 - i0 + 1) as f64 * (j1 - j0 + 1) as f64 * comp.kinds.len() as f64;
+    if cells > max_segments as f64 + 10_000.0 {
+        return None;
+    }
+    // All cell edges that meet the box of the region, then the edges that lie on one line are
+    // joined, so a shared edge is one line and a row of bricks is one long line.
+    let mut raw: Vec<Segment> = Vec::new();
+    for j in j0..=j1 {
+        for i in i0..=i1 {
+            let t = comp.a * i as f64 + comp.b * j as f64;
+            for kind in &comp.kinds {
+                let n = kind.cell.len();
+                for e in 0..n {
+                    let (p, q) = (kind.cell[e] + t, kind.cell[(e + 1) % n] + t);
+                    if p.max(q).x < local.lo.x
+                        || p.min(q).x > local.hi.x
+                        || p.max(q).y < local.lo.y
+                        || p.min(q).y > local.hi.y
+                    {
+                        continue;
+                    }
+                    raw.push((p, q));
+                }
+            }
+        }
+    }
+    let chunk = local.index.cell_size().max(1.0);
+    let mut out: Vec<Segment> = Vec::new();
+    let mut near: Vec<u32> = Vec::new();
+    for (p, q) in join_collinear(raw, chunk) {
+        for (a, b) in clip_to_region(&mut local, p, q, &mut near) {
+            out.push((origin + turn.rotate(a), origin + turn.rotate(b)));
+            if out.len() > max_segments {
+                return None;
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Joins segments that lie on one line and overlap or touch, and cuts the joined lines into pieces
+/// of at most `chunk` mm (so that a long line does not meet the whole boundary in one test).
+fn join_collinear(segments: Vec<Segment>, chunk: f64) -> Vec<Segment> {
+    use std::collections::HashMap;
+    let mut lines: HashMap<(i64, i64), (DVec2, Vec<(f64, f64)>)> = HashMap::new();
+    for (p, q) in segments {
+        let Some(mut d) = (q - p).try_normalize() else {
+            continue;
+        };
+        // One direction for both ways along a line.
+        if d.x < -1e-12 || (d.x.abs() <= 1e-12 && d.y < 0.0) {
+            d = -d;
+        }
+        let angle_key = (d.y.atan2(d.x) * 1.0e7).round() as i64;
+        let offset = p.perp_dot(d);
+        let key = (angle_key, (offset * 1000.0).round() as i64);
+        let (t0, t1) = (p.dot(d), q.dot(d));
+        let e = lines.entry(key).or_insert_with(|| (d, Vec::new()));
+        e.1.push((t0.min(t1), t0.max(t1)));
+    }
+    let mut out: Vec<Segment> = Vec::new();
+    let mut keys: Vec<_> = lines.keys().copied().collect();
+    keys.sort_unstable();
+    for key in keys {
+        let (d, mut spans) = lines.remove(&key).expect("key exists");
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let n = DVec2::new(-d.y, d.x);
+        let off = key.1 as f64 / 1000.0;
+        let at = |t: f64| d * t - n * off;
+        let mut cur = spans[0];
+        let mut flush = |(a, b): (f64, f64), out: &mut Vec<Segment>| {
+            let pieces = ((b - a) / chunk).ceil().max(1.0) as usize;
+            for k in 0..pieces {
+                let (s, e) = (
+                    a + (b - a) * k as f64 / pieces as f64,
+                    a + (b - a) * (k + 1) as f64 / pieces as f64,
+                );
+                out.push((at(s), at(e)));
+            }
+        };
+        for &(a, b) in &spans[1..] {
+            if a <= cur.1 + 1e-6 {
+                cur.1 = cur.1.max(b);
+            } else {
+                flush(cur, &mut out);
+                cur = (a, b);
+            }
+        }
+        flush(cur, &mut out);
+    }
+    out
+}
+
+/// The parts of the segment `p`-`q` inside the region (in the frame of the pattern).
+fn clip_to_region(local: &mut Local, p: DVec2, q: DVec2, near: &mut Vec<u32>) -> Vec<Segment> {
+    local.index.near(p.min(q), p.max(q), &mut local.stamp, near);
+    let r = q - p;
+    let mut ts = vec![0.0, 1.0];
+    for &e in near.iter() {
+        let (a, b) = local.index.edges[e as usize];
+        let s = b - a;
+        let denom = r.perp_dot(s);
+        if denom.abs() < 1e-18 {
+            continue;
+        }
+        let t = (a - p).perp_dot(s) / denom;
+        let u = (a - p).perp_dot(r) / denom;
+        if t > 0.0 && t < 1.0 && (0.0..=1.0).contains(&u) {
+            ts.push(t);
+        }
+    }
+    ts.sort_by(f64::total_cmp);
+    let mut out: Vec<Segment> = Vec::new();
+    for w in ts.windows(2) {
+        if w[1] - w[0] < 1e-12 {
+            continue;
+        }
+        let mid = p + r * ((w[0] + w[1]) / 2.0);
+        if local.index.inside(mid, &mut local.stamp) {
+            let seg = (p + r * w[0], p + r * w[1]);
+            match out.last_mut() {
+                Some(last) if last.1.distance_squared(seg.0) < 1e-12 => last.1 = seg.1,
+                _ => out.push(seg),
+            }
+        }
+    }
+    out
 }
 
 /// Total length of gap lines.

@@ -1,5 +1,10 @@
 //! Turns closed shapes into hardscapes in one step, for example the outlines of a parking lot
 //! that came in from a DXF file. A shape that lies inside another one becomes a hole of it.
+//!
+//! "Inside" is a test of area, not of corners: a shape is inside another one when it leaves it by
+//! less than a noise area (see `layout::ring_within`), so an island that touches the kerb line, or
+//! sits 0.01 mm outside after a snap, is still a hole. A shape that overlaps another one only in
+//! part is left out and named in `skipped`: the command never makes two hardscapes that overlap.
 
 use glam::DVec2;
 
@@ -9,6 +14,7 @@ use crate::command::Command;
 use crate::curve::{self, Vertex};
 use crate::geom;
 use crate::layout::object::outline_of;
+use crate::layout::{area_shared, ring_within};
 use crate::model::{Document, ObjectId, Shape};
 use crate::resource::ResourceId;
 
@@ -22,7 +28,7 @@ pub struct FromShapesOptions {
     /// A shape inside another one becomes a hole of it (a shape inside a hole becomes a hardscape
     /// again, and so on). Without this, every shape becomes a hardscape of its own.
     pub holes_from_inner: bool,
-    /// Delete the shapes that were used.
+    /// Delete the shapes that were used. Off by default: the outlines of a survey stay.
     pub delete_source: bool,
 }
 
@@ -31,7 +37,7 @@ impl Default for FromShapesOptions {
         FromShapesOptions {
             style: None,
             holes_from_inner: true,
-            delete_source: true,
+            delete_source: false,
         }
     }
 }
@@ -58,10 +64,13 @@ struct Item {
     hi: DVec2,
 }
 
-fn inside_or_on(ring: &[DVec2], p: DVec2) -> bool {
-    let n = ring.len();
-    geom::point_in_polygon(p, ring)
-        || (0..n).any(|i| geom::dist_to_segment(p, ring[i], ring[(i + 1) % n]) < 1e-6)
+fn boxes_meet(a: &Item, b: &Item) -> bool {
+    a.lo.x <= b.hi.x && b.lo.x <= a.hi.x && a.lo.y <= b.hi.y && b.lo.y <= a.hi.y
+}
+
+/// Noise area for "the shapes overlap", in mm2.
+fn noise(a: f64) -> f64 {
+    (1e-6 * a).max(1.0)
 }
 
 /// Plans the conversion of the given shapes. Shapes that are not closed outlines are skipped with
@@ -93,7 +102,7 @@ pub fn from_shapes(doc: &Document, ids: &[ObjectId], opts: &FromShapesOptions) -
                 continue;
             }
         };
-        let ring = curve::flatten(&outer, true, TOLERANCE);
+        let ring = geom::open_ring(&curve::flatten(&outer, true, TOLERANCE), 1e-9);
         let area = geom::polygon_area(&ring);
         if ring.len() < 3 || area.is_nan() || area <= 0.0 {
             made.skipped.push((id, "the outline has no area".into()));
@@ -113,37 +122,63 @@ pub fn from_shapes(doc: &Document, ids: &[ObjectId], opts: &FromShapesOptions) -
             hi,
         });
     }
-    // The smallest shape that holds each shape, and how deep the shape lies.
     let n = items.len();
+    // For each pair: is i inside j, or do they overlap in part?
     let mut parent: Vec<Option<usize>> = vec![None; n];
     let mut depth = vec![0usize; n];
+    let mut dropped = vec![false; n];
+    let overlaps = |a: &Item, b: &Item| {
+        boxes_meet(a, b) && area_shared(&a.ring, &b.ring) > noise(a.area.min(b.area))
+    };
     if opts.holes_from_inner {
         for i in 0..n {
             let mut best: Option<usize> = None;
             for j in 0..n {
                 let (a, b) = (&items[i], &items[j]);
-                if i == j
-                    || b.area <= a.area
-                    || a.lo.x < b.lo.x
-                    || a.lo.y < b.lo.y
-                    || a.hi.x > b.hi.x
-                    || a.hi.y > b.hi.y
-                    || !a.ring.iter().all(|p| inside_or_on(&b.ring, *p))
-                {
+                if i == j || b.area <= a.area || !boxes_meet(a, b) {
                     continue;
                 }
-                depth[i] += 1;
-                if best.is_none_or(|k| items[k].area > b.area) {
-                    best = Some(j);
+                if ring_within(&a.ring, &b.ring) {
+                    depth[i] += 1;
+                    if best.is_none_or(|k| items[k].area > b.area) {
+                        best = Some(j);
+                    }
                 }
             }
             parent[i] = best;
         }
     }
-    let mut host_holes: Vec<Vec<usize>> = vec![Vec::new(); n];
+    // Shapes that overlap in part (and are not inside each other) are not made. The smaller one goes.
     for i in 0..n {
+        for j in 0..n {
+            if i == j || dropped[i] || dropped[j] {
+                continue;
+            }
+            let (a, b) = (&items[i], &items[j]);
+            let nested = |x: usize, y: usize| {
+                opts.holes_from_inner && ring_within(&items[x].ring, &items[y].ring)
+            };
+            if (a.area, i) < (b.area, j) && !nested(i, j) && !nested(j, i) && overlaps(a, b) {
+                dropped[i] = true;
+                made.skipped.push((
+                    a.id,
+                    format!(
+                        "overlaps the shape {} in part, and would make two hardscapes that overlap. Fix the outlines or use holes_from_inner",
+                        b.id
+                    ),
+                ));
+            }
+        }
+    }
+    let mut host_holes: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut is_hole = vec![false; n];
+    for i in 0..n {
+        if dropped[i] {
+            continue;
+        }
         if depth[i] % 2 == 1
             && let Some(p) = parent[i]
+            && !dropped[p]
         {
             if host_holes[p].len() >= MAX_HOLES {
                 made.skipped.push((
@@ -153,20 +188,32 @@ pub fn from_shapes(doc: &Document, ids: &[ObjectId], opts: &FromShapesOptions) -
                 continue;
             }
             host_holes[p].push(i);
+            is_hole[i] = true;
         }
     }
     let mut commands = Vec::new();
     let mut next = doc.id_plan();
     let mut used: Vec<ObjectId> = Vec::new();
     for i in 0..n {
-        let it = &items[i];
-        if host_holes.iter().any(|h| h.contains(&i)) {
+        if dropped[i] || is_hole[i] {
             continue;
         }
+        let it = &items[i];
         let o = doc.object(it.id).expect("checked");
+        // A hole that leaves the outline by noise is cut to it.
         let holes: Vec<Vec<Vertex>> = host_holes[i]
             .iter()
-            .map(|&k| items[k].outer.clone())
+            .map(|&k| {
+                let h = &items[k];
+                if crate::layout::area_outside(&h.ring, &it.ring) <= 0.0 {
+                    h.outer.clone()
+                } else {
+                    crate::layout::clip_ring_to(&h.ring, &it.ring)
+                        .into_iter()
+                        .next()
+                        .map_or_else(|| h.outer.clone(), |r| curve::corners(&r))
+                }
+            })
             .collect();
         let patch = HardscapePatch {
             style: opts.style,

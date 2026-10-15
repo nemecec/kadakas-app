@@ -465,7 +465,20 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
         } else {
             boundary.clone()
         };
-        let p = crate::layout::Placement::along_edge(&outline, i)?;
+        let mut p = crate::layout::Placement::along_edge(&outline, i)?;
+        // Inside a kerb border the pattern starts on the inner border line.
+        let style = if patch.unstyle {
+            None
+        } else {
+            patch.style.or(d.style)
+        };
+        let border = style
+            .and_then(|id| doc.resources.hardscape_style(id))
+            .and_then(|st| st.border.as_ref())
+            .map_or(0.0, |b| b.width);
+        if border > 0.0 && d.mode == Mode::Slab {
+            p.origin = Some(inset_corner(&outline, i, border));
+        }
         d.origin = p.origin;
         d.angle = Some(p.angle);
     }
@@ -547,10 +560,7 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
         };
         let ring = curve::flatten(boundary, true, TOLERANCE);
         for (i, h) in d.holes.iter().enumerate() {
-            if !curve::flatten(h, true, TOLERANCE)
-                .iter()
-                .all(|p| inside_or_on(&ring, *p))
-            {
+            if !crate::layout::ring_within(&curve::flatten(h, true, TOLERANCE), &ring) {
                 return Err(format!("hole {} is not inside the outline", i + 1));
             }
         }
@@ -585,10 +595,89 @@ pub fn fix_edge_elevations(before: &Object, after: &mut Object) {
     set_data(after, &d);
 }
 
-fn inside_or_on(ring: &[DVec2], p: DVec2) -> bool {
-    let n = ring.len();
-    crate::geom::point_in_polygon(p, ring)
-        || (0..n).any(|i| crate::geom::dist_to_segment(p, ring[i], ring[(i + 1) % n]) < 1e-6)
+/// The holes of a hardscape as flat rings: merged where they overlap and cut to the outline. A
+/// hole that touches or crosses the outline is part of the outline then, and not in the list.
+/// Each ring runs clockwise, so a consumer that wants outer rings counterclockwise and holes
+/// clockwise can use them as they are. `None` if there are no holes.
+pub fn merged_holes(
+    boundary: &[Vertex],
+    holes: &[Vec<Vertex>],
+    tolerance: f64,
+) -> Option<Vec<Vec<DVec2>>> {
+    if holes.is_empty() {
+        return None;
+    }
+    let region = crate::layout::Region::new(boundary, holes, tolerance).ok()?;
+    Some(
+        region
+            .shapes
+            .iter()
+            .flat_map(|s| s.iter().skip(1))
+            .cloned()
+            .collect(),
+    )
+}
+
+/// Cuts the holes of a hardscape to its outline, when a merge of two edits (or a file) put them
+/// partly outside. Returns a note when something changed.
+pub fn repair_holes(obj: &mut Object) -> Option<String> {
+    let mut d = data(obj)?;
+    let Shape::Hardscape { boundary, .. } = &obj.shape else {
+        return None;
+    };
+    if d.holes.is_empty() {
+        return None;
+    }
+    let ring = curve::flatten(boundary, true, TOLERANCE);
+    let mut kept: Vec<Vec<Vertex>> = Vec::new();
+    let mut changed = false;
+    for h in &d.holes {
+        let flat = curve::flatten(h, true, TOLERANCE);
+        if crate::layout::ring_within(&flat, &ring) {
+            kept.push(h.clone());
+            continue;
+        }
+        changed = true;
+        for piece in crate::layout::clip_ring_to(&flat, &ring) {
+            if piece.len() >= 3 {
+                kept.push(curve::corners(&piece));
+            }
+        }
+    }
+    if !changed {
+        return None;
+    }
+    d.holes = kept;
+    set_data(obj, &d);
+    Some(format!(
+        "object {}: holes that lay outside the hardscape outline were cut to it",
+        obj.id
+    ))
+}
+
+/// The corner `index` of a closed outline moved inward by `d`: the point where the two edges at the
+/// corner, each moved inward by `d`, meet. Used for the start of a pattern inside a kerb border.
+pub fn inset_corner(outline: &[Vertex], index: usize, d: f64) -> DVec2 {
+    let pts = curve::positions(outline);
+    let n = pts.len();
+    let (prev, p, next) = (pts[(index + n - 1) % n], pts[index], pts[(index + 1) % n]);
+    let ccw = crate::geom::signed_area(&pts) >= 0.0;
+    let inward = |dir: DVec2| {
+        let left = DVec2::new(-dir.y, dir.x);
+        if ccw { left } else { -left }
+    };
+    let (d1, d2) = (
+        (p - prev).normalize_or_zero(),
+        (next - p).normalize_or_zero(),
+    );
+    let (n1, n2) = (inward(d1), inward(d2));
+    // Solve p + n1 d + s d1 = p + n2 d + t d2 for the meeting point.
+    let cross = d1.perp_dot(d2);
+    if cross.abs() < 1e-9 {
+        return p + n1 * d;
+    }
+    let s = ((n2 - n1) * d).perp_dot(d2) / cross;
+    p + n1 * d + d1 * s
 }
 
 /// Moves the data that holds positions with the object: the center line of a path, the holes and

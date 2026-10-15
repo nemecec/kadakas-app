@@ -371,6 +371,10 @@ pub struct ExportOptions {
     /// DXF: what to write of the unit pattern of hardscapes: `none` (default), `gaps` or `units`.
     /// A pattern with more units than the export limit is an error that names the object.
     pub patterns: PatternExport,
+    /// The most units (or gap lines) that the pattern export of one file may write in all objects.
+    /// A program sets it from its limits; it is not an option in JSON. `None`: the default bound.
+    #[serde(skip)]
+    pub pattern_budget: Option<usize>,
 }
 
 impl Default for ExportOptions {
@@ -385,6 +389,7 @@ impl Default for ExportOptions {
             site_mesh: SiteMesh::None,
             mesh_entity: MeshEntity::Polyface,
             patterns: PatternExport::None,
+            pattern_budget: None,
         }
     }
 }

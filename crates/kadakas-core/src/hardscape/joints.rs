@@ -65,6 +65,9 @@ mod tests {
             spacing: 0.0,
             angle: 0.0,
             color: None,
+            units: Vec::new(),
+            a: None,
+            b: None,
         }
     }
 
@@ -159,9 +162,10 @@ mod tests {
         // Joint length per area of a tiling by 2x1 bricks: each brick has perimeter 6 and every edge is shared by two bricks.
         // Inside a large rectangle the length per cell area tends to 3 / 2 per brick area (2 cells), i.e. 1.5 per cell.
         let cell = 100.0;
-        let poly = rect(20_000.0, 20_000.0);
+        let poly = rect(8_000.0, 8_000.0);
         let j = joint_lines(&poly, &pat(JointKind::Herringbone));
-        let per_cell = total_length(&j) / (20_000.0 * 20_000.0 / (cell * cell)) / cell;
+        assert!(!j.coarsened);
+        let per_cell = total_length(&j) / (8_000.0 * 8_000.0 / (cell * cell)) / cell;
         assert!((per_cell - 1.5).abs() < 0.05, "{per_cell}");
         assert!(inside_all(&j, &poly));
     }
@@ -183,7 +187,13 @@ mod tests {
             ..pat(JointKind::RunningBond)
         };
         for kind in JointKind::ALL {
-            let j = joint_lines(&rect(1.0e7, 1.0e7), &JointPattern { kind, ..tiny });
+            let j = joint_lines(
+                &rect(1.0e7, 1.0e7),
+                &JointPattern {
+                    kind,
+                    ..tiny.clone()
+                },
+            );
             assert!(j.truncated && j.segments.is_empty(), "{kind:?}");
         }
     }

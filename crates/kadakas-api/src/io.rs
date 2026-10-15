@@ -133,6 +133,24 @@ impl Session {
             .map_err(RpcError::policy)
     }
 
+    /// The bytes of a DXF file for a module pattern. The path policy of `import.file` applies, and
+    /// so does the size limit of the session.
+    pub(crate) fn read_dxf_for_module(&self, path: PathBuf) -> Result<Vec<u8>, RpcError> {
+        let path = self.file_path(path, Some(Format::Dxf), false)?;
+        let size = std::fs::metadata(&path)
+            .map_err(|e| RpcError::invalid_params(format!("{}: {e}", path.display())))?
+            .len();
+        if size > self.limits.import_text_bytes {
+            return Err(RpcError::limit(format!(
+                "{} is {size} bytes, more than the limit of {} bytes",
+                path.display(),
+                self.limits.import_text_bytes
+            )));
+        }
+        std::fs::read(&path)
+            .map_err(|e| RpcError::invalid_params(format!("{}: {e}", path.display())))
+    }
+
     pub(crate) fn import_file(&mut self, p: Value) -> Result<Value, RpcError> {
         self.import_impl(p, true)
     }
@@ -211,7 +229,9 @@ impl Session {
         {
             return self.export_sheet_file(f, path, &options, overwrite, checked);
         }
-        let opts = ExportOptions::from_json(&options).map_err(rpc)?;
+        let mut opts = ExportOptions::from_json(&options).map_err(rpc)?;
+        // A client cannot raise the limit of the session.
+        opts.pattern_budget = Some(self.limits.pattern_units);
         let format = format_of(format.as_deref())?;
         let path = if checked {
             self.file_path(path, format, true)?
