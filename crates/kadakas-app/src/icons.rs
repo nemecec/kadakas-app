@@ -64,6 +64,20 @@ pub const ICONS: &[(&str, &[u8])] = &[
         )),
     ),
     (
+        "issue-pin",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/icons/kadakas/issue-pin.svg"
+        )),
+    ),
+    (
+        "issues",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/icons/kadakas/issues.svg"
+        )),
+    ),
+    (
         "compose",
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -710,6 +724,8 @@ pub fn menu_icon(a: MenuAction) -> &'static str {
         MenuAction::Scripts => "code",
         MenuAction::PlugIns => "plug",
         MenuAction::Versions | MenuAction::Compare | MenuAction::CompareDrawings => "versions",
+        MenuAction::Bcf => "issues",
+        MenuAction::NewIssue => "issue-pin",
         MenuAction::Undo => "arrow-back-up",
         MenuAction::Redo => "arrow-forward-up",
         MenuAction::Delete => "trash",

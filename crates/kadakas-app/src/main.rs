@@ -10,6 +10,8 @@ mod area_ui;
 mod array_ui;
 mod autosave;
 #[cfg(not(target_arch = "wasm32"))]
+mod bcf_dialog;
+#[cfg(not(target_arch = "wasm32"))]
 mod autosave_fs;
 mod autosave_ui;
 mod canvas;
@@ -31,6 +33,7 @@ mod gpu3d;
 mod grading_ui;
 mod icon_size;
 mod icons;
+mod issues_ui;
 #[cfg(not(target_arch = "wasm32"))]
 mod io_dialog;
 mod irrigation_ui;

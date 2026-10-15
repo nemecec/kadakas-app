@@ -28,6 +28,8 @@ use crate::solid_ui::{Request as SolidRequest, SolidDialog};
 use crate::theme::{self, ThemeChoice};
 use crate::view::{View, ViewExt as _, grid_step};
 use crate::view3d::{self, View3d};
+
+mod issues;
 use kadakas_core::edit2d::Transform;
 use kadakas_core::edit2d::plan::{self, SurfaceOp};
 use kadakas_ui_core::annot_pick::Prims;
@@ -129,6 +131,8 @@ pub struct KadakasApp {
     /// WebAssembly plug-ins: the Plug-ins window, the trust dialog, the form and the tool.
     plugin_ui: crate::plugin_ui::PluginUi,
     versions_ui: crate::versions_ui::VersionsUi,
+    /// The Issues palette, the pins, the new issue window and the BCF dialog (REV-05, REV-06).
+    issues_ui: crate::issues_ui::IssuesUi,
     /// The Compare window and the overlay that it puts on the plan and on the 3D view (REV-03).
     compare_ui: crate::compare_ui::CompareUi,
     /// File > Import > Update from DXF/DWG...: the update window and its overlay on the plan (IOP-23).
@@ -151,6 +155,12 @@ pub struct KadakasApp {
     collab: crate::collab_ui::CollabUi,
     /// The pointer on the canvas in model units (mm), for presence. `None` outside the canvas.
     own_cursor: Option<[f64; 2]>,
+    /// A camera of an opened issue, applied after the 3D view followed the settings (REV-05).
+    pending_camera: Option<([f64; 3], f64, f64, f64)>,
+    /// A press on a pin or a click that placed an issue: its release is not a tool event.
+    issue_click: bool,
+    /// The model point where the context menu of the plan was opened.
+    context_point: Option<DVec2>,
     /// Files that the browser has picked, waiting for the next frame.
     #[cfg(target_arch = "wasm32")]
     web_inbox: std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>>,
@@ -479,6 +489,7 @@ impl KadakasApp {
             script_ui: Default::default(),
             plugin_ui: Default::default(),
             versions_ui: Default::default(),
+            issues_ui: Default::default(),
             compare_ui: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             update_ui: crate::update_ui::UpdateUi::new(),
@@ -492,6 +503,9 @@ impl KadakasApp {
             prefs_ui: crate::prefs_ui::PrefsDialog::default(),
             collab: crate::collab_ui::CollabUi::new(Default::default()),
             own_cursor: None,
+            pending_camera: None,
+            issue_click: false,
+            context_point: None,
             #[cfg(target_arch = "wasm32")]
             web_inbox: Default::default(),
             #[cfg(target_arch = "wasm32")]
@@ -979,6 +993,14 @@ impl KadakasApp {
                 }
             }
             MenuAction::PlugIns => self.plugin_ui.open(),
+            #[cfg(not(target_arch = "wasm32"))]
+            MenuAction::Bcf => self.issues_ui.open_bcf(),
+            #[cfg(target_arch = "wasm32")]
+            MenuAction::Bcf => {}
+            MenuAction::NewIssue => {
+                let selection = self.session.selection.clone();
+                self.issues_ui.start_for_selection(&selection);
+            }
             MenuAction::Versions => self.versions_ui.open(&mut self.session),
             MenuAction::Compare => self.compare_ui.open(&mut self.session),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1878,8 +1900,32 @@ impl KadakasApp {
 
         self.apply_typed_radius();
 
+        // Pins: a press on one opens its issue. After "New Issue at a Click" the next press places
+        // the issue. Neither is a tool event.
+        let mut issue_press = false;
+        if self.issues_ui.picking() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.issues_ui.set_picking(false);
+        }
+        if pressed && resp.hovered() && !panning && !space {
+            if let Some(p) = latest {
+                if let Some(id) = self.issues_ui.pin_at(p) {
+                    self.issues_ui.click_pin(id);
+                    issue_press = true;
+                } else if self.issues_ui.picking() && !self.read_only() {
+                    let at = self.view.to_model(p);
+                    self.issues_ui.start_at(at, 0.0);
+                    issue_press = true;
+                }
+            }
+            self.issue_click = issue_press;
+        }
+        if resp.secondary_clicked() {
+            self.context_point = latest.map(|p| self.view.to_model(p));
+        }
         // Tool events. A running plug-in tool takes them instead of the tool machine.
-        if self.plugin_ui.running() {
+        if issue_press {
+            // The press was for the issues.
+        } else if self.plugin_ui.running() {
             if !panning && !space {
                 let pixel = 1.0 / self.view.zoom;
                 if pressed && resp.hovered() {
@@ -1901,7 +1947,7 @@ impl KadakasApp {
             } else if hover.is_some() || self.machine.is_busy() {
                 self.send(Input::Move(self.cursor));
             }
-            if released {
+            if released && !std::mem::take(&mut self.issue_click) {
                 self.send(Input::Release(self.cursor));
             }
             if resp.double_clicked() {
@@ -1940,6 +1986,14 @@ impl KadakasApp {
             compare: self.compare_draw(),
         };
         canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
+        self.issues_ui
+            .paint_plan(&ui.painter_at(rect), rect, &self.view, &self.session);
+        if self.issues_ui.picking() && resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        // The context menu: new issues from the selection or from a point.
+        let menu_at = self.context_point;
+        resp.context_menu(|ui| self.issue_context_menu(ui, menu_at));
         // The cursors and selections of the other users. Presence is never in the document.
         if !self.collab.peers().is_empty() {
             crate::collab_ui::paint_peers(
@@ -2515,6 +2569,7 @@ impl KadakasApp {
                             pending_pan: &mut self.pending_pan,
                             compare,
                             frame,
+                            issues: Some(&mut self.issues_ui),
                         },
                     );
                 }
@@ -2576,6 +2631,12 @@ impl KadakasApp {
             Tab::People => {
                 let now = crate::collab_ui::now_ms();
                 egui::ScrollArea::vertical().show(ui, |ui| self.collab.people_ui(ui, now));
+            }
+            Tab::Issues => {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.issues_ui
+                        .palette(ui, &mut self.session, &mut self.status);
+                });
             }
             Tab::Snapping => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -2757,6 +2818,7 @@ impl eframe::App for KadakasApp {
         // The camera follows the chosen view, whoever chose it: a key, the view bar or an agent.
         let forced = self.session.take_view_changed();
         self.view3d.sync(self.session.view, forced);
+        self.apply_pending_camera();
 
         // With a shared document, Undo and Redo work on your own edits (the per-user undo).
         let (can_undo, can_redo) = if self.collab.is_linked() {
@@ -2828,6 +2890,9 @@ impl eframe::App for KadakasApp {
             .show(&ctx, &mut self.session, &mut self.status);
         self.versions_ui
             .show(&ctx, &mut self.session, &mut self.status);
+        self.issues_ui
+            .windows(&ctx, &mut self.session, &mut self.status);
+        self.run_issue_requests();
         self.compare_ui.set_dark(self.dark);
         self.compare_ui
             .show(&ctx, &mut self.session, &mut self.status);
@@ -4424,5 +4489,402 @@ mod tests {
         app.replace_document(Document::default(), None);
         assert!(app.compare_ui.draw().is_none());
         assert!(!app.read_only());
+    }
+
+    // ----- issues (REV-05, REV-06) -----
+
+    fn first_object(app: &KadakasApp) -> ObjectId {
+        *app.session.editor.doc().objects.keys().next().unwrap()
+    }
+
+    /// Makes an issue the way the New Issue window does: a form, then the request.
+    fn make_issue(app: &mut KadakasApp, title: &str, objects: &[ObjectId]) -> kadakas_core::issue::IssueId {
+        use kadakas_ui_core::issues::Draft;
+        let draft = Draft {
+            title: title.into(),
+            objects: objects.to_vec(),
+            ..Draft::default()
+        };
+        app.issues_ui
+            .push_request(crate::issues_ui::Request::Create(draft));
+        app.run_issue_requests();
+        app.issues_ui.selected.expect("the issue was made")
+    }
+
+    #[test]
+    fn a_new_issue_from_the_selection_has_a_view_a_snapshot_and_one_undo_step() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.exec(&add_rect_command(0.0));
+        let o = first_object(&app);
+        app.session.selection = vec![o];
+        app.apply_menu(&ctx, MenuAction::NewIssue);
+        assert!(app.issues_ui.is_new_issue_open());
+        app.issues_ui.draft_mut().unwrap().title = "Dead tree".into();
+        // The window draws in both languages, also with a title that is wrong.
+        for language in ["en-US", "et"] {
+            kadakas_l10n::with_language(language, || {
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    let c = ui.ctx().clone();
+                    app.issues_ui.windows(&c, &mut app.session, &mut app.status);
+                });
+            });
+        }
+        let depth = app.session.editor.undo_depth();
+        let draft = app.issues_ui.draft_mut().unwrap().clone();
+        app.issues_ui
+            .push_request(crate::issues_ui::Request::Create(draft));
+        app.run_issue_requests();
+        assert_eq!(app.session.editor.undo_depth(), depth + 1);
+        let doc = app.session.editor.doc();
+        let issue = doc.issues.iter().next().unwrap();
+        assert_eq!(issue.title, "Dead tree");
+        assert_eq!(issue.origin, kadakas_core::change::Origin::User);
+        assert_eq!(issue.objects, vec![o]);
+        let vp = &issue.viewpoints[0];
+        assert!(matches!(
+            vp.view,
+            Some(kadakas_core::issue::ViewSpec::Plan { .. })
+        ));
+        assert_eq!(vp.selection, vec![o]);
+        let hash = vp.snapshot.as_deref().expect("a snapshot");
+        assert!(doc.resources.find_image(hash).is_some());
+        assert!(app.status.contains("Dead tree"), "{}", app.status);
+        assert_eq!(app.issues_ui.selected, Some(issue.id));
+        // Undo takes the issue and its picture back.
+        app.undo();
+        assert!(app.session.editor.doc().issues.is_empty());
+        assert_eq!(app.session.editor.doc().resources.len(), 0);
+    }
+
+    #[test]
+    fn a_form_that_the_core_refuses_comes_back_with_the_reason() {
+        let mut app = KadakasApp::blank();
+        use kadakas_ui_core::issues::Draft;
+        let draft = Draft {
+            title: "x".into(),
+            due: "someday".into(),
+            ..Draft::default()
+        };
+        app.issues_ui
+            .push_request(crate::issues_ui::Request::Create(draft));
+        app.run_issue_requests();
+        assert!(app.session.editor.doc().issues.is_empty());
+        assert!(app.issues_ui.is_new_issue_open(), "the window is back");
+        assert!(app.status.contains("due"), "{}", app.status);
+    }
+
+    #[test]
+    fn an_issue_is_not_made_while_the_drawing_is_read_only() {
+        let mut app = KadakasApp::blank();
+        app.exec(&add_rect_command(0.0));
+        app.session
+            .handle("version.create", serde_json::json!({"name": "A", "now_ms": 1}))
+            .unwrap();
+        app.compare_ui.show_pair(
+            &mut app.session,
+            kadakas_ui_core::versions::Side::Version(1),
+            kadakas_ui_core::versions::Side::Current,
+        );
+        if app.read_only() {
+            make_issue_ignoring(&mut app);
+            assert!(app.session.editor.doc().issues.is_empty());
+        }
+    }
+
+    fn make_issue_ignoring(app: &mut KadakasApp) {
+        use kadakas_ui_core::issues::Draft;
+        app.issues_ui.push_request(crate::issues_ui::Request::Create(Draft {
+            title: "x".into(),
+            ..Draft::default()
+        }));
+        app.run_issue_requests();
+    }
+
+    #[test]
+    fn opening_an_issue_restores_the_layers_the_selection_and_the_view() {
+        let mut app = KadakasApp::blank();
+        app.exec(&add_rect_command(0.0));
+        app.exec(&add_rect_command(5000.0));
+        let objects: Vec<ObjectId> = app.session.editor.doc().objects.keys().copied().collect();
+        let layer = app.session.editor.doc().layers[0].id;
+        let id = make_issue(&mut app, "Look", &objects[..1]);
+        // The person hides the layer, selects the other object and moves the view.
+        app.exec(&Command::SetVisibility {
+            layers: vec![layer],
+            classes: vec![],
+            mode: kadakas_core::visibility::VisMode::Invisible,
+        });
+        app.session.selection = vec![objects[1]];
+        app.view.zoom = 0.9;
+        app.view.origin = DVec2::new(-5000.0, 9000.0);
+        app.open_issue(id, None);
+        assert!(app.session.editor.doc().layer(layer).unwrap().visible);
+        assert_eq!(app.session.selection, vec![objects[0]]);
+        assert!(app.plan());
+        assert!((app.view.zoom - 0.9).abs() > 1e-9, "the view went back to the viewpoint");
+        assert!(app.status.contains("Look"), "{}", app.status);
+        // One undo step for the layers.
+        let depth = app.session.editor.undo_depth();
+        app.exec(&Command::SetVisibility {
+            layers: vec![layer],
+            classes: vec![],
+            mode: kadakas_core::visibility::VisMode::Invisible,
+        });
+        app.open_issue(id, None);
+        assert_eq!(app.session.editor.undo_depth(), depth + 2);
+        // An issue that is not there does nothing.
+        app.open_issue(kadakas_core::issue::IssueId::from_num(77), None);
+    }
+
+    #[test]
+    fn opening_a_3d_viewpoint_goes_to_the_camera() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.exec(&add_rect_command(0.0));
+        let o = first_object(&app);
+        app.session.view.view = StandardView::LeftIsometric;
+        app.session.view.projection = Projection::Perspective;
+        let forced = app.session.take_view_changed();
+        app.view3d.sync(app.session.view, forced);
+        app.view3d.camera.yaw = 0.3;
+        app.view3d.camera.pitch = 0.4;
+        app.view3d.camera.distance = 7000.0;
+        let id = make_issue(&mut app, "In 3D", &[o]);
+        let vp = app.session.editor.doc().issues.get(id).unwrap().viewpoints[0].clone();
+        assert!(matches!(
+            vp.view,
+            Some(kadakas_core::issue::ViewSpec::Camera {
+                perspective: true,
+                ..
+            })
+        ));
+        // Back to the plan, then open: the 3D view with the camera of the viewpoint.
+        app.session.view.view = StandardView::Plan;
+        app.session.view.projection = Projection::Orthographic;
+        app.open_issue(id, Some(vp.id));
+        assert!(!app.plan());
+        assert_eq!(app.session.view.projection, Projection::Perspective);
+        let forced = app.session.take_view_changed();
+        app.view3d.sync(app.session.view, forced);
+        app.apply_pending_camera();
+        assert!((app.view3d.camera.yaw - 0.3).abs() < 1e-4);
+        assert!((app.view3d.camera.pitch - 0.4).abs() < 1e-4);
+        assert!((app.view3d.camera.distance - 7000.0).abs() < 1.0);
+        dock_frame(&mut app, &ctx);
+    }
+
+    #[test]
+    fn the_palette_lists_filters_and_draws_in_both_languages() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.exec(&add_rect_command(0.0));
+        let o = first_object(&app);
+        let a = make_issue(&mut app, "Tree", &[o]);
+        let b = make_issue(&mut app, "Wall", &[]);
+        app.session
+            .handle("issue.update", serde_json::json!({"id": b, "status": "resolved", "assignee": "Mari", "labels": ["wall"], "due": "2000-01-01"}))
+            .unwrap();
+        app.session
+            .handle("issue.comment", serde_json::json!({"id": a, "text": "A note"}))
+            .unwrap();
+        app.issues_ui.selected = Some(a);
+        for language in ["en-US", "et"] {
+            kadakas_l10n::with_language(language, || {
+                app.layouts.show_tab(Tab::Issues);
+                dock_frame(&mut app, &ctx);
+                app.issues_ui.filters.show_done = true;
+                dock_frame(&mut app, &ctx);
+                app.issues_ui.filters.toggle_status(kadakas_core::issue::IssueStatus::Resolved);
+                app.issues_ui.filters.text = "wa".into();
+                app.issues_ui.selected = Some(b);
+                dock_frame(&mut app, &ctx);
+                app.issues_ui.filters.clear();
+                app.issues_ui.selected = Some(a);
+            });
+        }
+        // The pin of the issue about the object is in the plan.
+        dock_frame(&mut app, &ctx);
+        dock_frame(&mut app, &ctx);
+        assert!(app.issues_ui.pin_screen(a).is_some(), "the pin has a place on the screen");
+        assert!(app.issues_ui.pin_screen(b).is_none(), "an issue without a place has no pin");
+    }
+
+    #[test]
+    fn a_click_on_a_pin_opens_the_issue_and_a_click_elsewhere_places_one() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.exec(&add_rect_command(0.0));
+        let o = first_object(&app);
+        let id = make_issue(&mut app, "Pinned", &[o]);
+        app.issues_ui.selected = None;
+        for _ in 0..3 {
+            dock_frame(&mut app, &ctx);
+        }
+        let at = app.issues_ui.pin_screen(id).expect("the pin is drawn");
+        let click = |app: &mut KadakasApp, at: egui::Pos2| {
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            for events in [
+                vec![egui::Event::PointerMoved(at)],
+                vec![button(true)],
+                vec![button(false)],
+            ] {
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::no_frame().show(ui, |ui| app.show_dock(ui));
+                    },
+                );
+            }
+        };
+        click(&mut app, at);
+        assert_eq!(app.issues_ui.selected, Some(id));
+        let before = app.session.editor.undo_depth();
+        app.run_issue_requests();
+        assert_eq!(app.session.selection, vec![o]);
+        assert_eq!(app.session.editor.undo_depth(), before, "opening changes nothing here");
+        // "New Issue at a Click": the next press places an issue instead of a tool event.
+        app.issues_ui.set_picking(true);
+        let elsewhere = at + egui::vec2(200.0, 150.0);
+        click(&mut app, elsewhere);
+        assert!(app.issues_ui.is_new_issue_open());
+        assert!(!app.issues_ui.picking());
+        assert!(app.issues_ui.draft_mut().unwrap().point.is_some());
+    }
+
+    #[test]
+    fn deleting_the_work_of_somebody_else_asks_and_your_own_is_asked_about_too() {
+        let mut app = KadakasApp::blank();
+        let mine = make_issue(&mut app, "Mine", &[]);
+        let theirs = app
+            .session
+            .handle_as(
+                0,
+                kadakas_core::change::Origin::Agent,
+                "issue.create",
+                serde_json::json!({"title": "From an agent"}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .and_then(kadakas_core::uid::Uid::parse)
+            .map(kadakas_core::issue::IssueId)
+            .unwrap();
+        app.issues_ui.ask_delete_for_test(&app.session, mine);
+        let (id, why) = app.issues_ui.pending_delete().unwrap();
+        assert_eq!((id, why), (mine, None));
+        app.issues_ui
+            .confirm_for_test(&mut app.session, &mut app.status);
+        assert!(app.session.editor.doc().issues.get(mine).is_none());
+        assert!(app.status.contains("Mine"), "{}", app.status);
+        // The issue of an agent: the question says why, and the yes sends the consent.
+        app.issues_ui.ask_delete_for_test(&app.session, theirs);
+        let (_, why) = app.issues_ui.pending_delete().unwrap();
+        assert!(why.unwrap().contains("agent"));
+        let ctx = egui::Context::default();
+        for language in ["en-US", "et"] {
+            kadakas_l10n::with_language(language, || {
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    let c = ui.ctx().clone();
+                    app.issues_ui.windows(&c, &mut app.session, &mut app.status);
+                });
+            });
+        }
+        app.issues_ui
+            .confirm_for_test(&mut app.session, &mut app.status);
+        assert!(app.session.editor.doc().issues.is_empty());
+        app.undo();
+        app.undo();
+        assert_eq!(app.session.editor.doc().issues.len(), 2);
+    }
+
+    #[test]
+    fn the_bcf_dialog_exports_imports_and_asks_about_a_conflict() {
+        let mut app = KadakasApp::blank();
+        app.exec(&add_rect_command(0.0));
+        let o = first_object(&app);
+        let id = make_issue(&mut app, "Dead tree", &[o]);
+        let dir = std::env::temp_dir().join(format!("kadakas-bcf-ui-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("issues.bcfzip");
+        app.session
+            .handle(
+                "issue.export_bcf",
+                serde_json::json!({"path": path.display().to_string(), "overwrite": true}),
+            )
+            .unwrap();
+        // The same file into the same drawing: nothing to do.
+        let mut dialog = crate::bcf_dialog::BcfDialog::default();
+        let mut status = String::new();
+        dialog.run_import(&mut app.session, &mut status, path.clone(), None);
+        let (good, text) = dialog.message().cloned().unwrap();
+        assert!(good, "{text}");
+        assert!(status.contains('0'), "{status}");
+        // The person changes the issue, the file has the old one: a conflict, nothing changes.
+        app.session
+            .handle(
+                "issue.update",
+                serde_json::json!({"id": id, "status": "resolved"}),
+            )
+            .unwrap();
+        let depth = app.session.editor.undo_depth();
+        dialog.run_import(&mut app.session, &mut status, path.clone(), None);
+        assert!(dialog.has_conflict());
+        assert_eq!(app.session.editor.undo_depth(), depth);
+        let ctx = egui::Context::default();
+        for language in ["en-US", "et"] {
+            kadakas_l10n::with_language(language, || {
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    let c = ui.ctx().clone();
+                    assert!(dialog.show(&c, &mut app.session, &mut status));
+                });
+            });
+        }
+        dialog.choose_for_test(&mut app.session, &mut status, "keep_both");
+        assert!(!dialog.has_conflict());
+        assert_eq!(app.session.editor.doc().issues.len(), 2);
+        // A file that is not a BCF file is an error in the dialog, not a crash.
+        let junk = dir.join("junk.bcfzip");
+        std::fs::write(&junk, b"not a zip").unwrap();
+        dialog.run_import(&mut app.session, &mut status, junk, None);
+        let (good, _) = dialog.message().cloned().unwrap();
+        assert!(!good);
+        assert!(dialog.notes().is_empty());
+        // The menu opens the dialog.
+        let ctx = egui::Context::default();
+        std::fs::remove_dir_all(&dir).ok();
+        app.apply_menu(&ctx, MenuAction::Bcf);
+        dock_frame(&mut app, &ctx);
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let c = ui.ctx().clone();
+            app.issues_ui.windows(&c, &mut app.session, &mut app.status);
+        });
+    }
+
+    #[test]
+    fn the_context_menu_and_the_menu_item_start_a_new_issue() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.exec(&add_rect_command(0.0));
+        let o = first_object(&app);
+        app.session.selection = vec![o];
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            app.issue_context_menu(ui, Some(DVec2::new(10.0, 20.0)));
+            app.issue_context_menu(ui, None);
+        });
+        app.apply_menu(&ctx, MenuAction::NewIssue);
+        assert_eq!(app.issues_ui.draft_mut().unwrap().objects, vec![o]);
+        app.issues_ui.start_at(DVec2::new(10.0, 20.0), 0.0);
+        assert_eq!(
+            app.issues_ui.draft_mut().unwrap().point,
+            Some([10.0, 20.0, 0.0])
+        );
     }
 }

@@ -49,7 +49,11 @@ pub const ISSUE_CREATE: (&str, &str) = (
 );
 pub const ISSUE_UPDATE: (&str, &str) = (
     "issue.update",
-    "Change an issue. One undo step; a call that changes nothing makes no step. params: {id, title?, description?, type?, status?, priority?, assignee? (null or empty: clear), labels? (replace), add_labels?, remove_labels?, due? (YYYY-MM-DD; null or empty: clear), objects? (replace), add_objects?, remove_objects?, point? ([x, y, z] or null: clear), now_ms?}. Returns {id, changed, issue: summary}.",
+    "Change an issue. One undo step; a call that changes nothing makes no step. params: {id, title?, description?, type?, status?, priority?, assignee? (null or empty: clear), labels? (replace), add_labels?, remove_labels?, due? (YYYY-MM-DD; null or empty: clear), objects? (replace), add_objects?, remove_objects?, point? ([x, y, z] or null: clear), remove_viewpoints? (viewpoint IDs; a snapshot that no viewpoint uses goes), now_ms?}. Returns {id, changed, issue: summary}.",
+);
+pub const ISSUE_ADD_VIEWPOINT: (&str, &str) = (
+    "issue.add_viewpoint",
+    "Add a viewpoint to an issue. One undo step. params: {id, name?, view? ({kind: plan, center: [x, y], zoom} or {kind: camera, target: [x, y, z], yaw, pitch, distance, perspective?}; default: the current view of the session), selection? (object IDs; default: the objects of the issue), capture_visibility? (default true: the visible layers and classes now), snapshot? (true or the params of render.png), snapshot_base64? (a PNG or JPEG file you made), now_ms?}. At most 16 viewpoints for an issue. Returns {id, viewpoint (the new ID), issue: summary}. Remove viewpoints with issue.update {remove_viewpoints: [IDs]}.",
 );
 pub const ISSUE_COMMENT: (&str, &str) = (
     "issue.comment",
@@ -320,6 +324,28 @@ fn filter_of(m: &Map<String, Value>) -> Result<Filter, RpcError> {
     })
 }
 
+/// The viewpoint of a call: `issue.create` (`viewpoint`) and `issue.add_viewpoint`.
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Vp {
+    name: Option<String>,
+    view: Option<ViewSpec>,
+    selection: Option<Vec<ObjectId>>,
+    capture_visibility: Option<bool>,
+    snapshot: Option<Value>,
+    snapshot_base64: Option<String>,
+}
+
+/// The options of a snapshot: `true` is a render with the defaults, an object is the params of
+/// `render.png`.
+fn snapshot_options(v: &Option<Value>) -> Option<Value> {
+    match v {
+        Some(Value::Bool(true)) => Some(json!({})),
+        Some(Value::Object(m)) => Some(Value::Object(m.clone())),
+        _ => None,
+    }
+}
+
 const LIST_LIMIT: usize = 200;
 const LIST_LIMIT_MAX: usize = 1000;
 
@@ -334,6 +360,7 @@ impl Session {
             "issue.get" => self.issue_get(&p),
             "issue.create" => self.issue_create(&p),
             "issue.update" => self.issue_update(&p),
+            "issue.add_viewpoint" => self.issue_add_viewpoint(&p),
             "issue.comment" => self.issue_comment(&p),
             "issue.resolve" => self.issue_resolve(&p),
             "issue.delete" => self.issue_delete(&p),
@@ -466,17 +493,86 @@ impl Session {
         }
     }
 
-    fn issue_create(&mut self, p: &Value) -> Result<Value, RpcError> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Vp {
-            name: Option<String>,
-            view: Option<ViewSpec>,
-            selection: Option<Vec<ObjectId>>,
-            capture_visibility: Option<bool>,
-            snapshot: Option<Value>,
-            snapshot_base64: Option<String>,
+    /// Makes a viewpoint of the session: the view (given, else the current view of the session),
+    /// the selection, the visible layers and classes, and a snapshot picture if one is wanted.
+    fn build_viewpoint(
+        &mut self,
+        vp: Vp,
+        default_selection: Vec<ObjectId>,
+        capture: bool,
+        top_snapshot: &Option<Value>,
+        now: i64,
+    ) -> Result<(Viewpoint, Option<ImageResource>), RpcError> {
+        let selection = match vp.selection {
+            Some(s) => {
+                object_ids(self.editor.doc(), &s)?;
+                s
+            }
+            None => default_selection,
+        };
+        let view = match vp.view {
+            Some(v) => v,
+            None => self.current_view(&selection),
+        };
+        let mut v = Viewpoint {
+            name: vp.name.unwrap_or_default(),
+            time: now,
+            view: Some(view),
+            selection,
+            ..Viewpoint::default()
+        };
+        if vp.capture_visibility.unwrap_or(true) {
+            let (layers, classes) = capture_visibility(self.editor.doc());
+            v.layers = layers;
+            v.classes = classes;
         }
+        let opts = snapshot_options(&vp.snapshot)
+            .or_else(|| snapshot_options(top_snapshot))
+            .or(if capture && vp.snapshot_base64.is_none() {
+                Some(json!({}))
+            } else {
+                None
+            });
+        let mut picture = None;
+        if let Some(b64) = vp.snapshot_base64 {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64.trim())
+                .map_err(|e| bad(format!("snapshot_base64: {e}")))?;
+            picture = Some(self.snapshot_from_bytes(&bytes)?);
+        } else if let Some(opts) = opts {
+            picture = Some(self.issue_snapshot(&opts)?);
+        }
+        v.snapshot = picture.as_ref().map(|p| p.sha256.clone());
+        Ok((v, picture))
+    }
+
+    fn issue_add_viewpoint(&mut self, p: &Value) -> Result<Value, RpcError> {
+        let mut m = as_object(p)?;
+        let id = issue_id(&m, "id")?;
+        let now = now_of(m.get("now_ms").and_then(Value::as_i64));
+        m.remove("id");
+        m.remove("now_ms");
+        let vp: Vp = parse(Value::Object(m))?;
+        let issue = find(self.editor.doc(), id)?.clone();
+        let (v, picture) = self.build_viewpoint(vp, issue.objects.clone(), false, &None, now)?;
+        let out = self
+            .editor
+            .execute(&Command::AddIssueViewpoint {
+                issue: id,
+                viewpoint: Box::new(v),
+                picture: picture.map(Box::new),
+                now,
+            })
+            .map_err(RpcError::from)?;
+        let doc = self.editor.doc();
+        Ok(json!({
+            "id": id,
+            "viewpoint": out.created[0],
+            "issue": summary(doc, find(doc, id)?),
+        }))
+    }
+
+    fn issue_create(&mut self, p: &Value) -> Result<Value, RpcError> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct P {
@@ -538,65 +634,21 @@ impl Session {
             ..Issue::default()
         };
         let capture = capture.unwrap_or(false);
-        let snapshot_opts = |v: &Option<Value>| match v {
-            Some(Value::Bool(true)) => Some(json!({})),
-            Some(Value::Object(m)) => Some(Value::Object(m.clone())),
-            _ => None,
-        };
         let mut pictures: Vec<ImageResource> = Vec::new();
-        let wants_viewpoint = viewpoint.is_some() || capture;
-        if wants_viewpoint || snapshot_opts(&snapshot).is_some() {
-            let vp = viewpoint.unwrap_or(Vp {
-                name: None,
-                view: None,
-                selection: None,
-                capture_visibility: None,
-                snapshot: None,
-                snapshot_base64: None,
-            });
-            let selection = match vp.selection {
-                Some(s) => {
-                    object_ids(self.editor.doc(), &s)?;
-                    s
-                }
-                None if objects.is_empty() && capture => self.selection.clone(),
-                None => objects.clone(),
+        if viewpoint.is_some() || capture || snapshot_options(&snapshot).is_some() {
+            let default_selection = if objects.is_empty() && capture {
+                self.selection.clone()
+            } else {
+                objects.clone()
             };
-            let view = match vp.view {
-                Some(v) => v,
-                None => self.current_view(&selection),
-            };
-            let mut v = Viewpoint {
-                name: vp.name.unwrap_or_default(),
-                time: now,
-                view: Some(view),
-                selection,
-                ..Viewpoint::default()
-            };
-            if vp.capture_visibility.unwrap_or(true) {
-                let (layers, classes) = capture_visibility(self.editor.doc());
-                v.layers = layers;
-                v.classes = classes;
-            }
-            let opts = snapshot_opts(&vp.snapshot).or_else(|| snapshot_opts(&snapshot)).or(
-                if capture && vp.snapshot_base64.is_none() {
-                    Some(json!({}))
-                } else {
-                    None
-                },
-            );
-            if let Some(b64) = vp.snapshot_base64 {
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(b64.trim())
-                    .map_err(|e| bad(format!("snapshot_base64: {e}")))?;
-                let img = self.snapshot_from_bytes(&bytes)?;
-                v.snapshot = Some(img.sha256.clone());
-                pictures.push(img);
-            } else if let Some(opts) = opts {
-                let img = self.issue_snapshot(&opts)?;
-                v.snapshot = Some(img.sha256.clone());
-                pictures.push(img);
-            }
+            let (v, picture) = self.build_viewpoint(
+                viewpoint.unwrap_or_default(),
+                default_selection,
+                capture,
+                &snapshot,
+                now,
+            )?;
+            pictures.extend(picture);
             issue.viewpoints.push(v);
         }
         let out = self
@@ -617,10 +669,10 @@ impl Session {
 
     fn issue_update(&mut self, p: &Value) -> Result<Value, RpcError> {
         let m = as_object(p)?;
-        const KEYS: [&str; 17] = [
+        const KEYS: [&str; 18] = [
             "id", "title", "description", "type", "status", "priority", "assignee", "labels",
             "add_labels", "remove_labels", "due", "objects", "add_objects", "remove_objects",
-            "point", "now_ms", "author",
+            "point", "now_ms", "author", "remove_viewpoints",
         ];
         if let Some(k) = m.keys().find(|k| !KEYS.contains(&k.as_str())) {
             return Err(bad(format!("unknown parameter {k}")));
@@ -711,13 +763,23 @@ impl Session {
             }
         }
         let now = now_of(m.get("now_ms").and_then(Value::as_i64));
+        let mut commands = vec![Command::ModifyIssue {
+            id,
+            patch: Box::new(patch),
+            now,
+        }];
+        if let Some(v) = m.get("remove_viewpoints").filter(|v| !v.is_null()) {
+            let gone: Vec<ViewpointId> = serde_json::from_value(v.clone())
+                .map_err(|e| bad(format!("remove_viewpoints: {e}")))?;
+            commands.extend(gone.into_iter().map(|viewpoint| Command::DeleteIssueViewpoint {
+                issue: id,
+                viewpoint,
+                now,
+            }));
+        }
         let before = self.editor.revision();
         self.editor
-            .execute(&Command::ModifyIssue {
-                id,
-                patch: Box::new(patch),
-                now,
-            })
+            .execute(&Command::Batch { commands })
             .map_err(RpcError::from)?;
         let changed = self.editor.revision() != before;
         let doc = self.editor.doc();

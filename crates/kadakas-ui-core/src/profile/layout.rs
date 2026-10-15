@@ -40,6 +40,10 @@ commands! {
     // File > Import > Update from DXF/DWG...: a new revision of an imported drawing (IOP-23).
     UpdateFromDxf => "file.update_from_dxf", msg!("panels-update-from-dxf"), true;
     Export => "file.export", msg!("panels-export"), true;
+    // File > BCF Issues...: read and write BCF files, the open issue format (REV-06).
+    Bcf => "file.bcf", msg!("panels-bcf"), true;
+    // Edit > New Issue from Selection (REV-05).
+    NewIssue => "edit.new_issue", msg!("panels-new-issue"), false;
     MapSources => "file.map_sources", msg!("panels-map-sources"), true;
     ChangeCrs => "file.change_crs", msg!("panels-change-crs"), true;
     Scripts => "file.scripts", msg!("panels-scripts"), true;
@@ -300,6 +304,7 @@ pub fn default_menus() -> Vec<Menu> {
                 "-",
                 "file.import_menu",
                 "file.export",
+                "file.bcf",
                 "-",
                 "file.map_sources",
                 "file.change_crs",
@@ -323,6 +328,8 @@ pub fn default_menus() -> Vec<Menu> {
                 "-",
                 "edit.delete",
                 "edit.select_all",
+                "-",
+                "edit.new_issue",
                 "-",
                 "ui.quick_search",
             ],

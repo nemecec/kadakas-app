@@ -13,7 +13,8 @@ pub mod feedback_api;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
 pub use errors::{
-    REASON_ALREADY_CONNECTED, REASON_BASE_TOO_LARGE, REASON_BASE_TOO_MANY, REASON_EDITS_WAIT,
+    REASON_ALREADY_CONNECTED, REASON_BASE_TOO_LARGE, REASON_BASE_TOO_MANY, REASON_BCF_CONFLICT,
+    REASON_CONFIRM_NEEDED, REASON_EDITS_WAIT,
     REASON_HISTORY_READONLY, REASON_UNSAVED_CHANGES, REASON_VERSION_LIMIT, RpcError,
 };
 #[cfg(test)]
@@ -731,6 +732,7 @@ pub const METHODS: &[(&str, &str)] = &[
     issue_api::ISSUE_GET,
     issue_api::ISSUE_CREATE,
     issue_api::ISSUE_UPDATE,
+    issue_api::ISSUE_ADD_VIEWPOINT,
     issue_api::ISSUE_COMMENT,
     issue_api::ISSUE_RESOLVE,
     issue_api::ISSUE_DELETE,
