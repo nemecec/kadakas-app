@@ -65,6 +65,10 @@ pub struct SessionLimits {
     /// drawing over it is refused with the choices `link` and `none`. It can be lowered, never
     /// raised above `provenance::MAX_BASE_RECS` (200,000).
     pub base_records: usize,
+    /// Most bytes that the pending update from DXF may hold (`import.update`, IOP-23): the new
+    /// objects of the changes and the update data of the new revision. A file over it is refused
+    /// with a limit error; `layers` limits the update.
+    pub update_bytes: u64,
     /// Time limit of one script reset.
     pub script_timeout: Duration,
     /// Time limit of one request to a map service.
@@ -97,6 +101,7 @@ impl Default for SessionLimits {
             import_text_bytes: 256 * 1024 * 1024,
             document_file_bytes: DEFAULT_DOCUMENT_FILE_BYTES,
             base_records: kadakas_core::provenance::MAX_BASE_RECS,
+            update_bytes: 256 * 1024 * 1024,
             script_timeout: Duration::from_secs(5),
             gis_timeout: Duration::from_secs(20),
             gis_cache_bytes: 256 * 1024 * 1024,
@@ -120,6 +125,7 @@ impl SessionLimits {
             raster_pixels: 8_000_000,
             import_text_bytes: 16 * 1024 * 1024,
             document_file_bytes: STRICT_DOCUMENT_FILE_BYTES,
+            update_bytes: 32 * 1024 * 1024,
             script_timeout: Duration::from_secs(2),
             gis_cache_bytes: 32 * 1024 * 1024,
             picture_bytes: 2 * 1024 * 1024,
@@ -217,6 +223,7 @@ impl Session {
             + self.editor.log_bytes()
             + self.mesh_cache.approx_bytes()
             + self.compare.approx_bytes()
+            + self.update_bytes_held()
     }
 
     /// Refuses a document that does not fit the limits. A host calls it before it replaces the
@@ -245,6 +252,7 @@ impl Session {
         self.mesh_cache = Default::default();
         self.lod_scene = None;
         self.compare.clear();
+        self.drop_update_preview();
         self.annot_cache = Default::default();
         self.worksheet_cache = Default::default();
         self.site_cache = Default::default();

@@ -519,7 +519,8 @@ pub fn dxf_to_dwg(
         .map_err(|e| DwgError::Io(format!("cannot write {}: {e}", dest.display())))
 }
 
-fn no_converter(search: &Search) -> DwgError {
+/// The error for a program that finds no converter.
+pub fn no_converter(search: &Search) -> DwgError {
     let tried = match &search.forced {
         Some(p) => format!(
             "KADAKAS_DWG_CONVERTER points to {}, which is not a usable ODAFileConverter or dwg2dxf program, and no other converter was found",

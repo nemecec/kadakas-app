@@ -59,6 +59,12 @@ use kadakas_core::sheets::SavedView;
 #[cfg(not(target_arch = "wasm32"))]
 mod dwg_api;
 #[cfg(not(target_arch = "wasm32"))]
+mod dxf_compare_api;
+#[cfg(not(target_arch = "wasm32"))]
+mod update_api;
+#[cfg(not(target_arch = "wasm32"))]
+pub use update_api::{PendingUpdate, UpdatePreview, UpdateState, is_drawing_path};
+#[cfg(not(target_arch = "wasm32"))]
 mod ifc_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod io;
@@ -164,6 +170,9 @@ pub struct Session {
     review: review_api::ReviewCache,
     /// States, overlays and one document of the visual compare (see `compare_api`).
     compare: compare_api::CompareCache,
+    /// The update from DXF that waits for `import.apply` (see `update_api`).
+    #[cfg(not(target_arch = "wasm32"))]
+    updates: update_api::UpdateState,
     /// What the load of the open document repaired (see `Session::load_notes`).
     load_notes: Vec<String>,
     /// Feedback reports: the outbox, the recent calls and the last failure (see `feedback_api`).
@@ -274,6 +283,12 @@ pub const METHODS: &[(&str, &str)] = &[
         "import.file",
         "Import a DXF, Shapefile or GeoJSON file as one undo step. params: {path, format?: dxf|shp|geojson, options?}. See describe.io for options. Returns {imported, skipped, report, georeference}.",
     ),
+    #[cfg(not(target_arch = "wasm32"))]
+    update_api::IMPORT_UPDATE,
+    #[cfg(not(target_arch = "wasm32"))]
+    update_api::IMPORT_APPLY,
+    #[cfg(not(target_arch = "wasm32"))]
+    dxf_compare_api::DXF_COMPARE,
     #[cfg(not(target_arch = "wasm32"))]
     (
         "export.file",
@@ -810,6 +825,8 @@ impl Session {
             wasm_plugins: WasmPluginState::default(),
             review: Default::default(),
             compare: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            updates: Default::default(),
             load_notes: Vec::new(),
             feedback: feedback_api::FeedbackState::default(),
             tainted: false,
@@ -1073,6 +1090,10 @@ impl Session {
         if let Some(r) = review_api::handle(self, method, p.clone()) {
             return r;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(r) = update_api::handle(self, method, p.clone()) {
+            return r;
+        }
         if let Some(r) = collab_api::handle(self, method, p.clone()) {
             return r;
         }
@@ -1133,6 +1154,8 @@ impl Session {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     d["io"] = io::describe();
+                    d["io"]["update"] = update_api::describe();
+                    d["review"]["dxf_compare"] = dxf_compare_api::describe();
                     d["gis"] = gis_api::describe();
                     d["scripting"] = plugin_api::describe();
                 }

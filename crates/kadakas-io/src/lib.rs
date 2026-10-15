@@ -326,6 +326,19 @@ pub fn import_file(
     }
 }
 
+/// The link to a file for a drawing that keeps a link and not the summaries of its entities
+/// (`base: "link"`): the absolute path, the size and the SHA-256 of `data`, which must be the bytes
+/// of the file. An update uses it for the new revision (IOP-23).
+pub fn file_link(path: &Path, data: &[u8]) -> Result<FileLink, IoError> {
+    let link = FileLink::of_bytes(&absolute_path_text(path)?, data);
+    match link.problem() {
+        Some(why) => Err(IoError::Option(format!(
+            "cannot keep a link to the file: {why}"
+        ))),
+        None => Ok(link),
+    }
+}
+
 /// The absolute path of `path` as text, for a [`FileLink`]: the canonical path, else the path made
 /// absolute. A path that is not text cannot be kept.
 pub(crate) fn absolute_path_text(path: &Path) -> Result<String, IoError> {

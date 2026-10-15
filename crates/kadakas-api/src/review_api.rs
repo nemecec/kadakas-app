@@ -613,6 +613,80 @@ fn create(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     Ok(out)
 }
 
+/// What [`execute_between_versions`] did.
+pub(crate) struct Between {
+    /// The version saved before the command.
+    pub before: u64,
+    /// The version saved after it. None: a limit refused it (the note says so).
+    pub after: Option<u64>,
+    /// Things to tell the person.
+    pub notes: Vec<String>,
+}
+
+/// Runs a command with a named version before it and one after it, all in ONE undo step (an update
+/// from DXF, IOP-23). The version "before" is the document as it is now. The version "after" is the
+/// document the command makes, which is found on a copy first. If a limit refuses the version
+/// "before", nothing changes and the error is that of `version.create`. If a limit refuses the
+/// version "after", the command still runs, with the version "before" only, and a note says so.
+/// A failing command changes nothing.
+pub(crate) fn execute_between_versions(
+    s: &mut Session,
+    cmd: &kadakas_core::command::Command,
+    (before, after): (&str, &str),
+    op: &str,
+    detail: Value,
+) -> Result<Between, RpcError> {
+    let empty = Map::new();
+    let limits = s.limits.version_limits();
+    let new_version = |s: &Session, name: &str| -> Result<NewVersion, RpcError> {
+        Ok(NewVersion {
+            name: name.chars().take(NAME_MAX).collect(),
+            note: None,
+            author: author(s, &empty)?,
+            time_ms: now_ms(&empty)?,
+            origin: s.editor.origin(),
+            base_revision: s.editor.revision(),
+            auto: false,
+        })
+    };
+    let mut h = (*writable(s)?).clone();
+    let first = h
+        .add(s.editor.doc(), new_version(s, before)?, limits)
+        .map_err(limit_error)?;
+    // The document after the command, on a copy: the same IDs as the real run.
+    let mut probe = kadakas_core::command::Editor::new(s.editor.doc().clone());
+    probe.execute(cmd).map_err(RpcError::from)?;
+    let mut notes = Vec::new();
+    let mut second = None;
+    let mut with_after = h.clone();
+    match with_after.add(probe.doc(), new_version(s, after)?, limits) {
+        Ok(added) => {
+            second = Some(added.id);
+            h = with_after;
+        }
+        Err(e) => notes.push(format!(
+            "the version \"{after}\" was not saved: {}",
+            limit_error(e).message
+        )),
+    }
+    let detail = json!({"between": detail, "versions": {"before": first.id, "after": second}});
+    s.editor
+        .execute_with_history(cmd, Some(h.to_data()), op, Some(detail))
+        .map_err(RpcError::from)?;
+    match s.editor.doc().history.clone() {
+        Some(data) => {
+            s.review.remember(h.anchor_pair());
+            s.review.keep(&data, Arc::new(h.clone()), Vec::new());
+        }
+        None => s.review.forget(),
+    }
+    Ok(Between {
+        before: first.id,
+        after: second,
+        notes,
+    })
+}
+
 fn list(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let current = match m.get("current") {
         None | Some(Value::Null) => true,

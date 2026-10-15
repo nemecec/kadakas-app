@@ -127,7 +127,7 @@ fn union(a: Option<Bounds3>, b: Option<Bounds3>) -> Option<Bounds3> {
 impl Session {
     /// Runs `f` on the document of a side with the caches that go with it: the caches of the
     /// session for the open drawing, new ones (that keep nothing) for a built version.
-    fn with_shown<R>(
+    pub(crate) fn with_shown<R>(
         &self,
         shown: &ShownDoc,
         f: impl FnOnce(&Document, u64, &kadakas_site::SiteCache, &kadakas_annot::AnnotCache) -> R,
@@ -195,13 +195,77 @@ impl Session {
         } else {
             None
         };
-        let scene = self.compare_scene(&shown, None);
-        Ok(self.with_shown(&shown, |doc, _, _, _| {
+        Ok(self.tint_shown(&shown, old, overlay, style))
+    }
+
+    /// The tinted scene of a shown document, with ghosts made against `old` (the document of the
+    /// old side; None: the shown document itself). Joins an overlay that a caller built from its
+    /// own list of changes (IOP-23, IOP-24) with the renderer.
+    pub(crate) fn tint_shown(
+        &mut self,
+        shown: &ShownDoc,
+        old: Option<Arc<Document>>,
+        overlay: &CompareOverlay,
+        style: &CompareStyle,
+    ) -> Tinted {
+        let scene = self.compare_scene(shown, None);
+        self.with_shown(shown, |doc, _, _, _| {
             let site = kadakas_site::SiteCache::default();
             let ext = kadakas_site::draw::scene_ext(&site, 0);
             let old_doc: &Document = old.as_deref().unwrap_or(doc);
             tint_scene(&scene, doc, old_doc, overlay, style, Some(&ext))
-        }))
+        })
+    }
+
+    /// The SVG of a shown document with an overlay: the changes tinted, the ghosts of removed
+    /// objects drawn against `old`. Returns the SVG and what became of the ghosts.
+    pub(crate) fn overlay_svg(
+        &self,
+        shown: &ShownDoc,
+        old: Option<&Arc<Document>>,
+        overlay: &CompareOverlay,
+        style: CompareStyle,
+        width: u32,
+    ) -> (String, GhostReport) {
+        self.with_shown(shown, |doc, revision, site, annot| {
+            let ov = SvgCompare::new(doc, old, overlay, style);
+            let svg = crate::svg_of(doc, width, revision, site, annot, Some(&ov));
+            (svg, ov.report())
+        })
+    }
+
+    /// The picture of a tinted scene (see `tint_shown`) for a PNG request.
+    pub(crate) fn overlay_image(
+        &self,
+        req: &PngRequest,
+        t: Tinted,
+        style: &CompareStyle,
+    ) -> (Image, GhostReport) {
+        let dark = style.dark;
+        let background = if dark { DARK_BACKGROUND } else { BACKGROUND };
+        let (tinted, report) = (t.scene, t.report);
+        let ghosts: HashSet<ObjectId> = t.ghosts.into_iter().collect();
+        let [r, g, b] = style.color(Status::Removed);
+        let look = Look::ghosted(&tinted, &|id| ghosts.contains(&id), [r, g, b], style.ghost);
+        let mut camera = Camera::standard(req.settings.view, req.settings.projection);
+        camera.fit(tinted.bounds, req.width as f32 / req.height as f32);
+        let img = shade::render_scene(
+            &tinted,
+            &look,
+            &camera,
+            &ShadeOptions {
+                width: req.width,
+                height: req.height,
+                mode: req.settings.mode,
+                edges: true,
+                shadows: false,
+                light: Light::Fixed,
+                background,
+                line_px: 1.2,
+                samples: req.samples,
+            },
+        );
+        (img, report)
     }
 
     /// `render.svg` with a `compare` option.
@@ -218,11 +282,7 @@ impl Session {
             } else {
                 None
             };
-            let (svg, report) = self.with_shown(&shown, |doc, revision, site, annot| {
-                let ov = SvgCompare::new(doc, old.as_ref(), &overlay, spec.style);
-                let svg = crate::svg_of(doc, width, revision, site, annot, Some(&ov));
-                (svg, ov.report())
-            });
+            let (svg, report) = self.overlay_svg(&shown, old.as_ref(), &overlay, spec.style, width);
             let info = self.compare_info(spec, Some(&overlay), Some(report));
             return Ok(json!({"svg": svg, "compare": info}));
         }
@@ -285,17 +345,7 @@ impl Session {
         let (img, info) = if spec.mode == CompareMode::Overlay {
             let overlay = self.compare_overlay(spec.from, spec.to)?;
             let t = self.compare_tinted(&overlay, spec.from, spec.to, &spec.style)?;
-            let (tinted, report) = (t.scene, t.report);
-            let ghosts: HashSet<ObjectId> = t.ghosts.into_iter().collect();
-            let [r, g, b] = spec.style.color(Status::Removed);
-            let look = Look::ghosted(
-                &tinted,
-                &|id| ghosts.contains(&id),
-                [r, g, b],
-                spec.style.ghost,
-            );
-            let camera = camera_for(tinted.bounds, req.width, req.height);
-            let img = draw(&tinted, &look, &camera, req.width, req.height);
+            let (img, report) = self.overlay_image(req, t, &spec.style);
             (img, self.compare_info(spec, Some(&overlay), Some(report)))
         } else {
             let b = self.compare_doc(spec.to)?;

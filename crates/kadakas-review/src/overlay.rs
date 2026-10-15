@@ -41,6 +41,7 @@ use crate::diff::{Counts, MAX_WORK, moved_things, same_without_order};
 use crate::state::{Props, State};
 
 mod apply;
+pub mod clouds;
 mod style;
 
 pub use apply::{Ghosts, SvgCompare, Tinted, ghost_document, ghosts_in, tint_scene};

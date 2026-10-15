@@ -193,7 +193,14 @@ fn moved_changed_added_and_removed_entities_are_found_and_applied() {
     assert_eq!(src_rev, vec![plan.new_revision.clone()]);
     for o in doc.objects.values() {
         let t = provenance::tag(&o.data).unwrap();
-        assert_eq!(t.revision, plan.new_revision);
+        // The objects that the update touched carry the new revision, the others the old one.
+        let touched = matches!(t.handle.as_deref(), Some("11" | "12" | "15"));
+        let want = if touched {
+            &plan.new_revision
+        } else {
+            &plan.old_revision
+        };
+        assert_eq!(&t.revision, want, "{:?}", t.handle);
         // Nothing the update made counts as an edit by the person.
         assert_eq!(provenance::is_edited(o), Some(false), "{:?}", o.id);
     }
@@ -364,10 +371,10 @@ fn an_edited_object_that_the_revision_changes_is_a_conflict() {
     assert!(partial.doc().objects.contains_key(&removed));
     assert_eq!(built.applied.removed, 0);
     assert_eq!(built.applied.replaced, 1);
-    // The calm edit stays, and the object keeps its tag with the new revision.
+    // The calm edit stays, and the object keeps its tag.
     assert!((y_of(partial.doc().objects.get(&calm).unwrap()) - 403.0).abs() < 1e-9);
     let t = provenance::tag(&partial.doc().objects.get(&calm).unwrap().data).unwrap();
-    assert_eq!(t.revision, plan.new_revision);
+    assert_eq!(t.revision, plan.old_revision);
     assert_eq!(
         provenance::is_edited(partial.doc().objects.get(&untouched).unwrap()),
         Some(false)
@@ -401,7 +408,7 @@ fn a_partial_apply_changes_only_the_chosen_changes() {
     // The ID of an added object in the document is known.
     assert_eq!(built.added.len(), 1);
     assert!(ed.doc().objects.contains_key(&built.added[0].1));
-    // An empty choice only moves the revision.
+    // An empty choice only moves the layers and the update data to the new revision.
     let mut ed2 = editor_with(&base_text());
     let built = plan
         .build(ed2.doc(), &vec![false; plan.changes.len()])
@@ -412,8 +419,9 @@ fn a_partial_apply_changes_only_the_chosen_changes() {
         ed2.doc()
             .objects
             .values()
-            .all(|o| provenance::tag(&o.data).unwrap().revision == plan.new_revision)
+            .all(|o| provenance::tag(&o.data).unwrap().revision == plan.old_revision)
     );
+    assert!(provenance::base_recs(ed2.doc(), &plan.drawing, &plan.new_revision).is_some());
 }
 
 #[test]

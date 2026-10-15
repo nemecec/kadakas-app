@@ -45,13 +45,13 @@ pub(crate) fn describe() -> Value {
 }
 
 /// The error for an agent request that would start a converter while the host did not allow it.
-fn converters_off() -> RpcError {
+pub(crate) fn converters_off() -> RpcError {
     RpcError::policy(
         "DWG needs an external converter program, and this host does not let agents start one. The owner can allow it with --allow-converters",
     )
 }
 
-fn rpc(e: DwgError) -> RpcError {
+pub(crate) fn rpc(e: DwgError) -> RpcError {
     match e {
         DwgError::Option(_) => RpcError::invalid_params(e),
         DwgError::Timeout { .. } => RpcError::limit(e),

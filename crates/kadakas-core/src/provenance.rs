@@ -584,11 +584,22 @@ pub fn base_recs<'a>(doc: &'a Document, drawing: &str, revision: &str) -> Option
 
 /// Who still needs the base of a revision: the objects that came from it, and the layers whose
 /// import source names it. A base that nobody needs can be purged (`library::purge_plan`).
+///
+/// An object whose layer has moved on to a newer revision of the drawing (an update from DXF,
+/// IOP-23, leaves the objects it did not change with the revision they came from) does not need
+/// the old base: an update reads the base of the revision of the layer.
 pub fn base_users(doc: &Document, drawing: &str, revision: &str) -> (Vec<ObjectId>, Vec<LayerId>) {
+    let moved_on = |o: &Object| {
+        doc.layer(o.layer)
+            .and_then(|l| l.extra.get(LAYER_KEY))
+            .and_then(LayerSource::of)
+            .is_some_and(|s| s.drawing == drawing && s.revision != revision)
+    };
     let objects = doc
         .objects
         .values()
         .filter(|o| tag(&o.data).is_some_and(|t| t.drawing == drawing && t.revision == revision))
+        .filter(|o| !moved_on(o))
         .map(|o| o.id)
         .collect();
     let layers = doc

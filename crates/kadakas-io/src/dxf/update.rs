@@ -1005,8 +1005,6 @@ pub struct Applied {
     pub removed: usize,
     /// Objects the command leaves alone because their layer is locked (not a layer of the drawing).
     pub skipped_locked: usize,
-    /// Objects that carry the tag of the drawing and got the new revision.
-    pub retagged: usize,
 }
 
 impl Plan {
@@ -1014,9 +1012,10 @@ impl Plan {
     /// of the plan, in order). The document must be the one the plan was made for.
     ///
     /// The command adds the new objects with their tags, replaces the shape and look of the
-    /// changed ones, deletes the removed ones, gives all objects of the drawing the new revision,
-    /// renews the source of the layers of the drawing and stores the update data of the new
-    /// revision.
+    /// changed ones (with the new revision in their tag), deletes the removed ones, renews the
+    /// source of the layers of the drawing and stores the update data of the new revision. Objects
+    /// that did not change keep the revision they came from: that way the update does not show up
+    /// in the history of every object, and costs what changed.
     pub fn build(&self, doc: &Document, chosen: &[bool]) -> Result<Built, UpdateError> {
         let mut b = Builder::new(&Context::of(doc), "dxf", usize::MAX);
         let mut notes = Vec::new();
@@ -1137,25 +1136,6 @@ impl Plan {
             b.push(Command::DeleteObjects {
                 ids: delete.iter().copied().collect(),
             });
-        }
-        // The other objects of the drawing: the new revision, so that the old update data can go.
-        for o in doc.objects.values() {
-            if touched.contains(&o.id) || delete.contains(&o.id) {
-                continue;
-            }
-            let Some(mut tag) = provenance::tag(&o.data) else {
-                continue;
-            };
-            if tag.drawing != self.drawing || tag.revision == self.new_revision {
-                continue;
-            }
-            tag.revision = self.new_revision.clone();
-            b.push(Command::SetData {
-                id: o.id,
-                set: BTreeMap::from([(provenance::KEY.to_string(), tag.to_value())]),
-                remove: vec![],
-            });
-            applied.retagged += 1;
         }
         if let NewBase::Plan(plan) = &self.new_base {
             import::store_base(&mut b, plan.clone());
