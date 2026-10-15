@@ -96,7 +96,15 @@ pub fn quantities(
                 .get(*id)
                 .map(|r| r.name.clone())
                 .unwrap_or_default();
-            let border = border_area(s, d.as_ref(), plan, closed_perimeter / 1000.0);
+            // The border is the part of the area that the pattern is not laid in: the exact
+            // difference between the plan and the paved region (corners count once).
+            let border =
+                border_area(s, d.as_ref(), plan, closed_perimeter / 1000.0).map(|(len, approx)| {
+                    let paved = crate::layout::object::region_of(doc, obj, TOLERANCE)
+                        .ok()
+                        .map(|r| r.area / 1e6);
+                    (len, paved.map_or(approx, |p| (plan - p).clamp(0.0, plan)))
+                });
             let net = (surface_area - border.map_or(0.0, |(_, a)| a * ratio)).max(0.0);
             layers.push(LayerQty {
                 kind: "surface",
@@ -388,14 +396,14 @@ mod tests {
         .unwrap();
         let q = quantities(ed.doc(), ed.doc().object(id).unwrap(), None).unwrap();
         let by = |k: &str| q.layers.iter().filter(|l| l.kind == k).collect::<Vec<_>>();
-        // Border: 13 m long and 0.2 m wide.
+        // Border: 0.2 m wide round a 4 x 2.5 m slab. The corners count once: 10 - 3.6 x 2.1 m2.
         let border = by("border")[0];
         assert!(
-            (border.area_m2 - 2.6).abs() < 1e-9 && (border.volume_m3 - 2.6 * 0.06).abs() < 1e-9
+            (border.area_m2 - 2.44).abs() < 1e-9 && (border.volume_m3 - 2.44 * 0.06).abs() < 1e-9
         );
         let surface = by("surface")[0];
         assert!(
-            (surface.area_m2 - 7.4).abs() < 1e-9 && (surface.volume_m3 - 7.4 * 0.06).abs() < 1e-9
+            (surface.area_m2 - 7.56).abs() < 1e-9 && (surface.volume_m3 - 7.56 * 0.06).abs() < 1e-9
         );
         let comps = by("component");
         assert_eq!(comps.len(), 2);
@@ -404,7 +412,7 @@ mod tests {
                 && (comps[1].volume_m3 - 10.0 * 0.15).abs() < 1e-9
         );
         assert_eq!(q.thickness_mm, 250.0);
-        assert!((q.volume_m3 - (7.4 * 0.06 + 2.6 * 0.06 + 0.4 + 1.5)).abs() < 1e-9);
+        assert!((q.volume_m3 - (7.56 * 0.06 + 2.44 * 0.06 + 0.4 + 1.5)).abs() < 1e-9);
     }
 
     #[test]

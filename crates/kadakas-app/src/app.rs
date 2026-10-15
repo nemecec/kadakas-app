@@ -545,6 +545,9 @@ impl KadakasApp {
         self.resource_ui
             .styles
             .show(ctx, &mut self.session, &mut self.status);
+        self.resource_ui
+            .joints
+            .show(ctx, &mut self.session, &mut self.status);
         if self.collab.take_save_request() {
             self.save(false, ctx);
         }

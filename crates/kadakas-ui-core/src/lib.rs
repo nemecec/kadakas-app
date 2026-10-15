@@ -17,6 +17,7 @@ pub mod effects;
 pub mod feedback;
 pub mod grading;
 pub mod hit;
+pub mod joint_edit;
 pub mod keymap;
 pub mod keys;
 pub mod massing;

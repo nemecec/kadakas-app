@@ -226,7 +226,7 @@ def test_paving_helpers(doc, tmp_path):
     assert made["created"][0]["holes"] == 1
     hid = made["created"][0]["id"]
     doc.api.hardscape_set(id=hid, origin=[0, 0], angle=0)
-    row = doc.report.pattern(waste_percent=10)["rows"][0]
+    row = doc.report.unit_pattern(waste_percent=10)["rows"][0]
     assert row["order_units"] == row["whole_units"] + row["cut_units"]
     assert row["order_units_with_waste"] > row["order_units"]
     assert doc.report.hardscape()["rows"][0]["pattern"]["whole_units"] == row["whole_units"]
@@ -238,3 +238,21 @@ def test_paving_helpers(doc, tmp_path):
     assert "0-UNITS-WHOLE" in text
     group = doc.pattern_to_objects(id=hid, name="Units")
     assert group["units"] == row["order_units"]
+    # Module patterns: a preset, shapes of the drawing, and a block of a DXF file.
+    hexagon = doc.pattern_module_preset("hexagon", across_flats=200)["pattern"]
+    assert hexagon["kind"] == "module"
+    lay = doc.pattern_layout(
+        region={"outline": [[0, 0], [2000, 0], [2000, 1000], [0, 1000]]},
+        pattern={**hexagon, "gap": 4}, include=["units"], limit=0)
+    assert lay["summary"]["by_unit"][0]["name"] == "hexagon"
+    a = doc.add.rect([0, 0], [100, 100])
+    b = doc.add.rect([100, 0], [200, 100])
+    made = doc.pattern_module_from_shapes([a.id, b.id], names=["left", "right"])
+    assert [u["name"] for u in made["pattern"]["units"]] == ["left", "right"]
+    dxf = tmp_path / "block.dxf"
+    dxf.write_text(
+        "0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n8\n0\n2\nM\n70\n0\n10\n0\n20\n0\n"
+        "0\nLWPOLYLINE\n8\nONE\n90\n4\n70\n1\n10\n0\n20\n0\n10\n100\n20\n0\n10\n100\n20\n100\n10\n0\n20\n100\n"
+        "0\nENDBLK\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n")
+    blk = doc.pattern_module_from_block(dxf, "M")
+    assert blk["pattern"]["units"][0]["name"] == "ONE"

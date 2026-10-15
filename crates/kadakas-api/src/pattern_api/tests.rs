@@ -39,7 +39,7 @@ fn layout_of_a_region_with_a_hole_and_paging() {
     let mut s = Session::with_sequential_ids();
     let r = ok(
         &mut s,
-        "pattern.layout",
+        "unit_pattern.layout",
         json!({"region": {"outline": rect(2050, 1050),
             "holes": [[[405, 210], [815, 210], [815, 630], [405, 630]]]},
             "pattern": {"bond": "stack", "unit_length": 200, "unit_width": 100, "gap": 5},
@@ -61,7 +61,7 @@ fn layout_of_a_region_with_a_hole_and_paging() {
     // The next page continues.
     let r2 = ok(
         &mut s,
-        "pattern.layout",
+        "unit_pattern.layout",
         json!({"region": {"outline": rect(2050, 1050)},
             "pattern": {"bond": "stack", "unit_length": 200, "unit_width": 100, "gap": 5},
             "origin": [0, 0], "include": ["units"], "offset": 95, "limit": 10}),
@@ -74,44 +74,44 @@ fn layout_of_a_region_with_a_hole_and_paging() {
 #[test]
 fn layout_errors_are_clear() {
     let mut s = Session::with_sequential_ids();
-    let (c, m) = fail(&mut s, "pattern.layout", json!({}));
+    let (c, m) = fail(&mut s, "unit_pattern.layout", json!({}));
     assert_eq!(c, -32602);
     assert!(m.contains("'id' or 'region'"));
     let (_, m) = fail(
         &mut s,
-        "pattern.layout",
+        "unit_pattern.layout",
         json!({"region": {"outline": rect(1000, 1000)}}),
     );
     assert!(m.contains("unit_length"));
     let (_, m) = fail(
         &mut s,
-        "pattern.layout",
+        "unit_pattern.layout",
         json!({"region": {"outline": rect(1000, 1000)}, "pattern": {"unit_length": 200, "unit_width": 100, "bond": "zigzag"}}),
     );
     assert!(m.contains("bond"));
     let (_, m) = fail(
         &mut s,
-        "pattern.layout",
+        "unit_pattern.layout",
         json!({"region": {"outline": rect(1000, 1000)}, "pattern": {"unit_length": 200, "unit_width": 100}, "align_to_edge": 9}),
     );
     assert!(m.contains("edge 9"));
     // More than a million units.
     let (c, m) = fail(
         &mut s,
-        "pattern.layout",
+        "unit_pattern.layout",
         json!({"region": {"outline": rect(200_000, 150_000)}, "pattern": {"unit_length": 200, "unit_width": 100, "gap": 5}}),
     );
     assert_eq!(c, kadakas_core_limit_code());
     assert!(m.contains("units") && m.contains("limit"), "{m}");
     let (_, m) = fail(
         &mut s,
-        "pattern.layout",
+        "unit_pattern.layout",
         json!({"region": {"outline": rect(1000, 1000)}, "pattern": {"unit_length": 200, "unit_width": 100}, "include": ["tiles"]}),
     );
     assert!(m.contains("include"));
     let (_, m) = fail(
         &mut s,
-        "pattern.layout",
+        "unit_pattern.layout",
         json!({"id": "00000000-0000-0000-0000-0000000000ff"}),
     );
     assert!(m.contains("does not exist"));
@@ -132,7 +132,7 @@ fn hardscape_with_style_origin_edge_and_report() {
             "holes": [[[405, 210], [815, 210], [815, 630], [405, 630]]]}),
     )["id"]
         .clone();
-    let rep = ok(&mut s, "report.pattern", json!({"waste_percent": 5}));
+    let rep = ok(&mut s, "report.unit_pattern", json!({"waste_percent": 5}));
     let row = &rep["rows"][0];
     assert_eq!(row["id"], h);
     assert_eq!(row["whole_units"], 88);
@@ -141,16 +141,16 @@ fn hardscape_with_style_origin_edge_and_report() {
     assert_eq!(row["order_units_with_waste"], 101); // ceil(96 * 1.05)
     assert_eq!(rep["totals"]["order_units_with_waste"], 101);
     // Without waste_percent there is no waste.
-    let rep = ok(&mut s, "report.pattern", json!({}));
+    let rep = ok(&mut s, "report.unit_pattern", json!({}));
     assert!(rep["rows"][0]["order_units_with_waste"].is_null());
     // A shifted origin cuts units at the edges. Area laid + gaps = region minus holes.
     ok(&mut s, "hardscape.set", json!({"id": h, "origin": [50, 0]}));
-    let row = ok(&mut s, "report.pattern", json!({}))["rows"][0].clone();
+    let row = ok(&mut s, "report.unit_pattern", json!({}))["rows"][0].clone();
     assert!(row["cut_units"].as_u64().unwrap() > 0);
     let laid = row["area_laid_m2"].as_f64().unwrap() + row["gap_area_m2"].as_f64().unwrap();
     assert!((laid - row["region_area_m2"].as_f64().unwrap()).abs() < 1e-9);
     // Slivers: a share of 1 makes every cut unit a sliver.
-    let row = ok(&mut s, "report.pattern", json!({"sliver_share": 1.0}))["rows"][0].clone();
+    let row = ok(&mut s, "report.unit_pattern", json!({"sliver_share": 1.0}))["rows"][0].clone();
     assert_eq!(row["slivers"], row["cut_units"]);
     // Clearing the origin and the hole; align_to_edge turns the pattern.
     ok(
@@ -229,7 +229,7 @@ fn to_objects_makes_a_group_in_one_undo_step() {
     let before = ok(&mut s, "document.summary", json!({}));
     let r = ok(
         &mut s,
-        "pattern.to_objects",
+        "unit_pattern.to_objects",
         json!({"id": h, "include": ["units", "gaps"], "name": "Paving"}),
     );
     let units = r["units"].as_u64().unwrap();
@@ -249,13 +249,13 @@ fn to_objects_makes_a_group_in_one_undo_step() {
     // Units only, no group.
     let r = ok(
         &mut s,
-        "pattern.to_objects",
+        "unit_pattern.to_objects",
         json!({"id": h, "group": false}),
     );
     assert!(r["group"].is_null() && r["gaps"] == 0);
     let (_, m) = fail(
         &mut s,
-        "pattern.to_objects",
+        "unit_pattern.to_objects",
         json!({"region": {"outline": rect(100_000, 100_000)}, "pattern": {"unit_length": 200, "unit_width": 100}}),
     );
     assert!(m.contains("units"), "{m}");
@@ -289,7 +289,7 @@ fn from_shapes_turns_nested_outlines_into_a_hardscape_with_holes() {
     let r = ok(
         &mut s,
         "hardscape.from_shapes",
-        json!({"ids": ids, "style": st}),
+        json!({"ids": ids, "style": st, "delete_source": true}),
     );
     assert_eq!(r["created"][0]["holes"], 1);
     assert_eq!(r["created"].as_array().unwrap().len(), 3);
@@ -314,13 +314,20 @@ fn from_shapes_turns_nested_outlines_into_a_hardscape_with_holes() {
     assert_eq!(count(&mut s), 3);
     ok(&mut s, "undo", json!({}));
     assert_eq!(count(&mut s), 4);
-    // Everything as its own hardscape, sources kept.
+    // Without holes, shapes inside others would make hardscapes that overlap: they are left out.
     let r = ok(
         &mut s,
         "hardscape.from_shapes",
-        json!({"ids": ids, "holes_from_inner": false, "delete_source": false}),
+        json!({"ids": ids, "holes_from_inner": false}),
     );
-    assert_eq!(r["created"].as_array().unwrap().len(), 4);
+    assert_eq!(r["created"].as_array().unwrap().len(), 2);
+    assert_eq!(r["skipped"].as_array().unwrap().len(), 2);
+    assert!(
+        r["skipped"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("overlaps")
+    );
     // Wrong kinds are skipped with a reason.
     let h = r["created"][0]["id"].as_uid().unwrap();
     let r = ok(&mut s, "hardscape.from_shapes", json!({"ids": [h]}));
@@ -345,7 +352,7 @@ fn any_closed_shape_works_and_csv_has_rows() {
     );
     let r = ok(
         &mut s,
-        "pattern.layout",
+        "unit_pattern.layout",
         json!({"id": c, "pattern": {"unit_length": 200, "unit_width": 100, "gap": 4, "bond": "herringbone"},
             "include": ["units"], "limit": 1}),
     );
@@ -355,7 +362,7 @@ fn any_closed_shape_works_and_csv_has_rows() {
     let line = add(&mut s, json!({"kind": "line", "a": [0, 0], "b": [100, 0]}));
     let (_, m) = fail(
         &mut s,
-        "pattern.layout",
+        "unit_pattern.layout",
         json!({"id": line, "pattern": {"unit_length": 200, "unit_width": 100}}),
     );
     assert!(m.contains("cannot be filled"), "{m}");
@@ -367,17 +374,275 @@ fn any_closed_shape_works_and_csv_has_rows() {
     );
     let rep = ok(
         &mut s,
-        "report.pattern",
+        "report.unit_pattern",
         json!({"format": "csv", "waste_percent": 10}),
     );
     let csv = rep["csv"].as_str().unwrap();
     assert!(csv.lines().next().unwrap().contains("Whole units"));
     assert_eq!(csv.lines().count(), 2);
     // An explicit id that is not a pattern object gives an error row.
-    let rep = ok(&mut s, "report.pattern", json!({"ids": [line]}));
+    let rep = ok(&mut s, "report.unit_pattern", json!({"ids": [line]}));
     assert!(rep["rows"][0]["error"].is_string());
-    let (_, m) = fail(&mut s, "report.pattern", json!({"waste_percent": 500}));
+    let (_, m) = fail(&mut s, "report.unit_pattern", json!({"waste_percent": 500}));
     assert!(m.contains("waste_percent"));
-    let (_, m) = fail(&mut s, "report.pattern", json!({"sliver_share": 2}));
+    let (_, m) = fail(&mut s, "report.unit_pattern", json!({"sliver_share": 2}));
     assert!(m.contains("sliver_share"));
+}
+
+#[test]
+fn presets_and_modules_work_as_patterns_and_in_styles() {
+    let mut s = Session::with_sequential_ids();
+    let hex = ok(
+        &mut s,
+        "unit_pattern.module_preset",
+        json!({"preset": "hexagon", "across_flats": 200}),
+    );
+    let pattern = hex["pattern"].clone();
+    assert_eq!(pattern["kind"], "module");
+    let region = json!({"outline": rect(3000, 2000)});
+    let r = ok(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"region": region, "pattern": {"kind": "module", "units": pattern["units"], "a": pattern["a"], "b": pattern["b"], "gap": 4}, "include": ["units"], "limit": 2}),
+    );
+    assert_eq!(r["summary"]["bond"], "module");
+    assert!(
+        r["summary"]["unit_length_mm"].is_null()
+            && r["summary"]["unit_area_m2"].as_f64().unwrap() > 0.03
+    );
+    assert_eq!(r["summary"]["by_unit"][0]["name"], "hexagon");
+    assert_eq!(r["units"][0]["kind"], "hexagon");
+    // A preset inside the pattern, with its numbers.
+    let r = ok(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"region": region, "pattern": {"preset": "i_shape", "length": 200, "width": 165, "notch": 25, "gap": 4}, "include": ["gaps"], "limit": 1}),
+    );
+    assert!(r["gaps_total"].as_u64().unwrap() > 50);
+    // Presets: errors.
+    for (params, word) in [
+        (json!({}), "preset"),
+        (json!({"preset": "pentagon"}), "no preset"),
+        (json!({"preset": "hexagon"}), "needs"),
+        (
+            json!({"preset": "hexagon", "side": 100, "across_flats": 100}),
+            "not both",
+        ),
+        (
+            json!({"preset": "hexagon", "side": 100, "bogus": 1}),
+            "bogus",
+        ),
+        (json!({"preset": "i_shape", "notch": 500}), "notch"),
+    ] {
+        let (_, m) = fail(&mut s, "unit_pattern.module_preset", params);
+        assert!(m.contains(word), "{m}");
+    }
+    ok(
+        &mut s,
+        "unit_pattern.module_preset",
+        json!({"preset": "octagon_square", "side": 100}),
+    );
+    // Module errors in a pattern.
+    for (pat, word) in [
+        (json!({"kind": "module"}), "units"),
+        (
+            json!({"kind": "module", "units": [], "a": [1, 0], "b": [0, 1]}),
+            "at least one",
+        ),
+        (
+            json!({"kind": "module", "units": pattern["units"], "a": [100]}),
+            "[x, y]",
+        ),
+        (
+            json!({"kind": "module", "units": pattern["units"], "b": [0, 100]}),
+            "'a'",
+        ),
+        (json!({"preset": "nope"}), "no preset"),
+    ] {
+        let (_, m) = fail(
+            &mut s,
+            "unit_pattern.layout",
+            json!({"region": region, "pattern": pat}),
+        );
+        assert!(m.contains(word), "{pat}: {m}");
+    }
+    // A module as the joints of a style.
+    ok(
+        &mut s,
+        "hardscape_style.create",
+        json!({"name": "Hex", "joints": {"kind": "module", "units": pattern["units"], "a": pattern["a"], "b": pattern["b"], "spacing": 4}}),
+    );
+    let h = ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": rect(3000, 2000), "style": "Hex"}),
+    )["id"]
+        .clone();
+    let rep = ok(&mut s, "report.unit_pattern", json!({"ids": [h]}));
+    assert_eq!(rep["rows"][0]["bond"], "module");
+    assert!(rep["totals"]["by_unit"][0]["whole_units"].as_u64().unwrap() > 50);
+    // A module that overlaps itself is refused when the style is made.
+    let (_, m) = fail(
+        &mut s,
+        "hardscape_style.create",
+        json!({"name": "Bad", "joints": {"kind": "module", "units": pattern["units"], "a": [10, 0], "b": [0, 10], "spacing": 0}}),
+    );
+    assert!(
+        m.contains("larger than the lattice cell") || m.contains("overlap"),
+        "{m}"
+    );
+}
+
+#[test]
+fn modules_from_shapes_and_from_a_block() {
+    let mut s = Session::with_sequential_ids();
+    let a = add(
+        &mut s,
+        json!({"kind": "polyline", "closed": true, "points": rect(100, 100)}),
+    );
+    let b = add(
+        &mut s,
+        json!({"kind": "rect", "min": [100, 0], "max": [200, 100]}),
+    );
+    let m = ok(
+        &mut s,
+        "unit_pattern.module_from_shapes",
+        json!({"ids": [a, b], "names": ["x", "y"]}),
+    );
+    assert_eq!(m["pattern"]["units"][1]["name"], "y");
+    assert!(m["note"].as_str().unwrap().contains("stack"));
+    // The selection is the default.
+    s.selection = vec![a.as_uid().map(ObjectId).unwrap()];
+    let m = ok(
+        &mut s,
+        "unit_pattern.module_from_shapes",
+        json!({"a": [150, 0], "b": [0, 150]}),
+    );
+    assert!(m["note"].is_null());
+    for (params, word) in [
+        (json!({"ids": []}), "select"),
+        (json!({"ids": [a, b], "names": ["one"]}), "one name"),
+        (json!({"ids": [a], "a": [1, 0]}), "both"),
+        (
+            json!({"ids": ["00000000-0000-0000-0000-0000000000ff"]}),
+            "does not exist",
+        ),
+    ] {
+        let (_, msg) = fail(&mut s, "unit_pattern.module_from_shapes", params);
+        assert!(msg.contains(word), "{msg}");
+    }
+    // A block of a file.
+    let dir = std::env::temp_dir().join(format!("kadakas-block-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("m.dxf");
+    let dxf = "0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n8\n0\n2\nM\n70\n0\n10\n0\n20\n0\n0\nLWPOLYLINE\n8\nONE\n90\n4\n70\n1\n10\n0\n20\n0\n10\n100\n20\n0\n10\n100\n20\n100\n10\n0\n20\n100\n0\nENDBLK\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n";
+    std::fs::write(&path, dxf).unwrap();
+    let m = ok(
+        &mut s,
+        "unit_pattern.module_from_block",
+        json!({"path": path, "block": "M"}),
+    );
+    assert_eq!(m["pattern"]["units"][0]["name"], "ONE");
+    for (params, word) in [
+        (json!({"block": "M"}), "path"),
+        (json!({"path": path}), "block"),
+        (json!({"path": path, "block": "Z"}), "no block"),
+        (json!({"path": path, "block": "M", "extra": 1}), "extra"),
+        (
+            json!({"path": dir.join("missing.dxf"), "block": "M"}),
+            "missing",
+        ),
+    ] {
+        let (_, msg) = fail(&mut s, "unit_pattern.module_from_block", params);
+        assert!(msg.contains(word), "{msg}");
+    }
+    // A limit of the session on the size of the file.
+    s.set_limits(crate::SessionLimits {
+        import_text_bytes: 10,
+        ..Default::default()
+    });
+    let (code, msg) = fail(
+        &mut s,
+        "unit_pattern.module_from_block",
+        json!({"path": path, "block": "M"}),
+    );
+    assert_eq!(code, kadakas_core_limit_code());
+    assert!(msg.contains("limit"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn session_limits_bound_the_pattern_work_and_errors_are_rows() {
+    let mut s = Session::with_sequential_ids();
+    ok(
+        &mut s,
+        "hardscape_style.create",
+        json!({"name": "Big", "joints": {"kind": "stack", "unit_length": 200, "unit_width": 100, "spacing": 5}}),
+    );
+    let h = ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": rect(20000, 10000), "style": "Big"}),
+    )["id"]
+        .clone();
+    s.set_limits(crate::SessionLimits {
+        pattern_units: 1000,
+        ..Default::default()
+    });
+    let rep = ok(&mut s, "report.unit_pattern", json!({}));
+    assert!(rep["rows"][0]["error"].as_str().unwrap().contains("limit"));
+    assert_eq!(rep["totals"]["complete"], false);
+    let hs = ok(&mut s, "report.hardscape", json!({}));
+    assert!(hs["rows"][0]["pattern"]["error"].is_string());
+    assert_eq!(hs["totals"]["pattern"]["errors"], 1);
+    let (c, _) = fail(&mut s, "unit_pattern.layout", json!({"id": h}));
+    assert_eq!(c, kadakas_core_limit_code());
+    // The strict limits are lower than the default ones.
+    assert!(
+        crate::SessionLimits::strict().pattern_units
+            < crate::SessionLimits::default().pattern_units
+    );
+    // report.hardscape: options are checked.
+    let (_, m) = fail(&mut s, "report.hardscape", json!({"sliver_share": 5}));
+    assert!(m.contains("sliver_share"));
+    // visible_only, the options of the count, csv.
+    s.set_limits(Default::default());
+    let rep = ok(
+        &mut s,
+        "report.unit_pattern",
+        json!({"visible_only": true, "trim": 0, "min_width": 50, "unfillable_share": 0.1, "exclude_unfillable": true, "format": "csv"}),
+    );
+    assert_eq!(rep["totals"]["complete"], true);
+    for (params, word) in [
+        (json!({"trim": 500}), "trim"),
+        (json!({"min_width": -1}), "min_width"),
+        (json!({"unfillable_share": 2}), "unfillable_share"),
+        (json!({"gap_length": "yes"}), "gap_length"),
+        (json!({"visible_only": 3}), "visible_only"),
+    ] {
+        let (_, m) = fail(&mut s, "report.unit_pattern", params);
+        assert!(m.contains(word), "{m}");
+    }
+    let oct = ok(
+        &mut s,
+        "unit_pattern.module_preset",
+        json!({"preset": "octagon_square", "side": 100}),
+    )["pattern"]
+        .clone();
+    let h = ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": rect(3000, 2000)}),
+    )["id"]
+        .clone();
+    let rep = ok(
+        &mut s,
+        "report.unit_pattern",
+        json!({"ids": [h], "pattern": {"kind": "module", "units": oct["units"], "a": oct["a"], "b": oct["b"], "gap": 3}, "format": "csv"}),
+    );
+    let csv = rep["csv"].as_str().unwrap();
+    assert!(
+        csv.contains("octagon") && csv.contains("square") && csv.contains("all"),
+        "{csv}"
+    );
 }

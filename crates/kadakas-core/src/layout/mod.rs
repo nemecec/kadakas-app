@@ -44,7 +44,8 @@ use crate::curve::{self, Vertex};
 pub use gaps::{Gaps, gap_lines};
 pub use module::{Module, ModuleUnit};
 pub use units::{
-    KindTally, LayoutError, Limits, Stats, Tally, TooMany, Unit, UnitRing, for_each_unit, lay_units,
+    KindTally, LayoutError, Limits, Stats, Tally, TooMany, Unfillable, Unit, UnitRing,
+    for_each_unit, lay_units,
 };
 
 /// Most units that a layout for export or a report makes. About 3.5 times a 5,000 m2 lot of
@@ -311,12 +312,19 @@ fn shapes_area(shapes: &[Vec<Vec<DVec2>>]) -> f64 {
         .sum()
 }
 
-/// True if the ring `inner` lies inside `outer`, or leaves it by less than a noise area: one
-/// millionth of its area, and at least 1 mm2. A vertex that sits 0.01 mm outside a kerb line still
-/// counts as inside; a corner that pokes into a concave notch does not.
+/// The area that counts as noise for a ring, in mm2: a strip of 0.05 mm along its edge, and one
+/// millionth of its area.
+pub fn noise_area(ring: &[DVec2]) -> f64 {
+    let n = ring.len();
+    let perimeter: f64 = (0..n).map(|i| ring[i].distance(ring[(i + 1) % n])).sum();
+    0.05 * perimeter + 1e-6 * crate::geom::polygon_area(ring)
+}
+
+/// True if the ring `inner` lies inside `outer`, or leaves it by less than noise (see
+/// [`noise_area`]). A vertex that sits 0.01 mm outside a kerb line still counts as inside; a corner
+/// that pokes into a concave notch does not.
 pub fn ring_within(inner: &[DVec2], outer: &[DVec2]) -> bool {
-    let area = crate::geom::polygon_area(inner);
-    area_outside(inner, outer) <= (1e-6 * area).max(1.0)
+    area_outside(inner, outer) <= noise_area(inner).max(1.0)
 }
 
 impl Region {

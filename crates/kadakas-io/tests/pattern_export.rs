@@ -34,8 +34,7 @@ fn lot(
                     unit_length: 200.0,
                     unit_width: 100.0,
                     spacing: 5.0,
-                    angle: 0.0,
-                    color: None,
+                    ..Default::default()
                 }),
                 ..Default::default()
             })),
@@ -154,7 +153,7 @@ fn units_in_the_dxf_match_the_report_for_every_bond() {
         let doc = ed.doc();
         let o = doc.object(id).unwrap();
         let (pattern, place) = object::pattern_of(doc, o).unwrap();
-        let region = object::region_of(o, 1.0).unwrap();
+        let region = object::region_of(doc, o, 1.0).unwrap();
         let sum = summarize(&region, &pattern, &place, &SummaryOptions::default()).unwrap();
         let out = export(doc, PatternExport::Units).unwrap();
         let text = String::from_utf8(out.bytes).unwrap();
@@ -253,7 +252,7 @@ fn gaps_are_lines_and_nothing_is_written_by_default() {
     let lines = entities(&text, "LINE");
     let o = ed.doc().object(id).unwrap();
     let (pattern, place) = object::pattern_of(ed.doc(), o).unwrap();
-    let region = object::region_of(o, 1.0).unwrap();
+    let region = object::region_of(ed.doc(), o, 1.0).unwrap();
     let g = layout::gap_lines(&region, &pattern, &place, layout::MAX_GAP_SEGMENTS, false);
     let written = lines.get("0-GAPS").unwrap();
     assert_eq!(written.len(), g.segments.len());
@@ -305,7 +304,7 @@ fn units_survive_an_import_and_the_unit_option() {
     let o = ed.doc().object(id).unwrap();
     let (pattern, place) = object::pattern_of(ed.doc(), o).unwrap();
     let sum = summarize(
-        &object::region_of(o, 1.0).unwrap(),
+        &object::region_of(ed.doc(), o, 1.0).unwrap(),
         &pattern,
         &place,
         &SummaryOptions::default(),
@@ -366,6 +365,208 @@ fn units_survive_an_import_and_the_unit_option() {
     let cut = counts.get("0-UNITS-CUT").copied().unwrap_or_default();
     assert_eq!((whole.0, cut.0), (sum.whole_units, sum.cut_units));
     assert!(((whole.1 + cut.1) / 1e6 - sum.area_laid_m2).abs() < 1e-3);
+}
+
+fn module_lot(preset: &str, w: f64, h: f64) -> (Editor, ObjectId) {
+    use kadakas_core::layout::module;
+    let m = match preset {
+        "hexagon" => module::hexagon(120.0).unwrap(),
+        "octagon_square" => module::octagon_square(100.0).unwrap(),
+        _ => module::i_shape(200.0, 165.0, 25.0).unwrap(),
+    };
+    let mut ed = Editor::new(Document::with_sequential_ids());
+    let style = ResourceId(
+        ed.execute(&Command::AddResource {
+            name: "Mod".into(),
+            body: ResourceBody::HardscapeStyle(Box::new(HardscapeStyle {
+                joints: Some(JointPattern {
+                    kind: JointKind::Module,
+                    spacing: 4.0,
+                    units: m.units.clone(),
+                    a: Some(m.a),
+                    b: Some(m.b),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let id = ObjectId(
+        ed.execute(&Command::AddHardscape {
+            boundary: Some(corners(&[
+                DVec2::ZERO,
+                DVec2::new(w, 0.0),
+                DVec2::new(w, h),
+                DVec2::new(0.0, h),
+            ])),
+            patch: Box::new(HardscapePatch {
+                style: Some(style),
+                ..Default::default()
+            }),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    (ed, id)
+}
+
+#[test]
+fn module_units_are_counted_and_typed_per_unit_type_in_the_dxf() {
+    for preset in ["hexagon", "octagon_square", "i_shape"] {
+        let (ed, id) = module_lot(preset, 5000.0, 3000.0);
+        let o = ed.doc().object(id).unwrap();
+        let (pattern, place) = object::pattern_of(ed.doc(), o).unwrap();
+        let region = object::region_of(ed.doc(), o, 1.0).unwrap();
+        let sum = summarize(&region, &pattern, &place, &SummaryOptions::default()).unwrap();
+        let text =
+            String::from_utf8(export(ed.doc(), PatternExport::Units).unwrap().bytes).unwrap();
+        let polys = entities(&text, "LWPOLYLINE");
+        let whole = polys.get("0-UNITS-WHOLE").map_or(0, Vec::len);
+        let cut = polys.get("0-UNITS-CUT").map_or(0, Vec::len);
+        assert_eq!((whole, cut), (sum.whole_units, sum.cut_units), "{preset}");
+        // Each unit polyline has its type as extended data, and the application is in the table.
+        let typed = text.matches("1001\nKADAKAS_UNIT\n").count();
+        assert_eq!(typed, whole + cut, "{preset}");
+        assert!(text.contains("2\nKADAKAS_UNIT\n"));
+        for u in &sum.by_unit {
+            let n = text.matches(&format!("1000\n{}\n", u.name)).count();
+            assert_eq!(n, u.whole_units + u.cut_units, "{preset} {}", u.name);
+        }
+        let notes = export(ed.doc(), PatternExport::Units).unwrap().report.notes;
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("whole") && n.contains("cut")),
+            "{notes:?}"
+        );
+        if sum.by_unit.len() > 1 {
+            assert!(
+                notes
+                    .iter()
+                    .any(|n| n.contains("octagon:") && n.contains("square:")),
+                "{notes:?}"
+            );
+        }
+        // The gap lines of a module are its outlines, each edge once.
+        let g = export(ed.doc(), PatternExport::Gaps).unwrap();
+        let lines = entities(&String::from_utf8(g.bytes).unwrap(), "LINE");
+        assert!(
+            lines.get("0-GAPS").is_some_and(|l| l.len() > 20),
+            "{preset}"
+        );
+    }
+    // A bond writes no extended data.
+    let (ed, _) = lot(
+        JointKind::Stack,
+        2050.0,
+        1050.0,
+        vec![],
+        Some(DVec2::ZERO),
+        None,
+    );
+    let text = String::from_utf8(export(ed.doc(), PatternExport::Units).unwrap().bytes).unwrap();
+    assert!(!text.contains("KADAKAS_UNIT"));
+}
+
+#[test]
+fn the_file_budget_is_shared_by_all_objects() {
+    let (mut ed, _) = lot(JointKind::Stack, 20_000.0, 10_000.0, vec![], None, None);
+    // A second hardscape with the same style.
+    let style = ed
+        .doc()
+        .resources
+        .hardscape_styles()
+        .next()
+        .map(|(id, _, _)| id)
+        .unwrap();
+    ed.execute(&Command::AddHardscape {
+        boundary: Some(corners(&[
+            DVec2::new(30_000.0, 0.0),
+            DVec2::new(50_000.0, 0.0),
+            DVec2::new(50_000.0, 10_000.0),
+            DVec2::new(30_000.0, 10_000.0),
+        ])),
+        patch: Box::new(HardscapePatch {
+            style: Some(style),
+            ..Default::default()
+        }),
+        layer: None,
+        class: None,
+        attrs: Attributes::default(),
+    })
+    .unwrap();
+    // Each lot has about 9,700 units. A budget of 12,000 takes the first and refuses the second.
+    let opts = ExportOptions {
+        patterns: PatternExport::Units,
+        pattern_budget: Some(12_000),
+        ..ExportOptions::default()
+    };
+    let err = DxfFormat.export(ed.doc(), &opts).unwrap_err().to_string();
+    assert!(err.contains("in all objects"), "{err}");
+    let opts = ExportOptions {
+        pattern_budget: Some(100_000),
+        ..opts
+    };
+    assert!(DxfFormat.export(ed.doc(), &opts).is_ok());
+}
+
+#[test]
+fn the_outlines_of_a_block_of_a_dxf_file() {
+    use kadakas_io::dxf::block::{block_names, block_outlines};
+    let poly = |layer: &str, pts: &[(f64, f64)], bulge: f64| {
+        let mut s = format!("0\nLWPOLYLINE\n8\n{layer}\n90\n{}\n70\n1\n", pts.len());
+        for (i, (x, y)) in pts.iter().enumerate() {
+            s.push_str(&format!("10\n{x}\n20\n{y}\n"));
+            if i == 0 && bulge != 0.0 {
+                s.push_str(&format!("42\n{bulge}\n"));
+            }
+        }
+        s
+    };
+    let blocks = format!(
+        "0\nBLOCK\n8\n0\n2\nTWO\n70\n0\n10\n0\n20\n0\n{}{}0\nLINE\n8\n0\n10\n0\n20\n0\n11\n5\n21\n5\n0\nENDBLK\n0\nBLOCK\n8\n0\n2\nLINES\n70\n0\n10\n0\n20\n0\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n5\n21\n5\n0\nENDBLK\n",
+        poly(
+            "BIG",
+            &[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)],
+            0.0
+        ),
+        poly(
+            "ROUND",
+            &[(100.0, 0.0), (150.0, 0.0), (150.0, 100.0), (100.0, 100.0)],
+            0.5
+        ),
+    );
+    let text = format!(
+        "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nBLOCKS\n{blocks}0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDSEC\n0\nEOF\n"
+    );
+    let names = block_names(text.as_bytes()).unwrap();
+    assert_eq!(names, vec!["LINES".to_string(), "TWO".to_string()]);
+    let outlines = block_outlines(text.as_bytes(), "TWO").unwrap();
+    let mut layers: Vec<&str> = outlines.iter().map(|o| o.layer.as_str()).collect();
+    layers.sort();
+    assert_eq!(layers, ["BIG", "ROUND"]);
+    let round = outlines.iter().find(|o| o.layer == "ROUND").unwrap();
+    assert!(
+        round.outline.iter().any(|v| !v.is_straight()),
+        "the bulge stays an arc"
+    );
+    let e = block_outlines(text.as_bytes(), "NOPE")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("no block 'NOPE'") && e.contains("TWO") && e.contains("LINES"),
+        "{e}"
+    );
+    let e = block_outlines(text.as_bytes(), "LINES")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("no closed"), "{e}");
+    assert!(block_outlines(b"not a dxf", "X").is_err());
 }
 
 /// Measures the time and the size of big exports. Run it in a release build under

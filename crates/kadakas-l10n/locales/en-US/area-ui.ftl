@@ -44,3 +44,27 @@ area-ui-clear-origin = Use the middle
 area-ui-pattern-angle = Pattern angle
 area-ui-set-angle = Set angle
 area-ui-clear-angle = Use the style angle
+joint-ui-title = Joint pattern of { $name }
+joint-ui-bond-running-bond = Running bond
+joint-ui-bond-stack = Stack
+joint-ui-bond-herringbone = Herringbone
+joint-ui-bond-basket-weave = Basket weave
+joint-ui-bond-module = Module (own shapes)
+joint-ui-unit-length = Unit length
+joint-ui-unit-width = Unit width
+joint-ui-gap = Joint width
+joint-ui-angle = Angle
+joint-ui-preset-hexagon = Hexagon
+joint-ui-preset-octagon-square = Octagon with square
+joint-ui-preset-i-shape = I-shaped paver
+joint-ui-from-selection = From selection
+joint-ui-side = Side
+joint-ui-across-flats = Across flats
+joint-ui-notch = Notch
+joint-ui-shapes =
+    { $count ->
+        [one] { $count } unit shape from the drawing
+       *[other] { $count } unit shapes from the drawing
+    }
+joint-ui-save = Save
+joint-ui-close = Close

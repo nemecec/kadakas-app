@@ -182,7 +182,7 @@ impl<W: Write> Exporter<'_, W> {
         // are refused.
         let hole_list = hardscape::data(obj).map(|d| d.holes).unwrap_or_default();
         let region = kadakas_core::layout::Region::new(boundary, &hole_list, 2.0)
-            .map_err(|_| "the holes cover the whole slab")?;
+            .map_err(|_| "the outline has no area, or the holes cover all of it")?;
         if region.shapes.len() != 1 {
             return Err("the holes split the slab into several parts");
         }

@@ -14,7 +14,7 @@ use crate::command::Command;
 use crate::curve::{self, Vertex};
 use crate::geom;
 use crate::layout::object::outline_of;
-use crate::layout::{area_shared, ring_within};
+use crate::layout::{area_shared, noise_area, ring_within};
 use crate::model::{Document, ObjectId, Shape};
 use crate::resource::ResourceId;
 
@@ -66,11 +66,6 @@ struct Item {
 
 fn boxes_meet(a: &Item, b: &Item) -> bool {
     a.lo.x <= b.hi.x && b.lo.x <= a.hi.x && a.lo.y <= b.hi.y && b.lo.y <= a.hi.y
-}
-
-/// Noise area for "the shapes overlap", in mm2.
-fn noise(a: f64) -> f64 {
-    (1e-6 * a).max(1.0)
 }
 
 /// Plans the conversion of the given shapes. Shapes that are not closed outlines are skipped with
@@ -128,7 +123,9 @@ pub fn from_shapes(doc: &Document, ids: &[ObjectId], opts: &FromShapesOptions) -
     let mut depth = vec![0usize; n];
     let mut dropped = vec![false; n];
     let overlaps = |a: &Item, b: &Item| {
-        boxes_meet(a, b) && area_shared(&a.ring, &b.ring) > noise(a.area.min(b.area))
+        boxes_meet(a, b)
+            && area_shared(&a.ring, &b.ring)
+                > noise_area(if a.area < b.area { &a.ring } else { &b.ring }).max(1.0)
     };
     if opts.holes_from_inner {
         for i in 0..n {

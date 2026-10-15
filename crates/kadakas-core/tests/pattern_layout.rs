@@ -9,7 +9,7 @@ use kadakas_core::hardscape::style::{HardscapeStyle, JointKind, JointPattern};
 use kadakas_core::hardscape::{self, HardscapePatch};
 use kadakas_core::layout::object::{outline_of, pattern_of, region_of};
 use kadakas_core::layout::summary::{SummaryOptions, summarize};
-use kadakas_core::layout::{self, Bond, Pattern, Placement, Region, gaps};
+use kadakas_core::layout::{self, Bond, LayoutError, Limits, Pattern, Placement, Region, gaps};
 use kadakas_core::mesh;
 use kadakas_core::model::{Attributes, Document, ObjectId, Shape};
 use kadakas_core::resource::{ResourceBody, ResourceId};
@@ -43,7 +43,7 @@ fn add_style(ed: &mut Editor, kind: JointKind) -> ResourceId {
                     unit_width: 100.0,
                     spacing: 5.0,
                     angle: 10.0,
-                    color: None,
+                    ..Default::default()
                 }),
                 border: Some(hardscape::Border::default()),
                 ..Default::default()
@@ -179,7 +179,8 @@ fn patch_validates_holes_origin_angle_and_edge() {
     )
     .unwrap();
     let d = hardscape::data(ed.doc().object(id).unwrap()).unwrap();
-    assert_eq!(d.origin, Some(DVec2::new(4000.0, 0.0)));
+    // The style has a kerb border of 150 mm, so the pattern starts on the inner border line.
+    assert_eq!(d.origin, Some(DVec2::new(3850.0, 150.0)));
     assert!((d.angle.unwrap() - 90.0).abs() < 1e-9);
     // On a path the edge is an edge of the outline from the center line.
     let path = ed
@@ -288,14 +289,14 @@ fn report_svg_and_scene_leave_the_holes_open() {
     assert!(svg.contains(r#"data-part="hole""#) && svg.contains("evenodd"));
     assert_eq!(svg.matches(r#"data-part="border""#).count(), 2);
     let joints = hardscape::drawn_joints(
+        ed.doc(),
         ed.doc().object(holed).unwrap(),
         &JointPattern {
             kind: JointKind::Stack,
             unit_length: 200.0,
             unit_width: 100.0,
             spacing: 5.0,
-            angle: 0.0,
-            color: None,
+            ..Default::default()
         },
         1.0,
     );
@@ -322,17 +323,21 @@ fn report_svg_and_scene_leave_the_holes_open() {
 #[test]
 fn summary_counts_options_and_errors() {
     let region = Region::from_rings(&rect(2050.0, 1050.0), &[hole()]).unwrap();
-    let pattern = Pattern {
-        bond: Bond::Stack,
-        unit_length: 200.0,
-        unit_width: 100.0,
-        gap: 5.0,
-    };
+    let pattern = Pattern::new(Bond::Stack, 200.0, 100.0, 5.0);
     let place = Placement {
         origin: Some(DVec2::ZERO),
         angle: 0.0,
     };
-    let s = summarize(&region, &pattern, &place, &SummaryOptions::default()).unwrap();
+    let s = summarize(
+        &region,
+        &pattern,
+        &place,
+        &SummaryOptions {
+            gap_length: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(s.order_units, s.whole_units + s.cut_units);
     assert!(s.waste_percent.is_none() && s.order_units_with_waste.is_none());
     assert!(s.gap_length_m.unwrap() > 10.0);
@@ -363,7 +368,10 @@ fn summary_counts_options_and_errors() {
         },
     )
     .unwrap_err();
-    assert!(e.estimated > 10);
+    assert!(
+        matches!(e, LayoutError::TooMany(ref t) if t.estimated > 10),
+        "{e:?}"
+    );
     // Gap lines over a limit: none, and the length is unknown.
     let g = gaps::gap_lines(&region, &pattern, &place, 5, false);
     assert!(g.truncated && g.segments.is_empty());
@@ -373,40 +381,29 @@ fn summary_counts_options_and_errors() {
         &place,
         &SummaryOptions {
             max_gap_segments: 5,
+            gap_length: true,
             ..Default::default()
         },
     )
     .unwrap();
     assert!(s.gap_length_m.is_none());
     // The on-screen drawing may use larger units. A fine pattern over a big region does.
-    let fine = Pattern {
-        unit_length: 10.0,
-        unit_width: 10.0,
-        gap: 0.0,
-        ..pattern
-    };
+    let fine = Pattern::new(Bond::Stack, 10.0, 10.0, 0.0);
     let big = Region::from_rings(&rect(400_000.0, 400_000.0), &[]).unwrap();
     let coarse = gaps::gap_lines(&big, &fine, &Placement::default(), 30_000, true);
     assert!(coarse.coarsened && !coarse.segments.is_empty());
     // Invalid pattern: nothing.
-    let bad = Pattern {
-        unit_length: 0.0,
-        ..pattern
-    };
+    let bad = Pattern::new(Bond::Stack, 0.0, 100.0, 5.0);
     assert_eq!(
         gaps::gap_lines(&region, &bad, &place, 100, true),
         gaps::Gaps::default()
     );
-    let (units, stats) = layout::lay_units(&region, &bad, &place, 100).unwrap();
-    assert!(units.is_empty() && stats.units == 0);
+    assert!(layout::lay_units(&region, &bad, &place, &Limits::new(100)).is_err());
     assert!(bad.validate().is_err());
     assert!(
-        Pattern {
-            gap: -1.0,
-            ..pattern
-        }
-        .validate()
-        .is_err()
+        Pattern::new(Bond::Stack, 200.0, 100.0, -1.0)
+            .validate()
+            .is_err()
     );
 }
 
@@ -414,13 +411,9 @@ fn summary_counts_options_and_errors() {
 fn bonds_have_their_unit_areas_and_all_fill_a_region() {
     let region = Region::from_rings(&rect(3000.0, 2000.0), &[]).unwrap();
     for bond in Bond::ALL {
-        let p = Pattern {
-            bond,
-            unit_length: 200.0,
-            unit_width: 100.0,
-            gap: 0.0,
-        };
-        let (units, _) = layout::lay_units(&region, &p, &Placement::default(), 100_000).unwrap();
+        let p = Pattern::new(bond, 200.0, 100.0, 0.0);
+        let (units, _) =
+            layout::lay_units(&region, &p, &Placement::default(), &Limits::new(100_000)).unwrap();
         let sum: f64 = units.iter().map(|u| u.area).sum();
         assert!((sum - 6.0e6).abs() < 1e-3, "{bond:?}");
         assert!((p.full_unit_area() - 20_000.0).abs() < 1e-9, "{bond:?}");
@@ -428,14 +421,12 @@ fn bonds_have_their_unit_areas_and_all_fill_a_region() {
     }
     assert_eq!(Bond::from_name("Basket-Weave"), Some(Bond::BasketWeave));
     assert_eq!(Bond::from_name("zigzag"), None);
-    // The herringbone long side is whole cells.
-    let h = Pattern {
-        bond: Bond::Herringbone,
-        unit_length: 200.0,
-        unit_width: 100.0,
-        gap: 5.0,
-    };
-    assert!((h.full_unit_area() - (2.0 * 105.0 - 5.0) * 100.0).abs() < 1e-9);
+    // The unit keeps its size in a herringbone.
+    let h = Pattern::new(Bond::Herringbone, 200.0, 100.0, 5.0);
+    assert!(
+        (h.full_unit_area() - 200.0 * 100.0).abs() < 1e-9,
+        "the unit keeps its size"
+    );
 }
 
 #[test]
@@ -519,7 +510,7 @@ fn objects_work_as_regions() {
         b: DVec2::X,
     });
     let doc = ed.doc();
-    let area = |id| region_of(doc.object(id).unwrap(), 1.0).unwrap().area;
+    let area = |id| region_of(doc, doc.object(id).unwrap(), 1.0).unwrap().area;
     assert!((area(poly) - 500_000.0).abs() < 1e-6);
     assert!((area(r) - 100.0).abs() < 1e-6);
     assert!((area(c) - std::f64::consts::PI * 1.0e6).abs() / 1.0e6 < 0.001);
@@ -568,6 +559,7 @@ fn from_shapes_plans_nested_outlines() {
     let ghost = ObjectId::from_num(999);
     let opts = FromShapesOptions {
         style: Some(st),
+        delete_source: true,
         ..Default::default()
     };
     let made = batch::from_shapes(ed.doc(), &[outer, island, island, open, ghost], &opts);
@@ -662,33 +654,375 @@ fn unit_polygons_carry_holes_and_dust_is_counted() {
         ]],
     )
     .unwrap();
-    let p = Pattern {
-        bond: Bond::Stack,
-        unit_length: 200.0,
-        unit_width: 100.0,
-        gap: 0.0,
-    };
+    let p = Pattern::new(Bond::Stack, 200.0, 100.0, 0.0);
     let place = Placement {
         origin: Some(DVec2::ZERO),
         angle: 0.0,
     };
-    let (units, stats) = layout::lay_units(&region, &p, &place, 100).unwrap();
+    let (units, stats) = layout::lay_units(&region, &p, &place, &Limits::new(100)).unwrap();
     assert_eq!(units.len(), 4);
     assert!(units.iter().any(|u| u.rings.len() == 2 && u.rings[1].hole));
     assert_eq!(stats.dust_pieces, 0);
     // The region edge 0.5 mm inside a unit cuts a sliver of 0.5 x 100 mm = 50 mm2: a unit, not dust.
     let thin = Region::from_rings(&rect(400.5, 200.0), &[]).unwrap();
-    let (units, _) = layout::lay_units(&thin, &p, &place, 100).unwrap();
+    let (units, _) = layout::lay_units(&thin, &p, &place, &Limits::new(100)).unwrap();
     assert_eq!(units.len(), 6);
     // 0.005 mm wide: 0.5 mm2, dust.
     let dust = Region::from_rings(&rect(400.005, 200.0), &[]).unwrap();
-    let (units, stats) = layout::lay_units(&dust, &p, &place, 100).unwrap();
+    let (units, stats) = layout::lay_units(&dust, &p, &place, &Limits::new(100)).unwrap();
     assert_eq!(units.len(), 4);
     assert_eq!(stats.dust_pieces, 2);
     // The tally.
     let mut t = layout::Tally::default();
     for u in &units {
-        t.add(u, 0.25);
+        t.add(u, 0.25, &layout::units::Unfillable::default());
     }
-    assert_eq!((t.whole, t.cut), (4, 0));
+    assert_eq!((t.whole(), t.cut()), (4, 0));
+}
+
+fn add_poly(ed: &mut Editor, pts: &[DVec2]) -> ObjectId {
+    ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::Polyline {
+                points: corners(pts),
+                closed: true,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    )
+}
+
+#[test]
+fn an_island_that_touches_or_crosses_the_outline_by_noise_is_still_a_hole() {
+    for (name, island) in [
+        // On the kerb line: the island shares an edge with the lot.
+        (
+            "touching",
+            vec![
+                DVec2::new(0.0, 500.0),
+                DVec2::new(800.0, 500.0),
+                DVec2::new(800.0, 900.0),
+                DVec2::new(0.0, 900.0),
+            ],
+        ),
+        // A vertex 0.01 mm outside after a snap.
+        (
+            "noise",
+            vec![
+                DVec2::new(-0.01, 500.0),
+                DVec2::new(800.0, 500.0),
+                DVec2::new(800.0, 900.0),
+                DVec2::new(-0.01, 900.0),
+            ],
+        ),
+    ] {
+        let mut ed = Editor::new(Document::with_sequential_ids());
+        let lot = add_poly(&mut ed, &rect(4000.0, 2000.0));
+        let isl = add_poly(&mut ed, &island);
+        let opts = FromShapesOptions {
+            style: Some(add_style(&mut ed, JointKind::Stack)),
+            ..Default::default()
+        };
+        let made = batch::from_shapes(ed.doc(), &[lot, isl], &opts);
+        assert_eq!(made.created.len(), 1, "{name}: {:?}", made.skipped);
+        assert_eq!(made.holes.len(), 1, "{name}");
+        ed.execute(&made.command.unwrap()).unwrap();
+        let rows = hardscape::report::report(ed.doc(), &kadakas_core::ground::NoTerrain).rows;
+        assert_eq!(rows.len(), 1, "{name}: one hardscape, not two");
+        let area = rows[0].quantities.plan_area_m2;
+        assert!((area - (8.0 - 0.8 * 0.4)).abs() < 1e-3, "{name}: {area}");
+    }
+}
+
+#[test]
+fn a_shape_that_overlaps_in_part_is_left_out_and_named() {
+    let mut ed = Editor::new(Document::with_sequential_ids());
+    let lot = add_poly(&mut ed, &rect(4000.0, 2000.0));
+    // Half in, half out.
+    let half = add_poly(
+        &mut ed,
+        &[
+            DVec2::new(3500.0, 500.0),
+            DVec2::new(4500.0, 500.0),
+            DVec2::new(4500.0, 900.0),
+            DVec2::new(3500.0, 900.0),
+        ],
+    );
+    // A clean neighbour.
+    let near = add_poly(
+        &mut ed,
+        &[
+            DVec2::new(8000.0, 0.0),
+            DVec2::new(9000.0, 0.0),
+            DVec2::new(9000.0, 500.0),
+            DVec2::new(8000.0, 500.0),
+        ],
+    );
+    let made = batch::from_shapes(ed.doc(), &[lot, half, near], &FromShapesOptions::default());
+    let skipped: Vec<ObjectId> = made.skipped.iter().map(|s| s.0).collect();
+    assert_eq!(skipped, vec![half], "{:?}", made.skipped);
+    assert!(made.skipped[0].1.contains("overlaps"));
+    assert_eq!(made.created.len(), 2);
+    ed.execute(&made.command.unwrap()).unwrap();
+    let rows = hardscape::report::report(ed.doc(), &kadakas_core::ground::NoTerrain).rows;
+    let total: f64 = rows.iter().map(|r| r.quantities.plan_area_m2).sum();
+    assert!(
+        (total - (8.0 + 0.5)).abs() < 1e-6,
+        "no area counted twice: {total}"
+    );
+    // Without holes_from_inner two lots that overlap in part are also not both made.
+    let made = batch::from_shapes(
+        ed.doc(),
+        &[lot, half],
+        &FromShapesOptions {
+            holes_from_inner: false,
+            ..Default::default()
+        },
+    );
+    assert!(made.created.len() <= 1);
+}
+
+#[test]
+fn an_island_on_an_arc_lot_works_and_a_closing_point_is_dropped() {
+    let mut ed = Editor::new(Document::with_sequential_ids());
+    // A lot with an arc side: a half disc.
+    let lot = ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::Polyline {
+                points: vec![
+                    Vertex::corner(DVec2::new(-2000.0, 0.0)),
+                    Vertex::new(DVec2::new(0.0, 2000.0), VertexKind::PointOnArc),
+                    Vertex::corner(DVec2::new(2000.0, 0.0)),
+                ],
+                closed: true,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    // An island on the flat side, closed with a repeated first point.
+    let isl = ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::Polyline {
+                points: corners(&[
+                    DVec2::new(-300.0, 0.0),
+                    DVec2::new(300.0, 0.0),
+                    DVec2::new(300.0, 400.0),
+                    DVec2::new(-300.0, 400.0),
+                    DVec2::new(-300.0, 0.0),
+                ]),
+                closed: true,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let made = batch::from_shapes(ed.doc(), &[lot, isl], &FromShapesOptions::default());
+    assert_eq!(made.holes.len(), 1, "{:?}", made.skipped);
+    ed.execute(&made.command.unwrap()).unwrap();
+    let h = made.created[0].1;
+    let d = hardscape::data(ed.doc().object(h).unwrap()).unwrap();
+    assert_eq!(d.holes[0].len(), 4, "the repeated point is not a corner");
+    let o = ed.doc().object(h).unwrap();
+    let region = layout::object::region_of(ed.doc(), o, 1.0).unwrap();
+    let want = std::f64::consts::PI * 2000.0 * 2000.0 / 2.0 - 600.0 * 400.0;
+    assert!((region.area - want).abs() / want < 0.001);
+}
+
+#[test]
+fn the_kerb_border_is_not_paved() {
+    let mut ed = Editor::new(Document::with_sequential_ids());
+    let st = add_style(&mut ed, JointKind::Stack); // has a border of 150 mm
+    let id = add_slab(
+        &mut ed,
+        HardscapePatch {
+            style: Some(st),
+            holes: Some(vec![corners(&hole())]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let o = ed.doc().object(id).unwrap();
+    let region = layout::object::region_of(ed.doc(), o, 1.0).unwrap();
+    // 4000 x 2000 less 150 mm all round, less the hole grown by 150 mm all round.
+    let want = (4000.0 - 300.0) * (2000.0 - 300.0) - (600.0 + 300.0) * (500.0 + 300.0);
+    assert!(
+        (region.area - want).abs() < 1e-3,
+        "{} vs {want}",
+        region.area
+    );
+    let (pattern, place) = layout::object::pattern_of(ed.doc(), o).unwrap();
+    let s = summarize(&region, &pattern, &place, &SummaryOptions::default()).unwrap();
+    assert!((s.area_laid_m2 + s.gap_area_m2 - region.area / 1e6).abs() < 1e-9);
+    // align_to_edge starts the pattern on the inner border line, not on the outline.
+    let p = layout::object::align_placement(ed.doc(), o, 0).unwrap();
+    assert!(
+        (p.origin.unwrap() - DVec2::new(150.0, 150.0)).length() < 1e-9,
+        "{:?}",
+        p.origin
+    );
+    set(
+        &mut ed,
+        id,
+        HardscapePatch {
+            align_to_edge: Some(2),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let d = hardscape::data(ed.doc().object(id).unwrap()).unwrap();
+    assert!(
+        (d.origin.unwrap() - DVec2::new(3850.0, 1850.0)).length() < 1e-9,
+        "{:?}",
+        d.origin
+    );
+    // A path loses the border only on the sides that have it.
+    let path = ed
+        .execute(&Command::AddHardscape {
+            boundary: None,
+            patch: Box::new(HardscapePatch {
+                center: Some(corners(&[DVec2::ZERO, DVec2::new(5000.0, 0.0)])),
+                width: Some(1000.0),
+                style: Some(st),
+                ..Default::default()
+            }),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0];
+    let o = ed.doc().object(ObjectId(path)).unwrap();
+    let region = layout::object::region_of(ed.doc(), o, 1.0).unwrap();
+    assert!(
+        (region.area - 5000.0 * 700.0).abs() < 1e-3,
+        "{}",
+        region.area
+    );
+}
+
+#[test]
+fn holes_are_checked_by_area_merged_and_repaired() {
+    let mut ed = Editor::new(Document::with_sequential_ids());
+    // A concave outline: an L. A hole across the notch must be refused, though its corners are
+    // inside or on the outline.
+    let l = vec![
+        DVec2::new(0.0, 0.0),
+        DVec2::new(3000.0, 0.0),
+        DVec2::new(3000.0, 1000.0),
+        DVec2::new(1000.0, 1000.0),
+        DVec2::new(1000.0, 3000.0),
+        DVec2::new(0.0, 3000.0),
+    ];
+    let id = ObjectId(
+        ed.execute(&Command::AddHardscape {
+            boundary: Some(corners(&l)),
+            patch: Box::new(HardscapePatch::default()),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let across_notch = vec![
+        DVec2::new(800.0, 800.0),
+        DVec2::new(1600.0, 800.0),
+        DVec2::new(1600.0, 1600.0),
+        DVec2::new(800.0, 1600.0),
+    ];
+    let e = set(
+        &mut ed,
+        id,
+        HardscapePatch {
+            holes: Some(vec![corners(&across_notch)]),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(e.contains("not inside"), "{e}");
+    // A hole that leaves the outline by 0.01 mm is fine.
+    let noisy = vec![
+        DVec2::new(-0.01, 200.0),
+        DVec2::new(500.0, 200.0),
+        DVec2::new(500.0, 600.0),
+        DVec2::new(-0.01, 600.0),
+    ];
+    set(
+        &mut ed,
+        id,
+        HardscapePatch {
+            holes: Some(vec![corners(&noisy)]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // Overlapping holes are merged for the perimeter and the 3D slab.
+    let a = vec![
+        DVec2::new(1500.0, 200.0),
+        DVec2::new(2000.0, 200.0),
+        DVec2::new(2000.0, 600.0),
+        DVec2::new(1500.0, 600.0),
+    ];
+    let b = vec![
+        DVec2::new(1800.0, 300.0),
+        DVec2::new(2300.0, 300.0),
+        DVec2::new(2300.0, 700.0),
+        DVec2::new(1800.0, 700.0),
+    ];
+    set(
+        &mut ed,
+        id,
+        HardscapePatch {
+            holes: Some(vec![corners(&a), corners(&b)]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let merged =
+        hardscape::data::merged_holes(&corners(&l), &[corners(&a), corners(&b)], 1.0).unwrap();
+    assert_eq!(merged.len(), 1);
+    let q = hardscape::report::quantities(ed.doc(), ed.doc().object(id).unwrap(), None).unwrap();
+    // The union of the two holes: 500 x 400 + 500 x 400 less the 200 x 300 overlap.
+    assert!((q.holes_area_m2 - (0.2 + 0.2 - 0.06)).abs() < 1e-9);
+    let outline = 3000.0 + 1000.0 + 2000.0 + 2000.0 + 1000.0 + 3000.0;
+    // The union is two 500 x 400 rectangles that share a 200 x 300 part: its edge is the sum of
+    // both perimeters less the parts inside each other.
+    let union_perimeter = 2.0 * (500.0 + 400.0) * 2.0 - 4.0 * 300.0 + 0.0 - 4.0 * 0.0;
+    let _ = union_perimeter;
+    let union_edge = 2.0 * (500.0 + 400.0) + 2.0 * (500.0 + 400.0) - 2.0 * 200.0 - 2.0 * 300.0;
+    assert!(
+        (q.perimeter_m * 1000.0 - outline - union_edge).abs() < 1e-3,
+        "{}",
+        q.perimeter_m
+    );
+    // A merge that left a hole outside the outline is cut to it.
+    let mut o = ed.doc().object(id).unwrap().clone();
+    let mut d = hardscape::data(&o).unwrap();
+    d.holes = vec![corners(&[
+        DVec2::new(2000.0, 500.0),
+        DVec2::new(4000.0, 500.0),
+        DVec2::new(4000.0, 900.0),
+        DVec2::new(2000.0, 900.0),
+    ])];
+    hardscape::data::set_data(&mut o, &d);
+    let note = hardscape::data::repair_holes(&mut o).unwrap();
+    assert!(note.contains("cut to it"));
+    let d = hardscape::data(&o).unwrap();
+    assert!(
+        d.holes
+            .iter()
+            .all(|h| h.iter().all(|v| v.p.x <= 3000.0 + 1e-6))
+    );
+    assert!(hardscape::data::repair_holes(&mut o).is_none());
 }
