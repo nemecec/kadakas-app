@@ -198,6 +198,17 @@ impl BlobSource for FileSource {
         self.part.check_unchanged().map_err(FileSource::error)
     }
 
+    fn check_blob(&self, hash: &str) -> Result<(), BlobError> {
+        if self.has_blob(hash) {
+            return Ok(());
+        }
+        let short: String = hash.chars().take(8).collect();
+        Err(BlobError(format!(
+            "the file {} changed on disk after it was opened, and the picture {short} is not in it now",
+            self.part.label()
+        )))
+    }
+
     fn note_handle(&self, blob: &Arc<LazyBlob>) {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         if live.map.len() > live.prune_at {

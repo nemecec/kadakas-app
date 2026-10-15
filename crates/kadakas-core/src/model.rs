@@ -1434,19 +1434,32 @@ impl Document {
         }
     }
 
-    /// Checks that every picture that stays in a file can still be read from it (the file is the
-    /// one that was opened). A host calls it before it works out the state of the document for the
-    /// versions or a compare, because a picture that cannot be read makes its object look as if
-    /// it were not there.
+    /// Checks that every picture that stays in a file can still be read from it. A host calls it
+    /// before it works out the state of the document for the versions or a compare, because a
+    /// picture that cannot be read makes its object look as if it were not there. A file that is
+    /// not the one that was opened is fine as long as it (or its backup) still has the pictures
+    /// that the document uses, found by their hash.
     pub fn check_blobs(&self) -> Result<(), crate::blob::BlobError> {
-        let mut seen: Vec<usize> = Vec::new();
+        let mut sources: Vec<(usize, bool)> = Vec::new();
         let mut result = Ok(());
         let mut one = |lazy: Option<&std::sync::Arc<crate::blob::LazyBlob>>| {
             let Some(l) = lazy else { return };
+            if result.is_err() {
+                return;
+            }
             let key = std::sync::Arc::as_ptr(l.source()) as *const () as usize;
-            if result.is_ok() && !seen.contains(&key) {
-                seen.push(key);
-                result = l.source().check();
+            // The file as a whole is looked at once; only when it is not the one that was opened
+            // is each picture looked for by its hash.
+            let whole = match sources.iter().find(|(k, _)| *k == key) {
+                Some((_, ok)) => *ok,
+                None => {
+                    let ok = l.source().check().is_ok();
+                    sources.push((key, ok));
+                    ok
+                }
+            };
+            if !whole {
+                result = l.source().check_blob(l.hash());
             }
         };
         self.for_each_blob(&mut |b| match b {
@@ -1455,6 +1468,69 @@ impl Document {
             DocBlob::ImportBase(_) => {}
         });
         result
+    }
+
+    /// The hashes of the pictures that stay in a file and cannot be read now (the file changed on
+    /// disk and no file has them).
+    pub fn unreadable_pictures(&self) -> Vec<String> {
+        let mut out = std::collections::BTreeSet::new();
+        let mut whole: Vec<(usize, bool)> = Vec::new();
+        let mut one = |lazy: Option<&std::sync::Arc<crate::blob::LazyBlob>>| {
+            let Some(l) = lazy else { return };
+            let key = std::sync::Arc::as_ptr(l.source()) as *const () as usize;
+            let ok = match whole.iter().find(|(k, _)| *k == key) {
+                Some((_, ok)) => *ok,
+                None => {
+                    let ok = l.source().check().is_ok();
+                    whole.push((key, ok));
+                    ok
+                }
+            };
+            if !ok && l.source().check_blob(l.hash()).is_err() {
+                out.insert(l.hash().to_string());
+            }
+        };
+        self.for_each_blob(&mut |b| match b {
+            DocBlob::Picture(p) => one(p.lazy()),
+            DocBlob::Image(t) => one(t.lazy()),
+            DocBlob::ImportBase(_) => {}
+        });
+        out.into_iter().collect()
+    }
+
+    /// Replaces the pictures with these hashes (they cannot be found any more and the person chose
+    /// to save without them) by a small gray picture, and returns how many pictures were replaced.
+    /// An underlay gets a raster of one pixel; an image resource gets a consistent one-pixel image
+    /// (hash, size and thumbnail). It is no edit: there is no undo step.
+    pub fn replace_missing_pictures(&mut self, missing: &std::collections::HashSet<String>) -> usize {
+        use crate::underlay::{PngData, base64_encode, placeholder_png};
+        let mut count = 0;
+        let png = placeholder_png();
+        for o in self.objects.values_mut() {
+            if let Shape::Underlay(u) = &mut o.shape
+                && u.png.lazy().is_some_and(|l| missing.contains(l.hash()))
+            {
+                u.png = PngData::new(png.clone());
+                u.width = 1;
+                u.height = 1;
+                count += 1;
+            }
+        }
+        for r in self.resources.iter_mut() {
+            if let crate::resource::ResourceBody::Image(i) = &mut r.body
+                && i.data.lazy().is_some_and(|l| missing.contains(l.hash()))
+            {
+                let text = base64_encode(&png);
+                i.sha256 = crate::picture::sha256_hex(&png);
+                i.format = crate::picture::PictureFormat::Png;
+                i.width = 1;
+                i.height = 1;
+                i.data = text.clone().into();
+                i.thumb = text.into();
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Like `from_json`, for JSON that is already parsed.

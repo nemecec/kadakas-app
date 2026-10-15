@@ -271,6 +271,7 @@ fn a_history_that_waits_is_copied_without_being_read_and_the_plain_form_needs_it
         generator: "t".into(),
         keep: vec![source.clone()],
         anchor: false,
+        skip_missing: false,
     };
     let (bytes, report) = write_container(Vec::new(), &first.doc, &opts).unwrap();
     assert_eq!(report.parts_copied, 4, "{report:?}");
@@ -386,6 +387,7 @@ fn raw_copy_keeps_the_compressed_bytes_of_unchanged_entries() {
         generator: "t".into(),
         keep: vec![source.clone()],
         anchor: false,
+        skip_missing: false,
     };
     let (bytes, report) = write_container(Vec::new(), &first.doc, &opts).unwrap();
     // Every blob is in the old file: the pictures and the import base are copied, and the picture
@@ -953,6 +955,7 @@ fn a_history_that_was_read_copies_its_unchanged_parts_on_the_next_save() {
         generator: "t".into(),
         keep: vec![source],
         anchor: false,
+        skip_missing: false,
     };
     let (bytes, report) = write_container(Vec::new(), &again, &opts).unwrap();
     assert_eq!(report.parts_copied, 4, "{report:?}");
@@ -1002,6 +1005,7 @@ fn a_picture_of_the_history_that_is_too_big_is_refused() {
         size,
         compressed: size,
         sha256: [0; 32],
+        role: None,
         data: Box::new(std::io::Read::take(std::io::repeat(0), size)),
     })
     .unwrap();
@@ -1291,6 +1295,7 @@ mod disk {
             generator: generator(),
             keep: o.source.iter().cloned().collect(),
             anchor: false,
+        skip_missing: false,
         }
     }
 

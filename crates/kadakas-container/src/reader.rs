@@ -69,6 +69,8 @@ pub struct Entry {
     pub crc32: u32,
     /// SHA-256 of the uncompressed bytes, from the manifest.
     pub sha256: [u8; 32],
+    /// What the entry is for, from the manifest (see `ManifestEntry::role`).
+    pub role: Option<String>,
     /// Where the local header starts.
     offset: u64,
     /// Where the next entry (or the central directory) starts: the data of this entry ends
@@ -84,6 +86,8 @@ pub struct RawEntry {
     pub size: u64,
     pub compressed: u64,
     pub sha256: [u8; 32],
+    /// What the entry is for (see `ManifestEntry::role`).
+    pub role: Option<String>,
     /// The compressed bytes.
     pub data: Box<dyn Read + Send>,
 }
@@ -356,6 +360,7 @@ impl Container {
             method: m.method,
             crc32: m.crc32,
             sha256: [0; 32],
+            role: None,
             offset: m.offset,
             limit: limits_of[pos],
         };
@@ -375,7 +380,7 @@ impl Container {
         };
         let bytes = container.read_checked(&manifest_entry, None)?;
         let manifest = Manifest::parse(&bytes)?;
-        let mut listed: HashMap<&str, (u64, [u8; 32])> = HashMap::new();
+        let mut listed: HashMap<&str, (u64, [u8; 32], Option<String>)> = HashMap::new();
         for e in &manifest.entries {
             if e.name == MANIFEST_NAME {
                 return Err(ContainerError::entry(
@@ -389,7 +394,7 @@ impl Container {
                     "its hash in the manifest is not 64 lowercase hex digits",
                 )
             })?;
-            if listed.insert(&e.name, (e.size, sha)).is_some() {
+            if listed.insert(&e.name, (e.size, sha, e.role.clone())).is_some() {
                 return Err(ContainerError::entry(
                     &e.name,
                     "the manifest lists it twice",
@@ -401,7 +406,7 @@ impl Container {
             if r.name == MANIFEST_NAME {
                 continue;
             }
-            let (size, sha256) = listed
+            let (size, sha256, role) = listed
                 .remove(r.name.as_str())
                 .ok_or_else(|| ContainerError::entry(&r.name, "the manifest does not list it"))?;
             if size != r.size {
@@ -420,6 +425,7 @@ impl Container {
                 method: r.method,
                 crc32: r.crc32,
                 sha256,
+                role,
                 offset: r.offset,
                 limit: limits_of[i],
             });
@@ -649,6 +655,7 @@ impl Container {
             size: e.size,
             compressed: e.compressed,
             sha256: e.sha256,
+            role: e.role.clone(),
             data,
         })
     }

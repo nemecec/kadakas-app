@@ -156,6 +156,7 @@ pub fn convert(from: &Path, to: &Path, form: Form, max_bytes: u64) -> Result<Sav
         generator: crate::generator(),
         keep: opened.source.iter().cloned().collect(),
         anchor: false,
+        skip_missing: false,
     };
     save_path(to, &opened.doc, form, &opts)
 }
@@ -174,6 +175,11 @@ pub struct Inspect {
     pub blob_bytes: u64,
     /// The bytes of the history entries.
     pub history_bytes: u64,
+    /// The bytes of the summaries of the import bases (blobs that an open parses into memory).
+    pub base_bytes: u64,
+    /// The bytes of the drawing of the anchor of the history (read again when the history is
+    /// used after an edit).
+    pub anchor_bytes: u64,
     pub entries: usize,
 }
 
@@ -181,7 +187,9 @@ impl Inspect {
     /// The bytes that opening the file reads into memory: the drawing and the history. The blobs
     /// stay in the file.
     pub fn resident_bytes(&self) -> u64 {
-        self.document_bytes.saturating_add(self.history_bytes)
+        self.document_bytes
+            .saturating_add(self.history_bytes)
+            .saturating_add(self.base_bytes)
     }
 }
 
@@ -201,6 +209,8 @@ pub fn inspect(path: &Path) -> Result<Inspect, FileError> {
             document_bytes: file_bytes,
             blob_bytes: 0,
             history_bytes: 0,
+            base_bytes: 0,
+            anchor_bytes: 0,
             entries: 0,
         }),
         Form::Container => {
@@ -217,9 +227,21 @@ pub fn inspect(path: &Path) -> Result<Inspect, FileError> {
             let history_bytes = c
                 .entries()
                 .iter()
-                .filter(|e| e.name.starts_with("history/"))
+                .filter(|e| e.name.starts_with("history/") && e.name != crate::HISTORY_ANCHOR)
                 .map(|e| e.size)
                 .sum();
+            let base_bytes = c
+                .entries()
+                .iter()
+                .filter(|e| e.role.as_deref() == Some(crate::layout::ROLE_IMPORT_BASE))
+                .map(|e| e.size)
+                .sum();
+            // The drawing is read again for the anchor of the history, once, after an edit.
+            let anchor_bytes = if c.entries().iter().any(|e| e.name.starts_with("history/")) {
+                size(crate::HISTORY_ANCHOR).max(size(DOCUMENT))
+            } else {
+                0
+            };
             let _ = HISTORY_BLOBS;
             Ok(Inspect {
                 form: Form::Container,
@@ -228,6 +250,8 @@ pub fn inspect(path: &Path) -> Result<Inspect, FileError> {
                 document_bytes: size(DOCUMENT),
                 blob_bytes,
                 history_bytes,
+                base_bytes,
+                anchor_bytes,
                 entries: c.entries().len(),
             })
         }

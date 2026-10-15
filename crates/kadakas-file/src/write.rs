@@ -54,6 +54,11 @@ pub struct WriteOptions {
     /// (`history/anchor.json`), so that the versions can still be read against the drawing they
     /// belong to.
     pub anchor: bool,
+    /// The person chose to save without what cannot be found: pictures that only an undo step
+    /// holds, the anchor drawing, and the entries of a newer program are left out (and counted in
+    /// [`Written::skipped`]). A picture of the drawing is never skipped: the caller replaces it
+    /// first (`Document::replace_missing_pictures`).
+    pub skip_missing: bool,
 }
 
 /// What a container save did.
@@ -74,6 +79,8 @@ pub struct Written {
     pub unknown_copied: usize,
     /// The drawing of the old file was written as the anchor of the history.
     pub anchor_written: bool,
+    /// Parts that could not be found and were left out (`WriteOptions::skip_missing`).
+    pub skipped: usize,
     /// The old files that were read from. After the rename of the save the caller moves them to
     /// the new file (`kadakas_file::native::rebind_sources`, `FileSource::rebind`).
     pub sources: Vec<Arc<FileSource>>,
@@ -340,43 +347,50 @@ fn unknown_entries(sources: &[Arc<FileSource>], known: &dyn Fn(&str) -> bool) ->
 }
 
 /// Checks the limits of the format and finds what cannot be copied, before anything is written.
+/// With `skip` (the person chose to save without what is missing) the parts that only an undo step,
+/// the anchor or a newer program's entry need are left out and counted; a picture of the drawing
+/// and the versions that wait in the file cannot be skipped here (the caller replaces the pictures
+/// and drops the versions first).
 fn preflight(
-    plans: &Plans,
+    plans: &mut Plans,
     history_parts: usize,
-    extras: &Extras,
+    extras: &mut Extras,
     root: Option<&Arc<FileSource>>,
-) -> Result<(), FileError> {
+    skip: bool,
+) -> Result<usize, FileError> {
     // The size of the texts: a file that is written must be a file that can be read.
     for (hash, planned) in &plans.blobs {
         let len = planned.len();
         if len > MAX_BLOB_TEXT {
             let short: String = hash.chars().take(8).collect();
             return Err(FileError::Limit(format!(
-                "a picture ({short}) has {len} bytes as text, more than the {MAX_BLOB_TEXT} that a container holds. Reduce the picture, or save the plain JSON form"
+                "a picture ({short}) has {len} bytes as text, more than the {MAX_BLOB_TEXT} bytes (128 MiB) that a container holds. Reduce the picture, or save the plain JSON form"
             )));
         }
     }
-    let waiting = extras.waiting.as_ref().map_or(0, |h| h.entry_names().len());
-    let anchor = extras.anchor.as_ref().map_or(0, |_| 2);
-    let planned = 1 + plans.blobs.len() + history_parts + waiting + anchor + extras.unknown.len();
-    check_entry_count(planned).map_err(|_| {
-        FileError::Limit(format!(
-            "the document would have {planned} entries in a container, more than the {MAX_ENTRIES} that it holds. Save the plain JSON form instead"
-        ))
-    })?;
     let mut missing = Missing {
         file: root.map_or_else(String::new, |s| s.label()),
         ..Missing::default()
     };
+    let mut skipped = 0usize;
+    let mut drop_blobs: Vec<String> = Vec::new();
     for (hash, planned) in &plans.blobs {
         if let Some(source) = planned.file()
             && !source.has_blob(hash)
         {
-            missing.pictures.push(hash.clone());
             if missing.file.is_empty() {
                 missing.file = source.label();
             }
+            if skip && matches!(planned, Planned::Kept(_)) {
+                drop_blobs.push(hash.clone());
+            } else {
+                missing.pictures.push(hash.clone());
+            }
         }
+    }
+    for h in &drop_blobs {
+        plans.blobs.remove(h);
+        skipped += 1;
     }
     if let Some(h) = &extras.waiting {
         for name in h.entry_names() {
@@ -386,27 +400,45 @@ fn preflight(
         }
     }
     if let Some((source, hashes)) = &extras.anchor {
-        if !source.has_entry(DOCUMENT) {
-            missing.history = true;
-        }
+        let mut gone = !source.has_entry(DOCUMENT);
         for hash in hashes {
             if !source.has_blob(hash) {
-                missing.pictures.push(hash.clone());
+                gone = true;
+            }
+        }
+        if gone {
+            if skip {
+                extras.anchor = None;
+                skipped += 1;
+            } else {
+                missing.history = true;
             }
         }
     }
-    for (source, name) in &extras.unknown {
-        if !source.has_entry(name) {
-            missing.other.push(name.clone());
+    let unknown = std::mem::take(&mut extras.unknown);
+    for (source, name) in unknown {
+        if source.has_entry(&name) {
+            extras.unknown.push((source, name));
+        } else if skip {
+            skipped += 1;
+        } else {
+            missing.other.push(name);
         }
     }
-    if missing.is_empty() {
-        Ok(())
-    } else {
+    if !missing.is_empty() {
         missing.pictures.sort();
         missing.pictures.dedup();
-        Err(FileError::Missing(missing))
+        return Err(FileError::Missing(missing));
     }
+    let waiting = extras.waiting.as_ref().map_or(0, |h| h.entry_names().len());
+    let anchor = extras.anchor.as_ref().map_or(0, |_| 2);
+    let planned = 1 + plans.blobs.len() + history_parts + waiting + anchor + extras.unknown.len();
+    check_entry_count(planned).map_err(|_| {
+        FileError::Limit(format!(
+            "the document would have {planned} entries in a container, more than the {MAX_ENTRIES} that it holds. Save the plain JSON form instead"
+        ))
+    })?;
+    Ok(skipped)
 }
 
 /// Copies an entry of an old file as it is. The entry is the one with this name and hash (it may
@@ -495,18 +527,22 @@ pub fn write_container<W: Write>(
     let all_sources = plans.sources.clone();
     let known = |n: &str| history_names.iter().any(|(k, _)| *k == n);
     extras.unknown = unknown_entries(&all_sources, &known);
-    preflight(
-        &plans,
+    let skipped = preflight(
+        &mut plans,
         history_names.len(),
-        &extras,
+        &mut extras,
         waiting
             .as_ref()
             .map(|h| h.source())
             .or_else(|| opts.keep.first()),
+        opts.skip_missing,
     )?;
 
     let mut writer = Writer::new(w).generator(&opts.generator);
-    let mut report = Written::default();
+    let mut report = Written {
+        skipped,
+        ..Written::default()
+    };
     let refs = SaveRefs {
         skip_history: true,
         import_bases: std::mem::take(&mut plans.bases),
@@ -557,6 +593,9 @@ pub fn write_container<W: Write>(
             Planned::Kept(_) => unreachable!("handled above"),
         };
         writer.add_bytes(&name, Compression::Stored, text.as_bytes())?;
+        if matches!(planned, Planned::Base(_)) {
+            writer.set_role(&name, crate::layout::ROLE_IMPORT_BASE);
+        }
         report.blobs_written += 1;
     }
 

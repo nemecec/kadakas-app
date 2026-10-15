@@ -16,6 +16,19 @@ use crate::blob::{BlobError, LazyBlob, MIN_BLOB_TEXT};
 /// Largest side of the embedded raster in pixels. Larger rasters are scaled down when they are made.
 pub const MAX_SIDE_PX: u32 = 4096;
 
+/// A PNG of one pixel (gray, opaque): the picture that stands for a picture that could not be
+/// found, when the person chose to save without it.
+pub fn placeholder_png() -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, 1, 1);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    if let Ok(mut w) = enc.write_header() {
+        let _ = w.write_image_data(&[128, 128, 128, 255]);
+    }
+    out
+}
+
 /// PNG bytes, kept as base64 text in files. The bytes are shared, so cloning an object is cheap.
 ///
 /// The bytes are in memory, or in the file the document was opened from (DOC-21): a lazy picture

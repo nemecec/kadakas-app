@@ -177,6 +177,13 @@ impl<W: Write> Writer<W> {
         self
     }
 
+    /// Sets the role of an entry that was written (see `ManifestEntry::role`).
+    pub fn set_role(&mut self, name: &str, role: &str) {
+        if let Some(e) = self.manifest.iter_mut().find(|e| e.name == name) {
+            e.role = Some(role.to_string());
+        }
+    }
+
     /// True if an entry with this name was written.
     pub fn has(&self, name: &str) -> bool {
         self.names.contains(name)
@@ -293,6 +300,7 @@ impl<W: Write> Writer<W> {
             name: name.to_string(),
             size,
             sha256: hex(&sha.finalize()),
+            role: None,
         });
         self.central.push(Central {
             name: name.to_string(),
@@ -338,6 +346,7 @@ impl<W: Write> Writer<W> {
             name: name.to_string(),
             size,
             sha256: hex(&Sha256::digest(bytes)),
+            role: None,
         });
         self.central.push(Central {
             name: name.to_string(),
@@ -394,6 +403,7 @@ impl<W: Write> Writer<W> {
             name: raw.name.clone(),
             size: raw.size,
             sha256: hex(&raw.sha256),
+            role: raw.role.clone(),
         });
         self.central.push(Central {
             name: raw.name,

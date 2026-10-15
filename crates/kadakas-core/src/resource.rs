@@ -344,6 +344,10 @@ impl Resources {
         self.0.iter().find(|r| r.id == id)
     }
 
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Resource> {
+        self.0.iter_mut()
+    }
+
     pub fn get_mut(&mut self, id: ResourceId) -> Option<&mut Resource> {
         self.0.iter_mut().find(|r| r.id == id)
     }

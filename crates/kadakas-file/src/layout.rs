@@ -27,6 +27,10 @@ pub const HISTORY_ANCHOR_BLOBS: &str = "history/anchor-blobs.json";
 /// A history that does not have the usual shape is stored as one JSON value, pictures inline.
 pub const HISTORY_RAW: &str = "history/raw.json";
 
+/// The role (in the manifest) of the blob that holds the summaries of an import base. A reader
+/// parses these when it opens the file, so the estimate of the memory counts them.
+pub const ROLE_IMPORT_BASE: &str = "import_base_recs";
+
 /// The entry of the blob with this hash.
 pub fn blob_name(hash: &str) -> String {
     format!("{BLOB_DIR}{hash}")

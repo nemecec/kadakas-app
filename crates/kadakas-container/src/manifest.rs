@@ -19,6 +19,11 @@ pub struct ManifestEntry {
     pub size: u64,
     /// SHA-256 of those bytes, 64 lowercase hex digits.
     pub sha256: String,
+    /// What the entry is for, if the writer says (for example the summaries of an import base,
+    /// which a reader parses when the file is opened). A reader that does not know a role ignores
+    /// it; it is a hint for the estimate of the memory that an open needs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 /// The manifest. It lists every entry but itself.
@@ -122,6 +127,7 @@ mod tests {
                 name: "a".into(),
                 size: 1,
                 sha256: sha256_hex(b"x"),
+                role: Some("import_base_recs".into()),
             }],
         };
         assert_eq!(Manifest::parse(&m.to_bytes()).unwrap(), m);

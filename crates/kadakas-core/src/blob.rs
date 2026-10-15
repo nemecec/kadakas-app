@@ -71,6 +71,12 @@ pub trait BlobSource: Send + Sync + std::fmt::Debug {
     fn check(&self) -> Result<(), BlobError> {
         Ok(())
     }
+    /// Checks that the blob with this hash can be read now. The default asks [`BlobSource::check`]
+    /// (the whole file is as it was opened). A source that finds a blob by its hash in another
+    /// file overrides it: a blob can be there when the file is not the one that was opened.
+    fn check_blob(&self, _hash: &str) -> Result<(), BlobError> {
+        self.check()
+    }
     /// Called for every handle that is made for this source while a document is read. A source
     /// can keep a weak pointer to know which pictures are still in use (the undo steps hold
     /// pictures that the document no longer has). The default does nothing.
