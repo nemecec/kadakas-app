@@ -2670,6 +2670,7 @@ dependencies = [
  "kadakas-core",
  "kadakas-crs",
  "kadakas-feedback",
+ "kadakas-file",
  "kadakas-gis",
  "kadakas-ifc",
  "kadakas-io",

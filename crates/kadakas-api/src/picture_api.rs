@@ -122,7 +122,7 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Result<Value, RpcError> {
                 out["thumbnail_base64"] = json!(res.thumb);
             }
             if want_bytes {
-                out["base64"] = json!(res.data_text().map_err(RpcError::app)?);
+                out["base64"] = json!(&*res.data_text().map_err(RpcError::app)?);
             }
             Ok(out)
         }

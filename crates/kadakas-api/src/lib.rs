@@ -150,6 +150,10 @@ pub struct Session {
     /// Folder of the open document. It is always an allowed folder. The host keeps it up to date.
     #[cfg(not(target_arch = "wasm32"))]
     pub doc_dir: Option<std::path::PathBuf>,
+    /// The container file that the open document was read from (DOC-21). Its pictures stay in the
+    /// file until they are used, and a save copies the unchanged parts from it. `None`: the
+    /// document is new, came from the plain JSON form, or was loaded from JSON.
+    pub file_source: Option<Arc<kadakas_file::FileSource>>,
     /// Map services and GIS calls: the list of addresses that agents may fetch (default: none), the
     /// tile cache and the running network jobs (see `gis_api`).
     #[cfg(not(target_arch = "wasm32"))]
@@ -817,6 +821,7 @@ impl Session {
             paths: PathPolicy::default(),
             #[cfg(not(target_arch = "wasm32"))]
             doc_dir: None,
+            file_source: None,
             #[cfg(not(target_arch = "wasm32"))]
             gis: GisState::default(),
             site_cache: kadakas_site::SiteCache::default(),
