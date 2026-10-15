@@ -95,7 +95,7 @@ pub fn from_shapes(doc: &Document, ids: &[ObjectId], opts: &FromShapesOptions) -
         };
         let ring = curve::flatten(&outer, true, TOLERANCE);
         let area = geom::polygon_area(&ring);
-        if ring.len() < 3 || !(area > 0.0) {
+        if ring.len() < 3 || area.is_nan() || area <= 0.0 {
             made.skipped.push((id, "the outline has no area".into()));
             continue;
         }

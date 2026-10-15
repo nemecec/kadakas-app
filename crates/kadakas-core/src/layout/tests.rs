@@ -149,7 +149,7 @@ fn gap_area_is_the_region_minus_the_units() {
     assert!(!g.truncated);
     let len = gaps::length(&g.segments);
     assert!(
-        len >= 9.0 * 1050.0 + 9.0 * 2050.0 - 1.0 && len <= 11.0 * 1050.0 + 11.0 * 2050.0 + 1.0,
+        (9.0 * 1050.0 + 9.0 * 2050.0 - 1.0..=11.0 * 1050.0 + 11.0 * 2050.0 + 1.0).contains(&len),
         "{len}"
     );
 }

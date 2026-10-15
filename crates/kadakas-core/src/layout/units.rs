@@ -120,8 +120,8 @@ impl Index {
                 }
             });
         }
-        for c in 0..cells {
-            ix.start[c + 1] = ix.start[c] + counts[c];
+        for (c, n) in counts.iter().enumerate() {
+            ix.start[c + 1] = ix.start[c] + n;
         }
         ix.items = vec![0; ix.start[cells] as usize];
         let mut fill = ix.start.clone();

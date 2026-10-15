@@ -97,7 +97,6 @@ pub(crate) fn describe() -> Value {
             {"method": "import.file", "params": {"path": "/data/site.dxf", "options": {"layer_mode": "classes"}}},
             {"method": "import.file", "params": {"path": "/data/trees.geojson", "options": {"class_field": "species"}}},
             {"method": "export.file", "params": {"path": "/data/out.dxf", "format": "dxf", "overwrite": true}},
-            {"method": "export.file", "params": {"path": "/data/paving.dxf", "format": "dxf", "overwrite": true, "options": {"patterns": "units"}}},
             {"method": "export.file", "params": {"path": "/data/site.ifc", "format": "ifc", "overwrite": true}}
         ],
         "paths": "A server for agents only reads and writes inside the folder of the open document and the folders that its owner allows with --allow-dir (default: the folder where it started). The extension must match the format, and export.file needs {overwrite: true} to replace a file.",
