@@ -604,6 +604,332 @@ fn the_generator_names_the_program() {
     let _ = std::io::sink().flush();
 }
 
+#[test]
+fn errors_know_where_they_come_from() {
+    let inner = kadakas_container::ContainerError::Entry {
+        name: "blobs/x".into(),
+        reason: "bad".into(),
+    };
+    let io: std::io::Error = inner.clone().into();
+    assert!(matches!(FileError::from(io), FileError::Container(c) if c == inner));
+    assert!(matches!(
+        FileError::from(std::io::Error::other("plain")),
+        FileError::Io(m) if m == "plain"
+    ));
+    assert!(
+        FileError::Io("the file x changed on disk after it was opened (y)".into()).is_changed()
+    );
+    assert!(!FileError::Io("disk full".into()).is_changed());
+    assert!(!FileError::Limit("x".into()).is_changed());
+    assert!(
+        FileError::Container(kadakas_container::ContainerError::Changed("c".into())).is_changed()
+    );
+}
+
+#[test]
+fn opened_has_a_short_debug_text_and_a_source_has_a_name() {
+    let o = open(container_bytes(&sample_doc()));
+    let text = format!("{o:?}");
+    assert!(
+        text.contains("Container") && text.contains("objects"),
+        "{text}"
+    );
+    let s = o.source.unwrap();
+    assert!(!s.label().is_empty());
+    assert!(s.check_unchanged().is_ok());
+    assert!(s.refresh().is_ok());
+    assert!(s.live_hashes().len() <= 4);
+    assert!(kadakas_core::blob::BlobSource::as_any(&*s).is::<FileSource>());
+    let any = kadakas_core::blob::BlobSource::into_any(s.clone());
+    assert!(any.downcast::<FileSource>().is_ok());
+}
+
+#[test]
+fn the_list_of_live_pictures_is_pruned() {
+    use kadakas_core::blob::{BlobSource, LazyBlob};
+    // A container with more pictures than the list keeps before it prunes.
+    let mut w = Writer::new(Vec::new());
+    let mut hashes = Vec::new();
+    for i in 0..4100 {
+        let text = format!("picture number {i}");
+        let h = text_hash(&text);
+        w.add_bytes(&blob_name(&h), Compression::Stored, text.as_bytes())
+            .unwrap();
+        hashes.push(h);
+    }
+    let c = Container::from_bytes(w.finish().unwrap(), Limits::default()).unwrap();
+    let source = FileSource::from_container(c);
+    let mut keep = Vec::new();
+    for (i, h) in hashes.iter().enumerate() {
+        let blob = Arc::new(LazyBlob::new(source.clone(), h).unwrap());
+        source.note_handle(&blob);
+        // Every tenth handle stays alive.
+        if i % 10 == 0 {
+            keep.push(blob);
+        }
+    }
+    let live = source.live_hashes();
+    assert!(
+        live.len() >= keep.len() && live.len() < 4100,
+        "{}",
+        live.len()
+    );
+    for b in &keep {
+        assert!(live.iter().any(|h| h == b.hash()));
+    }
+}
+
+/// A container with a hand-made history.
+fn container_with(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut w = Writer::new(Vec::new());
+    w.add_bytes(
+        DOCUMENT,
+        Compression::Deflate(1),
+        serde_json::to_string(&Document::with_sequential_ids())
+            .unwrap()
+            .as_bytes(),
+    )
+    .unwrap();
+    for (name, bytes) in entries {
+        w.add_bytes(name, Compression::Stored, bytes).unwrap();
+    }
+    w.finish().unwrap()
+}
+
+#[test]
+fn damaged_raw_histories_and_pictures_of_the_history_are_errors_that_name_the_entry() {
+    let read = |bytes: Vec<u8>| {
+        read_bytes(bytes, Limits::default(), ReadMode::Eager)
+            .unwrap_err()
+            .to_string()
+    };
+    assert!(read(container_with(&[(HISTORY_RAW, b"{nope")])).contains(HISTORY_RAW));
+    // A picture of the history that is not text.
+    let binary = [0xFFu8, 0xFE, 0x00, 0x01];
+    let hash = sha256_hex(&binary);
+    let listed = format!("[\"{hash}\"]");
+    let name = blob_name(&hash);
+    let bytes = container_with(&[
+        (HISTORY_TOP, br#"{"newest": {}}"#),
+        (HISTORY_VERSIONS, b"[]"),
+        (HISTORY_NEWEST, b"[]"),
+        (HISTORY_BLOBS, listed.as_bytes()),
+        (&name, &binary),
+    ]);
+    let e = read(bytes.clone());
+    assert!(e.contains(&name) && e.contains("not text"), "{e}");
+    // The history waits: a lazy open does not look at it.
+    let o = open(bytes);
+    let loader = o.doc.lazy_history.clone().unwrap();
+    assert!(loader.load().unwrap_err().contains("not text"));
+    assert!(loader.bytes() > 10);
+    assert!(loader.anchor().is_ok());
+    // A history that lists a picture whose entry is another picture: a save refuses to copy it.
+    let other = b"some other text".to_vec();
+    let name2 = blob_name(&text_hash("expected text"));
+    let listed2 = format!("[\"{}\"]", text_hash("expected text"));
+    let bytes = container_with(&[
+        (HISTORY_TOP, br#"{"newest": {}}"#),
+        (HISTORY_VERSIONS, b"[]"),
+        (HISTORY_NEWEST, b"[]"),
+        (HISTORY_BLOBS, listed2.as_bytes()),
+        (&name2, &other),
+    ]);
+    let o = open(bytes);
+    let e = write_container(Vec::new(), &o.doc, &WriteOptions::default()).unwrap_err();
+    assert!(
+        e.to_string().contains("not the picture of this hash"),
+        "{e}"
+    );
+    // Unreadable list of pictures: the save says so.
+    let bytes = container_with(&[
+        (HISTORY_TOP, br#"{"newest": {}}"#),
+        (HISTORY_VERSIONS, b"[]"),
+        (HISTORY_NEWEST, b"[]"),
+        (HISTORY_BLOBS, b"{}"),
+    ]);
+    let o = open(bytes);
+    let e = write_container(Vec::new(), &o.doc, &WriteOptions::default()).unwrap_err();
+    assert!(e.to_string().contains(HISTORY_BLOBS), "{e}");
+}
+
+#[test]
+fn a_history_with_no_list_of_pictures_has_none() {
+    let o = open(container_with(&[(HISTORY_RAW, br#"{"format": 2}"#)]));
+    let fh = o
+        .doc
+        .lazy_history
+        .as_ref()
+        .unwrap()
+        .as_any()
+        .downcast_ref::<FileHistory>()
+        .unwrap();
+    assert!(fh.blob_hashes().unwrap().is_empty());
+    assert_eq!(fh.entry_names(), [HISTORY_RAW]);
+    assert!(FileHistory::of(&open(container_bytes(&sample_doc())).source.unwrap()).is_none());
+}
+
+#[test]
+fn a_history_loader_of_another_kind_cannot_be_copied() {
+    #[derive(Debug)]
+    struct Foreign;
+    impl kadakas_core::history::HistoryLoader for Foreign {
+        fn load(&self) -> Result<HistoryData, String> {
+            Ok(sample_history())
+        }
+        fn anchor(&self) -> Result<Document, String> {
+            Ok(Document::with_sequential_ids())
+        }
+        fn bytes(&self) -> usize {
+            0
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    let mut doc = Document::with_sequential_ids();
+    doc.lazy_history = Some(Arc::new(Foreign));
+    let e = write_container(Vec::new(), &doc, &WriteOptions::default()).unwrap_err();
+    assert!(e.to_string().contains("cannot be copied from"), "{e}");
+    // It can be resolved, as it is.
+    resolve_history(&mut doc).unwrap();
+    assert!(doc.history.is_some() && doc.lazy_history.is_none());
+    resolve_history(&mut doc).unwrap();
+}
+
+#[test]
+fn a_picture_of_another_source_is_read_and_written_like_a_new_one() {
+    use kadakas_core::blob::{BlobError, BlobSource, HEAD_CHARS, with_load_source};
+    #[derive(Debug)]
+    struct Memory(std::collections::HashMap<String, String>, bool);
+    impl BlobSource for Memory {
+        fn blob_len(&self, hash: &str) -> Option<u64> {
+            self.0.get(hash).map(|t| t.len() as u64)
+        }
+        fn blob_head(&self, hash: &str) -> Result<String, BlobError> {
+            Ok(self.0[hash].chars().take(HEAD_CHARS).collect())
+        }
+        fn blob_text(&self, hash: &str) -> Result<Arc<str>, BlobError> {
+            if self.1 {
+                return Err(BlobError("the memory failed".into()));
+            }
+            Ok(Arc::from(self.0[hash].as_str()))
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+            self
+        }
+    }
+    let png = encode_base64(&png_bytes(3, 9000));
+    let image = {
+        let mut doc = sample_doc();
+        doc.resources = Default::default();
+        doc.resources.push(Resource {
+            id: ResourceId::from_num(30),
+            name: "Leaf".into(),
+            body: ResourceBody::Image(Box::new(image(7))),
+        });
+        doc
+    };
+    let image_text = match &image.resources.iter().next().unwrap().body {
+        ResourceBody::Image(i) => i.data.text().unwrap().to_string(),
+        _ => unreachable!(),
+    };
+    for failing in [false, true] {
+        let mut table = std::collections::HashMap::new();
+        table.insert(text_hash(&png), png.clone());
+        table.insert(text_hash(&image_text), image_text.clone());
+        let source = Arc::new(Memory(table, failing));
+        let json = serde_json::to_string(&with_refs(&image, &png)).unwrap();
+        let doc: Document =
+            with_load_source(source, false, || serde_json::from_str(&json)).unwrap();
+        let out = write_container(Vec::new(), &doc, &WriteOptions::default());
+        if failing {
+            let e = out.unwrap_err();
+            assert!(e.to_string().contains("the memory failed"), "{e}");
+        } else {
+            let back = resolved(open(out.unwrap().0));
+            let Shape::Underlay(u) = &back.objects[&ObjectId::from_num(12)].shape else {
+                panic!()
+            };
+            assert_eq!(u.png.base64().unwrap().as_ref(), png.as_str());
+        }
+    }
+}
+
+/// The JSON of a document with an underlay and an image, the pictures as references.
+fn with_refs(image_doc: &Document, png: &str) -> Value {
+    let mut v = serde_json::to_value(image_doc).unwrap();
+    let image_ref = match &image_doc.resources.iter().next().unwrap().body {
+        ResourceBody::Image(i) => i.data.hash(),
+        _ => unreachable!(),
+    };
+    v["resources"][0]["data"] = json!({"$blob": image_ref});
+    v["objects"] = json!([{
+        "id": ObjectId::from_num(12), "layer": FIRST_LAYER, "class": NONE_CLASS,
+        "shape": {"kind": "underlay", "name": "u", "min": [0, 0], "max": [1, 1], "width": 1,
+                  "height": 1, "png": {"$blob": text_hash(png)}, "opacity": 1.0}
+    }]);
+    v
+}
+
+#[test]
+fn a_damaged_document_entry_is_reported_as_the_entry() {
+    // A stored drawing with a changed byte: the CRC-32 fails at the end of the entry.
+    let json = serde_json::to_string(&Document::with_sequential_ids()).unwrap();
+    let mut w = Writer::new(Vec::new());
+    w.add_bytes(DOCUMENT, Compression::Stored, json.as_bytes())
+        .unwrap();
+    let mut bytes = w.finish().unwrap();
+    let at = bytes
+        .windows(10)
+        .position(|w| w == b"\"layers\":[")
+        .unwrap();
+    bytes[at + 2] = b'L';
+    let e = read_bytes(bytes, Limits::default(), ReadMode::Lazy).unwrap_err();
+    assert!(
+        matches!(&e, FileError::Container(c) if c.entry_name() == Some(DOCUMENT)),
+        "{e}"
+    );
+    // A container with no drawing.
+    let e = read_bytes(
+        container_with(&[]).clone(),
+        Limits::default(),
+        ReadMode::Lazy,
+    )
+    .map(|_| ());
+    assert!(e.is_ok());
+    let mut w = Writer::new(Vec::new());
+    w.add_bytes("blobs/x", Compression::Stored, b"1").unwrap();
+    let e = read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Lazy).unwrap_err();
+    assert!(e.to_string().contains(DOCUMENT));
+}
+
+#[test]
+fn blobs_that_are_too_small_to_be_blobs_stay_inline() {
+    let mut doc = Document::with_sequential_ids();
+    let small = kadakas_core::picture::header_only_sample(1);
+    doc.resources.push(Resource {
+        id: ResourceId::from_num(40),
+        name: "tiny".into(),
+        body: ResourceBody::ImportBase(Arc::new(json!({
+            "type": "import_base", "drawing": "d", "revision": "r", "unit_scale": 1.0, "recs": []
+        }))),
+    });
+    doc.resources.push(Resource {
+        id: ResourceId::from_num(41),
+        name: "small".into(),
+        body: ResourceBody::Image(Box::new(small)),
+    });
+    let bytes = container_bytes(&doc);
+    let c = Container::from_bytes(bytes.clone(), Limits::default()).unwrap();
+    assert!(!c.entries().iter().any(|e| e.name.starts_with(BLOB_DIR)));
+    let back = open(bytes).doc;
+    assert_eq!(back.resources.len(), 2);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod disk {
     use super::*;
@@ -863,6 +1189,36 @@ mod disk {
         assert_eq!(ij.form, Form::Json);
         assert_eq!(ij.resident_bytes(), ij.file_bytes);
         assert!(inspect(&d.join("none")).is_err());
+    }
+
+    #[test]
+    fn a_path_below_a_file_is_an_io_error_and_a_lost_source_is_a_note() {
+        let d = dir("io");
+        let f = d.join("a.kad");
+        save_path(&f, &sample_doc(), Form::Container, &WriteOptions::default()).unwrap();
+        // A path that goes through a file is not "not found".
+        let e = open_path(&f.join("inside.kad"), u64::MAX, ReadMode::Lazy).unwrap_err();
+        assert!(
+            matches!(e, FileError::Io(_) | FileError::NotFound(_)),
+            "{e}"
+        );
+        // A source that cannot move to the file it is given says so.
+        let rep = write_container(
+            Vec::new(),
+            &open_path(&f, u64::MAX, ReadMode::Lazy).unwrap().doc,
+            &WriteOptions::default(),
+        )
+        .unwrap()
+        .1;
+        assert_eq!(rep.sources.len(), 1);
+        let notes = crate::native::rebind_sources(&rep, &d.join("none.kad"));
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("none.kad"));
+        assert_eq!(
+            rep.sources[0].path(),
+            Some(f.clone()),
+            "the source stays where it was"
+        );
     }
 
     #[test]
