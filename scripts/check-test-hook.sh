@@ -8,6 +8,8 @@
 #
 #   scripts/check-test-hook.sh
 set -euo pipefail
+# Here-strings, not `echo | grep -q`: with pipefail, grep -q exits at the first match, echo then
+# fails on the closed pipe, and the match would count as a miss.
 cd "$(dirname "$0")/.."
 
 # Add the name of every new test-only feature here.
@@ -16,16 +18,16 @@ PATTERN="feature \"(${HOOKS})\""
 
 shipped=$(cargo tree -e normal,build,features --target all \
   -p kadakas-app -p kadakas-cli -p kadakas-launcher)
-if echo "$shipped" | grep -Eq "$PATTERN"; then
+if grep -Eq "$PATTERN" <<<"$shipped"; then
   echo "!! a test-only feature is in the feature tree of a shipped program:"
-  echo "$shipped" | grep -E "$PATTERN"
+  grep -E "$PATTERN" <<<"$shipped"
   exit 1
 fi
 
 # The check must be able to see the hook. With the dev-dependencies of kadakas-api, the tree has
 # it. If it does not, the pattern or the name has changed, and the check above sees nothing.
 with_dev=$(cargo tree -e normal,build,dev,features --target all -p kadakas-api)
-if ! echo "$with_dev" | grep -Eq 'feature "fault-injection"'; then
+if ! grep -Eq 'feature "fault-injection"' <<<"$with_dev"; then
   echo "!! the check cannot see the feature fault-injection in the tree of kadakas-api (dev)."
   echo "   Update scripts/check-test-hook.sh."
   exit 1
