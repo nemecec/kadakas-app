@@ -1450,6 +1450,197 @@ fn a_picture_that_the_drawing_and_the_history_share_is_one_copy_in_an_eager_read
     assert!(Arc::ptr_eq(&in_drawing, &history.blob_list()[0].1));
 }
 
+/// A container of `doc` plus an entry of a newer program.
+fn with_unknown_entry(doc: &Document) -> Vec<u8> {
+    let good = Container::from_bytes(container_bytes(doc), Limits::default()).unwrap();
+    let mut w = Writer::new(Vec::new());
+    for e in good.entries() {
+        w.copy_raw(good.raw(&e.name).unwrap()).unwrap();
+    }
+    w.add_bytes("extra/x", Compression::Stored, b"from a newer program")
+        .unwrap();
+    w.finish().unwrap()
+}
+
+#[test]
+fn what_only_an_undo_step_or_a_newer_program_needs_is_skipped_only_when_asked() {
+    let dir = std::env::temp_dir().join(format!("kf-skip-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("a.kad");
+    std::fs::write(&p, with_unknown_entry(&sample_doc())).unwrap();
+    let mut o = crate::native::open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
+    // The picture of the document is in memory; the other underlay is only held by a handle (an
+    // undo step), and the file is gone.
+    let held = o.doc.objects.shift_remove(&ObjectId::from_num(12)).unwrap();
+    for obj in o.doc.objects.values_mut() {
+        if let Shape::Underlay(u) = &mut obj.shape {
+            u.png = PngData::new(png_bytes(1, 20_000));
+        }
+    }
+    for r in o.doc.resources.iter_mut() {
+        if let ResourceBody::Image(i) = &mut r.body {
+            i.data = BlobText::from(i.data.text().unwrap());
+        }
+    }
+    std::fs::remove_file(&p).unwrap();
+    let source = o.source.clone().unwrap();
+    let opts = WriteOptions {
+        keep: vec![source.clone()],
+        ..WriteOptions::default()
+    };
+    let FileError::Missing(m) = write_container(Vec::new(), &o.doc, &opts).unwrap_err() else {
+        panic!("not Missing")
+    };
+    assert_eq!(m.pictures.len(), 1, "{m:?}");
+    assert_eq!(m.other, ["extra/x"]);
+    assert!(!m.history && !m.is_empty());
+    assert!(m.message().contains("1 picture") && m.message().contains("1 other part"));
+    let ask = WriteOptions {
+        skip_missing: true,
+        ..opts
+    };
+    let (out, report) = write_container(Vec::new(), &o.doc, &ask).unwrap();
+    assert_eq!(report.skipped, 2, "{report:?}");
+    let c = Container::from_bytes(out, Limits::default()).unwrap();
+    assert!(!c.contains("extra/x"));
+    drop(held);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn versions_that_wait_in_a_file_that_is_gone_cannot_be_skipped_by_the_writer() {
+    let dir = std::env::temp_dir().join(format!("kf-gone-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("a.kad");
+    let mut doc = sample_doc();
+    doc.history = Some(sample_history());
+    std::fs::write(&p, container_bytes(&doc)).unwrap();
+    let o = crate::native::open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
+    std::fs::remove_file(&p).unwrap();
+    for skip in [false, true] {
+        let opts = WriteOptions {
+            keep: o.source.iter().cloned().collect(),
+            anchor: true,
+            skip_missing: skip,
+            ..WriteOptions::default()
+        };
+        let e = write_container(Vec::new(), &o.doc, &opts).unwrap_err();
+        let FileError::Missing(m) = e else {
+            panic!("not Missing")
+        };
+        assert!(m.history, "skip {skip}: {m:?}");
+        assert!(m.message().contains("the versions"));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_container_with_too_many_entries_is_refused_before_it_is_written() {
+    use crate::write::{Extras, Plans, Planned, preflight_for_test};
+    let mut plans = Plans {
+        blobs: Default::default(),
+        bases: Default::default(),
+        sources: Vec::new(),
+    };
+    for i in 0..3 {
+        plans.blobs.insert(
+            format!("{i:064}"),
+            Planned::History(Arc::from("text")),
+        );
+    }
+    let mut extras = Extras {
+        waiting: None,
+        anchor: None,
+        unknown: Vec::new(),
+    };
+    let e = preflight_for_test(&mut plans, &mut extras, 4).unwrap_err();
+    assert!(matches!(e, FileError::Limit(_)) && e.to_string().contains("JSON"), "{e}");
+    assert_eq!(preflight_for_test(&mut plans, &mut extras, 5).unwrap(), 0);
+}
+
+#[test]
+fn small_edges_of_the_history_the_source_and_the_scan() {
+    // A source without a history reads none.
+    let o = open(container_bytes(&sample_doc()));
+    let source = o.source.clone().unwrap();
+    assert!(crate::history::read(&source).unwrap().is_none());
+    assert!(source.container_with_entry("none").is_err());
+    assert!(!source.has_blob("zz"));
+    // A memory source has no state key; a file source has one that changes with the file.
+    let mut doc = sample_doc();
+    doc.history = Some(sample_history());
+    let o = open(container_bytes(&doc));
+    let loader = o.doc.lazy_history.clone().unwrap();
+    assert_eq!(loader.state_key(), "");
+    // Many handles of one hash are pruned.
+    let hash = o.source.as_ref().unwrap().live_hashes()[0].clone();
+    let src: Arc<dyn kadakas_core::blob::BlobSource> = o.source.clone().unwrap();
+    let keep: Vec<_> = (0..20)
+        .map(|_| {
+            let b = Arc::new(kadakas_core::blob::LazyBlob::new(src.clone(), &hash).unwrap());
+            src.note_handle(&b);
+            drop(Arc::clone(&b));
+            b
+        })
+        .collect();
+    assert!(keep.len() == 20);
+    // The scan finds nothing at the very end of a stream: a key with nothing after it, a key with
+    // something else after it, and a reference that is cut short.
+    for tail in [
+        "\"$blob\"",
+        "\"$blob\"   ",
+        "\"$blob\" , 1",
+        "\"$blob\": \"abc\"",
+        "\"$blob\":",
+    ] {
+        let mut w = Writer::new(Vec::new());
+        w.add_bytes(DOCUMENT, Compression::Stored, tail.as_bytes())
+            .unwrap();
+        let c = Container::from_bytes(w.finish().unwrap(), Limits::default()).unwrap();
+        let s = FileSource::from_container(c);
+        assert!(crate::write::scan_refs(&s, DOCUMENT).unwrap().is_empty(), "{tail}");
+    }
+    // A copy of an entry that the file does not have.
+    let mut w = Writer::new(Vec::new());
+    let e = crate::write::copy_entry(&mut w, &source, "nothing", None).unwrap_err();
+    assert!(e.to_string().contains("nothing"), "{e}");
+}
+
+#[test]
+fn the_state_key_of_a_file_changes_when_the_file_does() {
+    let dir = std::env::temp_dir().join(format!("kf-key-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("a.kad");
+    let mut doc = sample_doc();
+    doc.history = Some(sample_history());
+    crate::native::save_path(&p, &doc, Form::Container, &WriteOptions::default()).unwrap();
+    let o = crate::native::open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
+    let loader = o.doc.lazy_history.clone().unwrap();
+    let before = loader.state_key();
+    assert!(before.contains("a.kad"));
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    std::fs::write(&p, b"changed").unwrap();
+    assert_ne!(loader.state_key(), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_history_whose_picture_entry_is_another_picture_is_found_at_the_read() {
+    let blob = "iVBORw0KGgo".repeat(400);
+    let hash = text_hash(&blob);
+    let listed = format!("[\"{hash}\"]");
+    let name = blob_name(&hash);
+    let bytes = container_with(&[
+        (HISTORY_TOP, br#"{"newest": {}}"#),
+        (HISTORY_VERSIONS, b"[]"),
+        (HISTORY_NEWEST, b"[]"),
+        (HISTORY_BLOBS, listed.as_bytes()),
+        (&name, b"not the text of that hash"),
+    ]);
+    let note = eager_note(bytes);
+    assert!(note.contains("not the picture of its name"), "{note}");
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod disk {
     use super::*;

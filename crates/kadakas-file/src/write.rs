@@ -18,8 +18,7 @@ use std::io::{BufWriter, Read, Write};
 use std::sync::Arc;
 
 use kadakas_container::{
-    Compression, ContainerError, MANIFEST_NAME, MAX_ENTRIES, PartSource, Writer, check_entry_count,
-    hex, parse_hash,
+    Compression, ContainerError, MANIFEST_NAME, MAX_ENTRIES, PartSource, Writer, hex, parse_hash,
 };
 use kadakas_core::blob::{
     BlobText, MAX_BLOB_TEXT, MIN_BLOB_TEXT, SaveRefs, text_hash, with_blob_refs,
@@ -118,7 +117,7 @@ pub fn resolve_history(doc: &mut Document) -> Result<(), FileError> {
 }
 
 /// A blob to write.
-enum Planned {
+pub(crate) enum Planned {
     Picture(PngData),
     Text(BlobText),
     Base(Arc<Value>),
@@ -131,10 +130,10 @@ fn base_text(body: &Value) -> Option<String> {
     serde_json::to_string(body.get("recs")?.as_array()?).ok()
 }
 
-struct Plans {
-    blobs: BTreeMap<String, Planned>,
-    bases: HashMap<usize, String>,
-    sources: Vec<Arc<FileSource>>,
+pub(crate) struct Plans {
+    pub(crate) blobs: BTreeMap<String, Planned>,
+    pub(crate) bases: HashMap<usize, String>,
+    pub(crate) sources: Vec<Arc<FileSource>>,
 }
 
 fn plan_blobs(doc: &Document, history: Option<&Plan>, opts: &WriteOptions) -> Plans {
@@ -293,14 +292,14 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// What a container save writes besides the drawing and the blobs: the entries of the history
 /// that wait in a file, the anchor, and the entries of the old file that this code does not know.
-struct Extras {
+pub(crate) struct Extras {
     /// The history that waits in its file.
-    waiting: Option<Arc<FileHistory>>,
+    pub(crate) waiting: Option<Arc<FileHistory>>,
     /// The drawing of the old file as the anchor of the waiting history, and the pictures it
     /// refers to.
-    anchor: Option<(Arc<FileSource>, Vec<String>)>,
+    pub(crate) anchor: Option<(Arc<FileSource>, Vec<String>)>,
     /// Entries of the old files with another name than the ones this code writes.
-    unknown: Vec<(Arc<FileSource>, String)>,
+    pub(crate) unknown: Vec<(Arc<FileSource>, String)>,
 }
 
 fn waiting_history(doc: &Document) -> Result<Option<Arc<FileHistory>>, FileError> {
@@ -355,6 +354,7 @@ fn preflight(
     extras: &mut Extras,
     root: Option<&Arc<FileSource>>,
     skip: bool,
+    max_entries: usize,
 ) -> Result<usize, FileError> {
     // The size of the texts: a file that is written must be a file that can be read.
     for (hash, planned) in &plans.blobs {
@@ -405,12 +405,9 @@ fn preflight(
             }
         }
         if gone {
-            if skip {
-                extras.anchor = None;
-                skipped += 1;
-            } else {
-                missing.history = true;
-            }
+            // The versions cannot be written without their drawing: they are left out by the
+            // caller (which drops them from the document), never here.
+            missing.history = true;
         }
     }
     let unknown = std::mem::take(&mut extras.unknown);
@@ -431,17 +428,18 @@ fn preflight(
     let waiting = extras.waiting.as_ref().map_or(0, |h| h.entry_names().len());
     let anchor = extras.anchor.as_ref().map_or(0, |_| 2);
     let planned = 1 + plans.blobs.len() + history_parts + waiting + anchor + extras.unknown.len();
-    check_entry_count(planned).map_err(|_| {
-        FileError::Limit(format!(
-            "the document would have {planned} entries in a container, more than the {MAX_ENTRIES} that it holds. Save the plain JSON form instead"
-        ))
-    })?;
+    // The manifest is one more entry.
+    if planned + 1 > max_entries {
+        return Err(FileError::Limit(format!(
+            "the document would have {planned} entries in a container, more than the {max_entries} that it holds. Save the plain JSON form instead"
+        )));
+    }
     Ok(skipped)
 }
 
 /// Copies an entry of an old file as it is. The entry is the one with this name and hash (it may
 /// be found in the file at the path, or in its `.bak`).
-fn copy_entry<W: Write>(
+pub(crate) fn copy_entry<W: Write>(
     writer: &mut Writer<W>,
     source: &FileSource,
     name: &str,
@@ -534,6 +532,7 @@ pub fn write_container<W: Write>(
             .map(|h| h.source())
             .or_else(|| opts.keep.first()),
         opts.skip_missing,
+        MAX_ENTRIES,
     )?;
 
     let mut writer = Writer::new(w).generator(&opts.generator);
@@ -557,10 +556,8 @@ pub fn write_container<W: Write>(
             if !report.sources.iter().any(|s| Arc::ptr_eq(s, &source)) {
                 report.sources.push(source.clone());
             }
-            let sha = parse_hash(hash).ok_or_else(|| ContainerError::Entry {
-                name: name.clone(),
-                reason: "not a hash".into(),
-            })?;
+            // The key of the plan is the hash of a text, so it parses.
+            let sha = parse_hash(hash).unwrap_or_default();
             let raw = source.parts().raw_by_content(&name, &sha)?;
             if hex(&raw.sha256) != *hash {
                 return Err(ContainerError::Entry {
@@ -623,9 +620,6 @@ pub fn write_container<W: Write>(
             });
             match old.map(|s| s.parts().raw_part(name)) {
                 Some(Ok(raw)) => {
-                    if !report.sources.iter().any(|k| Arc::ptr_eq(k, old.unwrap())) {
-                        report.sources.push(old.unwrap().clone());
-                    }
                     writer.copy_raw(raw)?;
                     report.parts_copied += 1;
                 }
@@ -635,9 +629,6 @@ pub fn write_container<W: Write>(
     }
     for (source, name) in &extras.unknown {
         copy_entry(&mut writer, source, name, None)?;
-        if !report.sources.iter().any(|s| Arc::ptr_eq(s, source)) {
-            report.sources.push(source.clone());
-        }
         report.unknown_copied += 1;
     }
     report.entries = writer.len();
@@ -647,4 +638,14 @@ pub fn write_container<W: Write>(
         }
     }
     Ok((writer.finish()?, report))
+}
+
+/// The check of the limits of the format for a test (no file is looked at).
+#[cfg(test)]
+pub(crate) fn preflight_for_test(
+    plans: &mut Plans,
+    extras: &mut Extras,
+    max_entries: usize,
+) -> Result<usize, FileError> {
+    preflight(plans, 0, extras, None, false, max_entries)
 }

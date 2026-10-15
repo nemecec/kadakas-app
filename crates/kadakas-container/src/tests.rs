@@ -1364,3 +1364,243 @@ fn other_zip_tools_read_what_the_writer_writes() {
     let _ = std::fs::remove_dir_all(&dir);
     eprintln!("read by: {ran:?}");
 }
+
+// ---- more: ZIP64 written by the writer, errors of the end records, the source without a file ----
+
+/// A writer that keeps what is written, except the long runs of zeros, which become holes.
+#[derive(Default)]
+struct Holes {
+    parts: Vec<(u64, Vec<u8>)>,
+    pos: u64,
+}
+
+impl Write for Holes {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        static ZEROS: [u8; 65_536] = [0; 65_536];
+        let zeros = buf.len() >= 1024 && buf.len() <= ZEROS.len() && buf == &ZEROS[..buf.len()];
+        if !zeros {
+            match self.parts.last_mut() {
+                Some((at, bytes)) if *at + bytes.len() as u64 == self.pos => {
+                    bytes.extend_from_slice(buf)
+                }
+                _ => self.parts.push((self.pos, buf.to_vec())),
+            }
+        }
+        self.pos += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn what_the_writer_writes_above_4_gib_is_read_back_in_the_zip64_form() {
+    // An entry of 4 GiB less one byte (its size is the value that means "see the ZIP64 field"),
+    // copied from a reader of zeros, and an entry after it, whose offset needs 64 bits. The
+    // directory is above 4 GiB too, so the end records are the ZIP64 ones.
+    let big = 0xFFFF_FFFFu64;
+    let mut w = Writer::new(Holes::default());
+    w.copy_raw(RawEntry {
+        name: "big".into(),
+        method: Method::Stored,
+        crc32: 0,
+        size: big,
+        compressed: big,
+        sha256: [7; 32],
+        role: None,
+        data: Box::new(Read::take(std::io::repeat(0), big)),
+    })
+    .unwrap();
+    w.add_bytes("small", Compression::Stored, b"hello").unwrap();
+    w.set_role("small", "a_role");
+    w.set_role("none", "ignored");
+    let holes = w.finish().unwrap();
+    let medium = Sparse {
+        parts: Arc::new(holes.parts),
+        len: holes.pos,
+    };
+    assert!(medium.len > big);
+    let c = Container::open(Arc::new(medium), Limits::default()).unwrap();
+    assert_eq!(c.entry("big").unwrap().size, big);
+    assert_eq!(c.entry("big").unwrap().compressed, big);
+    assert_eq!(c.entry("small").unwrap().role.as_deref(), Some("a_role"));
+    assert_eq!(c.read("small").unwrap(), b"hello");
+    assert_eq!(c.read_prefix("big", 3).unwrap(), [0, 0, 0]);
+    assert_eq!(c.raw("small").unwrap().compressed, 5);
+}
+
+#[test]
+fn the_writer_tells_what_it_has_and_checks_the_count_before_it_writes() {
+    let mut w = Writer::new(Vec::new()).generator("test");
+    assert!(w.is_empty() && w.len() == 0 && !w.has("a"));
+    w.add_with("a", Compression::Stored, |f| f.write_all(b"streamed"))
+        .unwrap();
+    assert!(!w.is_empty() && w.len() == 1 && w.has("a"));
+    let out = w.finish().unwrap();
+    let c = open(&out).unwrap();
+    assert_eq!(c.read("a").unwrap(), b"streamed");
+    assert_eq!(c.manifest().generator, "test");
+    assert!(check_entry_count(10).is_ok());
+    assert!(check_entry_count(MAX_ENTRIES - 1).is_ok());
+    let e = check_entry_count(MAX_ENTRIES).unwrap_err();
+    assert!(matches!(e, ContainerError::Limit(_)) && e.to_string().contains("JSON"));
+}
+
+#[test]
+fn a_raw_copy_with_more_bytes_than_declared_is_refused() {
+    let mut w = Writer::new(Vec::new());
+    let e = w
+        .copy_raw(RawEntry {
+            name: "x".into(),
+            method: Method::Stored,
+            crc32: 0,
+            size: 3,
+            compressed: 3,
+            sha256: [0; 32],
+            role: None,
+            data: Box::new(std::io::Cursor::new(b"abcde".to_vec())),
+        })
+        .unwrap_err();
+    assert!(e.to_string().contains("more bytes"), "{e}");
+}
+
+#[test]
+fn the_zip64_end_records_with_wrong_values_are_refused() {
+    let wrong = |edit: &dyn Fn(&mut Vec<u8>)| {
+        let mut s = sparse_zip64(true);
+        let parts = Arc::get_mut(&mut s.parts).unwrap();
+        let last = parts.len() - 1;
+        edit(&mut parts[last].1);
+        Container::open(Arc::new(s), Limits::default())
+            .unwrap_err()
+            .to_string()
+    };
+    // The tail is the ZIP64 record (56 bytes), the locator (20 bytes) and the end record (22).
+    let locator = |t: &Vec<u8>| t.len() - 22 - 20;
+    let e = wrong(&|t| {
+        let at = locator(t);
+        t[at + 4] = 1; // the disk of the ZIP64 record
+    });
+    assert!(e.contains("several parts"), "{e}");
+    let e = wrong(&|t| {
+        let at = locator(t);
+        t[at + 8..at + 16].copy_from_slice(&u64::MAX.to_le_bytes());
+    });
+    assert!(e.contains("not where the locator says"), "{e}");
+    let e = wrong(&|t| t[16] = 1); // the disk of the ZIP64 record itself
+    assert!(e.contains("several parts"), "{e}");
+    let e = wrong(&|t| t[0] = 0); // the signature of the record
+    assert!(e.contains("damaged"), "{e}");
+}
+
+#[test]
+fn zip64_fields_that_are_short_or_missing_are_refused() {
+    let wrong = |edit: &dyn Fn(&mut Vec<u8>)| {
+        let mut s = sparse_zip64(true);
+        let parts = Arc::get_mut(&mut s.parts).unwrap();
+        // The directory is the fourth part; the first entry ("big") has its extra at 46 + 3.
+        edit(&mut parts[3].1);
+        Container::open(Arc::new(s), Limits::default())
+            .unwrap_err()
+            .to_string()
+    };
+    let e = wrong(&|d| d[51] = 8); // the field is 8 bytes, the entry needs two values
+    assert!(e.contains("ZIP64 field is too short"), "{e}");
+    let e = wrong(&|d| d[49] = 9); // another kind of extra field: the ZIP64 one is gone
+    assert!(e.contains("needs a ZIP64 field"), "{e}");
+    let e = wrong(&|d| {
+        d[51] = 200; // the extra field says it is longer than the directory entry
+        d[52] = 0;
+    });
+    assert!(e.contains("extra field is cut short"), "{e}");
+}
+
+/// A medium that has fewer bytes than it says, or fails.
+#[derive(Debug)]
+struct Liar {
+    bytes: Vec<u8>,
+    extra: u64,
+    fail: bool,
+}
+
+impl Medium for Liar {
+    fn len(&self) -> u64 {
+        self.bytes.len() as u64 + self.extra
+    }
+
+    fn open(&self, offset: u64, len: u64) -> Result<Box<dyn Read + Send>, ContainerError> {
+        if self.fail {
+            struct Broken;
+            impl Read for Broken {
+                fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                    Err(std::io::Error::other("the disk went away"))
+                }
+            }
+            return Ok(Box::new(Broken));
+        }
+        let from = (offset as usize).min(self.bytes.len());
+        let to = ((offset + len) as usize).min(self.bytes.len());
+        Ok(Box::new(std::io::Cursor::new(self.bytes[from..to].to_vec())))
+    }
+
+    fn label(&self) -> String {
+        "liar".into()
+    }
+}
+
+#[test]
+fn a_medium_that_ends_early_or_fails_is_an_error_not_a_panic() {
+    let bytes = sample();
+    let short = Liar {
+        bytes: bytes.clone(),
+        extra: 10,
+        fail: false,
+    };
+    let e = Container::open(Arc::new(short), Limits::default()).unwrap_err();
+    assert!(e.to_string().contains("cut short"), "{e}");
+    let broken = Liar {
+        bytes,
+        extra: 0,
+        fail: true,
+    };
+    let e = Container::open(Arc::new(broken), Limits::default()).unwrap_err();
+    assert!(e.to_string().contains("the disk went away"), "{e}");
+}
+
+#[test]
+fn invisible_characters_in_a_name_are_refused() {
+    for c in ['\u{110BD}', '\u{1BCA1}', '\u{1D175}', '\u{E0001}', '\u{E0041}', '\u{FFFA}'] {
+        let name = format!("a{c}b");
+        assert!(check_name(&name, 255).is_err(), "{c:?}");
+    }
+}
+
+#[test]
+fn a_source_over_memory_follows_the_content_rules_without_a_file() {
+    let bytes = sample();
+    let c = open(&bytes).unwrap();
+    let sha = c.entry("blobs/aa").unwrap().sha256;
+    let s = ContainerSource::new(c.clone());
+    assert!(s.has_by_content("blobs/aa", &sha));
+    assert!(!s.has_by_content("blobs/aa", &[1; 32]));
+    assert!(!s.has_part("none"));
+    assert_eq!(s.part_sha256("blobs/aa"), Some(sha));
+    assert_eq!(s.read_prefix_by_content("blobs/aa", &sha, 4).unwrap(), b"pict");
+    assert_eq!(s.read_prefix("blobs/aa", 3).unwrap(), b"pic");
+    assert!(s.container_with("blobs/aa", &sha).is_ok());
+    assert!(s.container_with("blobs/aa", &[1; 32]).is_err());
+    assert!(s.check_unchanged().is_ok());
+    assert!(s.refresh().is_ok() && s.rebind(std::path::Path::new("none")).is_err());
+    // A part with a damaged body is an error that names it, with no other file to look in.
+    let mut bad = bytes.clone();
+    let at = bad
+        .windows(13)
+        .position(|w| w == b"picture bytes")
+        .unwrap();
+    bad[at] ^= 0x20;
+    let damaged = ContainerSource::new(open(&bad).unwrap());
+    let e = damaged.read_part("blobs/aa").unwrap_err();
+    assert_eq!(e.entry_name(), Some("blobs/aa"), "{e}");
+}

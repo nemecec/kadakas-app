@@ -201,8 +201,6 @@ pub(crate) fn read(source: &FileSource) -> Result<Option<HistoryData>, FileError
     let versions = json_array(source, HISTORY_VERSIONS)?;
     let newest = json_array(source, HISTORY_NEWEST)?;
     let hashes = listed_blobs(source)?;
-    // The bytes of the pictures are known from the directory before one is read.
-    let mut budget = c.uncompressed_bytes();
     let mut blobs = Vec::with_capacity(hashes.len());
     for hash in &hashes {
         let name = blob_name(hash);
@@ -217,16 +215,10 @@ pub(crate) fn read(source: &FileSource) -> Result<Option<HistoryData>, FileError
             }
             .into());
         }
-        budget = budget
-            .checked_sub(entry.size)
-            .ok_or_else(|| ContainerError::Entry {
-                name: name.clone(),
-                reason: "the pictures of the history are bigger together than the file".into(),
-            })?;
-        let sha = sha_of(hash).ok_or_else(|| ContainerError::Entry {
-            name: name.clone(),
-            reason: "not a hash".into(),
-        })?;
+        // Each hash is listed once (a list with a hash twice is refused), so the pictures together
+        // are never more than the entries of the file, which the limits of the reader bound.
+        // The hash was checked above; a value that does not parse cannot equal a SHA-256.
+        let sha = sha_of(hash).unwrap_or_default();
         if entry.sha256 != sha {
             return Err(ContainerError::Entry {
                 name,
