@@ -1135,6 +1135,10 @@ pub struct Document {
     /// to the file: collaboration does not share it. Older files have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history: Option<crate::history::HistoryData>,
+    /// Review issues and their comments (REV-04). They are review data, not drawing objects.
+    /// Older files have none.
+    #[serde(default, skip_serializing_if = "crate::issue::Issues::is_empty")]
+    pub issues: crate::issue::Issues,
     /// The generator of new IDs (see `crate::uid`). It is not saved.
     #[serde(skip)]
     ids: IdGen,
@@ -1158,6 +1162,7 @@ impl PartialEq for Document {
             && self.resources == other.resources
             && self.drawing == other.drawing
             && self.history == other.history
+            && self.issues == other.issues
             && self.extra == other.extra
             && self.objects.len() == other.objects.len()
             && self.objects.iter().eq(other.objects.iter())
@@ -1307,6 +1312,7 @@ impl Default for Document {
             resources: Resources::default(),
             drawing: Default::default(),
             history: None,
+            issues: Default::default(),
             ids: IdGen::default(),
             load_notes: Vec::new(),
             extra: Default::default(),
@@ -1497,6 +1503,7 @@ impl Document {
             notes.push(problem);
         }
         notes.extend(crate::provenance::repair(self));
+        notes.extend(self.issues.repair());
         self.load_notes = notes;
         let mut seen = std::collections::HashSet::new();
         let ids = self

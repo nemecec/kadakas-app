@@ -11,11 +11,14 @@ use std::hash::Hash;
 
 use serde::{Deserialize, Serialize};
 
+use crate::issue::{CommentId, IssueId};
 use crate::model::{ClassId, LayerId, ObjectId};
 use crate::resource::ResourceId;
 
 /// Who made a change.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Origin {
     /// A person, in the app.
@@ -53,7 +56,14 @@ impl Origin {
 }
 
 /// The names of the parts of a change set, for `events.subscribe {kinds}`.
-pub const KINDS: [&str; 5] = ["objects", "layers", "classes", "resources", "document"];
+pub const KINDS: [&str; 6] = [
+    "objects",
+    "layers",
+    "classes",
+    "resources",
+    "document",
+    "issues",
+];
 
 /// IDs by kind: objects, layers, classes and resources (styles, symbols, worksheets, ...).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +76,12 @@ pub struct IdsByKind {
     pub classes: Vec<ClassId>,
     #[serde(default)]
     pub resources: Vec<ResourceId>,
+    /// Review issues (REV-04). A change of a comment, a viewpoint or a snapshot changes its issue.
+    #[serde(default)]
+    pub issues: Vec<IssueId>,
+    /// The comments of the issues.
+    #[serde(default)]
+    pub comments: Vec<CommentId>,
 }
 
 impl IdsByKind {
@@ -74,11 +90,18 @@ impl IdsByKind {
             && self.layers.is_empty()
             && self.classes.is_empty()
             && self.resources.is_empty()
+            && self.issues.is_empty()
+            && self.comments.is_empty()
     }
 
     /// Number of IDs in all kinds.
     pub fn len(&self) -> usize {
-        self.objects.len() + self.layers.len() + self.classes.len() + self.resources.len()
+        self.objects.len()
+            + self.layers.len()
+            + self.classes.len()
+            + self.resources.len()
+            + self.issues.len()
+            + self.comments.len()
     }
 }
 
@@ -146,6 +169,14 @@ impl ChangeSet {
                     && self.removed.resources.is_empty())
             }
             "document" => self.document.any(),
+            "issues" => {
+                !(self.added.issues.is_empty()
+                    && self.changed.issues.is_empty()
+                    && self.removed.issues.is_empty()
+                    && self.added.comments.is_empty()
+                    && self.changed.comments.is_empty()
+                    && self.removed.comments.is_empty())
+            }
             _ => false,
         }
     }
@@ -175,6 +206,16 @@ impl ChangeSet {
             },
             resources: if want("resources") {
                 ids.resources.clone()
+            } else {
+                vec![]
+            },
+            issues: if want("issues") {
+                ids.issues.clone()
+            } else {
+                vec![]
+            },
+            comments: if want("issues") {
+                ids.comments.clone()
             } else {
                 vec![]
             },

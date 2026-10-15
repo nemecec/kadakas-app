@@ -496,7 +496,7 @@ impl Tx<'_> {
     }
 
     /// The plant styles that use a picture resource.
-    fn image_users(&self, id: ResourceId) -> Vec<ResourceId> {
+    pub(super) fn image_users(&self, id: ResourceId) -> Vec<ResourceId> {
         self.doc
             .resources
             .plant_styles()
@@ -506,7 +506,7 @@ impl Tx<'_> {
     }
 
     /// The resource of a picture: the one with the same hash if the document has it, else a new one.
-    fn picture_resource(
+    pub(super) fn picture_resource(
         &mut self,
         p: &crate::picture::ImageResource,
         out: &mut Outcome,
