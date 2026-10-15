@@ -319,7 +319,7 @@ mod tests {
         assert!(e.joints().is_err());
         e.draft.unit_length = 200.0;
         // Two shapes from the drawing.
-        let mut add = |pts: &[DVec2]| {
+        fn add(ed: &mut Editor, pts: &[DVec2]) -> ObjectId {
             ObjectId(
                 ed.execute(&Command::AddObject {
                     shape: Shape::Polyline {
@@ -333,31 +333,40 @@ mod tests {
                 .unwrap()
                 .created[0],
             )
-        };
-        let a = add(&[
-            DVec2::ZERO,
-            DVec2::new(100.0, 0.0),
-            DVec2::new(100.0, 100.0),
-            DVec2::new(0.0, 100.0),
-        ]);
-        let b = add(&[
-            DVec2::new(100.0, 0.0),
-            DVec2::new(200.0, 0.0),
-            DVec2::new(200.0, 100.0),
-            DVec2::new(100.0, 100.0),
-        ]);
+        }
+        let a = add(
+            &mut ed,
+            &[
+                DVec2::ZERO,
+                DVec2::new(100.0, 0.0),
+                DVec2::new(100.0, 100.0),
+                DVec2::new(0.0, 100.0),
+            ],
+        );
+        let b = add(
+            &mut ed,
+            &[
+                DVec2::new(100.0, 0.0),
+                DVec2::new(200.0, 0.0),
+                DVec2::new(200.0, 100.0),
+                DVec2::new(100.0, 100.0),
+            ],
+        );
         let note = e.from_shapes(ed.doc(), &[a, b], None, None).unwrap();
         assert!(note.unwrap().contains("stack"));
         assert_eq!(e.source, Some(ModuleSource::Shapes));
         assert_eq!(e.draft.units.len(), 2);
         assert!(e.preview().is_ok());
         // Shapes that overlap are refused with the reason.
-        let c = add(&[
-            DVec2::new(50.0, 0.0),
-            DVec2::new(150.0, 0.0),
-            DVec2::new(150.0, 100.0),
-            DVec2::new(50.0, 100.0),
-        ]);
+        let c = add(
+            &mut ed,
+            &[
+                DVec2::new(50.0, 0.0),
+                DVec2::new(150.0, 0.0),
+                DVec2::new(150.0, 100.0),
+                DVec2::new(50.0, 100.0),
+            ],
+        );
         let err = e
             .from_shapes(ed.doc(), &[a, c], Some([200.0, 0.0]), Some([0.0, 200.0]))
             .unwrap_err();

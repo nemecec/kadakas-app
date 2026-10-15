@@ -3,6 +3,7 @@
 //! form logic is in `kadakas_ui_core::joint_edit`; this file only draws the fields. A save is one
 //! `ModifyResource` command, so it is one undo step.
 
+use crate::units_ui::DragValueExt as _;
 use egui::{Color32, Context, DragValue, Pos2, Sense, Stroke, Ui, Vec2};
 use kadakas_api::Session;
 use kadakas_core::hardscape::style::JointKind;
@@ -140,14 +141,14 @@ fn body(ui: &mut Ui, w: &mut Open, session: &mut Session, status: &mut String) -
                 ui.add(
                     DragValue::new(&mut e.draft.unit_length)
                         .range(10.0..=5000.0)
-                        .suffix(" mm"),
+                        .length(),
                 );
                 ui.end_row();
                 ui.label(tr!("joint-ui-unit-width"));
                 ui.add(
                     DragValue::new(&mut e.draft.unit_width)
                         .range(10.0..=5000.0)
-                        .suffix(" mm"),
+                        .length(),
                 );
                 ui.end_row();
             }
@@ -156,11 +157,11 @@ fn body(ui: &mut Ui, w: &mut Open, session: &mut Session, status: &mut String) -
                 DragValue::new(&mut e.draft.spacing)
                     .range(0.0..=100.0)
                     .speed(0.1)
-                    .suffix(" mm"),
+                    .length(),
             );
             ui.end_row();
             ui.label(tr!("joint-ui-angle"));
-            ui.add(DragValue::new(&mut e.draft.angle).speed(1.0).suffix("°"));
+            ui.add(DragValue::new(&mut e.draft.angle).speed(1.0).degrees());
             ui.end_row();
         });
     if e.draft.kind == JointKind::Module {
@@ -191,7 +192,7 @@ fn body(ui: &mut Ui, w: &mut Open, session: &mut Session, status: &mut String) -
                             .add(
                                 DragValue::new(&mut e.numbers[1])
                                     .range(20.0..=2000.0)
-                                    .suffix(" mm"),
+                                    .length(),
                             )
                             .changed();
                         ui.end_row();
@@ -200,7 +201,7 @@ fn body(ui: &mut Ui, w: &mut Open, session: &mut Session, status: &mut String) -
                             .add(
                                 DragValue::new(&mut e.numbers[2])
                                     .range(20.0..=2000.0)
-                                    .suffix(" mm"),
+                                    .length(),
                             )
                             .changed();
                         ui.end_row();
@@ -209,7 +210,7 @@ fn body(ui: &mut Ui, w: &mut Open, session: &mut Session, status: &mut String) -
                             .add(
                                 DragValue::new(&mut e.numbers[3])
                                     .range(1.0..=1000.0)
-                                    .suffix(" mm"),
+                                    .length(),
                             )
                             .changed();
                         ui.end_row();
@@ -230,7 +231,7 @@ fn body(ui: &mut Ui, w: &mut Open, session: &mut Session, status: &mut String) -
                             .add(
                                 DragValue::new(&mut e.numbers[0])
                                     .range(5.0..=2000.0)
-                                    .suffix(" mm"),
+                                    .length(),
                             )
                             .changed();
                         ui.end_row();

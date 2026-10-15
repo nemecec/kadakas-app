@@ -837,28 +837,46 @@ class Api:
         return self._call("hardscape.set", params or None)
 
     def hardscape_from_shapes(self, **params: Any) -> Any:
-        """Create hardscapes from closed shapes (closed polylines, rectangles, circles; for example the outlines of a parking lot from a DXF file) in one undo step. A shape inside another one becomes a hole of it (a shape inside a hole becomes a hardscape again). params: {ids? (default: the selection), style? (ID or name), holes_from_inner? (default true; false makes every shape a hardscape of its own), delete_source? (default true), dry_run?}. The layer, class, look and data of a shape go to its hardscape. Returns {created: [{source, id, holes}], holes: [{source, host}], skipped: [{id, reason}], dry_run}. The new hardscapes become the selection.
+        """Create hardscapes from closed shapes (closed polylines, rectangles, circles; for example the outlines of a parking lot from a DXF file) in one undo step. A shape inside another one becomes a hole of it (a shape inside a hole becomes a hardscape again). params: {ids? (default: the selection), style? (ID or name), holes_from_inner? (default true; false makes every shape a hardscape of its own), delete_source? (default false: the outlines stay), dry_run?}. The layer, class, look and data of a shape go to its hardscape. A shape counts as inside another one by area (it may touch the outline or sit 0.01 mm outside it); a shape that overlaps another in part is left out and named in skipped, so the new hardscapes never overlap. Returns {created: [{source, id, holes}], holes: [{source, host}], skipped: [{id, reason}], dry_run}. The new hardscapes become the selection.
 
         JSON-RPC method ``hardscape.from_shapes``."""
         return self._call("hardscape.from_shapes", params or None)
 
-    def pattern_layout(self, **params: Any) -> Any:
-        """Lay units (pavers, tiles, boards) in a bond over a closed shape and return the units and the gaps. params: {id | region: {outline: [vertices], holes?: [[vertices]]}, pattern?: {bond? (running_bond | stack | herringbone | basket_weave), unit_length, unit_width, gap? (the joint width, default 0)}, origin? ([x, y]: where the pattern starts), angle? (degrees, counterclockwise), align_to_edge? (n: start at vertex n of the outline and run along the edge to vertex n+1; sets origin and angle), include? (["units", "gaps"], default both), offset? and limit? (page of the lists, default 0 and 1000, at most 20000), tolerance? (curve flattening, mm, default 1)}. A closed polyline, rectangle, circle, landscape area or hardscape works as id. A hardscape with a style uses the joint pattern of the style with its own origin and angle unless you give pattern, origin, angle or align_to_edge. The pattern starts at the middle of the box of the region without an origin. The unit is the pattern unit with the gap taken off, cut exactly to the outline minus the holes (arcs are cut into lines within the tolerance). Returns {summary: {bond, origin, angle_deg, whole_units, cut_units, slivers, area_laid_m2, gap_area_m2, gap_length_m, order_units, ...}, units_total, units: [{whole, area_m2, share (part of a full unit), outline: [[x, y]], holes: [[[x, y]]]}], gaps_total, gaps: [[[x, y], [x, y]]] (gap center lines), next_offset (null at the end)}. A cut unit that the edge splits in two pieces counts as two units. A layout of more than 1,000,000 units is an error that says how many units it would make.
+    def unit_pattern_layout(self, **params: Any) -> Any:
+        """Lay units (pavers, tiles, boards) over a closed shape and return the units and the gaps. params: {id | region: {outline: [vertices], holes?: [[vertices]]}, pattern?, origin? ([x, y]: where the pattern starts), angle? (degrees, counterclockwise), align_to_edge? (n: start at vertex n of the outline and run along the edge to vertex n+1; sets origin and angle), include? (["units", "gaps"], default both), offset? and limit? (a page of the lists, default 0 and 1000, at most 20000; limit 0 gives the counts only), tolerance? (curve flattening, mm, default 1), and the count options of report.unit_pattern}. pattern is {bond? (running_bond | stack | herringbone | basket_weave), unit_length, unit_width, gap? (the joint width, default 0)} for the four bonds. Every whole unit has exactly unit_length by unit_width. Or a module: {kind: module, units: [{name, outline}], a: [x, y], b: [x, y], gap?}, or {preset: hexagon | octagon_square | i_shape, ...numbers, gap?} (see unit_pattern.module_preset). A closed polyline, rectangle, circle, landscape area or hardscape works as id. A hardscape with a style uses the joint pattern of the style with its own origin and angle unless you give pattern, origin, angle or align_to_edge, and the pattern is laid inside its kerb border and outside its holes. The pattern starts at the middle of the box of the region without an origin. The unit is the pattern cell with half a gap taken off on every side, cut exactly to the outline minus the holes (arcs are cut into lines within the tolerance). Returns {summary: {bond, origin, angle_deg, whole_units, cut_units, slivers, unfillable_pieces, area_laid_m2, gap_area_m2, order_units, order_units_max, order_units_min, by_unit: [{name, whole_units, cut_units, ...}], ...}, units_total, units: [{kind (unit shape name), whole, area_m2, share (part of a full unit), outline: [[x, y]], holes: [[[x, y]]]}], gaps_total, gaps: [[[x, y], [x, y]]] (gap center lines), next_offset (null at the end)}. A cut unit that the edge splits in two pieces counts as two units. A layout of more than 1,000,000 units is an error that says how many units it would make.
 
-        JSON-RPC method ``pattern.layout``."""
-        return self._call("pattern.layout", params or None)
+        JSON-RPC method ``unit_pattern.layout``."""
+        return self._call("unit_pattern.layout", params or None)
 
-    def pattern_to_objects(self, **params: Any) -> Any:
-        """Turn the units (and, with include, the gap center lines) of a layout into ordinary objects in one undo step: a closed polyline for every unit and a line for every gap segment, in one group. params: as pattern.layout (id | region, pattern, origin, angle, align_to_edge, tolerance), plus include? (["units"] by default; add "gaps"), layer? (default: the layer of the object, else the active layer), class?, group? (default true), name? (name of the group). A hole inside a cut unit becomes a closed polyline of its own. At most 100,000 objects in one call. Returns {group, units, gaps, objects}.
+    def unit_pattern_to_objects(self, **params: Any) -> Any:
+        """Turn the units (and, with include, the gap center lines) of a layout into ordinary objects in one undo step: a closed polyline for every unit and a line for every gap segment, in one group. params: as unit_pattern.layout (id | region, pattern, origin, angle, align_to_edge, tolerance), plus include? (["units"] by default; add "gaps"), layer? (default: the layer of the object, else the active layer), class?, group? (default true), name? (name of the group). A hole inside a cut unit becomes a closed polyline of its own. With a module pattern each unit polyline has the data field unit_type with the name of its shape. At most 100,000 objects in one call. Returns {group, units, gaps, objects}.
 
-        JSON-RPC method ``pattern.to_objects``."""
-        return self._call("pattern.to_objects", params or None)
+        JSON-RPC method ``unit_pattern.to_objects``."""
+        return self._call("unit_pattern.to_objects", params or None)
 
-    def report_pattern(self, **params: Any) -> Any:
-        """Counts and quantities of unit patterns. params: {ids? (default: every hardscape with a joint pattern), pattern?, origin?, angle?, align_to_edge? (as pattern.layout; with several ids they apply to each), sliver_share? (cut units under this part of a full unit are slivers, default 0.25), waste_percent? (no default: without it the order has no waste added), tolerance? (curve flattening in mm, default 1; the DXF export uses its own tolerance, default 1, and gives the same counts when the two are equal), format?: csv}. Returns {rows: [{id, name, whole_units, cut_units, slivers, area_laid_m2, region_area_m2, gap_area_m2, gap_length_m, order_units, order_units_with_waste, ...} or {id, error}], totals: {whole_units, cut_units, slivers, area_laid_m2, gap_length_m, order_units, order_units_with_waste}}. The order is the whole units plus the cut units, every cut unit counted as one unit; waste_percent adds that percent on top, rounded up. Slivers are part of the cut units. The counts match the polylines on the layers <layer>-UNITS-WHOLE and <layer>-UNITS-CUT of export.file with patterns: "units".
+    def unit_pattern_module_preset(self, **params: Any) -> Any:
+        """Build a module pattern from a preset. params: {preset: hexagon | octagon_square | i_shape, ...numbers in mm}. hexagon: side or across_flats. octagon_square: side (a regular octagon and the small square between four octagons). i_shape: length? (200), width? (165), notch? (25): a double-T interlocking paver, rows shifted by half a length (generic approximate dimensions). Returns {pattern: {kind: module, units, a, b}, note}. Use the pattern as the pattern of unit_pattern.layout, report.unit_pattern, or as the joints of a hardscape style (add gap as spacing).
 
-        JSON-RPC method ``report.pattern``."""
-        return self._call("report.pattern", params or None)
+        JSON-RPC method ``unit_pattern.module_preset``."""
+        return self._call("unit_pattern.module_preset", params or None)
+
+    def unit_pattern_module_from_shapes(self, **params: Any) -> Any:
+        """Make a module pattern from closed shapes in the drawing (closed polylines, rectangles, circles). params: {ids? (default: the selection), names? ([text] one per shape; default unit 1, unit 2, ...), a? and b? ([x, y] the two repeat vectors)}. Without a and b the lattice is the box of the shapes (a stack): a = [width, 0], b = [0, height], and the reply says so. The shapes keep their place in the box; the corner of the box is the origin. The shapes must not overlap each other or their copies. Returns {pattern: {kind: module, units, a, b}, note?}.
+
+        JSON-RPC method ``unit_pattern.module_from_shapes``."""
+        return self._call("unit_pattern.module_from_shapes", params or None)
+
+    def unit_pattern_module_from_block(self, **params: Any) -> Any:
+        """Make a module pattern from the closed polylines of a block of a DXF file. params: {path, block, a? and b? ([x, y] repeat vectors; default the box of the shapes, as in module_from_shapes)}. The block goes through the DXF import (arcs from bulges, units from $INSUNITS, nested blocks exploded). The DXF layer of a polyline is the name of its unit shape. The path policy of import.file applies. Returns {pattern, note?, blocks?} (blocks lists the blocks of the file when the name is wrong, in the error).
+
+        JSON-RPC method ``unit_pattern.module_from_block``."""
+        return self._call("unit_pattern.module_from_block", params or None)
+
+    def report_unit_pattern(self, **params: Any) -> Any:
+        """Counts and quantities of unit patterns. params: {ids? (default: every hardscape with a joint pattern), pattern?, origin?, angle?, align_to_edge? (as unit_pattern.layout; with several ids they apply to each), sliver_share? (cut units under this part of a full unit are slivers, default 0.25), unfillable_share? (cut units under this part are too small to lay, default 0.05), min_width? (mm: cut units narrower than this cannot be laid, default off), exclude_unfillable? (default false: leave the unfillable pieces out of order_units), trim? (mm, default 0.1: a unit that crosses the edge by less than this counts as whole, so drawing noise makes no cut units; 0 turns it off), waste_percent? (no default: without it the order has no waste added), gap_length? (measure the length of the gap lines, default false), visible_only? (skip hardscapes on hidden layers, default false), tolerance? (curve flattening in mm, default 1; the DXF export has its own tolerance, default 1, and gives the same counts when the two are equal), format?: csv}. Returns {rows: [{id, name, whole_units, cut_units, slivers, unfillable_pieces, area_laid_m2, cut_area_m2, region_area_m2, gap_area_m2, gap_length_m?, order_units, order_units_max, order_units_min, order_units_with_waste, by_unit: [{name, whole_units, cut_units, ...}], ...} or {id, error}], totals: {..., complete}}. order_units is an upper bound: the whole units plus the cut units, every cut unit counted as one unit, no offcut used twice. order_units_min is a lower bound: the whole units plus the sum of the shares of the cut units, rounded up. waste_percent adds that percent to the total, rounded up, in whole numbers. Hardscapes are counted inside their kerb border and outside their holes. complete is false when a row is an error. The counts match the polylines on the layers <layer>-UNITS-WHOLE and <layer>-UNITS-CUT of export.file with patterns: "units".
+
+        JSON-RPC method ``report.unit_pattern``."""
+        return self._call("report.unit_pattern", params or None)
 
     def landscape_area_add(self, **params: Any) -> Any:
         """Add a landscape area in one undo step. params: {boundary: [vertices], name?, style? (ID or name), holes? ([[vertices]], parts that stay empty and lie inside the boundary), exclude? ([object IDs] whose outline becomes a hole: rect, circle, closed polyline, hardscape, landscape area), show_plants?, drape?, layer?, class?}. Returns {id}.
@@ -873,7 +891,7 @@ class Api:
         return self._call("landscape_area.set", params or None)
 
     def report_hardscape(self, **params: Any) -> Any:
-        """Hardscape quantities. params: {format?: csv, pattern? (false leaves out the unit pattern block), sliver_share?, waste_percent? (for the pattern block, see report.pattern)}. Returns {rows: [{id, name, style, style_name, material, mode, plan_area_m2, surface_area_m2, perimeter_m (outline and holes), holes, holes_area_m2, thickness_mm, volume_m3, pattern? (the unit counts of report.pattern, when the style has a joint pattern: {whole_units, cut_units, slivers, area_laid_m2, gap_length_m, order_units, ...} or {error}), draped, partially_draped (part of it lies outside the site model and follows the nearest edge height), layers: [{kind, name, material, thickness_mm, area_m2, volume_m3}]}], materials: [{kind, material, area_m2, volume_m3}], totals}. The surface area follows a slope or the site model; the volume of a layer is its thickness times the surface area.
+        """Hardscape quantities. params: {format?: csv, pattern? (false leaves out the unit pattern block), and the count options of report.unit_pattern (sliver_share, waste_percent, trim, ...) for the pattern block}. Returns {rows: [{id, name, style, style_name, material, mode, plan_area_m2, surface_area_m2, perimeter_m (outline and holes), holes, holes_area_m2, thickness_mm, volume_m3, pattern? (the unit counts of report.unit_pattern, when the style has a joint pattern: {whole_units, cut_units, slivers, area_laid_m2, gap_length_m, order_units, ...} or {error}), draped, partially_draped (part of it lies outside the site model and follows the nearest edge height), layers: [{kind, name, material, thickness_mm, area_m2, volume_m3}]}], materials: [{kind, material, area_m2, volume_m3}], totals}. The surface area follows a slope or the site model; the volume of a layer is its thickness times the surface area.
 
         JSON-RPC method ``report.hardscape``."""
         return self._call("report.hardscape", params or None)
@@ -2433,9 +2451,12 @@ METHOD_NAMES: tuple[str, ...] = (
     "hardscape.add",
     "hardscape.set",
     "hardscape.from_shapes",
-    "pattern.layout",
-    "pattern.to_objects",
-    "report.pattern",
+    "unit_pattern.layout",
+    "unit_pattern.to_objects",
+    "unit_pattern.module_preset",
+    "unit_pattern.module_from_shapes",
+    "unit_pattern.module_from_block",
+    "report.unit_pattern",
     "landscape_area.add",
     "landscape_area.set",
     "report.hardscape",

@@ -241,7 +241,7 @@ fn patch_checks_holes_names_and_styles() {
             .contains("3 or more")
     );
     let outside = curve::corners(&[
-        DVec2::new(-5.0, 0.0),
+        DVec2::new(-50.0, 0.0),
         DVec2::new(100.0, 0.0),
         DVec2::new(100.0, 100.0),
     ]);

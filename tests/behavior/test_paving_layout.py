@@ -122,7 +122,7 @@ def test_agent_lays_pavers_on_a_parking_lot_and_exports_the_units(cad, tmp_path)
     whole = [p for p, _ in by_layer["LOT-UNITS-WHOLE"]]
     cut = [p for p, _ in by_layer["LOT-UNITS-CUT"]]
     assert (len(whole), len(cut)) == (row["whole_units"], row["cut_units"])
-    assert len(by_layer["LOT"]) == 1, "the outline of the hardscape"
+    assert len(by_layer["LOT"]) == 3, "the outline of the hardscape and the two source outlines"
     # Every whole unit is exactly 200 x 100 mm (the gap is between the units).
     for u in whole[:2000]:
         a, b = edges(u)[:2]
@@ -346,14 +346,15 @@ def test_modules_from_shapes_and_from_a_dxf_block(cad, tmp_path):
     m = cad.result("unit_pattern.module_from_shapes", {"ids": [a, b], "names": ["left", "right"]})
     assert m["pattern"]["a"] == [200.0, 0.0] and m["pattern"]["b"] == [0.0, 100.0] and "stack" in m["note"]
     r = cad.result("unit_pattern.layout", {"region": {"outline": rect(1000, 500)}, "pattern": m["pattern"], "origin": [0, 0], "include": ["units"], "limit": 0})
-    assert r["summary"]["whole_units"] == 100
-    assert {u["name"]: u["whole_units"] for u in r["summary"]["by_unit"]} == {"left": 50, "right": 50}
+    assert r["summary"]["whole_units"] == 50
+    assert {u["name"]: u["whole_units"] for u in r["summary"]["by_unit"]} == {"left": 25, "right": 25}
     # Shapes that overlap are refused with the reason.
     c = add_poly(cad, [[50, 0], [150, 0], [150, 100], [50, 100]])
     err = cad.error("unit_pattern.module_from_shapes", {"ids": [a, c], "a": [200, 0], "b": [0, 200]})
     assert "overlap" in err["message"]
     # A block of a DXF file: two shapes on two layers; arcs through bulges are kept.
     doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 4  # millimeters
     doc.layers.add("BIG")
     doc.layers.add("SMALL")
     blk = doc.blocks.new("HEXMOD")
