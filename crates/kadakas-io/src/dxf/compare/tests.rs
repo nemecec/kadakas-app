@@ -187,3 +187,50 @@ fn a_far_drawing_is_placed_the_same_for_both_files() {
     let first = ys.iter().filter(|y| (**y - ys[0]).abs() < 1e-6).count();
     assert!(first >= 2, "{ys:?}");
 }
+
+fn paper_text(handle: u32, t: &str) -> String {
+    format!("0\nTEXT\n5\n{handle:X}\n8\nA\n67\n1\n10\n0\n20\n0\n40\n100\n1\n{t}\n")
+}
+
+#[test]
+fn units_layers_and_entities_that_make_no_object_are_told() {
+    // Another unit in the old file.
+    let meters = base().replace("$INSUNITS\n70\n4", "$INSUNITS\n70\n6");
+    let c = run(&meters, &revised(), &[]).unwrap();
+    assert!(
+        c.notes.iter().any(|n| n.contains("different units")),
+        "{:?}",
+        c.notes
+    );
+    // A paper space entity changes: no object, counted, and the skipped entities are told.
+    let old = file(
+        "A1B2",
+        &[line(0x10, "A", 0), paper_text(0x30, "one")].concat(),
+    );
+    let new = file(
+        "A1B2",
+        &[line(0x10, "A", 0), paper_text(0x30, "two")].concat(),
+    );
+    let c = run(&old, &new, &[]).unwrap();
+    assert!(c.items.is_empty());
+    assert_eq!(c.counts.ignored, 1);
+    assert!(c.notes.iter().any(|n| n.contains("make no object")));
+    assert!(c.notes.iter().any(|n| n.contains("are not imported")));
+    // A layer for each DXF layer, and a tolerance.
+    let layers = ImportOptions {
+        layer_mode: LayerMode::Layers,
+        ..ImportOptions::default()
+    };
+    let c = compare(&Request {
+        base: (base().as_bytes(), "a.dxf"),
+        new: (revised().as_bytes(), "b.dxf"),
+        options: &layers,
+        tolerance: Some(50.0),
+        layers: &[],
+    })
+    .unwrap();
+    assert!(c.notes.iter().any(|n| n.contains("each DXF layer")));
+    assert_eq!(c.counts.changed, 1);
+    assert_eq!(c.base_name, "a.dxf");
+    assert_eq!(c.name, "b.dxf");
+}

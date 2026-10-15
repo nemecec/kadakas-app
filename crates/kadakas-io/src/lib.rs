@@ -413,6 +413,22 @@ mod tests {
     }
 
     #[test]
+    fn a_link_to_a_file_is_made_from_its_bytes_and_a_bad_path_is_refused() {
+        let dir = kadakas_sys::tmp::PrivateTempDir::new("kadakas-io-file-link").unwrap();
+        let path = dir.path().join("plan.dxf");
+        std::fs::write(&path, b"0\nEOF\n").unwrap();
+        let link = file_link(&path, b"0\nEOF\n").unwrap();
+        assert!(link.path.ends_with("plan.dxf") && link.bytes == 6);
+        assert_eq!(link.problem(), None);
+        // A file that is not there yet still has an absolute path.
+        assert!(file_link(&dir.path().join("later.dxf"), b"x").is_ok());
+        // A path that is too long is not kept.
+        let long = dir.path().join("a".repeat(5000));
+        let err = file_link(&long, b"x").unwrap_err();
+        assert!(err.to_string().contains("cannot keep a link"), "{err}");
+    }
+
+    #[test]
     fn formats_by_name_and_path() {
         assert_eq!(Format::from_name(".DXF"), Some(Format::Dxf));
         assert_eq!(Format::from_name("shp"), Some(Format::Shapefile));

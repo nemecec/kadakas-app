@@ -1,9 +1,11 @@
 //! Tests of the update from DXF.
 
+use super::super::revision::Status;
 use super::*;
 use crate::{Format, Source, importer};
 use kadakas_core::DVec2;
 use kadakas_core::model::Shape;
+use kadakas_core::provenance::hex;
 use serde_json::Value;
 
 const GUID: &str = "A1B2C3D4-0001";
@@ -762,4 +764,256 @@ fn drawings_lists_what_was_imported() {
     assert!(d[0].has_base);
     assert!(!d[0].linked);
     assert!(drawings(&Document::with_sequential_ids()).is_empty());
+}
+
+fn paper_text(handle: u32, t: &str) -> String {
+    format!("0\nTEXT\n5\n{handle:X}\n8\nA\n67\n1\n10\n0\n20\n0\n40\n100\n1\n{t}\n")
+}
+
+#[test]
+fn changes_that_make_no_object_are_counted_and_the_skipped_entities_are_told() {
+    let base = file(
+        "AAAA0001",
+        "",
+        &[line(0x10, "A", 0), paper_text(0x30, "one")].concat(),
+    );
+    let new = file(
+        "AAAA0002",
+        "",
+        &[line(0x10, "A", 0), paper_text(0x30, "two")].concat(),
+    );
+    let ed = editor_with(&base);
+    let plan = make(ed.doc(), &new).unwrap();
+    assert!(plan.changes.is_empty());
+    assert_eq!(plan.counts.ignored, 1);
+    assert!(plan.notes.iter().any(|n| n.contains("make no object")));
+    assert!(plan.notes.iter().any(|n| n.contains("are not imported")));
+}
+
+#[test]
+fn the_unit_and_the_update_data_of_the_new_revision() {
+    let ed = editor_with(&base_text());
+    // Another unit in the new file is told.
+    let meters = revision_two().replace("$INSUNITS\n70\n4", "$INSUNITS\n70\n6");
+    let plan = make(ed.doc(), &meters).unwrap();
+    assert!(
+        plan.notes.iter().any(|n| n.contains("another unit")),
+        "{:?}",
+        plan.notes
+    );
+    // No update data for the new revision: told, and none is stored.
+    let none = ImportOptions {
+        base: BaseMode::Off,
+        ..ImportOptions::default()
+    };
+    let plan = make_with(ed.doc(), &revision_two(), None, &none).unwrap();
+    assert!(plan.notes.iter().any(|n| n.contains("base: none")));
+    let mut again = Editor::new(ed.doc().clone());
+    apply_all(&mut again, &plan);
+    assert!(provenance::base_recs(again.doc(), &plan.drawing, &plan.new_revision).is_none());
+    assert!(provenance::base_recs(again.doc(), &plan.drawing, &plan.old_revision).is_none());
+    // A link needs the file on disk: without one the plan is refused, with one it is kept.
+    let link_opts = ImportOptions {
+        base: BaseMode::Link,
+        ..ImportOptions::default()
+    };
+    let err = make_with(ed.doc(), &revision_two(), None, &link_opts)
+        .err()
+        .unwrap();
+    assert!(matches!(err, UpdateError::NewFile(_)), "{err}");
+    let data = revision_two();
+    let mut req = request_for(ed.doc(), &data);
+    req.options = &link_opts;
+    req.new_link = Some(FileLink::of_bytes("/data/plan_rev2.dxf", data.as_bytes()));
+    let plan = super::plan(&req).unwrap();
+    let mut linked = Editor::new(ed.doc().clone());
+    apply_all(&mut linked, &plan);
+    let src = linked
+        .doc()
+        .layers
+        .iter()
+        .find_map(|l| LayerSource::of(l.extra.get(provenance::LAYER_KEY)?))
+        .unwrap();
+    assert!(src.link.is_some());
+}
+
+#[test]
+fn a_bad_tolerance_a_broken_stored_base_and_a_plan_over_the_limit_are_refused() {
+    let ed = editor_with(&base_text());
+    let data = revision_two();
+    let mut req = request_for(ed.doc(), &data);
+    req.tolerance = Some(-1.0);
+    assert!(matches!(
+        super::plan(&req).err().unwrap(),
+        UpdateError::NewFile(_)
+    ));
+    req.tolerance = Some(f64::NAN);
+    assert!(super::plan(&req).is_err());
+
+    // The stored summaries are not valid (a hand-made document).
+    let mut doc = ed.doc().clone();
+    let ids: Vec<_> = doc
+        .resources
+        .iter()
+        .filter(|r| matches!(r.body, kadakas_core::resource::ResourceBody::ImportBase(_)))
+        .map(|r| r.id)
+        .collect();
+    for id in ids {
+        let r = doc.resources.get_mut(id).unwrap();
+        if let kadakas_core::resource::ResourceBody::ImportBase(v) = &r.body {
+            let mut body = (**v).clone();
+            body["recs"] = serde_json::json!(["not a record"]);
+            r.body = kadakas_core::resource::ResourceBody::ImportBase(std::sync::Arc::new(body));
+        }
+    }
+    let err = make(&doc, &data).err().unwrap();
+    assert!(matches!(err, UpdateError::NeedsOldFile(_)), "{err}");
+
+    // Some limits hold the plan back with the second message (the bytes of the whole plan), some
+    // with the first (the new objects).
+    let mut messages = BTreeSet::new();
+    for max in (200..6000).step_by(100) {
+        let mut req = request_for(ed.doc(), &data);
+        req.max_bytes = max;
+        if let Err(UpdateError::Limit(m)) = super::plan(&req) {
+            messages.insert(m.contains("bytes, the limit is"));
+        }
+    }
+    assert_eq!(messages.len(), 2, "both limits are reached: {messages:?}");
+}
+
+#[test]
+fn the_pairing_and_the_classification_of_objects() {
+    fn tag(handle: &str, part: Option<u32>) -> ImportTag {
+        ImportTag {
+            drawing: "d".into(),
+            revision: "r".into(),
+            handle: Some(handle.into()),
+            kind: "HATCH".into(),
+            hash: hex(1),
+            obj: hex(0),
+            block: None,
+            via: vec![],
+            part,
+        }
+    }
+    let id = |n: u64| ObjectId(kadakas_core::uid::Uid::from_num(n));
+    let old_tags = [tag("A", Some(0)), tag("A", Some(1)), tag("A", Some(2))];
+    let new_tags = [tag("A", Some(0)), tag("A", Some(5))];
+    let old: TagMap = old_tags
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (id(i as u64 + 1), t))
+        .collect();
+    let new: TagMap = new_tags
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (id(i as u64 + 10), t))
+        .collect();
+    // Part 0 pairs by place; part 5 has no partner, but one old object is left: they pair in
+    // order; the last old object goes.
+    let (pairs, gone, fresh) = pair_objects(&old, &new, &[id(1), id(2), id(3)], &[id(10), id(11)]);
+    assert_eq!(pairs.len(), 2);
+    assert!(pairs.contains(&(id(1), id(10))));
+    assert_eq!((gone.len(), fresh.len()), (1, 0));
+    // A changed entity whose objects are all gone is a removal.
+    let (kind, ops) = classify(Status::Changed, &[id(1)], &[], &old, &new);
+    assert_eq!(kind, Kind::Removed);
+    assert_eq!(ops.delete, vec![id(1)]);
+    let (kind, _) = classify(Status::Changed, &[id(1)], &[id(10)], &old, &new);
+    assert_eq!(kind, Kind::Changed);
+    assert_eq!(
+        classify(Status::Added, &[], &[id(10)], &old, &new).0,
+        Kind::Added
+    );
+    assert_eq!(
+        classify(Status::Removed, &[id(1)], &[], &old, &new).0,
+        Kind::Removed
+    );
+    assert_eq!(Take::from(true), Take::All);
+    assert_eq!(Take::from(false), Take::No);
+}
+
+#[test]
+fn edits_are_kept_for_removed_objects_and_locked_layers_of_other_work_are_respected() {
+    let mut ed = editor_with(&base_text());
+    let removed = object_at(ed.doc(), 0x13).unwrap().id;
+    let moved = object_at(ed.doc(), 0x11).unwrap().id;
+    let edit = |ed: &mut Editor, id| {
+        ed.execute(&Command::MoveObjects {
+            ids: vec![id],
+            delta: DVec2::new(0.0, 2.0),
+        })
+        .unwrap();
+    };
+    edit(&mut ed, removed);
+    // The person moves another object to a layer of their own work, which is locked.
+    ed.execute(&Command::AddLayer {
+        name: "Mine".into(),
+        elevation: 0.0,
+        scale: None,
+        kind: None,
+    })
+    .unwrap();
+    let mine = ed
+        .doc()
+        .layers
+        .iter()
+        .find(|l| l.name == "Mine")
+        .unwrap()
+        .id;
+    ed.execute(&Command::ModifyObject {
+        id: moved,
+        shape: None,
+        layer: Some(mine),
+        class: None,
+        attrs: None,
+    })
+    .unwrap();
+    ed.execute(&Command::ModifyLayer {
+        id: mine,
+        name: None,
+        visible: None,
+        locked: Some(true),
+        elevation: None,
+        scale: None,
+    })
+    .unwrap();
+    let plan = make(ed.doc(), &revision_two()).unwrap();
+    // The edited removed object is kept with KeepEdits.
+    let keep = plan
+        .build(ed.doc(), &vec![Take::KeepEdits; plan.changes.len()])
+        .unwrap();
+    assert_eq!(keep.applied.removed, 0);
+    assert!(keep.applied.kept_edits >= 2, "{:?}", keep.applied);
+    // With All, the object on the locked layer of the other work is left alone, and told.
+    let all = plan
+        .build(ed.doc(), &vec![Take::All; plan.changes.len()])
+        .unwrap();
+    assert_eq!(all.applied.skipped_locked, 1, "{:?}", all.applied);
+    assert_eq!(all.applied.removed, 1);
+    assert!(all.notes.iter().any(|n| n.contains("locked layer")));
+    ed.execute(&all.command).unwrap();
+    assert!(ed.doc().objects.contains_key(&moved));
+    assert!(!ed.doc().objects.contains_key(&removed));
+    // The new objects can be read from the plan for a window.
+    let added = &plan
+        .ops(
+            plan.index_of(
+                &plan
+                    .changes
+                    .iter()
+                    .find(|c| c.status == Kind::Added)
+                    .unwrap()
+                    .id,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .add;
+    assert!(plan.new_object(added[0]).is_some());
+    assert!(
+        plan.new_object(ObjectId(kadakas_core::uid::Uid::from_num(9999)))
+            .is_none()
+    );
 }
