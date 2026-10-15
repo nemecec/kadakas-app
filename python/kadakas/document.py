@@ -810,6 +810,52 @@ class Document:
         """Import DXF, Shapefile or GeoJSON as one undo step."""
         return self.api.import_file(path=str(path), **({"options": options} if options else {}))
 
+    def update_from_dxf(self, path: str | Path, *, accept: str | list[str] | None = None,
+                        reject: list[str] | None = None, conflicts: str | None = None,
+                        **params: Any) -> JsonDict:
+        """Update an imported DXF or DWG drawing from a new revision (``import.update``, IOP-23).
+        ``params`` are those of ``import.update`` (``drawing``, ``old``, ``layers``, ``tolerance``,
+        ``limit``, ``options``). Without ``accept`` the document is not changed: the answer lists the
+        changes (``counts``, ``changes``, ``conflicts``) and ``update_id``. With ``accept`` (``"all"``
+        or a list of change IDs) the changes are applied at once as one undo step with a version
+        before and after (``import.apply``); the answer is that of ``import.apply`` plus the
+        ``update`` that was applied. Changes that concern objects the person edited are conflicts:
+        ``"all"`` skips them unless ``conflicts="overwrite"``."""
+        update = self.api.import_update(path=str(path), **params)
+        if accept is None:
+            return update
+        apply: JsonDict = {"update_id": update["update_id"], "accept": accept}
+        if reject:
+            apply["reject"] = reject
+        if conflicts:
+            apply["conflicts"] = conflicts
+        applied = self.api.import_apply(**apply)
+        applied["update"] = update
+        return applied
+
+    def compare_drawings(self, base: str | Path, new: str | Path, *,
+                         render: JsonDict | None = None, **options: Any) -> JsonDict:
+        """Compare two DXF or DWG files without importing them (``dxf.compare``, IOP-24). The answer
+        has ``counts`` and ``changes``. ``render`` ({"format": "png" | "svg" | "pdf",
+        "revision_clouds": bool, ...}) adds ``image`` with the overlay picture; use
+        ``save_compare_image`` to write it. ``options`` are ``tolerance``, ``layers``, ``limit``."""
+        params: JsonDict = {"base": str(base), "new": str(new)}
+        if options:
+            params["options"] = options
+        if render is not None:
+            params["render"] = render
+        return self.api.dxf_compare(**params)
+
+    @staticmethod
+    def save_compare_image(result: JsonDict, path: str | Path) -> None:
+        """Write the overlay picture of ``compare_drawings`` to ``path``."""
+        image = result["image"]
+        if "svg" in image:
+            Path(path).write_text(image["svg"], encoding="utf-8")
+        else:
+            key = "png_base64" if "png_base64" in image else "pdf_base64"
+            Path(path).write_bytes(base64.b64decode(image[key]))
+
     def export_file(self, path: str | Path, **options: Any) -> JsonDict:
         """Export to DXF, GeoJSON (or IFC when the path ends in ``.ifc``)."""
         return self.api.export_file(path=str(path), **({"options": options} if options else {}))

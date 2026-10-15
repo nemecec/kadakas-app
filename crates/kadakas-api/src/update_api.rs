@@ -28,7 +28,7 @@ use kadakas_core::provenance::FileLink;
 use kadakas_io::dwg::{self, RunOptions, Search};
 use kadakas_io::dxf::link::{self, LinkError, ReadOptions};
 use kadakas_io::dxf::revision::Rec;
-use kadakas_io::dxf::update::{self, Built, MAX_NEW_RECS, Plan, UpdateError};
+use kadakas_io::dxf::update::{self, Built, MAX_NEW_RECS, Plan, Take, UpdateError};
 use kadakas_io::{BaseCaps, BaseMode, Format, ImportOptions, Source};
 use kadakas_review::overlay::{Change, CompareOverlay, Status};
 use serde::Deserialize;
@@ -42,7 +42,7 @@ pub(crate) const IMPORT_UPDATE: (&str, &str) = (
 );
 pub(crate) const IMPORT_APPLY: (&str, &str) = (
     "import.apply",
-    "Apply the changes of the last import.update. params: {update_id, accept: \"all\" | [change ids], reject? [change ids], conflicts? (skip, the default, or overwrite: what accept \"all\" does with the changes that concern objects the person edited)}. Saves the version \"Before update to <file>\" (a limit of versions refuses it with the version_limit error and nothing changes), applies the accepted changes as ONE undo step (new objects with tags, changed objects replaced, removed objects deleted; objects of other sources are never touched), moves the layers and the update data to the new revision, and saves \"After update to <file>\". Fails with a conflict error if the document changed since import.update. Returns {applied: {added, replaced, removed, skipped_locked}, accepted, skipped_conflicts, versions: {before, after}, drawing, revision, notes}.",
+    "Apply the changes of the last import.update. params: {update_id, accept: \"all\" | [change ids], reject? [change ids], conflicts? (skip, the default, or overwrite: what accept \"all\" does with the changes that concern objects the person edited)}. Saves the version \"Before update to <file>\" (a limit of versions refuses it with the version_limit error and nothing changes), applies the accepted changes as ONE undo step (new objects with tags, changed objects replaced, removed objects deleted; objects of other sources are never touched), moves the layers and the update data to the new revision, and saves \"After update to <file>\". Fails with a conflict error if the document changed since import.update. Returns {applied: {added, replaced, removed, skipped_locked, kept_edits}, accepted, skipped_conflicts (the conflicts whose edited objects were kept), versions: {before, after}, drawing, revision, notes}.",
 );
 
 /// Most changes that an answer lists.
@@ -60,7 +60,7 @@ pub(crate) fn describe() -> Value {
         "old_side": "The update data of the drawing in the document (the base of the last import), else the linked original file (import option base: link; read from the path on the layer with the path policy of the session, checked against the stored size and SHA-256), else the file given as `old`. If the file is gone or changed, or the drawing was imported with base: none, import.update fails with a conflict error that says so and asks for the old file.",
         "pending": "import.update keeps its plan in the session until the document changes (any edit, undo or load), another import.update replaces it, or import.apply uses it. dry_run keeps nothing. The plan is bounded (limit update_bytes of the session, 256 MiB by default); a file over it fails with a limit error: give `layers`.",
         "apply": "import.apply saves a version before, applies the accepted changes, and saves a version after, all in one undo step: undo takes back the update and both versions. If a limit of versions refuses the version before, the call fails with the version_limit error and nothing changes (pass it to the person, as for version.create). If only the version after is refused, the update is applied and `notes` says so. The changes you reject are not offered again in the next update: the layers and the update data move to the new revision either way.",
-        "conflicts": "accept: \"all\" skips conflicts unless conflicts: \"overwrite\" is given. A conflict that is named in the list of accept is applied: it replaces the edit of the person.",
+        "conflicts": "accept: \"all\" applies a conflict to the objects that the person did not edit and keeps the edited ones as they are (applied.kept_edits counts them, skipped_conflicts names the changes) unless conflicts: \"overwrite\" is given. A conflict that is named in the list of accept is applied to all its objects: it replaces the edit of the person.",
         "never_touched": "Only objects whose tag names this drawing are changed. Objects from other drawings, other importers and the objects the person drew are never touched. Objects on a locked layer that is not a layer of the drawing are left alone (applied.skipped_locked).",
         "base": "The new revision gets update data like the old one: summaries of the entities (auto), or a link to the new file when the drawing was imported with base: link. A new revision that is too big for summaries fails with the choices link and none (see import.file).",
         "limits": "The new file is read with the limits of import.file (max_bytes, import_text_bytes of the session, max_objects). At most 1,000,000 entities of the new file are matched, and the match has the bounds of kadakas_io::dxf::revision (work budget, truncated flag).",
@@ -414,7 +414,7 @@ impl Session {
             return Ok(Some(v));
         }
         let plan = pending.plan;
-        let chosen = vec![true; plan.changes.len()];
+        let chosen = vec![Take::All; plan.changes.len()];
         let built = plan
             .build(self.editor.doc(), &chosen)
             .map_err(update_error)?;
@@ -466,11 +466,16 @@ impl Session {
             plan.index_of(id)
                 .ok_or_else(|| RpcError::invalid_params(format!("no change has the ID {id}")))
         };
-        let mut chosen = vec![false; plan.changes.len()];
+        let mut chosen = vec![Take::No; plan.changes.len()];
         match &accept {
             Value::String(t) if t == "all" => {
                 for (i, c) in plan.changes.iter().enumerate() {
-                    chosen[i] = overwrite || !c.conflict;
+                    // A conflict keeps the objects that the person edited, unless overwrite.
+                    chosen[i] = if c.conflict && !overwrite {
+                        Take::KeepEdits
+                    } else {
+                        Take::All
+                    };
                 }
             }
             Value::Array(list) => {
@@ -478,7 +483,7 @@ impl Session {
                     let id = v.as_str().ok_or_else(|| {
                         RpcError::invalid_params("accept lists change IDs (text)")
                     })?;
-                    chosen[index(id)?] = true;
+                    chosen[index(id)?] = Take::All;
                 }
             }
             _ => {
@@ -488,7 +493,7 @@ impl Session {
             }
         }
         for id in &reject {
-            chosen[index(id)?] = false;
+            chosen[index(id)?] = Take::No;
         }
         let built = plan
             .build(self.editor.doc(), &chosen)
@@ -510,7 +515,7 @@ impl Session {
             .changes
             .iter()
             .zip(&chosen)
-            .filter(|(c, on)| c.conflict && !**on)
+            .filter(|(c, take)| c.conflict && **take != Take::All)
             .map(|(c, _)| &c.id)
             .take(MAX_CONFLICTS_LISTED)
             .collect();
@@ -518,7 +523,7 @@ impl Session {
         notes.extend(between.notes.iter().cloned());
         Ok(json!({
             "applied": built.applied,
-            "accepted": chosen.iter().filter(|c| **c).count(),
+            "accepted": chosen.iter().filter(|c| **c != Take::No).count(),
             "skipped_conflicts": skipped,
             "versions": {"before": between.before, "after": between.after},
             "drawing": plan.drawing,

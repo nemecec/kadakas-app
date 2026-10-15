@@ -985,6 +985,24 @@ impl Planner<'_> {
     }
 }
 
+/// What to do with a change when the command is built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Take {
+    /// Leave the change out.
+    No,
+    /// Apply the change to the objects that the person did not edit, and keep the edited ones as
+    /// they are (what "accept all" does with a conflict).
+    KeepEdits,
+    /// Apply the change to every object, the edited ones too.
+    All,
+}
+
+impl From<bool> for Take {
+    fn from(on: bool) -> Take {
+        if on { Take::All } else { Take::No }
+    }
+}
+
 /// What [`Plan::build`] made.
 pub struct Built {
     /// One command: the apply as one undo step.
@@ -1005,6 +1023,9 @@ pub struct Applied {
     pub removed: usize,
     /// Objects the command leaves alone because their layer is locked (not a layer of the drawing).
     pub skipped_locked: usize,
+    /// Objects the person edited, that a change would have replaced or removed, and that were kept
+    /// (`Take::KeepEdits`).
+    pub kept_edits: usize,
 }
 
 impl Plan {
@@ -1016,7 +1037,7 @@ impl Plan {
     /// source of the layers of the drawing and stores the update data of the new revision. Objects
     /// that did not change keep the revision they came from: that way the update does not show up
     /// in the history of every object, and costs what changed.
-    pub fn build(&self, doc: &Document, chosen: &[bool]) -> Result<Built, UpdateError> {
+    pub fn build(&self, doc: &Document, chosen: &[Take]) -> Result<Built, UpdateError> {
         let mut b = Builder::new(&Context::of(doc), "dxf", usize::MAX);
         let mut notes = Vec::new();
         let mut applied = Applied::default();
@@ -1042,12 +1063,31 @@ impl Plan {
         let mut replace: BTreeMap<ObjectId, ObjectId> = BTreeMap::new();
         let mut delete: BTreeSet<ObjectId> = BTreeSet::new();
         let mut add: BTreeSet<ObjectId> = BTreeSet::new();
+        let edited = |id: &ObjectId| {
+            doc.objects
+                .get(id)
+                .is_some_and(|o| provenance::is_edited(o) == Some(true))
+        };
         for (i, ops) in self.ops.iter().enumerate() {
-            if !chosen.get(i).copied().unwrap_or(false) {
+            let take = chosen.get(i).copied().unwrap_or(Take::No);
+            if take == Take::No {
                 continue;
             }
-            replace.extend(ops.replace.iter().copied());
-            delete.extend(ops.delete.iter().copied());
+            let keep = take == Take::KeepEdits;
+            for (d, n) in &ops.replace {
+                if keep && edited(d) {
+                    applied.kept_edits += 1;
+                } else {
+                    replace.insert(*d, *n);
+                }
+            }
+            for d in &ops.delete {
+                if keep && edited(d) {
+                    applied.kept_edits += 1;
+                } else {
+                    delete.insert(*d);
+                }
+            }
             add.extend(ops.add.iter().copied());
         }
         delete.retain(|d| !replace.contains_key(d));

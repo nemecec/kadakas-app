@@ -229,6 +229,9 @@ fn with_clouds(
     bump: f64,
     annotation: bool,
 ) -> Result<(Document, HashSet<ObjectId>), RpcError> {
+    // The layer has a scale, so that the bump of a cloud (1 to 100 mm on paper) is the size we want.
+    let scale = (bump / 20.0).max(1.0);
+    let bump_paper = bump / scale;
     let mut base = c.all_doc.clone();
     base.objects
         .retain(|id, _| c.new_doc.objects.contains_key(id));
@@ -237,7 +240,7 @@ fn with_clouds(
         .execute(&Command::AddLayer {
             name: "Revision clouds".into(),
             elevation: 0.0,
-            scale: Some(1.0),
+            scale: Some(scale),
             kind: None,
         })
         .map_err(RpcError::from)?
@@ -249,7 +252,7 @@ fn with_clouds(
     for cl in &found.clusters {
         let corners = clouds::corners(cl, pad);
         let shape = if annotation {
-            annot_cloud(&corners, bump, &format!("{} changes", cl.count))
+            annot_cloud(&corners, bump_paper, &format!("{} changes", cl.count))
         } else {
             line_cloud(&corners, bump)
         };

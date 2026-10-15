@@ -87,7 +87,7 @@ fn make_with(
 
 fn apply_all(ed: &mut Editor, plan: &Plan) -> Built {
     let built = plan
-        .build(ed.doc(), &vec![true; plan.changes.len()])
+        .build(ed.doc(), &vec![Take::All; plan.changes.len()])
         .unwrap();
     ed.execute(&built.command).unwrap();
     built
@@ -363,7 +363,7 @@ fn an_edited_object_that_the_revision_changes_is_a_conflict() {
     assert_eq!(edited.len(), 1);
 
     // Everything but the conflicts.
-    let chosen: Vec<bool> = plan.changes.iter().map(|c| !c.conflict).collect();
+    let chosen: Vec<Take> = plan.changes.iter().map(|c| (!c.conflict).into()).collect();
     let built = plan.build(ed.doc(), &chosen).unwrap();
     let mut partial = Editor::new(ed.doc().clone());
     partial.execute(&built.command).unwrap();
@@ -382,7 +382,7 @@ fn an_edited_object_that_the_revision_changes_is_a_conflict() {
 
     // Everything, the conflicts too.
     let built = plan
-        .build(ed.doc(), &vec![true; plan.changes.len()])
+        .build(ed.doc(), &vec![Take::All; plan.changes.len()])
         .unwrap();
     ed.execute(&built.command).unwrap();
     assert!((y_of(ed.doc().objects.get(&id).unwrap()) - 150.0).abs() < 1e-9);
@@ -390,13 +390,64 @@ fn an_edited_object_that_the_revision_changes_is_a_conflict() {
 }
 
 #[test]
+fn a_conflict_can_keep_the_edited_objects_and_update_the_others() {
+    let body = |y: i64| line(0x30, "A", y);
+    let inserts = [
+        insert(0x40, "TREE", 0),
+        insert(0x41, "TREE", 5000),
+        insert(0x42, "TREE", 9000),
+    ]
+    .concat();
+    let mut ed = editor_with(&file("AAAA0001", &block("TREE", 0x20, &body(0)), &inserts));
+    // The person moves one of the three trees.
+    let edited = ed.doc().objects.keys().copied().next().unwrap();
+    ed.execute(&Command::MoveObjects {
+        ids: vec![edited],
+        delta: DVec2::new(0.0, 5.0),
+    })
+    .unwrap();
+    let plan = make(
+        ed.doc(),
+        &file("AAAA0002", &block("TREE", 0x20, &body(70)), &inserts),
+    )
+    .unwrap();
+    assert_eq!(plan.counts.conflicts, 1);
+    assert_eq!(plan.changes[0].objects, 3);
+    let built = plan
+        .build(ed.doc(), &vec![Take::KeepEdits; plan.changes.len()])
+        .unwrap();
+    assert_eq!((built.applied.replaced, built.applied.kept_edits), (2, 1));
+    ed.execute(&built.command).unwrap();
+    let mut ys: Vec<i64> = ed.doc().objects.values().map(|o| y_of(o) as i64).collect();
+    ys.sort();
+    assert_eq!(
+        ys,
+        vec![5, 70, 70],
+        "the edited tree stays where the person put it"
+    );
+    // Take::All replaces the edit as well.
+    let mut again = editor_with(&file("AAAA0001", &block("TREE", 0x20, &body(0)), &inserts));
+    let first = again.doc().objects.keys().copied().next().unwrap();
+    again
+        .execute(&Command::MoveObjects {
+            ids: vec![first],
+            delta: DVec2::new(0.0, 5.0),
+        })
+        .unwrap();
+    let built = plan
+        .build(again.doc(), &vec![Take::All; plan.changes.len()])
+        .unwrap();
+    assert_eq!((built.applied.replaced, built.applied.kept_edits), (3, 0));
+}
+
+#[test]
 fn a_partial_apply_changes_only_the_chosen_changes() {
     let mut ed = editor_with(&base_text());
     let plan = make(ed.doc(), &revision_two()).unwrap();
-    let chosen: Vec<bool> = plan
+    let chosen: Vec<Take> = plan
         .changes
         .iter()
-        .map(|c| c.status == Kind::Added)
+        .map(|c| (c.status == Kind::Added).into())
         .collect();
     let built = plan.build(ed.doc(), &chosen).unwrap();
     ed.execute(&built.command).unwrap();
@@ -411,7 +462,7 @@ fn a_partial_apply_changes_only_the_chosen_changes() {
     // An empty choice only moves the layers and the update data to the new revision.
     let mut ed2 = editor_with(&base_text());
     let built = plan
-        .build(ed2.doc(), &vec![false; plan.changes.len()])
+        .build(ed2.doc(), &vec![Take::No; plan.changes.len()])
         .unwrap();
     ed2.execute(&built.command).unwrap();
     assert_eq!(ed2.doc().objects.len(), 5);

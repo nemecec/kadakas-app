@@ -390,6 +390,7 @@ fn an_object_the_person_edited_is_a_conflict_and_is_kept_unless_accepted() {
     assert_eq!(a["skipped_conflicts"], json!([conflict["id"]]));
     assert_eq!(ys(&s), vec![0, 103, 200, 403, 500]);
     assert_eq!(a["applied"]["replaced"], 1);
+    assert_eq!(a["applied"]["kept_edits"], 1);
 
     // Naming the conflict, or conflicts: overwrite, applies it.
     let mut t = session_with(dir.path(), &base_text(), json!({}));

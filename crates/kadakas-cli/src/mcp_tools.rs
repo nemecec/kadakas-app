@@ -189,14 +189,14 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "review",
-        summary: "Named versions of the document and the diff between them: save a version, list, read, restore (one undo step, the current state is saved first), delete, and compare two versions or a version and the current document (added, removed and changed things by ID, with the changed property paths and old and new values). The visual compare is the `compare` option of render.png, render.svg and sheet.render (domains render_view and sheets): added objects green, changed orange, removed objects as red ghosts, or both sides next to each other; describe.review.compare has the options.",
-        prefixes: &["version"],
+        summary: "Named versions of the document and the diff between them: save a version, list, read, restore (one undo step, the current state is saved first), delete, and compare two versions or a version and the current document (added, removed and changed things by ID, with the changed property paths and old and new values). The visual compare is the `compare` option of render.png, render.svg and sheet.render (domains render_view and sheets): added objects green, changed orange, removed objects as red ghosts, or both sides next to each other; describe.review.compare has the options. dxf.compare compares two DXF or DWG files without importing them: a JSON diff, and an overlay picture (png, svg or pdf) with optional revision clouds (describe.review.dxf_compare).",
+        prefixes: &["version", "dxf"],
         read_only: false,
         open_world: false,
     },
     Domain {
         name: "io",
-        summary: "Import and export files: DXF, DWG (needs a converter), Shapefile, GeoJSON, IFC (IFC2x3, IFC4 and IFC4x3 import, IFC4 export), glTF, GLB, OBJ, and PDF, SVG and PNG of sheets.",
+        summary: "Import and export files: DXF, DWG (needs a converter), Shapefile, GeoJSON, IFC (IFC2x3, IFC4 and IFC4x3 import, IFC4 export), glTF, GLB, OBJ, and PDF, SVG and PNG of sheets. import.update reads a new revision of an imported DXF or DWG drawing and lists what changed (added, removed, changed, conflicts with the edits of the person) without changing the document; import.apply then applies the accepted changes as one undo step with a version before and after (describe.io.update).",
         prefixes: &["import", "export"],
         read_only: false,
         open_world: false,
