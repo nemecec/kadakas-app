@@ -1,8 +1,8 @@
 use std::io::{Cursor, Write};
 
 use kadakas_core::issue::{
-    Comment, CommentId, Issue, IssueData, IssueId, IssueStatus, Issues, ViewSpec, Viewpoint,
-    ViewpointId,
+    Comment, CommentId, Issue, IssueData, IssueId, IssueStatus, Issues, MAX_COMMENTS,
+    MAX_VIEWPOINTS, ViewSpec, Viewpoint, ViewpointId,
 };
 use kadakas_core::model::ObjectId;
 use kadakas_core::picture::sha256_hex;
@@ -916,10 +916,10 @@ fn a_snapshot_name_that_leaves_the_folder_is_not_read() {
 
 #[test]
 fn topics_with_too_many_comments_or_viewpoints_or_bad_content_are_skipped_and_listed() {
-    let many_comments: String = (0..1001)
+    let many_comments: String = (0..=MAX_COMMENTS)
         .map(|n| format!("<Comment Guid=\"{n:08x}-1111-4222-8333-444455556666\"><Date>2020-01-01T00:00:00Z</Date><Author>a</Author><Comment>t</Comment></Comment>"))
         .collect();
-    let many_vps: String = (0..17)
+    let many_vps: String = (0..=MAX_VIEWPOINTS)
         .map(|n| format!("<Viewpoints Guid=\"{n:08x}-1111-4222-8333-444455556666\"/>"))
         .collect();
     let topic =
@@ -955,8 +955,8 @@ fn topics_with_too_many_comments_or_viewpoints_or_bad_content_are_skipped_and_li
         .collect();
     assert_eq!(got.skipped.len(), 8, "{reasons:#?}");
     for needle in [
-        "1001 comments",
-        "17 viewpoints",
+        &format!("{} comments", MAX_COMMENTS + 1),
+        &format!("{} viewpoints", MAX_VIEWPOINTS + 1),
         "not valid",
         "no title",
         "at most",

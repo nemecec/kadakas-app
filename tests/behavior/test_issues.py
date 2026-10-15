@@ -178,7 +178,8 @@ def test_the_mcp_review_tool_has_the_issue_methods():
 def test_describe_has_the_issue_section_with_examples(cad):
     d = cad.result("describe")
     issues = d["review"]["issues"]
-    assert issues["bounds"]["comments_per_issue"] == 1000
+    assert issues["bounds"]["comments_per_issue"] == 5000
+    assert issues["bounds"]["issues"] == 100000 and issues["bounds"]["issues_warning_above"] == 10000
     assert any(e["method"] == "issue.import_bcf" for e in issues["examples"])
     names = {m["name"] for m in d["methods"]}
     assert {"issue.list", "issue.get", "issue.create", "issue.update", "issue.comment", "issue.resolve",
