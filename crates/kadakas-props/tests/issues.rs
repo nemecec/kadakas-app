@@ -74,7 +74,10 @@ fn viewpoints_are_one_property_each_and_come_back_in_order() {
     let r = replica_of(&doc);
     let e = r.alive(target(Kind::Issue, 5)).unwrap();
     let props = e.visible();
-    let keys: Vec<&String> = props.keys().filter(|k| k.starts_with("viewpoints.")).collect();
+    let keys: Vec<&String> = props
+        .keys()
+        .filter(|k| k.starts_with("viewpoints."))
+        .collect();
     assert_eq!(keys.len(), 2, "{props:?}");
     // Back to JSON: the list is sorted by time, then ID.
     let whole = unflatten(Kind::Issue, &props);
@@ -99,7 +102,13 @@ fn a_change_becomes_ops_that_make_the_same_document_on_another_replica() {
     for (n, cmd) in [issue(1), comment(1, 7), issue(2)].iter().enumerate() {
         let before = ed.revision();
         ed.execute(cmd).unwrap();
-        let cs = ed.changes_since(before).changes.last().cloned().unwrap().clone();
+        let cs = ed
+            .changes_since(before)
+            .changes
+            .last()
+            .cloned()
+            .unwrap()
+            .clone();
         let ops = ops_from_change(&other, ed.doc(), &cs);
         assert!(!ops.is_empty(), "step {n}");
         other.apply_all(w(1), &ops);
@@ -112,10 +121,18 @@ fn a_change_becomes_ops_that_make_the_same_document_on_another_replica() {
         id: IssueId::from_num(1),
     })
     .unwrap();
-    let cs = ed.changes_since(before).changes.last().cloned().unwrap().clone();
+    let cs = ed
+        .changes_since(before)
+        .changes
+        .last()
+        .cloned()
+        .unwrap()
+        .clone();
     let ops = ops_from_change(&other, ed.doc(), &cs);
     assert_eq!(
-        ops.iter().filter(|o| matches!(o, Op::Delete { .. })).count(),
+        ops.iter()
+            .filter(|o| matches!(o, Op::Delete { .. }))
+            .count(),
         2
     );
     other.apply_all(w(1), &ops);
@@ -172,7 +189,10 @@ fn bad_issues_and_comments_are_quarantined_and_orphans_wait() {
     }
     assert_eq!(m.doc.issues.len(), 1);
     let kept = m.doc.issues.comment(CommentId::from_num(21)).unwrap();
-    assert_eq!(kept.viewpoint, None, "a view that is gone is dropped, the text stays");
+    assert_eq!(
+        kept.viewpoint, None,
+        "a view that is gone is dropped, the text stays"
+    );
     assert!(m.doc.issues.comment(CommentId::from_num(20)).is_none());
 }
 
@@ -182,16 +202,23 @@ fn a_thread_over_the_bound_is_cut_in_the_build_and_kept_in_the_replica() {
     let mut r = replica_of(ed.doc());
     r.insert_baseline(
         target(Kind::Issue, 1),
-        serde_json::from_value(json!({"title": "T", "type": "issue", "status": "open", "priority": "normal"})).unwrap(),
+        serde_json::from_value(
+            json!({"title": "T", "type": "issue", "status": "open", "priority": "normal"}),
+        )
+        .unwrap(),
     );
     for n in 0..(MAX_COMMENTS as u64 + 3) {
         r.insert_baseline(
             target(Kind::Comment, 100 + n),
-            serde_json::from_value(json!({"issue": IssueId::from_num(1), "text": "t", "time": n})).unwrap(),
+            serde_json::from_value(json!({"issue": IssueId::from_num(1), "text": "t", "time": n}))
+                .unwrap(),
         );
     }
     let m = materialize(&r, &Document::default());
-    assert_eq!(m.doc.issues.comment_count(IssueId::from_num(1)), MAX_COMMENTS);
+    assert_eq!(
+        m.doc.issues.comment_count(IssueId::from_num(1)),
+        MAX_COMMENTS
+    );
     assert_eq!(m.quarantined.len(), 3);
 }
 
@@ -200,7 +227,10 @@ fn validate_entity_checks_issues_and_comments() {
     let id = Uid::from_num(1);
     let ok_issue = json!({"title": "T", "type": "issue", "status": "open", "priority": "normal"});
     let props = |v: Value| v.as_object().unwrap().clone();
-    assert_eq!(validate_entity(Kind::Issue, id, &props(ok_issue.clone())), Ok(()));
+    assert_eq!(
+        validate_entity(Kind::Issue, id, &props(ok_issue.clone())),
+        Ok(())
+    );
     let mut bad = ok_issue.clone();
     bad["status"] = json!("nonsense");
     assert!(validate_entity(Kind::Issue, id, &props(bad)).is_err());
@@ -229,7 +259,10 @@ fn concurrent_edits_of_different_fields_and_comments_all_stay() {
     };
     let comment_op = |n: u64, text: &str| Op::Create {
         target: target(Kind::Comment, n),
-        props: serde_json::from_value(json!({"issue": IssueId::from_num(1), "text": text, "time": n})).unwrap(),
+        props: serde_json::from_value(
+            json!({"issue": IssueId::from_num(1), "text": text, "time": n}),
+        )
+        .unwrap(),
         merge: false,
     };
     // User 1 changes the status and comments; user 2 changes the assignee and comments.
