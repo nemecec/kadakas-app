@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use kadakas_core::model::{Document, Object, ObjectId};
-use kadakas_core::provenance::{self, FileLink};
+use kadakas_core::provenance::FileLink;
 use kadakas_io::dwg::{self, RunOptions, Search};
 use kadakas_io::dxf::link::{self, LinkError, ReadOptions};
 use kadakas_io::dxf::revision::Rec;
@@ -427,17 +427,11 @@ impl Session {
             return Ok(Some(v));
         }
         let plan = pending.plan;
-        // The default choice of the app: every change, the edits of the person kept.
+        // The default choice of the app: every change that does not concern an edit of the person.
         let chosen: Vec<Take> = plan
             .changes
             .iter()
-            .map(|c| {
-                if c.conflict {
-                    Take::KeepEdits
-                } else {
-                    Take::All
-                }
-            })
+            .map(|c| if c.conflict { Take::No } else { Take::All })
             .collect();
         let built = plan
             .build(self.editor.doc(), &chosen)
@@ -591,14 +585,9 @@ fn preview_changes(
 ) -> (Vec<Change>, Vec<Vec<ObjectId>>) {
     let real: HashMap<ObjectId, ObjectId> = built.added.iter().copied().collect();
     let object = |id: &ObjectId| -> Option<Object> { old.objects.get(id).cloned() };
-    // The preview keeps the edits of the person (the default choice): those objects do not change.
-    let kept = |i: usize, id: &ObjectId| {
-        plan.changes[i].conflict
-            && old
-                .objects
-                .get(id)
-                .is_some_and(|o| provenance::is_edited(o) == Some(true))
-    };
+    // The default choice leaves the conflicts out: their objects stay as they are, so they have no
+    // mark on the plan (the list of the window still shows them, and a click finds the objects).
+    let kept = |i: usize, _: &ObjectId| plan.changes[i].conflict;
     let mut changes = Vec::new();
     let mut objects = Vec::with_capacity(plan.changes.len());
     for i in 0..plan.changes.len() {

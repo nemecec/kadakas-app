@@ -709,10 +709,17 @@ impl UpdateUi {
         };
         let mut ids: Vec<&String> = self.accepted.iter().collect();
         ids.sort();
-        match session.handle(
-            "import.apply",
-            json!({"update_id": pending.id, "accept": ids}),
-        ) {
+        // A conflict is ticked on purpose, with the hint on screen: it replaces the edit.
+        let overwrite = pending
+            .plan
+            .changes
+            .iter()
+            .any(|c| c.conflict && self.accepted.contains(&c.id));
+        let mut params = json!({"update_id": pending.id, "accept": ids});
+        if overwrite {
+            params["conflicts"] = json!("overwrite");
+        }
+        match session.handle("import.apply", params) {
             Ok(r) => {
                 let a = &r["applied"];
                 let text = tr!(
@@ -976,6 +983,57 @@ mod tests {
         // Pressing Apply now applies the other changes.
         ui.apply(&mut f.session, &mut status);
         assert!(ui.done.is_some(), "{status}");
+    }
+
+    #[test]
+    fn a_ticked_conflict_replaces_the_edit_as_the_hint_says() {
+        let mut f = fixture(json!({}));
+        let id = f
+            .session
+            .editor
+            .doc()
+            .objects
+            .values()
+            .find(|o| {
+                kadakas_core::provenance::tag(&o.data)
+                    .and_then(|t| t.handle)
+                    .as_deref()
+                    == Some("11")
+            })
+            .unwrap()
+            .id;
+        f.session
+            .editor
+            .execute(&Command::MoveObjects {
+                ids: vec![id],
+                delta: glam::DVec2::new(0.0, 7.0),
+            })
+            .unwrap();
+        let mut ui = UpdateUi::new();
+        let mut status = String::new();
+        ui.begin(&mut f.session, f.new.clone());
+        let conflict = ui
+            .plan
+            .as_ref()
+            .unwrap()
+            .plan
+            .changes
+            .iter()
+            .find(|c| c.conflict)
+            .unwrap()
+            .id
+            .clone();
+        // The conflict is not ticked, and the plan shows no mark for it.
+        assert!(!ui.accepted.contains(&conflict));
+        // The person ticks it on purpose: the edit is replaced.
+        ui.accepted.insert(conflict);
+        ui.apply(&mut f.session, &mut status);
+        assert!(ui.done.is_some(), "{status}");
+        let y = match &f.session.editor.doc().objects[&id].shape {
+            kadakas_core::model::Shape::Line { a, .. } => a.y,
+            other => panic!("{other:?}"),
+        };
+        assert!((y - 150.0).abs() < 1e-9, "{y}");
     }
 
     #[test]

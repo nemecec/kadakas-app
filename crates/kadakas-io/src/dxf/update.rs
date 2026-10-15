@@ -394,21 +394,36 @@ fn twins(recs: &[Rec]) -> Vec<(usize, usize)> {
     rank
 }
 
-/// The share of `(rank, of)` among identical records of the objects that all of them find.
-fn share(objs: Vec<ObjectId>, (rank, of): (usize, usize)) -> Vec<ObjectId> {
+/// The share of `(rank, of)` among identical records of the objects that all of them find. The
+/// objects are grouped by their place (the INSERTs on the way, the part) first, so that each
+/// record takes its own object of each instance of a block.
+fn share(objs: Vec<ObjectId>, (rank, of): (usize, usize), tags: &TagMap<'_>) -> Vec<ObjectId> {
     if of <= 1 {
         return objs;
     }
-    let each = objs.len() / of;
-    if each == 0 {
-        return objs.get(rank).copied().into_iter().collect();
+    let mut groups: BTreeMap<Option<Place>, Vec<ObjectId>> = BTreeMap::new();
+    for id in objs {
+        groups
+            .entry(tags.get(&id).map(|t| place(t)))
+            .or_default()
+            .push(id);
     }
-    let end = if rank + 1 == of {
-        objs.len()
-    } else {
-        (rank + 1) * each
-    };
-    objs[rank * each..end].to_vec()
+    let mut out = Vec::new();
+    for group in groups.into_values() {
+        let each = group.len() / of;
+        if each == 0 {
+            out.extend(group.get(rank).copied());
+            continue;
+        }
+        let end = if rank + 1 == of {
+            group.len()
+        } else {
+            (rank + 1) * each
+        };
+        out.extend_from_slice(&group[rank * each..end]);
+    }
+    out.sort_by_key(|o| o.0);
+    out
 }
 
 /// True if two tags name the same entity in the same place of the file (the revision, the state
@@ -572,7 +587,7 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
         .any(|n| n.contains("stopped at the object limit"))
     {
         return Err(UpdateError::Limit(
-            "the new file makes more objects than the limit of objects allows, so the update would miss changes: limit it to some DXF layers with `layers`, or raise max_objects".into(),
+            "the new file makes more objects than the limit of objects allows, so the update would miss changes. The whole file is read whatever `layers` says: raise max_objects".into(),
         ));
     }
     for n in &imported.report.notes {
@@ -587,6 +602,11 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
     let wanted: BTreeSet<String> = req.layers.iter().map(|l| lower(l)).collect();
     let on_layer = |r: &Rec| wanted.is_empty() || wanted.contains(&lower(&r.layer));
     let link_mode = sources.iter().any(|(_, s)| s.link.is_some());
+    if req.base_given && req.options.base == BaseMode::Off && !wanted.is_empty() {
+        return Err(UpdateError::NewFile(
+            "base \"none\" cannot be used with `layers`: the layers that are not updated need their update data. Update all layers, or leave base out".into(),
+        ));
+    }
     let mode = if req.base_given {
         req.options.base
     } else if link_mode && req.new_link.is_some() {
@@ -615,7 +635,7 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
                 // A filtered update moves only the layers it names: the update data keeps the
                 // old entities of the other layers, so a later update offers their changes.
                 if mode == BaseMode::Link {
-                    notes.push("an update of some layers keeps update data in the document, not a link: the other layers are still at the old revision".into());
+                    notes.push("an update of some layers keeps update data in the document, not a link (a link cannot be kept for some layers only): the other layers are still at the old revision".into());
                 }
                 let mut recs: Vec<Rec> = Vec::new();
                 for e in &diff.entries {
@@ -627,7 +647,16 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
                 }
                 import::summary_plan(recs, &t, caps.0, caps.1)
             }
-            .map_err(UpdateError::Base)?;
+            .map_err(|e| match e {
+                // A link cannot be kept for some layers only: the question about a link would
+                // come back, so the answer is the way out.
+                IoError::BaseChoice { .. } if !wanted.is_empty() && mode == BaseMode::Link => {
+                    UpdateError::NewFile(
+                        "the update data of this drawing is too big to keep for an update of some layers, and a link cannot be kept for some layers only. Update all layers at once (without `layers`) to keep a link".into(),
+                    )
+                }
+                e => UpdateError::Base(e),
+            })?;
             NewBase::Plan(plan)
         }
     };
@@ -677,10 +706,16 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
     let mut seen_ids: HashMap<String, u32> = HashMap::new();
     let mut refresh: Vec<(ObjectId, ImportTag)> = Vec::new();
     let (old_twins, new_twins) = (twins(&old), twins(&new));
+    let centers = |new_side: bool, id: ObjectId| {
+        let d = if new_side { scratch } else { doc };
+        d.objects.get(&id).and_then(|o| center_of(&o.shape))
+    };
     for e in &diff.entries {
         let (b, n) = (e.base.map(|i| &old[i]), e.new.map(|i| &new[i]));
-        let old_objects = |r: &Rec, i: usize| share(old_index.objects_of(r), old_twins[i]);
-        let new_objects = |r: &Rec, i: usize| share(new_index.objects_of(r), new_twins[i]);
+        let old_objects =
+            |r: &Rec, i: usize, t: &TagMap<'_>| share(old_index.objects_of(r), old_twins[i], t);
+        let new_objects =
+            |r: &Rec, i: usize, t: &TagMap<'_>| share(new_index.objects_of(r), new_twins[i], t);
         let rec = n.or(b).expect("an entry has a side");
         if e.status == Status::Unchanged {
             if on_layer(rec) {
@@ -693,11 +728,12 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
                     && b.scope != PAPER
                 {
                     let (o, w) = (
-                        old_objects(b, e.base.expect("a side")),
-                        new_objects(n, e.new.expect("a side")),
+                        old_objects(b, e.base.expect("a side"), &st.tag_of_old),
+                        new_objects(n, e.new.expect("a side"), &st.tag_of_new),
                     );
                     if !o.is_empty() && !w.is_empty() {
-                        let (pairs, _, _) = pair_objects(&st.tag_of_old, &st.tag_of_new, &o, &w);
+                        let (pairs, _, _) =
+                            pair_objects(&st.tag_of_old, &st.tag_of_new, &o, &w, &centers);
                         for (d, nw) in pairs {
                             let (ot, nt) = (st.tag_of_old[&d], st.tag_of_new[&nw]);
                             if !same_identity(ot, nt) {
@@ -713,11 +749,11 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
             continue;
         }
         let old_objs = match (b, e.base) {
-            (Some(r), Some(i)) => old_objects(r, i),
+            (Some(r), Some(i)) => old_objects(r, i, &st.tag_of_old),
             _ => Vec::new(),
         };
         let new_objs = match (n, e.new) {
-            (Some(r), Some(i)) => new_objects(r, i),
+            (Some(r), Some(i)) => new_objects(r, i, &st.tag_of_new),
             _ => Vec::new(),
         };
         let (status, ops) = classify(
@@ -726,6 +762,7 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
             &new_objs,
             &st.tag_of_old,
             &st.tag_of_new,
+            &centers,
         );
         let nothing = ops.replace.is_empty() && ops.delete.is_empty() && ops.add.is_empty();
         if nothing {
@@ -920,13 +957,41 @@ fn place(t: &ImportTag) -> Place {
 /// The objects of a document, by ID, with their tags.
 pub(super) type TagMap<'a> = HashMap<ObjectId, &'a ImportTag>;
 
+/// Where an object is: the middle of its box. `true` asks about the new side.
+pub(super) type Centers<'a> = &'a dyn Fn(bool, ObjectId) -> Option<[f64; 2]>;
+
+/// The middle of the box of a shape, if it has a finite one.
+pub(super) fn center_of(shape: &Shape) -> Option<[f64; 2]> {
+    let (a, b) = shape.bounds();
+    (a.is_finite() && b.is_finite()).then(|| [(a.x + b.x) / 2.0, (a.y + b.y) / 2.0])
+}
+
+/// The place of an object without the handles, which another program renumbers: the name of the
+/// block, the INSERTs on the way by their content (position, scale, rotation) and copy, the part.
+type Content = (Option<String>, Vec<(String, Option<u32>)>, Option<u32>);
+
+fn content_place(t: &ImportTag) -> Content {
+    (
+        t.block.as_ref().map(|b| b.name.clone()),
+        t.via.iter().map(|v| (v.hash.clone(), v.copy)).collect(),
+        t.part,
+    )
+}
+
+/// Most pairs of leftovers that are compared by distance.
+const NEAREST_WORK: usize = 4_000_000;
+
 /// Pairs the objects of the old side with the new ones by their place in the file. What is left
-/// over on both sides is paired in order, and the rest goes (old) or comes (new).
+/// over is paired by the content of the INSERTs on the way (the handles may be new), then by the
+/// nearest position, and objects that are not reached through an INSERT by their order. The rest
+/// goes (old) or comes (new). An object is never paired with another instance of a block by the
+/// order of its ID.
 pub(super) fn pair_objects(
     tag_of_old: &TagMap<'_>,
     tag_of_new: &TagMap<'_>,
     old: &[ObjectId],
     new: &[ObjectId],
+    centers: Centers<'_>,
 ) -> (Vec<(ObjectId, ObjectId)>, Vec<ObjectId>, Vec<ObjectId>) {
     let mut by_place: BTreeMap<Place, Vec<ObjectId>> = BTreeMap::new();
     for id in new {
@@ -951,13 +1016,69 @@ pub(super) fn pair_objects(
     }
     let mut fresh: Vec<ObjectId> = by_place.into_values().flatten().collect();
     fresh.sort_by_key(|o| o.0);
-    // What is left on both sides: the same entity, with another place.
-    let k = gone.len().min(fresh.len());
-    for i in 0..k {
-        pairs.push((gone[i], fresh[i]));
+    // The same content of the INSERTs, whatever their handles.
+    let mut by_content: BTreeMap<Content, Vec<ObjectId>> = BTreeMap::new();
+    for id in &fresh {
+        if let Some(t) = tag_of_new.get(id) {
+            by_content.entry(content_place(t)).or_default().push(*id);
+        }
     }
-    gone.drain(..k);
-    fresh.drain(..k);
+    for v in by_content.values_mut() {
+        v.reverse();
+    }
+    let mut still_gone = Vec::new();
+    let mut taken: BTreeSet<ObjectId> = BTreeSet::new();
+    for id in gone {
+        let hit = tag_of_old
+            .get(&id)
+            .and_then(|t| by_content.get_mut(&content_place(t)))
+            .and_then(Vec::pop);
+        match hit {
+            Some(n) => {
+                taken.insert(n);
+                pairs.push((id, n));
+            }
+            None => still_gone.push(id),
+        }
+    }
+    fresh.retain(|f| !taken.contains(f));
+    // Objects with no INSERT on the way (the same entity with another part) are paired in order.
+    let mut left_old = Vec::new();
+    for id in still_gone {
+        let plain = tag_of_old.get(&id).is_some_and(|t| t.via.is_empty());
+        let mate = plain
+            .then(|| {
+                fresh
+                    .iter()
+                    .position(|f| tag_of_new.get(f).is_some_and(|t| t.via.is_empty()))
+            })
+            .flatten();
+        match mate {
+            Some(i) => pairs.push((id, fresh.remove(i))),
+            None => left_old.push(id),
+        }
+    }
+    // The rest by the nearest position, when the work is bounded.
+    if left_old.len().saturating_mul(fresh.len()) > NEAREST_WORK {
+        return (pairs, left_old, fresh);
+    }
+    let mut gone = Vec::new();
+    for id in left_old {
+        let best = centers(false, id).and_then(|c| {
+            fresh
+                .iter()
+                .enumerate()
+                .filter_map(|(i, f)| {
+                    let q = centers(true, *f)?;
+                    Some((i, (q[0] - c[0]).hypot(q[1] - c[1])))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+        });
+        match best {
+            Some((i, _)) => pairs.push((id, fresh.remove(i))),
+            None => gone.push(id),
+        }
+    }
     (pairs, gone, fresh)
 }
 
@@ -968,6 +1089,7 @@ pub(super) fn classify(
     new_objs: &[ObjectId],
     tag_of_old: &TagMap<'_>,
     tag_of_new: &TagMap<'_>,
+    centers: Centers<'_>,
 ) -> (Kind, Ops) {
     let mut ops = Ops::default();
     let mut kind = match status {
@@ -979,7 +1101,8 @@ pub(super) fn classify(
         Kind::Added => ops.add = new_objs.to_vec(),
         Kind::Removed => ops.delete = old_objs.to_vec(),
         Kind::Changed => {
-            let (pairs, gone, fresh) = pair_objects(tag_of_old, tag_of_new, old_objs, new_objs);
+            let (pairs, gone, fresh) =
+                pair_objects(tag_of_old, tag_of_new, old_objs, new_objs, centers);
             ops.replace = pairs;
             ops.delete = gone;
             ops.add = fresh;

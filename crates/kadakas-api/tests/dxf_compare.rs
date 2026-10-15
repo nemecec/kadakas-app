@@ -401,3 +401,17 @@ fn the_picture_size_follows_the_limits_of_the_session() {
     );
     assert!(w * h <= 10_000, "{w}x{h}");
 }
+
+#[test]
+fn a_comparison_over_the_object_limit_is_refused_not_cut() {
+    let dir = temp("kadakas-compare-limit");
+    let (base, new) = files(dir.path());
+    let mut s = Session::with_sequential_ids();
+    s.set_limits(kadakas_api::SessionLimits {
+        max_objects: 2,
+        ..kadakas_api::SessionLimits::default()
+    });
+    let e = fail(&mut s, json!({"base": base, "new": new}));
+    assert_eq!(e.kind, "limit", "{e:?}");
+    assert!(e.message.contains("max_objects"), "{}", e.message);
+}

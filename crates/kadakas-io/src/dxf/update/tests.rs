@@ -915,22 +915,30 @@ fn the_pairing_and_the_classification_of_objects() {
         .collect();
     // Part 0 pairs by place; part 5 has no partner, but one old object is left: they pair in
     // order; the last old object goes.
-    let (pairs, gone, fresh) = pair_objects(&old, &new, &[id(1), id(2), id(3)], &[id(10), id(11)]);
+    let (pairs, gone, fresh) = pair_objects(
+        &old,
+        &new,
+        &[id(1), id(2), id(3)],
+        &[id(10), id(11)],
+        &|_, _| None,
+    );
     assert_eq!(pairs.len(), 2);
     assert!(pairs.contains(&(id(1), id(10))));
     assert_eq!((gone.len(), fresh.len()), (1, 0));
     // A changed entity whose objects are all gone is a removal.
-    let (kind, ops) = classify(Status::Changed, &[id(1)], &[], &old, &new);
+    let (kind, ops) = classify(Status::Changed, &[id(1)], &[], &old, &new, &|_, _| None);
     assert_eq!(kind, Kind::Removed);
     assert_eq!(ops.delete, vec![id(1)]);
-    let (kind, _) = classify(Status::Changed, &[id(1)], &[id(10)], &old, &new);
+    let (kind, _) = classify(Status::Changed, &[id(1)], &[id(10)], &old, &new, &|_, _| {
+        None
+    });
     assert_eq!(kind, Kind::Changed);
     assert_eq!(
-        classify(Status::Added, &[], &[id(10)], &old, &new).0,
+        classify(Status::Added, &[], &[id(10)], &old, &new, &|_, _| None).0,
         Kind::Added
     );
     assert_eq!(
-        classify(Status::Removed, &[id(1)], &[], &old, &new).0,
+        classify(Status::Removed, &[id(1)], &[], &old, &new, &|_, _| None).0,
         Kind::Removed
     );
     assert_eq!(Take::from(true), Take::All);
@@ -1347,5 +1355,146 @@ fn edits_are_kept_when_a_change_brings_more_or_fewer_objects() {
     assert_eq!(built.applied.added, 0);
     ed.execute(&built.command).unwrap();
     assert!(ed.doc().objects.contains_key(&edited));
-    assert!(ed.doc().objects.len() >= 2);
+    assert_eq!(ed.doc().objects.len(), 2);
+}
+
+fn xs(doc: &Document) -> Vec<i64> {
+    let mut v: Vec<i64> = doc
+        .objects
+        .values()
+        .map(|o| match &o.shape {
+            Shape::Line { a, .. } => a.x as i64,
+            other => panic!("not a line: {other:?}"),
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+fn trees(version: &str, y: i64, inserts: &[(u32, i64)]) -> String {
+    file(
+        version,
+        &block("TREE", 0x20, &line(0x30, "A", y)),
+        &inserts
+            .iter()
+            .map(|(h, x)| insert(*h, "TREE", *x))
+            .collect::<String>(),
+    )
+}
+
+#[test]
+fn renumbered_and_reordered_instances_keep_their_own_objects() {
+    let mut ed = editor_with(&trees("AAAA0001", 0, &[(0x40, 0), (0x41, 5000)]));
+    assert_eq!(xs(ed.doc()), vec![0, 5000]);
+    // Another program writes the INSERTs again: new handles, the other order. Nothing moved.
+    let v2 = trees("AAAA0002", 0, &[(0x51, 5000), (0x50, 0)]);
+    let plan = make(ed.doc(), &v2).unwrap();
+    assert!(plan.changes.is_empty(), "{:?}", plan.changes);
+    apply_all(&mut ed, &plan);
+    // The instance at 5000 moves: the object at 5000 moves, not the one at 0.
+    let v3 = trees("AAAA0003", 0, &[(0x51, 5200), (0x50, 0)]);
+    let plan3 = make(ed.doc(), &v3).unwrap();
+    assert_eq!(plan3.changes.len(), 1, "{:?}", plan3.changes);
+    apply_all(&mut ed, &plan3);
+    assert_eq!(xs(ed.doc()), vec![0, 5200]);
+    // And the instance at 0 moves.
+    let v4 = trees("AAAA0004", 0, &[(0x51, 5200), (0x50, -200)]);
+    let plan4 = make(ed.doc(), &v4).unwrap();
+    assert_eq!(plan4.changes.len(), 1, "{:?}", plan4.changes);
+    apply_all(&mut ed, &plan4);
+    assert_eq!(xs(ed.doc()), vec![-200, 5200]);
+}
+
+#[test]
+fn a_changed_block_entity_with_kept_edits_survives_renumbered_instances() {
+    let mut ed = editor_with(&trees("AAAA0001", 0, &[(0x40, 0), (0x41, 5000)]));
+    // The person moves the instance at 0.
+    let edited = *ed
+        .doc()
+        .objects
+        .values()
+        .find(|o| matches!(&o.shape, Shape::Line { a, .. } if a.x == 0.0))
+        .map(|o| &o.id)
+        .unwrap();
+    ed.execute(&Command::MoveObjects {
+        ids: vec![edited],
+        delta: DVec2::new(0.0, 5.0),
+    })
+    .unwrap();
+    // The block entity changes, the INSERTs are renumbered and reordered.
+    let v2 = trees("AAAA0002", 70, &[(0x51, 5000), (0x50, 0)]);
+    let plan = make(ed.doc(), &v2).unwrap();
+    assert_eq!(plan.counts.conflicts, 1);
+    let built = plan
+        .build(ed.doc(), &vec![Take::KeepEdits; plan.changes.len()])
+        .unwrap();
+    assert_eq!((built.applied.replaced, built.applied.kept_edits), (1, 1));
+    ed.execute(&built.command).unwrap();
+    assert_eq!(ys(ed.doc()), vec![5, 70]);
+    // The next revision moves the instance at 5000: that object moves, the kept one does not.
+    let v3 = trees("AAAA0003", 70, &[(0x51, 5100), (0x50, 0)]);
+    let plan3 = make(ed.doc(), &v3).unwrap();
+    assert_eq!(plan3.counts.conflicts, 0, "{:?}", plan3.changes);
+    apply_all(&mut ed, &plan3);
+    assert_eq!(xs(ed.doc()), vec![0, 5100]);
+    assert_eq!(ys(ed.doc()), vec![5, 70]);
+}
+
+#[test]
+fn twins_in_a_block_of_two_instances_lose_one_line_each() {
+    let two = |version: &str, lines: usize| {
+        file(
+            version,
+            &block("TREE", 0x20, &line_nh("A", 0).repeat(lines)),
+            &[insert(0x40, "TREE", 0), insert(0x41, "TREE", 5000)].concat(),
+        )
+    };
+    let mut ed = editor_with(&two("AAAA0001", 2));
+    assert_eq!(ed.doc().objects.len(), 4);
+    let plan = make(ed.doc(), &two("AAAA0002", 1)).unwrap();
+    apply_all(&mut ed, &plan);
+    assert_eq!(
+        xs(ed.doc()),
+        vec![0, 5000],
+        "one line of each instance is left"
+    );
+}
+
+#[test]
+fn a_filtered_update_checks_the_cap_of_the_update_data() {
+    let layers = ["A".to_string()];
+    let ed = editor_with(&base_text());
+    let small = ImportOptions {
+        base_caps: crate::BaseCaps::with_records(3),
+        ..ImportOptions::default()
+    };
+    let data = revision_two();
+    let mut req = request_for(ed.doc(), &data);
+    req.layers = &layers;
+    req.options = &small;
+    let err = super::plan(&req).err().unwrap();
+    assert!(
+        matches!(&err, UpdateError::Base(IoError::BaseChoice { .. })),
+        "{err}"
+    );
+    // A link cannot be kept for some layers only: the way out is told, and the question does not
+    // come back.
+    req.base_given = true;
+    let link = ImportOptions {
+        base: BaseMode::Link,
+        ..small.clone()
+    };
+    req.options = &link;
+    req.new_link = Some(FileLink::of_bytes("/data/plan_rev2.dxf", data.as_bytes()));
+    let err = super::plan(&req).err().unwrap();
+    assert!(matches!(err, UpdateError::NewFile(_)), "{err}");
+    assert!(err.to_string().contains("all layers"), "{err}");
+    // No update data is refused together with layers.
+    let none = ImportOptions {
+        base: BaseMode::Off,
+        ..ImportOptions::default()
+    };
+    req.options = &none;
+    let err = super::plan(&req).err().unwrap();
+    assert!(err.to_string().contains("cannot be used with"), "{err}");
 }

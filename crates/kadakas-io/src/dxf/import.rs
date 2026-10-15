@@ -286,6 +286,12 @@ pub(super) fn summary_plan(
     scale: f64,
 ) -> Result<BasePlan, IoError> {
     {
+        if recs.len() > caps.records {
+            return Err(IoError::BaseChoice {
+                entities: recs.len(),
+                limit: crate::BaseLimit::TooMany { cap: caps.records },
+            });
+        }
         recs.iter_mut().for_each(revision::Rec::compact);
         // Split into parts of about `part_bytes`, so that each part is a blob of the
         // collaboration that fits in a frame.

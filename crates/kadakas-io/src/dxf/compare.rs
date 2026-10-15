@@ -79,8 +79,19 @@ fn scratch(
     opts: &ImportOptions,
     side: &str,
 ) -> Result<crate::ImportResult, UpdateError> {
-    import::import_parsed(name, dxf, ctx, opts, None)
-        .map_err(|e| UpdateError::NewFile(format!("the {side} file could not be read: {e}")))
+    let r = import::import_parsed(name, dxf, ctx, opts, None)
+        .map_err(|e| UpdateError::NewFile(format!("the {side} file could not be read: {e}")))?;
+    // A comparison that stops at the limit of objects would miss changes: it is refused.
+    if r.report
+        .notes
+        .iter()
+        .any(|n| n.contains("stopped at the object limit"))
+    {
+        return Err(UpdateError::Limit(format!(
+            "the {side} file makes more objects than the limit of objects allows, so the comparison would miss changes: raise max_objects"
+        )));
+    }
+    Ok(r)
 }
 
 /// Compares two files. See the module text.
@@ -207,6 +218,12 @@ pub fn compare(req: &Request<'_>) -> Result<Compared, UpdateError> {
     let wanted: HashSet<String> = req.layers.iter().map(|l| l.to_lowercase()).collect();
     let on_layer = |r: &Rec| wanted.is_empty() || wanted.contains(&r.layer.to_lowercase());
 
+    let centers = |_: bool, id: ObjectId| {
+        all_doc
+            .objects
+            .get(&id)
+            .and_then(|o| super::update::center_of(&o.shape))
+    };
     let mut counts = Counts::default();
     let mut items = Vec::new();
     let mut changes = Vec::new();
@@ -226,7 +243,14 @@ pub fn compare(req: &Request<'_>) -> Result<Compared, UpdateError> {
         }
         let old_objs = b.map_or_else(Vec::new, |r| old_index.objects_of(r));
         let new_objs = n.map_or_else(Vec::new, |r| new_index.objects_of(r));
-        let (status, ops) = classify(e.status, &old_objs, &new_objs, &tag_of_old, &tag_of_new);
+        let (status, ops) = classify(
+            e.status,
+            &old_objs,
+            &new_objs,
+            &tag_of_old,
+            &tag_of_new,
+            &centers,
+        );
         if ops.replace.is_empty() && ops.delete.is_empty() && ops.add.is_empty() {
             counts.ignored += 1;
             continue;
