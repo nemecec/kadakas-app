@@ -142,8 +142,12 @@ fn a_container_with_versions_saves_and_reads_again_with_no_notes() {
         "execute",
         json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [7, 7], "radius": 2}}}),
     );
+    let spec = files::SaveSpec {
+        anchor: s.needs_anchor(),
+        ..files::SaveSpec::container()
+    };
     let doc = s.document_for_save_in(true).unwrap().into_owned();
-    files::write_document(&out, &doc, &files::SaveSpec::container()).unwrap();
+    files::write_document(&out, &doc, &spec).unwrap();
     let mut back = Session::with_document(
         files::open_document(&out, u64::MAX, ReadMode::Lazy)
             .unwrap()

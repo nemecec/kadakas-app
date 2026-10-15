@@ -808,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn a_file_that_changed_on_disk_is_a_conflict_and_the_save_does_not_touch_it() {
+    fn a_file_that_changed_on_disk_is_found_by_content_in_the_bak() {
         let dir = tmp("changed");
         let mut a = restricted(&dir);
         add_picture(&mut a, 30_000);
@@ -817,31 +817,117 @@ mod tests {
         let mut b = restricted(&dir);
         call(&mut b, "file.open", &f);
         std::thread::sleep(std::time::Duration::from_millis(30));
+        // Another program saves over the file; its save keeps the old file as the .bak.
         let mut other = restricted(&dir);
         add_circle(&mut other);
         call(&mut other, "file.save", &f);
+        assert!(dir.join("a.kad.bak").exists());
+        // The picture of the document is not in the file now, but it is in the .bak: it is found
+        // by its hash, and the document can be read and saved.
+        assert!(b.handle("document.get", json!({})).is_ok());
+        add_circle(&mut b);
+        let r = call(&mut b, "file.save", &f);
+        assert_eq!(r["result"]["ok"], true, "{r}");
+        let mut c = restricted(&dir);
+        call(&mut c, "file.open", &f);
+        assert_eq!(c.editor.doc().objects.len(), b.editor.doc().objects.len());
+    }
+
+    #[test]
+    fn a_file_with_the_parts_gone_is_saved_only_with_the_consent_of_the_person() {
+        let dir = tmp("gone");
+        let mut a = restricted(&dir);
+        add_picture(&mut a, 30_000);
+        let f = dir.join("a.kad");
+        call(&mut a, "file.save", &f);
+        let mut b = restricted(&dir);
+        call(&mut b, "file.open", &f);
+        add_circle(&mut b);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        // The file is replaced by another document, and there is no .bak.
+        let mut other = restricted(&dir);
+        add_circle(&mut other);
+        let elsewhere = dir.join("other.kad");
+        call(&mut other, "file.save", &elsewhere);
+        std::fs::rename(&elsewhere, &f).unwrap();
+        assert!(!dir.join("a.kad.bak").exists());
         let other_bytes = std::fs::read(&f).unwrap();
+        // The document cannot be given out: a picture is read from the file now.
+        let e = b.handle("document.get", json!({})).unwrap_err();
+        assert!(e.message.contains("changed on disk"), "{}", e.message);
+        // A save says what is missing and asks the person; nothing is written.
         let r = call(&mut b, "file.save", &f);
         assert_eq!(r["error"]["code"], 5, "{r}");
-        assert!(
-            r["error"]["message"]
-                .as_str()
+        assert_eq!(r["error"]["data"]["ask_the_person"], true, "{r}");
+        assert_eq!(
+            r["error"]["data"]["missing"]["pictures"]
+                .as_array()
                 .unwrap()
-                .contains("changed on disk"),
+                .len(),
+            1,
             "{r}"
         );
         assert_eq!(std::fs::read(&f).unwrap(), other_bytes);
-        // The document cannot be given out either: a picture is read from the file now.
-        let e = b.handle("document.get", json!({})).unwrap_err();
-        assert!(e.message.contains("changed on disk"), "{}", e.message);
-        assert_eq!(
-            names(&dir),
-            ["a.kad", "a.kad.bak"]
-                .map(String::from)
-                .into_iter()
-                .filter(|n| dir.join(n).exists())
-                .collect::<Vec<_>>()
-        );
-        assert!(!names(&dir).iter().any(|n| n.contains(".tmp")));
+        let g = dir.join("elsewhere.kad");
+        let r = call(&mut b, "file.save", &g);
+        assert_eq!(r["error"]["code"], 5, "{r}");
+        assert!(!g.exists());
+        // With the consent the picture becomes a placeholder, and the rest is saved.
+        let req = json!({"jsonrpc":"2.0","id":1,"method":"file.save",
+            "params":{"path": f, "allow_missing": true}});
+        let r: Value = serde_json::from_str(&handle_file_request(&mut b, &req)).unwrap();
+        assert_eq!(r["result"]["ok"], true, "{r}");
+        let notes = r["result"]["notes"].to_string();
+        assert!(notes.contains("placeholder"), "{r}");
+        let mut c = restricted(&dir);
+        call(&mut c, "file.open", &f);
+        let placeholder = kadakas_core::underlay::placeholder_png();
+        let pngs: Vec<Vec<u8>> = c
+            .editor
+            .doc()
+            .objects
+            .values()
+            .filter_map(|o| match &o.shape {
+                Shape::Underlay(u) => Some((*u.png.bytes().unwrap()).clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pngs, [placeholder.clone()]);
+        // The session refers to the placeholder now: the next save is whole, without a question.
+        assert_eq!(b.editor.doc().unreadable_pictures().len(), 0);
+        assert!(b.handle("document.get", json!({})).is_ok());
+        let r = call(&mut b, "file.save", &f);
+        assert_eq!(r["result"]["ok"], true, "{r}");
+        assert!(r["result"].get("notes").is_none(), "{r}");
+    }
+
+    #[test]
+    fn a_file_save_returns_its_notes() {
+        // A source that cannot be opened again after the save is a note of the save.
+        let dir = tmp("savenotes");
+        let mut s = restricted(&dir);
+        add_circle(&mut s);
+        let f = dir.join("a.kad");
+        let r = call(&mut s, "file.save", &f);
+        assert_eq!(r["result"], json!({"ok": true, "format": "container"}), "{r}");
+        let done = FileDone::Saved(f.clone(), Form::Container, vec!["a note".into()]);
+        let text = file_reply(&s, "file.save", json!(1), Ok(done));
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["result"]["notes"], json!(["a note"]));
+    }
+
+    #[test]
+    fn document_load_clears_the_file_source() {
+        let dir = tmp("loadclears");
+        let mut a = restricted(&dir);
+        add_picture(&mut a, 10_000);
+        let f = dir.join("a.kad");
+        call(&mut a, "file.save", &f);
+        let mut b = restricted(&dir);
+        call(&mut b, "file.open", &f);
+        assert!(b.file_source.is_some());
+        let doc = b.handle("document.get", json!({})).unwrap();
+        b.handle("document.load", json!({"document": doc})).unwrap();
+        assert!(b.file_source.is_none());
     }
 }

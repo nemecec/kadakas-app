@@ -1294,8 +1294,14 @@ impl Session {
             "document.get" => {
                 // The versions have their own methods (version.*) and can be large.
                 // A picture that stays in the file is read now; the file may have changed.
-                let mut v = serde_json::to_value(doc)
-                    .map_err(|e| RpcError::app(format!("the document cannot be read: {e}")))?;
+                let mut v = serde_json::to_value(doc).map_err(|e| {
+                    let why = format!("the document cannot be read: {e}");
+                    if why.contains("changed on disk after it was opened") {
+                        RpcError::conflict(why)
+                    } else {
+                        RpcError::app(why)
+                    }
+                })?;
                 if let Some(m) = v.as_object_mut() {
                     m.remove("history");
                 }

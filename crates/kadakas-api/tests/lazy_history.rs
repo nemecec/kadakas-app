@@ -185,9 +185,15 @@ fn a_save_after_an_edit_reads_the_history_itself() {
     let f = make_file(&dir, "a.kad");
     let mut s = open(&dir, &f);
     circle(&mut s, 700.0);
-    // The history was never used: the save reads it, re-anchors it, and writes it.
+    // The history was never used: the save does not read it (that would parse the drawing a second
+    // time). It copies the entries as they are and writes the drawing of the old file as their
+    // anchor, so that the versions are still read against the drawing they belong to.
     ok(&mut s, "file.save", json!({"path": f}));
-    assert!(s.editor.doc().lazy_history.is_none());
+    assert!(s.editor.doc().lazy_history.is_some());
+    assert!(
+        !entry_hashes(&f, "history/anchor").is_empty(),
+        "the anchor drawing is in the file"
+    );
     let mut t = open(&dir, &f);
     assert_eq!(names(&mut t), ["v0", "v1", "v2"]);
     let list = ok(&mut t, "version.list", json!({}));
@@ -257,13 +263,27 @@ fn a_damaged_history_entry_is_found_when_the_history_is_used() {
         "the note names the entry: {list}"
     );
     // The untouched document can still be copied: the entries go over as they are, so nothing is
-    // lost. With an edit they cannot be re-anchored, and the save is refused.
+    // lost.
     let g = dir.join("g.kad");
     ok(&mut s, "file.save", json!({"path": g}));
     assert_eq!(entry_hashes(&bad, "history/"), entry_hashes(&g, "history/"));
+    // An edited document is saved too (REV-01: a damaged history never blocks the save). The
+    // entries go over as they are, and the drawing of the old file is written as their anchor.
     circle(&mut s, 9.0);
-    let r = rpc(&mut s, "file.save", json!({"path": dir.join("h.kad")}));
-    assert_eq!(r["error"]["code"], 5, "{r}");
+    let h = dir.join("h.kad");
+    ok(&mut s, "file.save", json!({"path": h}));
+    let mut kept = entry_hashes(&h, "history/");
+    let anchor = kept.iter().filter(|(n, _)| n.contains("anchor")).count();
+    assert_eq!(anchor, 2, "{kept:?}");
+    kept.retain(|(n, _)| !n.contains("anchor"));
+    assert_eq!(entry_hashes(&bad, "history/"), kept);
+    // The versions are still read only, and every one is still in the file.
+    let mut t = open(&dir, &h);
+    let list = ok(&mut t, "version.list", json!({}));
+    assert_eq!(list["read_only"], true, "{list}");
+    // Only the person's choice repairs it, and that keeps what is readable.
+    let r = ok(&mut t, "version.repair", json!({"confirm": true}));
+    assert!(r["notes"].to_string().contains("history/versions.json"), "{r}");
 }
 
 #[test]
@@ -311,10 +331,15 @@ fn a_file_that_changes_under_a_document_never_makes_a_wrong_version_or_a_wrong_d
     assert_eq!(names(&mut s), ["v0"]);
     assert_eq!(ok(&mut s, "version.list", json!({}))["read_only"], false);
     std::thread::sleep(std::time::Duration::from_millis(30));
-    // Another program replaces the file. The picture of the open document cannot be read.
+    // Another program replaces the file. The picture of the open document cannot be read: the
+    // old file is the .bak of that save, which is found by content, so it is taken away too.
     let mut other = session(&dir);
     circle(&mut other, 1.0);
     ok(&mut other, "file.save", json!({"path": f}));
+    assert!(dir.join("a.kad.bak").exists());
+    let with_bak = rpc(&mut s, "objects.list", json!({}));
+    assert!(with_bak.get("error").is_none(), "the .bak has the picture: {with_bak}");
+    std::fs::remove_file(dir.join("a.kad.bak")).unwrap();
     let changed = |r: &Value, what: &str| {
         assert_eq!(r["error"]["code"], 5, "{what}: {r}");
         assert!(
