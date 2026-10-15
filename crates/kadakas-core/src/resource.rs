@@ -68,13 +68,84 @@ impl Serialize for ResourceBody {
             }
             ResourceBody::Graphic(g) => g.serialize(s),
             ResourceBody::IrrigationCatalog(v) => v.serialize(s),
-            ResourceBody::ImportBase(v) => (**v).serialize(s),
+            ResourceBody::ImportBase(v) => serialize_import_base(v, s),
             ResourceBody::Annot(a) => a.serialize(s),
             ResourceBody::Render(r) => r.serialize(s),
             ResourceBody::Image(i) => tagged(i.as_ref(), "image", s),
             ResourceBody::Unknown(v) => v.serialize(s),
         }
     }
+}
+
+/// The compact JSON text of the `recs` of an import base: the text of its blob (the same text as
+/// in collaboration).
+pub(crate) fn import_base_text(body: &serde_json::Value) -> Option<String> {
+    serde_json::to_string(body.get("recs")?.as_array()?).ok()
+}
+
+/// Writes an import base. In a save to a container the list `recs` (megabytes of JSON) is
+/// written as a reference `{"$blob": hash}`; the blob itself is the work of `kadakas-file`.
+fn serialize_import_base<S: serde::Serializer>(
+    body: &std::sync::Arc<serde_json::Value>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeMap;
+    let reference = if crate::blob::writing_refs() && body.get("recs").is_some_and(|r| r.is_array())
+    {
+        let ptr = std::sync::Arc::as_ptr(body) as usize;
+        match crate::blob::import_base_ref(ptr) {
+            Some(h) => Some(h),
+            None => import_base_text(body)
+                .filter(|t| t.len() >= crate::blob::MIN_BLOB_TEXT)
+                .map(|t| crate::blob::text_hash(&t)),
+        }
+    } else {
+        None
+    };
+    let (Some(hash), Some(map)) = (reference, body.as_object()) else {
+        return (**body).serialize(s);
+    };
+    let mut out = s.serialize_map(Some(map.len()))?;
+    for (k, v) in map {
+        if k == "recs" {
+            out.serialize_entry(k, &BlobRef(&hash))?;
+        } else {
+            out.serialize_entry(k, v)?;
+        }
+    }
+    out.end()
+}
+
+struct BlobRef<'a>(&'a str);
+
+impl Serialize for BlobRef<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        crate::blob::serialize_ref(self.0, s)
+    }
+}
+
+/// Puts the list back into an import base that was written with a reference.
+fn resolve_import_base(v: &mut serde_json::Value) -> Result<(), String> {
+    let Some(obj) = v.as_object_mut() else {
+        return Ok(());
+    };
+    let Some(reference) = obj.get("recs").filter(|r| r.is_object()) else {
+        return Ok(());
+    };
+    let hash = reference
+        .get(crate::blob::REF_KEY)
+        .and_then(serde_json::Value::as_str)
+        .filter(|_| reference.as_object().is_some_and(|m| m.len() == 1))
+        .ok_or("the summaries of an import base are a list or a {\"$blob\": hash} reference")?
+        .to_string();
+    let text = crate::blob::read_ref_text(&hash)?;
+    let list: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("the summaries of an import base cannot be read: {e}"))?;
+    if !list.is_array() {
+        return Err("the summaries of an import base are not a list".into());
+    }
+    obj.insert("recs".into(), list);
+    Ok(())
 }
 
 fn tagged<T: Serialize, S: serde::Serializer>(
@@ -121,6 +192,8 @@ impl<'de> Deserialize<'de> for ResourceBody {
             }
             Some("irrigation_catalog") => Ok(ResourceBody::IrrigationCatalog(v)),
             Some(crate::provenance::BASE_TYPE) => {
+                let mut v = v;
+                resolve_import_base(&mut v).map_err(serde::de::Error::custom)?;
                 Ok(ResourceBody::ImportBase(std::sync::Arc::new(v)))
             }
             Some("hardscape_style") => serde_json::from_value::<HardscapeStyle>(v)

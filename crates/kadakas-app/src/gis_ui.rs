@@ -5,7 +5,6 @@ use crate::units_ui::DragValueExt as _;
 use kadakas_l10n::tr;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use egui::{Color32, DragValue, Painter, Pos2, Rect, TextureHandle, Ui};
 use glam::DVec2;
@@ -18,16 +17,17 @@ use kadakas_ui_core::massing::MassingToolSettings;
 /// Longest side of the texture of an underlay in pixels. Bigger rasters are reduced.
 const TEXTURE_SIDE: u32 = 2048;
 
-/// A texture with the PNG bytes it was made from (kept so the address stays this raster).
-type KeptTexture = (Arc<Vec<u8>>, TextureHandle);
+/// A texture with the picture it was made from (kept so the key stays this raster).
+type KeptTexture = (kadakas_core::underlay::PngData, TextureHandle);
 
 thread_local! {
-    /// Textures by the address of the PNG bytes. The bytes are shared between clones of the object.
-    static TEXTURES: RefCell<HashMap<usize, KeptTexture>> = RefCell::new(HashMap::new());
+    /// Textures by the key of the picture (`PngData::cache_key`: the address of the bytes, or the hash
+    /// of a picture that stays in the file). The picture is shared between clones of the object.
+    static TEXTURES: RefCell<HashMap<u64, KeptTexture>> = RefCell::new(HashMap::new());
 }
 
 fn texture(painter: &Painter, u: &Underlay) -> Option<TextureHandle> {
-    let key = Arc::as_ptr(&u.png.0) as usize;
+    let key = u.png.cache_key();
     TEXTURES.with(|t| {
         let mut t = t.borrow_mut();
         if let Some((_, h)) = t.get(&key) {
@@ -41,11 +41,11 @@ fn texture(painter: &Painter, u: &Underlay) -> Option<TextureHandle> {
         let handle = painter
             .ctx()
             .load_texture("underlay", color, egui::TextureOptions::LINEAR);
-        // The kept Arc makes sure that the address stays this raster.
-        t.insert(key, (u.png.0.clone(), handle.clone()));
+        // The kept picture makes sure that the key stays this raster.
+        t.insert(key, (u.png.clone(), handle.clone()));
         // Rasters that no object uses any more go with the next change of the document.
         if t.len() > 32 {
-            t.retain(|_, (bytes, _)| Arc::strong_count(bytes) > 1);
+            t.retain(|_, (png, _)| png.shared_count() > 1);
         }
         Some(handle)
     })

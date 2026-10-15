@@ -691,7 +691,7 @@ const IMAGE_PART_BYTES: u64 = 1024;
 fn object_bytes(o: &Object) -> u64 {
     OBJECT_BYTES
         + match &o.shape {
-            Shape::Underlay(u) => u.png.0.len() as u64,
+            Shape::Underlay(u) => u.png.resident_len() as u64,
             _ => 0,
         }
 }

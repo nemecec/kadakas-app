@@ -122,7 +122,7 @@ fn make(megabytes: usize) -> Document {
             max: DVec2::new(1000.0, 1000.0),
             width: 100,
             height: 100,
-            png: PngData(std::sync::Arc::new(png)),
+            png: PngData::new(png),
             opacity: 1.0,
             source: String::new(),
         };
@@ -161,7 +161,7 @@ fn main() {
                     let bytes = std::fs::read(file).expect("read");
                     Document::from_slice(&bytes).expect("load")
                 }
-                _ => kadakas_api::files::read_document(file).expect("load"),
+                _ => kadakas_api::files::read_document_capped(file, u64::MAX).expect("load"),
             };
             report(
                 &format!("load {} ({} objects)", arg(2), doc.objects.len()),
@@ -171,7 +171,7 @@ fn main() {
         }
         "save" => {
             let file = Path::new(arg(1));
-            let doc = kadakas_api::files::read_document(file).expect("load");
+            let doc = kadakas_api::files::read_document_capped(file, u64::MAX).expect("load");
             let loaded = Instant::now();
             PEAK.store(CURRENT.load(Relaxed), Relaxed);
             kadakas_api::files::write_document_file(Path::new(arg(2)), &doc).expect("save");

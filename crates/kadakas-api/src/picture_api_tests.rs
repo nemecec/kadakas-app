@@ -382,7 +382,7 @@ fn the_limits_hold_for_execute_batch_and_resource_commands() {
     });
     let set = json!({"op": "set_plant_picture", "style": id, "picture": picture});
     let add = json!({"op": "add_resource", "name": "Sneaky", "body": {"type": "image", "sha256": pic.sha256,
-        "format": "png", "width": 40, "height": 40, "data": pic.data.to_string(), "thumb": pic.thumb.to_string()}});
+        "format": "png", "width": 40, "height": 40, "data": pic.data_text().unwrap().to_string(), "thumb": pic.thumb.to_string()}});
     for command in [
         set.clone(),
         add.clone(),

@@ -170,7 +170,7 @@ pub(crate) fn document_bytes(doc: &kadakas_core::model::Document) -> u64 {
         .objects
         .values()
         .map(|o| match &o.shape {
-            kadakas_core::model::Shape::Underlay(u) => u.png.0.len() as u64,
+            kadakas_core::model::Shape::Underlay(u) => u.png.resident_len() as u64,
             _ => 0,
         })
         .sum();
@@ -178,7 +178,9 @@ pub(crate) fn document_bytes(doc: &kadakas_core::model::Document) -> u64 {
         .resources
         .iter()
         .map(|r| match &r.body {
-            kadakas_core::resource::ResourceBody::Image(i) => (i.data.len() + i.thumb.len()) as u64,
+            kadakas_core::resource::ResourceBody::Image(i) => {
+                (i.data.resident_len() + i.thumb.len()) as u64
+            }
             _ => 0,
         })
         .sum();

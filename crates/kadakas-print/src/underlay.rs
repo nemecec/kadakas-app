@@ -53,7 +53,7 @@ mod tests {
             max: DVec2::new(5000.0, 3000.0),
             width: 2,
             height: 1,
-            png: PngData(Arc::new(img.to_png())),
+            png: PngData::new(img.to_png()),
             opacity,
             source: String::new(),
         }
@@ -74,7 +74,7 @@ mod tests {
         let half = image_prim(&underlay(0.5), &xf).unwrap();
         assert_eq!(&half.rgb[..3], &[255, 128, 128]);
         let mut bad = underlay(1.0);
-        bad.png = PngData(Arc::new(vec![1, 2, 3]));
+        bad.png = PngData::new(vec![1, 2, 3]);
         assert!(image_prim(&bad, &xf).is_none());
     }
 }

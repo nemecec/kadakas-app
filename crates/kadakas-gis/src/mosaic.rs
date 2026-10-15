@@ -225,7 +225,7 @@ pub fn finish(
             max: view.max,
             width: size.0,
             height: size.1,
-            png: PngData(std::sync::Arc::new(out.to_png())),
+            png: PngData::new(out.to_png()),
             opacity: 1.0,
             source: source.to_string(),
         },

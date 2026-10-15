@@ -1241,6 +1241,16 @@ impl<'de> Deserialize<'de> for VersionProbe {
     }
 }
 
+/// A big text of a document that a container file stores as a blob (`Document::for_each_blob`).
+pub enum DocBlob<'a> {
+    /// The picture of an underlay.
+    Picture(&'a crate::underlay::PngData),
+    /// The file of an image resource.
+    Image(&'a crate::blob::BlobText),
+    /// The summaries of an import base (the body of the resource).
+    ImportBase(&'a std::sync::Arc<Value>),
+}
+
 /// The error for a text that does not parse as a document. `first` is the error of the typed
 /// parse. `probe` reads only the version, so a newer or older file says so, and a file without a
 /// version says that. A reader error (a failed read) is reported as it is.
@@ -1359,6 +1369,25 @@ impl Document {
     fn checked(self) -> Result<Document, LoadError> {
         check_version(u64::from(self.format_version))?;
         self.finish_load()
+    }
+
+    /// Calls `f` for every big text of the document that a container file stores as a blob: the
+    /// picture of an underlay, the file of an image resource and the summaries of an import
+    /// base (a text of at least `MIN_BLOB_TEXT` bytes, see `crate::blob`). The order is the order
+    /// of the document.
+    pub fn for_each_blob(&self, f: &mut dyn FnMut(DocBlob<'_>)) {
+        for o in self.objects.values() {
+            if let Shape::Underlay(u) = &o.shape {
+                f(DocBlob::Picture(&u.png));
+            }
+        }
+        for r in self.resources.iter() {
+            match &r.body {
+                crate::resource::ResourceBody::Image(i) => f(DocBlob::Image(&i.data)),
+                crate::resource::ResourceBody::ImportBase(v) => f(DocBlob::ImportBase(v)),
+                _ => {}
+            }
+        }
     }
 
     /// Like `from_json`, for JSON that is already parsed.
@@ -2593,7 +2622,7 @@ mod tests {
         assert_eq!(a, b);
         assert!(matches!(
             &a.objects.values().next().unwrap().shape,
-            Shape::Underlay(x) if x.png.0.len() == 9
+            Shape::Underlay(x) if x.png.len() == 9
         ));
         let broken = after.replace(&png, "!!!!");
         let e = load(&broken).unwrap_err();
