@@ -9,6 +9,7 @@ use kadakas_core::present::{
 };
 use kadakas_core::resource::{ResourceBody, ResourceId};
 use kadakas_render::{Camera, Projection, StandardView};
+use kadakas_review::overlay::CompareStyle;
 
 /// A device without a window, or `None` on a machine without a usable GPU.
 fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
@@ -750,5 +751,144 @@ fn coplanar_surfaces_of_different_objects_do_not_flicker_on_the_gpu() {
         }
         assert!(inside > 2000, "{projection:?}: {inside}");
         assert_eq!(bad, 0, "{projection:?}: red shows through green");
+    }
+}
+
+/// A tinted compare scene (REV-03) with two removed squares (x 0 and x 10000, both ghosts), an
+/// added one and an unchanged one, and the look that the compare window makes for it.
+fn compare_scene_and_look() -> (kadakas_review::overlay::Tinted, Look, CompareStyle) {
+    use kadakas_api::{CompareSide, Session};
+    use serde_json::json;
+    let mut s = Session::with_sequential_ids();
+    let rect = |s: &mut Session, x: i32| {
+        s.handle(
+            "execute",
+            json!({"command": {"op": "add_object", "shape":
+                {"kind": "rect", "min": [x, 0], "max": [x + 3000, 3000]},
+                "attrs": {"fill": [120, 120, 120, 255]}}}),
+        )
+        .unwrap()["created"][0]
+            .clone()
+    };
+    let near = rect(&mut s, 0);
+    let far = rect(&mut s, 10000);
+    let _same = rect(&mut s, 20000);
+    s.handle("version.create", json!({"name": "Before", "now_ms": 1}))
+        .unwrap();
+    s.handle(
+        "execute",
+        json!({"command": {"op": "delete_objects", "ids": [near, far]}}),
+    )
+    .unwrap();
+    let _added = rect(&mut s, 30000);
+    let style = CompareStyle::default();
+    let overlay = s
+        .compare_overlay(CompareSide::Version(1), CompareSide::Current)
+        .unwrap();
+    let t = s
+        .compare_tinted(
+            &overlay,
+            CompareSide::Version(1),
+            CompareSide::Current,
+            &style,
+        )
+        .unwrap();
+    let look = crate::compare_ui::ghost_look(&t, &style);
+    (t, look, style)
+}
+
+/// The compare view draws the ghosts of removed objects see-through. This is the part of that
+/// which needs no GPU: the look gives the ghost triangles one translucent material, and the
+/// batch building sends exactly those triangles to the blend pass and everything else to the
+/// opaque pass. The pixels are checked by `see_through_surfaces_blend_...` on a machine with a GPU.
+#[test]
+fn the_compare_ghosts_go_to_the_blend_pass_and_nothing_else_does() {
+    let (t, look, style) = compare_scene_and_look();
+    assert_eq!(t.ghosts.len(), 2, "both removed squares make a ghost");
+    // One material: the red of removed objects, with the opacity of the style (below 1).
+    assert_eq!(look.materials.len(), 1);
+    let m = &look.materials[0];
+    assert!(
+        m.opacity < 0.999 && (m.opacity - style.ghost).abs() < 1e-6,
+        "{}",
+        m.opacity
+    );
+    let [r, g, b] = style.color(kadakas_review::overlay::Status::Removed);
+    assert_eq!(m.color, [r, g, b, 255]);
+
+    let mesh = &t.scene.mesh;
+    let (opaque, blend) = split_blend(&t.scene, Some(&look));
+    let ghost_tris: Vec<usize> = (0..mesh.triangle_count())
+        .filter(|&i| t.ghosts.contains(&mesh.tri_object[i]))
+        .collect();
+    assert!(!ghost_tris.is_empty());
+    assert_eq!(blend.len(), ghost_tris.len(), "every ghost triangle blends");
+    assert_eq!(
+        opaque.len() + blend.len() * 3,
+        mesh.indices.len(),
+        "all other triangles stay opaque"
+    );
+    assert!(
+        opaque.len() >= 3,
+        "the added and the unchanged squares are opaque"
+    );
+    // Without the look nothing blends.
+    assert!(split_blend(&t.scene, None).1.is_empty());
+}
+
+/// The see-through triangles are sorted far to near, for both camera kinds. `dir` of the sort
+/// is the direction from the target to the eye (`Camera::eye_dir`).
+#[test]
+fn the_compare_ghosts_are_sorted_far_to_near() {
+    let (t, look, _) = compare_scene_and_look();
+    let mesh = &t.scene.mesh;
+    let (_, blend) = split_blend(&t.scene, Some(&look));
+    // The x of the first and the last triangle of an order.
+    let x = |i: u32| mesh.positions[i as usize].x;
+    let ends = |order: &[u32]| {
+        let first = (x(order[0]) + x(order[1]) + x(order[2])) / 3.0;
+        let n = order.len();
+        let last = (x(order[n - 3]) + x(order[n - 2]) + x(order[n - 1])) / 3.0;
+        (first, last)
+    };
+    let xs: Vec<f32> = blend.iter().flat_map(|b| b.indices).map(x).collect();
+    let (lo, hi) = (
+        xs.iter().copied().fold(f32::MAX, f32::min),
+        xs.iter().copied().fold(f32::MIN, f32::max),
+    );
+    let mid = (lo + hi) / 2.0;
+    assert!(hi - lo > 5000.0, "the two ghosts are apart: {lo} {hi}");
+    let (left, right) = ([lo - 50000.0, 0.0, 0.0], [hi + 50000.0, 0.0, 0.0]);
+    // Perspective, the eye at the left of the squares: the right one is farther.
+    let from_left = blend_order(&blend, left, [-1.0, 0.0, 0.0], false);
+    assert_eq!(from_left.len(), blend.len() * 3);
+    let (first, last) = ends(&from_left);
+    assert!(first > mid && last < mid, "{first} {last} {mid}");
+    // The eye at the right: the other way round.
+    let from_right = blend_order(&blend, right, [1.0, 0.0, 0.0], false);
+    let (first, last) = ends(&from_right);
+    assert!(first < mid && last > mid, "{first} {last} {mid}");
+    // Orthographic: the depth along the view direction decides.
+    let ortho = blend_order(&blend, left, [-1.0, 0.0, 0.0], true);
+    let (first, last) = ends(&ortho);
+    assert!(first > mid && last < mid, "{first} {last} {mid}");
+    // The same camera gives the same order (equal depths keep the order of the mesh).
+    assert_eq!(ortho, blend_order(&blend, left, [-1.0, 0.0, 0.0], true));
+}
+
+/// The sort itself, with triangles built by hand: the farthest comes first, and a tie keeps the
+/// order of the mesh.
+#[test]
+fn blend_order_puts_the_farthest_triangle_first_and_keeps_ties_stable() {
+    let tri = |i: u32, z: f32| BlendTri {
+        indices: [i * 3, i * 3 + 1, i * 3 + 2],
+        center: glam::Vec3::new(0.0, 0.0, z),
+    };
+    let tris = [tri(0, 5.0), tri(1, -3.0), tri(2, 5.0), tri(3, 1.0)];
+    // A camera above (the direction to the eye is up): the lowest is the farthest.
+    for ortho in [true, false] {
+        let order = blend_order(&tris, [0.0, 0.0, 10.0], [0.0, 0.0, 1.0], ortho);
+        let firsts: Vec<u32> = order.chunks(3).map(|c| c[0] / 3).collect();
+        assert_eq!(firsts, [1, 3, 0, 2], "ortho {ortho}");
     }
 }

@@ -18,6 +18,21 @@ thread_local! {
     /// Primitives and legend rows by document revision for drawing, so a frame does not read the
     /// whole document again for every tag and legend. Picking uses a cache of the app (see `Ctx`).
     static CACHE: (std::cell::Cell<u64>, kadakas_annot::AnnotCache) = Default::default();
+    /// The document that the cache belongs to (its address, 0: not set) and whether ghosts of a
+    /// compare are being drawn. A ghost has the ID of the live object but another shape, and a
+    /// ghost document is not the live one: neither may read or fill the cache of the live drawing.
+    static LIVE_DOC: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static GHOST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tells the drawing cache which document it is for. The canvas calls it before it draws.
+pub fn set_document(doc: &Document) {
+    LIVE_DOC.with(|d| d.set(std::ptr::from_ref(doc) as usize));
+}
+
+/// While true, annotations are drawn without the cache (the ghosts of a compare).
+pub fn set_ghost(ghost: bool) {
+    GHOST.with(|g| g.set(ghost));
 }
 
 /// Tells the drawing cache which document revision is current. The canvas calls it before it draws.
@@ -27,7 +42,14 @@ pub fn set_revision(revision: u64) {
 
 /// The primitives of an annotation object (from the drawing cache).
 fn object_prims(doc: &Document, o: &Object) -> std::sync::Arc<Vec<Prim>> {
-    CACHE.with(|c| c.1.prims(doc, o, c.0.get()))
+    let live = LIVE_DOC.with(std::cell::Cell::get);
+    let same_doc = live == 0 || live == std::ptr::from_ref(doc) as usize;
+    let revision = if same_doc && !GHOST.with(std::cell::Cell::get) {
+        CACHE.with(|c| c.0.get())
+    } else {
+        0 // revision 0: nothing is read from the cache or kept in it
+    };
+    CACHE.with(|c| c.1.prims(doc, o, revision))
 }
 
 /// Draws an annotation object. `offset` is added to every point (drag ghosts).
@@ -461,4 +483,64 @@ pub fn fields(ui: &mut Ui, a: &mut Annot) -> bool {
         }
     }
     commit
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kadakas_api::Session;
+    use serde_json::json;
+
+    /// The live document with a moved north arrow, the old document, and the arrow in both. A
+    /// "previous" ghost has the ID of the live object but the old shape.
+    fn moved_arrow() -> (Document, Document, Object, Object) {
+        let mut s = Session::with_sequential_ids();
+        s.handle("north_arrow.add", json!({"at": [0, 0]})).unwrap();
+        let old = s.editor.doc().clone();
+        let id = *old.objects.keys().next().unwrap();
+        s.handle(
+            "execute",
+            json!({"command": {"op": "move_objects", "ids": [id.to_string()], "delta": [50000, 0]}}),
+        )
+        .unwrap();
+        let live = s.editor.doc().clone();
+        let (a, b) = (old.objects[&id].clone(), live.objects[&id].clone());
+        (live, old, a, b)
+    }
+
+    #[test]
+    fn a_compare_ghost_and_the_live_annotation_each_show_their_own_shape() {
+        let (live, old, old_obj, live_obj) = moved_arrow();
+        let fresh = |d: &Document, o: &Object| {
+            kadakas_annot::AnnotCache::default()
+                .prims(d, o, 0)
+                .as_ref()
+                .clone()
+        };
+        let (want_live, want_old) = (fresh(&live, &live_obj), fresh(&old, &old_obj));
+        assert_ne!(want_live, want_old, "the arrow moved");
+
+        set_revision(7);
+        set_document(&live);
+        // The ghost is drawn first, against the old document, and against the live one (no
+        // ghost document): neither may fill the cache of the live drawing.
+        set_ghost(true);
+        assert_eq!(*object_prims(&old, &old_obj), want_old);
+        assert_eq!(*object_prims(&live, &old_obj), fresh(&live, &old_obj));
+        set_ghost(false);
+        assert_eq!(
+            *object_prims(&live, &live_obj),
+            want_live,
+            "the live annotation is not the ghost"
+        );
+        // A document that is not the live one does not use the cache either.
+        assert_eq!(*object_prims(&old, &old_obj), want_old);
+        // The other way round: the live annotation is cached first, a ghost does not read it.
+        set_ghost(true);
+        assert_eq!(*object_prims(&live, &old_obj), fresh(&live, &old_obj));
+        set_ghost(false);
+        // After the compare closes the live annotation is still right.
+        assert_eq!(*object_prims(&live, &live_obj), want_live);
+        set_revision(0);
+    }
 }

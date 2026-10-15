@@ -161,6 +161,9 @@ pub struct Session {
     site_cache: kadakas_site::SiteCache,
     /// Annotation primitives and legend rows by document revision (see `render.svg`).
     annot_cache: kadakas_annot::AnnotCache,
+    /// Site and annotation results for the ghosts of a compare, for the old document that was
+    /// drawn last (one document, so it is bounded by the ghost limits of the overlay).
+    ghost_caches: GhostCaches,
     /// Worksheet results by document revision.
     worksheet_cache: kadakas_sheet::WorksheetCache,
     /// Display lists of sheets, by document revision (see `sheet.render`).
@@ -192,6 +195,37 @@ pub struct Session {
     tainted: bool,
 }
 
+/// The caches of the ghosts of a compare (see `svg_of`). They belong to one old document, which
+/// is kept (so its address cannot be taken by another document); a new old document starts new
+/// caches under a new revision number.
+#[derive(Default)]
+pub(crate) struct GhostCaches {
+    site: kadakas_site::SiteCache,
+    annot: kadakas_annot::AnnotCache,
+    old: std::sync::Mutex<(Option<Arc<Document>>, u64)>,
+}
+
+impl GhostCaches {
+    /// The caches for `old` and their revision (never 0).
+    pub(crate) fn for_doc(
+        &self,
+        old: &Arc<Document>,
+    ) -> (&kadakas_site::SiteCache, &kadakas_annot::AnnotCache, u64) {
+        let mut g = self.old.lock().unwrap_or_else(|e| e.into_inner());
+        if !g.0.as_ref().is_some_and(|a| Arc::ptr_eq(a, old)) {
+            g.1 += 1;
+            g.0 = Some(old.clone());
+        }
+        (&self.site, &self.annot, g.1)
+    }
+
+    /// The bytes of the old document that is kept.
+    pub(crate) fn held_bytes(&self) -> u64 {
+        let g = self.old.lock().unwrap_or_else(|e| e.into_inner());
+        g.0.as_ref().map_or(0, |d| limits::document_bytes(d))
+    }
+}
+
 /// The SVG of a document with the site model and annotation extensions, and the caches that go
 /// with a revision of it (revision 0: nothing is kept). `overlay` changes the look of objects
 /// (the compare of REV-03).
@@ -202,11 +236,27 @@ fn svg_of(
     site_cache: &kadakas_site::SiteCache,
     annot_cache: &kadakas_annot::AnnotCache,
     overlay: Option<&dyn kadakas_core::svg_overlay::SvgOverlay>,
+    ghost: Option<(&kadakas_site::SiteCache, &kadakas_annot::AnnotCache, u64)>,
 ) -> String {
     let site_ext = kadakas_site::draw::svg_ext(site_cache, revision);
+    // A ghost of a compare is drawn against the document of the old side. It gets caches of its
+    // own, so it never reads what was built for another document. A session passes its ghost
+    // caches (kept while the same old document is compared); else they are new for this call and
+    // keep nothing (revision 0).
+    let local = (
+        kadakas_site::SiteCache::default(),
+        kadakas_annot::AnnotCache::default(),
+    );
+    let (ghost_site, ghost_annot, ghost_rev) = ghost.unwrap_or((&local.0, &local.1, 0));
+    let ghost_site_ext = kadakas_site::draw::svg_ext(ghost_site, ghost_rev);
     let ext = |d: &Document, o: &Object, style: &str, out: &mut String| {
-        site_ext(d, o, style, out);
-        kadakas_annot::svg::object_svg_with(d, o, style, out, annot_cache, revision);
+        if std::ptr::eq(d, doc) {
+            site_ext(d, o, style, out);
+            kadakas_annot::svg::object_svg_with(d, o, style, out, annot_cache, revision);
+        } else {
+            ghost_site_ext(d, o, style, out);
+            kadakas_annot::svg::object_svg_with(d, o, style, out, ghost_annot, ghost_rev);
+        }
     };
     kadakas_core::svg::render_overlay(doc, width.clamp(16, 8192), Some(&ext), overlay)
 }
@@ -826,6 +876,7 @@ impl Session {
             gis: GisState::default(),
             site_cache: kadakas_site::SiteCache::default(),
             annot_cache: kadakas_annot::AnnotCache::default(),
+            ghost_caches: GhostCaches::default(),
             worksheet_cache: kadakas_sheet::WorksheetCache::default(),
             #[cfg(not(target_arch = "wasm32"))]
             sheet_cache,
@@ -868,6 +919,7 @@ impl Session {
             self.editor.revision(),
             &self.site_cache,
             &self.annot_cache,
+            None,
             None,
         )
     }

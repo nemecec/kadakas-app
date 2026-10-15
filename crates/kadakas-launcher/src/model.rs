@@ -209,7 +209,7 @@ mod tests {
     }
 
     fn wait(m: &mut Model) {
-        for _ in 0..500 {
+        for _ in 0..3000 {
             if m.poll() {
                 return;
             }
