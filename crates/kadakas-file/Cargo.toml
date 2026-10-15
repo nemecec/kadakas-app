@@ -1,0 +1,23 @@
+[package]
+name = "kadakas-file"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The file forms of a Kadakas document (DOC-20 to DOC-22): the ZIP container with lazy pictures and history, and the plain JSON form. Reads and writes a Document to and from bytes; the native part adds paths, the atomic save and the copy of unchanged entries from the old file. No UI code."
+
+[dependencies]
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+kadakas-container = { version = "0.1.0", path = "../kadakas-container" }
+serde = "1.0.229"
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+sha2 = "0.10.9"
+thiserror = "2.0.21"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+
+[dev-dependencies]
+proptest = "1.11.0"
+glam = { version = "0.34.1", features = ["serde"] }

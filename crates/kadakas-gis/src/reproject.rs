@@ -1221,9 +1221,7 @@ mod tests {
                 max: DVec2::splat(1000.0),
                 width: 2,
                 height: 2,
-                png: PngData::new(vec![
-                    0x89, b'P', b'N', b'G', 0, 0, 0, 0, 0,
-                ]),
+                png: PngData::new(vec![0x89, b'P', b'N', b'G', 0, 0, 0, 0, 0]),
                 opacity: 1.0,
                 source: String::new(),
             })),

@@ -1,6 +1,5 @@
 //! Massing models and image underlays in the core: commands, files, 2D (SVG) and 3D (mesh).
 
-
 use glam::DVec2;
 use kadakas_core::command::{Command, CommandError, Editor};
 use kadakas_core::curve::corners;

@@ -2835,6 +2835,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kadakas-file"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "kadakas-container",
+ "kadakas-core",
+ "kadakas-sys",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "kadakas-gis"
 version = "0.1.0"
 dependencies = [

@@ -411,9 +411,10 @@ impl ImageResource {
     pub fn byte_len(&self) -> usize {
         // A file that stays in the document's file is not read: the padding of the last quad is
         // not known, so the size can be up to two bytes too big.
-        let pad = self.data.mem_text().map_or(0, |t| {
-            t.bytes().rev().take_while(|b| *b == b'=').count()
-        });
+        let pad = self
+            .data
+            .mem_text()
+            .map_or(0, |t| t.bytes().rev().take_while(|b| *b == b'=').count());
         (self.data.len() / 4 * 3).saturating_sub(pad)
     }
 

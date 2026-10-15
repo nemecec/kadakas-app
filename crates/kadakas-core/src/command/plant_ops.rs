@@ -1645,10 +1645,16 @@ mod tests {
             .unwrap();
         }
         let after = &ed.doc().resources.image(img).unwrap().data;
-        assert!(std::sync::Arc::ptr_eq(before.mem_text().unwrap(), after.mem_text().unwrap()));
+        assert!(std::sync::Arc::ptr_eq(
+            before.mem_text().unwrap(),
+            after.mem_text().unwrap()
+        ));
         assert!(ed.undo());
         let back = &ed.doc().resources.image(img).unwrap().data;
-        assert!(std::sync::Arc::ptr_eq(before.mem_text().unwrap(), back.mem_text().unwrap()));
+        assert!(std::sync::Arc::ptr_eq(
+            before.mem_text().unwrap(),
+            back.mem_text().unwrap()
+        ));
         // A big picture adds a fixed cost to the history, not its text.
         let big = {
             let mut p = sample(9);

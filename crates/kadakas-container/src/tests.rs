@@ -689,8 +689,9 @@ mod files {
         let d = dir("src");
         let p = d.join("f.kad");
         std::fs::write(&p, sample()).unwrap();
-        let s = ContainerSource::open_path(&p, Limits::default()).unwrap();
+        let s = ContainerSource::from_path(&p, Limits::default()).unwrap();
         assert!(s.can_refresh());
+        assert_eq!(s.path(), Some(p.as_path()));
         assert_eq!(s.read_part("blobs/aa").unwrap(), b"picture bytes");
         // Another file replaces it: the old source says so and reads nothing.
         std::thread::sleep(std::time::Duration::from_millis(30));
@@ -717,7 +718,7 @@ mod files {
         let p = d.join("f.kad");
         let bytes = write(&[("blobs/aa", Compression::Stored, b"picture bytes")]);
         std::fs::write(&p, &bytes).unwrap();
-        let s = ContainerSource::open_path(&p, Limits::default()).unwrap();
+        let s = ContainerSource::from_path(&p, Limits::default()).unwrap();
         let mtime = std::fs::metadata(&p).unwrap().modified().unwrap();
         let mut b = bytes.clone();
         let at = b.windows(7).position(|w| w == b"picture").unwrap();
@@ -737,7 +738,7 @@ mod files {
     #[test]
     fn open_path_of_a_missing_file_is_an_error() {
         let d = dir("missing");
-        assert!(ContainerSource::open_path(&d.join("none"), Limits::default()).is_err());
+        assert!(ContainerSource::from_path(&d.join("none"), Limits::default()).is_err());
         std::fs::remove_dir_all(&d).unwrap();
     }
 }

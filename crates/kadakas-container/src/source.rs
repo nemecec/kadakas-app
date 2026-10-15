@@ -38,6 +38,8 @@ type Reopen = Box<dyn Fn() -> Result<Container, ContainerError> + Send + Sync>;
 pub struct ContainerSource {
     inner: RwLock<Container>,
     reopen: Option<Reopen>,
+    #[cfg(not(target_arch = "wasm32"))]
+    path: Option<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for ContainerSource {
@@ -52,6 +54,8 @@ impl ContainerSource {
         ContainerSource {
             inner: RwLock::new(container),
             reopen: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            path: None,
         }
     }
 
@@ -63,21 +67,31 @@ impl ContainerSource {
         ContainerSource {
             inner: RwLock::new(container),
             reopen: Some(Box::new(reopen)),
+            #[cfg(not(target_arch = "wasm32"))]
+            path: None,
         }
     }
 
-    /// A source over a file path (native only).
+    /// A source over a file path (native only). The file is opened again for each read.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn open_path(
+    pub fn from_path(
         path: &std::path::Path,
         limits: crate::limits::Limits,
-    ) -> Result<std::sync::Arc<ContainerSource>, ContainerError> {
-        let path = path.to_path_buf();
+    ) -> Result<ContainerSource, ContainerError> {
+        let owned = path.to_path_buf();
         let open = move || -> Result<Container, ContainerError> {
-            let medium = crate::medium::FileMedium::open_path(&path)?;
+            let medium = crate::medium::FileMedium::open_path(&owned)?;
             Container::open(std::sync::Arc::new(medium), limits)
         };
-        Ok(std::sync::Arc::new(ContainerSource::with_reopen(open()?, open)))
+        let mut source = ContainerSource::with_reopen(open()?, open);
+        source.path = Some(path.to_path_buf());
+        Ok(source)
+    }
+
+    /// The path of the file, if the container is in a file.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn path(&self) -> Option<&std::path::Path> {
+        self.path.as_deref()
     }
 
     /// A copy of the container as it is now.

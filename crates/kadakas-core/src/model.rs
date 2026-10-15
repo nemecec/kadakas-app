@@ -1133,7 +1133,7 @@ pub struct Document {
     pub drawing: crate::sheets::Drawing,
     /// The named versions of this file (REV-01), as JSON that `kadakas-review` reads. It is local
     /// to the file: collaboration does not share it. Older files have none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "history_unwritten")]
     pub history: Option<crate::history::HistoryData>,
     /// The generator of new IDs (see `crate::uid`). It is not saved.
     #[serde(skip)]
@@ -1239,6 +1239,12 @@ impl<'de> Deserialize<'de> for VersionProbe {
         }
         d.deserialize_map(Probe)
     }
+}
+
+/// True if the field `history` is not written: there is none, or a container save writes it as
+/// entries of its own (`crate::blob::with_blob_refs`).
+fn history_unwritten(h: &Option<crate::history::HistoryData>) -> bool {
+    h.is_none() || crate::blob::history_hidden()
 }
 
 /// A big text of a document that a container file stores as a blob (`Document::for_each_blob`).
@@ -1361,6 +1367,28 @@ impl Document {
             Err(e) => Err(explain_failure(e, || {
                 reader.rewind().map_err(serde_json::Error::io)?;
                 serde_json::from_reader::<_, VersionProbe>(&mut reader)
+            })),
+        }
+    }
+
+    /// Like `from_reader`, for a reader that cannot seek (an entry of a container). `reopen` gives
+    /// the reader again for the second pass on the error path (see `from_reader`). `attach` runs
+    /// after the parse and before the checks of the load: a container puts the history, which is
+    /// not in the text, into the document there.
+    pub fn from_reader_with<R: std::io::Read, P: std::io::Read>(
+        reader: R,
+        reopen: impl FnOnce() -> std::io::Result<P>,
+        attach: impl FnOnce(&mut Document) -> Result<(), LoadError>,
+    ) -> Result<Document, LoadError> {
+        match serde_json::from_reader::<_, Document>(reader) {
+            Ok(mut doc) => {
+                check_version(u64::from(doc.format_version))?;
+                attach(&mut doc)?;
+                doc.finish_load()
+            }
+            Err(e) => Err(explain_failure(e, || {
+                let again = reopen().map_err(serde_json::Error::io)?;
+                serde_json::from_reader::<_, VersionProbe>(again)
             })),
         }
     }

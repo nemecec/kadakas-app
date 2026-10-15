@@ -46,9 +46,7 @@ impl std::fmt::Debug for PngData {
 impl PartialEq for PngData {
     fn eq(&self, other: &Self) -> bool {
         match (&self.0, &other.0) {
-            (Repr::Mem { bytes: a, .. }, Repr::Mem { bytes: b, .. }) => {
-                Arc::ptr_eq(a, b) || a == b
-            }
+            (Repr::Mem { bytes: a, .. }, Repr::Mem { bytes: b, .. }) => Arc::ptr_eq(a, b) || a == b,
             (Repr::Lazy(a), Repr::Lazy(b)) => Arc::ptr_eq(a, b) || a.hash() == b.hash(),
             _ => self.text_len() == other.text_len() && self.blob_hash() == other.blob_hash(),
         }
@@ -212,6 +210,11 @@ impl Serialize for PngData {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         if crate::blob::writing_refs() && self.is_blob() {
             return crate::blob::serialize_ref(&self.blob_hash(), s);
+        }
+        // A picture in the file is already the text.
+        if let Repr::Lazy(l) = &self.0 {
+            let text = l.text().map_err(serde::ser::Error::custom)?;
+            return s.serialize_str(&text);
         }
         let bytes = self.bytes().map_err(serde::ser::Error::custom)?;
         s.collect_str(&Base64Text(&bytes))
@@ -400,12 +403,7 @@ impl Underlay {
         };
         format!(
             "<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" opacity=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,{}\"/>",
-            self.min.x,
-            -self.max.y,
-            w,
-            h,
-            self.opacity,
-            text,
+            self.min.x, -self.max.y, w, h, self.opacity, text,
         )
     }
 }

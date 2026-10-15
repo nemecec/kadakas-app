@@ -53,6 +53,12 @@ pub trait BlobSource: Send + Sync + std::fmt::Debug {
     fn blob_text(&self, hash: &str) -> Result<Arc<str>, BlobError>;
     /// For a program that knows the kind of the source (the copy of a blob into a new file).
     fn as_any(&self) -> &dyn Any;
+    /// The same, for a shared pointer: `Arc::downcast` gives the concrete source back.
+    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
+    /// Called for every handle that is made for this source while a document is read. A source
+    /// can keep a weak pointer to know which pictures are still in use (the undo steps hold
+    /// pictures that the document no longer has). The default does nothing.
+    fn note_handle(&self, _blob: &Arc<LazyBlob>) {}
 }
 
 /// A blob that stays in the file until it is used.
@@ -132,10 +138,10 @@ impl LazyBlob {
             }
         }
         let text = self.text()?;
-        let b = Arc::new(
-            crate::underlay::base64_decode(&text)
-                .ok_or_else(|| BlobError(format!("the picture {} is not valid base64", self.hash)))?,
-        );
+        let b =
+            Arc::new(crate::underlay::base64_decode(&text).ok_or_else(|| {
+                BlobError(format!("the picture {} is not valid base64", self.hash))
+            })?);
         *self.bytes.lock().unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(&b);
         Ok(b)
     }
@@ -171,12 +177,17 @@ thread_local! {
 /// What a save in the container form knows: write a reference for each blob.
 #[derive(Default)]
 pub struct SaveRefs {
+    /// Leave out the field `history` (a container holds the history in its own entries).
+    pub skip_history: bool,
     /// The hash of the text of each import base, by the address of its shared body (the text is
     /// the compact JSON of `recs`). Made by the caller before the write.
     pub import_bases: HashMap<usize, String>,
 }
 
-struct Restore<T: 'static>(&'static std::thread::LocalKey<RefCell<Option<T>>>, Option<T>);
+struct Restore<T: 'static>(
+    &'static std::thread::LocalKey<RefCell<Option<T>>>,
+    Option<T>,
+);
 
 impl<T: 'static> Drop for Restore<T> {
     fn drop(&mut self) {
@@ -203,6 +214,11 @@ pub fn with_blob_refs<R>(refs: SaveRefs, f: impl FnOnce() -> R) -> R {
 /// True inside [`with_blob_refs`].
 pub fn writing_refs() -> bool {
     SAVE.with(|c| c.borrow().is_some())
+}
+
+/// True inside [`with_blob_refs`] when the history is not part of `document.json`.
+pub(crate) fn history_hidden() -> bool {
+    SAVE.with(|c| c.borrow().as_ref().is_some_and(|r| r.skip_history))
 }
 
 /// The hash of an import base body that [`with_blob_refs`] knows.
@@ -233,9 +249,9 @@ fn ref_source(hash: &str) -> Result<Arc<dyn BlobSource>, String> {
 /// A lazy handle for a reference met while reading.
 pub(crate) fn lazy_from_ref(hash: &str) -> Result<Arc<LazyBlob>, String> {
     let source = ref_source(hash)?;
-    LazyBlob::new(source, hash)
-        .map(Arc::new)
-        .map_err(|e| e.to_string())
+    let blob = Arc::new(LazyBlob::new(source.clone(), hash).map_err(|e| e.to_string())?);
+    source.note_handle(&blob);
+    Ok(blob)
 }
 
 /// Reads a reference value: `{"$blob": "<hash>"}` as a visitor of a map.
@@ -258,13 +274,13 @@ impl<'de, T, F: FnOnce(Arc<LazyBlob>) -> T, G: FnOnce(&str) -> T> serde::de::Vis
         use serde::de::Error;
         let key: Option<String> = map.next_key()?;
         if key.as_deref() != Some(REF_KEY) {
-            return Err(A::Error::custom(
-                "a picture is a text or {\"$blob\": hash}",
-            ));
+            return Err(A::Error::custom("a picture is a text or {\"$blob\": hash}"));
         }
         let hash: String = map.next_value()?;
         if map.next_key::<String>()?.is_some() {
-            return Err(A::Error::custom("a picture reference has only the key $blob"));
+            return Err(A::Error::custom(
+                "a picture reference has only the key $blob",
+            ));
         }
         let lazy = lazy_from_ref(&hash).map_err(A::Error::custom)?;
         Ok((self.0)(lazy))
@@ -418,9 +434,7 @@ impl From<Arc<LazyBlob>> for BlobText {
 impl PartialEq for BlobText {
     fn eq(&self, other: &Self) -> bool {
         match (&self.0, &other.0) {
-            (Repr::Mem { text: a, .. }, Repr::Mem { text: b, .. }) => {
-                Arc::ptr_eq(a, b) || a == b
-            }
+            (Repr::Mem { text: a, .. }, Repr::Mem { text: b, .. }) => Arc::ptr_eq(a, b) || a == b,
             (Repr::Lazy(a), Repr::Lazy(b)) => Arc::ptr_eq(a, b) || a.hash() == b.hash(),
             // A text in memory and one in the file are equal when their hashes are.
             _ => self.len() == other.len() && self.hash() == other.hash(),
@@ -493,6 +507,9 @@ pub(crate) mod testutil {
         fn as_any(&self) -> &dyn Any {
             self
         }
+        fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+            self
+        }
     }
 }
 
@@ -558,7 +575,11 @@ mod tests {
         assert_eq!(*src.1.lock().unwrap(), 1, "one read while it is held");
         drop((a, b));
         let _ = t.text().unwrap();
-        assert_eq!(*src.1.lock().unwrap(), 2, "read again after the memory was freed");
+        assert_eq!(
+            *src.1.lock().unwrap(),
+            2,
+            "read again after the memory was freed"
+        );
         // Without a scope the text is written inline; with refs it is a reference.
         assert_eq!(serde_json::to_string(&t).unwrap(), format!("\"{text}\""));
         let refs = with_blob_refs(SaveRefs::default(), || serde_json::to_string(&t)).unwrap();
@@ -590,7 +611,10 @@ mod tests {
                 .unwrap_err()
                 .to_string()
         };
-        assert!(read(&format!("{{\"$blob\": \"{}\"}}", text_hash("missing"))).contains("not in the file"));
+        assert!(
+            read(&format!("{{\"$blob\": \"{}\"}}", text_hash("missing")))
+                .contains("not in the file")
+        );
         assert!(read("{\"$blob\": \"abc\"}").contains("64 lowercase"));
         assert!(read("{\"other\": 1}").contains("$blob"));
         assert!(read(&format!("{{\"$blob\": \"{h}\", \"x\": 1}}")).contains("only the key"));

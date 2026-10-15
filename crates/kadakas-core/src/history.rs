@@ -227,6 +227,22 @@ impl HistoryData {
         self.versions.as_ref().map(|v| v.len())
     }
 
+    /// The versions, one JSON value each, if the list is split off the value (it is an array).
+    pub fn version_items(&self) -> Option<&[Arc<Value>]> {
+        self.versions.as_ref().map(|v| v.as_slice())
+    }
+
+    /// The operations of the newest change, one JSON value each, if they are split off (the
+    /// array `newest.delta`).
+    pub fn newest_items(&self) -> Option<&[Arc<Value>]> {
+        self.newest_delta.as_ref().map(|v| v.as_slice())
+    }
+
+    /// True if the table `blobs` is split off (it is an object of texts).
+    pub fn has_blob_table(&self) -> bool {
+        self.blobs.is_some()
+    }
+
     /// The pictures of the history (empty if `blobs` is not a table of texts).
     pub fn blob_list(&self) -> &[(String, Arc<str>)] {
         self.blobs.as_ref().map_or(&[], |b| b.as_slice())
