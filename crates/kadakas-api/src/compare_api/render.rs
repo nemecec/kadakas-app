@@ -393,8 +393,9 @@ impl Session {
     }
 
     /// The sheet `layer` of two sides on one page, side by side, each with its label (the old
-    /// side at the left). The sheet must exist in both. The app shows the page in its Compare
-    /// window; `sheet.render` with `compare` writes it.
+    /// side at the left). A side that does not have the sheet (it was added or deleted between the
+    /// two) shows an empty page of the other size with a note. The app shows the page in its
+    /// Compare window; `sheet.render` with `compare` writes it.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn compare_sheet_page(
         &mut self,
@@ -402,18 +403,44 @@ impl Session {
         from: Side,
         to: Side,
     ) -> Result<kadakas_print::Page, RpcError> {
+        use kadakas_core::model::LayerKind;
         let labels = [self.side_label(from), self.side_label(to)];
-        let mut pages = Vec::new();
+        let mut pages: Vec<Option<kadakas_print::Page>> = Vec::new();
         for (side, label) in [from, to].into_iter().zip(&labels) {
             let shown = self.compare_doc(side)?;
-            let page = match &shown {
-                ShownDoc::Live => self.sheet_page(layer)?.as_ref().clone(),
-                ShownDoc::Built(d) => kadakas_print::compose_page(d, layer)
-                    .map_err(|e| bad(format!("the sheet cannot be drawn for {label}: {e}")))?,
-            };
-            pages.push(page);
+            let has = self.with_shown(&shown, |d, _, _, _| {
+                d.layer(layer).is_some_and(|l| l.kind == LayerKind::Sheet)
+            });
+            pages.push(match (&shown, has) {
+                (_, false) => None,
+                (ShownDoc::Live, true) => Some(self.sheet_page(layer)?.as_ref().clone()),
+                (ShownDoc::Built(d), true) => Some(
+                    kadakas_print::compose_page(d, layer)
+                        .map_err(|e| bad(format!("the sheet cannot be drawn for {label}: {e}")))?,
+                ),
+            });
         }
-        Ok(pages[0].beside(&pages[1], GAP_MM, [&labels[0], &labels[1]]))
+        let size = pages.iter().flatten().next().map(|p| p.size);
+        let Some(size) = size else {
+            return Err(bad("the sheet is in neither side"));
+        };
+        let [a, b] = [0, 1].map(|i| {
+            pages[i].take().unwrap_or_else(|| {
+                use kadakas_print::display::{Align, TextPrim};
+                kadakas_print::Page {
+                    size,
+                    title: labels[i].clone(),
+                    prims: vec![kadakas_print::Prim::Text(TextPrim {
+                        at: size / 2.0,
+                        text: "(this sheet is not in this version)".into(),
+                        height: 4.0,
+                        color: [120, 120, 120, 255],
+                        align: Align::Center,
+                    })],
+                }
+            })
+        });
+        Ok(a.beside(&b, GAP_MM, [&labels[0], &labels[1]]))
     }
 
     /// `sheet.render` with a `compare` option: the sheet of both sides on one page.

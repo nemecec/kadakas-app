@@ -626,13 +626,15 @@ fn sheets_compare_side_by_side() {
         "sheet.render",
         json!({"sheet": "S", "compare": {"from": before, "to": "current", "mode": "side_by_side"}}),
     );
-    // A version made before the sheet existed has no such sheet.
-    let e = fail(
+    // A version made before the sheet existed has no such sheet: its side says so.
+    let r = ok(
         &mut s,
         "sheet.render",
         json!({"sheet": "S", "compare": compare(json!(1), json!("current"))}),
     );
-    assert!(e.message.contains("cannot be drawn"), "{}", e.message);
+    let svg = r["svg"].as_str().unwrap();
+    assert!(svg.contains("this sheet is not in this version"));
+    assert_eq!(svg.matches("LIVE-MARK").count(), 1);
     let e = fail(
         &mut s,
         "sheet.render",

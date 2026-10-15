@@ -271,6 +271,49 @@ fn a_restore_does_not_revive_what_another_user_deleted() {
     assert!(!has(&b, &x) && !has(&a, &x), "the other deletion stands");
 }
 
+/// A restore that brings back a sheet layer which the same user deleted: the layer comes back
+/// with its page settings, here and at the other user.
+#[test]
+fn restoring_a_version_revives_a_sheet_layer_with_its_page() {
+    let (_hub, mut a, mut b) = pair();
+    let sheet = call(
+        &mut a,
+        "sheet.create",
+        json!({"name": "Plan", "paper": "a1", "orientation": "portrait",
+            "number": "L-101", "title": "Planting plan"}),
+    )["layer"]
+        .clone();
+    call(&mut a, "collab.sync", json!({"now_ms": 2_000}));
+    call(&mut b, "collab.sync", json!({"now_ms": 2_000}));
+    let page = a.editor.doc().drawing.sheets.clone();
+    assert_eq!(page.len(), 1);
+    assert_eq!(b.editor.doc().drawing.sheets, page);
+    call(
+        &mut a,
+        "version.create",
+        json!({"name": "With sheet", "now_ms": 1}),
+    );
+    call(
+        &mut a,
+        "execute",
+        json!({"command": {"op": "delete_layer", "id": sheet}}),
+    );
+    call(&mut a, "collab.sync", json!({"now_ms": 2_100}));
+    call(&mut b, "collab.sync", json!({"now_ms": 2_100}));
+    assert!(a.editor.doc().drawing.sheets.is_empty());
+    assert!(b.editor.doc().drawing.sheets.is_empty());
+    call(&mut a, "version.restore", json!({"id": 1, "now_ms": 2}));
+    assert_eq!(a.editor.doc().drawing.sheets, page);
+    for t in [2_200, 2_300, 2_400] {
+        call(&mut a, "collab.sync", json!({"now_ms": t}));
+        call(&mut b, "collab.sync", json!({"now_ms": t}));
+    }
+    assert_eq!(a.editor.doc().drawing.sheets, page);
+    assert_eq!(b.editor.doc().drawing.sheets, page);
+    assert_eq!(b.editor.doc().layers.len(), 2);
+    assert!(same(&a, &b));
+}
+
 #[test]
 fn undo_is_per_user() {
     let (_hub, mut a, mut b) = pair();

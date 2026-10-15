@@ -1186,8 +1186,13 @@ mod tests {
         frame(&mut ui, &mut s, &mut status);
         ui.update_sheet(&mut s);
         assert!(ui.sheets.page.is_some(), "{:?}", ui.sheets.error);
-        // A version that has no such sheet gives an error text, not a crash.
+        // A version that has no such sheet shows an empty page for its side.
         ui.form.from = Some(Side::Version(1));
+        ui.update_sheet(&mut s);
+        assert!(ui.sheets.page.is_some(), "{:?}", ui.sheets.error);
+        // A sheet that is on neither side gives an error text, not a crash.
+        ui.sheets.layer = Some(LayerId::from_num(99));
+        ui.sheets.page = None;
         ui.update_sheet(&mut s);
         assert!(ui.sheets.error.is_some());
         // A version that is deleted is dropped from the form.
