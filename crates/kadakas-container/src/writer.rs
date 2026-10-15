@@ -1,10 +1,15 @@
 //! The writer: a stream of entries into any `Write` (no seek), with the manifest at the end.
 //!
-//! An entry that is written from data goes through the CRC-32, the SHA-256 and (for deflate) the
-//! encoder as it is written; its sizes follow the data in a data descriptor. An entry that is
-//! copied from another container ([`Writer::copy_raw`]) is not decoded: the compressed bytes and
-//! the CRC-32 and the hash from the manifest of the old container are written as they are.
-//! The time stamps are fixed (1980-01-01), so the same content gives the same bytes.
+//! An entry that is written from bytes and stored has its CRC-32 and sizes in the local header (no
+//! data descriptor: some readers, such as the Java stream reader, refuse that for a stored entry).
+//! An entry that is deflated or streamed goes through the CRC-32, the SHA-256 and the encoder as it
+//! is written; its sizes follow the data in a data descriptor, with 64 bit sizes and a ZIP64 extra
+//! field in the local header, because the size is not known at the start. A file with more than
+//! 65 534 entries, or with an offset or a size of 4 GiB or more, gets the ZIP64 end records.
+//!
+//! An entry that is copied from another container ([`Writer::copy_raw`]) is not decoded: the
+//! compressed bytes and the CRC-32 and the hash from the manifest of the old container are written
+//! as they are. The time stamps are fixed (1980-01-01), so the same content gives the same bytes.
 
 use std::collections::HashSet;
 use std::io::{Read, Write};
@@ -14,10 +19,11 @@ use flate2::write::DeflateEncoder;
 use sha2::{Digest, Sha256};
 
 use crate::error::ContainerError;
-use crate::limits::{Limits, MANIFEST_NAME, MAX_ENTRIES, MAX_FIELD, check_name};
+use crate::limits::{Limits, MANIFEST_NAME, MAX_ENTRIES, check_name};
 use crate::manifest::{FORMAT, Manifest, ManifestEntry, VERSION, hex};
 use crate::reader::{
-    CENTRAL_LEN, CENTRAL_SIG, DESCRIPTOR_SIG, END_SIG, LOCAL_SIG, Method, RawEntry,
+    CENTRAL_LEN, CENTRAL_SIG, DESCRIPTOR_SIG, END_SIG, END64_SIG, LOCAL_SIG, LOCATOR_SIG, Method,
+    RawEntry, ZIP64_AT,
 };
 
 /// How an entry is written.
@@ -57,9 +63,23 @@ struct Central {
     method: Method,
     flags: u16,
     crc32: u32,
-    compressed: u32,
-    size: u32,
-    offset: u32,
+    compressed: u64,
+    size: u64,
+    offset: u64,
+    /// The local header has a ZIP64 extra field.
+    zip64_local: bool,
+}
+
+/// What a local header says.
+struct Local<'a> {
+    name: &'a str,
+    method: Method,
+    flags: u16,
+    crc: u32,
+    compressed: u64,
+    size: u64,
+    /// Write the ZIP64 extra field (sizes that are 64 bit, or not known yet).
+    zip64: bool,
 }
 
 /// Writes a container.
@@ -94,12 +114,6 @@ impl<S: Write> Plain<S> {
 
 impl<S: Write> Write for Plain<S> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if self.size + buf.len() as u64 > MAX_FIELD {
-            return Err(ContainerError::Limit(format!(
-                "an entry is bigger than {MAX_FIELD} bytes, the most that the container format holds (ZIP64 is not supported)"
-            ))
-            .into());
-        }
         self.crc.update(buf);
         self.sha.update(buf);
         self.size += buf.len() as u64;
@@ -120,10 +134,26 @@ fn put32(out: &mut impl Write, v: u32) -> std::io::Result<()> {
     out.write_all(&v.to_le_bytes())
 }
 
+fn put64(out: &mut impl Write, v: u64) -> std::io::Result<()> {
+    out.write_all(&v.to_le_bytes())
+}
+
 fn limit_err(what: &str) -> ContainerError {
     ContainerError::Limit(format!(
-        "{what}; the container format holds at most {MAX_ENTRIES} entries and {MAX_FIELD} bytes (ZIP64 is not supported). Save the plain JSON form instead"
+        "{what}; the container format holds at most {MAX_ENTRIES} entries. Save the plain JSON form instead"
     ))
+}
+
+/// Checks the number of entries that a program plans to write (`parts`, without the manifest),
+/// before it writes anything.
+pub fn check_entry_count(parts: usize) -> Result<(), ContainerError> {
+    if parts + 1 > MAX_ENTRIES {
+        return Err(limit_err(&format!(
+            "the container would have {} entries",
+            parts + 1
+        )));
+    }
+    Ok(())
 }
 
 impl<W: Write> Writer<W> {
@@ -176,38 +206,40 @@ impl<W: Write> Writer<W> {
                 MAX_ENTRIES - 1
             )));
         }
-        if self.out.count > MAX_FIELD - 1024 * 1024 {
-            return Err(limit_err("the file would be bigger than 4 GiB"));
+        Ok(())
+    }
+
+    fn local_header(&mut self, l: &Local<'_>) -> std::io::Result<()> {
+        let out = &mut self.out;
+        let (comp32, size32) = if l.zip64 {
+            (ZIP64_AT as u32, ZIP64_AT as u32)
+        } else {
+            (l.compressed as u32, l.size as u32)
+        };
+        put32(out, LOCAL_SIG)?;
+        put16(out, if l.zip64 { 45 } else { 20 })?;
+        put16(out, l.flags | FLAG_UTF8)?;
+        put16(out, l.method.code())?;
+        put16(out, DOS_TIME)?;
+        put16(out, DOS_DATE)?;
+        put32(out, l.crc)?;
+        put32(out, comp32)?;
+        put32(out, size32)?;
+        put16(out, l.name.len() as u16)?;
+        put16(out, if l.zip64 { 20 } else { 0 })?;
+        out.write_all(l.name.as_bytes())?;
+        if l.zip64 {
+            put16(out, 1)?;
+            put16(out, 16)?;
+            put64(out, l.size)?;
+            put64(out, l.compressed)?;
         }
         Ok(())
     }
 
-    fn local_header(
-        &mut self,
-        name: &str,
-        method: Method,
-        flags: u16,
-        crc: u32,
-        compressed: u32,
-        size: u32,
-    ) -> std::io::Result<()> {
-        let out = &mut self.out;
-        put32(out, LOCAL_SIG)?;
-        put16(out, 20)?;
-        put16(out, flags | FLAG_UTF8)?;
-        put16(out, method.code())?;
-        put16(out, DOS_TIME)?;
-        put16(out, DOS_DATE)?;
-        put32(out, crc)?;
-        put32(out, compressed)?;
-        put32(out, size)?;
-        put16(out, name.len() as u16)?;
-        put16(out, 0)?;
-        out.write_all(name.as_bytes())
-    }
-
     /// Writes an entry. `fill` writes its bytes into the writer it is given. If `fill` fails,
-    /// the error is returned and the writer must be dropped (the output is incomplete).
+    /// the error is returned and the writer must be dropped (the output is incomplete). The
+    /// sizes follow the data in a data descriptor (64 bit).
     pub fn add_with(
         &mut self,
         name: &str,
@@ -215,12 +247,20 @@ impl<W: Write> Writer<W> {
         fill: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
     ) -> Result<(), ContainerError> {
         self.begin(name)?;
-        let offset = u32::try_from(self.out.count).map_err(|_| limit_err("the file is too big"))?;
+        let offset = self.out.count;
         let method = match how {
             Compression::Stored => Method::Stored,
             Compression::Deflate(_) => Method::Deflate,
         };
-        self.local_header(name, method, FLAG_DESCRIPTOR, 0, 0, 0)?;
+        self.local_header(&Local {
+            name,
+            method,
+            flags: FLAG_DESCRIPTOR,
+            crc: 0,
+            compressed: 0,
+            size: 0,
+            zip64: true,
+        })?;
         let start = self.out.count;
         let (crc, sha, size) = match how {
             Compression::Stored => {
@@ -239,46 +279,15 @@ impl<W: Write> Writer<W> {
                     sha,
                     size,
                 } = plain;
-                sink.finish()?;
+                sink.finish().map_err(ContainerError::from_io)?;
                 (crc.sum(), sha, size)
             }
         };
         let compressed = self.out.count - start;
-        if compressed > MAX_FIELD || self.out.count > MAX_FIELD {
-            return Err(limit_err("the file would be bigger than 4 GiB"));
-        }
-        let (c32, s32) = (compressed as u32, size as u32);
         put32(&mut self.out, DESCRIPTOR_SIG)?;
         put32(&mut self.out, crc)?;
-        put32(&mut self.out, c32)?;
-        put32(&mut self.out, s32)?;
-        self.finish_entry(
-            name,
-            method,
-            FLAG_DESCRIPTOR,
-            crc,
-            c32,
-            s32,
-            offset,
-            size,
-            sha,
-        );
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn finish_entry(
-        &mut self,
-        name: &str,
-        method: Method,
-        flags: u16,
-        crc32: u32,
-        compressed: u32,
-        size32: u32,
-        offset: u32,
-        size: u64,
-        sha: Sha256,
-    ) {
+        put64(&mut self.out, compressed)?;
+        put64(&mut self.out, size)?;
         self.names.insert(name.to_string());
         self.manifest.push(ManifestEntry {
             name: name.to_string(),
@@ -288,22 +297,59 @@ impl<W: Write> Writer<W> {
         self.central.push(Central {
             name: name.to_string(),
             method,
-            flags,
-            crc32,
+            flags: FLAG_DESCRIPTOR,
+            crc32: crc,
             compressed,
-            size: size32,
+            size,
             offset,
+            zip64_local: true,
         });
+        Ok(())
     }
 
-    /// Writes an entry from bytes.
+    /// Writes an entry from bytes. A stored entry has its CRC-32 and size in the local header.
     pub fn add_bytes(
         &mut self,
         name: &str,
         how: Compression,
         bytes: &[u8],
     ) -> Result<(), ContainerError> {
-        self.add_with(name, how, |w| w.write_all(bytes))
+        if how != Compression::Stored {
+            return self.add_with(name, how, |w| w.write_all(bytes));
+        }
+        self.begin(name)?;
+        let offset = self.out.count;
+        let mut crc = Crc::new();
+        crc.update(bytes);
+        let size = bytes.len() as u64;
+        let zip64 = size >= ZIP64_AT;
+        self.local_header(&Local {
+            name,
+            method: Method::Stored,
+            flags: 0,
+            crc: crc.sum(),
+            compressed: size,
+            size,
+            zip64,
+        })?;
+        self.out.write_all(bytes)?;
+        self.names.insert(name.to_string());
+        self.manifest.push(ManifestEntry {
+            name: name.to_string(),
+            size,
+            sha256: hex(&Sha256::digest(bytes)),
+        });
+        self.central.push(Central {
+            name: name.to_string(),
+            method: Method::Stored,
+            flags: 0,
+            crc32: crc.sum(),
+            compressed: size,
+            size,
+            offset,
+            zip64_local: zip64,
+        });
+        Ok(())
     }
 
     /// Copies an entry of another container without decoding it (see [`crate::Container::raw`]).
@@ -312,18 +358,17 @@ impl<W: Write> Writer<W> {
     /// copy fails and the writer must be dropped.
     pub fn copy_raw(&mut self, mut raw: RawEntry) -> Result<(), ContainerError> {
         self.begin(&raw.name)?;
-        if raw.compressed > MAX_FIELD || raw.size > MAX_FIELD {
-            return Err(limit_err("an entry is too big"));
-        }
-        let offset = u32::try_from(self.out.count).map_err(|_| limit_err("the file is too big"))?;
-        self.local_header(
-            &raw.name,
-            raw.method,
-            0,
-            raw.crc32,
-            raw.compressed as u32,
-            raw.size as u32,
-        )?;
+        let offset = self.out.count;
+        let zip64 = raw.compressed >= ZIP64_AT || raw.size >= ZIP64_AT;
+        self.local_header(&Local {
+            name: &raw.name,
+            method: raw.method,
+            flags: 0,
+            crc: raw.crc32,
+            compressed: raw.compressed,
+            size: raw.size,
+            zip64,
+        })?;
         let copied = std::io::copy(&mut (&mut raw.data).take(raw.compressed), &mut self.out)
             .map_err(ContainerError::from_io)?;
         if copied != raw.compressed {
@@ -335,8 +380,14 @@ impl<W: Write> Writer<W> {
                 ),
             ));
         }
-        if self.out.count > MAX_FIELD {
-            return Err(limit_err("the file would be bigger than 4 GiB"));
+        // A checked source (a stored entry) runs its final checks when it is read to the end.
+        let mut probe = [0u8; 1];
+        let more = raw.data.read(&mut probe).map_err(ContainerError::from_io)?;
+        if more != 0 {
+            return Err(ContainerError::entry(
+                &raw.name,
+                "the old file has more bytes of it than its directory says",
+            ));
         }
         self.names.insert(raw.name.clone());
         self.manifest.push(ManifestEntry {
@@ -349,9 +400,10 @@ impl<W: Write> Writer<W> {
             method: raw.method,
             flags: 0,
             crc32: raw.crc32,
-            compressed: raw.compressed as u32,
-            size: raw.size as u32,
+            compressed: raw.compressed,
+            size: raw.size,
             offset,
+            zip64_local: zip64,
         });
         Ok(())
     }
@@ -367,8 +419,16 @@ impl<W: Write> Writer<W> {
         };
         let bytes = manifest.to_bytes();
         // The manifest takes the last entry slot; `begin` kept one free.
-        let offset = u32::try_from(self.out.count).map_err(|_| limit_err("the file is too big"))?;
-        self.local_header(MANIFEST_NAME, Method::Deflate, FLAG_DESCRIPTOR, 0, 0, 0)?;
+        let offset = self.out.count;
+        self.local_header(&Local {
+            name: MANIFEST_NAME,
+            method: Method::Deflate,
+            flags: FLAG_DESCRIPTOR,
+            crc: 0,
+            compressed: 0,
+            size: 0,
+            zip64: true,
+        })?;
         let start = self.out.count;
         let mut crc = Crc::new();
         crc.update(&bytes);
@@ -377,57 +437,94 @@ impl<W: Write> Writer<W> {
             enc.write_all(&bytes)?;
             enc.finish()?;
         }
-        let compressed = (self.out.count - start) as u32;
+        let compressed = self.out.count - start;
         put32(&mut self.out, DESCRIPTOR_SIG)?;
         put32(&mut self.out, crc.sum())?;
-        put32(&mut self.out, compressed)?;
-        put32(&mut self.out, bytes.len() as u32)?;
+        put64(&mut self.out, compressed)?;
+        put64(&mut self.out, bytes.len() as u64)?;
         self.central.push(Central {
             name: MANIFEST_NAME.to_string(),
             method: Method::Deflate,
             flags: FLAG_DESCRIPTOR,
             crc32: crc.sum(),
             compressed,
-            size: bytes.len() as u32,
+            size: bytes.len() as u64,
             offset,
+            zip64_local: true,
         });
-        let dir_offset =
-            u32::try_from(self.out.count).map_err(|_| limit_err("the file is too big"))?;
+        let dir_offset = self.out.count;
         let mut dir_size = 0u64;
         let central = std::mem::take(&mut self.central);
         for c in &central {
+            // The values that do not fit in 32 bits go to the ZIP64 extra field, in this order.
+            let mut extra: Vec<u8> = Vec::new();
+            let mut field = |v: u64| -> u32 {
+                if v >= ZIP64_AT {
+                    extra.extend_from_slice(&v.to_le_bytes());
+                    ZIP64_AT as u32
+                } else {
+                    v as u32
+                }
+            };
+            let size32 = field(c.size);
+            let comp32 = field(c.compressed);
+            let off32 = field(c.offset);
+            let extra_len = if extra.is_empty() { 0 } else { extra.len() + 4 };
             let out = &mut self.out;
             put32(out, CENTRAL_SIG)?;
-            put16(out, 20)?;
-            put16(out, 20)?;
+            put16(out, if extra_len > 0 { 45 } else { 20 })?;
+            put16(out, if extra_len > 0 || c.zip64_local { 45 } else { 20 })?;
             put16(out, c.flags | FLAG_UTF8)?;
             put16(out, c.method.code())?;
             put16(out, DOS_TIME)?;
             put16(out, DOS_DATE)?;
             put32(out, c.crc32)?;
-            put32(out, c.compressed)?;
-            put32(out, c.size)?;
+            put32(out, comp32)?;
+            put32(out, size32)?;
             put16(out, c.name.len() as u16)?;
-            put16(out, 0)?;
+            put16(out, extra_len as u16)?;
             put16(out, 0)?;
             put16(out, 0)?;
             put16(out, 0)?;
             put32(out, 0)?;
-            put32(out, c.offset)?;
+            put32(out, off32)?;
             out.write_all(c.name.as_bytes())?;
-            dir_size += CENTRAL_LEN as u64 + c.name.len() as u64;
+            if extra_len > 0 {
+                put16(out, 1)?;
+                put16(out, extra.len() as u16)?;
+                out.write_all(&extra)?;
+            }
+            dir_size += (CENTRAL_LEN + c.name.len() + extra_len) as u64;
         }
-        if self.out.count > MAX_FIELD {
-            return Err(limit_err("the file would be bigger than 4 GiB"));
+        let count = central.len() as u64;
+        let big = count >= 0xFFFF || dir_size >= ZIP64_AT || dir_offset >= ZIP64_AT;
+        if big {
+            let rec_at = self.out.count;
+            let out = &mut self.out;
+            put32(out, END64_SIG)?;
+            put64(out, 44)?;
+            put16(out, 45)?;
+            put16(out, 45)?;
+            put32(out, 0)?;
+            put32(out, 0)?;
+            put64(out, count)?;
+            put64(out, count)?;
+            put64(out, dir_size)?;
+            put64(out, dir_offset)?;
+            put32(out, LOCATOR_SIG)?;
+            put32(out, 0)?;
+            put64(out, rec_at)?;
+            put32(out, 1)?;
         }
         let out = &mut self.out;
         put32(out, END_SIG)?;
         put16(out, 0)?;
         put16(out, 0)?;
-        put16(out, central.len() as u16)?;
-        put16(out, central.len() as u16)?;
-        put32(out, dir_size as u32)?;
-        put32(out, dir_offset)?;
+        let c16 = if count >= 0xFFFF { 0xFFFF } else { count as u16 };
+        put16(out, c16)?;
+        put16(out, c16)?;
+        put32(out, dir_size.min(ZIP64_AT) as u32)?;
+        put32(out, dir_offset.min(ZIP64_AT) as u32)?;
         put16(out, 0)?;
         Ok(self.out.inner)
     }

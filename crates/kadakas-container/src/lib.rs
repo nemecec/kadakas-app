@@ -13,10 +13,11 @@
 //! - [`PartSource`] reads a part by name. A document keeps a handle to the source of its file and
 //!   reads pictures and the history from it when they are used (DOC-21).
 //!
-//! The format: the ZIP of PKWARE, stored and deflate entries, no encryption, no ZIP64 (so at
-//! most 65 534 entries and 4 GiB less 2 bytes for the file and for each entry), UTF-8 names that
-//! are plain relative paths, and a `manifest.json` that lists every other entry with its size and
-//! its SHA-256. Any ZIP tool can open the file.
+//! The format: the ZIP of PKWARE, stored and deflate entries, no encryption, ZIP64 when a count
+//! is over 65 534 or an offset or a size is over 4 GiB less 2 bytes (at most 250 000 entries),
+//! UTF-8 names that are plain relative paths, and a `manifest.json` that lists every other entry
+//! with its size and its SHA-256. Other ZIP tools can read the file; an edited and re-zipped file
+//! is not supported (the manifest would not match).
 //!
 //! Pure and wasm-compatible. The file medium is native only.
 
@@ -29,14 +30,14 @@ mod source;
 mod writer;
 
 pub use error::ContainerError;
-pub use limits::{Limits, MANIFEST_NAME, MAX_ENTRIES, MAX_FIELD, check_name};
+pub use limits::{Limits, MANIFEST_NAME, MAX_ENTRIES, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES, check_name};
 pub use manifest::{FORMAT, Manifest, ManifestEntry, VERSION, hex, parse_hash, sha256_hex};
 #[cfg(not(target_arch = "wasm32"))]
 pub use medium::FileMedium;
 pub use medium::{Medium, MemMedium};
 pub use reader::{Container, Entry, EntryReader, Method, RawEntry, has_zip_magic};
 pub use source::{ContainerSource, PartSource};
-pub use writer::{Compression, Writer};
+pub use writer::{Compression, Writer, check_entry_count};
 
 #[cfg(test)]
 mod tests;

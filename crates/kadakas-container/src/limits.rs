@@ -2,12 +2,14 @@
 
 use crate::error::ContainerError;
 
-/// The most entries a container can hold. The ZIP end record has 16 bits for the count, and the
-/// value 0xFFFF means ZIP64, which this code does not read or write.
-pub const MAX_ENTRIES: usize = 65_534;
-/// The largest size of an entry, of the offsets and of the whole file: the 32 bit fields of ZIP
-/// (the value 0xFFFFFFFF means ZIP64).
-pub const MAX_FIELD: u64 = 0xFFFF_FFFE;
+/// The most entries a container holds. Above 65 534 entries (and above 4 GiB - 2 bytes for an
+/// offset or a size) the file uses ZIP64. The manifest and the central directory of this many
+/// entries are about 50 MB and 30 MB, which the bounds below allow.
+pub const MAX_ENTRIES: usize = 250_000;
+/// The largest uncompressed size of one entry that a reader accepts at most (16 GiB).
+pub const MAX_ENTRY_BYTES: u64 = 16 << 30;
+/// The largest uncompressed size of all entries together that a reader accepts at most (64 GiB).
+pub const MAX_TOTAL_BYTES: u64 = 64 << 30;
 /// The name of the manifest entry.
 pub const MANIFEST_NAME: &str = "manifest.json";
 
@@ -41,13 +43,13 @@ impl Default for Limits {
     fn default() -> Self {
         Limits {
             max_entries: MAX_ENTRIES,
-            max_entry_bytes: MAX_FIELD,
-            max_total_bytes: MAX_FIELD,
+            max_entry_bytes: MAX_ENTRY_BYTES,
+            max_total_bytes: MAX_TOTAL_BYTES,
             max_ratio: 200,
             ratio_floor: 1 << 20,
             max_name_bytes: 255,
-            max_directory_bytes: 32 * 1024 * 1024,
-            max_manifest_bytes: 32 * 1024 * 1024,
+            max_directory_bytes: 64 * 1024 * 1024,
+            max_manifest_bytes: 128 * 1024 * 1024,
         }
     }
 }
@@ -63,8 +65,8 @@ impl Limits {
 
     pub(crate) fn clamped(mut self) -> Limits {
         self.max_entries = self.max_entries.min(MAX_ENTRIES);
-        self.max_entry_bytes = self.max_entry_bytes.min(MAX_FIELD);
-        self.max_total_bytes = self.max_total_bytes.min(u64::MAX / 2);
+        self.max_entry_bytes = self.max_entry_bytes.min(MAX_ENTRY_BYTES);
+        self.max_total_bytes = self.max_total_bytes.min(MAX_TOTAL_BYTES);
         self.max_name_bytes = self.max_name_bytes.clamp(1, 1024);
         self
     }
@@ -88,7 +90,7 @@ pub fn check_name(name: &str, max: usize) -> Result<(), ContainerError> {
     if name.contains('\\') {
         return bad("the name has a backslash");
     }
-    if name.chars().any(|c| c.is_control()) {
+    if name.chars().any(|c| c.is_control() || is_invisible(c)) {
         return bad("the name has a control character");
     }
     let mut parts = name.split('/').peekable();
@@ -115,9 +117,24 @@ pub fn check_name(name: &str, max: usize) -> Result<(), ContainerError> {
     Ok(())
 }
 
-/// A name for an error text: cut, so a hostile name cannot flood a message.
+/// True for the characters of the Unicode class "format" (Cf) that show nothing and can reorder
+/// or hide text: bidi controls, zero-width characters, the byte order mark, the tag characters.
+pub(crate) fn is_invisible(c: char) -> bool {
+    matches!(c as u32,
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x08E2 | 0x180E
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
+        | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x1BCA0..=0x1BCA3
+        | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
+/// A name for an error text: cut, so a hostile name cannot flood a message, and without control
+/// and invisible characters (a name could reorder the text of the message around it).
 pub(crate) fn shown(name: &str) -> String {
-    let mut s: String = name.chars().filter(|c| !c.is_control()).take(80).collect();
+    let mut s: String = name
+        .chars()
+        .filter(|c| !c.is_control() && !is_invisible(*c))
+        .take(80)
+        .collect();
     if name.chars().count() > 80 {
         s.push_str("...");
     }
@@ -140,6 +157,7 @@ mod tests {
         }
         for bad in [
             "", "/abs", "../x", "a/../b", "a/./b", "a//b", "a/", "a\\b", "C:/x", "a\u{0}b", "a\nb",
+            "a\u{202E}b", "a\u{200B}b", "\u{FEFF}a",
         ] {
             assert!(check_name(bad, 255).is_err(), "{bad:?}");
         }
@@ -154,6 +172,13 @@ mod tests {
     }
 
     #[test]
+    fn invisible_characters_are_not_shown() {
+        assert_eq!(shown("a\u{202E}b\u{200B}c\u{7}d"), "abcd");
+        assert!(is_invisible('\u{FEFF}'));
+        assert!(!is_invisible('a'));
+    }
+
+    #[test]
     fn limits_are_clamped() {
         let l = Limits {
             max_entries: usize::MAX,
@@ -163,7 +188,7 @@ mod tests {
         }
         .clamped();
         assert_eq!(l.max_entries, MAX_ENTRIES);
-        assert_eq!(l.max_entry_bytes, MAX_FIELD);
+        assert_eq!(l.max_entry_bytes, MAX_ENTRY_BYTES);
         assert_eq!(l.max_name_bytes, 1);
         let t = Limits::default().with_total(10);
         assert_eq!((t.max_total_bytes, t.max_entry_bytes), (10, 10));

@@ -14,7 +14,7 @@ use flate2::Crc;
 use sha2::{Digest, Sha256};
 
 use crate::error::ContainerError;
-use crate::limits::{Limits, MANIFEST_NAME, MAX_FIELD, check_name, shown};
+use crate::limits::{Limits, MANIFEST_NAME, check_name, shown};
 use crate::manifest::{Manifest, hex, parse_hash};
 use crate::medium::{Medium, MemMedium};
 
@@ -22,6 +22,10 @@ pub(crate) const LOCAL_SIG: u32 = 0x0403_4b50;
 pub(crate) const CENTRAL_SIG: u32 = 0x0201_4b50;
 pub(crate) const END_SIG: u32 = 0x0605_4b50;
 pub(crate) const DESCRIPTOR_SIG: u32 = 0x0807_4b50;
+pub(crate) const END64_SIG: u32 = 0x0606_4b50;
+pub(crate) const LOCATOR_SIG: u32 = 0x0706_4b50;
+/// The value of a 32 bit field that says: the real value is in the ZIP64 extra field.
+pub(crate) const ZIP64_AT: u64 = 0xFFFF_FFFF;
 pub(crate) const END_LEN: usize = 22;
 pub(crate) const LOCAL_LEN: usize = 30;
 pub(crate) const CENTRAL_LEN: usize = 46;
@@ -67,6 +71,9 @@ pub struct Entry {
     pub sha256: [u8; 32],
     /// Where the local header starts.
     offset: u64,
+    /// Where the next entry (or the central directory) starts: the data of this entry ends
+    /// before it. The ranges of the entries are disjoint.
+    limit: u64,
 }
 
 /// An entry as it is in the file, for copying to another container without decoding it.
@@ -99,8 +106,6 @@ pub struct Container {
     // each read, and a container can have 65 534 entries.
     entries: Arc<Vec<Entry>>,
     index: Arc<HashMap<String, usize>>,
-    /// Where the central directory starts: the data of every entry ends before it.
-    dir_offset: u64,
     manifest: Arc<Manifest>,
     manifest_sha256: [u8; 32],
     manifest_entry: Entry,
@@ -159,6 +164,12 @@ fn le32(b: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
 }
 
+fn le64(b: &[u8], at: usize) -> u64 {
+    let mut x = [0u8; 8];
+    x.copy_from_slice(&b[at..at + 8]);
+    u64::from_le_bytes(x)
+}
+
 /// One entry of the central directory, before the manifest is known.
 struct Raw {
     name: String,
@@ -201,11 +212,6 @@ impl Container {
         if len < END_LEN as u64 {
             return Err(ContainerError::format("the file is too short"));
         }
-        if len > MAX_FIELD {
-            return Err(ContainerError::Limit(format!(
-                "the file has {len} bytes; a container is at most {MAX_FIELD} bytes (ZIP64 is not supported)"
-            )));
-        }
         // The end record is in the last 22 + 65535 bytes (the comment is at the end).
         let tail_len = len.min(END_LEN as u64 + 65_535);
         let tail = read_exact(&*medium, len - tail_len, tail_len)?;
@@ -227,17 +233,59 @@ impl Container {
                 "a file in several parts is not supported",
             ));
         }
-        if count == 0xFFFF || dir_size == 0xFFFF_FFFF || dir_offset == 0xFFFF_FFFF {
-            return Err(ContainerError::format("ZIP64 is not supported"));
-        }
         let end_pos = len - tail_len + end_at as u64;
-        let (dir_size, dir_offset) = (u64::from(dir_size), u64::from(dir_offset));
-        if dir_offset + dir_size > end_pos {
+        let saturated = count == 0xFFFF || dir_size == 0xFFFF_FFFF || dir_offset == 0xFFFF_FFFF;
+        // The ZIP64 locator is the 20 bytes before the end record.
+        let locator = (end_pos >= 20)
+            .then(|| end_at.checked_sub(20))
+            .flatten()
+            .filter(|at| le32(&tail, *at) == LOCATOR_SIG);
+        let (count, dir_size, dir_offset, dir_end) = match locator {
+            Some(at) => {
+                let l = &tail[at..at + 20];
+                let (l_disk, rec_at, disks) = (le32(l, 4), le64(l, 8), le32(l, 16));
+                if l_disk != 0 || disks > 1 {
+                    return Err(ContainerError::format(
+                        "a file in several parts is not supported",
+                    ));
+                }
+                let locator_pos = end_pos - 20;
+                if rec_at.checked_add(56).is_none_or(|e| e > locator_pos) {
+                    return Err(ContainerError::format(
+                        "the ZIP64 end record is not where the locator says",
+                    ));
+                }
+                let rec = read_exact(&*medium, rec_at, 56)?;
+                if le32(&rec, 0) != END64_SIG || le64(&rec, 4) < 44 {
+                    return Err(ContainerError::format("the ZIP64 end record is damaged"));
+                }
+                let (disk, dir_disk) = (le32(&rec, 16), le32(&rec, 20));
+                let (on_disk, total) = (le64(&rec, 24), le64(&rec, 32));
+                if disk != 0 || dir_disk != 0 || on_disk != total {
+                    return Err(ContainerError::format(
+                        "a file in several parts is not supported",
+                    ));
+                }
+                (total, le64(&rec, 40), le64(&rec, 48), rec_at)
+            }
+            None if saturated => {
+                return Err(ContainerError::format(
+                    "the ZIP64 end record is missing (the end record says that it follows)",
+                ));
+            }
+            None => (
+                u64::from(count),
+                u64::from(dir_size),
+                u64::from(dir_offset),
+                end_pos,
+            ),
+        };
+        if dir_offset.checked_add(dir_size).is_none_or(|e| e > dir_end) {
             return Err(ContainerError::format(
                 "the central directory is not where the end record says",
             ));
         }
-        if usize::from(count) > limits.max_entries {
+        if count > limits.max_entries as u64 {
             return Err(ContainerError::Limit(format!(
                 "the container has {count} entries; at most {} are read",
                 limits.max_entries
@@ -250,7 +298,7 @@ impl Container {
             )));
         }
         let dir = read_exact(&*medium, dir_offset, dir_size)?;
-        let raws = parse_directory(&dir, usize::from(count), dir_offset, &limits)?;
+        let raws = parse_directory(&dir, count as usize, dir_offset, &limits)?;
         Container::with_manifest(medium, raws, dir_offset, &limits)
     }
 
@@ -287,6 +335,7 @@ impl Container {
                 )));
             }
         }
+        let limits_of = disjoint_ranges(&raws, dir_offset)?;
         let pos = raws
             .iter()
             .position(|r| r.name == MANIFEST_NAME)
@@ -308,12 +357,12 @@ impl Container {
             crc32: m.crc32,
             sha256: [0; 32],
             offset: m.offset,
+            limit: limits_of[pos],
         };
         let mut container = Container {
             medium,
             entries: Arc::default(),
             index: Arc::default(),
-            dir_offset,
             manifest: Arc::new(Manifest {
                 format: String::new(),
                 format_version: 0,
@@ -348,7 +397,7 @@ impl Container {
             }
         }
         let mut entries = Vec::with_capacity(raws.len());
-        for r in raws {
+        for (i, r) in raws.into_iter().enumerate() {
             if r.name == MANIFEST_NAME {
                 continue;
             }
@@ -372,6 +421,7 @@ impl Container {
                 crc32: r.crc32,
                 sha256,
                 offset: r.offset,
+                limit: limits_of[i],
             });
         }
         if let Some(name) = listed.keys().min() {
@@ -440,7 +490,9 @@ impl Container {
         self.medium.verify()
     }
 
-    /// Opens the local header of the entry and returns where its data starts.
+    /// Opens the local header of the entry and returns where its data starts. The header must
+    /// agree with the directory: the name, the method, and (when the sizes are not left to a data
+    /// descriptor) the CRC-32 and the sizes. An entry that the header says is encrypted is refused.
     fn data_start(&self, e: &Entry) -> Result<u64, ContainerError> {
         let bad = |why: &str| ContainerError::entry(&e.name, why);
         // The local header and the name in one read: the name must be the name of the directory,
@@ -451,6 +503,12 @@ impl Container {
         if le32(&head, 0) != LOCAL_SIG {
             return Err(bad("its local header is missing"));
         }
+        let flags = le16(&head, 6);
+        if flags & (1 | 1 << 6 | 1 << 13) != 0 {
+            return Err(bad(
+                "its local header says that it is encrypted, which is not supported",
+            ));
+        }
         if Method::from_code(le16(&head, 8)) != Some(e.method) {
             return Err(bad(
                 "its local header says another method than the directory",
@@ -460,9 +518,32 @@ impl Container {
         if name_len != e.name.len() as u64 || head[LOCAL_LEN..] != *e.name.as_bytes() {
             return Err(bad("its local header has another name than the directory"));
         }
-        let start = e.offset + LOCAL_LEN as u64 + name_len + extra_len;
-        if start + e.compressed > self.dir_offset {
-            return Err(bad("its data reaches into the central directory"));
+        if flags & (1 << 3) == 0 {
+            // The sizes are in the header: they are those of the directory.
+            let (crc, comp32, size32) = (le32(&head, 14), le32(&head, 18), le32(&head, 22));
+            let (mut comp, mut size) = (u64::from(comp32), u64::from(size32));
+            if comp == ZIP64_AT || size == ZIP64_AT {
+                let extra = read_exact(&*self.medium, e.offset + want, extra_len)
+                    .map_err(|err| as_entry(err, &e.name))?;
+                let big =
+                    zip64_values(&extra, [true, true, false], &e.name)?;
+                size = big[0].unwrap_or(size);
+                comp = big[1].unwrap_or(comp);
+            }
+            if crc != e.crc32 || comp != e.compressed || size != e.size {
+                return Err(bad(
+                    "its local header has another CRC-32 or size than the directory",
+                ));
+            }
+        }
+        let start = e.offset + want + extra_len;
+        if start
+            .checked_add(e.compressed)
+            .is_none_or(|end| end > e.limit)
+        {
+            return Err(bad(
+                "its data reaches into the next entry or into the central directory",
+            ));
         }
         Ok(start)
     }
@@ -543,19 +624,24 @@ impl Container {
         Ok(out)
     }
 
-    /// An entry as it is in the file, for [`crate::Writer::copy_raw`]. The data is not decoded or
-    /// checked; the copy keeps the CRC-32 and the hash, so a damaged entry is found when the new
-    /// container is read.
+    /// An entry as it is in the file, for [`crate::Writer::copy_raw`]. A stored entry is checked
+    /// while it is copied (size, CRC-32 and SHA-256), so a copy never carries damaged bytes into a
+    /// new file. A deflated entry is not decoded: the copy keeps the CRC-32 and the hash, so a
+    /// damaged entry is found when the new container is read.
     pub fn raw(&self, name: &str) -> Result<RawEntry, ContainerError> {
         let e = self
             .entry(name)
             .ok_or_else(|| ContainerError::entry(name, "it is not in the container"))?;
         self.medium.verify()?;
-        let start = self.data_start(e)?;
-        let data = self
-            .medium
-            .open(start, e.compressed)
-            .map_err(|err| as_entry(err, &e.name))?;
+        let data: Box<dyn Read + Send> = match e.method {
+            Method::Stored => Box::new(self.reader_of(e, Some(e.sha256))?),
+            Method::Deflate => {
+                let start = self.data_start(e)?;
+                self.medium
+                    .open(start, e.compressed)
+                    .map_err(|err| as_entry(err, &e.name))?
+            }
+        };
         Ok(RawEntry {
             name: e.name.clone(),
             method: e.method,
@@ -571,6 +657,43 @@ impl Container {
     pub fn manifest_size(&self) -> u64 {
         self.manifest_entry.size
     }
+}
+
+/// For each entry, where the next entry (or the directory) starts. No two entries may overlap:
+/// the smallest possible extent of an entry (its local header, name and data) must end before the
+/// next entry starts.
+fn disjoint_ranges(raws: &[Raw], dir_offset: u64) -> Result<Vec<u64>, ContainerError> {
+    let mut order: Vec<usize> = (0..raws.len()).collect();
+    order.sort_by_key(|i| raws[*i].offset);
+    let mut limit = vec![dir_offset; raws.len()];
+    let least = |a: &Raw| {
+        a.offset
+            .saturating_add(LOCAL_LEN as u64 + a.name.len() as u64)
+            .saturating_add(a.compressed)
+    };
+    for w in order.windows(2) {
+        let (a, b) = (&raws[w[0]], &raws[w[1]]);
+        if a.offset == b.offset || least(a) > b.offset {
+            return Err(ContainerError::entry(
+                &b.name,
+                format!(
+                    "it overlaps the entry \"{}\" (the file is damaged or was made to confuse a reader)",
+                    shown(&a.name)
+                ),
+            ));
+        }
+        limit[w[0]] = b.offset;
+    }
+    if let Some(last) = order.last() {
+        let a = &raws[*last];
+        if least(a) > dir_offset {
+            return Err(ContainerError::entry(
+                &a.name,
+                "its data reaches into the central directory",
+            ));
+        }
+    }
+    Ok(limit)
 }
 
 /// A damaged read of a part that has no name yet gets the name of the entry.
@@ -592,6 +715,45 @@ impl ContainerError {
     }
 }
 
+/// The 64 bit values of the ZIP64 extra field (id 1). A value is in the field only if the 32 bit
+/// field next to it holds 0xFFFFFFFF, and the values come in this order: size, compressed size,
+/// offset. `want` says which of the three are there.
+fn zip64_values(
+    extra: &[u8],
+    want: [bool; 3],
+    name: &str,
+) -> Result<[Option<u64>; 3], ContainerError> {
+    let mut at = 0usize;
+    while at + 4 <= extra.len() {
+        let (id, n) = (le16(extra, at), usize::from(le16(extra, at + 2)));
+        let body = extra
+            .get(at + 4..at + 4 + n)
+            .ok_or_else(|| ContainerError::entry(name, "its extra field is cut short"))?;
+        if id == 1 {
+            let mut out = [None; 3];
+            let mut pos = 0usize;
+            for (i, w) in want.iter().enumerate() {
+                if *w {
+                    let v = body.get(pos..pos + 8).ok_or_else(|| {
+                        ContainerError::entry(name, "its ZIP64 field is too short")
+                    })?;
+                    out[i] = Some(le64(v, 0));
+                    pos += 8;
+                }
+            }
+            return Ok(out);
+        }
+        at += 4 + n;
+    }
+    if want.iter().any(|w| *w) {
+        return Err(ContainerError::entry(
+            name,
+            "a value needs a ZIP64 field, and the entry has none",
+        ));
+    }
+    Ok([None; 3])
+}
+
 fn parse_directory(
     dir: &[u8],
     count: usize,
@@ -599,8 +761,8 @@ fn parse_directory(
     limits: &Limits,
 ) -> Result<Vec<Raw>, ContainerError> {
     let mut c = Cursor { data: dir, pos: 0 };
-    let mut out = Vec::with_capacity(count);
-    let mut seen = HashSet::with_capacity(count);
+    let mut out = Vec::with_capacity(count.min(1 << 16));
+    let mut seen = HashSet::with_capacity(count.min(1 << 16));
     for _ in 0..count {
         if c.u32()? != CENTRAL_SIG {
             return Err(ContainerError::format(
@@ -624,7 +786,7 @@ fn parse_directory(
         let _external = c.u32()?;
         let offset = c.u32()?;
         let name_bytes = c.take(name_len)?;
-        c.take(extra_len)?;
+        let extra = c.take(extra_len)?;
         c.take(comment_len)?;
         let name = std::str::from_utf8(name_bytes)
             .map_err(|_| ContainerError::format("an entry name is not UTF-8 text"))?
@@ -633,18 +795,24 @@ fn parse_directory(
         if !seen.insert(name.clone()) {
             return Err(ContainerError::entry(&name, "the name is used twice"));
         }
-        if flags & 1 != 0 || flags & (1 << 6) != 0 {
+        if flags & (1 | 1 << 6 | 1 << 13) != 0 {
             return Err(ContainerError::entry(
                 &name,
                 "it is encrypted, which is not supported",
             ));
         }
-        if compressed == 0xFFFF_FFFF || size == 0xFFFF_FFFF || offset == 0xFFFF_FFFF {
-            return Err(ContainerError::entry(&name, "ZIP64 is not supported"));
-        }
-        if disk != 0 {
+        if disk != 0 && disk != 0xFFFF {
             return Err(ContainerError::entry(&name, "it is on another disk"));
         }
+        let want = [
+            u64::from(size) == ZIP64_AT,
+            u64::from(compressed) == ZIP64_AT,
+            u64::from(offset) == ZIP64_AT,
+        ];
+        let big = zip64_values(extra, want, &name)?;
+        let size = big[0].unwrap_or(u64::from(size));
+        let compressed = big[1].unwrap_or(u64::from(compressed));
+        let offset = big[2].unwrap_or(u64::from(offset));
         let method = Method::from_code(method).ok_or_else(|| {
             ContainerError::entry(
                 &name,
@@ -657,7 +825,10 @@ fn parse_directory(
                 "it is stored, but its two sizes differ",
             ));
         }
-        if u64::from(offset) + LOCAL_LEN as u64 > dir_offset {
+        if offset
+            .checked_add(LOCAL_LEN as u64)
+            .is_none_or(|e| e > dir_offset)
+        {
             return Err(ContainerError::entry(
                 &name,
                 "its local header is not in the file",
@@ -667,9 +838,9 @@ fn parse_directory(
             name,
             method,
             crc32,
-            size: u64::from(size),
-            compressed: u64::from(compressed),
-            offset: u64::from(offset),
+            size,
+            compressed,
+            offset,
         });
     }
     if c.pos != dir.len() {

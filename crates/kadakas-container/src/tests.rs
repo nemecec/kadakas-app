@@ -887,3 +887,335 @@ fn perf_the_most_entries() {
     );
     assert_eq!(c.entries().len(), n);
 }
+
+// ---- ZIP64, overlapping entries, local headers, raw copy checks ----
+
+/// A medium that is mostly zeros: only the listed parts hold bytes. It lets a test read a
+/// container whose offsets are above 4 GiB without a file of that size.
+#[derive(Debug)]
+struct Sparse {
+    parts: Arc<Vec<(u64, Vec<u8>)>>,
+    len: u64,
+}
+
+struct SparseReader {
+    parts: Arc<Vec<(u64, Vec<u8>)>>,
+    pos: u64,
+    end: u64,
+}
+
+impl Read for SparseReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = (buf.len() as u64).min(self.end - self.pos) as usize;
+        buf[..n].fill(0);
+        for (at, bytes) in self.parts.iter() {
+            for (i, b) in bytes.iter().enumerate() {
+                let p = at + i as u64;
+                if p >= self.pos && p < self.pos + n as u64 {
+                    buf[(p - self.pos) as usize] = *b;
+                }
+            }
+        }
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl Medium for Sparse {
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    fn open(&self, offset: u64, len: u64) -> Result<Box<dyn Read + Send>, ContainerError> {
+        assert!(offset + len <= self.len, "read past the end");
+        Ok(Box::new(SparseReader {
+            parts: self.parts.clone(),
+            pos: offset,
+            end: offset + len,
+        }))
+    }
+
+    fn label(&self) -> String {
+        "sparse".into()
+    }
+}
+
+fn crc_of(data: &[u8]) -> u32 {
+    let mut c = flate2::Crc::new();
+    c.update(data);
+    c.sum()
+}
+
+fn local_bytes(name: &str, crc: u32, comp: u64, size: u64, zip64: bool) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend(0x0403_4b50u32.to_le_bytes());
+    v.extend(45u16.to_le_bytes());
+    v.extend(0u16.to_le_bytes());
+    v.extend(0u16.to_le_bytes());
+    v.extend([0u8; 4]);
+    v.extend(crc.to_le_bytes());
+    let (c32, s32) = if zip64 {
+        (u32::MAX, u32::MAX)
+    } else {
+        (comp as u32, size as u32)
+    };
+    v.extend(c32.to_le_bytes());
+    v.extend(s32.to_le_bytes());
+    v.extend((name.len() as u16).to_le_bytes());
+    v.extend((if zip64 { 20u16 } else { 0 }).to_le_bytes());
+    v.extend(name.as_bytes());
+    if zip64 {
+        v.extend(1u16.to_le_bytes());
+        v.extend(16u16.to_le_bytes());
+        v.extend(size.to_le_bytes());
+        v.extend(comp.to_le_bytes());
+    }
+    v
+}
+
+fn central_bytes(name: &str, crc: u32, comp: u64, size: u64, offset: u64) -> Vec<u8> {
+    let mut extra = Vec::new();
+    let mut f = |v: u64| {
+        if v >= 0xFFFF_FFFF {
+            extra.extend(v.to_le_bytes());
+            u32::MAX
+        } else {
+            v as u32
+        }
+    };
+    let (s32, c32, o32) = (f(size), f(comp), f(offset));
+    let mut v = Vec::new();
+    v.extend(0x0201_4b50u32.to_le_bytes());
+    v.extend(45u16.to_le_bytes());
+    v.extend(45u16.to_le_bytes());
+    v.extend(0u16.to_le_bytes());
+    v.extend(0u16.to_le_bytes());
+    v.extend([0u8; 4]);
+    v.extend(crc.to_le_bytes());
+    v.extend(c32.to_le_bytes());
+    v.extend(s32.to_le_bytes());
+    v.extend((name.len() as u16).to_le_bytes());
+    let extra_len = if extra.is_empty() { 0 } else { extra.len() + 4 };
+    v.extend((extra_len as u16).to_le_bytes());
+    v.extend([0u8; 6]);
+    v.extend(0u32.to_le_bytes());
+    v.extend(o32.to_le_bytes());
+    v.extend(name.as_bytes());
+    if extra_len > 0 {
+        v.extend(1u16.to_le_bytes());
+        v.extend((extra.len() as u16).to_le_bytes());
+        v.extend(extra);
+    }
+    v
+}
+
+/// A container whose first entry has 6 GiB and whose other entries are above 4 GiB.
+fn sparse_zip64(with_locator: bool) -> Sparse {
+    let big: u64 = 6 << 30;
+    let a_off = big + 1000;
+    let a_local = local_bytes("a", crc_of(b"hello"), 5, 5, false);
+    let manifest = serde_json::to_vec(&serde_json::json!({
+        "format": FORMAT, "format_version": VERSION,
+        "entries": [
+            {"name": "big", "size": big, "sha256": sha256_hex(b"")},
+            {"name": "a", "size": 5, "sha256": sha256_hex(b"hello")},
+        ]
+    }))
+    .unwrap();
+    let m_off = a_off + a_local.len() as u64 + 5;
+    let m_local = local_bytes(
+        MANIFEST_NAME,
+        crc_of(&manifest),
+        manifest.len() as u64,
+        manifest.len() as u64,
+        false,
+    );
+    let dir_off = m_off + m_local.len() as u64 + manifest.len() as u64;
+    let mut dir = central_bytes("big", 0, big, big, 0);
+    dir.extend(central_bytes("a", crc_of(b"hello"), 5, 5, a_off));
+    dir.extend(central_bytes(
+        MANIFEST_NAME,
+        crc_of(&manifest),
+        manifest.len() as u64,
+        manifest.len() as u64,
+        m_off,
+    ));
+    let rec_at = dir_off + dir.len() as u64;
+    let mut tail = Vec::new();
+    tail.extend(0x0606_4b50u32.to_le_bytes());
+    tail.extend(44u64.to_le_bytes());
+    tail.extend([45, 0, 45, 0]);
+    tail.extend([0u8; 8]);
+    tail.extend(3u64.to_le_bytes());
+    tail.extend(3u64.to_le_bytes());
+    tail.extend((dir.len() as u64).to_le_bytes());
+    tail.extend(dir_off.to_le_bytes());
+    if with_locator {
+        tail.extend(0x0706_4b50u32.to_le_bytes());
+        tail.extend(0u32.to_le_bytes());
+        tail.extend(rec_at.to_le_bytes());
+        tail.extend(1u32.to_le_bytes());
+    }
+    tail.extend(0x0605_4b50u32.to_le_bytes());
+    tail.extend([0u8; 4]);
+    tail.extend(3u16.to_le_bytes());
+    tail.extend(3u16.to_le_bytes());
+    tail.extend(u32::MAX.to_le_bytes());
+    tail.extend(u32::MAX.to_le_bytes());
+    tail.extend(0u16.to_le_bytes());
+    let len = rec_at + tail.len() as u64;
+    let mut a_all = a_local;
+    a_all.extend(b"hello");
+    Sparse {
+        parts: Arc::new(vec![
+            (0, local_bytes("big", 0, big, big, true)),
+            (a_off, a_all),
+            (m_off, {
+                let mut m = m_local;
+                m.extend(&manifest);
+                m
+            }),
+            (dir_off, dir),
+            (rec_at, tail),
+        ]),
+        len,
+    }
+}
+
+#[test]
+fn zip64_offsets_and_sizes_above_4_gib_are_read() {
+    let c = Container::open(Arc::new(sparse_zip64(true)), Limits::default()).unwrap();
+    assert_eq!(c.entries().len(), 2);
+    assert_eq!(c.entry("big").unwrap().size, 6 << 30);
+    assert_eq!(c.read("a").unwrap(), b"hello");
+    // The big entry is there: its first bytes can be read (they are zeros), the rest is not read.
+    assert_eq!(c.read_prefix("big", 4).unwrap(), [0, 0, 0, 0]);
+    assert!(c.file_bytes() > 6 << 30);
+}
+
+#[test]
+fn a_zip64_end_record_that_is_missing_or_wrong_is_refused() {
+    let e = Container::open(Arc::new(sparse_zip64(false)), Limits::default()).unwrap_err();
+    assert!(e.to_string().contains("ZIP64 end record is missing"), "{e}");
+    // A locator that points nowhere.
+    let mut s = sparse_zip64(true);
+    let parts = Arc::get_mut(&mut s.parts).unwrap();
+    let last = parts.len() - 1;
+    let tail = &mut parts[last].1;
+    let n = tail.len();
+    // The locator is the 20 bytes before the 22 of the end record; its offset is at +8.
+    tail[n - 22 - 20 + 8..n - 22 - 20 + 16].copy_from_slice(&7u64.to_le_bytes());
+    let e = Container::open(Arc::new(s), Limits::default()).unwrap_err();
+    assert!(e.to_string().contains("ZIP64"), "{e}");
+}
+
+#[test]
+fn more_than_65534_entries_use_zip64_and_read_back() {
+    let n = 70_000usize;
+    let mut w = Writer::new(Vec::new());
+    for i in 0..n {
+        w.add_bytes(&format!("blobs/{i:08}"), Compression::Stored, b"")
+            .unwrap();
+    }
+    let bytes = w.finish().unwrap();
+    let end = bytes.len() - 22;
+    assert_eq!(&bytes[end..end + 4], &0x0605_4b50u32.to_le_bytes());
+    // The count field of the end record says "see the ZIP64 record".
+    assert_eq!(&bytes[end + 10..end + 12], &[0xFF, 0xFF]);
+    assert_eq!(&bytes[end - 20..end - 16], &0x0706_4b50u32.to_le_bytes());
+    let c = open(&bytes).unwrap();
+    assert_eq!(c.entries().len(), n);
+    assert_eq!(c.read("blobs/00069999").unwrap(), b"");
+    assert!(
+        Container::from_bytes(
+            bytes,
+            Limits {
+                max_entries: 60_000,
+                ..Limits::default()
+            }
+        )
+        .is_err()
+    );
+}
+
+/// The offsets of the central directory entries in a container made by the writer.
+fn central_offsets(bytes: &[u8]) -> Vec<usize> {
+    let sig = 0x0201_4b50u32.to_le_bytes();
+    bytes
+        .windows(4)
+        .enumerate()
+        .filter(|(_, w)| *w == sig)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+#[test]
+fn entries_that_overlap_are_refused() {
+    let base = sample();
+    let at = central_offsets(&base);
+    // The second entry starts where the first one starts.
+    let mut bytes = base.clone();
+    let first = bytes[at[0] + 42..at[0] + 46].to_vec();
+    bytes[at[1] + 42..at[1] + 46].copy_from_slice(&first);
+    let e = err(&bytes);
+    assert!(e.contains("overlaps"), "{e}");
+    // The second entry starts inside the data of the first one.
+    let mut bytes = base.clone();
+    let off0 = u32::from_le_bytes(bytes[at[0] + 42..at[0] + 46].try_into().unwrap());
+    bytes[at[1] + 42..at[1] + 46].copy_from_slice(&(off0 + 40).to_le_bytes());
+    let e = err(&bytes);
+    assert!(e.contains("overlaps"), "{e}");
+    // The data of the first entry is longer than the space to the next entry.
+    let mut bytes = base;
+    let comp = u32::from_le_bytes(bytes[at[0] + 20..at[0] + 24].try_into().unwrap());
+    bytes[at[0] + 20..at[0] + 24].copy_from_slice(&(comp + 5000).to_le_bytes());
+    assert!(err(&bytes).contains("overlaps") || err(&bytes).contains("grows"));
+}
+
+#[test]
+fn a_local_header_with_another_crc_size_or_an_encryption_flag_is_refused() {
+    let base = write(&[("blobs/aa", Compression::Stored, b"picture bytes")]);
+    let c = open(&base).unwrap();
+    assert_eq!(c.read("blobs/aa").unwrap(), b"picture bytes");
+    // A stored entry has its CRC-32 in the local header: change it.
+    let mut bytes = base.clone();
+    bytes[14] ^= 1;
+    let c = open(&bytes).unwrap();
+    let e = c.read("blobs/aa").unwrap_err().to_string();
+    assert!(e.contains("CRC-32 or size"), "{e}");
+    // The encryption bit of the local header.
+    let mut bytes = base;
+    bytes[6] |= 1;
+    let e = open(&bytes)
+        .unwrap()
+        .read("blobs/aa")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("encrypted"), "{e}");
+}
+
+#[test]
+fn a_stored_entry_has_no_data_descriptor_and_a_streamed_one_has_zip64_sizes() {
+    let bytes = write(&[
+        ("blobs/aa", Compression::Stored, b"abc"),
+        ("document.json", Compression::Deflate(1), b"{}"),
+    ]);
+    // The first local header: flags without bit 3, the CRC-32 and the sizes in place.
+    assert_eq!(u16::from_le_bytes([bytes[6], bytes[7]]) & 8, 0);
+    assert_eq!(&bytes[14..18], &crc_of(b"abc").to_le_bytes());
+    assert_eq!(&bytes[18..26], &[3, 0, 0, 0, 3, 0, 0, 0]);
+    let c = open(&bytes).unwrap();
+    assert_eq!(c.read("document.json").unwrap(), b"{}");
+}
+
+#[test]
+fn a_raw_copy_of_a_damaged_stored_entry_fails_and_names_it() {
+    let mut bytes = write(&[("blobs/aa", Compression::Stored, b"picture bytes")]);
+    // The data starts after the 30 byte header and the 8 byte name.
+    bytes[38] ^= 0x20;
+    let c = open(&bytes).unwrap();
+    let raw = c.raw("blobs/aa").unwrap();
+    let mut w = Writer::new(Vec::new());
+    let e = w.copy_raw(raw).unwrap_err();
+    assert_eq!(e.entry_name(), Some("blobs/aa"), "{e}");
+}
