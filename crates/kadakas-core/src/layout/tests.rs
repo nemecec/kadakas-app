@@ -720,7 +720,7 @@ fn the_order_has_bounds_and_unfillable_pieces_are_counted_separately() {
     assert_eq!((s.whole_units, s.cut_units), (90, 20));
     assert_eq!(s.order_units, 110);
     assert_eq!(s.order_units_max, 110);
-    assert_eq!(s.order_units_min, 100 + 0); // 90 + ceil(10 * 0.525 + 10 * 0.475) = 100
+    assert_eq!(s.order_units_min, 100); // 90 + ceil(10 * 0.525 + 10 * 0.475) = 100
     assert_eq!(s.unfillable_pieces, 0);
     assert!((s.cut_area_m2 - 0.2).abs() < 1e-9);
     // A column of 5 mm: unfillable by share, and left out of the order only on request.

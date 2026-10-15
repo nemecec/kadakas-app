@@ -44,10 +44,12 @@ impl JointWindows {
         }
     }
 
+    #[cfg(test)]
     pub fn is_open(&self, id: ResourceId) -> bool {
         self.open.iter().any(|o| o.editor.id() == id)
     }
 
+    #[cfg(test)]
     pub fn count(&self) -> usize {
         self.open.len()
     }
@@ -326,7 +328,7 @@ mod tests {
         assert!(!w.open(&s, ResourceId::from_num(999)));
         let ctx = Context::default();
         let mut status = String::new();
-        let mut frame = |w: &mut JointWindows, s: &mut Session| {
+        let frame = |w: &mut JointWindows, s: &mut Session| {
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
                 w.show(ui.ctx(), s, &mut String::new());
             });

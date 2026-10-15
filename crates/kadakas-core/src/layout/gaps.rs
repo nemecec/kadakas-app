@@ -318,7 +318,8 @@ fn cell_lines_once(
 /// of at most `chunk` mm (so that a long line does not meet the whole boundary in one test).
 fn join_collinear(segments: Vec<Segment>, chunk: f64) -> Vec<Segment> {
     use std::collections::HashMap;
-    let mut lines: HashMap<(i64, i64), (DVec2, Vec<(f64, f64)>)> = HashMap::new();
+    type Spans = (DVec2, Vec<(f64, f64)>);
+    let mut lines: HashMap<(i64, i64), Spans> = HashMap::new();
     for (p, q) in segments {
         let Some(mut d) = (q - p).try_normalize() else {
             continue;
@@ -344,7 +345,7 @@ fn join_collinear(segments: Vec<Segment>, chunk: f64) -> Vec<Segment> {
         let off = key.1 as f64 / 1000.0;
         let at = |t: f64| d * t - n * off;
         let mut cur = spans[0];
-        let mut flush = |(a, b): (f64, f64), out: &mut Vec<Segment>| {
+        let flush = |(a, b): (f64, f64), out: &mut Vec<Segment>| {
             let pieces = ((b - a) / chunk).ceil().max(1.0) as usize;
             for k in 0..pieces {
                 let (s, e) = (

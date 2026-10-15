@@ -252,7 +252,7 @@ mod tests {
         let id = ResourceId(
             ed.execute(&Command::AddResource {
                 name: "P".into(),
-                body: ResourceBody::HardscapeStyle(Box::new(HardscapeStyle::default())),
+                body: ResourceBody::HardscapeStyle(Box::default()),
             })
             .unwrap()
             .created[0],
