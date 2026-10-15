@@ -78,7 +78,10 @@ pub fn from_shapes(doc: &Document, ids: &[ObjectId], opts: &FromShapesOptions) -
             made.skipped.push((id, "no such object".into()));
             continue;
         };
-        if matches!(o.shape, Shape::Hardscape { .. } | Shape::LandscapeArea { .. }) {
+        if matches!(
+            o.shape,
+            Shape::Hardscape { .. } | Shape::LandscapeArea { .. }
+        ) {
             made.skipped
                 .push((id, format!("a {} is an area already", o.shape.kind())));
             continue;

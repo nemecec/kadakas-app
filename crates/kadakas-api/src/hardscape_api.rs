@@ -509,7 +509,8 @@ fn hardscape_patch(
             }
             "holes" if null => patch.holes = Some(Vec::new()),
             "holes" => {
-                patch.holes = Some(serde_json::from_value::<Vec<Vec<Vertex>>>(v.clone()).map_err(bad)?)
+                patch.holes =
+                    Some(serde_json::from_value::<Vec<Vec<Vertex>>>(v.clone()).map_err(bad)?)
             }
             "exclude" => {
                 let ids: Vec<ObjectId> = serde_json::from_value(v.clone()).map_err(bad)?;
@@ -529,7 +530,10 @@ fn hardscape_patch(
             }
             "angle" if null => patch.clear_angle = true,
             "angle" => {
-                patch.angle = Some(v.as_f64().ok_or_else(|| bad("'angle' must be a number (degrees) or null"))?)
+                patch.angle = Some(
+                    v.as_f64()
+                        .ok_or_else(|| bad("'angle' must be a number (degrees) or null"))?,
+                )
             }
             "align_to_edge" => {
                 patch.align_to_edge = Some(
@@ -712,7 +716,15 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             }
             let flag = |k: &str, d: bool| m.get(k).and_then(Value::as_bool).unwrap_or(d);
             for k in m.keys() {
-                if !["ids", "style", "holes_from_inner", "delete_source", "dry_run"].contains(&k.as_str()) {
+                if ![
+                    "ids",
+                    "style",
+                    "holes_from_inner",
+                    "delete_source",
+                    "dry_run",
+                ]
+                .contains(&k.as_str())
+                {
                     return Err(bad(format!("unknown field '{k}'")));
                 }
             }

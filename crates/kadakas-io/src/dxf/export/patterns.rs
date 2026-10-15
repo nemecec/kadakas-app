@@ -55,13 +55,12 @@ pub(super) fn write(
         .and_then(|(id, _)| cx.doc.resources.get(id).map(|r| r.name.clone()))
         .unwrap_or_default();
     let name = format!("hardscape {} (style {style})", o.id);
-    let region = object::region_of(o, cx.tol)
-        .map_err(|e| IoError::Option(format!("{name}: {e}")))?;
+    let region =
+        object::region_of(o, cx.tol).map_err(|e| IoError::Option(format!("{name}: {e}")))?;
     let [whole_layer, cut_layer, void_layer, gap_layer] = layer_names(layer);
     let shift = cx.shift;
-    let ring_verts = |pts: &[DVec2]| -> Vec<(DVec2, f64)> {
-        pts.iter().map(|p| (*p + shift, 0.0)).collect()
-    };
+    let ring_verts =
+        |pts: &[DVec2]| -> Vec<(DVec2, f64)> { pts.iter().map(|p| (*p + shift, 0.0)).collect() };
     match mode {
         PatternExport::Units => {
             let (mut whole, mut cut) = (0usize, 0usize);
@@ -86,7 +85,10 @@ pub(super) fn write(
             report.note(&format!(
                 "{name}: wrote {whole} whole and {cut} cut units{}",
                 if stats.dust_pieces > 0 {
-                    format!(" ({} pieces under 1 mm2 were left out as dust)", stats.dust_pieces)
+                    format!(
+                        " ({} pieces under 1 mm2 were left out as dust)",
+                        stats.dust_pieces
+                    )
                 } else {
                     String::new()
                 }

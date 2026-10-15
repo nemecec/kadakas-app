@@ -1795,3 +1795,44 @@ fn ifc2x3_without_a_georeference_or_with_a_bad_crs_still_writes() {
     let f = parsed(ed.doc(), &with_version("IFC2X3"));
     assert!(f.dangling().is_empty());
 }
+
+#[test]
+fn a_hardscape_with_holes_is_a_slab_with_voids_and_the_net_area() {
+    let mut ed = Editor::with_sequential_ids();
+    let id = ObjectId(
+        ed.execute(&Command::AddHardscape {
+            boundary: Some(square(0.0, 0.0, 4000.0)),
+            patch: Box::new(HardscapePatch {
+                holes: Some(vec![square(1000.0, 1000.0, 1000.0)]),
+                ..Default::default()
+            }),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let f = parsed(ed.doc(), &IfcOptions::default());
+    assert!(f.dangling().is_empty());
+    assert_eq!(named(&f, "IFCARBITRARYPROFILEDEFWITHVOIDS").len(), 1);
+    assert_eq!(named(&f, "IFCSLAB").len(), 1);
+    let text = export(ed.doc(), &IfcOptions::default()).0;
+    // The net area is the outline minus the hole: 16 - 1 m2, the gross area is 16.
+    assert!(text.contains("NetArea") && text.contains("GrossArea"));
+    // A sloped slab with a hole is a closed mesh with walls round the hole.
+    ed.execute(&Command::SetHardscape {
+        ids: vec![id],
+        patch: HardscapePatch {
+            slope: Some(Slope::Cross {
+                percent: 5.0,
+                angle_deg: 0.0,
+            }),
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    let f = parsed(ed.doc(), &IfcOptions::default());
+    assert!(f.dangling().is_empty());
+    assert!(!named(&f, "IFCTRIANGULATEDFACESET").is_empty());
+}

@@ -12,7 +12,12 @@ fn fail(s: &mut Session, method: &str, params: Value) -> (i64, String) {
 }
 
 fn add(s: &mut Session, shape: Value) -> Value {
-    ok(s, "execute", json!({"command": {"op": "add_object", "shape": shape}}))["created"][0].clone()
+    ok(
+        s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": shape}}),
+    )["created"][0]
+        .clone()
 }
 
 fn rect(w: i64, h: i64) -> Value {
@@ -41,7 +46,10 @@ fn layout_of_a_region_with_a_hole_and_paging() {
             "origin": [0, 0], "limit": 10}),
     );
     let sum = &r["summary"];
-    assert_eq!(sum["order_units"], sum["whole_units"].as_u64().unwrap() + sum["cut_units"].as_u64().unwrap());
+    assert_eq!(
+        sum["order_units"],
+        sum["whole_units"].as_u64().unwrap() + sum["cut_units"].as_u64().unwrap()
+    );
     // The hole covers 3 x 4 cells. The middle column of 4 units is gone, and the columns on each
     // side lose a few mm and become 8 cut units. 100 - 12 = 88 whole units remain.
     assert_eq!(sum["whole_units"], 88);
@@ -101,7 +109,11 @@ fn layout_errors_are_clear() {
         json!({"region": {"outline": rect(1000, 1000)}, "pattern": {"unit_length": 200, "unit_width": 100}, "include": ["tiles"]}),
     );
     assert!(m.contains("include"));
-    let (_, m) = fail(&mut s, "pattern.layout", json!({"id": "00000000-0000-0000-0000-0000000000ff"}));
+    let (_, m) = fail(
+        &mut s,
+        "pattern.layout",
+        json!({"id": "00000000-0000-0000-0000-0000000000ff"}),
+    );
     assert!(m.contains("does not exist"));
 }
 
@@ -141,12 +153,25 @@ fn hardscape_with_style_origin_edge_and_report() {
     let row = ok(&mut s, "report.pattern", json!({"sliver_share": 1.0}))["rows"][0].clone();
     assert_eq!(row["slivers"], row["cut_units"]);
     // Clearing the origin and the hole; align_to_edge turns the pattern.
-    ok(&mut s, "hardscape.set", json!({"id": h, "origin": null, "holes": null}));
-    ok(&mut s, "hardscape.set", json!({"id": h, "align_to_edge": 1}));
+    ok(
+        &mut s,
+        "hardscape.set",
+        json!({"id": h, "origin": null, "holes": null}),
+    );
+    ok(
+        &mut s,
+        "hardscape.set",
+        json!({"id": h, "align_to_edge": 1}),
+    );
     let o = ok(&mut s, "objects.get", json!({"id": h}));
     assert_eq!(o["data"]["hardscape"]["angle"], 90.0);
     assert_eq!(o["data"]["hardscape"]["origin"], json!([2050.0, 0.0]));
-    assert!(o["data"]["hardscape"]["holes"].as_array().unwrap().is_empty());
+    assert!(
+        o["data"]["hardscape"]["holes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     // report.hardscape carries the block, and the holes show in the plan area.
     let rep = ok(&mut s, "report.hardscape", json!({}));
     assert!(rep["rows"][0]["pattern"]["whole_units"].as_u64().unwrap() > 90);
@@ -179,9 +204,16 @@ fn hardscape_holes_change_the_area_and_survive_moving() {
     assert!((q["holes_area_m2"].as_f64().unwrap() - 1.0).abs() < 1e-9);
     // 16 m outline + 4 m round the hole.
     assert!((q["perimeter_m"].as_f64().unwrap() - 20.0).abs() < 1e-6);
-    ok(&mut s, "execute", json!({"command": {"op": "move_objects", "ids": [h], "delta": [100, 200]}}));
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "move_objects", "ids": [h], "delta": [100, 200]}}),
+    );
     let o = ok(&mut s, "objects.get", json!({"id": h}));
-    assert_eq!(o["data"]["hardscape"]["holes"][0][0], json!([1100.0, 1200.0]));
+    assert_eq!(
+        o["data"]["hardscape"]["holes"][0][0],
+        json!([1100.0, 1200.0])
+    );
 }
 
 #[test]
@@ -202,12 +234,18 @@ fn to_objects_makes_a_group_in_one_undo_step() {
     );
     let units = r["units"].as_u64().unwrap();
     assert!(units >= 20 && r["gaps"].as_u64().unwrap() > 0);
-    assert_eq!(r["objects"].as_u64().unwrap(), units + r["gaps"].as_u64().unwrap());
+    assert_eq!(
+        r["objects"].as_u64().unwrap(),
+        units + r["gaps"].as_u64().unwrap()
+    );
     assert!(r["group"].is_string());
     ok(&mut s, "undo", json!({}));
     let after = ok(&mut s, "document.summary", json!({}));
     assert_eq!(before["object_count"], after["object_count"]);
-    assert_eq!(after["object_count"], 1, "one undo removes the group and all objects");
+    assert_eq!(
+        after["object_count"], 1,
+        "one undo removes the group and all objects"
+    );
     // Units only, no group.
     let r = ok(
         &mut s,
@@ -236,9 +274,10 @@ fn from_shapes_turns_nested_outlines_into_a_hardscape_with_holes() {
         // A second lot far away.
         json!([[30000, 0], [40000, 0], [40000, 5000], [30000, 5000]]),
     ] {
-        ids.push(
-            add(&mut s, json!({"kind": "polyline", "points": pts, "closed": true})),
-        );
+        ids.push(add(
+            &mut s,
+            json!({"kind": "polyline", "points": pts, "closed": true}),
+        ));
     }
     let dry = ok(
         &mut s,
@@ -262,9 +301,16 @@ fn from_shapes_turns_nested_outlines_into_a_hardscape_with_holes() {
         .iter()
         .map(|r| r["plan_area_m2"].as_f64().unwrap())
         .collect();
-    assert!(areas.iter().any(|a| (a - (200.0 - 9.0)).abs() < 1e-9), "{areas:?}");
+    assert!(
+        areas.iter().any(|a| (a - (200.0 - 9.0)).abs() < 1e-9),
+        "{areas:?}"
+    );
     // Sources are gone; one undo brings them back.
-    let count = |s: &mut Session| ok(s, "document.summary", json!({}))["object_count"].as_u64().unwrap();
+    let count = |s: &mut Session| {
+        ok(s, "document.summary", json!({}))["object_count"]
+            .as_u64()
+            .unwrap()
+    };
     assert_eq!(count(&mut s), 3);
     ok(&mut s, "undo", json!({}));
     assert_eq!(count(&mut s), 4);
@@ -282,14 +328,21 @@ fn from_shapes_turns_nested_outlines_into_a_hardscape_with_holes() {
     assert!(r["skipped"][0]["reason"].as_str().unwrap().contains("area"));
     let (_, m) = fail(&mut s, "hardscape.from_shapes", json!({"ids": []}));
     assert!(m.contains("select"));
-    let (_, m) = fail(&mut s, "hardscape.from_shapes", json!({"ids": ids, "bogus": 1}));
+    let (_, m) = fail(
+        &mut s,
+        "hardscape.from_shapes",
+        json!({"ids": ids, "bogus": 1}),
+    );
     assert!(m.contains("bogus"));
 }
 
 #[test]
 fn any_closed_shape_works_and_csv_has_rows() {
     let mut s = Session::with_sequential_ids();
-    let c = add(&mut s, json!({"kind": "circle", "center": [0, 0], "radius": 1000}));
+    let c = add(
+        &mut s,
+        json!({"kind": "circle", "center": [0, 0], "radius": 1000}),
+    );
     let r = ok(
         &mut s,
         "pattern.layout",
@@ -300,11 +353,23 @@ fn any_closed_shape_works_and_csv_has_rows() {
     assert!((area - std::f64::consts::PI).abs() < 0.01);
     assert!(r["summary"]["cut_units"].as_u64().unwrap() > 10);
     let line = add(&mut s, json!({"kind": "line", "a": [0, 0], "b": [100, 0]}));
-    let (_, m) = fail(&mut s, "pattern.layout", json!({"id": line, "pattern": {"unit_length": 200, "unit_width": 100}}));
+    let (_, m) = fail(
+        &mut s,
+        "pattern.layout",
+        json!({"id": line, "pattern": {"unit_length": 200, "unit_width": 100}}),
+    );
     assert!(m.contains("cannot be filled"), "{m}");
     let st = style(&mut s, "basket_weave");
-    ok(&mut s, "hardscape.add", json!({"boundary": rect(1000, 1000), "style": st}));
-    let rep = ok(&mut s, "report.pattern", json!({"format": "csv", "waste_percent": 10}));
+    ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": rect(1000, 1000), "style": st}),
+    );
+    let rep = ok(
+        &mut s,
+        "report.pattern",
+        json!({"format": "csv", "waste_percent": 10}),
+    );
     let csv = rep["csv"].as_str().unwrap();
     assert!(csv.lines().next().unwrap().contains("Whole units"));
     assert_eq!(csv.lines().count(), 2);

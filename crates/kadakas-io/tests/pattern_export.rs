@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use kadakas_core::DVec2;
 use kadakas_core::command::{Command, Editor};
 use kadakas_core::curve::{self, corners};
-use kadakas_core::hardscape::style::{HardscapeStyle, JointKind, JointPattern};
 use kadakas_core::hardscape::HardscapePatch;
+use kadakas_core::hardscape::style::{HardscapeStyle, JointKind, JointPattern};
 use kadakas_core::layout::summary::{SummaryOptions, summarize};
 use kadakas_core::layout::{self, object};
 use kadakas_core::model::{Attributes, Document, ObjectId};
@@ -53,8 +53,7 @@ fn lot(
             ])),
             patch: Box::new(HardscapePatch {
                 style: Some(style),
-                holes: (!holes.is_empty())
-                    .then(|| holes.iter().map(|h| corners(h)).collect()),
+                holes: (!holes.is_empty()).then(|| holes.iter().map(|h| corners(h)).collect()),
                 origin,
                 angle,
                 ..Default::default()
@@ -161,7 +160,9 @@ fn units_in_the_dxf_match_the_report_for_every_bond() {
         let text = String::from_utf8(out.bytes).unwrap();
         let polys = entities(&text, "LWPOLYLINE");
         let base = "0";
-        let whole = polys.get(&format!("{base}-UNITS-WHOLE")).map_or(0, Vec::len);
+        let whole = polys
+            .get(&format!("{base}-UNITS-WHOLE"))
+            .map_or(0, Vec::len);
         let cut = polys.get(&format!("{base}-UNITS-CUT")).map_or(0, Vec::len);
         assert_eq!((whole, cut), (sum.whole_units, sum.cut_units), "{kind:?}");
         assert!(sum.cut_units > 0 && sum.whole_units > 100);
@@ -191,10 +192,10 @@ fn units_in_the_dxf_match_the_report_for_every_bond() {
         );
         // The report of the export names the counts.
         assert!(
-            out.report
-                .notes
-                .iter()
-                .any(|n| n.contains(&format!("wrote {} whole and {} cut", sum.whole_units, sum.cut_units))),
+            out.report.notes.iter().any(|n| n.contains(&format!(
+                "wrote {} whole and {} cut",
+                sum.whole_units, sum.cut_units
+            ))),
             "{:?}",
             out.report.notes
         );
@@ -203,7 +204,14 @@ fn units_in_the_dxf_match_the_report_for_every_bond() {
 
 #[test]
 fn units_stay_off_the_island_and_inside_the_lot() {
-    let (ed, _) = lot(JointKind::RunningBond, 9000.0, 5000.0, vec![island()], None, None);
+    let (ed, _) = lot(
+        JointKind::RunningBond,
+        9000.0,
+        5000.0,
+        vec![island()],
+        None,
+        None,
+    );
     let text = String::from_utf8(export(ed.doc(), PatternExport::Units).unwrap().bytes).unwrap();
     let polys = entities(&text, "LWPOLYLINE");
     let hole = island();
@@ -214,21 +222,32 @@ fn units_stay_off_the_island_and_inside_the_lot() {
         for p in list {
             let n = hole.len();
             for q in p {
-                let near_edge = (0..n)
-                    .any(|i| kadakas_core::geom::dist_to_segment(*q, hole[i], hole[(i + 1) % n]) < 1e-6);
+                let near_edge = (0..n).any(|i| {
+                    kadakas_core::geom::dist_to_segment(*q, hole[i], hole[(i + 1) % n]) < 1e-6
+                });
                 assert!(
                     near_edge || !kadakas_core::geom::point_in_polygon(*q, &hole),
                     "a unit corner lies on the island: {q:?}"
                 );
             }
-            assert!(p.iter().all(|q| q.x >= -1e-6 && q.x <= 9000.0 + 1e-6 && q.y >= -1e-6 && q.y <= 5000.0 + 1e-6));
+            assert!(p.iter().all(|q| q.x >= -1e-6
+                && q.x <= 9000.0 + 1e-6
+                && q.y >= -1e-6
+                && q.y <= 5000.0 + 1e-6));
         }
     }
 }
 
 #[test]
 fn gaps_are_lines_and_nothing_is_written_by_default() {
-    let (ed, id) = lot(JointKind::Stack, 2050.0, 1050.0, vec![], Some(DVec2::ZERO), None);
+    let (ed, id) = lot(
+        JointKind::Stack,
+        2050.0,
+        1050.0,
+        vec![],
+        Some(DVec2::ZERO),
+        None,
+    );
     let out = export(ed.doc(), PatternExport::Gaps).unwrap();
     let text = String::from_utf8(out.bytes).unwrap();
     let lines = entities(&text, "LINE");
@@ -250,14 +269,25 @@ fn gaps_are_lines_and_nothing_is_written_by_default() {
     )
     .unwrap();
     assert!(!plain.contains("-GAPS") && !plain.contains("-UNITS-"));
-    assert_eq!(entities(&plain, "LWPOLYLINE").values().map(Vec::len).sum::<usize>(), 1);
+    assert_eq!(
+        entities(&plain, "LWPOLYLINE")
+            .values()
+            .map(Vec::len)
+            .sum::<usize>(),
+        1
+    );
 }
 
 #[test]
 fn a_pattern_over_the_limit_is_an_error_that_names_the_hardscape() {
     let (ed, id) = lot(JointKind::Stack, 200_000.0, 150_000.0, vec![], None, None);
-    let err = export(ed.doc(), PatternExport::Units).unwrap_err().to_string();
-    assert!(err.contains(&id.to_string()) && err.contains("limit") && err.contains("Pavers"), "{err}");
+    let err = export(ed.doc(), PatternExport::Units)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains(&id.to_string()) && err.contains("limit") && err.contains("Pavers"),
+        "{err}"
+    );
     // Without patterns the same drawing exports fine.
     assert!(export(ed.doc(), PatternExport::None).is_ok());
 }
@@ -300,7 +330,11 @@ fn units_survive_an_import_and_the_unit_option() {
         .flat_map(|(_, v)| v.iter())
         .map(|p| area(p))
         .sum();
-    assert!((laid_m2 - sum.area_laid_m2).abs() < 1e-3, "{laid_m2} vs {}", sum.area_laid_m2);
+    assert!(
+        (laid_m2 - sum.area_laid_m2).abs() < 1e-3,
+        "{laid_m2} vs {}",
+        sum.area_laid_m2
+    );
     // Import again: the polylines are objects with the same count and area.
     let r = DxfFormat
         .import(
@@ -319,7 +353,10 @@ fn units_survive_an_import_and_the_unit_option() {
     let mut counts: BTreeMap<String, (usize, f64)> = BTreeMap::new();
     for o in doc.objects.values() {
         if let kadakas_core::model::Shape::Polyline { points, .. } = &o.shape {
-            let class = doc.class(o.class).map(|c| c.name.clone()).unwrap_or_default();
+            let class = doc
+                .class(o.class)
+                .map(|c| c.name.clone())
+                .unwrap_or_default();
             let e = counts.entry(class).or_default();
             e.0 += 1;
             e.1 += curve::area(points);

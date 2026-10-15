@@ -240,14 +240,19 @@ fn subject(s: &Session, m: &Map<String, Value>) -> Result<Subject, RpcError> {
 fn include(m: &Map<String, Value>, default: &[&str]) -> Result<(bool, bool), RpcError> {
     let list: Vec<String> = match m.get("include") {
         None | Some(Value::Null) => default.iter().map(|s| s.to_string()).collect(),
-        Some(v) => serde_json::from_value(v.clone()).map_err(|_| bad("'include' must be a list"))?,
+        Some(v) => {
+            serde_json::from_value(v.clone()).map_err(|_| bad("'include' must be a list"))?
+        }
     };
     for k in &list {
         if k != "units" && k != "gaps" {
             return Err(bad(format!("'include' has units and gaps, not '{k}'")));
         }
     }
-    Ok((list.iter().any(|k| k == "units"), list.iter().any(|k| k == "gaps")))
+    Ok((
+        list.iter().any(|k| k == "units"),
+        list.iter().any(|k| k == "gaps"),
+    ))
 }
 
 fn too_many(e: layout::TooMany) -> RpcError {
@@ -315,7 +320,13 @@ fn layout_call(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         out["units"] = json!(page);
     }
     if want_gaps {
-        let g = gaps::gap_lines(&sub.region, &sub.pattern, &sub.place, MAX_GAP_SEGMENTS, false);
+        let g = gaps::gap_lines(
+            &sub.region,
+            &sub.pattern,
+            &sub.place,
+            MAX_GAP_SEGMENTS,
+            false,
+        );
         if g.truncated {
             return Err(RpcError::limit(
                 "the pattern has too many gap lines. Use larger units or a smaller region",
@@ -367,19 +378,25 @@ fn to_objects(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
     let (mut units, mut gap_count) = (0usize, 0usize);
     if want_units {
         let mut over = false;
-        layout::for_each_unit(&sub.region, &sub.pattern, &sub.place, MAX_OBJECTS, &mut |u| {
-            if over {
-                return;
-            }
-            units += 1;
-            for r in &u.rings {
-                shapes.push(Shape::Polyline {
-                    points: kadakas_core::curve::corners(&r.points),
-                    closed: true,
-                });
-            }
-            over = shapes.len() > MAX_OBJECTS;
-        })
+        layout::for_each_unit(
+            &sub.region,
+            &sub.pattern,
+            &sub.place,
+            MAX_OBJECTS,
+            &mut |u| {
+                if over {
+                    return;
+                }
+                units += 1;
+                for r in &u.rings {
+                    shapes.push(Shape::Polyline {
+                        points: kadakas_core::curve::corners(&r.points),
+                        closed: true,
+                    });
+                }
+                over = shapes.len() > MAX_OBJECTS;
+            },
+        )
         .map_err(|e| {
             RpcError::limit(format!(
                 "{e}. One call makes at most {MAX_OBJECTS} objects: split the region"

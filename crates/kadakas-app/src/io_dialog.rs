@@ -563,11 +563,7 @@ impl IoUi {
                                 .selected_text(pattern_name(form.patterns))
                                 .show_ui(ui, |ui| {
                                     for i in 0..PATTERNS.len() {
-                                        ui.selectable_value(
-                                            &mut form.patterns,
-                                            i,
-                                            pattern_name(i),
-                                        );
+                                        ui.selectable_value(&mut form.patterns, i, pattern_name(i));
                                     }
                                 });
                         })
