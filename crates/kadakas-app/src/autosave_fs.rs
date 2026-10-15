@@ -1301,4 +1301,54 @@ mod tests {
         drop(e);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn the_copies_of_an_edited_document_keep_the_versions_that_wait_in_the_file() {
+        // S1: the versions were not used, the drawing was edited, and the autosave writes the
+        // recovery copy and the file of the person. The versions are in both, with the drawing
+        // they belong to, and read without a note.
+        let dir = temp("copies-waiting");
+        let target = dir.join("mine.kad");
+        let mut first = kadakas_api::Session::with_document(doc_with_picture());
+        first
+            .handle("version.create", serde_json::json!({"name": "v1"}))
+            .unwrap();
+        let saved = first.document_for_save_in(true).unwrap().into_owned();
+        file_io::write_document_raw(&target, &saved).unwrap();
+        let mut session = session_on(&target);
+        assert!(session.editor.doc().lazy_history.is_some());
+        session
+            .editor
+            .execute(&Command::AddObject {
+                shape: Shape::Circle {
+                    center: DVec2::new(9.0, 9.0),
+                    radius: 3.0,
+                },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
+        assert!(session.needs_anchor());
+        let job = session_job(&mut session, &target);
+        assert!(job.anchor);
+        assert_eq!(
+            write_version(&dir.join("rec"), "s1", 1, &job).unwrap(),
+            Over::Written
+        );
+        for copy in [
+            dir.join("rec").join("s1.000001.autosave.kad"),
+            target.clone(),
+        ] {
+            let opened = file_io::open_file(&copy).unwrap();
+            let mut back = kadakas_api::Session::with_document(opened.doc);
+            back.file_source = opened.source;
+            let list = back
+                .handle("version.list", serde_json::json!({"current": false}))
+                .unwrap();
+            assert_eq!(list["count"], 1, "{copy:?}: {list}");
+            assert_eq!(list["read_only"], false, "{copy:?}: {list}");
+            assert!(back.load_notes().is_empty(), "{:?}", back.load_notes());
+        }
+    }
 }
