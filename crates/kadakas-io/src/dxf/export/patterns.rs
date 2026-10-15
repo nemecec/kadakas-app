@@ -14,10 +14,13 @@ use super::{Ctx, W, common, lwpolyline};
 use crate::options::PatternExport;
 use crate::{IoError, Report};
 
-/// Most units that one export writes for one object. A DXF unit is one closed polyline of
-/// about 330 bytes, so this is about 330 MB of text. Measured: see `docs/dev-guide.md`.
+/// Most units that one export writes for one object. Measured (test `measure_export`): a 5,000 m2
+/// lot of 200 x 100 mm pavers has 233,000 units and gives 60 MB of DXF in 0.85 s with a peak of
+/// 300 MB; 514,000 units give 132 MB in 1.8 s with a peak of 525 MB (about 257 bytes and 3.5 us
+/// per unit). 600,000 units is 2.4 times the real job, 155 MB of text and a peak near 610 MB.
 pub const MAX_EXPORT_UNITS: usize = 600_000;
-/// Most gap center lines that one export writes for one object (LINE entities of about 190 bytes).
+/// Most gap center lines that one export writes for one object (about 154 bytes each: 1,000,000
+/// lines are 154 MB).
 pub const MAX_EXPORT_GAP_LINES: usize = 1_000_000;
 
 /// The names of the layers that a pattern export adds to a base layer.
