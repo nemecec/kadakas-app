@@ -11,7 +11,7 @@ use std::time::Duration;
 use crate::{RpcError, Session};
 
 /// The default for [`SessionLimits::document_file_bytes`]: 512 MiB, the document limit of the paid
-/// collaboration tier. A loaded drawing needs 1.1 to 1.7 times the file size in memory
+/// collaboration tier. A loaded drawing needs 1.1 to 1.9 times the bytes of its text in memory
 /// (`docs/doc-load-benchmark.md`).
 pub const DEFAULT_DOCUMENT_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -57,9 +57,11 @@ pub struct SessionLimits {
     /// The most text that an import reads, in bytes.
     pub import_text_bytes: u64,
     /// The largest document file that `file.open` reads, in bytes. The size is checked before the
-    /// file is read. An agent cannot be asked, so this is a hard limit; the error says how to raise
-    /// it (`kadakas serve --max-document-mib`). The desktop app does not use it for the files of
-    /// the person: it asks (`kadakas_ui_core::open_limit`).
+    /// file is read. For a container (DOC-20) the sum of the sizes of its entries, uncompressed
+    /// (from the manifest), is checked against it too, as is the size of each entry, so a small
+    /// file cannot hide a big document. An agent cannot be asked, so this is a hard limit; the
+    /// error says how to raise it (`kadakas serve --max-document-mib`). The desktop app does not
+    /// use it for the files of the person: it asks (`kadakas_ui_core::open_limit`).
     pub document_file_bytes: u64,
     /// Most entities whose summaries a DXF or DWG import keeps for updates (`base: "auto"`). A
     /// drawing over it is refused with the choices `link` and `none`. It can be lowered, never
