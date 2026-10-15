@@ -817,6 +817,22 @@ fn an_encrypted_entry_is_refused() {
 }
 
 #[test]
+fn a_symbolic_link_entry_is_refused() {
+    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default();
+    z.start_file("bcf.version", o).unwrap();
+    z.write_all(b"<Version VersionId=\"2.1\"/>").unwrap();
+    z.add_symlink("g/markup.bcf", "../../etc/passwd", o)
+        .unwrap();
+    let zip = z.finish().unwrap().into_inner();
+    let e = expect_err(&zip, &ReadLimits::default());
+    assert!(
+        matches!(&e, BcfError::Format(m) if m.contains("symbolic link")),
+        "{e:?}"
+    );
+}
+
+#[test]
 fn snapshots_that_are_too_big_or_not_pictures_are_left_out_with_a_warning() {
     let big = png_bytes(5000, 5000, 1);
     let junk = b"this is not a picture".to_vec();

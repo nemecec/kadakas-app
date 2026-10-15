@@ -19,8 +19,8 @@
 //! The commands that change issues are in `crate::command` (`AddIssue`, `ModifyIssue`, ...). The
 //! BCF files and the filters are in `kadakas-review`.
 
-use std::collections::{BTreeMap, HashSet};
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, OnceLock};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,9 @@ use serde::{Deserialize, Serialize};
 use crate::change::Origin;
 use crate::model::{ClassId, LayerId, ObjectId};
 use crate::uid::{Uid, id_type};
+
+mod shared;
+pub use shared::Shared;
 
 id_type!(
     /// Identifier of an issue. A BCF topic GUID is the same ID.
@@ -569,51 +572,110 @@ impl Comment {
     }
 }
 
-/// The issues and comments of a document.
+/// The issues and comments of a document. The lists are in order (issues by creation time, then
+/// ID; comments by time, then ID). They are [`Shared`] lists: a copy shares its parts with the
+/// original, so an undo step keeps a few kilobytes and not the whole list.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct IssueData {
     #[serde(default)]
-    pub issues: Vec<Issue>,
+    pub issues: Shared<Issue>,
     #[serde(default)]
-    pub comments: Vec<Comment>,
+    pub comments: Shared<Comment>,
 }
 
-/// The review data of a document. A clone costs a pointer: the undo steps and the change log
-/// share the data, and a command that changes it copies it once.
-#[derive(Clone, Debug, Default)]
-pub struct Issues(Arc<IssueData>);
+impl IssueData {
+    /// The data of two lists that are in order (issues by creation time, then ID; comments by
+    /// time, then ID). A host that builds data (a loader, a benchmark) uses this.
+    pub fn from_vecs(issues: Vec<Issue>, comments: Vec<Comment>) -> IssueData {
+        IssueData {
+            issues: Shared::from_vec(issues),
+            comments: Shared::from_vec(comments),
+        }
+    }
+}
+
+/// What is looked up often and costs a walk over the lists. Each part is made on its first use
+/// for one state of the data, and a change of the data drops them all.
+#[derive(Debug, Default)]
+struct Index {
+    /// The place (see [`Shared::places`]) of each issue.
+    issue_at: OnceLock<HashMap<IssueId, (u32, u32)>>,
+    /// The place of each comment.
+    comment_at: OnceLock<HashMap<CommentId, (u32, u32)>>,
+    /// For each issue the places of its comments, oldest first.
+    comments: OnceLock<HashMap<IssueId, Vec<(u32, u32)>>>,
+}
+
+/// The review data of a document. A clone costs two pointers: the undo steps and the change log
+/// share the data, and a command that changes it copies only the parts that change.
+#[derive(Debug, Default)]
+pub struct Issues {
+    data: Arc<IssueData>,
+    index: Arc<Index>,
+}
+
+impl Clone for Issues {
+    fn clone(&self) -> Issues {
+        Issues {
+            data: self.data.clone(),
+            index: self.index.clone(),
+        }
+    }
+}
 
 impl PartialEq for Issues {
     fn eq(&self, other: &Issues) -> bool {
-        Arc::ptr_eq(&self.0, &other.0) || self.0 == other.0
+        Arc::ptr_eq(&self.data, &other.data) || self.data == other.data
     }
 }
 
 impl Serialize for Issues {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(s)
+        self.data.serialize(s)
     }
 }
 
 impl<'de> Deserialize<'de> for Issues {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Issues, D::Error> {
-        IssueData::deserialize(d).map(|data| Issues(Arc::new(data)))
+        IssueData::deserialize(d).map(Issues::from)
     }
 }
 
 impl From<IssueData> for Issues {
     fn from(d: IssueData) -> Issues {
-        Issues(Arc::new(d))
+        Issues {
+            data: Arc::new(d),
+            index: Arc::default(),
+        }
     }
 }
 
 impl Issues {
     pub fn is_empty(&self) -> bool {
-        self.0.issues.is_empty() && self.0.comments.is_empty()
+        self.data.issues.is_empty() && self.data.comments.is_empty()
     }
 
     pub fn data(&self) -> &IssueData {
-        &self.0
+        &self.data
+    }
+
+    /// The same data without the index. An undo step keeps this, so that a step holds no index
+    /// (which can be large) of a state that nobody reads any more.
+    pub fn lean(&self) -> Issues {
+        Issues {
+            data: self.data.clone(),
+            index: Arc::default(),
+        }
+    }
+
+    fn comments_by_issue(&self) -> &HashMap<IssueId, Vec<(u32, u32)>> {
+        self.index.comments.get_or_init(|| {
+            let mut comments: HashMap<IssueId, Vec<(u32, u32)>> = HashMap::new();
+            for (place, c) in self.data.comments.places() {
+                comments.entry(c.issue).or_default().push(place);
+            }
+            comments
+        })
     }
 
     /// Puts an issue where it belongs: the list is sorted by creation time, then by ID, so two
@@ -634,41 +696,66 @@ impl Issues {
         d.comments.insert(at, c);
     }
 
-    /// The data for a change. It is copied first if the undo steps share it.
+    /// The data for a change. The parts that the undo steps share are copied when they change.
     pub fn data_mut(&mut self) -> &mut IssueData {
-        Arc::make_mut(&mut self.0)
+        // The index is of the state before the change.
+        self.index = Arc::default();
+        Arc::make_mut(&mut self.data)
     }
 
     pub fn len(&self) -> usize {
-        self.0.issues.len()
+        self.data.issues.len()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Issue> {
-        self.0.issues.iter()
+        self.data.issues.iter()
     }
 
     pub fn get(&self, id: IssueId) -> Option<&Issue> {
-        self.0.issues.iter().find(|i| i.id == id)
+        let at = self.index.issue_at.get_or_init(|| {
+            self.data
+                .issues
+                .places()
+                .map(|(place, i)| (i.id, place))
+                .collect()
+        });
+        at.get(&id).map(|p| self.data.issues.at_place(*p))
     }
 
     pub fn comment(&self, id: CommentId) -> Option<&Comment> {
-        self.0.comments.iter().find(|c| c.id == id)
+        let at = self.index.comment_at.get_or_init(|| {
+            self.data
+                .comments
+                .places()
+                .map(|(place, c)| (c.id, place))
+                .collect()
+        });
+        at.get(&id).map(|p| self.data.comments.at_place(*p))
     }
 
     /// The comments of an issue, oldest first (by time, then ID).
     pub fn comments_of(&self, id: IssueId) -> Vec<&Comment> {
-        let mut v: Vec<&Comment> = self.0.comments.iter().filter(|c| c.issue == id).collect();
+        let mut v: Vec<&Comment> = self
+            .comments_by_issue()
+            .get(&id)
+            .map(|places| {
+                places
+                    .iter()
+                    .map(|p| self.data.comments.at_place(*p))
+                    .collect()
+            })
+            .unwrap_or_default();
         v.sort_by_key(|c| (c.time, c.id));
         v
     }
 
     pub fn comment_count(&self, id: IssueId) -> usize {
-        self.0.comments.iter().filter(|c| c.issue == id).count()
+        self.comments_by_issue().get(&id).map_or(0, Vec::len)
     }
 
     /// True if some viewpoint refers to the snapshot with this hash.
     pub fn uses_snapshot(&self, hash: &str) -> bool {
-        self.0.issues.iter().any(|i| {
+        self.data.issues.iter().any(|i| {
             i.viewpoints
                 .iter()
                 .any(|v| v.snapshot.as_deref() == Some(hash))
@@ -678,7 +765,7 @@ impl Issues {
     /// The hashes of all snapshots that the issues refer to.
     pub fn snapshots(&self) -> Vec<&str> {
         let mut v: Vec<&str> = self
-            .0
+            .data
             .issues
             .iter()
             .flat_map(|i| i.viewpoints.iter())
@@ -691,74 +778,154 @@ impl Issues {
 
     /// A rough size in bytes, for the budget of the undo steps.
     pub fn approx_bytes(&self) -> u64 {
-        let issues: usize = self
-            .0
-            .issues
-            .iter()
-            .map(|i| {
-                256 + i.title.len()
-                    + i.description.len()
-                    + i.labels.iter().map(String::len).sum::<usize>()
-                    + i.objects.len() * 40
-                    + i.viewpoints
-                        .iter()
-                        .map(|v| {
-                            200 + v.selection.len() * 40 + (v.layers.len() + v.classes.len()) * 48
-                        })
-                        .sum::<usize>()
-            })
-            .sum();
-        let comments: usize = self.0.comments.iter().map(|c| 160 + c.text.len()).sum();
-        (issues + comments) as u64
+        let issues: u64 = self.data.issues.iter().map(issue_bytes).sum();
+        let comments: u64 = self.data.comments.iter().map(comment_bytes).sum();
+        issues + comments
     }
 
-    /// Checks what a file holds and repairs what cannot stay: a second issue or comment with the
-    /// same ID and a comment of an issue that is not there are left out. Returns a note for each
-    /// repair, so that the person is told. Values that break a bound stay (a file must open): the
-    /// next command that changes them is refused until they fit.
+    /// What an undo step keeps when it holds `before` and `after`: the pointers of the lists, and
+    /// the chunks and items that the two states do not share. The rest is shared with the
+    /// document (and with the other steps), and is counted once, there.
+    pub fn step_bytes(before: &Issues, after: &Issues) -> u64 {
+        const POINTER: u64 = 8;
+        let (bi, ai) = after.data.issues.unshared(&before.data.issues);
+        let (bc, ac) = after.data.comments.unshared(&before.data.comments);
+        let items: u64 = bi
+            .iter()
+            .chain(&ai)
+            .map(|i| issue_bytes(i))
+            .chain(bc.iter().chain(&ac).map(|c| comment_bytes(c)))
+            .sum();
+        // The outer lists of both states, and the pointers of the chunks that are not shared.
+        let outer = (before.data.issues.chunk_count()
+            + after.data.issues.chunk_count()
+            + before.data.comments.chunk_count()
+            + after.data.comments.chunk_count()) as u64
+            * POINTER;
+        // A chunk that is not shared is a list of pointers (256 when it is full).
+        let (oi, ni) = after.data.issues.unshared_chunks(&before.data.issues);
+        let (oc, nc) = after.data.comments.unshared_chunks(&before.data.comments);
+        let chunks = (oi + ni + oc + nc) as u64 * 256 * POINTER;
+        items + outer + chunks
+    }
+
+    /// The issues and the comments that differ between two states: `(in old, in new)` for each of
+    /// the two lists. Only the chunks that the states do not share are looked at.
+    #[allow(clippy::type_complexity)]
+    pub fn unshared<'a>(
+        &'a self,
+        old: &'a Issues,
+    ) -> (
+        (Vec<&'a Issue>, Vec<&'a Issue>),
+        (Vec<&'a Comment>, Vec<&'a Comment>),
+    ) {
+        (
+            self.data.issues.unshared(&old.data.issues),
+            self.data.comments.unshared(&old.data.comments),
+        )
+    }
+
+    /// Checks what a file holds and repairs what cannot stay as it is. Nothing of the person is
+    /// left out: a second issue or comment with a used ID gets a new ID, and comments of an issue
+    /// that is not there go to a new issue that says so. Returns a note for each repair, so that
+    /// the person is told. Values that break a bound stay (a file must open): the next command
+    /// that changes them is refused until they fit.
     pub fn repair(&mut self) -> Vec<String> {
         let mut notes = Vec::new();
-        let data = &self.0;
+        let data = &self.data;
         let mut seen = HashSet::new();
         let dup_issues = data.issues.iter().filter(|i| !seen.insert(i.id)).count();
-        let ids: HashSet<IssueId> = data.issues.iter().map(|i| i.id).collect();
         let mut cseen = HashSet::new();
-        let bad_comments = data
+        let dup_comments = data.comments.iter().filter(|c| !cseen.insert(c.id)).count();
+        let ids: HashSet<IssueId> = data.issues.iter().map(|i| i.id).collect();
+        let orphans = data
             .comments
             .iter()
-            .filter(|c| !cseen.insert(c.id) || !ids.contains(&c.issue))
+            .filter(|c| !ids.contains(&c.issue))
             .count();
-        if dup_issues > 0 || bad_comments > 0 {
-            let d = self.data_mut();
+        if dup_issues > 0 || dup_comments > 0 || orphans > 0 {
+            let mut issues = data.issues.to_vec();
+            let mut comments = data.comments.to_vec();
+            // A second issue with an ID gets an ID made from the old one.
+            let mut taken: HashSet<IssueId> = issues.iter().map(|i| i.id).collect();
             let mut seen = HashSet::new();
-            d.issues.retain(|i| seen.insert(i.id));
-            let ids: HashSet<IssueId> = d.issues.iter().map(|i| i.id).collect();
+            for i in &mut issues {
+                if !seen.insert(i.id) {
+                    let old = i.id;
+                    let new = (1..)
+                        .map(|n| IssueId(Uid::derive(old.0, 20, n)))
+                        .find(|u| !taken.contains(u))
+                        .expect("an unused ID");
+                    taken.insert(new);
+                    seen.insert(new);
+                    i.id = new;
+                }
+            }
+            let mut ctaken: HashSet<CommentId> = comments.iter().map(|c| c.id).collect();
             let mut cseen = HashSet::new();
-            d.comments
-                .retain(|c| cseen.insert(c.id) && ids.contains(&c.issue));
+            for c in &mut comments {
+                if !cseen.insert(c.id) {
+                    let old = c.id;
+                    let new = (1..)
+                        .map(|n| CommentId(Uid::derive(old.0, 21, n)))
+                        .find(|u| !ctaken.contains(u))
+                        .expect("an unused ID");
+                    ctaken.insert(new);
+                    cseen.insert(new);
+                    c.id = new;
+                }
+            }
+            // Comments of an issue that is not there are kept in an issue of that ID.
+            let ids: HashSet<IssueId> = issues.iter().map(|i| i.id).collect();
+            let mut lost: Vec<(IssueId, i64, i64)> = Vec::new();
+            for c in comments.iter().filter(|c| !ids.contains(&c.issue)) {
+                match lost.iter_mut().find(|(id, ..)| *id == c.issue) {
+                    Some(l) => {
+                        l.1 = l.1.min(c.time);
+                        l.2 = l.2.max(c.time);
+                    }
+                    None => lost.push((c.issue, c.time, c.time)),
+                }
+            }
+            for (id, first, last) in &lost {
+                issues.push(Issue {
+                    id: *id,
+                    title: LOST_ISSUE_TITLE.into(),
+                    created: *first,
+                    modified: *last,
+                    ..Issue::default()
+                });
+            }
+            let d = self.data_mut();
+            d.issues = Shared::from_vec(issues);
+            d.comments = Shared::from_vec(comments);
             if dup_issues > 0 {
                 notes.push(format!(
-                    "{dup_issues} issue(s) with an ID that was used before were left out"
+                    "{dup_issues} issue(s) with an ID that another issue had got new IDs"
                 ));
             }
-            if bad_comments > 0 {
+            if dup_comments > 0 {
                 notes.push(format!(
-                    "{bad_comments} comment(s) of an issue that is not there, or with a repeated ID, were left out"
+                    "{dup_comments} comment(s) with an ID that another comment had got new IDs"
+                ));
+            }
+            if orphans > 0 {
+                notes.push(format!(
+                    "{orphans} comment(s) belonged to {} issue(s) that are not in the file: the comments are kept in new issues titled \"{LOST_ISSUE_TITLE}\"",
+                    lost.len()
                 ));
             }
         }
         // The lists keep their order (see `insert_issue`): a file made by hand is put in order.
         let sorted = self
-            .0
+            .data
             .issues
-            .windows(2)
-            .all(|w| (w[0].created, w[0].id) <= (w[1].created, w[1].id))
+            .windows_all(|a, b| (a.created, a.id) <= (b.created, b.id))
             && self
-                .0
+                .data
                 .comments
-                .windows(2)
-                .all(|w| (w[0].time, w[0].id) <= (w[1].time, w[1].id))
-            && self.0.issues.iter().all(|i| {
+                .windows_all(|a, b| (a.time, a.id) <= (b.time, b.id))
+            && self.data.issues.iter().all(|i| {
                 i.viewpoints
                     .windows(2)
                     .all(|w| (w[0].time, w[0].id) <= (w[1].time, w[1].id))
@@ -767,16 +934,15 @@ impl Issues {
             let d = self.data_mut();
             d.issues.sort_by_key(|i| (i.created, i.id));
             d.comments.sort_by_key(|c| (c.time, c.id));
-            for i in &mut d.issues {
-                i.viewpoints.sort_by_key(|v| (v.time, v.id));
-            }
+            d.issues
+                .for_each_mut(|i| i.viewpoints.sort_by_key(|v| (v.time, v.id)));
         }
         let mut too_big = 0;
-        if self.0.issues.len() > MAX_ISSUES || self.0.comments.len() > MAX_COMMENTS_TOTAL {
+        if self.data.issues.len() > MAX_ISSUES || self.data.comments.len() > MAX_COMMENTS_TOTAL {
             too_big += 1;
         }
         too_big += self
-            .0
+            .data
             .issues
             .iter()
             .filter(|i| i.validate().is_err())
@@ -789,6 +955,26 @@ impl Issues {
         notes
     }
 }
+
+/// A rough size of an issue in bytes.
+fn issue_bytes(i: &Issue) -> u64 {
+    (256 + i.title.len()
+        + i.description.len()
+        + i.labels.iter().map(String::len).sum::<usize>()
+        + i.objects.len() * 40
+        + i.viewpoints
+            .iter()
+            .map(|v| 200 + v.selection.len() * 40 + (v.layers.len() + v.classes.len()) * 48)
+            .sum::<usize>()) as u64
+}
+
+/// A rough size of a comment in bytes.
+fn comment_bytes(c: &Comment) -> u64 {
+    (160 + c.text.len()) as u64
+}
+
+/// The title of an issue that holds the comments of an issue that a file lost.
+pub const LOST_ISSUE_TITLE: &str = "Comments of an issue that is not in the file";
 
 /// The ID that a command gets for a new issue, comment or viewpoint: the nil ID means "make one".
 pub fn is_unset(id: Uid) -> bool {

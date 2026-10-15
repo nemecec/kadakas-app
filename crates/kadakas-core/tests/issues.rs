@@ -441,11 +441,7 @@ fn the_issue_count_is_bounded() {
         })
         .collect();
     let mut doc = ed.doc().clone();
-    doc.issues = IssueData {
-        issues,
-        comments: vec![],
-    }
-    .into();
+    doc.issues = IssueData::from_vecs(issues, vec![]).into();
     let mut ed = Editor::new(doc);
     let err = ed.execute(&new_issue("one too many")).unwrap_err();
     assert!(err.to_string().contains("at most"), "{err}");
@@ -467,7 +463,10 @@ fn issues_are_saved_and_loaded_and_older_files_have_none() {
     let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
     v["issues"]["issues"] = serde_json::json!([]);
     let loaded = Document::from_json(&v.to_string()).unwrap();
-    assert!(loaded.issues.is_empty());
+    // Nothing is dropped: the comment goes to an issue that says what happened.
+    assert_eq!(loaded.issues.len(), 1);
+    assert_eq!(loaded.issues.get(id).unwrap().title, LOST_ISSUE_TITLE);
+    assert_eq!(loaded.issues.comment_count(id), 1);
     assert!(
         loaded.load_notes().iter().any(|n| n.contains("comment")),
         "{:?}",
@@ -728,4 +727,68 @@ fn a_snapshot_picture_is_used_by_its_issues_and_nothing_removes_it_unasked() {
     assert!(ed.doc().resources.find_image(&pic.sha256).is_none());
     ed.undo();
     assert!(ed.doc().resources.find_image(&pic.sha256).is_some());
+}
+
+#[test]
+fn an_undo_step_of_issues_does_not_grow_with_the_document() {
+    // 3000 issues and 20000 comments: a step keeps pointers and the chunks that changed, not a
+    // copy of the lists (it was megabytes before the lists were shared).
+    let issues: Vec<Issue> = (0..3000u64)
+        .map(|n| Issue {
+            id: IssueId::from_num(n + 10),
+            title: format!("Issue {n}"),
+            created: n as i64,
+            ..Issue::default()
+        })
+        .collect();
+    let comments: Vec<Comment> = (0..20_000u64)
+        .map(|n| Comment {
+            id: CommentId::from_num(n + 10),
+            issue: IssueId::from_num(n % 3000 + 10),
+            author: "A".into(),
+            origin: Origin::User,
+            time: n as i64,
+            text: "a note with some words in it".into(),
+            viewpoint: None,
+            edited: None,
+        })
+        .collect();
+    let mut doc = Document::with_sequential_ids();
+    doc.issues = IssueData::from_vecs(issues, comments).into();
+    let mut ed = Editor::new(doc);
+    let whole = ed.doc().issues.approx_bytes();
+    assert!(whole > 3_000_000, "{whole}");
+    let before = ed.history_bytes();
+    ed.execute(&comment(IssueId::from_num(1500 + 10), "one more", 99_999))
+        .unwrap();
+    let step = ed.history_bytes() - before;
+    assert!(
+        step < 40_000,
+        "a step keeps {step} bytes (the data is {whole})"
+    );
+    let before = ed.history_bytes();
+    ed.execute(&modify(
+        IssueId::from_num(7 + 10),
+        IssuePatch {
+            status: Some(IssueStatus::Resolved),
+            ..IssuePatch::default()
+        },
+        5,
+    ))
+    .unwrap();
+    assert!(ed.history_bytes() - before < 40_000);
+    // The change set of a step names only what changed, whatever the length of the lists.
+    let cs = last(&ed);
+    assert_eq!(cs.changed.issues, vec![IssueId::from_num(7 + 10)]);
+    // Undo and redo give back the same lists.
+    let with = ed.doc().issues.clone();
+    ed.undo();
+    ed.undo();
+    assert_eq!(
+        ed.doc().issues.comment_count(IssueId::from_num(1500 + 10)),
+        7
+    );
+    ed.redo();
+    ed.redo();
+    assert_eq!(ed.doc().issues, with);
 }

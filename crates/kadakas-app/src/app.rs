@@ -4934,6 +4934,72 @@ mod tests {
         });
     }
 
+    /// The time of one frame of the Issues palette for many issues. A measurement, not a test:
+    ///
+    /// ```text
+    /// KADAKAS_BENCH_SCALES=1000:10000,10000:99000 \
+    ///   cargo test -p kadakas-app --release -- --ignored --nocapture measure_palette_frame
+    /// ```
+    #[test]
+    #[ignore = "a measurement, run on request"]
+    fn measure_palette_frame() {
+        use kadakas_core::issue::*;
+        let text = std::env::var("KADAKAS_BENCH_SCALES").unwrap_or_else(|_| "1000:10000".into());
+        println!("issues,comments,first_frame_ms,steady_frame_ms,filtered_frame_ms");
+        for part in text.split(',') {
+            let (ni, nc) = part.split_once(':').expect("issues:comments");
+            let (ni, nc): (u64, u64) = (ni.parse().unwrap(), nc.parse().unwrap());
+            let t0 = 1_700_000_000_000i64;
+            let issues: Vec<Issue> = (0..ni)
+                .map(|n| Issue {
+                    id: IssueId::from_num(n + 10),
+                    title: format!("Issue {n}: a dead tree near the gate"),
+                    description: "The tree is dead.".into(),
+                    assignee: Some("mari@example.org".into()),
+                    labels: vec!["planting".into()],
+                    status: if n % 3 == 0 {
+                        IssueStatus::Resolved
+                    } else {
+                        IssueStatus::Open
+                    },
+                    created: t0 + n as i64 * 1000,
+                    modified: t0 + n as i64 * 1000,
+                    ..Issue::default()
+                })
+                .collect();
+            let comments: Vec<Comment> = (0..nc)
+                .map(|n| Comment {
+                    id: CommentId::from_num(n + 10),
+                    issue: IssueId::from_num(n % ni + 10),
+                    author: "bob".into(),
+                    origin: kadakas_core::change::Origin::User,
+                    time: t0 + n as i64 * 10,
+                    text: "Replaced it on Monday.".into(),
+                    viewpoint: None,
+                    edited: None,
+                })
+                .collect();
+            let mut doc = kadakas_core::model::Document::with_sequential_ids();
+            doc.issues = IssueData::from_vecs(issues, comments).into();
+            let mut app = KadakasApp::blank();
+            app.session = Session::with_document(doc);
+            let ctx = egui::Context::default();
+            let mut frame = |app: &mut KadakasApp| {
+                let t = std::time::Instant::now();
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    app.issues_ui.palette(ui, &mut app.session, &mut app.status);
+                });
+                t.elapsed().as_secs_f64() * 1000.0
+            };
+            let first = frame(&mut app);
+            let steady = (0..5).map(|_| frame(&mut app)).sum::<f64>() / 5.0;
+            // The first issue is open the whole time: its detail with the comment thread.
+            app.issues_ui.selected = Some(IssueId::from_num(10 + ni / 2));
+            let with_detail = (0..5).map(|_| frame(&mut app)).sum::<f64>() / 5.0;
+            println!("{ni},{nc},{first:.1},{steady:.1},{with_detail:.1}");
+        }
+    }
+
     #[test]
     fn the_context_menu_and_the_menu_item_start_a_new_issue() {
         let ctx = egui::Context::default();

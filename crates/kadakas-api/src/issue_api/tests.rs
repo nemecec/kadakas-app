@@ -1104,16 +1104,16 @@ fn an_import_checks_the_limits_of_the_document() {
     let file = export(&mut s, "3.0");
     let mut t = session();
     let mut doc = t.editor.doc().clone();
-    doc.issues = kadakas_core::issue::IssueData {
-        issues: (0..kadakas_core::issue::MAX_ISSUES as u64)
+    doc.issues = kadakas_core::issue::IssueData::from_vecs(
+        (0..kadakas_core::issue::MAX_ISSUES as u64)
             .map(|n| kadakas_core::issue::Issue {
                 id: kadakas_core::issue::IssueId::from_num(n + 10),
                 title: "x".into(),
                 ..Default::default()
             })
             .collect(),
-        comments: vec![],
-    }
+        vec![],
+    )
     .into();
     t = Session::with_document(doc);
     let e = t

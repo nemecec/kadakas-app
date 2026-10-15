@@ -32,10 +32,7 @@ fn store() -> Issues {
     let mut c = issue(3, "Wall too low");
     c.status = IssueStatus::Closed;
     c.labels = vec!["hardscape".into(), "planting".into()];
-    Issues::from(IssueData {
-        issues: vec![a, b, c],
-        comments: vec![],
-    })
+    Issues::from(IssueData::from_vecs(vec![a, b, c], vec![]))
 }
 
 fn ids(v: &[&Issue]) -> Vec<u64> {

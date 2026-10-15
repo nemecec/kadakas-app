@@ -240,11 +240,8 @@ impl Tx<'_> {
                 };
                 i.viewpoints.remove(vat);
                 i.modified = *now;
-                for c in &mut d.comments {
-                    if c.viewpoint == Some(*viewpoint) {
-                        c.viewpoint = None;
-                    }
-                }
+                d.comments
+                    .update_where(|c| c.viewpoint == Some(*viewpoint), |c| c.viewpoint = None);
             }
             _ => unreachable!("not an issue command"),
         }

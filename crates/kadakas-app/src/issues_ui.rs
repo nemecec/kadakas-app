@@ -25,6 +25,8 @@ use serde_json::{Value, json};
 
 /// How far from the middle of a pin a click still hits it, in points.
 const PIN_HIT: f64 = 13.0;
+/// The height of one row of the list.
+const ROW_HEIGHT: f32 = 38.0;
 
 /// What the app does for the Issues UI. They need the view, which the app owns.
 #[derive(Clone, Debug, PartialEq)]
@@ -447,14 +449,27 @@ impl IssuesUi {
         if rows.is_empty() && total > 0 {
             ui.label(tr!("issues-ui-none-match"));
         }
+        // Only the rows in view are made: the list can hold thousands of issues.
         egui::ScrollArea::vertical()
             .id_salt("issues-list")
             .max_height(240.0)
-            .show(ui, |ui| {
-                for row in &rows {
+            .show_rows(ui, ROW_HEIGHT, rows.len(), |ui, range| {
+                for row in &rows[range] {
                     self.row_ui(ui, row);
                 }
             });
+        // Shared issue data that this document does not show is not lost: say so.
+        let hidden = session.collab_hidden_issue_data();
+        if !hidden.is_empty() {
+            egui::CollapsingHeader::new(tr!("issues-ui-hidden", count = hidden.len()))
+                .id_salt("issues-hidden")
+                .show(ui, |ui| {
+                    ui.small(tr!("issues-ui-hidden-help"));
+                    for reason in hidden.iter().take(20) {
+                        ui.small(reason);
+                    }
+                });
+        }
         // The selected issue.
         let Some(id) = self.selected else { return };
         let doc = session.editor.doc();
@@ -500,7 +515,7 @@ impl IssuesUi {
     }
 
     fn row_ui(&mut self, ui: &mut Ui, row: &Row) {
-        let height = 38.0;
+        let height = ROW_HEIGHT;
         let (rect, resp) =
             ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::click());
         let selected = self.selected == Some(row.id);

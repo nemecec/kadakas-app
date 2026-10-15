@@ -247,21 +247,30 @@ fn the_store_finds_orders_and_repairs() {
         viewpoint: None,
         edited: None,
     };
-    let mut s = Issues::from(IssueData {
-        issues: vec![a.clone(), b, a.clone()],
-        comments: vec![mk(2, 1, 20), mk(1, 1, 10), mk(3, 9, 1), mk(1, 1, 10)],
-    });
+    let mut s = Issues::from(IssueData::from_vecs(
+        vec![a.clone(), b, a.clone()],
+        vec![mk(2, 1, 20), mk(1, 1, 10), mk(3, 9, 1), mk(1, 1, 10)],
+    ));
     assert!(!s.is_empty());
     let notes = s.repair();
-    assert_eq!(notes.len(), 2, "{notes:?}");
-    assert_eq!(s.len(), 2);
-    assert_eq!(s.comment_count(IssueId::from_num(1)), 2);
+    // Nothing is left out: the repeated issue and comment get new IDs, and the comment of the
+    // issue 9 (not in the file) goes to a new issue with that ID.
+    assert_eq!(notes.len(), 3, "{notes:?}");
+    assert_eq!(s.len(), 4);
+    assert_eq!(s.data().comments.len(), 4);
+    assert_eq!(s.get(IssueId::from_num(9)).unwrap().title, LOST_ISSUE_TITLE);
+    assert_eq!(s.comment_count(IssueId::from_num(9)), 1);
+    let ids: HashSet<_> = s.iter().map(|i| i.id).collect();
+    assert_eq!(ids.len(), 4, "all IDs differ now");
+    let cids: HashSet<_> = s.data().comments.iter().map(|c| c.id).collect();
+    assert_eq!(cids.len(), 4);
+    assert_eq!(s.comment_count(IssueId::from_num(1)), 3);
     let times: Vec<i64> = s
         .comments_of(IssueId::from_num(1))
         .iter()
         .map(|c| c.time)
         .collect();
-    assert_eq!(times, vec![10, 20]);
+    assert_eq!(times, vec![10, 10, 20]);
     assert!(s.get(IssueId::from_num(1)).is_some() && s.get(IssueId::from_num(5)).is_none());
     assert!(s.comment(CommentId::from_num(2)).is_some());
     assert!(s.uses_snapshot(&"b".repeat(64)) && !s.uses_snapshot("x"));
@@ -269,21 +278,22 @@ fn the_store_finds_orders_and_repairs() {
     assert!(s.approx_bytes() > 0);
     let c = s.clone();
     assert_eq!(c, s);
-    s.data_mut().issues.pop();
+    let last = s.len() - 1;
+    s.data_mut().issues.remove(last);
     assert_ne!(c, s, "a change copies the data");
     assert!(Issues::default().is_empty());
 }
 
 #[test]
 fn repair_notes_issues_over_the_limits() {
-    let mut s = Issues::from(IssueData {
-        issues: vec![Issue {
+    let mut s = Issues::from(IssueData::from_vecs(
+        vec![Issue {
             id: IssueId::from_num(1),
             title: "t".repeat(MAX_TITLE_CHARS + 5),
             ..Issue::default()
         }],
-        comments: vec![],
-    });
+        vec![],
+    ));
     let notes = s.repair();
     assert_eq!(notes.len(), 1);
     assert!(notes[0].contains("limits"));

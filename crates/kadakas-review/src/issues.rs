@@ -89,16 +89,19 @@ pub fn select<'a>(issues: &'a Issues, filter: &Filter) -> Vec<&'a Issue> {
 
 /// The assignees and labels in use, sorted, for the filter lists of a UI.
 pub fn facets(issues: &Issues) -> (Vec<String>, Vec<String>) {
+    // The first spelling of a name stays; names are the same without regard to case.
     let mut assignees: Vec<String> = Vec::new();
     let mut labels: Vec<String> = Vec::new();
+    let mut seen_a: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen_l: std::collections::HashSet<String> = std::collections::HashSet::new();
     for i in issues.iter() {
         if let Some(a) = &i.assignee
-            && !assignees.iter().any(|x| same(x, a))
+            && seen_a.insert(a.to_lowercase())
         {
             assignees.push(a.clone());
         }
         for l in &i.labels {
-            if !labels.iter().any(|x| same(x, l)) {
+            if seen_l.insert(l.to_lowercase()) {
                 labels.push(l.clone());
             }
         }

@@ -1945,3 +1945,24 @@ fn a_join_with_unsaved_work_says_why_and_the_status_tells_when_to_wait() {
     assert_eq!(st["state"], "online");
     assert_eq!(st["waiting_for_snapshot"], false);
 }
+
+#[test]
+fn issue_data_that_the_document_does_not_show_is_listed_for_the_person() {
+    use kadakas_collab::materialize::Quarantined;
+    use kadakas_collab::op::{Kind, Target};
+    let mut s = Session::default();
+    assert!(s.collab_hidden_issue_data().is_empty());
+    s.collab.quarantined = vec![
+        Quarantined {
+            target: Target::new(Kind::Comment, kadakas_core::uid::Uid::from_u128(5)),
+            reason: "the issue has more than 1000 comments: this one is not shown".into(),
+        },
+        Quarantined {
+            target: Target::new(Kind::Object, kadakas_core::uid::Uid::from_u128(6)),
+            reason: "an object".into(),
+        },
+    ];
+    let hidden = s.collab_hidden_issue_data();
+    assert_eq!(hidden.len(), 1);
+    assert!(hidden[0].contains("1000 comments"));
+}

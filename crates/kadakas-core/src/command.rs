@@ -770,18 +770,21 @@ fn object_bytes(o: &Object) -> u64 {
         }
 }
 
-fn issue_list(i: &crate::issue::Issues) -> Vec<(crate::issue::IssueId, &crate::issue::Issue)> {
-    i.iter().map(|x| (x.id, x)).collect()
+fn issue_pairs<'a>(
+    l: &[&'a crate::issue::Issue],
+) -> Vec<(crate::issue::IssueId, &'a crate::issue::Issue)> {
+    l.iter().map(|x| (x.id, *x)).collect()
 }
 
-fn comment_list(
-    i: &crate::issue::Issues,
-) -> Vec<(crate::issue::CommentId, &crate::issue::Comment)> {
-    i.data().comments.iter().map(|x| (x.id, x)).collect()
+fn comment_pairs<'a>(
+    l: &[&'a crate::issue::Comment],
+) -> Vec<(crate::issue::CommentId, &'a crate::issue::Comment)> {
+    l.iter().map(|x| (x.id, *x)).collect()
 }
 
 /// The issues and comments that differ between two states. A change of a comment is also a
-/// change of its issue, so a follower of the issues sees the activity.
+/// change of its issue, so a follower of the issues sees the activity. Only the chunks of the two
+/// lists that the states do not share are compared: the rest did not change.
 fn issue_changes(
     old: &crate::issue::Issues,
     new: &crate::issue::Issues,
@@ -792,9 +795,10 @@ fn issue_changes(
     if old == new {
         return;
     }
-    let (a, c, r) = change::diff_by_id(&issue_list(old), &issue_list(new));
+    let ((old_i, new_i), (old_c, new_c)) = new.unshared(old);
+    let (a, c, r) = change::diff_by_id(&issue_pairs(&old_i), &issue_pairs(&new_i));
     (added.issues, changed.issues, removed.issues) = (a, c, r);
-    let (a, c, r) = change::diff_by_id(&comment_list(old), &comment_list(new));
+    let (a, c, r) = change::diff_by_id(&comment_pairs(&old_c), &comment_pairs(&new_c));
     (added.comments, changed.comments, removed.comments) = (a, c, r);
     let mut touched = Vec::new();
     for cid in added
@@ -803,7 +807,7 @@ fn issue_changes(
         .chain(&changed.comments)
         .chain(&removed.comments)
     {
-        if let Some(c) = new.comment(*cid).or_else(|| old.comment(*cid)) {
+        if let Some(c) = new_c.iter().chain(&old_c).find(|c| c.id == *cid) {
             touched.push(c.issue);
         }
     }
@@ -1862,7 +1866,8 @@ impl<'a> Tx<'a> {
         let meta = (meta_before != meta_after).then_some((meta_before, meta_after));
         let history =
             (history_before != doc.history).then(|| (history_before, doc.history.clone()));
-        let issues = (issues_before != doc.issues).then(|| (issues_before, doc.issues.clone()));
+        let issues =
+            (issues_before != doc.issues).then(|| (issues_before.lean(), doc.issues.lean()));
         let objects = |l: &[(usize, Object)]| l.iter().map(|(_, o)| object_bytes(o)).sum::<u64>();
         let bytes = objects(&removed)
             + objects(&added)
@@ -1877,10 +1882,11 @@ impl<'a> Tx<'a> {
             // holds that the old one does not, and only if the step changed it. A layer edit
             // with a 16 MiB history in the document does not cost 32 MiB of undo budget, and a
             // new version costs its own change, not the whole history again.
-            // A step of the issues keeps the whole old and new data (a command copies it once).
+            // A step of the issues keeps the pointers of the two states and the parts that they
+            // do not share (the rest is shared with the document and counted there).
             + issues
                 .as_ref()
-                .map_or(0, |(b, a)| b.approx_bytes() + a.approx_bytes())
+                .map_or(0, |(b, a)| crate::issue::Issues::step_bytes(b, a))
             + history.as_ref().map_or(0, |(b, a)| {
                 a.as_ref()
                     .map_or(0, |h| h.bytes_not_in(b.as_ref()) as u64)

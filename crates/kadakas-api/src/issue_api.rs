@@ -93,7 +93,7 @@ pub fn describe() -> Value {
             "objects_per_issue": kadakas_core::issue::MAX_OBJECTS,
             "snapshot_bytes": MAX_SNAPSHOT_BYTES,
             "snapshot_pixels": kadakas_core::issue::MAX_SNAPSHOT_PIXELS,
-            "note": "A value over a bound is refused with a message. Nothing is cut.",
+            "note": "A value over a bound is refused with a message. Nothing is cut. These bounds are provisional: they are not final limits (see REV-04 in the feature list for the measurements).",
         },
         "consent": "issue.delete never deletes the work of somebody else silently: an issue of another origin, or with comments of another origin, needs confirm: true after the person said yes. issue.import_bcf never overwrites: an issue with the same GUID and other content is a conflict that the person decides (skip, replace or keep_both).",
         "origin": "An issue and a comment made through the API have the origin agent. The app makes user, a change of another user in a shared document arrives as remote.",

@@ -18,6 +18,7 @@
 //! `kadakas-api` joins these with the editor (`version.*` methods); the core keeps the history as
 //! opaque JSON in the file (`kadakas_core::history`).
 
+#[cfg(feature = "bcf")]
 pub mod bcf;
 pub mod diff;
 pub mod history;
