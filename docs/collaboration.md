@@ -180,10 +180,18 @@ the end of the fraction, and is not the smallest integer part alone. A server mu
 operation that gives a key that is not valid (`validate_entity` does it: `invalid_txn`). A client
 treats an invalid key as no key.
 
+- The objects are **one list over all layers**, not a list for each layer: the stacking order of a
+  document is the order of all its objects (it is the drawing order), and building the document
+  sorts all objects by key (section 3.4). The layers are a second list.
 - When the user changes the order locally (`arrange` to front, back, forward or backward,
-  `move_layer`, or a new object), the client looks at the list of each touched layer, keeps the
-  longest run of objects whose keys already increase, and gives new keys between the neighbours to the
-  others. One object that moves needs one new key. The keys are `set` operations like any other.
+  `move_layer`, or a new object), the client looks at the list of all objects (and, for a change of
+  layers, at the list of layers), keeps the longest run whose keys already increase, and gives new
+  keys between the neighbours to the others. One object that moves needs one new key. The keys are
+  `set` operations like any other. (Clients before 2026-10 made the keys in the list of each layer
+  only. Then an object could get a key below an object of another layer that it is in front of:
+  its author kept one order and the others built another, until the next change. The messages and
+  the merge rules did not change, so the protocol version stays 1; a session with such a client
+  converges in the replica, and the documents agree again when they are next built.)
 - Two users who insert at the same place at the same time may make the same key. Both objects stay,
   the ID decides which is first, and the client of the next change gives one of them a new key.
 - The key of an object is in the field `order` of the object in the document (in `extra`), so a saved
