@@ -1758,6 +1758,50 @@ mod real_commands {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(30))]
 
+        /// Two users add viewpoints to one issue at the same time, more than the bound allows
+        /// together (each stays under it alone). The issue must survive: the extra viewpoints
+        /// are cut in the same way on both sides, with a note, and nothing else is lost.
+        #[test]
+        fn concurrent_viewpoints_over_the_bound_keep_the_issue(
+            acts in prop::collection::vec((any::<bool>(), 0u8..4, any::<bool>()), 20..60)
+        ) {
+            let a = seeded(21);
+            let hub = Hub::new(Sequencer::new(docsync::replica_of(a.editor.doc())));
+            let mut sessions = [a, seeded(22)];
+            for s in &mut sessions {
+                s.set_collab_endpoint(Box::new(hub.endpoint()));
+                let connected = s.handle("collab.connect", json!({"now_ms": 1}));
+                prop_assert!(connected.is_ok());
+            }
+            let mut now = 1_000;
+            apply(&mut sessions, &hub, &mut now, &Act::AddIssue { s: false, n: 0 });
+            settle(&mut sessions, &hub, &mut now);
+            for (s, t, sync) in &acts {
+                apply(&mut sessions, &hub, &mut now, &Act::ViewpointIssue { s: *s, i: 0, t: *t });
+                if *sync {
+                    apply(&mut sessions, &hub, &mut now, &Act::Sync { s: *s });
+                }
+            }
+            settle(&mut sessions, &hub, &mut now);
+            for s in &sessions {
+                prop_assert_eq!(s.collab_client().unwrap().pending().len(), 0);
+                let issues: Vec<_> = s.editor.doc().issues.iter().collect();
+                prop_assert_eq!(issues.len(), 1, "the issue is not lost");
+                prop_assert_eq!(&issues[0].title, "I0");
+                prop_assert!(issues[0].viewpoints.len() <= kadakas_core::issue::MAX_VIEWPOINTS);
+            }
+            prop_assert!(same(&sessions[0], &sessions[1]));
+            let (x, y) = (sessions[0].editor.doc(), sessions[1].editor.doc());
+            prop_assert_eq!(
+                x.issues.iter().next().unwrap().viewpoints.len(),
+                y.issues.iter().next().unwrap().viewpoints.len()
+            );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(30))]
+
         #[test]
         fn two_sessions_with_real_commands_converge(acts in prop::collection::vec(act(), 1..45)) {
             let a = seeded(1);

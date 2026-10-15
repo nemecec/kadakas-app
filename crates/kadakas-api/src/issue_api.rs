@@ -10,7 +10,7 @@
 //! a BCF import that meets an issue with the same GUID but other content asks and changes
 //! nothing (error `conflict`, reason `bcf_conflict`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use base64::Engine;
 use kadakas_core::change::Origin;
@@ -31,13 +31,13 @@ use kadakas_review::issues::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::errors::{REASON_BCF_CONFLICT, REASON_CONFIRM_NEEDED, bad};
+use crate::errors::{REASON_BCF_CONFLICT, REASON_BCF_UNFIT, REASON_CONFIRM_NEEDED, bad};
 use crate::review_api::{author, default_now};
 use crate::{RpcError, Session};
 
 pub const ISSUE_LIST: (&str, &str) = (
     "issue.list",
-    "List review issues (REV-04). params: {status? (a status or a list: open, in_progress, resolved, closed), open_only? (true: not resolved or closed), assignee?, label?, object? (an object ID: the issue is about it), text? (in the title or the description), origin? (user, agent, script, remote), sort? (created, default, oldest first; modified, newest first; status), limit? (default 200, at most 1000)}. Returns {issues: [{id, title, type, status, priority, assignee, labels, due, author, origin, created, modified (ISO 8601), created_ms, modified_ms, objects (count), viewpoints (count), comments (count), point, pin (where the pin is: the point, else the first object, else the plan view)}], count (listed), total (matching), facets: {assignees, labels}}.",
+    "List review issues (REV-04). params: {status? (a status or a list: open, in_progress, resolved, closed), open_only? (true: not resolved or closed), assignee?, label?, object? (an object ID: the issue is about it), text? (in the title or the description), origin? (user, agent, script, remote), sort? (created, default, oldest first; modified, newest first; status), limit? (default 200, at most 1000), offset? (how many matching issues to skip, default 0: the next page starts at next_offset)}. Returns {issues: [{id, title, type, status, priority, assignee, labels, due, author, origin, created, modified (ISO 8601), created_ms, modified_ms, objects (count), viewpoints (count), comments (count), point, pin (where the pin is: the point, else the first object, else the plan view)}], count (listed), total (matching), offset, next_offset (null at the end), facets: {assignees, labels}}.",
 );
 pub const ISSUE_GET: (&str, &str) = (
     "issue.get",
@@ -49,7 +49,7 @@ pub const ISSUE_CREATE: (&str, &str) = (
 );
 pub const ISSUE_UPDATE: (&str, &str) = (
     "issue.update",
-    "Change an issue. One undo step; a call that changes nothing makes no step. params: {id, title?, description?, type?, status?, priority?, assignee? (null or empty: clear), labels? (replace), add_labels?, remove_labels?, due? (YYYY-MM-DD; null or empty: clear), objects? (replace), add_objects?, remove_objects?, point? ([x, y, z] or null: clear), remove_viewpoints? (viewpoint IDs; a snapshot that no viewpoint uses goes), now_ms?}. Returns {id, changed, issue: summary}.",
+    "Change an issue. One undo step; a call that changes nothing makes no step. params: {id, title?, description?, type?, status?, priority?, assignee? (null or empty: clear), labels? (replace), add_labels?, remove_labels?, due? (YYYY-MM-DD; null or empty: clear), objects? (replace), add_objects?, remove_objects?, point? ([x, y, z] or null: clear), remove_viewpoints? (viewpoint IDs; the picture stays in the document until resource.purge; viewpoints of an issue of somebody else need confirm: true, as issue.delete), confirm?, author?, now_ms?}. Returns {id, changed, issue: summary}.",
 );
 pub const ISSUE_ADD_VIEWPOINT: (&str, &str) = (
     "issue.add_viewpoint",
@@ -65,11 +65,11 @@ pub const ISSUE_RESOLVE: (&str, &str) = (
 );
 pub const ISSUE_DELETE: (&str, &str) = (
     "issue.delete",
-    "Delete issues with their comments. One undo step. Work of somebody else is never deleted silently: an issue that another origin made (a person, an agent, a script, another user), or one that has comments of another origin, needs {confirm: true}, which you may send only when the person has said so. Without it the call fails with a conflict error (reason confirm_needed) whose data has `issues` (what would be lost and why) and ask_the_person. Nothing is deleted if one issue needs the consent. params: {id} or {ids}, confirm?. Returns {deleted: [ID], count}.",
+    "Delete issues with their comments. One undo step. Work of somebody else is never deleted silently: an issue that another origin made (a person, an agent, a script, another user), or another author, or one that has comments of another origin or author, needs {confirm: true}, which you may send only when the person has said so. Without it the call fails with a conflict error (reason confirm_needed) whose data has `issues` (what would be lost and why) and ask_the_person. Nothing is deleted if one issue needs the consent. params: {id} or {ids}, confirm?, author? (who deletes; default the collaboration name, else the origin), purge_snapshots? (true: the pictures that no other issue uses go too, in the same undo step; not for a shared document). Somebody else is another origin or another author with the same origin. Returns {deleted: [ID], count}.",
 );
 pub const ISSUE_IMPORT_BCF: (&str, &str) = (
     "issue.import_bcf",
-    "Read a BCF file (.bcfzip, BCF 2.1 or 3.0) and add its issues. One undo step. params: {path | base64 (the file), on_conflict? (ask, default; skip; replace; keep_both), dry_run?, now_ms?}. Issues are matched by the GUID of the topic. A GUID that the document does not have is added. A GUID that the document has with the same content (what BCF holds) is left alone. A GUID with other content is a conflict: with `ask` the call fails with a conflict error (reason bcf_conflict, ask_the_person) that lists the conflicts, and nothing is imported; pass skip (keep ours), replace (take the values of the file for the fields, the viewpoints and the comments of the same ID, and add the new ones; viewpoints and comments that only we have stay) or keep_both (add the issue of the file with new IDs) after the person chose. Components with an IfcGuid become the objects of the issue (the GlobalId of an IFC export of this model gives the same object). Reading is bounded: a violation is an error. A topic that cannot be read is listed in `skipped`, and what was left out is in `warnings`. Returns {version, imported, replaced, unchanged, skipped_conflicts, kept_both, topics_skipped: [{topic, reason}], warnings, created: [IDs], pictures, dry_run?, plan?}.",
+    "Read a BCF file (.bcfzip, BCF 2.1 or 3.0) and add its issues. One undo step. params: {path | base64 (the file), on_conflict? (ask, default; skip; replace; keep_both), skip_items? (true: import without the items that do not fit, see below), dry_run? (true: a plan of what would happen, no change), author? (the author of the new issues that the file gives none; default the collaboration name, else the origin), now_ms?}. Issues are matched by the GUID of the topic. A GUID that the document does not have is added. A GUID that the document has with the same content (what BCF holds) is left alone. A GUID with other content is a conflict: with `ask` the call fails with a conflict error (reason bcf_conflict, ask_the_person) that lists the conflicts, and nothing is imported; pass skip (keep ours), replace (take the values of the file for the fields, the viewpoints and the comments of the same ID, and add the new ones; viewpoints and comments that only we have stay) or keep_both (add the issue of the file with new IDs) after the person chose. Components with an IfcGuid become the objects of the issue (the GlobalId of an IFC export of this model gives the same object). Items that do not fit the limits of Kadakas (a comment that is not valid, a snapshot over the size limits, a camera that cannot be used) are never dropped silently: the call fails with a conflict error (reason bcf_unfit, ask_the_person, options skip_items and cancel) that lists them, and nothing is imported; ask the person, then call again with skip_items: true, or give up. A dry run lists them in `unfit` and in the plan. With replace, a picture or a camera of ours stays when the file's was refused. A comment GUID that another issue of the document already uses gets a new ID. Reading is bounded: a violation is an error. A topic that cannot be read is listed in `topics_skipped`, and the other things that were not read are in `warnings`. Returns {version, imported, replaced, unchanged, skipped_conflicts, kept_both, topics_skipped: [{topic, reason}], items_skipped: [{topic, item, reason, viewpoint}], warnings, created: [IDs], pictures, dry_run?, plan?}.",
 );
 pub const ISSUE_EXPORT_BCF: (&str, &str) = (
     "issue.export_bcf",
@@ -390,6 +390,13 @@ impl Session {
                 .ok_or_else(|| bad("limit is a whole number of 1 or more"))?
                 .min(LIST_LIMIT_MAX as u64) as usize,
         };
+        let offset = match m.get("offset") {
+            None | Some(Value::Null) => 0,
+            Some(v) => v
+                .as_u64()
+                .ok_or_else(|| bad("offset is a whole number of 0 or more"))?
+                as usize,
+        };
         let doc = self.editor.doc();
         let mut list = select(&doc.issues, &filter);
         match text_param(&m, "sort")?.as_deref() {
@@ -399,12 +406,20 @@ impl Session {
             Some(_) => return Err(bad("sort is created, modified or status")),
         }
         let total = list.len();
-        let shown: Vec<Value> = list.iter().take(limit).map(|i| summary(doc, i)).collect();
+        let shown: Vec<Value> = list
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .map(|i| summary(doc, i))
+            .collect();
+        let next = offset.saturating_add(shown.len());
         let (assignees, labels) = facets(&doc.issues);
         Ok(json!({
             "issues": shown,
             "count": shown.len(),
             "total": total,
+            "offset": offset,
+            "next_offset": (next < total).then_some(next),
             "facets": {"assignees": assignees, "labels": labels},
         }))
     }
@@ -441,12 +456,13 @@ impl Session {
                 bytes.len()
             )));
         }
-        kadakas_render::picture::import_picture(
-            bytes,
-            kadakas_core::issue::SNAPSHOT_SOURCE,
-            self.limits().picture_limits(),
-        )
-        .map_err(RpcError::validation)
+        // The smaller of the limits of the session and of a snapshot.
+        let mut limits = self.limits().picture_limits();
+        limits.max_pixels = limits
+            .max_pixels
+            .min(kadakas_core::issue::MAX_SNAPSHOT_PIXELS);
+        kadakas_render::picture::import_picture(bytes, kadakas_core::issue::SNAPSHOT_SOURCE, limits)
+            .map_err(RpcError::validation)
     }
 
     /// The view of the session as a viewpoint view: a plan view that frames the objects, or the
@@ -678,7 +694,7 @@ impl Session {
 
     fn issue_update(&mut self, p: &Value) -> Result<Value, RpcError> {
         let m = as_object(p)?;
-        const KEYS: [&str; 18] = [
+        const KEYS: [&str; 19] = [
             "id",
             "title",
             "description",
@@ -697,6 +713,7 @@ impl Session {
             "now_ms",
             "author",
             "remove_viewpoints",
+            "confirm",
         ];
         if let Some(k) = m.keys().find(|k| !KEYS.contains(&k.as_str())) {
             return Err(bad(format!("unknown parameter {k}")));
@@ -798,6 +815,10 @@ impl Session {
         if let Some(v) = m.get("remove_viewpoints").filter(|v| !v.is_null()) {
             let gone: Vec<ViewpointId> = serde_json::from_value(v.clone())
                 .map_err(|e| bad(format!("remove_viewpoints: {e}")))?;
+            if !gone.is_empty() {
+                let my_author = author(self, &m)?;
+                self.check_consent(&[id], &my_author, flag(&m, "confirm")?)?;
+            }
             commands.extend(
                 gone.into_iter()
                     .map(|viewpoint| Command::DeleteIssueViewpoint {
@@ -905,11 +926,42 @@ impl Session {
         Ok(json!({"id": id, "changed": changed, "issue": summary(doc, find(doc, id)?)}))
     }
 
+    /// The rule of consent: the work of somebody else is not removed unless `confirm` is true.
+    /// Somebody else is another origin or another author. Nothing is removed if one issue asks.
+    fn check_consent(
+        &self,
+        ids: &[IssueId],
+        my_author: &str,
+        confirm: bool,
+    ) -> Result<(), RpcError> {
+        let me = self.editor.origin();
+        let doc = self.editor.doc();
+        let mut ask = Vec::new();
+        for id in ids {
+            let i = find(doc, *id)?;
+            let comments = doc.issues.comments_of(*id);
+            if let Some(why) = consent_reason(i, &comments, me, my_author) {
+                ask.push(json!({
+                    "id": id, "title": i.title, "author": i.author,
+                    "origin": i.origin.name(), "comments": comments.len(), "why": why,
+                }));
+            }
+        }
+        if ask.is_empty() || confirm {
+            return Ok(());
+        }
+        Err(RpcError::conflict(
+            "these issues were made by somebody else or have comments of somebody else: nothing was changed. Ask the person, then call again with confirm: true",
+        )
+        .with_reason(REASON_CONFIRM_NEEDED)
+        .with_details(json!({"issues": ask, "ask_the_person": true})))
+    }
+
     fn issue_delete(&mut self, p: &Value) -> Result<Value, RpcError> {
         let m = as_object(p)?;
         if let Some(k) = m
             .keys()
-            .find(|k| !["id", "ids", "confirm"].contains(&k.as_str()))
+            .find(|k| !["id", "ids", "confirm", "author", "purge_snapshots"].contains(&k.as_str()))
         {
             return Err(bad(format!("unknown parameter {k}")));
         }
@@ -921,30 +973,38 @@ impl Session {
             _ => return Err(bad("give id or ids")),
         };
         let confirm = flag(&m, "confirm")?;
-        let me = self.editor.origin();
-        let doc = self.editor.doc();
-        let mut ask = Vec::new();
-        for id in &ids {
-            let i = find(doc, *id)?;
-            let comments = doc.issues.comments_of(*id);
-            if let Some(why) = consent_reason(i, &comments, me) {
-                ask.push(json!({
-                    "id": id, "title": i.title, "author": i.author,
-                    "origin": i.origin.name(), "comments": comments.len(), "why": why,
-                }));
-            }
-        }
-        if !ask.is_empty() && !confirm {
-            return Err(RpcError::conflict(
-                "these issues were made by somebody else or have comments of somebody else: nothing was deleted. Ask the person, then call again with confirm: true",
-            )
-            .with_reason(REASON_CONFIRM_NEEDED)
-            .with_details(json!({"issues": ask, "ask_the_person": true})));
-        }
-        let commands = ids
+        let my_author = author(self, &m)?;
+        self.check_consent(&ids, &my_author, confirm)?;
+        let mut commands: Vec<Command> = ids
             .iter()
             .map(|id| Command::DeleteIssue { id: *id })
             .collect();
+        // On request the pictures that no other issue uses go too (one undo step). A shared
+        // document should not do this: another user may point to the picture at the same time.
+        if flag(&m, "purge_snapshots")? {
+            let doc = self.editor.doc();
+            let kept: std::collections::BTreeSet<&str> = doc
+                .issues
+                .iter()
+                .filter(|i| !ids.contains(&i.id))
+                .flat_map(|i| i.viewpoints.iter().filter_map(|v| v.snapshot.as_deref()))
+                .collect();
+            let mut gone = BTreeSet::new();
+            for i in ids.iter().filter_map(|id| doc.issues.get(*id)) {
+                for h in i.viewpoints.iter().filter_map(|v| v.snapshot.as_deref()) {
+                    if !kept.contains(h)
+                        && let Some(rid) = doc.resources.find_image(h)
+                        && kadakas_core::library::usage(doc, rid).resources.is_empty()
+                    {
+                        gone.insert(rid);
+                    }
+                }
+            }
+            commands.extend(
+                gone.into_iter()
+                    .map(|id| Command::DeleteResource { id, reassign: None }),
+            );
+        }
         self.editor
             .execute(&Command::Batch { commands })
             .map_err(RpcError::from)?;
@@ -1005,6 +1065,14 @@ impl Session {
                 issues: &doc.issues,
                 only: only.as_deref(),
                 snapshot: &lookup,
+                to_png: &|bytes: &[u8]| {
+                    let img = kadakas_render::texture::decode_image_limited(
+                        bytes,
+                        kadakas_core::issue::MAX_SNAPSHOT_PIXELS,
+                    )
+                    .ok()?;
+                    kadakas_render::texture::encode_png(img.width, img.height, &img.rgba).ok()
+                },
             },
         )
         .map_err(bcf_error)?;
@@ -1112,6 +1180,7 @@ impl Session {
                 "path",
                 "base64",
                 "on_conflict",
+                "skip_items",
                 "dry_run",
                 "now_ms",
                 "author",
@@ -1135,12 +1204,44 @@ impl Session {
             Some(_) => return Err(bad("on_conflict is ask, skip, replace or keep_both")),
         };
         let dry_run = flag(&m, "dry_run")?;
+        let skip_items = flag(&m, "skip_items")?;
         let now = now_of(m.get("now_ms").and_then(Value::as_i64));
         let bytes = self.bcf_bytes(&m)?;
         let mut imported = kadakas_review::bcf::read::read(&bytes, &ReadLimits::default(), now)
             .map_err(bcf_error)?;
         let me = self.editor.origin();
         let my_author = author(self, &m)?;
+
+        // What does not fit: found by the reader, and the pictures that cannot be made. It is
+        // listed, and the import goes on only when the caller says to skip these items.
+        let mut unfit: Vec<Value> = imported.unfit.iter().map(unfit_json).collect();
+        let keep_snapshot: HashSet<ViewpointId> = imported
+            .unfit
+            .iter()
+            .filter(|u| u.item == "snapshot")
+            .filter_map(|u| u.viewpoint)
+            .collect();
+        let keep_view: HashSet<ViewpointId> = imported
+            .unfit
+            .iter()
+            .filter(|u| u.item == "camera")
+            .filter_map(|u| u.viewpoint)
+            .collect();
+        let mut prepared: Vec<Option<Prepared>> = imported
+            .topics
+            .iter()
+            .map(|t| {
+                Some(Prepared::new(
+                    self,
+                    t,
+                    me,
+                    &my_author,
+                    &keep_snapshot,
+                    &keep_view,
+                    &mut unfit,
+                ))
+            })
+            .collect();
 
         // Sort the topics: new, the same, or a conflict.
         let doc = self.editor.doc();
@@ -1175,7 +1276,23 @@ impl Session {
             "new": new.iter().map(|n| imported.topics[*n].issue.id).collect::<Vec<_>>(),
             "unchanged": same.iter().map(|n| imported.topics[*n].issue.id).collect::<Vec<_>>(),
             "conflicts": conflicts.iter().map(|n| conflict_json(*n)).collect::<Vec<_>>(),
+            "unfit": unfit,
         });
+        if !unfit.is_empty() && !skip_items && !dry_run {
+            return Err(RpcError::conflict(format!(
+                "{} item(s) of the file do not fit the limits of Kadakas (a comment that is not valid, a picture that is too large, a camera that cannot be used): nothing was imported. Ask the person, then call again with skip_items: true to import without them, or give up",
+                unfit.len()
+            ))
+            .with_reason(REASON_BCF_UNFIT)
+            .with_details(json!({
+                "ask_the_person": true,
+                "unfit": unfit,
+                "options": ["skip_items", "cancel"],
+                "new": new.len(),
+                "unchanged": same.len(),
+                "conflicts": conflicts.len(),
+            })));
+        }
         if !conflicts.is_empty() && mode == Mode::Ask && !dry_run {
             return Err(RpcError::conflict(format!(
                 "{} issue(s) of the file have the GUID of an issue in the document and other content: nothing was imported. Ask the person, then call again with on_conflict skip, replace or keep_both",
@@ -1195,49 +1312,53 @@ impl Session {
             .iter()
             .map(|s| json!({"topic": s.topic, "reason": s.reason}))
             .collect();
-        let mut warnings = std::mem::take(&mut imported.warnings);
+        let warnings = std::mem::take(&mut imported.warnings);
         if dry_run {
             return Ok(json!({
                 "version": imported.version.id(),
                 "dry_run": true,
                 "plan": plan,
                 "topics_skipped": skipped,
+                "unfit": unfit,
                 "warnings": warnings,
             }));
         }
 
-        // Build the commands.
+        // Build the commands. The IDs of comments and issues that are taken, in the document or
+        // by an earlier topic of the file, are checked here, so one topic cannot fail the rest.
         let mut commands: Vec<Command> = Vec::new();
         let (mut replaced, mut kept_both, mut skipped_conflicts) = (0usize, 0usize, 0usize);
         let mut created_ids: Vec<Uid> = Vec::new();
         let mut pictures = 0usize;
-        let prepare = |s: &Session, t: &ImportedTopic, warnings: &mut Vec<String>| -> Prepared {
-            Prepared::new(s, t, me, &my_author, warnings)
-        };
+        let mut used_comments: HashSet<CommentId> =
+            doc.issues.data().comments.iter().map(|c| c.id).collect();
+        let mut taken_issues: HashSet<IssueId> = doc
+            .issues
+            .iter()
+            .map(|i| i.id)
+            .chain(imported.topics.iter().map(|t| t.issue.id))
+            .collect();
         for n in &new {
-            let t = &imported.topics[*n];
-            let prep = prepare(self, t, &mut warnings);
+            let mut prep = prepared[*n].take().expect("each topic once");
+            prep.claim_comment_ids(&mut used_comments);
             pictures += prep.pictures.len();
             created_ids.push(prep.issue.id.0);
             prep.add_commands(&mut commands);
         }
         for n in &conflicts {
-            let t = &imported.topics[*n];
+            let mut prep = prepared[*n].take().expect("each topic once");
             match mode {
                 Mode::Skip => skipped_conflicts += 1,
                 Mode::KeepBoth => {
-                    let mut copy = t.clone();
-                    renumber(&mut copy, self.editor.doc());
-                    let prep = prepare(self, &copy, &mut warnings);
+                    prep.renumber(doc, &mut taken_issues, &mut used_comments);
                     pictures += prep.pictures.len();
                     created_ids.push(prep.issue.id.0);
                     prep.add_commands(&mut commands);
                     kept_both += 1;
                 }
                 Mode::Replace => {
-                    let prep = prepare(self, t, &mut warnings);
                     pictures += prep.pictures.len();
-                    prep.replace_commands(self.editor.doc(), now, &mut commands);
+                    prep.replace_commands(doc, now, &mut used_comments, &mut commands);
                     replaced += 1;
                 }
                 Mode::Ask => unreachable!("asked above"),
@@ -1247,6 +1368,7 @@ impl Session {
         let detail = json!({
             "imported": imported_n, "replaced": replaced, "kept_both": kept_both,
             "unchanged": same.len(), "skipped_conflicts": skipped_conflicts,
+            "items_skipped": unfit.len(),
         });
         if !commands.is_empty() {
             let history = self.editor.doc().history.clone();
@@ -1267,6 +1389,7 @@ impl Session {
             "skipped_conflicts": skipped_conflicts,
             "kept_both": kept_both,
             "topics_skipped": skipped,
+            "items_skipped": unfit,
             "warnings": warnings,
             "created": created_ids,
             "pictures": pictures,
@@ -1274,12 +1397,21 @@ impl Session {
     }
 }
 
+fn unfit_json(u: &kadakas_review::bcf::Unfit) -> Value {
+    json!({"topic": u.topic, "item": u.item, "reason": u.reason, "viewpoint": u.viewpoint})
+}
+
 /// An imported topic ready for commands: the picture files are checked and made into pictures,
-/// the origin is set, and a snapshot whose picture failed is taken out (with a warning).
+/// the origin is set, and a snapshot whose picture failed is taken out. Whatever does not fit is
+/// listed in `unfit`, so the caller can ask the person.
 struct Prepared {
     issue: Issue,
     comments: Vec<Comment>,
     pictures: Vec<ImageResource>,
+    /// Viewpoints whose picture the file has but we refused: a replace keeps our picture.
+    keep_snapshot: HashSet<ViewpointId>,
+    /// Viewpoints whose camera could not be used: a replace keeps our view.
+    keep_view: HashSet<ViewpointId>,
 }
 
 impl Prepared {
@@ -1288,25 +1420,35 @@ impl Prepared {
         t: &ImportedTopic,
         me: Origin,
         author: &str,
-        warnings: &mut Vec<String>,
+        keep_snapshot: &HashSet<ViewpointId>,
+        keep_view: &HashSet<ViewpointId>,
+        unfit: &mut Vec<Value>,
     ) -> Prepared {
         let mut issue = t.issue.clone();
         issue.origin = me;
         if issue.author.trim().is_empty() {
             issue.author = author.to_string();
         }
+        let mut keep_snapshot = keep_snapshot.clone();
         let mut pictures: Vec<ImageResource> = Vec::new();
         for pic in &t.pictures {
-            match s.snapshot_from_bytes(&pic.bytes) {
-                Ok(img) if img.sha256 == pic.hash => pictures.push(img),
-                Ok(_) => warnings.push(format!(
-                    "issue {}: a snapshot changed on the way and is left out",
-                    issue.id
-                )),
-                Err(e) => warnings.push(format!(
-                    "issue {}: a snapshot is left out: {}",
-                    issue.id, e.message
-                )),
+            let why = match s.snapshot_from_bytes(&pic.bytes) {
+                Ok(img) if img.sha256 == pic.hash => {
+                    pictures.push(img);
+                    continue;
+                }
+                Ok(_) => "the picture changed on the way".to_string(),
+                Err(e) => e.message,
+            };
+            for v in issue
+                .viewpoints
+                .iter()
+                .filter(|v| v.snapshot.as_deref() == Some(pic.hash.as_str()))
+            {
+                keep_snapshot.insert(v.id);
+                unfit.push(json!({
+                    "topic": issue.id, "item": "snapshot", "reason": why, "viewpoint": v.id,
+                }));
             }
         }
         for v in &mut issue.viewpoints {
@@ -1329,6 +1471,8 @@ impl Prepared {
             issue,
             comments,
             pictures,
+            keep_snapshot,
+            keep_view: keep_view.clone(),
         }
     }
 
@@ -1338,6 +1482,53 @@ impl Prepared {
             .iter()
             .find(|p| p.sha256 == h)
             .map(|p| Box::new(p.clone()))
+    }
+
+    /// A comment ID that is taken (in the document, or by an earlier topic) becomes the nil ID:
+    /// the command makes a new one. The others are marked as taken.
+    fn claim_comment_ids(&mut self, used: &mut HashSet<CommentId>) {
+        for c in &mut self.comments {
+            if !used.insert(c.id) {
+                c.id = CommentId::default();
+            }
+        }
+    }
+
+    /// New IDs for the issue, its viewpoints and its comments (`keep_both`), made from the old
+    /// IDs, so the same file gives the same copy. `taken_issues` and `used_comments` hold the IDs
+    /// of the document and of the other topics of the file, and get the new ones.
+    fn renumber(
+        &mut self,
+        doc: &Document,
+        taken_issues: &mut HashSet<IssueId>,
+        used_comments: &mut HashSet<CommentId>,
+    ) {
+        let fresh = |old: Uid, taken: &dyn Fn(Uid) -> bool| {
+            (1..)
+                .map(|n| Uid::derive(old, 10, n))
+                .find(|u| !taken(*u))
+                .expect("an unused ID")
+        };
+        let new_issue = IssueId(fresh(self.issue.id.0, &|u| {
+            taken_issues.contains(&IssueId(u)) || doc.issues.get(IssueId(u)).is_some()
+        }));
+        taken_issues.insert(new_issue);
+        let mut vp_map: Vec<(ViewpointId, ViewpointId)> = Vec::new();
+        for v in &mut self.issue.viewpoints {
+            let new = ViewpointId(fresh(v.id.0, &|_| false));
+            vp_map.push((v.id, new));
+            v.id = new;
+        }
+        self.issue.id = new_issue;
+        for c in &mut self.comments {
+            c.id = CommentId(fresh(c.id.0, &|u| used_comments.contains(&CommentId(u))));
+            used_comments.insert(c.id);
+            c.issue = new_issue;
+            if let Some(v) = c.viewpoint {
+                c.viewpoint = vp_map.iter().find(|(o, _)| *o == v).map(|(_, n)| *n);
+            }
+        }
+        debug_assert!(!is_unset(new_issue.0));
     }
 
     /// The commands of a new issue: the issue and its comments.
@@ -1354,8 +1545,14 @@ impl Prepared {
 
     /// The commands that bring the values of the file into an issue that the document has: the
     /// fields, the viewpoints and the comments of the same ID, and the new ones. What only the
-    /// document has stays.
-    fn replace_commands(self, doc: &Document, now: i64, out: &mut Vec<Command>) {
+    /// document has stays, and so does a picture or a camera of ours that the file's was refused.
+    fn replace_commands(
+        self,
+        doc: &Document,
+        now: i64,
+        used: &mut HashSet<CommentId>,
+        out: &mut Vec<Command>,
+    ) {
         let id = self.issue.id;
         let ours = doc.issues.get(id).expect("a conflict has an issue");
         let i = &self.issue;
@@ -1376,13 +1573,20 @@ impl Prepared {
             now,
         });
         for v in &i.viewpoints {
-            let picture = self.picture_for(&v.snapshot);
             match ours.viewpoints.iter().find(|o| o.id == v.id) {
                 Some(o) => {
                     // BCF has no layers and classes: ours stay.
                     let mut merged = v.clone();
                     merged.layers = o.layers.clone();
                     merged.classes = o.classes.clone();
+                    let mut picture = self.picture_for(&v.snapshot);
+                    if self.keep_snapshot.contains(&v.id) && v.snapshot.is_none() {
+                        merged.snapshot = o.snapshot.clone();
+                        picture = None;
+                    }
+                    if self.keep_view.contains(&v.id) && v.view.is_none() {
+                        merged.view = o.view.clone();
+                    }
                     out.push(Command::ModifyIssueViewpoint {
                         issue: id,
                         viewpoint: Box::new(merged),
@@ -1393,7 +1597,7 @@ impl Prepared {
                 None => out.push(Command::AddIssueViewpoint {
                     issue: id,
                     viewpoint: Box::new(v.clone()),
-                    picture,
+                    picture: self.picture_for(&v.snapshot),
                     now,
                 }),
             }
@@ -1409,52 +1613,20 @@ impl Prepared {
                         });
                     }
                 }
-                // Another issue has a comment with this ID: it gets a new one.
-                Some(_) => {
+                // Another issue has a comment with this ID, or an earlier topic of the file
+                // took it: this one gets a new ID.
+                other => {
                     let mut c = c.clone();
-                    c.id = CommentId::default();
+                    if other.is_some() || !used.insert(c.id) {
+                        c.id = CommentId::default();
+                    }
                     out.push(Command::AddIssueComment {
                         comment: Box::new(c),
                     });
                 }
-                None => out.push(Command::AddIssueComment {
-                    comment: Box::new(c.clone()),
-                }),
             }
         }
     }
-}
-
-/// Gives a topic new IDs for the issue, its viewpoints and its comments (`keep_both`), made from
-/// the old IDs, so the same file gives the same copy.
-fn renumber(t: &mut ImportedTopic, doc: &Document) {
-    let fresh = |old: Uid, taken: &dyn Fn(Uid) -> bool| {
-        (1..)
-            .map(|n| Uid::derive(old, 10, n))
-            .find(|u| !taken(*u))
-            .expect("an unused ID")
-    };
-    let old_issue = t.issue.id;
-    let new_issue = IssueId(fresh(old_issue.0, &|u| {
-        doc.issues.get(IssueId(u)).is_some()
-    }));
-    let mut vp_map: Vec<(ViewpointId, ViewpointId)> = Vec::new();
-    for v in &mut t.issue.viewpoints {
-        let new = ViewpointId(fresh(v.id.0, &|_| false));
-        vp_map.push((v.id, new));
-        v.id = new;
-    }
-    t.issue.id = new_issue;
-    for c in &mut t.comments {
-        c.id = CommentId(fresh(c.id.0, &|u| {
-            doc.issues.comment(CommentId(u)).is_some()
-        }));
-        c.issue = new_issue;
-        if let Some(v) = c.viewpoint {
-            c.viewpoint = vp_map.iter().find(|(o, _)| *o == v).map(|(_, n)| *n);
-        }
-    }
-    debug_assert!(!is_unset(new_issue.0));
 }
 
 fn bcf_error(e: BcfError) -> RpcError {

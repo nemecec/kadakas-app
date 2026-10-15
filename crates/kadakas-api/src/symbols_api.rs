@@ -286,7 +286,7 @@ fn resource_json(doc: &Document, id: ResourceId) -> Value {
     v["id"] = json!(id);
     v["name"] = json!(r.name);
     v["type"] = json!(r.body.type_name());
-    v["used_by"] = json!({"objects": u.objects, "classes": u.classes, "resources": u.resources});
+    v["used_by"] = json!({"objects": u.objects, "classes": u.classes, "resources": u.resources, "issues": u.issues});
     v
 }
 

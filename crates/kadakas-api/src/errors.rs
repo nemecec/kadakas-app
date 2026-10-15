@@ -92,6 +92,9 @@ pub const REASON_CONFIRM_NEEDED: &str = "confirm_needed";
 /// `issue.import_bcf`: an issue of the file has the GUID of an issue in the document and other
 /// content. Nothing was imported. The details list the conflicts and the options (`on_conflict`).
 pub const REASON_BCF_CONFLICT: &str = "bcf_conflict";
+/// `issue.import_bcf`: items of the file do not fit the limits (a comment, a picture, a camera).
+/// Nothing was imported. The details list them; the person decides (`skip_items` or give up).
+pub const REASON_BCF_UNFIT: &str = "bcf_unfit";
 /// `import.file`: the drawing has more entities than an import keeps for updates and the option
 /// `base` is `auto`. `details` has `{entities, cap}`. The caller may ask the person, then pass
 /// `base: "link"` or `base: "none"`.

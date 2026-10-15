@@ -813,7 +813,7 @@ impl IssuesUi {
     fn ask_delete(&mut self, session: &Session, issue: &Issue) {
         let doc = session.editor.doc();
         let comments = doc.issues.comments_of(issue.id);
-        let why = consent_reason(issue, &comments, session.editor.origin());
+        let why = consent_reason(issue, &comments, session.editor.origin(), &author_name());
         self.confirm = Some(Confirm::Delete(issue.id, issue.title.clone(), why));
     }
 
@@ -950,7 +950,7 @@ impl IssuesUi {
         let r = call(
             session,
             "issue.delete",
-            json!({"id": id, "confirm": why.is_some()}),
+            json!({"id": id, "confirm": why.is_some(), "author": author_name()}),
         );
         match r {
             Ok(_) => *status = tr!("issues-ui-deleted", title = title),

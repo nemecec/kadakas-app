@@ -332,20 +332,20 @@ fn viewpoints_keep_snapshots_as_picture_resources() {
     .unwrap();
     assert!(ed.doc().resources.find_image(&hash).is_some());
     assert_eq!(ed.doc().issues.comments_of(id)[0].viewpoint, None);
-    // Deleting the last one removes the picture. Undo brings both back.
+    // Deleting the last one leaves the picture: a command never deletes a resource.
     ed.execute(&Command::DeleteIssueViewpoint {
         issue: id,
         viewpoint: ViewpointId(out2.created[0]),
         now: 10,
     })
     .unwrap();
-    assert!(ed.doc().resources.find_image(&hash).is_none());
+    assert!(ed.doc().resources.find_image(&hash).is_some());
     ed.undo();
     assert!(ed.doc().resources.find_image(&hash).is_some());
     ed.redo();
-    // Deleting the issue with no viewpoint left changes no resource.
+    // Deleting the issue changes no resource either.
     ed.execute(&Command::DeleteIssue { id }).unwrap();
-    assert_eq!(ed.doc().resources.len(), 0);
+    assert_eq!(ed.doc().resources.len(), 1);
 }
 
 #[test]
@@ -598,7 +598,8 @@ fn a_viewpoint_can_be_replaced_with_a_new_snapshot() {
         now: 8,
     })
     .unwrap();
-    assert!(ed.doc().resources.find_image(&p1.sha256).is_none());
+    // The old picture stays as a resource, the new one is added.
+    assert!(ed.doc().resources.find_image(&p1.sha256).is_some());
     assert!(ed.doc().resources.find_image(&p2.sha256).is_some());
     assert_eq!(
         ed.doc().issues.get(id).unwrap().viewpoints[0].name,
@@ -606,7 +607,10 @@ fn a_viewpoint_can_be_replaced_with_a_new_snapshot() {
     );
     ed.undo();
     assert!(ed.doc().resources.find_image(&p1.sha256).is_some());
-    assert!(ed.doc().resources.find_image(&p2.sha256).is_none());
+    assert_eq!(
+        ed.doc().issues.get(id).unwrap().viewpoints[0].snapshot,
+        Some(p1.sha256.clone())
+    );
     // An unknown viewpoint is refused.
     let ghost = Viewpoint {
         id: ViewpointId::from_num(999),
@@ -621,4 +625,107 @@ fn a_viewpoint_can_be_replaced_with_a_new_snapshot() {
         })
         .is_err()
     );
+}
+
+/// An issue with a viewpoint whose snapshot is a picture resource.
+fn issue_with_snapshot(
+    ed: &mut Editor,
+) -> (
+    IssueId,
+    kadakas_core::picture::ImageResource,
+    kadakas_core::resource::ResourceId,
+) {
+    let pic = header_only_sample(7);
+    let id = add(ed, "Snap");
+    ed.execute(&Command::AddIssueViewpoint {
+        issue: id,
+        viewpoint: Box::new(Viewpoint {
+            snapshot: Some(pic.sha256.clone()),
+            ..Viewpoint::default()
+        }),
+        picture: Some(Box::new(pic.clone())),
+        now: 2,
+    })
+    .unwrap();
+    let rid = ed.doc().resources.find_image(&pic.sha256).unwrap();
+    (id, pic, rid)
+}
+
+#[test]
+fn a_snapshot_picture_is_used_by_its_issues_and_nothing_removes_it_unasked() {
+    use kadakas_core::library;
+    use kadakas_core::resource::ResourceBody;
+    let mut ed = editor();
+    let (id, pic, rid) = issue_with_snapshot(&mut ed);
+    // The usage names the issue; a purge plan keeps the picture.
+    let u = library::usage(ed.doc(), rid);
+    assert_eq!(u.issues, vec![id]);
+    assert!(!u.is_unused());
+    assert!(!library::purge_plan(ed.doc(), &["image"]).contains(&rid));
+    let listed = library::list(ed.doc(), Some("image"), None);
+    assert_eq!(listed.iter().find(|r| r.id == rid).unwrap().used_by, 1);
+    // Deleting the resource is refused with the count of users.
+    let e = ed
+        .execute(&Command::DeleteResource {
+            id: rid,
+            reassign: None,
+        })
+        .unwrap_err();
+    assert!(
+        matches!(e, CommandError::ResourceInUse(r, 1) if r == rid),
+        "{e:?}"
+    );
+    // Another file under the same resource is refused too: the hash names the file.
+    let other = header_only_sample(8);
+    let e = ed
+        .execute(&Command::ModifyResource {
+            id: rid,
+            name: None,
+            body: Some(ResourceBody::Image(Box::new(other))),
+        })
+        .unwrap_err();
+    assert!(matches!(e, CommandError::ResourceInUse(..)), "{e:?}");
+    // A plant style that sets and then clears the same picture does not remove it.
+    let style = kadakas_core::resource::ResourceId(
+        ed.execute(&Command::AddResource {
+            name: "Oak".into(),
+            body: ResourceBody::PlantStyle(Box::default()),
+        })
+        .unwrap()
+        .created[0],
+    );
+    ed.execute(&Command::SetPlantPicture {
+        style,
+        picture: Some(Box::new(pic.clone())),
+    })
+    .unwrap();
+    ed.execute(&Command::SetPlantPicture {
+        style,
+        picture: None,
+    })
+    .unwrap();
+    assert_eq!(ed.doc().resources.find_image(&pic.sha256), Some(rid));
+    // Replacing the style's picture by another one does not remove it either.
+    ed.execute(&Command::SetPlantPicture {
+        style,
+        picture: Some(Box::new(pic.clone())),
+    })
+    .unwrap();
+    ed.execute(&Command::SetPlantPicture {
+        style,
+        picture: Some(Box::new(header_only_sample(9))),
+    })
+    .unwrap();
+    assert_eq!(ed.doc().resources.find_image(&pic.sha256), Some(rid));
+    // Once the issue is gone, the picture is unused and can go (a person's explicit step).
+    ed.execute(&Command::DeleteIssue { id }).unwrap();
+    assert!(library::usage(ed.doc(), rid).is_unused());
+    ed.execute(&Command::DeleteResource {
+        id: rid,
+        reassign: None,
+    })
+    .unwrap();
+    assert!(ed.doc().resources.find_image(&pic.sha256).is_none());
+    ed.undo();
+    assert!(ed.doc().resources.find_image(&pic.sha256).is_some());
 }

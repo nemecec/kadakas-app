@@ -1228,7 +1228,23 @@ impl<'a> Tx<'a> {
         let doc = &mut *self.doc;
         doc.layers = target.layers.clone();
         doc.classes = target.classes.clone();
-        doc.resources = target.resources.clone();
+        // The pictures that issues use as snapshots are not part of a version: they stay.
+        let snapshots: Vec<String> = doc
+            .issues
+            .snapshots()
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let mut resources = target.resources.clone();
+        for h in &snapshots {
+            if resources.find_image(h).is_none()
+                && let Some(rid) = doc.resources.find_image(h)
+                && let Some(r) = doc.resources.get(rid)
+            {
+                resources.push(r.clone());
+            }
+        }
+        doc.resources = resources;
         doc.drawing = target.drawing.clone();
         doc.georef = target.georef.clone();
         if doc.layer(doc.active_layer).is_none() {

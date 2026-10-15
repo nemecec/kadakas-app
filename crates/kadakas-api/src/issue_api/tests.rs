@@ -1208,14 +1208,15 @@ fn viewpoints_are_added_and_removed_through_the_api() {
             .len(),
         2
     );
-    // Removing a viewpoint is part of update; its picture goes with the last viewpoint that uses it.
+    // Removing a viewpoint is part of update. Its picture stays in the document as a resource:
+    // a command never deletes a resource (collab, and a person may want it back).
     let r = ok(
         &mut s,
         "issue.update",
         json!({"id": id, "remove_viewpoints": [vp], "now_ms": 7}),
     );
     assert_eq!(r["changed"], true);
-    assert!(s.editor.doc().resources.find_image(&hash).is_none());
+    assert!(s.editor.doc().resources.find_image(&hash).is_some());
     assert_eq!(
         ok(&mut s, "issue.get", json!({"id": id}))["viewpoints"]
             .as_array()
@@ -1267,4 +1268,340 @@ fn viewpoints_are_added_and_removed_through_the_api() {
             assert_eq!(r.unwrap_err().kind, "validation");
         }
     }
+}
+
+// ----- review fixes -----
+
+fn zip_of(files: &[(&str, &[u8])]) -> String {
+    use std::io::Write;
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for (name, bytes) in files {
+        z.start_file(*name, o).unwrap();
+        z.write_all(bytes).unwrap();
+    }
+    base64::engine::general_purpose::STANDARD.encode(z.finish().unwrap().into_inner())
+}
+
+fn snapshot_hash(s: &mut Session, id: &str) -> String {
+    ok(s, "issue.get", json!({"id": id}))["viewpoints"][0]["snapshot"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn a_version_restore_keeps_the_pictures_of_issues() {
+    // The sequence of the review: a version, an issue with a snapshot, then a restore of the
+    // version. Versions do not hold issues, so the issue and its picture must stay.
+    let mut s = session();
+    rect(&mut s, 0);
+    ok(
+        &mut s,
+        "version.create",
+        json!({"name": "V1", "now_ms": 1_000}),
+    );
+    let id = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "After V1", "capture": true, "now_ms": 2_000}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let hash = snapshot_hash(&mut s, &id);
+    rect(&mut s, 5000);
+    let r = ok(&mut s, "version.restore", json!({"id": 1, "now_ms": 3_000}));
+    assert_eq!(r["changed"], true);
+    let has = |s: &Session| {
+        s.editor.doc().resources.find_image(&hash).is_some() && s.editor.doc().issues.len() == 1
+    };
+    assert!(has(&s), "the restore keeps the issue and its picture");
+    assert_eq!(snapshot_hash(&mut s, &id), hash);
+    // Undo and redo of the restore, and a save and reopen (document.get and load).
+    assert!(s.editor.undo());
+    assert!(has(&s), "undo of the restore");
+    assert!(s.editor.redo());
+    assert!(has(&s), "redo of the restore");
+    let doc = ok(&mut s, "document.get", json!({}));
+    let mut t = session();
+    ok(&mut t, "document.load", json!({"document": doc}));
+    assert!(has(&t), "after a save and reopen");
+    // The picture of the issue is still the same file after all that.
+    let g = ok(&mut t, "issue.get", json!({"id": id, "snapshots": true}));
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(g["viewpoints"][0]["snapshot_base64"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(kadakas_core::picture::sha256_hex(&png), hash);
+}
+
+#[test]
+fn the_pictures_of_deleted_issues_stay_unless_the_caller_asks() {
+    let mut s = session();
+    let a = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "A", "capture": true, "now_ms": 1}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let hash = snapshot_hash(&mut s, &a);
+    // A second issue shares the picture.
+    let b = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "B", "capture": true, "now_ms": 2}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(snapshot_hash(&mut s, &b), hash);
+    let rid = s.editor.doc().resources.find_image(&hash).unwrap();
+    // The picture lists its issues.
+    let used = ok(&mut s, "resource.get", json!({"id": rid.0}));
+    assert_eq!(
+        used["used_by"]["issues"].as_array().unwrap().len(),
+        2,
+        "{used}"
+    );
+    // A delete keeps the picture. With purge_snapshots, the picture of a shared snapshot stays
+    // while another issue has it.
+    ok(
+        &mut s,
+        "issue.delete",
+        json!({"id": a, "purge_snapshots": true}),
+    );
+    assert!(s.editor.doc().resources.find_image(&hash).is_some());
+    // The last issue with purge_snapshots: the picture goes, in the same undo step.
+    let depth = s.editor.undo_depth();
+    ok(
+        &mut s,
+        "issue.delete",
+        json!({"id": b, "purge_snapshots": true}),
+    );
+    assert!(s.editor.doc().resources.find_image(&hash).is_none());
+    assert_eq!(s.editor.undo_depth(), depth + 1);
+    s.editor.undo();
+    assert!(s.editor.doc().resources.find_image(&hash).is_some());
+    assert_eq!(s.editor.doc().issues.len(), 1);
+    // Without it the picture stays, and the person can delete it as a resource.
+    ok(&mut s, "issue.delete", json!({"id": b}));
+    assert!(s.editor.doc().resources.find_image(&hash).is_some());
+}
+
+#[test]
+fn the_consent_compares_the_author_too() {
+    let mut s = session();
+    // The same origin (agent), two authors.
+    let id = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "Ann's", "author": "Ann", "capture": true, "now_ms": 1}),
+    )["id"]
+        .clone();
+    let e = fail(&mut s, "issue.delete", json!({"id": id, "author": "Bob"}));
+    assert_eq!(e.reason, Some("confirm_needed"));
+    // The viewpoints of the issue of Ann are not removed by Bob without the consent.
+    let vp = ok(&mut s, "issue.get", json!({"id": id}))["viewpoints"][0]["id"].clone();
+    let e = fail(
+        &mut s,
+        "issue.update",
+        json!({"id": id, "remove_viewpoints": [vp], "author": "Bob"}),
+    );
+    assert_eq!(e.reason, Some("confirm_needed"));
+    assert_eq!(
+        ok(&mut s, "issue.get", json!({"id": id}))["viewpoints"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let r = ok(
+        &mut s,
+        "issue.update",
+        json!({"id": id, "remove_viewpoints": [vp], "author": "Bob", "confirm": true}),
+    );
+    assert_eq!(r["changed"], true);
+    // Ann herself needs no consent.
+    ok(&mut s, "issue.delete", json!({"id": id, "author": "Ann"}));
+}
+
+#[test]
+fn issue_list_pages_with_an_offset() {
+    let mut s = session();
+    for n in 0..5 {
+        new_issue(&mut s, &format!("I{n}"));
+    }
+    let p1 = ok(&mut s, "issue.list", json!({"limit": 2}));
+    assert_eq!(ids(&p1), vec!["I0", "I1"]);
+    assert_eq!(p1["next_offset"], 2);
+    let p2 = ok(&mut s, "issue.list", json!({"limit": 2, "offset": 2}));
+    assert_eq!(ids(&p2), vec!["I2", "I3"]);
+    let p3 = ok(&mut s, "issue.list", json!({"limit": 2, "offset": 4}));
+    assert_eq!(ids(&p3), vec!["I4"]);
+    assert!(p3["next_offset"].is_null());
+    assert_eq!(p3["total"], 5);
+    let p4 = ok(&mut s, "issue.list", json!({"offset": 99}));
+    assert_eq!(p4["count"], 0);
+    assert_eq!(
+        fail(&mut s, "issue.list", json!({"offset": -1})).kind,
+        "invalid_params"
+    );
+}
+
+const TOPIC: &str = "aaaaaaaa-1111-4222-8333-444455556666";
+
+fn markup(topic: &str, title: &str, body: &str) -> String {
+    format!(
+        r#"<Markup><Topic Guid="{topic}" TopicType="Issue" TopicStatus="Open"><Title>{title}</Title><CreationDate>2026-01-01T00:00:00Z</CreationDate><CreationAuthor>a</CreationAuthor></Topic>{body}</Markup>"#
+    )
+}
+
+#[test]
+fn items_that_do_not_fit_ask_the_person_and_are_never_dropped_silently() {
+    let mut s = session();
+    let body = r#"<Comment Guid="cccccccc-1111-4222-8333-444455556666"><Date>2026-01-02T00:00:00Z</Date><Author>b</Author></Comment>
+        <Viewpoints Guid="dddddddd-1111-4222-8333-444455556666"><Snapshot>junk.png</Snapshot></Viewpoints>"#;
+    let file = zip_of(&[
+        ("bcf.version", b"<Version VersionId=\"2.1\"/>"),
+        (
+            &format!("{TOPIC}/markup.bcf"),
+            markup(TOPIC, "With junk", body).as_bytes(),
+        ),
+        (&format!("{TOPIC}/junk.png"), b"this is not a picture"),
+    ]);
+    let before = s.editor.revision();
+    let e = fail(&mut s, "issue.import_bcf", json!({"base64": file}));
+    assert_eq!(e.kind, "conflict");
+    assert_eq!(e.reason, Some("bcf_unfit"));
+    let d = e.details.as_ref().unwrap();
+    assert_eq!(d["ask_the_person"], true);
+    assert_eq!(d["options"], json!(["skip_items", "cancel"]));
+    let items: Vec<&str> = d["unfit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["item"].as_str().unwrap())
+        .collect();
+    assert!(
+        items.contains(&"comment") && items.contains(&"snapshot"),
+        "{d}"
+    );
+    assert_eq!(s.editor.revision(), before, "nothing was imported");
+    // A dry run lists them and changes nothing.
+    let plan = ok(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": file, "dry_run": true}),
+    );
+    assert_eq!(plan["unfit"].as_array().unwrap().len(), items.len());
+    assert_eq!(plan["plan"]["unfit"], plan["unfit"]);
+    assert_eq!(s.editor.revision(), before);
+    // After the person said yes: imported without the items, and the call says which.
+    let r = ok(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": file, "skip_items": true}),
+    );
+    assert_eq!(r["imported"], 1);
+    assert_eq!(r["items_skipped"].as_array().unwrap().len(), items.len());
+    assert_eq!(ok(&mut s, "issue.list", json!({}))["total"], 1);
+}
+
+#[test]
+fn a_replace_keeps_our_picture_when_the_one_of_the_file_was_refused() {
+    let (mut s, _a, id) = full_session();
+    let g = ok(&mut s, "issue.get", json!({"id": id}));
+    let vp = g["viewpoints"][0]["id"].as_str().unwrap().to_string();
+    let hash = g["viewpoints"][0]["snapshot"].as_str().unwrap().to_string();
+    let body = format!(r#"<Viewpoints Guid="{vp}"><Snapshot>junk.png</Snapshot></Viewpoints>"#);
+    let file = zip_of(&[
+        ("bcf.version", b"<Version VersionId=\"2.1\"/>"),
+        (
+            &format!("{id}/markup.bcf"),
+            markup(&id, "Changed in the file", &body).as_bytes(),
+        ),
+        (&format!("{id}/junk.png"), b"this is not a picture"),
+    ]);
+    let r = ok(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": file, "on_conflict": "replace", "skip_items": true}),
+    );
+    assert_eq!(r["replaced"], 1);
+    let g = ok(&mut s, "issue.get", json!({"id": id}));
+    assert_eq!(g["title"], "Changed in the file");
+    assert_eq!(
+        g["viewpoints"][0]["snapshot"], hash,
+        "our picture stays when the file's was refused"
+    );
+    assert!(s.editor.doc().resources.find_image(&hash).is_some());
+}
+
+#[test]
+fn a_comment_guid_of_another_issue_does_not_fail_the_import() {
+    let mut s = session();
+    let c = "cccccccc-1111-4222-8333-444455556666";
+    let comment = format!(
+        r#"<Comment Guid="{c}"><Date>2026-01-02T00:00:00Z</Date><Author>b</Author><Comment>Same GUID</Comment></Comment>"#
+    );
+    let topic_a = "aaaaaaaa-1111-4222-8333-444455556666";
+    let topic_b = "bbbbbbbb-1111-4222-8333-444455556666";
+    // One file with two topics that both use the comment GUID, and then a second file.
+    let file = zip_of(&[
+        ("bcf.version", b"<Version VersionId=\"2.1\"/>"),
+        (
+            &format!("{topic_a}/markup.bcf"),
+            markup(topic_a, "A", &comment).as_bytes(),
+        ),
+        (
+            &format!("{topic_b}/markup.bcf"),
+            markup(topic_b, "B", &comment).as_bytes(),
+        ),
+    ]);
+    let r = ok(&mut s, "issue.import_bcf", json!({"base64": file}));
+    assert_eq!(r["imported"], 2, "{r}");
+    let list = ok(&mut s, "issue.list", json!({}));
+    for i in list["issues"].as_array().unwrap() {
+        assert_eq!(i["comments"], 1, "each issue keeps its comment: {i}");
+    }
+    // The same comment GUID in a topic of a later file, when another issue has it already.
+    let topic_c = "cccccccc-2222-4222-8333-444455556666";
+    let file = zip_of(&[
+        ("bcf.version", b"<Version VersionId=\"2.1\"/>"),
+        (
+            &format!("{topic_c}/markup.bcf"),
+            markup(topic_c, "C", &comment).as_bytes(),
+        ),
+    ]);
+    let r = ok(&mut s, "issue.import_bcf", json!({"base64": file}));
+    assert_eq!(r["imported"], 1, "{r}");
+    assert_eq!(s.editor.doc().issues.data().comments.len(), 3);
+}
+
+#[test]
+fn a_renumbered_copy_never_takes_an_id_that_another_topic_of_the_file_has() {
+    let doc = Document::default();
+    let old = IssueId::from_num(77);
+    let mut taken: HashSet<IssueId> = HashSet::new();
+    // The ID that the renumber would pick first is the ID of another topic of the file.
+    let first = IssueId(Uid::derive(old.0, 10, 1));
+    taken.insert(first);
+    let mut used: HashSet<CommentId> = HashSet::new();
+    let mut p = Prepared {
+        issue: Issue {
+            id: old,
+            ..Issue::default()
+        },
+        comments: vec![],
+        pictures: vec![],
+        keep_snapshot: HashSet::new(),
+        keep_view: HashSet::new(),
+    };
+    p.renumber(&doc, &mut taken, &mut used);
+    assert_ne!(p.issue.id, first);
+    assert_ne!(p.issue.id, old);
+    assert!(taken.contains(&p.issue.id));
 }

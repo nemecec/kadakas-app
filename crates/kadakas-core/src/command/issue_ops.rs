@@ -2,7 +2,9 @@
 //!
 //! Every command is one undo step. A snapshot is a PNG picture. It becomes an `image` resource of
 //! the document (once per SHA-256), and the viewpoint holds the hash. A command that removes the
-//! last viewpoint that uses a snapshot removes the resource too, unless a plant style uses it.
+//! last viewpoint that uses a snapshot does NOT remove the resource: in a shared document another
+//! user may still point to it. An unused picture is removed by an explicit purge (`resource.purge`,
+//! or `issue.delete {purge_snapshots}`), which is one undo step.
 
 use super::*;
 use crate::issue::{
@@ -65,18 +67,6 @@ impl Tx<'_> {
         Ok(())
     }
 
-    /// Removes the picture of a snapshot that no viewpoint uses any more.
-    fn drop_snapshot(&mut self, hash: &str) {
-        if self.doc.issues.uses_snapshot(hash) {
-            return;
-        }
-        if let Some(rid) = self.doc.resources.find_image(hash)
-            && self.image_users(rid).is_empty()
-        {
-            self.doc.resources.remove(rid);
-        }
-    }
-
     pub(super) fn run_issue(
         &mut self,
         cmd: &Command,
@@ -121,11 +111,8 @@ impl Tx<'_> {
             Command::DeleteIssue { id } => {
                 let at = self.issue_index(*id)?;
                 let d = self.doc.issues.data_mut();
-                let gone = d.issues.remove(at);
+                d.issues.remove(at);
                 d.comments.retain(|c| c.issue != *id);
-                for h in gone.viewpoints.iter().filter_map(|v| v.snapshot.clone()) {
-                    self.drop_snapshot(&h);
-                }
             }
             Command::AddIssueComment { comment } => {
                 let mut c: Comment = (**comment).clone();
@@ -238,11 +225,7 @@ impl Tx<'_> {
                 new.validate().map_err(invalid)?;
                 let pics: Vec<&ImageResource> = picture.iter().map(|p| p.as_ref()).collect();
                 self.store_snapshots(&new.viewpoints, &pics)?;
-                let gone = old.viewpoints[vat].snapshot.clone();
                 self.doc.issues.data_mut().issues[at] = new;
-                if let Some(h) = gone {
-                    self.drop_snapshot(&h);
-                }
             }
             Command::DeleteIssueViewpoint {
                 issue,
@@ -255,15 +238,12 @@ impl Tx<'_> {
                 let Some(vat) = i.viewpoints.iter().position(|v| v.id == *viewpoint) else {
                     return Err(invalid(format!("the issue has no viewpoint {viewpoint}")));
                 };
-                let gone = i.viewpoints.remove(vat);
+                i.viewpoints.remove(vat);
                 i.modified = *now;
                 for c in &mut d.comments {
                     if c.viewpoint == Some(*viewpoint) {
                         c.viewpoint = None;
                     }
-                }
-                if let Some(h) = gone.snapshot {
-                    self.drop_snapshot(&h);
                 }
             }
             _ => unreachable!("not an issue command"),

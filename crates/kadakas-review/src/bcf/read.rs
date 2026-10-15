@@ -15,7 +15,7 @@ use roxmltree::{Document, Node, ParsingOptions};
 
 use super::camera::{self, BcfCamera};
 use super::write::generated_viewpoint_id;
-use super::{BcfError, Imported, ImportedTopic, Picture, Skipped, Version};
+use super::{BcfError, Imported, ImportedTopic, Picture, Skipped, Unfit, Version};
 use crate::issues::{match_ifc, time};
 
 /// The limits of the reader. A violation is an error, and nothing is imported.
@@ -299,6 +299,14 @@ fn text_of(n: Node<'_, '_>) -> Option<String> {
     n.text().map(str::to_string)
 }
 
+/// The text of a field as it is, except that the line breaks and the spaces around a text that a
+/// pretty printer put in are cut. A text of our own with spaces at its ends comes back the same.
+fn plain(n: Option<Node<'_, '_>>) -> Option<String> {
+    let t = n?.text()?;
+    let t = if t.contains('\n') { t.trim() } else { t };
+    (!t.trim().is_empty()).then(|| t.to_string())
+}
+
 fn trimmed(n: Option<Node<'_, '_>>) -> Option<String> {
     let t = n?.text()?.trim().to_string();
     (!t.is_empty()).then_some(t)
@@ -341,6 +349,7 @@ fn status_of(text: &str) -> Option<IssueStatus> {
 struct Ctx<'a> {
     entries: Entries<'a>,
     warnings: Vec<String>,
+    unfit: Vec<Unfit>,
     now_ms: i64,
     /// Counts of things that are not read, for one summary line each.
     unsupported: BTreeMap<&'static str, usize>,
@@ -403,6 +412,7 @@ pub fn read(bytes: &[u8], limits: &ReadLimits, now_ms: i64) -> Result<Imported, 
     let mut cx = Ctx {
         entries,
         warnings: Vec::new(),
+        unfit: Vec::new(),
         now_ms,
         unsupported: BTreeMap::new(),
     };
@@ -410,9 +420,11 @@ pub fn read(bytes: &[u8], limits: &ReadLimits, now_ms: i64) -> Result<Imported, 
     let mut skipped = Vec::new();
     let mut seen: HashSet<IssueId> = HashSet::new();
     for folder in &folders {
+        let mark = cx.unfit.len();
         match read_topic(&mut cx, version, folder) {
             Ok(Some(t)) => {
                 if !seen.insert(t.issue.id) {
+                    cx.unfit.truncate(mark);
                     skipped.push(Skipped {
                         topic: folder.clone(),
                         reason: format!("the GUID {} is used by an earlier topic", t.issue.id),
@@ -422,10 +434,13 @@ pub fn read(bytes: &[u8], limits: &ReadLimits, now_ms: i64) -> Result<Imported, 
                 }
             }
             Ok(None) => {}
-            Err(Fail::Skip(reason)) => skipped.push(Skipped {
-                topic: folder.clone(),
-                reason,
-            }),
+            Err(Fail::Skip(reason)) => {
+                cx.unfit.truncate(mark);
+                skipped.push(Skipped {
+                    topic: folder.clone(),
+                    reason,
+                });
+            }
             Err(Fail::Hard(e)) => return Err(e),
         }
     }
@@ -437,6 +452,7 @@ pub fn read(bytes: &[u8], limits: &ReadLimits, now_ms: i64) -> Result<Imported, 
         version,
         topics,
         skipped,
+        unfit: std::mem::take(&mut cx.unfit),
         warnings,
     })
 }
@@ -484,7 +500,7 @@ fn read_topic(
     let id = guid_attr(topic)
         .map(IssueId)
         .ok_or_else(|| skip("the topic GUID is missing or not valid"))?;
-    let title = trimmed(kid(topic, "Title")).ok_or_else(|| skip("the topic has no title"))?;
+    let title = plain(kid(topic, "Title")).ok_or_else(|| skip("the topic has no title"))?;
     let mut issue = Issue {
         id,
         title,
@@ -497,7 +513,7 @@ fn read_topic(
     {
         issue.kind = t.to_string();
     }
-    if let Some(t) = trimmed(kid(topic, "Priority")) {
+    if let Some(t) = plain(kid(topic, "Priority")) {
         issue.priority = t;
     }
     if let Some(s) = topic
@@ -524,9 +540,9 @@ fn read_topic(
     for l in kids(topic, "Labels") {
         let inner: Vec<_> = kids(l, "Label").collect();
         let texts: Vec<Option<String>> = if inner.is_empty() {
-            vec![trimmed(Some(l))]
+            vec![plain(Some(l))]
         } else {
-            inner.into_iter().map(|n| trimmed(Some(n))).collect()
+            inner.into_iter().map(|n| plain(Some(n))).collect()
         };
         for t in texts.into_iter().flatten() {
             if !issue
@@ -538,7 +554,7 @@ fn read_topic(
             }
         }
     }
-    issue.author = trimmed(kid(topic, "CreationAuthor")).unwrap_or_default();
+    issue.author = plain(kid(topic, "CreationAuthor")).unwrap_or_default();
     issue.created = cx.when(trimmed(kid(topic, "CreationDate")), &format!("topic {id}"));
     issue.modified = kid(topic, "ModifiedDate")
         .and_then(|n| trimmed(Some(n)))
@@ -553,7 +569,7 @@ fn read_topic(
             )),
         }
     }
-    issue.assignee = trimmed(kid(topic, "AssignedTo"));
+    issue.assignee = plain(kid(topic, "AssignedTo"));
     issue.description = kid(topic, "Description")
         .and_then(text_of)
         .unwrap_or_default();
@@ -637,7 +653,7 @@ fn read_topic(
         let file = r.file.clone().unwrap_or_else(|| "viewpoint.bcfv".into());
         read_viewpoint_file(cx, folder, &file, &mut vp, &mut objects)?;
         if let Some(s) = &r.snapshot {
-            vp.snapshot = read_snapshot(cx, folder, s, &mut pictures)?;
+            vp.snapshot = read_snapshot(cx, folder, s, vp.id, &mut pictures)?;
         }
         vps.push(vp);
     }
@@ -653,7 +669,12 @@ fn read_topic(
             .and_then(text_of)
             .filter(|t| !t.trim().is_empty())
         else {
-            cx.unsupported("comments without a text");
+            cx.unfit.push(Unfit {
+                topic: folder.to_string(),
+                item: "comment".into(),
+                reason: "the comment has no text (Kadakas comments need a text)".into(),
+                viewpoint: None,
+            });
             continue;
         };
         let mut cid = guid_attr(*c).unwrap_or(Uid::NIL);
@@ -673,7 +694,7 @@ fn read_topic(
         let comment = Comment {
             id: CommentId(cid),
             issue: id,
-            author: trimmed(kid(*c, "Author")).unwrap_or_default(),
+            author: plain(kid(*c, "Author")).unwrap_or_default(),
             origin: Origin::User,
             time: cx.when(
                 trimmed(kid(*c, "Date")),
@@ -685,9 +706,12 @@ fn read_topic(
         };
         match comment.validate() {
             Ok(()) => comments.push(comment),
-            Err(why) => cx
-                .warnings
-                .push(format!("topic {id}: a comment was left out: {why}")),
+            Err(why) => cx.unfit.push(Unfit {
+                topic: folder.to_string(),
+                item: "comment".into(),
+                reason: why,
+                viewpoint: None,
+            }),
         }
     }
     comments.sort_by_key(|c| (c.time, c.id));
@@ -804,14 +828,25 @@ fn read_viewpoint_file(
             };
             match camera::from_bcf(&c) {
                 Ok(v) => vp.view = Some(v),
-                Err(why) => cx
-                    .warnings
-                    .push(format!("{name}: {why}: the viewpoint has no camera")),
+                Err(why) => cx.unfit.push(Unfit {
+                    topic: folder.to_string(),
+                    item: "camera".into(),
+                    reason: format!("{name}: {why}"),
+                    viewpoint: Some(vp.id),
+                }),
+            }
+            if !orthogonal && (size - camera::FOV_DEG).abs() > 0.5 {
+                cx.unsupported(
+                    "perspective cameras with another field of view than 45 degrees (they show with 45)",
+                );
             }
         } else {
-            cx.warnings.push(format!(
-                "{name}: the camera is not complete: the viewpoint has no camera"
-            ));
+            cx.unfit.push(Unfit {
+                topic: folder.to_string(),
+                item: "camera".into(),
+                reason: format!("{name}: the camera is not complete"),
+                viewpoint: Some(vp.id),
+            });
         }
     }
     if let Some(v) = &vp.view {
@@ -821,9 +856,12 @@ fn read_viewpoint_file(
         };
         if probe.validate().is_err() {
             vp.view = None;
-            cx.warnings.push(format!(
-                "{name}: the camera is out of range: the viewpoint has no camera"
-            ));
+            cx.unfit.push(Unfit {
+                topic: folder.to_string(),
+                item: "camera".into(),
+                reason: format!("{name}: the camera is out of range"),
+                viewpoint: Some(vp.id),
+            });
         }
     }
     Ok(())
@@ -834,8 +872,17 @@ fn read_snapshot(
     cx: &mut Ctx<'_>,
     folder: &str,
     file: &str,
+    viewpoint: ViewpointId,
     pictures: &mut Vec<Picture>,
 ) -> Result<Option<String>, Fail> {
+    let refuse = |cx: &mut Ctx<'_>, reason: String| {
+        cx.unfit.push(Unfit {
+            topic: folder.to_string(),
+            item: "snapshot".into(),
+            reason,
+            viewpoint: Some(viewpoint),
+        });
+    };
     let Ok(name) = safe_name(&format!("{folder}/{file}"), cx.entries.limits) else {
         cx.warnings.push(format!(
             "topic {folder}: the snapshot name {file:?} is not allowed"
@@ -857,9 +904,10 @@ fn read_snapshot(
         .map(|f| f.size())
         .map_err(|e| BcfError::Archive(e.to_string()))?;
     if declared > cap {
-        cx.warnings.push(format!(
-            "{name}: the snapshot is {declared} bytes (at most {cap}) and is left out"
-        ));
+        refuse(
+            cx,
+            format!("{name}: the snapshot is {declared} bytes (at most {cap})"),
+        );
         return Ok(None);
     }
     let Some(bytes) = cx.entries.read(&name, cap)? else {
@@ -872,16 +920,18 @@ fn read_snapshot(
     }
     .unwrap_or((0, 0));
     if w == 0 || h == 0 {
-        cx.warnings.push(format!(
-            "{name}: the snapshot is not a PNG or JPEG picture and is left out"
-        ));
+        refuse(
+            cx,
+            format!("{name}: the snapshot is not a PNG or JPEG picture"),
+        );
         return Ok(None);
     }
     if u64::from(w) * u64::from(h) > cx.entries.limits.max_picture_pixels {
-        cx.warnings.push(format!(
-            "{name}: the snapshot has {w} x {h} pixels (at most {}) and is left out",
-            cx.entries.limits.max_picture_pixels
-        ));
+        let at_most = cx.entries.limits.max_picture_pixels;
+        refuse(
+            cx,
+            format!("{name}: the snapshot has {w} x {h} pixels (at most {at_most})"),
+        );
         return Ok(None);
     }
     let hash = sha256_hex(&bytes);

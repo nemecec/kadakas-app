@@ -189,6 +189,11 @@ impl Tx<'_> {
                 // A new picture file is read once; the same file (the same shared text) is not.
                 if new_body != current.body {
                     new_body.verify().map_err(invalid)?;
+                    // The file of a snapshot is named by its hash and cannot change.
+                    let issues = crate::library::snapshot_issues(self.doc, *id);
+                    if !issues.is_empty() {
+                        return Err(CommandError::ResourceInUse(*id, issues.len()));
+                    }
                 }
                 self.check_body_refs(&new_body)?;
                 self.check_graphic_refs(Some(*id), &new_body)?;
@@ -486,6 +491,7 @@ impl Tx<'_> {
                 if let Some(old) = old.filter(|o| Some(*o) != new)
                     && self.doc.resources.image(old).is_some()
                     && self.image_users(old).is_empty()
+                    && crate::library::snapshot_issues(self.doc, old).is_empty()
                 {
                     self.doc.resources.remove(old);
                 }
@@ -557,6 +563,11 @@ impl Tx<'_> {
                     None => CommandError::NoResource(to),
                 });
             }
+        }
+        // A picture that issues use as a snapshot stays until they let go of it.
+        let issues = crate::library::snapshot_issues(self.doc, id);
+        if !issues.is_empty() {
+            return Err(CommandError::ResourceInUse(id, issues.len()));
         }
         for sid in self.image_users(id) {
             if let Some(Resource {

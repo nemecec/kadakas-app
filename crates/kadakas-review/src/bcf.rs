@@ -112,12 +112,28 @@ pub struct Skipped {
     pub reason: String,
 }
 
+/// Something in the file that does not fit the limits of Kadakas (a comment that is not valid, a
+/// snapshot over the limits, a camera that cannot be used). The import does not take it. It is
+/// listed so that the person decides: nothing of a person's data goes without a choice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unfit {
+    /// The folder (the GUID) of the topic.
+    pub topic: String,
+    /// What it is: `comment`, `snapshot` or `camera`.
+    pub item: String,
+    pub reason: String,
+    /// The viewpoint that a snapshot or a camera belongs to.
+    pub viewpoint: Option<kadakas_core::issue::ViewpointId>,
+}
+
 /// What a BCF file holds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Imported {
     pub version: Version,
     pub topics: Vec<ImportedTopic>,
     pub skipped: Vec<Skipped>,
+    /// Items of the topics that do not fit. They are not in `topics`.
+    pub unfit: Vec<Unfit>,
     /// Things that were not read or were changed on the way in, in plain text.
     pub warnings: Vec<String>,
 }

@@ -197,11 +197,24 @@ pub fn match_ifc(global_id: &str) -> Option<ObjectId> {
     kadakas_core::guid::decode(global_id).map(|v| ObjectId(Uid::from_u128(v)))
 }
 
-/// Why deleting an issue needs a yes from the person, or `None` when `me` may delete it alone.
-/// Work of somebody else is never deleted silently: an issue that another origin made (a person,
-/// an agent, a script, another user), or one that holds comments of another origin, needs the
-/// consent. `me` is the origin of the one who deletes.
-pub fn consent_reason(issue: &Issue, comments: &[&Comment], me: Origin) -> Option<String> {
+/// True if two author names are the same person: without case and spaces at the ends. An author
+/// that is empty (not known) counts as the same, because there is nobody to ask for.
+fn same_author(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim(), b.trim());
+    a.is_empty() || b.is_empty() || a.to_lowercase() == b.to_lowercase()
+}
+
+/// Why deleting an issue needs a yes from the person, or `None` when the one who deletes may do
+/// it alone. Work of somebody else is never deleted silently. Somebody else is another origin (a
+/// person, an agent, a script, another user) or another author with the same origin (the agent of
+/// Bob is not the agent of Alice, and two people are two people). `me` and `my_author` say who
+/// deletes. The rule is also for the removal of viewpoints.
+pub fn consent_reason(
+    issue: &Issue,
+    comments: &[&Comment],
+    me: Origin,
+    my_author: &str,
+) -> Option<String> {
     if issue.origin != me {
         return Some(format!(
             "the issue was made by origin {}, not by {}",
@@ -209,8 +222,18 @@ pub fn consent_reason(issue: &Issue, comments: &[&Comment], me: Origin) -> Optio
             me.name()
         ));
     }
-    let others = comments.iter().filter(|c| c.origin != me).count();
-    (others > 0).then(|| format!("the issue has {others} comment(s) of another origin"))
+    if !same_author(&issue.author, my_author) {
+        return Some(format!(
+            "the issue was made by {}, not by {}",
+            issue.author.trim(),
+            my_author.trim()
+        ));
+    }
+    let others = comments
+        .iter()
+        .filter(|c| c.origin != me || !same_author(&c.author, my_author))
+        .count();
+    (others > 0).then(|| format!("the issue has {others} comment(s) of somebody else"))
 }
 
 /// An issue in a state where it is done: sets the status to resolved or closed.

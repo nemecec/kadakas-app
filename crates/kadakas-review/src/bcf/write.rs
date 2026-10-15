@@ -18,6 +18,9 @@ pub struct ExportInput<'a> {
     pub only: Option<&'a [IssueId]>,
     /// The picture file of a snapshot, by its SHA-256.
     pub snapshot: &'a dyn Fn(&str) -> Option<Vec<u8>>,
+    /// Makes a PNG file of a picture file. BCF 2.1 holds PNG snapshots only, so a JPEG snapshot
+    /// goes through it; `None` is a picture that cannot be converted (the viewpoint has no picture).
+    pub to_png: &'a dyn Fn(&[u8]) -> Option<Vec<u8>>,
 }
 
 /// The author that BCF needs when an issue has none.
@@ -44,6 +47,8 @@ struct OutViewpoint<'a> {
     vp: std::borrow::Cow<'a, Viewpoint>,
     /// The picture file name in the topic folder, if the snapshot is there.
     snapshot: Option<String>,
+    /// The bytes of that file.
+    bytes: Option<Vec<u8>>,
     /// The index in the topic (sort order).
     index: usize,
 }
@@ -94,13 +99,11 @@ pub fn export(
     for issue in &list {
         let folder = guid(issue.id);
         let comments = input.issues.comments_of(issue.id);
-        let (vps, mut notes) = out_viewpoints(issue, input, &folder);
+        let (vps, mut notes) = out_viewpoints(version, issue, input, &folder);
         report.notes.append(&mut notes);
         for v in &vps {
-            if let Some(name) = &v.snapshot {
-                let bytes = (input.snapshot)(v.vp.snapshot.as_deref().unwrap_or(""))
-                    .expect("checked when the viewpoint list was made");
-                put(&mut zip, &format!("{folder}/{name}"), &bytes)?;
+            if let (Some(name), Some(bytes)) = (&v.snapshot, &v.bytes) {
+                put(&mut zip, &format!("{folder}/{name}"), bytes)?;
                 report.snapshots += 1;
             }
             let (text, n) = viewpoint_file(version, issue, &v.vp);
@@ -161,6 +164,7 @@ fn version_file(v: Version) -> String {
 /// The viewpoints of an issue as they go into the file. The objects of the issue go into the
 /// selection of each one. An issue with objects and no viewpoint gets a viewpoint of its own.
 fn out_viewpoints<'a>(
+    version: Version,
     issue: &'a Issue,
     input: &ExportInput<'_>,
     folder: &str,
@@ -200,10 +204,26 @@ fn out_viewpoints<'a>(
             vp.to_mut().selection = sel.into_iter().collect();
         }
         let mut snapshot = None;
+        let mut file_bytes = None;
         if let Some(hash) = vp.snapshot.clone() {
             match (input.snapshot)(&hash) {
                 Some(bytes) if sha256_hex(&bytes) == hash => match picture_ext(&bytes) {
-                    Some(ext) => snapshot = Some(format!("{}.{ext}", guid(vp.id))),
+                    Some("jpg") if version == Version::V21 => match (input.to_png)(&bytes) {
+                        Some(png) => {
+                            snapshot = Some(format!("{}.png", guid(vp.id)));
+                            file_bytes = Some(png);
+                            notes.push(format!(
+                                "the JPEG snapshot of issue {folder} was made a PNG file: BCF 2.1 holds PNG pictures only"
+                            ));
+                        }
+                        None => notes.push(format!(
+                            "the JPEG snapshot {hash} could not be made a PNG file: the viewpoint has no picture"
+                        )),
+                    },
+                    Some(ext) => {
+                        snapshot = Some(format!("{}.{ext}", guid(vp.id)));
+                        file_bytes = Some(bytes);
+                    }
                     None => notes.push(format!("the snapshot {hash} is not a PNG or JPEG file")),
                 },
                 _ => notes.push(format!(
@@ -214,6 +234,7 @@ fn out_viewpoints<'a>(
         out.push(OutViewpoint {
             vp,
             snapshot,
+            bytes: file_bytes,
             index,
         });
     }

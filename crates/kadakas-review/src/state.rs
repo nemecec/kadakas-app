@@ -104,7 +104,18 @@ impl State {
     pub fn of(doc: &Document, prev: Option<&State>) -> State {
         let replica = replica_of(doc);
         let mut things = BTreeMap::new();
+        // The pictures of issue snapshots are review data too: a restore keeps them.
+        let snapshots: std::collections::BTreeSet<&str> =
+            doc.issues.snapshots().into_iter().collect();
         for (t, e) in replica.alive_things() {
+            if t.kind == Kind::Resource
+                && e.get("body")
+                    .and_then(|b| b.get("sha256"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|h| snapshots.contains(h))
+            {
+                continue;
+            }
             // Issues are review data: a version holds the drawing, and a restore leaves the
             // issues as they are.
             if matches!(t.kind, Kind::Issue | Kind::Comment) {

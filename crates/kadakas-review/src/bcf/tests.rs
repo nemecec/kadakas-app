@@ -140,6 +140,7 @@ fn export_all(version: Version, s: &Issues, pics: &[Picture]) -> (Vec<u8>, Expor
             issues: s,
             only: None,
             snapshot: &lookup,
+            to_png: &|_| None,
         },
     )
     .unwrap()
@@ -306,6 +307,7 @@ fn only_the_asked_issues_go_and_the_order_is_kept() {
             issues: &s,
             only: Some(&only),
             snapshot: &lookup,
+            to_png: &|_| None,
         },
     )
     .unwrap();
@@ -853,11 +855,23 @@ fn snapshots_that_are_too_big_or_not_pictures_are_left_out_with_a_warning() {
         assert_eq!(got.topics.len(), 1);
         assert!(got.topics[0].pictures.is_empty());
         assert!(got.topics[0].issue.viewpoints[0].snapshot.is_none());
-        assert!(
-            got.warnings.iter().any(|w| w.contains(word)),
-            "{name}: {:?}",
-            got.warnings
-        );
+        if name == "missing.png" {
+            // The file names a picture that is not in it: nothing of a person is lost.
+            assert!(
+                got.warnings.iter().any(|w| w.contains(word)),
+                "{name}: {:?}",
+                got.warnings
+            );
+        } else {
+            // A picture that is there and does not fit is listed, so the person decides.
+            assert!(
+                got.unfit
+                    .iter()
+                    .any(|u| u.item == "snapshot" && u.reason.contains(word)),
+                "{name}: {:?}",
+                got.unfit
+            );
+        }
     }
 }
 
@@ -980,13 +994,20 @@ fn bad_dates_numbers_and_cameras_give_warnings_not_crashes() {
     assert_eq!(
         t.comments.len(),
         1,
-        "the comment without a text is counted, not imported"
+        "the comment without a text is listed as unfit, not imported"
     );
     assert_eq!(t.comments[0].time, 777);
     assert!(t.issue.viewpoints.iter().all(|v| v.view.is_none()));
     let w = got.warnings.join("\n");
-    for needle in ["is not valid", "no camera", "comments without a text"] {
-        assert!(w.contains(needle), "{needle} in {w}");
+    assert!(w.contains("is not valid"), "{w}");
+    let u: Vec<String> = got
+        .unfit
+        .iter()
+        .map(|u| format!("{}: {}", u.item, u.reason))
+        .collect();
+    let u = u.join("\n");
+    for needle in ["camera: ", "comment: the comment has no text"] {
+        assert!(u.contains(needle), "{needle} in {u}");
     }
 }
 
