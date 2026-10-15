@@ -109,10 +109,10 @@ fn serve_saves_and_opens_documents_inside_the_allowed_folder() {
         &dir,
     );
     let l = lines(&out);
-    assert_eq!(l[1]["result"], json!({"ok": true}));
+    assert_eq!(l[1]["result"], json!({"ok": true, "format": "container"}));
     assert_eq!(l[2]["error"]["code"], -32602);
     assert!(l[3]["error"]["message"].as_str().unwrap().len() > 3);
-    assert_eq!(l[4]["result"], json!({"ok": true}));
+    assert_eq!(l[4]["result"], json!({"ok": true, "format": "container"}));
     assert!(l[5]["error"].is_object());
     assert_eq!(l[6]["result"].as_array().map_or(1, |a| a.len()), 1);
     assert!(doc.exists());
@@ -1090,5 +1090,58 @@ fn render_can_compare_a_version_with_the_drawing() {
         let out = run(&all, "", &dir);
         assert_eq!(out.status.code(), Some(1), "{args:?}");
         assert!(String::from_utf8_lossy(&out.stderr).starts_with("kadakas:"));
+    }
+}
+
+#[test]
+fn convert_goes_between_the_container_and_the_json_form() {
+    let dir = temp("convert");
+    let k = dir.join("a.kad");
+    let j = dir.join("a.json");
+    let k2 = dir.join("b.kad");
+    let input = requests(&[
+        rpc(
+            1,
+            "execute",
+            json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}),
+        ),
+        rpc(2, "file.save", json!({"path": k})),
+    ]);
+    run(&["serve", "--allow-dir", dir.to_str().unwrap()], &input, &dir);
+    assert!(std::fs::read(&k).unwrap().starts_with(b"PK\x03\x04"));
+
+    let out = run(&["convert", "a.kad", "a.json"], "", &dir);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["format"], "json");
+    let text = std::fs::read_to_string(&j).unwrap();
+    assert!(text.starts_with('{') && text.contains("\"format_version\""));
+    let out = run(&["convert", "a.json", "b.kad"], "", &dir);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(std::fs::read(&k2).unwrap().starts_with(b"PK"));
+
+    // The format flag wins over the extension, and a convert is also a check of the input.
+    let out = run(&["convert", "a.kad", "c.kad", "--format", "json"], "", &dir);
+    assert!(out.status.success());
+    assert!(std::fs::read(dir.join("c.kad")).unwrap().starts_with(b"{"));
+    let out = run(&["convert", "a.kad", "d.json", "--format", "zip2"], "", &dir);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--format"));
+    let out = run(&["convert", "missing.kad", "x.json"], "", &dir);
+    assert_eq!(out.status.code(), Some(1));
+    std::fs::write(dir.join("bad.kad"), "not a document").unwrap();
+    let out = run(&["convert", "bad.kad", "x.json"], "", &dir);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("bad.kad"));
+    assert!(!dir.join("x.json").exists());
+
+    // Both forms open in a session and show the same drawing.
+    for f in ["a.kad", "a.json", "b.kad"] {
+        let out = run(
+            &["serve", f],
+            &requests(&[rpc(1, "objects.list", Value::Null)]),
+            &dir,
+        );
+        assert_eq!(lines(&out)[0]["result"].as_array().map_or(0, |a| a.len()), 1, "{f}");
     }
 }

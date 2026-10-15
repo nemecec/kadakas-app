@@ -91,6 +91,16 @@ enum Cmd {
         #[arg(long)]
         options: Option<String>,
     },
+    /// Convert a document between the container (.kad, a ZIP file) and the plain JSON form (.json),
+    /// for git, diffs and debugging. The input is never changed. The form of the output comes from
+    /// its extension (`.json` is JSON, anything else the container) or from --format.
+    Convert {
+        input: PathBuf,
+        output: PathBuf,
+        /// container or json. Default: from the extension of the output.
+        #[arg(long)]
+        format: Option<String>,
+    },
     /// Export a document to DXF, GeoJSON or IFC4 (.ifc). Prints the report. The input file is never
     /// changed. GlobalIds come from the project GUID of the document.
     Export {
@@ -271,7 +281,9 @@ impl Backend {
         session.scripting.trust = kadakas_api::TrustStore::load_default();
         session.wasm_plugins.registry.trust = kadakas_api::ModuleTrust::load_default();
         if let Some(f) = file {
-            session.adopt_document(load(&f, max_doc)?);
+            let opened = load_opened(&f, max_doc)?;
+            session.adopt_document(opened.doc);
+            session.file_source = opened.source;
             report_notes(&f, &session);
             session.doc_dir = doc_dir_of(&f);
         }
@@ -391,11 +403,16 @@ fn mib_bytes(mib: u64) -> u64 {
 /// Loads a `.kad` file for a local command (`import --into`, `export`, `render`). The person runs
 /// these, so there is no fixed cap: the file is refused only when its memory estimate is more than
 /// the physical memory of the computer (the rule of the desktop app, without the question).
-fn load_own(path: &std::path::Path) -> Result<Document, String> {
-    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+fn load_own(path: &std::path::Path) -> Result<kadakas_file::Opened, String> {
+    // The memory a file needs is the drawing and the history in it. The pictures of a container
+    // stay in the file (DOC-21).
+    let len = kadakas_file::native::inspect(path)
+        .map(|i| i.resident_bytes())
+        .or_else(|_| std::fs::metadata(path).map(|m| m.len()))
+        .unwrap_or(0);
     own_file_fits(len, kadakas_sys::sysinfo::physical_memory())
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    load(path, Some(u64::MAX))
+    load_opened(path, Some(u64::MAX))
 }
 
 /// Says why a file of `len` bytes cannot be opened on a computer with `memory` bytes (None: unknown,
@@ -405,7 +422,7 @@ fn own_file_fits(len: u64, memory: Option<u64>) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "the file is {} MB and needs about {:.1} GB of memory to open, but this computer has only {:.1} GB",
+        "the file has {} MB of data to load and needs about {:.1} GB of memory to open, but this computer has only {:.1} GB",
         len / 1_000_000,
         kadakas_core::open_estimate::needed_bytes(len) as f64 / 1e9,
         memory.unwrap_or(0) as f64 / 1e9
@@ -414,18 +431,35 @@ fn own_file_fits(len: u64, memory: Option<u64>) -> Result<(), String> {
 
 /// Loads a `.kad` file of at most `max` bytes (default: the limit of a session). This is for a file
 /// that an agent session starts with. A file over the limit says how to raise it.
+#[cfg(test)]
 fn load(path: &std::path::Path, max: Option<u64>) -> Result<Document, String> {
+    load_opened(path, max).map(|o| o.doc)
+}
+
+/// Like [`load`], with the open file of a container: its pictures stay in the file (DOC-21).
+fn load_opened(
+    path: &std::path::Path,
+    max: Option<u64>,
+) -> Result<kadakas_file::Opened, String> {
     let max = max.unwrap_or(kadakas_api::DEFAULT_DOCUMENT_FILE_BYTES);
-    let mut doc = kadakas_api::files::read_document_capped(path, max).map_err(|e| e.message)?;
+    let mut opened = kadakas_api::files::open_document(path, max, kadakas_file::ReadMode::Lazy)
+        .map_err(|e| e.message)?;
     // An old file has no project GUID. It gets one in memory, and the next save writes it.
-    doc.ensure_project_guid();
-    Ok(doc)
+    opened.doc.ensure_project_guid();
+    Ok(opened)
 }
 
 /// Tells on stderr what the load of a file repaired or could not read (for example a history of
 /// versions that is kept as it is and read only).
 fn report_notes(path: &std::path::Path, session: &Session) {
     for note in session.load_notes() {
+        eprintln!("kadakas: {}: {note}", path.display());
+    }
+}
+
+/// Like [`report_notes`], for a document that has no session.
+fn report_doc_notes(path: &std::path::Path, doc: &Document) {
+    for note in doc.load_notes() {
         eprintln!("kadakas: {}: {note}", path.display());
     }
 }
@@ -697,9 +731,54 @@ fn io_call(
     session.handle(method, params).map_err(|e| e.message)
 }
 
-fn save(doc: &Document, path: &std::path::Path) -> Result<(), String> {
-    fsio::write_atomic_with(path, |w| doc.write_pretty(w))
-        .map_err(|e| format!("{}: {e}", path.display()))
+/// Saves a document atomically in the form of the extension of `path` (`.json` is the plain JSON
+/// form, anything else the container). Unchanged parts are copied from the file the document was
+/// read from (`from`).
+fn save(
+    doc: &Document,
+    path: &std::path::Path,
+    from: Option<&std::sync::Arc<kadakas_file::FileSource>>,
+) -> Result<(), String> {
+    save_as(
+        doc,
+        path,
+        kadakas_file::Form::from_extension(path),
+        from,
+    )
+}
+
+fn save_as(
+    doc: &Document,
+    path: &std::path::Path,
+    form: kadakas_file::Form,
+    from: Option<&std::sync::Arc<kadakas_file::FileSource>>,
+) -> Result<(), String> {
+    let spec = kadakas_api::files::SaveSpec {
+        form,
+        keep: from.cloned().into_iter().collect(),
+    };
+    kadakas_api::files::write_document(path, doc, &spec).map_err(|e| match e {
+        kadakas_file::FileError::Io(m) => m,
+        other => format!("{}: {other}", path.display()),
+    })
+}
+
+/// `kadakas convert`: a document from one form to the other.
+fn convert_command(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    format: Option<String>,
+) -> Result<(), String> {
+    let form = match format {
+        Some(f) => kadakas_file::Form::from_name(&f)
+            .ok_or_else(|| format!("--format is \"{f}\"; use container or json"))?,
+        None => kadakas_file::Form::from_extension(output),
+    };
+    let opened = load_own(input)?;
+    report_doc_notes(input, &opened.doc);
+    save_as(&opened.doc, output, form, opened.source.as_ref())?;
+    println!("{}", json!({"input": input, "output": output, "format": form.name()}));
+    Ok(())
 }
 
 /// `kadakas render`: the SVG of a document, or, with `compare` (the old version and the new side),
@@ -711,7 +790,7 @@ fn render_command(
     compare: Option<(u64, String)>,
     hide_unchanged: bool,
 ) -> Result<(), String> {
-    let doc = load_own(file)?;
+    let doc = load_own(file)?.doc;
     let mut session = Session::with_document(doc);
     let svg = match compare {
         None => session.render_svg(width),
@@ -740,13 +819,17 @@ fn import_command(
 ) -> Result<(), String> {
     let mut session = Session::default();
     if let Some(base) = base {
-        session.adopt_document(load_own(&base)?);
+        let opened = load_own(&base)?;
+        session.adopt_document(opened.doc);
+        session.file_source = opened.source;
         report_notes(&base, &session);
     }
     let result = io_call(&mut session, "import.file", file, format, options)?;
+    let keep = session.file_source.clone();
     save(
         &*session.document_for_save().map_err(|e| e.message)?,
         output,
+        keep.as_ref(),
     )?;
     println!(
         "{}",
@@ -761,7 +844,7 @@ fn export_command(
     format: Option<String>,
     options: Option<String>,
 ) -> Result<(), String> {
-    let mut session = Session::with_document(load_own(file)?);
+    let mut session = Session::with_document(load_own(file)?.doc);
     report_notes(file, &session);
     let result = io_call(&mut session, "export.file", output, format, options)?;
     println!(
@@ -824,6 +907,11 @@ fn main() {
             format,
             options,
         } => import_command(&file, &output, into, format, options),
+        Cmd::Convert {
+            input,
+            output,
+            format,
+        } => convert_command(&input, &output, format),
         Cmd::Export {
             file,
             output,
@@ -1124,6 +1212,7 @@ mod tests {
             "{e}"
         );
         assert!(load_own(&good).is_ok());
+        assert!(own_file_fits(10_000_000_000, None).is_ok());
         assert!(load_own(&dir.join("missing")).is_err());
         assert_eq!(mib_bytes(2), 2 * 1024 * 1024);
         assert_eq!(mib_bytes(u64::MAX), u64::MAX);
