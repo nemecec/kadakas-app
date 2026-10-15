@@ -234,6 +234,9 @@ pub fn write_container<W: Write>(
         });
         if let Some(source) = source {
             if !report.sources.iter().any(|s| Arc::ptr_eq(s, &source)) {
+                // The file must be the one that was opened: the size, the time of change and the
+                // manifest. A part is checked against its hash when it is copied as well.
+                source.check_unchanged()?;
                 report.sources.push(source.clone());
             }
             let raw = source.parts().raw_part(&name)?;
@@ -270,6 +273,9 @@ pub fn write_container<W: Write>(
     }
 
     if let Some(h) = waiting {
+        if !report.sources.iter().any(|s| Arc::ptr_eq(s, h.source())) {
+            h.source().check_unchanged()?;
+        }
         for name in h.entry_names() {
             writer.copy_raw(h.source().parts().raw_part(&name)?)?;
             report.parts_copied += 1;

@@ -748,6 +748,51 @@ mod files {
     }
 
     #[test]
+    fn a_file_with_the_same_size_and_time_but_another_manifest_is_found() {
+        let d = dir("manifest");
+        let p = d.join("f.kad");
+        let a = write(&[("blobs/aa", Compression::Stored, b"picture bytes")]);
+        // Another content of the same size, with a generator text that makes the file as long.
+        let b = (0..200)
+            .map(|pad| {
+                let mut w = Writer::new(Vec::new()).generator(&"x".repeat(pad));
+                w.add_bytes("blobs/aa", Compression::Stored, b"PICTURE BYTES")
+                    .unwrap();
+                w.finish().unwrap()
+            })
+            .find(|b| b.len() == a.len())
+            .expect("a padding that makes the same size");
+        std::fs::write(&p, &a).unwrap();
+        let s = ContainerSource::from_path(&p, Limits::default()).unwrap();
+        assert!(s.check_unchanged().is_ok());
+        assert!(s.verify_manifest().is_ok());
+        let mtime = std::fs::metadata(&p).unwrap().modified().unwrap();
+        std::fs::write(&p, &b).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        // The size and the time are the same; the manifest is not.
+        assert!(s.container().verify().is_ok());
+        let e = s.check_unchanged().unwrap_err();
+        assert!(matches!(e, ContainerError::Changed(_)), "{e}");
+        assert!(e.to_string().contains("manifest"), "{e}");
+        // A file that is gone or damaged says that it changed.
+        std::fs::write(&p, b"junk of the same size").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        let e = s.verify_manifest().unwrap_err();
+        assert!(e.to_string().contains("changed on disk"), "{e}");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
     fn open_path_of_a_missing_file_is_an_error() {
         let d = dir("missing");
         assert!(ContainerSource::from_path(&d.join("none"), Limits::default()).is_err());

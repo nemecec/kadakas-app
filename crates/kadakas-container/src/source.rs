@@ -21,7 +21,8 @@ pub trait PartSource: Send + Sync + std::fmt::Debug {
     /// The part as it is stored, for a copy into a new container.
     fn raw_part(&self, name: &str) -> Result<RawEntry, ContainerError>;
 
-    /// Checks that the file under the source is the one that was opened.
+    /// Checks that the file under the source is the one that was opened: the size and the time of
+    /// change, and the hash of the manifest, which is read from the file again.
     fn check_unchanged(&self) -> Result<(), ContainerError>;
 
     /// What the source is, for messages (a path).
@@ -137,6 +138,41 @@ impl ContainerSource {
         self.place().path.is_some()
     }
 
+    /// Reads the manifest of the file again and compares its hash with the one of the container
+    /// that was opened. A file that was replaced by another with the same size and time of change
+    /// (a copy that keeps the time, a restore from a backup) is found here, and by the hash of
+    /// every part that is read.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn verify_manifest(&self) -> Result<(), ContainerError> {
+        let (path, limits, was) = {
+            let p = self.place();
+            let Some(path) = p.path.clone() else {
+                return Ok(());
+            };
+            (path, p.limits, p.container.manifest_sha256())
+        };
+        let now = open_file(&path, limits).map_err(|e| match e {
+            ContainerError::Changed(m) => ContainerError::Changed(m),
+            other => ContainerError::Changed(format!(
+                "the file {} changed on disk after it was opened and cannot be read now: {other}. Open it again; nothing from the changed file is used",
+                path.display()
+            )),
+        })?;
+        if now.manifest_sha256() != was {
+            return Err(ContainerError::Changed(format!(
+                "the file {} changed on disk after it was opened (its manifest is another). Open it again; nothing from the changed file is used",
+                path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Without files there is nothing to compare.
+    #[cfg(target_arch = "wasm32")]
+    pub fn verify_manifest(&self) -> Result<(), ContainerError> {
+        Ok(())
+    }
+
     /// Without files there is nothing to open again.
     #[cfg(target_arch = "wasm32")]
     pub fn refresh(&self) -> Result<(), ContainerError> {
@@ -177,7 +213,8 @@ impl PartSource for ContainerSource {
     }
 
     fn check_unchanged(&self) -> Result<(), ContainerError> {
-        self.container().verify()
+        self.container().verify()?;
+        self.verify_manifest()
     }
 
     fn label(&self) -> String {

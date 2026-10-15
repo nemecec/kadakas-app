@@ -667,9 +667,11 @@ mod tests {
         let big = "A".repeat(MAX_BLOB_TEXT + 1);
         let h = src.put(&big);
         let json = format!("{{\"$blob\": \"{h}\"}}");
-        let e = with_load_source(src.clone(), false, || serde_json::from_str::<BlobText>(&json))
-            .unwrap_err()
-            .to_string();
+        let e = with_load_source(src.clone(), false, || {
+            serde_json::from_str::<BlobText>(&json)
+        })
+        .unwrap_err()
+        .to_string();
         assert!(e.contains("more than"), "{e}");
         let ok = "A".repeat(MAX_BLOB_TEXT);
         let h = src.put(&ok);
