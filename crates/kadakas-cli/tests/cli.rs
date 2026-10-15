@@ -32,13 +32,15 @@ fn run_env(args: &[&str], input: &str, dir: &Path, env: &[(&str, &Path)]) -> Out
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.as_bytes())
-        .unwrap();
-    child.wait_with_output().unwrap()
+    // Written on a thread: a long input must not block while the answers fill the pipe.
+    let mut stdin = child.stdin.take().unwrap();
+    let input = input.to_string();
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(input.as_bytes());
+    });
+    let out = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    out
 }
 
 fn lines(out: &Output) -> Vec<Value> {
