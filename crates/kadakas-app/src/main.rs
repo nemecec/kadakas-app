@@ -15,6 +15,8 @@ mod autosave_ui;
 mod canvas;
 mod canvas3d;
 mod collab_ui;
+mod compare_draw;
+mod compare_ui;
 mod data_ui;
 mod databar;
 mod enum_names;

@@ -363,6 +363,7 @@ impl VersionsUi {
                                     time_ms: row.time_ms,
                                     origin: String::new(),
                                     auto: row.auto,
+                                    branch: String::new(),
                                 }));
                             });
                         }
@@ -1098,6 +1099,7 @@ mod tests {
                     time_ms: 1_700_000_000_000,
                     origin: "agent".into(),
                     auto: false,
+                    branch: "main".into(),
                 };
                 assert!(time_text(&row).contains("22:13"));
                 for o in ["user", "agent", "script", "remote"] {

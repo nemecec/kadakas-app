@@ -129,6 +129,8 @@ pub struct KadakasApp {
     /// WebAssembly plug-ins: the Plug-ins window, the trust dialog, the form and the tool.
     plugin_ui: crate::plugin_ui::PluginUi,
     versions_ui: crate::versions_ui::VersionsUi,
+    /// The Compare window and the overlay that it puts on the plan and on the 3D view (REV-03).
+    compare_ui: crate::compare_ui::CompareUi,
     /// The coordinate readout of the Data bar.
     readout: crate::gis_ui::ReadoutState,
     /// Autosave, crash recovery and the Preferences dialog.
@@ -471,6 +473,7 @@ impl KadakasApp {
             script_ui: Default::default(),
             plugin_ui: Default::default(),
             versions_ui: Default::default(),
+            compare_ui: Default::default(),
             readout: Default::default(),
             autosave: crate::autosave_ui::AutosaveUi::inert(),
             about: crate::about::About::default(),
@@ -549,7 +552,72 @@ impl KadakasApp {
         crate::collab_ui::web::set_pending(self.collab.pending());
     }
 
+    /// True while the plan shows a version, or the 3D view shows a compare: the drawing is read
+    /// only. The selection is empty and no command changes the document (the Compare window).
+    fn read_only(&self) -> bool {
+        self.compare_ui.read_only(self.plan())
+    }
+
+    /// Clears the selection while the drawing is read only.
+    fn enforce_read_only(&mut self) {
+        if self.read_only() && !self.session.selection.is_empty() {
+            self.session.selection.clear();
+        }
+    }
+
+    /// The keys that still work while the drawing is read only: the view, the files, Quick Search
+    /// and Select (no key edits the drawing).
+    fn allowed_when_read_only(action: Action) -> bool {
+        action.standard_view().is_some()
+            || matches!(
+                action,
+                Action::ToolSelect
+                    | Action::ZoomFit
+                    | Action::ZoomIn
+                    | Action::ZoomOut
+                    | Action::ViewHistoryPrevious
+                    | Action::ViewHistoryNext
+                    | Action::QuickSearch
+                    | Action::Cancel
+                    | Action::FileNew
+                    | Action::FileOpen
+                    | Action::FileSave
+                    | Action::FileSaveAs
+                    | Action::FileExportPdf
+                    | Action::PanHold
+                    | Action::PanLeft
+                    | Action::PanRight
+                    | Action::PanUp
+                    | Action::PanDown
+            )
+    }
+
+    fn allowed_menu_when_read_only(action: MenuAction) -> bool {
+        matches!(
+            action,
+            MenuAction::New
+                | MenuAction::Open
+                | MenuAction::Save
+                | MenuAction::SaveAs
+                | MenuAction::ExportSvg
+                | MenuAction::ExportPdf
+                | MenuAction::Export
+                | MenuAction::ZoomFit
+                | MenuAction::PreviousView
+                | MenuAction::NextView
+                | MenuAction::QuickSearch
+                | MenuAction::Versions
+                | MenuAction::Compare
+                | MenuAction::Preferences
+                | MenuAction::Tool(Tool::Select)
+        )
+    }
+
     fn exec(&mut self, cmd: &Command) {
+        if self.read_only() {
+            self.status = tr!("compare-ui-read-only");
+            return;
+        }
         // The first snapshot of a shared document replaces the open one: an edit now would be lost.
         if self.collab.waiting_for_snapshot() {
             self.status = tr!("collab-ui-joining");
@@ -592,6 +660,8 @@ impl KadakasApp {
         let notes = self.session.replace_document(doc);
         // The app handles this change itself: agents must not see it as a `document.load`.
         self.session.take_replaced();
+        // A compare of the old document means nothing for the new one.
+        self.compare_ui.reset(&mut self.session);
         self.view_history.clear();
         self.path = path;
         self.title_dirty = true;
@@ -642,6 +712,10 @@ impl KadakasApp {
     /// the normal undo of the document.
     fn undo_or_redo(&mut self, redo: bool) {
         use kadakas_ui_core::collab::UndoRoute;
+        if self.read_only() {
+            self.status = tr!("compare-ui-read-only");
+            return;
+        }
         if self.collab.route(&mut self.session) == UndoRoute::Collab {
             let now = crate::collab_ui::now_ms();
             if let Some(text) = self.collab.undo(&mut self.session, redo, now) {
@@ -829,6 +903,10 @@ impl KadakasApp {
     }
 
     fn apply_menu(&mut self, ctx: &egui::Context, action: MenuAction) {
+        if self.read_only() && !Self::allowed_menu_when_read_only(action) {
+            self.status = tr!("compare-ui-read-only");
+            return;
+        }
         match action {
             MenuAction::New => {
                 self.replace_document(Document::default(), None);
@@ -864,6 +942,7 @@ impl KadakasApp {
             }
             MenuAction::PlugIns => self.plugin_ui.open(),
             MenuAction::Versions => self.versions_ui.open(&mut self.session),
+            MenuAction::Compare => self.compare_ui.open(&mut self.session),
             MenuAction::CollabConnect => self.collab.open_dialog(),
             MenuAction::CollabDisconnect => {
                 let now = crate::collab_ui::now_ms();
@@ -1256,6 +1335,10 @@ impl KadakasApp {
     }
 
     fn run_action(&mut self, ctx: &egui::Context, action: Action) {
+        if self.read_only() && !Self::allowed_when_read_only(action) {
+            self.status = tr!("compare-ui-read-only");
+            return;
+        }
         self.last_command = action.id().to_string();
         // The dimension keys pick the mode too: N is a linear dimension, `.` angular and `,` radial.
         let linear = |m: DimToolMode| {
@@ -1553,6 +1636,9 @@ impl KadakasApp {
     }
 
     fn send(&mut self, input: Input) {
+        if self.read_only() {
+            return;
+        }
         let effects = {
             let cx = Ctx {
                 doc: self.session.editor.doc(),
@@ -1607,6 +1693,13 @@ impl KadakasApp {
             self.fit_view(rect);
             self.needs_fit = false;
         }
+        // A click in the Compare window asks to zoom to an object.
+        if let Some(z) = self.compare_ui.take_zoom() {
+            self.view.fit(z.lo, z.hi, rect);
+        }
+        // The Compare window can show a version instead of the open drawing. That drawing is read
+        // only: only pan and zoom work.
+        let history = self.compare_ui.history_doc();
         let typing = ui.ctx().egui_wants_keyboard_input() || self.entry.active;
         let (latest, hover, mods, space, suspend, scroll, pinch, pressed, released) =
             ui.input(|i| {
@@ -1668,6 +1761,26 @@ impl KadakasApp {
                 .request_repaint_after(std::time::Duration::from_millis(450));
         }
 
+        if let Some(doc) = history.as_deref() {
+            self.own_cursor = None;
+            self.snap_hit = None;
+            let frame = canvas::Frame {
+                doc,
+                selection: &[],
+                preview: &kadakas_ui_core::tools::Preview::None,
+                snap: None,
+                cues: false,
+                dark: self.dark,
+                smart: &self.session.smart,
+                show_grid: self.show_grid,
+                site: None,
+                sheet: None,
+                plugin_preview: &[],
+                compare: self.compare_ui.draw(),
+            };
+            canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
+            return;
+        }
         // The pointer for presence: the raw position, not the snapped one.
         self.own_cursor = latest.filter(|p| rect.contains(*p)).map(|p| {
             let m = self.view.to_model(p);
@@ -1771,6 +1884,7 @@ impl KadakasApp {
             site: Some((self.session.site_cache(), self.session.editor.revision())),
             sheet: page.as_deref().map(|p| (&self.nav.sheets, p)),
             plugin_preview: self.plugin_ui.preview(),
+            compare: self.compare_ui.draw(),
         };
         canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
         // The cursors and selections of the other users. Presence is never in the document.
@@ -2049,6 +2163,7 @@ impl KadakasApp {
         for (label, m) in [
             (tr!("panels-plug-ins"), MenuAction::PlugIns),
             (tr!("panels-versions"), MenuAction::Versions),
+            (tr!("panels-compare"), MenuAction::Compare),
             (tr!("app-preferences"), MenuAction::Preferences),
             (tr!("app-export-svg"), MenuAction::ExportSvg),
             (tr!("app-select-all"), MenuAction::SelectAll),
@@ -2307,6 +2422,7 @@ impl KadakasApp {
 
     /// The dock: the drawing and the palettes as tabs that the user can move.
     fn show_dock(&mut self, ui: &mut egui::Ui) {
+        self.enforce_read_only();
         let mut state = self
             .layouts
             .current
@@ -2331,6 +2447,8 @@ impl KadakasApp {
                 if self.plan() {
                     self.canvas(ui);
                 } else {
+                    let compare = self.compare_ui.scene_3d(&mut self.session);
+                    let frame = self.compare_ui.take_zoom().map(|z| z.id);
                     canvas3d::show(
                         ui,
                         canvas3d::Canvas3d {
@@ -2340,6 +2458,8 @@ impl KadakasApp {
                             gpu_ready: self.gpu_ready,
                             pending_zoom: &mut self.pending_zoom,
                             pending_pan: &mut self.pending_pan,
+                            compare,
+                            frame,
                         },
                     );
                 }
@@ -2652,6 +2772,9 @@ impl eframe::App for KadakasApp {
         self.plugin_ui
             .show(&ctx, &mut self.session, &mut self.status);
         self.versions_ui
+            .show(&ctx, &mut self.session, &mut self.status);
+        self.compare_ui.set_dark(self.dark);
+        self.compare_ui
             .show(&ctx, &mut self.session, &mut self.status);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(script) = self
@@ -4123,5 +4246,119 @@ mod tests {
         assert_eq!(f.origin, kadakas_feedback::Origin::Crash);
         assert!(f.body.contains('3'));
         assert!(app.autosave.take_report_request().is_none());
+    }
+
+    #[test]
+    fn a_historic_view_is_read_only() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        let add = |app: &mut KadakasApp, x: i32| {
+            app.session
+                .handle(
+                    "execute",
+                    serde_json::json!({"command": {"op": "add_object", "shape":
+                        {"kind": "rect", "min": [x, 0], "max": [x + 1000, 1000]}}}),
+                )
+                .unwrap()["created"][0]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let first = add(&mut app, 0);
+        app.session
+            .handle(
+                "version.create",
+                serde_json::json!({"name": "One", "now_ms": 1}),
+            )
+            .unwrap();
+        add(&mut app, 5000);
+        app.session
+            .handle(
+                "version.create",
+                serde_json::json!({"name": "Two", "now_ms": 2}),
+            )
+            .unwrap();
+        // The drawing before the view: one object is selected, and Delete deletes it.
+        app.session
+            .handle("selection.set", serde_json::json!({"ids": [first]}))
+            .unwrap();
+        // Show version One as the new side: the plan shows an old document.
+        app.compare_ui.show_pair(
+            &mut app.session,
+            kadakas_ui_core::versions::Side::Version(2),
+            kadakas_ui_core::versions::Side::Version(1),
+        );
+        assert!(app.read_only());
+        app.enforce_read_only();
+        assert!(app.session.selection.is_empty(), "the selection is cleared");
+        let before = serde_json::to_string(app.session.editor.doc()).unwrap();
+        let depth = app.session.editor.undo_depth();
+        // Select again by hand, then press Delete, Select All, Group and a nudge.
+        app.session.selection = vec![ObjectId(kadakas_core::uid::Uid::parse(&first).unwrap())];
+        let key = |k, mods| egui::Event::Key {
+            key: k,
+            physical_key: Some(k),
+            pressed: true,
+            repeat: false,
+            modifiers: mods,
+        };
+        for events in [
+            vec![key(egui::Key::Delete, egui::Modifiers::NONE)],
+            vec![key(egui::Key::Backspace, egui::Modifiers::NONE)],
+            vec![key(egui::Key::A, egui::Modifiers::COMMAND)],
+            vec![key(egui::Key::G, egui::Modifiers::COMMAND)],
+            vec![key(egui::Key::ArrowLeft, egui::Modifiers::SHIFT)],
+            vec![key(egui::Key::Z, egui::Modifiers::COMMAND)],
+        ] {
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                let c = ui.ctx().clone();
+                app.handle_keys(&c);
+            });
+        }
+        // The menu and the commands are blocked too.
+        app.apply_menu(&ctx, MenuAction::Delete);
+        app.apply_menu(&ctx, MenuAction::Undo);
+        app.delete_selection();
+        app.exec(&Command::DeleteObjects {
+            ids: vec![ObjectId(kadakas_core::uid::Uid::parse(&first).unwrap())],
+        });
+        app.send(Input::Press {
+            p: DVec2::ZERO,
+            shift: false,
+        });
+        assert_eq!(
+            serde_json::to_string(app.session.editor.doc()).unwrap(),
+            before,
+            "the document did not change"
+        );
+        assert_eq!(app.session.editor.undo_depth(), depth);
+        // Menu commands for the view still work.
+        app.apply_menu(&ctx, MenuAction::ZoomFit);
+        // Closing the window ends the read only state, and Delete works again.
+        app.compare_ui.close();
+        assert!(!app.read_only());
+        app.session.selection = vec![ObjectId(kadakas_core::uid::Uid::parse(&first).unwrap())];
+        app.delete_selection();
+        assert!(
+            app.session
+                .editor
+                .doc()
+                .object(ObjectId(kadakas_core::uid::Uid::parse(&first).unwrap()))
+                .is_none()
+        );
+        // A new document resets the compare.
+        app.compare_ui.show_pair(
+            &mut app.session,
+            kadakas_ui_core::versions::Side::Version(1),
+            kadakas_ui_core::versions::Side::Version(2),
+        );
+        assert!(app.compare_ui.draw().is_some());
+        app.replace_document(Document::default(), None);
+        assert!(app.compare_ui.draw().is_none());
+        assert!(!app.read_only());
     }
 }

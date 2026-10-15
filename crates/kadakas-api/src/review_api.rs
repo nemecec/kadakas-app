@@ -84,12 +84,20 @@ pub fn describe() -> Value {
     json!({
         "model": "A version is a named state of the whole document: objects, layers, classes, resources, drawing data and georeference. The file keeps the newest version as a change from the current drawing and every older version as a reverse delta from the next newer one (the property model of collaboration), so many small edits cost little and the drawing is the only full copy. Pictures are stored once, by hash.",
         "consent": "No version is deleted or merged without the person. The limits (max_versions, max_version_bytes) are thresholds: a save over one is refused with the list of versions (code 6, data.kind limit, reason version_limit), and you pass the list to the person. A history that could not be read completely is kept as it is and is read only (code 5, reason history_read_only) until the person chooses version.repair.",
-        "local": "Versions belong to the file. Collaboration does not share them: joining a shared document keeps your versions, and the other users have their own. Shared versions are planned (REV-09). The active layer and class, the order of classes and resources, and the history itself are not part of a version.",
+        "local": "Versions belong to the file. Collaboration does not share them: joining a shared document keeps your versions, and the other users have their own. Shared versions are planned (REV-09). The compare in the render options reads the versions of the open file. The active layer and class, the order of classes and resources, and the history itself are not part of a version.",
         "events": "version.create, version.delete, version.restore and version.repair make an events.change with document.history = true and an op (version_create, version_delete, version_restore, version_repair). The change names what it did in `detail`: {created: {version}}, {deleted: [{id, name, ...}]}, {restored: {id, name}, saved_version}, {repaired: {notes}}. A restore also lists the objects, layers, classes and resources it changed.",
+        "compare": {
+            "what": "The visual compare (REV-03). render.png, render.svg and sheet.render take a `compare` option, so that an agent that reads images sees what changed. The picture shows the new side (`to`) with the changes since the old side (`from`): added objects are green, changed objects are orange, removed objects are red ghosts drawn from the old state (dashed and see-through), and unchanged objects are dimmed. Color is never the only sign: each status has its own line pattern (added solid and thick, changed dotted, removed dashed) and its own mark (+, ~, -), and the SVG has a legend with the counts.",
+            "option": "compare: {from, to, mode?, hide_unchanged?, unchanged?, palette?, dark?, ghosts?, previous?}. from and to: a version ID or \"current\". mode: overlay (default) or side_by_side (two pictures with the same framing, no tints; sheets are always side by side). hide_unchanged: true leaves out the unchanged objects (short for unchanged hide). unchanged: show, dim (default) or hide. palette: standard (green, red, orange) or color_blind (blue, vermillion, dark yellow). dark: colors for a dark background. ghosts: false leaves out the ghosts of removed objects. previous: false leaves out the faint old shape of changed objects (plan only). render.png cannot be combined with render_style. An unknown option is an error.",
+            "answer": "The answer of the render has a `compare` object: from and to (id and name, or current), mode, style, and for an overlay counts {added, removed, changed}, summary {total, ghosts_kept, ghosts_capped, ghosts_not_drawable, exact}, ghosts {drawn, hidden, not_drawable, capped} (what became of the removed objects in this picture: drawn, on a hidden layer or class, not drawable such as pictures and groups or shapes too long, or not kept because there are too many), notes (what the picture does not show completely) and legend [{status, color, pattern, symbol}]. The counts are exact whatever the size of the diff. At most 2000 ghosts are kept, and objects with a very long shape cannot be drawn as ghosts: `ghosts` and a notes entry say so. Ghosts are drawn against the old side, so removed symbols and styled plants have their own look. Use version.diff for the list of changed things with their properties.",
+            "cost": "The states of the versions are kept in a small cache (at most 6 states, 192 MiB), so a series of renders that steps through the versions replays each version once. Rendering a version builds its document: it is bounded by the limits of the session.",
+        },
         "examples": [
             {"method": "version.create", "params": {"name": "Concept approved", "note": "Before the client meeting"}},
             {"method": "version.list", "params": {}},
             {"method": "version.diff", "params": {"from": 1, "to": "current", "kinds": ["objects"], "limit": 20}},
+            {"method": "render.png", "params": {"view": "top", "compare": {"from": 1, "to": "current"}}},
+            {"method": "render.svg", "params": {"compare": {"from": 1, "to": 2, "hide_unchanged": true}}},
             {"method": "version.get", "params": {"id": 1, "document": false}},
             {"method": "version.restore", "params": {"id": 1}},
             {"method": "version.delete", "params": {"ids": [2]}}
@@ -241,7 +249,7 @@ fn read_history(
     (loaded.history, loaded.notes)
 }
 
-fn limit_error(e: ReviewError) -> RpcError {
+pub(crate) fn limit_error(e: ReviewError) -> RpcError {
     match e {
         ReviewError::NotFound(_) => RpcError::not_found(e),
         ReviewError::Disabled => RpcError::limit(e),
@@ -272,7 +280,7 @@ fn limit_reached(info: &LimitInfo) -> RpcError {
 
 /// The history of the open document (an empty one if there is none) and what could not be read.
 /// A history with notes is read only.
-fn read(s: &mut Session) -> Arc<History> {
+pub(crate) fn read(s: &mut Session) -> Arc<History> {
     let Some(data) = s.editor.doc().history.clone() else {
         s.review.forget();
         return Arc::new(History::new());
@@ -319,7 +327,7 @@ fn read_only_error(notes: &[String]) -> RpcError {
 
 /// The state of the newest version, from the cache if the history is the same. One replay of the
 /// history for each new history, however often the window or an agent asks.
-fn tip(s: &mut Session, h: &History) -> Result<Option<Arc<State>>, RpcError> {
+pub(crate) fn tip(s: &mut Session, h: &History) -> Result<Option<Arc<State>>, RpcError> {
     let serial = s
         .editor
         .doc()
@@ -809,13 +817,14 @@ fn repair(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     Ok(json!({"kept": kept, "notes": reasons}))
 }
 
-/// A side of a diff: a version ID or "current".
-enum Side {
+/// A side of a diff or a compare: a version ID or "current".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
     Version(u64),
     Current,
 }
 
-fn side(m: &Map<String, Value>, key: &str) -> Result<Side, RpcError> {
+pub(crate) fn side(m: &Map<String, Value>, key: &str) -> Result<Side, RpcError> {
     match m.get(key) {
         Some(Value::String(t)) if t.eq_ignore_ascii_case("current") => Ok(Side::Current),
         Some(Value::Number(n)) if n.as_u64().is_some() => {
@@ -827,7 +836,7 @@ fn side(m: &Map<String, Value>, key: &str) -> Result<Side, RpcError> {
     }
 }
 
-fn side_ref(h: &History, side: &Side) -> Value {
+pub(crate) fn side_ref(h: &History, side: &Side) -> Value {
     match side {
         Side::Current => json!({"current": true}),
         Side::Version(id) => {

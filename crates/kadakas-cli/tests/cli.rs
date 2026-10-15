@@ -1020,3 +1020,75 @@ fn feedback_send_uses_only_https_addresses() {
         "a refusal is not retried: {file}"
     );
 }
+
+#[test]
+fn render_can_compare_a_version_with_the_drawing() {
+    let dir = temp("render-compare");
+    let doc = dir.join("g.kad");
+    let rect = |x: i32| {
+        json!({"command": {"op": "add_object", "shape":
+            {"kind": "rect", "min": [x, 0], "max": [x + 3000, 3000]}}})
+    };
+    let input = requests(&[
+        rpc(1, "execute", rect(0)),
+        rpc(2, "version.create", json!({"name": "Before", "now_ms": 1})),
+        rpc(3, "execute", rect(9000)),
+        rpc(4, "file.save", json!({"path": doc})),
+    ]);
+    let out = run(&["serve"], &input, &dir);
+    assert!(out.status.success());
+    let svg = dir.join("compare.svg");
+    let out = run(
+        &[
+            "render",
+            doc.to_str().unwrap(),
+            "-o",
+            svg.to_str().unwrap(),
+            "--compare-from",
+            "1",
+        ],
+        "",
+        &dir,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = std::fs::read_to_string(&svg).unwrap();
+    assert!(text.contains("data-compare=\"added\"") && text.contains("data-compare-legend"));
+    assert!(
+        text.contains("data-compare=\"unchanged\""),
+        "the old object is dimmed"
+    );
+    // Hide the unchanged objects, and name both sides.
+    let out = run(
+        &[
+            "render",
+            doc.to_str().unwrap(),
+            "-o",
+            svg.to_str().unwrap(),
+            "--compare-from",
+            "1",
+            "--compare-to",
+            "current",
+            "--hide-unchanged",
+        ],
+        "",
+        &dir,
+    );
+    assert!(out.status.success());
+    assert!(!std::fs::read_to_string(&svg).unwrap().contains("unchanged"));
+    // A version that does not exist, or a side that is not a version, is an error.
+    for args in [
+        vec!["--compare-from", "9"],
+        vec!["--compare-from", "1", "--compare-to", "later"],
+        vec!["--compare-from", "1", "--compare-to", "2"],
+    ] {
+        let mut all = vec!["render", doc.to_str().unwrap(), "-o", svg.to_str().unwrap()];
+        all.extend(args.iter());
+        let out = run(&all, "", &dir);
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).starts_with("kadakas:"));
+    }
+}

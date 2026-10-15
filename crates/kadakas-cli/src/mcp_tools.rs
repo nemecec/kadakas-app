@@ -79,7 +79,7 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "render_view",
-        summary: "Pictures of the drawing (SVG, PNG, hidden-line), the 3D view, and display rules: the northing/easting grid, project phases and data visualizations (color by a property).",
+        summary: "Pictures of the drawing (SVG, PNG, hidden-line; render.png and render.svg take a `compare` option that tints what changed since a version, see the review domain), the 3D view, and display rules: the northing/easting grid, project phases and data visualizations (color by a property).",
         prefixes: &[
             "render",
             "view",
@@ -189,7 +189,7 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "review",
-        summary: "Named versions of the document and the diff between them: save a version, list, read, restore (one undo step, the current state is saved first), delete, and compare two versions or a version and the current document (added, removed and changed things by ID, with the changed property paths and old and new values).",
+        summary: "Named versions of the document and the diff between them: save a version, list, read, restore (one undo step, the current state is saved first), delete, and compare two versions or a version and the current document (added, removed and changed things by ID, with the changed property paths and old and new values). The visual compare is the `compare` option of render.png, render.svg and sheet.render (domains render_view and sheets): added objects green, changed orange, removed objects as red ghosts, or both sides next to each other; describe.review.compare has the options.",
         prefixes: &["version"],
         read_only: false,
         open_world: false,

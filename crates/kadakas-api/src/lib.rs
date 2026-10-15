@@ -18,6 +18,7 @@ pub use errors::{
 };
 #[cfg(test)]
 mod care_api_tests;
+mod compare_api;
 mod data_api;
 mod edit2d_api;
 #[cfg(not(target_arch = "wasm32"))]
@@ -38,7 +39,8 @@ mod plugin_util;
 mod present_api;
 mod query_api;
 mod review_api;
-pub use review_api::{VERSION_BYTES_MAX, VERSIONS_MAX, VERSIONS_WARN};
+pub use compare_api::{CompareCache, CompareMode, CompareSpec, ShownDoc};
+pub use review_api::{Side as CompareSide, VERSION_BYTES_MAX, VERSIONS_MAX, VERSIONS_WARN};
 mod rules_api;
 mod sheets_api;
 mod solid_api;
@@ -160,6 +162,8 @@ pub struct Session {
     pub wasm_plugins: WasmPluginState,
     /// The parsed history of versions of the open document (see `review_api`).
     review: review_api::ReviewCache,
+    /// States, overlays and one document of the visual compare (see `compare_api`).
+    compare: compare_api::CompareCache,
     /// What the load of the open document repaired (see `Session::load_notes`).
     load_notes: Vec<String>,
     /// Feedback reports: the outbox, the recent calls and the last failure (see `feedback_api`).
@@ -167,6 +171,25 @@ pub struct Session {
     /// True after a method panicked (see `Session::guarded`). Error replies say so
     /// (`data.tainted`), and a new document clears it.
     tainted: bool,
+}
+
+/// The SVG of a document with the site model and annotation extensions, and the caches that go
+/// with a revision of it (revision 0: nothing is kept). `overlay` changes the look of objects
+/// (the compare of REV-03).
+fn svg_of(
+    doc: &Document,
+    width: u32,
+    revision: u64,
+    site_cache: &kadakas_site::SiteCache,
+    annot_cache: &kadakas_annot::AnnotCache,
+    overlay: Option<&dyn kadakas_core::svg_overlay::SvgOverlay>,
+) -> String {
+    let site_ext = kadakas_site::draw::svg_ext(site_cache, revision);
+    let ext = |d: &Document, o: &Object, style: &str, out: &mut String| {
+        site_ext(d, o, style, out);
+        kadakas_annot::svg::object_svg_with(d, o, style, out, annot_cache, revision);
+    };
+    kadakas_core::svg::render_overlay(doc, width.clamp(16, 8192), Some(&ext), overlay)
 }
 
 /// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
@@ -224,11 +247,11 @@ pub const METHODS: &[(&str, &str)] = &[
     ),
     (
         "render.svg",
-        "SVG image of visible objects. params: {width?: px}.",
+        "SVG image of visible objects. params: {width?: px, compare?}. With compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) the plan of `to` is drawn with the changes since `from`: added objects green, changed objects orange, removed objects as red dashed ghosts, each with a mark (+, ~, -) and a legend with the counts. Returns {svg, compare?}.",
     ),
     (
         "render.png",
-        "PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. Returns {png_base64, width, height, view, projection, mode, render_style}.",
+        "PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) draws `to` with the changes since `from`: added objects green, changed orange, removed objects as see-through red ghosts; with mode side_by_side it draws both sides next to each other with the same framing. render_style cannot be used with compare. Returns {png_base64, width, height, view, projection, mode, render_style (not with compare), compare?}.",
     ),
     (
         "view.list",
@@ -786,6 +809,7 @@ impl Session {
             scripting: ScriptingState::default(),
             wasm_plugins: WasmPluginState::default(),
             review: Default::default(),
+            compare: Default::default(),
             load_notes: Vec::new(),
             feedback: feedback_api::FeedbackState::default(),
             tainted: false,
@@ -809,14 +833,14 @@ impl Session {
     /// command `kadakas render` and the app's SVG export all use this one function.
     /// The width is in px, 16 to 8192.
     pub fn render_svg(&self, width: u32) -> String {
-        let doc = self.editor.doc();
-        let revision = self.editor.revision();
-        let site_ext = kadakas_site::draw::svg_ext(&self.site_cache, revision);
-        let ext = |d: &Document, o: &Object, style: &str, out: &mut String| {
-            site_ext(d, o, style, out);
-            kadakas_annot::svg::object_svg_with(d, o, style, out, &self.annot_cache, revision);
-        };
-        kadakas_core::svg::render_with(doc, width.clamp(16, 8192), Some(&ext))
+        svg_of(
+            self.editor.doc(),
+            width,
+            self.editor.revision(),
+            &self.site_cache,
+            &self.annot_cache,
+            None,
+        )
     }
 
     /// A session for an opened document, with empty history and selection.
@@ -1268,9 +1292,13 @@ impl Session {
                 #[derive(Deserialize)]
                 struct P {
                     width: Option<u32>,
+                    compare: Option<Value>,
                 }
-                let P { width } = params(p)?;
-                json!({ "svg": self.render_svg(width.unwrap_or(800)) })
+                let P { width, compare } = params(p)?;
+                match compare_api::CompareSpec::parse(compare.as_ref())? {
+                    Some(spec) => self.render_svg_compare(width.unwrap_or(800), &spec)?,
+                    None => json!({ "svg": self.render_svg(width.unwrap_or(800)) }),
+                }
             }
             "render.png" => {
                 #[derive(Deserialize)]
@@ -1282,6 +1310,7 @@ impl Session {
                     mode: Option<String>,
                     render_style: Option<Value>,
                     samples: Option<u32>,
+                    compare: Option<Value>,
                 }
                 let P {
                     view,
@@ -1291,12 +1320,27 @@ impl Session {
                     mode,
                     render_style,
                     samples,
+                    compare,
                 } = params(p)?;
                 let settings =
                     self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
                 let (width, height) = self
                     .limits
                     .image_size(width.unwrap_or(800), height.unwrap_or(600));
+                if let Some(spec) = compare_api::CompareSpec::parse(compare.as_ref())? {
+                    if render_style.as_ref().is_some_and(|v| !v.is_null()) {
+                        return Err(RpcError::invalid_params(
+                            "render_style cannot be used with compare: the compare draws its own tints",
+                        ));
+                    }
+                    let req = compare_api::PngRequest {
+                        settings,
+                        width,
+                        height,
+                        samples: samples.unwrap_or(1),
+                    };
+                    return self.render_png_compare(&req, &spec);
+                }
                 let scene = self.scene();
                 let doc = self.editor.doc();
                 let mut camera = Camera::standard(settings.view, settings.projection);
