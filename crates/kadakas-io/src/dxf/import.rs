@@ -47,6 +47,18 @@ pub fn import(
         )));
     }
     let dxf = parse::parse(&src.data)?;
+    import_parsed(&src.name, &dxf, ctx, opts, link)
+}
+
+/// Like [`import`], for a file that is parsed already (the caller checked the size). `name` is the
+/// file name without extension, for the identity of a file that has no GUID.
+pub(super) fn import_parsed(
+    name: &str,
+    dxf: &Dxf,
+    ctx: &Context,
+    opts: &ImportOptions,
+    link: Option<&FileLink>,
+) -> Result<ImportResult, IoError> {
     let mut b = Builder::new(ctx, "dxf", opts.max_objects);
     let unit = match (
         opts.unit,
@@ -72,15 +84,24 @@ pub fn import(
             .note("the file ends early: imported what could be read");
     }
     let scale = unit.mm_per_unit();
-    let mut tracking = opts
-        .track_source
-        .then(|| Tracking::new(opts.source_name.as_deref().unwrap_or(&src.name), &dxf));
+    let mut tracking = opts.track_source.then(|| {
+        let mut t = Tracking::new(opts.source_name.as_deref().unwrap_or(name), dxf);
+        // An update names the drawing and the revision of the tags itself (IOP-23).
+        if let Some(l) = &opts.lineage {
+            t.drawing = l.drawing.clone();
+            if let Some(r) = &l.revision {
+                t.revision = r.clone();
+            }
+            t.headerless = false;
+        }
+        t
+    });
     // What to keep for an update is decided now, before the walk: a drawing over the cap is
     // refused here and not imported without a word (IOP-22).
     let plan = match tracking.as_mut() {
         Some(t) => plan_base(
             opts.base,
-            &dxf,
+            dxf,
             t,
             b.has_base(&t.drawing, &t.revision),
             link,
@@ -101,6 +122,14 @@ pub fn import(
 
     // Real-world drawings (survey grids in meters) are far from (0, 0). A probe pass finds the extent,
     // and the shift goes into the document georeference so that the geometry stays near the origin.
+    // An update puts the objects where the old ones are: the shift of the old import, with no
+    // search for a new one and no georeference of the file.
+    if let Some(l) = &opts.lineage {
+        b.set_offset(DVec2::from(l.shift));
+        walk(dxf, opts, &mut b, scale, tracking)?;
+        store_base(&mut b, plan);
+        return Ok(b.finish());
+    }
     let doc_has_georef = ctx.georef.is_some();
     // A GEODATA object with an EPSG code gives the georeference. The design point becomes the origin
     // of the model, and the grid north gives the rotation.
@@ -123,14 +152,14 @@ pub fn import(
         b.report.note(&format!(
             "the file has a GEODATA object: the drawing is placed in {crs}"
         ));
-        walk(&dxf, opts, &mut b, scale, tracking)?;
+        walk(dxf, opts, &mut b, scale, tracking)?;
         store_base(&mut b, plan);
         return Ok(b.finish());
     }
     if doc_has_georef || opts.origin == OriginMode::Center {
         let mut probe = Builder::new(ctx, "dxf", opts.max_objects);
         probe.set_probe();
-        walk(&dxf, opts, &mut probe, scale, tracking)?;
+        walk(dxf, opts, &mut probe, scale, tracking)?;
         if let Some((lo, hi)) = probe.bounds() {
             let center = (lo + hi) / 2.0;
             if center.is_finite() && center.abs().max_element() > FAR_MM {
@@ -155,13 +184,14 @@ pub fn import(
             }
         }
     }
-    walk(&dxf, opts, &mut b, scale, tracking)?;
+    walk(dxf, opts, &mut b, scale, tracking)?;
     store_base(&mut b, plan);
     Ok(b.finish())
 }
 
 /// What an import keeps for a later update.
-enum BasePlan {
+#[derive(Clone)]
+pub(super) enum BasePlan {
     /// No source tracking: nothing to decide.
     Off,
     /// The resources of the summaries (`base: "auto"`), made before the walk: one body for each
@@ -214,7 +244,7 @@ fn entity_count(dxf: &Dxf) -> usize {
 /// Decides what to keep. `auto` keeps the summaries when they fit the limits (the number of
 /// entities, and the size of the parts) and refuses above them, before anything is walked.
 /// `scale` is the unit of the file for the bodies of the base.
-fn plan_base(
+pub(super) fn plan_base(
     mode: BaseMode,
     dxf: &Dxf,
     t: &mut Tracking,
@@ -301,7 +331,7 @@ fn plan_base(
 /// Keeps the summaries of the entities of this revision in the document (resources of type
 /// `import_base`), so that an update can diff the old file against the new one without the old
 /// file. A revision that the document keeps is not stored again (the plan is `Existing`).
-fn store_base(b: &mut Builder, plan: BasePlan) {
+pub(super) fn store_base(b: &mut Builder, plan: BasePlan) {
     let BasePlan::Summary(bodies, key) = plan else {
         return;
     };

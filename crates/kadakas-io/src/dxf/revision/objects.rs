@@ -18,6 +18,8 @@
 //! The tags of one document can come from several drawings: `drawing` limits the answer to the
 //! objects of the drawing whose records are asked about.
 
+use std::collections::HashMap;
+
 use kadakas_core::model::ObjectId;
 use kadakas_core::provenance::ImportTag;
 
@@ -32,34 +34,123 @@ fn same_entity(rec: &Rec, tag: &ImportTag) -> bool {
         }
 }
 
+/// True if the tag is of an object that `rec` made.
+fn hits(rec: &Rec, tag: &ImportTag) -> bool {
+    if rec.kind == "INSERT" {
+        // The INSERT is one of the references on the way to the object.
+        tag.via.iter().any(|v| match (&rec.handle, &v.handle) {
+            (Some(a), Some(b)) => a == b,
+            _ => v.hash == hex(rec.hash),
+        })
+    } else if rec.scope == PAPER {
+        false
+    } else if let Some(key) = rec.scope.strip_prefix("block:") {
+        tag.block.as_ref().is_some_and(|b| b.key == key) && same_entity(rec, tag)
+    } else {
+        tag.block.is_none() && same_entity(rec, tag)
+    }
+}
+
 /// The objects that `rec` made, among the tagged objects. The result is sorted by ID.
+///
+/// The cost is linear in the number of tagged objects. For many records use a [`TagIndex`].
 pub fn objects_of<'a>(
     rec: &Rec,
     drawing: &str,
     tagged: impl IntoIterator<Item = (ObjectId, &'a ImportTag)>,
 ) -> Vec<ObjectId> {
-    let mut out: Vec<ObjectId> = Vec::new();
-    for (id, tag) in tagged.into_iter().filter(|(_, t)| t.drawing == drawing) {
-        let hit = if rec.kind == "INSERT" {
-            // The INSERT is one of the references on the way to the object.
-            tag.via.iter().any(|v| match (&rec.handle, &v.handle) {
-                (Some(a), Some(b)) => a == b,
-                _ => v.hash == hex(rec.hash),
-            })
-        } else if rec.scope == PAPER {
-            false
-        } else if let Some(key) = rec.scope.strip_prefix("block:") {
-            tag.block.as_ref().is_some_and(|b| b.key == key) && same_entity(rec, tag)
-        } else {
-            tag.block.is_none() && same_entity(rec, tag)
-        };
-        if hit {
-            out.push(id);
-        }
-    }
+    let mut out: Vec<ObjectId> = tagged
+        .into_iter()
+        .filter(|(_, t)| t.drawing == drawing && hits(rec, t))
+        .map(|(id, _)| id)
+        .collect();
     out.sort_by_key(|o| o.0);
     out.dedup();
     out
+}
+
+/// The tagged objects of one drawing, indexed, so that the objects of many records are found
+/// without a pass over all objects for each record. It gives the same answer as [`objects_of`].
+pub struct TagIndex<'a> {
+    tags: Vec<(ObjectId, &'a ImportTag)>,
+    by_handle: HashMap<(&'a str, &'a str), Vec<u32>>,
+    by_hash: HashMap<(&'a str, &'a str), Vec<u32>>,
+    by_insert_handle: HashMap<&'a str, Vec<u32>>,
+    by_insert_hash: HashMap<&'a str, Vec<u32>>,
+}
+
+impl<'a> TagIndex<'a> {
+    /// The index of the objects whose tag is of `drawing`.
+    pub fn new(
+        drawing: &str,
+        tagged: impl IntoIterator<Item = (ObjectId, &'a ImportTag)>,
+    ) -> TagIndex<'a> {
+        let mut ix = TagIndex {
+            tags: Vec::new(),
+            by_handle: HashMap::new(),
+            by_hash: HashMap::new(),
+            by_insert_handle: HashMap::new(),
+            by_insert_hash: HashMap::new(),
+        };
+        for (id, tag) in tagged.into_iter().filter(|(_, t)| t.drawing == drawing) {
+            let n = ix.tags.len() as u32;
+            ix.tags.push((id, tag));
+            if let Some(h) = &tag.handle {
+                ix.by_handle.entry((&tag.kind, h)).or_default().push(n);
+            }
+            ix.by_hash
+                .entry((&tag.kind, &tag.hash))
+                .or_default()
+                .push(n);
+            for v in &tag.via {
+                if let Some(h) = &v.handle {
+                    ix.by_insert_handle.entry(h).or_default().push(n);
+                }
+                ix.by_insert_hash.entry(&v.hash).or_default().push(n);
+            }
+        }
+        ix
+    }
+
+    /// How many objects the index holds.
+    pub fn len(&self) -> usize {
+        self.tags.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tags.is_empty()
+    }
+
+    /// The objects that `rec` made, sorted by ID (see [`objects_of`]).
+    pub fn objects_of(&self, rec: &Rec) -> Vec<ObjectId> {
+        let hash = hex(rec.hash);
+        let mut found: Vec<u32> = Vec::new();
+        let mut take = |list: Option<&Vec<u32>>| {
+            found.extend(list.into_iter().flatten().copied());
+        };
+        if rec.kind == "INSERT" {
+            if let Some(h) = &rec.handle {
+                take(self.by_insert_handle.get(h.as_str()));
+            }
+            take(self.by_insert_hash.get(hash.as_str()));
+        } else {
+            if let Some(h) = &rec.handle {
+                take(self.by_handle.get(&(rec.kind.as_str(), h.as_str())));
+            }
+            take(self.by_hash.get(&(rec.kind.as_str(), hash.as_str())));
+        }
+        found.sort_unstable();
+        found.dedup();
+        let mut out: Vec<ObjectId> = found
+            .into_iter()
+            .map(|n| self.tags[n as usize])
+            .filter(|(_, t)| hits(rec, t))
+            .map(|(id, _)| id)
+            .collect();
+        out.sort_by_key(|o| o.0);
+        out.dedup();
+        out
+    }
 }
 
 #[cfg(test)]

@@ -37,7 +37,7 @@ mod tests;
 use serde::Serialize;
 
 pub use matching::{changes, diff};
-pub use objects::objects_of;
+pub use objects::{TagIndex, objects_of};
 pub use rec::{MAX_POINTS, MAX_STORED_POINTS, MODEL, PAPER, Rec, records};
 
 /// What happened to an entity.

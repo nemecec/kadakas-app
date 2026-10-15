@@ -169,6 +169,20 @@ impl BaseCaps {
     }
 }
 
+/// The identity and the placement that an update gives to the import of a new revision (IOP-23),
+/// so that its objects carry the tags of the drawing that is updated and sit where the old ones
+/// do. Not an option in JSON.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lineage {
+    /// The drawing (lineage) of the tags, instead of the one the new file would get.
+    pub drawing: String,
+    /// The revision of the tags, instead of the one the new file would get.
+    pub revision: Option<String>,
+    /// The shift in mm that the objects get (the model is the file times the unit minus this),
+    /// instead of a shift that is found from the new file.
+    pub shift: [f64; 2],
+}
+
 /// The default of `ImportOptions::max_bytes`.
 pub const DEFAULT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -219,6 +233,10 @@ pub struct ImportOptions {
     /// The limits of the update data. Not an option in JSON.
     #[serde(skip)]
     pub base_caps: BaseCaps,
+    /// An update of a drawing (IOP-23): the identity and the shift of the old import. Not an
+    /// option in JSON.
+    #[serde(skip)]
+    pub lineage: Option<Lineage>,
 }
 
 impl Default for ImportOptions {
@@ -244,6 +262,7 @@ impl Default for ImportOptions {
             max_bytes: DEFAULT_MAX_BYTES,
             base: BaseMode::Auto,
             base_caps: BaseCaps::default(),
+            lineage: None,
         }
     }
 }
