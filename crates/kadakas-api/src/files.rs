@@ -749,6 +749,9 @@ mod tests {
             "{r}"
         );
         assert_eq!(std::fs::read(&f).unwrap(), other_bytes);
+        // The document cannot be given out either: a picture is read from the file now.
+        let e = b.handle("document.get", json!({})).unwrap_err();
+        assert!(e.message.contains("changed on disk"), "{}", e.message);
         assert_eq!(
             names(&dir),
             ["a.kad", "a.kad.bak"]

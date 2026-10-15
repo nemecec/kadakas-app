@@ -553,6 +553,75 @@ mod tests {
         j
     }
 
+    /// A document with an underlay whose picture is big enough to be a blob of a container.
+    fn doc_with_picture() -> Document {
+        use kadakas_core::underlay::{PngData, Underlay};
+        let mut doc = doc_with_circles(2);
+        let mut png = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+        png.extend((0..20_000u32).map(|i| i.wrapping_mul(2_654_435_761) as u8));
+        let u = Underlay {
+            name: "map".into(),
+            min: DVec2::ZERO,
+            max: DVec2::new(100.0, 100.0),
+            width: 10,
+            height: 10,
+            png: PngData::new(png),
+            opacity: 1.0,
+            source: String::new(),
+        };
+        let mut e = Editor::new(doc);
+        e.execute(&Command::AddObject {
+            shape: Shape::Underlay(Box::new(u)),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        doc = e.doc().clone();
+        doc
+    }
+
+    #[test]
+    fn the_copy_over_my_file_is_a_container_and_the_pictures_keep_reading_from_it() {
+        let dir = temp("over-lazy");
+        let target = dir.join("mine.kad");
+        let original = doc_with_picture();
+        file_io::write_document_raw(&target, &original).unwrap();
+        // The document of the person: opened lazily, so its picture is in the file.
+        let opened = file_io::open_file(&target).unwrap();
+        assert!(opened.source.is_some());
+        let doc = opened.doc;
+        assert_eq!(doc, original);
+        // The autosave writes the file of the person (a container, copying the picture from
+        // the file that it replaces) and a recovery copy.
+        let seen = manual_saves(&target);
+        let mut j = job(&doc, Some(target.clone()), 2);
+        j.over = Some(target.clone());
+        j.manual_seen = seen;
+        let out = write_version(&dir.join("rec"), "s1", 1, &j).unwrap();
+        assert_eq!(out, Over::Written);
+        assert!(std::fs::read(&target).unwrap().starts_with(b"PK"));
+        let copy = dir.join("rec").join("s1.000001.autosave.kad");
+        assert!(std::fs::read(&copy).unwrap().starts_with(b"PK"));
+        assert_eq!(file_io::read_document(&copy).unwrap(), original);
+        // The picture of the open document is read from the new file, not reported as changed.
+        assert_eq!(doc, original);
+        assert_eq!(file_io::read_document(&target).unwrap(), original);
+        // The form of the copy follows the extension: a JSON file gets the plain form.
+        let json_target = dir.join("mine.json");
+        file_io::write_document_raw(&json_target, &original).unwrap();
+        let mut j = job(&doc, Some(json_target.clone()), 2);
+        j.over = Some(json_target.clone());
+        j.manual_seen = manual_saves(&json_target);
+        assert_eq!(
+            write_version(&dir.join("rec"), "s1", 2, &j).unwrap(),
+            Over::Written
+        );
+        assert!(std::fs::read(&json_target).unwrap().starts_with(b"{"));
+        assert_eq!(file_io::read_document(&json_target).unwrap(), original);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     fn wait_for(mut done: impl FnMut() -> bool) {
         for _ in 0..500 {
             if done() {
