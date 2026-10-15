@@ -31,15 +31,22 @@ pub trait PartSource: Send + Sync + std::fmt::Debug {
     fn manifest_sha256(&self) -> String;
 }
 
-type Reopen = Box<dyn Fn() -> Result<Container, ContainerError> + Send + Sync>;
-
-/// A source over a [`Container`]. A source over a file can be refreshed after a save over the
-/// file: it opens the new file and keeps working for the parts that the new file holds.
-pub struct ContainerSource {
-    inner: RwLock<Container>,
-    reopen: Option<Reopen>,
+/// Where a [`ContainerSource`] reads from.
+struct Place {
+    container: Container,
+    /// The file, if the container is in a file (native only).
     #[cfg(not(target_arch = "wasm32"))]
     path: Option<std::path::PathBuf>,
+    /// The limits that the file is opened with again.
+    #[cfg(not(target_arch = "wasm32"))]
+    limits: crate::limits::Limits,
+}
+
+/// A source over a [`Container`]. A source over a file can be refreshed after a save over the
+/// file, and moved to another file after a save to a new path (`rebind`): the parts are found by
+/// name (the hash) in the new file.
+pub struct ContainerSource {
+    inner: RwLock<Place>,
 }
 
 impl std::fmt::Debug for ContainerSource {
@@ -52,24 +59,18 @@ impl ContainerSource {
     /// A source over a container that is not opened again (memory).
     pub fn new(container: Container) -> ContainerSource {
         ContainerSource {
-            inner: RwLock::new(container),
-            reopen: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            path: None,
+            inner: RwLock::new(Place {
+                container,
+                #[cfg(not(target_arch = "wasm32"))]
+                path: None,
+                #[cfg(not(target_arch = "wasm32"))]
+                limits: crate::limits::Limits::default(),
+            }),
         }
     }
 
-    /// A source that can open its file again with `reopen` (see [`ContainerSource::refresh`]).
-    pub fn with_reopen(
-        container: Container,
-        reopen: impl Fn() -> Result<Container, ContainerError> + Send + Sync + 'static,
-    ) -> ContainerSource {
-        ContainerSource {
-            inner: RwLock::new(container),
-            reopen: Some(Box::new(reopen)),
-            #[cfg(not(target_arch = "wasm32"))]
-            path: None,
-        }
+    fn place(&self) -> std::sync::RwLockReadGuard<'_, Place> {
+        self.inner.read().unwrap_or_else(|e| e.into_inner())
     }
 
     /// A source over a file path (native only). The file is opened again for each read.
@@ -78,47 +79,89 @@ impl ContainerSource {
         path: &std::path::Path,
         limits: crate::limits::Limits,
     ) -> Result<ContainerSource, ContainerError> {
-        let owned = path.to_path_buf();
-        let open = move || -> Result<Container, ContainerError> {
-            let medium = crate::medium::FileMedium::open_path(&owned)?;
-            Container::open(std::sync::Arc::new(medium), limits)
-        };
-        let mut source = ContainerSource::with_reopen(open()?, open);
-        source.path = Some(path.to_path_buf());
-        Ok(source)
+        let container = open_file(path, limits)?;
+        Ok(ContainerSource {
+            inner: RwLock::new(Place {
+                container,
+                path: Some(path.to_path_buf()),
+                limits,
+            }),
+        })
     }
 
     /// The path of the file, if the container is in a file.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn path(&self) -> Option<&std::path::Path> {
-        self.path.as_deref()
+    pub fn path(&self) -> Option<std::path::PathBuf> {
+        self.place().path.clone()
     }
 
     /// A copy of the container as it is now.
     pub fn container(&self) -> Container {
-        self.inner.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.place().container.clone()
     }
 
     /// Opens the file again and keeps the new container. Call it after the file was replaced by
     /// a save of this program. If the new file cannot be opened, the old container stays.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn refresh(&self) -> Result<(), ContainerError> {
-        let Some(reopen) = &self.reopen else {
-            return Ok(());
+        let (path, limits) = {
+            let p = self.place();
+            match &p.path {
+                Some(path) => (path.clone(), p.limits),
+                None => return Ok(()),
+            }
         };
-        let fresh = reopen()?;
-        *self.inner.write().unwrap_or_else(|e| e.into_inner()) = fresh;
+        let fresh = open_file(&path, limits)?;
+        self.inner
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .container = fresh;
         Ok(())
     }
 
-    /// True if [`ContainerSource::refresh`] can open the file again.
-    pub fn can_refresh(&self) -> bool {
-        self.reopen.is_some()
+    /// Moves the source to another file (after a save to a new path). The parts are found by
+    /// name in the new file. If the new file cannot be opened, the source stays where it was.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn rebind(&self, path: &std::path::Path) -> Result<(), ContainerError> {
+        let limits = self.place().limits;
+        let fresh = open_file(path, limits)?;
+        let mut p = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        p.container = fresh;
+        p.path = Some(path.to_path_buf());
+        Ok(())
     }
+
+    /// True if the container is in a file that can be opened again.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn can_refresh(&self) -> bool {
+        self.place().path.is_some()
+    }
+
+    /// Without files there is nothing to open again.
+    #[cfg(target_arch = "wasm32")]
+    pub fn refresh(&self) -> Result<(), ContainerError> {
+        Ok(())
+    }
+
+    /// Without files there is nothing to open again.
+    #[cfg(target_arch = "wasm32")]
+    pub fn can_refresh(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn open_file(
+    path: &std::path::Path,
+    limits: crate::limits::Limits,
+) -> Result<Container, ContainerError> {
+    let medium = crate::medium::FileMedium::open_path(path)?;
+    Container::open(std::sync::Arc::new(medium), limits)
 }
 
 impl PartSource for ContainerSource {
     fn part_size(&self, name: &str) -> Option<u64> {
-        self.container().entry(name).map(|e| e.size)
+        self.place().container.entry(name).map(|e| e.size)
     }
 
     fn read_part(&self, name: &str) -> Result<Vec<u8>, ContainerError> {
@@ -138,10 +181,10 @@ impl PartSource for ContainerSource {
     }
 
     fn label(&self) -> String {
-        self.container().medium().label()
+        self.place().container.medium().label()
     }
 
     fn manifest_sha256(&self) -> String {
-        self.container().manifest_sha256()
+        self.place().container.manifest_sha256()
     }
 }

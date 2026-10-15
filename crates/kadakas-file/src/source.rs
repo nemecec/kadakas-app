@@ -65,8 +65,15 @@ impl FileSource {
 
     /// The path of the file, if the container is in a file.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn path(&self) -> Option<&std::path::Path> {
+    pub fn path(&self) -> Option<std::path::PathBuf> {
         self.part.path()
+    }
+
+    /// Moves the source to another file, after a save to a new path: the pictures are found by
+    /// hash in the new file.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn rebind(&self, path: &std::path::Path) -> Result<(), ContainerError> {
+        self.part.rebind(path)
     }
 
     /// Opens the file again after a save over it, and keeps the new container. The pictures of

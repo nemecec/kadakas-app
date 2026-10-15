@@ -691,7 +691,7 @@ mod files {
         std::fs::write(&p, sample()).unwrap();
         let s = ContainerSource::from_path(&p, Limits::default()).unwrap();
         assert!(s.can_refresh());
-        assert_eq!(s.path(), Some(p.as_path()));
+        assert_eq!(s.path(), Some(p.clone()));
         assert_eq!(s.read_part("blobs/aa").unwrap(), b"picture bytes");
         // Another file replaces it: the old source says so and reads nothing.
         std::thread::sleep(std::time::Duration::from_millis(30));
@@ -709,6 +709,18 @@ mod files {
         // A refresh that cannot open keeps the old container.
         std::fs::write(&p, b"junk").unwrap();
         assert!(s.refresh().is_err());
+        // A source can move to another file with the same parts.
+        let q = d.join("g.kad");
+        std::fs::write(
+            &q,
+            write(&[("blobs/aa", Compression::Stored, b"moved bytes")]),
+        )
+        .unwrap();
+        s.rebind(&q).unwrap();
+        assert_eq!(s.path(), Some(q.clone()));
+        assert_eq!(s.read_part("blobs/aa").unwrap(), b"moved bytes");
+        assert!(s.rebind(&d.join("none.kad")).is_err());
+        assert_eq!(s.path(), Some(q));
         std::fs::remove_dir_all(&d).unwrap();
     }
 

@@ -781,7 +781,7 @@ mod disk {
         save_path(&k, &sample_doc(), Form::Container, &WriteOptions::default()).unwrap();
         let (_, s) = crate::native::open_with_source(&k, u64::MAX).unwrap();
         let s = s.unwrap();
-        assert_eq!(s.path(), Some(k.as_path()));
+        assert_eq!(s.path(), Some(k.clone()));
         assert!(s.check_unchanged().is_ok());
         assert!(format!("{s:?}").contains("a.kad"));
     }

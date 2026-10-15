@@ -89,13 +89,6 @@ pub struct Saved {
     pub notes: Vec<String>,
 }
 
-fn same_file(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        (Ok(x), Ok(y)) => x == y,
-        _ => a == b,
-    }
-}
-
 /// Saves the document to `path` in the given form, atomically. `opts.keep` names the files the
 /// document was opened from (unchanged entries are copied from them).
 pub fn save_path(
@@ -121,13 +114,16 @@ pub fn save_path(
         return Err(failure
             .unwrap_or_else(|| FileError::Io(format!("cannot write {}: {e}", path.display()))));
     }
-    // The file under the sources is a new file now. They open it again; the pictures are found
-    // by hash.
+    // The pictures of the document are in the new file now (by hash). The sources that were read
+    // from move there: after a save over their file it is a new file, and after a save to a new
+    // path the document no longer depends on the old file.
     let mut notes = Vec::new();
-    if let Some(rep) = &written {
+    if form == Form::Container
+        && let Some(rep) = &written
+    {
         for s in &rep.sources {
-            if s.path().is_some_and(|p| same_file(p, path))
-                && let Err(e) = s.refresh()
+            if s.path().is_some()
+                && let Err(e) = s.rebind(path)
             {
                 notes.push(format!(
                     "the saved file {} could not be opened again for the pictures: {e}",
