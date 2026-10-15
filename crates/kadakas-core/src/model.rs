@@ -1349,7 +1349,7 @@ impl Document {
     /// this for bytes and `from_reader` for files: parsing a slice is faster than parsing a reader.
     /// There is no `serde_json::Value` copy of the document: the typed parser reads the bytes.
     pub fn from_slice(bytes: &[u8]) -> Result<Document, LoadError> {
-        match serde_json::from_slice::<Document>(bytes) {
+        match crate::blob::with_intern_scope(|| serde_json::from_slice::<Document>(bytes)) {
             Ok(doc) => doc.checked(),
             Err(e) => Err(explain_failure(e, || {
                 serde_json::from_slice::<VersionProbe>(bytes)
@@ -1370,7 +1370,8 @@ impl Document {
     pub fn from_reader<R: std::io::Read + std::io::Seek>(
         mut reader: R,
     ) -> Result<Document, LoadError> {
-        match serde_json::from_reader::<_, Document>(&mut reader) {
+        match crate::blob::with_intern_scope(|| serde_json::from_reader::<_, Document>(&mut reader))
+        {
             Ok(doc) => doc.checked(),
             Err(e) => Err(explain_failure(e, || {
                 reader.rewind().map_err(serde_json::Error::io)?;
@@ -1388,7 +1389,7 @@ impl Document {
         reopen: impl FnOnce() -> std::io::Result<P>,
         attach: impl FnOnce(&mut Document) -> Result<(), LoadError>,
     ) -> Result<Document, LoadError> {
-        match serde_json::from_reader::<_, Document>(reader) {
+        match crate::blob::with_intern_scope(|| serde_json::from_reader::<_, Document>(reader)) {
             Ok(mut doc) => {
                 check_version(u64::from(doc.format_version))?;
                 attach(&mut doc)?;
@@ -1457,7 +1458,8 @@ impl Document {
             .ok_or_else(|| LoadError::Parse("missing format_version".into()))?;
         check_version(version)?;
         let doc: Document =
-            serde_json::from_value(value).map_err(|e| LoadError::Parse(e.to_string()))?;
+            crate::blob::with_intern_scope(|| serde_json::from_value(value))
+                .map_err(|e| LoadError::Parse(e.to_string()))?;
         doc.finish_load()
     }
 

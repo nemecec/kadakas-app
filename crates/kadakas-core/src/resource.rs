@@ -124,28 +124,53 @@ impl Serialize for BlobRef<'_> {
     }
 }
 
-/// Puts the list back into an import base that was written with a reference.
-fn resolve_import_base(v: &mut serde_json::Value) -> Result<(), String> {
+/// Reads an import base. The list `recs` is in the value, or it is a reference to a blob. The
+/// same base met again in one load (the same list and the same other fields) is the same memory,
+/// and a reference is read from the file once.
+fn read_import_base(mut v: serde_json::Value) -> Result<std::sync::Arc<serde_json::Value>, String> {
     let Some(obj) = v.as_object_mut() else {
-        return Ok(());
+        return Ok(std::sync::Arc::new(v));
     };
-    let Some(reference) = obj.get("recs").filter(|r| r.is_object()) else {
-        return Ok(());
+    let reference = match obj.get("recs") {
+        Some(r) if r.is_object() => Some(
+            r.get(crate::blob::REF_KEY)
+                .and_then(serde_json::Value::as_str)
+                .filter(|_| r.as_object().is_some_and(|m| m.len() == 1))
+                .ok_or("the summaries of an import base are a list or a {\"$blob\": hash} reference")?
+                .to_string(),
+        ),
+        _ => None,
     };
-    let hash = reference
-        .get(crate::blob::REF_KEY)
-        .and_then(serde_json::Value::as_str)
-        .filter(|_| reference.as_object().is_some_and(|m| m.len() == 1))
-        .ok_or("the summaries of an import base are a list or a {\"$blob\": hash} reference")?
-        .to_string();
-    let text = crate::blob::read_ref_text(&hash)?;
-    let list: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| format!("the summaries of an import base cannot be read: {e}"))?;
-    if !list.is_array() {
-        return Err("the summaries of an import base are not a list".into());
+    // The key of the base: the list (its hash, or the hash of the reference) and the other fields.
+    let rest: serde_json::Map<String, serde_json::Value> = obj
+        .iter()
+        .filter(|(k, _)| *k != "recs")
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let rest = serde_json::to_string(&rest).unwrap_or_default();
+    let key = match (&reference, obj.get("recs")) {
+        (Some(h), _) => format!("{h}|{rest}"),
+        (None, Some(list)) => {
+            let text = serde_json::to_string(list).unwrap_or_default();
+            format!("{}|{rest}", crate::blob::text_hash(&text))
+        }
+        (None, None) => format!("|{rest}"),
+    };
+    if let Some(shared) = crate::blob::base_get(&key) {
+        return Ok(shared);
     }
-    obj.insert("recs".into(), list);
-    Ok(())
+    if let Some(hash) = reference {
+        let text = crate::blob::read_ref_text(&hash)?;
+        let list: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("the summaries of an import base cannot be read: {e}"))?;
+        if !list.is_array() {
+            return Err("the summaries of an import base are not a list".into());
+        }
+        obj.insert("recs".into(), list);
+    }
+    let shared = std::sync::Arc::new(v);
+    crate::blob::base_put(key, shared.clone());
+    Ok(shared)
 }
 
 fn tagged<T: Serialize, S: serde::Serializer>(
@@ -192,9 +217,8 @@ impl<'de> Deserialize<'de> for ResourceBody {
             }
             Some("irrigation_catalog") => Ok(ResourceBody::IrrigationCatalog(v)),
             Some(crate::provenance::BASE_TYPE) => {
-                let mut v = v;
-                resolve_import_base(&mut v).map_err(serde::de::Error::custom)?;
-                Ok(ResourceBody::ImportBase(std::sync::Arc::new(v)))
+                let shared = read_import_base(v).map_err(serde::de::Error::custom)?;
+                Ok(ResourceBody::ImportBase(shared))
             }
             Some("hardscape_style") => serde_json::from_value::<HardscapeStyle>(v)
                 .map(|s| ResourceBody::HardscapeStyle(Box::new(s)))

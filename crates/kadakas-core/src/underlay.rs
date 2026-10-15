@@ -231,17 +231,20 @@ impl<'de> Deserialize<'de> for PngData {
                 f.write_str("base64 text or a {\"$blob\": hash} reference")
             }
             fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<PngData, E> {
-                base64_decode(text)
-                    .map(PngData::new)
+                // The same text read before in this load is the same memory.
+                crate::blob::intern_png(text, || base64_decode(text).map(PngData::new))
                     .ok_or_else(|| E::custom("the image is not valid base64"))
             }
             fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<PngData, A::Error> {
                 crate::blob::RefVisitor(
                     |r| match r {
                         crate::blob::Resolved::Lazy(l) => Ok(PngData::from_lazy(l)),
-                        crate::blob::Resolved::Text(t) => base64_decode(&t)
-                            .map(PngData::new)
-                            .ok_or_else(|| "the image is not valid base64".to_string()),
+                        crate::blob::Resolved::Text(hash, t) => {
+                            crate::blob::intern_png_of_hash(&hash, || {
+                                base64_decode(&t).map(PngData::new)
+                            })
+                            .ok_or_else(|| "the image is not valid base64".to_string())
+                        }
                     },
                     |_: &str| -> PngData { unreachable!() },
                 )
