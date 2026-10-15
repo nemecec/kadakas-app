@@ -904,7 +904,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(pngs, [placeholder.clone()]);
+        assert_eq!(pngs, std::slice::from_ref(&placeholder));
         // The session refers to the placeholder now: the next save is whole, without a question.
         assert_eq!(b.editor.doc().unreadable_pictures().len(), 0);
         assert!(b.handle("document.get", json!({})).is_ok());

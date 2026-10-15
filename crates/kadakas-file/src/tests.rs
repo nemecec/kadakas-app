@@ -1170,7 +1170,7 @@ fn live_handles_of_one_hash_are_all_kept() {
     let second = Arc::new(LazyBlob::new(src, &hash).unwrap());
     source.note_handle(&second);
     drop(o);
-    assert_eq!(source.live_hashes(), [hash.clone()]);
+    assert_eq!(source.live_hashes(), std::slice::from_ref(&hash));
     drop(second);
     assert!(source.live_hashes().is_empty());
 }
@@ -1386,6 +1386,70 @@ fn an_error_inside_the_encoder_is_not_lost() {
     let e = write_container(Failing, &doc, &WriteOptions::default()).unwrap_err();
     assert!(e.to_string().contains("the disk is full"), "{e}");
 }
+#[test]
+fn the_scan_for_references_finds_every_one_also_at_the_edge_of_a_chunk() {
+    // The references are found in a stream of 1.5 chunks, wherever the cut falls.
+    let chunk = 256 * 1024;
+    let mut want = std::collections::BTreeSet::new();
+    for shift in 0..120usize {
+        let hash = text_hash(&format!("picture {shift}"));
+        want.insert(hash.clone());
+        let mut text = String::from("{\"objects\": [\n");
+        // Put the reference so that it starts `shift` bytes before the first cut.
+        let reference = format!("{{\"$blob\":  \"{hash}\"}}");
+        let pad = chunk - shift - 20;
+        text.push_str(&" ".repeat(pad));
+        text.push_str(&reference);
+        text.push_str(&" ".repeat(chunk / 2));
+        // A text that only looks like a reference, and a reference with the white space of a
+        // pretty printer.
+        text.push_str("\"$blob\" : \"not a hash\"");
+        let second = text_hash("second");
+        text.push_str(&format!("{{\n  \"$blob\": \"{second}\"\n}}"));
+        want.insert(second);
+        text.push_str("]}");
+        let mut w = Writer::new(Vec::new());
+        w.add_bytes(DOCUMENT, Compression::Deflate(1), text.as_bytes())
+            .unwrap();
+        let c = Container::from_bytes(w.finish().unwrap(), Limits::default()).unwrap();
+        let source = FileSource::from_container(c);
+        let found = crate::write::scan_refs(&source, DOCUMENT).unwrap();
+        let expected: std::collections::BTreeSet<String> =
+            [text_hash(&format!("picture {shift}")), text_hash("second")]
+                .into_iter()
+                .collect();
+        assert_eq!(found, expected, "shift {shift}");
+    }
+    assert_eq!(want.len(), 121);
+}
+
+#[test]
+fn a_picture_that_the_drawing_and_the_history_share_is_one_copy_in_an_eager_read() {
+    let mut doc = Document::with_sequential_ids();
+    let img = image(7);
+    let text = img.data.text().unwrap();
+    let hash = text_hash(&text);
+    doc.resources.push(Resource {
+        id: ResourceId::from_num(30),
+        name: "Leaf".into(),
+        body: ResourceBody::Image(Box::new(img)),
+    });
+    doc.history = Some(HistoryData::from_parts(
+        json!({"format": 2, "next_id": 3, "branch": "main", "head": 1,
+               "newest": {"id": 1, "anchor": "ab".repeat(32)}}),
+        vec![Arc::new(json!({"id": 1, "name": "first", "delta": []}))],
+        vec![],
+        vec![(hash, text.clone())],
+    ));
+    let o = read_bytes(container_bytes(&doc), Limits::default(), ReadMode::Eager).unwrap();
+    let ResourceBody::Image(i) = &o.doc.resources.iter().next().unwrap().body else {
+        panic!()
+    };
+    let in_drawing = i.data.mem_text().unwrap().clone();
+    let history = o.doc.history.as_ref().unwrap();
+    assert!(Arc::ptr_eq(&in_drawing, &history.blob_list()[0].1));
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod disk {
     use super::*;

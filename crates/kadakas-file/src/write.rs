@@ -268,12 +268,12 @@ pub(crate) fn scan_refs(source: &FileSource, entry: &str) -> Result<BTreeSet<Str
                 }
                 break;
             }
-            if buf[j] == b'"' && buf[j + 65] == b'"' {
-                if let Ok(h) = std::str::from_utf8(&buf[j + 1..j + 65])
-                    && kadakas_core::blob::is_hash(h)
-                {
-                    out.insert(h.to_string());
-                }
+            if buf[j] == b'"'
+                && buf[j + 65] == b'"'
+                && let Ok(h) = std::str::from_utf8(&buf[j + 1..j + 65])
+                && kadakas_core::blob::is_hash(h)
+            {
+                out.insert(h.to_string());
             }
             at = i + 1;
         }

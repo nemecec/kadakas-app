@@ -234,12 +234,20 @@ pub(crate) fn read(source: &FileSource) -> Result<Option<HistoryData>, FileError
             }
             .into());
         }
+        // A picture that this load has read already (an eager read of the drawing) is the same
+        // memory in the history.
+        if let Some(text) = kadakas_core::blob::loaded_text(hash) {
+            blobs.push((hash.clone(), text));
+            continue;
+        }
         let bytes = source.parts().read_by_content(&name, &sha)?;
         let text = String::from_utf8(bytes).map_err(|_| ContainerError::Entry {
             name: name.clone(),
             reason: "it is not text".into(),
         })?;
-        blobs.push((hash.clone(), Arc::<str>::from(text)));
+        let text = Arc::<str>::from(text);
+        kadakas_core::blob::remember_text(hash, &text);
+        blobs.push((hash.clone(), text));
     }
     Ok(Some(HistoryData::from_parts(top, versions, newest, blobs)))
 }

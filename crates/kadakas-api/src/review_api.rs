@@ -326,11 +326,21 @@ pub(crate) fn resolve(s: &mut Session) {
         p.failed = Some(key);
         s.review.pending = Some(p);
     };
+    // The size of the entries and of the pictures they list is known from the directory: a history
+    // over the bound is not read at all (the bound is checked before the read, not after it).
+    let caps = s.limits.read_caps();
+    let size = p.loader.bytes();
+    if size > caps.max_bytes.saturating_mul(JSON_FACTOR) {
+        let why = format!(
+            "the history of versions has {size} bytes, more than is read ({} bytes)",
+            caps.max_bytes.saturating_mul(JSON_FACTOR)
+        );
+        return failed(s, p, why, key);
+    }
     let data = match p.loader.load() {
         Ok(d) => d,
         Err(e) => return failed(s, p, e, key),
     };
-    let caps = s.limits.read_caps();
     let anchor_doc;
     let drawing: &Document = if p.exact && s.editor.revision() == p.rev {
         s.editor.doc()
@@ -1297,6 +1307,9 @@ fn diff(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bound_tests;
 
 #[cfg(test)]
 mod cache_tests;

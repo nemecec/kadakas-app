@@ -469,6 +469,25 @@ fn intern_blob_text(text: &str) -> BlobText {
     t
 }
 
+/// The text of the blob with this hash, if this read has read it already (an eager read). A reader
+/// of the history uses it, so the picture that the drawing and the history share is one copy.
+pub fn loaded_text(hash: &str) -> Option<Arc<str>> {
+    load_scope()?.memo.texts.borrow().get(hash).cloned()
+}
+
+/// Tells the read that the text of the blob with this hash is in memory (read by the caller), so
+/// the next user of the hash gets the same memory.
+pub fn remember_text(hash: &str, text: &Arc<str>) {
+    if let Some(scope) = load_scope() {
+        scope
+            .memo
+            .texts
+            .borrow_mut()
+            .entry(hash.to_string())
+            .or_insert_with(|| text.clone());
+    }
+}
+
 /// An import base that was resolved before in this read, by its key.
 pub(crate) fn base_get(key: &str) -> Option<Arc<serde_json::Value>> {
     load_scope()?.memo.bases.borrow().get(key).cloned()
