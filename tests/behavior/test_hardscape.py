@@ -44,9 +44,10 @@ def test_styled_slab_reports_areas_and_the_volume_of_every_layer(cad):
     assert row["id"] == h and row["style_name"] == "Granite setts" and row["mode"] == "slab"
     assert row["plan_area_m2"] == approx(10.0) and row["surface_area_m2"] == approx(10.0)
     assert row["perimeter_m"] == approx(13.0)
-    # The border is 13 m long and 0.2 m wide and replaces part of the surface.
-    assert layer_volume(row, "border") == approx(2.6 * 0.06)
-    assert layer_volume(row, "surface") == approx(7.4 * 0.06)
+    # The border is 0.2 m wide round the slab and replaces part of the surface. The corners count
+    # once: 10 m2 less the 3.6 x 2.1 m of the paved part.
+    assert layer_volume(row, "border") == approx(2.44 * 0.06)
+    assert layer_volume(row, "surface") == approx(7.56 * 0.06)
     assert layer_volume(row, "component") == approx(10 * 0.04 + 10 * 0.15)
     assert row["thickness_mm"] == 250
     assert cad.result("objects.get", {"id": h})["shape"]["thickness"] == 250  # the shape follows the style
