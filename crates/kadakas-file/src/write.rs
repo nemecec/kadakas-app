@@ -23,8 +23,9 @@ use crate::layout::{DOCUMENT, blob_name};
 use crate::lazy::FileHistory;
 use crate::source::FileSource;
 
-/// The level of deflate for `document.json` and the history parts. Level 1 is the fastest; the
-/// measurement is in `docs/doc-load-benchmark.md`.
+/// The level of deflate for `document.json` and the history parts. Level 1 gives a file three
+/// times smaller than the plain form at about 170 MB/s of text; the numbers are in
+/// `docs/doc-load-benchmark.md` section 4.
 pub const DOCUMENT_LEVEL: u32 = 1;
 
 /// Options of a container save.
@@ -50,8 +51,8 @@ pub struct Written {
     pub blobs_kept: usize,
     /// History parts copied from an old file.
     pub parts_copied: usize,
-    /// The old files that were read from: after the rename of a save over one of them the caller
-    /// refreshes it (`FileSource::refresh`).
+    /// The old files that were read from. After the rename of the save the caller moves them to
+    /// the new file (`kadakas_file::native::rebind_sources`, `FileSource::rebind`).
     pub sources: Vec<Arc<FileSource>>,
 }
 
