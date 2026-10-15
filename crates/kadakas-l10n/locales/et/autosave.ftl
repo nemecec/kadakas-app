@@ -18,3 +18,17 @@ autosave-days-ago =
         [one] { $n } päev tagasi
        *[other] { $n } päeva tagasi
     }
+autosave-missing-pictures =
+    { $count ->
+        [one] { $count } pilt
+       *[other] { $count } pilti
+    }
+autosave-missing-versions = versioonid
+autosave-missing-other =
+    { $count ->
+        [one] { $count } muu osa
+       *[other] { $count } muud osa
+    }
+autosave-copy-missing = Fail { $file } muutus kettal ja selles ei ole enam { $what }. Taastekoopias on piltide asemel väikesed hallid kohatäited ja selles failis olnud versioone ei ole.
+autosave-copy-as-json = Taastekoopia on tavaline JSON-vorm, sest konteineri vorm ületaks piiri: { $why }
+autosave-over-missing = Automaatsalvestus ei asendanud sinu faili { $file }, sest see muutus kettal ja selles ei ole enam { $what }. Taastekoopia kirjutati. Salvesta ise, et otsustada, mida teha.

@@ -1269,26 +1269,84 @@ impl KadakasApp {
                 file_io::with_extension(&p)
             }
         };
-        let spec = file_io::SaveSpec::from_extension(
+        let mut spec = file_io::SaveSpec::from_extension(
             &path,
             self.session.file_source.iter().cloned().collect(),
         );
-        let written = match self
-            .session
-            .document_for_save_in(spec.form == kadakas_file::Form::Container)
-        {
-            Ok(doc) => file_io::write_document_as(&path, &doc, &spec),
-            Err(e) => Err(e.message),
+        let container = spec.form == kadakas_file::Form::Container;
+        spec.anchor = container && self.session.needs_anchor();
+        let first = match self.session.document_for_save_in(container) {
+            Ok(doc) => file_io::try_write_document(&path, &doc, &spec),
+            Err(e) => Err(file_io::SaveFailure::from_rpc(e)),
+        };
+        let written = match first {
+            // The file that the pictures stay in changed on disk. Nothing was written. The
+            // person decides: cancel (and put the file back), or save without what is missing.
+            Err(file_io::SaveFailure::Missing(from_writer)) => {
+                self.save_without_missing(&path, spec, from_writer)
+            }
+            other => other.map_err(file_io::SaveFailure::text),
         };
         match written {
-            Ok(()) => {
-                self.status = tr!("app-saved", name = path.display());
+            Ok(notes) => {
+                self.status = if notes.is_empty() {
+                    tr!("app-saved", name = path.display())
+                } else {
+                    tr!(
+                        "app-saved-with-notes",
+                        name = path.display(),
+                        notes = notes.join(" ")
+                    )
+                };
                 self.session.collab_mark_saved();
                 self.path = Some(path);
                 self.set_title(ctx);
             }
             Err(e) => self.status = e,
         }
+    }
+
+    /// Save after the file that the pictures stay in changed on disk (DOC-21): asks the person,
+    /// and on yes writes the document with small gray placeholders for the pictures that cannot be
+    /// found and without the versions that cannot be found; everything else is saved. The session
+    /// then refers to the placeholders, so the next save is whole.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_without_missing(
+        &mut self,
+        path: &std::path::Path,
+        spec: file_io::SaveSpec,
+        from_writer: kadakas_file::Missing,
+    ) -> Result<Vec<String>, String> {
+        let mut m = self.session.missing_for_save();
+        // What the writer found that the session does not know (a file of the history, parts of
+        // a newer program).
+        if m.file.is_empty() {
+            m.file = from_writer.file.clone();
+        }
+        m.history |= from_writer.history;
+        m.other.extend(from_writer.other.iter().cloned());
+        for p in &from_writer.pictures {
+            if !m.pictures.contains(p) {
+                m.pictures.push(p.clone());
+            }
+        }
+        if !file_io::ask_save_without(&m) {
+            return Err(tr!("app-save-missing-cancelled"));
+        }
+        let doc = self.session.document_without_missing(&m);
+        let container = spec.form == kadakas_file::Form::Container;
+        let retry = file_io::SaveSpec {
+            skip_missing: true,
+            anchor: container && self.session.needs_anchor() && !m.history,
+            ..spec
+        };
+        let mut notes = file_io::write_document_as(path, &doc, &retry)?;
+        self.session.accept_missing(&m);
+        notes.push(tr!(
+            "app-save-missing-done",
+            what = crate::autosave::missing_text(&m)
+        ));
+        Ok(notes)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2718,14 +2776,33 @@ impl eframe::App for KadakasApp {
             self.session.editor.revision(),
             self.path.as_deref(),
             || {
-                match self.session.document_for_save() {
-                    Ok(doc) => (doc.into_owned(), None),
-                    // The drawing is worth more than a copy that has nothing: write it without
-                    // the versions and say so.
+                let sources: Vec<_> = self.session.file_source.iter().cloned().collect();
+                let anchor = self.session.needs_anchor();
+                match self.session.document_for_save_in(true) {
+                    Ok(doc) => crate::autosave_ui::SaveCopy {
+                        doc: doc.into_owned(),
+                        note: None,
+                        sources,
+                        anchor,
+                    },
+                    // The drawing is worth more than a copy that has nothing: write it, and say
+                    // what is not in it. The versions that were read are in the memory form,
+                    // which a file does not hold, so they are left out; the versions that still
+                    // wait in the file are kept as they are (the writer copies their entries
+                    // and the drawing they belong to).
                     Err(e) => {
                         let mut doc = self.session.editor.doc().clone();
-                        doc.history = None;
-                        (doc, Some(e.message))
+                        let note = if doc.history.take().is_some() {
+                            Some(e.message)
+                        } else {
+                            None
+                        };
+                        crate::autosave_ui::SaveCopy {
+                            doc,
+                            note,
+                            sources,
+                            anchor,
+                        }
                     }
                 }
             },

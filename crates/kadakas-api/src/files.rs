@@ -31,6 +31,11 @@ pub const DOC_EXTS: [&str; 2] = ["kad", "json"];
 pub struct SaveSpec {
     pub form: Form,
     pub keep: Vec<Arc<FileSource>>,
+    /// The drawing was edited and the versions still wait in the file: write the drawing of the
+    /// file as their anchor (`Session::needs_anchor`).
+    pub anchor: bool,
+    /// The person chose to save without what cannot be found (`allow_missing`).
+    pub skip_missing: bool,
 }
 
 impl SaveSpec {
@@ -40,6 +45,8 @@ impl SaveSpec {
         SaveSpec {
             form: Form::from_extension(path),
             keep,
+            anchor: false,
+            skip_missing: false,
         }
     }
 
@@ -48,33 +55,37 @@ impl SaveSpec {
         SaveSpec {
             form: Form::Container,
             keep: Vec::new(),
+            anchor: false,
+            skip_missing: false,
         }
     }
 }
 
 /// Stores a save: the path, the document and how to write it. The function streams the document
 /// into the file (see [`write_document`]).
-pub type WriteFn<'a> = dyn FnMut(&Path, &Document, &SaveSpec) -> Result<(), FileError> + 'a;
+/// It returns the notes for the person (a source that could not be opened again, parts that were
+/// left out).
+pub type WriteFn<'a> = dyn FnMut(&Path, &Document, &SaveSpec) -> Result<Vec<String>, FileError> + 'a;
 
 /// What `file_call` did.
 #[derive(Debug, PartialEq)]
 pub enum FileDone {
     /// The path, what the load repaired (the load notes of the document) and the form of the file.
     Opened(PathBuf, Vec<String>, Form),
-    /// The path and the form that was written.
-    Saved(PathBuf, Form),
+    /// The path, the form that was written and what the person should know (see `file.save`).
+    Saved(PathBuf, Form, Vec<String>),
 }
 
 impl FileDone {
     pub fn path(&self) -> &Path {
         match self {
-            FileDone::Opened(p, ..) | FileDone::Saved(p, _) => p,
+            FileDone::Opened(p, ..) | FileDone::Saved(p, ..) => p,
         }
     }
 
     pub fn form(&self) -> Form {
         match self {
-            FileDone::Opened(_, _, f) | FileDone::Saved(_, f) => *f,
+            FileDone::Opened(_, _, f) | FileDone::Saved(_, f, _) => *f,
         }
     }
 }
@@ -111,6 +122,7 @@ fn write_error(path: &Path, e: FileError) -> RpcError {
         return RpcError::conflict(e);
     }
     match e {
+        FileError::Missing(m) => crate::review_api::missing_error(&m),
         FileError::Container(ContainerError::Changed(msg)) => RpcError::conflict(msg),
         FileError::Container(ContainerError::Limit(msg)) | FileError::Limit(msg) => {
             RpcError::limit(format!("cannot write {}: {msg}", path.display()))
@@ -204,15 +216,61 @@ fn file_call_inner(
         .check_path(Path::new(path), saving, &DOC_EXTS)
         .map_err(RpcError::policy)?;
     if saving {
-        let spec = SaveSpec {
-            form: save_form(params, &p)?,
-            keep: s.file_source.iter().cloned().collect(),
+        let allow = match params.get("allow_missing") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => {
+                return Err(RpcError::invalid_params(
+                    "params.allow_missing is true or false",
+                ));
+            }
         };
-        let doc = s.document_for_save_in(spec.form == Form::Container)?;
-        write(&p, &doc, &spec).map_err(|e| write_error(&p, e))?;
+        let form = save_form(params, &p)?;
+        let container = form == Form::Container;
+        let spec = SaveSpec {
+            form,
+            keep: s.file_source.iter().cloned().collect(),
+            anchor: container && s.needs_anchor(),
+            skip_missing: false,
+        };
+        let first = match s.document_for_save_in(container) {
+            Ok(doc) => write(&p, &doc, &spec).map_err(|e| write_error(&p, e)),
+            Err(e) => Err(e),
+        };
+        let notes = match first {
+            Ok(notes) => notes,
+            // The file that the pictures stay in changed, and the person agrees to save without
+            // what cannot be found: placeholders for the pictures, no versions that wait in the
+            // file, and the rest is saved.
+            Err(e) if allow && e.reason == Some(crate::errors::REASON_PARTS_MISSING) => {
+                let m = s.missing_for_save();
+                let doc = s.document_without_missing(&m);
+                let retry = SaveSpec {
+                    anchor: container && s.needs_anchor() && !m.history,
+                    skip_missing: true,
+                    ..spec
+                };
+                let mut notes = write(&p, &doc, &retry).map_err(|e| write_error(&p, e))?;
+                s.accept_missing(&m);
+                let mut what = Vec::new();
+                if !m.pictures.is_empty() {
+                    what.push(format!("{} picture(s) became placeholders", m.pictures.len()));
+                }
+                if m.history {
+                    what.push("the versions were left out".to_string());
+                }
+                notes.push(format!(
+                    "Saved without what could not be found in {}: {}",
+                    if m.file.is_empty() { "the old file" } else { &m.file },
+                    if what.is_empty() { "other parts were left out".into() } else { what.join(", ") }
+                ));
+                notes
+            }
+            Err(e) => return Err(e),
+        };
         s.collab_mark_saved();
         s.doc_dir = dir_of(&p);
-        Ok(FileDone::Saved(p, spec.form))
+        Ok(FileDone::Saved(p, form, notes))
     } else {
         let opened = open_document(&p, s.limits.document_file_bytes, ReadMode::Lazy)?;
         s.check_document_fits(&opened.doc)?;
@@ -228,21 +286,39 @@ fn file_call_inner(
 /// Atomic save with a `.bak` of the old file. The document is streamed into a buffered writer on
 /// the temporary file; the text of the document is never built. Unchanged parts are copied from
 /// the files in `spec.keep` without decoding them.
-pub fn write_document(path: &Path, doc: &Document, spec: &SaveSpec) -> Result<(), FileError> {
+pub fn write_document(
+    path: &Path,
+    doc: &Document,
+    spec: &SaveSpec,
+) -> Result<Vec<String>, FileError> {
     let opts = WriteOptions {
         generator: kadakas_file::generator(),
         keep: spec.keep.clone(),
+        anchor: spec.anchor,
+        skip_missing: spec.skip_missing,
     };
-    native::save_path(path, doc, spec.form, &opts).map(|_| ())
+    let saved = native::save_path(path, doc, spec.form, &opts)?;
+    let mut notes = saved.notes;
+    if let Some(w) = &saved.written
+        && w.skipped > 0
+    {
+        notes.push(format!(
+            "{} part(s) of the old file that could not be found were left out",
+            w.skipped
+        ));
+    }
+    Ok(notes)
 }
 
 /// [`write_document`] as a container with nothing to copy from (a new file). The error is a
 /// message.
 pub fn write_document_file(path: &Path, doc: &Document) -> Result<(), String> {
-    write_document(path, doc, &SaveSpec::container()).map_err(|e| match e {
-        FileError::Io(m) => m,
-        other => format!("cannot write {}: {other}", path.display()),
-    })
+    write_document(path, doc, &SaveSpec::container())
+        .map(|_| ())
+        .map_err(|e| match e {
+            FileError::Io(m) => m,
+            other => format!("cannot write {}: {other}", path.display()),
+        })
 }
 
 /// The JSON-RPC response for the result of `file_call`. An error carries the feedback hint and
@@ -256,6 +332,11 @@ pub fn file_reply(
     match result {
         // Like `document.load`: what the load repaired instead of refusing the file.
         Ok(FileDone::Opened(_, notes, form)) if !notes.is_empty() => {
+            json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true, "format": form.name(), "notes": notes}}).to_string()
+        }
+        // `file.save` too: what the person should know (a part that could not be found and was left
+        // out, a source that could not be opened again).
+        Ok(FileDone::Saved(_, form, notes)) if !notes.is_empty() => {
             json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true, "format": form.name(), "notes": notes}}).to_string()
         }
         Ok(done) => {
@@ -437,7 +518,7 @@ mod tests {
     /// A hook that streams like `write_document_file`, and fails after `limit` bytes.
     fn failing_hook(
         limit: usize,
-    ) -> impl FnMut(&Path, &Document, &SaveSpec) -> Result<(), FileError> {
+    ) -> impl FnMut(&Path, &Document, &SaveSpec) -> Result<Vec<String>, FileError> {
         move |p, doc, _spec| {
             struct Cut(usize);
             impl std::io::Write for Cut {
@@ -457,6 +538,7 @@ mod tests {
                 w.write_all(b"{\"half\":")?;
                 doc.write_pretty(Cut(limit))
             })
+            .map(|()| Vec::new())
             .map_err(|e| FileError::Io(e.to_string()))
         }
     }

@@ -440,10 +440,11 @@ fn load(path: &std::path::Path, max: Option<u64>) -> Result<Document, String> {
 /// Like [`load`], with the open file of a container: its pictures stay in the file (DOC-21).
 fn load_opened(path: &std::path::Path, max: Option<u64>) -> Result<kadakas_file::Opened, String> {
     let max = max.unwrap_or(kadakas_api::DEFAULT_DOCUMENT_FILE_BYTES);
-    let mut opened = kadakas_api::files::open_document(path, max, kadakas_file::ReadMode::Lazy)
+    let opened = kadakas_api::files::open_document(path, max, kadakas_file::ReadMode::Lazy)
         .map_err(|e| e.message)?;
-    // An old file has no project GUID. It gets one in memory, and the next save writes it.
-    opened.doc.ensure_project_guid();
+    // An old file has no project GUID. `Session::adopt_document` gives it one in memory (and then
+    // knows that the document is no longer exactly the document of the file); the next save
+    // writes it.
     Ok(opened)
 }
 
@@ -749,11 +750,17 @@ fn save_as(
     let spec = kadakas_api::files::SaveSpec {
         form,
         keep: from.cloned().into_iter().collect(),
+        anchor: false,
+        skip_missing: false,
     };
-    kadakas_api::files::write_document(path, doc, &spec).map_err(|e| match e {
+    let notes = kadakas_api::files::write_document(path, doc, &spec).map_err(|e| match e {
         kadakas_file::FileError::Io(m) => m,
         other => format!("{}: {other}", path.display()),
-    })
+    })?;
+    for n in notes {
+        eprintln!("kadakas: {}: {n}", path.display());
+    }
+    Ok(())
 }
 
 /// `kadakas convert`: a document from one form to the other.

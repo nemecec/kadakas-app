@@ -97,3 +97,11 @@ app-solids-made =
        *[other] { $count } solids made
     }
 app-solids-made-skipped = Solids made: { $count }, skipped: { $skipped }
+app-saved-with-notes = Saved { $name }. { $notes }
+app-save-missing-title = Parts of the file cannot be found
+app-save-missing-text =
+    The file { $file } was changed outside Kadakas, and it no longer has { $what }. Nothing was saved.
+
+    Save without them? The pictures become small gray placeholders and the versions that cannot be found are left out; everything else is saved. Or answer No, put the file (or its .bak copy) back, and save again.
+app-save-missing-cancelled = Not saved: parts of the file cannot be found. Put the file (or its .bak copy) back and save again, or save without them.
+app-save-missing-done = Not found, and left out of the file: { $what }.

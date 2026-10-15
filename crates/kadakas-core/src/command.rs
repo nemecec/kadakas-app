@@ -2024,6 +2024,13 @@ impl Editor {
         }
     }
 
+    /// Changes the document without an undo step and without a new revision. For a repair that
+    /// makes the memory equal to the file that was just saved (the pictures that could not be
+    /// found became placeholders in the file): it is no edit by the person.
+    pub fn repair_without_undo(&mut self, f: impl FnOnce(&mut crate::model::Document)) {
+        f(&mut self.doc);
+    }
+
     /// Sets or clears the history of the document (the named versions, see `crate::history`) as
     /// one undo step. Returns false if nothing changed.
     pub fn set_history(&mut self, history: Option<crate::history::HistoryData>) -> bool {

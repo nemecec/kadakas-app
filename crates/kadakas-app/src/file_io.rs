@@ -64,10 +64,13 @@ pub fn open_picked_bytes(bytes: Vec<u8>) -> Result<Opened, String> {
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // the browser build uses it
 pub fn container_bytes(session: &mut Session) -> Result<Vec<u8>, String> {
     let keep: Vec<_> = session.file_source.iter().cloned().collect();
+    let anchor = session.needs_anchor();
     let doc = session.document_for_save_in(true).map_err(|e| e.message)?;
     let opts = kadakas_file::WriteOptions {
         generator: kadakas_file::generator(),
         keep,
+        anchor,
+        skip_missing: false,
     };
     kadakas_file::write_container(Vec::new(), &doc, &opts)
         .map(|(bytes, _)| bytes)
@@ -169,18 +172,108 @@ pub fn file_len(path: &Path) -> Option<u64> {
 /// It counts as a manual save: a late autosave of the same file is dropped (see `autosave_fs`).
 #[cfg(all(not(target_arch = "wasm32"), test))]
 pub fn write_document(path: &Path, doc: &Document) -> Result<(), String> {
-    write_document_as(path, doc, &SaveSpec::from_extension(path, Vec::new()))
+    write_document_as(path, doc, &SaveSpec::from_extension(path, Vec::new())).map(|_| ())
 }
 
 /// How a save writes (see `kadakas_api::files::SaveSpec`).
 #[cfg(not(target_arch = "wasm32"))]
 pub use kadakas_api::files::SaveSpec;
 
+/// Why a save did not happen.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+pub enum SaveFailure {
+    /// The text for the person.
+    Text(String),
+    /// Parts of the document cannot be found in the file it was opened from (the file changed on
+    /// disk). Nothing was written. The person decides (see [`ask_save_without`]).
+    Missing(kadakas_file::Missing),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SaveFailure {
+    /// The error of a call of the session that stops a save: a message, or the missing parts.
+    pub fn from_rpc(e: kadakas_api::RpcError) -> SaveFailure {
+        if e.reason == Some(kadakas_api::REASON_PARTS_MISSING) {
+            SaveFailure::Missing(kadakas_file::Missing::default())
+        } else {
+            SaveFailure::Text(e.message)
+        }
+    }
+
+    /// The text for the status line.
+    pub fn text(self) -> String {
+        match self {
+            SaveFailure::Text(t) => t,
+            SaveFailure::Missing(m) => m.message(),
+        }
+    }
+}
+
+/// Writes a document; the notes are what the person should know (a source that could not be
+/// opened again, parts that were left out).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn try_write_document(
+    path: &Path,
+    doc: &Document,
+    spec: &SaveSpec,
+) -> Result<Vec<String>, SaveFailure> {
+    match crate::autosave::manual_save(path, || kadakas_api::files::write_document(path, doc, spec))
+    {
+        Ok(notes) => Ok(notes),
+        Err(FileError::Missing(m)) => Err(SaveFailure::Missing(m)),
+        Err(e) => Err(SaveFailure::Text(write_error(path, e))),
+    }
+}
+
 /// [`write_document`] with the form and the files to copy from.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn write_document_as(path: &Path, doc: &Document, spec: &SaveSpec) -> Result<(), String> {
-    crate::autosave::manual_save(path, || kadakas_api::files::write_document(path, doc, spec))
-        .map_err(|e| write_error(path, e))
+pub fn write_document_as(
+    path: &Path,
+    doc: &Document,
+    spec: &SaveSpec,
+) -> Result<Vec<String>, String> {
+    try_write_document(path, doc, spec).map_err(SaveFailure::text)
+}
+
+/// Asks the person whether to save without the parts that cannot be found in the file the
+/// document was opened from. The default is no.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ask_save_without(m: &kadakas_file::Missing) -> bool {
+    #[cfg(test)]
+    if let Some(answer) = test_answer::get() {
+        return answer;
+    }
+    let what = crate::autosave::missing_text(m);
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title(tr!("app-save-missing-title"))
+        .set_description(tr!(
+            "app-save-missing-text",
+            file = m.file.clone(),
+            what = what
+        ))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes
+}
+
+/// The answer of the person to [`ask_save_without`], set by a test.
+#[cfg(all(not(target_arch = "wasm32"), test))]
+pub mod test_answer {
+    use std::cell::Cell;
+
+    thread_local! {
+        static ANSWER: Cell<Option<bool>> = const { Cell::new(None) };
+    }
+
+    pub fn set(answer: Option<bool>) {
+        ANSWER.with(|a| a.set(answer));
+    }
+
+    pub fn get() -> Option<bool> {
+        ANSWER.with(Cell::get)
+    }
 }
 
 /// The text for a file that cannot be written.
@@ -196,6 +289,7 @@ fn write_error(path: &Path, e: FileError) -> String {
 #[cfg(all(not(target_arch = "wasm32"), test))]
 pub fn write_document_raw(path: &Path, doc: &Document) -> Result<(), String> {
     kadakas_api::files::write_document(path, doc, &SaveSpec::from_extension(path, Vec::new()))
+        .map(|_| ())
         .map_err(|e| write_error(path, e))
 }
 
@@ -257,7 +351,7 @@ pub fn agent_line(
         crate::autosave::manual_save(p, || kadakas_api::files::write_document(p, doc, spec))
     });
     match &result {
-        Ok(kadakas_api::files::FileDone::Saved(p, _)) => {
+        Ok(kadakas_api::files::FileDone::Saved(p, ..)) => {
             *path = Some(p.clone());
             fx.path_changed = true;
         }
