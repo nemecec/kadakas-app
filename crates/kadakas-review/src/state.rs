@@ -105,6 +105,11 @@ impl State {
         let replica = replica_of(doc);
         let mut things = BTreeMap::new();
         for (t, e) in replica.alive_things() {
+            // Issues are review data: a version holds the drawing, and a restore leaves the
+            // issues as they are.
+            if matches!(t.kind, Kind::Issue | Kind::Comment) {
+                continue;
+            }
             let mut props = e.visible();
             props.remove("order");
             things.insert(*t, props);

@@ -206,7 +206,8 @@ pub struct Viewpoint {
 }
 
 impl Viewpoint {
-    fn check(&self) -> Result<(), String> {
+    /// Checks the bounds and the values of a viewpoint.
+    pub fn validate(&self) -> Result<(), String> {
         if chars(&self.name) > MAX_NAME_CHARS {
             return Err(format!(
                 "a viewpoint name has at most {MAX_NAME_CHARS} characters"
@@ -521,7 +522,7 @@ impl Issue {
         }
         let mut seen = HashSet::new();
         for v in &self.viewpoints {
-            v.check()?;
+            v.validate()?;
             check_time("the viewpoint time", v.time)?;
             if !seen.insert(v.id) {
                 return Err("two viewpoints have the same ID".into());
@@ -591,6 +592,24 @@ impl Issues {
 
     pub fn data(&self) -> &IssueData {
         &self.0
+    }
+
+    /// Puts an issue where it belongs: the list is sorted by creation time, then by ID, so two
+    /// documents with the same issues have them in the same order.
+    pub fn insert_issue(&mut self, mut issue: Issue) {
+        issue.viewpoints.sort_by_key(|v| (v.time, v.id));
+        let d = self.data_mut();
+        let key = (issue.created, issue.id);
+        let at = d.issues.partition_point(|i| (i.created, i.id) <= key);
+        d.issues.insert(at, issue);
+    }
+
+    /// Puts a comment where it belongs: by time, then by ID.
+    pub fn insert_comment(&mut self, c: Comment) {
+        let d = self.data_mut();
+        let key = (c.time, c.id);
+        let at = d.comments.partition_point(|x| (x.time, x.id) <= key);
+        d.comments.insert(at, c);
     }
 
     /// The data for a change. It is copied first if the undo steps share it.
@@ -701,6 +720,30 @@ impl Issues {
                 notes.push(format!(
                     "{bad_comments} comment(s) of an issue that is not there, or with a repeated ID, were left out"
                 ));
+            }
+        }
+        // The lists keep their order (see `insert_issue`): a file made by hand is put in order.
+        let sorted = self
+            .0
+            .issues
+            .windows(2)
+            .all(|w| (w[0].created, w[0].id) <= (w[1].created, w[1].id))
+            && self
+                .0
+                .comments
+                .windows(2)
+                .all(|w| (w[0].time, w[0].id) <= (w[1].time, w[1].id))
+            && self
+                .0
+                .issues
+                .iter()
+                .all(|i| i.viewpoints.windows(2).all(|w| (w[0].time, w[0].id) <= (w[1].time, w[1].id)));
+        if !sorted {
+            let d = self.data_mut();
+            d.issues.sort_by_key(|i| (i.created, i.id));
+            d.comments.sort_by_key(|c| (c.time, c.id));
+            for i in &mut d.issues {
+                i.viewpoints.sort_by_key(|v| (v.time, v.id));
             }
         }
         let mut too_big = 0;

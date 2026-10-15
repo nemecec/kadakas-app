@@ -9,7 +9,7 @@ use crate::issue::{
     Comment, CommentId, Issue, IssueId, MAX_COMMENTS, MAX_COMMENTS_TOTAL, MAX_ISSUES,
     MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_PIXELS, MAX_VIEWPOINTS, Viewpoint, ViewpointId, is_unset,
 };
-use crate::picture::{ImageResource, PictureFormat};
+use crate::picture::ImageResource;
 
 fn invalid(m: impl Into<String>) -> CommandError {
     CommandError::Invalid(m.into())
@@ -26,11 +26,9 @@ impl Tx<'_> {
             .ok_or(CommandError::NoIssue(id))
     }
 
-    /// Checks a snapshot file and stores it as a picture resource (once per hash).
+    /// Checks a snapshot file (a PNG or JPEG picture) and stores it as a picture resource (once per
+    /// hash).
     fn snapshot_picture(&mut self, p: &ImageResource) -> Result<(), CommandError> {
-        if p.format != PictureFormat::Png {
-            return Err(invalid("a snapshot is a PNG file"));
-        }
         if p.byte_len() > MAX_SNAPSHOT_BYTES {
             return Err(invalid(format!(
                 "a snapshot is at most {MAX_SNAPSHOT_BYTES} bytes"
@@ -107,7 +105,7 @@ impl Tx<'_> {
                 issue.validate().map_err(invalid)?;
                 let refs: Vec<&ImageResource> = pictures.iter().collect();
                 self.store_snapshots(&issue.viewpoints, &refs)?;
-                self.doc.issues.data_mut().issues.push(issue);
+                self.doc.issues.insert_issue(issue);
             }
             Command::ModifyIssue { id, patch, now } => {
                 let at = self.issue_index(*id)?;
@@ -157,7 +155,7 @@ impl Tx<'_> {
                 out.created.push(c.id.0);
                 let d = self.doc.issues.data_mut();
                 d.issues[at].modified = d.issues[at].modified.max(c.time);
-                d.comments.push(c);
+                self.doc.issues.insert_comment(c);
             }
             Command::EditIssueComment { id, text, now } => {
                 let at = self
@@ -209,6 +207,7 @@ impl Tx<'_> {
                 }
                 out.created.push(v.id.0);
                 new.viewpoints.push(v);
+                new.viewpoints.sort_by_key(|x| (x.time, x.id));
                 new.modified = *now;
                 new.validate().map_err(invalid)?;
                 let pics: Vec<&ImageResource> = picture.iter().map(|p| p.as_ref()).collect();

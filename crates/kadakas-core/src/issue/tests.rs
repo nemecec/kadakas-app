@@ -125,20 +125,20 @@ fn viewpoint_bounds() {
         ..Viewpoint::default()
     };
     v.name = "n".repeat(MAX_NAME_CHARS + 1);
-    assert!(v.check().is_err());
+    assert!(v.validate().is_err());
     v.name.clear();
     v.selection = (0..=MAX_OBJECTS as u64).map(ObjectId::from_num).collect();
-    assert!(v.check().is_err());
+    assert!(v.validate().is_err());
     v.selection.clear();
     v.layers = (0..=MAX_VISIBILITY as u64)
         .map(|n| (LayerId::from_num(n), true))
         .collect();
-    assert!(v.check().is_err());
+    assert!(v.validate().is_err());
     v.layers.clear();
     v.snapshot = Some("abc".into());
-    assert!(v.check().is_err());
+    assert!(v.validate().is_err());
     v.snapshot = Some("a".repeat(64));
-    v.check().unwrap();
+    v.validate().unwrap();
 }
 
 #[test]

@@ -230,6 +230,7 @@ pub fn materialize_with(
         }
     }
 
+    out.issues = build_issues(view, &mut cx);
     out.layers = layers;
     out.classes = classes;
     out.resources = resources;
@@ -269,6 +270,56 @@ pub fn materialize_with(
         quarantined: cx.quarantined,
         repairs: cx.repairs,
     }
+}
+
+/// Reads the issues and their comments. A thing that does not read or breaks a bound is
+/// quarantined. A comment whose issue is not there (deleted, or not valid) waits in the replica
+/// and is not in the document.
+fn build_issues(view: &Replica, cx: &mut Ctx) -> kadakas_core::issue::Issues {
+    use kadakas_core::issue::{Comment, Issue, IssueData, Issues};
+    let mut data = IssueData::default();
+    for (id, props) in ordered(view, Kind::Issue, std::iter::empty()) {
+        let parsed = validate_entity(Kind::Issue, id, &props)
+            .and_then(|()| read::<Issue>(Kind::Issue, id, &props));
+        match parsed {
+            Ok(i) => data.issues.push(i),
+            Err(e) => cx.quarantine(Kind::Issue, id, e),
+        }
+    }
+    let mut per_issue: BTreeMap<Uid, usize> = BTreeMap::new();
+    for (id, props) in ordered(view, Kind::Comment, std::iter::empty()) {
+        let parsed = validate_entity(Kind::Comment, id, &props)
+            .and_then(|()| read::<Comment>(Kind::Comment, id, &props));
+        match parsed {
+            Ok(c) if !data.issues.iter().any(|i| i.id == c.issue) => {
+                cx.quarantine(Kind::Comment, id, "its issue is not there");
+            }
+            Ok(c) => {
+                // A comment that points to a viewpoint that is gone keeps its text.
+                let mut c = c;
+                if let Some(v) = c.viewpoint
+                    && !data
+                        .issues
+                        .iter()
+                        .any(|i| i.id == c.issue && i.viewpoints.iter().any(|x| x.id == v))
+                {
+                    c.viewpoint = None;
+                }
+                let n = per_issue.entry(c.issue.0).or_default();
+                if *n >= kadakas_core::issue::MAX_COMMENTS {
+                    cx.quarantine(Kind::Comment, id, "the issue has too many comments");
+                } else {
+                    *n += 1;
+                    data.comments.push(c);
+                }
+            }
+            Err(e) => cx.quarantine(Kind::Comment, id, e),
+        }
+    }
+    let mut issues = Issues::from(data);
+    // The same order as the commands keep (by time, then ID).
+    let _ = issues.repair();
+    issues
 }
 
 /// Sorts a list by the stacking key (the field `order` in `extra`), then by ID. A thing without a

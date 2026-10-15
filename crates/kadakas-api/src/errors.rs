@@ -150,7 +150,12 @@ impl From<kadakas_core::command::CommandError> for RpcError {
     fn from(e: kadakas_core::command::CommandError) -> Self {
         use kadakas_core::command::CommandError as E;
         match e {
-            E::NoObject(_) | E::NoLayer(_) | E::NoClass(_) | E::NoResource(_) => Self::not_found(e),
+            E::NoObject(_)
+            | E::NoLayer(_)
+            | E::NoClass(_)
+            | E::NoResource(_)
+            | E::NoIssue(_)
+            | E::NoComment(_) => Self::not_found(e),
             E::ResourceInUse(..) | E::LayerNotEmpty(_) | E::LayerLocked(_) => Self::conflict(e),
             E::LastLayer | E::Invalid(_) => Self::validation(e),
         }

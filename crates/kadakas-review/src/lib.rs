@@ -18,8 +18,10 @@
 //! `kadakas-api` joins these with the editor (`version.*` methods); the core keeps the history as
 //! opaque JSON in the file (`kadakas_core::history`).
 
+pub mod bcf;
 pub mod diff;
 pub mod history;
+pub mod issues;
 pub mod overlay;
 pub mod restore;
 pub mod state;

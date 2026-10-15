@@ -348,7 +348,7 @@ fn viewpoints_keep_snapshots_as_picture_resources() {
 }
 
 #[test]
-fn a_snapshot_needs_its_picture_and_must_be_a_small_png() {
+fn a_snapshot_needs_its_picture_and_must_be_small() {
     let mut ed = editor();
     let pic = header_only_sample(2);
     let with_snapshot = |hash: &str| Issue {
@@ -365,14 +365,11 @@ fn a_snapshot_needs_its_picture_and_must_be_a_small_png() {
     };
     let err = ed.execute(&missing).unwrap_err();
     assert!(err.to_string().contains("no picture"), "{err}");
-    // A picture that is not a PNG, one that is too big, one with a bad hash.
-    let mut jpeg = pic.clone();
-    jpeg.format = kadakas_core::picture::PictureFormat::Jpeg;
+    // A picture that is too big, one with a bad hash.
     let cmd = |p| Command::AddIssue {
         issue: Box::new(with_snapshot(&pic.sha256)),
         pictures: vec![p],
     };
-    assert!(ed.execute(&cmd(jpeg)).is_err());
     let mut huge = pic.clone();
     huge.width = 3000;
     huge.height = 3000;

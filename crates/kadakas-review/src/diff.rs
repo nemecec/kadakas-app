@@ -91,7 +91,8 @@ impl Group {
             Kind::Layer => Group::Layers,
             Kind::Class => Group::Classes,
             Kind::Resource => Group::Resources,
-            Kind::Document => Group::Document,
+            // A state holds no issues (they are review data, not part of a version).
+            Kind::Document | Kind::Issue | Kind::Comment => Group::Document,
         }
     }
 }

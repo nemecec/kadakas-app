@@ -48,6 +48,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kadakas_core::change::ChangeSet;
+use kadakas_core::issue::{CommentId, IssueId};
 use kadakas_core::model::{Document, ObjectId};
 use kadakas_core::uid::Uid;
 use serde_json::{Map, Value};
@@ -86,6 +87,8 @@ fn props_of_whole(doc: &Document, target: Target) -> Option<Map<String, Value>> 
         Kind::Layer => strip(doc.layers.iter().find(|l| l.id.0 == id)?),
         Kind::Class => strip(doc.classes.iter().find(|c| c.id.0 == id)?),
         Kind::Resource => strip(doc.resources.iter().find(|r| r.id.0 == id)?),
+        Kind::Issue => strip(doc.issues.get(IssueId(id))?),
+        Kind::Comment => strip(doc.issues.comment(CommentId(id))?),
         Kind::Document => {
             let mut m = Map::new();
             if let Some(g) = &doc.georef {
@@ -110,6 +113,18 @@ fn all_targets(doc: &Document) -> Vec<Target> {
             .map(|r| Target::new(Kind::Resource, r.id.0)),
     );
     out.extend(doc.objects.keys().map(|o| Target::new(Kind::Object, o.0)));
+    out.extend(
+        doc.issues
+            .iter()
+            .map(|i| Target::new(Kind::Issue, i.id.0)),
+    );
+    out.extend(
+        doc.issues
+            .data()
+            .comments
+            .iter()
+            .map(|c| Target::new(Kind::Comment, c.id.0)),
+    );
     out
 }
 
@@ -144,6 +159,21 @@ pub fn flatten(kind: Kind, whole: Map<String, Value>) -> Map<String, Value> {
                     }
                 }
                 out.insert("shape".into(), Value::Object(m));
+            }
+            (Kind::Issue, "viewpoints", Value::Array(vps)) => {
+                // One property for each viewpoint, so two users who add viewpoints together keep
+                // both, and a change of one viewpoint does not send the others.
+                for vp in vps {
+                    match vp.get("id").and_then(Value::as_str) {
+                        Some(id) => {
+                            let key = format!("viewpoints.{id}");
+                            out.insert(key, vp);
+                        }
+                        None => {
+                            out.insert("viewpoints".into(), vp);
+                        }
+                    }
+                }
             }
             (Kind::Document, "drawing", Value::Object(m)) => {
                 for (f, x) in m {
@@ -197,7 +227,12 @@ pub fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Value> {
     let mut lines: Vec<Value> = Vec::new();
     let mut has_points = false;
     let mut has_lines = false;
+    let mut viewpoints: Vec<Value> = Vec::new();
     for (k, v) in flat {
+        if kind == Kind::Issue && k.starts_with("viewpoints.") {
+            viewpoints.push(v.clone());
+            continue;
+        }
         if kind == Kind::Object {
             if let Some(n) = k.strip_prefix("shape.points.") {
                 let _ = n;
@@ -247,6 +282,17 @@ pub fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Value> {
         if has_lines {
             shape.insert("lines".into(), Value::Array(lines));
         }
+    }
+    if !viewpoints.is_empty() {
+        // The order of the list is the time of the viewpoints, then their IDs.
+        let key = |v: &Value| {
+            (
+                v.get("time").and_then(Value::as_i64).unwrap_or(0),
+                v.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
+            )
+        };
+        viewpoints.sort_by_key(key);
+        out.insert("viewpoints".into(), Value::Array(viewpoints));
     }
     if !sheets.is_empty() {
         let pairs = sheets
@@ -545,6 +591,8 @@ pub fn ops_from_change(view: &Replica, doc: &Document, cs: &ChangeSet) -> Vec<Op
         add(Kind::Layer, &uids(&ids.layers));
         add(Kind::Class, &uids(&ids.classes));
         add(Kind::Resource, &uids(&ids.resources));
+        add(Kind::Issue, &uids(&ids.issues));
+        add(Kind::Comment, &uids(&ids.comments));
     }
     if cs.document.georef || cs.document.drawing {
         targets.insert(Target::DOCUMENT);
