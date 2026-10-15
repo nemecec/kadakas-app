@@ -159,10 +159,12 @@ def test_a_program_that_renumbers_the_handles_still_matches_the_entities(cad, tm
     doc.saveas(str(v3))
     drawing = tags(cad)[0]["drawing"]
     r = update(cad, v3, drawing=drawing, tolerance=200)
-    assert r["match"]["renumbered"] is False or r["counts"]["changed"] >= 1
     assert r["counts"]["removed"] == 0 and r["counts"]["added"] == 0, kinds(r)
     assert r["counts"]["changed"] == 1
-    assert any("another" in n or "content" in n for n in r["notes"]) or r["match"]["renumbered"] is False
+    # The note about the handles is there exactly when the match says the handles were renumbered
+    # (the Rust tests make a file that surely is).
+    told = any("another program wrote it" in n for n in r["notes"])
+    assert told == r["match"]["renumbered"], (r["match"], r["notes"])
     applied = cad.result("import.apply", {"update_id": r["update_id"], "accept": "all"})
     assert applied["applied"]["replaced"] == 1
     # Without naming the drawing, a file of another lineage is refused when it could be any.

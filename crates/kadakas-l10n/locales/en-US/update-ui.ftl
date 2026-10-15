@@ -38,3 +38,6 @@ update-ui-what-linetype = line type
 update-ui-what-lineweight = line weight
 update-ui-what-text = text
 update-ui-what-other = other
+update-ui-confirm-drawing = The file says it is the drawing { $new }, not { $drawing }. Is it a new revision of { $drawing }?
+update-ui-confirm-yes = Yes, use it as a new revision
+update-ui-new-conflicts = { $count } changes now concern objects you edited. They are unticked. Check the list, then press Apply again.

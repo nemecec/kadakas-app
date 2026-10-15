@@ -232,6 +232,13 @@ fn the_svg_overlay_has_the_tints_the_marks_and_the_legend() {
     );
     assert_eq!(r["image"]["format"], "svg");
     let svg = r["image"]["svg"].as_str().unwrap();
+    // The width of the picture is bounded like the size of a PNG.
+    let big = ok(
+        &mut s,
+        json!({"base": base, "new": new, "render": {"format": "svg", "width": 4_000_000}}),
+    );
+    let head = &big["image"]["svg"].as_str().unwrap()[..400];
+    assert!(head.contains("width=\"2048\""), "{head}");
     for status in ["added", "changed"] {
         assert!(
             svg.contains(&format!("data-compare=\"{status}\"")),

@@ -9,7 +9,7 @@ ADVERTISED_METHODS = [
     "describe", "execute", "undo", "redo", "document.summary", "document.get", "document.load",
     "objects.list", "objects.get", "selection.get", "selection.set", "render.svg",
     "render.png", "view.list", "view.set", "report.plants", "report.areas",
-    "import.file", "export.file",
+    "import.file", "export.file", "import.update", "import.apply",
     "plant_style.list", "plant_style.get", "plant_style.create", "plant_style.update", "plant_style.duplicate",
     "plant_style.delete", "plant_style.import_csv", "plant_style.export_csv", "plant_style.sample_csv",
     "plants.place", "plants.set_style", "report.plant_schedule", "report.existing_trees",

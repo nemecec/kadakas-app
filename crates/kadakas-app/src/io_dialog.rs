@@ -66,7 +66,7 @@ struct BaseQuestion {
 /// The numbers of the question, when the error of the import is the refusal of a drawing over the
 /// limits of the update data: `(entities, cap, bytes)`. The reason says which limit: too many
 /// entities (`cap` is a number of entities) or too large (`cap` and `bytes` are sizes).
-fn base_choice_of(e: &kadakas_api::RpcError) -> Option<(u64, u64, Option<u64>)> {
+pub(crate) fn base_choice_of(e: &kadakas_api::RpcError) -> Option<(u64, u64, Option<u64>)> {
     let d = e.details.as_ref()?;
     let entities = d["entities"].as_u64()?;
     let cap = d["cap"].as_u64()?;
@@ -79,25 +79,30 @@ fn base_choice_of(e: &kadakas_api::RpcError) -> Option<(u64, u64, Option<u64>)> 
     }
 }
 
+/// The question for the person, from the numbers of `base_choice_of`. A link keeps the full path
+/// of the file, which can contain the user name and which the people who share the document can
+/// see (the text says so).
+pub(crate) fn base_question_text(entities: u64, cap: u64, bytes: Option<u64>) -> String {
+    let units = kadakas_units::current();
+    let count = |v: u64| units.number_text(v as f64, 0);
+    match bytes {
+        None => tr!(
+            "io-dialog-base-question",
+            entities = count(entities),
+            cap = count(cap)
+        ),
+        Some(bytes) => tr!(
+            "io-dialog-base-question-large",
+            entities = count(entities),
+            size = count(bytes / 1_000_000),
+            cap = count(cap / 1_000_000)
+        ),
+    }
+}
+
 impl BaseQuestion {
-    /// The question for the person. A link keeps the full path of the file, which can contain the
-    /// user name and which the people who share the document can see (the text says so).
     fn text(&self) -> String {
-        let units = kadakas_units::current();
-        let count = |v: u64| units.number_text(v as f64, 0);
-        match self.bytes {
-            None => tr!(
-                "io-dialog-base-question",
-                entities = count(self.entities),
-                cap = count(self.cap)
-            ),
-            Some(bytes) => tr!(
-                "io-dialog-base-question-large",
-                entities = count(self.entities),
-                size = count(bytes / 1_000_000),
-                cap = count(self.cap / 1_000_000)
-            ),
-        }
+        base_question_text(self.entities, self.cap, self.bytes)
     }
 }
 

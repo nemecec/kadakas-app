@@ -41,7 +41,7 @@ use super::hash::{content_hash, hex};
 use super::import;
 use super::link::LinkError;
 use super::parse;
-use super::revision::{self, Change as Prop, Diff, Rec, Status, TagIndex, Via};
+use super::revision::{self, Change as Prop, Diff, PAPER, Rec, Status, TagIndex, Via};
 use super::source::Tracking;
 use crate::builder::Builder;
 use crate::{BaseMode, Context, ImportOptions, IoError, LayerMode, Lineage, Unit};
@@ -62,6 +62,12 @@ pub enum UpdateError {
     /// Several drawings were imported and nothing says which one is meant.
     #[error("several drawings were imported: name the one to update with `drawing`: {0}")]
     Ambiguous(String),
+    /// The new file says it is another drawing than the only one in the document. The person
+    /// confirms it, and the caller then names the drawing.
+    #[error(
+        "the new file says it is the drawing {new}, not {drawing} (the only drawing in the document). If it is a new revision of {drawing}, give drawing: \"{drawing}\""
+    )]
+    Mismatch { new: String, drawing: String },
     /// The named drawing is not in the document.
     #[error("no imported drawing is named {0}. The drawings are: {1}")]
     Unknown(String, String),
@@ -160,6 +166,9 @@ pub struct Request<'a> {
     /// The import options that the update reuses (hatches, faces, points, tolerance, limits).
     /// `unit`, `layer_mode` and `lineage` are decided from the drawing.
     pub options: &'a ImportOptions,
+    /// The caller gave `options.base` itself. If not, the new revision gets update data like the
+    /// old one (a link stays a link, none stays none).
+    pub base_given: bool,
     /// The tolerance of the nearest match, in units of the drawing. None: automatic.
     pub tolerance: Option<f64>,
     /// Only the entities on these DXF layers (names, any case). Empty: all.
@@ -305,6 +314,11 @@ pub struct Plan {
     classes: Vec<NewClass>,
     new_base: NewBase,
     new_link: Option<FileLink>,
+    /// The tags (identity fields) that objects get when they are not replaced: entities that did
+    /// not change but have another handle or place in the new file.
+    refresh: Vec<(ObjectId, ImportTag)>,
+    /// The DXF layers (lower case) of a filtered update. Empty: all.
+    filter: BTreeSet<String>,
     bytes: u64,
 }
 
@@ -357,6 +371,57 @@ pub(super) fn unit_of(scale: f64) -> Option<Unit> {
     .find(|u| (u.mm_per_unit() - scale).abs() <= 1.0e-9 * scale.abs().max(1.0))
 }
 
+/// For each record: its place among the records that have the same type, scope and content and
+/// no handle (identical entities of a file that has no handles), and how many there are. Such
+/// records find the same objects, so each takes its own share of them.
+fn twins(recs: &[Rec]) -> Vec<(usize, usize)> {
+    let mut count: HashMap<(&str, &str, u64), usize> = HashMap::new();
+    let mut rank = Vec::with_capacity(recs.len());
+    for r in recs {
+        if r.handle.is_some() {
+            rank.push((0, 0));
+            continue;
+        }
+        let n = count.entry((&r.kind, &r.scope, r.hash)).or_insert(0);
+        rank.push((*n, 0));
+        *n += 1;
+    }
+    for (r, rec) in rank.iter_mut().zip(recs) {
+        if rec.handle.is_none() {
+            r.1 = count[&(rec.kind.as_str(), rec.scope.as_str(), rec.hash)];
+        }
+    }
+    rank
+}
+
+/// The share of `(rank, of)` among identical records of the objects that all of them find.
+fn share(objs: Vec<ObjectId>, (rank, of): (usize, usize)) -> Vec<ObjectId> {
+    if of <= 1 {
+        return objs;
+    }
+    let each = objs.len() / of;
+    if each == 0 {
+        return objs.get(rank).copied().into_iter().collect();
+    }
+    let end = if rank + 1 == of {
+        objs.len()
+    } else {
+        (rank + 1) * each
+    };
+    objs[rank * each..end].to_vec()
+}
+
+/// True if two tags name the same entity in the same place of the file (the revision, the state
+/// of the object and the drawing are not part of it).
+fn same_identity(a: &ImportTag, b: &ImportTag) -> bool {
+    a.kind == b.kind
+        && a.handle == b.handle
+        && a.hash == b.hash
+        && a.block == b.block
+        && a.via == b.via
+        && a.part == b.part
+}
+
 fn lower(s: &str) -> String {
     s.to_lowercase()
 }
@@ -376,6 +441,12 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
             .iter()
             .find(|k| k.drawing == d)
             .ok_or_else(|| UpdateError::Unknown(d.to_string(), names(&known)))?,
+        (None, 1) if known[0].drawing != tracking.drawing => {
+            return Err(UpdateError::Mismatch {
+                new: tracking.drawing.clone(),
+                drawing: known[0].drawing.clone(),
+            });
+        }
         (None, 1) => &known[0],
         (None, _) => known
             .iter()
@@ -494,15 +565,37 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
             "{skipped} entities of the new file are not imported (see report.skipped of import.file for the reasons); a change of such an entity is not in the list"
         ));
     }
+    if imported
+        .report
+        .notes
+        .iter()
+        .any(|n| n.contains("stopped at the object limit"))
+    {
+        return Err(UpdateError::Limit(
+            "the new file makes more objects than the limit of objects allows, so the update would miss changes: limit it to some DXF layers with `layers`, or raise max_objects".into(),
+        ));
+    }
     for n in &imported.report.notes {
-        if !n.contains("imported before") {
+        // The scratch import keeps no update data and says so: that is not the news of the update.
+        if !n.contains("imported before") && !n.contains("no update data was kept") {
             notes.push(n.clone());
         }
     }
 
-    // 5. The base that the new revision gets.
-    let mode = req.options.base;
+    // 5. The base that the new revision gets. It follows the old import (a link stays a link,
+    // none stays none) unless the caller chose.
+    let wanted: BTreeSet<String> = req.layers.iter().map(|l| lower(l)).collect();
+    let on_layer = |r: &Rec| wanted.is_empty() || wanted.contains(&lower(&r.layer));
     let link_mode = sources.iter().any(|(_, s)| s.link.is_some());
+    let mode = if req.base_given {
+        req.options.base
+    } else if link_mode && req.new_link.is_some() {
+        BaseMode::Link
+    } else if !info.has_base && !link_mode {
+        BaseMode::Off
+    } else {
+        BaseMode::Auto
+    };
     let new_base = match mode {
         BaseMode::Off => NewBase::Nothing,
         BaseMode::Link if req.new_link.is_none() => {
@@ -510,20 +603,30 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
                 "base \"link\" needs a file on disk: no link could be made".into(),
             ));
         }
-        BaseMode::Link => NewBase::Link,
-        BaseMode::Auto if link_mode && req.new_link.is_some() => NewBase::Link,
-        BaseMode::Auto => {
+        BaseMode::Link if wanted.is_empty() => NewBase::Link,
+        BaseMode::Link | BaseMode::Auto => {
             let mut t = Tracking::new(req.name, &new_dxf);
             t.drawing = drawing.clone();
             t.revision = new_revision.clone();
-            let plan = import::plan_base(
-                BaseMode::Auto,
-                &new_dxf,
-                &mut t,
-                false,
-                None,
-                (req.options.base_caps, first.unit_scale),
-            )
+            let caps = (req.options.base_caps, first.unit_scale);
+            let plan = if wanted.is_empty() {
+                import::plan_base(BaseMode::Auto, &new_dxf, &mut t, false, None, caps)
+            } else {
+                // A filtered update moves only the layers it names: the update data keeps the
+                // old entities of the other layers, so a later update offers their changes.
+                if mode == BaseMode::Link {
+                    notes.push("an update of some layers keeps update data in the document, not a link: the other layers are still at the old revision".into());
+                }
+                let mut recs: Vec<Rec> = Vec::new();
+                for e in &diff.entries {
+                    let (b, n) = (e.base.map(|i| &old[i]), e.new.map(|i| &new[i]));
+                    let inside = b.is_some_and(on_layer) || n.is_some_and(on_layer);
+                    if let Some(r) = if inside { n } else { b } {
+                        recs.push(r.clone());
+                    }
+                }
+                import::summary_plan(recs, &t, caps.0, caps.1)
+            }
             .map_err(UpdateError::Base)?;
             NewBase::Plan(plan)
         }
@@ -555,8 +658,6 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
     let new_index = TagIndex::new(&drawing, new_tags.iter().map(|(i, t)| (*i, t)));
     let tag_of_old: HashMap<ObjectId, &ImportTag> = tags.iter().map(|(i, t)| (*i, t)).collect();
     let tag_of_new: HashMap<ObjectId, &ImportTag> = new_tags.iter().map(|(i, t)| (*i, t)).collect();
-    let wanted: BTreeSet<String> = req.layers.iter().map(|l| lower(l)).collect();
-    let on_layer = |r: &Rec| wanted.is_empty() || wanted.contains(&lower(&r.layer));
 
     let mut st = Planner {
         scratch,
@@ -574,20 +675,51 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
     let mut changes: Vec<ChangeItem> = Vec::new();
     let mut ops_list: Vec<Ops> = Vec::new();
     let mut seen_ids: HashMap<String, u32> = HashMap::new();
+    let mut refresh: Vec<(ObjectId, ImportTag)> = Vec::new();
+    let (old_twins, new_twins) = (twins(&old), twins(&new));
     for e in &diff.entries {
         let (b, n) = (e.base.map(|i| &old[i]), e.new.map(|i| &new[i]));
+        let old_objects = |r: &Rec, i: usize| share(old_index.objects_of(r), old_twins[i]);
+        let new_objects = |r: &Rec, i: usize| share(new_index.objects_of(r), new_twins[i]);
         let rec = n.or(b).expect("an entry has a side");
         if e.status == Status::Unchanged {
             if on_layer(rec) {
                 counts.unchanged += 1;
+                // The entity is the same but the file may name it otherwise (another handle, an
+                // INSERT with another handle): its objects take the identity of the new file, or
+                // the next update would not find them.
+                if let (Some(b), Some(n)) = (b, n)
+                    && b.kind != "INSERT"
+                    && b.scope != PAPER
+                {
+                    let (o, w) = (
+                        old_objects(b, e.base.expect("a side")),
+                        new_objects(n, e.new.expect("a side")),
+                    );
+                    if !o.is_empty() && !w.is_empty() {
+                        let (pairs, _, _) = pair_objects(&st.tag_of_old, &st.tag_of_new, &o, &w);
+                        for (d, nw) in pairs {
+                            let (ot, nt) = (st.tag_of_old[&d], st.tag_of_new[&nw]);
+                            if !same_identity(ot, nt) {
+                                refresh.push((d, nt.clone()));
+                            }
+                        }
+                    }
+                }
             }
             continue;
         }
         if !(b.is_some_and(on_layer) || n.is_some_and(on_layer)) {
             continue;
         }
-        let old_objs = b.map_or_else(Vec::new, |r| old_index.objects_of(r));
-        let new_objs = n.map_or_else(Vec::new, |r| new_index.objects_of(r));
+        let old_objs = match (b, e.base) {
+            (Some(r), Some(i)) => old_objects(r, i),
+            _ => Vec::new(),
+        };
+        let new_objs = match (n, e.new) {
+            (Some(r), Some(i)) => new_objects(r, i),
+            _ => Vec::new(),
+        };
         let (status, ops) = classify(
             e.status,
             &old_objs,
@@ -644,7 +776,8 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
             }
             _ => 0,
         }
-        + (changes.len() as u64) * 400;
+        + (changes.len() as u64) * 400
+        + (refresh.len() as u64) * 300;
     if bytes > req.max_bytes {
         return Err(UpdateError::Limit(format!(
             "the update is too large to hold ({bytes} bytes, the limit is {}): limit it to some DXF layers with `layers`",
@@ -669,6 +802,8 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
         classes: st.new_classes,
         new_base,
         new_link,
+        refresh,
+        filter: wanted,
         bytes,
     })
 }
@@ -1055,6 +1190,15 @@ impl Plan {
             if src.drawing != self.drawing {
                 continue;
             }
+            // A filtered update moves only the layers it names (a layer that holds the whole
+            // file has no DXF layer name and always moves).
+            if !self.filter.is_empty()
+                && !src.dxf_layer.is_empty()
+                && !self.filter.contains(&lower(&src.dxf_layer))
+            {
+                drawing_layers.insert(l.id);
+                continue;
+            }
             let renewed = LayerSource {
                 revision: self.new_revision.clone(),
                 link: self.new_link.clone(),
@@ -1115,6 +1259,21 @@ impl Plan {
             ));
         }
 
+        // Objects that stay as they are take the identity of their entity in the new file (handle,
+        // hash, block, INSERTs), because the update data now holds the records of the new file.
+        // This covers entities that did not change but were renumbered, and changes that were
+        // left out or kept edits. The revision and the state of the object stay.
+        let mut refreshed: BTreeMap<ObjectId, &ImportTag> =
+            self.refresh.iter().map(|(d, t)| (*d, t)).collect();
+        for ops in &self.ops {
+            for (d, n) in &ops.replace {
+                if let Some(o) = self.objects.get(n) {
+                    refreshed.insert(*d, &o.tag);
+                }
+            }
+        }
+        refreshed.retain(|d, _| !replace.contains_key(d) && !delete.contains(d) && allowed(d));
+
         let place = |b: &mut Builder, n: &NewObject| -> (LayerId, ClassId, Attributes) {
             let l = &self.layers[n.layer];
             let src = LayerSource {
@@ -1174,6 +1333,26 @@ impl Plan {
             });
             touched.insert(*old);
             applied.replaced += 1;
+        }
+        // Objects that stay: the new identity.
+        for (id, new) in &refreshed {
+            let Some(mut tag) = doc.objects.get(id).and_then(|o| provenance::tag(&o.data)) else {
+                continue;
+            };
+            if same_identity(&tag, new) {
+                continue;
+            }
+            tag.kind = new.kind.clone();
+            tag.handle = new.handle.clone();
+            tag.hash = new.hash.clone();
+            tag.block = new.block.clone();
+            tag.via = new.via.clone();
+            tag.part = new.part;
+            b.push(Command::SetData {
+                id: *id,
+                set: BTreeMap::from([(provenance::KEY.to_string(), tag.to_value())]),
+                remove: vec![],
+            });
         }
         // Removed objects.
         if !delete.is_empty() {

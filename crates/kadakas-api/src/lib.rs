@@ -294,6 +294,11 @@ pub const METHODS: &[(&str, &str)] = &[
         "export.file",
         "Export the document to a DXF or GeoJSON file. params: {path, format?: dxf|geojson, options?}. Returns {path, exported, report}.",
     ),
+    // Updating an imported drawing from a new revision (see update_api.rs).
+    #[cfg(not(target_arch = "wasm32"))]
+    update_api::IMPORT_UPDATE,
+    #[cfg(not(target_arch = "wasm32"))]
+    update_api::IMPORT_APPLY,
     // Plants (see plants_api.rs).
     plants_api::PLANT_STYLE_LIST,
     plants_api::PLANT_STYLE_GET,
@@ -720,10 +725,6 @@ pub const METHODS: &[(&str, &str)] = &[
     review_api::VERSION_DELETE,
     review_api::VERSION_DIFF,
     review_api::VERSION_REPAIR,
-    #[cfg(not(target_arch = "wasm32"))]
-    update_api::IMPORT_UPDATE,
-    #[cfg(not(target_arch = "wasm32"))]
-    update_api::IMPORT_APPLY,
     #[cfg(not(target_arch = "wasm32"))]
     dxf_compare_api::DXF_COMPARE,
     // Collaboration (see collab_api.rs).

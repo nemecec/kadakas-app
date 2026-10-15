@@ -81,6 +81,7 @@ fn make_with(
         old_file: old.map(|o| (o.as_bytes(), "old.dxf")),
         read_link: &no_link,
         options,
+        base_given: options.base != BaseMode::Auto,
         tolerance: None,
         layers: &[],
         max_bytes: 1 << 30,
@@ -573,6 +574,7 @@ fn request_for<'a>(doc: &'a Document, data: &'a str) -> Request<'a> {
         old_file: None,
         read_link: &no_link,
         options: OPTS.get_or_init(ImportOptions::default),
+        base_given: false,
         tolerance: None,
         layers: &[],
         max_bytes: 1 << 30,
@@ -824,6 +826,7 @@ fn the_unit_and_the_update_data_of_the_new_revision() {
     let data = revision_two();
     let mut req = request_for(ed.doc(), &data);
     req.options = &link_opts;
+    req.base_given = true;
     req.new_link = Some(FileLink::of_bytes("/data/plan_rev2.dxf", data.as_bytes()));
     let plan = super::plan(&req).unwrap();
     let mut linked = Editor::new(ed.doc().clone());
@@ -1016,4 +1019,333 @@ fn edits_are_kept_for_removed_objects_and_locked_layers_of_other_work_are_respec
         plan.new_object(ObjectId(kadakas_core::uid::Uid::from_num(9999)))
             .is_none()
     );
+}
+
+fn line_nh(layer: &str, y: i64) -> String {
+    format!("0\nLINE\n8\n{layer}\n10\n0\n20\n{y}\n11\n1000\n21\n{y}\n")
+}
+
+fn objects_at(doc: &Document, y: i64) -> Vec<&Object> {
+    doc.objects
+        .values()
+        .filter(|o| matches!(o.shape, Shape::Line { .. }) && y_of(o) as i64 == y)
+        .collect()
+}
+
+fn ys(doc: &Document) -> Vec<i64> {
+    let mut v: Vec<i64> = doc.objects.values().map(|o| y_of(o) as i64).collect();
+    v.sort();
+    v
+}
+
+fn handle_at(doc: &Document, y: i64) -> String {
+    provenance::tag(&objects_at(doc, y)[0].data)
+        .unwrap()
+        .handle
+        .unwrap()
+}
+
+#[test]
+fn objects_follow_the_handles_of_the_new_file_over_several_updates() {
+    let mut ed = editor_with(&base_text());
+    // Another program renumbers every handle and one line moves a little.
+    let renumbered = |third: i64| {
+        file(
+            "AAAA0002",
+            "",
+            &[
+                line(0x11, "A", 0),
+                line(0x12, "A", 103),
+                line(0x13, "A", 200),
+                line(0x14, "A", 300),
+                line(0x10, "A", third),
+            ]
+            .concat(),
+        )
+    };
+    let v2 = renumbered(400);
+    let mut req = request_for(ed.doc(), &v2);
+    req.tolerance = Some(10.0);
+    let plan = super::plan(&req).unwrap();
+    assert!(plan.renumbered);
+    apply_all(&mut ed, &plan);
+    // The object at y = 0 is the entity 11 of the new file now, whatever it was called before.
+    assert_eq!(handle_at(ed.doc(), 0), "11");
+    assert_eq!(handle_at(ed.doc(), 400), "10");
+    // The third revision moves the line 10 (at y = 400). It must not touch the line at y = 0.
+    let third = renumbered(450).replace("AAAA0002", "AAAA0003");
+    let plan3 = make(ed.doc(), &third).unwrap();
+    assert_eq!(kinds(&plan3), vec![(Kind::Changed, "10".into())]);
+    apply_all(&mut ed, &plan3);
+    assert_eq!(ys(ed.doc()), vec![0, 103, 200, 300, 450]);
+    // And a fourth one that moves the line 11 (at y = 0).
+    let fourth = file(
+        "AAAA0004",
+        "",
+        &[
+            line(0x11, "A", 20),
+            line(0x12, "A", 103),
+            line(0x13, "A", 200),
+            line(0x14, "A", 300),
+            line(0x10, "A", 450),
+        ]
+        .concat(),
+    );
+    let plan4 = make(ed.doc(), &fourth).unwrap();
+    assert_eq!(kinds(&plan4), vec![(Kind::Changed, "11".into())]);
+    apply_all(&mut ed, &plan4);
+    assert_eq!(ys(ed.doc()), vec![20, 103, 200, 300, 450]);
+}
+
+#[test]
+fn a_rejected_change_does_not_make_the_next_update_duplicate_the_object() {
+    // A file without handles: the objects are found by the hash of their entity.
+    let nh = |version: &str, ys: &[i64]| {
+        file(
+            version,
+            "",
+            &ys.iter().map(|y| line_nh("A", *y)).collect::<String>(),
+        )
+    };
+    let mut ed = editor_with(&nh("AAAA0001", &[0, 100, 200]));
+    let v2 = nh("AAAA0002", &[0, 103, 200]);
+    let mut req = request_for(ed.doc(), &v2);
+    req.tolerance = Some(10.0);
+    let plan = super::plan(&req).unwrap();
+    assert_eq!(plan.counts.changed, 1, "{:?}", plan.changes);
+    // The person rejects the change: the object stays where it was.
+    let built = plan.build(ed.doc(), &[Take::No]).unwrap();
+    ed.execute(&built.command).unwrap();
+    assert_eq!(ys(ed.doc()), vec![0, 100, 200]);
+    // The next revision moves that entity again. The object is replaced, not duplicated.
+    let v3 = nh("AAAA0003", &[0, 108, 200]);
+    let mut req = request_for(ed.doc(), &v3);
+    req.tolerance = Some(10.0);
+    let plan3 = super::plan(&req).unwrap();
+    assert_eq!(plan3.counts.changed, 1, "{:?}", plan3.changes);
+    assert_eq!(plan3.counts.added, 0);
+    apply_all(&mut ed, &plan3);
+    assert_eq!(ys(ed.doc()), vec![0, 108, 200]);
+}
+
+#[test]
+fn objects_of_left_out_changes_follow_the_new_file_too() {
+    let mut ed = editor_with(&base_text());
+    let renumbered = |second: i64| {
+        file(
+            "AAAA0002",
+            "",
+            &[
+                line(0x21, "A", 0),
+                line(0x22, "A", second),
+                line(0x23, "A", 200),
+                line(0x24, "A", 300),
+                line(0x20, "A", 400),
+            ]
+            .concat(),
+        )
+    };
+    let v2 = renumbered(103);
+    let mut req = request_for(ed.doc(), &v2);
+    req.tolerance = Some(10.0);
+    let plan = super::plan(&req).unwrap();
+    assert_eq!(plan.counts.changed, 1);
+    // The move of the second line is left out.
+    let built = plan
+        .build(ed.doc(), &vec![Take::No; plan.changes.len()])
+        .unwrap();
+    ed.execute(&built.command).unwrap();
+    assert_eq!(ys(ed.doc()), vec![0, 100, 200, 300, 400]);
+    assert_eq!(handle_at(ed.doc(), 0), "21");
+    assert_eq!(
+        handle_at(ed.doc(), 100),
+        "22",
+        "the left out change still gets the new handle"
+    );
+    // The next revision moves the entity 22: the object at y = 100 is found.
+    let next = renumbered(140).replace("AAAA0002", "AAAA0003");
+    let plan2 = make(ed.doc(), &next).unwrap();
+    assert_eq!(kinds(&plan2), vec![(Kind::Changed, "22".into())]);
+    assert_eq!(plan2.changes[0].objects, 1);
+    apply_all(&mut ed, &plan2);
+    assert_eq!(ys(ed.doc()), vec![0, 140, 200, 300, 400]);
+}
+
+fn layered(version: &str, a: i64, b: i64) -> String {
+    file(
+        version,
+        "",
+        &[
+            line(0x10, "A", 0),
+            line(0x11, "A", a),
+            line(0x12, "B", 200),
+            line(0x13, "B", b),
+        ]
+        .concat(),
+    )
+}
+
+#[test]
+fn an_update_of_some_layers_leaves_the_other_layers_for_the_next_update() {
+    let layers = ImportOptions {
+        layer_mode: LayerMode::Layers,
+        ..ImportOptions::default()
+    };
+    let mut ed = Editor::new(Document::with_sequential_ids());
+    import_text(&mut ed, "plan.dxf", &layered("AAAA0001", 100, 300), &layers);
+    let v2 = layered("AAAA0002", 150, 350);
+    let only_a = ["A".to_string()];
+    let mut req = request_for(ed.doc(), &v2);
+    req.layers = &only_a;
+    let plan = super::plan(&req).unwrap();
+    assert_eq!(kinds(&plan), vec![(Kind::Changed, "11".into())]);
+    apply_all(&mut ed, &plan);
+    assert_eq!(ys(ed.doc()), vec![0, 150, 200, 300]);
+    // The layer A is at the new revision, the layer B still at the old one.
+    let revision_of = |ed: &Editor, name: &str| {
+        let l = ed
+            .doc()
+            .layers
+            .iter()
+            .find(|l| l.name.ends_with(name))
+            .unwrap();
+        LayerSource::of(l.extra.get(provenance::LAYER_KEY).unwrap())
+            .unwrap()
+            .revision
+    };
+    assert_eq!(revision_of(&ed, "A"), plan.new_revision);
+    assert_eq!(revision_of(&ed, "B"), plan.old_revision);
+    // The full update still offers the change on the layer B, and not the one on A again.
+    let full = make(ed.doc(), &v2).unwrap();
+    assert_eq!(
+        kinds(&full),
+        vec![(Kind::Changed, "13".into())],
+        "{:?}",
+        full.changes
+    );
+    apply_all(&mut ed, &full);
+    assert_eq!(ys(ed.doc()), vec![0, 150, 200, 350]);
+    assert_eq!(revision_of(&ed, "B"), full.new_revision);
+}
+
+#[test]
+fn no_update_data_stays_none_unless_the_caller_chooses() {
+    let none = ImportOptions {
+        base: BaseMode::Off,
+        ..ImportOptions::default()
+    };
+    let mut ed = Editor::new(Document::with_sequential_ids());
+    import_text(&mut ed, "plan.dxf", &base_text(), &none);
+    // An import with no update data: the update with the old file keeps none.
+    let plan = make_with(ed.doc(), &revision_two(), Some(&base_text()), &opts()).unwrap();
+    let mut other = Editor::new(ed.doc().clone());
+    apply_all(&mut other, &plan);
+    assert!(provenance::base_recs(other.doc(), &plan.drawing, &plan.new_revision).is_none());
+    assert!(plan.notes.iter().any(|n| n.contains("base: none")));
+    // The caller can ask for update data.
+    let data = revision_two();
+    let old = base_text();
+    let mut req = request_for(ed.doc(), &data);
+    req.old_file = Some((old.as_bytes(), "old.dxf"));
+    req.base_given = true;
+    let plan = super::plan(&req).unwrap();
+    apply_all(&mut ed, &plan);
+    assert!(provenance::base_recs(ed.doc(), &plan.drawing, &plan.new_revision).is_some());
+}
+
+#[test]
+fn a_file_of_another_lineage_must_be_confirmed() {
+    let ed = editor_with(&base_text());
+    let anon = revision_two().replace(GUID, "00000000");
+    let err = make(ed.doc(), &anon).err().unwrap();
+    assert!(
+        matches!(&err, UpdateError::Mismatch { drawing, .. } if drawing == &format!("guid:{GUID}")),
+        "{err}"
+    );
+    let ok = plan(&Request {
+        drawing: Some(&format!("guid:{GUID}")),
+        ..request_for(ed.doc(), &anon)
+    })
+    .unwrap();
+    assert!(ok.notes.iter().any(|n| n.contains("you chose it")));
+}
+
+fn array_insert(handle: u32, name: &str, cols: u32) -> String {
+    format!("0\nINSERT\n5\n{handle:X}\n8\nA\n2\n{name}\n10\n0\n20\n0\n70\n{cols}\n71\n1\n44\n500\n")
+}
+
+#[test]
+fn identical_entities_without_handles_are_removed_and_moved_one_by_one() {
+    let nh = |version: &str, ys: &[i64]| {
+        file(
+            version,
+            "",
+            &ys.iter().map(|y| line_nh("A", *y)).collect::<String>(),
+        )
+    };
+    // Two identical lines: the new revision has one of them.
+    let mut ed = editor_with(&nh("AAAA0001", &[0, 100, 100]));
+    assert_eq!(ed.doc().objects.len(), 3);
+    let plan = make(ed.doc(), &nh("AAAA0002", &[0, 100])).unwrap();
+    assert_eq!(plan.counts.removed, 1, "{:?}", plan.changes);
+    apply_all(&mut ed, &plan);
+    assert_eq!(ys(ed.doc()), vec![0, 100], "only one of the twins goes");
+    // Two identical lines again: one of them moves.
+    let mut ed = editor_with(&nh("AAAA0001", &[0, 100, 100]));
+    let v2 = nh("AAAA0002", &[0, 100, 104]);
+    let mut req = request_for(ed.doc(), &v2);
+    req.tolerance = Some(10.0);
+    let plan = super::plan(&req).unwrap();
+    assert_eq!(
+        plan.counts.removed + plan.counts.added + plan.counts.changed,
+        1
+    );
+    apply_all(&mut ed, &plan);
+    assert_eq!(ys(ed.doc()), vec![0, 100, 104]);
+    // And one more of them comes.
+    let mut ed = editor_with(&nh("AAAA0001", &[0, 100]));
+    let plan = make(ed.doc(), &nh("AAAA0002", &[0, 100, 100])).unwrap();
+    assert_eq!(plan.counts.added, 1);
+    apply_all(&mut ed, &plan);
+    assert_eq!(ys(ed.doc()), vec![0, 100, 100]);
+}
+
+#[test]
+fn edits_are_kept_when_a_change_brings_more_or_fewer_objects() {
+    let body = line(0x30, "A", 0);
+    let blocks = block("TREE", 0x20, &body);
+    let three = file("AAAA0002", &blocks, &array_insert(0x40, "TREE", 3));
+    let two = file("AAAA0001", &blocks, &array_insert(0x40, "TREE", 2));
+    let mut ed = editor_with(&two);
+    assert_eq!(ed.doc().objects.len(), 2);
+    // The person moves one copy.
+    let edited = *ed.doc().objects.keys().next().unwrap();
+    ed.execute(&Command::MoveObjects {
+        ids: vec![edited],
+        delta: DVec2::new(0.0, 5.0),
+    })
+    .unwrap();
+    let plan = make(ed.doc(), &three).unwrap();
+    assert_eq!(plan.counts.conflicts, 1, "{:?}", plan.changes);
+    let built = plan
+        .build(ed.doc(), &vec![Take::KeepEdits; plan.changes.len()])
+        .unwrap();
+    assert_eq!(built.applied.kept_edits, 1);
+    assert_eq!(built.applied.added, 1);
+    ed.execute(&built.command).unwrap();
+    assert_eq!(ed.doc().objects.len(), 3);
+    assert!(ed.doc().objects.contains_key(&edited));
+    // The same file again: nothing is left to change.
+    let again = make(ed.doc(), &three).unwrap();
+    assert!(again.changes.is_empty(), "{:?}", again.changes);
+    // Back to two copies: the edited copy is kept when it would have gone, and no copy is added.
+    let back = file("AAAA0003", &blocks, &array_insert(0x40, "TREE", 2));
+    let plan = make(ed.doc(), &back).unwrap();
+    let built = plan
+        .build(ed.doc(), &vec![Take::KeepEdits; plan.changes.len()])
+        .unwrap();
+    assert_eq!(built.applied.added, 0);
+    ed.execute(&built.command).unwrap();
+    assert!(ed.doc().objects.contains_key(&edited));
+    assert!(ed.doc().objects.len() >= 2);
 }

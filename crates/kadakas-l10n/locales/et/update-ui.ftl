@@ -38,3 +38,6 @@ update-ui-what-linetype = joonetüüp
 update-ui-what-lineweight = joone paksus
 update-ui-what-text = tekst
 update-ui-what-other = muu
+update-ui-confirm-drawing = Fail väidab, et see on joonis { $new }, mitte { $drawing }. Kas see on joonise { $drawing } uus versioon?
+update-ui-confirm-yes = Jah, kasuta uue versioonina
+update-ui-new-conflicts = { $count } muudatust puudutab nüüd objekte, mida sa muutsid. Need on märkimata. Vaata loend üle ja vajuta uuesti Rakenda.

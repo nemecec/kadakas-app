@@ -265,66 +265,79 @@ pub(super) fn plan_base(
         }
         BaseMode::Auto if has_base => Ok(BasePlan::Existing),
         BaseMode::Auto => {
-            let (mut recs, cut) = revision::records(dxf, caps.records);
+            let (recs, cut) = revision::records(dxf, caps.records);
             if cut {
                 return Err(IoError::BaseChoice {
                     entities: entity_count(dxf),
                     limit: crate::BaseLimit::TooMany { cap: caps.records },
                 });
             }
-            recs.iter_mut().for_each(revision::Rec::compact);
-            // Split into parts of about `part_bytes`, so that each part is a blob of the
-            // collaboration that fits in a frame.
-            let mut parts: Vec<Vec<serde_json::Value>> = vec![vec![]];
-            let mut bytes = 0usize;
-            let mut total = 0u64;
-            for r in &recs {
-                let v = r.to_value();
-                let n = v.to_string().len();
-                total += n as u64;
-                if bytes + n > caps.part_bytes && !parts.last().is_some_and(Vec::is_empty) {
-                    parts.push(vec![]);
-                    bytes = 0;
-                }
-                parts.last_mut().expect("a part").push(v);
-                bytes += n;
-            }
-            if parts.len() as u64 > caps.parts {
-                return Err(IoError::BaseChoice {
-                    entities: recs.len(),
-                    limit: crate::BaseLimit::TooLarge {
-                        bytes: total,
-                        cap: caps.part_bytes as u64 * caps.parts,
-                    },
-                });
-            }
-            let count = parts.len();
-            let bodies: Vec<serde_json::Value> = parts
-                .into_iter()
-                .enumerate()
-                .map(|(n, recs)| {
-                    let mut body = serde_json::json!({
-                        "type": provenance::BASE_TYPE,
-                        "drawing": t.drawing,
-                        "revision": t.revision,
-                        "unit_scale": scale,
-                        "recs": recs,
-                    });
-                    if count > 1 {
-                        body["part"] = n.into();
-                        body["parts"] = count.into();
-                    }
-                    body
-                })
-                .collect();
-            if bodies.iter().any(|v| provenance::check_base(v).is_err()) {
-                return Ok(BasePlan::Rejected);
-            }
-            Ok(BasePlan::Summary(
-                bodies,
-                hash::hex(hash::content_hash_of(&t.drawing, &t.revision)),
-            ))
+            summary_plan(recs, t, caps, scale)
         }
+    }
+}
+
+/// The summaries of `recs` as the bodies of a base, split into parts that fit a frame of the
+/// collaboration. The records are compacted here.
+pub(super) fn summary_plan(
+    mut recs: Vec<revision::Rec>,
+    t: &Tracking,
+    caps: crate::BaseCaps,
+    scale: f64,
+) -> Result<BasePlan, IoError> {
+    {
+        recs.iter_mut().for_each(revision::Rec::compact);
+        // Split into parts of about `part_bytes`, so that each part is a blob of the
+        // collaboration that fits in a frame.
+        let mut parts: Vec<Vec<serde_json::Value>> = vec![vec![]];
+        let mut bytes = 0usize;
+        let mut total = 0u64;
+        for r in &recs {
+            let v = r.to_value();
+            let n = v.to_string().len();
+            total += n as u64;
+            if bytes + n > caps.part_bytes && !parts.last().is_some_and(Vec::is_empty) {
+                parts.push(vec![]);
+                bytes = 0;
+            }
+            parts.last_mut().expect("a part").push(v);
+            bytes += n;
+        }
+        if parts.len() as u64 > caps.parts {
+            return Err(IoError::BaseChoice {
+                entities: recs.len(),
+                limit: crate::BaseLimit::TooLarge {
+                    bytes: total,
+                    cap: caps.part_bytes as u64 * caps.parts,
+                },
+            });
+        }
+        let count = parts.len();
+        let bodies: Vec<serde_json::Value> = parts
+            .into_iter()
+            .enumerate()
+            .map(|(n, recs)| {
+                let mut body = serde_json::json!({
+                    "type": provenance::BASE_TYPE,
+                    "drawing": t.drawing,
+                    "revision": t.revision,
+                    "unit_scale": scale,
+                    "recs": recs,
+                });
+                if count > 1 {
+                    body["part"] = n.into();
+                    body["parts"] = count.into();
+                }
+                body
+            })
+            .collect();
+        if bodies.iter().any(|v| provenance::check_base(v).is_err()) {
+            return Ok(BasePlan::Rejected);
+        }
+        Ok(BasePlan::Summary(
+            bodies,
+            hash::hex(hash::content_hash_of(&t.drawing, &t.revision)),
+        ))
     }
 }
 

@@ -413,28 +413,40 @@ fn an_object_the_person_edited_is_a_conflict_and_is_kept_unless_accepted() {
         json!({"update_id": r["update_id"], "accept": "all", "conflicts": "overwrite"}),
     );
     assert_eq!(ys(&t), vec![0, 150, 200, 400, 500]);
-    let mut u = session_with(dir.path(), &base_text(), json!({}));
-    let ids: Vec<Value> = ok(&mut u, "objects.list", json!({}))
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|o| o["data"]["import"]["handle"] == "13")
-        .map(|o| o["id"].clone())
-        .collect();
-    ok(
-        &mut u,
-        "execute",
-        json!({"command": {"op": "move_objects", "ids": ids, "delta": [0, 3]}}),
-    );
-    let r = ok(&mut u, "import.update", json!({"path": rev2}));
-    let gone = change_for(&r, "13");
-    assert_eq!(gone["conflict"], true, "{r}");
-    ok(
-        &mut u,
-        "import.apply",
-        json!({"update_id": r["update_id"], "accept": [gone["id"]]}),
-    );
-    assert_eq!(ys(&u), vec![0, 100, 200, 400]);
+    // A named conflict keeps the edit too, unless conflicts: overwrite is given.
+    for overwrite in [false, true] {
+        let mut u = session_with(dir.path(), &base_text(), json!({}));
+        let ids: Vec<Value> = ok(&mut u, "objects.list", json!({}))
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|o| o["data"]["import"]["handle"] == "13")
+            .map(|o| o["id"].clone())
+            .collect();
+        ok(
+            &mut u,
+            "execute",
+            json!({"command": {"op": "move_objects", "ids": ids, "delta": [0, 3]}}),
+        );
+        let r = ok(&mut u, "import.update", json!({"path": rev2}));
+        let gone = change_for(&r, "13");
+        assert_eq!(gone["conflict"], true, "{r}");
+        let mut params = json!({"update_id": r["update_id"], "accept": [gone["id"]]});
+        if overwrite {
+            params["conflicts"] = json!("overwrite");
+        }
+        let a = ok(&mut u, "import.apply", params);
+        let notes = a["notes"].to_string();
+        if overwrite {
+            assert_eq!(ys(&u), vec![0, 100, 200, 400]);
+            assert!(!notes.contains("overwrite"), "{notes}");
+        } else {
+            assert_eq!(ys(&u), vec![0, 100, 200, 303, 400]);
+            assert_eq!(a["applied"]["kept_edits"], 1);
+            assert_eq!(a["skipped_conflicts"], json!([gone["id"]]));
+            assert!(notes.contains("conflicts: \\\"overwrite\\\""), "{notes}");
+        }
+    }
 }
 
 #[test]
@@ -882,4 +894,46 @@ fn an_update_too_big_for_the_update_data_gives_the_choices_of_import_file() {
         json!({"update_id": r["update_id"], "accept": [1]}),
     );
     assert_eq!(e.kind, "invalid_params");
+}
+
+#[test]
+fn a_file_of_another_lineage_needs_the_person_to_confirm() {
+    let dir = temp("kadakas-update-lineage");
+    let mut s = session_with(dir.path(), &base_text(), json!({}));
+    let anon = write(
+        dir.path(),
+        "other_name.dxf",
+        &revision_two().replace(GUID, "00000000"),
+    );
+    let e = fail(&mut s, "import.update", json!({"path": anon}));
+    assert_eq!(e.kind, "invalid_params");
+    let d = e.details.as_ref().unwrap();
+    assert_eq!(d["ask_the_person"], true);
+    assert_eq!(d["drawing"], format!("guid:{GUID}"));
+    assert_eq!(d["file_says"], "other_name.dxf");
+    assert!(s.update_pending().is_none());
+    // After the person agrees, the agent names the drawing.
+    let r = ok(
+        &mut s,
+        "import.update",
+        json!({"path": anon, "drawing": format!("guid:{GUID}")}),
+    );
+    assert_eq!(r["counts"]["changed"], 2);
+}
+
+#[test]
+fn the_object_limit_of_the_session_bounds_the_new_file() {
+    let dir = temp("kadakas-update-max-objects");
+    let mut s = session_with(dir.path(), &base_text(), json!({}));
+    s.set_limits(SessionLimits {
+        max_objects: 3,
+        ..SessionLimits::default()
+    });
+    let rev2 = write(dir.path(), "plan_rev2.dxf", &revision_two());
+    let e = fail(
+        &mut s,
+        "import.update",
+        json!({"path": rev2, "options": {"max_objects": 1_000_000}}),
+    );
+    assert_eq!(e.kind, "limit", "{e:?}");
 }

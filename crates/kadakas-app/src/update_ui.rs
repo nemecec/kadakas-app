@@ -38,6 +38,11 @@ enum Problem {
     NeedsOldFile(String),
     /// Several drawings were imported: choose which one this is a revision of.
     WhichDrawing(Vec<String>),
+    /// The file says it is another drawing than the only one in the document: the person decides.
+    ConfirmDrawing { file_says: String, drawing: String },
+    /// The update data of the new revision does not fit: keep a link, or none (as the import
+    /// dialog asks). The text is the question.
+    BaseChoice(String),
     /// Anything else.
     Failed(String),
 }
@@ -69,6 +74,11 @@ pub struct UpdateUi {
     old: Option<PathBuf>,
     /// The drawing that the new revision is for, when the person had to choose.
     drawing: Option<String>,
+    /// The update data of the new revision, when the person had to choose: `link` or `none`.
+    base: Option<&'static str>,
+    /// The changes of the last plan (ID, and whether it was a conflict), to keep the choices of the
+    /// person when the plan is made again.
+    last_plan: std::collections::HashMap<String, bool>,
     problem: Option<Problem>,
     plan: Option<PendingUpdate>,
     /// The IDs of the changes to apply.
@@ -146,13 +156,18 @@ impl UpdateUi {
         self.path = Some(path);
         self.old = None;
         self.drawing = None;
+        self.base = None;
+        self.last_plan.clear();
+        self.accepted.clear();
         self.done = None;
         self.open = true;
         self.run(session);
     }
 
-    /// Reads the new revision and makes the plan.
-    fn run(&mut self, session: &mut Session) {
+    /// Reads the new revision and makes the plan. The ticks of the person stay for the changes
+    /// that were in the last plan (the IDs are stable); a change that is a conflict now and was not
+    /// one before is unticked, and its ID is in the answer.
+    fn run(&mut self, session: &mut Session) -> Vec<String> {
         self.plan = None;
         self.preview = None;
         self.ghosts.clear();
@@ -161,9 +176,12 @@ impl UpdateUi {
         self.note = None;
         self.focus = None;
         let Some(path) = self.path.clone() else {
-            return;
+            return Vec::new();
         };
         let mut params = json!({"path": path, "limit": 1});
+        if let Some(b) = self.base {
+            params["options"] = json!({"base": b});
+        }
         if let Some(d) = &self.drawing {
             params["drawing"] = json!(d);
         }
@@ -173,20 +191,41 @@ impl UpdateUi {
         match session.import_update_trusted(params) {
             Ok(_) => {
                 self.plan = session.update_pending();
-                // The default choice: every change that does not concern an edit of the person.
-                self.accepted = self
+                let mut newly: Vec<String> = Vec::new();
+                let mut accepted = HashSet::new();
+                for c in self.plan.iter().flat_map(|p| &p.plan.changes) {
+                    let on = match self.last_plan.get(&c.id) {
+                        // Known: the choice of the person stays, unless it is a conflict now.
+                        Some(was_conflict) => {
+                            let on = self.accepted.contains(&c.id);
+                            if c.conflict && !was_conflict {
+                                if on {
+                                    newly.push(c.id.clone());
+                                }
+                                false
+                            } else {
+                                on
+                            }
+                        }
+                        // New: every change that does not concern an edit of the person.
+                        None => !c.conflict,
+                    };
+                    if on {
+                        accepted.insert(c.id.clone());
+                    }
+                }
+                self.accepted = accepted;
+                self.last_plan = self
                     .plan
-                    .as_ref()
-                    .map(|p| {
-                        p.plan
-                            .changes
-                            .iter()
-                            .filter(|c| !c.conflict)
-                            .map(|c| c.id.clone())
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                    .iter()
+                    .flat_map(|p| &p.plan.changes)
+                    .map(|c| (c.id.clone(), c.conflict))
+                    .collect();
+                if !newly.is_empty() {
+                    self.note = Some(tr!("update-ui-new-conflicts", count = newly.len()));
+                }
                 self.build_preview(session);
+                return newly;
             }
             Err(e) => {
                 self.problem = Some(
@@ -195,6 +234,21 @@ impl UpdateUi {
                         .is_some_and(|d| d["needs_old_file"] == true)
                     {
                         Problem::NeedsOldFile(e.message)
+                    } else if let Some((entities, cap, bytes)) =
+                        crate::io_dialog::base_choice_of(&e)
+                    {
+                        Problem::BaseChoice(crate::io_dialog::base_question_text(
+                            entities, cap, bytes,
+                        ))
+                    } else if let Some(d) = e
+                        .details
+                        .as_ref()
+                        .filter(|d| d["ask_the_person"] == true && d["file_says"].is_string())
+                    {
+                        Problem::ConfirmDrawing {
+                            file_says: d["file_says"].as_str().unwrap_or_default().to_string(),
+                            drawing: d["drawing"].as_str().unwrap_or_default().to_string(),
+                        }
                     } else if e.kind == "invalid_params" && e.message.contains("drawing") {
                         Problem::WhichDrawing(
                             session
@@ -209,6 +263,7 @@ impl UpdateUi {
                 );
             }
         }
+        Vec::new()
     }
 
     fn build_preview(&mut self, session: &mut Session) {
@@ -377,6 +432,39 @@ impl UpdateUi {
                         self.run(session);
                     }
                 }
+            }
+            Problem::ConfirmDrawing { file_says, drawing } => {
+                ui.label(tr!(
+                    "update-ui-confirm-drawing",
+                    new = file_says.clone(),
+                    drawing = drawing.clone()
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button(tr!("update-ui-confirm-yes")).clicked() {
+                        self.drawing = Some(drawing.clone());
+                        self.run(session);
+                    }
+                    if ui.button(tr!("update-ui-cancel")).clicked() {
+                        self.close(session);
+                    }
+                });
+            }
+            Problem::BaseChoice(question) => {
+                ui.label(tr!("io-dialog-base-question-title"));
+                ui.label(question);
+                ui.horizontal(|ui| {
+                    if ui.button(tr!("io-dialog-base-keep-link")).clicked() {
+                        self.base = Some("link");
+                        self.run(session);
+                    }
+                    if ui.button(tr!("io-dialog-base-no-update-data")).clicked() {
+                        self.base = Some("none");
+                        self.run(session);
+                    }
+                    if ui.button(tr!("update-ui-cancel")).clicked() {
+                        self.close(session);
+                    }
+                });
             }
             Problem::Failed(text) => {
                 ui.colored_label(red, tr!("update-ui-failed", message = text.clone()));
@@ -607,17 +695,14 @@ impl UpdateUi {
     /// same choice, which the stable IDs of the changes allow.
     fn apply(&mut self, session: &mut Session, status: &mut String) {
         if session.update_pending().is_none() {
-            let keep = self.accepted.clone();
-            self.run(session);
+            let newly = self.run(session);
             if self.plan.is_none() {
                 return;
             }
-            let known: HashSet<String> = self
-                .plan
-                .as_ref()
-                .map(|p| p.plan.changes.iter().map(|c| c.id.clone()).collect())
-                .unwrap_or_default();
-            self.accepted = keep.into_iter().filter(|id| known.contains(id)).collect();
+            // A change that concerns an edit now was ticked: the person looks at it first.
+            if !newly.is_empty() {
+                return;
+            }
         }
         let Some(pending) = session.update_pending() else {
             return;
@@ -808,13 +893,120 @@ mod tests {
             .unwrap();
         frame(&mut ui, &mut f.session, &mut status);
         assert!(ui.expired && ui.plan.is_none());
-        // "Update again" would do the same as Apply on an old plan: make it again with the choice.
-        ui.run(&mut f.session);
-        let keep: HashSet<String> = ui.accepted.clone();
+        // "Update again" makes the plan again and keeps the ticks of the person.
+        let mut ticks: Vec<String> = ui.accepted.iter().cloned().collect();
+        ticks.sort();
+        let unticked = ticks.pop().unwrap();
+        ui.accepted.remove(&unticked);
+        let expected: HashSet<String> = ticks.iter().cloned().collect();
         f.session.editor.undo();
-        ui.accepted = keep;
+        ui.run(&mut f.session);
+        assert_eq!(ui.accepted, expected, "the choice of the person stays");
+        // Apply on an old plan makes it again, with the same choice, and applies it.
+        f.session
+            .editor
+            .execute(&Command::AddObject {
+                shape: kadakas_core::model::Shape::Circle {
+                    center: glam::DVec2::ZERO,
+                    radius: 10.0,
+                },
+                layer: None,
+                class: None,
+                attrs: Default::default(),
+            })
+            .unwrap();
+        f.session.editor.undo();
+        assert!(f.session.update_pending().is_none());
         ui.apply(&mut f.session, &mut status);
         assert!(ui.done.is_some(), "{status}");
+        assert!(f.session.editor.doc().objects.len() >= 4);
+    }
+
+    #[test]
+    fn a_change_that_became_a_conflict_is_unticked_and_not_applied_in_the_same_click() {
+        let mut f = fixture(json!({}));
+        let mut ui = UpdateUi::new();
+        let mut status = String::new();
+        ui.begin(&mut f.session, f.new.clone());
+        let ticked = ui.accepted.len();
+        assert_eq!(ticked, 4);
+        // The person edits the line 0x11 (it moves in v2) after the plan was made.
+        let id = f
+            .session
+            .editor
+            .doc()
+            .objects
+            .values()
+            .find(|o| {
+                kadakas_core::provenance::tag(&o.data)
+                    .and_then(|t| t.handle)
+                    .as_deref()
+                    == Some("11")
+            })
+            .unwrap()
+            .id;
+        f.session
+            .editor
+            .execute(&Command::MoveObjects {
+                ids: vec![id],
+                delta: glam::DVec2::new(0.0, 7.0),
+            })
+            .unwrap();
+        frame(&mut ui, &mut f.session, &mut status);
+        assert!(ui.expired);
+        let before = f.session.editor.doc().objects.len();
+        ui.apply(&mut f.session, &mut status);
+        // The plan is shown again with the new conflict unticked, and nothing was applied.
+        assert!(ui.done.is_none() && ui.plan.is_some(), "{status}");
+        assert_eq!(f.session.editor.doc().objects.len(), before);
+        assert_eq!(ui.accepted.len(), ticked - 1);
+        assert!(ui.note.is_some());
+        let conflict = ui
+            .plan
+            .as_ref()
+            .unwrap()
+            .plan
+            .changes
+            .iter()
+            .find(|c| c.conflict)
+            .unwrap()
+            .id
+            .clone();
+        assert!(!ui.accepted.contains(&conflict));
+        // Pressing Apply now applies the other changes.
+        ui.apply(&mut f.session, &mut status);
+        assert!(ui.done.is_some(), "{status}");
+    }
+
+    #[test]
+    fn a_file_of_another_lineage_is_confirmed_and_a_big_drawing_asks_for_a_link_or_none() {
+        let mut f = fixture(json!({}));
+        let anon = f._dir.path().join("anon.dxf");
+        std::fs::write(&anon, v2().replace(GUID, "00000000")).unwrap();
+        let mut ui = UpdateUi::new();
+        let mut status = String::new();
+        ui.begin(&mut f.session, anon);
+        let Some(Problem::ConfirmDrawing { drawing, .. }) = ui.problem.clone() else {
+            panic!("{:?}", ui.problem)
+        };
+        frame(&mut ui, &mut f.session, &mut status);
+        ui.drawing = Some(drawing);
+        ui.run(&mut f.session);
+        assert!(ui.problem.is_none() && ui.plan.is_some());
+        // The update data of the new revision does not fit: the same question as the import.
+        f.session.set_limits(kadakas_api::SessionLimits {
+            base_records: 2,
+            ..kadakas_api::SessionLimits::default()
+        });
+        ui.begin(&mut f.session, f.new.clone());
+        let Some(Problem::BaseChoice(question)) = ui.problem.clone() else {
+            panic!("{:?}", ui.problem)
+        };
+        assert!(question.contains("link"), "{question}");
+        frame(&mut ui, &mut f.session, &mut status);
+        ui.base = Some("none");
+        ui.run(&mut f.session);
+        assert!(ui.problem.is_none() && ui.plan.is_some());
     }
 
     #[test]

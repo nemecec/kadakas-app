@@ -455,7 +455,8 @@ impl Session {
                     (c.new_doc.clone(), HashSet::new())
                 };
                 let shown = ShownDoc::Built(Arc::new(doc));
-                let width = spec.width.unwrap_or(1200);
+                // The width of the picture is bounded like the size of a PNG.
+                let width = self.limits.image_size(spec.width.unwrap_or(1200), 16).0;
                 let tint = SvgTint {
                     rgb: tint_rgb,
                     pattern: SvgPattern::Solid,
