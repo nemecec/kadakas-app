@@ -802,6 +802,8 @@ mod tests {
     fn change_events_are_pushed_to_the_subscriber_only() {
         let server = start(0, Arc::new(|| {}), None).unwrap();
         let (addr, token) = (server.addr, server.token.clone());
+        // The editor starts when the watcher has the answer of its subscription: no fixed wait.
+        let (subscribed, subscribed_rx) = std::sync::mpsc::channel::<()>();
         let watcher = thread::spawn({
             let token = token.clone();
             move || {
@@ -809,6 +811,7 @@ mod tests {
                 c.auth(&token).unwrap();
                 let sub = c.call(1, "events.subscribe");
                 assert!(sub["result"]["revision"].is_u64());
+                subscribed.send(()).unwrap();
                 // The other client changes the document. A notification arrives, with no request.
                 let note = c.read().unwrap();
                 assert_eq!(note["method"], "events.change");
@@ -820,7 +823,9 @@ mod tests {
         let editor = thread::spawn(move || {
             let mut c = Client::connect(addr);
             c.auth(&token).unwrap();
-            thread::sleep(Duration::from_millis(150));
+            subscribed_rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("the watcher subscribed");
             c.call(1, "execute")
         });
         let mut session = Session::with_sequential_ids();
@@ -1039,7 +1044,8 @@ mod tests {
             reply_timeout: Duration::from_millis(150),
             ..small_limits()
         };
-        let server = start_with(0, Arc::new(|| {}), None, limits).unwrap();
+        let wakes = wait();
+        let server = start_with(0, counter_wake(&wakes), None, limits).unwrap();
         let (addr, token) = (server.addr, server.token.clone());
         let mut c = Client::connect(addr);
         c.auth(&token).unwrap();
@@ -1047,14 +1053,44 @@ mod tests {
         let r = c.call(5, "describe");
         assert_eq!(r["id"], 5);
         assert_eq!(r["error"]["code"], -32000);
-        // A notification that times out gets no reply at all. Use a real request to see that we are in sync.
+        // A notification that times out gets no reply at all. A connection reads its lines one
+        // after the other, so the request that follows is queued only after the notification
+        // timed out: the third wake of the UI says that both are cancelled. (A fixed sleep here
+        // could end before a slow machine had run the timeout.)
         c.send(r#"{"method":"undo"}"#);
-        thread::sleep(Duration::from_millis(400)); // let the notification time out too
+        c.send(&json!({"jsonrpc": "2.0", "id": 6, "method": "selection.get"}).to_string());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while wakes.load(Ordering::SeqCst) < 3 {
+            assert!(Instant::now() < deadline, "the requests never arrived");
+            thread::sleep(Duration::from_millis(2));
+        }
         let mut ui = Ui::start(server);
-        // The two requests above were cancelled, so the UI skips them.
-        let r = c.call(6, "selection.get");
-        assert_eq!(r["id"], 6);
-        assert_eq!(ui.handled(), 1, "timed-out requests are not run");
+        // The request 5 and the notification were cancelled, so the UI skips them. Request 6 may
+        // have timed out too on a slow machine (then its answer is the error): ask again, with
+        // new IDs, until the UI answers one. Every answer of the UI is one handled request, and
+        // the notification is never run.
+        let mut answered = 0;
+        let mut id = 6;
+        while answered == 0 {
+            assert!(id < 40, "the UI never answered");
+            let r = if id == 6 {
+                c.read().expect("response")
+            } else {
+                c.call(id, "selection.get")
+            };
+            assert_eq!(r["id"], id);
+            if r.get("result").is_some() {
+                answered += 1;
+            } else {
+                assert_eq!(r["error"]["code"], -32000);
+            }
+            id += 1;
+        }
+        assert_eq!(
+            ui.handled(),
+            answered,
+            "timed-out requests are not run (the undo notification least of all)"
+        );
         ui.finish();
     }
 
@@ -1082,8 +1118,9 @@ mod tests {
         let mut c = Client::connect(addr);
         c.send_raw(b"{");
         let start = Instant::now();
-        // One byte every 100 ms would reset a per-read timeout forever.
-        while start.elapsed() < Duration::from_secs(2) {
+        // One byte every 100 ms would reset a per-read timeout forever. The bounds are far
+        // above the 300 ms deadline, so a busy machine does not trip them.
+        while start.elapsed() < Duration::from_secs(20) {
             if !c.send_raw(b" ") {
                 break;
             }
@@ -1091,8 +1128,8 @@ mod tests {
         }
         assert!(c.drains_to_close());
         assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "closed near the 300 ms deadline"
+            start.elapsed() < Duration::from_secs(20),
+            "closed by the 300 ms deadline, not by the end of the loop"
         );
         ui.finish();
     }

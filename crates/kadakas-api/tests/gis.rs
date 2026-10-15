@@ -954,9 +954,18 @@ fn massing_in_a_group_and_report_filters() {
 
 #[test]
 fn a_result_is_applied_only_to_the_document_it_was_made_for() {
-    let m = Mock::start(|p| {
+    // The server holds its answer until the test has changed the document (or the
+    // georeference): a fixed delay would let a slow machine answer first.
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gate_in = gate.clone();
+    let m = Mock::start(move |p| {
         if p.contains("REQUEST=GetFeature") {
-            std::thread::sleep(std::time::Duration::from_millis(150));
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !gate_in.load(std::sync::atomic::Ordering::SeqCst)
+                && std::time::Instant::now() < end
+            {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
             Reply::Ok(
                 "application/json",
                 br#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[385000,6672000]}}]}"#.to_vec(),
@@ -978,7 +987,8 @@ fn a_result_is_applied_only_to_the_document_it_was_made_for() {
     set_crs(&mut s);
     let job = import(&mut s)["job"].as_u64().unwrap();
     s.replace_document(kadakas_core::model::Document::default());
-    let r = ok(&mut s, "gis.job.status", json!({"job": job, "wait": 5}));
+    gate.store(true, std::sync::atomic::Ordering::SeqCst);
+    let r = ok(&mut s, "gis.job.status", json!({"job": job, "wait": 30}));
     assert_eq!(r["status"], "failed");
     assert!(
         r["error"].as_str().unwrap().contains("another document"),
@@ -987,13 +997,15 @@ fn a_result_is_applied_only_to_the_document_it_was_made_for() {
     assert!(s.editor.doc().objects.is_empty());
     // 2. The georeference changes while the call runs.
     set_crs(&mut s);
+    gate.store(false, std::sync::atomic::Ordering::SeqCst);
     let job = import(&mut s)["job"].as_u64().unwrap();
     ok(
         &mut s,
         "gis.georef.set",
         json!({"crs": "EPSG:32635", "origin": [500000, 6670000]}),
     );
-    let r = ok(&mut s, "gis.job.status", json!({"job": job, "wait": 5}));
+    gate.store(true, std::sync::atomic::Ordering::SeqCst);
+    let r = ok(&mut s, "gis.job.status", json!({"job": job, "wait": 30}));
     assert_eq!(r["status"], "failed");
     assert!(
         r["error"]
@@ -1005,16 +1017,26 @@ fn a_result_is_applied_only_to_the_document_it_was_made_for() {
     assert!(s.editor.doc().objects.is_empty());
     // 3. Nothing changed: the result is applied.
     let job = import(&mut s)["job"].as_u64().unwrap();
-    let r = ok(&mut s, "gis.job.status", json!({"job": job, "wait": 5}));
+    let r = ok(&mut s, "gis.job.status", json!({"job": job, "wait": 30}));
     assert_eq!(r["status"], "done", "{r}");
     assert_eq!(s.editor.doc().objects.len(), 1);
 }
 
 #[test]
 fn cancel_stops_the_worker() {
-    let m = Mock::start(|p| {
+    // The server holds its answer until the test has cancelled the job, so the call is in flight
+    // at that moment whatever the speed of the machine. `answered` counts the answers it gave.
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let release = std::sync::Arc::new(AtomicBool::new(false));
+    let answered = std::sync::Arc::new(AtomicUsize::new(0));
+    let (release_in, answered_in) = (release.clone(), answered.clone());
+    let m = Mock::start(move |p| {
         if p.contains("REQUEST=GetFeature") {
-            std::thread::sleep(std::time::Duration::from_millis(150));
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !release_in.load(Ordering::SeqCst) && std::time::Instant::now() < end {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            answered_in.fetch_add(1, Ordering::SeqCst);
             let start: usize = p
                 .split("STARTINDEX=")
                 .nth(1)
@@ -1055,9 +1077,16 @@ fn cancel_stops_the_worker() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     ok(&mut s, "gis.job.cancel", json!({"job": job}));
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    release.store(true, Ordering::SeqCst);
+    // The worker gets the answer of the call that was in flight, sees the cancel and stops.
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while answered.load(Ordering::SeqCst) == 0 {
+        assert!(std::time::Instant::now() < end, "the server never answered");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     let seen = m.hit_count();
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // Nothing more may come. Nothing happening cannot be waited for, so give it a quiet second.
+    std::thread::sleep(std::time::Duration::from_millis(1000));
     assert_eq!(
         m.hit_count(),
         seen,

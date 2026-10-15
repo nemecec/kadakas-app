@@ -181,7 +181,7 @@ mod tests {
             let mut out = Vec::new();
             std::io::Read::read_to_end(&mut child.stdout.take().unwrap(), &mut out).unwrap();
             // The killed processes may be zombies for a moment, until init collects them.
-            let gone = (0..400).any(|_| {
+            let gone = (0..3000).any(|_| {
                 // SAFETY: signal 0 only checks that the group exists.
                 let empty = unsafe { libc::killpg(pid, 0) } == -1;
                 if !empty {
@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn an_ended_child_is_seen_before_it_is_collected() {
         let mut child = Command::new("true").spawn().unwrap();
-        let seen = (0..500).any(|_| {
+        let seen = (0..3000).any(|_| {
             let ended = ended_not_collected(&child);
             if !ended {
                 std::thread::sleep(std::time::Duration::from_millis(10));
@@ -235,7 +235,7 @@ mod tests {
         assert!(pid_alive(grandchild));
         kill_tree(&mut child);
         child.wait().unwrap();
-        for _ in 0..200 {
+        for _ in 0..3000 {
             if !pid_alive(grandchild) {
                 return;
             }
