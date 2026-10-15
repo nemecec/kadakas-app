@@ -15,8 +15,9 @@ pub struct UnitRing {
     pub hole: bool,
 }
 
-/// A unit: a whole one, or one that the region edge or a hole cuts. A cut unit can have several
-/// pieces (the rings), for example when a notch splits it.
+/// A unit: a whole one, or a cut one. The rings are the outline of the unit first, then holes in
+/// it (a hole of the region that lies inside the unit). A unit that the region edge splits in
+/// two pieces counts as two units.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Unit {
     pub rings: Vec<UnitRing>,
@@ -466,9 +467,9 @@ pub fn for_each_unit(
             OverlayRule::Union,
             FillRule::EvenOdd,
         );
-        let mut rings: Vec<UnitRing> = Vec::new();
-        let mut area = 0.0;
-        let mut pieces = 0;
+        // Every connected piece is a unit of its own: a notch that splits a unit in two makes two
+        // cut units.
+        let count = shapes.len();
         for shape in shapes {
             let a: f64 = shape
                 .iter()
@@ -483,33 +484,30 @@ pub fn for_each_unit(
                 stats.dust_pieces += 1;
                 continue;
             }
-            area += a;
-            pieces += 1;
-            for (i, r) in shape.iter().enumerate() {
-                rings.push(UnitRing {
+            if stats.units >= max_units {
+                failed = true;
+                return;
+            }
+            let rings: Vec<UnitRing> = shape
+                .iter()
+                .enumerate()
+                .map(|(i, r)| UnitRing {
                     points: r
                         .iter()
                         .map(|p| origin + turn.rotate(DVec2::new(p[0], p[1])))
                         .collect(),
                     hole: i > 0,
-                });
-            }
+                })
+                .collect();
+            let whole = count == 1 && rings.len() == 1 && a >= rect_area * (1.0 - 1e-9);
+            stats.units += 1;
+            f(&Unit {
+                rings,
+                whole,
+                area: a,
+                share: a / full,
+            });
         }
-        if pieces == 0 {
-            return;
-        }
-        if stats.units >= max_units {
-            failed = true;
-            return;
-        }
-        let whole = pieces == 1 && rings.len() == 1 && area >= rect_area * (1.0 - 1e-9);
-        stats.units += 1;
-        f(&Unit {
-            rings,
-            whole,
-            area,
-            share: area / full,
-        });
     };
     bond::for_each_cell(pattern, lo, hi, &mut visit);
     if failed {

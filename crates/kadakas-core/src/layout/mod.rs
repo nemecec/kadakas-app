@@ -23,6 +23,7 @@
 pub mod bond;
 pub mod gaps;
 pub mod object;
+pub mod summary;
 pub mod units;
 
 use glam::DVec2;
@@ -39,6 +40,8 @@ pub use units::{Stats, Tally, TooMany, Unit, UnitRing, for_each_unit, lay_units}
 /// Most units that a layout for export or a report makes. About 3.5 times a 5,000 m2 lot of
 /// 200 x 100 mm pavers (about 250,000 units). Measured in `measure_bounds`.
 pub const MAX_UNITS: usize = 1_000_000;
+/// Most gap center lines that a layout for export or a report makes.
+pub const MAX_GAP_SEGMENTS: usize = 2_000_000;
 /// Flattening tolerance of curves, in mm, when nothing else is given.
 pub const TOLERANCE: f64 = 1.0;
 /// A clipped piece with less area than this (mm2) is rounding dust, not a unit.

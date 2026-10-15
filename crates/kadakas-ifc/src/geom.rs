@@ -1,9 +1,6 @@
 //! Geometry helpers for the IFC bodies. Units are mm.
 
 use glam::{DVec2, DVec3};
-use i_overlay::core::fill_rule::FillRule;
-use i_overlay::core::overlay_rule::OverlayRule;
-use i_overlay::float::single::SingleFloatOverlay;
 pub use kadakas_core::geom::{clean_ring, signed_area, split_with_holes};
 use kadakas_core::hardscape::surface::{self, DRAPE_STEP};
 

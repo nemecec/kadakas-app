@@ -6,6 +6,8 @@ use crate::step::format_real;
 /// The geometry of a hardscape, computed before anything is written.
 struct SlabGeometry {
     ring: Vec<DVec2>,
+    /// Holes in the slab (open parts): the profile has voids and the walls close them.
+    holes: Vec<Vec<DVec2>>,
     thickness: f64,
     /// Height of a flat top surface. `None`: the top is sloped or draped, and `mesh` holds the solid.
     flat_top: Option<f64>,
@@ -179,6 +181,13 @@ impl<W: Write> Exporter<'_, W> {
         if ring.is_empty() {
             return Err("the outline has no area");
         }
+        let holes: Vec<Vec<DVec2>> = hardscape::data(obj)
+            .map(|d| d.holes)
+            .unwrap_or_default()
+            .iter()
+            .map(|h| geom::clean_ring(&curve::flatten(h, true, 2.0)))
+            .filter(|h| !h.is_empty())
+            .collect();
         let q =
             hardscape::report::quantities_on(self.doc, obj, &self.ground).ok_or("no quantities")?;
         let layers: Vec<(String, f64)> = q
@@ -215,11 +224,12 @@ impl<W: Write> Exporter<'_, W> {
             let step = surf.is_draped().then_some(geom::STEP);
             (
                 None,
-                Some(geom::solid_mesh(&ring, &[], &z, thickness, step)),
+                Some(geom::solid_mesh(&ring, &holes, &z, thickness, step)),
             )
         };
         Ok(SlabGeometry {
             ring,
+            holes,
             thickness,
             flat_top,
             mesh,
@@ -239,7 +249,7 @@ impl<W: Write> Exporter<'_, W> {
         let placement = self.place_in_layer(obj.layer, [0.0, 0.0, g.flat_top.unwrap_or(0.0)])?;
         let (item, rep_type) = match &g.mesh {
             None => {
-                let profile = self.profile(&g.ring, &[])?;
+                let profile = self.profile(&g.ring, &g.holes)?;
                 (
                     self.extrude(profile, -g.thickness, g.thickness)?,
                     "SweptSolid",
@@ -309,7 +319,11 @@ impl<W: Write> Exporter<'_, W> {
             "Qto_SlabBaseQuantities"
         };
         let mut standard = vec![
-            ("area", "GrossArea".to_string(), q.plan_area_m2),
+            (
+                "area",
+                "GrossArea".to_string(),
+                q.plan_area_m2 + q.holes_area_m2,
+            ),
             ("area", "NetArea".to_string(), q.plan_area_m2),
         ];
         if class == "IFCSLAB" {

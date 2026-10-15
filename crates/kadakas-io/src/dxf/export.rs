@@ -23,6 +23,7 @@ use crate::options::{ExportOrigin, LayerMode};
 use crate::{ExportOptions, ExportResult, IoError, Report};
 
 mod native;
+pub mod patterns;
 
 /// Longest text that one TEXT entity holds. Longer text becomes MTEXT.
 const TEXT_LIMIT: usize = 250;
@@ -288,12 +289,28 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     cx.shift = shift;
     let mut ents = W::new(FIRST_HANDLE);
     ents.owner = H_MODEL_RECORD.into();
+    // The entities of unit patterns come last and are not scanned for layer names: they are many.
+    let mut pattern_text = String::new();
+    let mut pattern_layers: BTreeSet<String> = BTreeSet::new();
     for o in doc.objects.values() {
         if opts.visible_only && !doc.is_visible(o) {
             continue;
         }
         let layer = cx.layer_name(o);
         let hidden_layer = doc.layer(o.layer).is_some_and(|l| !l.visible);
+        if opts.patterns != crate::options::PatternExport::None {
+            let mark = ents.buf.len();
+            pattern_layers.extend(patterns::write(
+                &mut ents,
+                &cx,
+                o,
+                &layer,
+                hidden_layer,
+                opts.patterns,
+                &mut report,
+            )?);
+            pattern_text.push_str(&ents.buf.split_off(mark));
+        }
         let shifted;
         let o = if shift != DVec2::ZERO {
             let mut c = o.clone();
@@ -354,6 +371,12 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         layers
             .entry(l.to_uppercase())
             .or_insert((l.to_string(), Attributes::default(), false));
+    }
+
+    for l in &pattern_layers {
+        layers
+            .entry(l.to_uppercase())
+            .or_insert((l.clone(), Attributes::default(), false));
     }
 
     let mut tables = W::new(ents.next);
@@ -872,6 +895,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     out.push_str(&blocks.buf);
     out.push_str("0\nENDSEC\n0\nSECTION\n2\nENTITIES\n");
     out.push_str(&ents.buf);
+    out.push_str(&pattern_text);
     out.push_str("0\nENDSEC\n0\nSECTION\n2\nOBJECTS\n");
     out.push_str(&objects.buf);
     out.push_str("0\nENDSEC\n0\nEOF\n");

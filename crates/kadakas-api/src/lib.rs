@@ -29,6 +29,7 @@ mod irrigation_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod libfiles;
 mod massing_api;
+mod pattern_api;
 mod picture_api;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod picture_api_tests;
@@ -435,6 +436,10 @@ pub const METHODS: &[(&str, &str)] = &[
     hardscape_api::LANDSCAPE_AREA_STYLE_DELETE,
     hardscape_api::HARDSCAPE_ADD,
     hardscape_api::HARDSCAPE_SET,
+    hardscape_api::HARDSCAPE_FROM_SHAPES,
+    pattern_api::PATTERN_LAYOUT,
+    pattern_api::PATTERN_TO_OBJECTS,
+    pattern_api::REPORT_PATTERN,
     hardscape_api::LANDSCAPE_AREA_ADD,
     hardscape_api::LANDSCAPE_AREA_SET,
     hardscape_api::REPORT_HARDSCAPE,
@@ -1139,6 +1144,7 @@ impl Session {
                 "plant_pictures": picture_api::describe(),
                 "data": data_api::describe(),
                 "hardscapes": hardscape_api::describe(),
+                "patterns": pattern_api::describe(),
                 "presentation": present_api::describe(),
                 "massing": massing_api::describe(),
                 "solids": solid_api::describe(),
@@ -1501,6 +1507,9 @@ impl Session {
                     return r;
                 }
                 if let Some(r) = hardscape_api::handle(self, method, p.clone()) {
+                    return r;
+                }
+                if let Some(r) = pattern_api::handle(self, method, p.clone()) {
                     return r;
                 }
                 if let Some(r) = massing_api::handle(self, method, p.clone()) {

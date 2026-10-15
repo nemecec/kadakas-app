@@ -86,6 +86,7 @@ pub(crate) fn describe() -> Value {
             "native_annotations": "DXF: true (default). Linear, radial and diameter dimensions become DIMENSION entities (each with its block), callouts become LEADER and MTEXT, text becomes MTEXT. Other annotations are lines and text. false: all annotations are lines and text",
             "site_mesh": "DXF: none (default) | existing | proposed. Also writes the triangles of a site model surface as a 3D mesh",
             "mesh_entity": "DXF: polyface (default: a POLYLINE polyface mesh) | face3d (one 3DFACE per triangle). For mesh3d objects and the site mesh",
+            "patterns": "DXF: what to write of the unit pattern of hardscapes that have a joint pattern. none (default: only the outline; a pattern can have hundreds of thousands of units) | gaps (gap center lines as LINE on <layer>-GAPS) | units (every unit, whole or cut, as a closed polyline with the gap taken off: <layer>-UNITS-WHOLE and <layer>-UNITS-CUT; a hole inside a cut unit is a closed polyline on <layer>-UNITS-VOID). Cut units are cut exactly to the outline minus the holes; curves are cut into lines within the tolerance. The counts equal report.pattern when the tolerances are equal (both default to 1 mm). A pattern with more than 600000 units (gaps: 1000000 lines) is an error that names the hardscape: nothing is dropped silently. The report lists the counts written",
             "tolerance": "mm, curve approximation. Default 1"
         },
         "ifc": crate::ifc_api::describe(),
@@ -96,6 +97,7 @@ pub(crate) fn describe() -> Value {
             {"method": "import.file", "params": {"path": "/data/site.dxf", "options": {"layer_mode": "classes"}}},
             {"method": "import.file", "params": {"path": "/data/trees.geojson", "options": {"class_field": "species"}}},
             {"method": "export.file", "params": {"path": "/data/out.dxf", "format": "dxf", "overwrite": true}},
+            {"method": "export.file", "params": {"path": "/data/paving.dxf", "format": "dxf", "overwrite": true, "options": {"patterns": "units"}}},
             {"method": "export.file", "params": {"path": "/data/site.ifc", "format": "ifc", "overwrite": true}}
         ],
         "paths": "A server for agents only reads and writes inside the folder of the open document and the folders that its owner allows with --allow-dir (default: the folder where it started). The extension must match the format, and export.file needs {overwrite: true} to replace a file.",

@@ -6,6 +6,7 @@
 //! style stay valid. Everything here is pure geometry or reads the document. The ground of a
 //! site model comes in through [`GroundSource`](crate::ground::GroundSource), so core does not depend on the site crate.
 
+pub mod batch;
 pub mod data;
 pub mod joints;
 pub mod offset;
