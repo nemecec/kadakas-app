@@ -930,6 +930,74 @@ fn blobs_that_are_too_small_to_be_blobs_stay_inline() {
     assert_eq!(back.resources.len(), 2);
 }
 
+#[test]
+fn a_history_that_was_read_copies_its_unchanged_parts_on_the_next_save() {
+    let mut doc = sample_doc();
+    doc.history = Some(sample_history());
+    let first = open(container_bytes(&doc));
+    let source = first.source.clone().unwrap();
+    // The history is read (as a session does when a call uses it), nothing is changed.
+    let mut again = first.doc;
+    resolve_history(&mut again).unwrap();
+    let opts = WriteOptions {
+        generator: "t".into(),
+        keep: vec![source],
+    };
+    let (bytes, report) = write_container(Vec::new(), &again, &opts).unwrap();
+    assert_eq!(report.parts_copied, 4, "{report:?}");
+    assert_eq!(report.blobs_written, 0, "{report:?}");
+    assert_eq!(resolved(open(bytes)).history, doc.history);
+    // A part that changed is written, and the others are still copied.
+    let mut changed = again.clone();
+    let h = changed.history.take().unwrap();
+    let mut value = h.to_value();
+    value["next_id"] = json!(99);
+    changed.history = Some(HistoryData::new(value));
+    let (_, report) = write_container(Vec::new(), &changed, &opts).unwrap();
+    assert_eq!(report.parts_copied, 3, "{report:?}");
+}
+
+#[test]
+fn a_picture_of_the_history_that_is_too_big_is_refused() {
+    // The entry is declared as bigger than a picture may be. Its bytes are never read: the size
+    // in the directory is enough, so the test needs no hash of 32 MiB.
+    let size = kadakas_core::blob::MAX_BLOB_TEXT as u64 + 1;
+    let hash = text_hash("a picture that is too big");
+    let name = blob_name(&hash);
+    let listed = format!("[\"{hash}\"]");
+    let mut w = Writer::new(Vec::new());
+    w.add_bytes(
+        DOCUMENT,
+        Compression::Deflate(1),
+        serde_json::to_string(&Document::with_sequential_ids())
+            .unwrap()
+            .as_bytes(),
+    )
+    .unwrap();
+    for (entry, bytes) in [
+        (HISTORY_TOP, &br#"{"newest": {}}"#[..]),
+        (HISTORY_VERSIONS, b"[]"),
+        (HISTORY_NEWEST, b"[]"),
+        (HISTORY_BLOBS, listed.as_bytes()),
+    ] {
+        w.add_bytes(entry, Compression::Stored, bytes).unwrap();
+    }
+    w.copy_raw(kadakas_container::RawEntry {
+        name: name.clone(),
+        method: kadakas_container::Method::Stored,
+        crc32: 0,
+        size,
+        compressed: size,
+        sha256: [0; 32],
+        data: Box::new(std::io::Read::take(std::io::repeat(0), size)),
+    })
+    .unwrap();
+    let e = read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Eager)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains(&name) && e.contains("bigger than"), "{e}");
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod disk {
     use super::*;
@@ -1222,6 +1290,21 @@ mod disk {
     }
 
     #[test]
+    fn the_pictures_of_a_document_can_be_checked_against_their_file() {
+        let d = dir("check");
+        let f = d.join("a.kad");
+        save_path(&f, &sample_doc(), Form::Container, &WriteOptions::default()).unwrap();
+        let o = open_path(&f, u64::MAX, ReadMode::Lazy).unwrap();
+        assert!(o.doc.check_blobs().is_ok());
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(&f, b"another file").unwrap();
+        let e = o.doc.check_blobs().unwrap_err();
+        assert!(e.to_string().contains("changed on disk"), "{e}");
+        // A document with no picture in a file has nothing to check.
+        assert!(sample_doc().check_blobs().is_ok());
+    }
+
+    #[test]
     fn open_with_source_gives_the_source_of_a_container() {
         let d = dir("src");
         let k = d.join("a.kad");
@@ -1232,4 +1315,43 @@ mod disk {
         assert!(s.check_unchanged().is_ok());
         assert!(format!("{s:?}").contains("a.kad"));
     }
+}
+
+/// Opening and saving a document with thousands of pictures: the open reads the first characters
+/// of each picture, the save copies each one from the old file. The numbers are in
+/// `docs/doc-load-benchmark.md`: `cargo test --release -p kadakas-file perf_ -- --ignored --nocapture`.
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn perf_many_pictures() {
+    let n = 20_000;
+    let mut doc = Document::with_sequential_ids();
+    for i in 0..n {
+        let mut r = image(7);
+        // A different text for each picture, the same shape: a PNG header and some bytes.
+        let mut file = r.data.text().map(|t| t.to_string()).unwrap();
+        file.push_str(&format!("{i:08}"));
+        r.data = BlobText::from(file);
+        doc.resources.push(Resource {
+            id: ResourceId::from_num(1000 + i),
+            name: format!("r{i}"),
+            body: ResourceBody::Image(Box::new(r)),
+        });
+    }
+    let started = std::time::Instant::now();
+    let dir = std::env::temp_dir().join(format!("kf-perf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("many.kad");
+    crate::native::save_path(&f, &doc, Form::Container, &WriteOptions::default()).unwrap();
+    let written = started.elapsed();
+    let started = std::time::Instant::now();
+    let o = crate::native::open_path(&f, u64::MAX, ReadMode::Lazy);
+    // The pictures were made without a valid hash of the file, so the check at load may refuse
+    // the document; the time of the reads is what counts here.
+    let opened = started.elapsed();
+    let kept = o.is_ok();
+    println!(
+        "{n} pictures: file {} bytes, written in {written:?}, opened in {opened:?} (loaded: {kept})",
+        std::fs::metadata(&f).unwrap().len()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

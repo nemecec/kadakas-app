@@ -17,7 +17,24 @@ pub struct FileSource {
     part: ContainerSource,
     /// The pictures that are in use: one weak handle for each hash. A save keeps the pictures that
     /// a handle still uses, also when the document no longer has them (the undo steps hold them).
-    live: Mutex<HashMap<String, Weak<LazyBlob>>>,
+    live: Mutex<Live>,
+}
+
+/// The weak handles of the pictures in use, and the size at which the dead ones are dropped. The
+/// size doubles after each drop, so that a document with 65 534 pictures does not scan the list at
+/// every picture.
+struct Live {
+    map: HashMap<String, Weak<LazyBlob>>,
+    prune_at: usize,
+}
+
+impl Default for Live {
+    fn default() -> Self {
+        Live {
+            map: HashMap::new(),
+            prune_at: 4096,
+        }
+    }
 }
 
 impl std::fmt::Debug for FileSource {
@@ -91,6 +108,7 @@ impl FileSource {
     pub fn live_hashes(&self) -> Vec<String> {
         let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         let mut v: Vec<String> = live
+            .map
             .iter()
             .filter(|(_, w)| w.strong_count() > 0)
             .map(|(h, _)| h.clone())
@@ -148,9 +166,11 @@ impl BlobSource for FileSource {
 
     fn note_handle(&self, blob: &Arc<LazyBlob>) {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
-        if live.len() > 4096 {
-            live.retain(|_, w| w.strong_count() > 0);
+        if live.map.len() > live.prune_at {
+            live.map.retain(|_, w| w.strong_count() > 0);
+            live.prune_at = (live.map.len() * 2).max(4096);
         }
-        live.insert(blob.hash().to_string(), Arc::downgrade(blob));
+        live.map
+            .insert(blob.hash().to_string(), Arc::downgrade(blob));
     }
 }

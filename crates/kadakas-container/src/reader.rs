@@ -95,11 +95,13 @@ impl std::fmt::Debug for RawEntry {
 #[derive(Clone)]
 pub struct Container {
     medium: Arc<dyn Medium>,
-    entries: Vec<Entry>,
-    index: HashMap<String, usize>,
+    // Shared, so that a copy of the container costs a few pointers: a source gives out a copy for
+    // each read, and a container can have 65 534 entries.
+    entries: Arc<Vec<Entry>>,
+    index: Arc<HashMap<String, usize>>,
     /// Where the central directory starts: the data of every entry ends before it.
     dir_offset: u64,
-    manifest: Manifest,
+    manifest: Arc<Manifest>,
     manifest_sha256: [u8; 32],
     manifest_entry: Entry,
     total: u64,
@@ -309,15 +311,15 @@ impl Container {
         };
         let mut container = Container {
             medium,
-            entries: Vec::new(),
-            index: HashMap::new(),
+            entries: Arc::default(),
+            index: Arc::default(),
             dir_offset,
-            manifest: Manifest {
+            manifest: Arc::new(Manifest {
                 format: String::new(),
                 format_version: 0,
                 generator: String::new(),
                 entries: Vec::new(),
-            },
+            }),
             manifest_sha256: [0; 32],
             manifest_entry: manifest_entry.clone(),
             total,
@@ -378,14 +380,16 @@ impl Container {
                 "the manifest lists it, but it is not in the container",
             ));
         }
-        container.index = entries
-            .iter()
-            .enumerate()
-            .map(|(i, e)| (e.name.clone(), i))
-            .collect();
-        container.entries = entries;
+        container.index = Arc::new(
+            entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (e.name.clone(), i))
+                .collect(),
+        );
+        container.entries = Arc::new(entries);
         container.manifest_sha256 = <[u8; 32]>::from(Sha256::digest(&bytes));
-        container.manifest = manifest;
+        container.manifest = Arc::new(manifest);
         Ok(container)
     }
 
@@ -439,8 +443,11 @@ impl Container {
     /// Opens the local header of the entry and returns where its data starts.
     fn data_start(&self, e: &Entry) -> Result<u64, ContainerError> {
         let bad = |why: &str| ContainerError::entry(&e.name, why);
-        let head = read_exact(&*self.medium, e.offset, LOCAL_LEN as u64)
-            .map_err(|err| as_entry(err, &e.name))?;
+        // The local header and the name in one read: the name must be the name of the directory,
+        // so its length is known.
+        let want = LOCAL_LEN as u64 + e.name.len() as u64;
+        let head =
+            read_exact(&*self.medium, e.offset, want).map_err(|err| as_entry(err, &e.name))?;
         if le32(&head, 0) != LOCAL_SIG {
             return Err(bad("its local header is missing"));
         }
@@ -450,9 +457,7 @@ impl Container {
             ));
         }
         let (name_len, extra_len) = (u64::from(le16(&head, 26)), u64::from(le16(&head, 28)));
-        let name = read_exact(&*self.medium, e.offset + LOCAL_LEN as u64, name_len)
-            .map_err(|err| as_entry(err, &e.name))?;
-        if name != e.name.as_bytes() {
+        if name_len != e.name.len() as u64 || head[LOCAL_LEN..] != *e.name.as_bytes() {
             return Err(bad("its local header has another name than the directory"));
         }
         let start = e.offset + LOCAL_LEN as u64 + name_len + extra_len;
