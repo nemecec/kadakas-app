@@ -834,6 +834,75 @@ mod tests {
         assert!(chunks.len() >= 2);
     }
 
+    /// The alive things of a replica with their visible properties.
+    fn alive_props(r: &Replica) -> BTreeMap<Target, Map<String, Value>> {
+        r.alive_things().map(|(t, e)| (*t, e.visible())).collect()
+    }
+
+    /// Runs the command on the editor and sends the change to the replica as operations from the
+    /// change set, like a collaboration client does.
+    fn follow(ed: &mut Editor, view: &mut Replica, cmd: serde_json::Value) {
+        let rev = ed.revision();
+        ed.execute(&serde_json::from_value(cmd).unwrap()).unwrap();
+        let ops = ops_from_change(view, ed.doc(), &last_change(ed, rev));
+        view.apply_all(crate::op::Writer::BASELINE, &ops);
+        assert_eq!(alive_props(view), alive_props(&replica_of(ed.doc())));
+    }
+
+    #[test]
+    fn a_deleted_sheet_layer_comes_back_with_its_page_through_undo_and_diff() {
+        let mut ed = editor();
+        let mut view = replica_of(ed.doc());
+        follow(
+            &mut ed,
+            &mut view,
+            json!({"op": "add_sheet", "name": "Plan", "paper": "a1",
+                "orientation": "portrait", "number": "L-101", "title": "Planting"}),
+        );
+        let with_sheet = ed.doc().clone();
+        assert_eq!(with_sheet.drawing.sheets.len(), 1);
+        let layer = with_sheet.sheet_layers().next().unwrap().id;
+        follow(
+            &mut ed,
+            &mut view,
+            json!({"op": "delete_layer", "id": layer}),
+        );
+        assert!(
+            view.alive(Target::DOCUMENT)
+                .unwrap()
+                .visible()
+                .keys()
+                .all(|k| !k.starts_with("drawing.sheets."))
+        );
+        // The undo brings the layer back: a change set with the layer and the page settings.
+        let rev = ed.revision();
+        assert!(ed.undo());
+        let ops = ops_from_change(&view, ed.doc(), &last_change(&ed, rev));
+        view.apply_all(crate::op::Writer::BASELINE, &ops);
+        assert_eq!(alive_props(&view), alive_props(&replica_of(ed.doc())));
+        let m = crate::materialize::materialize(&view, &Document::default());
+        assert!(m.quarantined.is_empty());
+        assert_eq!(m.doc.drawing, with_sheet.drawing);
+        assert_eq!(m.doc.layers.len(), with_sheet.layers.len());
+        // The full diff (a restore of a version) does the same.
+        follow(
+            &mut ed,
+            &mut view,
+            json!({"op": "delete_layer", "id": layer}),
+        );
+        let mut restored = with_sheet.clone();
+        restored.use_sequential_ids_after_existing();
+        let ops = ops_from_diff(&view, &restored);
+        view.apply_all(crate::op::Writer::BASELINE, &ops);
+        let m = crate::materialize::materialize(&view, &Document::default());
+        assert_eq!(m.doc.drawing, with_sheet.drawing);
+        assert!(
+            m.doc
+                .layer(layer)
+                .is_some_and(|l| l.kind == with_sheet.layer(layer).unwrap().kind)
+        );
+    }
+
     #[test]
     fn settings_travel_as_a_thing() {
         let mut base = Document::default();

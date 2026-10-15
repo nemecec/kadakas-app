@@ -911,5 +911,8 @@ mod memory_tests;
 #[cfg(test)]
 mod keep_tests;
 
+#[cfg(test)]
+mod sheet_tests;
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod props;
