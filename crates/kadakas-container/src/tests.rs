@@ -1251,7 +1251,7 @@ fn a_local_header_with_another_crc_size_or_an_encryption_flag_is_refused() {
 }
 
 #[test]
-fn a_stored_entry_has_no_data_descriptor_and_a_streamed_one_has_zip64_sizes() {
+fn a_stored_entry_has_no_data_descriptor_and_a_streamed_one_has_32_bit_sizes() {
     let bytes = write(&[
         ("blobs/aa", Compression::Stored, b"abc"),
         ("document.json", Compression::Deflate(1), b"{}"),
@@ -1262,6 +1262,23 @@ fn a_stored_entry_has_no_data_descriptor_and_a_streamed_one_has_zip64_sizes() {
     assert_eq!(&bytes[18..26], &[3, 0, 0, 0, 3, 0, 0, 0]);
     let c = open(&bytes).unwrap();
     assert_eq!(c.read("document.json").unwrap(), b"{}");
+    // The streamed entry: flag bit 3, no sizes in the local header, no ZIP64 field, and a
+    // descriptor of 16 bytes (the Java stream reader reads exactly that for an entry under 4 GiB).
+    let e = c.entry("document.json").unwrap();
+    let local = bytes
+        .windows(4)
+        .enumerate()
+        .filter(|(_, w)| *w == 0x0403_4b50u32.to_le_bytes())
+        .map(|(i, _)| i)
+        .nth(1)
+        .unwrap();
+    assert_eq!(u16::from_le_bytes([bytes[local + 6], bytes[local + 7]]) & 8, 8);
+    assert_eq!(&bytes[local + 28..local + 30], &[0, 0], "no extra field");
+    let data = local + 30 + "document.json".len();
+    let desc = data + e.compressed as usize;
+    assert_eq!(&bytes[desc..desc + 4], &0x0807_4b50u32.to_le_bytes());
+    assert_eq!(&bytes[desc + 12..desc + 16], &[2, 0, 0, 0], "32 bit size");
+    assert_eq!(&bytes[desc + 16..desc + 20], &0x0403_4b50u32.to_le_bytes(), "the manifest is next");
 }
 
 #[test]
@@ -1274,4 +1291,61 @@ fn a_raw_copy_of_a_damaged_stored_entry_fails_and_names_it() {
     let mut w = Writer::new(Vec::new());
     let e = w.copy_raw(raw).unwrap_err();
     assert_eq!(e.entry_name(), Some("blobs/aa"), "{e}");
+}
+
+/// Programs that are not ours read the file, also the ZIP64 form (more than 65 534 entries). A
+/// tool that is not on the computer is skipped.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+#[test]
+fn other_zip_tools_read_what_the_writer_writes() {
+    use std::process::Command;
+    let have = |tool: &str| {
+        Command::new(tool)
+            .arg("--help")
+            .output()
+            .is_ok_and(|o| o.status.success() || !o.stderr.is_empty() || !o.stdout.is_empty())
+    };
+    let dir = std::env::temp_dir().join(format!("kc-ext-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let small = dir.join("small.kad");
+    std::fs::write(&small, sample()).unwrap();
+    let many = dir.join("many.kad");
+    let mut w = Writer::new(Vec::new());
+    w.add_bytes("document.json", Compression::Deflate(1), b"{}")
+        .unwrap();
+    for i in 0..70_000 {
+        w.add_bytes(&format!("blobs/{i:08}"), Compression::Stored, b"")
+            .unwrap();
+    }
+    std::fs::write(&many, w.finish().unwrap()).unwrap();
+    let mut ran = Vec::new();
+    if have("unzip") {
+        for f in [&small, &many] {
+            let out = Command::new("unzip").arg("-tq").arg(f).output().unwrap();
+            let text = String::from_utf8_lossy(&out.stdout).to_string();
+            assert!(out.status.success(), "unzip -t {f:?}: {text} {:?}", out.stderr);
+            assert!(text.contains("No errors detected"), "{text}");
+        }
+        ran.push("unzip -t");
+    }
+    if have("bsdtar") {
+        let out = Command::new("bsdtar").arg("-tf").arg(&many).output().unwrap();
+        assert!(out.status.success(), "{:?}", out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 70_002);
+        ran.push("bsdtar -tf");
+    }
+    if have("python3") {
+        let out = Command::new("python3")
+            .arg("-I")
+            .arg("-c")
+            .arg("import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; print(len(z.namelist()))")
+            .arg(&many)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{:?}", out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "70002");
+        ran.push("python zipfile");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    eprintln!("read by: {ran:?}");
 }

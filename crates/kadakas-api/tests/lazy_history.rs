@@ -369,3 +369,143 @@ fn a_file_that_changes_under_a_document_never_makes_a_wrong_version_or_a_wrong_d
     assert!(!s.is_tainted());
     assert_eq!(ok(&mut s, "document.summary", json!({}))["object_count"], 3);
 }
+
+/// The id of the first underlay of the session.
+fn underlay_id(s: &mut Session) -> Value {
+    let list = ok(s, "objects.list", json!({"kind": "underlay"}));
+    list[0]["id"].clone()
+}
+
+#[test]
+fn a_picture_held_only_by_an_undo_step_survives_the_read_of_the_anchor_and_every_save() {
+    // B3: versions and an underlay; delete the underlay; use the versions (the anchor of the
+    // history is read again from the file); save; undo; save; reopen: the picture is there.
+    let dir = tmp("undopicture");
+    let mut a = session(&dir);
+    circle(&mut a, 0.0);
+    add_underlay(&mut a);
+    ok(&mut a, "version.create", json!({"name": "v0"}));
+    let f = dir.join("a.kad");
+    ok(&mut a, "file.save", json!({"path": f}));
+
+    let mut s = open(&dir, &f);
+    let id = underlay_id(&mut s);
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "delete_objects", "ids": [id]}}),
+    );
+    // The Versions window: the history is read and checked against the drawing of the file, which
+    // is read again (its handles are not noted as pictures in use).
+    assert_eq!(names(&mut s), ["v0"]);
+    ok(&mut s, "file.save", json!({"path": f}));
+    assert!(s.handle("undo", json!({})).is_ok());
+    ok(&mut s, "file.save", json!({"path": f}));
+    let mut t = open(&dir, &f);
+    assert_eq!(ok(&mut t, "objects.list", json!({"kind": "underlay"})).as_array().unwrap().len(), 1);
+    assert_eq!(names(&mut t), ["v0"]);
+}
+
+#[test]
+fn a_file_that_is_touched_or_moved_is_followed_by_content() {
+    // B1 at the level of the API: touch, rename (with the .bak next to it), replace, delete.
+    for change in ["touch", "bak", "replace", "gone"] {
+        let dir = tmp(&format!("by-content-{change}"));
+        let mut a = session(&dir);
+        circle(&mut a, 0.0);
+        add_underlay(&mut a);
+        ok(&mut a, "version.create", json!({"name": "v0"}));
+        let f = dir.join("a.kad");
+        ok(&mut a, "file.save", json!({"path": f}));
+        let mut s = open(&dir, &f);
+        circle(&mut s, 77.0);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let old = std::fs::read(&f).unwrap();
+        match change {
+            "touch" => std::fs::write(&f, &old).unwrap(),
+            "bak" => {
+                std::fs::write(dir.join("a.kad.bak"), &old).unwrap();
+                std::fs::write(&f, b"not a container any more").unwrap();
+            }
+            "replace" => {
+                let mut o = session(&dir);
+                circle(&mut o, 1.0);
+                ok(&mut o, "file.save", json!({"path": dir.join("o.kad")}));
+                std::fs::rename(dir.join("o.kad"), &f).unwrap();
+                let _ = std::fs::remove_file(dir.join("a.kad.bak"));
+            }
+            _ => std::fs::remove_file(&f).unwrap(),
+        }
+        let finds = matches!(change, "touch" | "bak");
+        for to in ["same.kad", "other.kad", "plain.json"] {
+            let r = rpc(&mut s, "file.save", json!({"path": dir.join(to)}));
+            if finds {
+                assert!(r.get("error").is_none(), "{change} -> {to}: {r}");
+                let mut t = session(&dir);
+                let r = ok(&mut t, "file.open", json!({"path": dir.join(to)}));
+                assert!(r.get("notes").is_none(), "{change} -> {to}: {r}");
+                assert_eq!(
+                    ok(&mut t, "objects.list", json!({"kind": "underlay"}))
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    1,
+                    "{change} -> {to}"
+                );
+            } else {
+                assert_eq!(r["error"]["code"], 5, "{change} -> {to}: {r}");
+                assert_eq!(r["error"]["data"]["reason"], "parts_missing", "{change} -> {to}: {r}");
+                assert!(!dir.join(to).exists(), "{change} -> {to}: nothing is written");
+            }
+        }
+        if !finds {
+            // With the consent of the person the rest is saved, the picture is a placeholder, and
+            // the versions that cannot be found are left out.
+            let r = ok(
+                &mut s,
+                "file.save",
+                json!({"path": dir.join("rest.kad"), "allow_missing": true}),
+            );
+            assert!(r["notes"].to_string().contains("placeholder"), "{change}: {r}");
+            let mut t = session(&dir);
+            ok(&mut t, "file.open", json!({"path": dir.join("rest.kad")}));
+            assert_eq!(names(&mut t), Vec::<String>::new());
+            assert_eq!(
+                ok(&mut t, "objects.list", json!({})).as_array().unwrap().len(),
+                3,
+                "{change}: the circle, the new circle and the underlay with its placeholder"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
+fn the_plain_json_form_round_trips_versions_with_a_picture() {
+    let dir = tmp("dbgjson");
+    let mut a = session(&dir);
+    circle(&mut a, 0.0);
+    add_underlay(&mut a);
+    ok(&mut a, "version.create", json!({"name": "v0"}));
+    let j = dir.join("a.json");
+    ok(&mut a, "file.save", json!({"path": j}));
+    let mut t = session(&dir);
+    let r = ok(&mut t, "file.open", json!({"path": j}));
+    assert!(r.get("notes").is_none(), "fresh session: {r}");
+    // After a container round trip.
+    let f = dir.join("a.kad");
+    ok(&mut a, "file.save", json!({"path": f}));
+    let mut s = open(&dir, &f);
+    let j2 = dir.join("b.json");
+    ok(&mut s, "file.save", json!({"path": j2}));
+    let mut t = session(&dir);
+    let r = ok(&mut t, "file.open", json!({"path": j2}));
+    assert!(r.get("notes").is_none(), "after a container open, unedited: {r}");
+    let mut s = open(&dir, &f);
+    circle(&mut s, 5.0);
+    let j3 = dir.join("c.json");
+    ok(&mut s, "file.save", json!({"path": j3}));
+    let mut t = session(&dir);
+    let r = ok(&mut t, "file.open", json!({"path": j3}));
+    assert!(r.get("notes").is_none(), "after a container open, edited: {r}");
+}

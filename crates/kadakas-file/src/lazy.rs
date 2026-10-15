@@ -18,8 +18,6 @@ pub struct FileHistory {
     source: Arc<FileSource>,
     /// The bytes of the parts and of the pictures that they list (known from the directory).
     bytes: usize,
-    /// The file has its own drawing for the history (see [`crate::HISTORY_ANCHOR`]).
-    anchored: bool,
 }
 
 /// True for the entries that are no part of the history value: the anchor drawing and its list.
@@ -44,13 +42,19 @@ impl FileHistory {
         Some(Arc::new(FileHistory {
             source: source.clone(),
             bytes: usize::try_from(bytes).unwrap_or(usize::MAX),
-            anchored: c.contains(HISTORY_ANCHOR),
         }))
     }
 
     /// The file that holds the entries.
     pub fn source(&self) -> &Arc<FileSource> {
         &self.source
+    }
+
+    /// True if the file has its own drawing for the history (see [`crate::HISTORY_ANCHOR`]). The
+    /// file can change under the loader (a save to a new path moves the source to the new file),
+    /// so it is asked each time.
+    fn anchored(&self) -> bool {
+        self.source.container().contains(HISTORY_ANCHOR)
     }
 
     /// The names of the history entries, in order (the anchor drawing and its list included).
@@ -97,7 +101,7 @@ impl HistoryLoader for FileHistory {
         // The drawing that the versions were saved with: the anchor drawing of the file, else the
         // drawing of the file. It is read to be looked at, so its pictures are not noted as in
         // use.
-        let entry = if self.anchored {
+        let entry = if self.anchored() {
             HISTORY_ANCHOR
         } else {
             crate::layout::DOCUMENT
@@ -111,7 +115,7 @@ impl HistoryLoader for FileHistory {
     }
 
     fn separate_anchor(&self) -> bool {
-        self.anchored
+        self.anchored()
     }
 
     fn state_key(&self) -> String {

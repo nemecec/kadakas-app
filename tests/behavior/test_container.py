@@ -217,7 +217,7 @@ def test_hostile_containers_are_errors_that_name_the_problem(make_serve, tmp_pat
     refused("cut.kad", "central directory")
     # A bit flipped in the middle of the drawing.
     flipped = bytearray(raw)
-    flipped[60] ^= 0xFF
+    flipped[80] ^= 0xFF
     (tmp_path / "flipped.kad").write_bytes(bytes(flipped))
     err = cad.error("file.open", {"path": str(tmp_path / "flipped.kad")})
     assert err["code"] == 3 and "document.json" in err["message"]
@@ -290,6 +290,8 @@ def test_a_file_that_changes_on_disk_after_open_is_found_and_never_read_wrong(ma
 
     time.sleep(0.05)
     other.result("file.save", {"path": str(path)})
+    # The old file is the .bak of that save and has the picture: take it away, so that no file has it.
+    (tmp_path / "plan.kad.bak").unlink()
     changed = path.read_bytes()
     err = work.error("file.save", {"path": str(path)})
     assert err["code"] == 5 and "changed on disk" in err["message"], err
@@ -300,3 +302,152 @@ def test_a_file_that_changes_on_disk_after_open_is_found_and_never_read_wrong(ma
     assert not (tmp_path / "copy.kad").exists()
     # The plain form of the same session is refused for the same reason.
     assert work.error("file.save", {"path": str(tmp_path / "c.json")})["code"] == 5
+
+
+def test_a_file_that_is_replaced_but_has_the_old_file_as_bak_is_found_by_content(make_serve, tmp_path):
+    cad = make_serve()
+    with_picture(cad)
+    path = tmp_path / "plan.kad"
+    cad.result("file.save", {"path": str(path)})
+    work = make_serve(path)
+    other = make_serve()
+    other.execute(rect_cmd(0, 0, 3, 3))
+    import time
+
+    time.sleep(0.05)
+    # Another program saves over the file: the old file is the .bak next to it, and has the picture.
+    other.result("file.save", {"path": str(path)})
+    assert (tmp_path / "plan.kad.bak").exists()
+    work.execute(rect_cmd(50, 50, 60, 60))
+    for name in ("plan.kad", "copy.kad", "plain.json"):
+        assert work.result("file.save", {"path": str(tmp_path / name)})["ok"] is True, name
+    check = make_serve(tmp_path / "copy.kad")
+    assert check.doc()["objects"], "the document is there"
+    sid = [r for r in check.doc()["resources"] if r["body"]["type"] == "plant_style"][0]["id"]
+    assert picture_of(check, sid)[1], "the picture is there"
+
+
+def test_parts_that_are_gone_are_saved_only_with_the_consent_of_the_person(make_serve, tmp_path):
+    cad = make_serve()
+    with_picture(cad)
+    path = tmp_path / "plan.kad"
+    cad.result("file.save", {"path": str(path)})
+    work = make_serve(path)
+    work.execute(rect_cmd(50, 50, 60, 60))
+    other = make_serve()
+    other.execute(rect_cmd(0, 0, 3, 3))
+    import time
+
+    time.sleep(0.05)
+    other.result("file.save", {"path": str(path)})
+    (tmp_path / "plan.kad.bak").unlink()
+    # The picture is nowhere: the save asks, and writes nothing.
+    err = work.error("file.save", {"path": str(tmp_path / "a.kad")})
+    assert err["code"] == 5, err
+    assert err["data"]["reason"] == "parts_missing" and err["data"]["ask_the_person"] is True, err
+    assert not (tmp_path / "a.kad").exists()
+    # With the consent of the person the rest is saved, and the reply has notes.
+    done = work.result("file.save", {"path": str(tmp_path / "a.kad"), "allow_missing": True})
+    assert done["ok"] is True and "placeholder" in json.dumps(done["notes"]), done
+    again = work.result("file.save", {"path": str(tmp_path / "b.kad")})
+    assert "notes" not in again, "the next save is whole"
+
+
+def test_zip64_overlap_and_local_header_faults_are_refused(make_serve, tmp_path):
+    cad = make_serve()
+    cad.execute(rect_cmd(0, 0, 1, 1))
+    good = tmp_path / "good.kad"
+    cad.result("file.save", {"path": str(good)})
+    document = zipfile.ZipFile(good).read("document.json")
+    before = cad.doc()
+
+    def opens(name):
+        return cad.result("file.open", {"path": str(tmp_path / name)})["ok"] is True
+
+    def refused(name, needle):
+        err = cad.error("file.open", {"path": str(tmp_path / name)})
+        assert err["code"] == 3 and needle in err["message"], (name, err)
+        assert cad.doc() == before
+
+    # A container that another program wrote in the ZIP64 form (sizes in 64 bit fields) opens.
+    with zipfile.ZipFile(tmp_path / "zip64.kad", "w", zipfile.ZIP_DEFLATED) as z:
+        with z.open("document.json", "w", force_zip64=True) as f:
+            f.write(document)
+        z.writestr("manifest.json", manifest_of({"document.json": document}))
+    assert opens("zip64.kad")
+    # Two entries that start at the same place overlap.
+    entries = {"document.json": document, "blobs/x": b"x" * 100}
+    write_zip(tmp_path / "overlap.kad", entries, method=zipfile.ZIP_STORED)
+    raw = bytearray((tmp_path / "overlap.kad").read_bytes())
+    sig = b"PK\x01\x02"
+    heads = []
+    at = raw.find(sig)
+    while at != -1:
+        heads.append(at)
+        at = raw.find(sig, at + 4)
+    raw[heads[1] + 42 : heads[1] + 46] = raw[heads[0] + 42 : heads[0] + 46]
+    (tmp_path / "overlap.kad").write_bytes(bytes(raw))
+    refused("overlap.kad", "overlaps")
+    # A stored entry whose local header has another CRC-32 than the directory.
+    write_zip(tmp_path / "localcrc.kad", {"document.json": document}, method=zipfile.ZIP_STORED)
+    raw = bytearray((tmp_path / "localcrc.kad").read_bytes())
+    raw[14] ^= 0x55
+    (tmp_path / "localcrc.kad").write_bytes(bytes(raw))
+    refused("localcrc.kad", "document.json")
+    # An entry that the local header says is encrypted.
+    write_zip(tmp_path / "encrypted.kad", {"document.json": document}, method=zipfile.ZIP_STORED)
+    raw = bytearray((tmp_path / "encrypted.kad").read_bytes())
+    raw[6] |= 1
+    (tmp_path / "encrypted.kad").write_bytes(bytes(raw))
+    refused("encrypted.kad", "encrypted")
+
+
+def test_other_zip_tools_read_the_container(make_serve, tmp_path):
+    import shutil
+    import subprocess
+
+    cad = make_serve()
+    cad.execute(rect_cmd(0, 0, 10, 10))
+    with_picture(cad)
+    cad.result("version.create", {"name": "first"})
+    path = tmp_path / "plan.kad"
+    cad.result("file.save", {"path": str(path)})
+    names = zipfile.ZipFile(path).namelist()
+    ran = []
+    if shutil.which("unzip"):
+        out = subprocess.run(["unzip", "-t", str(path)], capture_output=True, text=True)
+        assert out.returncode == 0 and "No errors detected" in out.stdout, out.stdout + out.stderr
+        ran.append("unzip -t")
+    if shutil.which("bsdtar"):
+        out = subprocess.run(["bsdtar", "-tf", str(path)], capture_output=True, text=True)
+        assert out.returncode == 0 and set(out.stdout.split()) == set(names), out.stderr
+        ran.append("bsdtar -tf")
+    if shutil.which("ditto"):
+        dest = tmp_path / "ditto"
+        out = subprocess.run(["ditto", "-x", "-k", str(path), str(dest)], capture_output=True, text=True)
+        assert out.returncode == 0, out.stderr
+        with zipfile.ZipFile(path) as z:
+            for n in names:
+                assert (dest / n).read_bytes() == z.read(n), n
+        ran.append("ditto -x -k")
+    java = shutil.which("java")
+    if java:
+        # The stream reader of Java refuses a stored entry with a data descriptor.
+        src = tmp_path / "Check.java"
+        src.write_text(
+            "import java.io.*; import java.util.zip.*;\n"
+            "public class Check { public static void main(String[] a) throws Exception {\n"
+            "  try (ZipInputStream z = new ZipInputStream(new FileInputStream(a[0]))) {\n"
+            "    ZipEntry e; while ((e = z.getNextEntry()) != null) {\n"
+            "      byte[] b = z.readAllBytes(); System.out.println(e.getName() + \" \" + b.length); } } } }\n"
+        )
+        out = subprocess.run([java, str(src), str(path)], capture_output=True, text=True, cwd=tmp_path)
+        assert out.returncode == 0, out.stderr
+        with zipfile.ZipFile(path) as z:
+            sizes = {line.rsplit(" ", 1)[0]: int(line.rsplit(" ", 1)[1]) for line in out.stdout.splitlines()}
+            assert sizes == {n: z.getinfo(n).file_size for n in names}
+        ran.append("java ZipInputStream")
+    if not ran:
+        import pytest
+
+        pytest.skip("no unzip, bsdtar, ditto or java on this computer")

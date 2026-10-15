@@ -3,9 +3,12 @@
 //! An entry that is written from bytes and stored has its CRC-32 and sizes in the local header (no
 //! data descriptor: some readers, such as the Java stream reader, refuse that for a stored entry).
 //! An entry that is deflated or streamed goes through the CRC-32, the SHA-256 and the encoder as it
-//! is written; its sizes follow the data in a data descriptor, with 64 bit sizes and a ZIP64 extra
-//! field in the local header, because the size is not known at the start. A file with more than
-//! 65 534 entries, or with an offset or a size of 4 GiB or more, gets the ZIP64 end records.
+//! is written; its sizes follow the data in a data descriptor. The descriptor has 32 bit sizes, as
+//! the readers that go through the stream (the Java `ZipInputStream`) expect for an entry under
+//! 4 GiB; an entry of 4 GiB or more gets 64 bit sizes in the descriptor, and its real sizes are in
+//! the central directory (a reader that uses the directory, as ours does, never reads the
+//! descriptor). A file with more than 65 534 entries, or with an offset or a size of 4 GiB or more,
+//! gets the ZIP64 end records.
 //!
 //! An entry that is copied from another container ([`Writer::copy_raw`]) is not decoded: the
 //! compressed bytes and the CRC-32 and the hash from the manifest of the old container are written
@@ -266,7 +269,7 @@ impl<W: Write> Writer<W> {
             crc: 0,
             compressed: 0,
             size: 0,
-            zip64: true,
+            zip64: false,
         })?;
         let start = self.out.count;
         let (crc, sha, size) = match how {
@@ -291,10 +294,7 @@ impl<W: Write> Writer<W> {
             }
         };
         let compressed = self.out.count - start;
-        put32(&mut self.out, DESCRIPTOR_SIG)?;
-        put32(&mut self.out, crc)?;
-        put64(&mut self.out, compressed)?;
-        put64(&mut self.out, size)?;
+        self.descriptor(crc, compressed, size)?;
         self.names.insert(name.to_string());
         self.manifest.push(ManifestEntry {
             name: name.to_string(),
@@ -310,9 +310,23 @@ impl<W: Write> Writer<W> {
             compressed,
             size,
             offset,
-            zip64_local: true,
+            zip64_local: false,
         });
         Ok(())
+    }
+
+    /// The data descriptor after the data of a streamed entry: 32 bit sizes, or 64 bit sizes if
+    /// the entry is 4 GiB or more.
+    fn descriptor(&mut self, crc: u32, compressed: u64, size: u64) -> std::io::Result<()> {
+        put32(&mut self.out, DESCRIPTOR_SIG)?;
+        put32(&mut self.out, crc)?;
+        if compressed >= ZIP64_AT || size >= ZIP64_AT {
+            put64(&mut self.out, compressed)?;
+            put64(&mut self.out, size)
+        } else {
+            put32(&mut self.out, compressed as u32)?;
+            put32(&mut self.out, size as u32)
+        }
     }
 
     /// Writes an entry from bytes. A stored entry has its CRC-32 and size in the local header.
@@ -437,7 +451,7 @@ impl<W: Write> Writer<W> {
             crc: 0,
             compressed: 0,
             size: 0,
-            zip64: true,
+            zip64: false,
         })?;
         let start = self.out.count;
         let mut crc = Crc::new();
@@ -448,10 +462,7 @@ impl<W: Write> Writer<W> {
             enc.finish()?;
         }
         let compressed = self.out.count - start;
-        put32(&mut self.out, DESCRIPTOR_SIG)?;
-        put32(&mut self.out, crc.sum())?;
-        put64(&mut self.out, compressed)?;
-        put64(&mut self.out, bytes.len() as u64)?;
+        self.descriptor(crc.sum(), compressed, bytes.len() as u64)?;
         self.central.push(Central {
             name: MANIFEST_NAME.to_string(),
             method: Method::Deflate,
@@ -460,7 +471,7 @@ impl<W: Write> Writer<W> {
             compressed,
             size: bytes.len() as u64,
             offset,
-            zip64_local: true,
+            zip64_local: false,
         });
         let dir_offset = self.out.count;
         let mut dir_size = 0u64;
