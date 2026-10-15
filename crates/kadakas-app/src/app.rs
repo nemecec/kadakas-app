@@ -4876,6 +4876,46 @@ mod tests {
         dialog.choose_for_test(&mut app.session, &mut status, "keep_both");
         assert!(!dialog.has_conflict());
         assert_eq!(app.session.editor.doc().issues.len(), 2);
+        // A file with items that do not fit is not imported until the person says so.
+        let unfit = dir.join("unfit.bcfzip");
+        {
+            use std::io::Write;
+            let topic = "aaaaaaaa-1111-4222-8333-444455556666";
+            let markup = format!(
+                r#"<Markup><Topic Guid="{topic}" TopicType="Issue" TopicStatus="Open"><Title>Junk</Title><CreationDate>2026-01-01T00:00:00Z</CreationDate><CreationAuthor>a</CreationAuthor></Topic>
+                <Viewpoints Guid="dddddddd-1111-4222-8333-444455556666"><Snapshot>junk.png</Snapshot></Viewpoints></Markup>"#
+            );
+            let mut z = zip::ZipWriter::new(std::fs::File::create(&unfit).unwrap());
+            let o = zip::write::SimpleFileOptions::default();
+            z.start_file("bcf.version", o).unwrap();
+            z.write_all(b"<Version VersionId=\"2.1\"/>").unwrap();
+            z.start_file(format!("{topic}/markup.bcf"), o).unwrap();
+            z.write_all(markup.as_bytes()).unwrap();
+            z.start_file(format!("{topic}/junk.png"), o).unwrap();
+            z.write_all(b"not a picture").unwrap();
+            z.finish().unwrap();
+        }
+        let depth = app.session.editor.undo_depth();
+        dialog.run_import(&mut app.session, &mut status, unfit, None);
+        assert!(dialog.has_unfit());
+        assert_eq!(dialog.unfit_rows().len(), 1, "{:?}", dialog.unfit_rows());
+        assert_eq!(
+            app.session.editor.undo_depth(),
+            depth,
+            "nothing was imported"
+        );
+        for language in ["en-US", "et"] {
+            kadakas_l10n::with_language(language, || {
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    let c = ui.ctx().clone();
+                    assert!(dialog.show(&c, &mut app.session, &mut status));
+                });
+            });
+        }
+        dialog.skip_items_for_test(&mut app.session, &mut status);
+        assert!(!dialog.has_unfit());
+        assert_eq!(app.session.editor.doc().issues.len(), 3);
+        assert!(!dialog.notes().is_empty(), "the skipped item is shown");
         // A file that is not a BCF file is an error in the dialog, not a crash.
         let junk = dir.join("junk.bcfzip");
         std::fs::write(&junk, b"not a zip").unwrap();

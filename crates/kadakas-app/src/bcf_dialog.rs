@@ -3,13 +3,15 @@
 //! The dialog calls `issue.export_bcf` and `issue.import_bcf`, so the app and an agent use one
 //! code path. A file that holds an issue with the same GUID as an issue in the drawing, but other
 //! content, is a conflict: the import changed nothing and the dialog asks. The choice goes back
-//! as `on_conflict`. Nothing is overwritten without that choice.
+//! as `on_conflict`. Nothing is overwritten without that choice. Items of the file that do not
+//! fit the limits (a comment, a picture, a camera) are listed and need the choice too: the import
+//! changed nothing until the person says to import without them (`skip_items`).
 
 use std::path::PathBuf;
 
 use egui::Color32;
-use kadakas_api::{REASON_BCF_CONFLICT, RpcError, Session};
-use kadakas_l10n::tr;
+use kadakas_api::{REASON_BCF_CONFLICT, REASON_BCF_UNFIT, RpcError, Session};
+use kadakas_l10n::{msg, tr, translate};
 use serde_json::{Value, json};
 
 /// An import that waits for the choice of the person.
@@ -18,6 +20,13 @@ struct Conflict {
     count: usize,
     /// For each issue: the title here, the status here, the title in the file, the status there.
     rows: Vec<[String; 4]>,
+}
+
+/// An import that found items that do not fit, and waits for the person.
+struct Unfit {
+    path: PathBuf,
+    /// One line for each item: what it is, where, and why.
+    rows: Vec<String>,
 }
 
 /// State of the dialog.
@@ -29,6 +38,9 @@ pub struct BcfDialog {
     message: Option<(bool, String)>,
     notes: Vec<String>,
     conflict: Option<Conflict>,
+    unfit: Option<Unfit>,
+    /// The person agreed to import without the items that do not fit.
+    skip_items: bool,
 }
 
 fn status_name(v: &Value) -> String {
@@ -42,6 +54,28 @@ impl BcfDialog {
     #[cfg(test)]
     pub fn has_conflict(&self) -> bool {
         self.conflict.is_some()
+    }
+
+    #[cfg(test)]
+    pub fn has_unfit(&self) -> bool {
+        self.unfit.is_some()
+    }
+
+    #[cfg(test)]
+    pub fn unfit_rows(&self) -> Vec<String> {
+        self.unfit
+            .as_ref()
+            .map(|u| u.rows.clone())
+            .unwrap_or_default()
+    }
+
+    /// Takes the answer to the question about unfit items, as the button does.
+    #[cfg(test)]
+    pub fn skip_items_for_test(&mut self, session: &mut Session, status: &mut String) {
+        if let Some(u) = self.unfit.take() {
+            self.skip_items = true;
+            self.run_import(session, status, u.path, None);
+        }
     }
 
     #[cfg(test)]
@@ -92,6 +126,7 @@ impl BcfDialog {
                 if ui.button(tr!("issues-ui-bcf-import")).clicked() {
                     self.import(session, status);
                 }
+                self.unfit_ui(ui, session, status);
                 self.conflict_ui(ui, session, status);
                 if let Some((good, text)) = &self.message {
                     let c = if *good {
@@ -168,6 +203,7 @@ impl BcfDialog {
         else {
             return;
         };
+        self.skip_items = false;
         self.run_import(session, status, path, None);
     }
 
@@ -187,7 +223,11 @@ impl BcfDialog {
         if let Some(c) = choice {
             p["on_conflict"] = json!(c);
         }
+        if self.skip_items {
+            p["skip_items"] = json!(true);
+        }
         self.conflict = None;
+        self.unfit = None;
         match session.handle("issue.import_bcf", p) {
             Ok(r) => {
                 let n = |k: &str| r[k].as_u64().unwrap_or(0);
@@ -216,7 +256,25 @@ impl BcfDialog {
                         .flatten()
                         .filter_map(|w| w.as_str().map(str::to_string)),
                 );
+                for s in r["items_skipped"].as_array().into_iter().flatten() {
+                    notes.push(unfit_row(s));
+                }
                 self.notes = notes;
+                self.skip_items = false;
+            }
+            Err(e) if e.reason == Some(REASON_BCF_UNFIT) => {
+                let d = e.details.clone().unwrap_or(Value::Null);
+                self.unfit = Some(Unfit {
+                    path,
+                    rows: d["unfit"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(unfit_row)
+                        .collect(),
+                });
+                self.message = None;
+                self.notes.clear();
             }
             Err(e) if e.reason == Some(REASON_BCF_CONFLICT) => {
                 let d = e.details.clone().unwrap_or(Value::Null);
@@ -242,6 +300,35 @@ impl BcfDialog {
                 self.notes.clear();
             }
             Err(e) => self.fail(&e),
+        }
+    }
+
+    fn unfit_ui(&mut self, ui: &mut egui::Ui, session: &mut Session, status: &mut String) {
+        let Some(u) = &self.unfit else { return };
+        ui.separator();
+        ui.strong(tr!("issues-ui-bcf-unfit-title"));
+        ui.label(tr!("issues-ui-bcf-unfit-text", count = u.rows.len()));
+        egui::ScrollArea::vertical()
+            .id_salt("bcf-unfit")
+            .max_height(140.0)
+            .show(ui, |ui| {
+                for r in &u.rows {
+                    ui.small(r);
+                }
+            });
+        let path = u.path.clone();
+        let mut go = false;
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(tr!("issues-ui-bcf-unfit-skip")).clicked() {
+                go = true;
+            }
+            if ui.button(tr!("issues-ui-cancel")).clicked() {
+                self.unfit = None;
+            }
+        });
+        if go {
+            self.skip_items = true;
+            self.run_import(session, status, path, None);
         }
     }
 
@@ -281,6 +368,24 @@ impl BcfDialog {
             self.run_import(session, status, path, Some(choice));
         }
     }
+}
+
+/// One line for an item that does not fit: the topic, what it is and why.
+fn unfit_row(u: &Value) -> String {
+    let item = translate(
+        match u["item"].as_str() {
+            Some("comment") => msg!("issues-ui-bcf-unfit-comment"),
+            Some("snapshot") => msg!("issues-ui-bcf-unfit-snapshot"),
+            _ => msg!("issues-ui-bcf-unfit-camera"),
+        },
+        &[],
+    );
+    tr!(
+        "issues-ui-bcf-unfit-row",
+        topic = u["topic"].as_str().unwrap_or("").to_string(),
+        item = item,
+        reason = u["reason"].as_str().unwrap_or("").to_string()
+    )
 }
 
 fn session_author() -> String {
