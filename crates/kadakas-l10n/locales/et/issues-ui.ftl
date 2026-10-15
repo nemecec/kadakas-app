@@ -6,6 +6,7 @@ issues-ui-new-at-click = Uus probleem klõpsu kohta
 issues-ui-pick-hint = Klõpsa joonisel, kuhu probleem panna.
 issues-ui-hide-pins = Peida nööpnõelad
 issues-ui-bcf = BCF...
+issues-ui-many = Selles dokumendis on { $count } probleemi. Üle { $warn } muutub loend aeglaseks ja fail kasvab. Võid jätkata; ülempiir on { $cap }.
 issues-ui-hidden = Jagatud probleemide andmed, mida ei näidata ({ $count })
 issues-ui-hidden-help = Jagatud dokument sisaldab neid andmeid, kuid see programm ei näita neid, sest need ületavad piiri. Midagi ei kustutatud.
 issues-ui-none = Probleeme pole veel. Vali objektid ja vali Uus probleem või kasuta käsku Uus probleem klõpsu kohta.

@@ -1258,13 +1258,14 @@ fn viewpoints_are_added_and_removed_through_the_api() {
     }
     assert!(r2["viewpoint"].is_string());
     // The limit of viewpoints for one issue.
-    for n in 0..20 {
+    let room = kadakas_core::issue::MAX_VIEWPOINTS - 2;
+    for n in 0..(room + 6) {
         let r = agent(
             &mut s,
             "issue.add_viewpoint",
             json!({"id": id, "capture_visibility": false, "now_ms": 10 + n}),
         );
-        if n >= 14 {
+        if n >= room {
             assert_eq!(r.unwrap_err().kind, "validation");
         }
     }
@@ -1604,4 +1605,38 @@ fn a_renumbered_copy_never_takes_an_id_that_another_topic_of_the_file_has() {
     assert_ne!(p.issue.id, first);
     assert_ne!(p.issue.id, old);
     assert!(taken.contains(&p.issue.id));
+}
+
+#[test]
+fn many_issues_give_a_note_and_nothing_is_refused_until_the_cap() {
+    use kadakas_core::issue::{Issue, IssueData, IssueId, MAX_ISSUES, WARN_ISSUES};
+    let make = |n: usize| {
+        let mut doc = Document::default();
+        doc.issues = IssueData::from_vecs(
+            (0..n as u64)
+                .map(|k| Issue {
+                    id: IssueId::from_num(k + 10),
+                    title: "x".into(),
+                    created: k as i64,
+                    ..Issue::default()
+                })
+                .collect(),
+            vec![],
+        )
+        .into();
+        Session::with_document(doc)
+    };
+    // At the warning size one more is fine and has no note...
+    let mut s = make(WARN_ISSUES - 1);
+    let r = ok(&mut s, "issue.create", json!({"title": "A", "now_ms": 1}));
+    assert!(r.get("note").is_none());
+    // ...above it the answer says so, and the issue is made.
+    let r = ok(&mut s, "issue.create", json!({"title": "B", "now_ms": 2}));
+    assert!(r["note"].as_str().unwrap().contains("10000"), "{r}");
+    assert_eq!(s.editor.doc().issues.len(), WARN_ISSUES + 1);
+    // The hard cap refuses with a message.
+    let mut s = make(MAX_ISSUES);
+    let e = fail(&mut s, "issue.create", json!({"title": "C", "now_ms": 3}));
+    assert_eq!(e.kind, "validation");
+    assert!(e.message.contains("100000"), "{}", e.message);
 }

@@ -45,14 +45,20 @@ id_type!(
     ViewpointId
 );
 
-/// The most issues in a document.
-pub const MAX_ISSUES: usize = 10_000;
-/// The most comments in a document, over all issues.
-pub const MAX_COMMENTS_TOTAL: usize = 100_000;
+/// The most issues in a document: a safety cap. Above [`WARN_ISSUES`] a host warns the person, but
+/// creating issues still works.
+pub const MAX_ISSUES: usize = 100_000;
+/// More issues than this in a document get a warning (the API answers with a note, the app shows
+/// one). Nothing is refused here.
+pub const WARN_ISSUES: usize = 10_000;
+/// The most comments in a document, over all issues. 100,000 issues (the cap) with a realistic
+/// average of 10 comments are 1,000,000, so the limit is that: a lower one would refuse comments
+/// before the cap of issues could be used.
+pub const MAX_COMMENTS_TOTAL: usize = 1_000_000;
 /// The most comments of one issue.
-pub const MAX_COMMENTS: usize = 1_000;
+pub const MAX_COMMENTS: usize = 5_000;
 /// The most viewpoints of one issue.
-pub const MAX_VIEWPOINTS: usize = 16;
+pub const MAX_VIEWPOINTS: usize = 64;
 /// The longest title, in characters.
 pub const MAX_TITLE_CHARS: usize = 200;
 /// The longest description or comment text, in characters.

@@ -5,8 +5,8 @@ use std::io::{Cursor, Read};
 
 use kadakas_core::change::Origin;
 use kadakas_core::issue::{
-    Comment, CommentId, Issue, IssueId, IssueStatus, MAX_COMMENTS, MAX_ISSUES, MAX_SNAPSHOT_BYTES,
-    MAX_SNAPSHOT_PIXELS, MAX_VIEWPOINTS, ViewSpec, Viewpoint, ViewpointId,
+    Comment, CommentId, Issue, IssueId, IssueStatus, MAX_COMMENTS, MAX_SNAPSHOT_BYTES,
+    MAX_SNAPSHOT_PIXELS, MAX_VIEWPOINTS, ViewSpec, Viewpoint, ViewpointId, WARN_ISSUES,
 };
 use kadakas_core::model::ObjectId;
 use kadakas_core::picture::{PictureFormat, jpeg_size, png_size, sha256_hex};
@@ -53,7 +53,7 @@ impl Default for ReadLimits {
             max_ratio: 200,
             max_name_bytes: 256,
             max_xml_nodes: 200_000,
-            max_topics: MAX_ISSUES,
+            max_topics: WARN_ISSUES,
             max_picture_bytes: MAX_SNAPSHOT_BYTES,
             max_picture_pixels: MAX_SNAPSHOT_PIXELS,
         }

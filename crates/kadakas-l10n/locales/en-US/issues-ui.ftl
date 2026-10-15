@@ -6,6 +6,7 @@ issues-ui-new-at-click = New Issue at a Click
 issues-ui-pick-hint = Click in the drawing to place the issue.
 issues-ui-hide-pins = Hide the pins
 issues-ui-bcf = BCF...
+issues-ui-many = This document has { $count } issues. Above { $warn } the list gets slow and the file grows. You can go on; the cap is { $cap }.
 issues-ui-hidden = Shared issue data that is not shown ({ $count })
 issues-ui-hidden-help = The shared document holds this data, but this program does not show it, because it is over a limit. Nothing was deleted.
 issues-ui-none = There are no issues yet. Select objects and choose New Issue, or use New Issue at a Click.

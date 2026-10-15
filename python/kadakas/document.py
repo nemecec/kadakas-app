@@ -587,7 +587,12 @@ class Issues:
     ``KadakasError`` (reason ``confirm_needed``) until the person has said yes and you pass
     ``confirm=True``. An import of a BCF file that meets an issue with the same GUID and other
     content raises ``KadakasError`` (reason ``bcf_conflict``): ask the person, then pass
-    ``on_conflict``. See ``describe()["review"]["issues"]``."""
+    ``on_conflict``.
+
+    Limits: more than 10000 issues in a document gives a warning (``create`` answers with a
+    ``note``), 100000 is the cap; 5000 comments and 64 viewpoints for an issue; 1000000 comments
+    in a document. A value over a limit raises ``KadakasError``. See
+    ``describe()["review"]["issues"]``."""
 
     def __init__(self, doc: "Document") -> None:
         self._doc = doc
@@ -596,7 +601,8 @@ class Issues:
         """Make an issue. Useful params: ``description``, ``type``, ``priority``, ``assignee``,
         ``labels``, ``due`` (``YYYY-MM-DD``), ``objects`` (IDs), ``point`` (``[x, y, z]`` in mm),
         ``viewpoint`` (``{view, selection, snapshot}``) and ``capture=True`` (a viewpoint of the
-        current view with a snapshot). Returns ``{id, viewpoints, issue}``."""
+        current view with a snapshot). Returns ``{id, viewpoints, issue}`` and a ``note`` when the
+        document has more than 10000 issues."""
         return self._doc.api.issue_create(title=title, **params)
 
     def list(self, **params: Any) -> JsonDict:

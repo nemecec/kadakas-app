@@ -446,6 +446,17 @@ impl IssuesUi {
         } else {
             ui.small(tr!("issues-ui-count", shown = rows.len(), total = total));
         }
+        if total > kadakas_core::issue::WARN_ISSUES {
+            ui.colored_label(
+                Color32::from_rgb(200, 120, 20),
+                tr!(
+                    "issues-ui-many",
+                    count = total,
+                    warn = kadakas_core::issue::WARN_ISSUES,
+                    cap = kadakas_core::issue::MAX_ISSUES
+                ),
+            );
+        }
         if rows.is_empty() && total > 0 {
             ui.label(tr!("issues-ui-none-match"));
         }

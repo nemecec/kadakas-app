@@ -262,3 +262,57 @@ fn measure_collab_with_objects_only() {
         b.editor.doc().objects.len()
     );
 }
+
+/// The size of snapshot pictures of a shaded 3D render (not a plan): boxes of different heights
+/// in the isometric view, at 1920 x 1080 and 3840 x 2160, as PNG (what the program stores) and as
+/// JPEG (quality 85 and 70, for comparison).
+#[test]
+#[ignore = "a measurement, run on request"]
+fn measure_shaded_snapshot_sizes() {
+    use base64::Engine;
+    let mut s = Session::default();
+    let mut n = 0;
+    for i in 0..30i64 {
+        for j in 0..20i64 {
+            let (x, y) = (i * 4000, j * 4000);
+            let h = 1500 + ((i * 7 + j * 13) % 9) * 900;
+            let r = s.handle(
+                "extrude.add",
+                json!({"profile": [[x, y], [x + 3000, y], [x + 3000, y + 3000], [x, y + 3000]],
+                       "height": h}),
+            );
+            if r.is_ok() {
+                n += 1;
+            }
+        }
+    }
+    s.handle("view.set", json!({"view": "right_isometric"}))
+        .expect("view");
+    println!("solids,width,height,render_ms,png_bytes,jpeg85_bytes,jpeg70_bytes");
+    for (w, h) in [(1920u32, 1080u32), (3840, 2160)] {
+        let t = Instant::now();
+        let r = s
+            .handle("render.png", json!({"width": w, "height": h}))
+            .expect("render.png");
+        let ms = ms(t);
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(r["png_base64"].as_str().unwrap())
+            .unwrap();
+        let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+            .expect("decode")
+            .to_rgb8();
+        let jpeg = |q: u8| {
+            let mut out = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, q)
+                .encode_image(&img)
+                .expect("jpeg");
+            out.len()
+        };
+        println!(
+            "{n},{w},{h},{ms:.0},{},{},{}",
+            png.len(),
+            jpeg(85),
+            jpeg(70)
+        );
+    }
+}

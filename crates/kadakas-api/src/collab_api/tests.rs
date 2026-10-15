@@ -2002,7 +2002,7 @@ fn issue_data_that_the_document_does_not_show_is_listed_for_the_person() {
     s.collab.quarantined = vec![
         Quarantined {
             target: Target::new(Kind::Comment, kadakas_core::uid::Uid::from_u128(5)),
-            reason: "the issue has more than 1000 comments: this one is not shown".into(),
+            reason: "the issue has more than 5000 comments: this one is not shown".into(),
         },
         Quarantined {
             target: Target::new(Kind::Object, kadakas_core::uid::Uid::from_u128(6)),
@@ -2011,5 +2011,5 @@ fn issue_data_that_the_document_does_not_show_is_listed_for_the_person() {
     ];
     let hidden = s.collab_hidden_issue_data();
     assert_eq!(hidden.len(), 1);
-    assert!(hidden[0].contains("1000 comments"));
+    assert!(hidden[0].contains("5000 comments"));
 }

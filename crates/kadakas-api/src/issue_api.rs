@@ -45,7 +45,7 @@ pub const ISSUE_GET: (&str, &str) = (
 );
 pub const ISSUE_CREATE: (&str, &str) = (
     "issue.create",
-    "Make an issue. One undo step. The origin is the origin of the session (agent for an agent). params: {title, description?, type? (issue, error, warning, request, clash, remark or any text; default issue), status? (default open), priority? (low, normal, high, critical or any text; default normal), assignee?, labels?, due? (YYYY-MM-DD), objects? (IDs; they must exist), point? ([x, y, z] in mm), author? (default: the collaboration name, else the origin), now_ms?, viewpoint? {name?, view? ({kind: plan, center: [x, y], zoom} or {kind: camera, target: [x, y, z], yaw, pitch, distance, perspective?}), selection? (default: the objects), capture_visibility? (default true: the visible layers and classes now), snapshot? (true or the params of render.png: a picture of the model; or snapshot_base64: a PNG or JPEG file you made)}, capture? (true: a viewpoint of the current view: the view of the session, the selection when objects is not given, the visible layers and classes, and a snapshot), snapshot? (true or render.png params: with a viewpoint or capture)}. The snapshot is stored once in the document as a picture (SHA-256), at most 2 MiB. Returns {id, viewpoints: [ids], issue: summary}.",
+    "Make an issue. One undo step. The origin is the origin of the session (agent for an agent). params: {title, description?, type? (issue, error, warning, request, clash, remark or any text; default issue), status? (default open), priority? (low, normal, high, critical or any text; default normal), assignee?, labels?, due? (YYYY-MM-DD), objects? (IDs; they must exist), point? ([x, y, z] in mm), author? (default: the collaboration name, else the origin), now_ms?, viewpoint? {name?, view? ({kind: plan, center: [x, y], zoom} or {kind: camera, target: [x, y, z], yaw, pitch, distance, perspective?}), selection? (default: the objects), capture_visibility? (default true: the visible layers and classes now), snapshot? (true or the params of render.png: a picture of the model; or snapshot_base64: a PNG or JPEG file you made)}, capture? (true: a viewpoint of the current view: the view of the session, the selection when objects is not given, the visible layers and classes, and a snapshot), snapshot? (true or render.png params: with a viewpoint or capture)}. The snapshot is stored once in the document as a picture (SHA-256), at most 2 MiB. Returns {id, viewpoints: [ids], issue: summary, note?}; `note` is there when the document has more than 10000 issues (a warning only; the cap is 100000).",
 );
 pub const ISSUE_UPDATE: (&str, &str) = (
     "issue.update",
@@ -53,11 +53,11 @@ pub const ISSUE_UPDATE: (&str, &str) = (
 );
 pub const ISSUE_ADD_VIEWPOINT: (&str, &str) = (
     "issue.add_viewpoint",
-    "Add a viewpoint to an issue. One undo step. params: {id, name?, view? ({kind: plan, center: [x, y], zoom} or {kind: camera, target: [x, y, z], yaw, pitch, distance, perspective?}; default: the current view of the session), selection? (object IDs; default: the objects of the issue), capture_visibility? (default true: the visible layers and classes now), snapshot? (true or the params of render.png), snapshot_base64? (a PNG or JPEG file you made), now_ms?}. At most 16 viewpoints for an issue. Returns {id, viewpoint (the new ID), issue: summary}. Remove viewpoints with issue.update {remove_viewpoints: [IDs]}.",
+    "Add a viewpoint to an issue. One undo step. params: {id, name?, view? ({kind: plan, center: [x, y], zoom} or {kind: camera, target: [x, y, z], yaw, pitch, distance, perspective?}; default: the current view of the session), selection? (object IDs; default: the objects of the issue), capture_visibility? (default true: the visible layers and classes now), snapshot? (true or the params of render.png), snapshot_base64? (a PNG or JPEG file you made), now_ms?}. At most 64 viewpoints for an issue. Returns {id, viewpoint (the new ID), issue: summary}. Remove viewpoints with issue.update {remove_viewpoints: [IDs]}.",
 );
 pub const ISSUE_COMMENT: (&str, &str) = (
     "issue.comment",
-    "Add a comment to the thread of an issue. A comment is a record of its own, so two people who comment at the same time both keep their comment. One undo step. params: {id, text, viewpoint? (the ID of a viewpoint of the issue), author?, now_ms?}. The origin is the origin of the session. At most 1000 comments for an issue. Returns {comment: ID, issue: summary}.",
+    "Add a comment to the thread of an issue. A comment is a record of its own, so two people who comment at the same time both keep their comment. One undo step. params: {id, text, viewpoint? (the ID of a viewpoint of the issue), author?, now_ms?}. The origin is the origin of the session. At most 5000 comments for an issue. Returns {comment: ID, issue: summary}.",
 );
 pub const ISSUE_RESOLVE: (&str, &str) = (
     "issue.resolve",
@@ -82,6 +82,7 @@ pub fn describe() -> Value {
         "model": "An issue (BCF terms) has a title, description, type, status (open, in_progress, resolved, closed), priority, assignee, labels, a due date, an author, an origin (user, agent, script, remote), times, a pin point, the objects it is about (by ID), viewpoints and a comment thread. A viewpoint is a plan view or a 3D camera, the visible layers and classes, a selection and a snapshot picture. Issues live in the document as review data, not as objects: they have no layer and no shape, and they are not versions (a restore leaves them as they are). Every change is one undo step and works in collaboration: an issue is a set of properties by ID, comments are records of their own, so two people who edit or comment at the same time keep both.",
         "bounds": {
             "issues": kadakas_core::issue::MAX_ISSUES,
+            "issues_warning_above": kadakas_core::issue::WARN_ISSUES,
             "title_chars": kadakas_core::issue::MAX_TITLE_CHARS,
             "text_chars": kadakas_core::issue::MAX_TEXT_CHARS,
             "label_chars": kadakas_core::issue::MAX_LABEL_CHARS,
@@ -93,7 +94,7 @@ pub fn describe() -> Value {
             "objects_per_issue": kadakas_core::issue::MAX_OBJECTS,
             "snapshot_bytes": MAX_SNAPSHOT_BYTES,
             "snapshot_pixels": kadakas_core::issue::MAX_SNAPSHOT_PIXELS,
-            "note": "A value over a bound is refused with a message. Nothing is cut. These bounds are provisional: they are not final limits (see REV-04 in the feature list for the measurements).",
+            "note": "A value over a bound is refused with a message. Nothing is cut. The limits were chosen with the person from measurements (REV-04 in the feature list): more than issues_warning_above issues only gives a note (issue.create answers with `note`, issue.import_bcf adds it to `warnings`, the app shows it), issues is the hard cap. The snapshot limits are still provisional.",
         },
         "consent": "issue.delete never deletes the work of somebody else silently: an issue of another origin, or with comments of another origin, needs confirm: true after the person said yes. issue.import_bcf never overwrites: an issue with the same GUID and other content is a conflict that the person decides (skip, replace or keep_both).",
         "origin": "An issue and a comment made through the API have the origin agent. The app makes user, a change of another user in a shared document arrives as remote.",
@@ -104,7 +105,7 @@ pub fn describe() -> Value {
             "files": ".bcfzip. One folder for each issue with markup.bcf, a .bcfv for each viewpoint and the snapshot pictures.",
             "ids": "The GUIDs of the topic, the viewpoints and the comments are the IDs of the issue, the viewpoints and the comments. A component is an IfcGuid: the 128 bits of the object ID in the IFC alphabet, the same GlobalId that export.file writes for ifc.",
             "objects": "BCF has no component list for a topic, only for viewpoints. The objects of an issue go into the selection of each of its viewpoints, and an issue with objects and no viewpoint gets a viewpoint for the file. On import the objects of an issue are the union of the selections.",
-            "limits": "Reading is bounded: at most 50000 entries, 32 MiB for an entry, 4 MiB for an XML file, 512 MiB in all, a compression ratio of 200 to 1, names of at most 256 bytes without .., absolute paths and drive letters, no encrypted entries, at most 10000 topics, 1000 comments and 16 viewpoints for a topic, XML with at most 40 levels and 200000 nodes and no DTD, snapshots of at most 2 MiB and 4 million pixels. A violation of the archive is an error and nothing is imported; a topic that breaks a limit is listed in topics_skipped.",
+            "limits": "Reading is bounded: at most 50000 entries, 32 MiB for an entry, 4 MiB for an XML file, 512 MiB in all, a compression ratio of 200 to 1, names of at most 256 bytes without .., absolute paths and drive letters, no encrypted entries, at most 10000 topics, 5000 comments and 64 viewpoints for a topic, XML with at most 40 levels and 200000 nodes and no DTD, snapshots of at most 2 MiB and 4 million pixels. A violation of the archive is an error and nothing is imported; a topic that breaks a limit is listed in topics_skipped.",
             "status": "Statuses are matched without case: open, active, new, assigned and reopened are open; in progress and started are in_progress; resolved, fixed and done are resolved; closed is closed. Any other word is open, and the label bcf-status:<word> keeps it.",
             "not_read": "Clipping planes, lines, bitmaps, coloring, hidden components, document references, related topics, BIM snippets and reference links are not read. warnings counts them.",
             "schema": "The files that export_bcf writes are checked against the buildingSMART XSD files of BCF 2.1 and 3.0 in the behavior tests.",
@@ -685,11 +686,15 @@ impl Session {
             .map_err(RpcError::from)?;
         let id = IssueId(out.created[0]);
         let doc = self.editor.doc();
-        Ok(json!({
+        let mut answer = json!({
             "id": id,
             "viewpoints": out.created[1..],
             "issue": summary(doc, find(doc, id)?),
-        }))
+        });
+        if let Some(note) = many_issues_note(doc) {
+            answer["note"] = json!(note);
+        }
+        Ok(answer)
     }
 
     fn issue_update(&mut self, p: &Value) -> Result<Value, RpcError> {
@@ -1312,7 +1317,7 @@ impl Session {
             .iter()
             .map(|s| json!({"topic": s.topic, "reason": s.reason}))
             .collect();
-        let warnings = std::mem::take(&mut imported.warnings);
+        let mut warnings = std::mem::take(&mut imported.warnings);
         if dry_run {
             return Ok(json!({
                 "version": imported.version.id(),
@@ -1381,6 +1386,9 @@ impl Session {
                 )
                 .map_err(RpcError::from)?;
         }
+        if let Some(note) = many_issues_note(self.editor.doc()) {
+            warnings.push(note);
+        }
         Ok(json!({
             "version": imported.version.id(),
             "imported": imported_n,
@@ -1395,6 +1403,18 @@ impl Session {
             "pictures": pictures,
         }))
     }
+}
+
+/// The note for a document with more issues than [`kadakas_core::issue::WARN_ISSUES`].
+fn many_issues_note(doc: &Document) -> Option<String> {
+    (doc.issues.len() > kadakas_core::issue::WARN_ISSUES).then(|| {
+        format!(
+            "the document has {} issues; above {} the lists get slow to read and the file grows (the cap is {})",
+            doc.issues.len(),
+            kadakas_core::issue::WARN_ISSUES,
+            kadakas_core::issue::MAX_ISSUES
+        )
+    })
 }
 
 fn unfit_json(u: &kadakas_review::bcf::Unfit) -> Value {
