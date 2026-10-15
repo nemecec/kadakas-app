@@ -18,7 +18,7 @@ use kadakas_sys::fsio::{self, OpenError};
 
 use crate::error::FileError;
 use crate::layout::{DOCUMENT, Form, HISTORY_BLOBS, sniff};
-use crate::read::{Opened, read_source};
+use crate::read::{Opened, ReadMode, read_source};
 use crate::source::FileSource;
 use crate::write::{WriteOptions, Written, write_container, write_json};
 
@@ -50,7 +50,7 @@ fn read_head(r: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
 /// (checked before anything is read). A container is also read with `max_bytes` as the limit of
 /// its uncompressed bytes (the sum of the sizes in the manifest), so a small file cannot expand
 /// to more than the limit. The plain JSON form is parsed from a buffered reader.
-pub fn open_path(path: &Path, max_bytes: u64) -> Result<Opened, FileError> {
+pub fn open_path(path: &Path, max_bytes: u64, mode: ReadMode) -> Result<Opened, FileError> {
     let mut reader = fsio::open_regular(path, max_bytes).map_err(|e| open_error(path, e))?;
     let mut head = [0u8; 64];
     let n = read_head(&mut reader, &mut head)
@@ -69,11 +69,11 @@ pub fn open_path(path: &Path, max_bytes: u64) -> Result<Opened, FileError> {
         Form::Container => {
             drop(reader);
             let source = FileSource::open_path(path, Limits::default().with_total(max_bytes))?;
-            let doc = read_source(&source)?;
+            let doc = read_source(&source, mode)?;
             Ok(Opened {
                 doc,
                 form: Form::Container,
-                source: Some(source),
+                source: (mode == ReadMode::Lazy).then_some(source),
             })
         }
     }
@@ -146,7 +146,7 @@ pub fn save_path(
 /// Opens `from` and saves it as `to` in the given form (`kadakas convert`). The document is
 /// checked on the way in, so a convert is also a check of the file.
 pub fn convert(from: &Path, to: &Path, form: Form, max_bytes: u64) -> Result<Saved, FileError> {
-    let opened = open_path(from, max_bytes)?;
+    let opened = open_path(from, max_bytes, ReadMode::Lazy)?;
     let opts = WriteOptions {
         generator: crate::generator(),
         keep: opened.source.iter().cloned().collect(),
@@ -233,6 +233,6 @@ pub fn open_with_source(
     path: &Path,
     max_bytes: u64,
 ) -> Result<(Document, Option<Arc<FileSource>>), FileError> {
-    let o = open_path(path, max_bytes)?;
+    let o = open_path(path, max_bytes, ReadMode::Lazy)?;
     Ok((o.doc, o.source))
 }

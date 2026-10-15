@@ -112,7 +112,7 @@ fn container_bytes(doc: &Document) -> Vec<u8> {
 }
 
 fn open(bytes: Vec<u8>) -> Opened {
-    read_bytes(bytes, Limits::default()).unwrap()
+    read_bytes(bytes, Limits::default(), ReadMode::Lazy).unwrap()
 }
 
 #[test]
@@ -265,7 +265,7 @@ fn json_form_has_pictures_inline_and_history_inside_and_loads_the_same_model() {
     assert!(text.contains("iVBORw0KGgo"), "base64 pictures");
     assert!(text.contains("\"history\""));
     assert!(!text.contains("$blob"));
-    let from_json = read_bytes(json_bytes, Limits::default()).unwrap();
+    let from_json = read_bytes(json_bytes, Limits::default(), ReadMode::Lazy).unwrap();
     assert_eq!(from_json.form, Form::Json);
     assert!(from_json.source.is_none());
     assert_eq!(from_json.doc, doc);
@@ -280,7 +280,7 @@ fn container_to_json_to_container_gives_the_same_document_and_history() {
     let a = open(container_bytes(&doc));
     let mut json_bytes = Vec::new();
     write_json(&mut json_bytes, &a.doc).unwrap();
-    let b = read_bytes(json_bytes, Limits::default()).unwrap();
+    let b = read_bytes(json_bytes, Limits::default(), ReadMode::Lazy).unwrap();
     let c = open(container_bytes(&b.doc));
     assert_eq!(c.doc, doc);
     assert_eq!(c.doc.history, doc.history);
@@ -340,7 +340,7 @@ fn a_picture_that_is_not_in_the_file_is_an_error_naming_it() {
     for e in c.entries().iter().filter(|e| e.name != blob) {
         w.copy_raw(c.raw(&e.name).unwrap()).unwrap();
     }
-    let e = read_bytes(w.finish().unwrap(), Limits::default()).unwrap_err();
+    let e = read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Lazy).unwrap_err();
     assert!(e.to_string().contains("not in the"), "{e}");
 }
 
@@ -364,7 +364,7 @@ fn a_blob_with_the_wrong_content_for_its_name_is_not_used() {
     // Another content under the name of the first.
     w.add_bytes(&blob, Compression::Stored, text.as_bytes())
         .unwrap();
-    let e = read_bytes(w.finish().unwrap(), Limits::default()).unwrap_err();
+    let e = read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Lazy).unwrap_err();
     assert!(e.to_string().contains("not in the"), "{e}");
 }
 
@@ -376,7 +376,7 @@ fn a_reference_in_a_plain_json_file_is_an_error() {
         ResourceId::from_num(5),
         text_hash("x")
     );
-    assert!(read_bytes(json.into_bytes(), Limits::default()).is_err());
+    assert!(read_bytes(json.into_bytes(), Limits::default(), ReadMode::Lazy).is_err());
 }
 
 #[test]
@@ -386,13 +386,13 @@ fn damaged_documents_name_the_entry() {
     // A container without a drawing.
     let mut w = Writer::new(Vec::new());
     w.add_bytes("blobs/x", Compression::Stored, b"1").unwrap();
-    let e = read_bytes(w.finish().unwrap(), Limits::default()).unwrap_err();
+    let e = read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Lazy).unwrap_err();
     assert!(e.to_string().contains("document.json"), "{e}");
     // A drawing that is not JSON.
     let mut w = Writer::new(Vec::new());
     w.add_bytes(DOCUMENT, Compression::Deflate(1), b"{nope")
         .unwrap();
-    let e = read_bytes(w.finish().unwrap(), Limits::default()).unwrap_err();
+    let e = read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Lazy).unwrap_err();
     assert!(e.to_string().contains("not a Kadakas file"), "{e}");
     // A newer drawing says so.
     let mut w = Writer::new(Vec::new());
@@ -402,7 +402,7 @@ fn damaged_documents_name_the_entry() {
         br#"{"format_version":99,"layers":"?"}"#,
     )
     .unwrap();
-    let e = read_bytes(w.finish().unwrap(), Limits::default()).unwrap_err();
+    let e = read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Lazy).unwrap_err();
     assert!(e.to_string().contains("newer Kadakas (format 99)"), "{e}");
     // A drawing and a history in two places.
     let mut doc = sample_doc();
@@ -417,7 +417,7 @@ fn damaged_documents_name_the_entry() {
     for e in cb.entries().iter().filter(|e| e.name != DOCUMENT) {
         w.copy_raw(cb.raw(&e.name).unwrap()).unwrap();
     }
-    let e = read_bytes(w.finish().unwrap(), Limits::default()).unwrap_err();
+    let e = read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Lazy).unwrap_err();
     assert!(e.to_string().contains("both hold a history"), "{e}");
     let _ = c;
 }
@@ -436,7 +436,7 @@ fn bad_history_entries_name_the_entry() {
                 w.copy_raw(good.raw(&e.name).unwrap()).unwrap();
             }
         }
-        read_bytes(w.finish().unwrap(), Limits::default())
+        read_bytes(w.finish().unwrap(), Limits::default(), ReadMode::Lazy)
             .unwrap_err()
             .to_string()
     };
@@ -453,11 +453,11 @@ fn bad_history_entries_name_the_entry() {
 fn the_form_is_told_from_the_bytes_and_unknown_bytes_are_an_error() {
     for bad in [&b""[..], b"hello", b"[]", b"\x89PNG\r\n\x1a\n"] {
         assert!(matches!(
-            read_bytes(bad.to_vec(), Limits::default()),
+            read_bytes(bad.to_vec(), Limits::default(), ReadMode::Lazy),
             Err(FileError::Unknown(_))
         ));
     }
-    let e = read_bytes(b"{\"a\":1}".to_vec(), Limits::default()).unwrap_err();
+    let e = read_bytes(b"{\"a\":1}".to_vec(), Limits::default(), ReadMode::Lazy).unwrap_err();
     assert!(e.to_string().contains("format_version"), "{e}");
 }
 
@@ -468,7 +468,12 @@ fn limits_apply_to_the_uncompressed_size_of_a_container() {
     let c = Container::from_bytes(bytes.clone(), Limits::default()).unwrap();
     let total = c.uncompressed_bytes();
     assert!(total > file_size / 2);
-    let e = read_bytes(bytes.clone(), Limits::default().with_total(total - 1)).unwrap_err();
+    let e = read_bytes(
+        bytes.clone(),
+        Limits::default().with_total(total - 1),
+        ReadMode::Lazy,
+    )
+    .unwrap_err();
     assert!(
         matches!(
             e,
@@ -476,7 +481,7 @@ fn limits_apply_to_the_uncompressed_size_of_a_container() {
         ),
         "{e}"
     );
-    assert!(read_bytes(bytes, Limits::default().with_total(total)).is_ok());
+    assert!(read_bytes(bytes, Limits::default().with_total(total), ReadMode::Lazy).is_ok());
 }
 
 #[test]
@@ -544,7 +549,7 @@ mod disk {
             let p = d.join(name);
             let saved = save_path(&p, &doc, form, &WriteOptions::default()).unwrap();
             assert_eq!(saved.form, form);
-            let o = open_path(&p, u64::MAX).unwrap();
+            let o = open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
             assert_eq!(o.form, form);
             assert_eq!(o.doc, doc);
             assert_eq!(o.source.is_some(), form == Form::Container);
@@ -564,7 +569,7 @@ mod disk {
         let p = d.join("a.kad");
         let doc = sample_doc();
         save_path(&p, &doc, Form::Container, &WriteOptions::default()).unwrap();
-        let mut o = open_path(&p, u64::MAX).unwrap();
+        let mut o = open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
         // Edit: move the circle.
         let obj = o.doc.objects.get_mut(&ObjectId::from_num(10)).unwrap();
         obj.shape = Shape::Circle {
@@ -590,7 +595,7 @@ mod disk {
         // And a third save works from the refreshed source.
         let again = save_path(&p, &o.doc, Form::Container, &opts(&o)).unwrap();
         assert_eq!(again.written.unwrap().blobs_copied, 4);
-        let back = open_path(&p, u64::MAX).unwrap();
+        let back = open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
         assert_eq!(back.doc, o.doc);
         assert_eq!(
             names(&d),
@@ -604,7 +609,7 @@ mod disk {
         let d = dir("undo");
         let p = d.join("a.kad");
         save_path(&p, &sample_doc(), Form::Container, &WriteOptions::default()).unwrap();
-        let mut o = open_path(&p, u64::MAX).unwrap();
+        let mut o = open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
         // The undo step holds the object; the drawing no longer has it.
         let held = o.doc.objects.shift_remove(&ObjectId::from_num(11)).unwrap();
         let saved = save_path(&p, &o.doc, Form::Container, &opts(&o)).unwrap();
@@ -636,7 +641,7 @@ mod disk {
         let d = dir("changed");
         let p = d.join("a.kad");
         save_path(&p, &sample_doc(), Form::Container, &WriteOptions::default()).unwrap();
-        let o = open_path(&p, u64::MAX).unwrap();
+        let o = open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(30));
         // Another program writes another document over the file.
         let other = {
@@ -696,9 +701,9 @@ mod disk {
         convert(&k, &j, Form::Json, u64::MAX).unwrap();
         convert(&j, &k2, Form::Container, u64::MAX).unwrap();
         assert!(std::fs::read(&k2).unwrap().starts_with(b"PK"));
-        let a = open_path(&k, u64::MAX).unwrap().doc;
-        let b = open_path(&j, u64::MAX).unwrap().doc;
-        let c = open_path(&k2, u64::MAX).unwrap().doc;
+        let a = open_path(&k, u64::MAX, ReadMode::Lazy).unwrap().doc;
+        let b = open_path(&j, u64::MAX, ReadMode::Lazy).unwrap().doc;
+        let c = open_path(&k2, u64::MAX, ReadMode::Lazy).unwrap().doc;
         assert_eq!(a, doc);
         assert_eq!(a, b);
         assert_eq!(b, c);
@@ -706,29 +711,29 @@ mod disk {
         // Convert over the same file.
         convert(&k2, &k2, Form::Json, u64::MAX).unwrap();
         assert!(std::fs::read(&k2).unwrap().starts_with(b"{"));
-        assert_eq!(open_path(&k2, u64::MAX).unwrap().doc, doc);
+        assert_eq!(open_path(&k2, u64::MAX, ReadMode::Lazy).unwrap().doc, doc);
     }
 
     #[test]
     fn errors_for_missing_and_big_files() {
         let d = dir("errors");
         assert!(matches!(
-            open_path(&d.join("none.kad"), u64::MAX),
+            open_path(&d.join("none.kad"), u64::MAX, ReadMode::Lazy),
             Err(FileError::NotFound(_))
         ));
         assert!(matches!(
-            open_path(&d, u64::MAX),
+            open_path(&d, u64::MAX, ReadMode::Lazy),
             Err(FileError::NotRegular(_))
         ));
         let p = d.join("a.kad");
         save_path(&p, &sample_doc(), Form::Container, &WriteOptions::default()).unwrap();
         let len = std::fs::metadata(&p).unwrap().len();
         assert!(matches!(
-            open_path(&p, len - 1),
+            open_path(&p, len - 1, ReadMode::Lazy),
             Err(FileError::TooLarge { .. })
         ));
         // The limit counts the bytes of the entries too.
-        let e = open_path(&p, len + 100).unwrap_err();
+        let e = open_path(&p, len + 100, ReadMode::Lazy).unwrap_err();
         assert!(
             matches!(
                 e,
@@ -738,12 +743,12 @@ mod disk {
         );
         std::fs::write(&p, b"garbage").unwrap();
         assert!(matches!(
-            open_path(&p, u64::MAX),
+            open_path(&p, u64::MAX, ReadMode::Lazy),
             Err(FileError::Unknown(_))
         ));
         std::fs::write(&p, b"").unwrap();
         assert!(matches!(
-            open_path(&p, u64::MAX),
+            open_path(&p, u64::MAX, ReadMode::Lazy),
             Err(FileError::Unknown(_))
         ));
     }

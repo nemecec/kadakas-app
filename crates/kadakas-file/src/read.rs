@@ -13,6 +13,17 @@ use crate::history;
 use crate::layout::{DOCUMENT, Form, sniff};
 use crate::source::FileSource;
 
+/// How the pictures of a container are read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadMode {
+    /// The pictures stay in the file and are read when they are used (DOC-21). For the document
+    /// that a person works on: it keeps a handle to the file, so the file must stay where it is.
+    Lazy,
+    /// Every picture is read into memory now. For a document that is only read from (a library,
+    /// an import) and must not depend on its file after the read.
+    Eager,
+}
+
 /// A document that was read, and where from.
 pub struct Opened {
     pub doc: Document,
@@ -33,8 +44,13 @@ impl std::fmt::Debug for Opened {
 }
 
 /// Reads a document from bytes in memory (the file picker of the browser, a test): a container
-/// or the plain JSON form, told by the first bytes. A container is read with `limits`.
-pub fn read_bytes(bytes: impl Into<Arc<[u8]>>, limits: Limits) -> Result<Opened, FileError> {
+/// or the plain JSON form, told by the first bytes. A container is read with `limits`. With
+/// `ReadMode::Eager` the result holds no handle to the container.
+pub fn read_bytes(
+    bytes: impl Into<Arc<[u8]>>,
+    limits: Limits,
+    mode: ReadMode,
+) -> Result<Opened, FileError> {
     let bytes: Arc<[u8]> = bytes.into();
     match sniff(&bytes[..bytes.len().min(64)])? {
         Form::Json => Ok(Opened {
@@ -44,11 +60,11 @@ pub fn read_bytes(bytes: impl Into<Arc<[u8]>>, limits: Limits) -> Result<Opened,
         }),
         Form::Container => {
             let source = FileSource::from_container(Container::from_bytes(bytes, limits)?);
-            let doc = read_source(&source)?;
+            let doc = read_source(&source, mode)?;
             Ok(Opened {
                 doc,
                 form: Form::Container,
-                source: Some(source),
+                source: (mode == ReadMode::Lazy).then_some(source),
             })
         }
     }
@@ -73,7 +89,7 @@ impl<R: Read> Read for Spy<'_, R> {
 
 /// Reads the document of an opened container. The pictures stay in the file (lazy); the history
 /// is read from its entries.
-pub fn read_source(source: &Arc<FileSource>) -> Result<Document, FileError> {
+pub fn read_source(source: &Arc<FileSource>, mode: ReadMode) -> Result<Document, FileError> {
     let container = source.container();
     if !container.contains(DOCUMENT) {
         return Err(ContainerError::Entry {
@@ -86,7 +102,7 @@ pub fn read_source(source: &Arc<FileSource>) -> Result<Document, FileError> {
     let history_error: RefCell<Option<FileError>> = RefCell::new(None);
     let mut entry = container.reader(DOCUMENT)?;
     let blobs: Arc<dyn BlobSource> = source.clone();
-    let parsed = with_load_source(blobs, || {
+    let parsed = with_load_source(blobs, mode == ReadMode::Eager, || {
         let spy = Spy {
             inner: &mut entry,
             error: &error,

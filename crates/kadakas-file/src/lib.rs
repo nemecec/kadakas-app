@@ -33,7 +33,7 @@ pub use layout::{
     BLOB_DIR, DOCUMENT, Form, HISTORY_BLOBS, HISTORY_NEWEST, HISTORY_RAW, HISTORY_TOP,
     HISTORY_VERSIONS, blob_name, sniff,
 };
-pub use read::{Opened, read_bytes, read_source};
+pub use read::{Opened, ReadMode, read_bytes, read_source};
 pub use source::FileSource;
 pub use write::{DOCUMENT_LEVEL, WriteOptions, Written, write_container, write_json};
 

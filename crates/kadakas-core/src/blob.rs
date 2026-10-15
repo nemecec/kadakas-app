@@ -169,8 +169,17 @@ pub fn is_hash(text: &str) -> bool {
 // ---------------------------------------------------------------------------------------------
 // The scopes.
 
+/// The source of a read and how it is used.
+#[derive(Clone)]
+struct LoadScope {
+    source: Arc<dyn BlobSource>,
+    /// Read every picture now (a document that is imported from, or kept after its file is
+    /// gone) and not later.
+    eager: bool,
+}
+
 thread_local! {
-    static LOAD: RefCell<Option<Arc<dyn BlobSource>>> = const { RefCell::new(None) };
+    static LOAD: RefCell<Option<LoadScope>> = const { RefCell::new(None) };
     static SAVE: RefCell<Option<SaveRefs>> = const { RefCell::new(None) };
 }
 
@@ -196,10 +205,11 @@ impl<T: 'static> Drop for Restore<T> {
     }
 }
 
-/// Runs `f` with a source for the references that the pictures meet while they are read. The
-/// previous scope comes back after `f`, also when `f` panics.
-pub fn with_load_source<R>(source: Arc<dyn BlobSource>, f: impl FnOnce() -> R) -> R {
-    let old = LOAD.with(|c| c.borrow_mut().replace(source));
+/// Runs `f` with a source for the references that the pictures meet while they are read. With
+/// `eager` the pictures are read into memory at once; otherwise they stay in the file (lazy).
+/// The previous scope comes back after `f`, also when `f` panics.
+pub fn with_load_source<R>(source: Arc<dyn BlobSource>, eager: bool, f: impl FnOnce() -> R) -> R {
+    let old = LOAD.with(|c| c.borrow_mut().replace(LoadScope { source, eager }));
     let _restore = Restore(&LOAD, old);
     f()
 }
@@ -226,38 +236,49 @@ pub(crate) fn import_base_ref(ptr: usize) -> Option<String> {
     SAVE.with(|c| c.borrow().as_ref()?.import_bases.get(&ptr).cloned())
 }
 
-/// The source of the scope of a read.
-fn load_source() -> Option<Arc<dyn BlobSource>> {
+/// The scope of a read.
+fn load_scope() -> Option<LoadScope> {
     LOAD.with(|c| c.borrow().clone())
 }
 
 /// The text of a reference, for a value that is read eagerly (the summaries of an import base).
 pub(crate) fn read_ref_text(hash: &str) -> Result<Arc<str>, String> {
-    let source = ref_source(hash)?;
-    source.blob_text(hash).map_err(|e| e.to_string())
+    let scope = ref_source(hash)?;
+    scope.source.blob_text(hash).map_err(|e| e.to_string())
 }
 
-fn ref_source(hash: &str) -> Result<Arc<dyn BlobSource>, String> {
+fn ref_source(hash: &str) -> Result<LoadScope, String> {
     if !is_hash(hash) {
         return Err("a picture reference needs 64 lowercase hex digits".into());
     }
-    load_source().ok_or_else(|| {
+    load_scope().ok_or_else(|| {
         "the text refers to a picture by hash ({\"$blob\": ...}), but it is not a container file, so the picture is not here".into()
     })
 }
 
-/// A lazy handle for a reference met while reading.
-pub(crate) fn lazy_from_ref(hash: &str) -> Result<Arc<LazyBlob>, String> {
-    let source = ref_source(hash)?;
-    let blob = Arc::new(LazyBlob::new(source.clone(), hash).map_err(|e| e.to_string())?);
-    source.note_handle(&blob);
-    Ok(blob)
+/// What a reference stands for after a read.
+pub(crate) enum Resolved {
+    /// The picture stays in the file.
+    Lazy(Arc<LazyBlob>),
+    /// The picture was read (an eager read).
+    Text(Arc<str>),
+}
+
+/// Resolves a reference met while reading.
+pub(crate) fn resolve_ref(hash: &str) -> Result<Resolved, String> {
+    let scope = ref_source(hash)?;
+    let blob = Arc::new(LazyBlob::new(scope.source.clone(), hash).map_err(|e| e.to_string())?);
+    if scope.eager {
+        return blob.text().map(Resolved::Text).map_err(|e| e.to_string());
+    }
+    scope.source.note_handle(&blob);
+    Ok(Resolved::Lazy(blob))
 }
 
 /// Reads a reference value: `{"$blob": "<hash>"}` as a visitor of a map.
 pub(crate) struct RefVisitor<F, G>(pub F, pub G);
 
-impl<'de, T, F: FnOnce(Arc<LazyBlob>) -> T, G: FnOnce(&str) -> T> serde::de::Visitor<'de>
+impl<'de, T, F: FnOnce(Resolved) -> Result<T, String>, G: FnOnce(&str) -> T> serde::de::Visitor<'de>
     for RefVisitor<F, G>
 {
     type Value = T;
@@ -282,8 +303,8 @@ impl<'de, T, F: FnOnce(Arc<LazyBlob>) -> T, G: FnOnce(&str) -> T> serde::de::Vis
                 "a picture reference has only the key $blob",
             ));
         }
-        let lazy = lazy_from_ref(&hash).map_err(A::Error::custom)?;
-        Ok((self.0)(lazy))
+        let resolved = resolve_ref(&hash).map_err(A::Error::custom)?;
+        (self.0)(resolved).map_err(A::Error::custom)
     }
 }
 
@@ -456,7 +477,15 @@ impl Serialize for BlobText {
 
 impl<'de> Deserialize<'de> for BlobText {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_any(RefVisitor(BlobText::from, |t: &str| BlobText::from(t)))
+        d.deserialize_any(RefVisitor(
+            |r: Resolved| {
+                Ok(match r {
+                    Resolved::Lazy(l) => BlobText::from(l),
+                    Resolved::Text(t) => BlobText::from(t),
+                })
+            },
+            |t: &str| BlobText::from(t),
+        ))
     }
 }
 
@@ -563,7 +592,8 @@ mod tests {
         let text = "iVBORw0KGgo".repeat(1000);
         let h = src.put(&text);
         let json = format!("{{\"$blob\": \"{h}\"}}");
-        let t: BlobText = with_load_source(src.clone(), || serde_json::from_str(&json)).unwrap();
+        let t: BlobText =
+            with_load_source(src.clone(), false, || serde_json::from_str(&json)).unwrap();
         assert!(t.is_lazy() && t.is_blob());
         assert_eq!(t.len(), text.len());
         assert_eq!(t.hash(), h);
@@ -591,8 +621,25 @@ mod tests {
         assert!(t.lazy().is_some() && t.mem_text().is_none());
         assert!(format!("{t:?}").contains("LazyBlob"));
         let lazy_again: BlobText =
-            with_load_source(src.clone(), || serde_json::from_str(&json)).unwrap();
+            with_load_source(src.clone(), false, || serde_json::from_str(&json)).unwrap();
         assert_eq!(t, lazy_again);
+    }
+
+    #[test]
+    fn an_eager_read_puts_the_text_in_memory() {
+        let src = Arc::new(MapSource::default());
+        let text = "iVBORw0KGgo".repeat(1000);
+        let h = src.put(&text);
+        let json = format!("{{\"$blob\": \"{h}\"}}");
+        let t: BlobText =
+            with_load_source(src.clone(), true, || serde_json::from_str(&json)).unwrap();
+        assert!(!t.is_lazy());
+        assert_eq!(&*t.text().unwrap(), text.as_str());
+        assert_eq!(*src.1.lock().unwrap(), 1);
+        assert_eq!(t.hash(), h);
+        // An eager read of a blob that cannot be read is an error at once.
+        src.0.lock().unwrap().clear();
+        assert!(with_load_source(src, true, || serde_json::from_str::<BlobText>(&json)).is_err());
     }
 
     #[test]
@@ -607,9 +654,11 @@ mod tests {
         let src = Arc::new(MapSource::default());
         let h = src.put("text");
         let read = |json: &str| {
-            with_load_source(src.clone(), || serde_json::from_str::<BlobText>(json))
-                .unwrap_err()
-                .to_string()
+            with_load_source(src.clone(), false, || {
+                serde_json::from_str::<BlobText>(json)
+            })
+            .unwrap_err()
+            .to_string()
         };
         assert!(
             read(&format!("{{\"$blob\": \"{}\"}}", text_hash("missing")))
@@ -636,8 +685,8 @@ mod tests {
             with_blob_refs(SaveRefs::default(), || assert!(writing_refs()));
             assert!(writing_refs());
         });
-        assert!(with_load_source(a.clone(), || load_source().is_some()));
-        assert!(load_source().is_none());
+        assert!(with_load_source(a.clone(), false, || load_scope().is_some()));
+        assert!(load_scope().is_none());
     }
 
     #[test]
