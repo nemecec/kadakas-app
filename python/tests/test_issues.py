@@ -39,11 +39,13 @@ def test_change_calls():
     doc.issues.comment("id1", "Hello", viewpoint="vp")
     doc.issues.resolve("id1")
     doc.issues.resolve("id1", "Done", status="closed")
+    doc.issues.add_viewpoint("id1", snapshot=True)
     assert fake.calls == [
         ("issue.update", {"id": "id1", "assignee": None, "add_labels": ["x"]}),
         ("issue.comment", {"id": "id1", "text": "Hello", "viewpoint": "vp"}),
         ("issue.resolve", {"id": "id1"}),
         ("issue.resolve", {"id": "id1", "comment": "Done", "status": "closed"}),
+        ("issue.add_viewpoint", {"id": "id1", "snapshot": True}),
     ]
 
 

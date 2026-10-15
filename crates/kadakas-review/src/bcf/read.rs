@@ -352,8 +352,9 @@ impl Ctx<'_> {
             Some(t) => match time::parse_iso(&t) {
                 Some(ms) if (0..=253_402_300_799_000).contains(&ms) => ms,
                 _ => {
-                    self.warnings
-                        .push(format!("{what}: the date {t:?} is not valid: the time of the import is used"));
+                    self.warnings.push(format!(
+                        "{what}: the date {t:?} is not valid: the time of the import is used"
+                    ));
                     self.now_ms
                 }
             },
@@ -464,7 +465,11 @@ struct VpRef {
     snapshot: Option<String>,
 }
 
-fn read_topic(cx: &mut Ctx<'_>, version: Version, folder: &str) -> Result<Option<ImportedTopic>, Fail> {
+fn read_topic(
+    cx: &mut Ctx<'_>,
+    version: Version,
+    folder: &str,
+) -> Result<Option<ImportedTopic>, Fail> {
     let path = format!("{folder}/markup.bcf");
     let text = cx
         .entries
@@ -485,13 +490,21 @@ fn read_topic(cx: &mut Ctx<'_>, version: Version, folder: &str) -> Result<Option
         title,
         ..Issue::default()
     };
-    if let Some(t) = topic.attribute("TopicType").map(str::trim).filter(|t| !t.is_empty()) {
+    if let Some(t) = topic
+        .attribute("TopicType")
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
         issue.kind = t.to_string();
     }
     if let Some(t) = trimmed(kid(topic, "Priority")) {
         issue.priority = t;
     }
-    if let Some(s) = topic.attribute("TopicStatus").map(str::trim).filter(|t| !t.is_empty()) {
+    if let Some(s) = topic
+        .attribute("TopicStatus")
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
         match status_of(s) {
             Some(st) => issue.status = st,
             None => {
@@ -516,7 +529,11 @@ fn read_topic(cx: &mut Ctx<'_>, version: Version, folder: &str) -> Result<Option
             inner.into_iter().map(|n| trimmed(Some(n))).collect()
         };
         for t in texts.into_iter().flatten() {
-            if !issue.labels.iter().any(|x| x.to_lowercase() == t.to_lowercase()) {
+            if !issue
+                .labels
+                .iter()
+                .any(|x| x.to_lowercase() == t.to_lowercase())
+            {
                 issue.labels.push(t);
             }
         }
@@ -531,13 +548,15 @@ fn read_topic(cx: &mut Ctx<'_>, version: Version, folder: &str) -> Result<Option
     if let Some(d) = trimmed(kid(topic, "DueDate")) {
         match time::parse_iso(&d) {
             Some(ms) if (0..=253_402_300_799_000).contains(&ms) => issue.due = Some(time::date(ms)),
-            _ => cx
-                .warnings
-                .push(format!("topic {id}: the due date {d:?} is not valid and is left out")),
+            _ => cx.warnings.push(format!(
+                "topic {id}: the due date {d:?} is not valid and is left out"
+            )),
         }
     }
     issue.assignee = trimmed(kid(topic, "AssignedTo"));
-    issue.description = kid(topic, "Description").and_then(text_of).unwrap_or_default();
+    issue.description = kid(topic, "Description")
+        .and_then(text_of)
+        .unwrap_or_default();
     if issue.description.trim().is_empty() {
         issue.description.clear();
     }
@@ -630,7 +649,9 @@ fn read_topic(cx: &mut Ctx<'_>, version: Version, folder: &str) -> Result<Option
     let mut comments: Vec<Comment> = Vec::new();
     let mut ctaken: HashSet<Uid> = HashSet::new();
     for (n, c) in comment_nodes.iter().enumerate() {
-        let Some(text) = kid(*c, "Comment").and_then(text_of).filter(|t| !t.trim().is_empty())
+        let Some(text) = kid(*c, "Comment")
+            .and_then(text_of)
+            .filter(|t| !t.trim().is_empty())
         else {
             cx.unsupported("comments without a text");
             continue;
@@ -654,7 +675,10 @@ fn read_topic(cx: &mut Ctx<'_>, version: Version, folder: &str) -> Result<Option
             issue: id,
             author: trimmed(kid(*c, "Author")).unwrap_or_default(),
             origin: Origin::User,
-            time: cx.when(trimmed(kid(*c, "Date")), &format!("a comment of topic {id}")),
+            time: cx.when(
+                trimmed(kid(*c, "Date")),
+                &format!("a comment of topic {id}"),
+            ),
             text,
             viewpoint,
             edited,
@@ -687,26 +711,30 @@ fn read_viewpoint_file(
     objects: &mut BTreeSet<ObjectId>,
 ) -> Result<(), Fail> {
     let Ok(name) = safe_name(&format!("{folder}/{file}"), cx.entries.limits) else {
-        cx.warnings
-            .push(format!("topic {folder}: the viewpoint file name {file:?} is not allowed"));
+        cx.warnings.push(format!(
+            "topic {folder}: the viewpoint file name {file:?} is not allowed"
+        ));
         return Ok(());
     };
     let Some(text) = cx.entries.read_xml(&name)? else {
-        cx.warnings
-            .push(format!("topic {folder}: the viewpoint file {file} is not in the archive"));
+        cx.warnings.push(format!(
+            "topic {folder}: the viewpoint file {file} is not in the archive"
+        ));
         return Ok(());
     };
     let doc = match parse(&text, cx.entries.limits) {
         Ok(d) => d,
         Err(e) => {
-            cx.warnings.push(format!("{name}: {e}: the viewpoint has no camera"));
+            cx.warnings
+                .push(format!("{name}: {e}: the viewpoint has no camera"));
             return Ok(());
         }
     };
     let root = doc.root_element();
     if root.tag_name().name() != "VisualizationInfo" {
-        cx.warnings
-            .push(format!("{name}: no VisualizationInfo element: the viewpoint has no camera"));
+        cx.warnings.push(format!(
+            "{name}: no VisualizationInfo element: the viewpoint has no camera"
+        ));
         return Ok(());
     }
     if let Some(c) = kid(root, "Components") {
@@ -776,11 +804,14 @@ fn read_viewpoint_file(
             };
             match camera::from_bcf(&c) {
                 Ok(v) => vp.view = Some(v),
-                Err(why) => cx.warnings.push(format!("{name}: {why}: the viewpoint has no camera")),
+                Err(why) => cx
+                    .warnings
+                    .push(format!("{name}: {why}: the viewpoint has no camera")),
             }
         } else {
-            cx.warnings
-                .push(format!("{name}: the camera is not complete: the viewpoint has no camera"));
+            cx.warnings.push(format!(
+                "{name}: the camera is not complete: the viewpoint has no camera"
+            ));
         }
     }
     if let Some(v) = &vp.view {
@@ -790,8 +821,9 @@ fn read_viewpoint_file(
         };
         if probe.validate().is_err() {
             vp.view = None;
-            cx.warnings
-                .push(format!("{name}: the camera is out of range: the viewpoint has no camera"));
+            cx.warnings.push(format!(
+                "{name}: the camera is out of range: the viewpoint has no camera"
+            ));
         }
     }
     Ok(())
@@ -805,14 +837,16 @@ fn read_snapshot(
     pictures: &mut Vec<Picture>,
 ) -> Result<Option<String>, Fail> {
     let Ok(name) = safe_name(&format!("{folder}/{file}"), cx.entries.limits) else {
-        cx.warnings
-            .push(format!("topic {folder}: the snapshot name {file:?} is not allowed"));
+        cx.warnings.push(format!(
+            "topic {folder}: the snapshot name {file:?} is not allowed"
+        ));
         return Ok(None);
     };
     let cap = cx.entries.limits.max_picture_bytes as u64;
     let Some(&at) = cx.entries.index.get(&name) else {
-        cx.warnings
-            .push(format!("topic {folder}: the snapshot {file} is not in the archive"));
+        cx.warnings.push(format!(
+            "topic {folder}: the snapshot {file} is not in the archive"
+        ));
         return Ok(None);
     };
     // The declared size is checked first, so a large file is not read at all.
@@ -838,8 +872,9 @@ fn read_snapshot(
     }
     .unwrap_or((0, 0));
     if w == 0 || h == 0 {
-        cx.warnings
-            .push(format!("{name}: the snapshot is not a PNG or JPEG picture and is left out"));
+        cx.warnings.push(format!(
+            "{name}: the snapshot is not a PNG or JPEG picture and is left out"
+        ));
         return Ok(None);
     }
     if u64::from(w) * u64::from(h) > cx.entries.limits.max_picture_pixels {
@@ -887,7 +922,8 @@ pub fn same_content(existing: &Issue, comments: &[&Comment], imported: &Imported
         || existing.assignee != b.assignee
         || existing.due != b.due
         || existing.created != b.created
-        || existing.author.trim() != b.author.trim() && !(existing.author.trim().is_empty() && b.author == "unknown")
+        || existing.author.trim() != b.author.trim()
+            && !(existing.author.trim().is_empty() && b.author == "unknown")
         || lower(&existing.labels) != lower(&b.labels)
         || universe(existing) != universe(b)
         || ex_vps.len() != b.viewpoints.len()
@@ -899,8 +935,14 @@ pub fn same_content(existing: &Issue, comments: &[&Comment], imported: &Imported
     let same_view = |a: &Option<ViewSpec>, b: &Option<ViewSpec>| match (a, b) {
         (None, None) => true,
         (
-            Some(ViewSpec::Plan { center: c1, zoom: z1 }),
-            Some(ViewSpec::Plan { center: c2, zoom: z2 }),
+            Some(ViewSpec::Plan {
+                center: c1,
+                zoom: z1,
+            }),
+            Some(ViewSpec::Plan {
+                center: c2,
+                zoom: z2,
+            }),
         ) => near(c1[0], c2[0]) && near(c1[1], c2[1]) && near(*z1, *z2),
         (
             Some(ViewSpec::Camera {
@@ -946,7 +988,8 @@ pub fn same_content(existing: &Issue, comments: &[&Comment], imported: &Imported
             || c.time != d.time
             || c.viewpoint != d.viewpoint
             || c.edited != d.edited
-            || c.author.trim() != d.author.trim() && !(c.author.trim().is_empty() && d.author == "unknown")
+            || c.author.trim() != d.author.trim()
+                && !(c.author.trim().is_empty() && d.author == "unknown")
         {
             return false;
         }

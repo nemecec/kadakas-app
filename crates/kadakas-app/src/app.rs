@@ -4498,7 +4498,11 @@ mod tests {
     }
 
     /// Makes an issue the way the New Issue window does: a form, then the request.
-    fn make_issue(app: &mut KadakasApp, title: &str, objects: &[ObjectId]) -> kadakas_core::issue::IssueId {
+    fn make_issue(
+        app: &mut KadakasApp,
+        title: &str,
+        objects: &[ObjectId],
+    ) -> kadakas_core::issue::IssueId {
         use kadakas_ui_core::issues::Draft;
         let draft = Draft {
             title: title.into(),
@@ -4579,7 +4583,10 @@ mod tests {
         let mut app = KadakasApp::blank();
         app.exec(&add_rect_command(0.0));
         app.session
-            .handle("version.create", serde_json::json!({"name": "A", "now_ms": 1}))
+            .handle(
+                "version.create",
+                serde_json::json!({"name": "A", "now_ms": 1}),
+            )
             .unwrap();
         app.compare_ui.show_pair(
             &mut app.session,
@@ -4594,10 +4601,11 @@ mod tests {
 
     fn make_issue_ignoring(app: &mut KadakasApp) {
         use kadakas_ui_core::issues::Draft;
-        app.issues_ui.push_request(crate::issues_ui::Request::Create(Draft {
-            title: "x".into(),
-            ..Draft::default()
-        }));
+        app.issues_ui
+            .push_request(crate::issues_ui::Request::Create(Draft {
+                title: "x".into(),
+                ..Draft::default()
+            }));
         app.run_issue_requests();
     }
 
@@ -4622,7 +4630,10 @@ mod tests {
         assert!(app.session.editor.doc().layer(layer).unwrap().visible);
         assert_eq!(app.session.selection, vec![objects[0]]);
         assert!(app.plan());
-        assert!((app.view.zoom - 0.9).abs() > 1e-9, "the view went back to the viewpoint");
+        assert!(
+            (app.view.zoom - 0.9).abs() > 1e-9,
+            "the view went back to the viewpoint"
+        );
         assert!(app.status.contains("Look"), "{}", app.status);
         // One undo step for the layers.
         let depth = app.session.editor.undo_depth();
@@ -4686,7 +4697,10 @@ mod tests {
             .handle("issue.update", serde_json::json!({"id": b, "status": "resolved", "assignee": "Mari", "labels": ["wall"], "due": "2000-01-01"}))
             .unwrap();
         app.session
-            .handle("issue.comment", serde_json::json!({"id": a, "text": "A note"}))
+            .handle(
+                "issue.comment",
+                serde_json::json!({"id": a, "text": "A note"}),
+            )
             .unwrap();
         app.issues_ui.selected = Some(a);
         for language in ["en-US", "et"] {
@@ -4695,7 +4709,9 @@ mod tests {
                 dock_frame(&mut app, &ctx);
                 app.issues_ui.filters.show_done = true;
                 dock_frame(&mut app, &ctx);
-                app.issues_ui.filters.toggle_status(kadakas_core::issue::IssueStatus::Resolved);
+                app.issues_ui
+                    .filters
+                    .toggle_status(kadakas_core::issue::IssueStatus::Resolved);
                 app.issues_ui.filters.text = "wa".into();
                 app.issues_ui.selected = Some(b);
                 dock_frame(&mut app, &ctx);
@@ -4706,8 +4722,14 @@ mod tests {
         // The pin of the issue about the object is in the plan.
         dock_frame(&mut app, &ctx);
         dock_frame(&mut app, &ctx);
-        assert!(app.issues_ui.pin_screen(a).is_some(), "the pin has a place on the screen");
-        assert!(app.issues_ui.pin_screen(b).is_none(), "an issue without a place has no pin");
+        assert!(
+            app.issues_ui.pin_screen(a).is_some(),
+            "the pin has a place on the screen"
+        );
+        assert!(
+            app.issues_ui.pin_screen(b).is_none(),
+            "an issue without a place has no pin"
+        );
     }
 
     #[test]
@@ -4750,7 +4772,11 @@ mod tests {
         let before = app.session.editor.undo_depth();
         app.run_issue_requests();
         assert_eq!(app.session.selection, vec![o]);
-        assert_eq!(app.session.editor.undo_depth(), before, "opening changes nothing here");
+        assert_eq!(
+            app.session.editor.undo_depth(),
+            before,
+            "opening changes nothing here"
+        );
         // "New Issue at a Click": the next press places an issue instead of a tool event.
         app.issues_ui.set_picking(true);
         let elsewhere = at + egui::vec2(200.0, 150.0);

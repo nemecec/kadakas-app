@@ -77,7 +77,13 @@ fn an_agent_makes_an_issue_with_its_origin_and_one_undo_step() {
     assert_eq!(g["created_ms"], 1_700_000_000_000i64);
     assert_eq!(g["objects"], json!([tree]));
     assert_eq!(g["objects_missing"], json!([]));
-    assert_eq!(g["objects_ifc"].as_array().unwrap()[0].as_str().unwrap().len(), 22);
+    assert_eq!(
+        g["objects_ifc"].as_array().unwrap()[0]
+            .as_str()
+            .unwrap()
+            .len(),
+        22
+    );
     assert_eq!(g["comments"], json!([]));
     // Undo takes it back.
     assert!(s.editor.undo());
@@ -96,8 +102,16 @@ fn every_change_emits_an_issue_event() {
     let mut s = session();
     let rev = s.editor.revision();
     let id = new_issue(&mut s, "A");
-    ok(&mut s, "issue.update", json!({"id": id, "status": "in_progress", "now_ms": 6_000}));
-    let c = ok(&mut s, "issue.comment", json!({"id": id, "text": "hi", "now_ms": 7_000}));
+    ok(
+        &mut s,
+        "issue.update",
+        json!({"id": id, "status": "in_progress", "now_ms": 6_000}),
+    );
+    let c = ok(
+        &mut s,
+        "issue.comment",
+        json!({"id": id, "text": "hi", "now_ms": 7_000}),
+    );
     ok(&mut s, "issue.resolve", json!({"id": id, "now_ms": 8_000}));
     ok(&mut s, "issue.delete", json!({"id": id}));
     let polled = ok(
@@ -109,12 +123,22 @@ fn every_change_emits_an_issue_event() {
     let ops: Vec<&str> = changes.iter().map(|c| c["op"].as_str().unwrap()).collect();
     assert_eq!(
         ops,
-        vec!["add_issue", "modify_issue", "add_issue_comment", "batch", "batch"]
+        vec![
+            "add_issue",
+            "modify_issue",
+            "add_issue_comment",
+            "batch",
+            "batch"
+        ]
     );
     assert_eq!(changes[0]["added"]["issues"], json!([id]));
     assert_eq!(changes[1]["changed"]["issues"], json!([id]));
     assert_eq!(changes[2]["added"]["comments"], json!([c["comment"]]));
-    assert_eq!(changes[2]["changed"]["issues"], json!([id]), "a comment changes its issue");
+    assert_eq!(
+        changes[2]["changed"]["issues"],
+        json!([id]),
+        "a comment changes its issue"
+    );
     assert_eq!(changes[4]["removed"]["issues"], json!([id]));
     assert_eq!(changes[4]["removed"]["comments"], json!([c["comment"]]));
     assert_eq!(changes[0]["origin"], "agent");
@@ -126,7 +150,12 @@ fn every_change_emits_an_issue_event() {
     );
     assert_eq!(objects["changes"], json!([]));
     assert_eq!(
-        fail(&mut s, "events.poll", json!({"since_revision": rev, "kinds": ["nope"]})).kind,
+        fail(
+            &mut s,
+            "events.poll",
+            json!({"since_revision": rev, "kinds": ["nope"]})
+        )
+        .kind,
         "invalid_params"
     );
 }
@@ -136,15 +165,28 @@ fn a_capture_keeps_the_view_the_selection_and_a_snapshot() {
     let mut s = session();
     let a = rect(&mut s, 0);
     let b = rect(&mut s, 5000);
-    let hidden = ok(&mut s, "execute", json!({"command": {"op": "add_layer", "name": "Hidden"}}))["created"][0].clone();
-    ok(&mut s, "execute", json!({"command": {"op": "set_visibility", "layers": [hidden], "mode": "invisible"}}));
+    let hidden = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Hidden"}}),
+    )["created"][0]
+        .clone();
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_visibility", "layers": [hidden], "mode": "invisible"}}),
+    );
     let r = ok(
         &mut s,
         "issue.create",
         json!({"title": "Look here", "objects": [a], "capture": true, "now_ms": 9_000}),
     );
     assert_eq!(r["viewpoints"].as_array().unwrap().len(), 1);
-    let g = ok(&mut s, "issue.get", json!({"id": r["id"], "snapshots": true}));
+    let g = ok(
+        &mut s,
+        "issue.get",
+        json!({"id": r["id"], "snapshots": true}),
+    );
     let vp = &g["viewpoints"][0];
     assert_eq!(vp["view"]["kind"], "plan");
     assert_eq!(vp["selection"], json!([a]));
@@ -161,17 +203,37 @@ fn a_capture_keeps_the_view_the_selection_and_a_snapshot() {
     assert_eq!(kadakas_core::picture::sha256_hex(&png), hash);
     assert!(s.editor.doc().resources.find_image(hash).is_some());
     // The same picture in a second issue does not make a second resource.
-    ok(&mut s, "issue.create", json!({"title": "Same", "objects": [a], "capture": true}));
-    let images = s.editor.doc().resources.iter().filter(|r| r.body.type_name() == "image").count();
+    ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "Same", "objects": [a], "capture": true}),
+    );
+    let images = s
+        .editor
+        .doc()
+        .resources
+        .iter()
+        .filter(|r| r.body.type_name() == "image")
+        .count();
     assert_eq!(images, 1);
     // The selection of the session counts when no objects are given.
-    s.selection = vec![kadakas_core::model::ObjectId(kadakas_core::uid::Uid::parse(&b).unwrap())];
-    let c = ok(&mut s, "issue.create", json!({"title": "Selected", "capture": true}));
+    s.selection = vec![kadakas_core::model::ObjectId(
+        kadakas_core::uid::Uid::parse(&b).unwrap(),
+    )];
+    let c = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "Selected", "capture": true}),
+    );
     let g = ok(&mut s, "issue.get", json!({"id": c["id"]}));
     assert_eq!(g["viewpoints"][0]["selection"], json!([b]));
     // A 3D view of the session gives a camera.
     ok(&mut s, "view.set", json!({"view": "right_isometric"}));
-    let d = ok(&mut s, "issue.create", json!({"title": "3D", "capture": true}));
+    let d = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "3D", "capture": true}),
+    );
     let g = ok(&mut s, "issue.get", json!({"id": d["id"]}));
     assert_eq!(g["viewpoints"][0]["view"]["kind"], "camera");
     // Undo removes the issue and its picture.
@@ -216,9 +278,17 @@ fn a_viewpoint_can_be_given_by_hand() {
         json!({"title": "x", "viewpoint": {"view": {"kind": "plan", "center": [0, 0], "zoom": 0}}}),
     );
     assert_eq!(e.kind, "validation");
-    let e = fail(&mut s, "issue.create", json!({"title": "x", "viewpoint": {"snapshot_base64": "!!"}}));
+    let e = fail(
+        &mut s,
+        "issue.create",
+        json!({"title": "x", "viewpoint": {"snapshot_base64": "!!"}}),
+    );
     assert_eq!(e.kind, "invalid_params");
-    assert_eq!(ok(&mut s, "issue.list", json!({}))["total"], 1, "nothing was made");
+    assert_eq!(
+        ok(&mut s, "issue.list", json!({}))["total"],
+        1,
+        "nothing was made"
+    );
 }
 
 fn png_header(w: u32, h: u32) -> Vec<u8> {
@@ -228,7 +298,9 @@ fn png_header(w: u32, h: u32) -> Vec<u8> {
         enc.set_color(png::ColorType::Rgba);
         enc.set_depth(png::BitDepth::Eight);
         let mut writer = enc.write_header().unwrap();
-        writer.write_image_data(&vec![200u8; (w * h * 4) as usize]).unwrap();
+        writer
+            .write_image_data(&vec![200u8; (w * h * 4) as usize])
+            .unwrap();
     }
     img
 }
@@ -236,7 +308,11 @@ fn png_header(w: u32, h: u32) -> Vec<u8> {
 #[test]
 fn create_checks_its_input() {
     let mut s = session();
-    let e = fail(&mut s, "issue.create", json!({"title": "x", "objects": ["0190f1c2-7a3b-7c1d-8e2f-123456789abc"]}));
+    let e = fail(
+        &mut s,
+        "issue.create",
+        json!({"title": "x", "objects": ["0190f1c2-7a3b-7c1d-8e2f-123456789abc"]}),
+    );
     assert_eq!(e.kind, "not_found");
     for (p, kind) in [
         (json!({}), "invalid_params"),
@@ -258,10 +334,26 @@ fn create_checks_its_input() {
 fn list_filters_sorts_and_lists_facets() {
     let mut s = session();
     let o = rect(&mut s, 0);
-    ok(&mut s, "issue.create", json!({"title": "Tree", "assignee": "Ann", "labels": ["Planting"], "objects": [o], "now_ms": 1000}));
-    let b = ok(&mut s, "issue.create", json!({"title": "Sprinkler", "assignee": "bo", "now_ms": 2000, "description": "At the Gate"}));
-    ok(&mut s, "issue.create", json!({"title": "Wall", "labels": ["planting", "hardscape"], "now_ms": 3000}));
-    ok(&mut s, "issue.resolve", json!({"id": b["id"], "now_ms": 9000}));
+    ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "Tree", "assignee": "Ann", "labels": ["Planting"], "objects": [o], "now_ms": 1000}),
+    );
+    let b = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "Sprinkler", "assignee": "bo", "now_ms": 2000, "description": "At the Gate"}),
+    );
+    ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "Wall", "labels": ["planting", "hardscape"], "now_ms": 3000}),
+    );
+    ok(
+        &mut s,
+        "issue.resolve",
+        json!({"id": b["id"], "now_ms": 9000}),
+    );
     let all = ok(&mut s, "issue.list", json!({}));
     assert_eq!(ids(&all), vec!["Tree", "Sprinkler", "Wall"]);
     assert_eq!(all["facets"]["assignees"], json!(["Ann", "bo"]));
@@ -269,18 +361,36 @@ fn list_filters_sorts_and_lists_facets() {
     assert_eq!(all["issues"][0]["comments"], 0);
     let q = |s: &mut Session, p: Value| ids(&ok(s, "issue.list", p));
     assert_eq!(q(&mut s, json!({"status": "resolved"})), vec!["Sprinkler"]);
-    assert_eq!(q(&mut s, json!({"status": ["open", "resolved"]})), vec!["Tree", "Sprinkler", "Wall"]);
+    assert_eq!(
+        q(&mut s, json!({"status": ["open", "resolved"]})),
+        vec!["Tree", "Sprinkler", "Wall"]
+    );
     assert_eq!(q(&mut s, json!({"open_only": true})), vec!["Tree", "Wall"]);
     assert_eq!(q(&mut s, json!({"assignee": "ann"})), vec!["Tree"]);
-    assert_eq!(q(&mut s, json!({"label": "PLANTING"})), vec!["Tree", "Wall"]);
+    assert_eq!(
+        q(&mut s, json!({"label": "PLANTING"})),
+        vec!["Tree", "Wall"]
+    );
     assert_eq!(q(&mut s, json!({"object": o})), vec!["Tree"]);
     assert_eq!(q(&mut s, json!({"text": "gate"})), vec!["Sprinkler"]);
-    assert_eq!(q(&mut s, json!({"origin": "agent"})), vec!["Tree", "Sprinkler", "Wall"]);
+    assert_eq!(
+        q(&mut s, json!({"origin": "agent"})),
+        vec!["Tree", "Sprinkler", "Wall"]
+    );
     assert!(q(&mut s, json!({"origin": "user"})).is_empty());
-    assert_eq!(q(&mut s, json!({"sort": "modified"})), vec!["Sprinkler", "Wall", "Tree"]);
-    assert_eq!(q(&mut s, json!({"sort": "status"})), vec!["Tree", "Wall", "Sprinkler"]);
+    assert_eq!(
+        q(&mut s, json!({"sort": "modified"})),
+        vec!["Sprinkler", "Wall", "Tree"]
+    );
+    assert_eq!(
+        q(&mut s, json!({"sort": "status"})),
+        vec!["Tree", "Wall", "Sprinkler"]
+    );
     let limited = ok(&mut s, "issue.list", json!({"limit": 1}));
-    assert_eq!((limited["count"].as_u64(), limited["total"].as_u64()), (Some(1), Some(3)));
+    assert_eq!(
+        (limited["count"].as_u64(), limited["total"].as_u64()),
+        (Some(1), Some(3))
+    );
     for p in [
         json!({"limit": 0}),
         json!({"sort": "random"}),
@@ -289,7 +399,11 @@ fn list_filters_sorts_and_lists_facets() {
         json!({"object": "nope"}),
         json!({"open_only": "yes"}),
     ] {
-        assert_eq!(fail(&mut s, "issue.list", p.clone()).kind, "invalid_params", "{p}");
+        assert_eq!(
+            fail(&mut s, "issue.list", p.clone()).kind,
+            "invalid_params",
+            "{p}"
+        );
     }
 }
 
@@ -314,20 +428,39 @@ fn update_changes_fields_and_no_change_makes_no_step() {
     assert_eq!(g["type"], "request");
     assert_eq!(g["priority"], "low");
     assert_eq!(g["status"], "in_progress");
-    assert_eq!(g["labels"], json!(["one", "Two"]), "a label is not added twice");
+    assert_eq!(
+        g["labels"],
+        json!(["one", "Two"]),
+        "a label is not added twice"
+    );
     assert_eq!(g["objects"], json!([a, b]));
     assert_eq!(g["modified_ms"], 2000);
     // Clear fields.
-    ok(&mut s, "issue.update", json!({"id": id, "assignee": null, "due": "", "point": null, "remove_objects": [a], "remove_labels": ["ONE"], "now_ms": 3000}));
+    ok(
+        &mut s,
+        "issue.update",
+        json!({"id": id, "assignee": null, "due": "", "point": null, "remove_objects": [a], "remove_labels": ["ONE"], "now_ms": 3000}),
+    );
     let g = ok(&mut s, "issue.get", json!({"id": id}));
     assert_eq!(g["assignee"], Value::Null);
     assert_eq!(g["due"], Value::Null);
     assert_eq!(g["point"], Value::Null);
     assert_eq!(g["objects"], json!([b]));
     assert_eq!(g["labels"], json!(["Two"]));
-    ok(&mut s, "issue.update", json!({"id": id, "labels": [], "objects": [], "point": [9, 8, 7]}));
+    ok(
+        &mut s,
+        "issue.update",
+        json!({"id": id, "labels": [], "objects": [], "point": [9, 8, 7]}),
+    );
     let g = ok(&mut s, "issue.get", json!({"id": id}));
-    assert_eq!((g["labels"].clone(), g["objects"].clone(), g["point"].clone()), (json!([]), json!([]), json!([9.0, 8.0, 7.0])));
+    assert_eq!(
+        (
+            g["labels"].clone(),
+            g["objects"].clone(),
+            g["point"].clone()
+        ),
+        (json!([]), json!([]), json!([9.0, 8.0, 7.0]))
+    );
     // No change, no step.
     let depth = s.editor.undo_depth();
     let r = ok(&mut s, "issue.update", json!({"id": id, "title": "B"}));
@@ -335,14 +468,23 @@ fn update_changes_fields_and_no_change_makes_no_step() {
     assert_eq!(s.editor.undo_depth(), depth);
     // Errors.
     for (p, kind) in [
-        (json!({"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abc", "title": "x"}), "not_found"),
+        (
+            json!({"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abc", "title": "x"}),
+            "not_found",
+        ),
         (json!({"id": id, "title": ""}), "validation"),
         (json!({"id": id, "status": "nope"}), "invalid_params"),
         (json!({"id": id, "labels": "one"}), "invalid_params"),
         (json!({"id": id, "assignee": 5}), "invalid_params"),
         (json!({"id": id, "point": "here"}), "invalid_params"),
-        (json!({"id": id, "objects": ["0190f1c2-7a3b-7c1d-8e2f-123456789abc"]}), "not_found"),
-        (json!({"id": id, "add_objects": ["0190f1c2-7a3b-7c1d-8e2f-123456789abc"]}), "not_found"),
+        (
+            json!({"id": id, "objects": ["0190f1c2-7a3b-7c1d-8e2f-123456789abc"]}),
+            "not_found",
+        ),
+        (
+            json!({"id": id, "add_objects": ["0190f1c2-7a3b-7c1d-8e2f-123456789abc"]}),
+            "not_found",
+        ),
         (json!({"id": id, "typo": 1}), "invalid_params"),
         (json!({}), "invalid_params"),
         (json!({"id": "nope"}), "invalid_params"),
@@ -354,12 +496,24 @@ fn update_changes_fields_and_no_change_makes_no_step() {
 #[test]
 fn comments_resolve_and_the_thread() {
     let mut s = session();
-    let r = ok(&mut s, "issue.create", json!({"title": "A", "viewpoint": {"view": {"kind": "plan", "center": [0, 0], "zoom": 1}}, "now_ms": 1000}));
+    let r = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "A", "viewpoint": {"view": {"kind": "plan", "center": [0, 0], "zoom": 1}}, "now_ms": 1000}),
+    );
     let id = r["id"].clone();
     let vp = r["viewpoints"][0].clone();
-    let c1 = ok(&mut s, "issue.comment", json!({"id": id, "text": "first", "author": "Mari", "viewpoint": vp, "now_ms": 2000}));
+    let c1 = ok(
+        &mut s,
+        "issue.comment",
+        json!({"id": id, "text": "first", "author": "Mari", "viewpoint": vp, "now_ms": 2000}),
+    );
     assert_eq!(c1["issue"]["comments"], 1);
-    ok(&mut s, "issue.comment", json!({"id": id, "text": "second", "now_ms": 1500}));
+    ok(
+        &mut s,
+        "issue.comment",
+        json!({"id": id, "text": "second", "now_ms": 1500}),
+    );
     let g = ok(&mut s, "issue.get", json!({"id": id}));
     let thread = g["comments"].as_array().unwrap();
     assert_eq!(thread[0]["text"], "second", "the thread is by time");
@@ -369,28 +523,83 @@ fn comments_resolve_and_the_thread() {
     assert!(thread[1].get("issue").is_none());
     // Resolve with a comment is one undo step.
     let depth = s.editor.undo_depth();
-    let r = ok(&mut s, "issue.resolve", json!({"id": id, "comment": "Fixed.", "now_ms": 3000}));
+    let r = ok(
+        &mut s,
+        "issue.resolve",
+        json!({"id": id, "comment": "Fixed.", "now_ms": 3000}),
+    );
     assert_eq!(r["issue"]["status"], "resolved");
     assert_eq!(r["issue"]["comments"], 3);
     assert_eq!(s.editor.undo_depth(), depth + 1);
     s.editor.undo();
     assert_eq!(ok(&mut s, "issue.get", json!({"id": id}))["status"], "open");
-    ok(&mut s, "issue.resolve", json!({"id": id, "status": "closed"}));
-    assert_eq!(ok(&mut s, "issue.get", json!({"id": id}))["status"], "closed");
-    let r = ok(&mut s, "issue.resolve", json!({"id": id, "status": "closed"}));
+    ok(
+        &mut s,
+        "issue.resolve",
+        json!({"id": id, "status": "closed"}),
+    );
+    assert_eq!(
+        ok(&mut s, "issue.get", json!({"id": id}))["status"],
+        "closed"
+    );
+    let r = ok(
+        &mut s,
+        "issue.resolve",
+        json!({"id": id, "status": "closed"}),
+    );
     assert_eq!(r["changed"], false);
     for (m, p, kind) in [
-        ("issue.comment", json!({"id": id, "text": " "}), "validation"),
+        (
+            "issue.comment",
+            json!({"id": id, "text": " "}),
+            "validation",
+        ),
         ("issue.comment", json!({"id": id}), "invalid_params"),
-        ("issue.comment", json!({"id": id, "text": "x", "viewpoint": "0190f1c2-7a3b-7c1d-8e2f-123456789abc"}), "validation"),
-        ("issue.comment", json!({"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abc", "text": "x"}), "not_found"),
-        ("issue.comment", json!({"id": id, "text": "x", "viewpoint": "nope"}), "invalid_params"),
-        ("issue.comment", json!({"id": id, "text": "x", "typo": 1}), "invalid_params"),
-        ("issue.resolve", json!({"id": id, "status": "open"}), "invalid_params"),
-        ("issue.resolve", json!({"id": id, "typo": 1}), "invalid_params"),
-        ("issue.resolve", json!({"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abc"}), "not_found"),
-        ("issue.get", json!({"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abc"}), "not_found"),
-        ("issue.get", json!({"id": id, "snapshots": 1}), "invalid_params"),
+        (
+            "issue.comment",
+            json!({"id": id, "text": "x", "viewpoint": "0190f1c2-7a3b-7c1d-8e2f-123456789abc"}),
+            "validation",
+        ),
+        (
+            "issue.comment",
+            json!({"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abc", "text": "x"}),
+            "not_found",
+        ),
+        (
+            "issue.comment",
+            json!({"id": id, "text": "x", "viewpoint": "nope"}),
+            "invalid_params",
+        ),
+        (
+            "issue.comment",
+            json!({"id": id, "text": "x", "typo": 1}),
+            "invalid_params",
+        ),
+        (
+            "issue.resolve",
+            json!({"id": id, "status": "open"}),
+            "invalid_params",
+        ),
+        (
+            "issue.resolve",
+            json!({"id": id, "typo": 1}),
+            "invalid_params",
+        ),
+        (
+            "issue.resolve",
+            json!({"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abc"}),
+            "not_found",
+        ),
+        (
+            "issue.get",
+            json!({"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abc"}),
+            "not_found",
+        ),
+        (
+            "issue.get",
+            json!({"id": id, "snapshots": 1}),
+            "invalid_params",
+        ),
     ] {
         assert_eq!(fail(&mut s, m, p.clone()).kind, kind, "{m} {p}");
     }
@@ -400,12 +609,21 @@ fn comments_resolve_and_the_thread() {
 fn deleting_the_work_of_somebody_else_asks_first() {
     let mut s = session();
     // A person makes an issue (origin user) and comments on an agent's issue.
-    let mine = ok(&mut s, "issue.create", json!({"title": "Mine", "now_ms": 1}))["id"].clone();
+    let mine = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "Mine", "now_ms": 1}),
+    )["id"]
+        .clone();
     let theirs = s
         .handle("issue.create", json!({"title": "Theirs", "now_ms": 2}))
         .unwrap()["id"]
         .clone();
-    s.handle("issue.comment", json!({"id": mine, "text": "from a person", "now_ms": 3})).unwrap();
+    s.handle(
+        "issue.comment",
+        json!({"id": mine, "text": "from a person", "now_ms": 3}),
+    )
+    .unwrap();
     // The agent may not delete the issue of the person, or an issue with a comment of a person.
     for id in [&theirs, &mine] {
         let e = fail(&mut s, "issue.delete", json!({"id": id}));
@@ -416,33 +634,65 @@ fn deleting_the_work_of_somebody_else_asks_first() {
         assert_eq!(d["issues"][0]["id"], *id);
         assert!(d["issues"][0]["why"].as_str().unwrap().len() > 5);
     }
-    assert_eq!(ok(&mut s, "issue.list", json!({}))["total"], 2, "nothing was deleted");
+    assert_eq!(
+        ok(&mut s, "issue.list", json!({}))["total"],
+        2,
+        "nothing was deleted"
+    );
     // One that needs the consent stops the whole call, also for the others.
     let own = ok(&mut s, "issue.create", json!({"title": "Own", "now_ms": 4}))["id"].clone();
     let e = fail(&mut s, "issue.delete", json!({"ids": [own, theirs]}));
     assert_eq!(e.reason, Some("confirm_needed"));
     assert_eq!(ok(&mut s, "issue.list", json!({}))["total"], 3);
     // Its own issue goes without a question. confirm false is no confirm.
-    assert_eq!(fail(&mut s, "issue.delete", json!({"id": theirs, "confirm": false})).kind, "conflict");
+    assert_eq!(
+        fail(
+            &mut s,
+            "issue.delete",
+            json!({"id": theirs, "confirm": false})
+        )
+        .kind,
+        "conflict"
+    );
     let r = ok(&mut s, "issue.delete", json!({"id": own}));
     assert_eq!(r["count"], 1);
     // With the consent, both go in one undo step.
     let depth = s.editor.undo_depth();
-    let r = ok(&mut s, "issue.delete", json!({"ids": [theirs, mine], "confirm": true}));
+    let r = ok(
+        &mut s,
+        "issue.delete",
+        json!({"ids": [theirs, mine], "confirm": true}),
+    );
     assert_eq!(r["count"], 2);
     assert_eq!(s.editor.undo_depth(), depth + 1);
     assert_eq!(ok(&mut s, "issue.list", json!({}))["total"], 0);
     s.editor.undo();
     assert_eq!(ok(&mut s, "issue.list", json!({}))["total"], 2);
     // The person deleting an issue of an agent is asked too (the app asks).
-    let agent_made = ok(&mut s, "issue.create", json!({"title": "Agent", "now_ms": 5}))["id"].clone();
-    let e = s.handle("issue.delete", json!({"id": agent_made})).unwrap_err();
+    let agent_made = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "Agent", "now_ms": 5}),
+    )["id"]
+        .clone();
+    let e = s
+        .handle("issue.delete", json!({"id": agent_made}))
+        .unwrap_err();
     assert_eq!(e.reason, Some("confirm_needed"));
     for (p, kind) in [
         (json!({}), "invalid_params"),
-        (json!({"id": agent_made, "ids": [agent_made]}), "invalid_params"),
-        (json!({"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abc"}), "not_found"),
-        (json!({"id": agent_made, "confirm": "yes"}), "invalid_params"),
+        (
+            json!({"id": agent_made, "ids": [agent_made]}),
+            "invalid_params",
+        ),
+        (
+            json!({"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abc"}),
+            "not_found",
+        ),
+        (
+            json!({"id": agent_made, "confirm": "yes"}),
+            "invalid_params",
+        ),
         (json!({"id": agent_made, "typo": 1}), "invalid_params"),
     ] {
         assert_eq!(fail(&mut s, "issue.delete", p.clone()).kind, kind, "{p}");
@@ -466,7 +716,11 @@ fn full_session() -> (Session, String, String) {
         .as_str()
         .unwrap()
         .to_string();
-    ok(&mut s, "issue.comment", json!({"id": id, "text": "On it", "author": "mari@example.org", "now_ms": 1_700_000_100_000i64}));
+    ok(
+        &mut s,
+        "issue.comment",
+        json!({"id": id, "text": "On it", "author": "mari@example.org", "now_ms": 1_700_000_100_000i64}),
+    );
     (s, a, id)
 }
 
@@ -497,7 +751,10 @@ fn bcf_goes_out_and_in_in_both_versions() {
         let mut t = session();
         let depth = t.editor.undo_depth();
         let back = ok(&mut t, "issue.import_bcf", json!({"base64": b64}));
-        assert_eq!((back["imported"].clone(), back["pictures"].clone()), (json!(1), json!(1)));
+        assert_eq!(
+            (back["imported"].clone(), back["pictures"].clone()),
+            (json!(1), json!(1))
+        );
         assert_eq!(back["created"], json!([id]));
         assert_eq!(t.editor.undo_depth(), depth + 1, "one undo step");
         let g = ok(&mut t, "issue.get", json!({"id": id, "snapshots": true}));
@@ -517,7 +774,11 @@ fn bcf_goes_out_and_in_in_both_versions() {
         assert_eq!(g["objects_missing"].as_array().unwrap().len(), 2);
         assert!(g["viewpoints"][0]["snapshot_base64"].is_string());
         // The change event names the import.
-        let polled = ok(&mut t, "events.poll", json!({"since_revision": 0, "kinds": ["issues"]}));
+        let polled = ok(
+            &mut t,
+            "events.poll",
+            json!({"since_revision": 0, "kinds": ["issues"]}),
+        );
         assert_eq!(polled["changes"][0]["op"], "issue_import_bcf");
         assert_eq!(polled["changes"][0]["detail"]["imported"], 1);
         // Undo removes the issue and its picture.
@@ -534,8 +795,16 @@ fn a_conflict_asks_and_never_overwrites() {
     // The person changes the issue here and a comment arrives from the file.
     let mut other = session();
     ok(&mut other, "issue.import_bcf", json!({"base64": b64}));
-    ok(&mut other, "issue.update", json!({"id": id, "status": "resolved", "title": "Dead tree (done)", "now_ms": 1_700_000_500_000i64}));
-    ok(&mut other, "issue.comment", json!({"id": id, "text": "Fixed it", "now_ms": 1_700_000_600_000i64}));
+    ok(
+        &mut other,
+        "issue.update",
+        json!({"id": id, "status": "resolved", "title": "Dead tree (done)", "now_ms": 1_700_000_500_000i64}),
+    );
+    ok(
+        &mut other,
+        "issue.comment",
+        json!({"id": id, "text": "Fixed it", "now_ms": 1_700_000_600_000i64}),
+    );
     let file = base64::engine::general_purpose::STANDARD.encode(export(&mut other, "3.0"));
     // Import into the first session: a conflict, nothing changes.
     let before = s.editor.revision();
@@ -550,17 +819,32 @@ fn a_conflict_asks_and_never_overwrites() {
     assert_eq!(d["options"], json!(["skip", "replace", "keep_both"]));
     assert_eq!(s.editor.revision(), before, "nothing was imported");
     // A dry run shows the plan and changes nothing.
-    let plan = ok(&mut s, "issue.import_bcf", json!({"base64": file, "dry_run": true}));
+    let plan = ok(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": file, "dry_run": true}),
+    );
     assert_eq!(plan["dry_run"], true);
     assert_eq!(plan["plan"]["conflicts"].as_array().unwrap().len(), 1);
     assert_eq!(s.editor.revision(), before);
     // skip keeps ours.
-    let r = ok(&mut s, "issue.import_bcf", json!({"base64": file, "on_conflict": "skip"}));
-    assert_eq!((r["skipped_conflicts"].clone(), r["imported"].clone()), (json!(1), json!(0)));
+    let r = ok(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": file, "on_conflict": "skip"}),
+    );
+    assert_eq!(
+        (r["skipped_conflicts"].clone(), r["imported"].clone()),
+        (json!(1), json!(0))
+    );
     assert_eq!(s.editor.revision(), before, "no step for nothing");
     assert_eq!(ok(&mut s, "issue.get", json!({"id": id}))["status"], "open");
     // keep_both adds a copy with new IDs.
-    let r = ok(&mut s, "issue.import_bcf", json!({"base64": file, "on_conflict": "keep_both"}));
+    let r = ok(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": file, "on_conflict": "keep_both"}),
+    );
     assert_eq!(r["kept_both"], 1);
     let list = ok(&mut s, "issue.list", json!({}));
     assert_eq!(list["total"], 2);
@@ -580,15 +864,28 @@ fn a_conflict_asks_and_never_overwrites() {
     s.editor.undo();
     assert_eq!(ok(&mut s, "issue.list", json!({}))["total"], 1);
     // replace takes the values of the file, keeps what only we have.
-    ok(&mut s, "issue.comment", json!({"id": id, "text": "Only here", "now_ms": 1_700_000_700_000i64}));
+    ok(
+        &mut s,
+        "issue.comment",
+        json!({"id": id, "text": "Only here", "now_ms": 1_700_000_700_000i64}),
+    );
     let depth = s.editor.undo_depth();
-    let r = ok(&mut s, "issue.import_bcf", json!({"base64": file, "on_conflict": "replace"}));
+    let r = ok(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": file, "on_conflict": "replace"}),
+    );
     assert_eq!(r["replaced"], 1);
     assert_eq!(s.editor.undo_depth(), depth + 1);
     let g = ok(&mut s, "issue.get", json!({"id": id}));
     assert_eq!(g["status"], "resolved");
     assert_eq!(g["title"], "Dead tree (done)");
-    let texts: Vec<&str> = g["comments"].as_array().unwrap().iter().map(|c| c["text"].as_str().unwrap()).collect();
+    let texts: Vec<&str> = g["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["text"].as_str().unwrap())
+        .collect();
     assert_eq!(texts, vec!["On it", "Fixed it", "Only here"]);
     assert_eq!(g["viewpoints"].as_array().unwrap().len(), 1);
     // Layers of the viewpoint (not in BCF) stay.
@@ -614,8 +911,15 @@ fn a_changed_comment_text_is_taken_by_replace() {
         })
         .unwrap();
     let file = base64::engine::general_purpose::STANDARD.encode(export(&mut other, "2.1"));
-    ok(&mut s, "issue.import_bcf", json!({"base64": file, "on_conflict": "replace"}));
-    assert_eq!(ok(&mut s, "issue.get", json!({"id": id}))["comments"][0]["text"], "Edited text");
+    ok(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": file, "on_conflict": "replace"}),
+    );
+    assert_eq!(
+        ok(&mut s, "issue.get", json!({"id": id}))["comments"][0]["text"],
+        "Edited text"
+    );
 }
 
 #[test]
@@ -634,11 +938,21 @@ fn export_picks_issues_and_checks_its_input() {
     for (p, kind) in [
         (json!({"version": "4.0"}), "invalid_params"),
         (json!({"version": "2.0"}), "invalid_params"),
-        (json!({"ids": ["0190f1c2-7a3b-7c1d-8e2f-123456789abc"]}), "not_found"),
+        (
+            json!({"ids": ["0190f1c2-7a3b-7c1d-8e2f-123456789abc"]}),
+            "not_found",
+        ),
         (json!({"typo": 1}), "invalid_params"),
-        (json!({"overwrite": 3, "path": "/nonexistent-dir-xyz/a.bcfzip"}), "invalid_params"),
+        (
+            json!({"overwrite": 3, "path": "/nonexistent-dir-xyz/a.bcfzip"}),
+            "invalid_params",
+        ),
     ] {
-        assert_eq!(fail(&mut s, "issue.export_bcf", p.clone()).kind, kind, "{p}");
+        assert_eq!(
+            fail(&mut s, "issue.export_bcf", p.clone()).kind,
+            kind,
+            "{p}"
+        );
     }
 }
 
@@ -655,9 +969,16 @@ fn files_are_written_and_read_inside_the_allowed_folders() {
     assert!(std::path::Path::new(r["path"].as_str().unwrap()).exists());
     assert!(r.get("base64").is_none());
     let mut t = session();
-    let r = ok(&mut t, "issue.import_bcf", json!({"path": path.display().to_string()}));
+    let r = ok(
+        &mut t,
+        "issue.import_bcf",
+        json!({"path": path.display().to_string()}),
+    );
     assert_eq!(r["imported"], 1);
-    assert_eq!(ok(&mut t, "issue.get", json!({"id": id}))["title"], "Dead tree");
+    assert_eq!(
+        ok(&mut t, "issue.get", json!({"id": id}))["title"],
+        "Dead tree"
+    );
     // A restricted session: a folder outside is refused, the extension must fit, a file is not
     // replaced without overwrite.
     let other = tempfile::tempdir().unwrap();
@@ -665,33 +986,68 @@ fn files_are_written_and_read_inside_the_allowed_folders() {
     r.paths = PathPolicy::restricted([dir.path().to_path_buf()]);
     r.handle("issue.create", json!({"title": "x"})).unwrap();
     let outside = other.path().join("x.bcfzip").display().to_string();
-    assert_eq!(fail(&mut r, "issue.export_bcf", json!({"path": outside})).kind, "policy");
-    assert_eq!(fail(&mut r, "issue.import_bcf", json!({"path": outside})).kind, "policy");
+    assert_eq!(
+        fail(&mut r, "issue.export_bcf", json!({"path": outside})).kind,
+        "policy"
+    );
+    assert_eq!(
+        fail(&mut r, "issue.import_bcf", json!({"path": outside})).kind,
+        "policy"
+    );
     let wrong = dir.path().join("x.txt").display().to_string();
-    assert_eq!(fail(&mut r, "issue.export_bcf", json!({"path": wrong})).kind, "policy");
+    assert_eq!(
+        fail(&mut r, "issue.export_bcf", json!({"path": wrong})).kind,
+        "policy"
+    );
     let inside = dir.path().join("in.bcfzip").display().to_string();
     ok(&mut r, "issue.export_bcf", json!({"path": inside}));
-    assert_eq!(fail(&mut r, "issue.export_bcf", json!({"path": inside})).kind, "conflict");
-    ok(&mut r, "issue.export_bcf", json!({"path": inside, "overwrite": true}));
+    assert_eq!(
+        fail(&mut r, "issue.export_bcf", json!({"path": inside})).kind,
+        "conflict"
+    );
+    ok(
+        &mut r,
+        "issue.export_bcf",
+        json!({"path": inside, "overwrite": true}),
+    );
     // A file that is not there.
     let missing = dir.path().join("none.bcfzip").display().to_string();
-    assert!(r.handle("issue.import_bcf", json!({"path": missing})).is_err());
+    assert!(
+        r.handle("issue.import_bcf", json!({"path": missing}))
+            .is_err()
+    );
     // path and base64 together, neither.
-    assert_eq!(fail(&mut s, "issue.import_bcf", json!({"path": inside, "base64": "AA=="})).kind, "invalid_params");
-    assert_eq!(fail(&mut s, "issue.import_bcf", json!({})).kind, "invalid_params");
+    assert_eq!(
+        fail(
+            &mut s,
+            "issue.import_bcf",
+            json!({"path": inside, "base64": "AA=="})
+        )
+        .kind,
+        "invalid_params"
+    );
+    assert_eq!(
+        fail(&mut s, "issue.import_bcf", json!({})).kind,
+        "invalid_params"
+    );
 }
 
 #[test]
 fn a_hostile_file_is_an_error_or_a_listed_skip() {
     let mut s = session();
     let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
-    let e = fail(&mut s, "issue.import_bcf", json!({"base64": b64(b"not a zip")}));
+    let e = fail(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": b64(b"not a zip")}),
+    );
     assert_eq!(e.kind, "validation");
     let e = fail(&mut s, "issue.import_bcf", json!({"base64": "!!!"}));
     assert_eq!(e.kind, "invalid_params");
     // A bomb: a limit.
     let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let o = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
     z.start_file("bcf.version", o).unwrap();
     std::io::Write::write_all(&mut z, b"<Version VersionId=\"3.0\"/>").unwrap();
     z.start_file("a/bomb", o).unwrap();
@@ -703,25 +1059,41 @@ fn a_hostile_file_is_an_error_or_a_listed_skip() {
     let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     z.start_file("bcf.version", o).unwrap();
     std::io::Write::write_all(&mut z, b"<Version VersionId=\"3.0\"/>").unwrap();
-    z.start_file("aaaaaaaa-1111-4222-8333-444455556666/markup.bcf", o).unwrap();
+    z.start_file("aaaaaaaa-1111-4222-8333-444455556666/markup.bcf", o)
+        .unwrap();
     std::io::Write::write_all(
         &mut z,
         br#"<Markup><Topic Guid="aaaaaaaa-1111-4222-8333-444455556666" TopicType="Issue" TopicStatus="Open"><Title>Good</Title><CreationDate>2026-01-01T00:00:00Z</CreationDate><CreationAuthor>a</CreationAuthor></Topic></Markup>"#,
     )
     .unwrap();
-    z.start_file("bbbbbbbb-1111-4222-8333-444455556666/markup.bcf", o).unwrap();
+    z.start_file("bbbbbbbb-1111-4222-8333-444455556666/markup.bcf", o)
+        .unwrap();
     std::io::Write::write_all(&mut z, b"<Markup><Topic/></Markup>").unwrap();
     let mixed = z.finish().unwrap().into_inner();
-    let r = ok(&mut s, "issue.import_bcf", json!({"base64": b64(&mixed), "now_ms": 5}));
+    let r = ok(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": b64(&mixed), "now_ms": 5}),
+    );
     assert_eq!(r["imported"], 1);
     assert_eq!(r["topics_skipped"].as_array().unwrap().len(), 1);
-    assert_eq!(r["topics_skipped"][0]["topic"], "bbbbbbbb-1111-4222-8333-444455556666");
+    assert_eq!(
+        r["topics_skipped"][0]["topic"],
+        "bbbbbbbb-1111-4222-8333-444455556666"
+    );
     for (p, kind) in [
-        (json!({"base64": "AA==", "on_conflict": "overwrite"}), "invalid_params"),
+        (
+            json!({"base64": "AA==", "on_conflict": "overwrite"}),
+            "invalid_params",
+        ),
         (json!({"base64": "AA==", "typo": 1}), "invalid_params"),
         (json!({"base64": 5}), "invalid_params"),
     ] {
-        assert_eq!(fail(&mut s, "issue.import_bcf", p.clone()).kind, kind, "{p}");
+        assert_eq!(
+            fail(&mut s, "issue.import_bcf", p.clone()).kind,
+            kind,
+            "{p}"
+        );
     }
 }
 
@@ -745,7 +1117,10 @@ fn an_import_checks_the_limits_of_the_document() {
     .into();
     t = Session::with_document(doc);
     let e = t
-        .handle("issue.import_bcf", json!({"base64": base64::engine::general_purpose::STANDARD.encode(file)}))
+        .handle(
+            "issue.import_bcf",
+            json!({"base64": base64::engine::general_purpose::STANDARD.encode(file)}),
+        )
         .unwrap_err();
     assert_eq!(e.kind, "validation");
     assert_eq!(t.editor.doc().issues.len(), kadakas_core::issue::MAX_ISSUES);
@@ -758,8 +1133,15 @@ fn the_self_description_covers_issues() {
     assert!(d["bcf"]["limits"].is_string());
     let all = json!(crate::METHODS.iter().map(|(m, _)| *m).collect::<Vec<_>>());
     for m in [
-        "issue.list", "issue.get", "issue.create", "issue.update", "issue.comment",
-        "issue.resolve", "issue.delete", "issue.import_bcf", "issue.export_bcf",
+        "issue.list",
+        "issue.get",
+        "issue.create",
+        "issue.update",
+        "issue.comment",
+        "issue.resolve",
+        "issue.delete",
+        "issue.import_bcf",
+        "issue.export_bcf",
     ] {
         assert!(all.as_array().unwrap().contains(&json!(m)), "{m}");
     }
@@ -781,4 +1163,108 @@ fn issues_follow_the_session_limits() {
     s.set_limits(limits);
     let r = ok(&mut s, "issue.create", json!({"title": "Fits"}));
     assert!(r["id"].is_string());
+}
+
+#[test]
+fn viewpoints_are_added_and_removed_through_the_api() {
+    let mut s = session();
+    let o = rect(&mut s, 0);
+    let made = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "A", "objects": [o], "now_ms": 1}),
+    );
+    let id = made["id"].clone();
+    assert_eq!(made["viewpoints"], json!([]), "no viewpoint unless asked");
+    // The current view of the session, with a snapshot.
+    let depth = s.editor.undo_depth();
+    let r = ok(
+        &mut s,
+        "issue.add_viewpoint",
+        json!({"id": id, "name": "Close", "snapshot": true, "now_ms": 5}),
+    );
+    assert_eq!(s.editor.undo_depth(), depth + 1);
+    let vp = r["viewpoint"].clone();
+    let g = ok(&mut s, "issue.get", json!({"id": id}));
+    assert_eq!(g["viewpoints"][0]["name"], "Close");
+    assert_eq!(
+        g["viewpoints"][0]["selection"],
+        json!([o]),
+        "the objects of the issue"
+    );
+    let hash = g["viewpoints"][0]["snapshot"].as_str().unwrap().to_string();
+    assert!(s.editor.doc().resources.find_image(&hash).is_some());
+    // A viewpoint by hand, without a picture.
+    let r2 = ok(
+        &mut s,
+        "issue.add_viewpoint",
+        json!({"id": id, "view": {"kind": "plan", "center": [0, 0], "zoom": 2}, "selection": [],
+               "capture_visibility": false, "now_ms": 6}),
+    );
+    assert_eq!(
+        ok(&mut s, "issue.get", json!({"id": id}))["viewpoints"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    // Removing a viewpoint is part of update; its picture goes with the last viewpoint that uses it.
+    let r = ok(
+        &mut s,
+        "issue.update",
+        json!({"id": id, "remove_viewpoints": [vp], "now_ms": 7}),
+    );
+    assert_eq!(r["changed"], true);
+    assert!(s.editor.doc().resources.find_image(&hash).is_none());
+    assert_eq!(
+        ok(&mut s, "issue.get", json!({"id": id}))["viewpoints"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    s.editor.undo();
+    assert!(s.editor.doc().resources.find_image(&hash).is_some());
+    for (m, p, kind) in [
+        ("issue.add_viewpoint", json!({}), "invalid_params"),
+        (
+            "issue.add_viewpoint",
+            json!({"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abc"}),
+            "not_found",
+        ),
+        (
+            "issue.add_viewpoint",
+            json!({"id": id, "typo": 1}),
+            "invalid_params",
+        ),
+        (
+            "issue.add_viewpoint",
+            json!({"id": id, "selection": ["0190f1c2-7a3b-7c1d-8e2f-123456789abc"]}),
+            "not_found",
+        ),
+        (
+            "issue.update",
+            json!({"id": id, "remove_viewpoints": ["0190f1c2-7a3b-7c1d-8e2f-123456789abc"]}),
+            "validation",
+        ),
+        (
+            "issue.update",
+            json!({"id": id, "remove_viewpoints": "x"}),
+            "invalid_params",
+        ),
+    ] {
+        assert_eq!(fail(&mut s, m, p.clone()).kind, kind, "{m} {p}");
+    }
+    assert!(r2["viewpoint"].is_string());
+    // The limit of viewpoints for one issue.
+    for n in 0..20 {
+        let r = agent(
+            &mut s,
+            "issue.add_viewpoint",
+            json!({"id": id, "capture_visibility": false, "now_ms": 10 + n}),
+        );
+        if n >= 14 {
+            assert_eq!(r.unwrap_err().kind, "validation");
+        }
+    }
 }

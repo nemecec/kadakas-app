@@ -189,10 +189,7 @@ fn errors_leave_the_document_alone() {
         comment(id, " ", 2),
         new_issue(&"t".repeat(MAX_TITLE_CHARS + 1)),
     ] {
-        assert!(matches!(
-            ed.execute(&bad),
-            Err(CommandError::Invalid(_))
-        ));
+        assert!(matches!(ed.execute(&bad), Err(CommandError::Invalid(_))));
     }
     assert_eq!(ed.undo_depth(), depth);
     assert_eq!(ed.doc().issues.len(), 1);
@@ -314,13 +311,17 @@ fn viewpoints_keep_snapshots_as_picture_resources() {
         _ => unreachable!(),
     };
     c.viewpoint = Some(vid);
-    ed.execute(&Command::AddIssueComment { comment: c }).unwrap();
+    ed.execute(&Command::AddIssueComment { comment: c })
+        .unwrap();
     let mut bad = match comment(id, "no such view", 8) {
         Command::AddIssueComment { comment } => comment,
         _ => unreachable!(),
     };
     bad.viewpoint = Some(ViewpointId::from_num(4242));
-    assert!(ed.execute(&Command::AddIssueComment { comment: bad }).is_err());
+    assert!(
+        ed.execute(&Command::AddIssueComment { comment: bad })
+            .is_err()
+    );
 
     // Deleting one viewpoint keeps the picture (the other uses it) and unlinks the comment.
     ed.execute(&Command::DeleteIssueViewpoint {

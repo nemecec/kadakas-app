@@ -113,11 +113,7 @@ fn all_targets(doc: &Document) -> Vec<Target> {
             .map(|r| Target::new(Kind::Resource, r.id.0)),
     );
     out.extend(doc.objects.keys().map(|o| Target::new(Kind::Object, o.0)));
-    out.extend(
-        doc.issues
-            .iter()
-            .map(|i| Target::new(Kind::Issue, i.id.0)),
-    );
+    out.extend(doc.issues.iter().map(|i| Target::new(Kind::Issue, i.id.0)));
     out.extend(
         doc.issues
             .data()
@@ -288,7 +284,10 @@ pub fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Value> {
         let key = |v: &Value| {
             (
                 v.get("time").and_then(Value::as_i64).unwrap_or(0),
-                v.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
+                v.get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
             )
         };
         viewpoints.sort_by_key(key);

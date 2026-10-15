@@ -31,7 +31,7 @@ use kadakas_review::issues::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::errors::{bad, REASON_BCF_CONFLICT, REASON_CONFIRM_NEEDED};
+use crate::errors::{REASON_BCF_CONFLICT, REASON_CONFIRM_NEEDED, bad};
 use crate::review_api::{author, default_now};
 use crate::{RpcError, Session};
 
@@ -114,6 +114,7 @@ pub fn describe() -> Value {
             {"method": "issue.list", "params": {"status": ["open", "in_progress"], "assignee": "Mari"}},
             {"method": "issue.get", "params": {"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abd", "snapshots": true}},
             {"method": "issue.update", "params": {"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abd", "assignee": "Mari", "add_labels": ["planting"]}},
+            {"method": "issue.add_viewpoint", "params": {"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abd", "snapshot": true}},
             {"method": "issue.comment", "params": {"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abd", "text": "Replaced with a field maple."}},
             {"method": "issue.resolve", "params": {"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abd", "comment": "Done."}},
             {"method": "issue.delete", "params": {"id": "0190f1c2-7a3b-7c1d-8e2f-123456789abd"}},
@@ -307,11 +308,15 @@ fn text_param(m: &Map<String, Value>, key: &str) -> Result<Option<String>, RpcEr
 fn filter_of(m: &Map<String, Value>) -> Result<Filter, RpcError> {
     let object = match m.get("object") {
         None | Some(Value::Null) => None,
-        Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| bad(format!("object: {e}")))?),
+        Some(v) => {
+            Some(serde_json::from_value(v.clone()).map_err(|e| bad(format!("object: {e}")))?)
+        }
     };
     let origin = match text_param(m, "origin")? {
         None => None,
-        Some(t) => Some(Origin::parse(&t).ok_or_else(|| bad("origin is user, agent, script or remote"))?),
+        Some(t) => {
+            Some(Origin::parse(&t).ok_or_else(|| bad("origin is user, agent, script or remote"))?)
+        }
     };
     Ok(Filter {
         status: status_list(m)?,
@@ -351,7 +356,11 @@ const LIST_LIMIT_MAX: usize = 1000;
 
 impl Session {
     /// The method of an `issue.*` call. `None`: not one of ours.
-    pub(crate) fn handle_issue(&mut self, method: &str, p: Value) -> Option<Result<Value, RpcError>> {
+    pub(crate) fn handle_issue(
+        &mut self,
+        method: &str,
+        p: Value,
+    ) -> Option<Result<Value, RpcError>> {
         if !knows(method) {
             return None;
         }
@@ -670,9 +679,24 @@ impl Session {
     fn issue_update(&mut self, p: &Value) -> Result<Value, RpcError> {
         let m = as_object(p)?;
         const KEYS: [&str; 18] = [
-            "id", "title", "description", "type", "status", "priority", "assignee", "labels",
-            "add_labels", "remove_labels", "due", "objects", "add_objects", "remove_objects",
-            "point", "now_ms", "author", "remove_viewpoints",
+            "id",
+            "title",
+            "description",
+            "type",
+            "status",
+            "priority",
+            "assignee",
+            "labels",
+            "add_labels",
+            "remove_labels",
+            "due",
+            "objects",
+            "add_objects",
+            "remove_objects",
+            "point",
+            "now_ms",
+            "author",
+            "remove_viewpoints",
         ];
         if let Some(k) = m.keys().find(|k| !KEYS.contains(&k.as_str())) {
             return Err(bad(format!("unknown parameter {k}")));
@@ -749,7 +773,10 @@ impl Session {
         if let Some(r) = ids("remove_objects")? {
             objects.retain(|o| !r.contains(o));
         }
-        if m.contains_key("objects") || m.contains_key("add_objects") || m.contains_key("remove_objects") {
+        if m.contains_key("objects")
+            || m.contains_key("add_objects")
+            || m.contains_key("remove_objects")
+        {
             patch.objects = Some(objects);
         }
         match m.get("point") {
@@ -771,16 +798,23 @@ impl Session {
         if let Some(v) = m.get("remove_viewpoints").filter(|v| !v.is_null()) {
             let gone: Vec<ViewpointId> = serde_json::from_value(v.clone())
                 .map_err(|e| bad(format!("remove_viewpoints: {e}")))?;
-            commands.extend(gone.into_iter().map(|viewpoint| Command::DeleteIssueViewpoint {
-                issue: id,
-                viewpoint,
-                now,
-            }));
+            commands.extend(
+                gone.into_iter()
+                    .map(|viewpoint| Command::DeleteIssueViewpoint {
+                        issue: id,
+                        viewpoint,
+                        now,
+                    }),
+            );
         }
         let before = self.editor.revision();
-        self.editor
-            .execute(&Command::Batch { commands })
-            .map_err(RpcError::from)?;
+        // One command keeps its own name in the change events.
+        let command = if commands.len() == 1 {
+            commands.remove(0)
+        } else {
+            Command::Batch { commands }
+        };
+        self.editor.execute(&command).map_err(RpcError::from)?;
         let changed = self.editor.revision() != before;
         let doc = self.editor.doc();
         Ok(json!({"id": id, "changed": changed, "issue": summary(doc, find(doc, id)?)}))
@@ -881,8 +915,9 @@ impl Session {
         }
         let ids: Vec<IssueId> = match (m.get("id"), m.get("ids")) {
             (Some(_), None) => vec![issue_id(&m, "id")?],
-            (None, Some(v)) => serde_json::from_value(v.clone())
-                .map_err(|e| bad(format!("ids: {e}")))?,
+            (None, Some(v)) => {
+                serde_json::from_value(v.clone()).map_err(|e| bad(format!("ids: {e}")))?
+            }
             _ => return Err(bad("give id or ids")),
         };
         let confirm = flag(&m, "confirm")?;
@@ -921,8 +956,17 @@ impl Session {
     fn issue_export_bcf(&mut self, p: &Value) -> Result<Value, RpcError> {
         let m = as_object(p)?;
         const KEYS: [&str; 11] = [
-            "path", "version", "ids", "status", "open_only", "assignee", "label", "object",
-            "overwrite", "text", "origin",
+            "path",
+            "version",
+            "ids",
+            "status",
+            "open_only",
+            "assignee",
+            "label",
+            "object",
+            "overwrite",
+            "text",
+            "origin",
         ];
         if let Some(k) = m.keys().find(|k| !KEYS.contains(&k.as_str())) {
             return Err(bad(format!("unknown parameter {k}")));
@@ -990,8 +1034,7 @@ impl Session {
                 }
             }
             None => {
-                out["base64"] =
-                    json!(base64::engine::general_purpose::STANDARD.encode(&bytes));
+                out["base64"] = json!(base64::engine::general_purpose::STANDARD.encode(&bytes));
             }
         }
         Ok(out)
@@ -1041,10 +1084,13 @@ impl Session {
                         .check_path(&path, false, &["bcfzip", "bcf", "zip"])
                         .map_err(RpcError::policy)?;
                     let mut r = kadakas_sys::fsio::open_regular(&path, limit.max_total_bytes)
-                        .map_err(|e| RpcError::app(format!("cannot read {}: {e}", path.display())))?;
+                        .map_err(|e| {
+                            RpcError::app(format!("cannot read {}: {e}", path.display()))
+                        })?;
                     let mut bytes = Vec::new();
-                    r.read_to_end(&mut bytes)
-                        .map_err(|e| RpcError::app(format!("cannot read {}: {e}", path.display())))?;
+                    r.read_to_end(&mut bytes).map_err(|e| {
+                        RpcError::app(format!("cannot read {}: {e}", path.display()))
+                    })?;
                     Ok(bytes)
                 }
                 #[cfg(target_arch = "wasm32")]
@@ -1062,7 +1108,15 @@ impl Session {
     fn issue_import_bcf(&mut self, p: &Value) -> Result<Value, RpcError> {
         let m = as_object(p)?;
         if let Some(k) = m.keys().find(|k| {
-            !["path", "base64", "on_conflict", "dry_run", "now_ms", "author"].contains(&k.as_str())
+            ![
+                "path",
+                "base64",
+                "on_conflict",
+                "dry_run",
+                "now_ms",
+                "author",
+            ]
+            .contains(&k.as_str())
         }) {
             return Err(bad(format!("unknown parameter {k}")));
         }
@@ -1229,7 +1283,13 @@ struct Prepared {
 }
 
 impl Prepared {
-    fn new(s: &Session, t: &ImportedTopic, me: Origin, author: &str, warnings: &mut Vec<String>) -> Prepared {
+    fn new(
+        s: &Session,
+        t: &ImportedTopic,
+        me: Origin,
+        author: &str,
+        warnings: &mut Vec<String>,
+    ) -> Prepared {
         let mut issue = t.issue.clone();
         issue.origin = me;
         if issue.author.trim().is_empty() {
@@ -1375,7 +1435,9 @@ fn renumber(t: &mut ImportedTopic, doc: &Document) {
             .expect("an unused ID")
     };
     let old_issue = t.issue.id;
-    let new_issue = IssueId(fresh(old_issue.0, &|u| doc.issues.get(IssueId(u)).is_some()));
+    let new_issue = IssueId(fresh(old_issue.0, &|u| {
+        doc.issues.get(IssueId(u)).is_some()
+    }));
     let mut vp_map: Vec<(ViewpointId, ViewpointId)> = Vec::new();
     for v in &mut t.issue.viewpoints {
         let new = ViewpointId(fresh(v.id.0, &|_| false));
@@ -1384,7 +1446,9 @@ fn renumber(t: &mut ImportedTopic, doc: &Document) {
     }
     t.issue.id = new_issue;
     for c in &mut t.comments {
-        c.id = CommentId(fresh(c.id.0, &|u| doc.issues.comment(CommentId(u)).is_some()));
+        c.id = CommentId(fresh(c.id.0, &|u| {
+            doc.issues.comment(CommentId(u)).is_some()
+        }));
         c.issue = new_issue;
         if let Some(v) = c.viewpoint {
             c.viewpoint = vp_map.iter().find(|(o, _)| *o == v).map(|(_, n)| *n);

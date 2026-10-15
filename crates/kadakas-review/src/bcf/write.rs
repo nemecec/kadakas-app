@@ -69,10 +69,7 @@ pub fn export(
     input: &ExportInput<'_>,
 ) -> Result<(Vec<u8>, ExportReport), BcfError> {
     let list: Vec<&Issue> = match input.only {
-        Some(ids) => ids
-            .iter()
-            .filter_map(|id| input.issues.get(*id))
-            .collect(),
+        Some(ids) => ids.iter().filter_map(|id| input.issues.get(*id)).collect(),
         None => input.issues.iter().collect(),
     };
     let mut report = ExportReport::default();
@@ -81,8 +78,8 @@ pub fn export(
         .compression_method(zip::CompressionMethod::Deflated)
         .last_modified_time(zip::DateTime::default());
     let put = |zip: &mut zip::ZipWriter<Cursor<Vec<u8>>>,
-                   name: &str,
-                   bytes: &[u8]|
+               name: &str,
+               bytes: &[u8]|
      -> Result<(), BcfError> {
         zip.start_file(name, opts)
             .map_err(|e| BcfError::Archive(e.to_string()))?;
@@ -239,7 +236,10 @@ fn viewpoint_file(version: Version, issue: &Issue, vp: &Viewpoint) -> (String, u
     x.empty("Visibility", &[("DefaultVisibility", "true")]);
     x.end();
     let view = vp.view.clone().unwrap_or(ViewSpec::Plan {
-        center: [issue.point.map_or(0.0, |p| p[0]), issue.point.map_or(0.0, |p| p[1])],
+        center: [
+            issue.point.map_or(0.0, |p| p[0]),
+            issue.point.map_or(0.0, |p| p[1]),
+        ],
         zoom: 0.1,
     });
     let cam = camera::to_bcf(&view, issue.point.map_or(0.0, |p| p[2]));

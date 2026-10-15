@@ -81,9 +81,19 @@ pub const TYPES: [&str; 6] = ["issue", "error", "warning", "request", "clash", "
 
 /// The state of an issue.
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
-#[derive(JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueStatus {
     #[default]
@@ -189,11 +199,19 @@ pub struct Viewpoint {
     pub view: Option<ViewSpec>,
     /// Visibility of layers when the viewpoint was made (`true`: visible). Layers that are not
     /// listed stay as they are.
-    #[serde(default, with = "crate::sheets::id_map", skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        with = "crate::sheets::id_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     #[schemars(with = "Vec<(LayerId, bool)>")]
     pub layers: BTreeMap<LayerId, bool>,
     /// Visibility of classes when the viewpoint was made.
-    #[serde(default, with = "crate::sheets::id_map", skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        with = "crate::sheets::id_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     #[schemars(with = "Vec<(ClassId, bool)>")]
     pub classes: BTreeMap<ClassId, bool>,
     /// The selected objects.
@@ -222,9 +240,7 @@ impl Viewpoint {
             ));
         }
         if self.selection.len() > MAX_OBJECTS {
-            return Err(format!(
-                "a viewpoint selects at most {MAX_OBJECTS} objects"
-            ));
+            return Err(format!("a viewpoint selects at most {MAX_OBJECTS} objects"));
         }
         if let Some(h) = &self.snapshot
             && !is_hash(h)
@@ -412,7 +428,9 @@ fn chars(s: &str) -> usize {
 
 /// True for 64 lowercase hex digits.
 pub fn is_hash(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// True for a date `YYYY-MM-DD` that exists in the calendar.
@@ -481,7 +499,11 @@ impl Issue {
                 check_text(what, t, MAX_NAME_CHARS)?;
             }
         }
-        if self.assignee.as_deref().is_some_and(|a| a.trim().is_empty()) {
+        if self
+            .assignee
+            .as_deref()
+            .is_some_and(|a| a.trim().is_empty())
+        {
             return Err("an assignee cannot be empty: leave it out".into());
         }
         if self.labels.len() > MAX_LABELS {
@@ -646,10 +668,11 @@ impl Issues {
 
     /// True if some viewpoint refers to the snapshot with this hash.
     pub fn uses_snapshot(&self, hash: &str) -> bool {
-        self.0
-            .issues
-            .iter()
-            .any(|i| i.viewpoints.iter().any(|v| v.snapshot.as_deref() == Some(hash)))
+        self.0.issues.iter().any(|i| {
+            i.viewpoints
+                .iter()
+                .any(|v| v.snapshot.as_deref() == Some(hash))
+        })
     }
 
     /// The hashes of all snapshots that the issues refer to.
@@ -679,7 +702,9 @@ impl Issues {
                     + i.objects.len() * 40
                     + i.viewpoints
                         .iter()
-                        .map(|v| 200 + v.selection.len() * 40 + (v.layers.len() + v.classes.len()) * 48)
+                        .map(|v| {
+                            200 + v.selection.len() * 40 + (v.layers.len() + v.classes.len()) * 48
+                        })
                         .sum::<usize>()
             })
             .sum();
@@ -733,11 +758,11 @@ impl Issues {
                 .comments
                 .windows(2)
                 .all(|w| (w[0].time, w[0].id) <= (w[1].time, w[1].id))
-            && self
-                .0
-                .issues
-                .iter()
-                .all(|i| i.viewpoints.windows(2).all(|w| (w[0].time, w[0].id) <= (w[1].time, w[1].id)));
+            && self.0.issues.iter().all(|i| {
+                i.viewpoints
+                    .windows(2)
+                    .all(|w| (w[0].time, w[0].id) <= (w[1].time, w[1].id))
+            });
         if !sorted {
             let d = self.data_mut();
             d.issues.sort_by_key(|i| (i.created, i.id));
@@ -750,7 +775,12 @@ impl Issues {
         if self.0.issues.len() > MAX_ISSUES || self.0.comments.len() > MAX_COMMENTS_TOTAL {
             too_big += 1;
         }
-        too_big += self.0.issues.iter().filter(|i| i.validate().is_err()).count();
+        too_big += self
+            .0
+            .issues
+            .iter()
+            .filter(|i| i.validate().is_err())
+            .count();
         if too_big > 0 {
             notes.push(format!(
                 "{too_big} issue(s) do not fit the limits of issues; they are kept as they are"

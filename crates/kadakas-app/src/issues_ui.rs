@@ -136,7 +136,11 @@ fn author_name() -> String {
             if let Ok(v) = std::env::var(key)
                 && !v.trim().is_empty()
             {
-                return v.trim().chars().take(kadakas_core::issue::MAX_NAME_CHARS).collect();
+                return v
+                    .trim()
+                    .chars()
+                    .take(kadakas_core::issue::MAX_NAME_CHARS)
+                    .collect();
             }
         }
     }
@@ -194,7 +198,8 @@ pub fn paint_pin(
             let n = 8;
             let mut pts: Vec<Pos2> = (0..=n)
                 .map(|k| {
-                    let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * k as f32 / n as f32;
+                    let a =
+                        -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * k as f32 / n as f32;
                     Pos2::new(c.x + r * 0.5 * a.cos(), c.y + r * 0.5 * a.sin())
                 })
                 .collect();
@@ -213,7 +218,10 @@ pub fn paint_pin(
         }
         Mark::Bar => {
             painter.line_segment(
-                [Pos2::new(c.x - r * 0.45, c.y), Pos2::new(c.x + r * 0.45, c.y)],
+                [
+                    Pos2::new(c.x - r * 0.45, c.y),
+                    Pos2::new(c.x + r * 0.45, c.y),
+                ],
                 white,
             );
         }
@@ -221,7 +229,12 @@ pub fn paint_pin(
     if let Some(text) = count {
         let b = Pos2::new(c.x + r * 0.95, c.y - r * 0.95);
         let br = 6.5 * scale;
-        painter.circle(b, br, Color32::from_rgb(35, 35, 35), Stroke::new(1.0, Color32::WHITE));
+        painter.circle(
+            b,
+            br,
+            Color32::from_rgb(35, 35, 35),
+            Stroke::new(1.0, Color32::WHITE),
+        );
         painter.text(
             b,
             egui::Align2::CENTER_CENTER,
@@ -336,7 +349,8 @@ impl IssuesUi {
                 1.0,
             );
             // The middle of the head, for a click.
-            self.screens.push((p.id, DVec2::new(at.x as f64, at.y as f64 - 17.6)));
+            self.screens
+                .push((p.id, DVec2::new(at.x as f64, at.y as f64 - 17.6)));
         }
     }
 
@@ -356,8 +370,8 @@ impl IssuesUi {
         let pins: Vec<Pin> = self.pins(session).to_vec();
         let painter = painter.with_clip_rect(rect);
         for p in &pins {
-            let clip = view_proj
-                * glam::Vec4::new(p.at[0] as f32, p.at[1] as f32, p.at[2] as f32, 1.0);
+            let clip =
+                view_proj * glam::Vec4::new(p.at[0] as f32, p.at[1] as f32, p.at[2] as f32, 1.0);
             if !(clip.w > 1e-6) {
                 continue;
             }
@@ -377,7 +391,8 @@ impl IssuesUi {
                 selected == Some(p.id),
                 1.0,
             );
-            self.screens.push((p.id, DVec2::new(at.x as f64, at.y as f64 - 17.6)));
+            self.screens
+                .push((p.id, DVec2::new(at.x as f64, at.y as f64 - 17.6)));
         }
     }
 
@@ -465,14 +480,20 @@ impl IssuesUi {
         let (assignees, labels) = facets(&doc.issues);
         ui.horizontal(|ui| {
             ui.label(tr!("issues-ui-filter-assignee"));
-            choose(ui, "issues-assignee", &mut self.filters.assignee, &assignees);
+            choose(
+                ui,
+                "issues-assignee",
+                &mut self.filters.assignee,
+                &assignees,
+            );
             ui.label(tr!("issues-ui-filter-label"));
             choose(ui, "issues-label", &mut self.filters.label, &labels);
         });
         ui.horizontal(|ui| {
             ui.label(tr!("issues-ui-filter-text"));
             ui.add(egui::TextEdit::singleline(&mut self.filters.text).desired_width(140.0));
-            if self.filters.is_active() && ui.small_button(tr!("issues-ui-clear-filters")).clicked() {
+            if self.filters.is_active() && ui.small_button(tr!("issues-ui-clear-filters")).clicked()
+            {
                 self.filters.clear();
             }
         });
@@ -544,7 +565,13 @@ impl IssuesUi {
         }
     }
 
-    fn detail_ui(&mut self, ui: &mut Ui, session: &mut Session, status: &mut String, issue: &Issue) {
+    fn detail_ui(
+        &mut self,
+        ui: &mut Ui,
+        session: &mut Session,
+        status: &mut String,
+        issue: &Issue,
+    ) {
         let id = issue.id;
         ui.strong(&issue.title);
         ui.small(tr!(
@@ -559,60 +586,62 @@ impl IssuesUi {
         ));
         // Status, priority and type are changed here: one undo step each.
         let mut patch = serde_json::Map::new();
-        egui::Grid::new("issue-fields").num_columns(2).show(ui, |ui| {
-            ui.label(tr!("issues-ui-detail-status"));
-            let mut s = issue.status;
-            egui::ComboBox::from_id_salt("issue-status")
-                .selected_text(status_text(s))
-                .show_ui(ui, |ui| {
-                    for v in IssueStatus::ALL {
-                        ui.selectable_value(&mut s, v, status_text(v));
-                    }
-                });
-            if s != issue.status {
-                patch.insert("status".into(), json!(s.name()));
-            }
-            ui.end_row();
-            ui.label(tr!("issues-ui-detail-priority"));
-            let mut p = issue.priority.clone();
-            egui::ComboBox::from_id_salt("issue-priority")
-                .selected_text(priority_text(&p))
-                .show_ui(ui, |ui| {
-                    for v in issue::PRIORITIES {
-                        ui.selectable_value(&mut p, v.to_string(), priority_text(v));
-                    }
-                });
-            if p != issue.priority {
-                patch.insert("priority".into(), json!(p));
-            }
-            ui.end_row();
-            ui.label(tr!("issues-ui-detail-type"));
-            let mut k = issue.kind.clone();
-            egui::ComboBox::from_id_salt("issue-type")
-                .selected_text(type_text(&k))
-                .show_ui(ui, |ui| {
-                    for v in issue::TYPES {
-                        ui.selectable_value(&mut k, v.to_string(), type_text(v));
-                    }
-                });
-            if k != issue.kind {
-                patch.insert("type".into(), json!(k));
-            }
-            ui.end_row();
-            ui.label(tr!("issues-ui-detail-assignee"));
-            ui.label(issue.assignee.clone().unwrap_or_else(|| "-".into()));
-            ui.end_row();
-            if !issue.labels.is_empty() {
-                ui.label(tr!("issues-ui-detail-labels"));
-                ui.label(issue.labels.join(", "));
+        egui::Grid::new("issue-fields")
+            .num_columns(2)
+            .show(ui, |ui| {
+                ui.label(tr!("issues-ui-detail-status"));
+                let mut s = issue.status;
+                egui::ComboBox::from_id_salt("issue-status")
+                    .selected_text(status_text(s))
+                    .show_ui(ui, |ui| {
+                        for v in IssueStatus::ALL {
+                            ui.selectable_value(&mut s, v, status_text(v));
+                        }
+                    });
+                if s != issue.status {
+                    patch.insert("status".into(), json!(s.name()));
+                }
                 ui.end_row();
-            }
-            if let Some(d) = &issue.due {
-                ui.label(tr!("issues-ui-detail-due"));
-                ui.label(d);
+                ui.label(tr!("issues-ui-detail-priority"));
+                let mut p = issue.priority.clone();
+                egui::ComboBox::from_id_salt("issue-priority")
+                    .selected_text(priority_text(&p))
+                    .show_ui(ui, |ui| {
+                        for v in issue::PRIORITIES {
+                            ui.selectable_value(&mut p, v.to_string(), priority_text(v));
+                        }
+                    });
+                if p != issue.priority {
+                    patch.insert("priority".into(), json!(p));
+                }
                 ui.end_row();
-            }
-        });
+                ui.label(tr!("issues-ui-detail-type"));
+                let mut k = issue.kind.clone();
+                egui::ComboBox::from_id_salt("issue-type")
+                    .selected_text(type_text(&k))
+                    .show_ui(ui, |ui| {
+                        for v in issue::TYPES {
+                            ui.selectable_value(&mut k, v.to_string(), type_text(v));
+                        }
+                    });
+                if k != issue.kind {
+                    patch.insert("type".into(), json!(k));
+                }
+                ui.end_row();
+                ui.label(tr!("issues-ui-detail-assignee"));
+                ui.label(issue.assignee.clone().unwrap_or_else(|| "-".into()));
+                ui.end_row();
+                if !issue.labels.is_empty() {
+                    ui.label(tr!("issues-ui-detail-labels"));
+                    ui.label(issue.labels.join(", "));
+                    ui.end_row();
+                }
+                if let Some(d) = &issue.due {
+                    ui.label(tr!("issues-ui-detail-due"));
+                    ui.label(d);
+                    ui.end_row();
+                }
+            });
         if !patch.is_empty() {
             patch.insert("id".into(), json!(id));
             patch.insert("now_ms".into(), json!(now_ms()));
@@ -626,7 +655,11 @@ impl IssuesUi {
         }
         let doc = session.editor.doc();
         if !issue.objects.is_empty() {
-            let missing = issue.objects.iter().filter(|o| doc.object(**o).is_none()).count();
+            let missing = issue
+                .objects
+                .iter()
+                .filter(|o| doc.object(**o).is_none())
+                .count();
             let mut line = tr!("issues-ui-objects", count = issue.objects.len());
             if missing > 0 {
                 line.push(' ');
@@ -754,7 +787,10 @@ impl IssuesUi {
             {
                 crate::picture_ui::paint_square(ui, &tex, size, 40.0);
             }
-            if ui.button(tr!("issues-ui-viewpoint-go", name = name)).clicked() {
+            if ui
+                .button(tr!("issues-ui-viewpoint-go", name = name))
+                .clicked()
+            {
                 self.selected = Some(issue.id);
                 self.requests.push(Request::Open(issue.id, Some(vp.id)));
             }
@@ -816,53 +852,59 @@ impl IssuesUi {
                     tr!("issues-ui-new-intro-none")
                 };
                 ui.small(intro);
-                egui::Grid::new("new-issue-grid").num_columns(2).show(ui, |ui| {
-                    ui.label(tr!("issues-ui-field-title"));
-                    ui.add(egui::TextEdit::singleline(&mut d.title).desired_width(260.0));
-                    ui.end_row();
-                    ui.label(tr!("issues-ui-field-description"));
-                    ui.add(
-                        egui::TextEdit::multiline(&mut d.description)
-                            .desired_rows(3)
-                            .desired_width(260.0),
-                    );
-                    ui.end_row();
-                    ui.label(tr!("issues-ui-detail-type"));
-                    egui::ComboBox::from_id_salt("new-type")
-                        .selected_text(type_text(&d.kind))
-                        .show_ui(ui, |ui| {
-                            for v in issue::TYPES {
-                                ui.selectable_value(&mut d.kind, v.to_string(), type_text(v));
-                            }
-                        });
-                    ui.end_row();
-                    ui.label(tr!("issues-ui-detail-priority"));
-                    egui::ComboBox::from_id_salt("new-priority")
-                        .selected_text(priority_text(&d.priority))
-                        .show_ui(ui, |ui| {
-                            for v in issue::PRIORITIES {
-                                ui.selectable_value(&mut d.priority, v.to_string(), priority_text(v));
-                            }
-                        });
-                    ui.end_row();
-                    ui.label(tr!("issues-ui-detail-assignee"));
-                    ui.add(egui::TextEdit::singleline(&mut d.assignee).desired_width(260.0));
-                    ui.end_row();
-                    ui.label(tr!("issues-ui-detail-labels"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut d.labels)
-                            .hint_text(tr!("issues-ui-field-labels-hint"))
-                            .desired_width(260.0),
-                    );
-                    ui.end_row();
-                    ui.label(tr!("issues-ui-detail-due"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut d.due)
-                            .hint_text(tr!("issues-ui-field-due-hint"))
-                            .desired_width(120.0),
-                    );
-                    ui.end_row();
-                });
+                egui::Grid::new("new-issue-grid")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        ui.label(tr!("issues-ui-field-title"));
+                        ui.add(egui::TextEdit::singleline(&mut d.title).desired_width(260.0));
+                        ui.end_row();
+                        ui.label(tr!("issues-ui-field-description"));
+                        ui.add(
+                            egui::TextEdit::multiline(&mut d.description)
+                                .desired_rows(3)
+                                .desired_width(260.0),
+                        );
+                        ui.end_row();
+                        ui.label(tr!("issues-ui-detail-type"));
+                        egui::ComboBox::from_id_salt("new-type")
+                            .selected_text(type_text(&d.kind))
+                            .show_ui(ui, |ui| {
+                                for v in issue::TYPES {
+                                    ui.selectable_value(&mut d.kind, v.to_string(), type_text(v));
+                                }
+                            });
+                        ui.end_row();
+                        ui.label(tr!("issues-ui-detail-priority"));
+                        egui::ComboBox::from_id_salt("new-priority")
+                            .selected_text(priority_text(&d.priority))
+                            .show_ui(ui, |ui| {
+                                for v in issue::PRIORITIES {
+                                    ui.selectable_value(
+                                        &mut d.priority,
+                                        v.to_string(),
+                                        priority_text(v),
+                                    );
+                                }
+                            });
+                        ui.end_row();
+                        ui.label(tr!("issues-ui-detail-assignee"));
+                        ui.add(egui::TextEdit::singleline(&mut d.assignee).desired_width(260.0));
+                        ui.end_row();
+                        ui.label(tr!("issues-ui-detail-labels"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut d.labels)
+                                .hint_text(tr!("issues-ui-field-labels-hint"))
+                                .desired_width(260.0),
+                        );
+                        ui.end_row();
+                        ui.label(tr!("issues-ui-detail-due"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut d.due)
+                                .hint_text(tr!("issues-ui-field-due-hint"))
+                                .desired_width(120.0),
+                        );
+                        ui.end_row();
+                    });
                 ui.checkbox(&mut d.with_viewpoint, tr!("issues-ui-keep-view"));
                 ui.add_enabled(
                     d.with_viewpoint,
@@ -929,7 +971,11 @@ impl IssuesUi {
             .collapsible(false)
             .show(ctx, |ui| {
                 match &why {
-                    Some(why) => ui.label(tr!("issues-ui-confirm-delete-others", title = title.clone(), why = why.clone())),
+                    Some(why) => ui.label(tr!(
+                        "issues-ui-confirm-delete-others",
+                        title = title.clone(),
+                        why = why.clone()
+                    )),
                     None => ui.label(tr!("issues-ui-confirm-delete", title = title.clone())),
                 };
                 ui.horizontal(|ui| {
@@ -996,7 +1042,10 @@ fn choose(ui: &mut Ui, id: &str, value: &mut Option<String>, values: &[String]) 
                 *value = None;
             }
             for v in values {
-                if ui.selectable_label(value.as_deref() == Some(v), v).clicked() {
+                if ui
+                    .selectable_label(value.as_deref() == Some(v), v)
+                    .clicked()
+                {
                     *value = Some(v.clone());
                 }
             }

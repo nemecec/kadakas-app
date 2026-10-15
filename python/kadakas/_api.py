@@ -2199,10 +2199,16 @@ class Api:
         return self._call("issue.create", params or None)
 
     def issue_update(self, **params: Any) -> Any:
-        """Change an issue. One undo step; a call that changes nothing makes no step. params: {id, title?, description?, type?, status?, priority?, assignee? (null or empty: clear), labels? (replace), add_labels?, remove_labels?, due? (YYYY-MM-DD; null or empty: clear), objects? (replace), add_objects?, remove_objects?, point? ([x, y, z] or null: clear), now_ms?}. Returns {id, changed, issue: summary}.
+        """Change an issue. One undo step; a call that changes nothing makes no step. params: {id, title?, description?, type?, status?, priority?, assignee? (null or empty: clear), labels? (replace), add_labels?, remove_labels?, due? (YYYY-MM-DD; null or empty: clear), objects? (replace), add_objects?, remove_objects?, point? ([x, y, z] or null: clear), remove_viewpoints? (viewpoint IDs; a snapshot that no viewpoint uses goes), now_ms?}. Returns {id, changed, issue: summary}.
 
         JSON-RPC method ``issue.update``."""
         return self._call("issue.update", params or None)
+
+    def issue_add_viewpoint(self, **params: Any) -> Any:
+        """Add a viewpoint to an issue. One undo step. params: {id, name?, view? ({kind: plan, center: [x, y], zoom} or {kind: camera, target: [x, y, z], yaw, pitch, distance, perspective?}; default: the current view of the session), selection? (object IDs; default: the objects of the issue), capture_visibility? (default true: the visible layers and classes now), snapshot? (true or the params of render.png), snapshot_base64? (a PNG or JPEG file you made), now_ms?}. At most 16 viewpoints for an issue. Returns {id, viewpoint (the new ID), issue: summary}. Remove viewpoints with issue.update {remove_viewpoints: [IDs]}.
+
+        JSON-RPC method ``issue.add_viewpoint``."""
+        return self._call("issue.add_viewpoint", params or None)
 
     def issue_comment(self, **params: Any) -> Any:
         """Add a comment to the thread of an issue. A comment is a record of its own, so two people who comment at the same time both keep their comment. One undo step. params: {id, text, viewpoint? (the ID of a viewpoint of the issue), author?, now_ms?}. The origin is the origin of the session. At most 1000 comments for an issue. Returns {comment: ID, issue: summary}.
@@ -2690,6 +2696,7 @@ METHOD_NAMES: tuple[str, ...] = (
     "issue.get",
     "issue.create",
     "issue.update",
+    "issue.add_viewpoint",
     "issue.comment",
     "issue.resolve",
     "issue.delete",

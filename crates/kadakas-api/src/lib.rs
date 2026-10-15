@@ -14,8 +14,8 @@ pub mod feedback_api;
 pub mod files;
 pub use errors::{
     REASON_ALREADY_CONNECTED, REASON_BASE_TOO_LARGE, REASON_BASE_TOO_MANY, REASON_BCF_CONFLICT,
-    REASON_CONFIRM_NEEDED, REASON_EDITS_WAIT,
-    REASON_HISTORY_READONLY, REASON_UNSAVED_CHANGES, REASON_VERSION_LIMIT, RpcError,
+    REASON_CONFIRM_NEEDED, REASON_EDITS_WAIT, REASON_HISTORY_READONLY, REASON_UNSAVED_CHANGES,
+    REASON_VERSION_LIMIT, RpcError,
 };
 #[cfg(test)]
 mod care_api_tests;
@@ -27,6 +27,7 @@ mod gis_api;
 mod grading_api;
 mod hardscape_api;
 mod irrigation_api;
+mod issue_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod libfiles;
 mod massing_api;
@@ -39,7 +40,6 @@ mod plugin_api;
 mod plugin_util;
 mod present_api;
 mod query_api;
-mod issue_api;
 mod review_api;
 pub use compare_api::{CompareCache, CompareMode, CompareSpec, ShownDoc};
 pub use review_api::{Side as CompareSide, VERSION_BYTES_MAX, VERSIONS_MAX, VERSIONS_WARN};

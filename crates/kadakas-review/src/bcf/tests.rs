@@ -158,7 +158,12 @@ fn a_round_trip_keeps_everything_that_bcf_holds_in_both_versions() {
     for version in [Version::V21, Version::V30] {
         let (bytes, report) = export_all(version, &s, &pics);
         assert_eq!(
-            (report.topics, report.viewpoints, report.snapshots, report.comments),
+            (
+                report.topics,
+                report.viewpoints,
+                report.snapshots,
+                report.comments
+            ),
             (2, 4, 2, 4),
             "{version:?}"
         );
@@ -252,9 +257,17 @@ fn objects_without_a_viewpoint_get_one_that_comes_back_as_objects() {
     for version in [Version::V21, Version::V30] {
         let (bytes, report) = export_all(version, &s, &p);
         assert_eq!(report.viewpoints, 1);
-        assert!(report.notes.iter().any(|n| n.contains("a viewpoint was made")));
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("a viewpoint was made"))
+        );
         let t = import(&bytes).topics.remove(0);
-        assert!(t.issue.viewpoints.is_empty(), "the made viewpoint is taken out");
+        assert!(
+            t.issue.viewpoints.is_empty(),
+            "the made viewpoint is taken out"
+        );
         assert_eq!(t.issue.objects, issue.objects);
         assert!(same_content(&issue, &[], &t));
     }
@@ -306,7 +319,12 @@ fn a_missing_snapshot_is_a_note_and_the_viewpoint_stays() {
     let (issue, comments, _) = full_issue(4);
     let (s, _) = store(&[(issue, comments, vec![])]);
     let (bytes, report) = export_all(Version::V30, &s, &[]);
-    assert!(report.notes.iter().any(|n| n.contains("not in the document")));
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("not in the document"))
+    );
     assert_eq!(report.snapshots, 0);
     let got = import(&bytes);
     assert_eq!(got.topics[0].issue.viewpoints.len(), 2);
@@ -324,7 +342,12 @@ fn a_snapshot_that_is_not_a_picture_is_a_note() {
     };
     // The bytes do not hash to the name: refused.
     let (_, report) = export_all(Version::V30, &s, &[junk]);
-    assert!(report.notes.iter().any(|n| n.contains("not in the document")));
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("not in the document"))
+    );
     // Bytes that hash right but are not a picture.
     let bytes = b"just some text".to_vec();
     let mut issue2 = full_issue(5).0;
@@ -347,7 +370,11 @@ fn characters_that_xml_cannot_hold_are_replaced_with_a_note() {
     issue.description = "bell\u{7} and \u{1} here".into();
     let (s, p) = store(&[(issue, vec![], vec![])]);
     let (bytes, report) = export_all(Version::V30, &s, &p);
-    assert!(report.notes.iter().any(|n| n.contains("2 character(s)")), "{:?}", report.notes);
+    assert!(
+        report.notes.iter().any(|n| n.contains("2 character(s)")),
+        "{:?}",
+        report.notes
+    );
     let t = import(&bytes).topics.remove(0);
     assert_eq!(t.issue.description, "bell\u{FFFD} and \u{FFFD} here");
 }
@@ -360,7 +387,12 @@ fn layer_visibility_is_a_note() {
         .insert(kadakas_core::model::LayerId::from_num(1), false);
     let (s, p) = store(&[(issue, vec![], vec![])]);
     let (_, report) = export_all(Version::V21, &s, &p);
-    assert!(report.notes.iter().any(|n| n.contains("layer and class visibility")));
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("layer and class visibility"))
+    );
 }
 
 #[test]
@@ -454,17 +486,30 @@ fn a_bcf_21_file_from_another_tool_is_read() {
     let t = &got.topics[0];
     let i = &t.issue;
     assert_eq!(i.id.to_string(), "a7f9c1d2-1111-4222-8333-444455556666");
-    assert_eq!((i.title.as_str(), i.kind.as_str()), ("Pipe through the wall", "Clash"));
-    assert_eq!((i.status, i.priority.as_str()), (IssueStatus::Open, "Critical"));
+    assert_eq!(
+        (i.title.as_str(), i.kind.as_str()),
+        ("Pipe through the wall", "Clash")
+    );
+    assert_eq!(
+        (i.status, i.priority.as_str()),
+        (IssueStatus::Open, "Critical")
+    );
     assert_eq!(i.labels, vec!["Plumbing", "Wall"]);
     assert_eq!(i.author, "Pat@Example.com");
     assert_eq!(i.assignee.as_deref(), Some("sam@example.com"));
     assert_eq!(i.due.as_deref(), Some("2021-04-01"));
     // +01:00 becomes UTC.
-    assert_eq!(i.created, crate::issues::time::parse_iso("2021-03-01T11:30:00Z").unwrap());
+    assert_eq!(
+        i.created,
+        crate::issues::time::parse_iso("2021-03-01T11:30:00Z").unwrap()
+    );
     assert_eq!(t.comments.len(), 2);
     assert_eq!(t.comments[0].viewpoint, Some(i.viewpoints[0].id));
-    assert_ne!(t.comments[1].id, CommentId::default(), "a bad GUID gets a made one");
+    assert_ne!(
+        t.comments[1].id,
+        CommentId::default(),
+        "a bad GUID gets a made one"
+    );
     assert_eq!(i.viewpoints.len(), 1);
     let v = &i.viewpoints[0];
     assert!(matches!(
@@ -504,10 +549,17 @@ fn an_unknown_status_keeps_its_word_as_a_label() {
     let got = import(&zip);
     let i = &got.topics[0].issue;
     assert_eq!(i.status, IssueStatus::Open);
-    assert!(i.labels.contains(&"bcf-status:Waiting for client".to_string()));
+    assert!(
+        i.labels
+            .contains(&"bcf-status:Waiting for client".to_string())
+    );
     assert!(got.warnings.iter().any(|w| w.contains("is not known")));
     // The viewpoint file is not there: a warning, the viewpoint stays.
-    assert!(got.warnings.iter().any(|w| w.contains("is not in the archive")));
+    assert!(
+        got.warnings
+            .iter()
+            .any(|w| w.contains("is not in the archive"))
+    );
 }
 
 #[test]
@@ -574,8 +626,14 @@ fn not_an_archive() {
 #[test]
 fn not_a_bcf_file_or_a_version_we_do_not_read() {
     let zip = make_zip(&[("readme.txt", b"hi")]);
-    assert!(matches!(expect_err(&zip, &ReadLimits::default()), BcfError::Format(_)));
-    for text in ["<Version VersionId=\"1.0\"/>", "<Version VersionId=\"3.1\"/>"] {
+    assert!(matches!(
+        expect_err(&zip, &ReadLimits::default()),
+        BcfError::Format(_)
+    ));
+    for text in [
+        "<Version VersionId=\"1.0\"/>",
+        "<Version VersionId=\"3.1\"/>",
+    ] {
         let zip = make_zip(&[("bcf.version", text.as_bytes())]);
         assert!(matches!(
             expect_err(&zip, &ReadLimits::default()),
@@ -608,12 +666,18 @@ fn bad_names_are_refused() {
         "a\\..\\..\\x",
         "a/b\u{1}c",
     ] {
-        let zip = make_zip(&[("bcf.version", b"<Version VersionId=\"3.0\"/>"), (name, b"x")]);
+        let zip = make_zip(&[
+            ("bcf.version", b"<Version VersionId=\"3.0\"/>"),
+            (name, b"x"),
+        ]);
         let e = expect_err(&zip, &ReadLimits::default());
         assert!(matches!(e, BcfError::Format(_)), "{name:?}: {e:?}");
     }
     let long = "a".repeat(300);
-    let zip = make_zip(&[("bcf.version", b"<Version VersionId=\"3.0\"/>"), (&long, b"x")]);
+    let zip = make_zip(&[
+        ("bcf.version", b"<Version VersionId=\"3.0\"/>"),
+        (&long, b"x"),
+    ]);
     assert!(matches!(
         expect_err(&zip, &ReadLimits::default()),
         BcfError::Limit(_)
@@ -661,7 +725,10 @@ fn too_many_entries_and_too_many_topics() {
 #[test]
 fn big_entries_and_a_compression_bomb_are_refused() {
     let zeros = vec![0u8; 8 * 1024 * 1024];
-    let zip = make_zip(&[("bcf.version", b"<Version VersionId=\"3.0\"/>"), ("a/bomb", &zeros)]);
+    let zip = make_zip(&[
+        ("bcf.version", b"<Version VersionId=\"3.0\"/>"),
+        ("a/bomb", &zeros),
+    ]);
     // The ratio of zeros is far above 200 to 1.
     assert!(matches!(
         expect_err(&zip, &ReadLimits::default()),
@@ -669,7 +736,10 @@ fn big_entries_and_a_compression_bomb_are_refused() {
     ));
     // An entry over the size limit, and entries over the limit together.
     let big = vec![7u8; 5000];
-    let zip = make_zip(&[("bcf.version", b"<Version VersionId=\"3.0\"/>"), ("a/big", &big)]);
+    let zip = make_zip(&[
+        ("bcf.version", b"<Version VersionId=\"3.0\"/>"),
+        ("a/big", &big),
+    ]);
     let limits = ReadLimits {
         max_entry_bytes: 1000,
         ..ReadLimits::default()
@@ -693,7 +763,10 @@ fn an_xml_file_over_its_limit_is_refused() {
         max_xml_bytes: 100,
         ..ReadLimits::default()
     };
-    assert!(matches!(expect_err(&sample_21(), &limits), BcfError::Limit(_)));
+    assert!(matches!(
+        expect_err(&sample_21(), &limits),
+        BcfError::Limit(_)
+    ));
 }
 
 #[test]

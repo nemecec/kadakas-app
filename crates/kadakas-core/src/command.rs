@@ -572,10 +572,14 @@ pub enum Command {
         now: i64,
     },
     /// Delete an issue with its comments. A snapshot picture that no other viewpoint uses goes too.
-    DeleteIssue { id: crate::issue::IssueId },
+    DeleteIssue {
+        id: crate::issue::IssueId,
+    },
     /// Add a comment to the thread of an issue. A nil `comment.id` makes a new ID (returned in
     /// `created`).
-    AddIssueComment { comment: Box<crate::issue::Comment> },
+    AddIssueComment {
+        comment: Box<crate::issue::Comment>,
+    },
     /// Change the text of a comment. `now` is the edit time.
     EditIssueComment {
         id: crate::issue::CommentId,
@@ -583,7 +587,9 @@ pub enum Command {
         now: i64,
     },
     /// Delete a comment.
-    DeleteIssueComment { id: crate::issue::CommentId },
+    DeleteIssueComment {
+        id: crate::issue::CommentId,
+    },
     /// Add a viewpoint to an issue, with its PNG snapshot if it has one. Returns the ID in
     /// `created`.
     AddIssueViewpoint {
@@ -802,7 +808,10 @@ fn issue_changes(
         }
     }
     for id in touched {
-        if !changed.issues.contains(&id) && !added.issues.contains(&id) && !removed.issues.contains(&id) {
+        if !changed.issues.contains(&id)
+            && !added.issues.contains(&id)
+            && !removed.issues.contains(&id)
+        {
             changed.issues.push(id);
         }
     }
@@ -2284,7 +2293,13 @@ impl Editor {
             change::diff_by_id(&classes(&old), &classes(&new));
         (added.resources, changed.resources, removed.resources) =
             change::diff_by_id(&resources(&old), &resources(&new));
-        issue_changes(&self.doc.issues, &doc.issues, &mut added, &mut changed, &mut removed);
+        issue_changes(
+            &self.doc.issues,
+            &doc.issues,
+            &mut added,
+            &mut changed,
+            &mut removed,
+        );
         let document = DocumentChanged {
             active_layer: old.active_layer != new.active_layer,
             active_class: old.active_class != new.active_class,

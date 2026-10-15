@@ -618,6 +618,12 @@ class Issues:
         ``due``, ``objects`` or ``add_objects`` and ``remove_objects``, ``point``."""
         return self._doc.api.issue_update(id=id, **params)
 
+    def add_viewpoint(self, id: str, **params: Any) -> JsonDict:
+        """Add a viewpoint: ``view`` (default: the current view), ``selection``, ``name``,
+        ``snapshot`` (``True`` or the params of ``render.png``). Remove one with
+        ``update(id, remove_viewpoints=[...])``."""
+        return self._doc.api.issue_add_viewpoint(id=id, **params)
+
     def comment(self, id: str, text: str, **params: Any) -> JsonDict:
         """Add a comment to the thread. ``viewpoint`` names a viewpoint of the issue."""
         return self._doc.api.issue_comment(id=id, text=text, **params)

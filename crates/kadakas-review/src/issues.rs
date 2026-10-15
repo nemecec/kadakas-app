@@ -178,7 +178,9 @@ pub fn pin_position(
         return Some(p);
     }
     issue.viewpoints.iter().find_map(|v| match &v.view {
-        Some(kadakas_core::issue::ViewSpec::Plan { center, .. }) => Some([center[0], center[1], 0.0]),
+        Some(kadakas_core::issue::ViewSpec::Plan { center, .. }) => {
+            Some([center[0], center[1], 0.0])
+        }
         _ => None,
     })
 }

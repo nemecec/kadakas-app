@@ -63,7 +63,12 @@ impl BcfDialog {
     }
 
     /// Draws the dialog. Returns false when the person closed it.
-    pub fn show(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String) -> bool {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        session: &mut Session,
+        status: &mut String,
+    ) -> bool {
         let mut open = true;
         egui::Window::new(tr!("issues-ui-bcf-title"))
             .id(egui::Id::new("win-bcf"))
@@ -97,13 +102,16 @@ impl BcfDialog {
                     ui.colored_label(c, text);
                 }
                 if !self.notes.is_empty() {
-                    egui::CollapsingHeader::new(tr!("issues-ui-bcf-notes", count = self.notes.len()))
-                        .id_salt("bcf-notes")
-                        .show(ui, |ui| {
-                            for n in &self.notes {
-                                ui.small(n);
-                            }
-                        });
+                    egui::CollapsingHeader::new(tr!(
+                        "issues-ui-bcf-notes",
+                        count = self.notes.len()
+                    ))
+                    .id_salt("bcf-notes")
+                    .show(ui, |ui| {
+                        for n in &self.notes {
+                            ui.small(n);
+                        }
+                    });
                 }
             });
         open
@@ -141,7 +149,11 @@ impl BcfDialog {
                 self.message = Some((true, text));
                 self.notes = r["notes"]
                     .as_array()
-                    .map(|a| a.iter().filter_map(|n| n.as_str().map(str::to_string)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|n| n.as_str().map(str::to_string))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 self.conflict = None;
             }
@@ -184,7 +196,8 @@ impl BcfDialog {
                     imported = n("imported") + n("kept_both"),
                     replaced = n("replaced"),
                     unchanged = n("unchanged"),
-                    skipped = n("skipped_conflicts") + r["topics_skipped"].as_array().map_or(0, |a| a.len() as u64)
+                    skipped = n("skipped_conflicts")
+                        + r["topics_skipped"].as_array().map_or(0, |a| a.len() as u64)
                 );
                 *status = text.clone();
                 self.message = Some((true, text));
@@ -237,15 +250,17 @@ impl BcfDialog {
         ui.separator();
         ui.strong(tr!("issues-ui-bcf-conflict-title"));
         ui.label(tr!("issues-ui-bcf-conflict-text", count = c.count));
-        egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-            for [ours, ours_status, file, file_status] in &c.rows {
-                ui.small(tr!(
-                    "issues-ui-bcf-conflict-row",
-                    ours = format!("{ours} ({ours_status})"),
-                    file = format!("{file} ({file_status})")
-                ));
-            }
-        });
+        egui::ScrollArea::vertical()
+            .max_height(140.0)
+            .show(ui, |ui| {
+                for [ours, ours_status, file, file_status] in &c.rows {
+                    ui.small(tr!(
+                        "issues-ui-bcf-conflict-row",
+                        ours = format!("{ours} ({ours_status})"),
+                        file = format!("{file} ({file_status})")
+                    ));
+                }
+            });
         let path = c.path.clone();
         let mut choice: Option<&str> = None;
         ui.horizontal_wrapped(|ui| {

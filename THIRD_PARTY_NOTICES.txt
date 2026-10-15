@@ -7,7 +7,7 @@ named for it. This file is made by scripts/notices.sh (cargo-about). Do not edit
 ================================================================================
 SUMMARY
 ================================================================================
-449 crates: MIT License
+451 crates: MIT License
 43 crates: Apache License 2.0
 19 crates: ISC License
 19 crates: Unicode License v3
@@ -7887,6 +7887,7 @@ Used by:
   - thiserror-impl 2.0.21 (https://github.com/dtolnay/thiserror)
   - thiserror 1.0.69 (https://github.com/dtolnay/thiserror)
   - thiserror 2.0.21 (https://github.com/dtolnay/thiserror)
+  - typed-path 0.12.3 (https://github.com/chipsenkbeil/typed-path)
   - unic-langid-impl 0.9.6 (https://github.com/zbraniecki/unic-locale)
   - unic-langid 0.9.6 (https://github.com/zbraniecki/unic-locale)
   - unicode-ident 1.0.26 (https://github.com/dtolnay/unicode-ident)
@@ -8042,6 +8043,7 @@ MIT License
 --------------------------------------------------------------------------------
 Used by:
   - tracing-core 0.1.36 (https://github.com/tokio-rs/tracing)
+  - zip 8.6.0 (https://github.com/zip-rs/zip2)
 
 The MIT License (MIT)
 

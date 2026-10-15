@@ -419,8 +419,7 @@ mod tests {
                 serde_json::json!({"title": "Here", "objects": [slab], "now_ms": 1}),
             )
             .unwrap();
-        let id: kadakas_core::issue::IssueId =
-            serde_json::from_value(made["id"].clone()).unwrap();
+        let id: kadakas_core::issue::IssueId = serde_json::from_value(made["id"].clone()).unwrap();
         for _ in 0..4 {
             h.frame(vec![]);
         }
@@ -428,7 +427,10 @@ mod tests {
         assert!(at.x > 0.0 && at.y > 0.0);
         h.click(at, egui::Modifiers::NONE);
         assert_eq!(h.issues.selected, Some(id), "the pin was clicked");
-        assert!(h.session.selection.is_empty(), "the click did not select the slab");
+        assert!(
+            h.session.selection.is_empty(),
+            "the click did not select the slab"
+        );
         let requests = h.issues.take_requests();
         assert_eq!(requests.len(), 1);
     }

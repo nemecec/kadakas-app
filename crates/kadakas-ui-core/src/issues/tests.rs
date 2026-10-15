@@ -140,11 +140,26 @@ fn due_dates() {
     let d = time::from_date("2026-06-10").unwrap();
     assert_eq!(due_state(None, IssueStatus::Open, 0), Due::None);
     assert_eq!(due_state(Some("bad"), IssueStatus::Open, 0), Due::None);
-    assert_eq!(due_state(Some("2026-06-10"), IssueStatus::Open, d - 10 * day), Due::Later);
-    assert_eq!(due_state(Some("2026-06-10"), IssueStatus::Open, d - 2 * day), Due::Soon);
-    assert_eq!(due_state(Some("2026-06-10"), IssueStatus::Open, d + day / 2), Due::Soon);
-    assert_eq!(due_state(Some("2026-06-10"), IssueStatus::Open, d + day), Due::Overdue);
-    assert_eq!(due_state(Some("2026-06-10"), IssueStatus::Closed, d + 9 * day), Due::Later);
+    assert_eq!(
+        due_state(Some("2026-06-10"), IssueStatus::Open, d - 10 * day),
+        Due::Later
+    );
+    assert_eq!(
+        due_state(Some("2026-06-10"), IssueStatus::Open, d - 2 * day),
+        Due::Soon
+    );
+    assert_eq!(
+        due_state(Some("2026-06-10"), IssueStatus::Open, d + day / 2),
+        Due::Soon
+    );
+    assert_eq!(
+        due_state(Some("2026-06-10"), IssueStatus::Open, d + day),
+        Due::Overdue
+    );
+    assert_eq!(
+        due_state(Some("2026-06-10"), IssueStatus::Closed, d + 9 * day),
+        Due::Later
+    );
 }
 
 #[test]
@@ -200,7 +215,11 @@ fn a_pin_of_a_layer_at_a_height_is_at_that_height() {
             attrs: Attributes::default(),
         })
         .unwrap();
-    add(&mut ed, &Draft::for_objects(&[ObjectId(out.created[0])]).tap_title("Up"), 1);
+    add(
+        &mut ed,
+        &Draft::for_objects(&[ObjectId(out.created[0])]).tap_title("Up"),
+        1,
+    );
     let p = pins(ed.doc(), &Filters::default());
     assert_eq!(p[0].at[2], 1500.0);
 }
@@ -248,7 +267,10 @@ fn a_form_checks_its_fields_and_makes_an_issue() {
     d.due = "soon".into();
     assert_eq!(d.check(), Err(DraftError::DueNotDate));
     d.due = "2026-12-24".into();
-    d.labels = (0..=MAX_LABELS).map(|n| format!("l{n}")).collect::<Vec<_>>().join(",");
+    d.labels = (0..=MAX_LABELS)
+        .map(|n| format!("l{n}"))
+        .collect::<Vec<_>>()
+        .join(",");
     assert_eq!(d.check(), Err(DraftError::TooManyLabels));
     d.labels = "x".repeat(MAX_LABEL_CHARS + 1);
     assert_eq!(d.check(), Err(DraftError::LabelTooLong));
@@ -277,7 +299,10 @@ fn a_form_checks_its_fields_and_makes_an_issue() {
     assert_eq!(i.point, Some([1.0, 2.0, 3.0]));
     i.validate().unwrap();
     let again = Draft::default().issue("", Origin::Agent, 0, vec![]);
-    assert_eq!((again.assignee, again.due, again.origin), (None, None, Origin::Agent));
+    assert_eq!(
+        (again.assignee, again.due, again.origin),
+        (None, None, Origin::Agent)
+    );
     for e in [
         DraftError::TitleEmpty,
         DraftError::TitleTooLong,
@@ -287,7 +312,10 @@ fn a_form_checks_its_fields_and_makes_an_issue() {
     ] {
         assert!(e.message().starts_with("uic-issues-error-"));
     }
-    assert_eq!(Draft::at_point([1.0, 2.0, 0.0]).point, Some([1.0, 2.0, 0.0]));
+    assert_eq!(
+        Draft::at_point([1.0, 2.0, 0.0]).point,
+        Some([1.0, 2.0, 0.0])
+    );
     assert!(Draft::for_objects(&[ObjectId::from_num(1)]).with_viewpoint);
 }
 
@@ -324,7 +352,11 @@ fn opening_an_issue_selects_its_objects_and_restores_the_layers() {
     })
     .unwrap();
     let plan = open_plan(ed.doc(), &issue, Some(&vp));
-    assert_eq!(plan.selection, vec![a], "the selection of the viewpoint, objects that exist");
+    assert_eq!(
+        plan.selection,
+        vec![a],
+        "the selection of the viewpoint, objects that exist"
+    );
     assert_eq!(plan.missing, 1);
     assert_eq!(plan.commands.len(), 1);
     assert!(matches!(plan.view, Some(ViewSpec::Plan { .. })));
@@ -339,7 +371,10 @@ fn opening_an_issue_selects_its_objects_and_restores_the_layers() {
     assert!(plan.commands.is_empty() && plan.view.is_none());
     // A viewpoint without a selection falls back to the objects of the issue.
     let empty = Viewpoint::default();
-    assert_eq!(open_plan(ed.doc(), &issue, Some(&empty)).selection, vec![a, b]);
+    assert_eq!(
+        open_plan(ed.doc(), &issue, Some(&empty)).selection,
+        vec![a, b]
+    );
 }
 
 #[test]
@@ -361,7 +396,9 @@ fn the_viewpoint_that_opens_is_the_asked_one_then_one_with_a_view() {
         ViewpointId::from_num(3)
     );
     assert_eq!(
-        viewpoint_of(&i, Some(ViewpointId::from_num(99))).unwrap().id,
+        viewpoint_of(&i, Some(ViewpointId::from_num(99)))
+            .unwrap()
+            .id,
         ViewpointId::from_num(2)
     );
     i.viewpoints = vec![mk(1, false)];

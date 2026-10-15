@@ -223,7 +223,10 @@ impl Tx<'_> {
                 let at = self.issue_index(*issue)?;
                 let old = self.doc.issues.data().issues[at].clone();
                 let Some(vat) = old.viewpoints.iter().position(|v| v.id == viewpoint.id) else {
-                    return Err(invalid(format!("the issue has no viewpoint {}", viewpoint.id)));
+                    return Err(invalid(format!(
+                        "the issue has no viewpoint {}",
+                        viewpoint.id
+                    )));
                 };
                 if old.viewpoints[vat] == **viewpoint {
                     return Ok(());

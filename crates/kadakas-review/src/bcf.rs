@@ -36,8 +36,8 @@ use kadakas_core::issue::{Comment, Issue};
 
 pub mod camera;
 pub mod read;
-mod xml;
 pub mod write;
+mod xml;
 
 #[cfg(test)]
 mod tests;
