@@ -10,7 +10,7 @@ Vectorworks is a trademark of Vectorworks, Inc. Kadakas is an independent projec
 
 AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. We name these products only to describe the file formats that Kadakas reads or writes, to compare workflows, or to say what a workspace profile is like (the built-in "AutoCAD-like" profile). Kadakas is not affiliated with their owners. The profile uses general public knowledge of common command aliases. It contains no Autodesk text, icon or file.
 
-SketchUp is a trademark of Trimble Inc. The feature spec names a SketchUp-like user interface as a possible future flavor. Kadakas has no SketchUp import or export and is not affiliated with Trimble Inc.
+SketchUp is a trademark of Trimble Inc. The feature spec plans a 3D-first modeler in the style of SketchUp (section 4.23). Kadakas has no SketchUp import or export and is not affiliated with Trimble Inc.
 
 ## Rust crates
 
