@@ -4,7 +4,7 @@ use glam::{DVec2, DVec3};
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::single::SingleFloatOverlay;
-pub use kadakas_core::geom::{clean_ring, signed_area};
+pub use kadakas_core::geom::{clean_ring, signed_area, split_with_holes};
 use kadakas_core::hardscape::surface::{self, DRAPE_STEP};
 
 /// Rounds to 0.1 micrometer, so files stay small. Numbers that are not finite become 0.
@@ -14,63 +14,6 @@ pub fn r4(x: f64) -> f64 {
     } else {
         0.0
     }
-}
-
-/// Splits a ring with holes into simple polygons without holes. It cuts the area into horizontal
-/// strips at the height of every hole vertex. Inside a strip, a hole crosses the whole strip, so the
-/// pieces have no holes. `outer` is counterclockwise. At most 400 cuts are used. With more, a piece
-/// may still have a hole, and the hole is filled.
-pub fn split_with_holes(outer: &[DVec2], holes: &[Vec<DVec2>]) -> Vec<Vec<DVec2>> {
-    if holes.is_empty() {
-        return vec![outer.to_vec()];
-    }
-    let path = |r: &[DVec2]| r.iter().map(|p| [p.x, p.y]).collect::<Vec<[f64; 2]>>();
-    let mut subject = vec![path(outer)];
-    subject.extend(holes.iter().map(|h| path(h)));
-    let (lo, hi) = outer
-        .iter()
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
-            (lo.min(p.y), hi.max(p.y))
-        });
-    let mut cuts: Vec<f64> = holes
-        .iter()
-        .flatten()
-        .map(|p| p.y)
-        .filter(|y| *y > lo && *y < hi)
-        .collect();
-    cuts.sort_by(f64::total_cmp);
-    cuts.dedup();
-    if cuts.len() > 400 {
-        let step = cuts.len() as f64 / 400.0;
-        cuts = (0..400).map(|i| cuts[(i as f64 * step) as usize]).collect();
-    }
-    let (min_x, max_x) = outer
-        .iter()
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
-            (lo.min(p.x), hi.max(p.x))
-        });
-    let (min_x, max_x) = (min_x - 1.0, max_x + 1.0);
-    let mut levels = vec![lo - 1.0];
-    levels.extend(cuts);
-    levels.push(hi + 1.0);
-    let mut out = Vec::new();
-    for w in levels.windows(2) {
-        let rect = vec![[min_x, w[0]], [max_x, w[0]], [max_x, w[1]], [min_x, w[1]]];
-        for shape in subject.overlay(&vec![rect], OverlayRule::Intersect, FillRule::EvenOdd) {
-            if let Some(contour) = shape.first() {
-                let piece = clean_ring(
-                    &contour
-                        .iter()
-                        .map(|p| DVec2::new(p[0], p[1]))
-                        .collect::<Vec<_>>(),
-                );
-                if !piece.is_empty() {
-                    out.push(piece);
-                }
-            }
-        }
-    }
-    out
 }
 
 /// A closed triangle mesh of a slab: the top surface at `z`, the bottom `thickness` below, and the

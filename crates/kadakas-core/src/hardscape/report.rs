@@ -32,7 +32,10 @@ pub struct LayerQty {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Quantities {
     pub mode: &'static str,
+    /// The plan area: the outline minus the holes.
     pub plan_area_m2: f64,
+    pub holes: usize,
+    pub holes_area_m2: f64,
     /// Area of the top surface. It is larger than the plan area for a slope or a draped surface.
     pub surface_area_m2: f64,
     pub perimeter_m: f64,
@@ -65,17 +68,23 @@ pub fn quantities(
     let d = data::data(obj);
     let style = data::style_of(doc, obj);
     let ring = curve::flatten(boundary, true, TOLERANCE);
-    let plan = curve::area(boundary) / 1e6;
+    let hole_list = d.as_ref().map(|d| d.holes.as_slice()).unwrap_or_default();
+    let holes_area = crate::landscape::holes_area(boundary, hole_list) / 1e6;
+    let plan = (curve::area(boundary) / 1e6 - holes_area).max(0.0);
     // Ground that does not reach the hardscape does not count.
     let terrain = terrain.filter(|t| ring.iter().any(|p| t(*p).is_some()));
     let surf = surface::surface_of(obj, d.as_ref(), terrain);
     let surface_area = plan * surface::area_ratio(&ring, &surf);
     let ratio = if plan > 0.0 { surface_area / plan } else { 1.0 };
-    let closed_perimeter = offset::length(&ring)
-        + ring
-            .last()
-            .zip(ring.first())
-            .map_or(0.0, |(a, b)| a.distance(*b));
+    let closed_len = |r: &[DVec2]| {
+        offset::length(r) + r.last().zip(r.first()).map_or(0.0, |(a, b)| a.distance(*b))
+    };
+    // The kerb runs round the holes too.
+    let closed_perimeter = closed_len(&ring)
+        + hole_list
+            .iter()
+            .map(|h| closed_len(&curve::flatten(h, true, TOLERANCE)))
+            .sum::<f64>();
     let m3 = |area: f64, t: f64| area * t / 1000.0;
     let mut layers: Vec<LayerQty> = Vec::new();
     match &style {
@@ -140,6 +149,8 @@ pub fn quantities(
     Some(Quantities {
         mode: d.as_ref().map_or("slab", |d| d.mode.id()),
         plan_area_m2: plan,
+        holes: hole_list.len(),
+        holes_area_m2: holes_area,
         surface_area_m2: surface_area,
         perimeter_m: closed_perimeter / 1000.0,
         thickness_mm: total_thickness,

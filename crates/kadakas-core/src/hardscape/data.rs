@@ -139,6 +139,13 @@ pub struct HardscapeData {
     pub drape: bool,
     /// Act as a pad on the site model.
     pub site_modifier: bool,
+    /// Parts of the surface that stay open, for example a planting island or a manhole.
+    pub holes: Vec<Vec<Vertex>>,
+    /// Where the joint pattern starts, in drawing coordinates. `None`: the middle of the box of
+    /// the outline, or what the style says.
+    pub origin: Option<DVec2>,
+    /// Angle of the joint pattern in degrees. It replaces the angle of the style.
+    pub angle: Option<f64>,
 }
 
 impl Default for HardscapeData {
@@ -155,9 +162,15 @@ impl Default for HardscapeData {
             slope: Slope::None,
             drape: false,
             site_modifier: false,
+            holes: Vec::new(),
+            origin: None,
+            angle: None,
         }
     }
 }
+
+/// Most holes in one hardscape.
+pub const MAX_HOLES: usize = 1000;
 
 impl HardscapeData {
     /// Checks the numbers and the rules between the fields.
@@ -176,6 +189,31 @@ impl HardscapeData {
         }
         if !self.offset.is_finite() || self.offset.abs() > MAX_COORD {
             return Err("the offset must be a finite number".into());
+        }
+        if self.holes.len() > MAX_HOLES {
+            return Err(format!("a hardscape has at most {MAX_HOLES} holes"));
+        }
+        for (i, h) in self.holes.iter().enumerate() {
+            if h.len() < 3 {
+                return Err(format!("hole {} needs 3 or more points", i + 1));
+            }
+            if h.len() > MAX_VERTICES {
+                return Err(format!("a hole has at most {MAX_VERTICES} points"));
+            }
+            if h.iter()
+                .any(|v| !v.is_finite() || v.p.abs().max_element() > MAX_COORD)
+            {
+                return Err("numbers must be finite".into());
+            }
+        }
+        if self
+            .origin
+            .is_some_and(|o| !o.is_finite() || o.abs().max_element() > MAX_COORD)
+        {
+            return Err("the origin must be a finite point".into());
+        }
+        if self.angle.is_some_and(|a| !a.is_finite() || a.abs() > 1e6) {
+            return Err("the angle must be a finite number".into());
         }
         if self.center.len() > MAX_VERTICES {
             return Err(format!("a path has at most {MAX_VERTICES} points"));
@@ -330,6 +368,19 @@ pub struct HardscapePatch {
     pub slope: Option<Slope>,
     pub drape: Option<bool>,
     pub site_modifier: Option<bool>,
+    /// New holes. They replace the old ones. Each hole must lie inside the outline.
+    pub holes: Option<Vec<Vec<Vertex>>>,
+    /// Where the joint pattern starts.
+    pub origin: Option<DVec2>,
+    /// Remove the origin of the object.
+    pub clear_origin: bool,
+    /// Angle of the joint pattern, in degrees.
+    pub angle: Option<f64>,
+    /// Remove the angle of the object: the style gives it again.
+    pub clear_angle: bool,
+    /// Start the pattern at vertex `n` of the outline and run it along the edge to vertex `n + 1`
+    /// (sets the origin and the angle).
+    pub align_to_edge: Option<usize>,
     /// Material of a hardscape without style.
     pub material: Option<String>,
     /// Thickness of a hardscape without style.
@@ -394,6 +445,35 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
     }
     if let Some(v) = patch.site_modifier {
         d.site_modifier = v;
+    }
+    if let Some(h) = &patch.holes {
+        d.holes = h.clone();
+    }
+    if patch.clear_origin {
+        d.origin = None;
+    }
+    if patch.clear_angle {
+        d.angle = None;
+    }
+    if let Some(i) = patch.align_to_edge {
+        let Shape::Hardscape { boundary, .. } = &obj.shape else {
+            unreachable!("checked above")
+        };
+        // The edge of the outline after this patch: a new center line moves the outline.
+        let outline = if d.mode == Mode::Path {
+            d.outline()
+        } else {
+            boundary.clone()
+        };
+        let p = crate::layout::Placement::along_edge(&outline, i)?;
+        d.origin = p.origin;
+        d.angle = Some(p.angle);
+    }
+    if let Some(o) = patch.origin {
+        d.origin = Some(o);
+    }
+    if let Some(a) = patch.angle {
+        d.angle = Some(a);
     }
     if patch.unstyle {
         // Keep what the style gave.
@@ -461,6 +541,20 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
             boundary.len()
         ));
     }
+    if !d.holes.is_empty() {
+        let Shape::Hardscape { boundary, .. } = &shape else {
+            unreachable!("checked above")
+        };
+        let ring = curve::flatten(boundary, true, TOLERANCE);
+        for (i, h) in d.holes.iter().enumerate() {
+            if !curve::flatten(h, true, TOLERANCE)
+                .iter()
+                .all(|p| inside_or_on(&ring, *p))
+            {
+                return Err(format!("hole {} is not inside the outline", i + 1));
+            }
+        }
+    }
     obj.shape = shape;
     set_data(obj, &d);
     sync_shape(doc, obj);
@@ -491,14 +585,24 @@ pub fn fix_edge_elevations(before: &Object, after: &mut Object) {
     set_data(after, &d);
 }
 
-/// Moves the center line of a path with the object.
+fn inside_or_on(ring: &[DVec2], p: DVec2) -> bool {
+    let n = ring.len();
+    crate::geom::point_in_polygon(p, ring)
+        || (0..n).any(|i| crate::geom::dist_to_segment(p, ring[i], ring[(i + 1) % n]) < 1e-6)
+}
+
+/// Moves the data that holds positions with the object: the center line of a path, the holes and
+/// the origin of the pattern.
 pub fn translate_data(obj: &mut Object, delta: DVec2) {
     let Some(mut d) = data(obj) else { return };
-    if d.center.is_empty() {
+    if d.center.is_empty() && d.holes.is_empty() && d.origin.is_none() {
         return;
     }
-    for v in &mut d.center {
+    for v in d.center.iter_mut().chain(d.holes.iter_mut().flatten()) {
         v.p += delta;
+    }
+    if let Some(o) = &mut d.origin {
+        *o += delta;
     }
     // The outline comes from the center line again, so the two always agree to the last bit.
     if d.mode == Mode::Path

@@ -309,10 +309,12 @@ pub fn shade(c: [u8; 4], k: f32) -> [u8; 4] {
     ]
 }
 
-/// Adds the top surface, the walls of every layer, and the outlines of a solid to a sink.
+/// Adds the top surface, the walls of every layer, and the outlines of a solid to a sink. The
+/// holes are open: the surface has no triangles over them, and the walls close them.
 pub fn emit_solid(
     sink: &mut SceneSink<'_>,
     ring: &[DVec2],
+    holes: &[Vec<DVec2>],
     surface: &Surface<'_>,
     layers: &[LayerSpec],
     edge: [u8; 4],
@@ -321,51 +323,77 @@ pub fn emit_solid(
     if ring.len() < 3 || layers.is_empty() {
         return;
     }
+    let holes: Vec<Vec<DVec2>> = holes
+        .iter()
+        .map(|h| clean_ring(h))
+        .filter(|h| h.len() >= 3)
+        .collect();
     let z = |p| surface.z(p);
     let step = surface.is_draped().then_some(DRAPE_STEP);
-    let (points, indices) = top_surface(&ring, &z, step);
+    let (mut points, mut indices) = (Vec::new(), Vec::new());
+    for piece in crate::geom::split_with_holes(&ring, &holes) {
+        let (p, i) = top_surface(&piece, &z, step);
+        let off = points.len() as u32;
+        points.extend(p);
+        indices.extend(i.iter().map(|k| k + off));
+    }
     sink.set_part(PART_LAYER);
     sink.mesh(&points, &indices, layers[0].color);
-    // Points along the outline. A draped outline gets extra points so it follows the ground.
-    let n = ring.len();
-    let mut outline: Vec<DVec2> = Vec::new();
-    for i in 0..n {
-        let (p, q) = (ring[i], ring[(i + 1) % n]);
-        let parts = step.map_or(1, |s| ((p.distance(q) / s).ceil() as usize).clamp(1, 400));
-        for k in 0..parts {
-            outline.push(p.lerp(q, k as f64 / parts as f64));
-        }
-    }
-    let m = outline.len();
+    // Points along the outline and the holes (the holes run clockwise, so the outside of the
+    // solid is on the right of every edge). A draped outline gets extra points so it follows the ground.
+    let mut loops: Vec<Vec<DVec2>> = vec![ring.clone()];
+    loops.extend(holes.iter().map(|h| h.iter().rev().copied().collect()));
+    let outlines: Vec<Vec<DVec2>> = loops
+        .iter()
+        .map(|lp| {
+            let n = lp.len();
+            let mut outline: Vec<DVec2> = Vec::new();
+            for i in 0..n {
+                let (p, q) = (lp[i], lp[(i + 1) % n]);
+                let parts = step.map_or(1, |s| ((p.distance(q) / s).ceil() as usize).clamp(1, 400));
+                for k in 0..parts {
+                    outline.push(p.lerp(q, k as f64 / parts as f64));
+                }
+            }
+            outline
+        })
+        .collect();
     for (li, layer) in layers.iter().enumerate() {
         sink.set_part(PART_LAYER + li.min(200) as u8);
-        let (mut pos, mut idx) = (Vec::with_capacity(m * 4), Vec::with_capacity(m * 6));
-        for i in 0..m {
-            let (p, q) = (outline[i], outline[(i + 1) % m]);
-            let (zp, zq) = (z(p), z(q));
-            let base = pos.len() as u32;
-            pos.extend([
-                p.extend(zp - layer.bottom),
-                q.extend(zq - layer.bottom),
-                q.extend(zq - layer.top),
-                p.extend(zp - layer.top),
-            ]);
-            // The ring is counterclockwise, so the outside is on the right of each edge.
-            idx.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        let (mut pos, mut idx) = (Vec::new(), Vec::new());
+        for outline in &outlines {
+            let m = outline.len();
+            for i in 0..m {
+                let (p, q) = (outline[i], outline[(i + 1) % m]);
+                let (zp, zq) = (z(p), z(q));
+                let base = pos.len() as u32;
+                pos.extend([
+                    p.extend(zp - layer.bottom),
+                    q.extend(zq - layer.bottom),
+                    q.extend(zq - layer.top),
+                    p.extend(zp - layer.top),
+                ]);
+                idx.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+            }
         }
         sink.mesh(&pos, &idx, shade(layer.color, 0.82));
     }
     sink.set_part(0);
-    let top: Vec<DVec3> = outline.iter().map(|p| p.extend(z(*p))).collect();
-    sink.polyline(&top, true, edge);
     let depth = layers.iter().map(|l| l.bottom).fold(0.0, f64::max);
-    let bottom: Vec<DVec3> = outline.iter().map(|p| p.extend(z(*p) - depth)).collect();
-    sink.polyline(&bottom, true, edge);
-    for i in 0..n {
-        let (a, b, c) = (ring[(i + n - 1) % n], ring[i], ring[(i + 1) % n]);
-        let (u, v) = ((b - a).normalize_or_zero(), (c - b).normalize_or_zero());
-        if u.dot(v) < 0.94 {
-            sink.polyline(&[b.extend(z(b) - depth), b.extend(z(b))], false, edge);
+    for outline in &outlines {
+        let top: Vec<DVec3> = outline.iter().map(|p| p.extend(z(*p))).collect();
+        sink.polyline(&top, true, edge);
+        let bottom: Vec<DVec3> = outline.iter().map(|p| p.extend(z(*p) - depth)).collect();
+        sink.polyline(&bottom, true, edge);
+    }
+    for lp in &loops {
+        let n = lp.len();
+        for i in 0..n {
+            let (a, b, c) = (lp[(i + n - 1) % n], lp[i], lp[(i + 1) % n]);
+            let (u, v) = ((b - a).normalize_or_zero(), (c - b).normalize_or_zero());
+            if u.dot(v) < 0.94 {
+                sink.polyline(&[b.extend(z(b) - depth), b.extend(z(b))], false, edge);
+            }
         }
     }
 }

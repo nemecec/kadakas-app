@@ -89,45 +89,8 @@ impl Default for Border {
     }
 }
 
-/// The layout of paving units in the 2D drawing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum JointKind {
-    /// Rows, each row shifted by half a unit.
-    #[default]
-    RunningBond,
-    /// Rows and columns line up.
-    Stack,
-    /// Units at a right angle to each other, in diagonal stripes.
-    Herringbone,
-    /// Blocks of two units, turned by 90 degrees from block to block.
-    BasketWeave,
-}
-
-impl JointKind {
-    pub const ALL: [JointKind; 4] = [
-        JointKind::RunningBond,
-        JointKind::Stack,
-        JointKind::Herringbone,
-        JointKind::BasketWeave,
-    ];
-
-    pub fn id(self) -> &'static str {
-        match self {
-            JointKind::RunningBond => "running_bond",
-            JointKind::Stack => "stack",
-            JointKind::Herringbone => "herringbone",
-            JointKind::BasketWeave => "basket_weave",
-        }
-    }
-
-    pub fn from_name(s: &str) -> Option<Self> {
-        let key = s.trim().replace([' ', '-'], "_");
-        Self::ALL
-            .into_iter()
-            .find(|k| k.id().eq_ignore_ascii_case(&key))
-    }
-}
+/// The layout of paving units (the bond). The bonds are defined by the layout engine.
+pub use crate::layout::Bond as JointKind;
 
 /// A joint pattern: paving units of `unit_length` by `unit_width`, with `spacing` between them,
 /// turned by `angle` degrees.
@@ -142,6 +105,18 @@ pub struct JointPattern {
     /// Rotation of the pattern in degrees, counterclockwise.
     pub angle: f64,
     pub color: Option<Color>,
+}
+
+impl JointPattern {
+    /// The pattern for the layout engine (the angle goes in the placement).
+    pub fn layout(&self) -> crate::layout::Pattern {
+        crate::layout::Pattern {
+            bond: self.kind,
+            unit_length: self.unit_length,
+            unit_width: self.unit_width,
+            gap: self.spacing,
+        }
+    }
 }
 
 impl Default for JointPattern {
