@@ -129,16 +129,29 @@ pub fn open_decision_for<P: AsRef<Path>>(paths: &[P]) -> OpenDecision {
         })
         // A file that is not a container (or is damaged) loads as much as it is long.
         .map(|(p, m)| match native::inspect(p.as_ref()) {
-            Ok(i) => (i.resident_bytes(), i.file_bytes),
-            Err(_) => (m.len(), m.len()),
+            Ok(i) => (
+                kadakas_core::open_estimate::needed_bytes_for(
+                    i.resident_bytes(),
+                    i.form == kadakas_file::Form::Container,
+                ),
+                i.file_bytes,
+                i.resident_bytes(),
+                i.form == kadakas_file::Form::Container,
+            ),
+            Err(_) => (
+                kadakas_core::open_estimate::needed_bytes(m.len()),
+                m.len(),
+                m.len(),
+                false,
+            ),
         })
         .max();
+    let memory = kadakas_sys::sysinfo::physical_memory();
     match largest {
-        Some((resident, file)) => kadakas_ui_core::open_limit::decide_sized(
-            file,
-            resident,
-            kadakas_sys::sysinfo::physical_memory(),
-        ),
+        Some((_, file, resident, true)) => {
+            kadakas_ui_core::open_limit::decide_container(file, resident, memory)
+        }
+        Some((_, file, _, false)) => kadakas_ui_core::open_limit::decide(file, memory),
         None => OpenDecision::Open,
     }
 }

@@ -406,25 +406,26 @@ fn mib_bytes(mib: u64) -> u64 {
 fn load_own(path: &std::path::Path) -> Result<kadakas_file::Opened, String> {
     // The memory a file needs is the drawing and the history in it. The pictures of a container
     // stay in the file (DOC-21).
-    let len = kadakas_file::native::inspect(path)
-        .map(|i| i.resident_bytes())
-        .or_else(|_| std::fs::metadata(path).map(|m| m.len()))
-        .unwrap_or(0);
-    own_file_fits(len, kadakas_sys::sysinfo::physical_memory())
+    let (len, container) = kadakas_file::native::inspect(path)
+        .map(|i| (i.resident_bytes(), i.form == kadakas_file::Form::Container))
+        .or_else(|_| std::fs::metadata(path).map(|m| (m.len(), false)))
+        .unwrap_or((0, false));
+    own_file_fits(len, container, kadakas_sys::sysinfo::physical_memory())
         .map_err(|e| format!("{}: {e}", path.display()))?;
     load_opened(path, Some(u64::MAX))
 }
 
 /// Says why a file of `len` bytes cannot be opened on a computer with `memory` bytes (None: unknown,
 /// so every file fits).
-fn own_file_fits(len: u64, memory: Option<u64>) -> Result<(), String> {
-    if len <= kadakas_core::open_estimate::largest_file_for(memory) {
+fn own_file_fits(len: u64, container: bool, memory: Option<u64>) -> Result<(), String> {
+    let needed = kadakas_core::open_estimate::needed_bytes_for(len, container);
+    if memory.is_none_or(|m| needed <= m) {
         return Ok(());
     }
     Err(format!(
         "the file has {} MB of data to load and needs about {:.1} GB of memory to open, but this computer has only {:.1} GB",
         len / 1_000_000,
-        kadakas_core::open_estimate::needed_bytes(len) as f64 / 1e9,
+        needed as f64 / 1e9,
         memory.unwrap_or(0) as f64 / 1e9
     ))
 }
@@ -1204,15 +1205,17 @@ mod tests {
             "{e}"
         );
         // A local command has no cap, only the memory of the computer.
-        assert!(own_file_fits(10_000_000_000, None).is_ok());
-        assert!(own_file_fits(1_000_000_000, Some(2_000_000_000)).is_ok());
-        let e = own_file_fits(2_000_000_000, Some(2_000_000_000)).unwrap_err();
+        assert!(own_file_fits(10_000_000_000, false, None).is_ok());
+        assert!(own_file_fits(1_000_000_000, false, Some(2_000_000_000)).is_ok());
+        // A container costs more for each byte of its drawing (its pictures stay in the file).
+        assert!(own_file_fits(1_000_000_000, true, Some(2_000_000_000)).is_ok());
+        assert!(own_file_fits(1_100_000_000, true, Some(2_000_000_000)).is_err());
+        let e = own_file_fits(2_000_000_000, false, Some(2_000_000_000)).unwrap_err();
         assert!(
             e.contains("2000 MB") && e.contains("3.4 GB") && e.contains("2.0 GB"),
             "{e}"
         );
         assert!(load_own(&good).is_ok());
-        assert!(own_file_fits(10_000_000_000, None).is_ok());
         assert!(load_own(&dir.join("missing")).is_err());
         assert_eq!(mib_bytes(2), 2 * 1024 * 1024);
         assert_eq!(mib_bytes(u64::MAX), u64::MAX);

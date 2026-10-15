@@ -13,7 +13,7 @@
 //! `file_io::open_decision`), and shows [`Estimate::ask_text`] or [`Estimate::refuse_text`].
 //! The sizes in the texts are decimal: 1 MB is 1 000 000 bytes and 1 GB is 1 000 000 000 bytes.
 
-use kadakas_core::open_estimate::needed_bytes;
+use kadakas_core::open_estimate::{needed_bytes, needed_bytes_container};
 use kadakas_l10n::tr;
 
 /// Files above this size need a question first: 500 MB.
@@ -42,28 +42,47 @@ pub enum OpenDecision {
 }
 
 /// Decides how to open a file of `file_bytes` whose text is all loaded into memory (the plain JSON
-/// form). `physical_memory` is the memory of the computer
+/// form, and the bytes of the browser's picker). `physical_memory` is the memory of the computer
 /// (`kadakas_sys::sysinfo::physical_memory`). Unknown memory never refuses.
 pub fn decide(file_bytes: u64, physical_memory: Option<u64>) -> OpenDecision {
-    decide_sized(file_bytes, file_bytes, physical_memory)
+    decide_with(
+        file_bytes,
+        file_bytes,
+        needed_bytes(file_bytes),
+        physical_memory,
+    )
 }
 
-/// Like [`decide`], for a file that loads only `resident_bytes` of JSON text into memory. A
-/// container (DOC-20) keeps its pictures in the file (DOC-21): what it loads is the drawing and the
-/// history, uncompressed, which the manifest names (`kadakas_file::native::Inspect::resident_bytes`).
-/// The question comes when that is above [`ASK_ABOVE_BYTES`], and the estimate of the memory is
-/// made from it. The question still names the size of the file.
-pub fn decide_sized(
+/// Like [`decide`], for a container (DOC-20). It keeps its pictures in the file (DOC-21), so what
+/// it loads is the drawing and the history, uncompressed, which the manifest names
+/// (`kadakas_file::native::Inspect::resident_bytes`). The question comes when that is above
+/// [`ASK_ABOVE_BYTES`], and the estimate of the memory is made from it
+/// ([`needed_bytes_container`]). The question still names the size of the file.
+pub fn decide_container(
     file_bytes: u64,
     resident_bytes: u64,
     physical_memory: Option<u64>,
 ) -> OpenDecision {
-    if resident_bytes <= ASK_ABOVE_BYTES {
+    decide_with(
+        file_bytes,
+        resident_bytes,
+        needed_bytes_container(resident_bytes),
+        physical_memory,
+    )
+}
+
+fn decide_with(
+    file_bytes: u64,
+    loaded_bytes: u64,
+    needed: u64,
+    physical_memory: Option<u64>,
+) -> OpenDecision {
+    if loaded_bytes <= ASK_ABOVE_BYTES {
         return OpenDecision::Open;
     }
     let est = Estimate {
         file_bytes,
-        needed_bytes: needed_bytes(resident_bytes),
+        needed_bytes: needed,
         memory_bytes: physical_memory,
     };
     match physical_memory {
@@ -138,22 +157,22 @@ mod tests {
     fn a_container_asks_by_what_it_loads_and_not_by_its_size_on_disk() {
         // A file of 900 MB that is mostly pictures loads 100 MB: no question.
         assert_eq!(
-            decide_sized(900 * MB, 100 * MB, Some(2 * GB)),
+            decide_container(900 * MB, 100 * MB, Some(2 * GB)),
             OpenDecision::Open
         );
         // A small file that expands to 2 GB of drawing asks (and the estimate follows the 2 GB).
-        match decide_sized(100 * MB, 2 * GB, Some(16 * GB)) {
+        match decide_container(100 * MB, 2 * GB, Some(16 * GB)) {
             OpenDecision::Ask(e) => {
                 assert_eq!(e.file_bytes, 100 * MB);
-                assert_eq!(e.needed_bytes, needed_bytes(2 * GB));
+                assert_eq!(e.needed_bytes, needed_bytes_container(2 * GB));
             }
             d => panic!("{d:?}"),
         }
         assert!(matches!(
-            decide_sized(100 * MB, 2 * GB, Some(3 * GB)),
+            decide_container(100 * MB, 2 * GB, Some(3 * GB)),
             OpenDecision::Refuse(_)
         ));
-        assert_eq!(decide(10 * MB, None), decide_sized(10 * MB, 10 * MB, None));
+        assert_eq!(decide(10 * MB, None), OpenDecision::Open);
     }
 
     #[test]
