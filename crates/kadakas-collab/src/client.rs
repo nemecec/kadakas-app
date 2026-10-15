@@ -255,6 +255,21 @@ struct Retry {
     fresh: Option<u64>,
 }
 
+/// What a client sent on this connection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SentKind {
+    Submit(u64),
+    Blob(String),
+}
+
+/// A send that the server has not answered. `round` is the number of resends of the retry
+/// before it: an answer from an older round is stale.
+#[derive(Clone, Debug)]
+struct Sent {
+    what: SentKind,
+    round: u32,
+}
+
 /// One step of splitmix64: a small deterministic generator, so the back-off needs no dependency.
 fn splitmix(state: &mut u64) -> u64 {
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -322,9 +337,12 @@ pub struct Client {
     facts: Mutex<PictureFacts>,
     /// The blobs that were sent on this connection. A blob is sent again on a new connection.
     put_on_conn: BTreeSet<String>,
-    /// The blobs whose `blob_put` the server refused with a retry error. The next resend puts
-    /// them before it sends any transaction.
-    refused: BTreeSet<String>,
+    /// The submits and blob puts of this connection that wait for an answer, oldest first. The
+    /// server answers one connection in order, so each answer belongs to the front (a `blob_put`
+    /// has no answer when it works).
+    sent: VecDeque<Sent>,
+    /// How many times the retry sent the queue again on this connection.
+    round: u32,
     /// Blobs that were asked for, and blobs that the server does not have.
     asked: BTreeSet<String>,
     missing: BTreeSet<String>,
@@ -370,7 +388,8 @@ impl Client {
             blobs: BTreeMap::new(),
             facts: Mutex::new(PictureFacts::default()),
             put_on_conn: BTreeSet::new(),
-            refused: BTreeSet::new(),
+            sent: VecDeque::new(),
+            round: 0,
             asked: BTreeSet::new(),
             missing: BTreeSet::new(),
             blob_scan: false,
@@ -575,6 +594,8 @@ impl Client {
         self.state = ConnState::Connecting;
         self.regress = false;
         self.put_on_conn.clear();
+        self.sent.clear();
+        self.round = 0;
         self.outbox.clear();
         self.outbox.push(ClientMsg::Hello {
             protocol: PROTOCOL_VERSION,
@@ -632,7 +653,8 @@ impl Client {
         self.retry = None;
         self.held_from = None;
         self.put_on_conn.clear();
-        self.refused.clear();
+        self.sent.clear();
+        self.round = 0;
         self.save_checkpoint();
     }
 
@@ -743,20 +765,22 @@ impl Client {
         }
         self.last_op = op_id;
         // While the client waits for the time of the next try, and after the resend until the
-        // first answer to it, the transaction waits in the queue too. The server could take it
-        // before the refused ones: a refused `blob_put` is unblocked by a later put of the same
-        // blob (rule 7), and then the refused transaction would be too low. When the hold is
-        // over, the queue goes out in order (`release_held`).
+        // first answer to it, the transaction waits in the queue too: the refused ones go out
+        // first, and the queue goes out in order when the hold is over (`release_held`).
         let held = self.holding();
         if self.state == ConnState::Online && held {
             self.held_from.get_or_insert(op_id);
+            if force_put {
+                // The pictures of an undo go out with the queue, also if this connection sent
+                // them before.
+                for h in applied.iter().flat_map(op_blob_refs) {
+                    self.put_on_conn.remove(&h);
+                }
+            }
         }
         if self.state == ConnState::Online && !held {
             self.put_blobs(&applied, force_put);
-            self.outbox.push(ClientMsg::Submit {
-                op_id,
-                ops: applied.clone(),
-            });
+            self.send_submit(op_id, applied.clone());
         }
         self.pending.push_back(Txn {
             op_id,
@@ -803,14 +827,67 @@ impl Client {
                 if let Some(data) = self.blobs.get(&h)
                     && (self.put_on_conn.insert(h.clone()) || force)
                 {
-                    self.refused.remove(&h);
-                    self.outbox.push(ClientMsg::BlobPut {
-                        hash: h,
-                        data: data.to_string(),
-                    });
+                    self.send_blob(h, data.to_string());
                 }
             }
         }
+    }
+
+    fn send_submit(&mut self, op_id: u64, ops: Vec<Op>) {
+        self.sent.push_back(Sent {
+            what: SentKind::Submit(op_id),
+            round: self.round,
+        });
+        self.outbox.push(ClientMsg::Submit { op_id, ops });
+    }
+
+    fn send_blob(&mut self, hash: String, data: String) {
+        self.sent.push_back(Sent {
+            what: SentKind::Blob(hash.clone()),
+            round: self.round,
+        });
+        self.outbox.push(ClientMsg::BlobPut { hash, data });
+    }
+
+    /// Matches an answer of the server with the send it belongs to, and returns the round of that
+    /// send. The server answers in order, so the answer is for the oldest send that can have one:
+    /// a `blob_put` that worked has no answer and is passed over, a submit always has one. An
+    /// answer for a send that is not at the front breaks this order.
+    fn match_answer(
+        &mut self,
+        op_id: Option<u64>,
+        hash: Option<&str>,
+    ) -> Result<Option<u32>, String> {
+        let want = match (op_id, hash) {
+            (Some(op), _) => SentKind::Submit(op),
+            (None, Some(h)) => {
+                // A `blob_put` that works has no answer, and a refused one is answered at its
+                // place in the order, but no submit is answered with it: only its own entry
+                // leaves the queue. The submit that follows gets its own refusal.
+                let want = SentKind::Blob(h.to_string());
+                let at = self.sent.iter().position(|s| s.what == want);
+                return Ok(at.and_then(|i| self.sent.remove(i)).map(|s| s.round));
+            }
+            (None, None) => return Ok(None),
+        };
+        while let Some(front) = self.sent.pop_front() {
+            if front.what == want {
+                return Ok(Some(front.round));
+            }
+            if let SentKind::Submit(first) = front.what {
+                return Err(format!(
+                    "an answer for {want:?} came before the answer for submit {first}"
+                ));
+            }
+        }
+        Err(format!("an answer for {want:?}, which was not sent"))
+    }
+
+    /// The server broke the order of its answers, or answered what was not asked. The numbers
+    /// stay: the client signs in again and the sync tells what the server has.
+    fn out_of_order(&mut self, why: String) {
+        self.events.push(ClientEvent::Reconnect(why));
+        self.connection_lost();
     }
 
     /// The document that the view describes, with the pictures it refers to (see
@@ -936,6 +1013,7 @@ impl Client {
                 });
                 // The held transactions are in the range.
                 self.held_from = None;
+                self.round += 1;
                 self.resend_from(r.from_op);
             }
         }
@@ -969,8 +1047,11 @@ impl Client {
 
     /// True while new transactions must not go to the server (see `commit`).
     fn holding(&self) -> bool {
-        self.retry
-            .is_some_and(|r| r.at.is_some() || r.fresh.is_some())
+        self.retry.is_some_and(|r| {
+            r.at.is_some()
+                || r.fresh
+                    .is_some_and(|f| self.pending.iter().any(|t| t.op_id == f))
+        })
     }
 
     /// Sends the transactions that were held, when the hold is over.
@@ -990,33 +1071,9 @@ impl Client {
             .filter(|t| t.op_id >= from_op)
             .cloned()
             .collect();
-        // The refused pictures first. A refused `blob_put` blocks the submits after it until the
-        // blob is put again (rule 7): a submit before that put would be refused again, and a
-        // later one that comes after the put would be taken before it.
-        let mut again: Vec<String> = Vec::new();
-        for t in &txns {
-            for h in t.ops.iter().flat_map(op_blob_refs) {
-                if self.refused.contains(&h) && !again.contains(&h) {
-                    again.push(h);
-                }
-            }
-        }
-        for h in again {
-            self.refused.remove(&h);
-            if let Some(data) = self.blobs.get(&h) {
-                self.put_on_conn.insert(h.clone());
-                self.outbox.push(ClientMsg::BlobPut {
-                    hash: h,
-                    data: data.to_string(),
-                });
-            }
-        }
         for t in txns {
             self.put_blobs(&t.ops, false);
-            self.outbox.push(ClientMsg::Submit {
-                op_id: t.op_id,
-                ops: t.ops,
-            });
+            self.send_submit(t.op_id, t.ops);
         }
     }
 
@@ -1058,8 +1115,13 @@ impl Client {
             }
             ServerMsg::Ack { op_id, seq, chain } => {
                 if self.state == ConnState::Online {
-                    self.on_ack(op_id, seq, chain);
-                    self.release_held();
+                    match self.match_answer(Some(op_id), None) {
+                        Ok(_) => {
+                            self.on_ack(op_id, seq, chain);
+                            self.release_held();
+                        }
+                        Err(why) => self.out_of_order(why),
+                    }
                 }
             }
             ServerMsg::Broadcast { entry } => {
@@ -1105,7 +1167,17 @@ impl Client {
                 op_id,
                 hash,
             } => {
-                self.on_error(code, message, op_id, hash, now_ms);
+                // A fatal error ends the client whatever it answers.
+                let round = if self.state == ConnState::Online && code.class() != ErrorClass::Fatal
+                {
+                    match self.match_answer(op_id, hash.as_deref()) {
+                        Ok(round) => round,
+                        Err(why) => return self.out_of_order(why),
+                    }
+                } else {
+                    None
+                };
+                self.on_error(code, message, op_id, hash, round, now_ms);
                 self.release_held();
             }
         }
@@ -1145,11 +1217,11 @@ impl Client {
             self.renumber_waiting();
         } else {
             // Some waiting transactions may be ordered already: their answers were lost with the
-            // connection. Which ones, the entries of the sync tell (`apply_entries`). A number up
-            // to `your_last_op` does not tell: the server may have taken a later transaction and
-            // not an earlier one (a refused blob that was put again). The waiting transactions
-            // that are not in the log get new numbers at the end of the sync (`finish_sync`). A
-            // transaction that the server has must not go out again, or it is applied twice.
+            // connection. The server orders the transactions of a client as a prefix (rule 7),
+            // so it has all up to `your_last_op`. With entries, the ones that are not in the
+            // log (the number is used by other content) get new numbers at the end of the sync
+            // (`finish_sync`). A transaction that the server has must not go out again, or it
+            // is applied twice.
             self.server_last_op = Some(your_last_op);
         }
         self.peers.clear();
@@ -1195,22 +1267,11 @@ impl Client {
             self.events.push(ClientEvent::ServerRegressed { resent });
             self.save_journal();
         } else {
-            // No entries to compare with. A waiting transaction up to `your_last_op` is in the
-            // snapshot if applying it changes nothing.
+            // No entries to compare with: the server has the transactions up to `your_last_op`
+            // (a prefix, rule 7). Applying them again to the snapshot would put an old write
+            // over a newer one. Their undo steps keep the inverse from the edit.
             if let Some(upto) = self.server_last_op {
-                let client = self.client;
-                let base = self.confirmed.clone();
-                self.pending.retain(|t| {
-                    t.op_id > upto || {
-                        let mut scratch = base.clone();
-                        let w = Writer {
-                            client,
-                            op: t.op_id,
-                        };
-                        scratch.apply_all(w, &t.ops);
-                        scratch != base
-                    }
-                });
+                self.pending.retain(|t| t.op_id > upto);
             }
             self.finish_sync();
         }
@@ -1277,7 +1338,7 @@ impl Client {
         };
         // After the resend, an ack of a transaction of the resent range: the server took it, the
         // retry is over. Before the resend it ends nothing: the refused transaction is not sent
-        // yet (a refused blob can be unblocked by a later put, and a later transaction taken).
+        // yet.
         if self
             .retry
             .is_some_and(|r| r.at.is_none() && op_id >= r.from_op)
@@ -1335,9 +1396,14 @@ impl Client {
         message: String,
         op_id: Option<u64>,
         hash: Option<String>,
+        round: Option<u32>,
         now_ms: u64,
     ) {
         let class = code.class();
+        // A retry error for a send of an earlier round is old news: the queue went out again.
+        if class == ErrorClass::Retry && round.is_some_and(|r| r < self.round) {
+            return;
+        }
         let mut op_id = op_id;
         // A blob error with a retry class: the blob is sent again before the next try. If the
         // error names no transaction, the first waiting transaction that uses the blob is tried
@@ -1345,9 +1411,7 @@ impl Client {
         if let Some(h) = hash.as_deref()
             && class == ErrorClass::Retry
         {
-            if self.put_on_conn.remove(h) {
-                self.refused.insert(h.to_string());
-            }
+            self.put_on_conn.remove(h);
             if op_id.is_none() {
                 op_id = self
                     .pending
@@ -1366,14 +1430,6 @@ impl Client {
                 {
                     return;
                 }
-                // After a resend the server answers in order: an error that comes before the
-                // answer to the first resent transaction is from the round before.
-                if let Some(first) = self.retry.and_then(|r| r.fresh)
-                    && op_id != first
-                    && self.pending.iter().any(|t| t.op_id == first)
-                {
-                    return;
-                }
                 if self.pending.iter().any(|t| t.op_id == op_id) {
                     let prev = self.retry;
                     let attempts = prev.map_or(0, |r| r.attempts);
@@ -1384,6 +1440,10 @@ impl Client {
                         attempts: attempts + 1,
                         fresh: None,
                     });
+                } else if self.state == ConnState::Online {
+                    // A retry error for a transaction that does not wait: the server holds this
+                    // connection for a number that the client does not send. Start again.
+                    self.out_of_order(format!("a retry error for {op_id}, which is not waiting"));
                 }
             }
             (Some(op_id), ErrorClass::Renumber)
@@ -1402,9 +1462,10 @@ impl Client {
                 self.save_journal();
             }
             (Some(op_id), ErrorClass::Reject) => {
-                // The answer to the first resent transaction: later errors are from this round.
+                // The answer to the first resent transaction: the hold is over.
                 if let Some(r) = self.retry.as_mut()
                     && r.fresh == Some(op_id)
+                    && round.is_none_or(|x| x == self.round)
                 {
                     r.fresh = None;
                 }
@@ -1505,10 +1566,7 @@ impl Client {
         let txns: Vec<Txn> = self.pending.iter().cloned().collect();
         for t in txns {
             self.put_blobs(&t.ops, false);
-            self.outbox.push(ClientMsg::Submit {
-                op_id: t.op_id,
-                ops: t.ops,
-            });
+            self.send_submit(t.op_id, t.ops);
         }
         self.out_presence.resend();
         self.events.push(ClientEvent::Connected);

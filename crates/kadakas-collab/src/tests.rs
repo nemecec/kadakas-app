@@ -706,8 +706,7 @@ fn a_gap_in_the_sequence_sends_the_client_offline() {
     assert_eq!(net.clients[0].state(), ConnState::Offline);
 }
 
-#[test]
-fn acks_out_of_order_and_unknown_acks() {
+fn online_client() -> Client {
     let mut c = Client::with_state(cfg(1), Replica::new(), 0, "log-1");
     c.connect();
     c.handle(
@@ -721,53 +720,54 @@ fn acks_out_of_order_and_unknown_acks() {
         0,
     );
     c.handle(ServerMsg::Entries { entries: vec![] }, 0);
+    c
+}
+
+fn ack(op_id: u64, seq: u64) -> ServerMsg {
+    ServerMsg::Ack {
+        op_id,
+        seq,
+        chain: None,
+    }
+}
+
+#[test]
+fn answers_out_of_order_or_for_nothing_make_the_client_sign_in_again() {
+    // The server answers in the order of the submits. Anything else breaks the order.
+    let mut c = online_client();
     c.edit(vec![create(1, 1)]).unwrap();
     c.edit(vec![set(1, "a", 2)]).unwrap();
-    // The server orders them the other way round: the second first. The set is dropped there
-    // (the object does not exist yet), and then the create comes.
-    c.handle(
-        ServerMsg::Ack {
-            op_id: 2,
-            seq: 1,
-            chain: None,
-        },
-        0,
+    c.handle(ack(2, 1), 0);
+    assert_eq!(c.state(), ConnState::Offline);
+    assert!(
+        c.take_events()
+            .iter()
+            .any(|e| matches!(e, ClientEvent::Reconnect(_)))
     );
-    c.handle(
-        ServerMsg::Ack {
-            op_id: 1,
-            seq: 2,
-            chain: None,
-        },
-        0,
-    );
+    assert_eq!(c.pending().len(), 2, "the work stays");
+    // An ack for something that was never sent.
+    let mut c = online_client();
+    c.handle(ack(99, 1), 0);
+    assert_eq!(c.state(), ConnState::Offline);
+    // An error for something that was never sent.
+    let mut c = online_client();
+    let late = ServerMsg::Error {
+        code: ErrorCode::OpIdReused,
+        message: "late".into(),
+        op_id: Some(77),
+        hash: None,
+    };
+    c.handle(late, 0);
+    assert_eq!(c.state(), ConnState::Offline);
+}
+
+#[test]
+fn an_ack_whose_number_is_old_only_clears_the_queue() {
+    let mut c = online_client();
+    c.edit(vec![create(1, 1)]).unwrap();
+    c.handle(ack(1, 0), 0);
     assert!(c.pending().is_empty());
-    assert_eq!(
-        c.confirmed().alive(obj(1)).unwrap().get("a"),
-        Some(&json!(1))
-    );
-    assert_eq!(c.view().canonical_text(), c.confirmed().canonical_text());
-    // An ack for something unknown does nothing.
-    c.handle(
-        ServerMsg::Ack {
-            op_id: 99,
-            seq: 3,
-            chain: None,
-        },
-        0,
-    );
-    assert_eq!(c.confirmed_seq(), 2);
-    // An ack whose number is old only clears the queue.
-    c.edit(vec![set(1, "a", 3)]).unwrap();
-    c.handle(
-        ServerMsg::Ack {
-            op_id: 3,
-            seq: 1,
-            chain: None,
-        },
-        0,
-    );
-    assert!(c.pending().is_empty());
+    assert_eq!(c.confirmed_seq(), 0);
 }
 
 #[test]
@@ -1729,6 +1729,8 @@ fn an_unknown_error_code_does_not_stop_the_client() {
     net.connect(0);
     net.settle();
     net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    // The send is lost; the answer is the made-up error.
+    net.clients[0].take_outbox();
     let op = net.clients[0].pending()[0].op_id;
     net.clients[0].handle(unknown(Some(op)), net.now);
     assert_eq!(net.clients[0].state(), ConnState::Online);
@@ -3100,6 +3102,12 @@ impl Net {
         }
     }
 
+    /// Client `i` sends and the server answers it, without the other client hearing.
+    fn settle_one(&mut self, i: usize) {
+        self.flush(i);
+        self.deliver(i);
+    }
+
     /// What the host does after a `Reconnect` event: signs in again.
     fn reconnect_offline(&mut self) {
         for i in 0..self.clients.len() {
@@ -3464,22 +3472,6 @@ fn a_snapshot_after_op_id_reused_drops_what_the_server_has() {
 }
 
 #[test]
-fn an_answer_of_op_id_reused_for_a_transaction_that_is_gone_changes_nothing() {
-    let mut net = Net::new(1);
-    net.connect(0);
-    net.settle();
-    let reused = ServerMsg::Error {
-        code: ErrorCode::OpIdReused,
-        message: "late".into(),
-        op_id: Some(77),
-        hash: None,
-    };
-    net.clients[0].handle(reused, net.now);
-    assert_eq!(net.clients[0].state(), ConnState::Online);
-    assert_eq!(net.trouble(0), (vec![], 0));
-}
-
-#[test]
 fn a_refusal_for_good_of_the_first_resent_transaction_ends_the_wait_for_it() {
     let mut net = Net::new(1);
     net.connect(0);
@@ -3521,15 +3513,20 @@ fn twin_submit(net: &mut Net, op_id: u64, ops: Vec<Op>) {
     net.route(outs);
 }
 
-/// The server has number 2 of this client but not number 1 (as after a refused picture that
-/// was put again). The client signs in: only number 2 is dropped, number 1 goes out again.
-fn the_server_has_a_later_number_but_not_the_first(snapshot: bool) {
+/// The server has numbers 1 and 2 of this client (a twin put them in the log, or the answers
+/// were lost). The client signs in: they are dropped and not sent again, under any number.
+fn the_server_has_a_prefix_of_our_numbers(snapshot: bool) {
     let mut net = Net::new(2);
     net.connect(1);
     net.settle();
     net.clients[0].edit(vec![create(1, 1)]).unwrap();
-    net.clients[0].edit(vec![create(2, 1)]).unwrap();
-    twin_submit(&mut net, 2, vec![create(2, 1)]);
+    net.clients[0].edit(vec![set(1, "a", 5)]).unwrap();
+    twin_submit(&mut net, 1, vec![create(1, 1)]);
+    twin_submit(&mut net, 2, vec![set(1, "a", 5)]);
+    // Another client writes the same property afterwards.
+    net.deliver(1);
+    net.clients[1].edit(vec![set(1, "a", 7)]).unwrap();
+    net.flush(1);
     if snapshot {
         for n in 10..13 {
             net.clients[1].edit(vec![create(n, 1)]).unwrap();
@@ -3540,22 +3537,54 @@ fn the_server_has_a_later_number_but_not_the_first(snapshot: bool) {
     net.connect(0);
     net.settle();
     net.all_equal();
-    let want = if snapshot { 5 } else { 2 };
+    let want = if snapshot { 6 } else { 3 };
     assert_eq!(net.seq.seq(), want, "each edit once");
-    for n in [1, 2] {
-        assert!(net.seq.replica().alive(obj(n)).is_some(), "object {n}");
-    }
+    assert_eq!(
+        net.value(0, 1, "a"),
+        Some(json!(7)),
+        "the newer write stays"
+    );
     assert_eq!(net.trouble(0), (vec![], 0));
 }
 
 #[test]
-fn a_number_the_server_has_does_not_prove_the_lower_ones_entries() {
-    the_server_has_a_later_number_but_not_the_first(false);
+fn what_the_server_has_up_to_your_last_op_is_not_sent_again_after_entries() {
+    the_server_has_a_prefix_of_our_numbers(false);
 }
 
 #[test]
-fn a_number_the_server_has_does_not_prove_the_lower_ones_snapshot() {
-    the_server_has_a_later_number_but_not_the_first(true);
+fn what_the_server_has_up_to_your_last_op_is_not_sent_again_after_a_snapshot() {
+    the_server_has_a_prefix_of_our_numbers(true);
+}
+
+#[test]
+fn an_acked_write_that_another_client_overwrote_is_not_sent_again_after_a_snapshot() {
+    // A's write was ordered, its ack was lost, B wrote the same property after it. A snapshot
+    // shows B's value. A's write must not go out again: it would win over B's.
+    let mut net = Net::new(2);
+    net.connect(0);
+    net.connect(1);
+    net.settle();
+    net.clients[0].edit(vec![create(1, 0)]).unwrap();
+    net.settle();
+    net.clients[0].edit(vec![set(1, "a", 5)]).unwrap();
+    net.flush(0);
+    net.inbox[0].clear();
+    net.clients[1].edit(vec![set(1, "a", 7)]).unwrap();
+    net.settle_one(1);
+    for v in 0..3 {
+        net.clients[1].edit(vec![set(1, "b", v)]).unwrap();
+        net.settle_one(1);
+    }
+    net.inbox[0].clear();
+    net.seq.set_log_limit(1);
+    net.disconnect(0);
+    net.connect(0);
+    net.settle();
+    net.all_equal();
+    assert_eq!(net.seq.seq(), 6, "each write once");
+    assert_eq!(net.value(0, 1, "a"), Some(json!(7)));
+    assert_eq!(net.value(1, 1, "a"), Some(json!(7)));
 }
 
 #[test]
@@ -3599,10 +3628,10 @@ fn an_ack_before_the_resend_does_not_end_the_retry() {
     net.settle();
     net.seq.inject_errors(ErrorCode::RateLimited, 1);
     net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.clients[0].edit(vec![create(2, 1)]).unwrap();
     net.flush(0);
     net.deliver_one(0);
-    net.clients[0].edit(vec![create(2, 1)]).unwrap();
-    // A late ack of the later number arrives before the resend.
+    // An ack of the later number arrives before the resend.
     let seq = net.clients[0].confirmed_seq() + 1;
     let ack = ServerMsg::Ack {
         op_id: 2,
@@ -3689,6 +3718,155 @@ fn a_restart_between_op_id_reused_and_the_sync_keeps_the_rule() {
     );
 }
 
+#[test]
+fn an_old_error_for_the_first_resent_number_is_not_its_answer() {
+    // A refused picture makes two errors for number 1 in the first round: the one of the
+    // `blob_put` (mapped to number 1) and the one of the submit. The second one arrives after
+    // the resend. It has the number of the first resent transaction, but it is old.
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.seq.inject_blob_errors(ErrorCode::RateLimited, 1);
+    let (op1, _) = picture_op(1, 'R');
+    net.clients[0].edit(vec![op1]).unwrap();
+    net.clients[0].edit(vec![create(2, 1)]).unwrap();
+    net.flush(0);
+    net.deliver_one(0); // the error of the blob_put: the retry is set
+    net.now += 300;
+    net.clients[0].tick(net.now);
+    net.flush(0);
+    net.deliver_one(0); // the old error for number 1
+    net.deliver_one(0); // the old error for number 2
+    // The queue is held until the first answer to the resend, and nothing is sent again.
+    net.clients[0].edit(vec![create(3, 1)]).unwrap();
+    assert!(net.clients[0].take_outbox().is_empty());
+    net.now += 60_000;
+    net.clients[0].tick(net.now);
+    assert!(
+        !net.clients[0]
+            .take_outbox()
+            .iter()
+            .any(|m| matches!(m, ClientMsg::Submit { .. })),
+        "no second resend"
+    );
+    net.settle();
+    net.all_equal();
+    assert_eq!(net.seq.seq(), 3);
+    assert_eq!(net.trouble(0), (vec![], 0));
+}
+
+#[test]
+fn the_hold_ends_when_the_transaction_it_waits_for_is_gone() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.seq.inject_errors(ErrorCode::RateLimited, 1);
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.flush(0);
+    net.deliver_one(0);
+    net.now += 300;
+    net.clients[0].tick(net.now);
+    net.clients[0].take_outbox();
+    // The log brings the transaction as an entry (a broadcast of an own entry).
+    let entry = Entry {
+        seq: net.clients[0].confirmed_seq() + 1,
+        author: net.clients[0].client_id(),
+        user: Uid::from_num(1),
+        op_id: 1,
+        ops: vec![create(1, 1)],
+        chain: None,
+    };
+    net.clients[0].handle(ServerMsg::Broadcast { entry }, net.now);
+    assert!(net.clients[0].pending().is_empty());
+    net.clients[0].edit(vec![create(9, 1)]).unwrap();
+    assert!(
+        net.clients[0]
+            .take_outbox()
+            .iter()
+            .any(|m| matches!(m, ClientMsg::Submit { .. })),
+        "not held for a transaction that is gone"
+    );
+}
+
+#[test]
+fn a_picture_that_an_undo_brings_back_is_put_again_when_the_hold_ends() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    let (op, old_hash) = picture_op(1, 'R');
+    net.clients[0].edit(vec![op]).unwrap();
+    let text = 'S'.to_string().repeat(crate::blob::MIN_BLOB_BYTES + 3);
+    let newer = Op::Set {
+        target: obj(1),
+        prop: "shape".into(),
+        value: json!({"kind": "underlay", "png": text}),
+    };
+    net.clients[0].edit(vec![newer]).unwrap();
+    net.clients[0].undo();
+    net.settle();
+    // The server dropped the pictures, and refuses the redo that needs the newer one.
+    net.seq.forget_blobs();
+    net.seq.inject_errors(ErrorCode::RateLimited, 1);
+    net.clients[0].redo();
+    net.flush(0);
+    net.deliver_one(0);
+    net.deliver_one(0);
+    // The undo brings the older picture back while the client holds its sends: it is put again
+    // with the queue, also though this connection put it before.
+    net.clients[0].undo();
+    assert!(net.clients[0].take_outbox().is_empty());
+    net.now += 300;
+    net.clients[0].tick(net.now);
+    let out = net.clients[0].take_outbox();
+    assert!(
+        out.iter()
+            .any(|m| matches!(m, ClientMsg::BlobPut { hash: h, .. } if *h == old_hash)),
+        "the picture goes with the queue"
+    );
+}
+
+#[test]
+fn the_stale_error_case_of_the_review_stays_clean() {
+    // Found by the busy-server test (shrunk): old errors with the number of `fresh`.
+    let create_c = |c| Busy::Create { c };
+    let mut acts = vec![
+        create_c(0),
+        create_c(0),
+        create_c(0),
+        create_c(0),
+        Busy::Connect { c: 2 },
+    ];
+    acts.extend([
+        create_c(0),
+        create_c(0),
+        Busy::Picture { c: 1, k: 0 },
+        Busy::Wait { ms: 0 },
+    ]);
+    acts.extend([Busy::Limit { n: 1 }, Busy::Limit { n: 1 }]);
+    acts.extend([
+        Busy::RefuseBlob {
+            code: false,
+            count: 1,
+        },
+        Busy::Picture { c: 2, k: 0 },
+        Busy::Deliver { c: 2 },
+        Busy::Drop { c: 0 },
+        Busy::Limit { n: 1 },
+        Busy::DeliverOne { c: 2 },
+        Busy::Wait { ms: 246 },
+        Busy::Tick { c: 2 },
+        Busy::DeliverOne { c: 2 },
+        Busy::Refuse {
+            code: false,
+            count: 1,
+        },
+        Busy::Wait { ms: 326 },
+        Busy::Tick { c: 2 },
+        create_c(2),
+    ]);
+    run_busy(3, 0, acts).unwrap();
+}
+
 /// Things that happen to clients of a busy server.
 #[derive(Clone, Debug)]
 enum Busy {
@@ -3719,8 +3897,6 @@ enum Busy {
         code: bool,
         count: usize,
     },
-    /// The server says that a number is used (a dishonest or confused server).
-    Reuse,
     /// The server keeps only the last `n` entries: a client that is behind gets a snapshot.
     Limit {
         n: usize,
@@ -3759,7 +3935,6 @@ fn busy_act() -> impl Strategy<Value = Busy> {
         1 => (0usize..4, any::<u8>()).prop_map(|(c, i)| Busy::Delete { c, i }),
         3 => (any::<bool>(), 1usize..4).prop_map(|(code, count)| Busy::Refuse { code, count }),
         2 => (any::<bool>(), 1usize..3).prop_map(|(code, count)| Busy::RefuseBlob { code, count }),
-        1 => Just(Busy::Reuse),
         1 => (1usize..4).prop_map(|n| Busy::Limit { n }),
         4 => (0usize..4).prop_map(|c| Busy::Flush { c }),
         3 => (0usize..4).prop_map(|c| Busy::Deliver { c }),
@@ -3771,9 +3946,37 @@ fn busy_act() -> impl Strategy<Value = Busy> {
     ]
 }
 
-/// Runs the actions on `n` honest clients and a server that is busy at random. With `honest`,
-/// the server never says `op_id_reused`.
-fn run_busy(n: usize, seed: u64, acts: Vec<Busy>, honest: bool) -> Result<(), TestCaseError> {
+/// Many broken connections and short logs: the sign-in drops what the server has, by entries
+/// and by snapshots.
+fn lossy_act() -> impl Strategy<Value = Busy> {
+    prop_oneof![
+        4 => (0usize..4).prop_map(|c| Busy::Create { c }),
+        2 => (0usize..4, 0u8..3).prop_map(|(c, k)| Busy::Picture { c, k }),
+        4 => (0usize..4, any::<u8>(), 0u8..9).prop_map(|(c, i, v)| Busy::Set { c, i, v }),
+        2 => (any::<bool>(), 1usize..3).prop_map(|(code, count)| Busy::Refuse { code, count }),
+        3 => (1usize..4).prop_map(|n| Busy::Limit { n }),
+        4 => (0usize..4).prop_map(|c| Busy::Flush { c }),
+        3 => (0usize..4).prop_map(|c| Busy::Deliver { c }),
+        3 => (0usize..4).prop_map(|c| Busy::DeliverOne { c }),
+        6 => (0usize..4).prop_map(|c| Busy::Drop { c }),
+        3 => (0u16..1_500).prop_map(|ms| Busy::Wait { ms }),
+        3 => (0usize..4).prop_map(|c| Busy::Tick { c }),
+        6 => (0usize..4).prop_map(|c| Busy::Connect { c }),
+    ]
+}
+
+/// The number of cases of the busy-server tests: 600, or `PROPTEST_CASES` of the environment.
+fn busy_cases() -> u32 {
+    std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600)
+}
+
+/// Runs the actions on `n` honest clients and a server that is busy at random.
+fn run_busy(n: usize, seed: u64, acts: Vec<Busy>) -> Result<(), TestCaseError> {
+    // Each write has a value of its own, so the same content twice in the log is a double send.
+    let mut writes = 0i64;
     let mut net = Net::new(n);
     for i in 0..n {
         net.clients[i].set_retry_jitter(Some(seed.wrapping_add(i as u64)));
@@ -3798,7 +4001,8 @@ fn run_busy(n: usize, seed: u64, acts: Vec<Busy>, honest: bool) -> Result<(), Te
             Busy::Set { c, i, v } => {
                 if !made.is_empty() {
                     let id = made[usize::from(i) % made.len()];
-                    let _ = net.clients[c % n].edit(vec![set(id, "a", i64::from(v))]);
+                    writes += 1;
+                    let _ = net.clients[c % n].edit(vec![set(id, "a", writes * 16 + i64::from(v))]);
                 }
             }
             Busy::Delete { c, i } => {
@@ -3822,11 +4026,6 @@ fn run_busy(n: usize, seed: u64, acts: Vec<Busy>, honest: bool) -> Result<(), Te
                     ErrorCode::Internal
                 };
                 net.seq.inject_blob_errors(code, count);
-            }
-            Busy::Reuse => {
-                if !honest {
-                    net.seq.inject_errors(ErrorCode::OpIdReused, 1);
-                }
             }
             Busy::Limit { n } => net.seq.set_log_limit(n),
             Busy::Flush { c } => net.flush(c % n),
@@ -3868,6 +4067,15 @@ fn run_busy(n: usize, seed: u64, acts: Vec<Busy>, honest: bool) -> Result<(), Te
             (e.author, e.op_id)
         );
     }
+    // The same content of one author is never in the log twice, also not under another number.
+    let mut contents = BTreeSet::new();
+    for e in net.seq.log() {
+        prop_assert!(
+            contents.insert((e.author, crate::op::ops_digest(&e.ops))),
+            "the same operations twice: {:?}",
+            e.ops
+        );
+    }
     // The log may be cut. The state shows every object that was made and not deleted.
     let whole = net.seq.log().len() as u64 == net.seq.seq();
     for id in &made {
@@ -3895,15 +4103,13 @@ fn run_busy(n: usize, seed: u64, acts: Vec<Busy>, honest: bool) -> Result<(), Te
     for i in 0..n {
         let (rejected, reconnects) = net.trouble(i);
         prop_assert_eq!(rejected, vec![], "client {}", i);
-        if honest {
-            prop_assert_eq!(reconnects, 0, "client {} had op_id_reused", i);
-        }
+        prop_assert_eq!(reconnects, 0, "client {} had op_id_reused", i);
     }
     Ok(())
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(600))]
+    #![proptest_config(ProptestConfig::with_cases(busy_cases()))]
 
     /// A server that is busy at random, with late answers, lost connections, pictures and short
     /// logs, and honest clients: they converge, the log holds every transaction once, every
@@ -3915,17 +4121,16 @@ proptest! {
         seed in any::<u64>(),
         acts in prop::collection::vec(busy_act(), 1..100),
     ) {
-        run_busy(n, seed, acts, true)?;
+        run_busy(n, seed, acts)?;
     }
 
-    /// The same, and the server also says `op_id_reused` for numbers at random. The clients
-    /// renumber and still send every edit once.
+    /// The same with many broken connections and short logs.
     #[test]
-    fn clients_converge_through_renumbering(
+    fn clients_converge_with_lost_connections(
         n in 2usize..4,
         seed in any::<u64>(),
-        acts in prop::collection::vec(busy_act(), 1..100),
+        acts in prop::collection::vec(lossy_act(), 1..100),
     ) {
-        run_busy(n, seed, acts, false)?;
+        run_busy(n, seed, acts)?;
     }
 }

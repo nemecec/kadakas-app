@@ -388,14 +388,22 @@ as canonical JSON text, are equal.
    come. If it refuses a submit with a **retry** error (`rate_limited`, `internal`), it must refuse
    every later submit of that connection with the same code, until a submit with the refused number, or a lower
    one, comes again. Otherwise a later transaction could be ordered before the refused one, and edits that depend on
-   it would be lost. A `blob_put` refused with a retry error blocks the later submits of the
-   connection with the same code, until that blob is put again. (Otherwise the next submit would
-   fail as `invalid_txn`, a reject, and the edit would be lost.) The error of such a `blob_put`
-   has the `hash` of the blob. This block ends at once when the blob is put again, so a later
-   submit may be ordered while the refused one is not: a number up to `your_last_op` does not
-   prove that the server has every lower one. A client that holds its new submits and blob puts
-   while it waits for a retry never makes this happen. It still tells what the server has from
-   the log (section 4.8), not from `your_last_op`.
+   it would be lost. A refused `blob_put` (over the byte limit, or `blob_failed`: the blob could not be saved) sets a
+   mark on the connection. The **first** submit after it is refused with the same class of error
+   ("an earlier blob was refused; send it again") and starts a block as above, with the number of
+   that submit. Later submits get the normal cascade. A submit with that number or a lower one
+   clears the block. Putting the blob again clears nothing by itself. If the first submit after
+   the refusal is already refused by a block or by a full queue, the mark is dropped, because the
+   block covers it. So the transactions that the server orders for one client are always a
+   prefix of what the client sent, and `your_last_op` means that the server has every transaction
+   up to it.
+
+   The answers of one connection come in the order of the messages that caused them: `blob_put`
+   errors and submit answers share one queue. A `blob_put` that works gets no answer. The error
+   of a refused `blob_put` has the `hash` and no `op_id`. The answers to `blob_get` may come out
+   of order. A client keeps a list of its sent submits, and matches each `ack` and each error
+   with an `op_id` to the oldest of them; an answer that does not match breaks the order, and the
+   client signs in again.
 8. **Refuse before ordering** (send `error` with the `op_id`; do not use a sequence number):
    - `invalid_txn`: the transaction is malformed or breaks a limit or a value check (below);
    - `duplicate_uid`: a `create` without `merge` uses an ID that exists or ever existed in the
@@ -521,13 +529,14 @@ too), its waiting transactions and its undo and redo steps refer to, and drops t
   edits only locally.
 - On `welcome`: if `your_last_op` is above the client's counter, the journal is behind (it was lost
   or old). The client sets its counter to `your_last_op` and gives its waiting transactions new
-  numbers above. Otherwise it does not drop waiting transactions at once, because a number up to
-  `your_last_op` does not prove that the server has every lower one (rule 7 of section 4.4). A
-  waiting transaction is dropped when the sync brings an entry of this client with the same number
-  and the same operations (compared by `ops_digest`), or, with a `snapshot`, when applying it to
-  the snapshot changes nothing. The waiting transactions up to `your_last_op` that are left, and
-  all waiting ones after `op_id_reused`, get new numbers when the sync ends. A transaction that
-  the server has must never go out again under a new number: it would be applied twice.
+  numbers above. Otherwise the server has every waiting transaction up to `your_last_op` (rule 7 of
+  section 4.4: the transactions of a client are ordered as a prefix of what it sent). With a
+  `snapshot` the client drops them. With `entries` it drops a waiting transaction when the sync
+  brings an entry of this client with the same number and the same operations (compared by
+  `ops_digest`). A waiting transaction up to `your_last_op` that has no such entry (the number
+  belongs to other content), and all waiting ones after `op_id_reused`, get new numbers when the
+  sync ends. A transaction that the server has must never go out again under a new number: it
+  would be applied twice.
 - If `log_id` differs from the client's state, or `head_seq` is below the client's sequence number,
   the server went back (a restore from a backup, another log). The client waits for the
   `snapshot` and then **throws away its queue and undo steps, compares the snapshot with the state

@@ -98,8 +98,8 @@ pub struct Sequencer {
     owners: BTreeMap<Uid, Uid>,
     /// The next blob_put calls fail with this error (nothing is kept).
     inject_blob: Option<(ErrorCode, usize)>,
-    /// Per connection: a blob_put was refused with a retry error. Every later submit gets the
-    /// same error, until that blob is put again.
+    /// Per connection: a blob_put was refused with a retry error. The next submit gets the same
+    /// error, and the connection is blocked from its number on (`blocked`).
     blob_blocked: BTreeMap<ConnId, (ErrorCode, String)>,
 }
 
@@ -424,13 +424,6 @@ impl Sequencer {
                         None,
                     ));
                 }
-                if self
-                    .blob_blocked
-                    .get(&conn)
-                    .is_some_and(|(_, h)| *h == hash)
-                {
-                    self.blob_blocked.remove(&conn);
-                }
                 self.blobs.insert(hash, data);
                 Vec::new()
             }
@@ -522,6 +515,8 @@ impl Sequencer {
         let reply = |msg| vec![Out { conn, msg }];
         if let Some((code, from)) = self.blocked.get(&conn).copied() {
             if op_id > from {
+                // The block covers this submit: a pending blob mark is not needed.
+                self.blob_blocked.remove(&conn);
                 return reply(error(
                     code,
                     "an earlier transaction was refused",
@@ -530,13 +525,16 @@ impl Sequencer {
             }
             self.blocked.remove(&conn);
         }
-        if let Some((code, hash)) = self.blob_blocked.get(&conn).cloned() {
-            return reply(ServerMsg::Error {
+        // A refused `blob_put` sets a mark. The first submit after it is refused (the answer
+        // names no blob; the error of the `blob_put` did), and the connection is blocked from
+        // its number on, like after any refused submit. Putting the blob again clears nothing.
+        if let Some((code, _)) = self.blob_blocked.remove(&conn) {
+            self.blocked.insert(conn, (code, op_id));
+            return reply(error(
                 code,
-                message: "a blob was refused".into(),
-                op_id: Some(op_id),
-                hash: Some(hash),
-            });
+                "an earlier blob was refused; send it again",
+                Some(op_id),
+            ));
         }
         if let Some((code, n)) = self.inject {
             self.inject = (n > 1).then_some((code, n - 1));
