@@ -82,6 +82,8 @@ pub struct Sequencer {
     tokens: BTreeMap<String, Option<Uid>>,
     require_token: bool,
     inject: Option<(ErrorCode, usize)>,
+    /// The next submits are refused as if the queue of the connection were full.
+    queue_full: usize,
     check_entities: bool,
     /// Per connection: after a refusal that the client must retry, every later submit gets the
     /// same error, until the refused number comes again.
@@ -121,6 +123,7 @@ impl Sequencer {
             tokens: BTreeMap::new(),
             require_token: false,
             inject: None,
+            queue_full: 0,
             check_entities: true,
             blocked: BTreeMap::new(),
             blobs: BTreeMap::new(),
@@ -188,6 +191,12 @@ impl Sequencer {
         self.chain_at(seq)
             .filter(|_| self.use_chain)
             .map(|c| chain::to_hex(&c))
+    }
+
+    /// Makes the next `count` submits fail with `rate_limited`, as when the queue of the
+    /// connection is full (nothing is ordered).
+    pub fn inject_queue_full(&mut self, count: usize) {
+        self.queue_full = count;
     }
 
     /// Makes the next `count` submits fail with this error (nothing is ordered).
@@ -418,11 +427,12 @@ impl Sequencer {
                 if data.len() > crate::blob::MAX_BLOB_BYTES
                     || crate::blob::sha256_hex(data.as_bytes()) != hash
                 {
-                    return reply(error(
-                        ErrorCode::BadMessage,
-                        "the hash is not the hash of the data",
-                        None,
-                    ));
+                    return reply(ServerMsg::Error {
+                        code: ErrorCode::BadMessage,
+                        message: "the hash is not the hash of the data".into(),
+                        op_id: None,
+                        hash: Some(hash),
+                    });
                 }
                 self.blobs.insert(hash, data);
                 Vec::new()
@@ -504,6 +514,19 @@ impl Sequencer {
         out
     }
 
+    /// Refuses a submit. With a retry class, the connection is blocked from this number on. A
+    /// pending blob mark is dropped: the block covers it.
+    fn refuse(&mut self, conn: ConnId, code: ErrorCode, op_id: u64, why: &str) -> Vec<Out> {
+        self.blob_blocked.remove(&conn);
+        if code.class() == crate::protocol::ErrorClass::Retry {
+            self.blocked.insert(conn, (code, op_id));
+        }
+        vec![Out {
+            conn,
+            msg: error(code, why, Some(op_id)),
+        }]
+    }
+
     fn submit(
         &mut self,
         conn: ConnId,
@@ -525,24 +548,6 @@ impl Sequencer {
             }
             self.blocked.remove(&conn);
         }
-        // A refused `blob_put` sets a mark. The first submit after it is refused (the answer
-        // names no blob; the error of the `blob_put` did), and the connection is blocked from
-        // its number on, like after any refused submit. Putting the blob again clears nothing.
-        if let Some((code, _)) = self.blob_blocked.remove(&conn) {
-            self.blocked.insert(conn, (code, op_id));
-            return reply(error(
-                code,
-                "an earlier blob was refused; send it again",
-                Some(op_id),
-            ));
-        }
-        if let Some((code, n)) = self.inject {
-            self.inject = (n > 1).then_some((code, n - 1));
-            if code.class() == crate::protocol::ErrorClass::Retry {
-                self.blocked.insert(conn, (code, op_id));
-            }
-            return reply(error(code, "injected by the test", Some(op_id)));
-        }
         let hash = ops_digest(&ops);
         if let Some(w) = self.writers.get(&client) {
             if op_id == w.high && hash == w.hash {
@@ -559,6 +564,25 @@ impl Sequencer {
                     Some(op_id),
                 ));
             }
+        }
+        // A refused `blob_put` sets a mark. The first submit after it is refused (the answer
+        // names no blob; the error of the `blob_put` did), and the connection is blocked from
+        // its number on, like after any refused submit. Putting the blob again clears nothing.
+        if let Some((code, _)) = self.blob_blocked.remove(&conn) {
+            self.blocked.insert(conn, (code, op_id));
+            return reply(error(
+                code,
+                "an earlier blob was refused; send it again",
+                Some(op_id),
+            ));
+        }
+        if self.queue_full > 0 {
+            self.queue_full -= 1;
+            return self.refuse(conn, ErrorCode::RateLimited, op_id, "the queue is full");
+        }
+        if let Some((code, n)) = self.inject {
+            self.inject = (n > 1).then_some((code, n - 1));
+            return self.refuse(conn, code, op_id, "injected by the test");
         }
         if let Err(e) = validate_ops(&ops) {
             return reply(error(ErrorCode::InvalidTxn, &e.to_string(), Some(op_id)));

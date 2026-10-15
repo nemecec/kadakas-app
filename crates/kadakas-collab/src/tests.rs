@@ -3389,40 +3389,29 @@ fn clients_with_other_ids_have_other_default_jitter() {
     assert_ne!(a, waits_of(1, Some(None), 9), "the default has a jitter");
 }
 
-#[test]
-fn a_number_with_other_content_in_the_log_is_sent_again_under_a_new_number() {
-    // Another instance with the same client ID used number 1 for other work. The server refuses
-    // number 1 of this client as `op_id_reused` and takes number 2. After the sign-in, only the
-    // transaction that is really in the log is dropped; the other one goes out again.
-    let mut net = Net::new(1);
+/// Another instance with the same client ID used number 1 for other work. The server refuses
+/// number 1 of this client as `op_id_reused` and takes number 2. After the sign-in, only the
+/// transaction that is really in the log is dropped; the other one goes out again, under a new
+/// number, whether the sync brings entries or a snapshot.
+fn a_number_with_other_content_in_the_log(snapshot: bool) {
+    let mut net = Net::new(2);
     net.connect(0);
+    net.connect(1);
     net.settle();
-    let conn = net.seq.open();
-    let hello = ClientMsg::Hello {
-        protocol: PROTOCOL_VERSION,
-        user: Uid::from_num(1),
-        client: Uid::from_num(1),
-        name: "twin".into(),
-        token: String::new(),
-        last_seq: None,
-        log_id: None,
-        last_hash: None,
-    };
-    net.seq.receive(conn, hello, 0);
-    net.seq.receive(
-        conn,
-        ClientMsg::Submit {
-            op_id: 1,
-            ops: vec![create(50, 1)],
-        },
-        0,
-    );
-    net.seq.close(conn);
+    twin_submit(&mut net, 1, 1, vec![create(50, 1)]);
     net.clients[0].edit(vec![create(1, 1)]).unwrap();
     net.clients[0].edit(vec![create(2, 1)]).unwrap();
     net.flush(0);
     net.deliver(0);
     assert_eq!(net.clients[0].state(), ConnState::Offline);
+    if snapshot {
+        net.deliver(1);
+        for n in 10..13 {
+            net.clients[1].edit(vec![create(n, 1)]).unwrap();
+            net.flush(1);
+        }
+        net.seq.set_log_limit(1);
+    }
     net.disconnect(0);
     net.connect(0);
     net.settle();
@@ -3430,12 +3419,39 @@ fn a_number_with_other_content_in_the_log_is_sent_again_under_a_new_number() {
     for n in [1, 2, 50] {
         assert!(net.seq.replica().alive(obj(n)).is_some(), "object {n}");
     }
-    assert_eq!(net.seq.seq(), 3);
+    assert_eq!(net.seq.seq(), if snapshot { 6 } else { 3 });
     assert_eq!(net.trouble(0).0, vec![]);
 }
 
 #[test]
-fn a_snapshot_after_op_id_reused_drops_what_the_server_has() {
+fn a_number_with_other_content_in_the_log_is_sent_again_under_a_new_number() {
+    a_number_with_other_content_in_the_log(false);
+}
+
+#[test]
+fn a_number_with_other_content_is_sent_again_also_after_a_snapshot() {
+    a_number_with_other_content_in_the_log(true);
+}
+
+#[test]
+fn a_restart_after_op_id_reused_keeps_the_numbers_that_were_refused() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    let store = MemStore::new();
+    net.clients[0].set_store(Box::new(store.clone()));
+    twin_submit(&mut net, 1, 1, vec![create(50, 1)]);
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.flush(0);
+    net.deliver(0);
+    assert_eq!(net.clients[0].state(), ConnState::Offline);
+    assert_eq!(net.clients[0].journal().reused, vec![1]);
+    let restored = Client::restore(cfg(1), Box::new(store));
+    assert_eq!(restored.journal().reused, vec![1]);
+}
+
+#[test]
+fn a_snapshot_drops_what_the_server_has() {
     let mut net = Net::new(2);
     net.connect(0);
     net.connect(1);
@@ -3446,7 +3462,6 @@ fn a_snapshot_after_op_id_reused_drops_what_the_server_has() {
     net.clients[0].edit(vec![set(1, "a", 5)]).unwrap();
     net.flush(0);
     net.inbox[0].clear();
-    let op = net.clients[0].pending()[0].op_id;
     for v in 0..4 {
         net.clients[1].edit(vec![set(1, "b", v)]).unwrap();
         net.flush(1);
@@ -3455,13 +3470,7 @@ fn a_snapshot_after_op_id_reused_drops_what_the_server_has() {
     net.inbox[0].clear();
     // The log is short: client 0 gets a snapshot when it signs in again.
     net.seq.set_log_limit(1);
-    let reused = ServerMsg::Error {
-        code: ErrorCode::OpIdReused,
-        message: "late".into(),
-        op_id: Some(op),
-        hash: None,
-    };
-    net.clients[0].handle(reused, net.now);
+    net.clients[0].connection_lost();
     let seq = net.seq.seq();
     net.disconnect(0);
     net.connect(0);
@@ -3495,12 +3504,12 @@ fn a_refusal_for_good_of_the_first_resent_transaction_ends_the_wait_for_it() {
 
 /// A client of `net` as a second instance with the same client ID that put `ops` in the log
 /// under `op_id` (a twin whose journal was lost, or an earlier life of this client).
-fn twin_submit(net: &mut Net, op_id: u64, ops: Vec<Op>) {
+fn twin_submit(net: &mut Net, who: u64, op_id: u64, ops: Vec<Op>) {
     let conn = net.seq.open();
     let hello = ClientMsg::Hello {
         protocol: PROTOCOL_VERSION,
-        user: Uid::from_num(1),
-        client: Uid::from_num(1),
+        user: Uid::from_num(who),
+        client: Uid::from_num(who),
         name: "twin".into(),
         token: String::new(),
         last_seq: None,
@@ -3513,16 +3522,17 @@ fn twin_submit(net: &mut Net, op_id: u64, ops: Vec<Op>) {
     net.route(outs);
 }
 
-/// The server has numbers 1 and 2 of this client (a twin put them in the log, or the answers
-/// were lost). The client signs in: they are dropped and not sent again, under any number.
+/// The server has numbers 1 and 2 of this client, but their answers were lost with the
+/// connection. The client signs in: they are dropped and not sent again, under any number.
 fn the_server_has_a_prefix_of_our_numbers(snapshot: bool) {
     let mut net = Net::new(2);
+    net.connect(0);
     net.connect(1);
     net.settle();
     net.clients[0].edit(vec![create(1, 1)]).unwrap();
     net.clients[0].edit(vec![set(1, "a", 5)]).unwrap();
-    twin_submit(&mut net, 1, vec![create(1, 1)]);
-    twin_submit(&mut net, 2, vec![set(1, "a", 5)]);
+    net.flush(0);
+    net.inbox[0].clear();
     // Another client writes the same property afterwards.
     net.deliver(1);
     net.clients[1].edit(vec![set(1, "a", 7)]).unwrap();
@@ -3534,6 +3544,7 @@ fn the_server_has_a_prefix_of_our_numbers(snapshot: bool) {
         }
         net.seq.set_log_limit(1);
     }
+    net.disconnect(0);
     net.connect(0);
     net.settle();
     net.all_equal();
@@ -3864,7 +3875,41 @@ fn the_stale_error_case_of_the_review_stays_clean() {
         Busy::Tick { c: 2 },
         create_c(2),
     ]);
-    run_busy(3, 0, acts).unwrap();
+    run_busy(3, 0, acts, false).unwrap();
+}
+
+#[test]
+fn a_full_queue_is_a_retry_error_and_covers_a_pending_blob_mark() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.seq.inject_blob_errors(ErrorCode::RateLimited, 1);
+    net.seq.inject_queue_full(1);
+    let (op, _) = picture_op(1, 'R');
+    net.clients[0].edit(vec![op]).unwrap();
+    net.clients[0].edit(vec![create(2, 1)]).unwrap();
+    net.flush(0);
+    net.settle();
+    net.all_equal();
+    assert_eq!(net.seq.seq(), 2);
+    assert_eq!(net.trouble(0), (vec![], 0));
+}
+
+#[test]
+fn a_blob_with_a_wrong_hash_is_refused_with_its_hash() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    let conn = net.conns[0].unwrap();
+    let put = ClientMsg::BlobPut {
+        hash: "00".into(),
+        data: "data".into(),
+    };
+    let outs = net.seq.receive(conn, put, 0);
+    assert!(matches!(
+        &outs[0].msg,
+        ServerMsg::Error { code: ErrorCode::BadMessage, hash: Some(h), op_id: None, .. } if h == "00"
+    ));
 }
 
 /// Things that happen to clients of a busy server.
@@ -3896,6 +3941,15 @@ enum Busy {
     RefuseBlob {
         code: bool,
         count: usize,
+    },
+    /// The server refuses the next `count` submits as if its queue were full.
+    QueueFull {
+        count: usize,
+    },
+    /// Another instance with the same client ID (a lost journal) takes the next number of the
+    /// client for other work. Only in the twin test.
+    Twin {
+        c: usize,
     },
     /// The server keeps only the last `n` entries: a client that is behind gets a snapshot.
     Limit {
@@ -3934,6 +3988,7 @@ fn busy_act() -> impl Strategy<Value = Busy> {
         4 => (0usize..4, any::<u8>(), 0u8..9).prop_map(|(c, i, v)| Busy::Set { c, i, v }),
         1 => (0usize..4, any::<u8>()).prop_map(|(c, i)| Busy::Delete { c, i }),
         3 => (any::<bool>(), 1usize..4).prop_map(|(code, count)| Busy::Refuse { code, count }),
+        1 => (1usize..3).prop_map(|count| Busy::QueueFull { count }),
         2 => (any::<bool>(), 1usize..3).prop_map(|(code, count)| Busy::RefuseBlob { code, count }),
         1 => (1usize..4).prop_map(|n| Busy::Limit { n }),
         4 => (0usize..4).prop_map(|c| Busy::Flush { c }),
@@ -3943,6 +3998,16 @@ fn busy_act() -> impl Strategy<Value = Busy> {
         5 => (0u16..1_500).prop_map(|ms| Busy::Wait { ms }),
         5 => (0usize..4).prop_map(|c| Busy::Tick { c }),
         3 => (0usize..4).prop_map(|c| Busy::Connect { c }),
+    ]
+}
+
+/// The busy server, and twins that take numbers of the clients: the sign-in after
+/// `op_id_reused` renumbers what the server does not have.
+fn twin_act() -> impl Strategy<Value = Busy> {
+    prop_oneof![
+        8 => busy_act(),
+        3 => (0usize..4).prop_map(|c| Busy::Twin { c }),
+        2 => (1usize..4).prop_map(|n| Busy::Limit { n }),
     ]
 }
 
@@ -3974,7 +4039,11 @@ fn busy_cases() -> u32 {
 }
 
 /// Runs the actions on `n` honest clients and a server that is busy at random.
-fn run_busy(n: usize, seed: u64, acts: Vec<Busy>) -> Result<(), TestCaseError> {
+///
+/// With `twins`, a twin instance of a client may take its next number, and the client may then
+/// get `op_id_reused` and sign in again. Without, the clients are never refused a number.
+fn run_busy(n: usize, seed: u64, acts: Vec<Busy>, twins: bool) -> Result<(), TestCaseError> {
+    let mut twin_objects = 0u64;
     // Each write has a value of its own, so the same content twice in the log is a double send.
     let mut writes = 0i64;
     let mut net = Net::new(n);
@@ -4027,11 +4096,28 @@ fn run_busy(n: usize, seed: u64, acts: Vec<Busy>) -> Result<(), TestCaseError> {
                 };
                 net.seq.inject_blob_errors(code, count);
             }
+            Busy::QueueFull { count } => net.seq.inject_queue_full(count),
+            Busy::Twin { c } => {
+                // The twin comes when the client has nothing waiting: its next number is free.
+                if twins && net.clients[c % n].pending().is_empty() {
+                    let c = c % n;
+                    twin_objects += 1;
+                    let next = net.clients[c].journal().last_op + 1;
+                    let ops = vec![create(5_000 + twin_objects, 1)];
+                    twin_submit(&mut net, c as u64 + 1, next, ops);
+                }
+            }
             Busy::Limit { n } => net.seq.set_log_limit(n),
             Busy::Flush { c } => net.flush(c % n),
             Busy::Deliver { c } => net.deliver(c % n),
             Busy::DeliverOne { c } => net.deliver_one(c % n),
-            Busy::Drop { c } => net.disconnect(c % n),
+            // A twin and a lost answer together cannot be told from a snapshot: the sign-in after
+            // `op_id_reused` is the only break of the connection in the twin test.
+            Busy::Drop { c } => {
+                if !twins {
+                    net.disconnect(c % n)
+                }
+            }
             Busy::Wait { ms } => net.now += u64::from(ms),
             Busy::Tick { c } => {
                 net.clients[c % n].tick(net.now);
@@ -4103,7 +4189,9 @@ fn run_busy(n: usize, seed: u64, acts: Vec<Busy>) -> Result<(), TestCaseError> {
     for i in 0..n {
         let (rejected, reconnects) = net.trouble(i);
         prop_assert_eq!(rejected, vec![], "client {}", i);
-        prop_assert_eq!(reconnects, 0, "client {} had op_id_reused", i);
+        if !twins {
+            prop_assert_eq!(reconnects, 0, "client {} had op_id_reused", i);
+        }
     }
     Ok(())
 }
@@ -4121,7 +4209,7 @@ proptest! {
         seed in any::<u64>(),
         acts in prop::collection::vec(busy_act(), 1..100),
     ) {
-        run_busy(n, seed, acts)?;
+        run_busy(n, seed, acts, false)?;
     }
 
     /// The same with many broken connections and short logs.
@@ -4131,6 +4219,17 @@ proptest! {
         seed in any::<u64>(),
         acts in prop::collection::vec(lossy_act(), 1..100),
     ) {
-        run_busy(n, seed, acts)?;
+        run_busy(n, seed, acts, false)?;
+    }
+
+    /// Twins that share the client ID: the clients are refused numbers (`op_id_reused`), sign in
+    /// again with entries or snapshots, and still send every edit once.
+    #[test]
+    fn clients_converge_with_a_twin_instance(
+        n in 2usize..4,
+        seed in any::<u64>(),
+        acts in prop::collection::vec(twin_act(), 1..100),
+    ) {
+        run_busy(n, seed, acts, true)?;
     }
 }

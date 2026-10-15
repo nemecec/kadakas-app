@@ -350,6 +350,11 @@ pub struct Client {
     blob_scan: bool,
     /// At the next sign-in, give the waiting transactions new numbers, whatever the server says.
     force_renumber: bool,
+    /// The numbers of waiting transactions that the server refused as `op_id_reused`.
+    reused: BTreeSet<u64>,
+    /// The highest number that this client ever sent in a `submit`, on any connection. A
+    /// waiting transaction above it was never sent, so the server cannot have it.
+    sent_upto: u64,
     /// `your_last_op` of the `welcome` of the sync that runs. At the end of the sync, waiting
     /// transactions up to it that are not in the log get new numbers.
     server_last_op: Option<u64>,
@@ -394,6 +399,8 @@ impl Client {
             missing: BTreeSet::new(),
             blob_scan: false,
             force_renumber: false,
+            reused: BTreeSet::new(),
+            sent_upto: 0,
             server_last_op: None,
             store: None,
             saved_journal: String::new(),
@@ -452,6 +459,8 @@ impl Client {
                     c.client = j.client;
                     c.jitter = Some(jitter_seed(c.client));
                     c.force_renumber = j.force_renumber;
+                    c.reused = j.reused.into_iter().collect();
+                    c.sent_upto = j.sent_upto;
                     c.server_last_op = j.server_last_op;
                     c.last_op = j.last_op;
                     c.pending = j.pending.into();
@@ -834,6 +843,7 @@ impl Client {
     }
 
     fn send_submit(&mut self, op_id: u64, ops: Vec<Op>) {
+        self.sent_upto = self.sent_upto.max(op_id);
         self.sent.push_back(Sent {
             what: SentKind::Submit(op_id),
             round: self.round,
@@ -1213,6 +1223,7 @@ impl Client {
             // `your_last_op` are used, maybe by other content. Our waiting transactions get
             // numbers above, so the server cannot take them for old ones.
             self.force_renumber = false;
+            self.reused.clear();
             self.last_op = your_last_op;
             self.renumber_waiting();
         } else {
@@ -1271,7 +1282,12 @@ impl Client {
             // (a prefix, rule 7). Applying them again to the snapshot would put an old write
             // over a newer one. Their undo steps keep the inverse from the edit.
             if let Some(upto) = self.server_last_op {
-                self.pending.retain(|t| t.op_id > upto);
+                // The numbers that the server refused as used are not in the snapshot: they
+                // belong to other content. Those transactions get new numbers below.
+                // A transaction that was never sent cannot be in the snapshot either.
+                let (reused, sent_upto) = (&self.reused, self.sent_upto);
+                self.pending
+                    .retain(|t| t.op_id > upto || t.op_id > sent_upto || reused.contains(&t.op_id));
             }
             self.finish_sync();
         }
@@ -1452,11 +1468,12 @@ impl Client {
                 // The answer to a transaction that does not wait any more: the server took it
                 // before (the answers come in order), so the numbers are fine.
             }
-            (Some(_), ErrorClass::Renumber) => {
+            (Some(op_id), ErrorClass::Renumber) => {
                 // The server knows this number with other content. Later transactions may have
                 // been taken or not, so the client stops here and fixes the numbers at the next
                 // sign-in, when the server tells the highest number it has.
                 self.force_renumber = true;
+                self.reused.insert(op_id);
                 self.events.push(ClientEvent::Reconnect(message));
                 self.connection_lost();
                 self.save_journal();
@@ -1541,6 +1558,7 @@ impl Client {
         if self.force_renumber || upto.is_some_and(|u| self.pending.iter().any(|t| t.op_id <= u)) {
             // What is left was not ordered, or the number is used by other content.
             self.force_renumber = false;
+            self.reused.clear();
             self.last_op = self.last_op.max(upto.unwrap_or(0));
             self.renumber_waiting();
         }
@@ -1602,6 +1620,8 @@ impl Client {
             redo: self.redo.clone(),
             blobs: self.journal_blobs(),
             force_renumber: self.force_renumber,
+            reused: self.reused.iter().copied().collect(),
+            sent_upto: self.sent_upto,
             server_last_op: self.server_last_op,
         }
     }

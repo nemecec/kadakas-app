@@ -47,6 +47,10 @@ pub trait OpLogStore: Send {
 /// steps go first.
 pub const MAX_JOURNAL_BYTES: usize = 64 * 1024 * 1024;
 
+fn all_sent() -> u64 {
+    u64::MAX
+}
+
 /// The pending work of a client.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Journal {
@@ -66,6 +70,14 @@ pub struct Journal {
     /// that are not in the log get new numbers. A restart in between keeps the rule.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_renumber: bool,
+    /// The numbers that the server refused as `op_id_reused`: they are used by other content, so
+    /// a snapshot never shows them as sent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reused: Vec<u64>,
+    /// The highest number that was sent in a `submit`. A journal without it is read as "all were
+    /// sent", which is the old rule.
+    #[serde(default = "all_sent")]
+    pub sent_upto: u64,
     /// `your_last_op` of the sync that runs, for the same check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_last_op: Option<u64>,

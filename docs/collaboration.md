@@ -531,7 +531,9 @@ too), its waiting transactions and its undo and redo steps refer to, and drops t
   or old). The client sets its counter to `your_last_op` and gives its waiting transactions new
   numbers above. Otherwise the server has every waiting transaction up to `your_last_op` (rule 7 of
   section 4.4: the transactions of a client are ordered as a prefix of what it sent). With a
-  `snapshot` the client drops them. With `entries` it drops a waiting transaction when the sync
+  `snapshot` the client drops them, except a transaction that it never sent and one that the
+  server refused as `op_id_reused` (another instance used the number: the client keeps a list of
+  these numbers, also across a restart). With `entries` it drops a waiting transaction when the sync
   brings an entry of this client with the same number and the same operations (compared by
   `ops_digest`). A waiting transaction up to `your_last_op` that has no such entry (the number
   belongs to other content), and all waiting ones after `op_id_reused`, get new numbers when the
