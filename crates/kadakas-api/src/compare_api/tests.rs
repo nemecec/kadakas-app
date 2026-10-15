@@ -820,3 +820,125 @@ fn a_sheet_compare_checks_the_format_and_dpi_first_and_finds_the_sheet_on_either
     );
     assert!(e.message.contains("no layer"), "{}", e.message);
 }
+
+/// A site model from nine 3D loci (they move into it), and a north arrow.
+fn site_and_arrow(s: &mut Session) -> (Value, Value) {
+    let ids: Vec<Value> = (0..9)
+        .map(|i| {
+            ok(
+                s,
+                "execute",
+                json!({"command": {"op": "add_object", "shape": {"kind": "locus3d",
+                    "p": [(i % 3) * 4000, (i / 3) * 4000, i * 100]}}}),
+            )["created"][0]
+                .clone()
+        })
+        .collect();
+    let site = ok(s, "site.create", json!({"source_ids": ids}))["id"].clone();
+    let arrow = ok(s, "north_arrow.add", json!({"at": [20000, 0]}))["id"].clone();
+    (site, arrow)
+}
+
+/// The text of the ghost group of `kind` for the object `id` (up to the next `</g>`).
+fn ghost_group<'a>(svg: &'a str, kind: &str, id: &Value) -> &'a str {
+    let head = format!("data-ghost=\"{kind}\"");
+    let id = id.as_str().unwrap();
+    for (i, _) in svg.match_indices(&head) {
+        let end = svg[i..].find('>').map_or(svg.len(), |e| i + e);
+        // The id is in the head of the group: `data-ghost-of` for an old place.
+        let tag = &svg[i..end];
+        if tag.contains(&format!("data-id=\"{id}\""))
+            || tag.contains(&format!("data-ghost-of=\"{id}\""))
+        {
+            let rest = &svg[i..];
+            return &rest[..rest.find("</g>").unwrap_or(rest.len())];
+        }
+    }
+    panic!("no {kind} ghost of {id} in {svg}");
+}
+
+#[test]
+fn removed_annotations_and_site_models_have_ghosts_in_the_svg() {
+    let mut s = Session::with_sequential_ids();
+    let (site, arrow) = site_and_arrow(&mut s);
+    save(&mut s, "Before");
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "delete_objects", "ids": [site, arrow]}}),
+    );
+    let r = ok(
+        &mut s,
+        "render.svg",
+        json!({"compare": compare(json!(1), json!("current"))}),
+    );
+    let svg = r["svg"].as_str().unwrap();
+    let a = ghost_group(svg, "removed", &arrow);
+    assert!(a.contains("data-kind=\"annotation\""), "{a}");
+    let m = ghost_group(svg, "removed", &site);
+    assert!(m.contains("data-kind=\"site_model\""), "{m}");
+    assert!(m.contains("data-kind=\"contour"), "{m}");
+    assert_eq!(
+        r["compare"]["ghosts"],
+        json!({"drawn": 2, "hidden": 0, "not_drawable": 0, "capped": 0})
+    );
+}
+
+#[test]
+fn changed_annotations_and_site_models_have_an_old_place_in_the_svg() {
+    let mut s = Session::with_sequential_ids();
+    let (site, arrow) = site_and_arrow(&mut s);
+    save(&mut s, "Before");
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "move_objects", "ids": [site, arrow], "delta": [0, 30000]}}),
+    );
+    let r = ok(
+        &mut s,
+        "render.svg",
+        json!({"compare": {"from": 1, "to": "current", "previous": true}}),
+    );
+    let svg = r["svg"].as_str().unwrap();
+    assert!(
+        r["compare"]["counts"]["changed"].as_u64().unwrap() >= 2,
+        "{r}"
+    );
+    let a = ghost_group(svg, "previous", &arrow);
+    assert!(a.contains("data-kind=\"annotation\""), "{a}");
+    let m = ghost_group(svg, "previous", &site);
+    assert!(m.contains("data-kind=\"contour"), "{m}");
+}
+
+#[test]
+fn a_sheet_compare_shows_a_removed_annotation_and_site_model_on_the_old_page() {
+    let mut s = Session::with_sequential_ids();
+    let (site, arrow) = site_and_arrow(&mut s);
+    ok(&mut s, "sheet.create", json!({"name": "S"}));
+    ok(&mut s, "viewport.create", json!({"sheet": "S"}));
+    let before = save(&mut s, "With both");
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "delete_objects", "ids": [site, arrow]}}),
+    );
+    let page = |s: &mut Session, from: u64| -> String {
+        let r = ok(
+            s,
+            "sheet.render",
+            json!({"sheet": "S", "compare": {"from": from, "to": "current"}}),
+        );
+        r["svg"].as_str().unwrap().to_string()
+    };
+    // Sheets compare side by side, so there are no ghosts: the page of the old side draws what
+    // the current one has lost, the annotation and the site model among it.
+    let with = page(&mut s, before);
+    let current = save(&mut s, "Without both");
+    let without = page(&mut s, current);
+    assert!(
+        with.len() > without.len() + 500,
+        "the old page draws the annotation and the site model: {} against {}",
+        with.len(),
+        without.len()
+    );
+}

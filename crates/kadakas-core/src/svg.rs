@@ -235,7 +235,7 @@ pub fn render_overlay(
     };
     let ghosts = overlay.map(|o| o.ghosts()).unwrap_or_default();
     let ghost = |g: &SvgGhost, s: &mut String| match (&g.doc, &ghost_counts) {
-        (Some(d), Some(c)) => tinted_object(d, &g.object, &g.tint, g.kind, s, c, None, mark_h),
+        (Some(d), Some(c)) => tinted_object(d, &g.object, &g.tint, g.kind, s, c, ext, mark_h),
         _ => tinted_object(doc, &g.object, &g.tint, g.kind, s, &tag_counts, ext, mark_h),
     };
     for o in visible().filter(|o| matches!(o.shape, Shape::Underlay(_))) {

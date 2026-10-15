@@ -200,9 +200,19 @@ fn svg_of(
     overlay: Option<&dyn kadakas_core::svg_overlay::SvgOverlay>,
 ) -> String {
     let site_ext = kadakas_site::draw::svg_ext(site_cache, revision);
+    // A ghost of a compare is drawn against the document of the old side. It gets caches of its
+    // own and revision 0 (nothing is kept), so it never reads what was built for another document.
+    let ghost_site = kadakas_site::SiteCache::default();
+    let ghost_annot = kadakas_annot::AnnotCache::default();
+    let ghost_site_ext = kadakas_site::draw::svg_ext(&ghost_site, 0);
     let ext = |d: &Document, o: &Object, style: &str, out: &mut String| {
-        site_ext(d, o, style, out);
-        kadakas_annot::svg::object_svg_with(d, o, style, out, annot_cache, revision);
+        if std::ptr::eq(d, doc) {
+            site_ext(d, o, style, out);
+            kadakas_annot::svg::object_svg_with(d, o, style, out, annot_cache, revision);
+        } else {
+            ghost_site_ext(d, o, style, out);
+            kadakas_annot::svg::object_svg_with(d, o, style, out, &ghost_annot, 0);
+        }
     };
     kadakas_core::svg::render_overlay(doc, width.clamp(16, 8192), Some(&ext), overlay)
 }
