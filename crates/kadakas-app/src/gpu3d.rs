@@ -383,9 +383,10 @@ fn split_blend(scene: &Scene, look: Option<&Look>) -> (Vec<u32>, Vec<BlendTri>) 
     (opaque, blend_tris)
 }
 
-/// The indices of the see-through triangles, far to near for a camera at `eye` that looks along
-/// `dir` (`ortho`: by the depth along `dir`, else by the distance from the eye). Equal depths keep
-/// the order of the mesh, so the picture is stable.
+/// The indices of the see-through triangles, far to near for a camera at `eye`. `dir` is the
+/// direction from the target to the eye (`Camera::eye_dir`), so the camera looks along `-dir`
+/// (`ortho`: by the depth along `-dir`, else by the distance from the eye). Equal depths keep the
+/// order of the mesh, so the picture is stable.
 fn blend_order(tris: &[BlendTri], eye: [f32; 3], dir: [f32; 3], ortho: bool) -> Vec<u32> {
     let (e, d) = (Vec3::from_array(eye), Vec3::from_array(dir));
     let depth = |c: Vec3| {

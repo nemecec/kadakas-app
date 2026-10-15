@@ -197,7 +197,21 @@ pub fn render_overlay(
         );
     }
     let tag_counts = schedule::tag_counts(doc);
-    // The tag counts of the old side, for ghosts that are drawn against its document.
+    // The tag counts of the old side, for ghosts that are drawn against its document. All ghosts
+    // of an overlay share one document (see `SvgGhost::doc`).
+    debug_assert!(
+        overlay.is_none_or(|o| {
+            let mut docs = o.ghosts().iter().map(|g| g.doc.as_ref());
+            docs.next().is_none_or(|first| {
+                docs.all(|d| match (first, d) {
+                    (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                })
+            })
+        }),
+        "the ghosts of an overlay share one document"
+    );
     let ghost_counts = overlay
         .and_then(|o| o.ghosts().iter().find_map(|g| g.doc.as_deref()))
         .map(schedule::tag_counts);

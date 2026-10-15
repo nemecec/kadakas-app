@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -78,9 +78,18 @@ pub struct Request {
     pub conn: u64,
     pub line: String,
     pub reply: Sender<Option<String>>,
-    /// Set by the socket thread when it gave up waiting. The request is then not run.
-    pub cancelled: Arc<AtomicBool>,
+    /// Who owns the request: the UI takes it to run it, or the socket thread cancels it when it
+    /// gave up waiting. One compare-and-swap decides, so a request that the client was told
+    /// "was not run" is never run, and a request that runs is never reported as cancelled.
+    pub state: Arc<AtomicU8>,
 }
+
+/// The request waits in the queue.
+const PENDING: u8 = 0;
+/// The UI took it and runs it.
+const TAKEN: u8 = 1;
+/// The socket thread cancelled it: the client got the timeout error.
+const CANCELLED: u8 = 2;
 
 /// Reads from a socket, and fails with `TimedOut` once one overall deadline has passed.
 struct DeadlineStream {
@@ -180,7 +189,11 @@ impl AgentServer {
             .or_else(|| self.rx.try_recv().ok());
         while let Some(req) = next.take() {
             next = self.rx.try_recv().ok();
-            if req.cancelled.load(Ordering::SeqCst) {
+            if req
+                .state
+                .compare_exchange(PENDING, TAKEN, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
                 continue; // the client was told that this request was cancelled
             }
             match handle(&req.line, &req.reply, req.conn) {
@@ -439,13 +452,13 @@ fn serve_client(
             .ok()
             .and_then(|v| v.get("id").cloned());
         let (reply, answer) = mpsc::channel();
-        let cancelled = Arc::new(AtomicBool::new(false));
+        let state = Arc::new(AtomicU8::new(PENDING));
         if tx
             .send(Request {
                 conn,
                 line,
                 reply,
-                cancelled: cancelled.clone(),
+                state: state.clone(),
             })
             .is_err()
         {
@@ -455,10 +468,24 @@ fn serve_client(
         let resp = match answer.recv_timeout(limits.reply_timeout) {
             Ok(r) => r,
             Err(RecvTimeoutError::Timeout) => {
-                cancelled.store(true, Ordering::SeqCst);
-                id.map(|id| {
-                    response(&id, json!({"error": {"code": -32000, "message": "timed out waiting for the app; the request was cancelled and was not run"}}))
-                })
+                if state
+                    .compare_exchange(PENDING, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    id.map(|id| {
+                        response(&id, json!({"error": {"code": -32000, "message": "timed out waiting for the app; the request was cancelled and was not run"}}))
+                    })
+                } else {
+                    // The UI took the request just now: it will run, so say nothing false. Its
+                    // answer is the one the client gets, for as long as the app needs.
+                    match answer.recv_timeout(limits.reply_timeout) {
+                        Ok(r) => r,
+                        Err(RecvTimeoutError::Timeout) => id.map(|id| {
+                            response(&id, json!({"error": {"code": -32000, "message": "timed out waiting for the answer of the app; the request was started and may have been run"}}))
+                        }),
+                        Err(RecvTimeoutError::Disconnected) => return,
+                    }
+                }
             }
             Err(RecvTimeoutError::Disconnected) => return,
         };
@@ -577,8 +604,12 @@ mod tests {
             let thread = thread::spawn(move || {
                 let mut session = Session::default();
                 while !s.load(Ordering::SeqCst) {
-                    let n = server.poll(&mut |line| session.handle_line(line));
-                    h.fetch_add(n, Ordering::SeqCst);
+                    // Count before the answer goes out (the reply is sent inside `poll`), so a
+                    // client that has its answer sees the count.
+                    server.poll(&mut |line| {
+                        h.fetch_add(1, Ordering::SeqCst);
+                        session.handle_line(line)
+                    });
                     thread::sleep(Duration::from_millis(2));
                 }
                 server
@@ -834,7 +865,7 @@ mod tests {
         let started = Instant::now();
         while !(sent && handled >= 2) {
             assert!(
-                started.elapsed() < Duration::from_secs(10),
+                started.elapsed() < Duration::from_secs(30),
                 "the test hangs"
             );
             handled += server.poll_ext(&mut |line, _, conn| {

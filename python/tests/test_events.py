@@ -152,8 +152,17 @@ def test_waiting_does_not_block_other_threads():
     t = _rpc.TcpTransport("127.0.0.1", server.getsockname()[1], "tok", timeout=5)
     waiting = threading.Event()
 
-    def wait_for_a_note() -> None:
+    # Signal from inside the wait, where the transport holds its lock (and releases it between
+    # the short turns), so the request below really meets a waiting thread.
+    real_wait = t._wait_for_note
+
+    def hooked_wait(turn: float) -> bool:
         waiting.set()
+        return real_wait(turn)
+
+    t._wait_for_note = hooked_wait
+
+    def wait_for_a_note() -> None:
         t.wait_notifications(30.0)
 
     waiter = threading.Thread(target=wait_for_a_note, daemon=True)

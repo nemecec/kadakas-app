@@ -941,4 +941,91 @@ fn a_sheet_compare_shows_a_removed_annotation_and_site_model_on_the_old_page() {
         with.len(),
         without.len()
     );
+    // The old page draws more paths (contours, arrow) than the new one.
+    assert!(
+        with.matches("<path").count() > without.matches("<path").count(),
+        "the old page has more paths"
+    );
+}
+
+/// A legend of the rects (one row with their count) is drawn from the document that it is in. A
+/// ghost of it is drawn against the old side, so it shows the count of the old side.
+#[test]
+fn a_legend_ghost_shows_the_rows_of_the_old_side() {
+    let mut s = Session::with_sequential_ids();
+    rect(&mut s, 0, 0, GRAY);
+    rect(&mut s, 5000, 0, GRAY);
+    let legend = ok(
+        &mut s,
+        "legend.add",
+        json!({"at": [0, 20000], "criteria": "Kind = \"rect\"", "group_by": "Kind"}),
+    )["id"]
+        .clone();
+    save(&mut s, "Two rects");
+    // The legend is removed, and three more rects make the count of the live drawing 5.
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "delete_objects", "ids": [legend]}}),
+    );
+    for i in 0..3 {
+        rect(&mut s, 10000 + i * 5000, 0, GRAY);
+    }
+    let legend2 = ok(
+        &mut s,
+        "legend.add",
+        json!({"at": [0, 40000], "criteria": "Kind = \"rect\"", "group_by": "Kind"}),
+    )["id"]
+        .clone();
+    let r = ok(
+        &mut s,
+        "render.svg",
+        json!({"compare": compare(json!(1), json!("current"))}),
+    );
+    let svg = r["svg"].as_str().unwrap();
+    let ghost = ghost_group(svg, "removed", &legend);
+    assert!(ghost.contains("data-kind=\"annotation\""), "{ghost}");
+    // The row of the ghost has the count of the old side (2), the live legend that of the new (5).
+    assert!(
+        ghost.contains(">rect</text>") && ghost.contains(">2</text>"),
+        "{ghost}"
+    );
+    assert!(!ghost.contains(">5</text>"), "{ghost}");
+    let live = text_of(svg, &legend2);
+    assert!(live.contains(">5</text>"), "{live}");
+}
+
+/// The text of the live object `id` in the SVG: from its group to the next `</g>`.
+fn text_of<'a>(svg: &'a str, id: &Value) -> &'a str {
+    let key = format!("data-id=\"{}\"", id.as_str().unwrap());
+    let from = svg.rfind(&key).expect("the live object is drawn");
+    let rest = &svg[from..];
+    &rest[..rest.find("</g>").unwrap_or(rest.len())]
+}
+
+#[test]
+fn the_ghost_caches_follow_the_old_document_and_are_dropped_with_the_caches() {
+    let caches = crate::GhostCaches::default();
+    let (a, b) = (Arc::new(Document::default()), Arc::new(Document::default()));
+    let ra = caches.for_doc(&a).2;
+    assert!(ra > 0, "revision 0 would keep nothing");
+    assert_eq!(
+        caches.for_doc(&a).2,
+        ra,
+        "the same old document: the same caches"
+    );
+    let rb = caches.for_doc(&b).2;
+    assert_ne!(rb, ra, "another old document: new caches");
+    // A session keeps them across renders of one comparison, and drop_caches frees them.
+    let (mut s, _) = fixture();
+    for _ in 0..2 {
+        ok(
+            &mut s,
+            "render.svg",
+            json!({"compare": compare(json!(1), json!("current"))}),
+        );
+    }
+    assert!(s.ghost_caches.held_bytes() > 0, "the old document is kept");
+    s.drop_caches();
+    assert_eq!(s.ghost_caches.held_bytes(), 0);
 }

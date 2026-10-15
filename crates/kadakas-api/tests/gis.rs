@@ -1073,7 +1073,9 @@ fn cancel_stops_the_worker() {
         json!({"url": format!("{}/wfs", m.base), "type_name": "t", "caps": false, "format": "geojson", "max_features": 20000}),
     );
     let job = r["job"].as_u64().unwrap();
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while m.hit_count() == 0 {
+        assert!(std::time::Instant::now() < end, "the worker never asked");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     ok(&mut s, "gis.job.cancel", json!({"job": job}));
