@@ -86,8 +86,8 @@ impl Default for SessionLimits {
             max_objects: usize::MAX,
             max_memory_bytes: u64::MAX,
             max_history_bytes: u64::MAX,
-            max_versions: 100,
-            max_version_bytes: 64 * 1024 * 1024,
+            max_versions: crate::VERSIONS_MAX,
+            max_version_bytes: crate::VERSION_BYTES_MAX,
             history_read_versions: kadakas_review::history::HARD_MAX_VERSIONS,
             history_read_bytes: kadakas_review::history::HARD_MAX_BYTES as u64,
             request_time: None,
@@ -159,7 +159,7 @@ const OBJECT_BYTES: u64 = 320;
 const RESOURCE_BYTES: u64 = 2048;
 
 /// A rough figure for a document: objects, resources and pictures.
-fn document_bytes(doc: &kadakas_core::model::Document) -> u64 {
+pub(crate) fn document_bytes(doc: &kadakas_core::model::Document) -> u64 {
     let underlays: u64 = doc
         .objects
         .values()
@@ -216,6 +216,7 @@ impl Session {
             + self.editor.history_bytes()
             + self.editor.log_bytes()
             + self.mesh_cache.approx_bytes()
+            + self.compare.approx_bytes()
     }
 
     /// Refuses a document that does not fit the limits. A host calls it before it replaces the
@@ -243,6 +244,7 @@ impl Session {
     pub fn drop_caches(&mut self) {
         self.mesh_cache = Default::default();
         self.lod_scene = None;
+        self.compare.clear();
         self.annot_cache = Default::default();
         self.worksheet_cache = Default::default();
         self.site_cache = Default::default();

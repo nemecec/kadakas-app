@@ -187,8 +187,8 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Limits {
-            max_versions: 100,
-            max_bytes: 64 * 1024 * 1024,
+            max_versions: HARD_MAX_VERSIONS,
+            max_bytes: WRITE_MAX_BYTES,
         }
     }
 }

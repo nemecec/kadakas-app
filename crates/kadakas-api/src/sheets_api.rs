@@ -35,7 +35,7 @@ pub const SHEET_SET: (&str, &str) = (
 );
 pub const SHEET_RENDER: (&str, &str) = (
     "sheet.render",
-    "Draw a sheet. params: {sheet (layer ID or name), format? (svg | png; default svg), dpi? (png, default 100)}. Returns {svg} or {png_base64, width, height}. Viewports are drawn live from the model.",
+    "Draw a sheet. params: {sheet (layer ID or name), format? (svg | png; default svg), dpi? (png, default 100)}. Returns {svg} or {png_base64, width, height}. Viewports are drawn live from the model. compare {from, to} (versions or \"current\", see describe.review.compare) draws the sheet of both sides next to each other on one page, each with its label; the sheet must exist in both. Returns also {compare}.",
 );
 pub const PROJECT_GET: (&str, &str) = (
     "project.get",
@@ -875,8 +875,13 @@ impl Session {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn sheet_render(s: &mut Session, p: &Value) -> Res {
-    let layer = sheet_ref(s.editor.doc(), p.get("sheet").unwrap_or(&Value::Null))?;
     let format = opt_str(p, "format").unwrap_or_else(|| "svg".into());
+    // With `compare`, the sheet of two versions stands side by side on one page (REV-03).
+    if let Some(spec) = crate::compare_api::CompareSpec::parse(p.get("compare"))? {
+        let dpi = p.get("dpi").and_then(Value::as_f64).unwrap_or(100.0);
+        return s.sheet_compare(p.get("sheet").unwrap_or(&Value::Null), &spec, &format, dpi);
+    }
+    let layer = sheet_ref(s.editor.doc(), p.get("sheet").unwrap_or(&Value::Null))?;
     let page = s.sheet_page(layer)?;
     match format.as_str() {
         "svg" => Ok(
@@ -917,7 +922,7 @@ impl Session {
 
 /// Width and height from the header of a PNG file.
 #[cfg(not(target_arch = "wasm32"))]
-fn png_size(b: &[u8]) -> (u32, u32) {
+pub(crate) fn png_size(b: &[u8]) -> (u32, u32) {
     let be = |i: usize| u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
     (be(16), be(20))
 }

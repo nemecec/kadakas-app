@@ -87,13 +87,13 @@ class Api:
         return self._call("selection.set", params or None)
 
     def render_svg(self, **params: Any) -> Any:
-        """SVG image of visible objects. params: {width?: px}.
+        """SVG image of visible objects. params: {width?: px, compare?}. With compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) the plan of `to` is drawn with the changes since `from`: added objects green, changed objects orange, removed objects as red dashed ghosts, each with a mark (+, ~, -) and a legend with the counts. Returns {svg, compare?}.
 
         JSON-RPC method ``render.svg``."""
         return self._call("render.svg", params or None)
 
     def render_png(self, **params: Any) -> Any:
-        """PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. Returns {png_base64, width, height, view, projection, mode, render_style}.
+        """PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) draws `to` with the changes since `from`: added objects green, changed orange, removed objects as see-through red ghosts; with mode side_by_side it draws both sides next to each other with the same framing. render_style cannot be used with compare. Returns {png_base64, width, height, view, projection, mode, render_style (not with compare), compare?}.
 
         JSON-RPC method ``render.png``."""
         return self._call("render.png", params or None)
@@ -1821,7 +1821,7 @@ class Api:
         return self._call("sheet.set", params or None)
 
     def sheet_render(self, **params: Any) -> Any:
-        """Draw a sheet. params: {sheet (layer ID or name), format? (svg | png; default svg), dpi? (png, default 100)}. Returns {svg} or {png_base64, width, height}. Viewports are drawn live from the model.
+        """Draw a sheet. params: {sheet (layer ID or name), format? (svg | png; default svg), dpi? (png, default 100)}. Returns {svg} or {png_base64, width, height}. Viewports are drawn live from the model. compare {from, to} (versions or "current", see describe.review.compare) draws the sheet of both sides next to each other on one page, each with its label; the sheet must exist in both. Returns also {compare}.
 
         JSON-RPC method ``sheet.render``."""
         return self._call("sheet.render", params or None)
@@ -2127,7 +2127,7 @@ class Api:
         return self._call("revision.list", params or None)
 
     def version_create(self, **params: Any) -> Any:
-        """Save the document as a named version. One undo step (undo removes the version again). params: {name, note?, author?, now_ms?}. The version keeps the author (default: the collaboration name, else the origin: user, agent or script), the time, the origin and the editor revision. If the version would go over a limit (max_versions or max_version_bytes of the session), nothing is saved and nothing is deleted: the call fails with a limit error whose data has `limit` {kind: versions|bytes, max, needed}, `versions` [{id, name, bytes, time_ms, auto}] and `options`. Pass this to the person and ask what to do: which versions to delete (version.delete {ids}), or raising the limit in Preferences. Never delete versions by yourself to make room. Fails with a conflict error (reason history_read_only) if the history of the file could not be read completely. Returns {version, count, bytes}.
+        """Save the document as a named version. One undo step (undo removes the version again). params: {name, note?, author?, now_ms?}. The version keeps the author (default: the collaboration name, else the origin: user, agent or script), the time, the origin and the editor revision. If the version would go over a limit (max_versions or max_version_bytes of the session), nothing is saved and nothing is deleted: the call fails with a limit error whose data has `limit` {kind: versions|bytes, max, needed}, `versions` [{id, name, bytes, time_ms, auto}] and `options`. Pass this to the person and ask what to do: which versions to delete (version.delete {ids}), or raising the limit in Preferences. Never delete versions by yourself to make room. Fails with a conflict error (reason history_read_only) if the history of the file could not be read completely. Returns {version, count, bytes, notes?, many_versions?}. The defaults are 1000 versions and 256 MiB, so a limit is rarely reached. When this save makes the count pass 500, the reply has `notes` (a text) and `many_versions` (500): tell the person once. The save is not blocked.
 
         JSON-RPC method ``version.create``."""
         return self._call("version.create", params or None)

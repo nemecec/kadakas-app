@@ -32,13 +32,15 @@ fn run_env(args: &[&str], input: &str, dir: &Path, env: &[(&str, &Path)]) -> Out
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.as_bytes())
-        .unwrap();
-    child.wait_with_output().unwrap()
+    // Written on a thread: a long input must not block while the answers fill the pipe.
+    let mut stdin = child.stdin.take().unwrap();
+    let input = input.to_string();
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(input.as_bytes());
+    });
+    let out = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    out
 }
 
 fn lines(out: &Output) -> Vec<Value> {
@@ -217,8 +219,8 @@ fn mcp_gives_the_reason_and_the_versions_of_a_refused_version() {
             json!({"method": "execute", "params": {"command": {"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [100, 50]}}}}),
         ),
     ];
-    // The default limit is 100 versions.
-    for i in 0..101u64 {
+    // The default limit is 1000 versions (the read cap).
+    for i in 0..1001u64 {
         reqs.push(call(
             10 + i,
             "review",
@@ -226,8 +228,8 @@ fn mcp_gives_the_reason_and_the_versions_of_a_refused_version() {
         ));
     }
     let l = mcp_session(&["mcp"], &reqs, &dir);
-    assert_eq!(l[101]["result"]["isError"], false, "the 100th version");
-    let last = &l[102]["result"];
+    assert_eq!(l[1001]["result"]["isError"], false, "the 1000th version");
+    let last = &l[1002]["result"];
     assert_eq!(last["isError"], true);
     let text = last["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("\"reason\":\"version_limit\""), "{text}");
@@ -1017,4 +1019,76 @@ fn feedback_send_uses_only_https_addresses() {
         ob["reports"][0]["attempts"], 8,
         "a refusal is not retried: {file}"
     );
+}
+
+#[test]
+fn render_can_compare_a_version_with_the_drawing() {
+    let dir = temp("render-compare");
+    let doc = dir.join("g.kad");
+    let rect = |x: i32| {
+        json!({"command": {"op": "add_object", "shape":
+            {"kind": "rect", "min": [x, 0], "max": [x + 3000, 3000]}}})
+    };
+    let input = requests(&[
+        rpc(1, "execute", rect(0)),
+        rpc(2, "version.create", json!({"name": "Before", "now_ms": 1})),
+        rpc(3, "execute", rect(9000)),
+        rpc(4, "file.save", json!({"path": doc})),
+    ]);
+    let out = run(&["serve"], &input, &dir);
+    assert!(out.status.success());
+    let svg = dir.join("compare.svg");
+    let out = run(
+        &[
+            "render",
+            doc.to_str().unwrap(),
+            "-o",
+            svg.to_str().unwrap(),
+            "--compare-from",
+            "1",
+        ],
+        "",
+        &dir,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = std::fs::read_to_string(&svg).unwrap();
+    assert!(text.contains("data-compare=\"added\"") && text.contains("data-compare-legend"));
+    assert!(
+        text.contains("data-compare=\"unchanged\""),
+        "the old object is dimmed"
+    );
+    // Hide the unchanged objects, and name both sides.
+    let out = run(
+        &[
+            "render",
+            doc.to_str().unwrap(),
+            "-o",
+            svg.to_str().unwrap(),
+            "--compare-from",
+            "1",
+            "--compare-to",
+            "current",
+            "--hide-unchanged",
+        ],
+        "",
+        &dir,
+    );
+    assert!(out.status.success());
+    assert!(!std::fs::read_to_string(&svg).unwrap().contains("unchanged"));
+    // A version that does not exist, or a side that is not a version, is an error.
+    for args in [
+        vec!["--compare-from", "9"],
+        vec!["--compare-from", "1", "--compare-to", "later"],
+        vec!["--compare-from", "1", "--compare-to", "2"],
+    ] {
+        let mut all = vec!["render", doc.to_str().unwrap(), "-o", svg.to_str().unwrap()];
+        all.extend(args.iter());
+        let out = run(&all, "", &dir);
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).starts_with("kadakas:"));
+    }
 }

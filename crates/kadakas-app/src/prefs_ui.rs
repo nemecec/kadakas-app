@@ -290,8 +290,8 @@ mod tests {
             units,
             active_language: "en-US",
             profiles,
-            max_versions: Box::leak(Box::new(100)),
-            max_version_mib: Box::leak(Box::new(64)),
+            max_versions: Box::leak(Box::new(crate::prefs::DEFAULT_MAX_VERSIONS)),
+            max_version_mib: Box::leak(Box::new(crate::prefs::DEFAULT_MAX_VERSION_MIB)),
         }
     }
 

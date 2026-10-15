@@ -162,3 +162,158 @@ pub fn sample(segs: &[PSeg], per_curve: usize) -> Vec<DVec2> {
 pub fn text_width(text: &str, height: f64) -> f64 {
     text.chars().count() as f64 * height * 0.52
 }
+
+impl Prim {
+    /// The primitive moved by `d` mm.
+    fn shifted(&self, d: DVec2) -> Prim {
+        let seg = |s: &PSeg| match *s {
+            PSeg::Move(p) => PSeg::Move(p + d),
+            PSeg::Line(p) => PSeg::Line(p + d),
+            PSeg::Cubic(a, b, p) => PSeg::Cubic(a + d, b + d, p + d),
+        };
+        match self {
+            Prim::Path(p) => Prim::Path(PathPrim {
+                segs: p.segs.iter().map(seg).collect(),
+                ..p.clone()
+            }),
+            Prim::Text(t) => Prim::Text(TextPrim {
+                at: t.at + d,
+                ..t.clone()
+            }),
+            Prim::Image(i) => Prim::Image(ImagePrim {
+                min: i.min + d,
+                max: i.max + d,
+                ..i.clone()
+            }),
+            Prim::PushClip(poly) => Prim::PushClip(poly.iter().map(|p| *p + d).collect()),
+            Prim::PopClip => Prim::PopClip,
+        }
+    }
+}
+
+impl Page {
+    /// Two pages side by side on one page: `self` at the left, `other` at the right, a gap with a
+    /// thin line between them, and a strip above each with its label. The sheet compare
+    /// (REV-03) uses it to show a sheet of version A next to the same sheet of version B.
+    pub fn beside(&self, other: &Page, gap: f64, labels: [&str; 2]) -> Page {
+        const STRIP: f64 = 8.0;
+        const TEXT: f64 = 4.0;
+        let height = self.size.y.max(other.size.y) + STRIP;
+        let size = DVec2::new(self.size.x + gap + other.size.x, height);
+        let right = DVec2::new(self.size.x + gap, 0.0);
+        let mut prims: Vec<Prim> = self.prims.clone();
+        prims.extend(other.prims.iter().map(|p| p.shifted(right)));
+        let line = |x: f64| {
+            Prim::Path(PathPrim::stroked(
+                PathPrim::polyline(&[DVec2::new(x, 0.0), DVec2::new(x, height)]),
+                false,
+                [160, 160, 160, 255],
+                0.3,
+            ))
+        };
+        prims.push(line(self.size.x + gap / 2.0));
+        for (x, label) in [(2.0, labels[0]), (right.x + 2.0, labels[1])] {
+            prims.push(Prim::Text(TextPrim {
+                at: DVec2::new(x, height - STRIP + 2.0),
+                text: label.to_string(),
+                height: TEXT,
+                color: [40, 40, 40, 255],
+                align: Align::Left,
+            }));
+        }
+        Page {
+            size,
+            title: format!("{} | {}", labels[0], labels[1]),
+            prims,
+        }
+    }
+}
+
+#[cfg(test)]
+mod beside_tests {
+    use super::*;
+
+    fn page(w: f64, h: f64) -> Page {
+        let clip = vec![DVec2::ZERO, DVec2::new(w, 0.0), DVec2::new(w, h)];
+        Page {
+            size: DVec2::new(w, h),
+            title: "A".into(),
+            prims: vec![
+                Prim::PushClip(clip),
+                Prim::Path(PathPrim::stroked(
+                    vec![
+                        PSeg::Move(DVec2::new(1.0, 1.0)),
+                        PSeg::Cubic(DVec2::splat(2.0), DVec2::splat(3.0), DVec2::splat(4.0)),
+                        PSeg::Line(DVec2::new(5.0, 5.0)),
+                    ],
+                    false,
+                    [0, 0, 0, 255],
+                    0.2,
+                )),
+                Prim::PopClip,
+                Prim::Text(TextPrim {
+                    at: DVec2::new(1.0, 2.0),
+                    text: "t".into(),
+                    height: 3.0,
+                    color: [0, 0, 0, 255],
+                    align: Align::Left,
+                }),
+                Prim::Image(ImagePrim {
+                    min: DVec2::ZERO,
+                    max: DVec2::splat(2.0),
+                    width: 1,
+                    height: 1,
+                    rgb: Arc::new(vec![1, 2, 3]),
+                }),
+            ],
+        }
+    }
+
+    #[test]
+    fn two_pages_stand_side_by_side_with_labels_and_a_divider() {
+        let (a, b) = (page(100.0, 50.0), page(80.0, 70.0));
+        let both = a.beside(&b, 10.0, ["Before", "After"]);
+        assert_eq!(both.size, DVec2::new(190.0, 78.0));
+        assert_eq!(both.title, "Before | After");
+        // The left page is as it was; the right page is moved by its width and the gap.
+        assert_eq!(&both.prims[..a.prims.len()], &a.prims[..]);
+        let moved = &both.prims[a.prims.len()..a.prims.len() + b.prims.len()];
+        assert_eq!(
+            moved[0],
+            Prim::PushClip(vec![
+                DVec2::new(110.0, 0.0),
+                DVec2::new(190.0, 0.0),
+                DVec2::new(190.0, 70.0),
+            ])
+        );
+        let Prim::Path(p) = &moved[1] else { panic!() };
+        assert_eq!(p.segs[0], PSeg::Move(DVec2::new(111.0, 1.0)));
+        assert_eq!(
+            p.segs[1],
+            PSeg::Cubic(
+                DVec2::new(112.0, 2.0),
+                DVec2::new(113.0, 3.0),
+                DVec2::new(114.0, 4.0)
+            )
+        );
+        assert_eq!(p.segs[2], PSeg::Line(DVec2::new(115.0, 5.0)));
+        assert_eq!(moved[2], Prim::PopClip);
+        let Prim::Text(t) = &moved[3] else { panic!() };
+        assert_eq!(t.at, DVec2::new(111.0, 2.0));
+        let Prim::Image(i) = &moved[4] else { panic!() };
+        assert_eq!((i.min.x, i.max.x), (110.0, 112.0));
+        // The two labels come last.
+        let texts: Vec<&str> = both
+            .prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Text(t) if t.height == 4.0 => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["Before", "After"]);
+        // Both outputs draw it.
+        assert!(crate::svg::page_svg(&both).contains("Before"));
+        assert!(crate::png::page_png(&both, 20.0).is_ok());
+    }
+}

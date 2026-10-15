@@ -211,6 +211,10 @@ impl VersionsUi {
                     "versions-ui-saved",
                     name = v["version"]["name"].as_str().unwrap_or("")
                 );
+                if let Some(n) = v["many_versions"].as_u64() {
+                    status.push(' ');
+                    status.push_str(&tr!("versions-ui-many", count = n));
+                }
                 self.form.clear();
                 self.refresh(session);
                 self.form.name = self.default_name();
@@ -359,6 +363,7 @@ impl VersionsUi {
                                     time_ms: row.time_ms,
                                     origin: String::new(),
                                     auto: row.auto,
+                                    branch: String::new(),
                                 }));
                             });
                         }
@@ -1094,6 +1099,7 @@ mod tests {
                     time_ms: 1_700_000_000_000,
                     origin: "agent".into(),
                     auto: false,
+                    branch: "main".into(),
                 };
                 assert!(time_text(&row).contains("22:13"));
                 for o in ["user", "agent", "script", "remote"] {

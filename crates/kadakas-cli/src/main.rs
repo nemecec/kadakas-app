@@ -64,6 +64,16 @@ enum Cmd {
         output: PathBuf,
         #[arg(long, default_value_t = 1200)]
         width: u32,
+        /// Show what changed since this version (a version ID): added objects green, changed
+        /// orange, removed objects as red ghosts, with a legend (REV-03).
+        #[arg(long)]
+        compare_from: Option<u64>,
+        /// The newer side, a version ID or "current" (the default). Needs --compare-from.
+        #[arg(long, requires = "compare_from")]
+        compare_to: Option<String>,
+        /// Leave out the objects that did not change. Needs --compare-from.
+        #[arg(long, requires = "compare_from")]
+        hide_unchanged: bool,
     },
     /// Import a DXF, Shapefile (.shp) or GeoJSON file. Saves the document and prints the report.
     Import {
@@ -692,6 +702,35 @@ fn save(doc: &Document, path: &std::path::Path) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// `kadakas render`: the SVG of a document, or, with `compare` (the old version and the new side),
+/// of the plan with the changes tinted (`render.svg` with the `compare` option).
+fn render_command(
+    file: &std::path::Path,
+    output: &std::path::Path,
+    width: u32,
+    compare: Option<(u64, String)>,
+    hide_unchanged: bool,
+) -> Result<(), String> {
+    let doc = load_own(file)?;
+    let mut session = Session::with_document(doc);
+    let svg = match compare {
+        None => session.render_svg(width),
+        Some((from, to)) => {
+            let to = match to.trim().parse::<u64>() {
+                Ok(id) => json!(id),
+                Err(_) => json!(to.trim()),
+            };
+            let params = json!({"width": width, "compare":
+                {"from": from, "to": to, "hide_unchanged": hide_unchanged}});
+            let answer = session
+                .handle("render.svg", params)
+                .map_err(|e| e.message)?;
+            answer["svg"].as_str().unwrap_or_default().to_string()
+        }
+    };
+    fsio::write_atomic(output, svg.as_bytes()).map_err(|e| format!("{}: {e}", output.display()))
+}
+
 fn import_command(
     file: &std::path::Path,
     output: &std::path::Path,
@@ -795,11 +834,16 @@ fn main() {
             file,
             output,
             width,
-        } => load_own(&file).and_then(|doc| {
-            let svg = Session::with_document(doc).render_svg(width);
-            fsio::write_atomic(&output, svg.as_bytes())
-                .map_err(|e| format!("{}: {e}", output.display()))
-        }),
+            compare_from,
+            compare_to,
+            hide_unchanged,
+        } => render_command(
+            &file,
+            &output,
+            width,
+            compare_from.map(|from| (from, compare_to.unwrap_or_else(|| "current".into()))),
+            hide_unchanged,
+        ),
     };
     if let Err(e) = result {
         eprintln!("kadakas: {e}");

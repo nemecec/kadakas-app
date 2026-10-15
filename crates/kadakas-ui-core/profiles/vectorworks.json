@@ -326,6 +326,7 @@
         "file.scripts",
         "file.plugins",
         "file.versions",
+        "file.compare",
         "-",
         "file.collaboration",
         "-",

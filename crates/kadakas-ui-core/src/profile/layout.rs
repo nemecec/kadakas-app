@@ -43,6 +43,8 @@ commands! {
     PlugIns => "file.plugins", msg!("panels-plug-ins"), false;
     // The window of named versions: save, restore, delete and compare (REV-01, REV-02).
     Versions => "file.versions", msg!("panels-versions"), false;
+    // The window that compares two versions with a colored overlay in the plan and in 3D (REV-03).
+    Compare => "file.compare", msg!("panels-compare"), false;
     // A block: the submenu File > Collaboration (Connect, Disconnect, People).
     Collaboration => "file.collaboration", msg!("panels-collaboration"), false;
     Preferences => "file.preferences", msg!("panels-preferences"), false;
@@ -299,6 +301,7 @@ pub fn default_menus() -> Vec<Menu> {
                 "file.scripts",
                 "file.plugins",
                 "file.versions",
+                "file.compare",
                 "-",
                 "file.collaboration",
                 "-",
