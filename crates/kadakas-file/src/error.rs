@@ -55,8 +55,13 @@ impl From<std::io::Error> for FileError {
 }
 
 impl FileError {
-    /// True if the error means that the file changed on disk after it was opened.
+    /// True if the error means that the file changed on disk after it was opened. A picture that
+    /// is read while the document is written reports it as text, so the text counts too.
     pub fn is_changed(&self) -> bool {
-        matches!(self, FileError::Container(ContainerError::Changed(_)))
+        match self {
+            FileError::Container(ContainerError::Changed(_)) => true,
+            FileError::Io(m) => m.contains("changed on disk after it was opened"),
+            _ => false,
+        }
     }
 }

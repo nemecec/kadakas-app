@@ -89,7 +89,10 @@ fn entry_hashes(f: &Path, prefix: &str) -> Vec<(String, String)> {
 fn the_history_waits_in_the_file_until_it_is_used() {
     let dir = tmp("waits");
     let f = make_file(&dir, "a.kad");
-    assert!(!entry_hashes(&f, "history/").is_empty(), "the versions are entries of the file");
+    assert!(
+        !entry_hashes(&f, "history/").is_empty(),
+        "the versions are entries of the file"
+    );
     let mut s = open(&dir, &f);
     assert!(s.editor.doc().history.is_none());
     assert!(s.editor.doc().lazy_history.is_some(), "not read at open");
@@ -101,7 +104,10 @@ fn the_history_waits_in_the_file_until_it_is_used() {
     assert!(s.editor.doc().history.is_some() && s.editor.doc().lazy_history.is_none());
     let list = ok(&mut s, "version.list", json!({}));
     assert_eq!(list["read_only"], false);
-    assert_eq!(list["current_is_newest"], false, "the circle after the last version");
+    assert_eq!(
+        list["current_is_newest"], false,
+        "the circle after the last version"
+    );
     // A version of a state in the file, rebuilt from the file.
     let v = ok(&mut s, "version.get", json!({"id": 1, "document": true}));
     assert_eq!(v["things"]["objects"], 1, "{v}");
@@ -116,7 +122,10 @@ fn a_save_of_an_untouched_document_copies_the_history_entries_as_they_are() {
     let mut s = open(&dir, &f);
     let g = dir.join("g.kad");
     ok(&mut s, "file.save", json!({"path": g}));
-    assert!(s.editor.doc().lazy_history.is_some(), "the save did not read the history");
+    assert!(
+        s.editor.doc().lazy_history.is_some(),
+        "the save did not read the history"
+    );
     assert_eq!(entry_hashes(&f, "history/"), entry_hashes(&g, "history/"));
     assert_eq!(entry_hashes(&f, "blobs/"), entry_hashes(&g, "blobs/"));
     let mut t = open(&dir, &g);
@@ -144,8 +153,10 @@ fn the_plain_json_form_needs_the_history_and_has_it() {
     ok(&mut t, "file.save", json!({"path": k}));
     let mut u = open(&dir, &k);
     assert_eq!(names(&mut u), ["v0", "v1", "v2"]);
-    assert_eq!(u.editor.doc().history.clone().unwrap().to_value()["newest"]["anchor"],
-        s.editor.doc().history.clone().unwrap().to_value()["newest"]["anchor"]);
+    assert_eq!(
+        u.editor.doc().history.clone().unwrap().to_value()["newest"]["anchor"],
+        s.editor.doc().history.clone().unwrap().to_value()["newest"]["anchor"]
+    );
 }
 
 #[test]
@@ -198,7 +209,10 @@ fn a_file_that_changed_on_disk_keeps_the_versions_read_only_and_a_save_never_tri
     let list = ok(&mut s, "version.list", json!({}));
     assert_eq!(list["read_only"], true, "{list}");
     assert_eq!(list["count"], 0);
-    assert!(s.editor.doc().lazy_history.is_some(), "the versions are still in the file");
+    assert!(
+        s.editor.doc().lazy_history.is_some(),
+        "the versions are still in the file"
+    );
     // No version can be made, restored or deleted, and the file cannot be saved without them.
     let r = rpc(&mut s, "version.create", json!({"name": "x"}));
     assert_eq!(r["error"]["data"]["reason"], "history_read_only", "{r}");
@@ -227,7 +241,8 @@ fn a_damaged_history_entry_is_found_when_the_history_is_used() {
     let mut w = kadakas_container::Writer::new(Vec::new());
     for e in c.entries() {
         if e.name == kadakas_file::HISTORY_VERSIONS {
-            w.add_bytes(&e.name, kadakas_container::Compression::Stored, b"{}").unwrap();
+            w.add_bytes(&e.name, kadakas_container::Compression::Stored, b"{}")
+                .unwrap();
         } else {
             w.copy_raw(c.raw(&e.name).unwrap()).unwrap();
         }

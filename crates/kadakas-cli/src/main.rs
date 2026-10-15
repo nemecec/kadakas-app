@@ -766,8 +766,13 @@ fn convert_command(
             .ok_or_else(|| format!("--format is \"{f}\"; use container or json"))?,
         None => kadakas_file::Form::from_extension(output),
     };
-    let opened = load_own(input)?;
+    let mut opened = load_own(input)?;
     report_doc_notes(input, &opened.doc);
+    if form == kadakas_file::Form::Json {
+        // The plain JSON form holds the versions inside: read them from the file as they are.
+        kadakas_file::resolve_history(&mut opened.doc)
+            .map_err(|e| format!("{}: {e}", input.display()))?;
+    }
     save_as(&opened.doc, output, form, opened.source.as_ref())?;
     println!(
         "{}",

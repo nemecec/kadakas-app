@@ -107,6 +107,9 @@ fn read_error(path: &Path, e: FileError) -> RpcError {
 
 /// The error for a file that cannot be written. The old file is as it was.
 fn write_error(path: &Path, e: FileError) -> RpcError {
+    if e.is_changed() {
+        return RpcError::conflict(e);
+    }
     match e {
         FileError::Container(ContainerError::Changed(msg)) => RpcError::conflict(msg),
         FileError::Container(ContainerError::Limit(msg)) | FileError::Limit(msg) => {

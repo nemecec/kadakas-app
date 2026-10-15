@@ -3,7 +3,7 @@
 import json
 import math
 
-from helpers import line_cmd, rect_cmd, uid
+from helpers import line_cmd, read_doc, rect_cmd, uid
 
 
 def ids(cad):
@@ -41,9 +41,9 @@ def test_numbers_beyond_1e9_mm_are_refused_and_the_document_still_saves_and_open
         err = cad.error("execute", {"command": {"op": "add_object", "shape": slab | {"thickness": bad}}})
         assert "thickness" in err["message"]
     path = tmp_path / "big.kad"
-    assert cad.result("file.save", {"path": str(path)}) == {"ok": True}
+    assert cad.result("file.save", {"path": str(path)}) == {"ok": True, "format": "container"}
     other = make_serve()
-    assert other.result("file.open", {"path": str(path)}) == {"ok": True}
+    assert other.result("file.open", {"path": str(path)}) == {"ok": True, "format": "container"}
     assert other.result("objects.get", {"id": a})["shape"]["b"][0] == 1e9
 
 
@@ -100,8 +100,8 @@ def test_saving_twice_keeps_the_previous_file_as_bak(make_serve, tmp_path):
     cad.result("file.save", {"path": str(path)})
     cad.execute(rect_cmd(0, 0, 1, 1))
     cad.result("file.save", {"path": str(path)})
-    assert len(json.loads(path.read_text())["objects"]) == 1
-    assert json.loads((tmp_path / "d.kad.bak").read_text())["objects"] == []
+    assert len(read_doc(path)["objects"]) == 1
+    assert read_doc(tmp_path / "d.kad.bak")["objects"] == []
     assert sorted(p.name for p in tmp_path.iterdir()) == ["d.kad", "d.kad.bak"]
 
 

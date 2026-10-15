@@ -6,7 +6,7 @@ import json
 import ezdxf
 from pytest import approx
 
-from helpers import parse_svg, rect_cmd, uid
+from helpers import parse_svg, read_doc, rect_cmd, uid
 
 
 def circle(cad, x, y=0, r=100):
@@ -174,7 +174,7 @@ def test_libraries_import_resources_with_what_they_need(make_serve, tmp_path, mo
     src.result("resource.create", {"type": "texture", "name": "Bark", "color": [1, 2, 3, 255]})
     path = src.result("resource.export_to_file", {"library": "Garden", "overwrite": True})["path"]
     assert path.endswith("Garden.kad")
-    json.loads(open(path).read())
+    read_doc(path)
     assert src.result("library.list")["files"] == [{"file": "Garden.kad", "resources": 3}]
 
     dst = make_serve()
