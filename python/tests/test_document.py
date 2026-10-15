@@ -215,3 +215,26 @@ def test_open_a_document_file_and_describe(tmp_path: Path):
 def test_a_missing_program_is_reported():
     with pytest.raises(kadakas.ConnectionFailed):
         kadakas.open(binary="/no/such/kadakas")
+
+
+def test_paving_helpers(doc, tmp_path):
+    outer = doc.add.polyline([[0, 0], [4100, 0], [4100, 2100], [0, 2100]], closed=True)
+    island = doc.add.polyline([[1000, 800], [1800, 800], [1800, 1400], [1000, 1400]], closed=True)
+    doc.api.hardscape_style_create(
+        name="P", joints={"kind": "stack", "unit_length": 200, "unit_width": 100, "spacing": 5})
+    made = doc.hardscape_from_shapes([outer.id, island.id], style="P")
+    assert made["created"][0]["holes"] == 1
+    hid = made["created"][0]["id"]
+    doc.api.hardscape_set(id=hid, origin=[0, 0], angle=0)
+    row = doc.report.pattern(waste_percent=10)["rows"][0]
+    assert row["order_units"] == row["whole_units"] + row["cut_units"]
+    assert row["order_units_with_waste"] > row["order_units"]
+    assert doc.report.hardscape()["rows"][0]["pattern"]["whole_units"] == row["whole_units"]
+    lay = doc.pattern_layout(id=hid, include=["units"], limit=3)
+    assert lay["units_total"] == row["order_units"] and len(lay["units"]) == 3
+    out = tmp_path / "p.dxf"
+    doc.export_file(out, patterns="units")
+    text = out.read_text()
+    assert "0-UNITS-WHOLE" in text
+    group = doc.pattern_to_objects(id=hid, name="Units")
+    assert group["units"] == row["order_units"]

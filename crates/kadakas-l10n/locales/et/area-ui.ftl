@@ -38,3 +38,9 @@ area-ui-plants-percent-density =
         [one] { $count } taim
        *[other] { $count } taime
     }  ({ $percent } %, { $density })
+area-ui-pattern-origin = Muster algab punktis { $x }, { $y }
+area-ui-pattern-origin-middle = Muster algab ala keskelt
+area-ui-clear-origin = Kasuta keskpunkti
+area-ui-pattern-angle = Mustri nurk
+area-ui-set-angle = Sea nurk
+area-ui-clear-angle = Kasuta stiili nurka

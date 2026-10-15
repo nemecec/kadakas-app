@@ -38,3 +38,9 @@ area-ui-plants-percent-density =
         [one] { $count } plant
        *[other] { $count } plants
     }  ({ $percent } %, { $density })
+area-ui-pattern-origin = Pattern starts at { $x }, { $y }
+area-ui-pattern-origin-middle = Pattern starts in the middle of the area
+area-ui-clear-origin = Use the middle
+area-ui-pattern-angle = Pattern angle
+area-ui-set-angle = Set angle
+area-ui-clear-angle = Use the style angle

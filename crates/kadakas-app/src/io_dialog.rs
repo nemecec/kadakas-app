@@ -212,12 +212,22 @@ pub struct ExportForm {
     pub layers_as_layers: bool,
     pub unit: usize,
     pub visible_only: bool,
+    /// DXF: the unit pattern of hardscapes. 0 nothing, 1 gap lines, 2 units.
+    pub patterns: usize,
     /// IFC: one presentation layer per class.
     pub ifc_classes_as_layers: bool,
     /// IFC: write 2D objects as annotations.
     pub ifc_include_2d: bool,
     /// IFC: one building storey per design layer.
     pub ifc_storeys: bool,
+}
+
+fn pattern_name(i: usize) -> String {
+    match i {
+        1 => tr!("io-dialog-patterns-gaps"),
+        2 => tr!("io-dialog-patterns-units"),
+        _ => tr!("io-dialog-patterns-none"),
+    }
 }
 
 fn is_ifc(path: &Path) -> bool {
@@ -233,6 +243,7 @@ impl ExportForm {
             layers_as_layers: false,
             unit: 0,
             visible_only: false,
+            patterns: 0,
             ifc_classes_as_layers: true,
             ifc_include_2d: false,
             ifc_storeys: false,
@@ -256,9 +267,15 @@ impl ExportForm {
         }
         o.insert("unit".into(), json!(UNITS[self.unit.min(UNITS.len() - 1)]));
         o.insert("visible_only".into(), json!(self.visible_only));
+        if let Some(p) = PATTERNS.get(self.patterns).filter(|p| **p != "none") {
+            o.insert("patterns".into(), json!(p));
+        }
         json!({"path": self.path, "options": o})
     }
 }
+
+/// The choices of the DXF option `patterns`, in the order of the dialog.
+const PATTERNS: [&str; 3] = ["none", "gaps", "units"];
 
 /// The dialogs that are open.
 #[derive(Default)]
@@ -540,6 +557,22 @@ impl IoUi {
                                     }
                                 });
                         });
+                        ui.horizontal(|ui| {
+                            ui.label(tr!("io-dialog-patterns"));
+                            egui::ComboBox::from_id_salt("export_patterns")
+                                .selected_text(pattern_name(form.patterns))
+                                .show_ui(ui, |ui| {
+                                    for i in 0..PATTERNS.len() {
+                                        ui.selectable_value(
+                                            &mut form.patterns,
+                                            i,
+                                            pattern_name(i),
+                                        );
+                                    }
+                                });
+                        })
+                        .response
+                        .on_hover_text(tr!("io-dialog-patterns-hint"));
                     }
                     ui.checkbox(
                         &mut form.visible_only,
@@ -778,6 +811,13 @@ mod tests {
             p["options"],
             json!({"layer_mode": "layers", "unit": "m", "visible_only": true})
         );
+        // The pattern option is sent only when it is asked for.
+        f.patterns = 2;
+        assert_eq!(f.params()["options"]["patterns"], "units");
+        f.patterns = 1;
+        assert_eq!(f.params()["options"]["patterns"], "gaps");
+        f.patterns = 0;
+        assert!(f.params()["options"].get("patterns").is_none());
         // Without open dialogs, nothing happens.
         let ctx = egui::Context::default();
         let mut ui = IoUi::default();
