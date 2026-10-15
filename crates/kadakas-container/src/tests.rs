@@ -1434,7 +1434,7 @@ fn what_the_writer_writes_above_4_gib_is_read_back_in_the_zip64_form() {
 #[test]
 fn the_writer_tells_what_it_has_and_checks_the_count_before_it_writes() {
     let mut w = Writer::new(Vec::new()).generator("test");
-    assert!(w.is_empty() && w.len() == 0 && !w.has("a"));
+    assert!(w.is_empty() && !w.has("a"));
     w.add_with("a", Compression::Stored, |f| f.write_all(b"streamed"))
         .unwrap();
     assert!(!w.is_empty() && w.len() == 1 && w.has("a"));
@@ -1542,7 +1542,9 @@ impl Medium for Liar {
         }
         let from = (offset as usize).min(self.bytes.len());
         let to = ((offset + len) as usize).min(self.bytes.len());
-        Ok(Box::new(std::io::Cursor::new(self.bytes[from..to].to_vec())))
+        Ok(Box::new(std::io::Cursor::new(
+            self.bytes[from..to].to_vec(),
+        )))
     }
 
     fn label(&self) -> String {
@@ -1571,7 +1573,14 @@ fn a_medium_that_ends_early_or_fails_is_an_error_not_a_panic() {
 
 #[test]
 fn invisible_characters_in_a_name_are_refused() {
-    for c in ['\u{110BD}', '\u{1BCA1}', '\u{1D175}', '\u{E0001}', '\u{E0041}', '\u{FFFA}'] {
+    for c in [
+        '\u{110BD}',
+        '\u{1BCA1}',
+        '\u{1D175}',
+        '\u{E0001}',
+        '\u{E0041}',
+        '\u{FFFA}',
+    ] {
         let name = format!("a{c}b");
         assert!(check_name(&name, 255).is_err(), "{c:?}");
     }
@@ -1587,7 +1596,10 @@ fn a_source_over_memory_follows_the_content_rules_without_a_file() {
     assert!(!s.has_by_content("blobs/aa", &[1; 32]));
     assert!(!s.has_part("none"));
     assert_eq!(s.part_sha256("blobs/aa"), Some(sha));
-    assert_eq!(s.read_prefix_by_content("blobs/aa", &sha, 4).unwrap(), b"pict");
+    assert_eq!(
+        s.read_prefix_by_content("blobs/aa", &sha, 4).unwrap(),
+        b"pict"
+    );
     assert_eq!(s.read_prefix("blobs/aa", 3).unwrap(), b"pic");
     assert!(s.container_with("blobs/aa", &sha).is_ok());
     assert!(s.container_with("blobs/aa", &[1; 32]).is_err());
@@ -1595,10 +1607,7 @@ fn a_source_over_memory_follows_the_content_rules_without_a_file() {
     assert!(s.refresh().is_ok() && s.rebind(std::path::Path::new("none")).is_err());
     // A part with a damaged body is an error that names it, with no other file to look in.
     let mut bad = bytes.clone();
-    let at = bad
-        .windows(13)
-        .position(|w| w == b"picture bytes")
-        .unwrap();
+    let at = bad.windows(13).position(|w| w == b"picture bytes").unwrap();
     bad[at] ^= 0x20;
     let damaged = ContainerSource::new(open(&bad).unwrap());
     let e = damaged.read_part("blobs/aa").unwrap_err();

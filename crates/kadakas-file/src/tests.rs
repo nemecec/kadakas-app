@@ -1536,17 +1536,16 @@ fn versions_that_wait_in_a_file_that_is_gone_cannot_be_skipped_by_the_writer() {
 
 #[test]
 fn a_container_with_too_many_entries_is_refused_before_it_is_written() {
-    use crate::write::{Extras, Plans, Planned, preflight_for_test};
+    use crate::write::{Extras, Planned, Plans, preflight_for_test};
     let mut plans = Plans {
         blobs: Default::default(),
         bases: Default::default(),
         sources: Vec::new(),
     };
     for i in 0..3 {
-        plans.blobs.insert(
-            format!("{i:064}"),
-            Planned::History(Arc::from("text")),
-        );
+        plans
+            .blobs
+            .insert(format!("{i:064}"), Planned::History(Arc::from("text")));
     }
     let mut extras = Extras {
         waiting: None,
@@ -1554,7 +1553,10 @@ fn a_container_with_too_many_entries_is_refused_before_it_is_written() {
         unknown: Vec::new(),
     };
     let e = preflight_for_test(&mut plans, &mut extras, 4).unwrap_err();
-    assert!(matches!(e, FileError::Limit(_)) && e.to_string().contains("JSON"), "{e}");
+    assert!(
+        matches!(e, FileError::Limit(_)) && e.to_string().contains("JSON"),
+        "{e}"
+    );
     assert_eq!(preflight_for_test(&mut plans, &mut extras, 5).unwrap(), 0);
 }
 
@@ -1598,7 +1600,10 @@ fn small_edges_of_the_history_the_source_and_the_scan() {
             .unwrap();
         let c = Container::from_bytes(w.finish().unwrap(), Limits::default()).unwrap();
         let s = FileSource::from_container(c);
-        assert!(crate::write::scan_refs(&s, DOCUMENT).unwrap().is_empty(), "{tail}");
+        assert!(
+            crate::write::scan_refs(&s, DOCUMENT).unwrap().is_empty(),
+            "{tail}"
+        );
     }
     // A copy of an entry that the file does not have.
     let mut w = Writer::new(Vec::new());
