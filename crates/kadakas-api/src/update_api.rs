@@ -382,6 +382,11 @@ impl Session {
         })
     }
 
+    /// The drawings of the document that came from a DXF or DWG import and can be updated.
+    pub fn imported_drawings(&self) -> Vec<update::DrawingInfo> {
+        update::drawings(self.editor.doc())
+    }
+
     /// Drops the pending update.
     pub fn update_discard(&mut self) {
         self.updates.pending = None;

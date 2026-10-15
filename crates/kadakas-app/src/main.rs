@@ -19,6 +19,8 @@ mod compare_draw;
 mod compare_ui;
 mod data_ui;
 mod databar;
+#[cfg(not(target_arch = "wasm32"))]
+mod drawings_ui;
 mod enum_names;
 mod feedback_ui;
 mod file_io;
@@ -61,6 +63,8 @@ mod style_ui;
 mod tess;
 mod theme;
 mod units_ui;
+#[cfg(not(target_arch = "wasm32"))]
+mod update_ui;
 mod versions_ui;
 mod vertex;
 mod view;

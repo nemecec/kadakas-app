@@ -63,6 +63,12 @@ mod dxf_compare_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod update_api;
 #[cfg(not(target_arch = "wasm32"))]
+pub use kadakas_io::dxf::revision::Change as EntityChange;
+#[cfg(not(target_arch = "wasm32"))]
+pub use kadakas_io::dxf::update::{
+    ChangeItem, Counts as UpdateCounts, DrawingInfo, Kind as ChangeKind, Plan as UpdatePlan,
+};
+#[cfg(not(target_arch = "wasm32"))]
 pub use update_api::{PendingUpdate, UpdatePreview, UpdateState, is_drawing_path};
 #[cfg(not(target_arch = "wasm32"))]
 mod ifc_api;

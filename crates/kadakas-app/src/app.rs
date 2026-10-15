@@ -131,6 +131,12 @@ pub struct KadakasApp {
     versions_ui: crate::versions_ui::VersionsUi,
     /// The Compare window and the overlay that it puts on the plan and on the 3D view (REV-03).
     compare_ui: crate::compare_ui::CompareUi,
+    /// File > Import > Update from DXF/DWG...: the update window and its overlay on the plan (IOP-23).
+    #[cfg(not(target_arch = "wasm32"))]
+    update_ui: crate::update_ui::UpdateUi,
+    /// File > Compare Drawings...: two DXF or DWG files without an import (IOP-24).
+    #[cfg(not(target_arch = "wasm32"))]
+    drawings_ui: crate::drawings_ui::DrawingsUi,
     /// The coordinate readout of the Data bar.
     readout: crate::gis_ui::ReadoutState,
     /// Autosave, crash recovery and the Preferences dialog.
@@ -474,6 +480,10 @@ impl KadakasApp {
             plugin_ui: Default::default(),
             versions_ui: Default::default(),
             compare_ui: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            update_ui: crate::update_ui::UpdateUi::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            drawings_ui: Default::default(),
             readout: Default::default(),
             autosave: crate::autosave_ui::AutosaveUi::inert(),
             about: crate::about::About::default(),
@@ -555,7 +565,27 @@ impl KadakasApp {
     /// True while the plan shows a version, or the 3D view shows a compare: the drawing is read
     /// only. The selection is empty and no command changes the document (the Compare window).
     fn read_only(&self) -> bool {
-        self.compare_ui.read_only(self.plan())
+        self.compare_ui.read_only(self.plan()) || self.update_read_only()
+    }
+
+    /// True while the plan shows the drawing as the open update would make it (IOP-23).
+    fn update_read_only(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.update_ui.read_only(self.plan())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
+    }
+
+    /// The overlay for the plan: the one of the Compare window, else the one of the update window.
+    fn compare_draw(&self) -> Option<crate::compare_draw::CompareDraw<'_>> {
+        let c = self.compare_ui.draw();
+        #[cfg(not(target_arch = "wasm32"))]
+        let c = c.or_else(|| self.update_ui.draw());
+        c
     }
 
     /// Clears the selection while the drawing is read only.
@@ -608,6 +638,8 @@ impl KadakasApp {
                 | MenuAction::QuickSearch
                 | MenuAction::Versions
                 | MenuAction::Compare
+                | MenuAction::UpdateFromDxf
+                | MenuAction::CompareDrawings
                 | MenuAction::Preferences
                 | MenuAction::Tool(Tool::Select)
         )
@@ -615,7 +647,11 @@ impl KadakasApp {
 
     fn exec(&mut self, cmd: &Command) {
         if self.read_only() {
-            self.status = tr!("compare-ui-read-only");
+            self.status = if self.update_read_only() {
+                tr!("update-ui-read-only-edit")
+            } else {
+                tr!("compare-ui-read-only")
+            };
             return;
         }
         // The first snapshot of a shared document replaces the open one: an edit now would be lost.
@@ -662,6 +698,8 @@ impl KadakasApp {
         self.session.take_replaced();
         // A compare of the old document means nothing for the new one.
         self.compare_ui.reset(&mut self.session);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.update_ui.reset(&mut self.session);
         self.view_history.clear();
         self.path = path;
         self.title_dirty = true;
@@ -943,6 +981,12 @@ impl KadakasApp {
             MenuAction::PlugIns => self.plugin_ui.open(),
             MenuAction::Versions => self.versions_ui.open(&mut self.session),
             MenuAction::Compare => self.compare_ui.open(&mut self.session),
+            #[cfg(not(target_arch = "wasm32"))]
+            MenuAction::UpdateFromDxf => self.update_ui.start(&mut self.session),
+            #[cfg(not(target_arch = "wasm32"))]
+            MenuAction::CompareDrawings => self.drawings_ui.start(),
+            #[cfg(target_arch = "wasm32")]
+            MenuAction::UpdateFromDxf | MenuAction::CompareDrawings => {}
             MenuAction::CollabConnect => self.collab.open_dialog(),
             MenuAction::CollabDisconnect => {
                 let now = crate::collab_ui::now_ms();
@@ -1697,9 +1741,18 @@ impl KadakasApp {
         if let Some(z) = self.compare_ui.take_zoom() {
             self.view.fit(z.lo, z.hi, rect);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(z) = self.update_ui.take_zoom() {
+            self.view.fit(z.lo, z.hi, rect);
+        }
         // The Compare window can show a version instead of the open drawing. That drawing is read
         // only: only pan and zoom work.
-        let history = self.compare_ui.history_doc();
+        #[allow(unused_mut)]
+        let mut history = self.compare_ui.history_doc();
+        #[cfg(not(target_arch = "wasm32"))]
+        if history.is_none() {
+            history = self.update_ui.history_doc();
+        }
         let typing = ui.ctx().egui_wants_keyboard_input() || self.entry.active;
         let (latest, hover, mods, space, suspend, scroll, pinch, pressed, released) =
             ui.input(|i| {
@@ -1776,7 +1829,7 @@ impl KadakasApp {
                 site: None,
                 sheet: None,
                 plugin_preview: &[],
-                compare: self.compare_ui.draw(),
+                compare: self.compare_draw(),
             };
             canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
             return;
@@ -1884,7 +1937,7 @@ impl KadakasApp {
             site: Some((self.session.site_cache(), self.session.editor.revision())),
             sheet: page.as_deref().map(|p| (&self.nav.sheets, p)),
             plugin_preview: self.plugin_ui.preview(),
-            compare: self.compare_ui.draw(),
+            compare: self.compare_draw(),
         };
         canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
         // The cursors and selections of the other users. Presence is never in the document.
@@ -2177,6 +2230,8 @@ impl KadakasApp {
         #[cfg(not(target_arch = "wasm32"))]
         for (label, m) in [
             (tr!("app-import"), MenuAction::Import),
+            (tr!("panels-update-from-dxf"), MenuAction::UpdateFromDxf),
+            (tr!("panels-compare-drawings"), MenuAction::CompareDrawings),
             (tr!("app-export"), MenuAction::Export),
             (tr!("app-map-sources"), MenuAction::MapSources),
             (tr!("app-change-crs"), MenuAction::ChangeCrs),
@@ -2776,6 +2831,15 @@ impl eframe::App for KadakasApp {
         self.compare_ui.set_dark(self.dark);
         self.compare_ui
             .show(&ctx, &mut self.session, &mut self.status);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.update_ui.set_dark(self.dark);
+            self.update_ui
+                .show(&ctx, &mut self.session, &mut self.status);
+            self.drawings_ui.set_dark(self.dark);
+            self.drawings_ui
+                .show(&ctx, &mut self.session, &mut self.status);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(script) = self
             .script_ui

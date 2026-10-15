@@ -945,7 +945,7 @@ impl CompareUi {
 }
 
 /// A short line in the pattern of a status, with its mark: the key of the list and the legend.
-fn swatch(ui: &mut Ui, style: &CompareStyle, status: Status) {
+pub(crate) fn swatch(ui: &mut Ui, style: &CompareStyle, status: Status) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(34.0, 14.0), egui::Sense::hover());
     let t = style.tint(status);
     let [r, g, b] = t.rgb;

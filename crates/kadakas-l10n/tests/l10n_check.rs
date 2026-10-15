@@ -60,6 +60,8 @@ const LITERAL_OK: &[(&str, &str)] = &[
     ("app.rs", "SVG"),
     ("app.rs", "PDF"),
     ("io_dialog.rs", "DXF"),
+    ("update_ui.rs", "DXF"),
+    ("drawings_ui.rs", "DXF"),
     ("io_dialog.rs", "GeoJSON"),
     ("io_dialog.rs", "IFC"),
     ("io_dialog.rs", "IFC4"),

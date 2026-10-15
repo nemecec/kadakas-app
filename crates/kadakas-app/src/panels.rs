@@ -45,6 +45,10 @@ pub enum MenuAction {
     Versions,
     /// File > Compare Versions: the colored overlay of two versions in the plan and in 3D.
     Compare,
+    /// File > Import > Update from DXF/DWG...: a new revision of an imported drawing (IOP-23).
+    UpdateFromDxf,
+    /// File > Compare Drawings...: two DXF or DWG files without an import (IOP-24).
+    CompareDrawings,
     Undo,
     Redo,
     Delete,
@@ -149,6 +153,8 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         Cmd::PlugIns => M::PlugIns,
         Cmd::Versions => M::Versions,
         Cmd::Compare => M::Compare,
+        Cmd::UpdateFromDxf => M::UpdateFromDxf,
+        Cmd::CompareDrawings => M::CompareDrawings,
         Cmd::Preferences => M::Preferences,
         Cmd::Undo => M::Undo,
         Cmd::Redo => M::Redo,
@@ -180,6 +186,7 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         | Cmd::WindowPanels
         | Cmd::WindowLayouts
         | Cmd::Collaboration
+        | Cmd::ImportMenu
         | Cmd::ReportBug
         | Cmd::RequestFeature
         | Cmd::Feedback
@@ -387,6 +394,26 @@ fn command_item(
                 }
             });
         }
+        Cmd::ImportMenu => {
+            ui.menu_button(c.label(), |ui| {
+                menu_item(
+                    ui,
+                    keys,
+                    &Cmd::Import.label(),
+                    true,
+                    MenuAction::Import,
+                    out,
+                );
+                menu_item(
+                    ui,
+                    keys,
+                    &Cmd::UpdateFromDxf.label(),
+                    true,
+                    MenuAction::UpdateFromDxf,
+                    out,
+                );
+            });
+        }
         Cmd::About if ui.button(c.label()).clicked() => {
             extras.requests.push(MenuRequest::About);
             ui.close();
@@ -576,6 +603,8 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         | MenuAction::PlugIns
         | MenuAction::Versions
         | MenuAction::Compare
+        | MenuAction::UpdateFromDxf
+        | MenuAction::CompareDrawings
         | MenuAction::CreateSiteModel
         | MenuAction::Preferences
         | MenuAction::CollabConnect

@@ -35,6 +35,10 @@ commands! {
     ExportSvg => "file.export_svg", msg!("panels-export-svg"), false;
     ExportPdf => "file.export_pdf", msg!("panels-export-pdf"), true;
     Import => "file.import", msg!("panels-import"), true;
+    // A block: the submenu File > Import (Import..., Update from DXF/DWG...).
+    ImportMenu => "file.import_menu", msg!("panels-import-menu"), true;
+    // File > Import > Update from DXF/DWG...: a new revision of an imported drawing (IOP-23).
+    UpdateFromDxf => "file.update_from_dxf", msg!("panels-update-from-dxf"), true;
     Export => "file.export", msg!("panels-export"), true;
     MapSources => "file.map_sources", msg!("panels-map-sources"), true;
     ChangeCrs => "file.change_crs", msg!("panels-change-crs"), true;
@@ -45,6 +49,8 @@ commands! {
     Versions => "file.versions", msg!("panels-versions"), false;
     // The window that compares two versions with a colored overlay in the plan and in 3D (REV-03).
     Compare => "file.compare", msg!("panels-compare"), false;
+    // The window that compares two DXF or DWG files without importing them (IOP-24).
+    CompareDrawings => "file.compare_drawings", msg!("panels-compare-drawings"), true;
     // A block: the submenu File > Collaboration (Connect, Disconnect, People).
     Collaboration => "file.collaboration", msg!("panels-collaboration"), false;
     Preferences => "file.preferences", msg!("panels-preferences"), false;
@@ -292,7 +298,7 @@ pub fn default_menus() -> Vec<Menu> {
                 "file.export_svg",
                 "file.export_pdf",
                 "-",
-                "file.import",
+                "file.import_menu",
                 "file.export",
                 "-",
                 "file.map_sources",
@@ -302,6 +308,7 @@ pub fn default_menus() -> Vec<Menu> {
                 "file.plugins",
                 "file.versions",
                 "file.compare",
+                "file.compare_drawings",
                 "-",
                 "file.collaboration",
                 "-",
@@ -509,7 +516,12 @@ mod tests {
             })
             .collect();
         cmds.sort();
-        let mut want = Cmd::ALL.to_vec();
+        // Import... and Update from DXF/DWG... are in the block File > Import.
+        let mut want: Vec<Cmd> = Cmd::ALL
+            .iter()
+            .copied()
+            .filter(|c| !matches!(c, Cmd::Import | Cmd::UpdateFromDxf))
+            .collect();
         want.sort();
         assert_eq!(cmds, want);
         assert_eq!(menus.len(), 8);
