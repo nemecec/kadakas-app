@@ -578,6 +578,89 @@ class Versions:
         return self._doc.render_svg(path, width, compare=option)
 
 
+class Issues:
+    """Review issues of the document (``doc.issues``): the BCF data model with a pin, viewpoints
+    and a comment thread (REV-04, REV-07).
+
+    An issue made through this class has the origin ``agent``. Every call is one undo step.
+    Deleting the work of somebody else needs the consent of a person: ``delete`` raises
+    ``KadakasError`` (reason ``confirm_needed``) until the person has said yes and you pass
+    ``confirm=True``. An import of a BCF file that meets an issue with the same GUID and other
+    content raises ``KadakasError`` (reason ``bcf_conflict``): ask the person, then pass
+    ``on_conflict``. See ``describe()["review"]["issues"]``."""
+
+    def __init__(self, doc: "Document") -> None:
+        self._doc = doc
+
+    def create(self, title: str, **params: Any) -> JsonDict:
+        """Make an issue. Useful params: ``description``, ``type``, ``priority``, ``assignee``,
+        ``labels``, ``due`` (``YYYY-MM-DD``), ``objects`` (IDs), ``point`` (``[x, y, z]`` in mm),
+        ``viewpoint`` (``{view, selection, snapshot}``) and ``capture=True`` (a viewpoint of the
+        current view with a snapshot). Returns ``{id, viewpoints, issue}``."""
+        return self._doc.api.issue_create(title=title, **params)
+
+    def list(self, **params: Any) -> JsonDict:
+        """The issues. Filters: ``status`` (a name or a list), ``open_only``, ``assignee``,
+        ``label``, ``object``, ``text``, ``origin``; ``sort`` and ``limit``. Returns
+        ``{issues, count, total, facets}``."""
+        return self._doc.api.issue_list(**params)
+
+    def get(self, id: str, *, snapshots: bool = False) -> JsonDict:
+        """One issue with its viewpoints and comments. ``snapshots=True`` adds the pictures as
+        base64 text."""
+        if snapshots:
+            return self._doc.api.issue_get(id=id, snapshots=True)
+        return self._doc.api.issue_get(id=id)
+
+    def update(self, id: str, **params: Any) -> JsonDict:
+        """Change fields: ``title``, ``description``, ``type``, ``status``, ``priority``,
+        ``assignee`` (``None`` clears), ``labels`` or ``add_labels`` and ``remove_labels``,
+        ``due``, ``objects`` or ``add_objects`` and ``remove_objects``, ``point``."""
+        return self._doc.api.issue_update(id=id, **params)
+
+    def comment(self, id: str, text: str, **params: Any) -> JsonDict:
+        """Add a comment to the thread. ``viewpoint`` names a viewpoint of the issue."""
+        return self._doc.api.issue_comment(id=id, text=text, **params)
+
+    def resolve(self, id: str, comment: str | None = None, *, status: str | None = None) -> JsonDict:
+        """Set the status to ``resolved`` (default) or ``closed``, with an optional comment."""
+        given = {"comment": comment, "status": status}
+        return self._doc.api.issue_resolve(
+            id=id, **{k: v for k, v in given.items() if v is not None})
+
+    def delete(self, id: str | Sequence[str], *, confirm: bool = False) -> JsonDict:
+        """Delete an issue, or several in one undo step. The work of somebody else needs
+        ``confirm=True``, which you may pass only after the person said yes."""
+        p: JsonDict = {"id": id} if isinstance(id, str) else {"ids": list(id)}
+        if confirm:
+            p["confirm"] = True
+        return self._doc.api.issue_delete(**p)
+
+    def export_bcf(self, path: str | Path | None = None, *, version: str = "3.0",
+                   **params: Any) -> JsonDict:
+        """Write a BCF file (``.bcfzip``). Without ``path`` the answer has the file as
+        ``base64``. Filters as in ``list``, or ``ids``."""
+        p: JsonDict = {"version": version}
+        if path is not None:
+            p["path"] = str(path)
+        p.update(params)
+        return self._doc.api.issue_export_bcf(**p)
+
+    def import_bcf(self, path: str | Path | None = None, *, base64: str | None = None,
+                   on_conflict: str | None = None, **params: Any) -> JsonDict:
+        """Read a BCF file and add its issues. ``on_conflict`` is ``skip``, ``replace`` or
+        ``keep_both``; leave it out to be asked (a conflict raises ``KadakasError``)."""
+        p: JsonDict = {}
+        if path is not None:
+            p["path"] = str(path)
+        if base64 is not None:
+            p["base64"] = base64
+        if on_conflict is not None:
+            p["on_conflict"] = on_conflict
+        p.update(params)
+        return self._doc.api.issue_import_bcf(**p)
+
+
 class Feedback:
     """Bug reports and feature requests for the Kadakas team (``doc.feedback``).
 
@@ -640,6 +723,7 @@ class Document:
         self.events = Events(self)
         self.collab = Collab(self)
         self.versions = Versions(self)
+        self.issues = Issues(self)
         self.feedback = Feedback(self)
         from .plugins import Plugins, Scripts  # late: plugins import this module
 
