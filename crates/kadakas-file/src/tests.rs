@@ -1009,6 +1009,271 @@ fn a_picture_of_the_history_that_is_too_big_is_refused() {
     assert!(e.contains(&name) && e.contains("bigger than"), "{e}");
 }
 
+/// A document with `n` underlays that all have the same picture.
+fn same_picture_doc(n: u64) -> Document {
+    let mut doc = Document::with_sequential_ids();
+    for i in 0..n {
+        let o = Object::new(ObjectId::from_num(100 + i), FIRST_LAYER, NONE_CLASS, underlay(1));
+        doc.objects.insert(o.id, o);
+    }
+    doc
+}
+
+fn bytes_of(doc: &Document) -> Vec<Arc<Vec<u8>>> {
+    doc.objects
+        .values()
+        .filter_map(|o| match &o.shape {
+            Shape::Underlay(u) => u.png.mem_bytes().cloned(),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn fifty_objects_with_one_picture_are_one_copy_in_memory_on_every_path() {
+    let doc = same_picture_doc(50);
+    // The container holds the picture once.
+    let bytes = container_bytes(&doc);
+    let c = Container::from_bytes(bytes.clone(), Limits::default()).unwrap();
+    assert_eq!(
+        c.entries().iter().filter(|e| e.name.starts_with("blobs/")).count(),
+        1
+    );
+    // Eager container read: one copy of the bytes.
+    let eager = read_bytes(bytes.clone(), Limits::default(), ReadMode::Eager).unwrap();
+    let copies = bytes_of(&eager.doc);
+    assert_eq!(copies.len(), 50);
+    assert!(copies.iter().all(|b| Arc::ptr_eq(b, &copies[0])));
+    // Lazy container read: one handle.
+    let lazy = read_bytes(bytes, Limits::default(), ReadMode::Lazy).unwrap();
+    let handles: Vec<_> = lazy
+        .doc
+        .objects
+        .values()
+        .filter_map(|o| match &o.shape {
+            Shape::Underlay(u) => u.png.lazy().cloned(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(handles.len(), 50);
+    assert!(handles.iter().all(|h| Arc::ptr_eq(h, &handles[0])));
+    assert_eq!(lazy.source.unwrap().live_hashes().len(), 1);
+    // The plain JSON form has 50 copies of the text; the load merges them by SHA-256.
+    let mut json = Vec::new();
+    write_json(&mut json, &doc).unwrap();
+    assert!(json.len() > 50 * 20_000);
+    let plain = read_bytes(json, Limits::default(), ReadMode::Lazy).unwrap();
+    let copies = bytes_of(&plain.doc);
+    assert_eq!(copies.len(), 50);
+    assert!(copies.iter().all(|b| Arc::ptr_eq(b, &copies[0])));
+}
+
+#[test]
+fn an_image_resource_text_and_an_import_base_are_shared_too() {
+    let mut doc = Document::with_sequential_ids();
+    for n in 0..20u64 {
+        doc.resources.push(Resource {
+            id: ResourceId::from_num(200 + n),
+            name: format!("Leaf {n}"),
+            body: ResourceBody::Image(Box::new(image(7))),
+        });
+        doc.resources.push(Resource {
+            id: ResourceId::from_num(300 + n),
+            name: format!("Base {n}"),
+            body: ResourceBody::ImportBase(Arc::new(base_body(200))),
+        });
+    }
+    let bytes = container_bytes(&doc);
+    let check = |doc: &Document| {
+        let texts: Vec<_> = doc
+            .resources
+            .iter()
+            .filter_map(|r| match &r.body {
+                ResourceBody::Image(i) => i.data.mem_text().cloned(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts.len(), 20);
+        assert!(texts.iter().all(|t| Arc::ptr_eq(t, &texts[0])));
+        let bases: Vec<_> = doc
+            .resources
+            .iter()
+            .filter_map(|r| match &r.body {
+                ResourceBody::ImportBase(b) => Some(b.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bases.len(), 20);
+        assert!(bases.iter().all(|b| Arc::ptr_eq(b, &bases[0])));
+    };
+    // The names differ, so the images differ in their fields but share the text.
+    for mode in [ReadMode::Eager, ReadMode::Lazy] {
+        let o = read_bytes(bytes.clone(), Limits::default(), mode).unwrap();
+        if mode == ReadMode::Eager {
+            check(&o.doc);
+        } else {
+            // Lazy: the base is parsed at open (one copy); the image text stays in the file
+            // behind one handle.
+            let handles: Vec<_> = o
+                .doc
+                .resources
+                .iter()
+                .filter_map(|r| match &r.body {
+                    ResourceBody::Image(i) => i.data.lazy().cloned(),
+                    _ => None,
+                })
+                .collect();
+            assert!(handles.iter().all(|h| Arc::ptr_eq(h, &handles[0])));
+            let bases: Vec<_> = o
+                .doc
+                .resources
+                .iter()
+                .filter_map(|r| match &r.body {
+                    ResourceBody::ImportBase(b) => Some(b.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert!(bases.iter().all(|b| Arc::ptr_eq(b, &bases[0])));
+        }
+    }
+    let mut json = Vec::new();
+    write_json(&mut json, &doc).unwrap();
+    let plain = read_bytes(json, Limits::default(), ReadMode::Lazy).unwrap();
+    check(&plain.doc);
+}
+
+#[test]
+fn live_handles_of_one_hash_are_all_kept() {
+    use kadakas_core::blob::{BlobSource, LazyBlob};
+    let doc = same_picture_doc(1);
+    let o = open(container_bytes(&doc));
+    let source = o.source.clone().unwrap();
+    assert_eq!(source.live_hashes().len(), 1);
+    let hash = source.live_hashes()[0].clone();
+    // A second handle for the same hash (the read of the anchor makes one) does not hide the
+    // first, and when the first is gone the second still stands for the picture.
+    let src: Arc<dyn BlobSource> = source.clone();
+    let second = Arc::new(LazyBlob::new(src, &hash).unwrap());
+    source.note_handle(&second);
+    drop(o);
+    assert_eq!(source.live_hashes(), [hash.clone()]);
+    drop(second);
+    assert!(source.live_hashes().is_empty());
+}
+
+#[test]
+fn the_anchor_of_the_history_does_not_stand_for_a_picture_in_use() {
+    let mut doc = same_picture_doc(1);
+    doc.history = Some(sample_history());
+    let o = open(container_bytes(&doc));
+    let source = o.source.clone().unwrap();
+    let loader = o.doc.lazy_history.clone().unwrap();
+    let anchor = loader.anchor().unwrap();
+    // The document that was opened holds the picture; the anchor read made a handle too, but it
+    // is not noted.
+    drop(o);
+    assert!(
+        source.live_hashes().is_empty(),
+        "an anchor is read to be looked at"
+    );
+    drop(anchor);
+}
+
+#[test]
+fn a_history_that_lists_a_picture_twice_is_refused() {
+    let blob = "iVBORw0KGgo".repeat(400);
+    let hash = text_hash(&blob);
+    let listed = format!("[\"{hash}\",\"{hash}\"]");
+    let name = blob_name(&hash);
+    let bytes = container_with(&[
+        (HISTORY_TOP, br#"{"newest": {}}"#),
+        (HISTORY_VERSIONS, b"[]"),
+        (HISTORY_NEWEST, b"[]"),
+        (HISTORY_BLOBS, listed.as_bytes()),
+        (&name, blob.as_bytes()),
+    ]);
+    let note = eager_note(bytes.clone());
+    assert!(note.contains(HISTORY_BLOBS) && note.contains("twice"), "{note}");
+    let o = open(bytes);
+    let e = o.doc.lazy_history.unwrap().load().unwrap_err();
+    assert!(e.contains("twice"), "{e}");
+}
+
+#[test]
+fn the_history_is_bounded_by_the_directory_before_it_is_read() {
+    // The loader reports the size of its entries and of the pictures they list, without reading.
+    let mut doc = sample_doc();
+    doc.history = Some(sample_history());
+    let o = open(container_bytes(&doc));
+    let loader = o.doc.lazy_history.unwrap();
+    let c = o.source.unwrap().container();
+    let history: u64 = c
+        .entries()
+        .iter()
+        .filter(|e| e.name.starts_with("history/"))
+        .map(|e| e.size)
+        .sum();
+    let blob = "iVBORw0KGgo".repeat(400).len() as u64;
+    assert_eq!(loader.bytes() as u64, history + blob);
+}
+
+#[test]
+fn a_picture_over_the_bound_is_refused_before_anything_is_written() {
+    // 97 MiB of bytes make more than 128 MiB of base64 text. The size is known from the length, so
+    // the refusal comes before the text is made.
+    let mut doc = Document::with_sequential_ids();
+    let mut shape = underlay(1);
+    if let Shape::Underlay(u) = &mut shape {
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+        bytes.resize(100 * 1024 * 1024, 0);
+        u.png = PngData::new(bytes);
+    }
+    let o = Object::new(ObjectId::from_num(5), FIRST_LAYER, NONE_CLASS, shape);
+    doc.objects.insert(o.id, o);
+    let mut out = Vec::new();
+    let e = write_container(&mut out, &doc, &WriteOptions::default()).unwrap_err();
+    assert!(matches!(e, FileError::Limit(_)), "{e}");
+    assert!(e.to_string().contains("128") || e.to_string().contains("134217728"), "{e}");
+    assert!(out.is_empty(), "nothing was written");
+}
+
+#[test]
+fn a_reference_amplification_file_cannot_make_a_load_read_more_than_the_file_has() {
+    // 100 import bases that all refer to one blob: the blob is read and parsed once.
+    let mut doc = Document::with_sequential_ids();
+    for n in 0..100u64 {
+        doc.resources.push(Resource {
+            id: ResourceId::from_num(400 + n),
+            name: format!("Base {n}"),
+            body: ResourceBody::ImportBase(Arc::new(base_body(300))),
+        });
+    }
+    let bytes = container_bytes(&doc);
+    let c = Container::from_bytes(bytes.clone(), Limits::default()).unwrap();
+    let blob = c
+        .entries()
+        .iter()
+        .find(|e| e.name.starts_with("blobs/"))
+        .unwrap()
+        .size;
+    // The document text has 100 references; the file is smaller than 100 times the blob.
+    assert!(c.uncompressed_bytes() < 3 * blob + 100_000, "one blob in the file");
+    for mode in [ReadMode::Lazy, ReadMode::Eager] {
+        let o = read_bytes(bytes.clone(), Limits::default(), mode).unwrap();
+        let bases: Vec<_> = o
+            .doc
+            .resources
+            .iter()
+            .filter_map(|r| match &r.body {
+                ResourceBody::ImportBase(b) => Some(b.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bases.len(), 100);
+        assert!(bases.iter().all(|b| Arc::ptr_eq(b, &bases[0])));
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod disk {
     use super::*;
