@@ -1079,4 +1079,226 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "copy");
     }
+
+    /// A session on a file with a picture, as the app has it.
+    fn session_on(path: &Path) -> kadakas_api::Session {
+        let opened = file_io::open_file(path).unwrap();
+        let mut session = kadakas_api::Session::with_document(opened.doc);
+        session.file_source = opened.source;
+        session
+    }
+
+    fn underlay_id(session: &kadakas_api::Session) -> kadakas_core::model::ObjectId {
+        session
+            .editor
+            .doc()
+            .objects
+            .iter()
+            .find(|(_, o)| matches!(o.shape, Shape::Underlay(_)))
+            .map(|(id, _)| *id)
+            .unwrap()
+    }
+
+    /// The job that the app makes for a session.
+    fn session_job(session: &mut kadakas_api::Session, target: &Path) -> Job {
+        let anchor = session.needs_anchor();
+        let doc = session.document_for_save_in(true).unwrap().into_owned();
+        let mut j = over_job(&doc, target);
+        j.sources = session.file_source.iter().cloned().collect();
+        j.anchor = anchor;
+        j
+    }
+
+    #[test]
+    fn an_autosave_over_my_file_keeps_the_picture_that_only_an_undo_step_holds() {
+        // B2: open with an underlay, delete it, autosave over the file, undo, save, reopen.
+        let dir = temp("over-undo");
+        let target = dir.join("mine.kad");
+        let original = doc_with_picture();
+        file_io::write_document_raw(&target, &original).unwrap();
+        let mut session = session_on(&target);
+        let id = underlay_id(&session);
+        session
+            .editor
+            .execute(&Command::DeleteObjects { ids: vec![id] })
+            .unwrap();
+        let job = session_job(&mut session, &target);
+        assert_eq!(
+            write_version(&dir.join("rec"), "s1", 1, &job).unwrap(),
+            Over::Written
+        );
+        // The file has no underlay in its drawing, but still the picture: the undo step needs it.
+        assert!(session.editor.undo());
+        let spec = file_io::SaveSpec {
+            anchor: session.needs_anchor(),
+            ..file_io::SaveSpec::from_extension(
+                &target,
+                session.file_source.iter().cloned().collect(),
+            )
+        };
+        let doc = session.document_for_save_in(true).unwrap();
+        file_io::write_document_as(&target, &doc, &spec).unwrap();
+        drop(doc);
+        let back = file_io::read_document(&target).unwrap();
+        assert_eq!(back.objects, original.objects);
+        let (before, after) = (underlay_png(&original), underlay_png(&back));
+        assert_eq!(before, after, "the picture is there");
+    }
+
+    fn underlay_png(doc: &Document) -> Vec<u8> {
+        doc.objects
+            .values()
+            .find_map(|o| match &o.shape {
+                Shape::Underlay(u) => Some((*u.png.bytes().unwrap()).clone()),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn the_recovery_copy_and_the_autosave_over_my_file_survive_a_changed_file() {
+        // B1: touch, rename, replace and delete the file under the open document, then autosave.
+        for change in ["touch", "rename", "replace", "replace-same", "delete", "delete-bak"] {
+            let dir = temp(&format!("changed-{change}"));
+            let target = dir.join("mine.kad");
+            let original = doc_with_picture();
+            file_io::write_document_raw(&target, &original).unwrap();
+            let mut session = session_on(&target);
+            let id = underlay_id(&session);
+            session
+                .editor
+                .execute(&Command::DeleteObjects { ids: vec![id] })
+                .unwrap();
+            let old = std::fs::read(&target).unwrap();
+            std::thread::sleep(Duration::from_millis(30));
+            match change {
+                "touch" => std::fs::write(&target, &old).unwrap(),
+                "rename" => std::fs::rename(&target, dir.join("moved.kad")).unwrap(),
+                "replace" => {
+                    file_io::write_document_raw(&target, &doc_with_circles(5)).unwrap();
+                    let _ = std::fs::remove_file(dir.join("mine.kad.bak"));
+                }
+                // The same pictures in another file.
+                "replace-same" => {
+                    let mut e = Editor::new(original.clone());
+                    e.execute(&Command::AddObject {
+                        shape: Shape::Circle { center: DVec2::ZERO, radius: 9.0 },
+                        layer: None,
+                        class: None,
+                        attrs: Attributes::default(),
+                    })
+                    .unwrap();
+                    file_io::write_document_raw(&target, e.doc()).unwrap();
+                    let _ = std::fs::remove_file(dir.join("mine.kad.bak"));
+                }
+                "delete" => std::fs::remove_file(&target).unwrap(),
+                _ => {
+                    std::fs::write(dir.join("mine.kad.bak"), &old).unwrap();
+                    std::fs::remove_file(&target).unwrap();
+                }
+            }
+            let finds = matches!(change, "touch" | "replace-same" | "delete-bak");
+            let job = session_job(&mut session, &target);
+            let rec = dir.join("rec");
+            // The recovery copy is always written, whatever happened to the file.
+            let out = write_version(&rec, "s1", 1, &job)
+                .unwrap_or_else(|e| panic!("{change}: {e}"));
+            let copy = rec.join("s1.000001.autosave.kad");
+            assert!(copy.exists(), "{change}");
+            let meta: Value =
+                serde_json::from_slice(&std::fs::read(rec.join("s1.meta.json")).unwrap()).unwrap();
+            if finds {
+                assert!(meta["missing"].is_null(), "{change}: {meta}");
+                assert_eq!(out, Over::Written, "{change}");
+                assert_eq!(file_io::read_document(&target).unwrap().objects.len(), 2);
+            } else {
+                // The copy records what it could not find, and the file of the person is left alone.
+                assert!(
+                    meta["missing"]["pictures"]
+                        .as_array()
+                        .is_some_and(|a| !a.is_empty()),
+                    "{change}: {meta}"
+                );
+                assert!(!meta["note"].is_null(), "{change}: {meta}");
+                assert!(matches!(out, Over::Missing(_)), "{change}: {out:?}");
+                let copy_doc = file_io::read_document(&copy).unwrap();
+                assert_eq!(copy_doc.objects.len(), 2, "{change}");
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn the_json_copy_has_the_versions_that_wait_in_the_file_and_placeholders() {
+        // The plain JSON form as the recovery copy: the versions that wait in the file are read
+        // as they are, and a picture that is gone becomes a placeholder.
+        let dir = temp("json-copy-small");
+        let target = dir.join("mine.kad");
+        let mut s = kadakas_api::Session::with_document(doc_with_picture());
+        s.handle("version.create", serde_json::json!({"name": "v1"}))
+            .unwrap();
+        let saved = s.document_for_save_in(true).unwrap().into_owned();
+        file_io::write_document_raw(&target, &saved).unwrap();
+        let opened = file_io::open_file(&target).unwrap();
+        assert!(opened.doc.lazy_history.is_some());
+        let mut report = CopyReport::default();
+        let json = dir.join("copy.json");
+        write_json_copy(&json, &opened.doc, &mut report).unwrap();
+        assert!(report.missing.is_none());
+        let back = file_io::read_document(&json).unwrap();
+        assert_eq!(back.history.as_ref().and_then(|h| h.version_count()), Some(1));
+        // The file goes away: the picture and the versions cannot be found.
+        std::fs::remove_file(&target).unwrap();
+        let mut report = CopyReport::default();
+        write_json_copy(&json, &opened.doc, &mut report).unwrap();
+        let missing = report.missing.expect("recorded");
+        assert!(!missing.pictures.is_empty() && missing.history);
+        let back = file_io::read_document(&json).unwrap();
+        assert!(back.history.is_none());
+        assert_eq!(
+            underlay_png(&back),
+            kadakas_core::underlay::placeholder_png()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "heavy: a picture of 100 MiB; run with --ignored (best in release mode)"]
+    fn a_copy_over_the_limits_of_the_container_is_the_plain_json_form() {
+        // S5: a picture of more than 128 MiB as text cannot be in a container. The recovery copy is
+        // written as JSON, so that there is a copy.
+        use kadakas_core::underlay::{PngData, Underlay};
+        let dir = temp("json-copy");
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+        bytes.resize(100 * 1024 * 1024, 7);
+        let mut doc = doc_with_circles(1);
+        let mut e = Editor::new(std::mem::take(&mut doc));
+        e.execute(&Command::AddObject {
+            shape: Shape::Underlay(Box::new(Underlay {
+                name: "huge".into(),
+                min: DVec2::ZERO,
+                max: DVec2::new(10.0, 10.0),
+                width: 10,
+                height: 10,
+                png: PngData::new(bytes),
+                opacity: 1.0,
+                source: String::new(),
+            })),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        let j = job(e.doc(), None, 2);
+        write_version(&dir.join("rec"), "s1", 1, &j).unwrap();
+        let copy = dir.join("rec").join("s1.000001.autosave.kad");
+        assert!(std::fs::read(&copy).unwrap().starts_with(b"{"), "plain JSON");
+        let meta: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("rec").join("s1.meta.json")).unwrap())
+                .unwrap();
+        assert_eq!(meta["form"], "json");
+        assert!(meta["note"].as_str().unwrap().contains("limit"), "{meta}");
+        drop(e);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

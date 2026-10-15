@@ -4530,4 +4530,76 @@ mod tests {
         assert!(app.compare_ui.draw().is_none());
         assert!(!app.read_only());
     }
+
+    /// A document with a picture that is a blob of a container.
+    fn doc_with_big_picture() -> Document {
+        use kadakas_core::underlay::{PngData, Underlay};
+        let mut png = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+        png.extend((0..20_000u32).map(|i| i.wrapping_mul(2_654_435_761) as u8));
+        let mut e = kadakas_core::command::Editor::new(Document::default());
+        e.execute(&Command::AddObject {
+            shape: Shape::Underlay(Box::new(Underlay {
+                name: "map".into(),
+                min: DVec2::ZERO,
+                max: DVec2::new(100.0, 100.0),
+                width: 10,
+                height: 10,
+                png: PngData::new(png),
+                opacity: 1.0,
+                source: String::new(),
+            })),
+            layer: None,
+            class: None,
+            attrs: Default::default(),
+        })
+        .unwrap();
+        e.doc().clone()
+    }
+
+    #[test]
+    fn a_save_after_the_file_changed_asks_and_saves_the_rest_with_the_consent_of_the_person() {
+        let dir = std::env::temp_dir().join(format!("kadakas-save-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("mine.kad");
+        file_io::write_document_raw(&file, &doc_with_big_picture()).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.open_path(&ctx, file.clone());
+        assert_eq!(app.path.as_deref(), Some(file.as_path()));
+        app.exec(&add_rect_command(0.0));
+        // Another program replaces the file; there is no .bak to find the picture in.
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let other = dir.join("other.kad");
+        file_io::write_document_raw(&other, &Document::default()).unwrap();
+        std::fs::rename(&other, &file).unwrap();
+        let _ = std::fs::remove_file(dir.join("mine.kad.bak"));
+        let other_bytes = std::fs::read(&file).unwrap();
+        // No: nothing is written, and the status says what to do.
+        file_io::test_answer::set(Some(false));
+        app.save(false, &ctx);
+        assert_eq!(std::fs::read(&file).unwrap(), other_bytes);
+        assert!(app.status.contains(".bak"), "{}", app.status);
+        // Yes: the picture is a placeholder, the edit is saved, the status has the note.
+        file_io::test_answer::set(Some(true));
+        app.save(false, &ctx);
+        file_io::test_answer::set(None);
+        assert!(app.status.contains("placeholder") || app.status.contains("left out"), "{}", app.status);
+        let back = file_io::read_document(&file).unwrap();
+        assert_eq!(back.objects.len(), 2);
+        let png = back
+            .objects
+            .values()
+            .find_map(|o| match &o.shape {
+                Shape::Underlay(u) => Some((*u.png.bytes().unwrap()).clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(png, kadakas_core::underlay::placeholder_png());
+        // The session refers to the placeholder: the next save is whole and asks nothing.
+        app.save(false, &ctx);
+        assert!(!app.status.contains("placeholder"), "{}", app.status);
+        assert_eq!(file_io::read_document(&file).unwrap().objects.len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
