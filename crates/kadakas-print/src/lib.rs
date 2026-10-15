@@ -119,6 +119,32 @@ pub fn export_pdf_on(
     Ok(pdf::write_pdf(&refs, title))
 }
 
+/// A PDF file of one page that shows a picture (RGB, 8 bits per channel, rows from the top). The
+/// page has the size of the picture at `dpi` pixels per inch. The compare of two drawings
+/// (IOP-24) uses it for its overlay. Returns `None` if the size does not fit the pixels.
+pub fn image_pdf(rgb: Vec<u8>, width: u32, height: u32, dpi: f64, title: &str) -> Option<Vec<u8>> {
+    if width == 0
+        || height == 0
+        || !(dpi.is_finite() && dpi > 0.0)
+        || rgb.len() as u64 != u64::from(width) * u64::from(height) * 3
+    {
+        return None;
+    }
+    let size = glam::DVec2::new(f64::from(width), f64::from(height)) * (25.4 / dpi);
+    let page = Page {
+        size,
+        title: title.to_string(),
+        prims: vec![Prim::Image(display::ImagePrim {
+            min: glam::DVec2::ZERO,
+            max: size,
+            width,
+            height,
+            rgb: std::sync::Arc::new(rgb),
+        })],
+    };
+    Some(pdf::write_pdf(&[&page], title))
+}
+
 /// Writes bytes to a file, atomically (a temporary file, then a rename). The folder must exist.
 /// An existing file is replaced, and the old one stays as `<path>.bak`.
 pub fn write_file(path: &Path, bytes: &[u8]) -> Result<PathBuf, PrintError> {

@@ -370,6 +370,26 @@ pub fn dwg_to_dxf(
     convert(dwg, conv, run_opts, max_bytes, None).map(|(data, _)| data)
 }
 
+/// Converts a DWG file to DXF and returns the DXF bytes with a link to the DWG file (its absolute
+/// path, size and SHA-256), made from the private copy that is converted. An update that keeps a
+/// link instead of the summaries of the entities uses it (IOP-23).
+pub fn dwg_to_dxf_linked(
+    dwg: &Path,
+    conv: &Converter,
+    run_opts: &RunOptions,
+    max_bytes: u64,
+) -> Result<(Vec<u8>, FileLink), DwgError> {
+    let path = crate::absolute_path_text(dwg).map_err(|e| DwgError::Option(e.to_string()))?;
+    let (data, link) = convert(dwg, conv, run_opts, max_bytes, Some(&path))?;
+    let link = link.ok_or_else(|| DwgError::Io("no link could be made".into()))?;
+    if let Some(why) = link.problem() {
+        return Err(DwgError::Option(format!(
+            "cannot keep a link to the file: {why}"
+        )));
+    }
+    Ok((data, link))
+}
+
 /// Converts a DWG file to DXF like [`dwg_to_dxf`]. The file is copied into a private folder first
 /// (with the size cap), and the converter reads that copy. With `link_path`, the link of the file
 /// (its size and SHA-256) is made from the same copy, so the hash is of the bytes that were

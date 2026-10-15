@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod base_tests;
+pub mod compare;
 mod export;
 pub mod hash;
 mod import;

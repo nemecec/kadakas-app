@@ -1936,6 +1936,29 @@ impl Editor {
         )
     }
 
+    /// Runs a command and sets the history of the document (the named versions) in the same undo
+    /// step, so that undo takes back both. `op` names the step in the change set, with an optional
+    /// `detail` (see [`Editor::set_history_with`]). An update from DXF (IOP-23) saves its versions
+    /// "before" and "after" with its changes this way.
+    pub fn execute_with_history(
+        &mut self,
+        cmd: &Command,
+        history: Option<crate::history::HistoryData>,
+        op: &str,
+        detail: Option<Value>,
+    ) -> Result<Outcome, CommandError> {
+        self.check_pictures(cmd)?;
+        self.transact(
+            || op.to_string(),
+            detail,
+            |tx, out| {
+                tx.run(cmd, out)?;
+                tx.doc.history = history;
+                Ok(())
+            },
+        )
+    }
+
     /// Runs `body` on a transaction as one undo step. The name of the step is made only when the
     /// step changed something.
     fn transact(

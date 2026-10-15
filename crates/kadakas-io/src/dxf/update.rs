@@ -339,7 +339,7 @@ fn names(known: &[DrawingInfo]) -> String {
         .join(", ")
 }
 
-fn unit_of(scale: f64) -> Option<Unit> {
+pub(super) fn unit_of(scale: f64) -> Option<Unit> {
     [
         Unit::Mm,
         Unit::Cm,
@@ -580,30 +580,18 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
             }
             continue;
         }
-        if !(b.is_none_or(&on_layer) || n.is_none_or(&on_layer)) {
+        if !(b.is_some_and(&on_layer) || n.is_some_and(&on_layer)) {
             continue;
         }
         let old_objs = b.map_or_else(Vec::new, |r| old_index.objects_of(r));
         let new_objs = n.map_or_else(Vec::new, |r| new_index.objects_of(r));
-        let (mut status, mut ops) = match e.status {
-            Status::Added => (Kind::Added, Ops::default()),
-            Status::Removed => (Kind::Removed, Ops::default()),
-            _ => (Kind::Changed, Ops::default()),
-        };
-        match status {
-            Kind::Added => ops.add = new_objs.clone(),
-            Kind::Removed => ops.delete = old_objs.clone(),
-            Kind::Changed => {
-                let (pairs, gone, fresh) = st.pair(&old_objs, &new_objs);
-                ops.replace = pairs;
-                ops.delete = gone;
-                ops.add = fresh;
-                if ops.replace.is_empty() && ops.add.is_empty() && !ops.delete.is_empty() {
-                    // The importer no longer reads the entity: its objects go.
-                    status = Kind::Removed;
-                }
-            }
-        }
+        let (status, ops) = classify(
+            e.status,
+            &old_objs,
+            &new_objs,
+            &st.tag_of_old,
+            &st.tag_of_new,
+        );
         let nothing = ops.replace.is_empty() && ops.delete.is_empty() && ops.add.is_empty();
         if nothing {
             counts.ignored += 1;
@@ -626,11 +614,6 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
             .collect();
         st.claim(&ops)?;
         let id = change_id(e.status, b, n, &mut seen_ids);
-        let text =
-            (e.changes.contains(&Prop::Text) && b.is_some() && n.is_some()).then(|| TextChange {
-                old: clip(&b.expect("old").text),
-                new: clip(&n.expect("new").text),
-            });
         match status {
             Kind::Added => counts.added += 1,
             Kind::Removed => counts.removed += 1,
@@ -642,22 +625,7 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
         counts.objects_added += ops.add.len();
         counts.objects_replaced += ops.replace.len();
         counts.objects_removed += ops.delete.len();
-        changes.push(ChangeItem {
-            id,
-            status,
-            entity: rec.kind.clone(),
-            handle: rec.handle.clone(),
-            layer: rec.layer.clone(),
-            what: e.changes.clone(),
-            via: e.via,
-            distance: e.distance,
-            text,
-            objects: touched.len(),
-            new_objects: ops.add.len() + ops.replace.len(),
-            object_ids: touched.iter().copied().take(LISTED_OBJECTS).collect(),
-            conflict: !edited.is_empty(),
-            edited_ids: edited.iter().copied().take(LISTED_OBJECTS).collect(),
-        });
+        changes.push(item(id, status, e, (b, n), &ops, &edited));
         ops_list.push(ops);
     }
     if counts.ignored > 0 {
@@ -702,11 +670,11 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
     })
 }
 
-fn clip(s: &str) -> String {
+pub(super) fn clip(s: &str) -> String {
     s.chars().take(120).collect()
 }
 
-fn change_id(
+pub(super) fn change_id(
     status: Status,
     old: Option<&Rec>,
     new: Option<&Rec>,
@@ -785,8 +753,8 @@ fn old_records(
 /// The state of the walk over the changes.
 struct Planner<'a> {
     scratch: &'a Document,
-    tag_of_old: HashMap<ObjectId, &'a ImportTag>,
-    tag_of_new: HashMap<ObjectId, &'a ImportTag>,
+    tag_of_old: TagMap<'a>,
+    tag_of_new: TagMap<'a>,
     new_layers: Vec<NewLayer>,
     new_classes: Vec<NewClass>,
     layer_ix: HashMap<LayerId, usize>,
@@ -797,7 +765,7 @@ struct Planner<'a> {
 }
 
 /// Where an object sits in the file: the block, the INSERTs on the way, the part.
-type Place = (
+pub(super) type Place = (
     Option<String>,
     Vec<(Option<String>, Option<u32>)>,
     Option<u32>,
@@ -811,48 +779,124 @@ fn place(t: &ImportTag) -> Place {
     )
 }
 
-impl Planner<'_> {
-    /// Pairs the objects of the document with the new ones by their place in the file. What is
-    /// left over on both sides is paired in order, and the rest goes (document) or comes (new).
-    fn pair(
-        &self,
-        old: &[ObjectId],
-        new: &[ObjectId],
-    ) -> (Vec<(ObjectId, ObjectId)>, Vec<ObjectId>, Vec<ObjectId>) {
-        let mut by_place: BTreeMap<Place, Vec<ObjectId>> = BTreeMap::new();
-        for id in new {
-            if let Some(t) = self.tag_of_new.get(id) {
-                by_place.entry(place(t)).or_default().push(*id);
-            }
-        }
-        for v in by_place.values_mut() {
-            v.reverse();
-        }
-        let mut pairs = Vec::new();
-        let mut gone = Vec::new();
-        for id in old {
-            let hit = self
-                .tag_of_old
-                .get(id)
-                .and_then(|t| by_place.get_mut(&place(t)))
-                .and_then(Vec::pop);
-            match hit {
-                Some(n) => pairs.push((*id, n)),
-                None => gone.push(*id),
-            }
-        }
-        let mut fresh: Vec<ObjectId> = by_place.into_values().flatten().collect();
-        fresh.sort_by_key(|o| o.0);
-        // What is left on both sides: the same entity, with another place.
-        let k = gone.len().min(fresh.len());
-        for i in 0..k {
-            pairs.push((gone[i], fresh[i]));
-        }
-        gone.drain(..k);
-        fresh.drain(..k);
-        (pairs, gone, fresh)
-    }
+/// The objects of a document, by ID, with their tags.
+pub(super) type TagMap<'a> = HashMap<ObjectId, &'a ImportTag>;
 
+/// Pairs the objects of the old side with the new ones by their place in the file. What is left
+/// over on both sides is paired in order, and the rest goes (old) or comes (new).
+pub(super) fn pair_objects(
+    tag_of_old: &TagMap<'_>,
+    tag_of_new: &TagMap<'_>,
+    old: &[ObjectId],
+    new: &[ObjectId],
+) -> (Vec<(ObjectId, ObjectId)>, Vec<ObjectId>, Vec<ObjectId>) {
+    let mut by_place: BTreeMap<Place, Vec<ObjectId>> = BTreeMap::new();
+    for id in new {
+        if let Some(t) = tag_of_new.get(id) {
+            by_place.entry(place(t)).or_default().push(*id);
+        }
+    }
+    for v in by_place.values_mut() {
+        v.reverse();
+    }
+    let mut pairs = Vec::new();
+    let mut gone = Vec::new();
+    for id in old {
+        let hit = tag_of_old
+            .get(id)
+            .and_then(|t| by_place.get_mut(&place(t)))
+            .and_then(Vec::pop);
+        match hit {
+            Some(n) => pairs.push((*id, n)),
+            None => gone.push(*id),
+        }
+    }
+    let mut fresh: Vec<ObjectId> = by_place.into_values().flatten().collect();
+    fresh.sort_by_key(|o| o.0);
+    // What is left on both sides: the same entity, with another place.
+    let k = gone.len().min(fresh.len());
+    for i in 0..k {
+        pairs.push((gone[i], fresh[i]));
+    }
+    gone.drain(..k);
+    fresh.drain(..k);
+    (pairs, gone, fresh)
+}
+
+/// What a diff entry does to objects, from the objects of the two sides.
+pub(super) fn classify(
+    status: Status,
+    old_objs: &[ObjectId],
+    new_objs: &[ObjectId],
+    tag_of_old: &TagMap<'_>,
+    tag_of_new: &TagMap<'_>,
+) -> (Kind, Ops) {
+    let mut ops = Ops::default();
+    let mut kind = match status {
+        Status::Added => Kind::Added,
+        Status::Removed => Kind::Removed,
+        _ => Kind::Changed,
+    };
+    match kind {
+        Kind::Added => ops.add = new_objs.to_vec(),
+        Kind::Removed => ops.delete = old_objs.to_vec(),
+        Kind::Changed => {
+            let (pairs, gone, fresh) = pair_objects(tag_of_old, tag_of_new, old_objs, new_objs);
+            ops.replace = pairs;
+            ops.delete = gone;
+            ops.add = fresh;
+            if ops.replace.is_empty() && ops.add.is_empty() && !ops.delete.is_empty() {
+                // The importer no longer reads the entity: its objects go.
+                kind = Kind::Removed;
+            }
+        }
+    }
+    (kind, ops)
+}
+
+/// The change as the person sees it. `edited` are the objects of the old side that the person
+/// edited.
+pub(super) fn item(
+    id: String,
+    status: Kind,
+    e: &revision::Entry,
+    (b, n): (Option<&Rec>, Option<&Rec>),
+    ops: &Ops,
+    edited: &[ObjectId],
+) -> ChangeItem {
+    let rec = n.or(b).expect("an entry has a side");
+    let touched: Vec<ObjectId> = ops
+        .replace
+        .iter()
+        .map(|(d, _)| *d)
+        .chain(ops.delete.iter().copied())
+        .collect();
+    let text = match (b, n) {
+        (Some(b), Some(n)) if e.changes.contains(&Prop::Text) => Some(TextChange {
+            old: clip(&b.text),
+            new: clip(&n.text),
+        }),
+        _ => None,
+    };
+    ChangeItem {
+        id,
+        status,
+        entity: rec.kind.clone(),
+        handle: rec.handle.clone(),
+        layer: rec.layer.clone(),
+        what: e.changes.clone(),
+        via: e.via,
+        distance: e.distance,
+        text,
+        objects: touched.len(),
+        new_objects: ops.add.len() + ops.replace.len(),
+        object_ids: touched.iter().copied().take(LISTED_OBJECTS).collect(),
+        conflict: !edited.is_empty(),
+        edited_ids: edited.iter().copied().take(LISTED_OBJECTS).collect(),
+    }
+}
+
+impl Planner<'_> {
     /// Keeps the new objects that a change brings, within the size limit.
     fn claim(&mut self, ops: &Ops) -> Result<(), UpdateError> {
         let ids: Vec<ObjectId> = ops
