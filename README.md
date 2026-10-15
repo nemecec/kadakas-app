@@ -81,6 +81,13 @@ data (`rotation_deg`). Old files are decoded with their code page (`$DWGCODEPAGE
 The DXF export writes a release 2004 file with all tables, handles and owner handles, and snaps line weights to the values
 that DXF allows. To check it with ezdxf: `uv run --with pytest --with ezdxf pytest tests/behavior -q`.
 
+When an architect sends a new revision of a drawing that you imported, File > Import > Update from DXF/DWG... (or
+`import.update`, then `import.apply`) compares the new file with the objects of the old import, shows what was added,
+removed and changed on the plan (green, red, orange) with the changes you made yourself marked as conflicts, and applies
+the changes you accept as one undo step with a version before and one after. File > Compare Drawings... (or
+`dxf.compare`) compares two DXF or DWG files without importing them, as a list of changes and as a picture (PNG, SVG or
+PDF) with optional revision clouds. See `docs/feature-spec.md` (IOP-23, IOP-24) and `describe`.
+
 A server for agents (`kadakas serve`, `kadakas mcp`, the app with `--agent-port`) only reads and writes in the folder of
 the open document and in the folders given with `--allow-dir DIR` (repeat the flag; default: the folder where it started).
 This covers `import.file`, `export.file`, `file.open` and `file.save`. Paths are resolved first, so `..` and links do not
