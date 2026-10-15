@@ -85,6 +85,13 @@ pub const REASON_VERSION_LIMIT: &str = "version_limit";
 /// `version.create`, `version.restore`, `version.delete`: the history of the file could not be
 /// read completely. It is kept as it is and read only, until the person calls `version.repair`.
 pub const REASON_HISTORY_READONLY: &str = "history_read_only";
+/// `issue.delete`: an issue of somebody else (or with comments of somebody else) would be deleted.
+/// Nothing was deleted. The details list the issues. The caller may ask the person, then pass
+/// `confirm: true`.
+pub const REASON_CONFIRM_NEEDED: &str = "confirm_needed";
+/// `issue.import_bcf`: an issue of the file has the GUID of an issue in the document and other
+/// content. Nothing was imported. The details list the conflicts and the options (`on_conflict`).
+pub const REASON_BCF_CONFLICT: &str = "bcf_conflict";
 /// `import.file`: the drawing has more entities than an import keeps for updates and the option
 /// `base` is `auto`. `details` has `{entities, cap}`. The caller may ask the person, then pass
 /// `base: "link"` or `base: "none"`.

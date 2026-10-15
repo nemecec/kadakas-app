@@ -38,6 +38,7 @@ mod plugin_api;
 mod plugin_util;
 mod present_api;
 mod query_api;
+mod issue_api;
 mod review_api;
 pub use compare_api::{CompareCache, CompareMode, CompareSpec, ShownDoc};
 pub use review_api::{Side as CompareSide, VERSION_BYTES_MAX, VERSIONS_MAX, VERSIONS_WARN};
@@ -725,6 +726,16 @@ pub const METHODS: &[(&str, &str)] = &[
     review_api::VERSION_DELETE,
     review_api::VERSION_DIFF,
     review_api::VERSION_REPAIR,
+    // Issues and BCF files (see issue_api.rs).
+    issue_api::ISSUE_LIST,
+    issue_api::ISSUE_GET,
+    issue_api::ISSUE_CREATE,
+    issue_api::ISSUE_UPDATE,
+    issue_api::ISSUE_COMMENT,
+    issue_api::ISSUE_RESOLVE,
+    issue_api::ISSUE_DELETE,
+    issue_api::ISSUE_IMPORT_BCF,
+    issue_api::ISSUE_EXPORT_BCF,
     #[cfg(not(target_arch = "wasm32"))]
     dxf_compare_api::DXF_COMPARE,
     // Collaboration (see collab_api.rs).
@@ -737,7 +748,7 @@ pub const METHODS: &[(&str, &str)] = &[
     collab_api::REDO,
     (
         "events.subscribe",
-        "Get change events. params: {kinds?: [objects, layers, classes, resources, document]}. After each change the server sends a notification (no id) {method: \"events.change\", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.",
+        "Get change events. params: {kinds?: [objects, layers, classes, resources, document, issues]}. After each change the server sends a notification (no id) {method: \"events.change\", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.",
     ),
     (
         "events.unsubscribe",
@@ -1097,6 +1108,9 @@ impl Session {
         if let Some(r) = review_api::handle(self, method, p.clone()) {
             return r;
         }
+        if let Some(r) = self.handle_issue(method, p.clone()) {
+            return r;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(r) = update_api::handle(self, method, p.clone()) {
             return r;
@@ -1167,6 +1181,7 @@ impl Session {
                     d["scripting"] = plugin_api::describe();
                 }
                 d["plugins"] = wasm_plugin_api::describe();
+                d["review"]["issues"] = issue_api::describe();
                 d["schemas"] = json!({
                     "command": "The JSON Schema (draft 2020-12) of every command that `execute` takes. Call describe with {\"schema\": true} to get it in `command_schema` (about 30 KB). Everything the schema accepts for add_object, add_object_in, modify_object and set_vertex with an exact shape kind is accepted by the server too (a test fuzzes this). Other parts are structural only: they check the shape of the object and the kind, not every field, so the server may still refuse what the schema accepts. Their fields are in command_examples and in the sections of this answer.",
                     "exact_shape_kinds": kadakas_core::schema::EXACT_SHAPE_KINDS,

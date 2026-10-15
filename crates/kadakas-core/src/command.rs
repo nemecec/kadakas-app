@@ -593,6 +593,15 @@ pub enum Command {
         picture: Option<Box<crate::picture::ImageResource>>,
         now: i64,
     },
+    /// Replace a viewpoint of an issue (the one with the same ID) with a new one, for example a
+    /// new camera or a new snapshot. A snapshot that no viewpoint uses any more goes.
+    ModifyIssueViewpoint {
+        issue: crate::issue::IssueId,
+        viewpoint: Box<crate::issue::Viewpoint>,
+        #[serde(default)]
+        picture: Option<Box<crate::picture::ImageResource>>,
+        now: i64,
+    },
     /// Delete a viewpoint of an issue. Comments that referred to it keep their text.
     DeleteIssueViewpoint {
         issue: crate::issue::IssueId,
@@ -668,6 +677,9 @@ impl Command {
             } => out.push(i),
             Command::AddIssue { pictures, .. } => out.extend(pictures.iter()),
             Command::AddIssueViewpoint {
+                picture: Some(p), ..
+            }
+            | Command::ModifyIssueViewpoint {
                 picture: Some(p), ..
             } => out.push(p),
             Command::Batch { commands } => commands.iter().for_each(|c| c.pictures(out)),
@@ -1626,6 +1638,7 @@ impl<'a> Tx<'a> {
             | Command::EditIssueComment { .. }
             | Command::DeleteIssueComment { .. }
             | Command::AddIssueViewpoint { .. }
+            | Command::ModifyIssueViewpoint { .. }
             | Command::DeleteIssueViewpoint { .. } => self.run_issue(cmd, out)?,
             Command::AttachRecord { .. }
             | Command::DetachRecord { .. }

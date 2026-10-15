@@ -261,3 +261,32 @@ fn done_follows_the_status() {
     assert!(is_done(&s, IssueId::from_num(2)));
     assert!(!is_done(&s, IssueId::from_num(99)));
 }
+
+#[test]
+fn deleting_the_work_of_others_needs_consent() {
+    let mut mine = issue(1, "x");
+    mine.origin = Origin::Agent;
+    assert_eq!(consent_reason(&mine, &[], Origin::Agent), None);
+    assert!(
+        consent_reason(&mine, &[], Origin::User)
+            .unwrap()
+            .contains("agent")
+    );
+    let c = Comment {
+        id: kadakas_core::issue::CommentId::from_num(1),
+        issue: mine.id,
+        author: String::new(),
+        origin: Origin::User,
+        time: 0,
+        text: "t".into(),
+        viewpoint: None,
+        edited: None,
+    };
+    let why = consent_reason(&mine, &[&c], Origin::Agent).unwrap();
+    assert!(why.contains("1 comment"), "{why}");
+    let own = Comment {
+        origin: Origin::Agent,
+        ..c
+    };
+    assert_eq!(consent_reason(&mine, &[&own], Origin::Agent), None);
+}

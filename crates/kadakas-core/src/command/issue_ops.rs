@@ -214,6 +214,33 @@ impl Tx<'_> {
                 self.store_snapshots(&new.viewpoints, &pics)?;
                 self.doc.issues.data_mut().issues[at] = new;
             }
+            Command::ModifyIssueViewpoint {
+                issue,
+                viewpoint,
+                picture,
+                now,
+            } => {
+                let at = self.issue_index(*issue)?;
+                let old = self.doc.issues.data().issues[at].clone();
+                let Some(vat) = old.viewpoints.iter().position(|v| v.id == viewpoint.id) else {
+                    return Err(invalid(format!("the issue has no viewpoint {}", viewpoint.id)));
+                };
+                if old.viewpoints[vat] == **viewpoint {
+                    return Ok(());
+                }
+                let mut new = old.clone();
+                new.viewpoints[vat] = (**viewpoint).clone();
+                new.viewpoints.sort_by_key(|x| (x.time, x.id));
+                new.modified = *now;
+                new.validate().map_err(invalid)?;
+                let pics: Vec<&ImageResource> = picture.iter().map(|p| p.as_ref()).collect();
+                self.store_snapshots(&new.viewpoints, &pics)?;
+                let gone = old.viewpoints[vat].snapshot.clone();
+                self.doc.issues.data_mut().issues[at] = new;
+                if let Some(h) = gone {
+                    self.drop_snapshot(&h);
+                }
+            }
             Command::DeleteIssueViewpoint {
                 issue,
                 viewpoint,

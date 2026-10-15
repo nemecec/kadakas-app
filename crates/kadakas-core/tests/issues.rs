@@ -550,3 +550,74 @@ fn the_undo_budget_counts_issue_steps() {
     add(&mut ed, "A");
     assert!(ed.history_bytes() > before);
 }
+
+#[test]
+fn a_viewpoint_can_be_replaced_with_a_new_snapshot() {
+    let mut ed = editor();
+    let id = add(&mut ed, "A");
+    let (p1, p2) = (header_only_sample(11), header_only_sample(12));
+    let vp = Viewpoint {
+        time: 5,
+        snapshot: Some(p1.sha256.clone()),
+        ..Viewpoint::default()
+    };
+    let vid = ViewpointId(
+        ed.execute(&Command::AddIssueViewpoint {
+            issue: id,
+            viewpoint: Box::new(vp.clone()),
+            picture: Some(Box::new(p1.clone())),
+            now: 6,
+        })
+        .unwrap()
+        .created[0],
+    );
+    let depth = ed.undo_depth();
+    let same = Viewpoint {
+        id: vid,
+        ..vp.clone()
+    };
+    ed.execute(&Command::ModifyIssueViewpoint {
+        issue: id,
+        viewpoint: Box::new(same),
+        picture: None,
+        now: 7,
+    })
+    .unwrap();
+    assert_eq!(ed.undo_depth(), depth, "the same viewpoint is no change");
+    let newer = Viewpoint {
+        id: vid,
+        name: "Changed".into(),
+        snapshot: Some(p2.sha256.clone()),
+        ..vp
+    };
+    ed.execute(&Command::ModifyIssueViewpoint {
+        issue: id,
+        viewpoint: Box::new(newer),
+        picture: Some(Box::new(p2.clone())),
+        now: 8,
+    })
+    .unwrap();
+    assert!(ed.doc().resources.find_image(&p1.sha256).is_none());
+    assert!(ed.doc().resources.find_image(&p2.sha256).is_some());
+    assert_eq!(
+        ed.doc().issues.get(id).unwrap().viewpoints[0].name,
+        "Changed"
+    );
+    ed.undo();
+    assert!(ed.doc().resources.find_image(&p1.sha256).is_some());
+    assert!(ed.doc().resources.find_image(&p2.sha256).is_none());
+    // An unknown viewpoint is refused.
+    let ghost = Viewpoint {
+        id: ViewpointId::from_num(999),
+        ..Viewpoint::default()
+    };
+    assert!(
+        ed.execute(&Command::ModifyIssueViewpoint {
+            issue: id,
+            viewpoint: Box::new(ghost),
+            picture: None,
+            now: 9,
+        })
+        .is_err()
+    );
+}

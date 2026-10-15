@@ -3728,6 +3728,43 @@
       "type": "object"
     },
     {
+      "description": "Replace a viewpoint of an issue (the one with the same ID) with a new one, for example a\nnew camera or a new snapshot. A snapshot that no viewpoint uses any more goes.",
+      "properties": {
+        "issue": {
+          "$ref": "#/$defs/IssueId"
+        },
+        "now": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "op": {
+          "const": "modify_issue_viewpoint",
+          "type": "string"
+        },
+        "picture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageResource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "viewpoint": {
+          "$ref": "#/$defs/Viewpoint"
+        }
+      },
+      "required": [
+        "op",
+        "issue",
+        "viewpoint",
+        "now"
+      ],
+      "type": "object"
+    },
+    {
       "description": "Delete a viewpoint of an issue. Comments that referred to it keep their text.",
       "properties": {
         "issue": {

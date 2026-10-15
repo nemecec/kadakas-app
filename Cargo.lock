@@ -2692,6 +2692,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "wat",
+ "zip",
 ]
 
 [[package]]

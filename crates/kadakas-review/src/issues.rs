@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use kadakas_core::change::Origin;
 use kadakas_core::command::Command;
-use kadakas_core::issue::{Issue, IssueId, IssueStatus, Issues, Viewpoint};
+use kadakas_core::issue::{Comment, Issue, IssueId, IssueStatus, Issues, Viewpoint};
 use kadakas_core::model::{ClassId, Document, LayerId, ObjectId};
 use kadakas_core::uid::Uid;
 use kadakas_core::visibility::VisMode;
@@ -193,6 +193,22 @@ pub fn ifc_guid(id: ObjectId) -> String {
 /// GlobalId from an IFC export of this model gives the object it was made from.
 pub fn match_ifc(global_id: &str) -> Option<ObjectId> {
     kadakas_core::guid::decode(global_id).map(|v| ObjectId(Uid::from_u128(v)))
+}
+
+/// Why deleting an issue needs a yes from the person, or `None` when `me` may delete it alone.
+/// Work of somebody else is never deleted silently: an issue that another origin made (a person,
+/// an agent, a script, another user), or one that holds comments of another origin, needs the
+/// consent. `me` is the origin of the one who deletes.
+pub fn consent_reason(issue: &Issue, comments: &[&Comment], me: Origin) -> Option<String> {
+    if issue.origin != me {
+        return Some(format!(
+            "the issue was made by origin {}, not by {}",
+            issue.origin.name(),
+            me.name()
+        ));
+    }
+    let others = comments.iter().filter(|c| c.origin != me).count();
+    (others > 0).then(|| format!("the issue has {others} comment(s) of another origin"))
 }
 
 /// An issue in a state where it is done: sets the status to resolved or closed.

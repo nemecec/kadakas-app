@@ -55,6 +55,7 @@ fn same(a: &Session, b: &Session) -> bool {
         && sorted(x.resources.iter().map(|r| (r.id.0, format!("{r:?}"))))
             == sorted(y.resources.iter().map(|r| (r.id.0, format!("{r:?}"))))
         && x.drawing == y.drawing
+        && x.issues == y.issues
 }
 
 fn object_count(s: &mut Session) -> usize {
@@ -1146,6 +1147,34 @@ mod real_commands {
             i: u8,
             k: u16,
         },
+        /// Issues (REV-04): a new issue, a change, a comment, a viewpoint, a delete.
+        AddIssue {
+            s: bool,
+            n: u8,
+        },
+        ModifyIssue {
+            s: bool,
+            i: u8,
+            f: u8,
+        },
+        CommentIssue {
+            s: bool,
+            i: u8,
+            t: u8,
+        },
+        ViewpointIssue {
+            s: bool,
+            i: u8,
+            t: u8,
+        },
+        DeleteIssue {
+            s: bool,
+            i: u8,
+        },
+        DeleteComment {
+            s: bool,
+            i: u8,
+        },
         Sync {
             s: bool,
         },
@@ -1195,6 +1224,12 @@ mod real_commands {
             1 => (any::<bool>(), -500i32..500, 0u8..2).prop_map(|(s, x, v)| Act::Underlay { s, x, v }),
             1 => (any::<bool>(), 1u16..300).prop_map(|(s, n)| Act::AddSite { s, n }),
             1 => (any::<bool>(), any::<u8>(), 0u16..300).prop_map(|(s, i, k)| Act::EditSite { s, i, k }),
+            3 => (any::<bool>(), 0u8..4).prop_map(|(s, n)| Act::AddIssue { s, n }),
+            3 => (any::<bool>(), any::<u8>(), 0u8..5).prop_map(|(s, i, f)| Act::ModifyIssue { s, i, f }),
+            3 => (any::<bool>(), any::<u8>(), 0u8..3).prop_map(|(s, i, t)| Act::CommentIssue { s, i, t }),
+            1 => (any::<bool>(), any::<u8>(), 0u8..3).prop_map(|(s, i, t)| Act::ViewpointIssue { s, i, t }),
+            1 => (any::<bool>(), any::<u8>()).prop_map(|(s, i)| Act::DeleteIssue { s, i }),
+            1 => (any::<bool>(), any::<u8>()).prop_map(|(s, i)| Act::DeleteComment { s, i }),
             5 => any::<bool>().prop_map(|s| Act::Sync { s }),
             1 => any::<bool>().prop_map(|s| Act::Offline { s }),
             2 => any::<bool>().prop_map(|s| Act::Online { s }),
@@ -1229,6 +1264,18 @@ mod real_commands {
             .objects
             .keys()
             .map(|k| k.0.to_string())
+            .collect()
+    }
+
+    const STATUSES: [&str; 4] = ["open", "in_progress", "resolved", "closed"];
+    const PRIORITIES: [&str; 2] = ["low", "high"];
+
+    fn issue_ids(s: &Session) -> Vec<String> {
+        s.editor
+            .doc()
+            .issues
+            .iter()
+            .map(|i| i.id.0.to_string())
             .collect()
     }
 
@@ -1417,6 +1464,69 @@ mod real_commands {
             Act::Sync { s } => {
                 let r = sessions[idx(*s)].handle("collab.sync", json!({"now_ms": *now}));
                 assert_clean(&r);
+            }
+            Act::AddIssue { s, n } => exec(
+                &mut sessions[idx(*s)],
+                json!({"op": "add_issue", "issue": {"title": format!("I{n}"),
+                    "author": "A", "created": *now as i64, "modified": *now as i64}}),
+            ),
+            Act::ModifyIssue { s, i, f } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(id) = pick(&issue_ids(ss), *i) {
+                    let patch = match f {
+                        0 => json!({"title": format!("T{}", *now)}),
+                        1 => json!({"status": STATUSES[*now as usize % 4]}),
+                        2 => json!({"assignee": format!("U{}", *now % 3)}),
+                        3 => json!({"labels": [format!("L{}", *now % 3)]}),
+                        _ => json!({"priority": PRIORITIES[*now as usize % 2]}),
+                    };
+                    exec(
+                        ss,
+                        json!({"op": "modify_issue", "id": id, "patch": patch, "now": *now as i64}),
+                    );
+                }
+            }
+            Act::CommentIssue { s, i, t } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(id) = pick(&issue_ids(ss), *i) {
+                    exec(
+                        ss,
+                        json!({"op": "add_issue_comment", "comment": {"issue": id,
+                            "text": format!("c{t}"), "time": *now as i64, "author": "A"}}),
+                    );
+                }
+            }
+            Act::ViewpointIssue { s, i, t } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(id) = pick(&issue_ids(ss), *i) {
+                    exec(
+                        ss,
+                        json!({"op": "add_issue_viewpoint", "issue": id, "now": *now as i64,
+                            "viewpoint": {"name": format!("v{t}"), "time": *now as i64,
+                                "view": {"kind": "plan", "center": [0, 0], "zoom": 1}}}),
+                    );
+                }
+            }
+            Act::DeleteIssue { s, i } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(id) = pick(&issue_ids(ss), *i) {
+                    exec(ss, json!({"op": "delete_issue", "id": id}));
+                }
+            }
+            Act::DeleteComment { s, i } => {
+                let ss = &mut sessions[idx(*s)];
+                let ids: Vec<String> = ss
+                    .editor
+                    .doc()
+                    .issues
+                    .data()
+                    .comments
+                    .iter()
+                    .map(|c| c.id.0.to_string())
+                    .collect();
+                if let Some(id) = pick(&ids, *i) {
+                    exec(ss, json!({"op": "delete_issue_comment", "id": id}));
+                }
             }
             Act::Refuse { n, internal } => {
                 let code = if *internal {

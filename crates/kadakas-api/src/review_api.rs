@@ -498,7 +498,7 @@ fn now_ms(m: &Map<String, Value>) -> Result<u64, RpcError> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn default_now() -> u64 {
+pub(crate) fn default_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
@@ -506,7 +506,7 @@ fn default_now() -> u64 {
 
 /// A browser build has no clock in `std`: the time is 0 (not known) unless the host gives it.
 #[cfg(target_arch = "wasm32")]
-fn default_now() -> u64 {
+pub(crate) fn default_now() -> u64 {
     0
 }
 
@@ -524,7 +524,7 @@ fn version_id(m: &Map<String, Value>, key: &str) -> Result<u64, RpcError> {
         .ok_or_else(|| bad(format!("give {key}: the number of a version")))
 }
 
-fn origin_name(o: kadakas_core::change::Origin) -> &'static str {
+pub(crate) fn origin_name(o: kadakas_core::change::Origin) -> &'static str {
     use kadakas_core::change::Origin;
     match o {
         Origin::User => "user",
@@ -534,7 +534,7 @@ fn origin_name(o: kadakas_core::change::Origin) -> &'static str {
     }
 }
 
-fn author(s: &Session, m: &Map<String, Value>) -> Result<String, RpcError> {
+pub(crate) fn author(s: &Session, m: &Map<String, Value>) -> Result<String, RpcError> {
     if let Some(a) = text(m, "author")? {
         return Ok(a.trim().to_string());
     }

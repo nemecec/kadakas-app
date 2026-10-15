@@ -42,6 +42,8 @@ png = "0.18"
 # Draws the SVG of a compare to pixels in the tests. The app ships it already. Not shipped here.
 resvg = { version = "0.48.1", default-features = false }
 proptest = "1.11.0"
+# Makes hostile BCF archives in the tests. Not shipped here (kadakas-review reads them).
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
 kadakas-collab = { version = "0.1.0", path = "../kadakas-collab", features = ["testkit"] }
 # The in-process WebSocket server for tests of `collab.connect {url}`. Not shipped.
 kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws", features = ["test-server"] }

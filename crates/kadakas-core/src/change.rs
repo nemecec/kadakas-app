@@ -232,7 +232,7 @@ impl ChangeSet {
             } else {
                 DocumentChanged::default()
             },
-            detail: if want("document") {
+            detail: if want("document") || (want("issues") && self.touches("issues")) {
                 self.detail.clone()
             } else {
                 None
