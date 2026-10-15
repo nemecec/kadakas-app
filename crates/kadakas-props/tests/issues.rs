@@ -290,3 +290,77 @@ fn concurrent_edits_of_different_fields_and_comments_all_stay() {
     );
     let _ = Replica::new();
 }
+
+#[test]
+fn viewpoints_over_the_bound_cut_the_viewpoints_and_keep_the_issue() {
+    use kadakas_core::issue::MAX_VIEWPOINTS;
+    let ed = Editor::with_sequential_ids();
+    let mut r = replica_of(ed.doc());
+    let mut i = Issue {
+        id: IssueId::from_num(1),
+        title: "T".into(),
+        ..Issue::default()
+    };
+    for n in 0..(MAX_VIEWPOINTS as u64 + 4) {
+        i.viewpoints.push(Viewpoint {
+            id: ViewpointId::from_num(100 + n),
+            time: n as i64,
+            ..Viewpoint::default()
+        });
+    }
+    let mut whole = match serde_json::to_value(&i).unwrap() {
+        Value::Object(m) => m,
+        _ => unreachable!(),
+    };
+    whole.remove("id");
+    r.insert_baseline(target(Kind::Issue, 1), flatten(Kind::Issue, whole));
+    let m = materialize(&r, &Document::default());
+    let got = m
+        .doc
+        .issues
+        .get(IssueId::from_num(1))
+        .expect("the issue stays");
+    assert_eq!(got.viewpoints.len(), MAX_VIEWPOINTS);
+    // The first ones by time stay.
+    assert_eq!(got.viewpoints[0].time, 0);
+    assert!(m.quarantined.is_empty(), "{:?}", m.quarantined);
+    assert!(
+        m.repairs
+            .iter()
+            .any(|n| n.contains("viewpoints over the limit"))
+    );
+}
+
+#[test]
+fn two_picture_resources_with_one_hash_become_one() {
+    use kadakas_core::picture::header_only_sample;
+    use kadakas_core::resource::ResourceBody;
+    let mut ed = Editor::with_sequential_ids();
+    let pic = header_only_sample(3);
+    ed.execute(&Command::AddResource {
+        name: "Snap".into(),
+        body: ResourceBody::Image(Box::new(pic.clone())),
+    })
+    .unwrap();
+    let mut r = replica_of(ed.doc());
+    // A second user made another resource for the same picture at the same time.
+    let (first, e) = r.alive_of(Kind::Resource).next().unwrap();
+    let _ = first;
+    let props = e.visible();
+    r.insert_baseline(target(Kind::Resource, 9_999_999), props);
+    let m = materialize(&r, ed.doc());
+    let images = m
+        .doc
+        .resources
+        .iter()
+        .filter(|x| matches!(x.body, ResourceBody::Image(_)))
+        .count();
+    assert_eq!(images, 1, "one resource for one hash");
+    assert!(
+        m.quarantined
+            .iter()
+            .any(|q| q.reason.contains("the same picture")),
+        "{:?}",
+        m.quarantined
+    );
+}
