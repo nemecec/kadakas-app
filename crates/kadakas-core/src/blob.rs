@@ -60,6 +60,12 @@ pub trait BlobSource: Send + Sync + std::fmt::Debug {
     fn as_any(&self) -> &dyn Any;
     /// The same, for a shared pointer: `Arc::downcast` gives the concrete source back.
     fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
+    /// Checks that the file under the source is still the one that was opened. A host calls it
+    /// before it works out the state of a document for the versions: a picture that cannot be read
+    /// would otherwise look like a thing that is not there. The default has nothing to check.
+    fn check(&self) -> Result<(), BlobError> {
+        Ok(())
+    }
     /// Called for every handle that is made for this source while a document is read. A source
     /// can keep a weak pointer to know which pictures are still in use (the undo steps hold
     /// pictures that the document no longer has). The default does nothing.

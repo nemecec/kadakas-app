@@ -1168,6 +1168,7 @@ impl Session {
                 "collaboration": collab_api::describe(),
                 "review": review_api::describe(),
                 "errors": errors::describe(),
+                "files": limits::describe_files(),
                 "feedback": feedback_api::describe(),
                 "unknown_shapes": "A file from a newer Kadakas may hold shapes of a kind that this version does not know. They load as kind 'unknown' (the original kind is in shape.kind of objects.get). They are listed in document.summary (objects_by_kind.unknown and unknown_shapes), they are not drawn, they save back unchanged, and only delete_objects can change them.",
                 });
@@ -1807,6 +1808,13 @@ mod tests {
         let expected: Vec<&str> = METHODS.iter().map(|(n, _)| *n).collect();
         assert_eq!(names, expected);
         assert!(d["units"].as_str().unwrap().contains("millimeters"));
+        assert!(
+            d["files"]["forms"]["container"]
+                .as_str()
+                .unwrap()
+                .contains("ZIP")
+        );
+        assert!(d["files"]["file.save"].as_str().unwrap().contains("format"));
         assert!(d["command_examples"].as_array().unwrap().len() >= 10);
 
         // Every advertised method is handled: none of them is "unknown method".

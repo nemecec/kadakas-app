@@ -19,6 +19,29 @@ pub const DEFAULT_DOCUMENT_FILE_BYTES: u64 = 512 * 1024 * 1024;
 /// the free collaboration tier.
 pub const STRICT_DOCUMENT_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
+/// The part of `describe` about document files (DOC-20 to DOC-22): the two forms, `file.open` and
+/// `file.save`, and the limits. The methods are answered by the host (`kadakas serve`, `kadakas
+/// mcp`, the app), so they are not in `methods`.
+pub(crate) fn describe_files() -> serde_json::Value {
+    serde_json::json!({
+        "forms": {
+            "container": "The default, extension .kad: a ZIP file with document.json (the drawing, deflated), blobs/<sha256> (each picture of 4 KiB or more, stored once, with the hash of collaboration), history/ (the versions) and manifest.json (every entry with its size and SHA-256). Any ZIP tool opens it. The pictures and the versions stay in the file until a call uses them.",
+            "json": "One readable JSON file, extension .json: the text of the document with the pictures as base64 and the versions in the field history. For git, diffs and debugging.",
+        },
+        "file.save": "params: {path, format?}. format is \"container\" or \"json\"; without it the extension decides (.json is JSON, anything else the container). The save is atomic and the old file stays as <path>.bak. Returns {ok, format}. If the file that the open document was read from changed on disk, the call fails with code 5 (conflict) and writes nothing; open the file again.",
+        "file.open": "params: {path}. The form is told by the first bytes. Returns {ok, format, notes?}. A file over the size limit, or a container whose entries together are over it, is refused (code 3) with the way to raise the limit (kadakas serve --max-document-mib). A damaged or hostile container is an error that names the entry.",
+        "cli": "kadakas convert <input> <output> [--format container|json] converts between the forms and checks the input.",
+        "limits": {
+            "document_file_bytes": "The most bytes of a file that file.open reads, and the most bytes of all entries of a container together (uncompressed, from the manifest).",
+            "entries": MAX_CONTAINER_ENTRIES,
+            "inflate_ratio": "An entry above 1 MiB that inflates more than 200 times is refused as a compression bomb.",
+        },
+    })
+}
+
+/// The most entries a container holds (the 16 bit count of ZIP, less one).
+const MAX_CONTAINER_ENTRIES: usize = 65_534;
+
 /// The limits of one session. `Default` gives the limits that Kadakas always had, and no limit
 /// for the number of objects, the memory and the time of a request.
 #[derive(Clone, Debug, PartialEq)]

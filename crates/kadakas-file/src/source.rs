@@ -142,6 +142,10 @@ impl BlobSource for FileSource {
         self
     }
 
+    fn check(&self) -> Result<(), BlobError> {
+        self.part.check_unchanged().map_err(FileSource::error)
+    }
+
     fn note_handle(&self, blob: &Arc<LazyBlob>) {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         if live.len() > 4096 {

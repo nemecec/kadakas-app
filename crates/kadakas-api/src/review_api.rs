@@ -329,6 +329,10 @@ pub(crate) fn resolve(s: &mut Session) {
             Err(e) => return failed(s, p, e),
         }
     };
+    // The state of the drawing is made from its pictures too.
+    if let Err(e) = drawing.check_blobs() {
+        return failed(s, p, e.to_string());
+    }
     let vetted = vet(drawing, data, caps);
     s.load_notes.extend(vetted.notes.iter().cloned());
     s.editor.adopt_history(Some(vetted.data), vetted.notes);
@@ -432,8 +436,20 @@ fn notes(s: &Session) -> &[String] {
     s.review.cached.as_ref().map_or(&[], |c| &c.notes)
 }
 
+/// Checks that the pictures of the document that stay in a file can be read: the file is the one
+/// that was opened. The state of the document, for a version or a compare, is worked out from
+/// the pictures too, and a picture that cannot be read would make its object look deleted. A
+/// call that works out that state asks first (a conflict that says the file changed).
+pub(crate) fn pictures_readable(s: &Session) -> Result<(), RpcError> {
+    s.editor
+        .doc()
+        .check_blobs()
+        .map_err(|e| RpcError::conflict(format!("{e}")))
+}
+
 /// The history, for a call that changes it: refused while the history is read only.
 fn writable(s: &mut Session) -> Result<Arc<History>, RpcError> {
+    pictures_readable(s)?;
     let h = read(s);
     if read_only(s) {
         return Err(read_only_error(notes(s)));
@@ -562,6 +578,7 @@ impl Session {
         if container && self.review.waits_unchanged(self.editor.revision()) {
             return Ok(Cow::Borrowed(self.editor.doc()));
         }
+        pictures_readable(self)?;
         let Some(kind) = self.file_history()? else {
             return Ok(Cow::Borrowed(self.editor.doc()));
         };
@@ -867,6 +884,7 @@ fn list(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     // The comparison of the whole document with the newest version costs a pass over the
     // document, so a caller that polls can leave it out.
     if current {
+        pictures_readable(s)?;
         out["current_is_newest"] = match tip(s, &h)? {
             None => Value::Null,
             Some(t) => json!(State::of(s.editor.doc(), Some(&t)) == *t),
@@ -1108,6 +1126,7 @@ fn diff(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     };
     let h = read(s);
     let tip_state = if matches!(from, Side::Current) || matches!(to, Side::Current) {
+        pictures_readable(s)?;
         tip(s, &h)?
     } else {
         None

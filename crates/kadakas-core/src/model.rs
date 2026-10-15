@@ -1426,6 +1426,29 @@ impl Document {
         }
     }
 
+    /// Checks that every picture that stays in a file can still be read from it (the file is the
+    /// one that was opened). A host calls it before it works out the state of the document for the
+    /// versions or a compare, because a picture that cannot be read makes its object look as if
+    /// it were not there.
+    pub fn check_blobs(&self) -> Result<(), crate::blob::BlobError> {
+        let mut seen: Vec<usize> = Vec::new();
+        let mut result = Ok(());
+        let mut one = |lazy: Option<&std::sync::Arc<crate::blob::LazyBlob>>| {
+            let Some(l) = lazy else { return };
+            let key = std::sync::Arc::as_ptr(l.source()) as *const () as usize;
+            if result.is_ok() && !seen.contains(&key) {
+                seen.push(key);
+                result = l.source().check();
+            }
+        };
+        self.for_each_blob(&mut |b| match b {
+            DocBlob::Picture(p) => one(p.lazy()),
+            DocBlob::Image(t) => one(t.lazy()),
+            DocBlob::ImportBase(_) => {}
+        });
+        result
+    }
+
     /// Like `from_json`, for JSON that is already parsed.
     pub fn from_value(value: Value) -> Result<Document, LoadError> {
         let version = value

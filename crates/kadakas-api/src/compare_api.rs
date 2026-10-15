@@ -302,6 +302,7 @@ impl Session {
         let state = match side {
             Side::Version(id) => h.state_of(id).map_err(review_api::limit_error)?,
             Side::Current => {
+                review_api::pictures_readable(self)?;
                 let tip = review_api::tip(self, &h)?;
                 State::of(self.editor.doc(), tip.as_deref())
             }

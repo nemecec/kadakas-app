@@ -278,3 +278,69 @@ fn a_session_without_versions_has_nothing_that_waits() {
     assert!(s.editor.doc().lazy_history.is_none());
     assert_eq!(names(&mut s), Vec::<String>::new());
 }
+
+/// An underlay with a picture that is a blob of a container (about 6 KB).
+fn add_underlay(s: &mut Session) {
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+    let mut seed = 7u32;
+    for _ in 0..6000 {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        bytes.push((seed >> 24) as u8);
+    }
+    let png = kadakas_core::underlay::base64_encode(&bytes);
+    ok(
+        s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "underlay", "min": [0, 0],
+            "max": [640, 640], "width": 64, "height": 64, "png": png, "opacity": 1.0}}}),
+    );
+}
+
+#[test]
+fn a_file_that_changes_under_a_document_never_makes_a_wrong_version_or_a_wrong_diff() {
+    let dir = tmp("wrongversion");
+    let mut a = session(&dir);
+    circle(&mut a, 0.0);
+    add_underlay(&mut a);
+    ok(&mut a, "version.create", json!({"name": "v0"}));
+    circle(&mut a, 50.0);
+    let f = dir.join("a.kad");
+    ok(&mut a, "file.save", json!({"path": f}));
+
+    let mut s = open(&dir, &f);
+    assert_eq!(names(&mut s), ["v0"]);
+    assert_eq!(ok(&mut s, "version.list", json!({}))["read_only"], false);
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    // Another program replaces the file. The picture of the open document cannot be read.
+    let mut other = session(&dir);
+    circle(&mut other, 1.0);
+    ok(&mut other, "file.save", json!({"path": f}));
+    let changed = |r: &Value, what: &str| {
+        assert_eq!(r["error"]["code"], 5, "{what}: {r}");
+        assert!(
+            r["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("changed on disk"),
+            "{what}: {r}"
+        );
+    };
+    changed(
+        &rpc(&mut s, "version.create", json!({"name": "wrong"})),
+        "create",
+    );
+    changed(
+        &rpc(&mut s, "version.diff", json!({"from": 1, "to": "current"})),
+        "diff",
+    );
+    changed(&rpc(&mut s, "version.list", json!({})), "list");
+    changed(
+        &rpc(&mut s, "file.save", json!({"path": dir.join("g.kad")})),
+        "save",
+    );
+    // A call that puts the picture into its answer is refused with the reason, not as a bug of
+    // Kadakas; a call that does not need the pictures works.
+    changed(&rpc(&mut s, "objects.list", json!({})), "objects.list");
+    assert!(!s.is_tainted());
+    assert_eq!(ok(&mut s, "document.summary", json!({}))["object_count"], 3);
+}
