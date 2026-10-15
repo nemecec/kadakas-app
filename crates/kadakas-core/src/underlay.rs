@@ -487,6 +487,44 @@ impl Rgba {
 mod tests {
     use super::*;
 
+    /// The largest picture an underlay can have: 4096 x 4096 pixels of noise that does not
+    /// compress. The result sets `MAX_BLOB_TEXT` (see `crate::blob`). Run with `--ignored
+    /// --nocapture` to see the numbers.
+    #[test]
+    #[ignore = "measures the worst case picture: 64 MiB of noise"]
+    fn the_worst_case_picture_is_inside_the_bound_of_a_blob() {
+        let side = MAX_SIDE_PX as usize;
+        let mut seed = 0x1234_5678_9abc_def0u64;
+        let mut data = vec![0u8; side * side * 4];
+        for chunk in data.chunks_mut(8) {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            chunk.copy_from_slice(&seed.to_le_bytes()[..chunk.len()]);
+        }
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, side as u32, side as u32);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_compression(png::Compression::Fast);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&data).unwrap();
+        w.finish().unwrap();
+        let text = crate::underlay::base64_encode(&out);
+        println!(
+            "4096 x 4096 RGBA noise: PNG {} bytes ({:.1} MiB), base64 text {} bytes ({:.1} MiB), bound {} bytes ({} MiB)",
+            out.len(),
+            out.len() as f64 / 1048576.0,
+            text.len(),
+            text.len() as f64 / 1048576.0,
+            crate::blob::MAX_BLOB_TEXT,
+            crate::blob::MAX_BLOB_TEXT >> 20
+        );
+        assert!(text.len() < crate::blob::MAX_BLOB_TEXT);
+        // 16 bit RGBA is twice that and is not a picture the app makes (the GIS code and the image
+        // import make 8 bit RGBA); the bound is for what Kadakas writes.
+    }
+
     fn sample() -> Underlay {
         Underlay {
             name: "map".into(),

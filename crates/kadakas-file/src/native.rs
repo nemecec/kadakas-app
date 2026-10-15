@@ -196,10 +196,10 @@ impl Inspect {
     /// The memory for the second reading of the drawing, in the same unit as the other parts
     /// (the estimate multiplies the sum by 1.9). A file with versions reads its drawing again the
     /// first time the versions are used after an edit (the anchor of the history). That reading
-    /// costs 1.3 times the text of the drawing (measured in `docs/doc-load-benchmark.md`), so
-    /// the part is the text times 1.3 / 1.9.
+    /// costs the same as the open: measured, a load of 482 MB of heap and the same again for the
+    /// anchor (`docs/doc-load-benchmark.md` section 4). So the part is the text of the drawing.
     pub fn anchor_extra_bytes(&self) -> u64 {
-        (u128::from(self.anchor_bytes) * 13 / 19) as u64
+        self.anchor_bytes
     }
 }
 
