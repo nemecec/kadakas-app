@@ -31,7 +31,7 @@ fn issue(n: u64) -> Issue {
         assignee: Some("mari@example.org".into()),
         labels: vec!["planting".into(), "tree".into()],
         author: "ann@example.org".into(),
-        status: if n % 3 == 0 { IssueStatus::Resolved } else { IssueStatus::Open },
+        status: if n.is_multiple_of(3) { IssueStatus::Resolved } else { IssueStatus::Open },
         created: T0 + n as i64 * 1000,
         modified: T0 + (n * 7919 % 100_003) as i64 * 1000,
         objects: (0..3).map(|k| ObjectId::from_num(n * 3 + k + 5)).collect(),

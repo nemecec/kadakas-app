@@ -634,12 +634,19 @@ class Issues:
         return self._doc.api.issue_resolve(
             id=id, **{k: v for k, v in given.items() if v is not None})
 
-    def delete(self, id: str | Sequence[str], *, confirm: bool = False) -> JsonDict:
-        """Delete an issue, or several in one undo step. The work of somebody else needs
-        ``confirm=True``, which you may pass only after the person said yes."""
+    def delete(self, id: str | Sequence[str], *, confirm: bool = False,
+               purge_snapshots: bool = False, author: str | None = None) -> JsonDict:
+        """Delete an issue, or several in one undo step. The work of somebody else (another
+        origin or another ``author``) needs ``confirm=True``, which you may pass only after the
+        person said yes. ``purge_snapshots=True`` also removes the pictures that no other issue
+        uses, in the same undo step."""
         p: JsonDict = {"id": id} if isinstance(id, str) else {"ids": list(id)}
         if confirm:
             p["confirm"] = True
+        if purge_snapshots:
+            p["purge_snapshots"] = True
+        if author is not None:
+            p["author"] = author
         return self._doc.api.issue_delete(**p)
 
     def export_bcf(self, path: str | Path | None = None, *, version: str = "3.0",
@@ -655,7 +662,11 @@ class Issues:
     def import_bcf(self, path: str | Path | None = None, *, base64: str | None = None,
                    on_conflict: str | None = None, **params: Any) -> JsonDict:
         """Read a BCF file and add its issues. ``on_conflict`` is ``skip``, ``replace`` or
-        ``keep_both``; leave it out to be asked (a conflict raises ``KadakasError``)."""
+        ``keep_both``; leave it out to be asked (a conflict raises ``KadakasError``). Items of
+        the file that do not fit (a comment, a snapshot, a camera) are also asked about: the
+        call raises ``KadakasError`` (reason ``bcf_unfit``) with the list, and only after the
+        person agreed may you pass ``skip_items=True``. ``dry_run=True`` shows the plan.
+        ``author`` is the author of new issues that the file gives none."""
         p: JsonDict = {}
         if path is not None:
             p["path"] = str(path)

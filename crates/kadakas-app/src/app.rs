@@ -4957,7 +4957,7 @@ mod tests {
                     description: "The tree is dead.".into(),
                     assignee: Some("mari@example.org".into()),
                     labels: vec!["planting".into()],
-                    status: if n % 3 == 0 {
+                    status: if n.is_multiple_of(3) {
                         IssueStatus::Resolved
                     } else {
                         IssueStatus::Open
@@ -4984,7 +4984,7 @@ mod tests {
             let mut app = KadakasApp::blank();
             app.session = Session::with_document(doc);
             let ctx = egui::Context::default();
-            let mut frame = |app: &mut KadakasApp| {
+            let frame = |app: &mut KadakasApp| {
                 let t = std::time::Instant::now();
                 let _ = ctx.run_ui(Default::default(), |ui| {
                     app.issues_ui.palette(ui, &mut app.session, &mut app.status);
