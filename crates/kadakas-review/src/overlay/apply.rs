@@ -20,16 +20,15 @@ use super::style::{CompareStyle, Pattern, UnchangedMode};
 use super::{CompareOverlay, GhostReport, Status};
 
 /// True if a shape draws something in the plan. A picture (underlay), a group, a shape of a kind
-/// that this version does not know, an annotation (it needs the document of its own side, with
-/// worksheets) and the parts of a sheet make no ghost: a ghost never covers the plan with a
-/// picture.
+/// that this version does not know and the parts of a sheet make no ghost: a ghost never covers
+/// the plan with a picture. Annotations and site models do: they are drawn against the document
+/// of the old side, with its worksheets and site data.
 fn has_geometry(shape: &Shape) -> bool {
     !matches!(
         shape,
         Shape::Underlay(_)
             | Shape::Group { .. }
             | Shape::Unknown { .. }
-            | Shape::Annotation(_)
             | Shape::Viewport(_)
             | Shape::TitleBlock(_)
     )

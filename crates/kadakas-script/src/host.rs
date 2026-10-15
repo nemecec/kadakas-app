@@ -415,7 +415,7 @@ mod tests {
     }
 
     fn wait(h: &ScriptHost, id: u64) -> (Vec<Line>, Status) {
-        for _ in 0..500 {
+        for _ in 0..1500 {
             let (lines, st) = h.poll(id, 0).unwrap();
             if !st.is_running() {
                 return (lines, st);

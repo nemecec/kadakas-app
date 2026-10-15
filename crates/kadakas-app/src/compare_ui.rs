@@ -56,6 +56,15 @@ pub struct Compare3d {
     pub key: u64,
 }
 
+/// The look of the 3D compare scene: the ghosts of removed objects in the color of removed
+/// objects, see-through with the opacity of the style (the GPU draws them in its blend pass,
+/// far to near).
+pub(crate) fn ghost_look(t: &kadakas_review::overlay::Tinted, style: &CompareStyle) -> Look {
+    let ghosts: HashSet<ObjectId> = t.ghosts.iter().copied().collect();
+    let [r, g, b] = style.color(Status::Removed);
+    Look::ghosted(&t.scene, &|id| ghosts.contains(&id), [r, g, b], style.ghost)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tab {
     TwoSides,
@@ -323,9 +332,7 @@ impl CompareUi {
         let t = session
             .compare_tinted(&overlay, api_side(pair.0), api_side(pair.1), &style)
             .ok()?;
-        let ghosts: HashSet<ObjectId> = t.ghosts.iter().copied().collect();
-        let [r, g, b] = style.color(Status::Removed);
-        let look = Look::ghosted(&t.scene, &|id| ghosts.contains(&id), [r, g, b], style.ghost);
+        let look = ghost_look(&t, &style);
         // Each scene has a key of its own: a change of the palette, the theme or the pair
         // gives other geometry, which the GPU must upload again.
         self.scene_serial += 1;

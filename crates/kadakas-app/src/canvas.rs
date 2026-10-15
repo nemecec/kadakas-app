@@ -665,6 +665,7 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     draw_ne_grid(&painter, view, rect, f.doc);
     crate::area_ui::set_revision(f.site.map(|(_, revision)| revision));
     crate::annot_ui::set_revision(f.site.map_or(0, |(_, revision)| revision));
+    crate::annot_ui::set_document(f.doc);
     // Tag counts are made once per frame, not once per tag.
     let counts = tag_counts(f.doc);
     // Map underlays are drawn first, below the vector objects.
@@ -810,12 +811,15 @@ fn draw_ghosts(
     } else {
         counts
     };
+    // A ghost has the ID of the live object: it must not use the annotation cache of the drawing.
+    crate::annot_ui::set_ghost(true);
     for (o, k) in c.ghosts.iter().filter(|g| g.1 == kind) {
         set_grey(false);
         let base = object_style(gdoc, o, view.zoom);
         let st = crate::compare_draw::ghost_style(base, c.style, *k == "previous");
         draw_object(painter, view, gdoc, counts, o, st, DVec2::ZERO);
     }
+    crate::annot_ui::set_ghost(false);
 }
 
 fn draw_preview(painter: &Painter, view: &View, f: &Frame) {

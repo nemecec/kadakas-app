@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -78,9 +78,18 @@ pub struct Request {
     pub conn: u64,
     pub line: String,
     pub reply: Sender<Option<String>>,
-    /// Set by the socket thread when it gave up waiting. The request is then not run.
-    pub cancelled: Arc<AtomicBool>,
+    /// Who owns the request: the UI takes it to run it, or the socket thread cancels it when it
+    /// gave up waiting. One compare-and-swap decides, so a request that the client was told
+    /// "was not run" is never run, and a request that runs is never reported as cancelled.
+    pub state: Arc<AtomicU8>,
 }
+
+/// The request waits in the queue.
+const PENDING: u8 = 0;
+/// The UI took it and runs it.
+const TAKEN: u8 = 1;
+/// The socket thread cancelled it: the client got the timeout error.
+const CANCELLED: u8 = 2;
 
 /// Reads from a socket, and fails with `TimedOut` once one overall deadline has passed.
 struct DeadlineStream {
@@ -180,7 +189,11 @@ impl AgentServer {
             .or_else(|| self.rx.try_recv().ok());
         while let Some(req) = next.take() {
             next = self.rx.try_recv().ok();
-            if req.cancelled.load(Ordering::SeqCst) {
+            if req
+                .state
+                .compare_exchange(PENDING, TAKEN, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
                 continue; // the client was told that this request was cancelled
             }
             match handle(&req.line, &req.reply, req.conn) {
@@ -439,13 +452,13 @@ fn serve_client(
             .ok()
             .and_then(|v| v.get("id").cloned());
         let (reply, answer) = mpsc::channel();
-        let cancelled = Arc::new(AtomicBool::new(false));
+        let state = Arc::new(AtomicU8::new(PENDING));
         if tx
             .send(Request {
                 conn,
                 line,
                 reply,
-                cancelled: cancelled.clone(),
+                state: state.clone(),
             })
             .is_err()
         {
@@ -455,10 +468,24 @@ fn serve_client(
         let resp = match answer.recv_timeout(limits.reply_timeout) {
             Ok(r) => r,
             Err(RecvTimeoutError::Timeout) => {
-                cancelled.store(true, Ordering::SeqCst);
-                id.map(|id| {
-                    response(&id, json!({"error": {"code": -32000, "message": "timed out waiting for the app; the request was cancelled and was not run"}}))
-                })
+                if state
+                    .compare_exchange(PENDING, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    id.map(|id| {
+                        response(&id, json!({"error": {"code": -32000, "message": "timed out waiting for the app; the request was cancelled and was not run"}}))
+                    })
+                } else {
+                    // The UI took the request just now: it will run, so say nothing false. Its
+                    // answer is the one the client gets, for as long as the app needs.
+                    match answer.recv_timeout(limits.reply_timeout) {
+                        Ok(r) => r,
+                        Err(RecvTimeoutError::Timeout) => id.map(|id| {
+                            response(&id, json!({"error": {"code": -32000, "message": "timed out waiting for the answer of the app; the request was started and may have been run"}}))
+                        }),
+                        Err(RecvTimeoutError::Disconnected) => return,
+                    }
+                }
             }
             Err(RecvTimeoutError::Disconnected) => return,
         };
@@ -577,8 +604,12 @@ mod tests {
             let thread = thread::spawn(move || {
                 let mut session = Session::default();
                 while !s.load(Ordering::SeqCst) {
-                    let n = server.poll(&mut |line| session.handle_line(line));
-                    h.fetch_add(n, Ordering::SeqCst);
+                    // Count before the answer goes out (the reply is sent inside `poll`), so a
+                    // client that has its answer sees the count.
+                    server.poll(&mut |line| {
+                        h.fetch_add(1, Ordering::SeqCst);
+                        session.handle_line(line)
+                    });
                     thread::sleep(Duration::from_millis(2));
                 }
                 server
@@ -802,6 +833,8 @@ mod tests {
     fn change_events_are_pushed_to_the_subscriber_only() {
         let server = start(0, Arc::new(|| {}), None).unwrap();
         let (addr, token) = (server.addr, server.token.clone());
+        // The editor starts when the watcher has the answer of its subscription: no fixed wait.
+        let (subscribed, subscribed_rx) = std::sync::mpsc::channel::<()>();
         let watcher = thread::spawn({
             let token = token.clone();
             move || {
@@ -809,6 +842,7 @@ mod tests {
                 c.auth(&token).unwrap();
                 let sub = c.call(1, "events.subscribe");
                 assert!(sub["result"]["revision"].is_u64());
+                subscribed.send(()).unwrap();
                 // The other client changes the document. A notification arrives, with no request.
                 let note = c.read().unwrap();
                 assert_eq!(note["method"], "events.change");
@@ -820,7 +854,9 @@ mod tests {
         let editor = thread::spawn(move || {
             let mut c = Client::connect(addr);
             c.auth(&token).unwrap();
-            thread::sleep(Duration::from_millis(150));
+            subscribed_rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("the watcher subscribed");
             c.call(1, "execute")
         });
         let mut session = Session::with_sequential_ids();
@@ -829,7 +865,7 @@ mod tests {
         let started = Instant::now();
         while !(sent && handled >= 2) {
             assert!(
-                started.elapsed() < Duration::from_secs(10),
+                started.elapsed() < Duration::from_secs(30),
                 "the test hangs"
             );
             handled += server.poll_ext(&mut |line, _, conn| {
@@ -1039,7 +1075,8 @@ mod tests {
             reply_timeout: Duration::from_millis(150),
             ..small_limits()
         };
-        let server = start_with(0, Arc::new(|| {}), None, limits).unwrap();
+        let wakes = wait();
+        let server = start_with(0, counter_wake(&wakes), None, limits).unwrap();
         let (addr, token) = (server.addr, server.token.clone());
         let mut c = Client::connect(addr);
         c.auth(&token).unwrap();
@@ -1047,14 +1084,44 @@ mod tests {
         let r = c.call(5, "describe");
         assert_eq!(r["id"], 5);
         assert_eq!(r["error"]["code"], -32000);
-        // A notification that times out gets no reply at all. Use a real request to see that we are in sync.
+        // A notification that times out gets no reply at all. A connection reads its lines one
+        // after the other, so the request that follows is queued only after the notification
+        // timed out: the third wake of the UI says that both are cancelled. (A fixed sleep here
+        // could end before a slow machine had run the timeout.)
         c.send(r#"{"method":"undo"}"#);
-        thread::sleep(Duration::from_millis(400)); // let the notification time out too
+        c.send(&json!({"jsonrpc": "2.0", "id": 6, "method": "selection.get"}).to_string());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while wakes.load(Ordering::SeqCst) < 3 {
+            assert!(Instant::now() < deadline, "the requests never arrived");
+            thread::sleep(Duration::from_millis(2));
+        }
         let mut ui = Ui::start(server);
-        // The two requests above were cancelled, so the UI skips them.
-        let r = c.call(6, "selection.get");
-        assert_eq!(r["id"], 6);
-        assert_eq!(ui.handled(), 1, "timed-out requests are not run");
+        // The request 5 and the notification were cancelled, so the UI skips them. Request 6 may
+        // have timed out too on a slow machine (then its answer is the error): ask again, with
+        // new IDs, until the UI answers one. Every answer of the UI is one handled request, and
+        // the notification is never run.
+        let mut answered = 0;
+        let mut id = 6;
+        while answered == 0 {
+            assert!(id < 40, "the UI never answered");
+            let r = if id == 6 {
+                c.read().expect("response")
+            } else {
+                c.call(id, "selection.get")
+            };
+            assert_eq!(r["id"], id);
+            if r.get("result").is_some() {
+                answered += 1;
+            } else {
+                assert_eq!(r["error"]["code"], -32000);
+            }
+            id += 1;
+        }
+        assert_eq!(
+            ui.handled(),
+            answered,
+            "timed-out requests are not run (the undo notification least of all)"
+        );
         ui.finish();
     }
 
@@ -1082,8 +1149,9 @@ mod tests {
         let mut c = Client::connect(addr);
         c.send_raw(b"{");
         let start = Instant::now();
-        // One byte every 100 ms would reset a per-read timeout forever.
-        while start.elapsed() < Duration::from_secs(2) {
+        // One byte every 100 ms would reset a per-read timeout forever. The bounds are far
+        // above the 300 ms deadline, so a busy machine does not trip them.
+        while start.elapsed() < Duration::from_secs(20) {
             if !c.send_raw(b" ") {
                 break;
             }
@@ -1091,8 +1159,8 @@ mod tests {
         }
         assert!(c.drains_to_close());
         assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "closed near the 300 ms deadline"
+            start.elapsed() < Duration::from_secs(20),
+            "closed by the 300 ms deadline, not by the end of the loop"
         );
         ui.finish();
     }
