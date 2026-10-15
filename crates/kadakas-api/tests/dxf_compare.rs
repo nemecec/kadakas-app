@@ -283,7 +283,7 @@ fn the_png_overlay_tints_added_changed_and_removed_objects() {
     let mut s = Session::with_sequential_ids();
     let r = ok(
         &mut s,
-        json!({"base": base, "new": new, "render": {"format": "png", "width": 900, "height": 700}}),
+        json!({"base": base, "new": new, "render": {"format": "png", "width": 900, "height": 700, "view": "top"}}),
     );
     assert_eq!(r["image"]["format"], "png");
     assert_eq!(r["image"]["width"], 900);

@@ -29,7 +29,7 @@ use kadakas_io::dwg::{self, RunOptions, Search};
 use kadakas_io::dxf::link::{self, LinkError, ReadOptions};
 use kadakas_io::dxf::revision::Rec;
 use kadakas_io::dxf::update::{self, Built, MAX_NEW_RECS, Plan, Take, UpdateError};
-use kadakas_io::{BaseCaps, BaseMode, Format, ImportOptions, Source};
+use kadakas_io::{BaseCaps, BaseMode, ImportOptions, Source};
 use kadakas_review::overlay::{Change, CompareOverlay, Status};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -98,10 +98,6 @@ impl UpdateState {
                     .as_ref()
                     .map_or(0, |v| crate::limits::document_bytes(&v.doc) * 2)
         })
-    }
-
-    pub fn clear(&mut self) {
-        self.pending = None;
     }
 }
 
@@ -599,9 +595,4 @@ pub(crate) fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<V
         "dxf.compare" => s.dxf_compare(p),
         _ => return None,
     })
-}
-
-/// True if the path names a DXF or DWG file by its extension.
-pub fn is_drawing_path(path: &Path) -> bool {
-    Format::from_path(path) == Some(Format::Dxf) || crate::dwg_api::is_dwg(None, path)
 }

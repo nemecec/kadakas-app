@@ -798,3 +798,88 @@ fn the_update_is_in_describe() {
     let e = fail(&mut s, "import.update", json!({"path": rev2}));
     assert_eq!(e.kind, "not_found");
 }
+
+#[test]
+fn the_pending_update_has_a_preview_with_the_overlay_that_the_app_draws() {
+    let dir = temp("kadakas-update-preview");
+    let mut s = session_with(dir.path(), &base_text(), json!({}));
+    let rev2 = write(dir.path(), "plan_rev2.dxf", &revision_two());
+    assert!(s.update_preview().unwrap().is_none(), "nothing is pending");
+    assert_eq!(s.imported_drawings().len(), 1);
+    let before = s.editor.doc().clone();
+    let held = s.estimated_bytes();
+    ok(&mut s, "import.update", json!({"path": rev2}));
+    let pending = s.update_pending().unwrap();
+    assert!(
+        s.estimated_bytes() > held,
+        "the plan is part of the memory of the session"
+    );
+
+    let preview = s.update_preview().unwrap().unwrap();
+    // The document is not touched, the preview is the drawing after all changes.
+    assert_eq!(s.editor.doc(), &before);
+    assert_eq!(preview.old.objects, before.objects);
+    assert_eq!(preview.doc.objects.len(), 5);
+    let c = preview.overlay.counts();
+    assert_eq!((c.added, c.removed, c.changed), (1, 1, 2));
+    assert_eq!(preview.overlay.ghosts().count(), 1);
+    // The objects of each change, in the document after: added and changed ones are there, a
+    // removed one is only in the old document.
+    assert_eq!(preview.objects.len(), pending.plan.changes.len());
+    for (i, item) in pending.plan.changes.iter().enumerate() {
+        assert!(!preview.objects[i].is_empty(), "{item:?}");
+        for id in &preview.objects[i] {
+            let doc = if item.status == kadakas_api::ChangeKind::Removed {
+                &preview.old
+            } else {
+                &preview.doc
+            };
+            assert!(doc.objects.contains_key(id));
+        }
+    }
+    // It is made once for a plan.
+    let again = s.update_preview().unwrap().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&preview, &again));
+    // Freeing the caches drops the preview but not the plan.
+    s.drop_caches();
+    assert!(s.update_pending().is_some());
+    let rebuilt = s.update_preview().unwrap().unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&preview, &rebuilt));
+    // Discarding, and an edit, both end it.
+    s.update_discard();
+    assert!(s.update_pending().is_none() && s.update_preview().unwrap().is_none());
+    ok(&mut s, "import.update", json!({"path": rev2}));
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [9000, 9000], "radius": 20}}}),
+    );
+    assert!(s.update_preview().unwrap().is_none());
+}
+
+#[test]
+fn an_update_too_big_for_the_update_data_gives_the_choices_of_import_file() {
+    let dir = temp("kadakas-update-base-limit");
+    let mut s = session_with(dir.path(), &base_text(), json!({}));
+    let rev2 = write(dir.path(), "plan_rev2.dxf", &revision_two());
+    s.set_limits(SessionLimits {
+        base_records: 3,
+        ..SessionLimits::default()
+    });
+    let e = fail(&mut s, "import.update", json!({"path": rev2}));
+    assert_eq!(e.reason, Some(kadakas_api::REASON_BASE_TOO_MANY));
+    assert_eq!(e.details.as_ref().unwrap()["cap"], 3);
+    // The choices work for an update as they do for an import.
+    let r = ok(
+        &mut s,
+        "import.update",
+        json!({"path": rev2, "options": {"base": "none"}}),
+    );
+    assert!(r["notes"].to_string().contains("base: none"), "{r}");
+    let e = fail(
+        &mut s,
+        "import.apply",
+        json!({"update_id": r["update_id"], "accept": [1]}),
+    );
+    assert_eq!(e.kind, "invalid_params");
+}
