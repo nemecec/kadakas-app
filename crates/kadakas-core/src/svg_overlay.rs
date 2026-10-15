@@ -58,7 +58,10 @@ pub struct SvgGhost {
     pub kind: &'static str,
     /// The document that the ghost is drawn against: the old side, with its resources (symbols,
     /// styles, materials). `None`: the document that is drawn. A ghost with a document of its own
-    /// is drawn without the extensions for site models and annotations.
+    /// is drawn with the extension too, which gets that document as its first argument (so it
+    /// can tell it from the drawn one and not use the caches of the drawn one). All ghosts of one
+    /// overlay share one document (the same `Arc`): the renderer reads the tag counts of the
+    /// first one for all, and a ghost cache is for one old document.
     pub doc: Option<Arc<Document>>,
     /// Drawn before the objects of the document, so that it never covers them.
     pub below: bool,

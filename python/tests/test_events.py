@@ -74,22 +74,30 @@ def test_tcp_transport_waits_for_a_pushed_message():
     server.listen(1)
     note = {"jsonrpc": "2.0", "method": "events.change", "params": {"revision": 7}}
 
+    # The app pushes the note when the test says so (after the first wait found nothing), and
+    # keeps the connection open until the test has the note. No fixed delays: a busy machine
+    # could run them out of order.
+    push = threading.Event()
+    done = threading.Event()
+
     def app() -> None:
         conn, _ = server.accept()
         f = conn.makefile("rw", encoding="utf-8", newline="\n")
         first = json.loads(f.readline())
         f.write(json.dumps({"jsonrpc": "2.0", "id": first["id"], "result": {"ok": True}}) + "\n")
         f.flush()
-        time.sleep(0.2)
+        push.wait(30)
         f.write(json.dumps(note) + "\n")
         f.flush()
-        time.sleep(1)
+        done.wait(30)
         conn.close()
 
     threading.Thread(target=app, daemon=True).start()
     t = _rpc.TcpTransport("127.0.0.1", server.getsockname()[1], "tok", timeout=5)
     assert t.wait_notifications(0.01) == []
-    assert t.wait_notifications(3) == [note]
+    push.set()
+    assert t.wait_notifications(30) == [note]
+    done.set()
     t.close()
     server.close()
 
@@ -122,7 +130,6 @@ def test_waiting_does_not_block_other_threads():
     import json
     import socket
     import threading
-    import time
 
     from kadakas import _rpc
 
@@ -130,8 +137,11 @@ def test_waiting_does_not_block_other_threads():
     server.bind(("127.0.0.1", 0))
     server.listen(1)
 
+    held = {}
+
     def app() -> None:
         conn, _ = server.accept()
+        held["conn"] = conn
         f = conn.makefile("rw", encoding="utf-8", newline="\n")
         for line in f:
             req = json.loads(line)
@@ -140,12 +150,30 @@ def test_waiting_does_not_block_other_threads():
 
     threading.Thread(target=app, daemon=True).start()
     t = _rpc.TcpTransport("127.0.0.1", server.getsockname()[1], "tok", timeout=5)
-    waiter = threading.Thread(target=lambda: t.wait_notifications(2.0), daemon=True)
+    waiting = threading.Event()
+
+    # Signal from inside the wait, where the transport holds its lock (and releases it between
+    # the short turns), so the request below really meets a waiting thread.
+    real_wait = t._wait_for_note
+
+    def hooked_wait(turn: float) -> bool:
+        waiting.set()
+        return real_wait(turn)
+
+    t._wait_for_note = hooked_wait
+
+    def wait_for_a_note() -> None:
+        t.wait_notifications(30.0)
+
+    waiter = threading.Thread(target=wait_for_a_note, daemon=True)
     waiter.start()
-    time.sleep(0.1)
-    started = time.monotonic()
+    assert waiting.wait(30)
     assert t.request("ping") == {"ok": True}
-    assert time.monotonic() - started < 1.0, "a request waited for the whole wait"
-    waiter.join(5)
+    # The wait is 30 s and nobody pushed a note: if the request came back, it did not wait for it.
+    assert waiter.is_alive(), "a request waited for the whole wait"
+    # Now push a note, so the waiter ends.
+    held["conn"].sendall((json.dumps({"jsonrpc": "2.0", "method": "events.change", "params": {"revision": 1}}) + "\n").encode())
+    waiter.join(30)
+    assert not waiter.is_alive()
     t.close()
     server.close()

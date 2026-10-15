@@ -475,7 +475,7 @@ impl Session {
                         tint,
                     };
                     (
-                        crate::svg_of(doc, width, revision, site, annot, Some(&ov)),
+                        crate::svg_of(doc, width, revision, site, annot, Some(&ov), None),
                         r,
                     )
                 });

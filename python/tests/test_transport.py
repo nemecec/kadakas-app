@@ -29,6 +29,7 @@ class Bridge:
         self.port = self.server.getsockname()[1]
         self.proc = subprocess.Popen([str(binary), "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         self.refused = 0
+        self.answers = 0  # answers written to a client, delayed ones too
         threading.Thread(target=self._accept, daemon=True).start()
 
     def _accept(self) -> None:
@@ -59,6 +60,7 @@ class Bridge:
                 self.delay = 0.0
             f.write(answer)
             f.flush()
+            self.answers += 1
 
     def close(self) -> None:
         self.server.close()
@@ -150,25 +152,39 @@ def test_a_dead_process_is_reported(kadakas_bin):
 
 
 def test_a_timeout_does_not_break_the_connection(bridge):
-    doc = kadakas.connect(f"127.0.0.1:{bridge.port}", TOKEN, timeout=0.4)
+    # Connect and make the first call with a long timeout (a busy machine is slow), then use a
+    # short one for the call that must time out.
+    doc = kadakas.connect(f"127.0.0.1:{bridge.port}", TOKEN, timeout=30)
     doc.add.circle([0, 0], 5)
+    doc._transport._timeout = 0.4
+    doc._transport._sock.settimeout(0.4)
     bridge.delay = 1.0  # the next answer comes late
+    sent = bridge.answers
     with pytest.raises(kadakas.RequestTimeout):
         doc.summary()
-    # The late answer is thrown away by its ID. The next call gets its own answer.
-    time.sleep(1.2)
+    # Wait until the late answer is on the wire (not a fixed pause: a busy machine is slower).
+    deadline = time.monotonic() + 30
+    while bridge.answers == sent:
+        assert time.monotonic() < deadline, "the bridge never sent the late answer"
+        time.sleep(0.01)
+    # The late answer is thrown away by its ID. The next call gets its own answer. The timeout
+    # of this call is long, so that a busy machine does not turn it into a second timeout.
+    doc._transport._timeout = 30.0
+    doc._transport._sock.settimeout(30.0)
     assert doc.summary()["object_count"] == 1
     assert [o.kind for o in doc.objects()] == ["circle"]
     doc.close()
 
 
 def test_a_late_answer_that_arrives_during_the_next_call_is_skipped(bridge):
-    doc = kadakas.connect(f"127.0.0.1:{bridge.port}", TOKEN, timeout=0.4)
+    doc = kadakas.connect(f"127.0.0.1:{bridge.port}", TOKEN, timeout=30)
+    doc._transport._timeout = 0.4
+    doc._transport._sock.settimeout(0.4)
     bridge.delay = 0.7
     with pytest.raises(kadakas.RequestTimeout):
         doc.summary()
     # No pause: the next call reads the old answer first, skips it, and waits for its own.
-    doc._transport._timeout = 3.0
-    doc._transport._sock.settimeout(3.0)
+    doc._transport._timeout = 30.0
+    doc._transport._sock.settimeout(30.0)
     assert doc.summary()["object_count"] == 0
     doc.close()

@@ -431,17 +431,16 @@ fn document_keys(doc: &Document, keep_ties: bool) -> BTreeMap<Target, String> {
         keep_ties,
         &mut out,
     );
-    let mut per_layer: BTreeMap<kadakas_core::model::LayerId, Vec<(Target, Option<String>)>> =
-        BTreeMap::new();
-    for o in doc.objects.values() {
-        per_layer
-            .entry(o.layer)
-            .or_default()
-            .push((Target::new(Kind::Object, o.id.0), stored_key(&o.extra)));
-    }
-    for items in per_layer.into_values() {
-        lists_keys(items, keep_ties, &mut out);
-    }
+    // The objects are one list over all layers: the stacking order of the document is one list
+    // (it is the drawing order), and `materialize` sorts all objects by key.
+    lists_keys(
+        doc.objects
+            .values()
+            .map(|o| (Target::new(Kind::Object, o.id.0), stored_key(&o.extra)))
+            .collect(),
+        keep_ties,
+        &mut out,
+    );
     out
 }
 
@@ -453,15 +452,15 @@ fn key_in(r: &Replica, t: Target) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The operations that give a new key to every object that is out of place in the list of its
-/// layer (and to every layer out of place in the list of layers, if `layers_too`). `only` limits
-/// the objects to these layers. The keys of the others stay.
-fn order_ops(
-    shadow: &Replica,
-    doc: &Document,
-    only: Option<&BTreeSet<kadakas_core::model::LayerId>>,
-    layers_too: bool,
-) -> Vec<Op> {
+/// The operations that give a new key to every object that is out of place in the list of all
+/// objects (if `objects_too`), and to every layer out of place in the list of layers (if
+/// `layers_too`). The keys of the others stay.
+///
+/// The objects are **one** list, not a list for each layer: the stacking order of the document is
+/// the order of all objects (the drawing order), and every client builds it by sorting all
+/// objects by key (`materialize`). Keys that only increase inside each layer would let the
+/// document of the author keep an order that the others do not build.
+fn order_ops(shadow: &Replica, doc: &Document, objects_too: bool, layers_too: bool) -> Vec<Op> {
     let mut ops = Vec::new();
     let mut emit = |items: Vec<Target>| {
         // A thing that the replica has deleted stays deleted: it takes no key.
@@ -486,17 +485,13 @@ fn order_ops(
                 .collect(),
         );
     }
-    let mut per_layer: BTreeMap<kadakas_core::model::LayerId, Vec<Target>> = BTreeMap::new();
-    for o in doc.objects.values() {
-        if only.is_none_or(|s| s.contains(&o.layer)) {
-            per_layer
-                .entry(o.layer)
-                .or_default()
-                .push(Target::new(Kind::Object, o.id.0));
-        }
-    }
-    for items in per_layer.into_values() {
-        emit(items);
+    if objects_too {
+        emit(
+            doc.objects
+                .values()
+                .map(|o| Target::new(Kind::Object, o.id.0))
+                .collect(),
+        );
     }
     ops
 }
@@ -601,18 +596,17 @@ pub fn ops_from_change(view: &Replica, doc: &Document, cs: &ChangeSet) -> Vec<Op
         .flat_map(|t| diff_thing(view, t, props_of(doc, t)))
         .collect();
     // Objects that were added or changed may have a new place in the stacking order.
-    let layers: BTreeSet<kadakas_core::model::LayerId> = cs
+    let objects_too = cs
         .added
         .objects
         .iter()
         .chain(&cs.changed.objects)
-        .filter_map(|id| doc.object(*id).map(|o| o.layer))
-        .collect();
+        .any(|id| doc.object(*id).is_some());
     let layers_too = cs.op == "move_layer"
         || [&cs.added, &cs.changed, &cs.removed]
             .iter()
             .any(|ids| !ids.layers.is_empty());
-    ops.extend(order_ops(view, doc, Some(&layers), layers_too));
+    ops.extend(order_ops(view, doc, objects_too, layers_too));
     order(ops)
 }
 
@@ -633,7 +627,7 @@ pub fn ops_from_diff(view: &Replica, doc: &Document) -> Vec<Op> {
             ops.extend(diff_thing(view, *t, None));
         }
     }
-    ops.extend(order_ops(view, doc, None, true));
+    ops.extend(order_ops(view, doc, true, true));
     order(ops)
 }
 

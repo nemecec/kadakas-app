@@ -1707,6 +1707,53 @@ mod real_commands {
         );
     }
 
+    /// The stacking order is one list of all objects (it is the drawing order), and every client
+    /// builds it by sorting all objects by key. The keys of a local `arrange` must therefore be
+    /// made in the list of all objects, not only in the list of one layer: else the author keeps
+    /// an order that the others do not build (a shrunk proptest case, seed `55656a0c`).
+    #[test]
+    fn an_arrange_on_a_second_layer_keeps_the_order_of_the_author() {
+        let a = seeded(1);
+        let hub = Hub::new(Sequencer::new(docsync::replica_of(a.editor.doc())));
+        let mut sessions = [a, seeded(2)];
+        for s in &mut sessions {
+            s.set_collab_endpoint(Box::new(hub.endpoint()));
+            s.handle("collab.connect", json!({"now_ms": 1})).unwrap();
+        }
+        let mut now = 1_000;
+        let rect = |x: i32, layer: Option<&str>| {
+            let mut c = json!({"op": "add_object",
+                "shape": {"kind": "rect", "min": [x, 0], "max": [x + 10, 10]}});
+            if let Some(l) = layer {
+                c["layer"] = json!(l);
+            }
+            c
+        };
+        // 1. A draws P on the first layer, adds a second layer and draws Q on it. Sync: P and Q
+        //    both get the key `a0` (each is the first of its layer, before the fix).
+        let a = &mut sessions[0];
+        exec(a, rect(0, None));
+        exec(a, json!({"op": "add_layer", "name": "Two"}));
+        let layer = a.editor.doc().layers[1].id.0.to_string();
+        exec(a, rect(20, Some(&layer)));
+        settle(&mut sessions, &hub, &mut now);
+        // 2. A draws S on the second layer and brings Q one step forward, past S.
+        let a = &mut sessions[0];
+        exec(a, rect(40, Some(&layer)));
+        let [p, q, s] = <[String; 3]>::try_from(object_ids(a)).unwrap();
+        exec(a, json!({"op": "arrange", "ids": [q], "how": "forward"}));
+        assert_eq!(object_ids(a), vec![p.clone(), s.clone(), q.clone()]);
+        // 3. Sync. A keeps its order (it built nothing new). B must build the same order. Before
+        //    the fix S got a key before `a0` in the list of its layer only, so B sorted S behind P.
+        settle(&mut sessions, &hub, &mut now);
+        assert_eq!(
+            object_ids(&sessions[0]),
+            vec![p.clone(), s.clone(), q.clone()]
+        );
+        assert_eq!(object_ids(&sessions[1]), vec![p, s, q]);
+        assert!(same(&sessions[0], &sessions[1]));
+    }
+
     /// Two objects of two users tie on their key. One user then puts a new object between them: the
     /// tied run gets new keys, so the order is the same on both sides.
     #[test]

@@ -229,7 +229,8 @@ impl Session {
     ) -> (String, GhostReport) {
         self.with_shown(shown, |doc, revision, site, annot| {
             let ov = SvgCompare::new(doc, old, overlay, style);
-            let svg = crate::svg_of(doc, width, revision, site, annot, Some(&ov));
+            let ghost = old.map(|o| self.ghost_caches.for_doc(o));
+            let svg = crate::svg_of(doc, width, revision, site, annot, Some(&ov), ghost);
             (svg, ov.report())
         })
     }
@@ -301,7 +302,7 @@ impl Session {
         let half = (width.clamp(16, 8192).saturating_sub(GAP_PX) / 2).max(16);
         let svg_of = |s: &Session, shown: &ShownDoc| {
             s.with_shown(shown, |doc, revision, site, annot| {
-                crate::svg_of(doc, half, revision, site, annot, Some(&view))
+                crate::svg_of(doc, half, revision, site, annot, Some(&view), None)
             })
         };
         let (sa, sb) = (svg_of(self, &a), svg_of(self, &b));

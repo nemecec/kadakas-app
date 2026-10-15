@@ -223,7 +223,8 @@ impl Session {
             + self.editor.history_bytes()
             + self.editor.log_bytes()
             + self.mesh_cache.approx_bytes()
-            + self.compare.approx_bytes();
+            + self.compare.approx_bytes()
+            + self.ghost_caches.held_bytes();
         // The update from DXF that waits for `import.apply` (native only).
         #[cfg(not(target_arch = "wasm32"))]
         let bytes = bytes + self.update_bytes_held();
@@ -261,6 +262,7 @@ impl Session {
         self.annot_cache = Default::default();
         self.worksheet_cache = Default::default();
         self.site_cache = Default::default();
+        self.ghost_caches = Default::default();
     }
 
     /// Checks the limits after a call. `steps` is the number of undo steps the call added, and
