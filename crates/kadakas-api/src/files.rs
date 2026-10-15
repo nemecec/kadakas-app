@@ -205,7 +205,7 @@ fn file_call_inner(
             form: save_form(params, &p)?,
             keep: s.file_source.iter().cloned().collect(),
         };
-        let doc = s.document_for_save()?;
+        let doc = s.document_for_save_in(spec.form == Form::Container)?;
         write(&p, &doc, &spec).map_err(|e| write_error(&p, e))?;
         s.collab_mark_saved();
         s.doc_dir = dir_of(&p);

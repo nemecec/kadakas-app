@@ -874,29 +874,35 @@ impl Session {
 
     /// A session for an opened document, with empty history and selection.
     pub fn with_document(mut doc: Document) -> Self {
-        let cache = review_api::vet_document(&mut doc, SessionLimits::default().read_caps());
+        let mut cache = review_api::vet_document(&mut doc, SessionLimits::default().read_caps());
         let notes = doc.load_notes().to_vec();
-        let mut s = Session::with_vetted_document(doc);
+        let (mut s, exact) = Session::with_vetted_document(doc);
         s.load_notes = notes;
+        cache.arm(s.editor.revision(), exact);
         s.review = cache;
         s
     }
 
-    /// Like `with_document`, for a document whose history was checked already.
-    fn with_vetted_document(mut doc: Document) -> Self {
+    /// Like `with_document`, for a document whose history was checked already. The flag is true
+    /// when the document is as it was read (an old file gets a project GUID in memory, which it
+    /// had not in the file).
+    fn with_vetted_document(mut doc: Document) -> (Self, bool) {
         // An old file has no project GUID. It gets one in memory, and the next save writes it.
-        doc.ensure_project_guid();
-        Session {
-            editor: Editor::new(doc),
-            ..Session::blank()
-        }
+        let exact = !doc.ensure_project_guid();
+        (
+            Session {
+                editor: Editor::new(doc),
+                ..Session::blank()
+            },
+            exact,
+        )
     }
 
     /// Replaces the document, as `document.load` does. Sets the `replaced` flag. The history of
     /// versions of the new document is checked against the limits of the session; what was
     /// repaired or dropped is returned as notes (they are also the load notes of the document).
     pub fn replace_document(&mut self, mut doc: Document) -> Vec<String> {
-        let cache = review_api::vet_document(&mut doc, self.limits.read_caps());
+        let mut cache = review_api::vet_document(&mut doc, self.limits.read_caps());
         let notes = doc.load_notes().to_vec();
         #[cfg(not(target_arch = "wasm32"))]
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
@@ -914,13 +920,15 @@ impl Session {
         let mut hub = std::mem::take(&mut self.events);
         hub.document_replaced();
         let sequential = self.sequential_ids;
+        let (fresh, exact) = Session::with_vetted_document(doc);
         *self = Session {
             replaced: true,
             view: self.view,
             snap: self.snap,
-            ..Session::with_vetted_document(doc)
+            ..fresh
         };
         self.events = hub;
+        cache.arm(self.editor.revision(), exact);
         self.review = cache;
         self.feedback = feedback;
         self.collab = collab;

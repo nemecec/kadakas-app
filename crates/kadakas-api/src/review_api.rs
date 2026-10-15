@@ -105,6 +105,16 @@ pub fn describe() -> Value {
     })
 }
 
+/// A history that still waits in the file the document was opened from (DOC-21).
+pub(crate) struct Pending {
+    loader: Arc<dyn kadakas_core::history::HistoryLoader>,
+    /// The revision of the editor right after the open.
+    rev: u64,
+    /// True if the document in memory is the document in the file (the open changed nothing in
+    /// it). Then, as long as the revision is `rev`, the document is the anchor of the history.
+    exact: bool,
+}
+
 /// What the cache holds for one history.
 struct Cached {
     serial: u64,
@@ -119,6 +129,9 @@ struct Cached {
 #[derive(Default)]
 pub struct ReviewCache {
     cached: Option<Cached>,
+    /// The history waits in the file; it is read, checked and put into the document when a call
+    /// needs it (`resolve`). While it is set, `Document::history` is `None`.
+    pub(crate) pending: Option<Pending>,
     /// The state of the newest version, for the serial of the history it was made from.
     tip: Option<(u64, Option<Arc<State>>)>,
     /// The anchors of the histories that this session has had (see the module text of
@@ -138,6 +151,23 @@ pub struct ReviewCache {
 }
 
 impl ReviewCache {
+    /// Tells the cache the revision of the editor right after the open, and whether the document
+    /// is the one in the file (`Pending::exact`).
+    pub(crate) fn arm(&mut self, rev: u64, exact: bool) {
+        if let Some(p) = &mut self.pending {
+            p.rev = rev;
+            p.exact = exact;
+        }
+    }
+
+    /// True while the history waits in the file and the document in memory is the one in the
+    /// file: a save may copy the entries of the history as they are.
+    pub(crate) fn waits_unchanged(&self, revision: u64) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|p| p.exact && p.rev == revision)
+    }
+
     /// Keeps a history that is the parsed form of this JSON.
     fn keep(&mut self, data: &HistoryData, history: Arc<History>, notes: Vec<String>) {
         self.cached = Some(Cached {
@@ -195,11 +225,44 @@ impl SessionLimits {
 /// the anchor of the history in memory.
 pub fn vet_document(doc: &mut Document, caps: ReadCaps) -> ReviewCache {
     let mut cache = ReviewCache::default();
+    // A history that waits in the file is read when it is used (`resolve`).
+    if doc.history.is_none()
+        && let Some(loader) = doc.lazy_history.clone()
+    {
+        cache.pending = Some(Pending {
+            loader,
+            rev: 0,
+            exact: false,
+        });
+        return cache;
+    }
     let Some(data) = doc.history.clone() else {
         return cache;
     };
+    let vetted = vet(doc, data, caps);
+    doc.history = Some(vetted.data);
+    for n in vetted.notes {
+        doc.add_load_note(n);
+    }
+    vetted.cache
+}
+
+/// The result of the check of a history (see [`vet`]).
+struct Vetted {
+    /// The history, with the anchor drawing that it keeps alive.
+    data: HistoryData,
+    cache: ReviewCache,
+    /// What could not be read, and the sentence about the read only state.
+    notes: Vec<String>,
+}
+
+/// Checks a history against the drawing it was written against. `doc` is that drawing.
+fn vet(doc: &Document, data: HistoryData, caps: ReadCaps) -> Vetted {
+    let mut cache = ReviewCache::default();
+    let mut out = Vec::new();
     let (history, notes) = read_history(doc, &data, &[], caps);
     cache.parses += 1;
+    let mut data = data;
     // The drawing is the anchor of the history now: the session keeps it, because the drawing
     // changes with the first edit.
     if let Some(h) = &history {
@@ -208,13 +271,11 @@ pub fn vet_document(doc: &mut Document, caps: ReadCaps) -> ReviewCache {
         // (so an undo back to it can read it, however the drawing was edited).
         let anchor = h.anchor_pair().1;
         let bytes = anchor.bytes();
-        doc.history = Some(data.clone().with_keepalive(anchor, bytes));
+        data = data.with_keepalive(anchor, bytes);
     }
-    for n in &notes {
-        doc.add_load_note(n.clone());
-    }
+    out.extend(notes.iter().cloned());
     if !notes.is_empty() {
-        doc.add_load_note(
+        out.push(
             "The versions of this file are kept as they are and are read only until you choose to keep only the part that could be read."
                 .into(),
         );
@@ -223,7 +284,61 @@ pub fn vet_document(doc: &mut Document, caps: ReadCaps) -> ReviewCache {
         cache.opaque_base = written_against(data.top(), data.blob_list(), doc);
     }
     cache.keep(&data, Arc::new(history.unwrap_or_default()), notes);
-    cache
+    Vetted {
+        data,
+        cache,
+        notes: out,
+    }
+}
+
+/// Reads the history that waits in the file, checks it and puts it into the document (DOC-21). A
+/// call that uses the history does this first (`read`). The history is checked against the drawing
+/// as the file holds it: the document in memory if it is that drawing still, else the drawing read
+/// again from the file. If the file cannot be read (it changed on disk, an entry is damaged) the
+/// history stays unread, the session treats it as read only, and a save is refused until the
+/// person decides (`version.repair {confirm: true}` drops it).
+pub(crate) fn resolve(s: &mut Session) {
+    let Some(p) = s.review.pending.take() else {
+        return;
+    };
+    let failed = |s: &mut Session, p: Pending, why: String| {
+        let note = format!(
+            "the versions of this file could not be read: {why}. They stay in the file as they are, and are read only"
+        );
+        s.review.cached = Some(Cached {
+            serial: 0,
+            history: Arc::new(History::new()),
+            notes: vec![note],
+        });
+        s.review.pending = Some(p);
+    };
+    let data = match p.loader.load() {
+        Ok(d) => d,
+        Err(e) => return failed(s, p, e),
+    };
+    let caps = s.limits.read_caps();
+    let anchor_doc;
+    let drawing: &Document = if p.exact && s.editor.revision() == p.rev {
+        s.editor.doc()
+    } else {
+        match p.loader.anchor() {
+            Ok(d) => {
+                anchor_doc = d;
+                &anchor_doc
+            }
+            Err(e) => return failed(s, p, e),
+        }
+    };
+    let vetted = vet(drawing, data, caps);
+    s.load_notes.extend(vetted.notes.iter().cloned());
+    s.editor.adopt_history(Some(vetted.data), vetted.notes);
+    s.review = vetted.cache;
+}
+
+/// True while the history cannot be changed: it waits in a file that cannot be read, or it was
+/// read with notes.
+fn read_only(s: &Session) -> bool {
+    s.review.pending.is_some() || (s.editor.doc().history.is_some() && !notes(s).is_empty())
 }
 
 /// Reads a history. Returns the history that could be read, and what could not.
@@ -281,6 +396,15 @@ fn limit_reached(info: &LimitInfo) -> RpcError {
 /// The history of the open document (an empty one if there is none) and what could not be read.
 /// A history with notes is read only.
 pub(crate) fn read(s: &mut Session) -> Arc<History> {
+    resolve(s);
+    if s.review.pending.is_some() {
+        // The history waits in a file that cannot be read: nothing of it is shown.
+        return s
+            .review
+            .cached
+            .as_ref()
+            .map_or_else(|| Arc::new(History::new()), |c| c.history.clone());
+    }
     let Some(data) = s.editor.doc().history.clone() else {
         s.review.forget();
         return Arc::new(History::new());
@@ -311,7 +435,7 @@ fn notes(s: &Session) -> &[String] {
 /// The history, for a call that changes it: refused while the history is read only.
 fn writable(s: &mut Session) -> Result<Arc<History>, RpcError> {
     let h = read(s);
-    if s.editor.doc().history.is_some() && !notes(s).is_empty() {
+    if read_only(s) {
         return Err(read_only_error(notes(s)));
     }
     Ok(h)
@@ -427,6 +551,17 @@ impl Session {
     /// drawing written into its objects and layers, so that the file gives the versions back
     /// when it is read. A history that could not be read completely is written as it is.
     pub fn document_for_save(&mut self) -> Result<Cow<'_, Document>, RpcError> {
+        self.document_for_save_in(false)
+    }
+
+    /// Like [`Session::document_for_save`], told whether the save is a container (DOC-20). A
+    /// history that waits in the file, and a document that is still the one in the file, need no
+    /// work for a container: the writer copies the entries of the history as they are, without
+    /// reading them. Everything else reads the history first.
+    pub fn document_for_save_in(&mut self, container: bool) -> Result<Cow<'_, Document>, RpcError> {
+        if container && self.review.waits_unchanged(self.editor.revision()) {
+            return Ok(Cow::Borrowed(self.editor.doc()));
+        }
         let Some(kind) = self.file_history()? else {
             return Ok(Cow::Borrowed(self.editor.doc()));
         };
@@ -442,6 +577,15 @@ impl Session {
     /// What a file needs of the history of this session to write it for a drawing (see
     /// `FileHistory::write_for`). `None` if the session has no history.
     fn file_history(&mut self) -> Result<Option<FileHistory>, RpcError> {
+        resolve(self);
+        if self.review.pending.is_some() {
+            let why = notes(self).first().cloned().unwrap_or_default();
+            return Err(RpcError::conflict(format!(
+                "{why}. The file cannot be saved without losing them. Save to a container from the unchanged document, or drop the versions with version.repair {{confirm: true}} if the person agrees"
+            ))
+            .with_reason(REASON_HISTORY_READONLY)
+            .with_details(json!({"notes": notes(self), "ask_the_person": true})));
+        }
         let Some(data) = self.editor.doc().history.clone() else {
             return Ok(None);
         };
@@ -481,9 +625,10 @@ impl Session {
     /// `vet_document`), without the other changes that `replace_document` makes. For a host that
     /// starts a session with a file.
     pub fn adopt_document(&mut self, mut doc: Document) {
-        let cache = vet_document(&mut doc, self.limits.read_caps());
+        let mut cache = vet_document(&mut doc, self.limits.read_caps());
         self.load_notes = doc.load_notes().to_vec();
         self.editor = kadakas_core::command::Editor::new(doc);
+        cache.arm(self.editor.revision(), true);
         self.review = cache;
     }
 }
@@ -698,7 +843,7 @@ fn list(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let h = read(s);
     let versions: Vec<Value> = h.versions().map(|v| meta_json(&h, v.id)).collect();
     let l = s.limits.version_limits().clamped();
-    let read_only = s.editor.doc().history.is_some() && !notes(s).is_empty();
+    let read_only = read_only(s);
     let mut out = json!({
         "read_only": read_only,
         "versions": versions,
@@ -871,6 +1016,12 @@ fn repair(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     }
     let h = read(s);
     let reasons = notes(s).to_vec();
+    if s.review.pending.is_some() {
+        // The versions wait in a file that cannot be read: dropping them is the only way on.
+        s.editor.adopt_history(None, Vec::new());
+        s.review = ReviewCache::default();
+        return Ok(json!({"kept": 0, "notes": reasons}));
+    }
     if s.editor.doc().history.is_none() || reasons.is_empty() {
         return Err(RpcError::conflict(
             "the history of this file was read completely: there is nothing to repair",

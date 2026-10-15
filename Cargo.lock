@@ -2667,6 +2667,7 @@ dependencies = [
  "kadakas-annot",
  "kadakas-collab",
  "kadakas-collab-ws",
+ "kadakas-container",
  "kadakas-core",
  "kadakas-crs",
  "kadakas-feedback",

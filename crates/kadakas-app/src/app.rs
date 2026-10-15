@@ -1273,7 +1273,10 @@ impl KadakasApp {
             &path,
             self.session.file_source.iter().cloned().collect(),
         );
-        let written = match self.session.document_for_save() {
+        let written = match self
+            .session
+            .document_for_save_in(spec.form == kadakas_file::Form::Container)
+        {
             Ok(doc) => file_io::write_document_as(&path, &doc, &spec),
             Err(e) => Err(e.message),
         };

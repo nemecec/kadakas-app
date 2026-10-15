@@ -64,7 +64,7 @@ pub fn open_picked_bytes(bytes: Vec<u8>) -> Result<Opened, String> {
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // the browser build uses it
 pub fn container_bytes(session: &mut Session) -> Result<Vec<u8>, String> {
     let keep: Vec<_> = session.file_source.iter().cloned().collect();
-    let doc = session.document_for_save().map_err(|e| e.message)?;
+    let doc = session.document_for_save_in(true).map_err(|e| e.message)?;
     let opts = kadakas_file::WriteOptions {
         generator: kadakas_file::generator(),
         keep,

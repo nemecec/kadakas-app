@@ -37,6 +37,7 @@ kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
 tempfile = "3"
 
 [dev-dependencies]
+kadakas-container = { version = "0.1.0", path = "../kadakas-container" }
 # The tests make a command panic (`kadakas_core::fault`). Not shipped.
 kadakas-core = { version = "0.1.0", path = "../kadakas-core", features = ["fault-injection"] }
 png = "0.18"
