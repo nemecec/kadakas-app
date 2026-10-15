@@ -14,7 +14,7 @@ serializable, undoable command. The desktop app, scripts and AI agents all send 
 - `crates/kadakas-cli`: the `kadakas` command for scripts and agents (JSON-RPC over stdio, MCP server, SVG render).
 - `crates/kadakas-app`: the desktop app (egui). It can also serve the API over TCP to agents.
 
-Documents are JSON files with the extension `.kad`. Units are millimeters, the Y axis points up, angles are in radians.
+A document is a file with the extension `.kad`: a ZIP container with the drawing (`document.json`), the pictures (`blobs/`), the versions (`history/`) and a manifest of sizes and SHA-256 hashes (any ZIP tool opens it, `docs/doc-load-benchmark.md` has the numbers). The pictures and the versions stay in the file until they are used. The plain JSON form (`.json`, pictures as base64) is for git and diffs: `kadakas convert drawing.kad drawing.json`, and back. Units are millimeters, the Y axis points up, angles are in radians.
 See `docs/feature-spec.md` for the plan.
 
 ## Build
@@ -64,6 +64,7 @@ Import and export (File > Import... and File > Export... in the app, `import.fil
 kadakas import site.dxf -o drawing.kad                                # DXF layers become classes
 kadakas import trees.geojson -o drawing.kad --into drawing.kad  # GIS data sets the georeference
 kadakas import site.dxf -o d.kad --options '{"layer_mode": "layers", "unit": "m"}'
+kadakas convert drawing.kad drawing.json                               # the plain JSON form, for git and diffs
 kadakas export drawing.kad -o out.dxf --options '{"unit": "m"}'
 kadakas export drawing.kad -o site.ifc                                 # IFC4; the first export stores a project GUID in the file
 kadakas import model.ifc -o drawing.kad                                # IFC2x3, IFC4 or IFC4x3
