@@ -15,6 +15,7 @@ use crate::store::{MemoryBackend, StoreBackend};
 const LIMITS: HardenLimits = HardenLimits {
     fuel: 100_000,
     memory_bytes: 64 << 20,
+    host_imports: false,
 };
 
 fn probe(name: &str) -> Vec<u8> {

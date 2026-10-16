@@ -25,3 +25,7 @@ sha2 = "0.11.0"
 sha2 = "0.11.0"
 # Checks the imports and exports of the module that the build made.
 wasmparser = { version = "0.258.3", default-features = false, features = ["std"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The tests run the metered engine (the engine of the browser) on a plain wasmtime compiler.
+kadakas-plugin = { version = "0.1.0", path = "../kadakas-plugin", features = ["testkit"] }

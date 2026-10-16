@@ -15,14 +15,16 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use base64::Engine as _;
 use js_sys::{Array, ArrayBuffer, BigInt, Function, Object, Reflect, Uint8Array, WebAssembly};
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 
 use crate::harden::{HardenLimits, harden};
-use crate::metered::{Compiler, MeteredRuntime, RawError, RawInstance, RawModule};
+use crate::metered::{Compiler, HostLink, MeteredRuntime, RawError, RawInstance, RawModule};
 use crate::runtime::{Limits, PluginError};
 use crate::store::{MemoryBackend, ModuleStore, StoreBackend, safe_name};
 use crate::trust;
@@ -75,8 +77,29 @@ pub async fn precompile(wasm: &[u8], limits: &Limits) -> Result<(), PluginError>
         &HardenLimits {
             fuel: limits.start_fuel(),
             memory_bytes: limits.memory_bytes,
+            host_imports: false,
         },
     )?;
+    compile_in_advance(hardened).await
+}
+
+/// Like [`precompile`], for a hosted module (the script engine, see `crate::runtime::HostedModule`):
+/// it may import `kadakas.call` and `kadakas.read`, and it has the fuel of a whole run. The app
+/// calls it once, before the first script runs, because the synchronous compile of a module of
+/// this size is refused on the main thread of Chrome.
+pub async fn precompile_hosted(wasm: &[u8], limits: &Limits) -> Result<(), PluginError> {
+    let hardened = harden(
+        wasm,
+        &HardenLimits {
+            fuel: limits.fuel,
+            memory_bytes: limits.memory_bytes,
+            host_imports: true,
+        },
+    )?;
+    compile_in_advance(hardened).await
+}
+
+async fn compile_in_advance(hardened: Vec<u8>) -> Result<(), PluginError> {
     let key = trust::hash(&hardened);
     if PRECOMPILED.with(|p| p.borrow().contains_key(&key)) {
         return Ok(());
@@ -153,8 +176,72 @@ impl RawModule for JsModule {
 
     fn instantiate(&self) -> Result<Box<dyn RawInstance>, RawError> {
         // No imports: the import object is empty.
+        self.build(&Object::new(), Vec::new(), Rc::default())
+    }
+
+    fn instantiate_hosted(
+        &self,
+        link: Rc<dyn HostLink>,
+    ) -> Result<Box<dyn RawInstance>, RawError> {
+        // The imports need the memory of the instance, which exists only after the instance. The
+        // closures find it in this cell.
+        let memory: Rc<RefCell<Option<WebAssembly::Memory>>> = Rc::default();
+        let bytes_at = |memory: &Rc<RefCell<Option<WebAssembly::Memory>>>,
+                        ptr: u32,
+                        len: u32|
+         -> Result<Uint8Array, JsValue> {
+            let mem = memory.borrow();
+            let buffer = mem
+                .as_ref()
+                .ok_or_else(|| JsValue::from_str("the module called the host too early"))?
+                .buffer()
+                .dyn_into::<ArrayBuffer>()?;
+            let end = u64::from(ptr) + u64::from(len);
+            if end > u64::from(buffer.byte_length()) {
+                return Err(JsValue::from_str("the request is outside the memory"));
+            }
+            Ok(Uint8Array::new_with_byte_offset_and_length(&buffer, ptr, len))
+        };
+        let call = {
+            let (link, memory) = (link.clone(), memory.clone());
+            Closure::<dyn FnMut(u32, u32) -> Result<u32, JsValue>>::new(move |ptr, len| {
+                let request = bytes_at(&memory, ptr, len)?.to_vec();
+                link.call(&request)
+                    .map_err(|e| JsValue::from_str(&format!("{e:?}")))
+            })
+        };
+        let read = {
+            let (link, memory) = (link.clone(), memory.clone());
+            Closure::<dyn FnMut(u32) -> Result<(), JsValue>>::new(move |dst| {
+                let reply = link.take_reply();
+                let n = u32::try_from(reply.len())
+                    .map_err(|_| JsValue::from_str("the reply is too large"))?;
+                bytes_at(&memory, dst, n)?.copy_from(&reply);
+                Ok(())
+            })
+        };
+        let host = Object::new();
+        for (name, f) in [("call", call.as_ref()), ("read", read.as_ref())] {
+            Reflect::set(&host, &JsValue::from_str(name), f).map_err(|e| raw_error(&e))?;
+        }
+        let imports = Object::new();
+        Reflect::set(&imports, &JsValue::from_str(crate::runtime::HOST_MODULE), &host)
+            .map_err(|e| raw_error(&e))?;
+        self.build(&imports, vec![Box::new(call), Box::new(read)], memory)
+    }
+}
+
+impl JsModule {
+    /// Makes an instance. `keep` holds what the imports need until the instance is dropped;
+    /// `memory_cell` receives the memory of the instance for the imports.
+    fn build(
+        &self,
+        imports: &Object,
+        keep: Vec<Box<dyn std::any::Any>>,
+        memory_cell: Rc<RefCell<Option<WebAssembly::Memory>>>,
+    ) -> Result<Box<dyn RawInstance>, RawError> {
         let instance =
-            WebAssembly::Instance::new(&self.module, &Object::new()).map_err(|e| raw_error(&e))?;
+            WebAssembly::Instance::new(&self.module, imports).map_err(|e| raw_error(&e))?;
         let exports = instance.exports();
         let get = |name: &str| {
             Reflect::get(&exports, &JsValue::from_str(name)).map_err(|e| RawError::Trap(text(&e)))
@@ -162,6 +249,7 @@ impl RawModule for JsModule {
         let memory = get("memory")?
             .dyn_into::<WebAssembly::Memory>()
             .map_err(|_| RawError::Trap("'memory' is not a memory".into()))?;
+        *memory_cell.borrow_mut() = Some(memory.clone());
         let fuel = get(crate::harden::FUEL_EXPORT)
             .ok()
             .and_then(|g| g.dyn_into::<WebAssembly::Global>().ok());
@@ -169,6 +257,7 @@ impl RawModule for JsModule {
             exports,
             memory,
             fuel,
+            _keep: keep,
         }))
     }
 }
@@ -177,6 +266,8 @@ struct JsInstance {
     exports: Object,
     memory: WebAssembly::Memory,
     fuel: Option<WebAssembly::Global>,
+    /// The closures of the imports of a hosted module: they must live as long as the instance.
+    _keep: Vec<Box<dyn std::any::Any>>,
 }
 
 /// The packed `u64` of an export comes back as a signed `BigInt`.
@@ -217,6 +308,15 @@ impl JsInstance {
 }
 
 impl RawInstance for JsInstance {
+    fn initialize(&mut self) -> Result<(), RawError> {
+        let init = Reflect::get(&self.exports, &JsValue::from_str("_initialize"))
+            .map_err(|e| RawError::Trap(text(&e)))?;
+        if let Some(f) = init.dyn_ref::<Function>() {
+            f.call0(&JsValue::NULL).map_err(|e| raw_error(&e))?;
+        }
+        Ok(())
+    }
+
     fn alloc(&mut self, len: u32) -> Result<u32, RawError> {
         let v = self
             .function("alloc")?

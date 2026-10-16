@@ -218,7 +218,6 @@ impl From<ScriptError> for Failure {
 pub struct ScriptEngine {
     module: Option<Box<dyn HostedModule>>,
     limits: ScriptLimits,
-    /// The limits as the plug-in host knows them.
     unavailable: Option<String>,
 }
 
@@ -226,13 +225,21 @@ impl ScriptEngine {
     /// Loads the module with the engine of this build (wasmtime on the desktop). Compiling the
     /// module takes a moment the first time in a process; the compiled module is shared.
     pub fn new(limits: ScriptLimits) -> Result<Self, ScriptError> {
+        Self::with_runtime(&*kadakas_plugin::default_runtime(), limits)
+    }
+
+    /// Like [`ScriptEngine::new`], on the engine you give (the tests run the metered engine of
+    /// the browser on the desktop).
+    pub fn with_runtime(
+        runtime: &dyn kadakas_plugin::PluginRuntime,
+        limits: ScriptLimits,
+    ) -> Result<Self, ScriptError> {
         if MODULE.is_empty() {
             return Err(ScriptError::Unavailable(
                 "this build has no script engine (kadakas-script-js was built without the feature `engine`)"
                     .into(),
             ));
         }
-        let runtime = kadakas_plugin::default_runtime();
         let module = runtime
             .load_hosted(MODULE, &plugin_limits(&limits))
             .map_err(|e| match e {
@@ -244,6 +251,19 @@ impl ScriptEngine {
             limits,
             unavailable: None,
         })
+    }
+
+    /// Compiles the module in advance, asynchronously. **The browser needs this** before the first
+    /// script: Chrome refuses the synchronous compile of a module of this size on the main thread.
+    /// Call it once at start, with the limits that the engine will have.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn precompile(limits: &ScriptLimits) -> Result<(), ScriptError> {
+        if MODULE.is_empty() {
+            return Ok(());
+        }
+        kadakas_plugin::web::precompile_hosted(MODULE, &plugin_limits(limits))
+            .await
+            .map_err(|e| ScriptError::Trap(e.to_string()))
     }
 
     pub fn limits(&self) -> &ScriptLimits {
@@ -403,3 +423,14 @@ fn parse_answer(answer: &[u8]) -> Result<Output, Failure> {
 
 #[cfg(all(test, feature = "engine", not(target_arch = "wasm32")))]
 mod tests;
+#[cfg(all(test, not(feature = "engine")))]
+mod tests_without_engine {
+    use super::*;
+
+    #[test]
+    fn a_build_without_the_engine_says_so() {
+        assert!(!ScriptEngine::built_in());
+        let e = ScriptEngine::new(ScriptLimits::default()).err().unwrap();
+        assert!(matches!(e, ScriptError::Unavailable(m) if m.contains("without the feature")));
+    }
+}

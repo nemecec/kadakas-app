@@ -31,6 +31,8 @@ pub mod plugin;
 pub mod registry;
 pub mod runtime;
 pub mod store;
+#[cfg(all(any(test, feature = "testkit"), not(target_arch = "wasm32")))]
+pub mod testkit;
 pub mod trust;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
