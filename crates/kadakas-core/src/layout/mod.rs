@@ -27,6 +27,7 @@
 //! [`MAX_UNITS`] units.
 
 pub mod bond;
+pub mod course;
 pub mod gaps;
 pub mod module;
 pub mod object;

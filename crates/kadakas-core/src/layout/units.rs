@@ -567,7 +567,7 @@ pub fn for_each_unit(
         .iter()
         .map(|k| (k.name.clone(), k.area))
         .collect();
-    let mut stats = Stats {
+    let stats = Stats {
         origin,
         angle,
         full_unit_area: kinds.first().map_or(0.0, |k| k.1),
@@ -594,7 +594,7 @@ pub fn for_each_unit(
         .iter()
         .map(|k| (k.hi - k.lo).max_element())
         .fold(0.0, f64::max);
-    let mut local = Local::new(region, origin, angle, extent);
+    let local = Local::new(region, origin, angle, extent);
     let (lo, hi) = (local.lo, local.hi);
     // The job in the box of the region may be larger than the region (a long, thin, diagonal shape).
     let ((i0, i1), (j0, j1)) = lattice_range(&comp, lo, hi);
