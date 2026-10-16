@@ -937,6 +937,8 @@ ID, and two users on one document get different colors while the palette (8 colo
 one. The People palette (Window menu) lists you and the others with their color, a mark for a quiet
 user and the number of selected objects. Presence is never in the document.
 
+**The agent as a collaborator** (AGR-03). An agent that points (`view.highlight`) or moves the view (`view.zoom`, `view.pan`, `view.camera`) shows like another user, but it is not a peer of the server and sends nothing. The window draws the same pointer with the name Agent at the last place it pointed at or zoomed to, in the color of index 4 of the palette, and the People palette has an Agent row with a diamond mark, a count of its pointers and the quiet mark after 30 s. The cursor stays for 2 minutes after the last thing the agent did. In 3D the pointer is drawn too. The pointers of the agent (outline glow, box or marker with a short text) are local to the window and never in the document or on the server.
+
 **Undo and redo.** While the session has a collaboration client (joined, joining, between two
 tries, or offline after a Disconnect), Edit > Undo, Edit > Redo and their keys call `collab.undo`
 and `collab.redo`, so a person never takes back the work of somebody else; the menu items follow the

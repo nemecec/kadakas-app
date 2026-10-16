@@ -194,7 +194,7 @@ fn view_get_tells_what_the_person_sees_after_a_zoom() {
     );
     // The rest of what the person has.
     assert_eq!(g["selection"], json!([a.to_string()]));
-    assert_eq!(g["active_layer"]["name"].as_str().is_some(), true);
+    assert!(g["active_layer"]["name"].as_str().is_some());
     assert!(!g["visible_layers"].as_array().unwrap().is_empty());
     assert!(g["visible_classes"].is_array());
     assert_eq!(num(&g["canvas"]["width"]), f64::from(canvas.width()));

@@ -564,7 +564,7 @@ impl Env<'_> {
             .state
             .highlights
             .add(req, now, rev)
-            .map_err(|e| RpcError::limit(e))?;
+            .map_err(RpcError::limit)?;
         self.state.presence.touch(place, now);
         self.state.news = true;
         Ok(json!({"id": id, "count": self.state.highlights.len()}))
@@ -657,13 +657,13 @@ pub fn step(env: &mut Env) -> bool {
     if changed {
         env.state.news = true;
     }
-    if let Some(size) = env.size().ok() {
-        if let Some(a) = env.state.plan_anim {
-            let (pose, done) = a.at(now);
-            *env.view = pose.view(size);
-            if done {
-                env.state.plan_anim = None;
-            }
+    if let Ok(size) = env.size()
+        && let Some(a) = env.state.plan_anim
+    {
+        let (pose, done) = a.at(now);
+        *env.view = pose.view(size);
+        if done {
+            env.state.plan_anim = None;
         }
     }
     if let Some(a) = env.state.cam_anim {

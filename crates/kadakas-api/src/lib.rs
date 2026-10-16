@@ -419,12 +419,6 @@ pub const METHODS: &[(&str, &str)] = &[
         "view.set",
         "Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list or the name of a saved view (view.list saved_views); top is the 2D plan in the app. A saved view sets the camera only (the plan middle and zoom in the app, or the 3D view, projection and mode): the layers and classes stay as they are, because changing them is an edit of the document (use saved_view.restore for that), and the answer has layers_not_applied: true when the saved view holds visibility. Returns the current view.",
     ),
-    agent_view_api::VIEW_GET,
-    agent_view_api::VIEW_ZOOM,
-    agent_view_api::VIEW_PAN,
-    agent_view_api::VIEW_CAMERA,
-    agent_view_api::VIEW_HIGHLIGHT,
-    agent_view_api::VIEW_HIGHLIGHT_CLEAR,
     (
         "report.plants",
         "Plant schedule: count by species. Rows of plants with a style also have style, style_name, id_code and prices (see report.plant_schedule).",
@@ -803,6 +797,13 @@ pub const METHODS: &[(&str, &str)] = &[
         "view.screenshot",
         "A PNG picture of the live drawing area of the app window, as the user sees it (the plan or the 3D view with palettes left out). Only the app (kadakas app with --agent-port) answers; the headless server gives an error. params: {region? (drawing (default) | window: the whole window), max_width? (px, 64 to 4096; larger pictures are scaled down)}. Returns {png_base64, width, height, region, theme (light | dark), view (the current view id)}.",
     ),
+    // The agent drives the view of the person and points; only the app answers (see agent_view_api.rs).
+    agent_view_api::VIEW_GET,
+    agent_view_api::VIEW_ZOOM,
+    agent_view_api::VIEW_PAN,
+    agent_view_api::VIEW_CAMERA,
+    agent_view_api::VIEW_HIGHLIGHT,
+    agent_view_api::VIEW_HIGHLIGHT_CLEAR,
     // Editing 2D geometry (see edit2d_api.rs).
     edit2d_api::EDIT_ROTATE,
     edit2d_api::EDIT_SCALE,
