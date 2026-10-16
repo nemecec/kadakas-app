@@ -17,6 +17,12 @@
 //!    `WASI_CLANG`, `WASI_WASM_LD` and `WASI_SYSROOT`. The result may differ byte for byte from a
 //!    build with the pinned wasi-sdk (which CI and releases use).
 //!
+//! **A cache for CI.** If `KADAKAS_JS_CACHE_DIR` names a folder, the finished module is kept there
+//! as `script-<hash>.wasm`, where the hash covers the source, the flags and the pinned wasi-sdk
+//! version, and a build with the same hash takes the module from there without a toolchain. CI
+//! caches that folder (`.github/actions/wasi-sdk`). A module that a Homebrew toolchain made is
+//! never put in it.
+//!
 //! The finished module may import only `kadakas.call` and `kadakas.read`. The build fails if it
 //! imports anything else (WASI, a clock), so the sandbox has no way out.
 
@@ -56,7 +62,7 @@ fn main() {
         "WASI_CLANG",
         "WASI_WASM_LD",
         "WASI_SYSROOT",
-        "KADAKAS_WASI_TOOLCHAIN",
+        "KADAKAS_JS_CACHE_DIR",
     ] {
         println!("cargo:rerun-if-env-changed={var}");
     }
@@ -101,6 +107,8 @@ fn read_pins() -> Pinned {
 
 /// A toolchain that can compile C to wasm32.
 struct Toolchain {
+    /// Names the route and the version, without paths: `wasi-sdk 34.0`.
+    id: String,
     clang: PathBuf,
     /// Extra clang arguments (sysroot, linker).
     args: Vec<String>,
@@ -109,23 +117,24 @@ struct Toolchain {
 }
 
 fn install_help(pins: &Pinned) -> String {
-    format!(
-        "The script engine needs the C compiler of wasi-sdk {v} (it builds QuickJS to WebAssembly).\n\
-         Install it once:\n\
-         \n\
-         - macOS or Linux:  scripts/install-wasi-sdk.sh\n\
-           It downloads wasi-sdk {v} ({tag}), checks its SHA-256 and installs it to\n\
-           ~/.local/share/wasi-sdk/{v}. Then set WASI_SDK_PATH to that folder (the script prints the line).\n\
-         - Windows: download wasi-sdk-{v}-x86_64-windows.tar.gz (or arm64) from\n\
-           https://github.com/WebAssembly/wasi-sdk/releases/tag/{tag}, check its SHA-256 against\n\
-           crates/kadakas-script-js/wasi-sdk.env, unpack it, and set WASI_SDK_PATH to the folder.\n\
-         - Homebrew instead (the result may differ byte for byte from the pinned build):\n\
-           brew install llvm lld wasi-libc wasi-runtimes\n\
-         \n\
-         To work without the engine, build without the feature: cargo build -p kadakas-api --no-default-features",
-        v = pins.version,
-        tag = pins.tag
-    )
+    let (v, tag) = (&pins.version, &pins.tag);
+    [
+        format!("The script engine needs the C compiler of wasi-sdk {v} (it builds QuickJS to WebAssembly)."),
+        "Install it once:".to_string(),
+        String::new(),
+        "  macOS or Linux:  run scripts/install-wasi-sdk.sh".to_string(),
+        format!("    It downloads wasi-sdk {v} ({tag}), checks its SHA-256 and installs it to"),
+        "    ~/.local/share/wasi-sdk/".to_string() + v + ". Then set WASI_SDK_PATH to that folder",
+        "    (the script prints the line).".to_string(),
+        "  Windows: download wasi-sdk-".to_string() + v + "-x86_64-windows.tar.gz (or arm64) from",
+        format!("    https://github.com/WebAssembly/wasi-sdk/releases/tag/{tag} , check its SHA-256 against"),
+        "    crates/kadakas-script-js/wasi-sdk.env, unpack it, and set WASI_SDK_PATH to the folder.".to_string(),
+        "  Homebrew instead (the result may differ byte for byte from the pinned build):".to_string(),
+        "    brew install llvm lld wasi-libc wasi-runtimes".to_string(),
+        String::new(),
+        "To work without the engine, build without the feature: cargo build -p kadakas-api --no-default-features".to_string(),
+    ]
+    .join("\n")
 }
 
 fn sdk_version(dir: &Path) -> Option<String> {
@@ -155,6 +164,7 @@ fn sdk_toolchain(dir: &Path, pins: &Pinned) -> Result<Toolchain, String> {
     }
     let exe = if cfg!(windows) { "clang.exe" } else { "clang" };
     Ok(Toolchain {
+        id: format!("wasi-sdk {found}"),
         clang: dir.join("bin").join(exe),
         args: vec![format!(
             "--sysroot={}",
@@ -206,6 +216,7 @@ fn homebrew_toolchain() -> Option<Toolchain> {
         }
     }
     Some(Toolchain {
+        id: format!("homebrew {version}"),
         clang,
         args,
         label: format!("Homebrew llvm/lld/wasi-libc ({version})"),
@@ -248,10 +259,61 @@ fn find_toolchain(pins: &Pinned) -> Result<Toolchain, String> {
     ))
 }
 
+/// The SHA-256 of everything that decides the module: the toolchain id, the flags, the vendored
+/// source, the shim and the prelude.
+fn input_hash(toolchain_id: &str) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(toolchain_id.as_bytes());
+    for f in FLAGS {
+        h.update(f.as_bytes());
+        h.update([0]);
+    }
+    for dir in ["c", "quickjs"] {
+        let mut files: Vec<PathBuf> = fs::read_dir(dir)
+            .map_err(|e| format!("{dir}: {e}"))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_file())
+            .collect();
+        files.sort();
+        for f in files {
+            h.update(f.to_string_lossy().as_bytes());
+            h.update(fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))?);
+        }
+    }
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
 fn build() -> Result<(), String> {
     let pins = read_pins();
-    let tc = find_toolchain(&pins)?;
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|e| e.to_string())?);
+    let wasm = out_dir.join("script.wasm");
+    // The cache of CI: the module for the pinned toolchain and this exact source.
+    let cache = env::var_os("KADAKAS_JS_CACHE_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .map(|dir| {
+            input_hash(&format!("wasi-sdk {}", pins.version))
+                .map(|h| dir.join(format!("script-{h}.wasm")))
+        })
+        .transpose()?;
+    if let Some(cached) = cache.as_ref().filter(|c| c.is_file()) {
+        let bytes = fs::read(cached).map_err(|e| e.to_string())?;
+        if check_module(&bytes).is_ok() {
+            fs::write(&wasm, &bytes).map_err(|e| e.to_string())?;
+            println!(
+                "cargo:warning=script engine: QuickJS module taken from the cache {}",
+                cached.display()
+            );
+            println!(
+                "cargo:rustc-env=KADAKAS_JS_TOOLCHAIN=wasi-sdk {} (module from the build cache)",
+                pins.version
+            );
+            println!("cargo:rustc-env=KADAKAS_JS_WASM={}", wasm.display());
+            return Ok(());
+        }
+    }
+    let tc = find_toolchain(&pins)?;
 
     // The prelude as a C array (bytes, so quotes and newlines need no care).
     let prelude = fs::read("c/prelude.js").map_err(|e| format!("c/prelude.js: {e}"))?;
@@ -265,7 +327,6 @@ fn build() -> Result<(), String> {
     header.push_str("0};\n");
     fs::write(out_dir.join("prelude.h"), header).map_err(|e| e.to_string())?;
 
-    let wasm = out_dir.join("script.wasm");
     let mut cmd = Command::new(&tc.clang);
     cmd.args(FLAGS)
         .args(&tc.args)
@@ -296,6 +357,14 @@ fn build() -> Result<(), String> {
         started.elapsed().as_secs_f64(),
         bytes.len()
     );
+    // Only a module of the pinned toolchain goes into the cache.
+    if let Some(cached) = cache
+        && tc.id == format!("wasi-sdk {}", pins.version)
+        && let Some(dir) = cached.parent()
+        && fs::create_dir_all(dir).is_ok()
+    {
+        let _ = fs::write(&cached, &bytes);
+    }
     println!("cargo:rustc-env=KADAKAS_JS_TOOLCHAIN={}", tc.label);
     println!(
         "cargo:rustc-env=KADAKAS_JS_WASM={}",

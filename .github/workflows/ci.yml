@@ -20,6 +20,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           components: clippy, rustfmt
+      - uses: ./.github/actions/wasi-sdk
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgtk-3-dev
       - run: cargo fmt --all --check
@@ -34,6 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: ./.github/actions/wasi-sdk
       - run: PERF_SIZES=10000 cargo test --release -p kadakas-core -p kadakas-container -p kadakas-site -p kadakas-api -p kadakas-io -- --ignored
   # A short run of the fuzzer of the container reader (crates/kadakas-container/tests/fuzz_open.rs):
   # changed containers must be errors, never panics. The seed is printed; KADAKAS_FUZZ_SEED repeats a run.
@@ -50,6 +52,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: ./.github/actions/wasi-sdk
       - run: cargo check -p kadakas-units -p kadakas-l10n -p kadakas-core -p kadakas-container -p kadakas-file -p kadakas-props -p kadakas-review -p kadakas-collab -p kadakas-collab-ws -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-feedback -p kadakas-app --target wasm32-unknown-unknown
   # Test-only features (fault-injection) must not be in a program that we ship.
   test-hooks:
@@ -65,6 +68,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: ./.github/actions/wasi-sdk
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
         with:
           tool: trunk
@@ -78,6 +82,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           components: llvm-tools-preview
+      - uses: ./.github/actions/wasi-sdk
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
         with:
           tool: cargo-llvm-cov

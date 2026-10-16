@@ -7,8 +7,13 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["script-js"]
+# The JavaScript engine (SCR-08). Needs a wasi-sdk to build, see docs/dev-guide.md.
+script-js = ["kadakas-api/script-js"]
+
 [dependencies]
-kadakas-api = { version = "0.1.0", path = "../kadakas-api" }
+kadakas-api = { version = "0.1.0", path = "../kadakas-api", default-features = false }
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-feedback = { version = "0.1.0", path = "../kadakas-feedback" }
 kadakas-file = { version = "0.1.0", path = "../kadakas-file" }

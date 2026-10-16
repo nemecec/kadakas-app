@@ -4,10 +4,11 @@
 #   scripts/install-wasi-sdk.sh [--dest DIR]
 #
 # Downloads exactly the version in crates/kadakas-script-js/wasi-sdk.env for this operating system
-# and processor (macOS and Linux, arm64 and x86_64), checks its SHA-256 against the pinned value,
-# and unpacks it to DIR (default: ${XDG_DATA_HOME:-~/.local/share}/wasi-sdk/<version>; the
-# environment variable WASI_SDK_DEST also sets it). It prints the line to set WASI_SDK_PATH.
-# On Windows, download the archive by hand (see docs/dev-guide.md); the hashes are in the same file.
+# and processor (macOS and Linux, arm64 and x86_64; Windows in Git Bash), checks its SHA-256
+# against the pinned value, and unpacks it to DIR (default:
+# ${XDG_DATA_HOME:-~/.local/share}/wasi-sdk/<version>; the environment variable WASI_SDK_DEST also
+# sets it). It prints the line to set WASI_SDK_PATH. Without bash on Windows, download the archive
+# by hand (see docs/dev-guide.md); the hashes are in the same file.
 # CI uses this script too, with a cache of the folder.
 set -euo pipefail
 
@@ -31,7 +32,9 @@ done
 case "$(uname -s)" in
   Darwin) os=macos ;;
   Linux) os=linux ;;
-  *) echo "error: $(uname -s) is not supported by this script. See docs/dev-guide.md for Windows." >&2; exit 1 ;;
+  # Git Bash on Windows (CI uses it). Without bash, install the archive by hand (docs/dev-guide.md).
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
+  *) echo "error: $(uname -s) is not supported by this script. See docs/dev-guide.md." >&2; exit 1 ;;
 esac
 case "$(uname -m)" in
   arm64|aarch64) arch=arm64 ;;
