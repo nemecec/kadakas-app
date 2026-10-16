@@ -216,7 +216,7 @@ fn sheets_are_created_listed_and_changed() {
         )
         .contains("not a sheet")
     );
-    assert!(fail(&mut s, "sheet.set", json!({"layer": "nowhere"})).contains("no layer"));
+    assert!(fail(&mut s, "sheet.set", json!({"layer": "nowhere"})).contains("no sheet layer"));
     assert!(fail(&mut s, "sheet.set", json!({"layer": true})).contains("no layer"));
     assert!(fail(&mut s, "sheet.set", json!({})).contains("no layer"));
 }

@@ -266,7 +266,7 @@ fn wms_underlay_in_the_document_and_refresh() {
     );
     assert!(err(&mut s, "gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 10, 10], "opacity": 3})).contains("opacity"));
     assert!(err(&mut s, "gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["nope"], "bbox": [0, 0, 1000, 1000]})).contains("no layer named nope"));
-    assert!(err(&mut s, "gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 1000, 1000], "layer": "Missing"})).contains("no layer named Missing"));
+    assert!(err(&mut s, "gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 1000, 1000], "layer": "Missing"})).contains("no layer is named \"Missing\""));
     // Clearing the cache.
     assert!(
         ok(&mut s, "gis.cache.clear", json!({}))["removed"]
@@ -848,7 +848,7 @@ fn wmts_through_the_api_and_refresh() {
         )
         .contains("no layer named nope")
     );
-    assert!(err(&mut s, "gis.wmts.add", json!({"url": format!("{}/wmts", m.base), "layer": "base", "bbox": [0, 0, 1000, 1000], "layer_name": "None"})).contains("no layer named None"));
+    assert!(err(&mut s, "gis.wmts.add", json!({"url": format!("{}/wmts", m.base), "layer": "base", "bbox": [0, 0, 1000, 1000], "layer_name": "None"})).contains("no layer is named \"None\""));
     // An underlay from a file has no source to fetch again.
     let dir = std::env::temp_dir().join(format!("kadakas-api-gis-file-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
