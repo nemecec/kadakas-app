@@ -1,3 +1,4 @@
+#![allow(clippy::field_reassign_with_default)]
 //! The pattern plan of a hardscape (zones, courses, their own patterns) on a sheet: the units drawn
 //! in a viewport are the units of the report; a viewport with more units than the print bound
 //! draws a preview and says so on the sheet.

@@ -210,9 +210,10 @@ fn a_frame_paints_the_joint_lines_cut_units_and_zone_edges_of_the_plan() {
 fn a_view_with_more_units_than_the_bound_paints_a_preview_with_its_label() {
     // 60 m x 30 m: 90,000 units. At 0.05 px/mm a unit of 100 mm is 5 px.
     let (ed, id) = lot(60_000.0, 30_000.0, false);
-    let mut view = View::default();
-    view.zoom = 0.05;
-    view.origin = DVec2::new(-200.0, 700.0);
+    let view = View {
+        zoom: 0.05,
+        origin: DVec2::new(-200.0, 700.0),
+    };
     let painted = frame(&ed, id, &view, 1);
     let label = kadakas_l10n::translate("plan-draw-preview", &[]);
     assert!(

@@ -1,3 +1,4 @@
+#![allow(clippy::field_reassign_with_default)]
 //! Tests of the drawing source: what is drawn is what the report counts.
 
 use super::*;
