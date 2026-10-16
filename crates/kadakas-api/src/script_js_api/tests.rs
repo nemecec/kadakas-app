@@ -249,3 +249,181 @@ fn a_typed_array_in_the_answer_of_a_call_and_in_the_result_is_written_out() {
     assert_eq!(r["result"]["pts"], json!([[0.0, 0.0], [4000.0, 0.0], [4000.0, 3000.0], [0.0, 3000.0]]));
     assert!(r["result"]["summary"].is_object() || r["result"]["summary"].is_null(), "{r}");
 }
+
+/// A script resource that is trusted, for the generator tests.
+fn trusted_script(s: &mut Session, name: &str, code: &str) {
+    let made = s
+        .handle("script_resource.create", json!({"name": name, "code": code}))
+        .unwrap();
+    crate::trust_script(s, name, made["sha256"].as_str().unwrap()).unwrap();
+}
+
+/// A grid of rectangles 200 x 100 over the box of the region; the rows alternate between two
+/// unit types.
+const GRID: &str = r#"
+    const b = args.region.box;
+    const w = args.params.w, h = args.params.h;
+    const cols = Math.ceil((b[2] - b[0]) / w), rows = Math.ceil((b[3] - b[1]) / h);
+    const data = new Float64Array(cols * rows * 5), kind = new Uint32Array(cols * rows);
+    let n = 0;
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        data.set([b[0] + c * w + w / 2, b[1] + r * h + h / 2, w, h, 0], n * 5);
+        kind[n++] = r % 2;
+    }
+    return {types: ["even", "odd"], rects: {kind, data}};
+"#;
+
+fn layout(s: &mut Session, extra: Value) -> Result<Value, RpcError> {
+    let mut p = json!({
+        "region": {"outline": [[0, 0], [1000, 0], [1000, 250], [0, 250]]},
+        "pattern": {"kind": "generator", "script": "Grid", "params": {"w": 200, "h": 100}, "gap": 0},
+        "origin": [0, 0],
+        "limit": 100,
+    });
+    for (k, v) in extra.as_object().unwrap() {
+        p[k] = v.clone();
+    }
+    s.handle("unit_pattern.layout", p)
+}
+
+#[test]
+fn a_generator_pattern_is_laid_clipped_and_counted_like_any_other_kind() {
+    let mut s = Session::default();
+    trusted_script(&mut s, "Grid", GRID);
+    let l = layout(&mut s, json!({})).unwrap();
+    let sum = &l["summary"];
+    // 5 columns and 3 rows of 200 x 100: two whole rows, and a third row cut at y = 250 (half).
+    assert_eq!(l["units_total"], json!(15), "{l}");
+    assert_eq!(sum["whole_units"], json!(10), "{l}");
+    assert_eq!(sum["cut_units"], json!(5), "{l}");
+    assert_eq!(sum["by_unit"][0]["name"], json!("even"));
+    assert_eq!(sum["by_unit"][0]["whole_units"], json!(5));
+    assert_eq!(sum["by_unit"][0]["cut_units"], json!(5));
+    assert_eq!(sum["by_unit"][1]["whole_units"], json!(5));
+    let units = l["units"].as_array().unwrap();
+    let cut: Vec<&Value> = units.iter().filter(|u| u["whole"] == json!(false)).collect();
+    assert_eq!(cut.len(), 5);
+    assert!((cut[0]["area_m2"].as_f64().unwrap() - 0.01).abs() < 1e-9, "{}", cut[0]);
+    assert!((cut[0]["share"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+}
+
+#[test]
+fn the_same_input_gives_the_same_layout_and_a_change_makes_a_new_one() {
+    let mut s = Session::default();
+    trusted_script(&mut s, "Grid", GRID);
+    let a = layout(&mut s, json!({})).unwrap();
+    let b = layout(&mut s, json!({})).unwrap();
+    assert_eq!(a, b, "deterministic");
+    // Other parameters, the script, and the region each give a new answer.
+    let c = layout(
+        &mut s,
+        json!({"pattern": {"kind": "generator", "script": "Grid", "params": {"w": 250, "h": 125}, "gap": 0}}),
+    )
+    .unwrap();
+    assert_eq!(c["units_total"], json!(8), "4 columns and 2 rows");
+    s.handle(
+        "script_resource.update",
+        json!({"id": "Grid", "code": GRID.replace("r % 2", "0")}),
+    )
+    .unwrap();
+    let e = layout(&mut s, json!({})).unwrap_err();
+    assert!(e.message.contains("not trusted"), "a new text needs trust: {}", e.message);
+}
+
+#[test]
+fn a_generator_that_is_not_trusted_or_missing_or_wrong_is_an_error_with_the_reason() {
+    let mut s = Session::default();
+    let e = layout(&mut s, json!({})).unwrap_err();
+    assert!(e.message.contains("none with that name"), "{}", e.message);
+    s.handle("script_resource.create", json!({"name": "Grid", "code": GRID}))
+        .unwrap();
+    let e = layout(&mut s, json!({})).unwrap_err();
+    assert!(e.message.contains("not trusted"), "{}", e.message);
+    trusted_script(&mut s, "Bad", "return 5;");
+    let e = layout(&mut s, json!({"pattern": {"kind": "generator", "script": "Bad", "gap": 0}})).unwrap_err();
+    assert!(e.message.contains("must return an object"), "{}", e.message);
+    trusted_script(&mut s, "Calls", "kadakas.call('document.summary', {}); return {};");
+    let e = layout(&mut s, json!({"pattern": {"kind": "generator", "script": "Calls", "gap": 0}})).unwrap_err();
+    assert!(e.message.contains("cannot call"), "{}", e.message);
+    trusted_script(&mut s, "Loop", "for (;;) {}");
+    s.set_limits(SessionLimits {
+        script_js_fuel: 20_000_000,
+        ..SessionLimits::default()
+    });
+    let e = layout(&mut s, json!({"pattern": {"kind": "generator", "script": "Loop", "gap": 0}})).unwrap_err();
+    assert!(e.message.contains("fuel"), "{}", e.message);
+}
+
+#[test]
+fn the_unit_count_of_the_session_bounds_a_generator() {
+    let mut s = Session::default();
+    trusted_script(&mut s, "Grid", GRID);
+    s.set_limits(SessionLimits {
+        pattern_units: 10,
+        ..SessionLimits::default()
+    });
+    let e = layout(&mut s, json!({})).unwrap_err();
+    assert!(e.message.contains("limit of 10") || e.message.contains("more than"), "{}", e.message);
+}
+
+/// Measures what a call from a script costs against the same call from Rust. Run it with
+/// `cargo test -p kadakas-api --release --lib measure_call_overhead -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, not a test"]
+fn measure_call_overhead() {
+    use std::time::Instant;
+    const N: usize = 10_000;
+    let mut s = Session::default();
+    let t = Instant::now();
+    ok(&mut s, json!({"code": "return 1;", "mode": "read"}));
+    println!("first run (compile of the module, start): {:?}", t.elapsed());
+    let t = Instant::now();
+    for _ in 0..20 {
+        ok(&mut s, json!({"code": "return 1;", "mode": "read"}));
+    }
+    println!("an empty run, mean of 20: {:?}", t.elapsed() / 20);
+
+    let t = Instant::now();
+    for _ in 0..N {
+        s.handle("selection.get", json!({})).unwrap();
+    }
+    let rust = t.elapsed();
+    println!("{N} calls of selection.get from Rust: {rust:?} ({:?} per call)", rust / N as u32);
+
+    let code = format!("for (let i = 0; i < {N}; i++) kadakas.call('selection.get', {{}});");
+    let t = Instant::now();
+    let r = ok(&mut s, json!({"code": code, "mode": "read"}));
+    let js = t.elapsed();
+    println!(
+        "{N} calls of selection.get from a script: {js:?} ({:?} per call, {} calls)",
+        js / N as u32,
+        r["calls"]
+    );
+
+    // A call with parameters and a bigger answer: document.summary.
+    let t = Instant::now();
+    for _ in 0..N {
+        s.handle("document.summary", json!({})).unwrap();
+    }
+    let rust = t.elapsed();
+    let code = format!("for (let i = 0; i < {N}; i++) kadakas.call('document.summary', {{}});");
+    let t = Instant::now();
+    ok(&mut s, json!({"code": code, "mode": "read"}));
+    let js = t.elapsed();
+    println!(
+        "{N} calls of document.summary: Rust {rust:?} ({:?}), script {js:?} ({:?})",
+        rust / N as u32,
+        js / N as u32
+    );
+
+    // Fuel: how much does a loop of calls cost? Use a small budget and find the limit.
+    let code = "let i = 0; try { for (;;) { kadakas.call('selection.get', {}); i++; } } catch (e) {} return i;";
+    s.set_limits(SessionLimits {
+        script_js_fuel: 100_000_000,
+        ..SessionLimits::default()
+    });
+    match eval(&mut s, json!({"code": code, "mode": "read"})) {
+        Err(e) => println!("100M fuel stops the loop of calls: {}", e.details.unwrap()["calls"]),
+        Ok(r) => println!("{r}"),
+    }
+}
