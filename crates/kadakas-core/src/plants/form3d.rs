@@ -1,9 +1,9 @@
 //! Parametric 3D forms of plants, and their levels of detail.
 //!
 //! A form is a small triangle mesh around the foot of the plant, in mm, Z up. The same
-//! parameters and the same seed always give the same mesh. The seed comes from the object
-//! (see `seed_for`), so two plants of one species differ a little, and a plant keeps its
-//! look every time the scene is built.
+//! parameters and the same seed always give the same mesh. The seed comes from the place of the
+//! plant (see `variant_at`) and never from an object ID, so two plants of one species differ a
+//! little, and the same drawing gives the same picture in every session.
 //!
 //! Levels of detail: `Fine` is the normal mesh, `Coarse` is for scenes with many plants, and
 //! `Billboard` is two crossed, upright quads with the outline of the plant. A renderer uses
@@ -54,8 +54,21 @@ pub fn lod_for(spread: f64, pixel_size: f64) -> Detail {
 /// exports can instance them (a thousand plants make at most this many meshes).
 pub const VARIANTS: u64 = 8;
 
-/// The seed of a plant: the same variant (the object ID modulo `VARIANTS`) and species always
-/// give the same seed.
+/// The look of the plant at a place: a number below `VARIANTS` from the position, on a 1 mm grid.
+/// It comes from the content of the drawing and never from an object ID, because IDs differ in
+/// every session. The same drawing then gives the same picture on every run (3D-13).
+pub fn variant_at(at: DVec2) -> u64 {
+    let q = |v: f64| (v.round() as i64) as u64;
+    let mut h =
+        q(at.x).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ q(at.y).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
+    h ^= h >> 29;
+    h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    h ^= h >> 32;
+    h % VARIANTS
+}
+
+/// The seed of a plant: the same variant (see `variant_at`) and species always give the same
+/// seed.
 pub fn seed_for(id: u64, species: &str) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ id.wrapping_mul(0x9e37_79b9_7f4a_7c15);
     for b in species.bytes() {
@@ -908,6 +921,15 @@ mod tests {
         let b = build(&p);
         assert_ne!(a, b);
         assert_eq!(seed_for(7, "Acer"), seed_for(7, "Acer"));
+        // The variant is from the position: the same place the same look, and all looks occur.
+        assert_eq!(
+            variant_at(DVec2::new(1200.4, -50.0)),
+            variant_at(DVec2::new(1200.0, -50.2))
+        );
+        let seen: std::collections::BTreeSet<u64> = (0..200)
+            .map(|i| variant_at(DVec2::new(i as f64 * 3000.0, 700.0)))
+            .collect();
+        assert_eq!(seen.len() as u64, VARIANTS);
         assert_ne!(seed_for(7, "Acer"), seed_for(8, "Acer"));
         assert_ne!(seed_for(7, "Acer"), seed_for(7, "Betula"));
     }

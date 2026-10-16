@@ -400,7 +400,15 @@ pub fn scatter(doc: &Document, obj: &Object) -> Vec<Placed> {
         lo = lo.min(*p);
         hi = hi.max(*p);
     }
-    let mut rng = Rng(obj.id.0.low_u64().wrapping_mul(0x2545_F491_4F6C_DD1D) ^ 0xA5A5);
+    // The seed comes from the outline, not from the object ID: IDs differ in every session, and the
+    // same drawing must give the same picture (3D-13).
+    let seed = ring.iter().fold(ring.len() as u64, |h, p| {
+        let q = |v: f64| (v.round() as i64) as u64;
+        (h.rotate_left(7) ^ q(p.x).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            .wrapping_mul(0x2545_F491_4F6C_DD1D)
+            ^ q(p.y)
+    });
+    let mut rng = Rng(seed ^ 0xA5A5);
     // A thin shape in a big box: a coarser grid keeps the work small and thins the symbols evenly.
     let grid = |cell: f64| {
         (

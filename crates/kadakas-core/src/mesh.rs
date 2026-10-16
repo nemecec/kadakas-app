@@ -841,7 +841,7 @@ impl Builder<'_> {
                     form: look.form,
                     color,
                     trunk_radius: None,
-                    seed: form3d::seed_for(id.0.low_u64() % form3d::VARIANTS, species),
+                    seed: form3d::seed_for(form3d::variant_at(*at), species),
                 };
                 self.plant(&build, link::ground_z(obj).unwrap_or(z), edge, id);
             }
@@ -860,7 +860,7 @@ impl Builder<'_> {
                     form: PlantForm::Tree,
                     color: fill.unwrap_or_else(|| species_color(species)),
                     trunk_radius: Some(dbh / 2.0),
-                    seed: form3d::seed_for(id.0.low_u64() % form3d::VARIANTS, species),
+                    seed: form3d::seed_for(form3d::variant_at(*at), species),
                 };
                 self.plant(&build, link::ground_z(obj).unwrap_or(z), edge, id);
             }
@@ -2546,7 +2546,11 @@ mod tests {
     fn new_forms_differ_between_plants_but_not_between_builds() {
         use crate::plants::style::PlantStyle;
         use crate::resource::{ResourceBody, ResourceId};
-        // Sequential ids: the variant is the id modulo VARIANTS, so random ids could collide.
+        // The variant comes from the position, so two positions could share one: take another.
+        let second = (1..)
+            .map(|i| DVec2::new(i as f64 * 1000.0, 0.0))
+            .find(|p| form3d::variant_at(*p) != form3d::variant_at(DVec2::ZERO))
+            .unwrap();
         let mut ed = Editor::new(Document::with_sequential_ids());
         let style = PlantStyle {
             form: PlantForm::MultiStem,
@@ -2566,7 +2570,7 @@ mod tests {
             .execute(&Command::AddPlants {
                 style: Some(sid),
                 overrides: Default::default(),
-                positions: vec![DVec2::new(0.0, 0.0), DVec2::new(10_000.0, 0.0)],
+                positions: vec![DVec2::new(0.0, 0.0), second],
                 layer: None,
                 class: None,
                 variation: None,
@@ -2589,7 +2593,7 @@ mod tests {
                 })
                 .collect()
         };
-        assert_ne!(shape_of(a), shape_of(b), "the seed comes from the object");
+        assert_ne!(shape_of(a), shape_of(b), "the seed comes from the position");
         let again = build(ed.doc());
         assert_eq!(scene.mesh.positions, again.mesh.positions);
     }
