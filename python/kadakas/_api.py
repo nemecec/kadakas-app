@@ -74,6 +74,8 @@ if TYPE_CHECKING:
 
     RenderSvgParams = TypedDict("RenderSvgParams", {
         'compare': dict[str, Any],
+        'region': list[float],
+        'show_check': bool,
         'width': int,
     }, total=False)
 
