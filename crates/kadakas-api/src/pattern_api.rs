@@ -247,7 +247,7 @@ fn pattern_param(m: &Map<String, Value>, base: Option<Pattern>) -> Result<Patter
         } else if is_generator {
             p.bond = Bond::Generator;
             p.module = None;
-            p.generator = Some(generator_param(g)?);
+            p.generator = Some(Box::new(generator_param(g)?));
         } else if is_module || g.contains_key("units") {
             p.bond = Bond::Module;
             p.module = Some(module_of(g)?);

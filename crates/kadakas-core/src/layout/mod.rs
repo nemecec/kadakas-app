@@ -129,7 +129,7 @@ pub struct Pattern {
     pub module: Option<Module>,
     /// Generator: the script and its parameters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generator: Option<generator::GeneratorSpec>,
+    pub generator: Option<Box<generator::GeneratorSpec>>,
 }
 
 impl Pattern {
@@ -156,7 +156,7 @@ impl Pattern {
             unit_width: 0.0,
             gap,
             module: None,
-            generator: Some(spec),
+            generator: Some(Box::new(spec)),
         }
     }
 

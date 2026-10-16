@@ -149,7 +149,7 @@ impl StoredUnits {
                     r.kind.len()
                 ));
             }
-            for (i, d) in r.data.chunks_exact(5).enumerate() {
+            for (i, d) in r.data.as_chunks::<5>().0.iter().enumerate() {
                 let (c, l, w) = (DVec2::new(d[0], d[1]), d[2], d[3]);
                 if !d.iter().all(|v| v.is_finite()) || !(l > 0.0 && w > 0.0) {
                     return bad(format!(

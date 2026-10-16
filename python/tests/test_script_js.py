@@ -90,7 +90,7 @@ def test_a_program_makes_a_generator_result_and_the_document_stores_it(doc):
         args={"box": [0, 0, 1000, 250], "w": 200, "h": 100},
     )
     assert r["undo_steps"] == 1
-    report = doc.reports.unit_pattern(ids=[r["result"]])
+    report = doc.report.unit_pattern(ids=[r["result"]])
     row = report["rows"][0]
     assert (row["whole_units"], row["cut_units"], row["order_units"]) == (10, 5, 15)
     assert [(u["name"], u["whole_units"], u["cut_units"]) for u in row["by_unit"]] == [
