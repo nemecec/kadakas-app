@@ -40,6 +40,7 @@ pub mod present;
 pub mod props;
 pub mod provenance;
 pub mod record;
+pub mod regions;
 pub mod resource;
 pub mod schema;
 pub mod section;

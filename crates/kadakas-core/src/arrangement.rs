@@ -490,6 +490,14 @@ struct Hit {
 
 /// Builds the arrangement of `curves` with the node tolerance `tol` (mm).
 pub fn build(curves: &[Curve], tol: f64) -> Result<Arrangement, BuildError> {
+    build_ranked(curves, &[], tol)
+}
+
+/// Like [`build`]. `ranks` says which curves are fixed: where ends of curves of different rank
+/// join in one node, the node sits where the curves of the highest rank put it, and the others
+/// move to it. Zones use this so that the boundary of a region never moves. An empty list gives
+/// every curve rank 0 (the node is the mean of its points).
+pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangement, BuildError> {
     if curves.len() > MAX_CURVES {
         return Err(BuildError::TooMany(format!(
             "an arrangement takes at most {MAX_CURVES} curves, not {}",
@@ -574,12 +582,12 @@ pub fn build(curves: &[Curve], tol: f64) -> Result<Arrangement, BuildError> {
                                 p: q,
                                 gap: d,
                             });
-                            // The end of `a` meets `q`: remember that they are one node.
-                            let (te, _) = if e == ca.from() { (0.0, 0) } else { (1.0, 1) };
+                            // The end of `a` stays where it is: the clustering joins it to `q`.
+                            let te = if e == ca.from() { 0.0 } else { 1.0 };
                             hits.push(Hit {
                                 curve: a,
                                 t: te,
-                                p: q,
+                                p: e,
                                 gap: d,
                             });
                         }
@@ -624,17 +632,24 @@ pub fn build(curves: &[Curve], tol: f64) -> Result<Arrangement, BuildError> {
         hit_node[i] = id;
         members[id].push(i);
     }
+    let rank_of = |i: usize| ranks.get(hits[i].curve).copied().unwrap_or(0);
     for m in &members {
-        let sum: DVec2 = m.iter().map(|&i| hits[i].p).sum();
-        out.nodes.push(sum / m.len() as f64);
+        let top = m.iter().map(|&i| rank_of(i)).max().unwrap_or(0);
+        let first: Vec<usize> = m.iter().copied().filter(|&i| rank_of(i) == top).collect();
+        let sum: DVec2 = first.iter().map(|&i| hits[i].p).sum();
+        out.nodes.push(sum / first.len() as f64);
     }
     // A node whose members are not all at one point closed a gap.
     for (id, m) in members.iter().enumerate() {
         let mut size = 0.0f64;
         for &i in m {
             size = size.max(hits[i].gap);
-            for &j in m {
-                size = size.max(hits[i].p.distance(hits[j].p));
+            if m.len() <= 32 {
+                for &j in m {
+                    size = size.max(hits[i].p.distance(hits[j].p));
+                }
+            } else {
+                size = size.max(2.0 * hits[i].p.distance(out.nodes[id]));
             }
         }
         if size > 1e-6 {

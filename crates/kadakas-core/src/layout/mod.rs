@@ -32,6 +32,7 @@ pub mod module;
 pub mod object;
 pub mod summary;
 pub mod units;
+pub mod zones;
 
 use glam::DVec2;
 use i_overlay::core::fill_rule::FillRule;
@@ -403,6 +404,54 @@ impl Region {
             }
         }
         if shapes.is_empty() || area <= 0.0 {
+            return Err("the holes cover the whole region".into());
+        }
+        Ok(Region {
+            shapes,
+            area,
+            lo,
+            hi,
+        })
+    }
+
+    /// A region from shapes that are normalized already: each shape is its outer ring and then its
+    /// holes. Nothing is clipped or merged, so the points stay exactly as given (zones that share
+    /// an edge keep sharing it). The shapes must not overlap.
+    pub fn from_shapes(shapes: Vec<Vec<Vec<DVec2>>>) -> Result<Region, String> {
+        let shapes: Vec<Vec<Vec<DVec2>>> = shapes
+            .into_iter()
+            .filter_map(|s| {
+                let rings: Vec<Vec<DVec2>> = s
+                    .iter()
+                    .map(|r| crate::geom::open_ring(r, 1e-9))
+                    .filter(|r| r.len() >= 3)
+                    .collect();
+                // The outline must survive; a hole that collapsed is dropped.
+                (s.first().is_some_and(|o| crate::geom::open_ring(o, 1e-9).len() >= 3))
+                    .then_some(rings)
+            })
+            .collect();
+        if shapes.is_empty() {
+            return Err("a region needs an outline of 3 or more points".into());
+        }
+        if shapes.iter().flatten().flatten().any(|p| !p.is_finite()) {
+            return Err("numbers must be finite".into());
+        }
+        let mut area = 0.0;
+        let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+        for s in &shapes {
+            for (i, r) in s.iter().enumerate() {
+                let a = crate::geom::polygon_area(r);
+                area += if i == 0 { a } else { -a };
+                if i == 0 {
+                    for p in r {
+                        lo = lo.min(*p);
+                        hi = hi.max(*p);
+                    }
+                }
+            }
+        }
+        if area <= 0.0 {
             return Err("the holes cover the whole region".into());
         }
         Ok(Region {
