@@ -860,6 +860,22 @@ pub fn plan_groups(
     Ok(out)
 }
 
+/// The groups of a hardscape with a joint pattern, as the report and the export lay them. `None`
+/// if the hardscape has no joint pattern. `tolerance` flattens curves; `max_units` bounds the
+/// units of the courses.
+pub fn groups_of(
+    doc: &Document,
+    obj: &Object,
+    tolerance: f64,
+    max_units: usize,
+) -> Result<Option<Planned>, String> {
+    let Some((pattern, place)) = super::object::pattern_of(doc, obj) else {
+        return Ok(None);
+    };
+    let region = super::object::region_of(doc, obj, tolerance)?;
+    plan_groups(doc, obj, region, pattern, place, max_units).map(Some)
+}
+
 /// Adds the summaries of the groups of one hardscape into one. `region_area` is the area of the
 /// hardscape (a course lies inside it and is not added).
 pub fn merge(parts: &[Summary], region_area_mm2: f64, opts: &SummaryOptions) -> Summary {

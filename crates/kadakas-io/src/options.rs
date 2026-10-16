@@ -336,6 +336,10 @@ pub enum PatternExport {
     /// `<layer>-UNITS-WHOLE` and `<layer>-UNITS-CUT`. A hole inside a cut unit is a closed
     /// polyline on `<layer>-UNITS-VOID`.
     Units,
+    /// Like `Units`, but each whole unit is an INSERT of the block of its unit type (on
+    /// `<layer>-UNITS-WHOLE`), and only cut units are polylines. The file is several times
+    /// smaller, and CAD programs count the blocks directly.
+    Blocks,
 }
 
 impl PatternExport {
@@ -344,6 +348,7 @@ impl PatternExport {
             PatternExport::None => "none",
             PatternExport::Gaps => "gaps",
             PatternExport::Units => "units",
+            PatternExport::Blocks => "blocks",
         }
     }
 }
@@ -368,7 +373,8 @@ pub struct ExportOptions {
     pub site_mesh: SiteMesh,
     /// DXF: how meshes (mesh objects and the site mesh) are written.
     pub mesh_entity: MeshEntity,
-    /// DXF: what to write of the unit pattern of hardscapes: `none` (default), `gaps` or `units`.
+    /// DXF: what to write of the unit pattern of hardscapes: `none` (default), `gaps`, `units` or
+    /// `blocks` (whole units as INSERTs of one block per unit type).
     /// A pattern with more units than the export limit is an error that names the object.
     pub patterns: PatternExport,
     /// The most units (or gap lines) that the pattern export of one file may write in all objects.
