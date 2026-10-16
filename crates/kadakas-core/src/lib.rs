@@ -22,6 +22,7 @@ pub mod guid;
 pub mod hardscape;
 pub mod history;
 pub mod irrigation;
+pub mod issue;
 pub mod landscape;
 pub mod layout;
 pub mod library;

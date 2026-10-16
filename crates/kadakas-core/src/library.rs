@@ -22,11 +22,17 @@ pub struct Usage {
     pub resources: Vec<ResourceId>,
     /// Layers that name an imported revision whose base this resource keeps.
     pub layers: Vec<crate::model::LayerId>,
+    /// Issues with a viewpoint whose snapshot is this picture (REV-04).
+    pub issues: Vec<crate::issue::IssueId>,
 }
 
 impl Usage {
     pub fn total(&self) -> usize {
-        self.objects.len() + self.classes.len() + self.resources.len() + self.layers.len()
+        self.objects.len()
+            + self.classes.len()
+            + self.resources.len()
+            + self.layers.len()
+            + self.issues.len()
     }
 
     pub fn is_unused(&self) -> bool {
@@ -74,6 +80,22 @@ fn object_uses(o: &Object, id: ResourceId, tag: &Value) -> bool {
             .any(|v| v.get(crate::record::MARKER) == Some(tag))
 }
 
+/// The issues that use a picture resource as the snapshot of a viewpoint.
+pub fn snapshot_issues(doc: &Document, id: ResourceId) -> Vec<crate::issue::IssueId> {
+    let Some(img) = doc.resources.image(id) else {
+        return Vec::new();
+    };
+    doc.issues
+        .iter()
+        .filter(|i| {
+            i.viewpoints
+                .iter()
+                .any(|v| v.snapshot.as_deref() == Some(img.sha256.as_str()))
+        })
+        .map(|i| i.id)
+        .collect()
+}
+
 /// Who uses the resource. A resource that does not exist has no users.
 pub fn usage(doc: &Document, id: ResourceId) -> Usage {
     // The base of an imported revision is used by the objects and layers of that revision.
@@ -94,6 +116,7 @@ pub fn usage(doc: &Document, id: ResourceId) -> Usage {
     let tag = Value::from(id.0);
     Usage {
         layers: Vec::new(),
+        issues: snapshot_issues(doc, id),
         objects: doc
             .objects
             .values()
@@ -187,6 +210,15 @@ pub fn list(doc: &Document, type_filter: Option<&str>, search: Option<&str>) -> 
             }
         }
     }
+    // A snapshot picture is used by the issues whose viewpoints hold its hash.
+    for r in doc.resources.iter() {
+        if matches!(r.body, ResourceBody::Image(_)) {
+            let n = snapshot_issues(doc, r.id).len();
+            if n > 0 {
+                *uses.entry(r.id).or_default() += n;
+            }
+        }
+    }
     // A base is used by the objects and layers of its revision (parts of one base count alike).
     let mut bases: HashMap<(String, String), usize> = HashMap::new();
     for r in doc.resources.iter() {
@@ -253,6 +285,7 @@ pub fn purge_plan(doc: &Document, types: &[&str]) -> Vec<ResourceId> {
             if u.objects.is_empty()
                 && u.classes.is_empty()
                 && u.layers.is_empty()
+                && u.issues.is_empty()
                 && u.resources.iter().all(|x| gone.contains(x))
             {
                 gone.insert(r.id);

@@ -2222,6 +2222,66 @@ class Api:
         JSON-RPC method ``version.repair``."""
         return self._call("version.repair", params or None)
 
+    def issue_list(self, **params: Any) -> Any:
+        """List review issues (REV-04). params: {status? (a status or a list: open, in_progress, resolved, closed), open_only? (true: not resolved or closed), assignee?, label?, object? (an object ID: the issue is about it), text? (in the title or the description), origin? (user, agent, script, remote), sort? (created, default, oldest first; modified, newest first; status), limit? (default 200, at most 1000), offset? (how many matching issues to skip, default 0: the next page starts at next_offset)}. Returns {issues: [{id, title, type, status, priority, assignee, labels, due, author, origin, created, modified (ISO 8601), created_ms, modified_ms, objects (count), viewpoints (count), comments (count), point, pin (where the pin is: the point, else the first object, else the plan view)}], count (listed), total (matching), offset, next_offset (null at the end), facets: {assignees, labels}}.
+
+        JSON-RPC method ``issue.list``."""
+        return self._call("issue.list", params or None)
+
+    def issue_get(self, **params: Any) -> Any:
+        """One issue with its viewpoints and its comment thread. params: {id, snapshots? (true: add snapshot_base64 to each viewpoint that has a picture)}. Returns the issue: {id, title, description, type, status, priority, assignee, labels, due, author, origin, created, modified (ISO 8601), created_ms, modified_ms, point, objects, objects_missing (objects that are not in the document), objects_ifc (the IFC GlobalIds, as the IFC export and BCF write them), pin, viewpoints: [{id, name, time, view, layers, classes, selection, snapshot (SHA-256 of the picture file), snapshot_base64?}], comments: [{id, author, origin, time, time_ms, text, viewpoint?, edited?}]}.
+
+        JSON-RPC method ``issue.get``."""
+        return self._call("issue.get", params or None)
+
+    def issue_create(self, **params: Any) -> Any:
+        """Make an issue. One undo step. The origin is the origin of the session (agent for an agent). params: {title, description?, type? (issue, error, warning, request, clash, remark or any text; default issue), status? (default open), priority? (low, normal, high, critical or any text; default normal), assignee?, labels?, due? (YYYY-MM-DD), objects? (IDs; they must exist), point? ([x, y, z] in mm), author? (default: the collaboration name, else the origin), now_ms?, viewpoint? {name?, view? ({kind: plan, center: [x, y], zoom} or {kind: camera, target: [x, y, z], yaw, pitch, distance, perspective?}), selection? (default: the objects), capture_visibility? (default true: the visible layers and classes now), snapshot? (true or the params of render.png: a picture of the model; or snapshot_base64: a PNG or JPEG file you made)}, capture? (true: a viewpoint of the current view: the view of the session, the selection when objects is not given, the visible layers and classes, and a snapshot), snapshot? (true or render.png params: with a viewpoint or capture)}. The snapshot is stored once in the document as a picture (SHA-256), at most 2 MiB. Returns {id, viewpoints: [ids], issue: summary, note?}; `note` is there when the document has more than 10000 issues (a warning only; the cap is 100000).
+
+        JSON-RPC method ``issue.create``."""
+        return self._call("issue.create", params or None)
+
+    def issue_update(self, **params: Any) -> Any:
+        """Change an issue. One undo step; a call that changes nothing makes no step. params: {id, title?, description?, type?, status?, priority?, assignee? (null or empty: clear), labels? (replace), add_labels?, remove_labels?, due? (YYYY-MM-DD; null or empty: clear), objects? (replace), add_objects?, remove_objects?, point? ([x, y, z] or null: clear), remove_viewpoints? (viewpoint IDs; the picture stays in the document until resource.purge; viewpoints of an issue of somebody else need confirm: true, as issue.delete), confirm?, now_ms?}. Returns {id, changed, issue: summary}.
+
+        JSON-RPC method ``issue.update``."""
+        return self._call("issue.update", params or None)
+
+    def issue_add_viewpoint(self, **params: Any) -> Any:
+        """Add a viewpoint to an issue. One undo step. params: {id, name?, view? ({kind: plan, center: [x, y], zoom} or {kind: camera, target: [x, y, z], yaw, pitch, distance, perspective?}; default: the current view of the session), selection? (object IDs; default: the objects of the issue), capture_visibility? (default true: the visible layers and classes now), snapshot? (true or the params of render.png), snapshot_base64? (a PNG or JPEG file you made), now_ms?}. At most 64 viewpoints for an issue. Returns {id, viewpoint (the new ID), issue: summary}. Remove viewpoints with issue.update {remove_viewpoints: [IDs]}.
+
+        JSON-RPC method ``issue.add_viewpoint``."""
+        return self._call("issue.add_viewpoint", params or None)
+
+    def issue_comment(self, **params: Any) -> Any:
+        """Add a comment to the thread of an issue. A comment is a record of its own, so two people who comment at the same time both keep their comment. One undo step. params: {id, text, viewpoint? (the ID of a viewpoint of the issue), author?, now_ms?}. The origin is the origin of the session. At most 5000 comments for an issue. Returns {comment: ID, issue: summary}.
+
+        JSON-RPC method ``issue.comment``."""
+        return self._call("issue.comment", params or None)
+
+    def issue_resolve(self, **params: Any) -> Any:
+        """Set the status of an issue to resolved (default) or closed, with an optional comment, in one undo step. params: {id, status? (resolved or closed), comment? (a text), author?, now_ms?}. Returns {id, changed, issue: summary}.
+
+        JSON-RPC method ``issue.resolve``."""
+        return self._call("issue.resolve", params or None)
+
+    def issue_delete(self, **params: Any) -> Any:
+        """Delete issues with their comments. One undo step. Work of somebody else is never deleted silently: an issue that another origin made (a person, an agent, a script, another user), or another author, or one that has comments of another origin or author, needs {confirm: true}, which you may send only when the person has said so. Without it the call fails with a conflict error (reason confirm_needed) whose data has `issues` (what would be lost and why) and ask_the_person. Nothing is deleted if one issue needs the consent. params: {id} or {ids}, confirm?, author? (who deletes; default the collaboration name, else the origin), purge_snapshots? (true: the pictures that no other issue uses go too, in the same undo step; refused with a policy error while the session is connected to a shared document). The consent is checked against who this session is (the collaboration name in a shared session, else the identity the host gave, else the origin); the caller's `author` is ignored, and an issue or comment without an author always needs the consent. Somebody else is another origin or another author with the same origin. A delete leaves the snapshot pictures in the document until a purge. Returns {deleted: [ID], count}.
+
+        JSON-RPC method ``issue.delete``."""
+        return self._call("issue.delete", params or None)
+
+    def issue_import_bcf(self, **params: Any) -> Any:
+        """Read a BCF file (.bcfzip, BCF 2.1 or 3.0) and add its issues. One undo step. params: {path | base64 (the file), on_conflict? (ask, default; skip; replace; keep_both), skip_items? (true: import without the items that do not fit, see below), dry_run? (true: a plan of what would happen, no change), author? (the author of the new issues that the file gives none; default the collaboration name, else the origin), now_ms?}. Issues are matched by the GUID of the topic. A GUID that the document does not have is added. A GUID that the document has with the same content (what BCF holds) is left alone. A GUID with other content is a conflict: with `ask` the call fails with a conflict error (reason bcf_conflict, ask_the_person) that lists the conflicts, and nothing is imported; pass skip (keep ours), replace (take the values of the file for the fields, the viewpoints and the comments of the same ID, and add the new ones; viewpoints and comments that only we have stay) or keep_both (add the issue of the file with new IDs) after the person chose. Components with an IfcGuid become the objects of the issue (the GlobalId of an IFC export of this model gives the same object). Items that do not fit the limits of Kadakas (a comment that is not valid, a snapshot over the size limits, a camera that cannot be used) are never dropped silently: the call fails with a conflict error (reason bcf_unfit, ask_the_person, options skip_items and cancel) that lists them, and nothing is imported; ask the person, then call again with skip_items: true, or give up. A dry run lists them in `unfit` and in the plan. With replace, a picture or a camera of ours stays when the file's was refused. A comment GUID that another issue of the document already uses gets a new ID. Reading is bounded: a violation is an error. A topic that cannot be read or breaks a bound (no title, a title over 200 characters, over 64 viewpoints, over 5000 comments, a repeated GUID) is an item of the same question (item `topic`): nothing is imported until the caller passes skip_items, and then it is listed in `topics_skipped`. A topic that is the same already, or a conflict that on_conflict skip keeps ours for, is not asked about. The other things that were not read are in `warnings`. Returns {version, imported, replaced, unchanged, skipped_conflicts, kept_both, topics_skipped: [{topic, reason}], items_skipped: [{topic, item, reason, viewpoint}], warnings, created: [IDs], pictures, dry_run?, plan?}.
+
+        JSON-RPC method ``issue.import_bcf``."""
+        return self._call("issue.import_bcf", params or None)
+
+    def issue_export_bcf(self, **params: Any) -> Any:
+        """Write issues as a BCF file (.bcfzip). params: {path (a file that ends in .bcfzip; omit to get the file as base64), version? (3.0 default, or 2.1), ids?, status?, open_only?, assignee?, label?, object? (which issues; default all), overwrite? (a restricted session needs it to replace a file)}. Objects become Components with the IfcGuid of the IFC export. Not in BCF: the layers and classes of a viewpoint, the origin, the pin. Returns {version, path?, base64?, bytes, topics, viewpoints, snapshots, comments, notes}.
+
+        JSON-RPC method ``issue.export_bcf``."""
+        return self._call("issue.export_bcf", params or None)
+
     def dxf_compare(self, **params: Any) -> Any:
         """Compare two DXF or DWG files without importing them (IOP-24). params: {base (the old file), new, options? {tolerance? (units of the drawing), layers? (only entities on these DXF layers), limit? (most changes listed, default 200, at most 1000), ...import options such as hatches}, render? {format: png|svg|pdf, revision_clouds? (draw revision clouds around the clusters of changes), width?, height?, palette?, unchanged?, dark?, ghosts?, previous?, view? (png, default top)}}. Returns {base, new, counts, changes: [{id, status: added|removed|changed, entity, handle?, layer, what?, via?, distance?, text?, objects, new_objects, object_ids}], listed, total_changes, notes, match, compare (the legend, counts and ghosts of the overlay, with render), image (with render: {format, svg | png_base64 | pdf_base64, width?, height?, clouds?})}. The matching is that of import.update: by handle first, else by content, geometry and nearest position. Nothing changes in the document. See describe.review.dxf_compare.
 
@@ -2271,7 +2331,7 @@ class Api:
         return self._call("collab.redo", params or None)
 
     def events_subscribe(self, **params: Any) -> Any:
-        """Get change events. params: {kinds?: [objects, layers, classes, resources, document]}. After each change the server sends a notification (no id) {method: "events.change", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.
+        """Get change events. params: {kinds?: [objects, layers, classes, resources, document, issues]}. After each change the server sends a notification (no id) {method: "events.change", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.
 
         JSON-RPC method ``events.subscribe``."""
         return self._call("events.subscribe", params or None)
@@ -2681,6 +2741,16 @@ METHOD_NAMES: tuple[str, ...] = (
     "version.delete",
     "version.diff",
     "version.repair",
+    "issue.list",
+    "issue.get",
+    "issue.create",
+    "issue.update",
+    "issue.add_viewpoint",
+    "issue.comment",
+    "issue.resolve",
+    "issue.delete",
+    "issue.import_bcf",
+    "issue.export_bcf",
     "dxf.compare",
     "collab.status",
     "collab.connect",

@@ -319,6 +319,7 @@
         "-",
         "file.import_menu",
         "file.export",
+        "file.bcf",
         "-",
         "file.map_sources",
         "file.change_crs",
@@ -342,6 +343,8 @@
         "-",
         "edit.delete",
         "edit.select_all",
+        "-",
+        "edit.new_issue",
         "-",
         "ui.quick_search"
       ]

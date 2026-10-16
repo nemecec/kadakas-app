@@ -85,6 +85,16 @@ pub const REASON_VERSION_LIMIT: &str = "version_limit";
 /// `version.create`, `version.restore`, `version.delete`: the history of the file could not be
 /// read completely. It is kept as it is and read only, until the person calls `version.repair`.
 pub const REASON_HISTORY_READONLY: &str = "history_read_only";
+/// `issue.delete`: an issue of somebody else (or with comments of somebody else) would be deleted.
+/// Nothing was deleted. The details list the issues. The caller may ask the person, then pass
+/// `confirm: true`.
+pub const REASON_CONFIRM_NEEDED: &str = "confirm_needed";
+/// `issue.import_bcf`: an issue of the file has the GUID of an issue in the document and other
+/// content. Nothing was imported. The details list the conflicts and the options (`on_conflict`).
+pub const REASON_BCF_CONFLICT: &str = "bcf_conflict";
+/// `issue.import_bcf`: items of the file do not fit the limits (a comment, a picture, a camera).
+/// Nothing was imported. The details list them; the person decides (`skip_items` or give up).
+pub const REASON_BCF_UNFIT: &str = "bcf_unfit";
 /// `file.save`: parts of the document that stay in the file it was opened from (pictures, versions)
 /// cannot be found any more, because the file changed on disk. Nothing was written. `details`
 /// has `missing` {file, pictures, history, other} and `consent_token`. The caller asks the person,
@@ -160,7 +170,12 @@ impl From<kadakas_core::command::CommandError> for RpcError {
     fn from(e: kadakas_core::command::CommandError) -> Self {
         use kadakas_core::command::CommandError as E;
         match e {
-            E::NoObject(_) | E::NoLayer(_) | E::NoClass(_) | E::NoResource(_) => Self::not_found(e),
+            E::NoObject(_)
+            | E::NoLayer(_)
+            | E::NoClass(_)
+            | E::NoResource(_)
+            | E::NoIssue(_)
+            | E::NoComment(_) => Self::not_found(e),
             E::ResourceInUse(..) | E::LayerNotEmpty(_) | E::LayerLocked(_) => Self::conflict(e),
             E::LastLayer | E::Invalid(_) => Self::validation(e),
         }

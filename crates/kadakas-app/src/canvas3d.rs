@@ -28,6 +28,8 @@ pub struct Canvas3d<'a> {
     pub compare: Option<std::sync::Arc<crate::compare_ui::Compare3d>>,
     /// An object to zoom to (a click in the Compare window).
     pub frame: Option<kadakas_core::model::ObjectId>,
+    /// The pins of the issues (REV-05): drawn over the scene, and a click on one opens its issue.
+    pub issues: Option<&'a mut crate::issues_ui::IssuesUi>,
 }
 
 /// Draws the canvas and handles its input for one frame.
@@ -41,6 +43,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         pending_pan,
         compare,
         frame,
+        mut issues,
     } = c;
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     if !gpu_ready {
@@ -113,8 +116,19 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
             view3d.zoom_at(factor, local(h), size);
         }
     }
+    // A click on a pin opens its issue.
+    let mut pin_clicked = false;
+    if resp.clicked()
+        && compare.is_none()
+        && let (Some(ui_issues), Some(p)) = (issues.as_deref_mut(), resp.interact_pointer_pos())
+        && let Some(id) = ui_issues.pin_at(p)
+    {
+        ui_issues.click_pin(id);
+        pin_clicked = true;
+    }
     // A compare is read only: a click selects nothing.
     if resp.clicked()
+        && !pin_clicked
         && compare.is_none()
         && let Some(p) = resp.interact_pointer_pos()
     {
@@ -152,6 +166,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     };
     let bg = style.background.0;
     let ppp = ui.ctx().pixels_per_point();
+    let view_proj = cam.view_proj(aspect, bounds);
     ui.painter().add(egui_wgpu::Callback::new_paint_callback(
         rect,
         SceneCallback {
@@ -159,7 +174,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
             scene_rev: geometry,
             overlay,
             overlay_rev,
-            mvp: cam.view_proj(aspect, bounds).to_cols_array_2d(),
+            mvp: view_proj.to_cols_array_2d(),
             eye: cam.eye().to_array(),
             eye_dir: cam.eye_dir().to_array(),
             ortho: cam.projection == Projection::Orthographic,
@@ -175,6 +190,11 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
             ],
         },
     ));
+    if compare.is_none()
+        && let Some(issues) = issues
+    {
+        issues.paint_3d(&ui.painter_at(rect), rect, view_proj, session);
+    }
 }
 
 #[cfg(test)]
@@ -194,6 +214,7 @@ mod tests {
         pending_zoom: f64,
         pending_pan: egui::Vec2,
         ctx: egui::Context,
+        issues: crate::issues_ui::IssuesUi,
     }
 
     impl Harness {
@@ -206,6 +227,7 @@ mod tests {
                 pending_zoom: 1.0,
                 pending_pan: egui::Vec2::ZERO,
                 ctx: egui::Context::default(),
+                issues: Default::default(),
             }
         }
 
@@ -264,6 +286,7 @@ mod tests {
                             pending_pan: &mut self.pending_pan,
                             compare: None,
                             frame: None,
+                            issues: Some(&mut self.issues),
                         },
                     );
                 });
@@ -385,6 +408,34 @@ mod tests {
     }
 
     #[test]
+    fn a_pin_is_drawn_in_3d_and_a_click_on_it_opens_the_issue_instead_of_selecting() {
+        let mut h = Harness::new();
+        let slab = h.add_slab();
+        h.session.view.view = StandardView::RightIsometric;
+        let made = h
+            .session
+            .handle(
+                "issue.create",
+                serde_json::json!({"title": "Here", "objects": [slab], "now_ms": 1}),
+            )
+            .unwrap();
+        let id: kadakas_core::issue::IssueId = serde_json::from_value(made["id"].clone()).unwrap();
+        for _ in 0..4 {
+            h.frame(vec![]);
+        }
+        let at = h.issues.pin_screen(id).expect("the pin is on the screen");
+        assert!(at.x > 0.0 && at.y > 0.0);
+        h.click(at, egui::Modifiers::NONE);
+        assert_eq!(h.issues.selected, Some(id), "the pin was clicked");
+        assert!(
+            h.session.selection.is_empty(),
+            "the click did not select the slab"
+        );
+        let requests = h.issues.take_requests();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[test]
     fn the_scene_is_built_again_only_when_the_document_changes() {
         let mut h = Harness::new();
         h.add_slab();
@@ -429,6 +480,7 @@ mod tests {
                     pending_pan: &mut h.pending_pan,
                     compare: None,
                     frame: None,
+                    issues: None,
                 },
             );
         });

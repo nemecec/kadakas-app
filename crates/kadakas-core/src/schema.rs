@@ -89,6 +89,9 @@ id_schema!(ObjectId, "ObjectId");
 id_schema!(LayerId, "LayerId");
 id_schema!(ClassId, "ClassId");
 id_schema!(ResourceId, "ResourceId");
+id_schema!(crate::issue::IssueId, "IssueId");
+id_schema!(crate::issue::CommentId, "CommentId");
+id_schema!(crate::issue::ViewpointId, "ViewpointId");
 
 schema_impl!(Color, "Color", |_g| json_schema!({
     "type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255},

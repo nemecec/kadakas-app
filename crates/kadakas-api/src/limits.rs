@@ -201,7 +201,7 @@ impl SessionLimits {
 const OBJECT_BYTES: u64 = 320;
 const RESOURCE_BYTES: u64 = 2048;
 
-/// A rough figure for a document: objects, resources and pictures.
+/// A rough figure for a document: objects, resources, pictures, versions and issues.
 pub(crate) fn document_bytes(doc: &kadakas_core::model::Document) -> u64 {
     let underlays: u64 = doc
         .objects
@@ -227,6 +227,7 @@ pub(crate) fn document_bytes(doc: &kadakas_core::model::Document) -> u64 {
         + doc.resources.len() as u64 * RESOURCE_BYTES
         + pictures
         + versions
+        + doc.issues.approx_bytes()
 }
 
 impl Session {

@@ -47,6 +47,10 @@ pub enum MenuAction {
     Compare,
     /// File > Import > Update from DXF/DWG...: a new revision of an imported drawing (IOP-23).
     UpdateFromDxf,
+    /// File > BCF Issues...: read and write BCF files (REV-06).
+    Bcf,
+    /// Edit > New Issue from Selection (REV-05).
+    NewIssue,
     /// File > Compare Drawings...: two DXF or DWG files without an import (IOP-24).
     CompareDrawings,
     Undo,
@@ -154,6 +158,8 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         Cmd::Versions => M::Versions,
         Cmd::Compare => M::Compare,
         Cmd::UpdateFromDxf => M::UpdateFromDxf,
+        Cmd::Bcf => M::Bcf,
+        Cmd::NewIssue => M::NewIssue,
         Cmd::CompareDrawings => M::CompareDrawings,
         Cmd::Preferences => M::Preferences,
         Cmd::Undo => M::Undo,
@@ -604,6 +610,8 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         | MenuAction::Versions
         | MenuAction::Compare
         | MenuAction::UpdateFromDxf
+        | MenuAction::Bcf
+        | MenuAction::NewIssue
         | MenuAction::CompareDrawings
         | MenuAction::CreateSiteModel
         | MenuAction::Preferences

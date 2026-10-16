@@ -1135,6 +1135,10 @@ pub struct Document {
     /// to the file: collaboration does not share it. Older files have none.
     #[serde(default, skip_serializing_if = "history_unwritten")]
     pub history: Option<crate::history::HistoryData>,
+    /// Review issues and their comments (REV-04). They are review data, not drawing objects.
+    /// Older files have none.
+    #[serde(default, skip_serializing_if = "crate::issue::Issues::is_empty")]
+    pub issues: crate::issue::Issues,
     /// The history of versions that waits in the file this document was opened from, not read yet
     /// (`crate::history::HistoryLoader`, DOC-21). While it is set, `history` is `None`. A host
     /// resolves it before it uses the history or writes the document in any other way than a
@@ -1165,6 +1169,7 @@ impl PartialEq for Document {
             && self.resources == other.resources
             && self.drawing == other.drawing
             && self.history == other.history
+            && self.issues == other.issues
             && self.extra == other.extra
             && self.objects.len() == other.objects.len()
             && self.objects.iter().eq(other.objects.iter())
@@ -1330,6 +1335,7 @@ impl Default for Document {
             resources: Resources::default(),
             drawing: Default::default(),
             history: None,
+            issues: Default::default(),
             lazy_history: None,
             ids: IdGen::default(),
             load_notes: Vec::new(),
@@ -1807,6 +1813,7 @@ impl Document {
             notes.push(problem);
         }
         notes.extend(crate::provenance::repair(self));
+        notes.extend(self.issues.repair());
         self.load_notes = notes;
         let mut seen = std::collections::HashSet::new();
         let ids = self

@@ -104,7 +104,36 @@ impl State {
     pub fn of(doc: &Document, prev: Option<&State>) -> State {
         let replica = replica_of(doc);
         let mut things = BTreeMap::new();
+        // The pictures of issue snapshots are review data too: a restore keeps them.
+        let snapshots: std::collections::BTreeSet<&str> =
+            doc.issues.snapshots().into_iter().collect();
+        // A picture that a plant style uses is part of the drawing and of the version, also when
+        // an issue uses it as a snapshot too.
+        let styled: std::collections::BTreeSet<kadakas_core::uid::Uid> = replica
+            .alive_things()
+            .filter(|(t, _)| t.kind == Kind::Resource)
+            .filter_map(|(_, e)| {
+                e.get("body")
+                    .and_then(|b| b.get("image"))
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(kadakas_core::uid::Uid::parse)
+            })
+            .collect();
         for (t, e) in replica.alive_things() {
+            if t.kind == Kind::Resource
+                && !styled.contains(&t.id)
+                && e.get("body")
+                    .and_then(|b| b.get("sha256"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|h| snapshots.contains(h))
+            {
+                continue;
+            }
+            // Issues are review data: a version holds the drawing, and a restore leaves the
+            // issues as they are.
+            if matches!(t.kind, Kind::Issue | Kind::Comment) {
+                continue;
+            }
             let mut props = e.visible();
             props.remove("order");
             things.insert(*t, props);
@@ -522,6 +551,56 @@ mod tests {
         got.apply_all(&back).unwrap();
         assert_eq!(got, s1);
         assert!(s1.diff(&s1).is_empty());
+    }
+
+    #[test]
+    fn a_snapshot_picture_is_left_out_of_a_version_unless_a_plant_style_uses_it() {
+        use kadakas_core::issue::{Issue, Viewpoint};
+        use kadakas_core::picture::header_only_sample;
+        use kadakas_core::resource::{ResourceBody, ResourceId};
+        let mut ed = Editor::with_sequential_ids();
+        let (only_issue, shared) = (header_only_sample(1), header_only_sample(2));
+        for pic in [&only_issue, &shared] {
+            ed.execute(&Command::AddIssue {
+                issue: Box::new(Issue {
+                    title: "T".into(),
+                    viewpoints: vec![Viewpoint {
+                        snapshot: Some(pic.sha256.clone()),
+                        ..Viewpoint::default()
+                    }],
+                    ..Issue::default()
+                }),
+                pictures: vec![pic.clone()],
+            })
+            .unwrap();
+        }
+        let style = ed
+            .execute(&Command::AddResource {
+                name: "Oak".into(),
+                body: ResourceBody::PlantStyle(Box::default()),
+            })
+            .unwrap()
+            .created[0];
+        ed.execute(&Command::SetPlantPicture {
+            style: ResourceId(style),
+            picture: Some(Box::new(shared.clone())),
+        })
+        .unwrap();
+        let state = State::of(ed.doc(), None);
+        let hashes = |s: &State| -> Vec<String> {
+            s.things
+                .iter()
+                .filter(|(t, _)| t.kind == Kind::Resource)
+                .filter_map(|(_, p)| {
+                    p.get("body")
+                        .and_then(|b| b.get("sha256"))
+                        .and_then(|h| h.as_str().map(String::from))
+                })
+                .collect()
+        };
+        let got = hashes(&state);
+        assert!(!got.contains(&only_issue.sha256), "review data stays out");
+        assert!(got.contains(&shared.sha256), "a style needs its picture");
     }
 
     #[test]

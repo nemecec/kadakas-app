@@ -15,9 +15,10 @@ pub mod feedback_api;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
 pub use errors::{
-    REASON_ALREADY_CONNECTED, REASON_BASE_TOO_LARGE, REASON_BASE_TOO_MANY, REASON_EDITS_WAIT,
-    REASON_FILE_CHANGED, REASON_HISTORY_READONLY, REASON_PARTS_MISSING, REASON_UNSAVED_CHANGES,
-    REASON_VERSION_LIMIT, RpcError,
+    REASON_ALREADY_CONNECTED, REASON_BASE_TOO_LARGE, REASON_BASE_TOO_MANY, REASON_BCF_CONFLICT,
+    REASON_BCF_UNFIT, REASON_CONFIRM_NEEDED, REASON_EDITS_WAIT, REASON_FILE_CHANGED,
+    REASON_HISTORY_READONLY, REASON_PARTS_MISSING, REASON_UNSAVED_CHANGES, REASON_VERSION_LIMIT,
+    RpcError,
 };
 #[cfg(test)]
 mod care_api_tests;
@@ -29,6 +30,7 @@ mod gis_api;
 mod grading_api;
 mod hardscape_api;
 mod irrigation_api;
+mod issue_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod libfiles;
 mod massing_api;
@@ -136,6 +138,9 @@ pub struct Session {
     view_changed: bool,
     /// The collaboration client and where it connects (see `collab_api`).
     collab: collab_api::CollabState,
+    /// Who this session is, for the checks that need a name (the consent to delete the work of
+    /// somebody else). Set by the host; a caller of the API cannot change it.
+    identity: Option<String>,
     /// Who subscribed to the change events (see `events`), and the connection of the current call.
     events: events::EventHub,
     conn: u64,
@@ -798,6 +803,17 @@ pub const METHODS: &[(&str, &str)] = &[
     review_api::VERSION_DELETE,
     review_api::VERSION_DIFF,
     review_api::VERSION_REPAIR,
+    // Issues and BCF files (see issue_api.rs).
+    issue_api::ISSUE_LIST,
+    issue_api::ISSUE_GET,
+    issue_api::ISSUE_CREATE,
+    issue_api::ISSUE_UPDATE,
+    issue_api::ISSUE_ADD_VIEWPOINT,
+    issue_api::ISSUE_COMMENT,
+    issue_api::ISSUE_RESOLVE,
+    issue_api::ISSUE_DELETE,
+    issue_api::ISSUE_IMPORT_BCF,
+    issue_api::ISSUE_EXPORT_BCF,
     #[cfg(not(target_arch = "wasm32"))]
     dxf_compare_api::DXF_COMPARE,
     // Collaboration (see collab_api.rs).
@@ -810,7 +826,7 @@ pub const METHODS: &[(&str, &str)] = &[
     collab_api::REDO,
     (
         "events.subscribe",
-        "Get change events. params: {kinds?: [objects, layers, classes, resources, document]}. After each change the server sends a notification (no id) {method: \"events.change\", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.",
+        "Get change events. params: {kinds?: [objects, layers, classes, resources, document, issues]}. After each change the server sends a notification (no id) {method: \"events.change\", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.",
     ),
     (
         "events.unsubscribe",
@@ -840,6 +856,12 @@ impl Default for Session {
 }
 
 impl Session {
+    /// Names the person at this session (the app uses the name of the account). The API checks
+    /// the consent to delete the work of somebody else against it.
+    pub fn set_identity(&mut self, name: &str) {
+        self.identity = Some(name.trim().to_string()).filter(|n| !n.is_empty());
+    }
+
     /// Like `Session::with_sequential_ids()`, but the new IDs count 2, 3, 4 and so on, as small numbers, so a
     /// test or a fixture can predict them. They are not unique in the world: never use this for a
     /// document that is merged with others.
@@ -880,6 +902,7 @@ impl Session {
             replaced: false,
             view_changed: false,
             collab: Default::default(),
+            identity: None,
             events: Default::default(),
             conn: events::LOCAL,
             limits: SessionLimits::default(),
@@ -1203,6 +1226,9 @@ impl Session {
         if let Some(r) = review_api::handle(self, method, p.clone()) {
             return r;
         }
+        if let Some(r) = self.handle_issue(method, p.clone()) {
+            return r;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(r) = update_api::handle(self, method, p.clone()) {
             return r;
@@ -1275,6 +1301,7 @@ impl Session {
                     d["scripting"] = plugin_api::describe();
                 }
                 d["plugins"] = wasm_plugin_api::describe();
+                d["review"]["issues"] = issue_api::describe();
                 d["schemas"] = json!({
                     "command": "The JSON Schema (draft 2020-12) of every command that `execute` takes. Call describe with {\"schema\": true} to get it in `command_schema` (about 30 KB). Everything the schema accepts for add_object, add_object_in, modify_object and set_vertex with an exact shape kind is accepted by the server too (a test fuzzes this). Other parts are structural only: they check the shape of the object and the kind, not every field, so the server may still refuse what the schema accepts. Their fields are in command_examples and in the sections of this answer.",
                     "exact_shape_kinds": kadakas_core::schema::EXACT_SHAPE_KINDS,

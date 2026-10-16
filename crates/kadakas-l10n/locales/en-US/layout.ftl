@@ -6,6 +6,7 @@ layout-object-info = Object Info
 layout-navigation = Navigation
 layout-resources = Resources
 layout-plant-schedule = Plant Schedule
+layout-issues = Issues
 layout-people = People
 layout-snapping = Snapping
 layout-is-ignored = { $path } is ignored: { $e }

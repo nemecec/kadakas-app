@@ -227,6 +227,67 @@
       "minItems": 4,
       "type": "array"
     },
+    "Comment": {
+      "description": "One message in the thread of an issue.",
+      "properties": {
+        "author": {
+          "default": "",
+          "type": "string"
+        },
+        "edited": {
+          "description": "When the text was edited last (milliseconds since 1970).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/CommentId",
+          "default": "00000000-0000-0000-0000-000000000000",
+          "description": "The ID. A nil ID in a command means \"make a new one\"."
+        },
+        "issue": {
+          "$ref": "#/$defs/IssueId"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin",
+          "default": "user"
+        },
+        "text": {
+          "type": "string"
+        },
+        "time": {
+          "default": 0,
+          "description": "Milliseconds since 1970 (UTC).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "viewpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ViewpointId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The viewpoint of the issue that the comment refers to."
+        }
+      },
+      "required": [
+        "issue",
+        "text"
+      ],
+      "type": "object"
+    },
+    "CommentId": {
+      "description": "An ID: a UUID text such as 0190f1c2-7a3b-7c1d-8e2f-123456789abc.",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "type": "string"
+    },
     "FileLink": {
       "additionalProperties": false,
       "description": "A link to the original file of an import, instead of the summaries of its entities (see the\nmodule docs). It is a hint: the file may be gone or changed, and the hash tells.",
@@ -264,6 +325,221 @@
     "ImageResource": {
       "description": "A picture: {sha256, format (png|jpeg), width, height, data (base64 of the file), thumb (base64 PNG), source?}. Use plant_style.set_picture to make one from a file.",
       "type": "object"
+    },
+    "Issue": {
+      "description": "A review issue.",
+      "properties": {
+        "assignee": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "author": {
+          "default": "",
+          "type": "string"
+        },
+        "created": {
+          "default": 0,
+          "description": "Milliseconds since 1970 (UTC).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "description": {
+          "type": "string"
+        },
+        "due": {
+          "description": "The due date, `YYYY-MM-DD`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/IssueId",
+          "default": "00000000-0000-0000-0000-000000000000",
+          "description": "The ID. A nil ID in a command means \"make a new one\"."
+        },
+        "labels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "modified": {
+          "default": 0,
+          "description": "Milliseconds since 1970 (UTC). Every change sets it.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "objects": {
+          "description": "The objects that the issue is about.",
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin",
+          "default": "user",
+          "description": "Who made it: a person in the app, an agent, a script or another user."
+        },
+        "point": {
+          "description": "The model point (x, y, z in mm) that the issue is about, for the pin.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "priority": {
+          "default": "normal",
+          "description": "The priority, free text. The app offers `low`, `normal`, `high` and `critical`.",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/IssueStatus",
+          "default": "open"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "default": "issue",
+          "description": "The type, free text. The app offers `issue`, `error`, `warning`, `request`, `clash` and\n`remark`.",
+          "type": "string"
+        },
+        "viewpoints": {
+          "items": {
+            "$ref": "#/$defs/Viewpoint"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
+    "IssueId": {
+      "description": "An ID: a UUID text such as 0190f1c2-7a3b-7c1d-8e2f-123456789abc.",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "type": "string"
+    },
+    "IssuePatch": {
+      "additionalProperties": false,
+      "description": "The fields of an issue that `ModifyIssue` can change. A field that is left out stays. For\n`assignee` and `due`, an empty text clears the field.",
+      "properties": {
+        "assignee": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clear_point": {
+          "default": false,
+          "description": "True removes the point.",
+          "type": "boolean"
+        },
+        "description": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "due": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "labels": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "objects": {
+          "default": null,
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "point": {
+          "default": null,
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "priority": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "title": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "IssueStatus": {
+      "description": "The state of an issue.",
+      "enum": [
+        "open",
+        "in_progress",
+        "resolved",
+        "closed"
+      ],
+      "type": "string"
     },
     "LandscapePatch": {
       "description": "Landscape area settings to change. Missing fields stay.",
@@ -348,6 +624,31 @@
         "portrait"
       ],
       "type": "string"
+    },
+    "Origin": {
+      "description": "Who made a change.",
+      "oneOf": [
+        {
+          "const": "user",
+          "description": "A person, in the app.",
+          "type": "string"
+        },
+        {
+          "const": "agent",
+          "description": "An agent, through the API.",
+          "type": "string"
+        },
+        {
+          "const": "script",
+          "description": "A plug-in object that its script generated again. A Python script that calls the API is\nan `Agent`.",
+          "type": "string"
+        },
+        {
+          "const": "remote",
+          "description": "Another user of a shared document (collaboration, PLAT-07). The editor applied their\nchanges with `Editor::apply_remote`.",
+          "type": "string"
+        }
+      ]
     },
     "PaperSize": {
       "enum": [
@@ -1230,6 +1531,167 @@
     "ViewRules": {
       "description": "Display rules: {ne_grid?: {spacing, labels?, label_height?, color?}, phases?: {enabled, existing, new, demolished}, visualization?: {name, field, rules, target?, enabled?, kinds?, include_missing?}}. See view_rules.get and the methods grid.set, phase.display and visualization.set.",
       "type": "object"
+    },
+    "ViewSpec": {
+      "description": "What a viewpoint looks at.",
+      "oneOf": [
+        {
+          "description": "The 2D plan: the model point at the middle of the view and the zoom in pixels per mm.",
+          "properties": {
+            "center": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "kind": {
+              "const": "plan",
+              "type": "string"
+            },
+            "zoom": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "center",
+            "zoom"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The 3D view: an orbit camera as in the 3D window. Angles are radians, lengths are mm.",
+          "properties": {
+            "distance": {
+              "format": "double",
+              "type": "number"
+            },
+            "kind": {
+              "const": "camera",
+              "type": "string"
+            },
+            "perspective": {
+              "default": false,
+              "type": "boolean"
+            },
+            "pitch": {
+              "format": "double",
+              "type": "number"
+            },
+            "target": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "yaw": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "yaw",
+            "pitch",
+            "distance"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Viewpoint": {
+      "description": "A saved view of an issue.",
+      "properties": {
+        "classes": {
+          "description": "Visibility of classes when the viewpoint was made.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/ClassId"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/ViewpointId",
+          "default": "00000000-0000-0000-0000-000000000000",
+          "description": "The ID. A nil ID in a command means \"make a new one\"."
+        },
+        "layers": {
+          "description": "Visibility of layers when the viewpoint was made (`true`: visible). Layers that are not\nlisted stay as they are.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/LayerId"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "selection": {
+          "description": "The selected objects.",
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "snapshot": {
+          "description": "The SHA-256 of the PNG snapshot, as 64 lowercase hex digits. The file is the `image`\nresource of the document with this hash (`Resources::find_image`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "time": {
+          "default": 0,
+          "description": "When it was made, in milliseconds since 1970 (UTC).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "view": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ViewSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The camera or the plan view. Without one, the viewpoint holds a selection only."
+        }
+      },
+      "type": "object"
+    },
+    "ViewpointId": {
+      "description": "An ID: a UUID text such as 0190f1c2-7a3b-7c1d-8e2f-123456789abc.",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "type": "string"
     },
     "VisMode": {
       "enum": [
@@ -3104,6 +3566,233 @@
         "op",
         "ids",
         "array"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Add a review issue (REV-04). A nil `issue.id` (and nil viewpoint ids) make new IDs; an ID\nfrom a BCF file stays. `pictures` are the PNG snapshots of the viewpoints: each becomes an\n`image` resource, once per hash. Returns the ID of the issue first in `created`, then those\nof its viewpoints.",
+      "properties": {
+        "issue": {
+          "$ref": "#/$defs/Issue"
+        },
+        "op": {
+          "const": "add_issue",
+          "type": "string"
+        },
+        "pictures": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ImageResource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "op",
+        "issue"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change fields of an issue. Fields that are left out stay. `now` is the new change time\n(milliseconds since 1970). A patch that changes nothing makes no undo step.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/IssueId"
+        },
+        "now": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "op": {
+          "const": "modify_issue",
+          "type": "string"
+        },
+        "patch": {
+          "$ref": "#/$defs/IssuePatch"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "patch",
+        "now"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Delete an issue with its comments. A snapshot picture that no other viewpoint uses goes too.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/IssueId"
+        },
+        "op": {
+          "const": "delete_issue",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Add a comment to the thread of an issue. A nil `comment.id` makes a new ID (returned in\n`created`).",
+      "properties": {
+        "comment": {
+          "$ref": "#/$defs/Comment"
+        },
+        "op": {
+          "const": "add_issue_comment",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "comment"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change the text of a comment. `now` is the edit time.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/CommentId"
+        },
+        "now": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "op": {
+          "const": "edit_issue_comment",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "text",
+        "now"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Delete a comment.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/CommentId"
+        },
+        "op": {
+          "const": "delete_issue_comment",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Add a viewpoint to an issue, with its PNG snapshot if it has one. Returns the ID in\n`created`.",
+      "properties": {
+        "issue": {
+          "$ref": "#/$defs/IssueId"
+        },
+        "now": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "op": {
+          "const": "add_issue_viewpoint",
+          "type": "string"
+        },
+        "picture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageResource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "viewpoint": {
+          "$ref": "#/$defs/Viewpoint"
+        }
+      },
+      "required": [
+        "op",
+        "issue",
+        "viewpoint",
+        "now"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Replace a viewpoint of an issue (the one with the same ID) with a new one, for example a\nnew camera or a new snapshot. A snapshot that no viewpoint uses any more goes.",
+      "properties": {
+        "issue": {
+          "$ref": "#/$defs/IssueId"
+        },
+        "now": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "op": {
+          "const": "modify_issue_viewpoint",
+          "type": "string"
+        },
+        "picture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageResource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "viewpoint": {
+          "$ref": "#/$defs/Viewpoint"
+        }
+      },
+      "required": [
+        "op",
+        "issue",
+        "viewpoint",
+        "now"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Delete a viewpoint of an issue. Comments that referred to it keep their text.",
+      "properties": {
+        "issue": {
+          "$ref": "#/$defs/IssueId"
+        },
+        "now": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "op": {
+          "const": "delete_issue_viewpoint",
+          "type": "string"
+        },
+        "viewpoint": {
+          "$ref": "#/$defs/ViewpointId"
+        }
+      },
+      "required": [
+        "op",
+        "issue",
+        "viewpoint",
+        "now"
       ],
       "type": "object"
     },

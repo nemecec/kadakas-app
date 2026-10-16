@@ -44,9 +44,13 @@ kadakas-container = { version = "0.1.0", path = "../kadakas-container" }
 # The tests make a command panic (`kadakas_core::fault`). Not shipped.
 kadakas-core = { version = "0.1.0", path = "../kadakas-core", features = ["fault-injection"] }
 png = "0.18"
+# Encodes JPEG in the snapshot benchmark only (to compare sizes).
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 # Draws the SVG of a compare to pixels in the tests. The app ships it already. Not shipped here.
 resvg = { version = "0.48.1", default-features = false }
 proptest = "1.11.0"
+# Makes hostile BCF archives in the tests. Not shipped here (kadakas-review reads them).
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
 kadakas-collab = { version = "0.1.0", path = "../kadakas-collab", features = ["testkit"] }
 # The in-process WebSocket server for tests of `collab.connect {url}`. Not shipped.
 kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws", features = ["test-server"] }

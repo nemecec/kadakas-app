@@ -51,16 +51,23 @@ pub enum Kind {
     /// The settings of the document itself (georeference, drawing data). There is exactly one,
     /// with the nil ID. It always exists and nobody can delete it.
     Document,
+    /// A review issue (REV-04): title, status, anchor and viewpoints. Its comments are things of
+    /// their own, so two users who comment together keep both comments.
+    Issue,
+    /// A comment of an issue.
+    Comment,
 }
 
 impl Kind {
     /// All kinds, in the order that a document is built: things that others refer to come first.
-    pub const ALL: [Kind; 5] = [
+    pub const ALL: [Kind; 7] = [
         Kind::Layer,
         Kind::Class,
         Kind::Resource,
         Kind::Object,
         Kind::Document,
+        Kind::Issue,
+        Kind::Comment,
     ];
 }
 

@@ -237,6 +237,7 @@ pub fn materialize_with(
         }
     }
 
+    out.issues = build_issues(view, &mut cx);
     out.layers = layers;
     out.classes = classes;
     out.resources = resources;
@@ -276,6 +277,84 @@ pub fn materialize_with(
         quarantined: cx.quarantined,
         repairs: cx.repairs,
     }
+}
+
+/// Reads the issues and their comments. A thing that does not read or breaks a bound is
+/// quarantined. A comment whose issue is not there (deleted, or not valid) waits in the replica
+/// and is not in the document.
+fn build_issues(view: &Replica, cx: &mut Ctx) -> kadakas_core::issue::Issues {
+    use kadakas_core::issue::{
+        Comment, Issue, IssueData, IssueId, Issues, MAX_COMMENTS, MAX_VIEWPOINTS, ViewpointId,
+    };
+    use std::collections::{HashMap, HashSet};
+    let mut data = IssueData::default();
+    for (id, props) in ordered(view, Kind::Issue, std::iter::empty()) {
+        // Two users can add viewpoints at the same time and go over the bound together. The issue
+        // stays: the viewpoints after the first ones (by time, then ID) are not shown, and a
+        // repair note says so. Nothing is lost in the replica.
+        let parsed = read::<Issue>(Kind::Issue, id, &props).and_then(|mut i| {
+            if i.viewpoints.len() > MAX_VIEWPOINTS {
+                i.viewpoints.sort_by_key(|v| (v.time, v.id));
+                let hidden = i.viewpoints.len() - MAX_VIEWPOINTS;
+                i.viewpoints.truncate(MAX_VIEWPOINTS);
+                cx.repair(format!(
+                    "issue {id} has {hidden} viewpoints over the limit of {MAX_VIEWPOINTS}: they are not shown"
+                ));
+            }
+            i.validate()?;
+            Ok(i)
+        });
+        match parsed {
+            Ok(i) => data.issues.push(i),
+            Err(e) => cx.quarantine(Kind::Issue, id, e),
+        }
+    }
+    let views: HashMap<IssueId, HashSet<ViewpointId>> = data
+        .issues
+        .iter()
+        .map(|i| (i.id, i.viewpoints.iter().map(|v| v.id).collect()))
+        .collect();
+    let mut comments: Vec<(Uid, Comment)> = Vec::new();
+    for (id, props) in ordered(view, Kind::Comment, std::iter::empty()) {
+        let parsed = validate_entity(Kind::Comment, id, &props)
+            .and_then(|()| read::<Comment>(Kind::Comment, id, &props));
+        match parsed {
+            Ok(c) if !views.contains_key(&c.issue) => {
+                cx.quarantine(Kind::Comment, id, "its issue is not there");
+            }
+            Ok(mut c) => {
+                // A comment that points to a viewpoint that is gone keeps its text.
+                if let Some(v) = c.viewpoint
+                    && !views[&c.issue].contains(&v)
+                {
+                    c.viewpoint = None;
+                }
+                comments.push((id, c));
+            }
+            Err(e) => cx.quarantine(Kind::Comment, id, e),
+        }
+    }
+    // Over the bound of a thread, the first comments (by time, then ID) stay and the others are
+    // not shown. They stay in the replica, and the report names them.
+    comments.sort_by_key(|(id, c)| (c.time, *id));
+    let mut per_issue: HashMap<IssueId, usize> = HashMap::new();
+    for (id, c) in comments {
+        let n = per_issue.entry(c.issue).or_default();
+        if *n >= MAX_COMMENTS {
+            cx.quarantine(
+                Kind::Comment,
+                id,
+                format!("the issue has more than {MAX_COMMENTS} comments: this one is not shown"),
+            );
+        } else {
+            *n += 1;
+            data.comments.push(c);
+        }
+    }
+    let mut issues = Issues::from(data);
+    // The same order as the commands keep (by time, then ID).
+    let _ = issues.repair();
+    issues
 }
 
 /// Sorts a list by the stacking key (the field `order` in `extra`), then by ID. A thing without a
@@ -353,6 +432,44 @@ fn build_resources(
         match parsed {
             Ok(r) => list.push(r),
             Err(e) => cx.quarantine(Kind::Resource, id, e),
+        }
+    }
+    // One resource for each picture file: two users who add the same snapshot at the same time
+    // make two resources with one hash. The smallest ID stays on every client; the others wait in
+    // the replica, and the plant styles that used them use the one that stays.
+    {
+        let mut order: Vec<usize> = (0..list.len()).collect();
+        order.sort_by_key(|i| list[*i].id.0);
+        let mut first: BTreeMap<String, ResourceId> = BTreeMap::new();
+        let mut dup: BTreeMap<ResourceId, ResourceId> = BTreeMap::new();
+        for i in order {
+            if let ResourceBody::Image(img) = &list[i].body {
+                match first.get(&img.sha256) {
+                    Some(k) => {
+                        dup.insert(list[i].id, *k);
+                    }
+                    None => {
+                        first.insert(img.sha256.clone(), list[i].id);
+                    }
+                }
+            }
+        }
+        if !dup.is_empty() {
+            for (gone, kept) in &dup {
+                cx.quarantine(
+                    Kind::Resource,
+                    gone.0,
+                    format!("the same picture is the resource {kept}"),
+                );
+            }
+            list.retain(|r| !dup.contains_key(&r.id));
+            for r in &mut list {
+                if let ResourceBody::PlantStyle(s) = &mut r.body
+                    && let Some(k) = s.image.and_then(|i| dup.get(&i))
+                {
+                    s.image = Some(*k);
+                }
+            }
         }
     }
     // Names are repaired in the order of the IDs, so that every client gives the same names.

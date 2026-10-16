@@ -55,6 +55,7 @@ fn same(a: &Session, b: &Session) -> bool {
         && sorted(x.resources.iter().map(|r| (r.id.0, format!("{r:?}"))))
             == sorted(y.resources.iter().map(|r| (r.id.0, format!("{r:?}"))))
         && x.drawing == y.drawing
+        && x.issues == y.issues
 }
 
 fn object_count(s: &mut Session) -> usize {
@@ -1149,6 +1150,34 @@ mod real_commands {
             i: u8,
             k: u16,
         },
+        /// Issues (REV-04): a new issue, a change, a comment, a viewpoint, a delete.
+        AddIssue {
+            s: bool,
+            n: u8,
+        },
+        ModifyIssue {
+            s: bool,
+            i: u8,
+            f: u8,
+        },
+        CommentIssue {
+            s: bool,
+            i: u8,
+            t: u8,
+        },
+        ViewpointIssue {
+            s: bool,
+            i: u8,
+            t: u8,
+        },
+        DeleteIssue {
+            s: bool,
+            i: u8,
+        },
+        DeleteComment {
+            s: bool,
+            i: u8,
+        },
         Sync {
             s: bool,
         },
@@ -1200,6 +1229,12 @@ mod real_commands {
                 .prop_map(|(s, x, v, l)| Act::Underlay { s, x, v, l }),
             1 => (any::<bool>(), 1u16..300).prop_map(|(s, n)| Act::AddSite { s, n }),
             1 => (any::<bool>(), any::<u8>(), 0u16..300).prop_map(|(s, i, k)| Act::EditSite { s, i, k }),
+            3 => (any::<bool>(), 0u8..4).prop_map(|(s, n)| Act::AddIssue { s, n }),
+            3 => (any::<bool>(), any::<u8>(), 0u8..5).prop_map(|(s, i, f)| Act::ModifyIssue { s, i, f }),
+            3 => (any::<bool>(), any::<u8>(), 0u8..3).prop_map(|(s, i, t)| Act::CommentIssue { s, i, t }),
+            1 => (any::<bool>(), any::<u8>(), 0u8..3).prop_map(|(s, i, t)| Act::ViewpointIssue { s, i, t }),
+            1 => (any::<bool>(), any::<u8>()).prop_map(|(s, i)| Act::DeleteIssue { s, i }),
+            1 => (any::<bool>(), any::<u8>()).prop_map(|(s, i)| Act::DeleteComment { s, i }),
             5 => any::<bool>().prop_map(|s| Act::Sync { s }),
             1 => any::<bool>().prop_map(|s| Act::Offline { s }),
             2 => any::<bool>().prop_map(|s| Act::Online { s }),
@@ -1234,6 +1269,18 @@ mod real_commands {
             .objects
             .keys()
             .map(|k| k.0.to_string())
+            .collect()
+    }
+
+    const STATUSES: [&str; 4] = ["open", "in_progress", "resolved", "closed"];
+    const PRIORITIES: [&str; 2] = ["low", "high"];
+
+    fn issue_ids(s: &Session) -> Vec<String> {
+        s.editor
+            .doc()
+            .issues
+            .iter()
+            .map(|i| i.id.0.to_string())
             .collect()
     }
 
@@ -1441,6 +1488,69 @@ mod real_commands {
             Act::Sync { s } => {
                 let r = sessions[idx(*s)].handle("collab.sync", json!({"now_ms": *now}));
                 assert_clean(&r);
+            }
+            Act::AddIssue { s, n } => exec(
+                &mut sessions[idx(*s)],
+                json!({"op": "add_issue", "issue": {"title": format!("I{n}"),
+                    "author": "A", "created": *now as i64, "modified": *now as i64}}),
+            ),
+            Act::ModifyIssue { s, i, f } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(id) = pick(&issue_ids(ss), *i) {
+                    let patch = match f {
+                        0 => json!({"title": format!("T{}", *now)}),
+                        1 => json!({"status": STATUSES[*now as usize % 4]}),
+                        2 => json!({"assignee": format!("U{}", *now % 3)}),
+                        3 => json!({"labels": [format!("L{}", *now % 3)]}),
+                        _ => json!({"priority": PRIORITIES[*now as usize % 2]}),
+                    };
+                    exec(
+                        ss,
+                        json!({"op": "modify_issue", "id": id, "patch": patch, "now": *now as i64}),
+                    );
+                }
+            }
+            Act::CommentIssue { s, i, t } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(id) = pick(&issue_ids(ss), *i) {
+                    exec(
+                        ss,
+                        json!({"op": "add_issue_comment", "comment": {"issue": id,
+                            "text": format!("c{t}"), "time": *now as i64, "author": "A"}}),
+                    );
+                }
+            }
+            Act::ViewpointIssue { s, i, t } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(id) = pick(&issue_ids(ss), *i) {
+                    exec(
+                        ss,
+                        json!({"op": "add_issue_viewpoint", "issue": id, "now": *now as i64,
+                            "viewpoint": {"name": format!("v{t}"), "time": *now as i64,
+                                "view": {"kind": "plan", "center": [0, 0], "zoom": 1}}}),
+                    );
+                }
+            }
+            Act::DeleteIssue { s, i } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(id) = pick(&issue_ids(ss), *i) {
+                    exec(ss, json!({"op": "delete_issue", "id": id}));
+                }
+            }
+            Act::DeleteComment { s, i } => {
+                let ss = &mut sessions[idx(*s)];
+                let ids: Vec<String> = ss
+                    .editor
+                    .doc()
+                    .issues
+                    .data()
+                    .comments
+                    .iter()
+                    .map(|c| c.id.0.to_string())
+                    .collect();
+                if let Some(id) = pick(&ids, *i) {
+                    exec(ss, json!({"op": "delete_issue_comment", "id": id}));
+                }
             }
             Act::Refuse { n, internal } => {
                 let code = if *internal {
@@ -1893,6 +2003,50 @@ mod real_commands {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(30))]
 
+        /// Two users add viewpoints to one issue at the same time, more than the bound allows
+        /// together (each stays under it alone). The issue must survive: the extra viewpoints
+        /// are cut in the same way on both sides, with a note, and nothing else is lost.
+        #[test]
+        fn concurrent_viewpoints_over_the_bound_keep_the_issue(
+            acts in prop::collection::vec((any::<bool>(), 0u8..4, any::<bool>()), 20..60)
+        ) {
+            let a = seeded(21);
+            let hub = Hub::new(Sequencer::new(docsync::replica_of(a.editor.doc())));
+            let mut sessions = [a, seeded(22)];
+            for s in &mut sessions {
+                s.set_collab_endpoint(Box::new(hub.endpoint()));
+                let connected = s.handle("collab.connect", json!({"now_ms": 1}));
+                prop_assert!(connected.is_ok());
+            }
+            let mut now = 1_000;
+            apply(&mut sessions, &hub, &mut now, &Act::AddIssue { s: false, n: 0 });
+            settle(&mut sessions, &hub, &mut now);
+            for (s, t, sync) in &acts {
+                apply(&mut sessions, &hub, &mut now, &Act::ViewpointIssue { s: *s, i: 0, t: *t });
+                if *sync {
+                    apply(&mut sessions, &hub, &mut now, &Act::Sync { s: *s });
+                }
+            }
+            settle(&mut sessions, &hub, &mut now);
+            for s in &sessions {
+                prop_assert_eq!(s.collab_client().unwrap().pending().len(), 0);
+                let issues: Vec<_> = s.editor.doc().issues.iter().collect();
+                prop_assert_eq!(issues.len(), 1, "the issue is not lost");
+                prop_assert_eq!(&issues[0].title, "I0");
+                prop_assert!(issues[0].viewpoints.len() <= kadakas_core::issue::MAX_VIEWPOINTS);
+            }
+            prop_assert!(same(&sessions[0], &sessions[1]));
+            let (x, y) = (sessions[0].editor.doc(), sessions[1].editor.doc());
+            prop_assert_eq!(
+                x.issues.iter().next().unwrap().viewpoints.len(),
+                y.issues.iter().next().unwrap().viewpoints.len()
+            );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(30))]
+
         #[test]
         fn two_sessions_with_real_commands_converge(acts in prop::collection::vec(act(), 1..45)) {
             converge(&acts)?;
@@ -1988,4 +2142,25 @@ fn a_join_with_unsaved_work_says_why_and_the_status_tells_when_to_wait() {
     );
     assert_eq!(st["state"], "online");
     assert_eq!(st["waiting_for_snapshot"], false);
+}
+
+#[test]
+fn issue_data_that_the_document_does_not_show_is_listed_for_the_person() {
+    use kadakas_collab::materialize::Quarantined;
+    use kadakas_collab::op::{Kind, Target};
+    let mut s = Session::default();
+    assert!(s.collab_hidden_issue_data().is_empty());
+    s.collab.quarantined = vec![
+        Quarantined {
+            target: Target::new(Kind::Comment, kadakas_core::uid::Uid::from_u128(5)),
+            reason: "the issue has more than 5000 comments: this one is not shown".into(),
+        },
+        Quarantined {
+            target: Target::new(Kind::Object, kadakas_core::uid::Uid::from_u128(6)),
+            reason: "an object".into(),
+        },
+    ];
+    let hidden = s.collab_hidden_issue_data();
+    assert_eq!(hidden.len(), 1);
+    assert!(hidden[0].contains("5000 comments"));
 }

@@ -20,6 +20,7 @@ mod area_ops;
 mod drawing_ops;
 mod graphic_ops;
 mod group_ops;
+mod issue_ops;
 mod plant_ops;
 mod present_ops;
 mod record_ops;
@@ -554,6 +555,65 @@ pub enum Command {
         ids: Vec<ObjectId>,
         array: crate::edit2d::ArrayParams,
     },
+    /// Add a review issue (REV-04). A nil `issue.id` (and nil viewpoint ids) make new IDs; an ID
+    /// from a BCF file stays. `pictures` are the PNG snapshots of the viewpoints: each becomes an
+    /// `image` resource, once per hash. Returns the ID of the issue first in `created`, then those
+    /// of its viewpoints.
+    AddIssue {
+        issue: Box<crate::issue::Issue>,
+        #[serde(default)]
+        pictures: Vec<crate::picture::ImageResource>,
+    },
+    /// Change fields of an issue. Fields that are left out stay. `now` is the new change time
+    /// (milliseconds since 1970). A patch that changes nothing makes no undo step.
+    ModifyIssue {
+        id: crate::issue::IssueId,
+        patch: Box<crate::issue::IssuePatch>,
+        now: i64,
+    },
+    /// Delete an issue with its comments. A snapshot picture that no other viewpoint uses goes too.
+    DeleteIssue {
+        id: crate::issue::IssueId,
+    },
+    /// Add a comment to the thread of an issue. A nil `comment.id` makes a new ID (returned in
+    /// `created`).
+    AddIssueComment {
+        comment: Box<crate::issue::Comment>,
+    },
+    /// Change the text of a comment. `now` is the edit time.
+    EditIssueComment {
+        id: crate::issue::CommentId,
+        text: String,
+        now: i64,
+    },
+    /// Delete a comment.
+    DeleteIssueComment {
+        id: crate::issue::CommentId,
+    },
+    /// Add a viewpoint to an issue, with its PNG snapshot if it has one. Returns the ID in
+    /// `created`.
+    AddIssueViewpoint {
+        issue: crate::issue::IssueId,
+        viewpoint: Box<crate::issue::Viewpoint>,
+        #[serde(default)]
+        picture: Option<Box<crate::picture::ImageResource>>,
+        now: i64,
+    },
+    /// Replace a viewpoint of an issue (the one with the same ID) with a new one, for example a
+    /// new camera or a new snapshot. A snapshot that no viewpoint uses any more goes.
+    ModifyIssueViewpoint {
+        issue: crate::issue::IssueId,
+        viewpoint: Box<crate::issue::Viewpoint>,
+        #[serde(default)]
+        picture: Option<Box<crate::picture::ImageResource>>,
+        now: i64,
+    },
+    /// Delete a viewpoint of an issue. Comments that referred to it keep their text.
+    DeleteIssueViewpoint {
+        issue: crate::issue::IssueId,
+        viewpoint: crate::issue::ViewpointId,
+        now: i64,
+    },
     /// Several commands as one undo step. Stops at the first error.
     Batch {
         commands: Vec<Command>,
@@ -578,6 +638,10 @@ pub enum CommandError {
     NoResource(ResourceId),
     #[error("resource {0} is used by {1} object(s). Reassign them to another resource first")]
     ResourceInUse(ResourceId, usize),
+    #[error("issue {0} does not exist")]
+    NoIssue(crate::issue::IssueId),
+    #[error("comment {0} does not exist")]
+    NoComment(crate::issue::CommentId),
     #[error("invalid value: {0}")]
     Invalid(String),
 }
@@ -617,6 +681,13 @@ impl Command {
                 body: Some(ResourceBody::Image(i)),
                 ..
             } => out.push(i),
+            Command::AddIssue { pictures, .. } => out.extend(pictures.iter()),
+            Command::AddIssueViewpoint {
+                picture: Some(p), ..
+            }
+            | Command::ModifyIssueViewpoint {
+                picture: Some(p), ..
+            } => out.push(p),
             Command::Batch { commands } => commands.iter().for_each(|c| c.pictures(out)),
             _ => {}
         }
@@ -677,6 +748,9 @@ pub struct Patch {
     /// The history of versions before and after, if the step changed it. It is apart from `meta`
     /// so that a new version does not copy the layers, classes and resources into the step.
     history: Option<(Option<HistoryData>, Option<HistoryData>)>,
+    /// The issues before and after, if the step changed them (REV-04). The data is shared
+    /// (`Arc`), so a step that did not touch the issues holds nothing.
+    issues: Option<(crate::issue::Issues, crate::issue::Issues)>,
     /// A rough size in bytes, for the history limit (see [`Editor::set_history_limit`]).
     bytes: u64,
 }
@@ -694,6 +768,57 @@ fn object_bytes(o: &Object) -> u64 {
             Shape::Underlay(u) => u.png.resident_len() as u64,
             _ => 0,
         }
+}
+
+fn issue_pairs<'a>(
+    l: &[&'a crate::issue::Issue],
+) -> Vec<(crate::issue::IssueId, &'a crate::issue::Issue)> {
+    l.iter().map(|x| (x.id, *x)).collect()
+}
+
+fn comment_pairs<'a>(
+    l: &[&'a crate::issue::Comment],
+) -> Vec<(crate::issue::CommentId, &'a crate::issue::Comment)> {
+    l.iter().map(|x| (x.id, *x)).collect()
+}
+
+/// The issues and comments that differ between two states. A change of a comment is also a
+/// change of its issue, so a follower of the issues sees the activity. Only the chunks of the two
+/// lists that the states do not share are compared: the rest did not change.
+fn issue_changes(
+    old: &crate::issue::Issues,
+    new: &crate::issue::Issues,
+    added: &mut IdsByKind,
+    changed: &mut IdsByKind,
+    removed: &mut IdsByKind,
+) {
+    if old == new {
+        return;
+    }
+    let ((old_i, new_i), (old_c, new_c)) = new.unshared(old);
+    let (a, c, r) = change::diff_by_id(&issue_pairs(&old_i), &issue_pairs(&new_i));
+    (added.issues, changed.issues, removed.issues) = (a, c, r);
+    let (a, c, r) = change::diff_by_id(&comment_pairs(&old_c), &comment_pairs(&new_c));
+    (added.comments, changed.comments, removed.comments) = (a, c, r);
+    let mut touched = Vec::new();
+    for cid in added
+        .comments
+        .iter()
+        .chain(&changed.comments)
+        .chain(&removed.comments)
+    {
+        if let Some(c) = new_c.iter().chain(&old_c).find(|c| c.id == *cid) {
+            touched.push(c.issue);
+        }
+    }
+    for id in touched {
+        if !changed.issues.contains(&id)
+            && !added.issues.contains(&id)
+            && !removed.issues.contains(&id)
+        {
+            changed.issues.push(id);
+        }
+    }
 }
 
 impl Meta {
@@ -736,6 +861,14 @@ impl Patch {
             history: self.history.is_some(),
             ..DocumentChanged::default()
         };
+        if let Some((before, after)) = &self.issues {
+            let (old, new) = if forward {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            issue_changes(old, new, &mut added, &mut changed, &mut removed);
+        }
         if let Some((before, after)) = &self.meta {
             let (old, new) = if forward {
                 (before, after)
@@ -783,6 +916,7 @@ impl Patch {
             && self.modified.is_empty()
             && self.meta.is_none()
             && self.history.is_none()
+            && self.issues.is_none()
     }
 
     fn apply(&self, doc: &mut Document, forward: bool) {
@@ -808,6 +942,9 @@ impl Patch {
         }
         if let Some((before, after)) = &self.history {
             doc.history = if forward { after } else { before }.clone();
+        }
+        if let Some((before, after)) = &self.issues {
+            doc.issues = if forward { after } else { before }.clone();
         }
     }
 }
@@ -1095,7 +1232,23 @@ impl<'a> Tx<'a> {
         let doc = &mut *self.doc;
         doc.layers = target.layers.clone();
         doc.classes = target.classes.clone();
-        doc.resources = target.resources.clone();
+        // The pictures that issues use as snapshots are not part of a version: they stay.
+        let snapshots: Vec<String> = doc
+            .issues
+            .snapshots()
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let mut resources = target.resources.clone();
+        for h in &snapshots {
+            if resources.find_image(h).is_none()
+                && let Some(rid) = doc.resources.find_image(h)
+                && let Some(r) = doc.resources.get(rid)
+            {
+                resources.push(r.clone());
+            }
+        }
+        doc.resources = resources;
         doc.drawing = target.drawing.clone();
         doc.georef = target.georef.clone();
         if doc.layer(doc.active_layer).is_none() {
@@ -1509,6 +1662,15 @@ impl<'a> Tx<'a> {
             | Command::ConvertSymbolToGroup { .. }
             | Command::EditSymbol { .. }
             | Command::ExitSymbolEdit { .. } => self.run_group(cmd, out)?,
+            Command::AddIssue { .. }
+            | Command::ModifyIssue { .. }
+            | Command::DeleteIssue { .. }
+            | Command::AddIssueComment { .. }
+            | Command::EditIssueComment { .. }
+            | Command::DeleteIssueComment { .. }
+            | Command::AddIssueViewpoint { .. }
+            | Command::ModifyIssueViewpoint { .. }
+            | Command::DeleteIssueViewpoint { .. } => self.run_issue(cmd, out)?,
             Command::AttachRecord { .. }
             | Command::DetachRecord { .. }
             | Command::SetRecordFields { .. } => self.run_record(cmd)?,
@@ -1672,7 +1834,12 @@ impl<'a> Tx<'a> {
         }
     }
 
-    fn finish(self, meta_before: Meta, history_before: Option<HistoryData>) -> Patch {
+    fn finish(
+        self,
+        meta_before: Meta,
+        history_before: Option<HistoryData>,
+        issues_before: crate::issue::Issues,
+    ) -> Patch {
         let doc = &*self.doc;
         let removed: Vec<(usize, Object)> = self
             .removed
@@ -1701,6 +1868,8 @@ impl<'a> Tx<'a> {
         let meta = (meta_before != meta_after).then_some((meta_before, meta_after));
         let history =
             (history_before != doc.history).then(|| (history_before, doc.history.clone()));
+        let issues =
+            (issues_before != doc.issues).then(|| (issues_before.lean(), doc.issues.lean()));
         let objects = |l: &[(usize, Object)]| l.iter().map(|(_, o)| object_bytes(o)).sum::<u64>();
         let bytes = objects(&removed)
             + objects(&added)
@@ -1715,6 +1884,11 @@ impl<'a> Tx<'a> {
             // holds that the old one does not, and only if the step changed it. A layer edit
             // with a 16 MiB history in the document does not cost 32 MiB of undo budget, and a
             // new version costs its own change, not the whole history again.
+            // A step of the issues keeps the pointers of the two states and the parts that they
+            // do not share (the rest is shared with the document and counted there).
+            + issues
+                .as_ref()
+                .map_or(0, |(b, a)| crate::issue::Issues::step_bytes(b, a))
             + history.as_ref().map_or(0, |(b, a)| {
                 a.as_ref()
                     .map_or(0, |h| h.bytes_not_in(b.as_ref()) as u64)
@@ -1725,6 +1899,7 @@ impl<'a> Tx<'a> {
             modified,
             meta,
             history,
+            issues,
             bytes,
         }
     }
@@ -1971,6 +2146,8 @@ impl Editor {
     ) -> Result<Outcome, CommandError> {
         let meta_before = Meta::of(&self.doc);
         let history_before = self.doc.history.clone();
+        // Without the index: the live data keeps it from one command to the next.
+        let issues_before = self.doc.issues.lean();
         let mut tx = Tx::new(&mut self.doc);
         let mut out = Outcome::default();
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1981,12 +2158,12 @@ impl Editor {
             Err(payload) => {
                 // Every change was recorded by `touch` and the lists of the transaction, so the
                 // patch of a failed command undoes it.
-                let patch = tx.finish(meta_before, history_before);
+                let patch = tx.finish(meta_before, history_before, issues_before);
                 patch.apply(&mut self.doc, false);
                 std::panic::resume_unwind(payload);
             }
         };
-        let patch = tx.finish(meta_before, history_before);
+        let patch = tx.finish(meta_before, history_before, issues_before);
         let result = result.and_then(|()| match &patch.meta {
             Some((_, after)) if !after.is_finite() => Err(CommandError::Invalid(NOT_FINITE.into())),
             _ => Ok(()),
@@ -2196,6 +2373,13 @@ impl Editor {
             change::diff_by_id(&classes(&old), &classes(&new));
         (added.resources, changed.resources, removed.resources) =
             change::diff_by_id(&resources(&old), &resources(&new));
+        issue_changes(
+            &self.doc.issues,
+            &doc.issues,
+            &mut added,
+            &mut changed,
+            &mut removed,
+        );
         let document = DocumentChanged {
             active_layer: old.active_layer != new.active_layer,
             active_class: old.active_class != new.active_class,

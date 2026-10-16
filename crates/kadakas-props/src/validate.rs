@@ -130,6 +130,14 @@ pub fn validate_entity(kind: Kind, id: Uid, props: &Map<String, Value>) -> Resul
             // is built.
             r.body.validate()
         }
+        Kind::Issue => {
+            let i: kadakas_core::issue::Issue = serde_json::from_value(full).map_err(read)?;
+            i.validate()
+        }
+        Kind::Comment => {
+            let c: kadakas_core::issue::Comment = serde_json::from_value(full).map_err(read)?;
+            c.validate()
+        }
         Kind::Document => {
             let mut doc = Document::default();
             for (k, v) in props {

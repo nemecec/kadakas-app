@@ -7,6 +7,13 @@ license.workspace = true
 repository.workspace = true
 description = "Review of a Kadakas document: named versions kept as a base snapshot and deltas of property operations, and the diff between two versions. Pure and wasm-compatible; no I/O."
 
+[features]
+# BCF files (REV-06). On by default. The UI logic (`kadakas-ui-core`) does not need them, so it
+# depends on this crate with `default-features = false` and a build of that crate alone does not
+# compile the ZIP and XML readers.
+default = ["bcf"]
+bcf = ["dep:roxmltree", "dep:zip"]
+
 [dependencies]
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-props = { version = "0.1.0", path = "../kadakas-props" }
@@ -15,6 +22,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.10.9"
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 thiserror = "2.0.21"
+roxmltree = { version = "0.21.1", optional = true }
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"], optional = true }
 
 [dev-dependencies]
 proptest = "1.11.0"

@@ -154,6 +154,23 @@ pub type EndpointFactory =
     Box<dyn Fn(&str, Option<&str>) -> Result<Box<dyn Endpoint>, String> + Send>;
 
 impl Session {
+    /// True while the session is connected to a shared document (or connecting).
+    pub fn collab_connected(&self) -> bool {
+        is_connected(self)
+    }
+
+    /// The issues and comments of the shared state that the document does not show, each with
+    /// the reason (for example a comment over the bound of 1000 for an issue). A host tells the
+    /// person: this data is not lost, it is in the shared state, but nobody can see it here.
+    pub fn collab_hidden_issue_data(&self) -> Vec<String> {
+        self.collab
+            .quarantined
+            .iter()
+            .filter(|q| matches!(q.target.kind, Kind::Issue | Kind::Comment))
+            .map(|q| q.reason.clone())
+            .collect()
+    }
+
     /// Gives the session the place to connect to (see `collab.connect`). The host decides where
     /// agents may connect.
     pub fn set_collab_endpoint(&mut self, endpoint: Box<dyn Endpoint>) {

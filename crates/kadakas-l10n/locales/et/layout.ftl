@@ -6,6 +6,7 @@ layout-object-info = Objekti info
 layout-navigation = Navigeerimine
 layout-resources = Ressursid
 layout-plant-schedule = Taimeloend
+layout-issues = Probleemid
 layout-people = Inimesed
 layout-snapping = Haaramine
 layout-is-ignored = { $path } jäetakse kõrvale: { $e }

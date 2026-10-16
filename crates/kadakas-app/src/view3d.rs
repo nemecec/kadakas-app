@@ -135,6 +135,11 @@ impl View3d {
         self.fit_pending = true;
     }
 
+    /// The camera is placed: no fit at the next frame.
+    pub fn fit_done(&mut self) {
+        self.fit_pending = false;
+    }
+
     pub fn fit_pending(&self) -> bool {
         self.fit_pending
     }
