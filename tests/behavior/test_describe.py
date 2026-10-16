@@ -7,7 +7,7 @@ from helpers import JsonRpc
 # Mirrors METHODS in crates/kadakas-core/src/api.rs.
 ADVERTISED_METHODS = [
     "describe", "execute", "undo", "redo", "document.summary", "document.get", "document.load",
-    "objects.list", "objects.get", "selection.get", "selection.set", "render.svg",
+    "file.save", "file.open", "objects.list", "objects.get", "selection.get", "selection.set", "render.svg",
     "render.png", "view.list", "view.set", "report.plants", "report.areas",
     "import.file", "export.file", "import.update", "import.apply",
     "plant_style.list", "plant_style.get", "plant_style.create", "plant_style.update", "plant_style.duplicate",

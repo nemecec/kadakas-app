@@ -593,6 +593,38 @@ fn zones_by_center_have_no_false_cuts_and_the_cuts_are_counted() {
     let cutu: usize = parts.iter().map(|s| s.cut_units).sum();
     assert_eq!((whole, cutu), (one.whole_units, one.cut_units));
     assert!(whole > whole_cut);
+    // The dust and the trimmed units of the lattice are counted once in the totals, as for the
+    // same lot laid without zones.
+    for trim in [0.0, 30.0, 120.0] {
+        let o = SummaryOptions {
+            trim,
+            ..SummaryOptions::default()
+        };
+        let parts: Vec<_> = centered
+            .groups
+            .iter()
+            .map(|g| g.summarize(&o).unwrap())
+            .collect();
+        let one = kadakas_core::layout::summary::summarize(
+            &region_of(ed.doc(), ed.doc().object(id).unwrap(), 1.0).unwrap(),
+            &Pattern::new(Bond::RunningBond, 200.0, 100.0, 5.0),
+            &kadakas_core::layout::Placement {
+                origin: Some(v(0.0, 0.0)),
+                angle: 0.0,
+            },
+            &o,
+        )
+        .unwrap();
+        let total = merge(&parts, 32e6, &o);
+        assert_eq!(
+            (total.dust_pieces, total.trimmed_units),
+            (one.dust_pieces, one.trimmed_units),
+            "trim {trim}"
+        );
+        if trim == 120.0 {
+            assert!(total.trimmed_units > 0);
+        }
+    }
     // The units are not counted twice, and the check finds nothing.
     clean(&ed, id, &centered.groups);
     assert_eq!(centered.groups.len(), 3);

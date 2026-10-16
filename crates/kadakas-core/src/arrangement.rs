@@ -464,6 +464,8 @@ pub struct Arrangement {
     /// Faces thinner than the tolerance (slivers between curves that nearly coincide) that were
     /// left out.
     pub dropped_slivers: usize,
+    /// True when no thin face is dropped (the faces must add up to the area, as zones do).
+    pub keep_slivers: bool,
     /// Where the first of them lie and their areas (cut at [`MAX_LISTED`]).
     pub dropped_sliver_list: Vec<DroppedSliver>,
     /// The sum of the distances that the points moved to their nodes, in mm.
@@ -589,7 +591,7 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
             }
         }
     }
-    let mut out = build_inner(&split, &split_ranks, tol)?;
+    let mut out = build_inner(&split, &split_ranks, tol, !ranks.is_empty())?;
     for e in &mut out.edges {
         e.source = origin[e.source];
     }
@@ -610,7 +612,12 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
     Ok(out)
 }
 
-fn build_inner(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangement, BuildError> {
+fn build_inner(
+    curves: &[Curve],
+    ranks: &[u8],
+    tol: f64,
+    keep_slivers: bool,
+) -> Result<Arrangement, BuildError> {
     if curves.len() > MAX_CURVES * 2 {
         return Err(BuildError::TooMany(format!(
             "an arrangement takes at most {MAX_CURVES} curves, not {}",
@@ -870,6 +877,8 @@ fn build_inner(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangement, 
             });
         }
     }
+    // Zones (ranked curves) cut a region into parts that must add up to it: no face is dropped.
+    out.keep_slivers = keep_slivers;
     prune_and_trace(&mut out, curves.len(), &short, &merged, tol);
     Ok(out)
 }
@@ -1157,7 +1166,7 @@ fn trace_faces(out: &mut Arrangement, tol: f64) {
             .iter()
             .map(|&(e, _)| out.edges[e].curve.length())
             .sum();
-        if faces[fi].area < 0.5 * tol.min(MAX_SLIVER_WIDTH) * perimeter {
+        if !out.keep_slivers && faces[fi].area < 0.5 * tol.min(MAX_SLIVER_WIDTH) * perimeter {
             out.dropped_slivers += 1;
             if out.dropped_sliver_list.len() < MAX_LISTED {
                 let ring = &faces[fi].ring;

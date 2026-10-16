@@ -62,7 +62,7 @@ pub const PLANT_STYLE_SAMPLE_CSV: (&str, &str) = (
 );
 pub const PLANTS_PLACE: (&str, &str) = (
     "plants.place",
-    "Place plants in one undo step. params: {mode, style? (ID or name), overrides? ({field: value}), variation? ({seed?, size? (0 to 0.9: size changes by up to this fraction), rotation? (bool)}; the same seed gives the same plants), layer?, class?, tag? (true adds a plant tag), on_terrain? (true stands each plant on the proposed ground of the site model on its layer, see plants.drape), source? (ID of a polyline, rect, circle, landscape area or hardscape to use as the path, boundary or rectangle)} and by mode: single {at}; path {path, closed?, spacing?, count?}; grid {min, max, spacing | spacing_x+spacing_y, margin?}; triangular {min, max, spacing, margin?}; fill {boundary, spacing | count | density (plants per m2), pattern? (triangular|rectangular), margin?, holes? ([[points], ...], areas that stay empty)}; poly {points}; hedgerow {path, closed?, spacing, rows? (1 to 20, default 2), row_spacing? (needed for more than one row), stagger? (default true: every second row starts half a spacing along)}. Any spacing may be the text \"spread\": one canopy diameter of the plant. Returns {created: [id], count, tag?}.",
+    "Place plants in one undo step. params: {mode, style? (ID or name), overrides? ({field: value}), variation? ({seed?, size? (0 to 0.9: size changes by up to this fraction), rotation? (bool)}; the same seed gives the same plants), layer?, class?, tag? (true adds a plant tag), on_terrain? (true stands each plant on the proposed ground of the site model that covers it, on any design layer; the answer has warnings when a plant lies outside every model or the document has none; see plants.drape), source? (ID of a polyline, rect, circle, landscape area or hardscape to use as the path, boundary or rectangle)} and by mode: single {at}; path {path, closed?, spacing?, count?}; grid {min, max, spacing | spacing_x+spacing_y, margin?}; triangular {min, max, spacing, margin?}; fill {boundary, spacing | count | density (plants per m2), pattern? (triangular|rectangular), margin?, holes? ([[points], ...], areas that stay empty)}; poly {points}; hedgerow {path, closed?, spacing, rows? (1 to 20, default 2), row_spacing? (needed for more than one row), stagger? (default true: every second row starts half a spacing along)}. Any spacing may be the text \"spread\": one canopy diameter of the plant. Returns {created: [id], count, tag?}.",
 );
 pub const PLANTS_SET_STYLE: (&str, &str) = (
     "plants.set_style",
@@ -70,7 +70,7 @@ pub const PLANTS_SET_STYLE: (&str, &str) = (
 );
 pub const PLANTS_DRAPE: (&str, &str) = (
     "plants.drape",
-    "Place plants on the terrain height: store the height of the proposed ground (site model) under each plant, so the 3D view and the plant height report stand the plant on the ground. params: {ids? (plants and existing trees; default all), release? (true removes the stored height: the plant goes back to the elevation of its layer)}. Run it again after the terrain changes. One undo step. Returns {updated, outside_model (plants off the site model take the height of its nearest edge), skipped (no site model on the layer)}.",
+    "Place plants on the terrain height: store the height of the proposed ground (site model) under each plant, so the 3D view and the plant height report stand the plant on the ground. params: {ids? (plants and existing trees; default all), release? (true removes the stored height: the plant goes back to the elevation of its layer)}. Run it again after the terrain changes. One undo step. Returns {updated, outside_model (plants off the site model take the height of its nearest edge), skipped (the document has no site model), warnings?}. A plant takes the ground of the site model that covers its place, on any design layer, unless the plant or its layer names a site model (data site_model, or the command set_layer_site). The stored height is above the origin: the elevation of the layer of the site model counts.",
 );
 pub const PLANT_TAG_SET: (&str, &str) = (
     "plant_tag.set",
@@ -603,6 +603,7 @@ fn drape(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     };
     let terrain = kadakas_site::SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);
     let (mut commands, mut outside, mut skipped) = (Vec::new(), 0usize, 0usize);
+    let mut dangling = 0usize;
     for id in ids {
         let o = doc
             .object(id)
@@ -624,7 +625,8 @@ fn drape(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             });
             continue;
         }
-        match terrain.elevation(o, at) {
+        dangling += usize::from(terrain.name_dangles(o));
+        match terrain.absolute(o, at) {
             Some(z) => {
                 if !terrain.covered(o, at) {
                     outside += 1;
@@ -645,7 +647,65 @@ fn drape(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             .execute(&Command::Batch { commands })
             .map_err(RpcError::from)?;
     }
-    Ok(json!({"updated": updated, "outside_model": outside, "skipped": skipped}))
+    let mut out = json!({"updated": updated, "outside_model": outside, "skipped": skipped});
+    let mut warnings = ground_warnings(release, updated, outside, skipped);
+    if dangling > 0 && !release {
+        warnings.push(format!(
+            "{dangling} objects name a site model that does not exist: they use the site model that covers their place"
+        ));
+    }
+    if !warnings.is_empty() {
+        out["warnings"] = json!(warnings);
+    }
+    Ok(out)
+}
+
+/// A note for a document that was made before the ground height of plants and trees became a
+/// height above the origin (it was the height above the elevation of the layer of the site
+/// model). It matters only when a layer has an elevation. The note is part of the load notes, so
+/// the person sees it when the document opens, and `plants.drape` renews the heights.
+pub(crate) fn ground_height_note(doc: &kadakas_core::model::Document) -> Option<String> {
+    if doc.layers.iter().all(|l| l.elevation == 0.0) {
+        return None;
+    }
+    let n = doc
+        .objects
+        .values()
+        .filter(|o| link::ground_z(o).is_some())
+        .count();
+    (n > 0).then(|| {
+        format!(
+            "{n} plants or trees have a stored ground height, and some layers have an elevation. A document that an older version saved may have them relative to the layer of the site model. Run plants.drape to renew the heights"
+        )
+    })
+}
+
+/// What a call says when plants or trees did not find ground: never a silent height of 0.
+/// `outside` plants take the height of the nearest edge of a site model, `skipped` plants have no
+/// site model at all and stay at the elevation of their layer.
+pub(crate) fn ground_warnings(
+    release: bool,
+    done: usize,
+    outside: usize,
+    skipped: usize,
+) -> Vec<String> {
+    let mut w = Vec::new();
+    if release {
+        return w;
+    }
+    if skipped > 0 {
+        w.push(format!(
+            "{skipped} of {} objects have no site model to stand on (the document has no site model that can be built): they stay at the elevation of their layer. Create a site model with site.create, then run plants.drape",
+            done + skipped
+        ));
+    }
+    if outside > 0 {
+        w.push(format!(
+            "{outside} of {} objects lie outside every site model: they stand at the height of the nearest edge of a model",
+            done + skipped
+        ));
+    }
+    w
 }
 
 fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
@@ -747,6 +807,7 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         Some(Value::Bool(true)) => true,
         Some(_) => return Err(bad("'on_terrain' must be true or false")),
     };
+    let (mut outside, mut off_ground) = (0usize, 0usize);
     if on_terrain {
         use kadakas_core::ground::GroundSource;
         let planned = doc.next_ids(positions.len());
@@ -765,7 +826,10 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                     height: 1.0,
                 },
             );
-            if let Some(z) = terrain.elevation(&probe, *p) {
+            if let Some(z) = terrain.absolute(&probe, *p) {
+                if !terrain.covered(&probe, *p) {
+                    outside += 1;
+                }
                 sets.push(Command::SetData {
                     id: ObjectId(planned[i]),
                     set: [(link::GROUND_Z_KEY.to_string(), json!(z))].into(),
@@ -774,6 +838,7 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             }
         }
         drop(terrain);
+        off_ground = positions.len() - sets.len();
         commands.extend(sets);
     }
     let out = s
@@ -782,7 +847,14 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         .map_err(RpcError::from)?;
     let mut created = out.created;
     let tag = if want_tag { created.pop() } else { None };
-    Ok(json!({ "created": created, "count": count, "tag": tag }))
+    let mut out = json!({ "created": created, "count": count, "tag": tag });
+    if on_terrain {
+        let warnings = ground_warnings(false, count - off_ground, outside, off_ground);
+        if !warnings.is_empty() {
+            out["warnings"] = json!(warnings);
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

@@ -34,21 +34,42 @@ pub type Ground<'a> = &'a dyn GroundSource;
 /// The ground of one site model, with the heights of its edge for places outside it.
 pub struct SiteGround<'a> {
     site: &'a SiteResult,
+    /// Added to every height: the elevation of the layer of the model gives heights above the
+    /// origin (`with_offset`).
+    offset: f64,
     edges: [OnceCell<Vec<[glam::DVec3; 2]>>; 2],
 }
 
 impl<'a> SiteGround<'a> {
+    /// Heights in the frame of the site model (above the elevation of its layer).
     pub fn new(site: &'a SiteResult) -> Self {
+        Self::with_offset(site, 0.0)
+    }
+
+    /// Heights increased by `offset` (for example `site_elevation`: heights above the origin).
+    pub fn with_offset(site: &'a SiteResult, offset: f64) -> Self {
         SiteGround {
             site,
+            offset,
             edges: [OnceCell::new(), OnceCell::new()],
         }
     }
 }
 
+/// The elevation of the layer of a site model, in mm: add it to the heights of the model to get
+/// heights above the origin.
+pub fn site_elevation(doc: &Document, site: &SiteResult) -> f64 {
+    doc.object(site.id)
+        .and_then(|o| doc.layer(o.layer))
+        .map_or(0.0, |l| l.elevation)
+}
+
 impl GroundSource for SiteGround<'_> {
     fn exact(&self, _obj: Option<&Object>, p: DVec2, which: Follow) -> Option<f64> {
-        self.site.surface(which).elevation_at(p)
+        self.site
+            .surface(which)
+            .elevation_at(p)
+            .map(|z| z + self.offset)
     }
 
     fn clamped(&self, obj: Option<&Object>, p: DVec2, which: Follow) -> Option<f64> {
@@ -57,7 +78,7 @@ impl GroundSource for SiteGround<'_> {
         }
         let tin = self.site.surface(which);
         let edges = self.edges[which as usize].get_or_init(|| boundary_edges(tin));
-        nearest_edge_height(edges, p).map(|(_, z)| z)
+        nearest_edge_height(edges, p).map(|(_, z)| z + self.offset)
     }
 }
 
@@ -93,8 +114,8 @@ pub fn read<T: DeserializeOwned>(obj: &Object, key: &str) -> Option<T> {
     serde_json::from_value(obj.data.get(key)?.clone()).ok()
 }
 
-/// The site model that serves a layer: the one named, or the first visible site model on the
-/// layer whose surface can be built.
+/// The site model that serves a layer: the one named, or the first site model on the layer (then
+/// on the other layers) whose surface can be built.
 pub fn host(
     doc: &Document,
     cache: &SiteCache,
@@ -105,12 +126,54 @@ pub fn host(
     if let Some(id) = named {
         return cache.get(revision, doc, id).ok();
     }
-    doc.objects
+    // The layer of the object first, then the other layers in their order, then the ID: the
+    // ground does not stop at a layer, and does not depend on the stacking order or on what is
+    // visible.
+    let rank = |l: kadakas_core::model::LayerId| {
+        (
+            l != layer,
+            doc.layers
+                .iter()
+                .position(|x| x.id == l)
+                .unwrap_or(usize::MAX),
+        )
+    };
+    let mut sites: Vec<&Object> = doc
+        .objects
         .values()
-        .filter(|o| {
-            o.layer == layer && matches!(o.shape, Shape::SiteModel { .. }) && doc.is_visible(o)
-        })
+        .filter(|o| matches!(o.shape, Shape::SiteModel { .. }))
+        .collect();
+    sites.sort_by_key(|o| (rank(o.layer), o.id));
+    sites
+        .into_iter()
         .find_map(|o| cache.get(revision, doc, o.id).ok())
+}
+
+/// Like [`host`], for an object at a place: the named site model, else the one that covers `at`
+/// (on the layer of the object first, then on any layer), else the one that [`host`] finds.
+pub fn host_near(
+    doc: &Document,
+    cache: &SiteCache,
+    revision: u64,
+    layer: kadakas_core::model::LayerId,
+    named: Option<ObjectId>,
+    at: DVec2,
+) -> Option<Arc<SiteResult>> {
+    if named.is_none() {
+        let terrain = crate::terrain::SiteTerrain::new(cache, revision, doc);
+        let probe = Object::new(
+            ObjectId::from_num(0),
+            layer,
+            kadakas_core::model::NONE_CLASS,
+            Shape::Locus3d {
+                p: glam::DVec3::ZERO,
+            },
+        );
+        if let Some((_, result)) = terrain.host_at(Some(&probe), at) {
+            return Some(result);
+        }
+    }
+    host(doc, cache, revision, layer, named)
 }
 
 /// Checks that a number is finite.

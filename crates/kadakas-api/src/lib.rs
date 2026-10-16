@@ -52,6 +52,7 @@ pub use review_api::{Side as CompareSide, VERSION_BYTES_MAX, VERSIONS_MAX, VERSI
 mod rules_api;
 mod sheets_api;
 mod solid_api;
+pub mod spec;
 mod survey_api;
 mod symbols_api;
 mod wasm_plugin_api;
@@ -283,6 +284,24 @@ fn svg_of(
 }
 
 /// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
+/// The tags of the sources of a site model are long (a tag for every point). Lists and
+/// `objects.get` show how many there are; `objects.get {sources: true}` and `document.get` show
+/// them.
+fn elide_sources(object: &mut Value) {
+    if let Some(v) = object.pointer_mut("/data/import_sources") {
+        let tagged = |k: &str| {
+            v.get(k)
+                .and_then(Value::as_array)
+                .map_or(0, |a| a.iter().filter(|x| !x.is_null()).count())
+        };
+        *v = json!({
+            "hidden": "objects.get {sources: true} shows the tags of the sources",
+            "tagged_points": tagged("points"),
+            "tagged_lines": tagged("lines"),
+        });
+    }
+}
+
 fn elide_image(object: &mut Value) {
     if let Some(png) = object.pointer_mut("/shape/png") {
         let n = png.as_str().map_or(0, str::len);
@@ -328,8 +347,15 @@ pub const METHODS: &[(&str, &str)] = &[
         "document.load",
         "Replace the document. params: {document}. Clears the undo history. If the document has no `history` field (document.get leaves it out), the versions of the current document stay: they are written for the new drawing. A document with a `history` field brings its own versions. Returns {ok, notes?}; notes lists values that were repaired instead of refusing the document (an invalid 3D look of a site model goes back to its defaults) and what could not be read of its versions.",
     ),
+    #[cfg(not(target_arch = "wasm32"))]
+    files::FILE_SAVE,
+    #[cfg(not(target_arch = "wasm32"))]
+    files::FILE_OPEN,
     ("objects.list", "Objects. params: {layer?, class?, kind?}."),
-    ("objects.get", "One object. params: {id}."),
+    (
+        "objects.get",
+        "One object. params: {id, sources? (true shows the import tags of the sources of a site model: data.import_sources, one entry for each point and line; by default the answer only counts them)}.",
+    ),
     ("selection.get", "Selected object IDs."),
     (
         "selection.set",
@@ -362,12 +388,12 @@ pub const METHODS: &[(&str, &str)] = &[
     #[cfg(not(target_arch = "wasm32"))]
     (
         "import.file",
-        "Import a DXF, Shapefile or GeoJSON file as one undo step. params: {path, format?: dxf|shp|geojson, options?}. See describe.io for options. Returns {imported, skipped, report, georeference}.",
+        "Import a file as one undo step: DXF, DWG (needs a converter), Shapefile, GeoJSON or IFC. params: {path, format?: dxf|dwg|shp|geojson|ifc (default: from the extension), options?}. See describe.io for the options of each format. Returns {imported, skipped, report, georeference}.",
     ),
     #[cfg(not(target_arch = "wasm32"))]
     (
         "export.file",
-        "Export the document to a DXF or GeoJSON file. params: {path, format?: dxf|geojson, options?}. Returns {path, exported, report}.",
+        "Export the document to a file: DXF, GeoJSON, DWG (needs a converter), IFC (IFC4, IFC2X3 or IFC4X3), glTF, GLB or OBJ (3D), or a sheet as PDF, SVG or PNG. params: {path, format?: dxf|geojson|dwg|ifc|gltf|glb|obj|pdf|sheet_svg|sheet_png (default: from the extension; the sheet formats need format), options?, overwrite? (replace an existing file; a server for agents needs it)}. See describe.io for the options of each format. Returns {path, exported, report}.",
     ),
     // Updating an imported drawing from a new revision (see update_api.rs).
     #[cfg(not(target_arch = "wasm32"))]
@@ -482,6 +508,7 @@ pub const METHODS: &[(&str, &str)] = &[
     massing_api::MASSING_SET,
     massing_api::MASSING_GET,
     massing_api::MASSING_FROM_SHAPES,
+    massing_api::MASSING_FOLLOW_SOURCES,
     massing_api::MASSING_REPORT,
     // Extrude, sweep and 3D polygon (see solid_api.rs).
     solid_api::EXTRUDE_ADD,
@@ -570,6 +597,7 @@ pub const METHODS: &[(&str, &str)] = &[
     grading_api::SECTION_PROFILE,
     grading_api::SECTION_PLACE,
     grading_api::PAD_ADD,
+    grading_api::GRADE_LIMIT_ADD,
     grading_api::PAD_RETAINING_EDGE,
     // Plug-in objects and scripts (see plugin_api.rs).
     #[cfg(not(target_arch = "wasm32"))]
@@ -676,11 +704,11 @@ pub const METHODS: &[(&str, &str)] = &[
     symbols_api::LIBRARY_FAVORITE_REMOVE,
     (
         "site.create",
-        "Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh), and the 3D look surface_look (color | texture | elevation), texture (material resource id), texture_tile (mm), texture_offset ([x, y]), texture_rotation (degrees), elevation_bands, elevation_ramp ([[r, g, b, a]]), elevation_range ([low, high]), elevation_bands_at_contours; site.texture sets them with checks. Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}.",
+        "Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], layer? (design layer of the site model; default: the layer of the first source), settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh), and the 3D look surface_look (color | texture | elevation), texture (material resource id), texture_tile (mm), texture_offset ([x, y]), texture_rotation (degrees), elevation_bands, elevation_ramp ([[r, g, b, a]]), elevation_range ([low, high]), elevation_bands_at_contours; site.texture sets them with checks. Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. The sources keep the import tags of the objects they came from (data.import_sources of the site model, one entry for each point and line), so import.update and import.apply replace, add and remove them inside the model. Plants, trees, hardscapes, landscape areas, massing models and walls stand on the site model that covers their place, on any design layer (a layer or an object can name one with the command set_layer_site or data.site_model). Returns {id}.",
     ),
     (
         "site.update",
-        "Change a site model. params: {id, settings?, add_source_ids?, remove_points?: [index], remove_lines?: [index]}. settings has the same fields as in site.create, including the 3D look: surface_look (color | texture | elevation), texture (material resource id or null), texture_tile (mm), texture_offset ([x, y] mm), texture_rotation (degrees), elevation_bands (1 to 64), elevation_ramp ([[r, g, b, a]], 1 to 16 colors), elevation_range ([low, high] mm or null), elevation_bands_at_contours (bool); null puts a field back to its default. site.texture sets the look with its own checks. Returns {id, points, lines}.",
+        "Change a site model. params: {id, settings?, add_source_ids? (3D loci and 3D polylines that move into the model), remove_points?: [index], remove_lines?: [index], replace? ([{point: index | line: index, with: id}]: the locus3d or polyline3d takes the place of that source, with its own import tag, instead of standing next to it)}. settings has the same fields as in site.create, including the 3D look: surface_look (color | texture | elevation), texture (material resource id or null), texture_tile (mm), texture_offset ([x, y] mm), texture_rotation (degrees), elevation_bands (1 to 64), elevation_ramp ([[r, g, b, a]], 1 to 16 colors), elevation_range ([low, high] mm or null), elevation_bands_at_contours (bool); null puts a field back to its default. site.texture sets the look with its own checks. Returns {id, points, lines}.",
     ),
     site_texture::SITE_TEXTURE,
     bed_api::BED_ADD,
@@ -992,7 +1020,8 @@ impl Session {
     /// A session for an opened document, with empty history and selection.
     pub fn with_document(mut doc: Document) -> Self {
         let mut cache = review_api::vet_document(&mut doc, SessionLimits::default().read_caps());
-        let notes = doc.load_notes().to_vec();
+        let mut notes = doc.load_notes().to_vec();
+        notes.extend(plants_api::ground_height_note(&doc));
         let (mut s, exact) = Session::with_vetted_document(doc);
         s.load_notes = notes;
         cache.arm(s.editor.revision(), exact);
@@ -1039,6 +1068,7 @@ impl Session {
         let mut cache = review_api::vet_document(&mut doc, self.limits.read_caps());
         let mut notes = doc.load_notes().to_vec();
         notes.extend(doc.placeholder_note());
+        notes.extend(plants_api::ground_height_note(&doc));
         #[cfg(not(target_arch = "wasm32"))]
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
         #[cfg(not(target_arch = "wasm32"))]
@@ -1203,7 +1233,12 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         let start = std::time::Instant::now();
         let note = feedback_api::begin(method, &p);
-        let mut result = self.dispatch(method, p);
+        // The table of parameters (spec.rs): unknown parameters are refused, names of layers and
+        // classes become IDs.
+        let mut result = match spec::prepare(self.editor.doc(), method, p) {
+            Ok(p) => self.dispatch(method, p),
+            Err(e) => Err(e),
+        };
         feedback_api::finish(self, note, &result);
         #[cfg(not(target_arch = "wasm32"))]
         let elapsed = Some(start.elapsed());
@@ -1269,6 +1304,10 @@ impl Session {
                 "this session is connected to a shared document: use collab.{method}, which takes back only your own edits"
             )));
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if files::is_file_method(method) {
+            return files::value_call(self, method, &p);
+        }
         if method.starts_with("site.") {
             return self.handle_site(method, p);
         }
@@ -1283,6 +1322,11 @@ impl Session {
         let doc = self.editor.doc();
         Ok(match method {
             "describe" => {
+                // One method with the JSON Schema of its parameters (spec.rs).
+                if let Some(name) = p.get("method").and_then(Value::as_str) {
+                    return spec::describe_method(name);
+                }
+                let want_schemas = p.get("schemas").and_then(Value::as_bool) == Some(true);
                 let want_schema = p.get("schema").and_then(Value::as_bool) == Some(true);
                 #[allow(unused_mut)]
                 let mut d = json!({
@@ -1336,6 +1380,12 @@ impl Session {
                 });
                 if want_schema {
                     d["command_schema"] = kadakas_core::schema::command_schema();
+                }
+                d["parameters"] = json!(
+                    "Every method refuses a parameter that it does not take, and says which one and what the nearest known name is. The JSON Schema of the parameters of a method (names, types, required, allowed values, defaults) comes from describe {method: \"plants.place\"}; describe {schemas: true} returns them all in method_schemas (about 300 KB). A parameter of the type layer or class takes an ID or the unique name of the layer or class; a name that matches none or several is an error that lists the candidates."
+                );
+                if want_schemas {
+                    d["method_schemas"] = Value::Object(spec::all_schemas());
                 }
                 d
             }
@@ -1450,20 +1500,28 @@ impl Session {
                     .filter(|o| f.kind.as_deref().is_none_or(|k| o.shape.kind() == k))
                     .collect();
                 let mut v = serde_json::to_value(list).unwrap();
-                v.as_array_mut().into_iter().flatten().for_each(elide_image);
+                v.as_array_mut().into_iter().flatten().for_each(|o| {
+                    elide_image(o);
+                    elide_sources(o);
+                });
                 v
             }
             "objects.get" => {
                 #[derive(Deserialize)]
                 struct P {
                     id: ObjectId,
+                    #[serde(default)]
+                    sources: bool,
                 }
-                let P { id } = params(p)?;
+                let P { id, sources } = params(p)?;
                 let o = doc
                     .object(id)
                     .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
                 let mut v = serde_json::to_value(o).unwrap();
                 elide_image(&mut v);
+                if !sources {
+                    elide_sources(&mut v);
+                }
                 v
             }
             "selection.get" => json!({ "ids": self.selection }),
@@ -1859,7 +1917,8 @@ fn command_examples() -> Value {
         {"op": "add_object", "layer": "00000000-0000-0000-0000-000000000003", "shape": {"kind": "viewport", "min": [15, 55], "max": [405, 282], "center": [10000, 5000], "scale": 100, "layers": ["00000000-0000-0000-0000-000000000001"]}},
         {"op": "add_object", "layer": "00000000-0000-0000-0000-000000000003", "shape": {"kind": "title_block", "grid_columns": 6, "grid_rows": 4}},
         {"op": "restore_view", "name": "Planting only"},
-        {"op": "add_object", "shape": {"kind": "site_modifier", "modifier": {"type": "grade_limit"}, "boundary": [[1000,1000],[7000,1000],[7000,6000],[1000,6000]]}}
+        {"op": "add_object", "shape": {"kind": "site_modifier", "modifier": {"type": "grade_limit"}, "boundary": [[1000,1000],[7000,1000],[7000,6000],[1000,6000]]}},
+        {"op": "set_layer_site", "id": "00000000-0000-0000-0000-000000000001", "site": "00000000-0000-0000-0000-000000000002"}
     ])
 }
 

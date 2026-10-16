@@ -330,7 +330,7 @@ fn beds_must_be_on_the_layer_visible_and_near_the_site() {
         find(doc).iter().map(|b| b.object).collect::<Vec<_>>(),
         vec![near]
     );
-    // A bed on another layer does not act.
+    // A bed on a layer that has no site model acts on the model under it, on any layer.
     ed.execute(&Command::AddLayer {
         name: "Other".into(),
         elevation: 0.0,
@@ -345,6 +345,26 @@ fn beds_must_be_on_the_layer_visible_and_near_the_site() {
         layer: Some(other),
         class: None,
         attrs: None,
+    })
+    .unwrap();
+    assert_eq!(
+        find(ed.doc()).iter().map(|b| b.object).collect::<Vec<_>>(),
+        vec![near]
+    );
+    // A layer with a site model of its own keeps its beds for it.
+    ed.execute(&Command::AddObject {
+        shape: Shape::SiteModel {
+            points: vec![
+                glam::DVec3::new(5.0e6, 0.0, 0.0),
+                glam::DVec3::new(5.0e6 + 1000.0, 0.0, 0.0),
+                glam::DVec3::new(5.0e6, 1000.0, 0.0),
+            ],
+            lines: vec![],
+            settings: SiteSettings::default(),
+        },
+        layer: Some(other),
+        class: None,
+        attrs: Attributes::default(),
     })
     .unwrap();
     assert!(find(ed.doc()).is_empty());

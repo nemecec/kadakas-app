@@ -201,12 +201,23 @@ pub struct Pin {
 /// The pins of the issues that match. An issue shows where its point is, else at its first
 /// object, else at the center of its first plan viewpoint. One that has none of these has no pin.
 pub fn pins(doc: &Document, filters: &Filters) -> Vec<Pin> {
+    pins_at(doc, filters, &|ob, _| {
+        doc.layer(ob.layer).map_or(0.0, |l| l.elevation)
+    })
+}
+
+/// Like [`pins`], with the height of a pin given by `height(object, place)`: a caller that has the
+/// site models puts the pin of an object on the ground (`SiteTerrain::pin_height`).
+pub fn pins_at(
+    doc: &Document,
+    filters: &Filters,
+    height: &dyn Fn(&kadakas_core::model::Object, glam::DVec2) -> f64,
+) -> Vec<Pin> {
     let position = |o: ObjectId| {
         doc.object(o).map(|ob| {
             let (lo, hi) = ob.shape.bounds();
             let c = (lo + hi) / 2.0;
-            let z = doc.layer(ob.layer).map_or(0.0, |l| l.elevation);
-            [c.x, c.y, z]
+            [c.x, c.y, height(ob, c)]
         })
     };
     select(&doc.issues, &filters.to_filter())

@@ -125,6 +125,10 @@ pub fn drawings(doc: &Document) -> Vec<DrawingInfo> {
             e.1 += 1;
         }
     }
+    // The sources inside site models count as objects of the drawing.
+    for (drawing, e) in by.iter_mut() {
+        e.1 += site::count(doc, drawing);
+    }
     by.into_iter()
         .map(|(drawing, (layers, objects))| {
             // The revision of the layers; if they differ, one that has a base.
@@ -205,6 +209,12 @@ pub struct ChangeItem {
     pub handle: Option<String>,
     /// The DXF layer.
     pub layer: String,
+    /// The handle of the entity in the old file, if it is in the old file and has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_handle: Option<String>,
+    /// The handle of the entity in the new file, if it is in the new file and has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_handle: Option<String>,
     /// What differs, for a changed entity.
     pub what: Vec<Prop>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -677,6 +687,9 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
             tags.push((o.id, t));
         }
     }
+    // The sources inside site models take part as objects of their own.
+    let virtuals = site::collect(doc, &drawing);
+    tags.extend(virtuals.iter().map(|(id, v)| (*id, v.tag.clone())));
     let mut new_tags: Vec<(ObjectId, ImportTag)> = Vec::new();
     for o in scratch.objects.values() {
         if let Some(t) = provenance::tag(&o.data) {
@@ -707,6 +720,9 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
     let mut refresh: Vec<(ObjectId, ImportTag)> = Vec::new();
     let (old_twins, new_twins) = (twins(&old), twins(&new));
     let centers = |new_side: bool, id: ObjectId| {
+        if !new_side && let Some(v) = virtuals.get(&id) {
+            return Some(v.center);
+        }
         let d = if new_side { scratch } else { doc };
         d.objects.get(&id).and_then(|o| center_of(&o.shape))
     };
@@ -778,10 +794,12 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
         let edited: Vec<ObjectId> = touched
             .iter()
             .copied()
-            .filter(|id| {
-                doc.objects
+            .filter(|id| match virtuals.get(id) {
+                Some(v) => v.edited,
+                None => doc
+                    .objects
                     .get(id)
-                    .is_some_and(|o| provenance::is_edited(o) == Some(true))
+                    .is_some_and(|o| provenance::is_edited(o) == Some(true)),
             })
             .collect();
         st.claim(&ops)?;
@@ -797,7 +815,17 @@ pub fn plan(req: &Request<'_>) -> Result<Plan, UpdateError> {
         counts.objects_added += ops.add.len();
         counts.objects_replaced += ops.replace.len();
         counts.objects_removed += ops.delete.len();
-        changes.push(item(id, status, e, (b, n), &ops, &edited));
+        let mut change = item(id, status, e, (b, n), &ops, &edited);
+        // A change that concerns a source names the site model that holds it.
+        for list in [&mut change.object_ids, &mut change.edited_ids] {
+            let mut seen = BTreeSet::new();
+            *list = list
+                .iter()
+                .map(|i| virtuals.get(i).map_or(*i, |v| v.site))
+                .filter(|i| seen.insert(*i))
+                .collect();
+        }
+        changes.push(change);
         ops_list.push(ops);
     }
     if counts.ignored > 0 {
@@ -1145,6 +1173,8 @@ pub(super) fn item(
         entity: rec.kind.clone(),
         handle: rec.handle.clone(),
         layer: rec.layer.clone(),
+        base_handle: b.and_then(|r| r.handle.clone()),
+        new_handle: n.and_then(|r| r.handle.clone()),
         what: e.changes.clone(),
         via: e.via,
         distance: e.distance,
@@ -1292,6 +1322,22 @@ pub struct Applied {
 }
 
 impl Plan {
+    /// A new object of the plan as a source for a site model (a locus3d or a polyline3d), with the
+    /// DXF layer that decides which model it joins.
+    fn site_source(&self, id: ObjectId) -> Option<site::NewSource> {
+        let n = self.objects.get(&id)?;
+        let src = site::NewSource {
+            shape: n.shape.clone(),
+            tag: n.tag.clone(),
+            // The same rule as `provenance::source_ref`: the DXF layer of the layer, else the class.
+            dxf_layer: Some(self.layers[n.layer].source.dxf_layer.clone())
+                .filter(|l| !l.is_empty())
+                .or_else(|| n.class.map(|c| self.classes[c].name.clone()))
+                .unwrap_or_default(),
+        };
+        src.kind().map(|_| src)
+    }
+
     /// The command that applies the changes for which `chosen` is true (one flag for each change
     /// of the plan, in order). The document must be the one the plan was made for.
     ///
@@ -1331,14 +1377,18 @@ impl Plan {
             drawing_layers.insert(id);
         }
 
-        // What the chosen changes do, once for each object.
+        // What the chosen changes do, once for each object. A source inside a site model is a
+        // virtual object (see `site`).
+        let virtuals = site::collect(doc, &self.drawing);
         let mut replace: BTreeMap<ObjectId, ObjectId> = BTreeMap::new();
         let mut delete: BTreeSet<ObjectId> = BTreeSet::new();
         let mut add: BTreeSet<ObjectId> = BTreeSet::new();
-        let edited = |id: &ObjectId| {
-            doc.objects
+        let edited = |id: &ObjectId| match virtuals.get(id) {
+            Some(v) => v.edited,
+            None => doc
+                .objects
                 .get(id)
-                .is_some_and(|o| provenance::is_edited(o) == Some(true))
+                .is_some_and(|o| provenance::is_edited(o) == Some(true)),
         };
         for (i, ops) in self.ops.iter().enumerate() {
             let take = chosen.get(i).copied().unwrap_or(Take::No);
@@ -1365,10 +1415,14 @@ impl Plan {
         delete.retain(|d| !replace.contains_key(d));
         // Only objects of this drawing, and not on a layer that is locked for other reasons.
         let allowed = |id: &ObjectId| -> bool {
+            let unlocked = |o: &Object| {
+                drawing_layers.contains(&o.layer) || doc.layer(o.layer).is_none_or(|l| !l.locked)
+            };
+            if let Some(v) = virtuals.get(id) {
+                return doc.object(v.site).is_some_and(unlocked);
+            }
             doc.objects.get(id).is_some_and(|o| {
-                provenance::tag(&o.data).is_some_and(|t| t.drawing == self.drawing)
-                    && (drawing_layers.contains(&o.layer)
-                        || doc.layer(o.layer).is_none_or(|l| !l.locked))
+                provenance::tag(&o.data).is_some_and(|t| t.drawing == self.drawing) && unlocked(o)
             })
         };
         let before = replace.len() + delete.len();
@@ -1396,6 +1450,79 @@ impl Plan {
             }
         }
         refreshed.retain(|d, _| !replace.contains_key(d) && !delete.contains(d) && allowed(d));
+
+        // The sources of site models: the update changes the model, not an object.
+        let homes = site::homes(doc, &virtuals);
+        let mut work: BTreeMap<ObjectId, site::Work> = BTreeMap::new();
+        let mut loose_add: BTreeSet<ObjectId> = BTreeSet::new();
+        let mut loose_replace: BTreeMap<ObjectId, ObjectId> = BTreeMap::new();
+        for (old, new) in &replace {
+            let Some(v) = virtuals.get(old) else {
+                loose_replace.insert(*old, *new);
+                continue;
+            };
+            let w = work.entry(v.site).or_default();
+            match self.site_source(*new).filter(|n| n.kind() == Some(v.kind)) {
+                Some(n) => w.replace.push((v.kind, v.index, n)),
+                // The entity is not the same kind of source any more: the old source goes, and the
+                // new object comes in as a new one.
+                None => {
+                    w.delete.insert((v.kind, v.index));
+                    loose_add.insert(*new);
+                }
+            }
+            applied.replaced += 1;
+        }
+        replace = loose_replace;
+        let mut loose_delete = BTreeSet::new();
+        for d in &delete {
+            match virtuals.get(d) {
+                Some(v) => {
+                    work.entry(v.site)
+                        .or_default()
+                        .delete
+                        .insert((v.kind, v.index));
+                    applied.removed += 1;
+                }
+                None => {
+                    loose_delete.insert(*d);
+                }
+            }
+        }
+        delete = loose_delete;
+        add.extend(loose_add);
+        let mut loose_add = BTreeSet::new();
+        for n in &add {
+            let home = self.site_source(*n).and_then(|src| {
+                let candidates = homes.get(&src.dxf_layer.to_lowercase())?;
+                site::pick_home(doc, candidates, &src.shape).map(|h| (h, src))
+            });
+            match home {
+                Some((site_id, src)) => {
+                    work.entry(site_id).or_default().add.push(src);
+                    applied.added += 1;
+                }
+                None => {
+                    loose_add.insert(*n);
+                }
+            }
+        }
+        let add = loose_add;
+        let mut loose_refreshed = BTreeMap::new();
+        for (d, t) in refreshed {
+            match virtuals.get(&d) {
+                Some(v) => {
+                    work.entry(v.site)
+                        .or_default()
+                        .refresh
+                        .push((v.kind, v.index, t.clone()))
+                }
+                None => {
+                    loose_refreshed.insert(d, t);
+                }
+            }
+        }
+        let refreshed = loose_refreshed;
 
         let place = |b: &mut Builder, n: &NewObject| -> (LayerId, ClassId, Attributes) {
             let l = &self.layers[n.layer];
@@ -1477,9 +1604,17 @@ impl Plan {
                 remove: vec![],
             });
         }
+        // The site models whose sources change.
+        for (site_id, w) in &work {
+            if !w.is_empty() {
+                for c in site::commands(doc, *site_id, w, &self.new_revision) {
+                    b.push(c);
+                }
+            }
+        }
         // Removed objects.
         if !delete.is_empty() {
-            applied.removed = delete.len();
+            applied.removed += delete.len();
             b.push(Command::DeleteObjects {
                 ids: delete.iter().copied().collect(),
             });
@@ -1511,6 +1646,8 @@ impl Plan {
         })
     }
 }
+
+mod site;
 
 #[cfg(test)]
 mod tests;

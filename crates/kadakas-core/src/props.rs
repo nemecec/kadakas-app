@@ -72,6 +72,7 @@ pub const NAMES: &[&str] = &[
     "Condition",
     "Action",
     "RPZ",
+    "TreeId",
     "X",
     "Y",
 ];
@@ -519,6 +520,14 @@ fn builtin(
             Shape::Massing(m) => num(m.eave_height()),
             Shape::Extrude(e) => num(e.height.abs()),
             Shape::Plant { height, .. } | Shape::ExistingTree { height, .. } => num(*height),
+            _ => Prop::NotApplicable,
+        },
+        // The number of the tree in the survey (`data.tree_id`, set by `tree.import_survey`).
+        "treeid" => match (shape, obj.data.get("tree_id")) {
+            (Shape::ExistingTree { .. }, Some(Value::String(s))) if !s.is_empty() => {
+                text(s.clone())
+            }
+            (Shape::ExistingTree { .. }, Some(Value::Number(n))) => text(n.to_string()),
             _ => Prop::NotApplicable,
         },
         "dbh" | "condition" | "action" | "rpz" => match shape {

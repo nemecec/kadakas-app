@@ -224,6 +224,19 @@ fn a_pin_of_a_layer_at_a_height_is_at_that_height() {
     assert_eq!(p[0].at[2], 1500.0);
 }
 
+#[test]
+fn a_caller_with_the_ground_puts_the_pin_on_it() {
+    let mut ed = Editor::with_sequential_ids();
+    let o = rect(&mut ed, 2000.0);
+    add(
+        &mut ed,
+        &Draft::for_objects(&[o]).tap_title("On the ground"),
+        1,
+    );
+    let p = pins_at(ed.doc(), &Filters::default(), &|_, at| at.x * 2.0);
+    assert_eq!(p[0].at, [2500.0, 250.0, 5000.0]);
+}
+
 trait TapTitle {
     fn tap_title(self, t: &str) -> Self;
 }

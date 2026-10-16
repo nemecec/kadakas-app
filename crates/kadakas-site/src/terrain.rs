@@ -1,50 +1,179 @@
-//! The site model as the ground under hardscapes and landscape areas.
+//! The site model as the ground under hardscapes, landscape areas, massing models and plants.
 //!
-//! Core knows hardscapes and landscape areas but not terrain. It asks for the ground through
-//! `GroundSource`, and this module answers with the site models on the layer of the object.
+//! Core knows these objects but not terrain. It asks for the ground through `GroundSource`, and
+//! this module answers with the site models of the document.
+//!
+//! **Which site model.** An object that stands on the ground uses the site model that covers its
+//! position, on any design layer. If the object (or its layer) names a site model (`site_model`
+//! in its data, or the command `SetLayerSite`), only that model counts. Where several models
+//! cover a position, the one on the layer of the object wins, then the first in the drawing.
+//! Outside every model the height of the nearest edge counts (of the named model, else of the
+//! nearest model on any layer; a tie goes to the layer of the object); a document without a site model has no
+//! ground, and the callers say so.
+//!
+//! **Heights and layers.** A site model has its heights above the elevation of its own layer. The
+//! answers of `GroundSource` are heights above the elevation of the layer of the object that asks
+//! (the 3D scene adds that elevation back), so a model on a layer at 2 m and a plant on a layer at
+//! 0 m differ by 2 m. `absolute` gives the height above the origin. A query without an object
+//! answers in the frame of the model.
+//!
+//! **Speed.** The models have a grid over their boxes. A query looks at the models in its cell,
+//! so 20 000 plants and a few models cost a lookup each. A model is built once per document
+//! revision (`SiteCache`).
 //! A hardscape can also act as a pad on the site model (see `pad_of`).
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::OnceCell;
 use std::sync::{Arc, OnceLock};
 
 use glam::{DVec2, DVec3};
 
 use kadakas_core::ground::GroundSource;
 use kadakas_core::hardscape;
-use kadakas_core::model::{Document, LayerId, Object, Shape};
+use kadakas_core::model::{Document, LayerId, Object, ObjectId, Shape};
 use kadakas_core::site::boundary_points;
 
 use crate::model::{SiteCache, SiteResult, Surface};
 use crate::modifier::{Modifier, PadSlope};
 
-/// The ground of a document, from its site models. A site model serves the objects on its layer.
+/// The ground of a document, from its site models. See the module text.
 pub struct SiteTerrain<'a> {
     cache: &'a SiteCache,
     revision: u64,
     doc: &'a Document,
-    hosts: RefCell<HashMap<LayerId, Vec<Arc<Host>>>>,
+    index: OnceCell<Arc<Index>>,
 }
 
 /// A site model with the edge of its surfaces, for points outside the model.
 struct Host {
-    result: Arc<SiteResult>,
+    id: ObjectId,
+    layer: LayerId,
+    /// The elevation of the layer of the model, in mm.
+    elevation: f64,
+    /// The box of the source data (the surfaces lie inside it).
+    lo: DVec2,
+    hi: DVec2,
+    result: OnceLock<Option<Arc<SiteResult>>>,
     edges: [OnceLock<Vec<[DVec3; 2]>>; 2],
 }
 
 impl Host {
-    fn new(result: Arc<SiteResult>) -> Self {
-        Host {
-            result,
-            edges: [OnceLock::new(), OnceLock::new()],
+    fn contains(&self, p: DVec2) -> bool {
+        p.x >= self.lo.x && p.x <= self.hi.x && p.y >= self.lo.y && p.y <= self.hi.y
+    }
+}
+
+/// The site models of a document and a grid over their boxes. The cache keeps one for the
+/// revision that was asked last, so the lookups of one frame share it.
+pub(crate) struct Index {
+    hosts: Vec<Host>,
+    lo: DVec2,
+    cell: f64,
+    cols: usize,
+    rows: usize,
+    /// For each cell the hosts (indices, in drawing order) whose box touches it.
+    cells: Vec<Vec<u32>>,
+}
+
+/// Cells in each direction of the grid, at most.
+const GRID: usize = 32;
+
+impl Index {
+    pub(crate) fn new(doc: &Document) -> Index {
+        // Visibility is view state: hiding the layer of a site model must not drop the objects
+        // that stand on it. The order is stable: the order of the layers, then the ID (never the
+        // stacking order of the drawing).
+        let layer_rank = |l: LayerId| {
+            doc.layers
+                .iter()
+                .position(|x| x.id == l)
+                .unwrap_or(usize::MAX)
+        };
+        let mut sites: Vec<&Object> = doc
+            .objects
+            .values()
+            .filter(|o| matches!(o.shape, Shape::SiteModel { .. }))
+            .collect();
+        sites.sort_by_key(|o| (layer_rank(o.layer), o.id));
+        let hosts: Vec<Host> = sites
+            .into_iter()
+            .map(|o| {
+                let (lo, hi) = o.shape.bounds();
+                Host {
+                    id: o.id,
+                    layer: o.layer,
+                    elevation: doc.layer(o.layer).map_or(0.0, |l| l.elevation),
+                    lo,
+                    hi,
+                    result: OnceLock::new(),
+                    edges: [OnceLock::new(), OnceLock::new()],
+                }
+            })
+            .filter(|h| h.lo.is_finite() && h.hi.is_finite())
+            .collect();
+        let mut lo = DVec2::splat(f64::INFINITY);
+        let mut hi = DVec2::splat(f64::NEG_INFINITY);
+        for h in &hosts {
+            lo = lo.min(h.lo);
+            hi = hi.max(h.hi);
+        }
+        let (cols, rows, cell) = if hosts.len() <= 1 {
+            (1, 1, f64::INFINITY)
+        } else {
+            let size = (hi - lo).max_element().max(1.0);
+            let cell = size / GRID as f64;
+            let cols = (((hi.x - lo.x) / cell).ceil() as usize).clamp(1, GRID);
+            let rows = (((hi.y - lo.y) / cell).ceil() as usize).clamp(1, GRID);
+            (cols, rows, cell)
+        };
+        let mut cells = vec![Vec::new(); cols * rows];
+        for (i, h) in hosts.iter().enumerate() {
+            let (c0, r0, c1, r1) = if cell.is_finite() {
+                (
+                    (((h.lo.x - lo.x) / cell).floor() as usize).min(cols - 1),
+                    (((h.lo.y - lo.y) / cell).floor() as usize).min(rows - 1),
+                    (((h.hi.x - lo.x) / cell).floor() as usize).min(cols - 1),
+                    (((h.hi.y - lo.y) / cell).floor() as usize).min(rows - 1),
+                )
+            } else {
+                (0, 0, 0, 0)
+            };
+            for r in r0..=r1 {
+                for c in c0..=c1 {
+                    cells[r * cols + c].push(i as u32);
+                }
+            }
+        }
+        Index {
+            hosts,
+            lo,
+            cell,
+            cols,
+            rows,
+            cells,
         }
     }
 
-    /// The height of the model at the nearest point of its edge, with the squared distance.
-    fn edge_height(&self, p: DVec2, which: Surface) -> Option<(f64, f64)> {
-        let edges = self.edges[which as usize]
-            .get_or_init(|| crate::grading::boundary_edges(self.result.surface(which)));
-        crate::grading::nearest_edge_height(edges, p)
+    /// The hosts whose box holds `p`, in drawing order.
+    fn at(&self, p: DVec2) -> impl Iterator<Item = &Host> {
+        let list: &[u32] = if !self.cell.is_finite() {
+            &self.cells[0]
+        } else {
+            let c = ((p.x - self.lo.x) / self.cell).floor();
+            let r = ((p.y - self.lo.y) / self.cell).floor();
+            // A point on the far edge of the whole area is in the last cell (a box holds its edge).
+            if c < 0.0 || r < 0.0 || c > self.cols as f64 || r > self.rows as f64 {
+                &[]
+            } else {
+                let (c, r) = (
+                    (c as usize).min(self.cols - 1),
+                    (r as usize).min(self.rows - 1),
+                );
+                &self.cells[r * self.cols + c]
+            }
+        };
+        list.iter()
+            .map(|i| &self.hosts[*i as usize])
+            .filter(move |h| h.contains(p))
     }
 }
 
@@ -55,45 +184,135 @@ impl<'a> SiteTerrain<'a> {
             cache,
             revision,
             doc,
-            hosts: RefCell::new(HashMap::new()),
+            index: OnceCell::new(),
         }
     }
 
-    fn hosts(&self, layer: LayerId) -> Vec<Arc<Host>> {
-        self.hosts
-            .borrow_mut()
-            .entry(layer)
-            .or_insert_with(|| {
-                self.doc
-                    .objects
-                    .values()
-                    .filter(|o| {
-                        o.layer == layer
-                            && matches!(o.shape, Shape::SiteModel { .. })
-                            && self.doc.is_visible(o)
-                    })
-                    .filter_map(|o| self.cache.get(self.revision, self.doc, o.id).ok())
-                    .map(|r| Arc::new(Host::new(r)))
-                    .collect()
-            })
-            .clone()
+    fn index(&self) -> &Index {
+        self.index_arc()
+    }
+
+    fn index_arc(&self) -> &Arc<Index> {
+        self.index
+            .get_or_init(|| self.cache.terrain_index(self.revision, self.doc))
+    }
+
+    fn result<'h>(&self, h: &'h Host) -> Option<&'h Arc<SiteResult>> {
+        h.result
+            .get_or_init(|| self.cache.get(self.revision, self.doc, h.id).ok())
+            .as_ref()
+    }
+
+    fn elevation_of(&self, layer: LayerId) -> f64 {
+        self.doc.layer(layer).map_or(0.0, |l| l.elevation)
+    }
+
+    /// The change from the frame of the model to the frame of the asking object.
+    fn shift(&self, obj: Option<&Object>, h: &Host) -> f64 {
+        obj.map_or(0.0, |o| h.elevation - self.elevation_of(o.layer))
+    }
+
+    /// The site model that the object or its layer names, if it exists.
+    fn named_host(&self, obj: Option<&Object>) -> Option<&Host> {
+        let id = kadakas_core::site::named_site(self.doc, obj?)?;
+        self.index().hosts.iter().find(|h| h.id == id)
+    }
+
+    /// True if the object (or its layer) names a site model that does not exist. The object then
+    /// uses the model that covers its place, and the callers say so.
+    pub fn name_dangles(&self, obj: &Object) -> bool {
+        kadakas_core::site::named_site(self.doc, obj).is_some()
+            && self.named_host(Some(obj)).is_none()
+    }
+
+    /// True if the document has a site model.
+    pub fn has_site_models(&self) -> bool {
+        !self.index().hosts.is_empty()
+    }
+
+    /// The site model that serves the object at `p`, if the ground itself lies under `p`: the
+    /// named one, else the first that covers the point (the layer of the object first).
+    fn pick(&self, obj: Option<&Object>, p: DVec2, which: Surface) -> Option<(&Host, f64)> {
+        let idx = self.index();
+        // A name that points at nothing (the model was deleted) counts for nothing.
+        if let Some(h) = self.named_host(obj) {
+            let z = self.result(h)?.surface(which).elevation_at(p)?;
+            return Some((h, z));
+        }
+        let own = obj.map(|o| o.layer);
+        let mut found: Option<(&Host, f64)> = None;
+        for h in idx.at(p) {
+            let Some(z) = self
+                .result(h)
+                .and_then(|r| r.surface(which).elevation_at(p))
+            else {
+                continue;
+            };
+            if Some(h.layer) == own {
+                return Some((h, z));
+            }
+            found.get_or_insert((h, z));
+        }
+        found
+    }
+
+    /// The site model that holds the ground under `p` for this object, and its result.
+    pub fn host_at(&self, obj: Option<&Object>, p: DVec2) -> Option<(ObjectId, Arc<SiteResult>)> {
+        let (h, _) = self.pick(obj, p, Surface::Existing)?;
+        Some((h.id, self.result(h)?.clone()))
+    }
+
+    /// The height of the ground at `p` above the origin (the elevation of the layer of the site
+    /// model included), on the proposed surface. Outside every model it is the height of the
+    /// nearest edge.
+    pub fn absolute(&self, obj: &Object, p: DVec2) -> Option<f64> {
+        self.elevation(obj, p)
+            .map(|z| z + self.elevation_of(obj.layer))
+    }
+
+    /// The height above the origin where a pin or a note about `obj` at `p` belongs: the stored
+    /// ground height of a plant, else the ground under an object that stands on the ground (plants,
+    /// hardscapes, landscape areas, massing models, walls, grades, spots, sections), else the
+    /// elevation of the layer of the object.
+    pub fn pin_height(&self, obj: &Object, p: DVec2) -> f64 {
+        if let Some(z) = kadakas_core::plants::link::ground_z(obj) {
+            return z;
+        }
+        // A building stands at its base (the lowest ground under it), not at the ground under the
+        // point of the pin.
+        if let Shape::Massing(m) = &obj.shape {
+            return self.elevation_of(obj.layer) + self.massing_base(obj, m);
+        }
+        let on_ground = matches!(
+            obj.shape,
+            Shape::Plant { .. }
+                | Shape::ExistingTree { .. }
+                | Shape::Hardscape { .. }
+                | Shape::LandscapeArea { .. }
+        ) || kadakas_core::site::carries_extra(obj);
+        on_ground
+            .then(|| self.absolute(obj, p))
+            .flatten()
+            .unwrap_or_else(|| self.elevation_of(obj.layer))
+    }
+
+    fn edge_height(&self, h: &Host, p: DVec2, which: Surface) -> Option<(f64, f64)> {
+        let result = self.result(h)?;
+        let edges = h.edges[which as usize]
+            .get_or_init(|| crate::grading::boundary_edges(result.surface(which)));
+        crate::grading::nearest_edge_height(edges, p)
     }
 }
 
 impl SiteTerrain<'_> {
     /// The height of the base of a massing model above its layer, in mm: the lowest ground height
     /// under the footprint, so the building stands on the ground and never floats. A base that the
-    /// model gives itself wins. Without a site model on the layer the base is 0.
+    /// model gives itself wins. Without a site model that covers the footprint the base is 0.
     pub fn massing_base(&self, obj: &Object, m: &kadakas_core::massing::Massing) -> f64 {
         if let Some(b) = m.base {
             return b;
         }
-        let ring = m.ring();
-        let step = (ring.len() / 64).max(1);
-        let mut samples: Vec<DVec2> = ring.iter().step_by(step).copied().collect();
-        if !ring.is_empty() {
-            samples.push(ring.iter().copied().sum::<DVec2>() / ring.len() as f64);
-        }
+        let samples = self.footprint_samples(m);
         let on_ground = samples
             .iter()
             .filter(|p| self.covered(obj, **p))
@@ -108,27 +327,55 @@ impl SiteTerrain<'_> {
             })
             .unwrap_or(0.0)
     }
+
+    /// True if a site model covers some of the footprint of the massing model (or the model gives
+    /// its own base). A massing model that is not on the ground stands at the elevation of its
+    /// layer; the callers say so.
+    pub fn massing_on_ground(&self, obj: &Object, m: &kadakas_core::massing::Massing) -> bool {
+        m.base.is_some()
+            || self
+                .footprint_samples(m)
+                .iter()
+                .any(|p| self.covered(obj, *p))
+    }
+
+    fn footprint_samples(&self, m: &kadakas_core::massing::Massing) -> Vec<DVec2> {
+        let ring = m.ring();
+        let step = (ring.len() / 64).max(1);
+        let mut samples: Vec<DVec2> = ring.iter().step_by(step).copied().collect();
+        if !ring.is_empty() {
+            samples.push(ring.iter().copied().sum::<DVec2>() / ring.len() as f64);
+        }
+        samples
+    }
 }
 
 impl GroundSource for SiteTerrain<'_> {
     fn exact(&self, obj: Option<&Object>, p: DVec2, which: Surface) -> Option<f64> {
-        self.hosts(obj?.layer)
-            .iter()
-            .find_map(|h| h.result.surface(which).elevation_at(p))
+        self.pick(obj, p, which)
+            .map(|(h, z)| z + self.shift(obj, h))
     }
 
-    /// The height of the ground. Outside every site model on the layer it is the height of the
-    /// nearest edge of the nearest model, so a hardscape that reaches over the edge stays level
-    /// with the edge there.
+    /// The height of the ground. Outside every site model it is the height of the nearest edge
+    /// of the nearest model, whatever its layer (a named model only: its own edge), so a hardscape
+    /// that reaches over the edge stays level with the edge there. Two edges at the same distance:
+    /// the model of the layer of the object wins.
     fn clamped(&self, obj: Option<&Object>, p: DVec2, which: Surface) -> Option<f64> {
         if let Some(z) = self.exact(obj, p, which) {
             return Some(z);
         }
-        self.hosts(obj?.layer)
+        let idx = self.index();
+        let named = self.named_host(obj);
+        let own = obj.map(|o| o.layer);
+        idx.hosts
             .iter()
-            .filter_map(|h| h.edge_height(p, which))
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, z)| z)
+            .filter(|h| named.is_none_or(|n| n.id == h.id))
+            .filter_map(|h| {
+                self.edge_height(h, p, which)
+                    .map(|(d, z)| (d, Some(h.layer) != own, z + self.shift(obj, h)))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+            .map(|(_, _, z)| z)
     }
 }
 
@@ -225,10 +472,75 @@ mod tests {
         assert!(
             t.covered(o, DVec2::new(3000.0, 3000.0)) && !t.covered(o, DVec2::new(30_000.0, 0.0))
         );
-        // Another layer has no ground.
+        // An object on another layer stands on the same ground (the layer has the same elevation).
         let mut other = o.clone();
         other.layer = LayerId::from_num(77);
-        assert_eq!(t.elevation(&other, DVec2::new(3000.0, 3000.0)), None);
+        assert_eq!(t.elevation(&other, DVec2::new(3000.0, 3000.0)), Some(300.0));
+    }
+
+    #[test]
+    fn outside_the_models_the_nearest_edge_counts_whatever_the_layer_and_the_index_is_shared() {
+        let mut ed = Editor::default();
+        let mut layer = |name: &str| {
+            ed.execute(&Command::AddLayer {
+                name: name.into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap();
+            ed.doc().layers.last().unwrap().id
+        };
+        let (west, east) = (layer("West"), layer("East"));
+        let put = |ed: &mut Editor, dx: f64, z: f64, layer: LayerId| {
+            let mut shape = grid_site(3, 1000.0, |_, _| z);
+            if let Shape::SiteModel { points, .. } = &mut shape {
+                points.iter_mut().for_each(|p| p.x += dx);
+            }
+            ed.execute(&Command::AddObject {
+                shape,
+                layer: Some(layer),
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
+        };
+        put(&mut ed, 0.0, 100.0, west);
+        put(&mut ed, 10_000.0, 900.0, east);
+        let id = slab(&mut ed, 0.0, 10.0, HardscapePatch::default());
+        let mut o = ed.doc().object(id).unwrap().clone();
+        // The point is outside both; the east model is much nearer. An object of the west layer
+        // takes the height of the east edge.
+        o.layer = west;
+        let cache = SiteCache::default();
+        let t = SiteTerrain::new(&cache, ed.revision(), ed.doc());
+        assert_eq!(t.elevation(&o, DVec2::new(9000.0, 1000.0)), Some(900.0));
+        // One index serves every lookup of the revision.
+        let again = SiteTerrain::new(&cache, ed.revision(), ed.doc());
+        assert!(Arc::ptr_eq(t.index_arc(), again.index_arc()));
+    }
+
+    #[test]
+    fn a_point_on_the_far_edge_of_all_the_models_is_covered() {
+        let mut ed = Editor::default();
+        add(&mut ed, grid_site(3, 1000.0, |_, _| 100.0));
+        let mut east = grid_site(3, 1000.0, |_, _| 200.0);
+        if let Shape::SiteModel { points, .. } = &mut east {
+            points.iter_mut().for_each(|p| p.x += 2000.0);
+        }
+        add(&mut ed, east);
+        let id = slab(&mut ed, 100.0, 200.0, HardscapePatch::default());
+        let cache = SiteCache::default();
+        let t = SiteTerrain::new(&cache, ed.revision(), ed.doc());
+        let o = ed.doc().object(id).unwrap();
+        for p in [
+            DVec2::new(4000.0, 1000.0),
+            DVec2::new(4000.0, 2000.0),
+            DVec2::new(1000.0, 2000.0),
+        ] {
+            assert!(t.covered(o, p), "{p}");
+        }
+        assert!(!t.covered(o, DVec2::new(4000.5, 1000.0)));
     }
 
     #[test]
@@ -363,5 +675,163 @@ mod tests {
             panic!()
         };
         assert!((elevation - (100.0 - 200.0)).abs() < 1e-9);
+    }
+
+    fn layer(ed: &mut Editor, name: &str, elevation: f64) -> LayerId {
+        LayerId(
+            ed.execute(&Command::AddLayer {
+                name: name.into(),
+                elevation,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0],
+        )
+    }
+
+    fn add_on(ed: &mut Editor, shape: Shape, layer: LayerId) -> ObjectId {
+        ObjectId(
+            ed.execute(&Command::AddObject {
+                shape,
+                layer: Some(layer),
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        )
+    }
+
+    fn probe(layer: LayerId) -> Object {
+        Object::new(
+            ObjectId::from_num(0),
+            layer,
+            kadakas_core::model::NONE_CLASS,
+            Shape::Locus3d { p: DVec3::ZERO },
+        )
+    }
+
+    /// A site model of 9 by 9 points, 1 m apart from `x0`, flat at `z`.
+    fn flat(x0: f64, z: f64) -> Shape {
+        let mut s = grid_site(9, 1000.0, |_, _| z);
+        if let Shape::SiteModel { points, .. } = &mut s {
+            points.iter_mut().for_each(|p| p.x += x0);
+        }
+        s
+    }
+
+    #[test]
+    fn the_site_model_that_covers_the_place_serves_objects_of_any_layer() {
+        let mut ed = Editor::default();
+        let site = layer(&mut ed, "Site", 2000.0);
+        let plants = layer(&mut ed, "Planting", 5000.0);
+        let near = add_on(&mut ed, flat(0.0, 300.0), site);
+        let far = add_on(&mut ed, flat(20_000.0, 900.0), site);
+        let cache = SiteCache::default();
+        let t = SiteTerrain::new(&cache, ed.revision(), ed.doc());
+        let o = probe(plants);
+        let q = DVec2::new(4000.0, 4000.0);
+        // Above the layer of the object: the model is 300 above its layer at 2 m; the object layer
+        // is at 5 m, so the ground is 2300 - 5000 = -2700 from it, and 2300 above the origin.
+        assert_eq!(t.elevation(&o, q), Some(-2700.0));
+        assert_eq!(t.host_at(Some(&o), q).unwrap().0, near);
+        assert_eq!(t.elevation(&o, DVec2::new(24_000.0, 4000.0)), Some(-2100.0));
+        assert_eq!(
+            t.host_at(Some(&o), DVec2::new(24_000.0, 4000.0)).unwrap().0,
+            far
+        );
+        let mut on_site = probe(site);
+        on_site.data.clear();
+        assert_eq!(t.elevation(&on_site, q), Some(300.0));
+        assert!(t.covered(&o, q) && !t.covered(&o, DVec2::new(15_000.0, 4000.0)));
+        // Between the models the nearest edge counts: the near model ends at x = 8000.
+        assert_eq!(t.elevation(&o, DVec2::new(10_000.0, 4000.0)), Some(-2700.0));
+        // Without an object the answer is in the frame of the model.
+        assert_eq!(t.exact(None, q, Surface::Existing), Some(300.0));
+        assert!(t.has_site_models());
+    }
+
+    #[test]
+    fn the_layer_of_the_object_wins_and_a_name_wins_over_the_place() {
+        let mut ed = Editor::default();
+        let a = layer(&mut ed, "A", 0.0);
+        let b = layer(&mut ed, "B", 0.0);
+        let first = add_on(&mut ed, flat(0.0, 100.0), a);
+        let second = add_on(&mut ed, flat(0.0, 700.0), b);
+        let cache = SiteCache::default();
+        let q = DVec2::new(3000.0, 3000.0);
+        let t = SiteTerrain::new(&cache, ed.revision(), ed.doc());
+        // Both cover the place: the model on the layer of the object, else the first.
+        assert_eq!(t.elevation(&probe(a), q), Some(100.0));
+        assert_eq!(t.elevation(&probe(b), q), Some(700.0));
+        let c = layer(&mut ed, "C", 0.0);
+        let t = SiteTerrain::new(&cache, ed.revision(), ed.doc());
+        assert_eq!(t.elevation(&probe(c), q), Some(100.0));
+        // The layer names the second model; the object names the first.
+        ed.execute(&Command::SetLayerSite {
+            id: c,
+            site: Some(second),
+        })
+        .unwrap();
+        let t = SiteTerrain::new(&cache, ed.revision(), ed.doc());
+        assert_eq!(t.elevation(&probe(c), q), Some(700.0));
+        let mut o = probe(c);
+        o.data.insert("site_model".into(), serde_json::json!(first));
+        let t = SiteTerrain::new(&cache, ed.revision(), ed.doc());
+        // The probe is not in the document: its layer names the second model, its data the first.
+        assert_eq!(t.elevation(&o, q), Some(100.0));
+        // A named model that does not cover the place gives the height of its edge.
+        o.data
+            .insert("site_model".into(), serde_json::json!(second));
+        assert_eq!(t.elevation(&o, DVec2::new(30_000.0, 0.0)), Some(700.0));
+        // The command checks its input.
+        assert!(
+            ed.execute(&Command::SetLayerSite {
+                id: c,
+                site: Some(ObjectId::from_num(5)),
+            })
+            .is_err()
+        );
+        ed.execute(&Command::SetLayerSite { id: c, site: None })
+            .unwrap();
+        assert!(ed.doc().layer(c).unwrap().extra.get("site_model").is_none());
+        assert!(
+            ed.execute(&Command::SetLayerSite {
+                id: LayerId::from_num(99),
+                site: None,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn many_models_use_the_grid_and_hidden_models_are_not_ground() {
+        let mut ed = Editor::default();
+        let l = layer(&mut ed, "L", 0.0);
+        let ids: Vec<ObjectId> = (0..6)
+            .map(|i| {
+                add_on(
+                    &mut ed,
+                    flat(i as f64 * 20_000.0, 100.0 * (i + 1) as f64),
+                    l,
+                )
+            })
+            .collect();
+        let cache = SiteCache::default();
+        let t = SiteTerrain::new(&cache, ed.revision(), ed.doc());
+        for (i, id) in ids.iter().enumerate() {
+            let p = DVec2::new(i as f64 * 20_000.0 + 3000.0, 3000.0);
+            assert_eq!(t.host_at(None, p).unwrap().0, *id);
+        }
+        // Outside the grid, and in a gap between two models.
+        assert!(t.host_at(None, DVec2::new(-5000.0, 0.0)).is_none());
+        assert!(t.host_at(None, DVec2::new(500_000.0, 0.0)).is_none());
+        assert!(t.host_at(None, DVec2::new(12_000.0, 0.0)).is_none());
+        // A document with no model has no ground.
+        let empty = Editor::default();
+        let t = SiteTerrain::new(&cache, empty.revision(), empty.doc());
+        assert!(!t.has_site_models());
+        assert_eq!(t.elevation(&probe(LayerId::from_num(1)), DVec2::ZERO), None);
     }
 }

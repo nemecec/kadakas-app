@@ -57,7 +57,7 @@ mod retaining;
 #[cfg(test)]
 mod tests;
 
-pub use retaining::{PAD_ADD, PAD_RETAINING_EDGE};
+pub use retaining::{GRADE_LIMIT_ADD, PAD_ADD, PAD_RETAINING_EDGE};
 
 pub const GRADE_ADD: (&str, &str) = (
     "grade.add",
@@ -150,6 +150,7 @@ pub fn knows(method: &str) -> bool {
             | "section.profile"
             | "section.place"
             | "pad.add"
+            | "grade_limit.add"
             | "pad.retaining_edge"
     )
 }
@@ -325,6 +326,7 @@ impl Session {
             "section.profile" => self.section_profile(m),
             "section.place" => self.section_place(m),
             "pad.add" => self.pad_add(Value::Object(m)),
+            "grade_limit.add" => self.grade_limit_add(Value::Object(m)),
             "pad.retaining_edge" => self.pad_retaining_edge(Value::Object(m)),
             _ => Err(RpcError::method_not_found(method)),
         }
@@ -404,12 +406,19 @@ impl Session {
         obj: &Object,
         named: Option<ObjectId>,
     ) -> Option<std::sync::Arc<SiteResult>> {
-        grading::host(
+        let (lo, hi) = obj.shape.bounds();
+        let at = if lo.is_finite() && hi.is_finite() {
+            (lo + hi) / 2.0
+        } else {
+            DVec2::ZERO
+        };
+        grading::host_near(
             self.editor.doc(),
             &self.site_cache,
             self.editor.revision(),
             obj.layer,
             named,
+            at,
         )
     }
 
@@ -505,7 +514,14 @@ impl Session {
         let d = wall::data(obj)?;
         let site = self.site_for(obj, d.site);
         let ground = site.as_ref().map(|s| grading::SiteGround::new(s));
-        let w = wall::evaluate(doc, obj, ground.as_ref().map(|g| g as grading::Ground<'_>))?;
+        // The same layer difference as the 3D scene (`grading::hook::wall_of`).
+        let dz = grading::hook::site_dz(doc, site.as_deref(), obj);
+        let w = wall::evaluate_at(
+            doc,
+            obj,
+            ground.as_ref().map(|g| g as grading::Ground<'_>),
+            dz,
+        )?;
         let q = w.quantities;
         let (first, last) = (w.stations.first()?, w.stations.last()?);
         Some(json!({
@@ -649,9 +665,18 @@ impl Session {
     ) -> Result<grade::Grade, RpcError> {
         let doc = self.editor.doc();
         let site = d.snap.and_then(|_| {
-            grading::host(doc, &self.site_cache, self.editor.revision(), layer, d.site)
+            grading::host_near(
+                doc,
+                &self.site_cache,
+                self.editor.revision(),
+                layer,
+                d.site,
+                path.first().copied().unwrap_or_default(),
+            )
         });
-        let ground = site.as_ref().map(|s| grading::SiteGround::new(s));
+        let ground = site
+            .as_ref()
+            .map(|s| grading::SiteGround::with_offset(s, grading::site_elevation(doc, s)));
         grade::solve_path(path, d, ground.as_ref().map(|g| g as grading::Ground<'_>)).map_err(app)
     }
 
@@ -875,7 +900,7 @@ impl Session {
         let Some(site) = self.site_for(obj_layer_of, d.site) else {
             return json!({ "existing": null, "proposed": null, "modified": false, "label": "no site model", "northing_m": n, "easting_m": e, "georeferenced": geo });
         };
-        let rd = spot::read_at(&site, at);
+        let rd = spot::read_at_offset(&site, at, grading::site_elevation(doc, &site));
         json!({ "existing": rd.existing, "proposed": rd.proposed, "modified": rd.modified, "label": spot::label(d, &rd, at, georef), "northing_m": n, "easting_m": e, "georeferenced": geo })
     }
 
@@ -949,7 +974,13 @@ impl Session {
             .transpose()
             .map_err(|_| bad("'site' must be an object ID"))?;
         let doc = self.editor.doc();
+        // The site model that covers the point, else the first one in the drawing.
+        let covering =
+            kadakas_site::SiteTerrain::new(&self.site_cache, self.editor.revision(), doc)
+                .host_at(None, at)
+                .map(|(id, _)| id);
         let host = site
+            .or(covering)
             .or_else(|| {
                 doc.objects
                     .values()

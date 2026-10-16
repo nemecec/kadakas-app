@@ -1866,7 +1866,7 @@ fn issue_snapshots_survive_a_save_and_a_lazy_reopen_in_the_container() {
     let names: Vec<String> = zip::ZipArchive::new(zip)
         .unwrap()
         .file_names()
-        .map(String::from)
+        .map(|n| n.unwrap().into_owned())
         .collect();
     assert!(
         names.iter().any(|n| n.starts_with("blobs/")),

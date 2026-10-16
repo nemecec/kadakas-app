@@ -30,6 +30,10 @@ pub const PAD_ADD: (&str, &str) = (
     "pad.add",
     "Add a pad: a site modifier that sets the ground inside its boundary to a level. params: {boundary: [vertices] (arcs allowed), elevation (mm), slope? ({direction (radians the ground falls), percent}), retaining_edge? (true or the settings of pad.retaining_edge: a wall along the edge), layer?, class?}. Where pads overlap, the later one wins. A pad without a grade limit has a vertical edge. Returns {id, wall?, quantities?}.",
 );
+pub const GRADE_LIMIT_ADD: (&str, &str) = (
+    "grade_limit.add",
+    "Add grade limits: a site modifier (Site Modifiers tool, Grade Limits mode) that closes the area in which the proposed surface may differ from the existing one. The ground outside the boundary keeps its existing height, and a pad inside it gets sloping sides down to that ground; without grade limits a pad has a vertical edge. A thin method over the add_object command with a site_modifier shape. params: {boundary: [vertices] (3 or more, arcs allowed), layer? (the modifier acts on the site models of its layer), class?}. Returns {id}.",
+);
 pub const PAD_RETAINING_EDGE: (&str, &str) = (
     "pad.retaining_edge",
     "Give a pad a retaining edge: a closed landscape wall along its boundary, with its top at the level of the pad plus top_offset, standing on the existing ground. The wall is centered on the edge. The pad must be level. Calling it again replaces the wall. params: {id (a pad), enabled? (false removes the wall; default true), thickness? (mm, default 300), top_offset? (mm, default 0), embed? (mm below the ground, default 0), style? (wall style ID or name), class?}. One undo step. Returns {id, wall, quantities} (the rows of wall.report).",
@@ -120,11 +124,24 @@ impl Session {
         use kadakas_site::grading::{self, Follow};
         let doc = self.editor.doc();
         let layer = layer.unwrap_or(doc.active_layer);
-        let Some(site) = grading::host(doc, &self.site_cache, self.editor.revision(), layer, None)
-        else {
+        let at = boundary.first().map_or(glam::DVec2::ZERO, |v| v.p);
+        let Some(site) = grading::host_near(
+            doc,
+            &self.site_cache,
+            self.editor.revision(),
+            layer,
+            None,
+            at,
+        ) else {
             return ("fill", 0.0);
         };
-        let ground = grading::SiteGround::new(&site);
+        // The level of the pad is above the elevation of its layer, the ground above the one of
+        // the layer of the site model: compare them in the frame of the pad.
+        let pad_layer = doc.layer(layer).map_or(0.0, |l| l.elevation);
+        let ground = grading::SiteGround::with_offset(
+            &site,
+            grading::site_elevation(doc, &site) - pad_layer,
+        );
         let (mut above, mut below, mut sum, mut n) = (0, 0, 0.0, 0);
         for p in kadakas_core::curve::flatten(boundary, true, 100.0) {
             if let Some(z) = ground.exact(None, p, Follow::Existing) {
@@ -279,6 +296,37 @@ impl Session {
         Ok(json!({"id": id, "wall": wall_id, "quantities": self.wall_row(wall_id)}))
     }
 
+    pub(super) fn grade_limit_add(&mut self, p: Value) -> Result<Value, RpcError> {
+        let mut m = map_of(p)?;
+        let (layer, class) = take_where(&mut m)?;
+        let boundary: Vec<Vertex> = serde_json::from_value(
+            m.remove("boundary")
+                .ok_or_else(|| bad("missing 'boundary': [vertices]"))?,
+        )
+        .map_err(|e| bad(format!("bad boundary: {e}")))?;
+        if boundary.len() < 3 {
+            return Err(bad("a grade limit boundary needs 3 or more points"));
+        }
+        let out = self
+            .editor
+            .execute(&Command::AddObject {
+                shape: Shape::SiteModifier {
+                    modifier: ModifierKind::GradeLimit,
+                    boundary,
+                },
+                layer,
+                class,
+                attrs: Attributes::default(),
+            })
+            .map_err(RpcError::from)?;
+        self.prune_selection();
+        let mut res = json!({ "id": out.created[0] });
+        if let Some(w) = self.modifier_warning(ObjectId(out.created[0])) {
+            res["warnings"] = json!([w]);
+        }
+        Ok(res)
+    }
+
     pub(super) fn pad_add(&mut self, p: Value) -> Result<Value, RpcError> {
         let mut m = map_of(p)?;
         let (layer, class) = take_where(&mut m)?;
@@ -336,11 +384,30 @@ impl Session {
             .execute(&Command::Batch { commands: cmds })
             .map_err(RpcError::from)?;
         self.prune_selection();
-        Ok(json!({
+        let mut out = json!({
             "id": pad_id,
             "wall": wall_id,
             "quantities": wall_id.and_then(|w| self.wall_row(w)),
-        }))
+        });
+        if let Some(w) = self.modifier_warning(pad_id) {
+            out["warnings"] = json!([w]);
+        }
+        Ok(out)
+    }
+
+    /// The warning for a modifier that acts on no site model: it changes nothing, and no cut or
+    /// fill shows it.
+    pub(super) fn modifier_warning(&self, id: ObjectId) -> Option<String> {
+        let doc = self.editor.doc();
+        let acts = doc.objects.values().any(|o| {
+            matches!(o.shape, Shape::SiteModel { .. })
+                && kadakas_site::model::modifiers_for(doc, o.id)
+                    .iter()
+                    .any(|(m, _)| *m == id)
+        });
+        (!acts).then(|| {
+            "no site model is affected: the modifier acts on the site models of its layer, or, on a layer without one, on the models its outline touches. Move it over a site model or name one (data.site_model)".to_string()
+        })
     }
 }
 
@@ -351,6 +418,30 @@ mod tests {
     fn ok(s: &mut Session, method: &str, p: Value) -> Value {
         s.handle(method, p)
             .unwrap_or_else(|e| panic!("{method}: {}", e.message))
+    }
+
+    #[test]
+    fn grade_limit_add_makes_a_site_modifier_and_checks_its_boundary() {
+        let mut s = Session::with_sequential_ids();
+        let site = site(&mut s);
+        let ring = json!([[0, 0], [10000, 0], [10000, 10000], [0, 10000]]);
+        let r = ok(&mut s, "grade_limit.add", json!({"boundary": ring}));
+        let o = ok(&mut s, "objects.get", json!({"id": r["id"]}));
+        assert_eq!(o["shape"]["kind"], "site_modifier");
+        assert_eq!(o["shape"]["modifier"]["type"], "grade_limit");
+        // The site model counts it as one of its modifiers.
+        let sr = ok(&mut s, "site.cut_fill", json!({"id": site}));
+        assert!(
+            sr["modifiers"].as_array().unwrap().contains(&r["id"]),
+            "{sr}"
+        );
+        let e = s
+            .handle("grade_limit.add", json!({"boundary": [[0, 0], [1, 1]]}))
+            .unwrap_err();
+        assert!(e.message.contains("3 or more"), "{}", e.message);
+        let e = s.handle("grade_limit.add", json!({})).unwrap_err();
+        assert!(e.message.contains("boundary"), "{}", e.message);
+        assert!(s.editor.undo());
     }
 
     /// A site 20 m by 20 m, flat at 0.

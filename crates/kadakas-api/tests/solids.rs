@@ -80,7 +80,7 @@ fn bad_extrudes_say_why() {
             "extrude.add",
             json!({"profile": sq, "height": 5, "colour": 1})
         )
-        .contains("unknown field")
+        .contains("unknown parameter")
     );
     assert!(
         err(
@@ -227,7 +227,9 @@ fn bad_sweeps_say_why() {
         .contains("axis")
     );
     assert!(err(&mut s, "sweep.add", json!({"profile": sq, "pitch": 1e30})).contains("range"));
-    assert!(err(&mut s, "sweep.add", json!({"profile": sq, "speed": 1})).contains("unknown field"));
+    assert!(
+        err(&mut s, "sweep.add", json!({"profile": sq, "speed": 1})).contains("unknown parameter")
+    );
     assert!(err(&mut s, "sweep.add", json!({"profile": "x"})).len() > 3);
 }
 
@@ -383,9 +385,11 @@ fn a_3d_polygon_has_heights_and_can_be_a_face() {
             "polygon3d.add",
             json!({"points": [[0, 0, 0], [1, 1, 1]], "closed": false, "x": 1})
         )
-        .contains("unknown field")
+        .contains("unknown parameter")
     );
-    assert!(err(&mut s, "polygon3d.set", json!({"id": id, "foo": 1})).contains("unknown field"));
+    assert!(
+        err(&mut s, "polygon3d.set", json!({"id": id, "foo": 1})).contains("unknown parameter")
+    );
     assert!(err(&mut s, "polygon3d.set", json!({"id": id, "raise": "high"})).contains("raise"));
     let ex = ok(
         &mut s,
@@ -555,7 +559,7 @@ fn turns_that_cross_and_typos_in_options_are_refused() {
             "sweep.from_shapes",
             json!({"ids": [a], "sweepAngle": 90})
         )
-        .contains("unknown field")
+        .contains("unknown parameter")
     );
     assert!(
         err(
@@ -563,6 +567,6 @@ fn turns_that_cross_and_typos_in_options_are_refused() {
             "extrude.from_shapes",
             json!({"ids": [a], "hieght": 90})
         )
-        .contains("unknown field")
+        .contains("unknown parameter")
     );
 }

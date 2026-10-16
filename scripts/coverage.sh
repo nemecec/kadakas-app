@@ -27,6 +27,9 @@ for c in "${CRATES[@]}"; do
   min=$LIB_MIN
   if [ "$c" = "cli" ]; then min=$CLI_MIN; fi
   echo "== kadakas-$c (at least ${min}% of lines)"
+  # Profile data of an earlier run, or of an older tree, would be counted again and gives wrong
+  # totals. Start every crate from clean profile data.
+  cargo llvm-cov clean --workspace
   # The script engine needs its feature to be built (and a wasi-sdk, see docs/dev-guide.md).
   features=()
   if [ "$c" = "script-js" ]; then features=(--features engine); fi

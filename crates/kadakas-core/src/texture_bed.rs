@@ -217,10 +217,11 @@ pub fn beds_for(doc: &Document, site: &Object) -> Vec<Bed> {
     };
     let (lo, hi) = site.shape.bounds();
     let site_mapping = settings.texture_mapping();
+    let own = crate::site::site_layers(doc);
     let mut found: Vec<(&Object, ResourceId, Option<BedMapping>)> = doc
         .objects
         .values()
-        .filter(|o| o.layer == site.layer && doc.is_displayed(o))
+        .filter(|o| doc.is_displayed(o) && crate::site::acts_on_site(doc, &own, o, site))
         .filter_map(|o| {
             let Shape::SiteModifier {
                 modifier: ModifierKind::TextureBed { texture, mapping },

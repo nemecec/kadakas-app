@@ -2055,6 +2055,34 @@
       "type": "object"
     },
     {
+      "description": "Name the site model that the objects of a layer stand on (`site::SITE_KEY` in the data of the\nlayer), or clear it. Without a name an object uses the site model that covers its place.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LayerId"
+        },
+        "op": {
+          "const": "set_layer_site",
+          "type": "string"
+        },
+        "site": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
       "description": "Delete an empty layer.",
       "properties": {
         "id": {

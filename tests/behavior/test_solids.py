@@ -45,7 +45,7 @@ def test_bad_solids_are_refused_with_a_reason(cad):
     assert "hole" in cad.error("extrude.add", {"profile": sq, "height": 5, "holes": [rect(80, 80, 50, 50)]})["message"]
     assert "axis" in cad.error("sweep.add", {"profile": rect(-50, 0, 100, 100)})["message"]
     assert "sweep angle" in cad.error("sweep.add", {"profile": rect(10, 0, 100, 100), "sweep_angle": 0})["message"]
-    assert "unknown field" in cad.error("sweep.add", {"profile": rect(10, 0, 100, 100), "speed": 3})["message"]
+    assert "unknown parameter" in cad.error("sweep.add", {"profile": rect(10, 0, 100, 100), "speed": 3})["message"]
     assert cad.doc()["objects"] == [] or len(cad.doc()["objects"]) == 0
 
 

@@ -695,7 +695,7 @@ pub(crate) fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<V
 /// The option or variant that a message names: the first word in quotes after `field`, `variant`
 /// or `option`.
 fn named_option(message: &str) -> Option<String> {
-    let at = ["field", "variant", "option"]
+    let at = ["field", "variant", "option", "parameter"]
         .iter()
         .filter_map(|w| message.find(w))
         .min()?;
@@ -730,6 +730,7 @@ pub fn hint(method: &str, kind: &str, message: &str) -> Option<Value> {
         "invalid_params"
             if [
                 "unknown field",
+                "unknown parameter",
                 "unknown variant",
                 "unknown option",
                 "unsupported",

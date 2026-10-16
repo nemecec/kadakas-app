@@ -54,6 +54,11 @@ pub struct Stats {
     pub dust_pieces: usize,
     /// Units that crossed the edge by less than the trim and were counted as whole.
     pub trimmed: usize,
+    /// Where the dust pieces lay (a point of each, in the plane), so that zones that share a
+    /// lattice can count their own.
+    pub dust_at: Vec<DVec2>,
+    /// The center of each trimmed unit.
+    pub trimmed_at: Vec<DVec2>,
 }
 
 /// More units than the limit allows. Nothing was made.
@@ -579,6 +584,8 @@ pub fn for_each_unit(
         units: 0,
         dust_pieces: 0,
         trimmed: 0,
+        dust_at: Vec::new(),
+        trimmed_at: Vec::new(),
     };
     let pieces: usize = comp.kinds.iter().map(|k| k.pieces.len()).sum();
     let estimated = (region.area / comp.det.abs().max(1e-9) * pieces as f64).ceil() as u64;
@@ -775,6 +782,10 @@ impl Placer {
             }
             self.stats.units += 1;
             self.stats.trimmed += 1;
+            let c = buf.iter().copied().sum::<DVec2>() / buf.len() as f64;
+            self.stats
+                .trimmed_at
+                .push(self.origin + self.turn.rotate(c));
             let u = whole_unit(
                 buf,
                 self.origin,
@@ -805,6 +816,9 @@ impl Placer {
                 .sum();
             if a < DUST_AREA {
                 self.stats.dust_pieces += 1;
+                if let Some(p) = pts.first().and_then(|r| r.first()) {
+                    self.stats.dust_at.push(self.origin + self.turn.rotate(*p));
+                }
                 continue;
             }
             made.push(Unit {

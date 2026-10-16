@@ -194,6 +194,13 @@ pub enum Command {
         #[serde(default)]
         source: Option<crate::provenance::LayerSource>,
     },
+    /// Name the site model that the objects of a layer stand on (`site::SITE_KEY` in the data of the
+    /// layer), or clear it. Without a name an object uses the site model that covers its place.
+    SetLayerSite {
+        id: LayerId,
+        #[serde(default)]
+        site: Option<ObjectId>,
+    },
     /// Delete an empty layer.
     DeleteLayer {
         id: LayerId,
@@ -1078,6 +1085,37 @@ impl<'a> Tx<'a> {
     }
 
     /// Call before changing an object that may be older than this command.
+    /// Removes the names (`site::SITE_KEY`, in the data of objects and layers) that point at the
+    /// site models in `gone`, in the same step as their deletion, so that undo brings them back.
+    fn forget_site_names(&mut self, gone: &[ObjectId]) {
+        if gone.is_empty() {
+            return;
+        }
+        let points_at = |v: &Value| {
+            v.as_str()
+                .and_then(crate::uid::Uid::parse)
+                .is_some_and(|u| gone.contains(&ObjectId(u)))
+        };
+        let named: Vec<ObjectId> = self
+            .doc
+            .objects
+            .values()
+            .filter(|o| o.data.get(crate::site::SITE_KEY).is_some_and(points_at))
+            .map(|o| o.id)
+            .collect();
+        for id in named {
+            self.touch(id);
+            if let Some(o) = self.doc.object_mut(id) {
+                o.data.remove(crate::site::SITE_KEY);
+            }
+        }
+        for l in self.doc.layers.iter_mut() {
+            if l.extra.get(crate::site::SITE_KEY).is_some_and(points_at) {
+                l.extra.remove(crate::site::SITE_KEY);
+            }
+        }
+    }
+
     fn touch(&mut self, id: ObjectId) {
         if !self.before.contains_key(&id)
             && !self.added_set.contains(&id)
@@ -1300,7 +1338,18 @@ impl<'a> Tx<'a> {
                     self.editable(id)?;
                 }
                 self.release_edited(&ids);
+                let sites: Vec<ObjectId> = ids
+                    .iter()
+                    .copied()
+                    .filter(|i| {
+                        matches!(
+                            self.doc.object(*i).map(|o| &o.shape),
+                            Some(Shape::SiteModel { .. })
+                        )
+                    })
+                    .collect();
                 self.remove_objects(ids);
+                self.forget_site_names(&sites);
             }
             Command::MoveObjects { ids, delta } => {
                 if !delta.is_finite() {
@@ -1320,8 +1369,24 @@ impl<'a> Tx<'a> {
                     self.editable(id)?;
                     self.touch(id);
                     let o = self.doc.object_mut(id).expect("checked");
+                    let before = crate::provenance::SiteSources::read(o).zip(match &o.shape {
+                        Shape::SiteModel { points, lines, .. } => {
+                            Some((points.clone(), lines.clone()))
+                        }
+                        _ => None,
+                    });
                     o.shape.translate(*delta);
                     crate::hardscape::translate_object_data(o, *delta);
+                    // A model that moves as a whole keeps its sources as they were.
+                    if let (Some((mut tags, (op, ol))), Shape::SiteModel { points, lines, .. }) =
+                        (before, &o.shape)
+                    {
+                        tags.moved((&op, &ol), (points, lines));
+                        o.data.insert(
+                            crate::provenance::SITE_SOURCES_KEY.to_string(),
+                            tags.to_value(),
+                        );
+                    }
                 }
             }
             Command::ModifyObject {
@@ -1388,6 +1453,34 @@ impl<'a> Tx<'a> {
                     .cloned();
                 let o = self.doc.object_mut(*id).expect("checked");
                 if let Some(s) = shape {
+                    // The tags of the sources of a site model follow the points and lines that
+                    // are still there; the rest go with the sources that are gone.
+                    if let (
+                        Shape::SiteModel {
+                            points: op,
+                            lines: ol,
+                            ..
+                        },
+                        Shape::SiteModel {
+                            points: np,
+                            lines: nl,
+                            ..
+                        },
+                    ) = (&o.shape, s)
+                        && let Some(tags) = crate::provenance::SiteSources::read(o)
+                    {
+                        let carried = tags.carry((op, ol), (np, nl));
+                        if carried == tags {
+                            // nothing to change
+                        } else if carried.is_empty() {
+                            o.data.remove(crate::provenance::SITE_SOURCES_KEY);
+                        } else {
+                            o.data.insert(
+                                crate::provenance::SITE_SOURCES_KEY.to_string(),
+                                carried.to_value(),
+                            );
+                        }
+                    }
                     o.shape = s.clone();
                 }
                 if let Some(l) = layer {
@@ -1560,6 +1653,30 @@ impl<'a> Tx<'a> {
                         serde_json::to_value(s).expect("plain data"),
                     ),
                     None => l.extra.remove(crate::provenance::LAYER_KEY),
+                };
+            }
+            Command::SetLayerSite { id, site } => {
+                if let Some(s) = site
+                    && !matches!(
+                        self.doc.object(*s).map(|o| &o.shape),
+                        Some(Shape::SiteModel { .. })
+                    )
+                {
+                    return Err(CommandError::Invalid(format!(
+                        "object {s} is not a site model"
+                    )));
+                }
+                let l = self
+                    .doc
+                    .layers
+                    .iter_mut()
+                    .find(|l| l.id == *id)
+                    .ok_or(CommandError::NoLayer(*id))?;
+                match site {
+                    Some(s) => l
+                        .extra
+                        .insert(crate::site::SITE_KEY.into(), serde_json::json!(s)),
+                    None => l.extra.remove(crate::site::SITE_KEY),
                 };
             }
             Command::DeleteLayer { id } => {
