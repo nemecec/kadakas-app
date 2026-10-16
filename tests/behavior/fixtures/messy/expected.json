@@ -1,0 +1,698 @@
+{
+ "01_line_soup_mm.dxf": {
+  "area_tol": 0.02,
+  "desc": "LINE soup with gaps of 0.1 to 5 mm, overshoots, duplicates, overlaps",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 6.0,
+  "unit_mm": 1.0,
+  "via": "from_curves",
+  "zones": 24
+ },
+ "02_lwpolyline_bulge_unclosed.dxf": {
+  "area_tol": 0.02,
+  "desc": "LWPOLYLINE with bulges, closed flag missing, first point = last",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 598.068583470577,
+  "import": {},
+  "net_m2": 575.716815,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "03a_polyline_2d_old.dxf": {
+  "area_tol": 0.02,
+  "desc": "old POLYLINE 2D with bulges, mixed closed flags",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 598.068583470577,
+  "import": {},
+  "net_m2": 575.716815,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "03b_polyline_3d_heights.dxf": {
+  "area_tol": 0.02,
+  "desc": "POLYLINE 3D with heights as the outline",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_curves",
+  "zones": 24
+ },
+ "04a_spline_fit_points.dxf": {
+  "area_tol": 0.05,
+  "desc": "SPLINE kerb corner (fit)",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 598.041338034224,
+  "import": {},
+  "net_m2": 575.689569,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_curves",
+  "zones": 24
+ },
+ "04b_spline_control_points.dxf": {
+  "area_tol": 0.02,
+  "desc": "SPLINE kerb corner (ctrl)",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 598.0705183195995,
+  "import": {},
+  "net_m2": 575.71875,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_curves",
+  "zones": 24
+ },
+ "04c_spline_control_frame.dxf": {
+  "area_tol": 0.02,
+  "desc": "SPLINE kerb corner (frame)",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 598.0704028325001,
+  "import": {},
+  "net_m2": 575.718634,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_curves",
+  "zones": 24
+ },
+ "04d_ellipse_kerb_and_island.dxf": {
+  "area_tol": 0.02,
+  "desc": "ELLIPSE arc kerb and an ELLIPSE island",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 597.8539816339745,
+  "import": {},
+  "islands_m2": 21.566370614359172,
+  "net_m2": 576.287611,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_curves",
+  "zones": 24
+ },
+ "05_blocks_nested_mirrored_xref.dxf": {
+  "area_tol": 0.02,
+  "desc": "geometry in blocks: scale, rotation, mirror, nested, XREF",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [
+   "SITE_XREF"
+  ],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_curves",
+  "zones": 24
+ },
+ "06a_units_mm.dxf": {
+  "area_tol": 0.02,
+  "desc": "$INSUNITS 4",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "06b_units_cm.dxf": {
+  "area_tol": 0.02,
+  "desc": "$INSUNITS 5",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 10.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "06c_units_m.dxf": {
+  "area_tol": 0.02,
+  "desc": "$INSUNITS 6",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1000.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "06d_units_inch.dxf": {
+  "area_tol": 0.02,
+  "desc": "$INSUNITS 1",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 25.4,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "06e_units_foot.dxf": {
+  "area_tol": 0.02,
+  "desc": "$INSUNITS 2",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 304.8,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "06f_unitless_meters.dxf": {
+  "area_tol": 0.02,
+  "desc": "$INSUNITS 0 with coordinates in meters",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "import_fix": {
+   "unit": "m"
+  },
+  "net_m2": 577.648231,
+  "notes": [
+   "unit"
+  ],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1000.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "06g_unitless_mm.dxf": {
+  "area_tol": 0.02,
+  "desc": "$INSUNITS 0 with coordinates in mm",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [
+   "unit"
+  ],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "07a_survey_m_6588000_north_soup.dxf": {
+  "area_tol": 0.02,
+  "desc": "survey coordinates (6,588,000 m north) as LINE soup, meters",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   650000.0,
+   6588000.0
+  ],
+  "stalls": "STALLS",
+  "tol": 6.0,
+  "unit_mm": 1000.0,
+  "via": "from_curves",
+  "zones": 24
+ },
+ "07b_far_from_origin_mm.dxf": {
+  "area_tol": 0.02,
+  "desc": "x = 650,000,000 mm, y = 6,588,000,000 mm",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   650000000.0,
+   6588000000.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "08_layers_unicode_frozen_paperspace.dxf": {
+  "area_tol": 0.02,
+  "desc": "Unicode, spaces and a 242 character layer name; colors by layer and entity; frozen and off layers; paper space",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "Parkla äärejoon õü",
+    "SAARED šž Ülemiste"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "layer_names": {
+   "frozen": "KÜLMUTATUD ääre vana",
+   "isl": "SAARED šž Ülemiste",
+   "lot": "Parkla äärejoon õü",
+   "off": "VÄLJAS vana joon",
+   "paper": "Leht-ä",
+   "stall": "Pysikud-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-"
+  },
+  "net_m2": 577.648231,
+  "notes": [
+   "paper"
+  ],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "Pysikud-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-ülipikk-kihi-nimi-",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "09_text_mtext_dimensions_hatch_noise.dxf": {
+  "area_tol": 0.02,
+  "desc": "TEXT, MTEXT, dimensions and a hatch around the lot",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "10a_hatch_polyline_paths_only.dxf": {
+  "area_tol": 0.02,
+  "desc": "the lot is only a HATCH (poly paths)",
+  "find": {
+   "how": "hatch"
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "10b_hatch_edge_paths_only.dxf": {
+  "area_tol": 0.02,
+  "desc": "the lot is only a HATCH (edge paths)",
+  "find": {
+   "how": "hatch"
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "10c_hatch_edge_ellipse_only.dxf": {
+  "area_tol": 0.03,
+  "desc": "the lot is only a HATCH with ELLIPSE edges",
+  "find": {
+   "how": "hatch"
+  },
+  "gross_m2": 597.8539816339745,
+  "import": {},
+  "islands_m2": 21.566370614359172,
+  "net_m2": 576.287611,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "10d_hatch_edge_spline_only.dxf": {
+  "area_tol": 0.03,
+  "desc": "the lot is only a HATCH with a SPLINE edge",
+  "find": {
+   "how": "hatch"
+  },
+  "gross_m2": 598.0705183195995,
+  "import": {},
+  "net_m2": 575.71875,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "11a_r12_cp1257.dxf": {
+  "area_tol": 0.02,
+  "desc": "R12 file with old POLYLINE and the Estonian code page",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "SAARED_õä"
+   ]
+  },
+  "gross_m2": 598.068583470577,
+  "import": {},
+  "net_m2": 575.716815,
+  "notes": [
+   "unit"
+  ],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_curves",
+  "zones": 24
+ },
+ "11b_r2018.dxf": {
+  "area_tol": 0.02,
+  "desc": "R2018 file",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
+ "12_full_lot_3_islands_2_aisles.dxf": {
+  "area_tol": 0.02,
+  "desc": "3 islands, 2 drive aisles, 20 stalls, rounded corner",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT",
+    "ISLANDS"
+   ]
+  },
+  "gross_m2": 598.068583470577,
+  "import": {},
+  "net_m2": 575.716815,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_curves",
+  "zones": 24
+ },
+ "13_all_on_layer_0_largest_region.dxf": {
+  "area_tol": 0.02,
+  "desc": "everything on layer 0: find the lot as the largest closed region",
+  "find": {
+   "how": "largest"
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": null,
+  "tol": 6.0,
+  "unit_mm": 1.0,
+  "via": "from_curves",
+  "zones": null
+ },
+ "14_line_soup_with_heights.dxf": {
+  "area_tol": 0.02,
+  "desc": "LINE soup where every LINE has a z value (survey heights)",
+  "find": {
+   "how": "layer",
+   "layers": [
+    "LOT"
+   ]
+  },
+  "gross_m2": 600.0,
+  "import": {},
+  "net_m2": 577.648231,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 6.0,
+  "unit_mm": 1.0,
+  "via": "from_curves",
+  "zones": 24
+ }
+}
