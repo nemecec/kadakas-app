@@ -70,6 +70,8 @@ pub struct IssuesUi {
     new_issue: Option<NewIssue>,
     comment: String,
     confirm: Option<Confirm>,
+    /// The person ticked: remove the pictures that no other issue uses, with the deleted issue.
+    purge_pictures: bool,
     #[cfg(not(target_arch = "wasm32"))]
     bcf: Option<crate::bcf_dialog::BcfDialog>,
     /// Where the pins were drawn in the last frame, for clicks.
@@ -151,6 +153,16 @@ pub(crate) fn author_name() -> String {
 
 pub(crate) fn now_ms() -> i64 {
     crate::collab_ui::now_ms() as i64
+}
+
+/// The title for the screen. The title of an issue that holds comments of a lost issue is stored
+/// in English in the file (the core has no texts for people); here it is translated.
+fn display_title(title: &str) -> String {
+    if title == kadakas_core::issue::LOST_ISSUE_TITLE {
+        tr!("issues-ui-lost-title")
+    } else {
+        title.to_string()
+    }
 }
 
 fn call(session: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
@@ -551,7 +563,7 @@ impl IssuesUi {
         p.text(
             Pos2::new(rect.min.x + 30.0, rect.min.y + 4.0),
             egui::Align2::LEFT_TOP,
-            &row.title,
+            display_title(&row.title),
             egui::FontId::proportional(13.5),
             text_color,
         );
@@ -599,7 +611,7 @@ impl IssuesUi {
         issue: &Issue,
     ) {
         let id = issue.id;
-        ui.strong(&issue.title);
+        ui.strong(display_title(&issue.title));
         ui.small(tr!(
             "issues-ui-detail-by",
             author = if issue.author.is_empty() {
@@ -840,7 +852,8 @@ impl IssuesUi {
         let doc = session.editor.doc();
         let comments = doc.issues.comments_of(issue.id);
         let why = consent_reason(issue, &comments, session.editor.origin(), &author_name());
-        self.confirm = Some(Confirm::Delete(issue.id, issue.title.clone(), why));
+        self.purge_pictures = false;
+        self.confirm = Some(Confirm::Delete(issue.id, display_title(&issue.title), why));
     }
 
     // ----- windows -----
@@ -973,10 +986,12 @@ impl IssuesUi {
         let Some(Confirm::Delete(id, title, why)) = self.confirm.take() else {
             return;
         };
+        let purge = self.purge_pictures && !session.collab_connected();
+        self.purge_pictures = false;
         let r = call(
             session,
             "issue.delete",
-            json!({"id": id, "confirm": why.is_some(), "author": author_name()}),
+            json!({"id": id, "confirm": why.is_some(), "purge_snapshots": purge}),
         );
         match r {
             Ok(_) => *status = tr!("issues-ui-deleted", title = title),
@@ -1004,6 +1019,14 @@ impl IssuesUi {
                     )),
                     None => ui.label(tr!("issues-ui-confirm-delete", title = title.clone())),
                 };
+                // The pictures of the issue stay in the drawing until they are removed.
+                ui.small(tr!("issues-ui-delete-pictures-note"));
+                let shared = session.collab_connected();
+                ui.add_enabled(
+                    !shared,
+                    egui::Checkbox::new(&mut self.purge_pictures, tr!("issues-ui-delete-purge")),
+                )
+                .on_disabled_hover_text(tr!("issues-ui-delete-purge-shared"));
                 ui.horizontal(|ui| {
                     if ui.button(tr!("issues-ui-delete")).clicked() {
                         self.delete_confirmed(session, status);

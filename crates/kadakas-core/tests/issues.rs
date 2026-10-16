@@ -792,3 +792,74 @@ fn an_undo_step_of_issues_does_not_grow_with_the_document() {
     ed.redo();
     assert_eq!(ed.doc().issues, with);
 }
+
+#[test]
+fn the_comment_index_stays_right_across_commands_undo_and_redo() {
+    let mut ed = editor();
+    let ids: Vec<IssueId> = (0..3).map(|n| add(&mut ed, &format!("I{n}"))).collect();
+    let check = |ed: &Editor| {
+        let doc = ed.doc();
+        for id in &ids {
+            let mut want: Vec<_> = doc
+                .issues
+                .data()
+                .comments
+                .iter()
+                .filter(|c| c.issue == *id)
+                .map(|c| (c.time, c.id))
+                .collect();
+            want.sort();
+            let got: Vec<_> = doc
+                .issues
+                .comments_of(*id)
+                .iter()
+                .map(|c| (c.time, c.id))
+                .collect();
+            assert_eq!(got, want);
+            assert_eq!(doc.issues.comment_count(*id), want.len());
+        }
+    };
+    for n in 0..40i64 {
+        let id = ids[(n % 3) as usize];
+        // Times out of order, so the inserts go to different places.
+        ed.execute(&comment(id, &format!("c{n}"), (n * 37) % 11))
+            .unwrap();
+        check(&ed);
+        match n % 5 {
+            0 => {
+                ed.execute(&modify(
+                    id,
+                    IssuePatch {
+                        title: Some(format!("T{n}")),
+                        ..IssuePatch::default()
+                    },
+                    100 + n,
+                ))
+                .unwrap();
+            }
+            1 => {
+                let c = ed.doc().issues.comments_of(id)[0].id;
+                ed.execute(&Command::EditIssueComment {
+                    id: c,
+                    text: format!("e{n}"),
+                    now: 200 + n,
+                })
+                .unwrap();
+            }
+            2 => {
+                let c = ed.doc().issues.comments_of(id)[0].id;
+                ed.execute(&Command::DeleteIssueComment { id: c }).unwrap();
+            }
+            _ => {}
+        }
+        check(&ed);
+    }
+    for _ in 0..10 {
+        ed.undo();
+        check(&ed);
+    }
+    for _ in 0..10 {
+        ed.redo();
+        check(&ed);
+    }
+}

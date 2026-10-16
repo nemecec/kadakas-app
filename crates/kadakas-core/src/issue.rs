@@ -608,8 +608,9 @@ struct Index {
     issue_at: OnceLock<HashMap<IssueId, (u32, u32)>>,
     /// The place of each comment.
     comment_at: OnceLock<HashMap<CommentId, (u32, u32)>>,
-    /// For each issue the places of its comments, oldest first.
-    comments: OnceLock<HashMap<IssueId, Vec<(u32, u32)>>>,
+    /// For each issue its comments, oldest first. It is kept from one command to the next (a
+    /// new comment is added to it), so adding a comment does not walk all comments.
+    comments: OnceLock<HashMap<IssueId, Vec<Arc<Comment>>>>,
 }
 
 /// The review data of a document. A clone costs two pointers: the undo steps and the change log
@@ -674,24 +675,62 @@ impl Issues {
         }
     }
 
-    fn comments_by_issue(&self) -> &HashMap<IssueId, Vec<(u32, u32)>> {
+    fn comments_by_issue(&self) -> &HashMap<IssueId, Vec<Arc<Comment>>> {
         self.index.comments.get_or_init(|| {
-            let mut comments: HashMap<IssueId, Vec<(u32, u32)>> = HashMap::new();
-            for (place, c) in self.data.comments.places() {
-                comments.entry(c.issue).or_default().push(place);
+            let mut comments: HashMap<IssueId, Vec<Arc<Comment>>> = HashMap::new();
+            for c in self.data.comments.arcs() {
+                comments.entry(c.issue).or_default().push(c.clone());
             }
             comments
         })
+    }
+
+    /// Takes the comment index out of this state, if it is built and nobody else holds it. A
+    /// change that does not touch the comments, or only adds one, keeps it.
+    fn take_comment_index(&mut self) -> Option<HashMap<IssueId, Vec<Arc<Comment>>>> {
+        Arc::get_mut(&mut self.index).and_then(|ix| ix.comments.take())
+    }
+
+    /// The list of issues for a change that does not touch the comments. The index of the
+    /// comments stays; the one of the issues is made again when it is needed.
+    pub fn issues_mut(&mut self) -> &mut Shared<Issue> {
+        let kept = self.take_comment_index();
+        self.index = Arc::new(Index::default());
+        if let Some(m) = kept {
+            let _ = self.index.comments.set(m);
+        }
+        &mut Arc::make_mut(&mut self.data).issues
+    }
+
+    /// Adds a comment to the issue at place `at` and sets the time of its last change. Cost does
+    /// not grow with the number of comments: the lists share their parts, and the index of the
+    /// comments is kept and gets the new one.
+    pub fn add_comment(&mut self, at: usize, c: Comment) {
+        let kept = self.take_comment_index();
+        let (issue, time) = (c.issue, c.time);
+        let d = Arc::make_mut(&mut self.data);
+        let key = (c.time, c.id);
+        let pos = d.comments.partition_point(|x| (x.time, x.id) <= key);
+        let arc = d.comments.insert_arc(pos, c);
+        let i = &mut d.issues[at];
+        i.modified = i.modified.max(time);
+        self.index = Arc::new(Index::default());
+        if let Some(mut m) = kept {
+            let list = m.entry(issue).or_default();
+            let p = list.partition_point(|x| (x.time, x.id) <= key);
+            list.insert(p, arc);
+            let _ = self.index.comments.set(m);
+        }
     }
 
     /// Puts an issue where it belongs: the list is sorted by creation time, then by ID, so two
     /// documents with the same issues have them in the same order.
     pub fn insert_issue(&mut self, mut issue: Issue) {
         issue.viewpoints.sort_by_key(|v| (v.time, v.id));
-        let d = self.data_mut();
+        let list = self.issues_mut();
         let key = (issue.created, issue.id);
-        let at = d.issues.partition_point(|i| (i.created, i.id) <= key);
-        d.issues.insert(at, issue);
+        let at = list.partition_point(|i| (i.created, i.id) <= key);
+        list.insert(at, issue);
     }
 
     /// Puts a comment where it belongs: by time, then by ID.
@@ -744,12 +783,7 @@ impl Issues {
         let mut v: Vec<&Comment> = self
             .comments_by_issue()
             .get(&id)
-            .map(|places| {
-                places
-                    .iter()
-                    .map(|p| self.data.comments.at_place(*p))
-                    .collect()
-            })
+            .map(|list| list.iter().map(|a| &**a).collect())
             .unwrap_or_default();
         v.sort_by_key(|c| (c.time, c.id));
         v

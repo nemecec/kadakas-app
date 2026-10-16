@@ -2144,7 +2144,8 @@ impl Editor {
     ) -> Result<Outcome, CommandError> {
         let meta_before = Meta::of(&self.doc);
         let history_before = self.doc.history.clone();
-        let issues_before = self.doc.issues.clone();
+        // Without the index: the live data keeps it from one command to the next.
+        let issues_before = self.doc.issues.lean();
         let mut tx = Tx::new(&mut self.doc);
         let mut out = Outcome::default();
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

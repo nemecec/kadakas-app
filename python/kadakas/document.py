@@ -641,18 +641,17 @@ class Issues:
             id=id, **{k: v for k, v in given.items() if v is not None})
 
     def delete(self, id: str | Sequence[str], *, confirm: bool = False,
-               purge_snapshots: bool = False, author: str | None = None) -> JsonDict:
+               purge_snapshots: bool = False) -> JsonDict:
         """Delete an issue, or several in one undo step. The work of somebody else (another
-        origin or another ``author``) needs ``confirm=True``, which you may pass only after the
-        person said yes. ``purge_snapshots=True`` also removes the pictures that no other issue
-        uses, in the same undo step."""
+        origin or another author; the check uses who this session is, not a parameter) needs
+        ``confirm=True``, which you may pass only after the person said yes. The snapshot pictures
+        stay in the document; ``purge_snapshots=True`` also removes the ones that no other issue
+        uses, in the same undo step (refused in a shared session)."""
         p: JsonDict = {"id": id} if isinstance(id, str) else {"ids": list(id)}
         if confirm:
             p["confirm"] = True
         if purge_snapshots:
             p["purge_snapshots"] = True
-        if author is not None:
-            p["author"] = author
         return self._doc.api.issue_delete(**p)
 
     def export_bcf(self, path: str | Path | None = None, *, version: str = "3.0",

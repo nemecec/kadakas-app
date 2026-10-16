@@ -57,17 +57,32 @@ impl<T: PartialEq> PartialEq for Shared<T> {
         if self.len != other.len {
             return false;
         }
-        // Chunks that both hold are equal without a look at their items. The chunks may be cut at
-        // other places in the two lists, so the walk goes over the items, but an item that both
-        // hold (the same pointer) is not compared.
-        let mut a = self.arcs();
-        let mut b = other.arcs();
+        // Walk both lists. At the start of a chunk that both hold (the same pointer) the whole
+        // chunk is equal and is skipped. Otherwise items are compared one by one (the chunks may
+        // be cut at other places in the two lists), and an item that both hold is not compared.
+        let (mut ca, mut ia, mut cb, mut ib) = (0, 0, 0, 0);
         loop {
-            match (a.next(), b.next()) {
+            match (self.chunks.get(ca), other.chunks.get(cb)) {
                 (None, None) => return true,
                 (Some(x), Some(y)) => {
-                    if !Arc::ptr_eq(x, y) && **x != **y {
+                    if ia == 0 && ib == 0 && Arc::ptr_eq(x, y) {
+                        ca += 1;
+                        cb += 1;
+                        continue;
+                    }
+                    let (p, q) = (&x[ia], &y[ib]);
+                    if !Arc::ptr_eq(p, q) && **p != **q {
                         return false;
+                    }
+                    ia += 1;
+                    ib += 1;
+                    if ia == x.len() {
+                        ca += 1;
+                        ia = 0;
+                    }
+                    if ib == y.len() {
+                        cb += 1;
+                        ib = 0;
                     }
                 }
                 _ => return false,
@@ -145,7 +160,8 @@ impl<T> Shared<T> {
         self.chunks.len()
     }
 
-    fn arcs(&self) -> impl Iterator<Item = &Arc<T>> {
+    /// The items as the shared pointers they are kept in.
+    pub fn arcs(&self) -> impl Iterator<Item = &Arc<T>> {
         self.chunks.iter().flat_map(|c| c.iter())
     }
 
@@ -282,6 +298,11 @@ impl<T: Clone> Shared<T> {
 
     /// Puts an item at `at` (0 to `len`).
     pub fn insert(&mut self, at: usize, item: T) {
+        self.insert_arc(at, item);
+    }
+
+    /// Puts an item at `at` and gives the shared pointer that holds it.
+    pub fn insert_arc(&mut self, at: usize, item: T) -> Arc<T> {
         assert!(at <= self.len, "insert past the end");
         let (c, i) = match self.locate(at) {
             Some(place) => place,
@@ -291,12 +312,14 @@ impl<T: Clone> Shared<T> {
             }
         };
         let chunk = Arc::make_mut(&mut self.chunks[c]);
-        chunk.insert(i, Arc::new(item));
+        let arc = Arc::new(item);
+        chunk.insert(i, arc.clone());
         if chunk.len() > SPLIT {
             let tail = chunk.split_off(FILL);
             self.chunks.insert(c + 1, Arc::new(tail));
         }
         self.len += 1;
+        arc
     }
 
     pub fn push(&mut self, item: T) {

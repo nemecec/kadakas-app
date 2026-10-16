@@ -149,11 +149,28 @@ fn measure_issue_data() {
         ed.set_origin(Origin::User);
         let steps = 20u64;
         // One comment per step on an issue.
-        let before = live();
-        let t = Instant::now();
         // Over the bound of comments a command refuses a new one: an edit of a comment is the
         // step then (it has the same costs for the undo step).
         let adds = (nc as usize) < MAX_COMMENTS_TOTAL;
+        // The index of the comments is made once and kept from command to command; it is memory
+        // of the document (measured here), not of an undo step. One command first, so that the
+        // steps below are the steady state.
+        let before_index = live();
+        if adds {
+            ed.execute(&Command::AddIssueComment {
+                comment: Box::new(Comment {
+                    id: CommentId::default(),
+                    issue: IssueId::from_num(10),
+                    time: T0 + 9_000_000_000,
+                    ..comment(0, ni)
+                }),
+            })
+            .unwrap();
+        }
+        let index_mib = mib(live().saturating_sub(before_index));
+        println!("  first comment (makes the index): {index_mib:.1} MiB");
+        let before = live();
+        let t = Instant::now();
         for k in 0..steps {
             let command = if adds {
                 Command::AddIssueComment {

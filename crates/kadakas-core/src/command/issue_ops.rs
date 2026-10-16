@@ -106,7 +106,7 @@ impl Tx<'_> {
                 }
                 new.modified = *now;
                 new.validate().map_err(invalid)?;
-                self.doc.issues.data_mut().issues[at] = new;
+                self.doc.issues.issues_mut()[at] = new;
             }
             Command::DeleteIssue { id } => {
                 let at = self.issue_index(*id)?;
@@ -140,9 +140,7 @@ impl Tx<'_> {
                 }
                 c.validate().map_err(invalid)?;
                 out.created.push(c.id.0);
-                let d = self.doc.issues.data_mut();
-                d.issues[at].modified = d.issues[at].modified.max(c.time);
-                self.doc.issues.insert_comment(c);
+                self.doc.issues.add_comment(at, c);
             }
             Command::EditIssueComment { id, text, now } => {
                 let at = self
@@ -199,7 +197,7 @@ impl Tx<'_> {
                 new.validate().map_err(invalid)?;
                 let pics: Vec<&ImageResource> = picture.iter().map(|p| p.as_ref()).collect();
                 self.store_snapshots(&new.viewpoints, &pics)?;
-                self.doc.issues.data_mut().issues[at] = new;
+                self.doc.issues.issues_mut()[at] = new;
             }
             Command::ModifyIssueViewpoint {
                 issue,
@@ -225,7 +223,7 @@ impl Tx<'_> {
                 new.validate().map_err(invalid)?;
                 let pics: Vec<&ImageResource> = picture.iter().map(|p| p.as_ref()).collect();
                 self.store_snapshots(&new.viewpoints, &pics)?;
-                self.doc.issues.data_mut().issues[at] = new;
+                self.doc.issues.issues_mut()[at] = new;
             }
             Command::DeleteIssueViewpoint {
                 issue,
