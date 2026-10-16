@@ -17,10 +17,20 @@
 //! - **One instance per call.** Nothing stays in memory between calls.
 //! - Only the core WebAssembly features that plug-ins need: no threads, no 64-bit memories, no
 //!   multiple memories, no component model.
+//!
+//! **One engine per process, and a cache of compiled modules.** Compiling a module with cranelift
+//! takes far longer than a call. Every runtime of the process shares one engine (the configuration
+//! above is fixed), so a module that one session compiled serves the others: the last
+//! [`MODULE_CACHE_ENTRIES`] modules stay compiled, found by the SHA-256 of their bytes. A module
+//! that does not compile is not kept. The checks of a module (no imports, the exports) run at every
+//! load, also for a module from the cache.
 
-use std::sync::Arc;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
+
+use sha2::{Digest, Sha256};
 
 use wasmtime::{Config, Engine, Linker, Module, ResourceLimiter, Store, Trap};
 
@@ -33,7 +43,58 @@ const MAX_MANIFEST_BYTES: usize = 256 << 10;
 /// How often the ticker advances the epoch, in milliseconds.
 pub const TICK_MILLIS: u64 = 50;
 
-/// The wasmtime engine. One thread per engine advances the epoch; it ends when the engine is dropped.
+/// How many compiled modules the process keeps (see the module text). A compiled plug-in is a few
+/// MiB at most, so the cache stays small.
+pub const MODULE_CACHE_ENTRIES: usize = 16;
+
+/// The last compiled values, found by a key, with at most `cap` entries: the oldest use goes
+/// first.
+struct Lru<T> {
+    cap: usize,
+    entries: VecDeque<([u8; 32], T)>,
+}
+
+impl<T: Clone> Lru<T> {
+    fn new(cap: usize) -> Self {
+        Lru {
+            cap,
+            entries: VecDeque::new(),
+        }
+    }
+
+    fn get(&mut self, key: &[u8; 32]) -> Option<T> {
+        let at = self.entries.iter().position(|(k, _)| k == key)?;
+        let e = self.entries.remove(at)?;
+        let v = e.1.clone();
+        self.entries.push_back(e);
+        Some(v)
+    }
+
+    fn insert(&mut self, key: [u8; 32], value: T) {
+        self.entries.retain(|(k, _)| *k != key);
+        self.entries.push_back((key, value));
+        while self.entries.len() > self.cap {
+            self.entries.pop_front();
+        }
+    }
+}
+
+/// The engine of the process, the ticker that runs while a runtime or a loaded module uses it, and
+/// the compiled modules.
+struct Shared {
+    engine: Engine,
+    ticker: Weak<Ticker>,
+    modules: Lru<Module>,
+}
+
+static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
+
+fn shared() -> std::sync::MutexGuard<'static, Option<Shared>> {
+    SHARED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The wasmtime engine. One thread advances the epoch of the engine of the process while a runtime
+/// or a loaded module uses it.
 pub struct WasmtimeRuntime {
     engine: Engine,
     ticker: Arc<Ticker>,
@@ -58,6 +119,23 @@ impl Default for WasmtimeRuntime {
 
 impl WasmtimeRuntime {
     pub fn new() -> Self {
+        let mut guard = shared();
+        let sh = guard.get_or_insert_with(|| Shared {
+            engine: Self::engine(),
+            ticker: Weak::new(),
+            modules: Lru::new(MODULE_CACHE_ENTRIES),
+        });
+        let engine = sh.engine.clone();
+        // One ticker for the engine: a second one would make every deadline shorter.
+        let ticker = sh.ticker.upgrade().unwrap_or_else(|| {
+            let t = Arc::new(Self::start_ticker(&engine));
+            sh.ticker = Arc::downgrade(&t);
+            t
+        });
+        WasmtimeRuntime { engine, ticker }
+    }
+
+    fn engine() -> Engine {
         let mut config = Config::new();
         config.consume_fuel(true);
         config.epoch_interruption(true);
@@ -66,19 +144,47 @@ impl WasmtimeRuntime {
         config.wasm_multi_memory(false);
         config.wasm_memory64(false);
         config.max_wasm_stack(512 << 10);
-        let engine = Engine::new(&config).expect("the wasmtime configuration is valid");
+        Engine::new(&config).expect("the wasmtime configuration is valid")
+    }
+
+    /// A thread that advances the epoch until the returned ticker is dropped. It looks at the stop
+    /// flag after each wait, before it advances, so a stopped ticker never ticks again (a new one
+    /// may start for the same engine at once).
+    fn start_ticker(engine: &Engine) -> Ticker {
         let stop = Arc::new(AtomicBool::new(false));
         let (ticker, flag) = (engine.clone(), stop.clone());
         std::thread::spawn(move || {
-            while !flag.load(Ordering::Relaxed) {
+            loop {
                 std::thread::sleep(Duration::from_millis(TICK_MILLIS));
+                if flag.load(Ordering::Relaxed) {
+                    break;
+                }
                 ticker.increment_epoch();
             }
         });
-        WasmtimeRuntime {
-            engine,
-            ticker: Arc::new(Ticker { stop }),
+        Ticker { stop }
+    }
+
+    /// The compiled module for these bytes: from the cache of the process, or compiled now.
+    fn compile(&self, wasm: &[u8]) -> Result<Module, PluginError> {
+        let key: [u8; 32] = Sha256::digest(wasm).into();
+        let cached = shared()
+            .as_mut()
+            .filter(|sh| Engine::same(&sh.engine, &self.engine))
+            .and_then(|sh| sh.modules.get(&key));
+        if let Some(m) = cached {
+            return Ok(m);
         }
+        // Compile without the lock: other sessions go on meanwhile.
+        let module =
+            Module::new(&self.engine, wasm).map_err(|e| PluginError::Invalid(format!("{e:#}")))?;
+        if let Some(sh) = shared()
+            .as_mut()
+            .filter(|sh| Engine::same(&sh.engine, &self.engine))
+        {
+            sh.modules.insert(key, module.clone());
+        }
+        Ok(module)
     }
 }
 
@@ -88,8 +194,7 @@ impl PluginRuntime for WasmtimeRuntime {
     }
 
     fn load(&self, wasm: &[u8], limits: &Limits) -> Result<Box<dyn LoadedModule>, PluginError> {
-        let module =
-            Module::new(&self.engine, wasm).map_err(|e| PluginError::Invalid(format!("{e:#}")))?;
+        let module = self.compile(wasm)?;
         if let Some(i) = module.imports().next() {
             return Err(PluginError::Invalid(format!(
                 "the module imports '{}.{}'. A plug-in may import nothing: it has no files, no network and no clock",
@@ -284,4 +389,82 @@ fn memory_of(
     instance
         .get_memory(&mut *store, "memory")
         .ok_or_else(|| wasmtime::Error::msg("'memory' is not a memory"))
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn the_cache_keeps_the_last_used_entries_up_to_its_bound() {
+        let mut lru = Lru::new(2);
+        let k = |n: u8| [n; 32];
+        lru.insert(k(1), 10);
+        lru.insert(k(2), 20);
+        assert_eq!(lru.get(&k(1)), Some(10), "a hit makes the entry the newest");
+        lru.insert(k(3), 30);
+        assert_eq!(lru.get(&k(2)), None, "the oldest use went");
+        assert_eq!((lru.get(&k(1)), lru.get(&k(3))), (Some(10), Some(30)));
+        lru.insert(k(3), 31);
+        assert_eq!(lru.entries.len(), 2, "a key is kept once");
+        assert_eq!(lru.get(&k(3)), Some(31));
+    }
+
+    #[test]
+    fn runtimes_share_the_engine_and_a_compiled_module() {
+        let wasm = include_bytes!("../tests/fixtures/raised_planter.wasm");
+        let a = WasmtimeRuntime::new();
+        let b = WasmtimeRuntime::new();
+        assert!(Engine::same(&a.engine, &b.engine));
+        let limits = Limits::default();
+        a.load(wasm, &limits).unwrap();
+        let key: [u8; 32] = Sha256::digest(wasm).into();
+        // The second runtime finds the module of the first one. (Other tests of this process load
+        // modules too, but far fewer than the bound in between.)
+        let cached = shared().as_mut().and_then(|sh| sh.modules.get(&key));
+        assert!(cached.is_some());
+        b.load(wasm, &limits).unwrap();
+        // A module that does not compile is refused every time and not kept.
+        let bad = b"not a module";
+        assert!(matches!(a.load(bad, &limits), Err(PluginError::Invalid(_))));
+        let bad_key: [u8; 32] = Sha256::digest(bad).into();
+        assert!(
+            shared()
+                .as_mut()
+                .and_then(|sh| sh.modules.get(&bad_key))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_new_ticker_starts_when_the_old_one_stopped() {
+        let first = WasmtimeRuntime::new();
+        let engine = first.engine.clone();
+        drop(first);
+        // Another test may hold a runtime: then its ticker goes on. Either way, the new runtime
+        // has a running ticker for the same engine, and the epoch moves.
+        let second = WasmtimeRuntime::new();
+        assert!(Engine::same(&second.engine, &engine));
+        assert!(!second.ticker.stop.load(Ordering::Relaxed));
+        let mut store = Store::new(&second.engine, ());
+        store.set_fuel(u64::MAX).unwrap();
+        store.set_epoch_deadline(1);
+        let end = std::time::Instant::now() + Duration::from_secs(10);
+        // (module (func (export "spin") (loop br 0))): without a ticker the endless loop would
+        // never stop (the fuel is endless); the epoch ends it.
+        let spin_wasm: &[u8] = &[
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic, version
+            0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type () -> ()
+            0x03, 0x02, 0x01, 0x00, // one function
+            0x07, 0x08, 0x01, 0x04, b's', b'p', b'i', b'n', 0x00, 0x00, // export "spin"
+            0x0a, 0x09, 0x01, 0x07, 0x00, 0x03, 0x40, 0x0c, 0x00, 0x0b, 0x0b, // loop br 0
+        ];
+        let module = Module::new(&second.engine, spin_wasm).unwrap();
+        let instance = wasmtime::Instance::new(&mut store, &module, &[]).unwrap();
+        let spin = instance
+            .get_typed_func::<(), ()>(&mut store, "spin")
+            .unwrap();
+        assert!(spin.call(&mut store, ()).is_err());
+        assert!(std::time::Instant::now() < end);
+    }
 }

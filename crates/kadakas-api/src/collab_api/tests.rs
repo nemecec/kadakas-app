@@ -1746,8 +1746,15 @@ mod real_commands {
         let a = seeded(1);
         let hub = Hub::new(Sequencer::new(docsync::replica_of(a.editor.doc())));
         let mut sessions = [a, seeded(2)];
+        // Compiling the plug-in takes most of the time of a case: only the cases that use it
+        // install it.
+        let planter = acts
+            .iter()
+            .any(|a| matches!(a, Act::Place { .. } | Act::SetParams { .. }));
         for s in &mut sessions {
-            let _ = s.handle("plugins.install", json!({"path": PLANTER}));
+            if planter {
+                let _ = s.handle("plugins.install", json!({"path": PLANTER}));
+            }
             s.set_collab_endpoint(Box::new(hub.endpoint()));
             let r = s.handle("collab.connect", json!({"now_ms": 1}));
             prop_assert!(r.is_ok());
@@ -1893,7 +1900,8 @@ mod real_commands {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(100))]
+        // A case needs no plug-in, so it takes a few milliseconds.
+        #![proptest_config(ProptestConfig::with_cases(1000))]
 
         /// The stacking order over several layers: the author and the others build one order.
         #[test]
