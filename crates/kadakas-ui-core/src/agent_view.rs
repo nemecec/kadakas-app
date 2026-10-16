@@ -276,12 +276,14 @@ impl CameraReq {
         })
     }
 
-    /// The orbit camera that looks from the eye to the target.
-    pub fn camera(&self, projection: Projection) -> Camera {
-        let d = self.eye - self.target;
+    /// The orbit camera that looks from the eye to the target. The camera works in scene
+    /// coordinates, which are the drawing coordinates less the scene `origin`.
+    pub fn camera(&self, origin: DVec3, projection: Projection) -> Camera {
+        let (eye, target) = (self.eye - origin, self.target - origin);
+        let d = eye - target;
         let dist = d.length();
         Camera {
-            target: self.target.as_vec3(),
+            target: target.as_vec3(),
             yaw: (d.y.atan2(d.x) as f32).rem_euclid(std::f32::consts::TAU),
             pitch: ((d.z / dist).clamp(-1.0, 1.0).asin() as f32)
                 .clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2),
@@ -976,15 +978,27 @@ mod tests {
             "eye": [10000, 0, 0], "target": [0, 0, 0], "up": [0, 0, 1], "fov": 45, "projection": "perspective"
         }))
         .unwrap();
-        let c = r.camera(Projection::Orthographic);
+        let c = r.camera(DVec3::ZERO, Projection::Orthographic);
         assert_eq!(c.projection, Projection::Perspective);
         assert!((c.distance - 10000.0).abs() < 1.0);
         assert!(c.yaw.abs() < 1e-5 && c.pitch.abs() < 1e-5);
         assert!((c.eye() - Vec3::new(10000.0, 0.0, 0.0)).length() < 1.0);
+        // The scene origin goes off the points, in f64: a far drawing keeps its precision.
+        let far = DVec3::new(6.5e9, 5.9e9, 0.0);
+        let shifted = CameraReq {
+            eye: far + DVec3::new(10_000.0, 0.0, 0.0),
+            target: far,
+            projection: None,
+        };
+        let c = shifted.camera(far, Projection::Orthographic);
+        assert_eq!(c.target, Vec3::ZERO);
+        assert!((c.eye() - Vec3::new(10_000.0, 0.0, 0.0)).length() < 1.0);
         // Straight above.
         let top = CameraReq::parse(&json!({"eye": [0, 0, 500], "target": [0, 0, 0]})).unwrap();
         assert!(
-            (top.camera(Projection::Orthographic).pitch - std::f32::consts::FRAC_PI_2).abs() < 1e-5
+            (top.camera(DVec3::ZERO, Projection::Orthographic).pitch - std::f32::consts::FRAC_PI_2)
+                .abs()
+                < 1e-5
         );
         assert!(CameraReq::parse(&json!({"target": [0, 0, 0]})).is_err());
         assert!(CameraReq::parse(&json!({"eye": [0, 0, 0], "target": [0, 0, 0]})).is_err());

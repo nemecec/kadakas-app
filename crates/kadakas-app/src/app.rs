@@ -29,6 +29,8 @@ use crate::theme::{self, ThemeChoice};
 use crate::view::{View, ViewExt as _, grid_step};
 use crate::view3d::{self, View3d};
 
+#[cfg(test)]
+mod agent_view_tests;
 mod issues;
 use kadakas_core::edit2d::Transform;
 use kadakas_core::edit2d::plan::{self, SurfaceOp};
@@ -157,6 +159,8 @@ pub struct KadakasApp {
     own_cursor: Option<[f64; 2]>,
     /// A camera of an opened issue, applied after the 3D view followed the settings (REV-05).
     pending_camera: Option<([f64; 3], f64, f64, f64)>,
+    /// What an agent shows in the view: pointers, the cursor, the views to go Back to (AGR-02, AGR-03).
+    agent_view: crate::agent_view::AgentView,
     /// A press on a pin or a click that placed an issue: its release is not a tool event.
     issue_click: bool,
     /// The model point where the context menu of the plan was opened.
@@ -505,6 +509,7 @@ impl KadakasApp {
             collab: crate::collab_ui::CollabUi::new(Default::default()),
             own_cursor: None,
             pending_camera: None,
+            agent_view: Default::default(),
             issue_click: false,
             context_point: None,
             #[cfg(target_arch = "wasm32")]
@@ -625,6 +630,8 @@ impl KadakasApp {
                     | Action::ZoomOut
                     | Action::ViewHistoryPrevious
                     | Action::ViewHistoryNext
+                    | Action::ViewAgentBack
+                    | Action::ViewAgentNext
                     | Action::QuickSearch
                     | Action::Cancel
                     | Action::FileNew
@@ -1689,6 +1696,8 @@ impl KadakasApp {
             Action::QuickSearch => self.quick.open(),
             Action::ViewHistoryPrevious => self.step_view_history(true),
             Action::ViewHistoryNext => self.step_view_history(false),
+            Action::ViewAgentBack => self.agent_back(ctx),
+            Action::ViewAgentNext => self.agent_next(ctx),
             Action::SnapCues => {
                 self.prefs.cues = !self.prefs.cues;
                 self.status = if self.prefs.cues {
@@ -1938,7 +1947,11 @@ impl KadakasApp {
                 )
             });
 
-        // Pan and zoom from keys.
+        // Pan and zoom from keys. The person's navigation wins over the agent's (AGR-02).
+        let mut nav = crate::agent_view::NavSignal {
+            moved: self.pending_zoom != 1.0 || self.pending_pan != egui::Vec2::ZERO,
+            dragging: false,
+        };
         if self.pending_zoom != 1.0 {
             self.view.zoom_at(
                 rect.center(),
@@ -1954,13 +1967,17 @@ impl KadakasApp {
             || (space && resp.dragged_by(egui::PointerButton::Primary));
         if panning {
             self.view.pan(resp.drag_delta());
+            nav.moved = true;
+            nav.dragging = true;
         }
         if let (true, Some(h)) = (resp.hovered(), hover) {
             let factor = (scroll as f64 * 0.0025).exp() * pinch as f64;
             if (factor - 1.0).abs() > 1e-9 {
                 self.view.zoom_at(h, factor);
+                nav.moved = true;
             }
         }
+        let now_ms = ui.input(|i| i.time) * 1000.0;
 
         // Mouse buttons 4 and 5 (back and forward) go through the view history.
         let (back, forward) = ui.input(|i| {
@@ -1974,6 +1991,8 @@ impl KadakasApp {
         } else if forward {
             self.step_view_history(false);
         }
+        nav.moved |= back || forward;
+        self.agent_view.person_moved(nav, now_ms);
         // A view that has rested counts as a view in the history.
         let waiting = self
             .view_history
@@ -2137,6 +2156,28 @@ impl KadakasApp {
         canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
         self.issues_ui
             .paint_plan(&ui.painter_at(rect), rect, &self.view, &self.session);
+        // What the agent points at, and where the agent is (never part of the document).
+        crate::agent_view_ui::paint_plan(
+            &ui.painter_at(rect),
+            rect,
+            &self.view,
+            self.session.editor.doc(),
+            &self.agent_view.highlights,
+        );
+        if let Some(peer) = self
+            .agent_view
+            .presence
+            .peer(now_ms, tr!("agent-view-name"))
+        {
+            crate::collab_ui::paint_peers(
+                &ui.painter_at(rect),
+                rect,
+                &self.view,
+                self.session.editor.doc(),
+                &[peer],
+                now_ms as u64,
+            );
+        }
         if self.issues_ui.picking() && resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
@@ -2197,6 +2238,87 @@ impl egui_dock::TabViewer for DockViewer<'_> {
 }
 
 impl KadakasApp {
+    /// What the calls of the agent about the view need from the window.
+    fn agent_env(&mut self, ctx: &egui::Context) -> crate::agent_view::Env<'_> {
+        let window = ctx.content_rect().size();
+        crate::agent_view::Env {
+            state: &mut self.agent_view,
+            session: &mut self.session,
+            view: &mut self.view,
+            view3d: &mut self.view3d,
+            needs_fit: &mut self.needs_fit,
+            canvas: self.canvas_rect,
+            window: [window.x, window.y],
+            pixels_per_point: ctx.pixels_per_point(),
+            animate: self.prefs.animate_agent_view,
+            now_ms: ctx.input(|i| i.time) * 1000.0,
+        }
+    }
+
+    /// One frame of the agent's view: pointers that are over go, animations move on.
+    fn agent_view_step(&mut self, ctx: &egui::Context) {
+        let animating = crate::agent_view::step(&mut self.agent_env(ctx));
+        if animating {
+            ctx.request_repaint();
+        }
+        if !self.agent_view.highlights.is_empty() {
+            // A pointer with a time ends by itself: look again soon.
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+    }
+
+    /// Back: the view from before the last change of the agent.
+    fn agent_back(&mut self, ctx: &egui::Context) {
+        let went = crate::agent_view::go_back(&mut self.agent_env(ctx));
+        self.status = if went {
+            tr!("agent-view-restored")
+        } else {
+            tr!("agent-view-nothing-back")
+        };
+    }
+
+    /// Zooms to the next pointer of the agent.
+    fn agent_next(&mut self, ctx: &egui::Context) {
+        crate::agent_view::show_next(&mut self.agent_env(ctx), None);
+    }
+
+    /// What the person chose in the panel of the agent.
+    fn agent_panel_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: crate::agent_view_ui::PanelAction,
+    ) {
+        use crate::agent_view_ui::PanelAction;
+        match action {
+            PanelAction::Back => self.agent_back(ctx),
+            PanelAction::Next => self.agent_next(ctx),
+            PanelAction::Zoom(id) => {
+                if crate::agent_view::show_next(&mut self.agent_env(ctx), Some(id)).is_none() {
+                    self.status = tr!("agent-view-gone");
+                }
+            }
+            PanelAction::Dismiss(id) => {
+                self.agent_view.highlights.remove(id);
+            }
+            PanelAction::ClearAll => {
+                self.agent_view.highlights.clear();
+            }
+        }
+    }
+
+    /// The small panel of the agent in the corner of the drawing.
+    fn agent_panel(&mut self, ctx: &egui::Context, canvas: egui::Rect) {
+        let (back, next) = (
+            self.keys.hint(Action::ViewAgentBack),
+            self.keys.hint(Action::ViewAgentNext),
+        );
+        if let Some(a) =
+            crate::agent_view_ui::panel(ctx, canvas, &mut self.agent_view, &back, &next)
+        {
+            self.agent_panel_action(ctx, a);
+        }
+    }
+
     /// The pan and zoom of the plan, for the view history.
     fn view_snapshot(&self) -> view_history::Snapshot {
         view_history::Snapshot {
@@ -2702,9 +2824,12 @@ impl KadakasApp {
     fn tab_ui(&mut self, ui: &mut egui::Ui, tab: Tab) {
         match tab {
             Tab::Drawing => {
+                let area = ui.available_rect_before_wrap();
                 if self.plan() {
                     self.canvas(ui);
                 } else {
+                    self.canvas_rect = Some(area);
+                    let mut nav = crate::agent_view::NavSignal::default();
                     let compare = self.compare_ui.scene_3d(&mut self.session);
                     let frame = self.compare_ui.take_zoom().map(|z| z.id);
                     canvas3d::show(
@@ -2719,9 +2844,14 @@ impl KadakasApp {
                             compare,
                             frame,
                             issues: Some(&mut self.issues_ui),
+                            nav: &mut nav,
+                            agent: Some(&self.agent_view),
                         },
                     );
+                    let now_ms = ui.input(|i| i.time) * 1000.0;
+                    self.agent_view.person_moved(nav, now_ms);
                 }
+                self.agent_panel(ui.ctx(), area);
             }
             Tab::Tools => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -2779,7 +2909,11 @@ impl KadakasApp {
             }
             Tab::People => {
                 let now = crate::collab_ui::now_ms();
-                egui::ScrollArea::vertical().show(ui, |ui| self.collab.people_ui(ui, now));
+                let now_ms = ui.input(|i| i.time) * 1000.0;
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.collab.people_ui(ui, now);
+                    crate::agent_view_ui::people_row(ui, &self.agent_view, now_ms);
+                });
             }
             Tab::Issues => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -2842,7 +2976,49 @@ impl eframe::App for KadakasApp {
                 .get_or_insert_with(|| (agent.addr.to_string(), agent.token.clone()));
             let now = ctx.input(|i| i.time);
             let (shots, shot_key) = (&mut self.shots, &mut self.shot_key);
+            let window = ctx.content_rect().size();
+            let ppp = ctx.pixels_per_point();
             agent.poll_ext(&mut |line, reply, conn| {
+                // The agent drives the view and points: the app answers these itself. A change
+                // through the session (`view.set`) keeps the view from before, for Back.
+                let method = crate::agent_view::method_of(line);
+                macro_rules! env {
+                    () => {
+                        crate::agent_view::Env {
+                            state: &mut self.agent_view,
+                            session: &mut self.session,
+                            view: &mut self.view,
+                            view3d: &mut self.view3d,
+                            needs_fit: &mut self.needs_fit,
+                            canvas: self.canvas_rect,
+                            window: [window.x, window.y],
+                            pixels_per_point: ppp,
+                            animate: self.prefs.animate_agent_view,
+                            now_ms: now * 1000.0,
+                        }
+                    };
+                }
+                if method
+                    .as_deref()
+                    .is_some_and(crate::agent_view::is_app_method)
+                {
+                    return crate::agent::Reply::Now(crate::agent_view::respond(&mut env!(), line));
+                }
+                let memo = if method
+                    .as_deref()
+                    .is_some_and(crate::agent_view::is_session_view_change)
+                {
+                    match crate::agent_view::memo_for_session_change(&env!()) {
+                        Ok(m) => Some(m),
+                        Err(e) => {
+                            return crate::agent::Reply::Now(crate::agent_view::error_line(
+                                line, &e,
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
                 // A screenshot is answered in a later frame, when the window has sent the picture.
                 match screenshot::parse(line) {
                     Some(Ok((id, request))) => {
@@ -2862,13 +3038,12 @@ impl eframe::App for KadakasApp {
                     Some(Err(answer)) => return crate::agent::Reply::Now(Some(answer)),
                     None => {}
                 }
-                crate::agent::Reply::Now(file_io::agent_line(
-                    &mut self.session,
-                    &mut self.path,
-                    conn,
-                    line,
-                    &mut fx,
-                ))
+                let answer =
+                    file_io::agent_line(&mut self.session, &mut self.path, conn, line, &mut fx);
+                if let Some(memo) = memo {
+                    crate::agent_view::keep_if_changed(&mut env!(), memo);
+                }
+                crate::agent::Reply::Now(answer)
             });
             // Change events (`events.subscribe`) go to the clients that asked for them.
             for conn in self.session.subscribers() {
@@ -2880,6 +3055,7 @@ impl eframe::App for KadakasApp {
                 }
             }
             if fx.replaced {
+                self.agent_view.reset();
                 self.machine.cancel();
                 self.needs_fit = true;
                 self.view_history.clear();
@@ -2955,6 +3131,7 @@ impl eframe::App for KadakasApp {
                 profiles: &mut self.profiles,
                 max_versions: &mut self.prefs.max_versions,
                 max_version_mib: &mut self.prefs.max_version_mib,
+                animate_agent_view: &mut self.prefs.animate_agent_view,
             },
             &mut self.autosave,
         );
@@ -2993,6 +3170,7 @@ impl eframe::App for KadakasApp {
         let forced = self.session.take_view_changed();
         self.view3d.sync(self.session.view, forced);
         self.apply_pending_camera();
+        self.agent_view_step(&ctx);
 
         // With a shared document, Undo and Redo work on your own edits (the per-user undo).
         let (can_undo, can_redo) = if self.collab.is_linked() {

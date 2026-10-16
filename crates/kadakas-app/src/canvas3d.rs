@@ -30,6 +30,10 @@ pub struct Canvas3d<'a> {
     pub frame: Option<kadakas_core::model::ObjectId>,
     /// The pins of the issues (REV-05): drawn over the scene, and a click on one opens its issue.
     pub issues: Option<&'a mut crate::issues_ui::IssuesUi>,
+    /// Tells the app that the person navigates (the agent never wins against that).
+    pub nav: &'a mut crate::agent_view::NavSignal,
+    /// What an agent shows: the pointers and the agent cursor (AGR-03).
+    pub agent: Option<&'a crate::agent_view::AgentView>,
 }
 
 /// Draws the canvas and handles its input for one frame.
@@ -44,6 +48,8 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         compare,
         frame,
         mut issues,
+        nav,
+        agent,
     } = c;
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     if !gpu_ready {
@@ -92,6 +98,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     let local = |p: egui::Pos2| glam::Vec2::new(p.x - rect.min.x, p.y - rect.min.y);
 
     // Keys: zoom and pan.
+    nav.moved |= *pending_zoom != 1.0 || *pending_pan != egui::Vec2::ZERO;
     if *pending_zoom != 1.0 {
         let factor = std::mem::replace(pending_zoom, 1.0) as f32;
         view3d.zoom_at(factor, size / 2.0, size);
@@ -107,13 +114,18 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         || (resp.dragged_by(egui::PointerButton::Primary) && (mods.shift || space))
     {
         view3d.pan(delta, size.y);
+        nav.moved = true;
+        nav.dragging = true;
     } else if resp.dragged_by(egui::PointerButton::Primary) {
         view3d.orbit(delta);
+        nav.moved = true;
+        nav.dragging = true;
     }
     if let (true, Some(h)) = (resp.hovered(), hover) {
         let factor = ((scroll as f64 * 0.0025).exp() * pinch as f64) as f32;
         if (factor - 1.0).abs() > 1e-6 {
             view3d.zoom_at(factor, local(h), size);
+            nav.moved = true;
         }
     }
     // A click on a pin opens its issue.
@@ -171,7 +183,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     ui.painter().add(egui_wgpu::Callback::new_paint_callback(
         rect,
         SceneCallback {
-            scene,
+            scene: scene.clone(),
             scene_rev: geometry,
             overlay,
             overlay_rev,
@@ -204,6 +216,31 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         && let Some(issues) = issues
     {
         issues.paint_3d(&ui.painter_at(rect), rect, view_proj, session);
+    }
+    // What the agent points at, and where the agent is (never part of the document).
+    if compare.is_none()
+        && let Some(agent) = agent
+    {
+        let painter = ui.painter_at(rect);
+        crate::agent_view_ui::paint_3d(
+            &painter,
+            rect,
+            view_proj,
+            &scene,
+            session.editor.doc(),
+            &agent.highlights,
+        );
+        let now_ms = ui.input(|i| i.time) * 1000.0;
+        if let Some(peer) = agent.presence.peer(now_ms, tr!("agent-view-name")) {
+            crate::agent_view_ui::paint_agent_cursor_3d(
+                &painter,
+                rect,
+                view_proj,
+                scene.origin,
+                cam.target.z,
+                &peer,
+            );
+        }
     }
 }
 
@@ -297,6 +334,8 @@ mod tests {
                             compare: None,
                             frame: None,
                             issues: Some(&mut self.issues),
+                            nav: &mut Default::default(),
+                            agent: None,
                         },
                     );
                 });
@@ -491,6 +530,8 @@ mod tests {
                     compare: None,
                     frame: None,
                     issues: None,
+                    nav: &mut Default::default(),
+                    agent: None,
                 },
             );
         });

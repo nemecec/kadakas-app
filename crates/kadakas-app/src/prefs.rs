@@ -42,6 +42,8 @@ pub struct Prefs {
     /// The most size of the versions in a file, in MiB (default 256, the highest safe value). The
     /// same.
     pub max_version_mib: u32,
+    /// Animate the view when an agent moves it (AGR-02). Off: the view jumps.
+    pub animate_agent_view: bool,
 }
 
 /// The default of `Prefs::max_versions`: the most a reader reads (no practical limit).
@@ -77,6 +79,7 @@ impl Default for Prefs {
             units: kadakas_units::Settings::default(),
             max_versions: DEFAULT_MAX_VERSIONS,
             max_version_mib: DEFAULT_MAX_VERSION_MIB,
+            animate_agent_view: true,
         }
     }
 }

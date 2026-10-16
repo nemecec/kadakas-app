@@ -27,6 +27,8 @@ pub struct PrefsEdit<'a> {
     /// The limits of the versions of a file.
     pub max_versions: &'a mut u32,
     pub max_version_mib: &'a mut u32,
+    /// Animate the view when an agent moves it.
+    pub animate_agent_view: &'a mut bool,
 }
 
 impl PrefsDialog {
@@ -61,6 +63,7 @@ impl PrefsDialog {
                         ui.selectable_value(edit.icon_size, z, z.label());
                     }
                 });
+                ui.checkbox(edit.animate_agent_view, tr!("prefs-ui-animate-agent-view"));
                 ui.add_space(6.0);
                 ui.heading(tr!("prefs-ui-versions"));
                 ui.horizontal(|ui| {
@@ -292,6 +295,7 @@ mod tests {
             profiles,
             max_versions: Box::leak(Box::new(crate::prefs::DEFAULT_MAX_VERSIONS)),
             max_version_mib: Box::leak(Box::new(crate::prefs::DEFAULT_MAX_VERSION_MIB)),
+            animate_agent_view: Box::leak(Box::new(true)),
         }
     }
 

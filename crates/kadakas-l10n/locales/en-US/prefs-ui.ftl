@@ -27,3 +27,4 @@ prefs-ui-versions = Versions
 prefs-ui-max-versions = Most versions in a file
 prefs-ui-max-version-size = Most size of the versions in a file (MiB)
 prefs-ui-versions-hint = A save over a limit is stopped, and you are asked which versions to delete. No version is deleted by itself.
+prefs-ui-animate-agent-view = Animate the view when an agent moves it

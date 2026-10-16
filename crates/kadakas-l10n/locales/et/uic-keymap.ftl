@@ -105,3 +105,5 @@ action-view-realistic = Realistlik kuvamine (tekstuurid, päike ja varjud)
 action-tool-polygon3d = 3D-hulknurga tööriist
 action-cmd-extrude = Väljapressimine
 action-cmd-sweep = Pöördkeha
+action-view-agent-back = Tagasi vaatesse enne agendi muudatust
+action-view-agent-next = Näita agendi järgmist osutit
