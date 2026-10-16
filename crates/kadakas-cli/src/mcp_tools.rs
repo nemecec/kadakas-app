@@ -185,7 +185,7 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "review",
-        summary: "Review issues and named versions. Issues (BCF terms): issue.create (from objects, a point or the current view, with a viewpoint and a snapshot picture), issue.list (filter by status, assignee, label, object, text), issue.get (viewpoints and the comment thread), issue.update, issue.comment, issue.resolve, issue.delete (the work of somebody else needs the consent of the person: confirm), and BCF files: issue.export_bcf and issue.import_bcf (.bcfzip, BCF 3.0 and 2.1; an issue with the same GUID and other content is a conflict that the person decides). Issues made by an agent have the origin agent; describe.review.issues has the model, the limits and examples. Named versions of the document and the diff between them: save a version, list, read, restore (one undo step, the current state is saved first), delete, and compare two versions or a version and the current document (added, removed and changed things by ID, with the changed property paths and old and new values). The visual compare is the `compare` option of render.png, render.svg and sheet.render (domains render_view and sheets): added objects green, changed orange, removed objects as red ghosts, or both sides next to each other; describe.review.compare has the options. dxf.compare compares two DXF or DWG files without importing them: a JSON diff, and an overlay picture (png, svg or pdf) with optional revision clouds (describe.review.dxf_compare).",
+        summary: "What the person sees and what the agent shows: view.get (the camera, zoom, visible box, selection, active layer and visible layers and classes of the person), view.zoom, view.pan and view.camera (move the view of the person with a short animation; the person wins while they navigate and can step back with Back), and view.highlight and view.highlight_clear (point at objects or a place with a short text; the agent shows like a collaborator). They work only in the app (kadakas app --agent-port), never change the document, and describe.review.agent_view has the rules and examples. Review issues and named versions. Issues (BCF terms): issue.create (from objects, a point or the current view, with a viewpoint and a snapshot picture), issue.list (filter by status, assignee, label, object, text), issue.get (viewpoints and the comment thread), issue.update, issue.comment, issue.resolve, issue.delete (the work of somebody else needs the consent of the person: confirm), and BCF files: issue.export_bcf and issue.import_bcf (.bcfzip, BCF 3.0 and 2.1; an issue with the same GUID and other content is a conflict that the person decides). Issues made by an agent have the origin agent; describe.review.issues has the model, the limits and examples. Named versions of the document and the diff between them: save a version, list, read, restore (one undo step, the current state is saved first), delete, and compare two versions or a version and the current document (added, removed and changed things by ID, with the changed property paths and old and new values). The visual compare is the `compare` option of render.png, render.svg and sheet.render (domains render_view and sheets): added objects green, changed orange, removed objects as red ghosts, or both sides next to each other; describe.review.compare has the options. dxf.compare compares two DXF or DWG files without importing them: a JSON diff, and an overlay picture (png, svg or pdf) with optional revision clouds (describe.review.dxf_compare).",
         prefixes: &["version", "dxf", "issue"],
         read_only: false,
         open_world: false,
@@ -218,8 +218,23 @@ fn prefix_of(method: &str) -> &str {
     method.split('.').next().unwrap_or(method)
 }
 
+/// Methods that belong to another domain than their prefix says. The methods with which an agent
+/// reads and drives what the person sees (AGR-02, AGR-03) are part of the review: a person
+/// reviews what the agent does, and the agent points at it.
+const METHOD_DOMAIN: &[(&str, &str)] = &[
+    ("view.get", "review"),
+    ("view.zoom", "review"),
+    ("view.pan", "review"),
+    ("view.camera", "review"),
+    ("view.highlight", "review"),
+    ("view.highlight_clear", "review"),
+];
+
 /// The domain of a method.
 pub fn domain_of(method: &str) -> Option<&'static Domain> {
+    if let Some((_, name)) = METHOD_DOMAIN.iter().find(|(m, _)| *m == method) {
+        return DOMAINS.iter().find(|d| d.name == *name);
+    }
     let p = prefix_of(method);
     DOMAINS.iter().find(|d| d.prefixes.contains(&p))
 }
@@ -483,11 +498,16 @@ mod tests {
                 .filter(|d| d.prefixes.contains(&prefix_of(m)))
                 .map(|d| d.name)
                 .collect();
+            let moved = METHOD_DOMAIN.iter().any(|(name, _)| *name == m);
             assert_eq!(
                 owners.len(),
                 1,
                 "{m} is in {owners:?}: add its prefix to one domain"
             );
+            assert!(domain_of(m).is_some(), "{m} has a domain");
+            if !moved {
+                assert_eq!(domain_of(m).map(|d| d.name), Some(owners[0]));
+            }
         }
         // No prefix is dead: each one names a method.
         for d in DOMAINS {

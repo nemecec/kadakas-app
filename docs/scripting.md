@@ -172,6 +172,28 @@ doc.execute({"op": "add_layer", "name": "Notes"})   # any command
 
 Errors raise `KadakasError`. It has `code`, `message` and `method`. A broken connection raises `ConnectionFailed`.
 
+### Review in the live app: the view of the person
+
+When a person reviews what an agent does, the agent can read what the person looks at, move the view and point at things. These calls work only over a connection to the app (`kadakas.connect()` or `--agent-port`). A `kadakas serve` process has no window, so it answers each with an error that names the app.
+
+```python
+doc = kadakas.connect()
+state = doc.view_get()                      # plan or 3d, camera, plan middle and zoom,
+print(state["selection"], state["plan"]["visible_box"])   # selection, active layer, visible layers
+areas = [a["id"] for a in doc.reports.areas()["rows"] if a["kind"] == "hardscape"]
+doc.view_zoom(ids=areas, margin=0.15)        # animated, about 250 ms
+pointer = doc.view_highlight(ids=islands, text="Not paved", color="red", until="next_change")
+doc.view_highlight_clear(pointer["id"])      # or doc.view_highlight_clear() for all
+doc.view_camera([20000, -20000, 12000], [5000, 5000, 0], projection="perspective")
+```
+
+- `view.get`, `view.zoom {ids | box | at, scale?, margin?}`, `view.pan {by | to}`, `view.camera {eye, target, up?, fov?, projection?}`, `view.highlight {ids | box | at, text?, color?, until?}` and `view.highlight_clear {id?}` never change the document or the undo history. Pointers are never saved.
+- Lengths are drawing coordinates in mm. `scale` is px per mm of the plan, as the zoom of a saved view. The 3D camera has no roll and its field of view is 45 degrees; `up` must point upward and `fov` must be 45.
+- `view.set {view: <name of a saved view>}` applies the camera of a saved view. It leaves the layers and classes as they are, because that is an edit of the document (`saved_view.restore` does it). `view.list` lists the saved views.
+- **The person always wins.** While the person drags or zooms the view, a zoom, pan or camera call fails with a conflict (`data.reason` is `person_navigating`) and nothing moves. Try again after a moment. The person can step back with the Back button in the drawing, or the key (`Cmd/Ctrl+Alt+B`): one step for each view change of the agent. The animation can be turned off in Preferences.
+- A pointer shows an outline glow (objects), a box or a marker (a place) with a short text of at most 80 characters, in the plan and in 3D. Each color also has its own mark and line style, so colour is not the only sign. At most 32 pointers at a time and 500 objects in one. A request over a bound is refused with a message; nothing is cut. `until` is `"next_change"` (the document changes), `"dismissed"` (the default; the person dismisses it) or a time in ms.
+- The person sees the agent like a collaborator: a cursor with the name Agent at the last place it pointed at or zoomed to, and Agent in the People palette. A small panel in the drawing lists the pointers; a click zooms to one, and each can be dismissed. `Cmd/Ctrl+Alt+N` shows the next pointer.
+
 ## Scripts palette
 
 Choose **File > Scripts...** to open the palette.

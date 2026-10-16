@@ -1067,6 +1067,59 @@ class Document:
             Path(path).write_text(svg, encoding="utf-8")
         return svg
 
+    # -- what the person sees, and what the agent shows (AGR-02, AGR-03; only the app answers) --
+
+    def view_get(self) -> JsonDict:
+        """What the person looks at: plan or 3D, the camera, the plan middle and zoom, the visible
+        box (drawing mm), the selection, the active layer and the visible layers and classes.
+        Only the app (``kadakas app --agent-port``) answers; the headless server raises a
+        ``KadakasError`` that names the app."""
+        return self.api.view_get()
+
+    def view_zoom(self, *, ids: Iterable[ObjRef] | None = None, box: Sequence[float] | None = None,
+                  at: Sequence[float] | None = None, scale: float | None = None,
+                  margin: float | None = None) -> JsonDict:
+        """Zoom the view of the person to objects (``ids``), a box ``[x0, y0, x1, y1]`` or a place
+        ``at`` (give exactly one), with a short animation. ``scale`` is px per mm of the plan,
+        ``margin`` the space around the aim as a fraction. Never changes the document. The person
+        wins: while they drag or zoom, this raises a conflict (``person_navigating``)."""
+        params: JsonDict = {}
+        if ids is not None:
+            params["ids"] = [_id_of(i) for i in ids]
+        for key, value in (("box", box), ("at", at), ("scale", scale), ("margin", margin)):
+            if value is not None:
+                params[key] = value
+        return self.api.view_zoom(**params)
+
+    def view_pan(self, *, by: Sequence[float] | None = None, to: Sequence[float] | None = None) -> JsonDict:
+        """Move the view of the person by ``[dx, dy]`` mm, or to the middle ``[x, y]``."""
+        params = {k: v for k, v in (("by", by), ("to", to)) if v is not None}
+        return self.api.view_pan(**params)
+
+    def view_camera(self, eye: Sequence[float], target: Sequence[float], **params: Any) -> JsonDict:
+        """Set the 3D camera of the person (``projection`` is ``ortho`` or ``perspective``). The
+        camera has no roll and a fixed field of view of 45 degrees."""
+        return self.api.view_camera(eye=list(eye), target=list(target), **params)
+
+    def view_highlight(self, *, ids: Iterable[ObjRef] | None = None, box: Sequence[float] | None = None,
+                       at: Sequence[float] | None = None, text: str | None = None,
+                       color: str | None = None, until: str | int | None = None) -> JsonDict:
+        """Point at objects, a box or a place, with a short ``text`` (80 characters at most).
+        ``color`` is ``agent`` (default), ``red``, ``blue``, ``green`` or ``orange``; ``until`` is
+        ``"next_change"``, ``"dismissed"`` (default) or a time in ms. Not saved in the document.
+        Returns ``{id, count}``."""
+        params: JsonDict = {}
+        if ids is not None:
+            params["ids"] = [_id_of(i) for i in ids]
+        for key, value in (("box", box), ("at", at), ("text", text), ("color", color), ("until", until)):
+            if value is not None:
+                params[key] = value
+        return self.api.view_highlight(**params)
+
+    def view_highlight_clear(self, id: int | None = None) -> JsonDict:  # noqa: A002
+        """Remove one pointer (``id`` from ``view_highlight``), or all."""
+        return self.api.view_highlight_clear(**({} if id is None else {"id": id}))
+
     def to_json(self) -> JsonDict:
         """The whole document as JSON."""
         return self.api.document_get()
