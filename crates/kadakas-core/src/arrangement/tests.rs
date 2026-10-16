@@ -96,8 +96,15 @@ fn faces_that_share_an_edge_use_the_same_nodes() {
     let total: f64 = a.faces.iter().map(|f| f.area).sum();
     assert!((total - 1_000_000.0).abs() < 1e-6);
     assert_eq!(a.dead_end_count, 2, "the two overshoots are reported");
-    assert_eq!(a.open_dead_ends, 0, "an overshoot is a stub, not an open end");
-    assert!(a.dead_ends.iter().all(|d| !d.open && (d.length - 50.0).abs() < 1e-9));
+    assert_eq!(
+        a.open_dead_ends, 0,
+        "an overshoot is a stub, not an open end"
+    );
+    assert!(
+        a.dead_ends
+            .iter()
+            .all(|d| !d.open && (d.length - 50.0).abs() < 1e-9)
+    );
     // The shared edge appears once in each face, walked in opposite directions.
     let shared: Vec<_> = a.faces[0]
         .outer
@@ -215,4 +222,96 @@ fn curve_helpers() {
     let (q, _, _) = arc.closest(v(0.0, -3.0));
     assert!(q.distance(v(1.0, 0.0)) < 1e-9 || q.distance(v(-1.0, 0.0)) < 1e-9);
     assert!(arc.flatten(0.01).len() > 10);
+}
+
+#[test]
+fn two_circles_make_a_lens_and_two_crescents() {
+    let c = vec![
+        Curve::arc_ccw(v(0.0, 0.0), 500.0, 0.0, PI),
+        Curve::arc_ccw(v(0.0, 0.0), 500.0, PI, TAU),
+        Curve::arc_ccw(v(600.0, 0.0), 500.0, 0.0, PI),
+        Curve::arc_ccw(v(600.0, 0.0), 500.0, PI, TAU),
+    ];
+    let a = build(&c, 0.5).unwrap();
+    assert_eq!(a.faces.len(), 3);
+    let total: f64 = a.faces.iter().map(|f| f.area).sum();
+    let lens = 2.0 * 500.0 * 500.0 * (300.0f64 / 500.0).acos()
+        - 300.0 * 2.0 * (500.0f64 * 500.0 - 300.0 * 300.0).sqrt();
+    let union = 2.0 * PI * 500.0 * 500.0 - lens;
+    assert!((total - union).abs() < 1e-2, "{total} vs {union}");
+}
+
+#[test]
+fn arcs_with_a_negative_sweep_and_the_helpers() {
+    let arc = Curve::Arc {
+        c: v(0.0, 0.0),
+        r: 10.0,
+        start: PI,
+        sweep: -PI,
+    };
+    assert!(arc.from().distance(v(-10.0, 0.0)) < 1e-9 && arc.to().distance(v(10.0, 0.0)) < 1e-9);
+    let (lo, hi) = arc.bounds();
+    // From (-10, 0) clockwise over the top to (10, 0).
+    assert!(
+        lo.y.abs() < 1e-9 && (hi.y - 10.0).abs() < 1e-9,
+        "{lo:?} {hi:?}"
+    );
+    assert!(arc.start_tangent().distance(v(0.0, 1.0)) < 1e-9);
+    let (q, t, d) = arc.closest(v(0.0, 15.0));
+    assert!(q.distance(v(0.0, 10.0)) < 1e-9 && (t - 0.5).abs() < 1e-9 && (d - 5.0).abs() < 1e-9);
+    // The center of the circle: an end is the closest point.
+    let (_, _, d) = arc.closest(v(0.0, 0.0));
+    assert!((d - 10.0).abs() < 1e-9);
+    let part = arc.part(0.25, 0.75);
+    assert!((part.length() - 10.0 * PI / 2.0).abs() < 1e-9);
+    assert!((Curve::line(v(0.0, 0.0), v(3.0, 4.0)).length() - 5.0).abs() < 1e-12);
+    assert!(
+        Curve::line(v(0.0, 0.0), v(3.0, 4.0))
+            .part(0.0, 0.5)
+            .to()
+            .distance(v(1.5, 2.0))
+            < 1e-12
+    );
+    assert_eq!(Curve::line(v(1.0, 1.0), v(2.0, 1.0)).curvature(), 0.0);
+    assert_eq!(
+        Curve::line(v(1.0, 1.0), v(1.0, 1.0)).closest(v(5.0, 1.0)).2,
+        4.0
+    );
+    assert!(BuildError::TooMany("x".into()).to_string() == "x");
+    assert!((Curve::arc_ccw(v(0.0, 0.0), 1.0, 0.0, TAU).length() - TAU).abs() < 1e-12);
+}
+
+#[test]
+fn a_line_that_touches_an_arc_and_a_branching_dead_end() {
+    // A line tangent to the arc at its top: a node, no face.
+    let c = vec![
+        Curve::arc_ccw(v(0.0, 0.0), 500.0, 0.0, PI),
+        Curve::line(v(-100.0, 500.0), v(100.0, 500.0)),
+    ];
+    let a = build(&c, 0.5).unwrap();
+    assert!(a.faces.is_empty());
+    // A square with a dead branch that forks.
+    let mut c = rect_lines(0.0, 0.0, 1000.0, 1000.0);
+    c.push(Curve::line(v(0.0, 500.0), v(-200.0, 500.0)));
+    c.push(Curve::line(v(-100.0, 500.0), v(-100.0, 800.0)));
+    let a = build(&c, 0.5).unwrap();
+    assert_eq!(a.faces.len(), 1);
+    assert_eq!(a.open_dead_ends, 0);
+    assert_eq!(a.dead_end_count, 2);
+    // Lines that nearly meet at a corner meet where they cross.
+    let c = vec![
+        Curve::line(v(0.0, 0.0), v(1000.0, 0.4)),
+        Curve::line(v(1000.3, 0.0), v(1000.0, 1000.0)),
+        Curve::line(v(1000.0, 1000.0), v(0.0, 1000.0)),
+        Curve::line(v(0.0, 1000.0), v(0.0, 0.0)),
+    ];
+    let a = build(&c, 1.0).unwrap();
+    assert_eq!(a.faces.len(), 1);
+    // Nearly parallel lines that nearly meet use the mean of the ends.
+    let c = vec![
+        Curve::line(v(0.0, 0.0), v(1000.0, 0.0)),
+        Curve::line(v(1000.5, 0.0), v(2000.0, 0.001)),
+    ];
+    let a = build(&c, 1.0).unwrap();
+    assert_eq!(a.closed_gap_count, 1);
 }

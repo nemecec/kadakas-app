@@ -171,6 +171,9 @@ pub struct Report {
     pub ok: bool,
 }
 
+/// The edges of the area of a group, in a grid.
+type EdgeGrid = (Grid, Vec<(DVec2, DVec2)>);
+
 struct U {
     group: usize,
     kind: usize,
@@ -229,7 +232,9 @@ impl Grid {
             items: Vec::new(),
             marks: std::cell::RefCell::new((vec![0; boxes.len()], 0)),
         };
-        let range = |g: &Grid, a: DVec2, b: DVec2| g.cell_range(a - DVec2::splat(pad), b + DVec2::splat(pad));
+        let range = |g: &Grid, a: DVec2, b: DVec2| {
+            g.cell_range(a - DVec2::splat(pad), b + DVec2::splat(pad))
+        };
         let mut counts = vec![0u32; nx * ny];
         for (a, b) in boxes {
             let ((x0, y0), (x1, y1)) = range(&g, *a, *b);
@@ -239,8 +244,8 @@ impl Grid {
                 }
             }
         }
-        for c in 0..nx * ny {
-            g.start[c + 1] = g.start[c] + counts[c];
+        for (c, n) in counts.iter().enumerate() {
+            g.start[c + 1] = g.start[c] + n;
         }
         g.items = vec![0; g.start[nx * ny] as usize];
         let mut fill = g.start.clone();
@@ -313,10 +318,11 @@ fn sat_depth(a: &[DVec2], b: &[DVec2]) -> f64 {
                 continue;
             };
             let proj = |p: &[DVec2]| {
-                p.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), q| {
-                    let d = q.dot(axis);
-                    (lo.min(d), hi.max(d))
-                })
+                p.iter()
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), q| {
+                        let d = q.dot(axis);
+                        (lo.min(d), hi.max(d))
+                    })
             };
             let (pa, pb) = (proj(a), proj(b));
             let overlap = pa.1.min(pb.1) - pa.0.max(pb.0);
@@ -471,8 +477,7 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
     let mut cand: Vec<u32> = Vec::new();
     // Overlaps.
     for i in 0..us.len() {
-        let (a, b) = (&us[i], ());
-        let _ = b;
+        let a = &us[i];
         grid.query(a.lo, a.hi, &mut cand);
         for &jj in &cand {
             let j = jj as usize;
@@ -532,7 +537,7 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
         }
     }
     // Per unit: small pieces, wrong sizes, outside the area of the group.
-    let mut edge_grids: Vec<Option<(Grid, Vec<(DVec2, DVec2)>)>> = Vec::new();
+    let mut edge_grids: Vec<Option<EdgeGrid>> = Vec::new();
     for g in groups {
         let mut edges: Vec<(DVec2, DVec2)> = Vec::new();
         for r in g.region.rings() {
@@ -547,7 +552,10 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
         let g = &groups[u.group];
         let c = centroid(&u.ring);
         // Small pieces.
-        if !u.whole && (u.share < opts.min_share || (opts.min_width_mm > 0.0 && u.width < opts.min_width_mm)) {
+        if !u.whole
+            && (u.share < opts.min_share
+                || (opts.min_width_mm > 0.0 && u.width < opts.min_width_mm))
+        {
             add(
                 Kind::SmallPiece,
                 Finding {
@@ -767,7 +775,10 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
                 let inside = area.shapes.iter().any(|s| {
                     s.first()
                         .is_some_and(|o| crate::geom::point_in_polygon(at, o))
-                        && !s.iter().skip(1).any(|h| crate::geom::point_in_polygon(at, h))
+                        && !s
+                            .iter()
+                            .skip(1)
+                            .any(|h| crate::geom::point_in_polygon(at, h))
                 });
                 if inside {
                     add(
@@ -799,10 +810,15 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
     for (gi, g) in groups.iter().enumerate() {
         let (n, laid) = per_group[gi];
         let region = g.region.area;
-        let open = if region > 0.0 { (1.0 - laid / region).max(0.0) } else { 0.0 };
+        let open = if region > 0.0 {
+            (1.0 - laid / region).max(0.0)
+        } else {
+            0.0
+        };
         let expected = match &g.body {
             Body::Pattern { pattern, .. } => pattern.compile().ok().map(|c| {
-                let covered: f64 = c.kinds.iter().map(|k| k.area).sum::<f64>() / c.det.abs().max(1e-9);
+                let covered: f64 =
+                    c.kinds.iter().map(|k| k.area).sum::<f64>() / c.det.abs().max(1e-9);
                 (1.0 - covered).max(0.0)
             }),
             Body::Course(cb) => Some(cb.gap / (cb.along + cb.gap)),

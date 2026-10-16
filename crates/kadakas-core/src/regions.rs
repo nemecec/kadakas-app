@@ -54,7 +54,9 @@ pub fn curves_of(shape: &Shape) -> Result<Vec<Curve>, String> {
                 }])
             }
         }
-        Shape::Circle { center, radius } if finite(*center) && radius.is_finite() && *radius > 0.0 => {
+        Shape::Circle { center, radius }
+            if finite(*center) && radius.is_finite() && *radius > 0.0 =>
+        {
             Ok(vec![
                 Curve::arc_ccw(*center, *radius, 0.0, PI),
                 Curve::arc_ccw(*center, *radius, PI, TAU),

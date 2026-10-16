@@ -306,7 +306,8 @@ fn subject_of(
     };
     let pattern = pattern_param(m, own_pattern)?;
     let place = placement(m, Some((doc, o)), own_place, &[])?;
-    let planned = plan::plan_groups(doc, o, region.clone(), pattern, place, max_units).map_err(bad)?;
+    let planned =
+        plan::plan_groups(doc, o, region.clone(), pattern, place, max_units).map_err(bad)?;
     Ok(Subject {
         region,
         groups: planned.groups,
@@ -500,7 +501,7 @@ fn summarize_all(
     for g in &sub.groups {
         let o = SummaryOptions {
             max_units: left,
-            ..opts.clone()
+            ..*opts
         };
         let part = g.summarize(&o)?;
         left = left.saturating_sub(part.whole_units + part.cut_units);
@@ -616,7 +617,13 @@ fn gap_segments(sub: &Subject, max: usize) -> Result<Vec<layout::Segment>, RpcEr
         let Body::Pattern { pattern, place } = &g.body else {
             continue;
         };
-        let got = gaps::gap_lines(&g.region, pattern, place, max.saturating_sub(all.len()), false);
+        let got = gaps::gap_lines(
+            &g.region,
+            pattern,
+            place,
+            max.saturating_sub(all.len()),
+            false,
+        );
         if got.truncated {
             return Err(RpcError::limit(
                 "the pattern has too many gap lines. Use larger units or a smaller region",
@@ -693,7 +700,11 @@ fn to_objects(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
             ))
         })?;
         gap_count = segments.len();
-        shapes.extend(segments.iter().map(|(a, b)| (Shape::Line { a: *a, b: *b }, None)));
+        shapes.extend(
+            segments
+                .iter()
+                .map(|(a, b)| (Shape::Line { a: *a, b: *b }, None)),
+        );
     }
     if shapes.len() > MAX_OBJECTS {
         return Err(RpcError::limit(format!(

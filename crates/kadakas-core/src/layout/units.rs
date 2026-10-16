@@ -736,7 +736,15 @@ impl Placer {
                     return Err(self.too_many());
                 }
                 self.stats.units += 1;
-                let u = whole_unit(buf, self.origin, self.turn, ki, piece_area, kind_area, width);
+                let u = whole_unit(
+                    buf,
+                    self.origin,
+                    self.turn,
+                    ki,
+                    piece_area,
+                    kind_area,
+                    width,
+                );
                 f(&u);
             }
             return Ok(());
@@ -757,21 +765,22 @@ impl Placer {
         let shapes = subject.overlay(&clip, OverlayRule::Intersect, FillRule::EvenOdd);
         // Noise: the unit crosses the edge by less than the trim. It counts as whole.
         if self.trim > 0.0
-            && is_trimmed(
-                buf,
-                &shapes,
-                piece_area,
-                &self.local,
-                &self.near,
-                self.trim,
-            )
+            && is_trimmed(buf, &shapes, piece_area, &self.local, &self.near, self.trim)
         {
             if self.stats.units >= self.max_units {
                 return Err(self.too_many());
             }
             self.stats.units += 1;
             self.stats.trimmed += 1;
-            let u = whole_unit(buf, self.origin, self.turn, ki, piece_area, kind_area, width);
+            let u = whole_unit(
+                buf,
+                self.origin,
+                self.turn,
+                ki,
+                piece_area,
+                kind_area,
+                width,
+            );
             f(&u);
             return Ok(());
         }

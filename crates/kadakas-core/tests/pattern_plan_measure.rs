@@ -42,14 +42,20 @@ fn grid_lines(n: usize) -> Vec<Curve> {
     let mut out = Vec::new();
     for j in 0..=n {
         for i in 0..n {
-            let (a, b) = (v(i as f64 * s, j as f64 * s), v((i + 1) as f64 * s, j as f64 * s));
+            let (a, b) = (
+                v(i as f64 * s, j as f64 * s),
+                v((i + 1) as f64 * s, j as f64 * s),
+            );
             let g = (rng.next() * 0.45, rng.next() * 0.45);
             out.push(Curve::line(a + v(g.0, 0.0), b - v(g.1, 0.0)));
         }
     }
     for i in 0..=n {
         for j in 0..n {
-            let (a, b) = (v(i as f64 * s, j as f64 * s), v(i as f64 * s, (j + 1) as f64 * s));
+            let (a, b) = (
+                v(i as f64 * s, j as f64 * s),
+                v(i as f64 * s, (j + 1) as f64 * s),
+            );
             let g = (rng.next() * 0.45, rng.next() * 0.45);
             out.push(Curve::line(a + v(0.0, g.0), b - v(0.0, g.1)));
         }
@@ -109,10 +115,16 @@ fn measure_zones() {
     let r = lot(100_000.0, 50_000.0);
     let mut lines: Vec<Vec<DVec2>> = Vec::new();
     for k in 1..5 {
-        lines.push(vec![v(k as f64 * 20_000.0, -100.0), v(k as f64 * 20_000.0, 50_100.0)]);
+        lines.push(vec![
+            v(k as f64 * 20_000.0, -100.0),
+            v(k as f64 * 20_000.0, 50_100.0),
+        ]);
     }
     for k in 1..4 {
-        lines.push(vec![v(-100.0, k as f64 * 12_500.0), v(100_100.0, k as f64 * 12_500.0)]);
+        lines.push(vec![
+            v(-100.0, k as f64 * 12_500.0),
+            v(100_100.0, k as f64 * 12_500.0),
+        ]);
     }
     let t = Instant::now();
     let s = zones::split(&r, &lines, 1.0).unwrap();
@@ -128,8 +140,14 @@ fn measure_zones() {
     // Many lines: a fine grid of 100 by 100 lines.
     let mut many: Vec<Vec<DVec2>> = Vec::new();
     for k in 1..100 {
-        many.push(vec![v(k as f64 * 1000.0, -100.0), v(k as f64 * 1000.0, 50_100.0)]);
-        many.push(vec![v(-100.0, k as f64 * 500.0), v(100_100.0, k as f64 * 500.0)]);
+        many.push(vec![
+            v(k as f64 * 1000.0, -100.0),
+            v(k as f64 * 1000.0, 50_100.0),
+        ]);
+        many.push(vec![
+            v(-100.0, k as f64 * 500.0),
+            v(100_100.0, k as f64 * 500.0),
+        ]);
     }
     let t = Instant::now();
     let s = zones::split(&r, &many, 1.0).unwrap();
@@ -144,7 +162,11 @@ fn measure_zones() {
     let t = Instant::now();
     let mut units = 0;
     for z in &s.zones {
-        let g = group("z", Region::from_shapes(vec![z.shape.clone()]).unwrap(), 0.0);
+        let g = group(
+            "z",
+            Region::from_shapes(vec![z.shape.clone()]).unwrap(),
+            0.0,
+        );
         let sum = g.summarize(&SummaryOptions::default()).unwrap();
         units += sum.whole_units + sum.cut_units;
     }
@@ -173,7 +195,11 @@ fn measure_zones() {
     let mut units = 0;
     let mut laid = 0.0;
     for (i, z) in s.zones.iter().enumerate() {
-        let g = group(&format!("zone {i}"), Region::from_shapes(vec![z.shape.clone()]).unwrap(), 0.0);
+        let g = group(
+            &format!("zone {i}"),
+            Region::from_shapes(vec![z.shape.clone()]).unwrap(),
+            0.0,
+        );
         let sum = g.summarize(&opts).unwrap();
         units += sum.whole_units + sum.cut_units;
         laid += sum.area_laid_m2;
@@ -205,7 +231,10 @@ fn measure_courses() {
     // 1 km straight.
     let t = Instant::now();
     let c = course::lay(
-        &spec(vec![Vertex::corner(v(0.0, 0.0)), Vertex::corner(v(1_000_000.0, 0.0))]),
+        &spec(vec![
+            Vertex::corner(v(0.0, 0.0)),
+            Vertex::corner(v(1_000_000.0, 0.0)),
+        ]),
         1_000_000,
     )
     .unwrap();
@@ -278,7 +307,14 @@ fn measure_check() {
         rep.counts
     );
     let t = Instant::now();
-    let rep = check(&one, &r, &CheckOptions { ..Default::default() }).unwrap();
+    let rep = check(
+        &one,
+        &r,
+        &CheckOptions {
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let _ = rep;
     println!("check again: {:.2} s", t.elapsed().as_secs_f64());
     // At 45 degrees every unit has boxes that overlap its neighbours.

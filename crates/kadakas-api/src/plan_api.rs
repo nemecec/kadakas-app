@@ -130,14 +130,18 @@ fn object_id(v: &Value, what: &str) -> Result<ObjectId, RpcError> {
 
 fn hardscape<'a>(doc: &'a Document, m: &Map<String, Value>) -> Result<&'a Object, RpcError> {
     let id = object_id(
-        m.get("id").ok_or_else(|| bad("give the 'id' of a hardscape"))?,
+        m.get("id")
+            .ok_or_else(|| bad("give the 'id' of a hardscape"))?,
         "id",
     )?;
     let o = doc
         .object(id)
         .ok_or_else(|| bad(format!("object {id} does not exist")))?;
     if !matches!(o.shape, Shape::Hardscape { .. }) {
-        return Err(bad(format!("object {id} is a {}, not a hardscape", o.shape.kind())));
+        return Err(bad(format!(
+            "object {id} is a {}, not a hardscape",
+            o.shape.kind()
+        )));
     }
     if plan::has_unreadable_data(o) {
         return Err(bad(format!(
@@ -181,7 +185,8 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
     )?;
     let doc = s.editor.doc();
     let ids: Vec<ObjectId> = match m.get("ids").filter(|v| !v.is_null()) {
-        Some(v) => serde_json::from_value(v.clone()).map_err(|_| bad("'ids' must be a list of object IDs"))?,
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|_| bad("'ids' must be a list of object IDs"))?,
         None => s.selection.clone(),
     };
     if ids.is_empty() {
@@ -328,7 +333,11 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         Some(v) => Some(crate::hardscape_api::hardscape_style_ref(doc, v)?),
         None => None,
     };
-    let name = m.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+    let name = m
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let mut commands: Vec<Command> = Vec::new();
     for &i in &chosen {
         let r = &found.regions[i];
@@ -420,12 +429,9 @@ fn with_plan(o: &Object, p: &Plan) -> Object {
     c
 }
 
-fn plan_state(
-    doc: &Document,
-    o: &Object,
-    max_units: usize,
-) -> Result<plan::Planned, RpcError> {
-    let Some(planned) = plan::groups_of(doc, o, kadakas_core::layout::TOLERANCE, max_units).map_err(bad)?
+fn plan_state(doc: &Document, o: &Object, max_units: usize) -> Result<plan::Planned, RpcError> {
+    let Some(planned) =
+        plan::groups_of(doc, o, kadakas_core::layout::TOLERANCE, max_units).map_err(bad)?
     else {
         return Err(bad(
             "the hardscape has no joint pattern: give it a style with joints first (hardscape.set)",
@@ -448,11 +454,26 @@ fn zones_json(p: &plan::Planned, with_outline: Option<&plan::Planned>) -> Vec<Va
                 "has_settings": z.has_setting,
             });
             if let Some(pl) = with_outline
-                && let Some(g) = pl.groups.iter().find(|g| g.role == plan::Role::Zone && g.name == z.name)
-                    .or_else(|| pl.groups.iter().filter(|g| g.role != plan::Role::Course).nth(i))
+                && let Some(g) = pl
+                    .groups
+                    .iter()
+                    .find(|g| g.role == plan::Role::Zone && g.name == z.name)
+                    .or_else(|| {
+                        pl.groups
+                            .iter()
+                            .filter(|g| g.role != plan::Role::Course)
+                            .nth(i)
+                    })
             {
                 v["outline"] = json!(
-                    g.region.shapes.iter().map(|sh| sh.iter().map(|r| r.iter().map(|q| xy(*q)).collect::<Vec<_>>()).collect::<Vec<_>>()).collect::<Vec<_>>()
+                    g.region
+                        .shapes
+                        .iter()
+                        .map(|sh| sh
+                            .iter()
+                            .map(|r| r.iter().map(|q| xy(*q)).collect::<Vec<_>>())
+                            .collect::<Vec<_>>())
+                        .collect::<Vec<_>>()
                 );
             }
             v
@@ -489,9 +510,12 @@ fn store(s: &mut Session, o: &Object, p: &Plan) -> Result<(), RpcError> {
     } else {
         Command::SetData {
             id: o.id,
-            set: [(plan::KEY.to_string(), serde_json::to_value(p).expect("json"))]
-                .into_iter()
-                .collect(),
+            set: [(
+                plan::KEY.to_string(),
+                serde_json::to_value(p).expect("json"),
+            )]
+            .into_iter()
+            .collect(),
             remove: Vec::new(),
         }
     };
@@ -518,9 +542,9 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             match item {
                 Value::String(_) => {
                     let id = object_id(item, "lines")?;
-                    let src = doc
-                        .object(id)
-                        .ok_or_else(|| bad(format!("line {}: object {id} does not exist", i + 1)))?;
+                    let src = doc.object(id).ok_or_else(|| {
+                        bad(format!("line {}: object {id} does not exist", i + 1))
+                    })?;
                     let (points, _) = plan::path_of(&src.shape).ok_or_else(|| {
                         bad(format!(
                             "line {}: object {id} is a {}, not a line, arc or polyline",
@@ -539,7 +563,10 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                     if points.len() < 2 {
                         return Err(bad(format!("line {} needs 2 or more points", i + 1)));
                     }
-                    p.splits.push(SplitLine { source: None, points });
+                    p.splits.push(SplitLine {
+                        source: None,
+                        points,
+                    });
                 }
                 _ => {
                     return Err(bad(format!(
@@ -579,7 +606,12 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             )
             .map_err(|e| bad(format!("zone {}: {}", i + 1, e.message)))?;
             let seed = match (z.get("index"), z.get("seed")) {
-                (Some(_), Some(_)) => return Err(bad(format!("zone {}: give 'index' or 'seed', not both", i + 1))),
+                (Some(_), Some(_)) => {
+                    return Err(bad(format!(
+                        "zone {}: give 'index' or 'seed', not both",
+                        i + 1
+                    )));
+                }
                 (Some(ix), None) => {
                     let ix = ix
                         .as_u64()
@@ -617,8 +649,14 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                     None => None,
                 },
                 angle: opt_number(z, "angle")?,
-                align_to_edge: z.get("align_to_edge").and_then(Value::as_u64).map(|n| n as usize),
-                align_to_split: z.get("align_to_split").and_then(Value::as_u64).map(|n| n as usize),
+                align_to_edge: z
+                    .get("align_to_edge")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize),
+                align_to_split: z
+                    .get("align_to_split")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize),
             });
         }
     }
@@ -800,8 +838,9 @@ fn course_from(
                 }
                 Some("inside") => Side::Left,
                 Some("outside") => Side::Right,
-                Some(t) => Side::from_name(t)
-                    .ok_or_else(|| fail(bad("'side' must be inside, outside, left, right or center")))?,
+                Some(t) => Side::from_name(t).ok_or_else(|| {
+                    fail(bad("'side' must be inside, outside, left, right or center"))
+                })?,
             };
             // The kerb border is not paved: the course starts at its inner edge.
             if border > 0.0 {
@@ -867,7 +906,10 @@ fn course(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     p.validate().map_err(bad)?;
     // The field starts from the edge of the course, so that its first row is whole.
     let mut aligned: Option<(DVec2, f64)> = None;
-    if let Some(c) = list.iter().find(|c| c.get("align_field").and_then(Value::as_bool) == Some(true)) {
+    if let Some(c) = list
+        .iter()
+        .find(|c| c.get("align_field").and_then(Value::as_bool) == Some(true))
+    {
         let name = c.get("name").and_then(Value::as_str).unwrap_or("");
         let def = p
             .courses
@@ -906,9 +948,12 @@ fn course(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                 },
                 Command::SetData {
                     id: o.id,
-                    set: [(plan::KEY.to_string(), serde_json::to_value(&p).expect("json"))]
-                        .into_iter()
-                        .collect(),
+                    set: [(
+                        plan::KEY.to_string(),
+                        serde_json::to_value(&p).expect("json"),
+                    )]
+                    .into_iter()
+                    .collect(),
                     remove: Vec::new(),
                 },
             ],
@@ -980,7 +1025,8 @@ fn plan_clear(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
         return Err(bad("'what' must be all, splits, zones or courses"));
     }
     let ids: Vec<ObjectId> = match (m.get("ids"), m.get("id")) {
-        (Some(v), _) => serde_json::from_value(v.clone()).map_err(|_| bad("'ids' must be a list of object IDs"))?,
+        (Some(v), _) => serde_json::from_value(v.clone())
+            .map_err(|_| bad("'ids' must be a list of object IDs"))?,
         (None, Some(v)) => vec![object_id(v, "id")?],
         _ => return Err(bad("give 'id' or 'ids'")),
     };
@@ -1009,9 +1055,12 @@ fn plan_clear(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
         } else {
             Command::SetData {
                 id: *id,
-                set: [(plan::KEY.to_string(), serde_json::to_value(&p).expect("json"))]
-                    .into_iter()
-                    .collect(),
+                set: [(
+                    plan::KEY.to_string(),
+                    serde_json::to_value(&p).expect("json"),
+                )]
+                .into_iter()
+                .collect(),
                 remove: Vec::new(),
             }
         });
@@ -1071,7 +1120,8 @@ fn check_call(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
     let doc = s.editor.doc();
     let visible_only = flag(m, "visible_only", false)?;
     let ids: Vec<ObjectId> = match m.get("ids").filter(|v| !v.is_null()) {
-        Some(v) => serde_json::from_value(v.clone()).map_err(|_| bad("'ids' must be a list of object IDs"))?,
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|_| bad("'ids' must be a list of object IDs"))?,
         None => doc
             .objects
             .values()

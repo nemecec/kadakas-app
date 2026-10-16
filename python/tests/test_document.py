@@ -201,6 +201,37 @@ def test_render(doc, tmp_path: Path):
     assert (tmp_path / "plan.svg").read_text(encoding="utf-8") == svg
 
 
+def test_regions_zones_courses_and_the_check(doc, tmp_path):
+    # A lot drawn as four loose lines with gaps of 0.3 mm.
+    lines = [
+        doc.add.line([0.3, 0], [4000, 0]),
+        doc.add.line([4000, 0.3], [4000, 2000]),
+        doc.add.line([3999.7, 2000], [0, 2000]),
+        doc.add.line([0, 1999.7], [0, 0]),
+    ]
+    doc.api.hardscape_style_create(
+        name="P", joints={"kind": "running_bond", "unit_length": 200, "unit_width": 100, "spacing": 5})
+    made = doc.region_from_curves([l.id for l in lines], tolerance=1, create="hardscape", style="P")
+    assert made["complete"] is True and made["closed_gaps"]["count"] == 4
+    assert len(made["regions"]) == 1 and made["regions"][0]["area_m2"] == 8.0
+    hid = made["created"][0]["id"]
+    split = doc.add.line([2000, -50], [2000, 2050])
+    z = doc.hardscape_split(hid, lines=[split.id])
+    assert [round(x["area_m2"], 6) for x in z["zones"]] == [4.0, 4.0]
+    c = doc.hardscape_course(
+        hid, name="Kerb", path=[[0, 0], [4000, 0]], side="left", align_field=True)
+    assert c["courses"][0]["units"] == 39
+    plan = doc.hardscape_plan(hid)
+    assert [g["name"] for g in plan["groups"]] == ["zone 1", "zone 2", "Kerb"]
+    row = doc.report.unit_pattern()["rows"][0]
+    assert sum(g["whole_units"] for g in row["groups"]) == row["whole_units"]
+    chk = doc.pattern_check([hid])
+    assert chk["objects"][0]["counts"]["overlap"] == 0 and chk["totals"]["complete"] is True
+    out = tmp_path / "lot.dxf"
+    doc.export_file(out, patterns="blocks")
+    assert "KADAKAS_200X100" in out.read_text()
+
+
 def test_open_a_document_file_and_describe(tmp_path: Path):
     saved = tmp_path / "start.kad"
     with kadakas.open(allow_dir=[tmp_path]) as d:

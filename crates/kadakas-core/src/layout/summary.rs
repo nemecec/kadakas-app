@@ -148,6 +148,10 @@ pub fn with_waste(n: usize, percent: f64) -> usize {
     ((n as u128 * (10_000 + basis)).div_ceil(10_000)) as usize
 }
 
+/// A layout that calls its argument for each unit and returns the stats of the layout.
+pub type UnitRun<'a> =
+    dyn FnMut(&mut dyn FnMut(&super::units::Unit)) -> Result<Stats, LayoutError> + 'a;
+
 /// What a summary says about the pattern, besides the counts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Desc {
@@ -205,7 +209,7 @@ pub fn summarize_stream(
     region_area: f64,
     opts: &SummaryOptions,
     gap_length_m: Option<f64>,
-    run: &mut dyn FnMut(&mut dyn FnMut(&super::units::Unit)) -> Result<Stats, LayoutError>,
+    run: &mut UnitRun,
 ) -> Result<Summary, LayoutError> {
     let mut tally = Tally::default();
     let unfillable = Unfillable {

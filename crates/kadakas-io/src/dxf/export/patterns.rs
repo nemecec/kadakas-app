@@ -125,11 +125,7 @@ fn canon(ring: &[DVec2]) -> Option<Canon> {
     }
     let (k, local, phi) = best?;
     Some(Canon {
-        key: k
-            .iter()
-            .map(i64::to_string)
-            .collect::<Vec<_>>()
-            .join(","),
+        key: k.iter().map(i64::to_string).collect::<Vec<_>>().join(","),
         local,
         center: c,
         angle_deg: phi.to_degrees(),
@@ -225,7 +221,9 @@ pub(super) fn write(
         } else {
             name.clone()
         };
-        let (w_, c_) = write_group(w, cx, o, group, &base, &label, hidden, mode, report, budget, &mut used)?;
+        let (w_, c_) = write_group(
+            w, cx, o, group, &base, &label, hidden, mode, report, budget, &mut used,
+        )?;
         all_whole += w_;
         all_cut += c_;
     }
@@ -336,7 +334,11 @@ fn write_group(
             *budget = budget.saturating_sub(stats.units);
             used.xdata |= is_module && stats.units > 0;
             counts = (whole, cut);
-            let how = if blocks { " (whole units as blocks)" } else { "" };
+            let how = if blocks {
+                " (whole units as blocks)"
+            } else {
+                ""
+            };
             let mut text = format!("{name}: wrote {whole} whole and {cut} cut units{how}");
             if names.len() > 1 {
                 let mut parts: Vec<String> = Vec::new();
@@ -419,7 +421,10 @@ mod tests {
         // A clockwise ring is the same as a counterclockwise one.
         let mut cw = rect(200.0, 100.0, DVec2::ZERO, 0.3);
         cw.reverse();
-        assert_eq!(canon(&cw).unwrap().key, canon(&rect(200.0, 100.0, DVec2::ZERO, 0.3)).unwrap().key);
+        assert_eq!(
+            canon(&cw).unwrap().key,
+            canon(&rect(200.0, 100.0, DVec2::ZERO, 0.3)).unwrap().key
+        );
         assert!(canon(&[DVec2::ZERO, DVec2::X]).is_none());
     }
 
@@ -444,7 +449,10 @@ mod tests {
     #[test]
     fn block_names_are_dxf_safe() {
         assert_eq!(block_name_base("200x100"), "KADAKAS_200X100");
-        assert_eq!(block_name_base("corner 200x200 at 80.5 degrees"), "KADAKAS_CORNER_200X200_AT_80_5_DEGREES");
+        assert_eq!(
+            block_name_base("corner 200x200 at 80.5 degrees"),
+            "KADAKAS_CORNER_200X200_AT_80_5_DEGREES"
+        );
         assert_eq!(block_name_base(""), "KADAKAS_UNIT");
         assert_eq!(layer_names("PAVING")[0], "PAVING-UNITS-WHOLE");
     }

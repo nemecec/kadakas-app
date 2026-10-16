@@ -1,7 +1,7 @@
 use proptest::prelude::*;
 
 use super::*;
-use crate::layout::{Region, area_shared};
+use crate::layout::{Region, shapes_overlap};
 
 fn v(x: f64, y: f64) -> DVec2 {
     DVec2::new(x, y)
@@ -61,16 +61,27 @@ fn an_end_within_the_tolerance_joins_the_edge_and_the_region_does_not_move() {
     let sum: f64 = s.zones.iter().map(|z| z.area).sum();
     assert_eq!(sum, r.area);
     // The new points are on the edges of the region.
-    assert!(s.zones.iter().all(|z| z
-        .shape[0]
-        .iter()
-        .all(|p| p.y == 0.0 || p.y == 5000.0 || p.x == 0.0 || p.x == 10_000.0 || p.x == 4000.0)));
+    assert!(s.zones.iter().all(|z| z.shape[0].iter().all(|p| p.y == 0.0
+        || p.y == 5000.0
+        || p.x == 0.0
+        || p.x == 10_000.0
+        || p.x == 4000.0)));
 }
 
 #[test]
 fn a_hole_stays_a_hole_and_a_line_through_it_cuts_the_zones() {
-    let hole = vec![v(4000.0, 2000.0), v(6000.0, 2000.0), v(6000.0, 3000.0), v(4000.0, 3000.0)];
-    let outer = vec![v(0.0, 0.0), v(10_000.0, 0.0), v(10_000.0, 5_000.0), v(0.0, 5_000.0)];
+    let hole = vec![
+        v(4000.0, 2000.0),
+        v(6000.0, 2000.0),
+        v(6000.0, 3000.0),
+        v(4000.0, 3000.0),
+    ];
+    let outer = vec![
+        v(0.0, 0.0),
+        v(10_000.0, 0.0),
+        v(10_000.0, 5_000.0),
+        v(0.0, 5_000.0),
+    ];
     let r = Region::from_rings(&outer, &[hole]).unwrap();
     let s = split(&r, &[vec![v(5000.0, 0.0), v(5000.0, 5000.0)]], 1.0).unwrap();
     assert_eq!(s.zones.len(), 2);
@@ -81,8 +92,18 @@ fn a_hole_stays_a_hole_and_a_line_through_it_cuts_the_zones() {
 
 #[test]
 fn an_island_that_no_line_touches_stays_a_hole_of_its_zone() {
-    let hole = vec![v(1000.0, 1000.0), v(2000.0, 1000.0), v(2000.0, 2000.0), v(1000.0, 2000.0)];
-    let outer = vec![v(0.0, 0.0), v(10_000.0, 0.0), v(10_000.0, 5_000.0), v(0.0, 5_000.0)];
+    let hole = vec![
+        v(1000.0, 1000.0),
+        v(2000.0, 1000.0),
+        v(2000.0, 2000.0),
+        v(1000.0, 2000.0),
+    ];
+    let outer = vec![
+        v(0.0, 0.0),
+        v(10_000.0, 0.0),
+        v(10_000.0, 5_000.0),
+        v(0.0, 5_000.0),
+    ];
     let r = Region::from_rings(&outer, &[hole]).unwrap();
     let s = split(&r, &[vec![v(5000.0, 0.0), v(5000.0, 5000.0)]], 1.0).unwrap();
     assert_eq!(s.zones.len(), 2);
@@ -147,7 +168,7 @@ proptest! {
         // No two zones overlap.
         for i in 0..s.zones.len() {
             for j in i + 1..s.zones.len() {
-                let o = area_shared(&s.zones[i].shape[0], &s.zones[j].shape[0]);
+                let o = shapes_overlap(&s.zones[i].shape, &s.zones[j].shape);
                 prop_assert!(o < 1e-3, "zones {} and {} overlap by {} mm2", i, j, o);
             }
         }
@@ -179,4 +200,3 @@ proptest! {
         }
     }
 }
-

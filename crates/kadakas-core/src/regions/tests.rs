@@ -10,10 +10,7 @@ fn line(a: DVec2, b: DVec2) -> Shape {
 }
 
 fn curves(shapes: &[Shape]) -> Vec<Curve> {
-    shapes
-        .iter()
-        .flat_map(|s| curves_of(s).unwrap())
-        .collect()
+    shapes.iter().flat_map(|s| curves_of(s).unwrap()).collect()
 }
 
 #[test]

@@ -62,12 +62,7 @@ impl Curve {
         if sweep == 0.0 && end != start {
             sweep = TAU;
         }
-        Curve::Arc {
-            c,
-            r,
-            start,
-            sweep,
-        }
+        Curve::Arc { c, r, start, sweep }
     }
 
     /// The arc through three points, or a line if the points are on one line.
@@ -467,7 +462,9 @@ struct Union {
 
 impl Union {
     fn new(n: usize) -> Union {
-        Union { p: (0..n).collect() }
+        Union {
+            p: (0..n).collect(),
+        }
     }
     fn find(&mut self, mut x: usize) -> usize {
         while self.p[x] != x {
@@ -658,16 +655,15 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
     let mut node_of_root: HashMap<usize, usize> = HashMap::new();
     let mut hit_node = vec![0usize; n];
     let mut members: Vec<Vec<usize>> = Vec::new();
-    for i in 0..n {
+    for (i, slot) in hit_node.iter_mut().enumerate() {
         let r = uf.find(i);
         let id = *node_of_root.entry(r).or_insert_with(|| {
             members.push(Vec::new());
             members.len() - 1
         });
-        hit_node[i] = id;
+        *slot = id;
         members[id].push(i);
     }
-    // An end of a curve outranks a crossing in the middle of a curve of the same rank.
     // Which point a node takes: first the curves of the highest rank (a fixed boundary); among
     // those the point of a curve that another end was moved to (a T-junction: the end goes to the
     // line, the line does not bend), then the ends of curves, then crossings.
@@ -796,10 +792,7 @@ fn prune_and_trace(out: &mut Arrangement) {
     let mut dead: Vec<(usize, f64, bool)> = Vec::new();
     for &v0 in &free {
         let (mut v, mut prev_edge, mut length) = (v0, usize::MAX, 0.0);
-        loop {
-            let Some(&ei) = adj[v].iter().find(|&&e| e != prev_edge) else {
-                break;
-            };
+        while let Some(&ei) = adj[v].iter().find(|&&e| e != prev_edge) {
             length += out.edges[ei].curve.length();
             let e = &out.edges[ei];
             let w = if e.a == v { e.b } else { e.a };
@@ -889,7 +882,7 @@ fn trace_faces(out: &mut Arrangement) {
     }
     let target = |h: usize| {
         let e = &out.edges[h / 2];
-        if h % 2 == 0 { e.b } else { e.a }
+        if h.is_multiple_of(2) { e.b } else { e.a }
     };
     let mut pos = vec![0usize; 2 * ne];
     for list in around.iter_mut() {
@@ -1135,10 +1128,7 @@ pub fn interior_point(ring: &[DVec2], holes: &[Vec<DVec2>]) -> DVec2 {
             }
         }
     }
-    best.map_or_else(
-        || ring.first().copied().unwrap_or(DVec2::ZERO),
-        |(_, p)| p,
-    )
+    best.map_or_else(|| ring.first().copied().unwrap_or(DVec2::ZERO), |(_, p)| p)
 }
 
 #[cfg(test)]

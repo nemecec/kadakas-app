@@ -13,7 +13,7 @@ use kadakas_core::layout::course::{self, Corner, Side};
 use kadakas_core::layout::object::{pattern_of, region_of};
 use kadakas_core::layout::plan::{self, CourseDef, Plan, SplitLine, groups_of};
 use kadakas_core::layout::summary::SummaryOptions;
-use kadakas_core::layout::{area_shared, MAX_UNITS};
+use kadakas_core::layout::{MAX_UNITS, area_shared};
 use kadakas_core::model::{Attributes, Document, ObjectId};
 use kadakas_core::resource::{ResourceBody, ResourceId};
 
@@ -258,4 +258,26 @@ proptest! {
         }
         let _ = hardscape::data::KEY;
     }
+}
+
+#[test]
+fn a_case_with_lines_and_a_course_has_the_groups_it_should() {
+    let c = Case {
+        w: 9000.0,
+        h: 5000.0,
+        kind: 0,
+        angle: 0.0,
+        cuts_x: vec![3000.0, 6000.0],
+        cuts_y: vec![2500.0],
+        course: Some((100.0, 200.0, 5.0, 0, 0)),
+        shift: (0.0, 0.0),
+    };
+    let (ed, id) = build(&c, DVec2::ZERO);
+    let doc = ed.doc();
+    let o = doc.object(id).unwrap();
+    let planned = groups_of(doc, o, 1.0, MAX_UNITS).unwrap().unwrap();
+    // Six zones and a course.
+    assert_eq!(planned.groups.len(), 7, "{:?}", planned.notes);
+    assert_eq!(planned.zones.len(), 6);
+    assert_eq!(planned.courses.len(), 1);
 }

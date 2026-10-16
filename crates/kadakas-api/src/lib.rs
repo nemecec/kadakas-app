@@ -35,10 +35,10 @@ mod issue_api;
 mod libfiles;
 mod massing_api;
 mod pattern_api;
-mod plan_api;
 mod picture_api;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod picture_api_tests;
+mod plan_api;
 mod plants_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod plugin_api;

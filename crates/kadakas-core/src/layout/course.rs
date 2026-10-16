@@ -146,7 +146,7 @@ pub struct Spec {
 impl Spec {
     /// Checks the numbers.
     pub fn validate(&self) -> Result<(), String> {
-        let ok = |v: f64| v.is_finite() && v >= MIN_SIZE && v <= crate::model::MAX_COORD;
+        let ok = |v: f64| v.is_finite() && (MIN_SIZE..=crate::model::MAX_COORD).contains(&v);
         if !ok(self.along) || !ok(self.depth) {
             return Err(format!(
                 "the unit size of a course is at least {MIN_SIZE} mm along and across"
@@ -271,8 +271,9 @@ fn flatten(path: &[Vertex], closed: bool) -> Flat {
         if let Some(pe) = prev_end {
             let s = start_dir(seg);
             let last = smooth.len() - 1;
-            smooth[last] =
-                pe.length_squared() > 0.0 && s.length_squared() > 0.0 && pe.angle_to(s).abs() < SMOOTH_DEG.to_radians();
+            smooth[last] = pe.length_squared() > 0.0
+                && s.length_squared() > 0.0
+                && pe.angle_to(s).abs() < SMOOTH_DEG.to_radians();
         }
         prev_end = Some(seg.end_direction().normalize_or_zero());
         match *seg {
@@ -291,7 +292,9 @@ fn flatten(path: &[Vertex], closed: bool) -> Flat {
                 let step = CURVE_STEP.min(2.0 * (1.0 - (CURVE_ERR / radius).min(1.0)).acos());
                 let n = ((sweep.abs() / step.max(1e-4)).ceil() as usize).clamp(1, 100_000);
                 for k in 1..n {
-                    pts.push(center + DVec2::from_angle(start + sweep * k as f64 / n as f64) * radius);
+                    pts.push(
+                        center + DVec2::from_angle(start + sweep * k as f64 / n as f64) * radius,
+                    );
                     smooth.push(true);
                 }
                 pts.push(to);
@@ -402,7 +405,11 @@ impl Poly {
                 // Solve |from + t (q - from) - p0| = a for t in 0..1.
                 let d = q - from;
                 let w = from - p0;
-                let (qa, qb, qc) = (d.length_squared(), 2.0 * w.dot(d), w.length_squared() - a * a);
+                let (qa, qb, qc) = (
+                    d.length_squared(),
+                    2.0 * w.dot(d),
+                    w.length_squared() - a * a,
+                );
                 let t = if qa == 0.0 {
                     1.0
                 } else {
@@ -414,7 +421,11 @@ impl Poly {
                         .filter(|t| *t >= -1e-9 && *t <= 1.0 + 1e-9)
                         .fold(f64::INFINITY, f64::min)
                 };
-                let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 1.0 };
+                let t = if t.is_finite() {
+                    t.clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
                 return Some((from_s + t * d.length(), from + d * t));
             }
             from = q;
@@ -427,6 +438,8 @@ impl Poly {
 /// A rectangle standing on a chord of the path.
 #[derive(Clone, Copy)]
 struct Rect {
+    /// The arc length where the chord starts.
+    s0: f64,
     p0: DVec2,
     p1: DVec2,
     /// The unit vector along the chord.
@@ -439,17 +452,18 @@ fn rect_at(poly: &Poly, s: f64, a: f64) -> Option<Rect> {
     let p0 = poly.at(s);
     let (s1, p1) = poly.chord_end(s, a)?;
     let t = (p1 - p0).try_normalize()?;
-    Some(Rect { p0, p1, t, s1 })
+    Some(Rect {
+        s0: s,
+        p0,
+        p1,
+        t,
+        s1,
+    })
 }
 
 fn rect_poly(r: &Rect, lo: f64, hi: f64) -> Vec<DVec2> {
     let n = left(r.t);
-    vec![
-        r.p0 + n * lo,
-        r.p1 + n * lo,
-        r.p1 + n * hi,
-        r.p0 + n * hi,
-    ]
+    vec![r.p0 + n * lo, r.p1 + n * lo, r.p1 + n * hi, r.p0 + n * hi]
 }
 
 /// The joint between two rectangles on a bend: the distance along the mean direction between the
@@ -557,7 +571,11 @@ pub fn field_origin(spec: &Spec, unit_width: f64) -> Option<(DVec2, f64)> {
         Side::Left | Side::Center => (spec.offset + hi + g, true),
         Side::Right => (spec.offset + lo - g, false),
     };
-    let y0 = if up { e - g / 2.0 } else { e - unit_width - g / 2.0 };
+    let y0 = if up {
+        e - g / 2.0
+    } else {
+        e - unit_width - g / 2.0
+    };
     let along = p0.dot(u) - g / 2.0;
     let origin = u * along + n * (p0.dot(n) + y0);
     Some((origin, u.y.atan2(u.x).to_degrees()))
@@ -715,10 +733,7 @@ pub fn lay(spec: &Spec, max_units: usize) -> Result<Course, String> {
                 Corner::Butt => {
                     let ts = u1.perp_dot(u2).signum();
                     let (l1, l2) = (left(u1), left(u2));
-                    let s_end = [lo, hi]
-                        .iter()
-                        .map(|e| e * l2.dot(u1))
-                        .fold(0.0, f64::max);
+                    let s_end = [lo, hi].iter().map(|e| e * l2.dot(u1)).fold(0.0, f64::max);
                     runs[r1].end = Some(Plane {
                         p: cp + u1 * s_end,
                         n: -u1,
@@ -830,7 +845,13 @@ fn lay_run(
     starts.reverse();
     let mut rects: Vec<Rect> = Vec::new();
     let limit_total = poly.len();
+    // The length of the run itself, without the pieces that were added at its ends.
+    let run_len = poly.len() - 2.0 * ext;
     let past_end = |r: &Rect| -> bool {
+        if run.closed_loop {
+            // A loop ends where it started: the units stop one gap before the seam.
+            return r.s0 > ext + run_len - g;
+        }
         run.end.as_ref().is_some_and(|pl| {
             // Every corner of the rectangle is beyond the end plane.
             rect_poly(r, lo, hi).iter().all(|p| pl.side(*p) < -1e-9)
@@ -846,8 +867,7 @@ fn lay_run(
     }
     // Forward from the anchor.
     let mut s = s_anchor;
-    loop {
-        let Some(r) = rect_at(&poly, s, a) else { break };
+    while let Some(r) = rect_at(&poly, s, a) {
         if past_end(&r) {
             break;
         }
@@ -902,7 +922,18 @@ fn lay_run(
     for r in &rects {
         let mut p = rect_poly(r, lo, hi);
         let mut clipped = false;
-        for pl in [run.start.as_ref(), run.end.as_ref()].into_iter().flatten() {
+        // The planes of a loop are both at the seam: the first half of the loop has the start
+        // plane, the second half the end plane.
+        let planes: [Option<&Plane>; 2] = if run.closed_loop {
+            if r.s0 < ext + run_len / 2.0 {
+                [run.start.as_ref(), None]
+            } else {
+                [None, run.end.as_ref()]
+            }
+        } else {
+            [run.start.as_ref(), run.end.as_ref()]
+        };
+        for pl in planes.into_iter().flatten() {
             if p.is_empty() {
                 break;
             }
@@ -940,7 +971,6 @@ fn lay_run(
             last_whole = None;
         }
     }
-    let _ = run.closed_loop;
     Ok(())
 }
 

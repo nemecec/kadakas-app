@@ -45,7 +45,10 @@ fn the_plan_is_checked() {
     let mut p = Plan::default();
     p.courses.push(CourseDef {
         name: "a".into(),
-        path: vec![Vertex::corner(v(0.0, 0.0)), Vertex::corner(v(10_000.0, 0.0))],
+        path: vec![
+            Vertex::corner(v(0.0, 0.0)),
+            Vertex::corner(v(10_000.0, 0.0)),
+        ],
         ..Default::default()
     });
     assert!(p.validate().is_ok());
@@ -107,7 +110,10 @@ fn the_plan_moves_with_the_object() {
     assert_eq!(q.courses[0].path[1].p, v(100.0, 59.0));
     // Objects without a plan, and other shapes, stay as they are.
     let mut line = o.clone();
-    line.shape = Shape::Line { a: v(0.0, 0.0), b: v(1.0, 0.0) };
+    line.shape = Shape::Line {
+        a: v(0.0, 0.0),
+        b: v(1.0, 0.0),
+    };
     assert!(data(&line).is_none());
     translate_data(&mut line, v(1.0, 1.0));
     o.data.insert(KEY.into(), serde_json::json!({"splits": 5}));
@@ -118,7 +124,16 @@ fn the_plan_moves_with_the_object() {
 
 #[test]
 fn paths_of_drawn_objects() {
-    assert_eq!(path_of(&Shape::Line { a: v(0.0, 0.0), b: v(1.0, 0.0) }).unwrap().0.len(), 2);
+    assert_eq!(
+        path_of(&Shape::Line {
+            a: v(0.0, 0.0),
+            b: v(1.0, 0.0)
+        })
+        .unwrap()
+        .0
+        .len(),
+        2
+    );
     let (arc, closed) = path_of(&Shape::Arc {
         center: v(0.0, 0.0),
         radius: 10.0,
@@ -129,12 +144,20 @@ fn paths_of_drawn_objects() {
     assert_eq!(arc.len(), 3);
     assert!(!closed);
     assert!((arc[1].p.y - 10.0).abs() < 1e-9);
-    assert!(path_of(&Shape::Arc {
-        center: v(0.0, 0.0),
-        radius: 10.0,
-        start: 0.0,
-        end: std::f64::consts::TAU
-    })
-    .is_none());
-    assert!(path_of(&Shape::Circle { center: v(0.0, 0.0), radius: 1.0 }).is_none());
+    assert!(
+        path_of(&Shape::Arc {
+            center: v(0.0, 0.0),
+            radius: 10.0,
+            start: 0.0,
+            end: std::f64::consts::TAU
+        })
+        .is_none()
+    );
+    assert!(
+        path_of(&Shape::Circle {
+            center: v(0.0, 0.0),
+            radius: 1.0
+        })
+        .is_none()
+    );
 }

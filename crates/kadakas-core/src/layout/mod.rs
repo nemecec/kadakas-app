@@ -290,6 +290,12 @@ pub fn area_shared(a: &[DVec2], b: &[DVec2]) -> f64 {
     shapes_area(&to_shapes(shapes))
 }
 
+/// The area that two shapes share, in mm2. A shape is its outline and then its holes.
+pub fn shapes_overlap(a: &[Vec<DVec2>], b: &[Vec<DVec2>]) -> f64 {
+    let shapes = paths(a).overlay(&paths(b), OverlayRule::Intersect, FillRule::EvenOdd);
+    shapes_area(&to_shapes(shapes))
+}
+
 /// The parts of `inner` that lie inside `outer`, as flat rings (holes of the parts are dropped).
 pub fn clip_ring_to(inner: &[DVec2], outer: &[DVec2]) -> Vec<Vec<DVec2>> {
     to_shapes(paths(&[inner.to_vec()]).overlay(
@@ -430,8 +436,9 @@ impl Region {
                     .filter(|r| r.len() >= 3)
                     .collect();
                 // The outline must survive; a hole that collapsed is dropped.
-                (s.first().is_some_and(|o| crate::geom::open_ring(o, 1e-9).len() >= 3))
-                    .then_some(rings)
+                (s.first()
+                    .is_some_and(|o| crate::geom::open_ring(o, 1e-9).len() >= 3))
+                .then_some(rings)
             })
             .collect();
         if shapes.is_empty() {

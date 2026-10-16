@@ -191,13 +191,21 @@ impl Plan {
             if !z.seed.is_finite() {
                 return Err(format!("zone setting {} has no finite seed point", i + 1));
             }
-            if z.angle.is_some_and(|a| !a.is_finite()) || z.origin.is_some_and(|o| !o.is_finite())
-            {
+            if z.angle.is_some_and(|a| !a.is_finite()) || z.origin.is_some_and(|o| !o.is_finite()) {
                 return Err(format!("zone setting {}: numbers must be finite", i + 1));
             }
             if let Some(p) = &z.pattern {
                 p.validate()
                     .map_err(|e| format!("zone setting {}: {e}", i + 1))?;
+                if p.bond != super::Bond::Module
+                    && (p.unit_length < Pattern::MIN_UNIT || p.unit_width < Pattern::MIN_UNIT)
+                {
+                    return Err(format!(
+                        "zone setting {}: units must be at least {} mm",
+                        i + 1,
+                        Pattern::MIN_UNIT
+                    ));
+                }
             }
             if z.align_to_split.is_some_and(|n| n >= self.splits.len()) {
                 return Err(format!(
@@ -586,7 +594,11 @@ pub fn effective_splits(
 }
 
 /// The course path now: a followed object read again, else the saved path.
-pub fn effective_path(doc: &Document, c: &CourseDef, notes: &mut Vec<String>) -> (Vec<Vertex>, bool) {
+pub fn effective_path(
+    doc: &Document,
+    c: &CourseDef,
+    notes: &mut Vec<String>,
+) -> (Vec<Vertex>, bool) {
     if let Some(id) = c.source {
         match doc.object(id).and_then(|o| path_of(&o.shape)) {
             Some((p, closed)) => return (p, closed),
@@ -635,6 +647,12 @@ pub fn plan_groups(
     place: Placement,
     max_units: usize,
 ) -> Result<Planned, String> {
+    if has_unreadable_data(obj) {
+        return Err(format!(
+            "the zones and courses of object {} cannot be read (data pattern_plan). Clear them with hardscape.plan_clear",
+            obj.id
+        ));
+    }
     let plan = data(obj).unwrap_or_default();
     let mut out = Planned::default();
     if plan.is_empty() {
