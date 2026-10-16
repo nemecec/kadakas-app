@@ -23,6 +23,8 @@ pub const MAX_UNIT_TYPES: usize = 16;
 pub const MAX_OUTLINE_VERTICES: usize = 2000;
 /// Flattening tolerance of the curves of a module, in mm.
 pub const TOLERANCE: f64 = 0.25;
+/// Most lattice shifts tested for one pair of unit shapes.
+pub const MAX_SHIFTS: usize = 400;
 /// Shortest repeat vector, in mm.
 pub const MIN_VECTOR: f64 = 1.0;
 
@@ -113,6 +115,21 @@ fn crosses_itself(r: &[DVec2]) -> bool {
         }
     }
     false
+}
+
+/// Gauss reduction of a lattice basis: the same lattice with the shortest, most square vectors.
+pub fn reduce_basis(mut a: DVec2, mut b: DVec2) -> (DVec2, DVec2) {
+    for _ in 0..200 {
+        if a.length_squared() > b.length_squared() {
+            std::mem::swap(&mut a, &mut b);
+        }
+        let m = (b.dot(a) / a.length_squared()).round();
+        if m == 0.0 {
+            break;
+        }
+        b -= a * m;
+    }
+    (a, b)
 }
 
 impl Module {
@@ -227,31 +244,82 @@ impl Module {
                 det.abs()
             ));
         }
-        // Overlaps: between the shapes of one cell, and with the copies on the next lattice points.
-        let steps = [a, b, a + b, a - b];
+        // Overlaps: between the shapes of one cell, and with every copy whose box meets the box of
+        // the other shape. The basis is reduced first (Gauss), so the vectors are as short and as
+        // square as they can be and the copies that can meet a shape are near the origin. A basis
+        // such as a = (100, 0), b = (300, 10) has a short vector b - 3a = (0, 10) that the first
+        // basis does not show.
+        let (ra, rb) = reduce_basis(a, b);
+        let mut tested = 0usize;
         for i in 0..kinds.len() {
-            for j in 0..kinds.len() {
-                let small = ring_area(&kinds[i].cell).min(ring_area(&kinds[j].cell));
+            for j in i..kinds.len() {
+                let (ki, kj) = (&kinds[i], &kinds[j]);
+                let small = ring_area(&ki.cell).min(ring_area(&kj.cell));
                 let limit = 1e-6 * small;
-                let mut shifts: Vec<(DVec2, &str)> = Vec::new();
-                if i < j {
-                    shifts.push((DVec2::ZERO, "in the same cell"));
+                // The shifts t of shape j for which its box meets the box of shape i.
+                let (tlo, thi) = (ki.lo - kj.hi, ki.hi - kj.lo);
+                let corners = [tlo, DVec2::new(thi.x, tlo.y), thi, DVec2::new(tlo.x, thi.y)];
+                let rdet = ra.perp_dot(rb);
+                let (mut u0, mut u1, mut v0, mut v1) = (
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                );
+                for c in corners {
+                    let (u, v) = (c.perp_dot(rb) / rdet, ra.perp_dot(c) / rdet);
+                    u0 = u0.min(u);
+                    u1 = u1.max(u);
+                    v0 = v0.min(v);
+                    v1 = v1.max(v);
                 }
-                for (k, s) in steps.iter().enumerate() {
-                    let what = ["a", "b", "a + b", "a - b"][k];
-                    shifts.push((*s, what));
-                    shifts.push((-*s, what));
+                let (u0, u1, v0, v1) = (
+                    u0.floor() as i64,
+                    u1.ceil() as i64,
+                    v0.floor() as i64,
+                    v1.ceil() as i64,
+                );
+                if (u1 - u0 + 1) as f64 * (v1 - v0 + 1) as f64 > MAX_SHIFTS as f64 {
+                    return Err(format!(
+                        "the unit shape '{}' reaches across too many lattice cells ({} by {}). Check the repeat vectors, or draw the shapes inside one cell",
+                        ki.name,
+                        u1 - u0 + 1,
+                        v1 - v0 + 1
+                    ));
                 }
-                for (t, what) in shifts {
-                    if overlap_area(&kinds[i].cell, &kinds[j].cell, t) > limit {
-                        let (n1, n2) = (&kinds[i].name, &kinds[j].name);
-                        return Err(if t == DVec2::ZERO {
-                            format!("the unit shapes '{n1}' and '{n2}' overlap")
-                        } else {
-                            format!(
-                                "the unit shape '{n1}' overlaps '{n2}' moved by {what} (check the repeat vectors)"
-                            )
-                        });
+                for iu in u0..=u1 {
+                    for jv in v0..=v1 {
+                        let t = ra * iu as f64 + rb * jv as f64;
+                        if i == j && iu == 0 && jv == 0 {
+                            continue;
+                        }
+                        // The boxes must meet.
+                        if kj.lo.x + t.x > ki.hi.x
+                            || kj.hi.x + t.x < ki.lo.x
+                            || kj.lo.y + t.y > ki.hi.y
+                            || kj.hi.y + t.y < ki.lo.y
+                        {
+                            continue;
+                        }
+                        tested += 1;
+                        if tested > 20 * MAX_SHIFTS {
+                            return Err(
+                                "the module has too many shapes close to each other to check"
+                                    .into(),
+                            );
+                        }
+                        if overlap_area(&ki.cell, &kj.cell, t) > limit {
+                            let (n1, n2) = (&ki.name, &kj.name);
+                            return Err(if iu == 0 && jv == 0 {
+                                format!("the unit shapes '{n1}' and '{n2}' overlap")
+                            } else {
+                                format!(
+                                    "the unit shape '{n1}' overlaps '{n2}' moved by {iu} a' + {jv} b' (a' = {:.1?}, b' = {:.1?} are the repeat vectors made short). Check the repeat vectors",
+                                    ra.to_array(),
+                                    rb.to_array()
+                                )
+                            });
+                        }
                     }
                 }
             }

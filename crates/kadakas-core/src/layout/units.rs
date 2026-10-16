@@ -32,7 +32,10 @@ pub struct Unit {
     pub share: f64,
     /// The unit shape (the index into `Stats::kinds`). Always 0 in the four bonds.
     pub kind: usize,
-    /// About how wide the piece is, in mm: twice its area over its perimeter.
+    /// How wide the piece is, in mm: the smallest width of the convex hull of its outline over
+    /// all directions. It is the short side of a rectangle, also when the piece is long. The hull
+    /// hides a thin tail or a notch of a concave piece, so the width can be overstated for such a
+    /// piece (a piece may be flagged as too narrow less often than it should, never more often).
     pub width: f64,
 }
 
@@ -80,13 +83,16 @@ pub enum LayoutError {
     TooMany(TooMany),
     /// The pattern or the region is not valid. The text says why.
     Invalid(String),
+    /// The region is so long and thin in the frame of the pattern that the scan of its box would
+    /// test far more cells than there are units. The text says what to do.
+    Scan(String),
 }
 
 impl std::fmt::Display for LayoutError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LayoutError::TooMany(t) => t.fmt(f),
-            LayoutError::Invalid(s) => f.write_str(s),
+            LayoutError::Invalid(s) | LayoutError::Scan(s) => f.write_str(s),
         }
     }
 }
@@ -594,8 +600,17 @@ pub fn for_each_unit(
     let ((i0, i1), (j0, j1)) = lattice_range(&comp, lo, hi);
     let steps = (i1 - i0 + 1) as f64 * (j1 - j0 + 1) as f64 * pieces as f64;
     if steps > (max_units as f64) * 8.0 + 10_000.0 {
-        return Err(too_many(estimated.max(steps as u64 / 4)));
+        return Err(LayoutError::Scan(format!(
+            "the region is long and thin in the frame of the pattern: its box holds about {} cells to test for about {estimated} units. Turn the pattern (angle, or align_to_edge) to follow the length of the region, or split the region",
+            steps as u64
+        )));
     }
+    // The width of each piece of each unit shape (the same for every copy of it).
+    let widths: Vec<Vec<f64>> = comp
+        .kinds
+        .iter()
+        .map(|k| k.pieces.iter().map(|p| min_width(p)).collect())
+        .collect();
     let mut inside_cache: std::collections::HashMap<(usize, usize), bool> = Default::default();
     let mut buf: Vec<DVec2> = Vec::new();
     let mut near: Vec<u32> = Vec::new();
@@ -612,7 +627,7 @@ pub fn for_each_unit(
                 {
                     continue;
                 }
-                for piece in &kind.pieces {
+                for (pi, piece) in kind.pieces.iter().enumerate() {
                     buf.clear();
                     buf.extend(piece.iter().map(|p| *p + t));
                     let (mut plo, mut phi) =
@@ -645,7 +660,15 @@ pub fn for_each_unit(
                                 return Err(too_many(estimated.max(stats.units as u64 + 1)));
                             }
                             stats.units += 1;
-                            let u = whole_unit(&buf, origin, turn, ki, piece_area, kind.area);
+                            let u = whole_unit(
+                                &buf,
+                                origin,
+                                turn,
+                                ki,
+                                piece_area,
+                                kind.area,
+                                widths[ki][pi],
+                            );
                             f(&u);
                         }
                         continue;
@@ -671,7 +694,15 @@ pub fn for_each_unit(
                         }
                         stats.units += 1;
                         stats.trimmed += 1;
-                        let u = whole_unit(&buf, origin, turn, ki, piece_area, kind.area);
+                        let u = whole_unit(
+                            &buf,
+                            origin,
+                            turn,
+                            ki,
+                            piece_area,
+                            kind.area,
+                            widths[ki][pi],
+                        );
                         f(&u);
                         continue;
                     }
@@ -695,7 +726,6 @@ pub fn for_each_unit(
                             stats.dust_pieces += 1;
                             continue;
                         }
-                        let perimeter: f64 = pts.iter().map(|r| ring_length(r)).sum();
                         made.push(Unit {
                             rings: pts
                                 .iter()
@@ -709,7 +739,7 @@ pub fn for_each_unit(
                             area: a,
                             share: a / kind.area,
                             kind: ki,
-                            width: 2.0 * a / perimeter.max(1e-9),
+                            width: min_width(&pts[0]),
                         });
                     }
                     // Counted after the dust is gone: one piece, no hole, and all of the unit.
@@ -738,6 +768,7 @@ fn whole_unit(
     kind: usize,
     area: f64,
     full: f64,
+    width: f64,
 ) -> Unit {
     Unit {
         rings: vec![UnitRing {
@@ -748,8 +779,58 @@ fn whole_unit(
         area,
         share: area / full,
         kind,
-        width: 2.0 * area / ring_length(buf).max(1e-9),
+        width,
     }
+}
+
+/// The smallest width of the convex hull of the ring over all directions (the narrowest strip
+/// that holds it). For a concave ring the hull hides a thin tail, so the width is overstated, on
+/// the safe side for a test of "too narrow". The inscribed-circle diameter would be smaller for a
+/// long piece and needs more work.
+pub fn min_width(ring: &[DVec2]) -> f64 {
+    let mut pts: Vec<DVec2> = ring.to_vec();
+    pts.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    pts.dedup();
+    if pts.len() < 3 {
+        return 0.0;
+    }
+    // Andrew's monotone chain.
+    let cross = |o: DVec2, a: DVec2, b: DVec2| (a - o).perp_dot(b - o);
+    let mut hull: Vec<DVec2> = Vec::new();
+    for pass in 0..2 {
+        let start = hull.len();
+        let iter: Box<dyn Iterator<Item = &DVec2>> = if pass == 0 {
+            Box::new(pts.iter())
+        } else {
+            Box::new(pts.iter().rev())
+        };
+        for &p in iter {
+            while hull.len() >= start + 2
+                && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
+            {
+                hull.pop();
+            }
+            hull.push(p);
+        }
+        hull.pop();
+    }
+    let n = hull.len();
+    if n < 3 {
+        return 0.0;
+    }
+    let mut best = f64::INFINITY;
+    for i in 0..n {
+        let (a, b) = (hull[i], hull[(i + 1) % n]);
+        let Some(d) = (b - a).try_normalize() else {
+            continue;
+        };
+        let far = hull
+            .iter()
+            .map(|p| d.perp_dot(*p - a).abs())
+            .fold(0.0, f64::max);
+        best = best.min(far);
+    }
+    if best.is_finite() { best } else { 0.0 }
 }
 
 /// True if the unit `buf` sticks out of the region only by less than `trim`, and no corner of

@@ -38,14 +38,20 @@ fn with_one_insert(text: &str, block: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
     let mut in_entities = false;
+    let mut found = false;
+    let insert = format!("0\nINSERT\n8\n0\n2\n{block}\n10\n0\n20\n0\n30\n0\n");
     while i + 1 < lines.len() {
         let (code, value) = (lines[i].trim(), lines[i + 1].trim());
+        // A file without an ENTITIES section gets one before its end.
+        if !found && !in_entities && code == "0" && value == "EOF" {
+            out.push_str(&format!("0\nSECTION\n2\nENTITIES\n{insert}0\nENDSEC\n"));
+            found = true;
+        }
         if in_entities {
             if code == "0" && value == "ENDSEC" {
                 in_entities = false;
-                out.push_str(&format!(
-                    "0\nINSERT\n8\n0\n2\n{block}\n10\n0\n20\n0\n30\n0\n0\nENDSEC\n"
-                ));
+                out.push_str(&insert);
+                out.push_str("0\nENDSEC\n");
             }
             i += 2;
             continue;
@@ -57,6 +63,7 @@ fn with_one_insert(text: &str, block: &str) -> String {
             && lines[i - 1].trim() == "SECTION"
         {
             in_entities = true;
+            found = true;
             out.push_str("2\nENTITIES\n");
             i += 2;
             continue;

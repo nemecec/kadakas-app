@@ -532,7 +532,7 @@ fn the_basket_weave_never_resizes_a_unit_and_says_how_wide_the_joints_get() {
     // 200 x 100 with a gap of 5: the block is 210 mm, the length needs 205: the extra goes into the joint.
     let p = pat(Bond::BasketWeave, 5.0);
     assert!(
-        (p.widest_joint() - 10.0).abs() < 1e-9,
+        (p.widest_joint() - 7.5).abs() < 1e-9,
         "{}",
         p.widest_joint()
     );
@@ -770,6 +770,251 @@ fn the_order_has_bounds_and_unfillable_pieces_are_counted_separately() {
     );
 }
 
+#[test]
+fn bond_units_are_named_by_their_size() {
+    let r = region(&rect(3000.0, 2000.0), &[]);
+    for bond in Bond::ALL {
+        let s = summarize(
+            &r,
+            &pat(bond, 5.0),
+            &Placement::default(),
+            &SummaryOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(s.by_unit.len(), 1, "{bond:?}");
+        assert_eq!(s.by_unit[0].name, "200x100", "{bond:?}");
+        assert_eq!(s.by_unit[0].whole_units, s.whole_units);
+        assert_eq!(s.by_unit[0].order_units_min, s.order_units_min);
+    }
+    let s = summarize(
+        &r,
+        &Pattern::new(Bond::Stack, 300.0, 150.5, 4.0),
+        &Placement::default(),
+        &SummaryOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(s.by_unit[0].name, "300x150.5");
+}
+
+#[test]
+fn the_widest_joint_of_a_basket_weave_is_the_real_one() {
+    // 200 x 100 with a gap of 3: the block is 206 wide, the unit needs 203. The unit sits in the
+    // middle of its slot: 3 mm on each side of the block, and the units of the next block start
+    // 1.5 mm in, so the joint between two blocks is 3 + 1.5 mm.
+    let p = pat(Bond::BasketWeave, 3.0);
+    assert!(
+        (p.widest_joint() - 4.5).abs() < 1e-9,
+        "{}",
+        p.widest_joint()
+    );
+    // The measured joint between a whole unit and its neighbour of the next block is the same.
+    let r = region(&rect(2060.0, 2060.0), &[]);
+    let place = Placement {
+        origin: Some(DVec2::ZERO),
+        angle: 0.0,
+    };
+    let (units, _) = run(&r, &p, &place);
+    let whole: Vec<&Unit> = units.iter().filter(|u| u.whole).collect();
+    // The first block (flat units) and the next block (standing units) along x.
+    let box_of = |u: &Unit| {
+        let pts = &u.rings[0].points;
+        let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+        for q in pts {
+            lo = lo.min(*q);
+            hi = hi.max(*q);
+        }
+        (lo, hi)
+    };
+    let flat = whole
+        .iter()
+        .map(|u| box_of(u))
+        .find(|(lo, hi)| (hi.x - lo.x - 200.0).abs() < 1e-6 && lo.x < 100.0 && lo.y < 100.0)
+        .unwrap();
+    let standing = whole
+        .iter()
+        .map(|u| box_of(u))
+        .filter(|(lo, hi)| (hi.y - lo.y - 200.0).abs() < 1e-6 && lo.x > flat.1.x && lo.y < 300.0)
+        .min_by(|a, b| a.0.x.total_cmp(&b.0.x))
+        .unwrap();
+    assert!(
+        (standing.0.x - flat.1.x - 4.5).abs() < 1e-6,
+        "{} {}",
+        standing.0.x,
+        flat.1.x
+    );
+}
+
+#[test]
+fn the_width_of_a_piece_is_the_width_of_its_narrowest_strip() {
+    use super::units::min_width;
+    let r = rect(200.0, 100.0);
+    assert!((min_width(&r) - 100.0).abs() < 1e-9);
+    // Turned by 30 degrees the width stays.
+    let turn = DVec2::from_angle(30f64.to_radians());
+    let t: Vec<DVec2> = r.iter().map(|p| turn.rotate(*p)).collect();
+    assert!((min_width(&t) - 100.0).abs() < 1e-9);
+    // A piece with a long thin tail has the width of the tail; the area over the perimeter would
+    // give 2/3 of the short side of a rectangle (2 x 100 x 200 / 600 = 66.7).
+    let tail = vec![
+        DVec2::new(0.0, 0.0),
+        DVec2::new(500.0, 0.0),
+        DVec2::new(500.0, 10.0),
+        DVec2::new(0.0, 10.0),
+    ];
+    assert!((min_width(&tail) - 10.0).abs() < 1e-9);
+    // A triangle: its smallest height. An L shape: the hull is a pentagon.
+    let tri = vec![DVec2::ZERO, DVec2::new(100.0, 0.0), DVec2::new(0.0, 100.0)];
+    assert!((min_width(&tri) - 70.710678).abs() < 1e-3);
+    assert_eq!(min_width(&[DVec2::ZERO, DVec2::X]), 0.0);
+    // A near-whole cut unit is no sliver by width: a 200 x 100 unit cut to 195 x 100 is 100 wide.
+    let r = region(&rect(795.0, 100.0), &[]);
+    let p = Pattern::new(Bond::Stack, 200.0, 100.0, 0.0);
+    let place = Placement {
+        origin: Some(DVec2::ZERO),
+        angle: 0.0,
+    };
+    let s = summarize(
+        &r,
+        &p,
+        &place,
+        &SummaryOptions {
+            min_width: 90.0,
+            trim: 0.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(s.cut_units, 1);
+    assert_eq!(s.unfillable_pieces, 0, "195 x 100 is 100 mm wide, not 66");
+    let s = summarize(
+        &r,
+        &p,
+        &place,
+        &SummaryOptions {
+            min_width: 110.0,
+            trim: 0.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(s.unfillable_pieces, 1);
+}
+
+#[test]
+fn a_shape_that_meets_a_far_lattice_copy_is_found() {
+    // a = (100, 0), b = (300, 10): the copy at b - 3a = (0, 10) overlaps the shape.
+    let m = Module {
+        units: vec![ModuleUnit {
+            name: "bar".into(),
+            outline: curve::corners(&[
+                DVec2::new(0.0, 0.0),
+                DVec2::new(60.0, 0.0),
+                DVec2::new(60.0, 15.0),
+                DVec2::new(0.0, 15.0),
+            ]),
+        }],
+        a: [100.0, 0.0],
+        b: [300.0, 10.0],
+    };
+    let e = m.compile(0.0).unwrap_err();
+    assert!(e.contains("overlaps"), "{e}");
+    // The same lattice with a shape of 8 mm height has room.
+    let ok = Module {
+        units: vec![ModuleUnit {
+            name: "bar".into(),
+            outline: curve::corners(&[
+                DVec2::new(0.0, 0.0),
+                DVec2::new(60.0, 0.0),
+                DVec2::new(60.0, 8.0),
+                DVec2::new(0.0, 8.0),
+            ]),
+        }],
+        ..m.clone()
+    };
+    assert!(ok.compile(0.0).is_ok());
+    // A shape drawn several lattice steps away from the others.
+    let far = Module {
+        units: vec![
+            ModuleUnit {
+                name: "near".into(),
+                outline: curve::corners(&[
+                    DVec2::ZERO,
+                    DVec2::new(50.0, 0.0),
+                    DVec2::new(50.0, 50.0),
+                    DVec2::new(0.0, 50.0),
+                ]),
+            },
+            ModuleUnit {
+                name: "far".into(),
+                // 3 steps of a away and 2 of b: the copy at -3a - 2b meets "near".
+                outline: curve::corners(&[
+                    DVec2::new(300.0, 200.0),
+                    DVec2::new(350.0, 200.0),
+                    DVec2::new(350.0, 250.0),
+                    DVec2::new(300.0, 250.0),
+                ]),
+            },
+        ],
+        a: [100.0, 0.0],
+        b: [0.0, 100.0],
+    };
+    assert!(far.compile(0.0).unwrap_err().contains("overlap"));
+    // The reduced basis is shorter and has the same cell.
+    let (ra, rb) = module::reduce_basis(DVec2::new(100.0, 0.0), DVec2::new(300.0, 10.0));
+    assert!((ra.perp_dot(rb).abs() - 1000.0).abs() < 1e-9 && ra.length() <= 10.0 + 1e-9);
+    // Too many cells to check: a shape across a huge number of cells is refused, not slow.
+    let wide = Module {
+        units: vec![ModuleUnit {
+            name: "w".into(),
+            outline: curve::corners(&[
+                DVec2::ZERO,
+                DVec2::new(100_000.0, 0.0),
+                DVec2::new(100_000.0, 5.0),
+                DVec2::new(0.0, 5.0),
+            ]),
+        }],
+        a: [10.0, 0.0],
+        b: [0.0, 10.0],
+    };
+    assert!(wide.compile(0.0).is_err());
+}
+
+#[test]
+fn the_minimum_order_is_kept_per_unit_type() {
+    let r = region(&rect(3000.0, 2000.0), &[]);
+    let p = Pattern::of_module(module::octagon_square(100.0).unwrap(), 4.0);
+    let s = summarize(&r, &p, &Placement::default(), &SummaryOptions::default()).unwrap();
+    for u in &s.by_unit {
+        assert!(
+            u.order_units_min >= u.whole_units && u.order_units_min <= u.whole_units + u.cut_units
+        );
+    }
+    let sum: usize = s.by_unit.iter().map(|u| u.order_units_min).sum();
+    assert!(sum >= s.order_units_min, "{sum} {}", s.order_units_min);
+}
+
+#[test]
+fn a_long_thin_region_in_the_frame_of_the_pattern_gets_a_clear_message() {
+    let thin = region(
+        &[
+            DVec2::new(0.0, 0.0),
+            DVec2::new(2_000_000.0, 2_000_000.0),
+            DVec2::new(2_000_000.0, 2_000_100.0),
+            DVec2::new(0.0, 100.0),
+        ],
+        &[],
+    );
+    let e = lay_units(
+        &thin,
+        &pat(Bond::Stack, 5.0),
+        &Placement::default(),
+        &Limits::new(10_000),
+    )
+    .unwrap_err();
+    assert!(matches!(e, LayoutError::Scan(_)), "{e:?}");
+    assert!(e.to_string().contains("Turn the pattern"), "{e}");
+}
+
 proptest! {
     #[test]
     fn units_never_exceed_the_region(
@@ -863,4 +1108,75 @@ fn measure_bounds() {
         );
         assert_eq!(units.len(), n);
     }
+}
+
+#[test]
+fn a_wide_joint_in_a_basket_weave_is_a_warning() {
+    let r = region(&rect(3000.0, 2000.0), &[]);
+    let place = Placement::default();
+    // 200 x 100 with a gap of 5: the widest joint is 7.5 mm, 2.5 mm more than the gap.
+    let s = summarize(
+        &r,
+        &pat(Bond::BasketWeave, 5.0),
+        &place,
+        &SummaryOptions::default(),
+    )
+    .unwrap();
+    let w = s.joint_warning.expect("a warning");
+    assert!(w.contains("7.5") && w.contains("2.5"), "{w}");
+    // With a gap of 3 the extra is 1.5 mm: no warning. A looser option takes the first one away.
+    let s = summarize(
+        &r,
+        &pat(Bond::BasketWeave, 3.0),
+        &place,
+        &SummaryOptions::default(),
+    )
+    .unwrap();
+    assert!(s.joint_warning.is_none() && (s.widest_joint_mm - 4.5).abs() < 1e-9);
+    let s = summarize(
+        &r,
+        &pat(Bond::BasketWeave, 5.0),
+        &place,
+        &SummaryOptions {
+            max_extra_joint_mm: 3.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(s.joint_warning.is_none());
+    // The other bonds have the gap as their joint.
+    let s = summarize(
+        &r,
+        &pat(Bond::Herringbone, 5.0),
+        &place,
+        &SummaryOptions::default(),
+    )
+    .unwrap();
+    assert!(s.joint_warning.is_none());
+}
+
+#[test]
+fn the_waste_is_worked_out_for_each_unit_type() {
+    let r = region(&rect(3000.0, 2000.0), &[]);
+    let p = Pattern::of_module(module::octagon_square(100.0).unwrap(), 4.0);
+    let s = summarize(
+        &r,
+        &p,
+        &Placement::default(),
+        &SummaryOptions {
+            waste_percent: Some(10.0),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for u in &s.by_unit {
+        assert_eq!(
+            u.order_units_with_waste,
+            Some(with_waste(u.order_units, 10.0)),
+            "{}",
+            u.name
+        );
+    }
+    let s = summarize(&r, &p, &Placement::default(), &SummaryOptions::default()).unwrap();
+    assert!(s.by_unit.iter().all(|u| u.order_units_with_waste.is_none()));
 }

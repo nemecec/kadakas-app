@@ -1026,3 +1026,126 @@ fn holes_are_checked_by_area_merged_and_repaired() {
     );
     assert!(hardscape::data::repair_holes(&mut o).is_none());
 }
+
+#[test]
+fn a_path_with_a_border_starts_on_the_inner_border_line() {
+    let mut ed = Editor::new(Document::with_sequential_ids());
+    let st = add_style(&mut ed, JointKind::Stack); // a border of 150 mm on both sides
+    let path = ObjectId(
+        ed.execute(&Command::AddHardscape {
+            boundary: None,
+            patch: Box::new(HardscapePatch {
+                center: Some(corners(&[DVec2::ZERO, DVec2::new(5000.0, 0.0)])),
+                width: Some(1000.0),
+                style: Some(st),
+                ..Default::default()
+            }),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let o = ed.doc().object(path).unwrap();
+    let outline = hardscape::data(o).unwrap().outline();
+    let pts = kadakas_core::curve::positions(&outline);
+    // Every long edge of the outline has the border, the ends do not.
+    for i in 0..pts.len() {
+        let p = layout::object::align_placement(ed.doc(), o, i).unwrap();
+        let start = p.origin.unwrap();
+        let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+        let along_x = (b - a).y.abs() < 1e-9;
+        if along_x {
+            // On the outline's long side: moved 150 mm in, across the path.
+            assert!((start.y.abs() - 350.0).abs() < 1e-6, "edge {i}: {start:?}");
+        } else {
+            // An end: not moved along the path, but the corner is inside the border of the long side.
+            assert!(start.y.abs() <= 500.0 + 1e-6);
+        }
+    }
+    // A border on the left only: the right edge keeps the outline.
+    let mut style = match &ed.doc().resources.get(st).unwrap().body {
+        ResourceBody::HardscapeStyle(s) => (**s).clone(),
+        _ => panic!(),
+    };
+    style.border.as_mut().unwrap().sides = hardscape::Sides::Left;
+    ed.execute(&Command::ModifyResource {
+        id: st,
+        name: None,
+        body: Some(ResourceBody::HardscapeStyle(Box::new(style))),
+    })
+    .unwrap();
+    let o = ed.doc().object(path).unwrap();
+    let ys: Vec<f64> = (0..pts.len())
+        .filter(|i| (pts[(i + 1) % pts.len()] - pts[*i]).y.abs() < 1e-9)
+        .map(|i| {
+            layout::object::align_placement(ed.doc(), o, i)
+                .unwrap()
+                .origin
+                .unwrap()
+                .y
+        })
+        .collect();
+    assert!(ys.iter().any(|y| (y.abs() - 500.0).abs() < 1e-6), "{ys:?}");
+    assert!(ys.iter().any(|y| (y.abs() - 350.0).abs() < 1e-6), "{ys:?}");
+}
+
+#[test]
+fn the_inner_corner_next_to_an_arc_uses_the_tangent() {
+    // A half disc: the corner at (2000, 0) joins the flat side and the arc. The arc leaves
+    // upward (tangent), the flat side comes in along x. The corner moved in by 100 mm on both
+    // edges is at (1900, 100) only when the arc is taken as a tangent, not as the chord.
+    let outline = vec![
+        Vertex::corner(DVec2::new(-2000.0, 0.0)),
+        Vertex::corner(DVec2::new(2000.0, 0.0)),
+        Vertex::new(DVec2::new(0.0, 2000.0), VertexKind::PointOnArc),
+    ];
+    let c = hardscape::data::inset_corner(&outline, 1, 100.0, 100.0);
+    assert!((c - DVec2::new(1900.0, 100.0)).length() < 1e-6, "{c:?}");
+    // No border on the edge before: only the arc moves.
+    let c = hardscape::data::inset_corner(&outline, 1, 0.0, 100.0);
+    assert!((c.x - 1900.0).abs() < 1e-6 && c.y.abs() < 1e-6, "{c:?}");
+    assert_eq!(
+        hardscape::data::inset_corner(&outline, 1, 0.0, 0.0),
+        DVec2::new(2000.0, 0.0)
+    );
+}
+
+#[test]
+fn a_bar_across_a_notch_is_a_part_overlap_and_not_a_hole() {
+    // An island that leaves the lot at both ends of a notch: two pieces stay inside.
+    let mut ed = Editor::new(Document::with_sequential_ids());
+    let lot = add_poly(
+        &mut ed,
+        &[
+            DVec2::new(0.0, 0.0),
+            DVec2::new(4000.0, 0.0),
+            DVec2::new(4000.0, 2000.0),
+            DVec2::new(2200.0, 2000.0),
+            DVec2::new(2200.0, 1000.0),
+            DVec2::new(1800.0, 1000.0),
+            DVec2::new(1800.0, 2000.0),
+            DVec2::new(0.0, 2000.0),
+        ],
+    );
+    // A bar across the notch that is inside the lot at both sides of the notch, 0.02 mm past the
+    // outline at the top (noise, so it counts as inside) and crossing the notch.
+    let bar = add_poly(
+        &mut ed,
+        &[
+            DVec2::new(1000.0, 500.0),
+            DVec2::new(3000.0, 500.0),
+            DVec2::new(3000.0, 1500.0),
+            DVec2::new(1000.0, 1500.0),
+        ],
+    );
+    let made = batch::from_shapes(ed.doc(), &[lot, bar], &FromShapesOptions::default());
+    // The bar leaves the notch part of the lot: it is a part overlap, not a hole.
+    assert_eq!(made.holes.len(), 0, "{:?}", made.holes);
+    assert!(
+        made.skipped
+            .iter()
+            .any(|s| s.0 == bar && s.1.contains("overlaps"))
+    );
+}

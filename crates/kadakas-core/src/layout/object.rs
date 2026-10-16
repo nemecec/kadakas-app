@@ -155,14 +155,18 @@ fn move_ring(ring: &[DVec2], d: f64, side: crate::edit2d::offset::Side) -> Optio
 /// line, where the pattern begins.
 pub fn align_placement(doc: &Document, obj: &Object, index: usize) -> Result<Placement, String> {
     let (outline, _) = outline_of(obj)?;
-    let mut p = Placement::along_edge(&outline, index)?;
-    if let Some((width, _)) = border_of(doc, obj)
-        && matches!(obj.shape, Shape::Hardscape { .. })
-        && crate::hardscape::data(obj).is_none_or(|d| d.mode == crate::hardscape::Mode::Slab)
-    {
-        p.origin = Some(crate::hardscape::data::inset_corner(&outline, index, width));
+    if let Shape::Hardscape { .. } = obj.shape {
+        let mut d = crate::hardscape::data(obj).unwrap_or_default();
+        // A path has the outline of its center line.
+        let outline = if d.mode == crate::hardscape::Mode::Path {
+            d.outline()
+        } else {
+            outline
+        };
+        d.holes.clear();
+        return crate::hardscape::data::align_start(&outline, &d, border_of(doc, obj), index);
     }
-    Ok(p)
+    Placement::along_edge(&outline, index)
 }
 
 /// The pattern of an object, with where it starts: for a hardscape, the joint pattern of its style

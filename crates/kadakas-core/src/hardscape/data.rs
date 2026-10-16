@@ -465,7 +465,6 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
         } else {
             boundary.clone()
         };
-        let mut p = crate::layout::Placement::along_edge(&outline, i)?;
         // Inside a kerb border the pattern starts on the inner border line.
         let style = if patch.unstyle {
             None
@@ -475,10 +474,8 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
         let border = style
             .and_then(|id| doc.resources.hardscape_style(id))
             .and_then(|st| st.border.as_ref())
-            .map_or(0.0, |b| b.width);
-        if border > 0.0 && d.mode == Mode::Slab {
-            p.origin = Some(inset_corner(&outline, i, border));
-        }
+            .map(|b| (b.width, b.sides));
+        let p = align_start(&outline, &d, border, i)?;
         d.origin = p.origin;
         d.angle = Some(p.angle);
     }
@@ -655,29 +652,147 @@ pub fn repair_holes(obj: &mut Object) -> Option<String> {
     ))
 }
 
-/// The corner `index` of a closed outline moved inward by `d`: the point where the two edges at the
-/// corner, each moved inward by `d`, meet. Used for the start of a pattern inside a kerb border.
-pub fn inset_corner(outline: &[Vertex], index: usize, d: f64) -> DVec2 {
+/// The direction of travel at the start of a segment.
+fn start_direction(seg: &curve::Seg) -> DVec2 {
+    match *seg {
+        curve::Seg::Line { from, to } => to - from,
+        curve::Seg::Arc { start, sweep, .. } => {
+            DVec2::new(-start.sin(), start.cos()) * sweep.signum()
+        }
+        curve::Seg::Quad { from, c, to } => {
+            if c != from {
+                c - from
+            } else {
+                to - from
+            }
+        }
+        curve::Seg::Cubic { from, c1, c2, to } => [c1 - from, c2 - from, to - from]
+            .into_iter()
+            .find(|d| d.length_squared() > 0.0)
+            .unwrap_or(DVec2::ZERO),
+    }
+}
+
+/// The directions of the outline at corner `index`: arriving and leaving. At the end of an arc
+/// this is the tangent of the arc, not the chord. Corners that a fillet changed fall back to the
+/// chords.
+fn corner_directions(outline: &[Vertex], index: usize) -> (DVec2, DVec2) {
     let pts = curve::positions(outline);
     let n = pts.len();
-    let (prev, p, next) = (pts[(index + n - 1) % n], pts[index], pts[(index + 1) % n]);
-    let ccw = crate::geom::signed_area(&pts) >= 0.0;
+    let p = pts[index];
+    let chord_in = (p - pts[(index + n - 1) % n]).normalize_or_zero();
+    let chord_out = (pts[(index + 1) % n] - p).normalize_or_zero();
+    let path = curve::path(outline, true);
+    let arriving = path
+        .segs
+        .iter()
+        .find(|s| s.to().distance(p) < 1e-6)
+        .map(|s| s.end_direction().normalize_or_zero())
+        .filter(|d| *d != DVec2::ZERO);
+    let leaving = path
+        .segs
+        .iter()
+        .find(|s| s.from().distance(p) < 1e-6)
+        .map(|s| start_direction(s).normalize_or_zero())
+        .filter(|d| *d != DVec2::ZERO);
+    (arriving.unwrap_or(chord_in), leaving.unwrap_or(chord_out))
+}
+
+/// The corner `index` of a closed outline moved inward: the point where the two edges at the
+/// corner, the edge before it moved inward by `d_before` and the edge after it by `d_after`, meet.
+/// An edge next to an arc counts as the tangent of the arc at the corner. Used for the start of a
+/// pattern inside a kerb border.
+pub fn inset_corner(outline: &[Vertex], index: usize, d_before: f64, d_after: f64) -> DVec2 {
+    let pts = curve::positions(outline);
+    let p = pts[index];
+    if d_before == 0.0 && d_after == 0.0 {
+        return p;
+    }
+    let ring = curve::flatten(outline, true, 1.0);
+    let ccw = crate::geom::signed_area(&ring) >= 0.0;
     let inward = |dir: DVec2| {
         let left = DVec2::new(-dir.y, dir.x);
         if ccw { left } else { -left }
     };
-    let (d1, d2) = (
-        (p - prev).normalize_or_zero(),
-        (next - p).normalize_or_zero(),
-    );
-    let (n1, n2) = (inward(d1), inward(d2));
-    // Solve p + n1 d + s d1 = p + n2 d + t d2 for the meeting point.
-    let cross = d1.perp_dot(d2);
+    let (u1, u2) = corner_directions(outline, index);
+    let (n1, n2) = (inward(u1), inward(u2));
+    let cross = u1.perp_dot(u2);
     if cross.abs() < 1e-9 {
-        return p + n1 * d;
+        return if d_after != 0.0 {
+            p + n2 * d_after
+        } else {
+            p + n1 * d_before
+        };
     }
-    let s = ((n2 - n1) * d).perp_dot(d2) / cross;
-    p + n1 * d + d1 * s
+    // Solve p + n1 d1 + s u1 = p + n2 d2 + t u2 for the meeting point.
+    let r = n2 * d_after - n1 * d_before;
+    let s = r.perp_dot(u2) / cross;
+    p + n1 * d_before + u1 * s
+}
+
+/// How far the pattern starts inside the edge `edge` of the outline of `d`: the width of the kerb
+/// border on that edge, or 0. A slab has the border on all edges. A path has it on its long
+/// sides, as the style says, and not on its ends.
+fn border_on_edge(
+    outline: &[Vertex],
+    d: &HardscapeData,
+    border: (f64, super::style::Sides),
+    edge: usize,
+) -> f64 {
+    let (width, sides) = border;
+    if d.mode != Mode::Path {
+        return width;
+    }
+    let pts = curve::positions(outline);
+    let n = pts.len();
+    let mid = (pts[edge % n] + pts[(edge + 1) % n]) / 2.0;
+    let axis = d.axis();
+    let mut best: Option<(f64, f64)> = None; // (distance, side)
+    for w in axis.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let Some(u) = (b - a).try_normalize() else {
+            continue;
+        };
+        let t = (mid - a).dot(u).clamp(0.0, a.distance(b));
+        let q = a + u * t;
+        let dist = q.distance(mid);
+        if best.is_none_or(|(bd, _)| dist < bd) {
+            best = Some((dist, u.perp_dot(mid - q)));
+        }
+    }
+    let Some((dist, side)) = best else { return 0.0 };
+    // An edge across the end of a path is on the center line: no border there.
+    if dist < d.width * 0.25 {
+        return 0.0;
+    }
+    use super::style::Sides;
+    let on = match sides {
+        Sides::Both => true,
+        Sides::Left => side > 0.0,
+        Sides::Right => side < 0.0,
+    };
+    if on { width } else { 0.0 }
+}
+
+/// A placement that starts at vertex `index` of `outline` and runs along the edge to the next
+/// vertex. With a kerb border (`border`: the width and the sides), the start is on the inner
+/// border line: the corner of the paved part, where the border of the two edges at the corner
+/// meet (an edge without border does not move it). A curved edge counts as its chord for the
+/// angle.
+pub fn align_start(
+    outline: &[Vertex],
+    d: &HardscapeData,
+    border: Option<(f64, super::style::Sides)>,
+    index: usize,
+) -> Result<crate::layout::Placement, String> {
+    let mut p = crate::layout::Placement::along_edge(outline, index)?;
+    if let Some(b) = border.filter(|b| b.0 > 0.0) {
+        let n = outline.len();
+        let before = border_on_edge(outline, d, b, (index + n - 1) % n);
+        let after = border_on_edge(outline, d, b, index);
+        p.origin = Some(inset_corner(outline, index, before, after));
+    }
+    Ok(p)
 }
 
 /// Moves the data that holds positions with the object: the center line of a path, the holes and

@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use kadakas_core::DVec2;
 use kadakas_core::command::{Command, Editor};
 use kadakas_core::curve::{self, corners};
-use kadakas_core::hardscape::HardscapePatch;
 use kadakas_core::hardscape::style::{HardscapeStyle, JointKind, JointPattern};
+use kadakas_core::hardscape::{self, HardscapePatch};
 use kadakas_core::layout::summary::{SummaryOptions, summarize};
 use kadakas_core::layout::{self, object};
 use kadakas_core::model::{Attributes, Document, ObjectId};
@@ -599,4 +599,42 @@ fn measure_export() {
             t.elapsed().as_millis(),
         );
     }
+}
+
+#[test]
+fn a_dxf_file_without_an_entities_section_still_gives_its_block() {
+    use kadakas_io::dxf::block::block_outlines;
+    let text = "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n8\n0\n2\nB\n70\n0\n10\n0\n20\n0\n0\nLWPOLYLINE\n8\nA\n90\n4\n70\n1\n10\n0\n20\n0\n10\n10\n20\n0\n10\n10\n20\n10\n10\n0\n20\n10\n0\nENDBLK\n0\nENDSEC\n0\nEOF\n";
+    let o = block_outlines(text.as_bytes(), "B").unwrap();
+    assert_eq!(o.len(), 1);
+    assert_eq!(o[0].layer, "A");
+}
+
+#[test]
+fn only_a_count_over_the_limit_gets_the_limit_text() {
+    // A long thin lot at an angle to the pattern: not too many units, but a scan that is too wide.
+    let (mut ed, id) = lot(JointKind::Stack, 100.0, 100.0, vec![], None, None);
+    let o = ed.doc().object(id).unwrap().clone();
+    let style = hardscape::data::style_id(&o).unwrap();
+    ed.execute(&Command::AddHardscape {
+        boundary: Some(corners(&[
+            DVec2::new(0.0, 0.0),
+            DVec2::new(2_000_000.0, 2_000_000.0),
+            DVec2::new(2_000_000.0, 2_000_100.0),
+            DVec2::new(0.0, 100.0),
+        ])),
+        patch: Box::new(HardscapePatch {
+            style: Some(style),
+            ..Default::default()
+        }),
+        layer: None,
+        class: None,
+        attrs: Attributes::default(),
+    })
+    .unwrap();
+    let err = export(ed.doc(), PatternExport::Units)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("Turn the pattern"), "{err}");
+    assert!(!err.contains("limit of a DXF export"), "{err}");
 }
