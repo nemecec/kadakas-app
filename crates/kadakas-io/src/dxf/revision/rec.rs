@@ -210,6 +210,7 @@ impl Rec {
     /// Cuts the points to what a stored summary keeps. The center and diagonal stay.
     pub fn compact(&mut self) {
         self.points.truncate(MAX_STORED_POINTS);
+        self.block.clear();
     }
 
     pub fn to_value(&self) -> Value {
