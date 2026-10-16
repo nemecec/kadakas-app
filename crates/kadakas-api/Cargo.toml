@@ -50,7 +50,7 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 resvg = { version = "0.48.1", default-features = false }
 proptest = "1.11.0"
 # Makes hostile BCF archives in the tests. Not shipped here (kadakas-review reads them).
-zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2"] }
 kadakas-collab = { version = "0.1.0", path = "../kadakas-collab", features = ["testkit"] }
 # The in-process WebSocket server for tests of `collab.connect {url}`. Not shipped.
 kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws", features = ["test-server"] }
