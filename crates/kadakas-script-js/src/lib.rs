@@ -373,12 +373,11 @@ fn parse_answer(answer: &[u8]) -> Result<Output, Failure> {
             };
             let message = s("message");
             let name = s("name");
-            // QuickJS reports a spent memory limit and a deep recursion as `InternalError`.
-            if name == "InternalError"
-                && (message.contains("out of memory") || message.contains("stack overflow"))
-            {
+            // QuickJS reports a spent memory limit and a string or array that is too long as
+            // `InternalError`, and a deep recursion as `RangeError`.
+            if name == "InternalError" || message.contains("call stack size") {
                 return Err(fail(ScriptError::Limit(format!(
-                    "{message} (memory limit of the script, or recursion too deep)"
+                    "{message} (a limit of the script engine: memory, size or recursion depth)"
                 ))));
             }
             if message.contains("more than") && message.contains("calls") {
