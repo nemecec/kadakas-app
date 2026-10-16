@@ -470,6 +470,7 @@ pub(super) fn epsg_of(g: &Georeference) -> Option<String> {
 /// dictionary of the model space block record). Returns its handle. `design` is the point in drawing
 /// coordinates that has the map position `g.origin`-based `reference` (meters). `unit_m` is meters per
 /// drawing unit.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn geodata(
     objects: &mut W,
     owner: &str,
