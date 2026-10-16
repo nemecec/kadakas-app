@@ -425,6 +425,19 @@ fn walk(
         w.entity(e, &root);
     }
     w.flush_faces();
+    // The layouts of paper space are not part of the model: the sheets of the drawing. Their
+    // entities are counted in the report.
+    let mut sheets: Vec<&String> = dxf
+        .blocks
+        .keys()
+        .filter(|n| n.to_ascii_lowercase().starts_with("*paper_space"))
+        .collect();
+    sheets.sort();
+    for n in sheets {
+        for e in &dxf.blocks[n].entities {
+            w.b.report.skip(&e.kind, "in paper space");
+        }
+    }
     if w.overflow {
         return Err(IoError::Format(format!(
             "the blocks make more than {} objects (nested or array INSERTs): raise the max_exploded option or turn off explode_blocks",
@@ -850,6 +863,19 @@ impl Walker<'_> {
             self.b.report.skip("INSERT", "block is not defined");
             return;
         };
+        if block.flags & 12 != 0 {
+            // An external reference holds no geometry in this file: say which file it needs.
+            let path = if block.path.is_empty() {
+                "unknown path"
+            } else {
+                &block.path
+            };
+            self.b.report.skip(
+                "INSERT",
+                &format!("external reference (XREF) '{name}' to {path} is not loaded: import that file too"),
+            );
+            return;
+        }
         if cx.depth >= MAX_DEPTH {
             self.b.report.skip("INSERT", "blocks are nested too deep");
             return;
@@ -963,7 +989,10 @@ impl Walker<'_> {
                         _ => {}
                     }
                 }
-                let closed = e.int(70).unwrap_or(0) & 1 != 0;
+                let mut closed = e.int(70).unwrap_or(0) & 1 != 0;
+                if close_repeated(&mut pts, &mut closed, |p| p.0) {
+                    self.b.report.note(REPEATED_NOTE);
+                }
                 let elevation = e.fd(38, 0.0);
                 out.push(Item::new(polyline_from(
                     &pts, closed, flip, elevation, xf, tol,
@@ -979,24 +1008,35 @@ impl Walker<'_> {
                     out.push(Item::new(Shape::Mesh3d(Box::new(grid_mesh(e, xf)?))));
                     return Ok(());
                 }
-                let closed = flags & 1 != 0;
+                let mut closed = flags & 1 != 0;
                 let verts = e
                     .children
                     .iter()
                     .filter(|v| !(flags & 4 != 0 && v.int(70).unwrap_or(0) & 16 != 0));
                 if flags & 8 != 0 {
-                    let points: Vec<DVec3> = verts
+                    let mut points: Vec<DVec3> = verts
                         .map(|v| {
                             xf.apply(DVec2::new(v.fd(10, 0.0), v.fd(20, 0.0)))
                                 .extend(xf.z(v.fd(30, 0.0)))
                         })
                         .collect();
+                    if points
+                        .first()
+                        .zip(points.last())
+                        .is_some_and(|(a, b)| a.z == b.z)
+                        && close_repeated(&mut points, &mut closed, |p| p.truncate())
+                    {
+                        self.b.report.note(REPEATED_NOTE);
+                    }
                     out.push(Item::new(Shape::Polyline3d { points, closed }));
                 } else {
                     let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
-                    let pts: Vec<(DVec2, f64)> = verts
+                    let mut pts: Vec<(DVec2, f64)> = verts
                         .map(|v| (DVec2::new(v.fd(10, 0.0), v.fd(20, 0.0)), v.fd(42, 0.0)))
                         .collect();
+                    if close_repeated(&mut pts, &mut closed, |p| p.0) {
+                        self.b.report.note(REPEATED_NOTE);
+                    }
                     out.push(Item::new(polyline_from(
                         &pts,
                         closed,
@@ -1209,7 +1249,13 @@ impl Walker<'_> {
                     return Err("hatches are not imported (option)");
                 }
                 let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
-                let loops = hatch_loops(e, tol);
+                let (loops, dropped) = hatch_loops(e, tol);
+                for _ in 0..dropped {
+                    self.b.report.skip(
+                        "HATCH",
+                        "boundary path that cannot be read (unsupported edge or too few points)",
+                    );
+                }
                 if loops.is_empty() {
                     return Err("hatch without usable boundary");
                 }
@@ -1247,6 +1293,24 @@ impl Walker<'_> {
         }
         Ok(())
     }
+}
+
+const REPEATED_NOTE: &str = "polylines whose closed flag is off but whose last point equals the first were imported as closed (the repeated point is dropped)";
+
+/// CAD programs write a closed outline as an open polyline that ends where it starts. Such a
+/// polyline (a circle is 2 points that repeat the first) becomes closed, and the repeated point is dropped.
+/// Returns true if it changed the polyline.
+fn close_repeated<T>(pts: &mut Vec<T>, closed: &mut bool, at: impl Fn(&T) -> DVec2) -> bool {
+    if *closed || pts.len() < 3 {
+        return false;
+    }
+    let (a, b) = (at(&pts[0]), at(&pts[pts.len() - 1]));
+    if a.distance(b) > 1e-9 * (1.0 + a.abs().max_element()) {
+        return false;
+    }
+    pts.pop();
+    *closed = true;
+    true
 }
 
 fn flipx(p: DVec2, flip: bool) -> DVec2 {
@@ -1381,8 +1445,9 @@ fn polyline_from(
 }
 
 /// Boundary loops of a HATCH as vertices in OCS: polyline paths and line/arc edge paths.
-fn hatch_loops(e: &Entity, tol: f64) -> Vec<Vec<Vertex>> {
+fn hatch_loops(e: &Entity, tol: f64) -> (Vec<Vec<Vertex>>, usize) {
     let mut loops = Vec::new();
+    let mut dropped = 0usize;
     let items = &e.items;
     let mut i = items
         .iter()
@@ -1433,71 +1498,143 @@ fn hatch_loops(e: &Entity, tol: f64) -> Vec<Vec<Vertex>> {
             }
         } else {
             let edges = next(&mut i, 93).unwrap_or(0.0).clamp(0.0, 1.0e6) as usize;
-            let mut pts: Vec<DVec2> = Vec::new();
+            let mut path: Vec<Vertex> = Vec::new();
             let mut ok = true;
             for _ in 0..edges {
-                match next(&mut i, 72).map(|v| v as i64) {
-                    Some(1) => {
-                        let (Some(x0), Some(y0), Some(x1), Some(y1)) = (
-                            next(&mut i, 10),
-                            next(&mut i, 20),
-                            next(&mut i, 11),
-                            next(&mut i, 21),
-                        ) else {
-                            ok = false;
-                            break;
-                        };
-                        pts.push(DVec2::new(x0, y0));
-                        pts.push(DVec2::new(x1, y1));
-                    }
-                    Some(2) => {
-                        let (Some(cx), Some(cy), Some(r), Some(a0), Some(a1)) = (
-                            next(&mut i, 10),
-                            next(&mut i, 20),
-                            next(&mut i, 40),
-                            next(&mut i, 50),
-                            next(&mut i, 51),
-                        ) else {
-                            ok = false;
-                            break;
-                        };
-                        let ccw = next(&mut i, 73).unwrap_or(1.0) != 0.0;
-                        let (a0, a1) = (a0.to_radians(), a1.to_radians());
-                        let mut sweep = if ccw {
-                            (a1 - a0).rem_euclid(TAU)
-                        } else {
-                            -(a0 - a1).rem_euclid(TAU)
-                        };
-                        if sweep == 0.0 {
-                            sweep = if ccw { TAU } else { -TAU };
-                        }
-                        let n = arc_steps(r, sweep, tol);
-                        pts.extend((0..=n).map(|k| {
-                            DVec2::new(cx, cy)
-                                + DVec2::from_angle(a0 + sweep * k as f64 / n as f64) * r
-                        }));
-                    }
-                    _ => {
-                        ok = false;
-                        break;
-                    }
+                let Some(edge) = hatch_edge(&mut i, &next, tol) else {
+                    ok = false;
+                    break;
+                };
+                if path.is_empty() {
+                    path = edge;
+                    continue;
                 }
+                // Edges are chained end to start, but one may be written the other way round.
+                let end = path[path.len() - 1].p;
+                let mut edge = edge;
+                if edge[0].p.distance(end) > edge[edge.len() - 1].p.distance(end) {
+                    edge.reverse();
+                }
+                path.extend(edge.into_iter().skip(1));
             }
             if ok {
-                let mut dedup: Vec<DVec2> = Vec::new();
-                for p in pts {
-                    if dedup.last().is_none_or(|l| l.distance(p) > 1e-9) {
-                        dedup.push(p);
-                    }
+                if path.len() > 1 && path[0].p.distance(path[path.len() - 1].p) <= 1e-6 {
+                    path.pop();
                 }
-                let dedup = drop_closing(dedup);
-                if dedup.len() >= 3 {
-                    loops.push(corners(&dedup));
+                if path.len() >= 3
+                    || (path.len() == 2 && path.iter().any(|v| v.kind != VertexKind::Corner))
+                {
+                    loops.push(path);
+                } else {
+                    dropped += 1;
                 }
+            } else {
+                dropped += 1;
             }
         }
     }
-    loops
+    (loops, dropped)
+}
+
+/// One edge of a HATCH edge path, as vertices from its start to its end (both are corners; an
+/// arc has a point on it between them). Lines and arcs stay exact; ellipses and splines are cut
+/// into lines within `tol`. `None` for an edge type that cannot be read.
+fn hatch_edge(
+    i: &mut usize,
+    next: &dyn Fn(&mut usize, i32) -> Option<f64>,
+    tol: f64,
+) -> Option<Vec<Vertex>> {
+    let corner = |p: DVec2| Vertex::corner(p);
+    match next(i, 72)? as i64 {
+        1 => {
+            let (x0, y0, x1, y1) = (next(i, 10)?, next(i, 20)?, next(i, 11)?, next(i, 21)?);
+            Some(vec![corner(DVec2::new(x0, y0)), corner(DVec2::new(x1, y1))])
+        }
+        2 => {
+            let (cx, cy, r, a0, a1) = (
+                next(i, 10)?,
+                next(i, 20)?,
+                next(i, 40)?,
+                next(i, 50)?,
+                next(i, 51)?,
+            );
+            let ccw = next(i, 73).unwrap_or(1.0) != 0.0;
+            if !(r.is_finite() && r > 0.0) {
+                return None;
+            }
+            let c = DVec2::new(cx, cy);
+            let (a0, a1) = (a0.to_radians(), a1.to_radians());
+            let mut sweep = if ccw {
+                (a1 - a0).rem_euclid(TAU)
+            } else {
+                -(a0 - a1).rem_euclid(TAU)
+            };
+            if sweep == 0.0 || sweep.abs() > TAU - 1e-9 {
+                sweep = if ccw { TAU } else { -TAU };
+            }
+            let at = |a: f64| c + DVec2::from_angle(a) * r;
+            // A full circle is two half arcs; one arc cannot close on itself.
+            let parts = if sweep.abs() > PI + 1e-9 { 2 } else { 1 };
+            let part = sweep / parts as f64;
+            let mut v = vec![corner(at(a0))];
+            for k in 0..parts {
+                let s = a0 + part * k as f64;
+                v.push(Vertex::new(at(s + part / 2.0), VertexKind::PointOnArc));
+                v.push(corner(at(s + part)));
+            }
+            Some(v)
+        }
+        3 => {
+            let (cx, cy, mx, my, ratio, a0, a1) = (
+                next(i, 10)?,
+                next(i, 20)?,
+                next(i, 11)?,
+                next(i, 21)?,
+                next(i, 40)?,
+                next(i, 50)?,
+                next(i, 51)?,
+            );
+            let ccw = next(i, 73).unwrap_or(1.0) != 0.0;
+            let major = DVec2::new(mx, my);
+            if major.length_squared() == 0.0 || !(ratio.is_finite() && ratio > 0.0) {
+                return None;
+            }
+            let (t0, t1) = (a0.to_radians(), a1.to_radians());
+            let (t0, t1) = if ccw { (t0, t1) } else { (t1, t0) };
+            let mut sweep = (t1 - t0).rem_euclid(TAU);
+            if sweep == 0.0 || (t1 - t0).abs() >= TAU - 1e-9 {
+                sweep = TAU;
+            }
+            let mut pts = ellipse_points(DVec2::new(cx, cy), major, ratio, t0, sweep, tol);
+            if !ccw {
+                pts.reverse();
+            }
+            Some(corners(&pts))
+        }
+        4 => {
+            let degree = next(i, 94)?.clamp(1.0, 16.0) as usize;
+            let rational = next(i, 73).unwrap_or(0.0) != 0.0;
+            let _periodic = next(i, 74);
+            let (nk, nc) = (next(i, 95)? as usize, next(i, 96)? as usize);
+            if nk > 100_000 || nc > 100_000 {
+                return None;
+            }
+            let knots: Vec<f64> = (0..nk).map(|_| next(i, 40)).collect::<Option<_>>()?;
+            let mut ctrl = Vec::with_capacity(nc);
+            let mut weights = Vec::new();
+            for _ in 0..nc {
+                ctrl.push(DVec3::new(next(i, 10)?, next(i, 20)?, 0.0));
+                if rational {
+                    weights.push(next(i, 42)?);
+                }
+            }
+            let pts = bspline_points(degree, &ctrl, &knots, &weights)?;
+            Some(corners(
+                &pts.iter().map(|p| p.truncate()).collect::<Vec<_>>(),
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// Reads the optional bulge (42) that directly follows a hatch polyline vertex.
@@ -1530,6 +1667,48 @@ fn basis(span: usize, t: f64, p: usize, knots: &[f64]) -> Vec<f64> {
         n[j] = saved;
     }
     n
+}
+
+/// Points on a (rational) B-spline from its control points, knots and weights. `None` when the
+/// data do not make a spline.
+fn bspline_points(
+    degree: usize,
+    ctrl: &[DVec3],
+    knots: &[f64],
+    weights: &[f64],
+) -> Option<Vec<DVec3>> {
+    let n = ctrl.len();
+    let valid = n > degree
+        && knots.len() == n + degree + 1
+        && knots.windows(2).all(|w| w[0] <= w[1])
+        && knots[degree] < knots[n]
+        && (weights.is_empty() || weights.len() == n);
+    if !valid {
+        return None;
+    }
+    let samples = (n * 12).clamp(24, 4000);
+    let (t0, t1) = (knots[degree], knots[n]);
+    let mut pts = Vec::with_capacity(samples + 1);
+    for k in 0..=samples {
+        let t = t0 + (t1 - t0) * k as f64 / samples as f64;
+        // The last knot span that starts at or before t, but not past the end.
+        let mut span = degree;
+        while span + 1 < n && knots[span + 1] <= t {
+            span += 1;
+        }
+        let nb = basis(span, t, degree, knots);
+        let (mut acc, mut wsum) = (DVec3::ZERO, 0.0);
+        for (j, nj) in nb.iter().enumerate() {
+            let idx = span - degree + j;
+            let w = weights.get(idx).copied().unwrap_or(1.0);
+            acc += ctrl[idx] * (nj * w);
+            wsum += nj * w;
+        }
+        if wsum.abs() > 1e-300 {
+            pts.push(acc / wsum);
+        }
+    }
+    (pts.len() >= 2).then_some(pts)
 }
 
 fn spline(e: &Entity, xf: &Xf) -> Result<Shape, Skip> {
@@ -1574,46 +1753,16 @@ fn spline(e: &Entity, xf: &Xf) -> Result<Shape, Skip> {
             }
         }
     };
-    let n = ctrl.len();
-    let valid = n > degree
-        && knots.len() == n + degree + 1
-        && knots.windows(2).all(|w| w[0] <= w[1])
-        && knots[degree] < knots[n]
-        && (weights.is_empty() || weights.len() == n);
-    if valid {
-        let samples = (n * 12).clamp(24, 4000);
-        let (t0, t1) = (knots[degree], knots[n]);
-        let mut pts = Vec::with_capacity(samples + 1);
-        for k in 0..=samples {
-            let t = t0 + (t1 - t0) * k as f64 / samples as f64;
-            // The last knot span that starts at or before t, but not past the end.
-            let mut span = degree;
-            while span + 1 < n && knots[span + 1] <= t {
-                span += 1;
-            }
-            let nb = basis(span, t, degree, &knots);
-            let (mut acc, mut wsum) = (DVec3::ZERO, 0.0);
-            for (j, nj) in nb.iter().enumerate() {
-                let idx = span - degree + j;
-                let w = weights.get(idx).copied().unwrap_or(1.0);
-                acc += ctrl[idx] * (nj * w);
-                wsum += nj * w;
-            }
-            if wsum.abs() > 1e-300 {
-                pts.push(acc / wsum);
-            }
+    if let Some(mut pts) = bspline_points(degree, &ctrl, &knots, &weights) {
+        let end_closed = closed
+            && pts
+                .first()
+                .zip(pts.last())
+                .is_some_and(|(a, b)| a.distance(*b) < 1e-9);
+        if end_closed {
+            pts.pop();
         }
-        if pts.len() >= 2 {
-            let end_closed = closed
-                && pts
-                    .first()
-                    .zip(pts.last())
-                    .is_some_and(|(a, b)| a.distance(*b) < 1e-9);
-            if end_closed {
-                pts.pop();
-            }
-            return Ok(make(pts, end_closed));
-        }
+        return Ok(make(pts, end_closed));
     }
     if fit.len() >= 2 && fit.iter().all(|p| p.z == 0.0) {
         let last = fit.len() - 1;
@@ -2083,7 +2232,8 @@ mod tests {
 0\nHATCH\n70\n0\n";
         let (doc, report) = run(&dxf_text("", "", "", ents), &ImportOptions::default());
         let s = shapes(&doc);
-        assert_eq!(report.skipped_total(), 2, "{:?}", report.skipped);
+        // An unreadable path is reported, and so is the hatch that is left without one.
+        assert_eq!(report.skipped_total(), 3, "{:?}", report.skipped);
         assert_eq!(s.len(), 3);
         let first = doc.objects.values().next().unwrap();
         assert_eq!(first.attrs.fill, Some(Color([0, 0, 255, 255])));
@@ -2096,6 +2246,129 @@ mod tests {
         };
         let (doc, _) = run(&dxf_text("", "", "", ents), &opts);
         assert!(doc.objects.is_empty());
+    }
+
+    #[test]
+    fn a_polyline_that_ends_where_it_starts_is_closed() {
+        let ents = "0\nLWPOLYLINE\n70\n0\n10\n0\n20\n0\n10\n10\n20\n0\n10\n10\n20\n10\n10\n0\n20\n0\n\
+0\nPOLYLINE\n70\n0\n0\nVERTEX\n10\n0\n20\n0\n0\nVERTEX\n10\n10\n20\n0\n0\nVERTEX\n10\n10\n20\n10\n0\nVERTEX\n10\n0\n20\n0\n0\nSEQEND\n\
+0\nPOLYLINE\n70\n8\n0\nVERTEX\n10\n0\n20\n0\n30\n1\n0\nVERTEX\n10\n10\n20\n0\n30\n1\n0\nVERTEX\n10\n10\n20\n10\n30\n1\n0\nVERTEX\n10\n0\n20\n0\n30\n1\n0\nSEQEND\n\
+0\nPOLYLINE\n70\n8\n0\nVERTEX\n10\n0\n20\n0\n30\n1\n0\nVERTEX\n10\n10\n20\n0\n30\n1\n0\nVERTEX\n10\n10\n20\n10\n30\n1\n0\nVERTEX\n10\n0\n20\n0\n30\n5\n0\nSEQEND\n\
+0\nLWPOLYLINE\n70\n0\n10\n0\n20\n0\n10\n10\n20\n0\n10\n10\n20\n10\n";
+        let (doc, report) = run(&dxf_text("", "", "", ents), &ImportOptions::default());
+        let s = shapes(&doc);
+        assert_eq!(s.len(), 5);
+        assert!(matches!(s[0], Shape::Polyline { points, closed: true } if points.len() == 3));
+        assert!(matches!(s[1], Shape::Polyline { points, closed: true } if points.len() == 3));
+        assert!(matches!(s[2], Shape::Polyline3d { points, closed: true } if points.len() == 3));
+        // The last point is higher: not the same point.
+        assert!(matches!(s[3], Shape::Polyline3d { points, closed: false } if points.len() == 4));
+        assert!(matches!(s[4], Shape::Polyline { closed: false, .. }));
+        assert!(
+            report.notes.iter().any(|n| n == REPEATED_NOTE),
+            "{:?}",
+            report.notes
+        );
+    }
+
+    #[test]
+    fn xrefs_and_paper_space_are_reported() {
+        let blocks = "0\nBLOCK\n2\nXR\n70\n4\n1\nsite.dxf\n10\n0\n20\n0\n0\nENDBLK\n\
+0\nBLOCK\n2\nXR2\n70\n8\n10\n0\n20\n0\n0\nENDBLK\n\
+0\nBLOCK\n2\n*Paper_Space\n10\n0\n20\n0\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDBLK\n";
+        let ents = "0\nINSERT\n2\nXR\n8\n0\n10\n0\n20\n0\n0\nINSERT\n2\nXR2\n8\n0\n10\n0\n20\n0\n";
+        let (doc, report) = run(&dxf_text("", "", blocks, ents), &ImportOptions::default());
+        assert!(doc.objects.is_empty());
+        let why: Vec<&str> = report.skipped.iter().map(|s| s.reason.as_str()).collect();
+        assert!(
+            why.iter()
+                .any(|w| w.contains("XREF") && w.contains("'XR'") && w.contains("site.dxf"))
+        );
+        assert!(
+            why.iter()
+                .any(|w| w.contains("'XR2'") && w.contains("unknown path"))
+        );
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|s| s.entity == "LINE" && s.reason == "in paper space")
+        );
+    }
+
+    #[test]
+    fn hatch_edge_paths_keep_arcs_and_read_ellipses_and_splines() {
+        let circle = "92\n1\n93\n1\n72\n2\n10\n0\n20\n0\n40\n5\n50\n0\n51\n360\n73\n1\n97\n0\n";
+        let ellipse = "92\n1\n93\n1\n72\n3\n10\n0\n20\n0\n11\n1000\n21\n0\n40\n0.5\n50\n0\n51\n360\n73\n1\n97\n0\n";
+        // A spline, and the line back along its chord written the other way round.
+        let spline = "92\n1\n93\n2\n72\n4\n94\n3\n73\n0\n74\n0\n95\n8\n96\n4\n40\n0\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n40\n1\n\
+10\n0\n20\n0\n10\n3\n20\n5\n10\n7\n20\n5\n10\n10\n20\n0\n72\n1\n10\n0\n20\n0\n11\n10\n21\n0\n97\n0\n";
+        let rational = "92\n1\n93\n2\n72\n4\n94\n2\n73\n1\n74\n0\n95\n6\n96\n3\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n\
+10\n0\n20\n0\n42\n1\n10\n5\n20\n5\n42\n2\n10\n10\n20\n0\n42\n1\n72\n1\n10\n10\n20\n0\n11\n0\n21\n0\n97\n0\n";
+        let bad = "92\n1\n93\n1\n72\n9\n97\n0\n";
+        let ents =
+            format!("0\nHATCH\n8\nH\n70\n0\n91\n5\n{circle}{ellipse}{spline}{rational}{bad}");
+        let (doc, report) = run(&dxf_text("", "", "", &ents), &ImportOptions::default());
+        let polys: Vec<&Vec<Vertex>> = shapes(&doc)
+            .into_iter()
+            .map(|s| match s {
+                Shape::Polyline {
+                    points,
+                    closed: true,
+                } => points,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(polys.len(), 4, "{:?}", report.skipped);
+        // The circle is two exact half arcs, not many chords.
+        let arcs = |p: &Vec<Vertex>| {
+            p.iter()
+                .filter(|v| v.kind == VertexKind::PointOnArc)
+                .count()
+        };
+        assert_eq!((polys[0].len(), arcs(polys[0])), (4, 2));
+        assert!(polys[1].len() > 16 && arcs(polys[1]) == 0);
+        assert!(polys[2].len() > 20 && polys[3].len() > 20);
+        assert_eq!(report.skipped_total(), 1);
+        assert!(report.skipped[0].reason.contains("boundary path"));
+        // The ellipse of 1000 by 500 has the area pi * 500,000 (the chords are within 2 mm).
+        let pts: Vec<DVec2> = polys[1].iter().map(|v| v.p).collect();
+        let area = pts
+            .iter()
+            .zip(pts.iter().cycle().skip(1))
+            .map(|(a, b)| a.x * b.y - b.x * a.y)
+            .sum::<f64>()
+            .abs()
+            / 2.0;
+        assert!(
+            (area / (std::f64::consts::PI * 500_000.0) - 1.0).abs() < 0.005,
+            "{area}"
+        );
+    }
+
+    #[test]
+    fn hatch_arcs_that_run_clockwise_and_partial_ellipses() {
+        // A half disc: a clockwise arc from 0 to 180 degrees (below the center), and the chord.
+        let half = "92\n1\n93\n2\n72\n2\n10\n0\n20\n0\n40\n5\n50\n0\n51\n180\n73\n0\n72\n1\n10\n-5\n20\n0\n11\n5\n21\n0\n97\n0\n";
+        // A quarter of an ellipse written clockwise, closed by two lines.
+        let quarter = "92\n1\n93\n3\n72\n3\n10\n0\n20\n0\n11\n10\n21\n0\n40\n0.5\n50\n0\n51\n90\n73\n0\n72\n1\n10\n0\n20\n5\n11\n0\n21\n0\n72\n1\n10\n0\n20\n0\n11\n10\n21\n0\n97\n0\n";
+        let ents = format!("0\nHATCH\n8\nH\n70\n0\n91\n2\n{half}{quarter}");
+        let (doc, report) = run(&dxf_text("", "", "", &ents), &ImportOptions::default());
+        assert_eq!(doc.objects.len(), 2, "{:?}", report.skipped);
+        let s = shapes(&doc);
+        // Clockwise from 0 to 180 degrees runs through the bottom: the middle is (0, -5).
+        let Shape::Polyline { points, .. } = s[0] else {
+            panic!()
+        };
+        let mid = points
+            .iter()
+            .find(|v| v.kind == VertexKind::PointOnArc)
+            .unwrap();
+        assert!(
+            (mid.p - DVec2::new(0.0, -5.0)).length() < 1e-9,
+            "{:?}",
+            mid.p
+        );
     }
 
     #[test]

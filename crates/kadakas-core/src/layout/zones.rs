@@ -74,6 +74,23 @@ pub fn region_contains(region: &Region, p: DVec2) -> bool {
     })
 }
 
+/// Removes the noise of the last bits from a coordinate: a value that lies within 1e-9 mm of a
+/// multiple of a micrometer becomes that multiple. The crossing of a split line with a straight
+/// edge is computed with a rounding error (an edge at x = 404 can come out at
+/// 403.99999999999994), and a unit whose side lies exactly on such an edge then meets a nearly
+/// vertical edge and can be lost. The function depends on the value only, so the zones that share
+/// a node still share it exactly.
+fn snap(v: f64) -> f64 {
+    let r = (v * 1e6).round() / 1e6;
+    if (r - v).abs() < 1e-9 { r } else { v }
+}
+
+fn snap_ring(ring: Vec<DVec2>) -> Vec<DVec2> {
+    ring.into_iter()
+        .map(|p| DVec2::new(snap(p.x), snap(p.y)))
+        .collect()
+}
+
 /// Cuts `region` by `lines` (flat polylines; open or closed ones both work). `tolerance` is the
 /// biggest gap that is closed (mm).
 pub fn split(region: &Region, lines: &[Vec<DVec2>], tolerance: f64) -> Result<Split, String> {
@@ -121,9 +138,9 @@ pub fn split(region: &Region, lines: &[Vec<DVec2>], tolerance: f64) -> Result<Sp
         if !region_contains(region, f.inside) {
             continue;
         }
-        let mut shape = vec![arrangement::cycle_ring(&a, &f.outer)];
+        let mut shape = vec![snap_ring(arrangement::cycle_ring(&a, &f.outer))];
         for h in &f.holes {
-            shape.push(arrangement::cycle_ring(&a, h));
+            shape.push(snap_ring(arrangement::cycle_ring(&a, h)));
         }
         let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
         for p in &shape[0] {

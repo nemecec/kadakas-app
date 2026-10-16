@@ -12,6 +12,53 @@ fn rect(w: f64, h: f64) -> Region {
 }
 
 #[test]
+fn the_last_bits_of_a_node_are_cleaned() {
+    assert_eq!(snap(403.99999999999994), 404.0);
+    assert_eq!(snap(7500.000000000001), 7500.0);
+    // A real difference stays.
+    assert_eq!(snap(404.0000001), 404.0000001);
+    assert_eq!(snap(-0.25), -0.25);
+    // Lines in feet, converted to mm, cross an edge at x = 404 with the noise of the last bits:
+    // every vertex of the left edge of the zones is exactly 404.
+    let edge = 404.0;
+    let r = Region::from_rings(
+        &[
+            v(edge, 404.0),
+            v(30_000.0, 404.0),
+            v(30_000.0, 20_000.0),
+            v(edge, 20_000.0),
+        ],
+        &[],
+    )
+    .unwrap();
+    let ft = |x: f64| x / 304.8 * 304.8;
+    let lines = [
+        vec![v(ft(0.0), ft(5000.0)), v(ft(30_000.0), ft(5000.0))],
+        vec![v(ft(2500.0), ft(0.0)), v(ft(2500.0), ft(5000.0))],
+    ];
+    let s = split(&r, &lines, 3.0).unwrap();
+    assert_eq!(s.zones.len(), 3);
+    for z in &s.zones {
+        for p in &z.shape[0] {
+            assert!(p.x == snap(p.x) && p.y == snap(p.y), "{p:?}");
+        }
+    }
+    let left = s
+        .zones
+        .iter()
+        .find(|z| z.lo.x < 405.0 && z.hi.y < 6000.0)
+        .unwrap();
+    assert!(
+        left.shape[0]
+            .iter()
+            .filter(|p| p.x < 1000.0)
+            .all(|p| p.x == edge),
+        "{:?}",
+        left.shape[0]
+    );
+}
+
+#[test]
 fn one_line_makes_two_zones_that_add_up() {
     let r = rect(10_000.0, 5_000.0);
     let s = split(&r, &[vec![v(4000.0, -100.0), v(4000.0, 5100.0)]], 1.0).unwrap();
