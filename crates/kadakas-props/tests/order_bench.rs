@@ -59,7 +59,7 @@ fn measure(
         ed.execute(&c).unwrap();
         let cs = ed.changes_since(rev).changes.last().cloned().unwrap();
         let t = Instant::now();
-        let ops = ops_from_change(shadow, ed.doc(), &cs);
+        let ops = ops_from_change(shadow, ed.doc(), cs);
         total += t.elapsed();
         ops_count += ops.len();
         shadow.apply_all(Writer::BASELINE, &ops);
