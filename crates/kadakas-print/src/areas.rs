@@ -12,6 +12,18 @@ use kadakas_core::plants::style::PlantGraphic;
 use crate::display::*;
 use crate::plan::{Style, Xf};
 
+thread_local! {
+    /// Tests that measure change the bound of the units on a sheet.
+    static BOUND: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Sets the bound of the units that a viewport draws one by one on this thread (`None`: the
+/// default, [`kadakas_core::hardscape::draw::PRINT_BOUND`]). For measurements.
+#[doc(hidden)]
+pub fn set_bound_for_measurement(bound: Option<usize>) {
+    BOUND.with(|b| b.set(bound));
+}
+
 /// Joint units smaller than this on paper (mm) are not drawn: they would only make a gray area.
 const MIN_UNIT_ON_PAPER: f64 = 0.6;
 /// Thin lines of the extras, in mm on paper.
@@ -118,7 +130,10 @@ fn pattern_prims(
         );
         return;
     }
-    let drawn = prepared.draw(xf.window, &DrawOptions::units(draw::PRINT_BOUND));
+    let drawn = prepared.draw(
+        xf.window,
+        &DrawOptions::units(BOUND.with(|b| b.get()).unwrap_or(draw::PRINT_BOUND)),
+    );
     let hair = THIN;
     for g in &drawn.groups {
         if !g.joints.is_empty() {

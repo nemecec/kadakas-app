@@ -41,18 +41,24 @@ pub type BBox = (DVec2, DVec2);
 /// What the canvas and the previews say when they draw a preview.
 pub const PREVIEW_LABEL: &str = "preview: zoom in for the real pattern";
 
-/// Most units in the window of the canvas for a drawing of the real units. The window is the part
-/// in view and a margin round it (see the app). Measured in the app (`measure_canvas_frames`): a
-/// frame with 10,000 / 30,000 / 100,000 line segments costs 1.9 / 5.6 / 19 ms to tessellate and
-/// paint on one core, and a pattern has about 1.5 segments per unit, so 20,000 units stay under
-/// 60 frames a second on a slow machine.
-pub const CANVAS_BOUND: usize = 20_000;
+/// Most units in the window of the canvas for a drawing of the real units. The window is the
+/// visible part and a margin round it (see the app). Measured in the app (`measure_canvas_frames`,
+/// release-like build of the egui crates, one core): painting a kept window and tessellating it
+/// costs 1.9 ms at 10,000 line segments, 15 ms at 30,000 and 39 ms at 100,000. A running bond or a
+/// stack has about one segment per unit, so 30,000 units are the most for 60 frames a second.
+pub const CANVAS_BOUND: usize = 30_000;
+/// Most gap lines in the window of the canvas (see [`CANVAS_BOUND`]). A herringbone has about three
+/// lines per unit, so its window holds a third of the units before the preview.
+pub const CANVAS_MAX_SEGMENTS: usize = 30_000;
 /// Most units in the region of a render (`render.svg`) for the real units. Measured
-/// (`measure_bounds`): a 5,000 m2 lot of 200 x 100 mm units (250,000 units) is a 31 MB SVG in
-/// 1.4 s; 60,000 units are 7.5 MB in 0.4 s.
+/// (`measure_bounds`): a 1,250 m2 lot of 200 x 100 mm units (60,000 units) is an SVG of 5.5 MB made
+/// in 0.28 s; the 5,000 m2 lot (233,000 units) is 21.8 MB and 1.0 s, too much for an answer of the
+/// API. Above the bound the render is a preview of 0.2 to 0.7 MB.
 pub const SVG_BOUND: usize = 60_000;
-/// Most units in the window of a viewport on a sheet for the real units, for a PDF or an SVG of a
-/// sheet. Measured (`measure_pdf` in the print crate): 60,000 units are a PDF of 5 MB.
+/// Most units in the window of a viewport on a sheet for the real units, for a PDF, an SVG or a PNG
+/// of a sheet. Measured (`measure_pdf` in the print crate): 60,000 units are a PDF of 0.9 MB made in
+/// 1.1 s (the page in 48 ms, an SVG of the page 5.3 MB); the 5,000 m2 lot (233,000 units) is a PDF of
+/// 3.5 MB in 4.3 s and an SVG of 21 MB. Above the bound the sheet has the gap lines and a note.
 pub const PRINT_BOUND: usize = 60_000;
 /// Most units of a lattice that zones give to the zone of their center. The lattice is laid whole
 /// (and kept) because a unit goes to the zone of its center; a bigger lattice is drawn as a
@@ -70,6 +76,8 @@ pub struct DrawOptions {
     pub cut_units: bool,
     /// Most units in the view for the real units; above it the drawing is a preview.
     pub bound: usize,
+    /// Most gap lines for the real units; above it the drawing is a preview.
+    pub max_segments: usize,
 }
 
 impl DrawOptions {
@@ -80,6 +88,7 @@ impl DrawOptions {
             whole_units: false,
             cut_units: true,
             bound: CANVAS_BOUND,
+            max_segments: CANVAS_MAX_SEGMENTS,
         }
     }
 
@@ -90,6 +99,7 @@ impl DrawOptions {
             whole_units: true,
             cut_units: true,
             bound,
+            max_segments: bound.saturating_mul(6),
         }
     }
 }
@@ -274,6 +284,11 @@ impl PlanCache {
 }
 
 static CACHE: PlanCache = PlanCache::new(CACHE_SIZE);
+
+/// How many plans the shared cache laid since the start of the process (a hit does not count).
+pub fn builds() -> u64 {
+    CACHE.builds()
+}
 
 /// The laid plan of a hardscape, from the cache when nothing that it depends on changed. `None`
 /// if the object has no joint pattern; `Err` says why the plan cannot be laid (the message of the
@@ -571,7 +586,7 @@ impl Prepared {
                             None => true,
                         };
                         if first {
-                            let max = opts.bound.saturating_mul(6).max(2000);
+                            let max = opts.max_segments.max(2000);
                             let gl = gaps::gap_lines(&window, pattern, &place, max, false);
                             if gl.truncated {
                                 return None;

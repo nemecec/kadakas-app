@@ -235,3 +235,37 @@ fn units_too_small_for_the_paper_are_not_drawn_and_the_sheet_says_so() {
     assert_eq!(drawn_units(&all), (0, 0));
     assert!(notes(&all).iter().any(|t| t.contains("pattern not drawn")));
 }
+
+/// Measures the size and the time of a sheet with a lot of 1,250 m2 and of 5,000 m2 with every
+/// unit drawn (`cargo test -p kadakas-print --test pattern_draw measure_pdf -- --ignored
+/// --nocapture`).
+#[test]
+#[ignore = "a measurement"]
+fn measure_pdf() {
+    kadakas_print::areas::set_bound_for_measurement(Some(usize::MAX / 8));
+    for (label, w, h, scale) in [
+        ("1,250 m2, 60,000 units, 1:100", 50_000.0, 25_000.0, 100.0),
+        ("5,000 m2, 233,000 units, 1:150", 100_000.0, 50_000.0, 150.0),
+    ] {
+        let (ed, sheet, _) = lot(w, h, false, scale, v(w / 2.0, h / 2.0));
+        let t = std::time::Instant::now();
+        let page = compose_page(ed.doc(), sheet).unwrap();
+        let compose = t.elapsed();
+        let t = std::time::Instant::now();
+        let pdf = kadakas_print::pdf::write_pdf(&[&page], "measure");
+        let pdf_time = t.elapsed();
+        let t = std::time::Instant::now();
+        let svg = kadakas_print::svg::page_svg(&page);
+        let svg_time = t.elapsed();
+        let (whole, cut) = drawn_units(&page.prims);
+        println!(
+            "{label}: {whole} whole + {cut} cut drawn; compose {:.0} ms; PDF {:.1} MB in {:.0} ms; SVG {:.1} MB in {:.0} ms",
+            compose.as_secs_f64() * 1e3,
+            pdf.len() as f64 / 1e6,
+            pdf_time.as_secs_f64() * 1e3,
+            svg.len() as f64 / 1e6,
+            svg_time.as_secs_f64() * 1e3,
+        );
+    }
+    kadakas_print::areas::set_bound_for_measurement(None);
+}

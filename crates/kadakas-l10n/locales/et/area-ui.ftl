@@ -68,3 +68,12 @@ joint-ui-shapes =
     }
 joint-ui-save = Salvesta
 joint-ui-close = Sulge
+
+## area-ui: plan_draw.rs (the pattern plan on the canvas)
+
+area-ui-show-pattern-check = Näita mustri kontrolli plaanil
+area-ui-the-check-marks-overlaps-small-pieces-wrong-joints-and-holes = Märgib unit_pattern.check leiud: kattuvused, väikesed tükid, valed vuugid ja augud katvuses
+plan-draw-preview = eelvaade: suumi sisse, et näha tegelikku mustrit
+plan-draw-preview-too-fine = { $label } (kivid on liiga peenikesed: mõned vuugid jäetakse välja)
+plan-draw-not-drawn = Mustrit ei joonistata: { $reason }
+plan-draw-check-failed = Mustri kontroll ebaõnnestus: { $reason }

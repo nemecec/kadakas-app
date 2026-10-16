@@ -491,3 +491,53 @@ fn a_pattern_that_cannot_be_laid_says_why_in_the_drawing() {
     let svg = svg_of(&ed, id, SvgContext::default());
     assert!(svg.contains(r#"data-error=""#), "{svg}");
 }
+
+/// Measures the size and the time of the SVG of a lot of 5,000 m2 (`cargo test -p kadakas-core
+/// --lib measure_bounds -- --ignored --nocapture`).
+#[test]
+#[ignore = "a measurement"]
+fn measure_bounds() {
+    for (label, w, h) in [
+        ("1,250 m2, 60,000 units", 50_000.0, 25_000.0),
+        ("5,000 m2, 240,000 units", 100_000.0, 50_000.0),
+    ] {
+        let (ed, id) = slab(w, h, 15.0, false);
+        let o = ed.doc().object(id).unwrap();
+        let t = std::time::Instant::now();
+        let p = Prepared::new(ed.doc(), o, layout::TOLERANCE, 0).unwrap();
+        let lay = t.elapsed();
+        let t = std::time::Instant::now();
+        let d = p.draw(None, &DrawOptions::units(usize::MAX / 8));
+        let cut = t.elapsed();
+        let (whole, cuts) = d.unit_counts();
+        let t = std::time::Instant::now();
+        let svg = svg_of(
+            &ed,
+            id,
+            SvgContext {
+                bound: usize::MAX / 8,
+                ..Default::default()
+            },
+        );
+        let svg_time = t.elapsed();
+        let t = std::time::Instant::now();
+        let preview = svg_of(
+            &ed,
+            id,
+            SvgContext {
+                bound: 10,
+                ..Default::default()
+            },
+        );
+        let preview_time = t.elapsed();
+        println!(
+            "{label}: {whole} whole + {cuts} cut units; plan {:.0} ms, units {:.0} ms; SVG with every unit {:.1} MB in {:.0} ms; preview SVG {:.2} MB in {:.0} ms",
+            lay.as_secs_f64() * 1e3,
+            cut.as_secs_f64() * 1e3,
+            svg.len() as f64 / 1e6,
+            svg_time.as_secs_f64() * 1e3,
+            preview.len() as f64 / 1e6,
+            preview_time.as_secs_f64() * 1e3,
+        );
+    }
+}
