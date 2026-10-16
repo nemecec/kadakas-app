@@ -1,13 +1,16 @@
 """Scenario: a landscape wall (a polyline with wall settings) is an IfcWall in the IFC export, with
 its solid, the layers of its style as materials and quantities. IfcOpenShell reads the files."""
 
+import json
+import subprocess
+import sys
+
 import pytest
 from pytest import approx
 
 ifcopenshell = pytest.importorskip("ifcopenshell", reason="run with: uv run --with pytest --with ifcopenshell pytest tests/behavior")
 import ifcopenshell.geom  # noqa: E402
 import ifcopenshell.util.element as element  # noqa: E402
-import ifcopenshell.validate  # noqa: E402
 
 
 def build(cad):
@@ -34,6 +37,19 @@ def export(cad, tmp_path, version=None):
     return ifcopenshell.open(str(path)), r
 
 
+def validation_statements(path):
+    """The messages of the IfcOpenShell validation, from a separate Python process: importing
+    ifcopenshell.validate puts a module named `codegen` in sys.modules, which would shadow the
+    `codegen` of python/tests/test_drift.py."""
+    script = (
+        "import json, sys, ifcopenshell, ifcopenshell.validate as v\n"
+        "m = ifcopenshell.open(sys.argv[1]); log = v.json_logger(); v.validate(m, log)\n"
+        "print(json.dumps(log.statements))\n"
+    )
+    run = subprocess.run([sys.executable, "-I", "-c", script, str(path)], capture_output=True, text=True, check=True)
+    return json.loads(run.stdout.splitlines()[-1])
+
+
 def z_range(model, wall):
     settings = ifcopenshell.geom.settings()
     shape = ifcopenshell.geom.create_shape(settings, wall)
@@ -47,9 +63,8 @@ def test_walls_are_ifc_walls_with_solid_materials_and_quantities(cad, tmp_path, 
     model, r = export(cad, tmp_path, version)
     assert not [s for s in r["report"]["skipped"] if s["entity"] == "polyline"], r["report"]["skipped"]
     assert r["report"]["objects"]["polyline"] == 3
-    logger = ifcopenshell.validate.json_logger()
-    ifcopenshell.validate.validate(model, logger)
-    assert logger.statements == [], logger.statements[:3]
+    statements = validation_statements(tmp_path / f"walls_{version or 'ifc4'}.ifc")
+    assert statements == [], statements[:3]
     walls = model.by_type("IfcWall")
     assert len(walls) == 3
     by_name = {}
