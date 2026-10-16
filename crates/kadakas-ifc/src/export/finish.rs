@@ -100,6 +100,25 @@ impl<W: Write> Exporter<'_, W> {
         } else {
             (pre, object_type)
         };
+        // A landscape wall is an IfcWall. IFC4 has no retaining wall type: a user-defined wall
+        // says what it is in its object type.
+        let (mut pre, mut object_type) = (pre, object_type);
+        if class.0 == "IfcWall" && matches!(kind, "wall" | "retaining_wall") {
+            let retaining = kind == "retaining_wall";
+            object_type = Some(
+                if retaining {
+                    "RETAININGWALL"
+                } else {
+                    "LANDSCAPEWALL"
+                }
+                .into(),
+            );
+            if retaining && self.schema != Schema::Ifc4x3 {
+                pre = Some("USERDEFINED".into());
+            } else if !retaining && pre.as_deref() == Some("RETAININGWALL") {
+                pre = Some("SOLIDWALL".into());
+            }
+        }
         (class.1, pre, object_type)
     }
 

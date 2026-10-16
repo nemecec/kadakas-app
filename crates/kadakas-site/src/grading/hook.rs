@@ -167,6 +167,26 @@ pub fn svg(doc: &Document, cache: &SiteCache, revision: u64, obj: &Object, out: 
     out.push_str(&extras(doc, cache, revision, obj).svg());
 }
 
+/// A wall object computed on the site model of its layer (or on flat ground without one). `None`
+/// for an object that is not a wall. The 3D scene and the IFC export use it, so they agree.
+pub fn wall_of(
+    doc: &Document,
+    cache: &SiteCache,
+    revision: u64,
+    obj: &Object,
+) -> Option<wall::Wall> {
+    let d = wall::data(obj)?;
+    let site = host(doc, cache, revision, obj.layer, d.site);
+    let ground = site.as_ref().map(|s| SiteGround::new(s));
+    let dz = site_dz(doc, site.as_deref(), obj);
+    wall::evaluate_at(
+        doc,
+        obj,
+        ground.as_ref().map(|g| g as super::Ground<'_>),
+        dz,
+    )
+}
+
 /// Adds the 3D solid of a wall to a scene sink.
 pub fn scene(
     doc: &Document,
@@ -175,16 +195,7 @@ pub fn scene(
     obj: &Object,
     sink: &mut SceneSink<'_>,
 ) {
-    let Some(d) = wall::data(obj) else { return };
-    let site = host(doc, cache, revision, obj.layer, d.site);
-    let ground = site.as_ref().map(|s| SiteGround::new(s));
-    let dz = site_dz(doc, site.as_deref(), obj);
-    if let Some(w) = wall::evaluate_at(
-        doc,
-        obj,
-        ground.as_ref().map(|g| g as super::Ground<'_>),
-        dz,
-    ) {
+    if let Some(w) = wall_of(doc, cache, revision, obj) {
         wall::emit(&w, sink);
     }
 }

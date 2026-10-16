@@ -20,6 +20,9 @@ struct SlabGeometry {
 impl<W: Write> Exporter<'_, W> {
     pub(super) fn object(&mut self, obj: &Object) -> Outcome {
         match &obj.shape {
+            Shape::Polyline { .. } if kadakas_site::grading::wall::data(obj).is_some() => {
+                self.wall(obj)
+            }
             Shape::Hardscape { .. } => self.hardscape(obj),
             Shape::LandscapeArea { .. } => self.landscape_area(obj),
             Shape::Plant { .. } | Shape::ExistingTree { .. } => self.plant(obj),
