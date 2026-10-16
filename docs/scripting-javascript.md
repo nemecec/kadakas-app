@@ -24,7 +24,7 @@ Python stays the tool for programs that run next to the app, with files and libr
 
 Every heavy operation (geometry, Boolean operations, offsets, clipping, pattern layout, meshing, analysis, rendering, import and export) is a native Kadakas call that works on many items in one call. A script decides what to call and with what. If a script needs a loop over many items to do geometry, a native call is missing. Add the call to the API; do not write the loop in the script.
 
-A call costs about 17 microseconds more than the same call from Rust (see [the measurement](#limits)). A loop of 10,000 cheap calls is fine. A loop of 10,000 calls that each move one point is the sign of a missing call that moves many points.
+A call costs about 4 microseconds more than the same call from Rust in a release build (see [the measurement](#limits)). A loop of 10,000 cheap calls is fine. A loop of 10,000 calls that each move one point is the sign of a missing call that moves many points.
 
 ## Run a script
 
@@ -93,7 +93,7 @@ The limits come from the session (`SessionLimits`: `script_js_fuel`, `script_tim
 
 The strict limits for free accounts are smaller (`SessionLimits::strict`). The native engine counts fuel exactly. The browser engine rewrites the module so that it counts its own fuel; it cannot stop a script by time (a page has no worker to interrupt), so fuel is the bound there, as for plug-ins. Every call from a script goes through `Session::handle`, so the limits of the session (objects, memory, time of a call) apply to each call too.
 
-**Cost of a call.** Measured in a debug build on an Apple M-series computer (`measure_call_overhead` in `crates/kadakas-api/src/script_js_api/tests.rs`): a call of `selection.get` costs 6 microseconds from Rust and 23 microseconds from a script; `document.summary` 16 and 59 microseconds. An empty run costs 1 ms. The first run in a process compiles the module (1.5 s). A round trip uses about 46,000 WebAssembly instructions of fuel.
+**Cost of a call.** Measured on an Apple M-series computer (`measure_call_overhead` in `crates/kadakas-api/src/script_js_api/tests.rs`, 10,000 calls each). Release build: a call of `selection.get` costs 1.1 microseconds from Rust and 5.4 microseconds from a script; `document.summary` 3.7 and 19 microseconds. Debug build: 6 and 23, 16 and 59. An empty run costs 1.3 ms. The first run in a process compiles the module (1.1 s release, 1.5 s debug). A round trip uses about 46,000 WebAssembly instructions of fuel.
 
 ## Script resources and trust
 
