@@ -774,3 +774,21 @@ fn waste_per_product_and_products_by_style_id() {
     );
     assert!(m.contains("max_extra_joint_mm"));
 }
+
+#[test]
+fn every_call_sets_the_unit_limit_that_the_drawings_of_patterns_use() {
+    // Sheets, PDF and SVG are drawn on the thread of the call, with the limit of the session.
+    let mut s = Session::with_sequential_ids();
+    s.set_limits(crate::SessionLimits {
+        pattern_units: 1234,
+        ..Default::default()
+    });
+    ok(&mut s, "document.summary", json!({}));
+    assert_eq!(kadakas_core::hardscape::draw::pattern_units(), 1234);
+    s.set_limits(Default::default());
+    ok(&mut s, "document.summary", json!({}));
+    assert_eq!(
+        kadakas_core::hardscape::draw::pattern_units(),
+        crate::SessionLimits::default().pattern_units
+    );
+}

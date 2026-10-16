@@ -1271,6 +1271,9 @@ impl Session {
     /// Runs one request. The limits of the session (`SessionLimits`) apply: a call that breaks one
     /// is undone and fails with a limit error.
     pub fn handle(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
+        // The drawings of patterns (sheets, PDF, SVG) lay plans with the unit limit of this session,
+        // as the reports do.
+        kadakas_core::hardscape::draw::set_pattern_units(self.limits.pattern_units);
         let depth = self.editor.undo_depth();
         let revision = self.editor.revision();
         #[cfg(not(target_arch = "wasm32"))]

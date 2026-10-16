@@ -21,7 +21,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use egui::{Color32, Painter, Pos2, Stroke};
@@ -59,10 +58,15 @@ struct Held {
     /// The key of the plan that the check is asked for.
     check_asked: Option<u64>,
     /// What was drawn last, and for which plan, window and zoom.
-    drawn: Option<Rc<Drawn>>,
+    drawn: Option<Arc<Drawn>>,
     drawn_key: u64,
     window: Option<BBox>,
     need_area: f64,
+    /// The window that the worker is asked to cut: the request, and what it is for.
+    cut_asked: Option<(u64, BBox, f64)>,
+    /// In the browser the check runs in the window, and the page pauses: the label is painted one
+    /// frame before the check starts.
+    check_deferred: bool,
     /// The frame that used this last.
     used: u64,
 }
@@ -78,7 +82,7 @@ thread_local! {
     static BOUND: Cell<Option<usize>> = const { Cell::new(None) };
     static HELD: RefCell<HashMap<Slot, Held>> = RefCell::new(HashMap::new());
     /// The content key of an object for a document revision.
-    static KEYS: RefCell<HashMap<ObjectId, (u64, u64)>> = RefCell::new(HashMap::new());
+    static KEYS: RefCell<HashMap<ObjectId, (u64, usize, u64)>> = RefCell::new(HashMap::new());
     /// The revision of the document that the entries were last compared with the objects of.
     static PRUNED: Cell<Option<u64>> = const { Cell::new(None) };
     static GHOST: Cell<bool> = const { Cell::new(false) };
@@ -188,8 +192,8 @@ fn key_of(doc: &Document, o: &Object, revision: Option<u64>, ghost: bool) -> u64
         && let Some(k) = KEYS.with(|k| {
             k.borrow()
                 .get(&o.id)
-                .filter(|(r, _)| *r == rev)
-                .map(|e| e.1)
+                .filter(|(r, units, _)| *r == rev && *units == draw::pattern_units())
+                .map(|e| e.2)
         })
     {
         return k;
@@ -197,7 +201,8 @@ fn key_of(doc: &Document, o: &Object, revision: Option<u64>, ghost: bool) -> u64
     let key = draw::content_key(doc, o, kadakas_core::layout::TOLERANCE);
     if !ghost && let Some(rev) = revision {
         KEYS.with(|k| {
-            k.borrow_mut().insert(o.id, (rev, key));
+            k.borrow_mut()
+                .insert(o.id, (rev, draw::pattern_units(), key));
         });
     }
     key
@@ -299,7 +304,9 @@ fn plan_for(
             Plan::Failed(e)
         }
         None => {
-            if held.asked != Some(key) {
+            // Ask when nothing was asked, or when the job went (its result was dropped and the
+            // shared cache no longer has the plan).
+            if held.asked != Some(key) || !worker().pending_plan(slot, key) {
                 match draw::prepare_job(doc, o, key) {
                     Some(job) => {
                         held.asked = Some(key);
@@ -313,12 +320,21 @@ fn plan_for(
     }
 }
 
-/// The drawing of a plan for a visible box: kept while the view stays in its window.
-fn drawn_for(held: &mut Held, prepared: &Prepared, visible: BBox, zoom: f64) -> Option<Rc<Drawn>> {
+/// The drawing of a plan for a visible box: kept while the view stays in its window. A new window
+/// is cut by the worker; until it is there the window that is held is returned, and the flag says
+/// that it is being updated.
+fn drawn_for(
+    held: &mut Held,
+    slot: Slot,
+    prepared: &Arc<Prepared>,
+    visible: BBox,
+    zoom: f64,
+    ctx: &egui::Context,
+) -> (Option<Arc<Drawn>>, bool) {
     let bounds = prepared.bounds();
     let need = (visible.0.max(bounds.0), visible.1.min(bounds.1));
     if need.0.x > need.1.x || need.0.y > need.1.y {
-        return None;
+        return (None, false);
     }
     let min_unit = MIN_UNIT_PX / zoom;
     if let (Some(d), Some(w)) = (&held.drawn, held.window)
@@ -330,30 +346,50 @@ fn drawn_for(held: &mut Held, prepared: &Prepared, visible: BBox, zoom: f64) -> 
         // A preview is looked at again when the view got smaller.
         && (!d.is_preview() || area(need) >= PREVIEW_SHRINK * held.need_area)
     {
-        return Some(d.clone());
+        return (Some(d.clone()), false);
     }
-    REDRAWS.with(|r| r.set(r.get() + 1));
     let size = need.1 - need.0;
     let window = (
         (need.0 - size * MARGIN).max(bounds.0),
         (need.1 + size * MARGIN).min(bounds.1),
     );
-    let drawn = Rc::new(
-        prepared.draw(
-            Some(window),
-            &DrawOptions {
-                bound: bound(),
-                max_segments: max_segments(),
-                ..DrawOptions::canvas()
-            }
-            .hiding_units_under(min_unit),
-        ),
-    );
-    held.drawn = Some(drawn.clone());
-    held.drawn_key = prepared.key;
-    held.window = Some(window);
-    held.need_area = area(need);
-    Some(drawn)
+    let opts = DrawOptions {
+        bound: bound(),
+        max_segments: max_segments(),
+        ..DrawOptions::canvas()
+    }
+    .hiding_units_under(min_unit);
+    // The request: this plan, this window, this limit of units.
+    let id = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        prepared.key.hash(&mut h);
+        for x in [window.0.x, window.0.y, window.1.x, window.1.y, min_unit] {
+            x.to_bits().hash(&mut h);
+        }
+        (opts.bound, opts.max_segments).hash(&mut h);
+        h.finish()
+    };
+    if let Some((asked, w, need_area)) = held.cut_asked
+        && asked == id
+    {
+        if let Some(cut) = worker().take_cut(slot, id) {
+            let d = Arc::new(cut.drawn);
+            held.drawn = Some(d.clone());
+            held.drawn_key = prepared.key;
+            held.window = Some(w);
+            held.need_area = need_area;
+            held.cut_asked = None;
+            return (Some(d), false);
+        }
+        if worker().pending_cut(slot, id) {
+            return (held.drawn.clone(), true);
+        }
+    }
+    REDRAWS.with(|r| r.set(r.get() + 1));
+    held.cut_asked = Some((id, window, area(need)));
+    worker().draw(slot, id, prepared.clone(), window, opts, ctx);
+    (held.drawn.clone(), true)
 }
 
 /// What the canvas draws for one hardscape: `pen` is the pen of the object, `color` the color of
@@ -453,11 +489,20 @@ pub fn draw_plan(
     if !meet(visible, (blo, bhi)) {
         return;
     }
-    let drawn = HELD.with(|h| {
+    let (drawn, updating) = HELD.with(|h| {
         let mut h = h.borrow_mut();
         h.get_mut(&slot)
-            .and_then(|held| drawn_for(held, &prepared, visible, view.zoom))
+            .map(|held| drawn_for(held, slot, &prepared, visible, view.zoom, ctx))
+            .unwrap_or((None, false))
     });
+    if updating {
+        // The window is being cut by the worker; the one that is held stays meanwhile.
+        note(if drawn.is_some() {
+            tr!("plan-draw-updating")
+        } else {
+            tr!("plan-draw-laying")
+        });
+    }
     if let Some(d) = &drawn {
         paint_drawn(painter, view, d, visible, offset, color, pen);
         if d.has_hidden() {
@@ -506,13 +551,26 @@ pub fn draw_plan(
             }
             None => {
                 // The findings are made in the background; none of an older plan are shown.
-                note(tr!("plan-draw-checking"));
+                // In the browser there is no second thread: the check runs in the page and the page
+                // pauses, so the label says so and is painted one frame before the check starts.
+                let browser = cfg!(target_arch = "wasm32");
+                note(if browser {
+                    tr!("plan-draw-checking-pauses")
+                } else {
+                    tr!("plan-draw-checking")
+                });
                 HELD.with(|h| {
                     if let Some(held) = h.borrow_mut().get_mut(&slot)
                         && held.check_asked != Some(prepared.key)
                     {
-                        held.check_asked = Some(prepared.key);
-                        worker().check(slot, prepared.clone(), ctx);
+                        if browser && !held.check_deferred {
+                            held.check_deferred = true;
+                            ctx.request_repaint();
+                        } else {
+                            held.check_deferred = false;
+                            held.check_asked = Some(prepared.key);
+                            worker().check(slot, prepared.clone(), ctx);
+                        }
                     }
                 });
             }

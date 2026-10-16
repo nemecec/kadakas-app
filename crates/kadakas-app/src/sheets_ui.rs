@@ -52,9 +52,30 @@ fn flatten(segs: &[PSeg]) -> Vec<Vec<DVec2>> {
     kadakas_print::display::sample_subpaths(segs, 12)
 }
 
-/// The rings of a filled path, as the PDF fills it: a ring that runs counterclockwise is an outline,
-/// one that runs clockwise is a hole in the outline that holds it. The closing point that repeats
-/// the first one is dropped.
+fn ring_area(r: &[DVec2]) -> f64 {
+    (0..r.len())
+        .map(|i| r[i].perp_dot(r[(i + 1) % r.len()]))
+        .sum::<f64>()
+        .abs()
+        / 2.0
+}
+
+fn inside_ring(poly: &[DVec2], p: DVec2) -> bool {
+    let mut c = false;
+    for i in 0..poly.len() {
+        let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
+            c = !c;
+        }
+    }
+    c
+}
+
+/// The rings of a filled path, grouped as outlines with their holes. Which ring is an outline and
+/// which a hole is decided by nesting, not by the direction of the ring (a ring inside one ring is
+/// a hole, inside two it is an outline again): the paths of the sheets promise only that a hole runs
+/// the other way, and some shapes (the poche of a section) may not even do that. The closing point
+/// that repeats the first one is dropped.
 fn fill_groups(subs: &[Vec<DVec2>]) -> Vec<Vec<Vec<DVec2>>> {
     let rings: Vec<Vec<DVec2>> = subs
         .iter()
@@ -67,30 +88,33 @@ fn fill_groups(subs: &[Vec<DVec2>]) -> Vec<Vec<Vec<DVec2>>> {
         })
         .filter(|r| r.len() >= 3)
         .collect();
-    let area = |r: &[DVec2]| -> f64 {
-        (0..r.len())
-            .map(|i| r[i].perp_dot(r[(i + 1) % r.len()]))
-            .sum::<f64>()
-    };
-    let (outers, holes): (Vec<_>, Vec<_>) = rings.into_iter().partition(|r| area(r) >= 0.0);
-    if outers.is_empty() {
-        return holes.into_iter().map(|h| vec![h]).collect();
+    // The rings that hold each ring.
+    let holders: Vec<Vec<usize>> = (0..rings.len())
+        .map(|i| {
+            (0..rings.len())
+                .filter(|&j| j != i && inside_ring(&rings[j], rings[i][0]))
+                .collect()
+        })
+        .collect();
+    let mut groups: Vec<Vec<Vec<DVec2>>> = Vec::new();
+    let mut group_of: Vec<Option<usize>> = vec![None; rings.len()];
+    for i in 0..rings.len() {
+        if holders[i].len().is_multiple_of(2) {
+            group_of[i] = Some(groups.len());
+            groups.push(vec![rings[i].clone()]);
+        }
     }
-    let mut groups: Vec<Vec<Vec<DVec2>>> = outers.into_iter().map(|o| vec![o]).collect();
-    for h in holes {
-        let inside = |poly: &[DVec2], p: DVec2| {
-            let mut c = false;
-            for i in 0..poly.len() {
-                let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
-                if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x
-                {
-                    c = !c;
-                }
+    for i in 0..rings.len() {
+        if !holders[i].len().is_multiple_of(2) {
+            // The hole of the smallest ring that holds it and is an outline.
+            let parent = holders[i]
+                .iter()
+                .copied()
+                .filter(|&j| holders[j].len().is_multiple_of(2))
+                .min_by(|&a, &b| ring_area(&rings[a]).total_cmp(&ring_area(&rings[b])));
+            if let Some(g) = parent.and_then(|j| group_of[j]) {
+                groups[g].push(rings[i].clone());
             }
-            c
-        };
-        if let Some(g) = groups.iter_mut().find(|g| inside(&g[0], h[0])) {
-            g.push(h);
         }
     }
     groups
@@ -469,5 +493,56 @@ pub fn capture(session: &Session, name: &str, zoom: f64, pan: DVec2) -> SavedVie
         view: Some(session.view.view.id().to_string()),
         projection: Some(session.view.projection.id().to_string()),
         mode: Some(session.view.mode.id().to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn square(x0: f64, y0: f64, x1: f64, y1: f64, ccw: bool) -> Vec<DVec2> {
+        let mut r = vec![
+            DVec2::new(x0, y0),
+            DVec2::new(x1, y0),
+            DVec2::new(x1, y1),
+            DVec2::new(x0, y1),
+        ];
+        if !ccw {
+            r.reverse();
+        }
+        r
+    }
+
+    #[test]
+    fn a_hole_is_a_ring_inside_a_ring_whatever_the_direction() {
+        // A clockwise outline with a counterclockwise hole.
+        let g = fill_groups(&[
+            square(0.0, 0.0, 10.0, 10.0, false),
+            square(3.0, 3.0, 6.0, 6.0, true),
+        ]);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].len(), 2);
+        // Both the same direction: still a hole.
+        let g = fill_groups(&[
+            square(0.0, 0.0, 10.0, 10.0, true),
+            square(3.0, 3.0, 6.0, 6.0, true),
+        ]);
+        assert_eq!((g.len(), g[0].len()), (1, 2));
+        // An island in the hole is an outline again; two separate shapes are two groups; the closing
+        // point that repeats the first is dropped.
+        let mut closed = square(20.0, 0.0, 30.0, 10.0, true);
+        closed.push(closed[0]);
+        let g = fill_groups(&[
+            square(0.0, 0.0, 10.0, 10.0, true),
+            square(2.0, 2.0, 8.0, 8.0, false),
+            square(4.0, 4.0, 5.0, 5.0, true),
+            closed,
+        ]);
+        assert_eq!(g.len(), 3);
+        let sizes: Vec<usize> = g.iter().map(Vec::len).collect();
+        assert_eq!(sizes, vec![2, 1, 1]);
+        assert_eq!(g[2][0].len(), 4);
+        // Rings that are too small are dropped.
+        assert!(fill_groups(&[vec![DVec2::ZERO, DVec2::X]]).is_empty());
     }
 }

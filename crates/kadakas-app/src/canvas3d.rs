@@ -156,7 +156,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         None => view3d.look(doc, &scene, rev, style.textures),
     };
     let geometry = view3d.geometry_key(&scene, rev);
-    let not_in_3d = kadakas_render::look::patterned_untextured(doc);
+    let not_in_3d = view3d.untextured(doc, rev);
     let light = light_for(doc, &style);
     let gpu_style = GpuStyle {
         mode: style.mode,

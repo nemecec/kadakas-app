@@ -773,6 +773,8 @@ fn a_job_lays_the_plan_from_a_small_document_and_a_check_can_be_stopped() {
         .join()
         .unwrap()
         .unwrap();
+    // The preview is made by the job, not by the first drawing.
+    assert!(made.preview.get().is_some());
     // It is what the window laid.
     let direct = Prepared::new(ed.doc(), o, layout::TOLERANCE, key, MAX_UNITS).unwrap();
     let opts = DrawOptions::units(SVG_BOUND);

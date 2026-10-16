@@ -28,7 +28,7 @@ use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use glam::DVec2;
@@ -78,20 +78,23 @@ pub const CACHE_BYTES: usize = 384 * 1024 * 1024;
 /// The most plans the shared cache keeps.
 pub const CACHE_PLANS: usize = 48;
 
-static PATTERN_UNITS: AtomicUsize = AtomicUsize::new(layout::MAX_UNITS);
+thread_local! {
+    static PATTERN_UNITS: Cell<usize> = const { Cell::new(layout::MAX_UNITS) };
+}
 
-/// Sets the most units that a plan may have in the drawings of this process (the courses of a plan
-/// are bound by it, as in the report: `SessionLimits::pattern_units`). The app sets it from its
-/// session; a render sets it in its [`SvgContext`].
+/// Sets the most units that a plan may have in the drawings of the calling thread (the courses of a
+/// plan are bound by it, as in the report: `SessionLimits::pattern_units`). The window and the API
+/// set it from their session at each call; a render can set it in its [`SvgContext`]. Another
+/// thread (the background worker) gets the number with its job.
 pub fn set_pattern_units(n: usize) {
-    PATTERN_UNITS.store(n.max(1), Ordering::Relaxed);
+    PATTERN_UNITS.with(|p| p.set(n.max(1)));
 }
 
 /// The unit limit that a plan is laid with now.
 pub fn pattern_units() -> usize {
     context()
         .max_units
-        .unwrap_or_else(|| PATTERN_UNITS.load(Ordering::Relaxed))
+        .unwrap_or_else(|| PATTERN_UNITS.with(Cell::get))
 }
 
 /// What to draw.
@@ -430,8 +433,12 @@ impl PrepareJob {
 /// object has no joint pattern.
 pub fn prepare_job(doc: &Document, obj: &Object, key: u64) -> Option<PrepareJob> {
     layout::object::pattern_of(doc, obj)?;
+    // The document of the job holds the style of the object and the objects that are followed,
+    // not every resource of the drawing.
     let mut small = Document::default();
-    small.resources = doc.resources.clone();
+    if let Some(style) = super::style_id(obj).and_then(|id| doc.resources.get(id)) {
+        small.resources.push(style.clone());
+    }
     if let Some(p) = plan::data(obj) {
         let followed = p
             .splits
@@ -641,6 +648,25 @@ impl Prepared {
         total
     }
 
+    /// Makes what a drawing needs and that takes time: the preview (the gap lines of the whole plan)
+    /// and the lattices of the zones that give their units by center, when they are kept. The
+    /// background job calls it; a drawing that comes after finds both ready.
+    pub fn warm(&self) {
+        self.preview();
+        let mut seen: Vec<*const Vec<Region>> = Vec::new();
+        for g in &self.planned.groups {
+            let (Some(o), Some((pattern, place))) = (&g.owner, resolved(g)) else {
+                continue;
+            };
+            let ptr = Arc::as_ptr(&o.zones);
+            if seen.contains(&ptr) || estimate(pattern, g.region.area) > OWNER_LATTICE_MAX as u64 {
+                continue;
+            }
+            seen.push(ptr);
+            let _ = o.warm(&g.region, pattern, &place, &Limits::default());
+        }
+    }
+
     /// The box of the whole plan.
     pub fn bounds(&self) -> BBox {
         (self.region.lo, self.region.hi)
@@ -744,6 +770,8 @@ impl Prepared {
         };
         let mut groups = Vec::with_capacity(self.planned.groups.len());
         let mut lattices: Vec<*const Vec<Region>> = Vec::new();
+        // The window laid one time for all zones of a lattice that is too big to keep.
+        let mut windows: Vec<(*const Vec<Region>, Vec<Vec<layout::Unit>>)> = Vec::new();
         for g in &self.planned.groups {
             let mut dg = new_group(g, opts.min_unit_mm);
             if let Some(v) = view {
@@ -829,10 +857,17 @@ impl Prepared {
                                 // A lattice too big to keep: lay the window, and give each unit to
                                 // the zone of its center.
                                 view?;
-                                o.units_near(&window, pattern, &place, &limits, &mut |u| {
-                                    take(u, &mut dg, false)
-                                })
-                                .ok()?;
+                                let ptr = Arc::as_ptr(&o.zones);
+                                if !windows.iter().any(|w| w.0 == ptr) {
+                                    let per_zone =
+                                        o.units_near_all(&window, pattern, &place, &limits).ok()?;
+                                    windows.push((ptr, per_zone));
+                                }
+                                if let Some((_, per_zone)) = windows.iter().find(|w| w.0 == ptr) {
+                                    for u in &per_zone[o.index] {
+                                        take(u, &mut dg, false);
+                                    }
+                                }
                             }
                             Some(_) => {
                                 g.for_each_unit(&Limits::default(), &mut |u| {

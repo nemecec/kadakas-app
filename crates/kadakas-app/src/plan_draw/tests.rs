@@ -736,6 +736,101 @@ fn the_sheet_view_draws_the_units_and_the_fills_that_the_pdf_has() {
     let _ = PSeg::Move(DVec2::ZERO);
 }
 
+#[test]
+fn a_new_plan_goes_ahead_of_the_checks_and_drops_the_checks_of_its_place() {
+    use crate::plan_worker::{Worker, slot};
+    let (ed, id) = lot(4000.0, 2000.0, true);
+    let doc = ed.doc();
+    let o = doc.object(id).unwrap();
+    let key = draw::content_key(doc, o, kadakas_core::layout::TOLERANCE);
+    let prepared =
+        Arc::new(Prepared::new(doc, o, kadakas_core::layout::TOLERANCE, key, MAX_UNITS).unwrap());
+    let ctx = egui::Context::default();
+    let w = Worker::detached();
+    let (a, b) = (slot(id, false), slot(id, true));
+    let window = prepared.bounds();
+    w.check(a, prepared.clone(), &ctx);
+    w.draw(a, 1, prepared.clone(), window, DrawOptions::canvas(), &ctx);
+    w.check(b, prepared.clone(), &ctx);
+    assert_eq!(w.queued(None), ["window", "check", "check"]);
+    // A newer plan for place a: it goes first, and the window and the check of the old plan of a
+    // are dropped. The check of place b stays.
+    w.prepare(a, draw::prepare_job(doc, o, key).unwrap(), &ctx);
+    assert_eq!(w.queued(None), ["plan", "check"]);
+    assert_eq!(w.queued(Some(a)), ["plan"]);
+    // A second plan for b goes after the first, before any check.
+    w.check(a, prepared.clone(), &ctx);
+    w.prepare(b, draw::prepare_job(doc, o, key).unwrap(), &ctx);
+    assert_eq!(w.queued(None), ["plan", "plan", "check"]);
+    assert_eq!(w.queued(Some(b)), ["plan"]);
+    // The newest job of a place and a kind replaces the one that waits.
+    w.prepare(a, draw::prepare_job(doc, o, key).unwrap(), &ctx);
+    assert_eq!(w.queued(None).iter().filter(|k| **k == "plan").count(), 2);
+}
+
+#[test]
+fn a_plan_whose_job_went_is_asked_for_again() {
+    let (ed, id) = lot(4000.0, 2000.0, true);
+    let view = view_of(v(-200.0, -200.0), v(4200.0, 2200.0));
+    let doc = ed.doc();
+    let key = draw::content_key(
+        doc,
+        doc.object(id).unwrap(),
+        kadakas_core::layout::TOLERANCE,
+    );
+    let first = frame(&ed, id, &view, 1);
+    assert!(first.waiting());
+    wait_for_worker();
+    // The result is lost (dropped from the list of results), and the shared cache no longer has
+    // the plan.
+    let slot = crate::plan_worker::slot(id, false);
+    let lost = worker().take(slot, key);
+    draw::cache().clear();
+    assert!(lost.is_some() || draw::cached(key).is_none());
+    let settled = settle(&ed, id, &view, 1);
+    assert!(settled.joints > 100, "{settled:?}");
+}
+
+#[test]
+fn a_change_of_the_unit_limit_is_a_change_of_the_plan() {
+    let (ed, id) = lot(4000.0, 2000.0, true);
+    let view = view_of(v(-200.0, -200.0), v(4200.0, 2200.0));
+    let before = settle(&ed, id, &view, 1);
+    assert!(before.joints > 100);
+    // Under the same revision of the document, a course of more units than the limit of the
+    // session cannot be laid: the plan is another plan.
+    draw::set_pattern_units(5);
+    let limited = settle(&ed, id, &view, 1);
+    draw::set_pattern_units(MAX_UNITS);
+    assert!(
+        limited
+            .texts
+            .iter()
+            .any(|t| t.contains("Pattern not drawn")),
+        "{:?}",
+        limited.texts
+    );
+    let after = settle(&ed, id, &view, 1);
+    assert_eq!(after.joints, before.joints);
+}
+
+#[test]
+fn a_window_that_is_cut_in_the_background_leaves_the_held_one_on_the_screen() {
+    let (ed, id) = lot(8000.0, 4000.0, true);
+    let view = view_of(v(1000.0, 500.0), v(3000.0, 1500.0));
+    let held = settle(&ed, id, &view, 1);
+    assert!(held.joints > 100);
+    // The view leaves the window: the frame does not wait for the cut. It draws what it has and
+    // says that it updates.
+    let mut far = view;
+    far.pan(egui::vec2(-900.0, 0.0));
+    let at_once = frame(&ed, id, &far, 1);
+    assert!(at_once.says("plan-draw-updating"), "{:?}", at_once.texts);
+    let done = settle(&ed, id, &far, 1);
+    assert!(!done.says("plan-draw-updating"));
+    assert!(done.joints > 0);
+}
+
 /// Measures the frame of the canvas for 10,000, 30,000 and 100,000 line segments of a pattern
 /// (`cargo test -p kadakas-app --bin kadakas-app measure_canvas_frames -- --ignored --nocapture`,
 /// with the egui crates optimized, as the release build has them). A frame is the drawing of the
