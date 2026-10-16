@@ -221,9 +221,8 @@ impl From<ScriptError> for Failure {
 
 /// The script engine: the loaded module and the limits.
 pub struct ScriptEngine {
-    module: Option<Box<dyn HostedModule>>,
+    module: Box<dyn HostedModule>,
     limits: ScriptLimits,
-    unavailable: Option<String>,
 }
 
 impl ScriptEngine {
@@ -251,11 +250,7 @@ impl ScriptEngine {
                 PluginError::Unsupported(m) => ScriptError::Unavailable(m),
                 other => ScriptError::Trap(other.to_string()),
             })?;
-        Ok(ScriptEngine {
-            module: Some(module),
-            limits,
-            unavailable: None,
-        })
+        Ok(ScriptEngine { module, limits })
     }
 
     /// Compiles the module in advance, asynchronously. **The browser needs this** before the first
@@ -282,22 +277,14 @@ impl ScriptEngine {
 
     /// Runs a script. Every call of the script goes to `host`.
     pub fn run(&self, request: &Request<'_>, host: &mut dyn ScriptHost) -> Result<Output, Failure> {
-        let Some(module) = &self.module else {
-            return Err(
-                ScriptError::Unavailable(self.unavailable.clone().unwrap_or_default()).into(),
-            );
-        };
+        let module = &self.module;
         let options = json!({
             "memory": self.limits.memory_bytes / 4 * 3,
             "stack": 256 * 1024,
             "seed": request.seed,
             "max_calls": self.limits.max_calls,
         });
-        let args = serde_json::to_vec(request.args).map_err(|e| {
-            Failure::from(ScriptError::Trap(format!(
-                "the arguments cannot be sent: {e}"
-            )))
-        })?;
+        let args = serde_json::to_vec(request.args).expect("a JSON value is JSON");
         let options = serde_json::to_vec(&options).expect("options are JSON");
         let mut parts: Vec<&[u8]> = vec![request.code.as_bytes(), &args, &options];
         parts.extend(request.buffers.iter().map(Vec::as_slice));
