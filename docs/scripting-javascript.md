@@ -1,32 +1,34 @@
-# JavaScript scripts
+# JavaScript programs
 
-This guide shows how to run JavaScript inside Kadakas, and how to use a script as a generator of unit patterns.
+This guide shows how to run JavaScript inside Kadakas, and how a program makes the unit shapes of a generator pattern.
 
-A script is JavaScript on QuickJS. QuickJS runs **inside the WebAssembly sandbox** of Kadakas (the same host as the plug-ins in [plugins.md](plugins.md)), so a script runs the same way on the desktop, on the server and in the browser. A script has no files, no network and no clock. Its only way out is `kadakas.call(method, params)`. That runs a method of the API, with the same dispatch and the same checks as a JSON-RPC request. So a script can do no more than the API allows, and it needs no extra consent.
+A program is JavaScript on QuickJS. QuickJS runs **inside the WebAssembly sandbox** of Kadakas (the same host as the plug-ins in [plugins.md](plugins.md)), so a program runs the same way on the desktop, on the server and in the browser. A program has no files, no network and no clock. Its only way out is `kadakas.call(method, params)`. That runs a method of the API, with the same dispatch and the same checks as a JSON-RPC request.
 
-Python stays the tool for programs that run next to the app, with files and libraries ([scripting.md](scripting.md)). Use JavaScript when the script must run in the session itself, in one undo step, also in the browser.
+**A document holds no code** (PLAT-15). The program is the text of the call: an agent sends it, a person runs a `.js` file from the Scripts window. A document stores results, never programs. Opening it, drawing it, counting it and exporting it run no code.
+
+Python stays the tool for programs that run next to the app, with files and libraries ([scripting.md](scripting.md)). Use JavaScript when the program must run in the session itself, in one undo step, also in the browser.
 
 ## Contents
 
-- [The rule: scripts only coordinate](#the-rule-scripts-only-coordinate)
-- [Run a script](#run-a-script)
-- [What a script sees](#what-a-script-sees)
+- [The rule: programs only coordinate](#the-rule-programs-only-coordinate)
+- [Run a program](#run-a-program)
+- [What a program sees](#what-a-program-sees)
+- [What a program may call](#what-a-program-may-call)
 - [Typed arrays](#typed-arrays)
 - [One undo step, and the read mode](#one-undo-step-and-the-read-mode)
 - [Limits](#limits)
-- [Script resources and trust](#script-resources-and-trust)
 - [Generators for unit patterns](#generators-for-unit-patterns)
-- [The Scripts palette](#the-scripts-palette)
+- [The Scripts window](#the-scripts-window)
 - [Build the engine](#build-the-engine)
 - [What is not done yet](#what-is-not-done-yet)
 
-## The rule: scripts only coordinate
+## The rule: programs only coordinate
 
-Every heavy operation (geometry, Boolean operations, offsets, clipping, pattern layout, meshing, analysis, rendering, import and export) is a native Kadakas call that works on many items in one call. A script decides what to call and with what. If a script needs a loop over many items to do geometry, a native call is missing. Add the call to the API; do not write the loop in the script.
+Every heavy operation (geometry, Boolean operations, offsets, clipping, pattern layout, meshing, analysis, rendering, import and export) is a native Kadakas call that works on many items in one call. A program decides what to call and with what. If a program needs a loop over many items to do geometry, a native call is missing. Add the call to the API; do not write the loop in the program.
 
 A call costs about 4 microseconds more than the same call from Rust in a release build (see [the measurement](#limits)). A loop of 10,000 cheap calls is fine. A loop of 10,000 calls that each move one point is the sign of a missing call that moves many points.
 
-## Run a script
+## Run a program
 
 `script.eval {code, mode?, args?, seed?}` runs the code as the body of a function and returns its result:
 
@@ -47,20 +49,27 @@ r = doc.script_eval("""
 """, args={"n": 5})
 ```
 
-MCP clients find the method in the tool `scripting`. `script.js_info` says how scripts run here (limits, the engine, the toolchain that built it).
+MCP clients find the method in the tool `scripting` (marked open world: the methods a program calls may reach files and the network as far as they could directly). `script.js_info` says how programs run here (limits, the engine, the toolchain that built it).
 
-## What a script sees
+## What a program sees
 
 - `args`: the value of the parameter `args`.
-- `kadakas.call(method, params)`: runs a method of `describe` and returns its result. If the method fails, it throws an `Error` with `code`, `message`, `data` and `method`. A script can catch it.
+- `kadakas.call(method, params)`: runs a method of `describe` and returns its result. If the method fails, it throws an `Error` with `code`, `message`, `data` and `method`. A program can catch it.
 - `console.log(...)`: writes to the log.
 - `Math.random()`: a fixed sequence. `seed` sets it; the same seed gives the same numbers.
 - `Date.now()` is always 0, and `new Date()` is the start of 1970. There is no clock.
-- Not there: `require`, `fetch`, `process`, files, timers.
+- Not there: `require`, `fetch`, `process`, files, timers. The code is synchronous: a promise or an `async` function is refused.
 
-A script cannot call `script.eval`, `script.run`, `undo`, `redo`, `document.load`, `collab.*` and `events.*`. In mode `read` it cannot call `export.*`, `import.*`, `file.*`, `gis.*`, `update.*` and other methods that write files or use the network.
+The same program gives the same result every time, on every engine (the tests run the engine of the desktop and the engine of the browser side by side).
 
-The same script gives the same result every time. A test for this is in the test suite of the crate.
+## What a program may call
+
+A table (`crates/kadakas-api/src/script_js_api/policy.rs`) classifies **every** method of the API by what it can touch: `read`, `edit` (the document only), `ui` (the selection, the view), `files`, `network`, `install` (plug-ins) and `never`. A method that nobody classified is denied, and a test fails when a method has no row.
+
+- A program cannot call `script.*`, `undo`, `redo`, `document.load`, `collab.*`, `events.*`, `feedback.*` and `plugin.*` (the last ones run Python).
+- Files, the network and plug-in installs follow the policy of the session: the allowed folders, the allowed addresses. A program has the rights of the agent that sent it, not more.
+- In mode `read` a program may call `read` methods only. Any other call is refused **before** it runs, with a policy error (code 4) that the program can catch.
+- While a run is open, the session refuses every call that is not one of the run (a conflict), so nothing else becomes part of its undo step.
 
 ## Typed arrays
 
@@ -68,15 +77,13 @@ Geometry can be a typed array (`Float64Array`, `Float32Array`, `Int32Array`, `Ui
 
 - **Into a call.** A typed array in `params` is written out as numbers before the method sees it, so it works for every method that takes numbers or points. `kadakas.points(array, 2)` marks a flat array as a list of `[x, y]` pairs (stride 2; 3 for `[x, y, z]`). `kadakas.pointsFrom([[0, 0], [10, 0]])` makes one from a list. A marked array becomes `[[x, y], ...]` in the parameters.
 - **Out of a call.** `kadakas.call(method, params, {typed: true})` gives long lists of points (8 or more) and long lists of numbers (64 or more) in the answer as `Float64Array` with `.stride`. Short lists stay plain arrays.
-- **In `args` and in the result.** A generator gets its region as typed arrays and returns the units as typed arrays. `script.eval` writes a returned typed array out as numbers.
+- **In the result.** `script.eval` writes a returned typed array out as numbers.
 
-A typed array must not sit inside a list of plain numbers.
+A typed array must not sit inside a list of plain numbers. The size of a call and of its reply, and the count of numbers that typed arrays make, are bounded by the output limit.
 
 ## One undo step, and the read mode
 
-All changes of a run are **one undo step**, with the change origin `script`. One `undo` takes back the whole run; one `redo` brings it back. If the script throws, or a limit stops it, the whole run is taken back, and the history shows no trace of it.
-
-`mode: "read"` is for checks and reports. A call that changes the document fails with a policy error (code 4), and the change is taken back at once. The script can catch the error. A call that writes a file or uses the network is refused before it runs.
+All changes of a run are **one undo step**, with the change origin `script`. One `undo` takes back the whole run; one `redo` brings it back. If the program throws, or a limit stops it, the whole run is taken back, and the history and the log of changes show no trace of it. The history limit does not drop steps while a run is open. The collaboration client and `events.poll` see the run as one change.
 
 ## Limits
 
@@ -85,62 +92,43 @@ The limits come from the session (`SessionLimits`: `script_js_fuel`, `script_tim
 | Limit | Desktop and server | Browser |
 |---|---|---|
 | Fuel (about one unit per WebAssembly instruction; a JavaScript bytecode costs about 100) | 10,000,000,000 | 400,000,000 |
-| Time for each stretch of the script between two calls | 5 s (`script_timeout`) | none (fuel only) |
-| Time for the whole run, with the calls | 120 s (`script_js_time`) | none (the page has no clock) |
+| Time for each stretch of the program between two calls | 5 s (`script_timeout`) | none (fuel only) |
+| Time for the whole run, with the calls | 120 s (`script_js_time`) | measured at the calls (`Date.now()`) |
 | Memory of the engine | 128 MiB | 128 MiB |
-| Size of the answer (value, log, typed arrays) | 16 MiB | 16 MiB |
+| Size of the answer, and of each call and reply | 16 MiB | 16 MiB |
 | Calls into the API | 1,000,000 | 1,000,000 |
 
-The strict limits for free accounts are smaller (`SessionLimits::strict`). The native engine counts fuel exactly. The browser engine rewrites the module so that it counts its own fuel; it cannot stop a script by time (a page has no worker to interrupt), so fuel is the bound there, as for plug-ins. Every call from a script goes through `Session::handle`, so the limits of the session (objects, memory, time of a call) apply to each call too.
+The strict limits for free accounts are smaller and never above the browser limits (`SessionLimits::strict`). On the desktop the whole-run time is checked at every call **and** at every tick of the clock of the engine (about every 50 ms), so a program that makes no calls stops too; a run that lasts "5 s" only when it makes no calls is bounded by 5 s per stretch and 120 s in all. The browser cannot interrupt a program by time (a page has no worker to do it), so fuel is the bound there, as for plug-ins. Every call from a program goes through `Session::handle`, so the limits of the session (objects, memory, time of a call) apply to each call too. The memory of the engine inside the module is three quarters of the limit; the rest is for the C library and the frames, which are counted by the memory cap of the module.
 
-**Cost of a call.** Measured on an Apple M-series computer (`measure_call_overhead` in `crates/kadakas-api/src/script_js_api/tests.rs`, 10,000 calls each). Release build: a call of `selection.get` costs 1.1 microseconds from Rust and 5.4 microseconds from a script; `document.summary` 3.7 and 19 microseconds. Debug build: 6 and 23, 16 and 59. An empty run costs 1.3 ms. The first run in a process compiles the module (1.1 s release, 1.5 s debug). A round trip uses about 46,000 WebAssembly instructions of fuel.
-
-## Script resources and trust
-
-A script can live in the document as a resource (SCR-03, lite): `script_resource.create {name, code, description?}`, `script_resource.get`, `script_resource.update`, `script_resource.list`; delete it with `resource.delete`. The resource keeps the name, the code and the SHA-256 of the code.
-
-- A script that an agent sends in `script.eval {code}` is the agent's own text and runs without trust, for that call.
-- A script from the document runs only after a person trusted its **exact text** (the SHA-256). The person trusts it in the Scripts window (File > Scripts, "Scripts in this document"), in a dialog that shows the whole text. A changed text has a new hash and needs trust again. **No API method adds trust**, and none removes it. When the host lets agents run scripts (`--allow-agent-scripts`), they may run scripts of the document without trust, as for plug-ins.
-- `script.eval {script: "Name"}` and a generator pattern both need that trust.
+**Cost of a call.** Measured on an Apple M-series computer (`measure_call_overhead` in `crates/kadakas-api/src/script_js_api/tests.rs`, 10,000 calls each). Release build: a call of `selection.get` costs 1.1 microseconds from Rust and 5.4 microseconds from a program; `document.summary` 3.7 and 19 microseconds. Debug build: 6 and 23, 16 and 59. An empty run costs 1.3 ms. The first run in a process compiles the module (1.1 s release, 1.5 s debug).
 
 ## Generators for unit patterns
 
-A pattern of the kind `generator` (PAT-09) lets a script make the unit shapes. Kadakas does everything after that, as for the other kinds: clipping to the outline and the holes, whole and cut units, counts per unit type, `unit_pattern.check`, reports, `to_objects` and the DXF export.
+A pattern of the kind `generator` (PAT-09) lays unit shapes that a generator made. Kadakas does everything after that, as for the other kinds: clipping to the outline and the holes (also of each zone and course), whole and cut units, counts per unit type, `unit_pattern.check`, reports, `to_objects` and the DXF export.
 
-```json
-{"method": "unit_pattern.layout", "params": {
-  "region": {"outline": [[0, 0], [6000, 0], [6000, 3000], [0, 3000]]},
-  "pattern": {"kind": "generator", "script": "Ashlar", "params": {"seed": 7}, "gap": 10},
-  "origin": [0, 0]}}
-```
+The pattern **stores the last result** of the generator: the shapes, a `label` (who made them) and the `params` (what they were made with). So a document draws, counts and exports a generator pattern **without running any code**. Today an agent makes the result: it runs a program with `script.eval`, which computes the shapes, and writes them where they belong, in the same run (one undo step). An installed package will make results later (PLAT-15); then the document will name the package, its version and hash, and a person or an agent will make the result again when the parameters change. Regeneration is never automatic.
 
-In a hardscape style: `hardscape_style.create {name, joints: {kind: "generator", generator: {script: "Ashlar", params: {...}}, spacing: 10}}`. The origin and the angle of the hardscape, its zones and its courses work as for other patterns; each zone calls the script for its own region.
-
-**Input.** The script gets `args`:
-
-```text
-{ params,                 // generator.params
-  origin: [x, y],          // where the pattern starts (mm)
-  angle,                   // degrees, counterclockwise
-  gap,                     // the width of a joint
-  max_units,               // the most shapes it may return (the unit limit of the session)
-  region: { box: [x0, y0, x1, y1], area,
-            outer: Float64Array (stride 2), holes: [Float64Array, ...],      // the first shape
-            shapes: [{ outer, holes }, ...] } }                              // all shapes
-```
-
-**Output.** The unit shapes, **not clipped**, as typed arrays:
+The shapes, **not clipped**, in drawing coordinates:
 
 ```text
 { types: ["name", ...],                                     // the unit types
-  rects: { kind: Uint32Array, data: Float64Array },         // cx, cy, length, width, angle (degrees) per unit
-  polygons: { kind: Uint32Array, start: Uint32Array,         // start has n + 1 entries
-              points: Float64Array } }                      // x, y pairs of all units
+  rects: { kind: [type index per unit], data: [cx, cy, length, width, angle (degrees), ...] },
+  polygons: { kind: [...], start: [n + 1 entries], points: [x, y, ...] } }
 ```
 
-Like the cells of a bond or a module, the shapes are the outlines **at the centers of the joints**; the gap moves each one inward by half a gap. The full area of a unit type is the area of its largest cell, so a cut unit has a share of it.
+Like the cells of a bond or a module, the shapes are the outlines **at the centers of the joints**; the gap moves each one inward by half a gap. The full area of a unit type is the area of its largest cell, so a cut unit has a share of it. Typed arrays in the call are written out as numbers, so a program passes the typed arrays of its result as they are. At most `limits.pattern_units` shapes.
 
-**Rules.** A generator is a pure function of its input: it cannot call the API, it has no clock, and `Math.random` is a fixed sequence. Kadakas keeps the answer for the same input (region, parameters, origin, angle, gap, text of the script), so the pattern is "regenerated" whenever one of them changes, and not otherwise. The result is not stored in the document: the script, the parameters and the object are the editable data, and any client that has the script can make the units again. Bounds: fuel, time, memory and the unit count of the session (`pattern_units`); a script that makes more units fails with the number it made.
+In a call: `unit_pattern.layout {region, pattern: {kind: "generator", label, params, types, rects, polygons, gap}, origin}`. In a hardscape style: `hardscape_style.create {name, joints: {kind: "generator", spacing: 10, generator: {label, params, units: {types, rects, polygons}}}}`. The result is stored in the style and lays under every hardscape that uses it; each zone and course clips it to its own region. Run the program again and call `hardscape_style.update {id, joints}` to replace the result.
+
+The two examples below return the shapes when they get `args` with `region.box` and `params`. Wrap a generator in a function and pass its result on:
+
+```js
+const generate = (args) => { /* the body of a generator */ };
+const result = generate(args);
+kadakas.call("hardscape_style.update", {id: args.style, joints: {kind: "generator", spacing: 10,
+  generator: {label: "ashlar", params: args.params,
+    units: {types: result.types, rects: result.rects}}}});
+```
 
 ### Example: random ashlar
 
@@ -148,11 +136,14 @@ Courses of equal height; in each course, units of three lengths in a random orde
 
 ```js
 // Random ashlar: courses of equal height, in each course units of three lengths in a random
-// order. A generator for a pattern of the kind "generator" (PAT-09).
+// order. A generator program for a pattern of the kind "generator" (PAT-09): it makes the unit
+// shapes. Run it with script.eval (see docs/scripting-javascript.md), then write what it
+// returns into a pattern; the document stores the result and runs no code.
 //
-// params: { course: 200,                    height of a course (mm)
-//           lengths: [300, 450, 600],       the three unit lengths (mm)
-//           seed: 1 }                       the same seed gives the same wall
+// args.region.box = [x0, y0, x1, y1]: the area to cover (mm), for example the box of a hardscape.
+// args.params = { course: 200,              height of a course (mm)
+//                 lengths: [300, 450, 600], the three unit lengths (mm)
+//                 seed: 1 }                 the same seed gives the same wall
 //
 // The shapes are the cells at the centers of the joints, not clipped. Kadakas moves them inward
 // by half the gap and cuts them to the region and its holes.
@@ -199,16 +190,19 @@ Rings of wedge-shaped units round the origin of the pattern. The file is `docs/s
 
 ```js
 // Radial fan: rings of wedge-shaped units around the origin of the pattern, like a fan of
-// cobbles round a fountain. A generator for a pattern of the kind "generator" (PAT-09).
+// cobbles round a fountain. A generator program for a pattern of the kind "generator" (PAT-09):
+// run it with script.eval (see docs/scripting-javascript.md), then write what it returns into a
+// pattern; the document stores the result and runs no code.
 //
-// params: { ring: 500,       width of a ring (mm)
-//           unit: 300,       about how long a wedge is along the middle of its ring (mm)
-//           count: 0,        units in every ring; 0 = choose from `unit` for each ring
-//           step: 5 }        degrees of an arc piece (arcs are cut into straight pieces)
+// args.region.box = [x0, y0, x1, y1]: the area to cover (mm).
+// args.origin = [x, y] and args.angle (degrees): where the fan is and where its first joint points.
+// args.params = { ring: 500,   width of a ring (mm)
+//                 unit: 300,   about how long a wedge is along the middle of its ring (mm)
+//                 count: 0,    units in every ring; 0 = choose from `unit` for each ring
+//                 step: 5 }    degrees of an arc piece (arcs are cut into straight pieces)
 //
-// The fan starts at args.origin and turns with args.angle, so the pattern origin and angle of
-// the object set where the fan is and where its first joint points. Two unit types alternate
-// from ring to ring. The shapes are not clipped; Kadakas cuts them to the region.
+// Two unit types alternate from ring to ring. The shapes are not clipped; Kadakas cuts them
+// to the region.
 const p = args.params || {};
 const ring = p.ring || 500;
 const unit = p.unit || 300;
@@ -259,22 +253,20 @@ return {
 };
 ```
 
-Both scripts are tested: the fan over a 2 m square gives 24 units (16 whole, 8 cut), the ashlar fills its region and gives the same wall for the same seed (`crates/kadakas-api/src/script_js_api/tests.rs`).
+Both programs are tested: the fan over a 2 m square gives 24 units (16 whole, 8 cut), the ashlar fills its region and gives the same wall for the same seed, and a small grid gives 15 units (10 whole, 5 cut) (`crates/kadakas-api/src/script_js_api/tests.rs`).
 
-## The Scripts palette
+## The Scripts window
 
-File > Scripts lists `.py` and `.js` files of a folder. **Run** on a `.js` file runs it with `script.eval` in the open document: one undo step, the log and the result in the console, an error in red. The run uses the UI thread, within the limits of the session. A `.py` file starts as a program, as before.
-
-The window also lists the **scripts in the document** with their state. A script that is not trusted has a Review button (the trust dialog); a trusted one has Run and Stop trusting.
+File > Scripts lists `.py` and `.js` files of a folder. **Run** on a `.js` file runs it with `script.eval` in the open document: one undo step, the log and the result in the console, an error in red. The engine runs on a **worker thread**; the window stays alive, serves the calls of the program in each frame (about 8 ms at a time) and shows "Script running" with the time, the calls and a **Stop** button. Stop makes the next call fail, and the clock of the engine interrupts a program that makes no calls. While the program runs, the drawing cannot be edited (a modal window), so the edits of the person do not become part of the undo step of the run. One call can take longer than a frame (a native operation does not stop in the middle). A `.py` file starts as a program, as before. The browser has no threads: there the run is done at once, within its fuel.
 
 ## Build the engine
 
-The engine is QuickJS (quickjs-ng 0.17.0, vendored) built to WebAssembly by `crates/kadakas-script-js/build.rs` with a pinned wasi-sdk. The cargo feature `script-js` of `kadakas-api`, `kadakas-cli` and `kadakas-app` turns it on (default). How to install the toolchain is in [dev-guide.md](dev-guide.md#the-javascript-engine-wasi-sdk). Without the feature, `script.eval` says that the engine is not built in.
+The engine is QuickJS (quickjs-ng 0.17.0, vendored) built to WebAssembly by `crates/kadakas-script-js/build.rs` with a pinned wasi-sdk. The cargo feature `script-js` of `kadakas-api`, `kadakas-cli` and `kadakas-app` turns it on (default). How to install the toolchain is in [dev-guide.md](dev-guide.md#the-javascript-engine-wasi-sdk). Without the feature, `script.eval` says that the engine is not built in; a stored generator result is still laid.
 
 ## What is not done yet
 
+- A package registry for generators (PLAT-15): a generator takes its code from an installed package, and the document names the package. For now an agent makes the results.
+- The result of a generator is stored inside the pattern as numbers (JSON). A large result will move to a blob of the file (`blobs/`) with the registry.
 - The browser path is tested on the desktop with the engine of the browser (a rewrite of the module, run on a plain wasmtime); the glue to the `WebAssembly` API of a page compiles but has not run in a browser. The page must call `ScriptEngine::precompile()` once (the app does, at start).
-- A script runs on the thread of the caller. In the app, a long script blocks the window until the limit (5 s per stretch).
-- A generator needs its pattern in a hardscape style or in the `pattern` parameter. The joint editor of the app does not edit a generator yet (it shows the kind).
-- Read mode refuses a call that changes the document after the call ran (and takes it back); a method that has other effects than on the document (the selection, the view) is allowed.
+- The joint editor of the app shows the generator kind but does not edit it.
 - Script-based plug-in objects (SCR-04) still use Python. They can move to this engine later.

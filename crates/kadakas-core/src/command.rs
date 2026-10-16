@@ -1226,7 +1226,7 @@ impl<'a> Tx<'a> {
     /// Makes the objects and the settings of the document equal to those of `target` (see
     /// `Editor::restore_content`). An object that is gone, changed or out of place in the z-order
     /// is removed and put back where `target` has it; the others stay.
-    fn replace_content(&mut self, target: &Document) {
+    fn replace_content(&mut self, target: &Document, keep_issue_pictures: bool) {
         let cur_ids: Vec<ObjectId> = self.doc.objects.keys().copied().collect();
         // The objects that keep their place: the longest run of the current order that is also in
         // the order of `target`, among the objects that did not change.
@@ -1271,12 +1271,15 @@ impl<'a> Tx<'a> {
         doc.layers = target.layers.clone();
         doc.classes = target.classes.clone();
         // The pictures that issues use as snapshots are not part of a version: they stay.
-        let snapshots: Vec<String> = doc
-            .issues
-            .snapshots()
-            .into_iter()
-            .map(String::from)
-            .collect();
+        let snapshots: Vec<String> = if keep_issue_pictures {
+            doc.issues
+                .snapshots()
+                .into_iter()
+                .map(String::from)
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut resources = target.resources.clone();
         for h in &snapshots {
             if resources.find_image(h).is_none()
@@ -2158,6 +2161,20 @@ pub struct Editor {
     /// The largest picture file and the most pixels that a command may bring (see
     /// [`Editor::set_picture_limits`]).
     picture_limits: (usize, u64),
+    /// How many steps were pushed on the undo list in all (a count that the history limit cannot
+    /// change), for [`RunMark`].
+    pushes: u64,
+    /// While a run is open, the history limit does not drop old steps, so the steps of the run
+    /// can be merged or taken back by their number.
+    hold_trim: bool,
+}
+
+/// The start of a run of many commands that become one undo step (a script). See
+/// [`Editor::begin_run`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RunMark {
+    revision: u64,
+    pushes: u64,
 }
 
 impl Default for Editor {
@@ -2202,6 +2219,8 @@ impl Editor {
                 crate::picture::MAX_PICTURE_BYTES,
                 crate::picture::MAX_PICTURE_PIXELS,
             ),
+            pushes: 0,
+            hold_trim: false,
         }
     }
 
@@ -2293,8 +2312,11 @@ impl Editor {
                     cs.detail = detail;
                     self.log.push(cs);
                     self.undo.push(patch);
+                    self.pushes += 1;
                     self.redo.clear();
-                    self.trim_history();
+                    if !self.hold_trim {
+                        self.trim_history();
+                    }
                 }
                 Ok(out)
             }
@@ -2414,7 +2436,7 @@ impl Editor {
             || op.to_string(),
             detail,
             |tx, _| {
-                tx.replace_content(target);
+                tx.replace_content(target, true);
                 tx.doc.history = history;
                 Ok(())
             },
@@ -2672,6 +2694,55 @@ impl Editor {
         self.redo.clear();
     }
 
+    /// Opens a run: the commands that follow are meant to become one undo step (or to be taken
+    /// back). The history limit does not drop steps until [`Editor::squash_run`] or
+    /// [`Editor::rollback_run`], so the steps of the run are counted exactly.
+    pub fn begin_run(&mut self) -> RunMark {
+        self.hold_trim = true;
+        RunMark {
+            revision: self.revision,
+            pushes: self.pushes,
+        }
+    }
+
+    /// How many undo steps the run has made so far.
+    pub fn run_steps(&self, mark: &RunMark) -> usize {
+        usize::try_from(self.pushes - mark.pushes).unwrap_or(usize::MAX)
+    }
+
+    /// Ends a run and merges its steps into one. The change sets of the single steps leave the
+    /// log (nobody read them) and the sum takes their place, so a follower of the log, such as
+    /// the collaboration client or `events.poll`, sees the run once. Returns the number of steps
+    /// that the run had.
+    pub fn squash_run(&mut self, mark: RunMark, op: &str) -> usize {
+        let steps = self.run_steps(&mark);
+        self.hold_trim = false;
+        if steps >= 2 {
+            self.log.remove_after(mark.revision);
+            self.squash_last(steps, op);
+        }
+        self.trim_history();
+        steps
+    }
+
+    /// Ends a run and takes all of it back. The steps are forgotten (they cannot be redone) and
+    /// leave no trace in the log.
+    pub fn rollback_run(&mut self, mark: RunMark) {
+        let steps = self.run_steps(&mark);
+        self.hold_trim = false;
+        for _ in 0..steps {
+            let Some(p) = self.undo.pop() else { break };
+            p.apply(&mut self.doc, false);
+        }
+        if steps > 0 {
+            self.redo.clear();
+            self.log.remove_after(mark.revision);
+            // Caches of the states in between must not be taken for this one.
+            self.revision = next_revision();
+        }
+        self.trim_history();
+    }
+
     /// Merges the last `steps` undo steps into one, so that one undo takes back all of them (a
     /// script that made many changes is one step for the person). Returns how many steps were
     /// merged: `steps`, or fewer if the history has fewer (the oldest steps may have been dropped
@@ -2699,7 +2770,7 @@ impl Editor {
             || op.to_string(),
             None,
             |tx, _| {
-                tx.replace_content(&after);
+                tx.replace_content(&after, false);
                 tx.doc.active_layer = after.active_layer;
                 tx.doc.active_class = after.active_class;
                 tx.doc.history = history;
@@ -2811,6 +2882,87 @@ mod tests {
         assert_eq!(ed.squash_last(1, "x"), 1);
         assert_eq!(ed.squash_last(1000, "x"), depth + 1);
         assert_eq!(ed.undo_depth(), 1);
+    }
+
+    #[test]
+    fn a_run_is_one_step_also_with_a_tiny_history_limit_and_leaves_one_change_set() {
+        let mut ed = Editor::with_sequential_ids();
+        ed.set_history_limit(1);
+        for k in 0..2 {
+            ed.execute(&serde_json::from_value(line_json(f64::from(k))).unwrap())
+                .unwrap();
+        }
+        let before = ed.doc().clone();
+        let revision = ed.revision();
+        let mark = ed.begin_run();
+        for k in 0..5 {
+            ed.execute(&serde_json::from_value(line_json(10.0 + f64::from(k))).unwrap())
+                .unwrap();
+        }
+        assert_eq!(
+            ed.run_steps(&mark),
+            5,
+            "the limit did not drop steps of the run"
+        );
+        let after = ed.doc().clone();
+        assert_eq!(ed.squash_run(mark, "script.eval"), 5);
+        assert_eq!(ed.doc(), &after);
+        let changes = ed.changes_since(revision);
+        assert_eq!(changes.changes.len(), 1, "one change set for the run");
+        assert_eq!(changes.changes[0].added.len(), 5);
+        assert!(ed.undo(), "one undo");
+        assert_eq!(ed.doc(), &before);
+        assert!(ed.redo());
+        assert_eq!(ed.doc(), &after);
+    }
+
+    #[test]
+    fn a_run_that_is_taken_back_leaves_no_trace() {
+        let mut ed = Editor::with_sequential_ids();
+        ed.execute(&serde_json::from_value(line_json(0.0)).unwrap())
+            .unwrap();
+        let before = ed.doc().clone();
+        let (revision, depth) = (ed.revision(), ed.undo_depth());
+        let mark = ed.begin_run();
+        for k in 0..3 {
+            ed.execute(&serde_json::from_value(line_json(5.0 + f64::from(k))).unwrap())
+                .unwrap();
+        }
+        ed.rollback_run(mark);
+        assert_eq!(ed.doc(), &before);
+        assert_eq!(ed.undo_depth(), depth);
+        assert!(!ed.can_redo());
+        assert!(
+            ed.changes_since(revision).changes.is_empty(),
+            "the log has nothing of it"
+        );
+        assert_ne!(
+            ed.revision(),
+            revision,
+            "a new revision, so no cache takes it for the old state"
+        );
+        // An empty run changes nothing.
+        let mark = ed.begin_run();
+        let r = ed.revision();
+        ed.rollback_run(mark);
+        assert_eq!(ed.revision(), r);
+        let mark = ed.begin_run();
+        assert_eq!(ed.squash_run(mark, "x"), 0);
+    }
+
+    #[test]
+    fn a_squash_does_not_bring_back_a_picture_that_the_run_removed() {
+        // The pictures of issues stay across a restore of a version (they are not part of it), but a
+        // run that removed an issue and its picture must not get the picture back.
+        let mut ed = Editor::with_sequential_ids();
+        let mark = ed.begin_run();
+        ed.execute(&serde_json::from_value(line_json(1.0)).unwrap())
+            .unwrap();
+        ed.execute(&serde_json::from_value(line_json(2.0)).unwrap())
+            .unwrap();
+        let after = ed.doc().resources.len();
+        ed.squash_run(mark, "x");
+        assert_eq!(ed.doc().resources.len(), after);
     }
 
     #[test]

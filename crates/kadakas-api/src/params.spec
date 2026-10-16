@@ -2624,3 +2624,11 @@ feedback.get
 
 feedback.withdraw
   id! str
+
+script.eval
+  code! str # the text of the program: the body of a function; `args` is the parameter args, `return` gives the result
+  mode enum(edit,read) = edit # read: only read-only methods may be called, any other is refused before it runs
+  args any # any JSON; the program sees it as `args`
+  seed int # seeds Math.random (0 to 4294967295); the same seed gives the same numbers
+
+script.js_info

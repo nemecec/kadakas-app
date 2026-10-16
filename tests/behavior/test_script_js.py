@@ -1,18 +1,18 @@
 """Scenario: an agent writes JavaScript that runs inside the session (SCR-08), over JSON-RPC and
 MCP."""
 
-import json
-
 CIRCLE = {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 100}}
 
 
 def test_describe_has_the_javascript_section_with_examples(cad):
     d = cad.result("describe")
     js = d["scripting"]["javascript"]
-    assert "Scripts only coordinate" in js["rule"]
+    assert "Programs only coordinate" in js["rule"]
     assert js["examples"] and js["examples"][0]["method"] == "script.eval"
+    assert "documents_hold_no_code" in js
     names = [m["name"] for m in d["methods"]]
-    assert {"script.eval", "script.js_info", "script_resource.create"} <= set(names)
+    assert {"script.eval", "script.js_info"} <= set(names)
+    assert "script_resource.create" not in names
     assert "generators" in d["unit_patterns"]
 
 
@@ -35,15 +35,17 @@ def test_one_undo_step_and_a_rollback_on_error(cad):
     assert cad.result("objects.list") == []
 
 
-def test_read_mode_refuses_changes(cad):
+def test_read_mode_allows_read_only_methods_and_refuses_the_rest_up_front(cad):
     err = cad.error("script.eval", {"code": "kadakas.call('execute', {command: args.c});",
                                     "args": {"c": CIRCLE}, "mode": "read"})
-    assert "mode read" in err["message"]
+    assert "read-only" in err["message"]
     assert cad.result("objects.list") == []
 
 
 def test_unknown_parameters_are_refused(cad):
     err = cad.error("script.eval", {"code": "1", "colour": "red"})
+    assert err["code"] == -32602
+    err = cad.error("script.eval", {"script": "x"})
     assert err["code"] == -32602
 
 
@@ -54,16 +56,23 @@ def test_a_script_runs_the_same_every_time(cad):
     assert a == b and a[1] == 0
 
 
-def test_a_generator_script_needs_trust(cad):
-    made = cad.result("script_resource.create", {"name": "G", "code": "return {rects: {data: [0, 0, 10, 10, 0]}};"})
+def test_a_generator_pattern_stores_its_result_and_needs_no_code(cad):
+    pattern = {"kind": "generator", "types": ["a"], "gap": 0,
+               "rects": {"data": [100, 50, 200, 100, 0, 300, 50, 200, 100, 0]}}
+    cad.result("script.eval", {"code": "return 1;"})  # the engine is not needed for the layout below
+    layout = cad.result("unit_pattern.layout", {
+        "region": {"outline": [[0, 0], [400, 0], [400, 100], [0, 100]]},
+        "pattern": pattern, "origin": [0, 0]})
+    assert layout["units_total"] == 2
     err = cad.error("unit_pattern.layout", {
         "region": {"outline": [[0, 0], [10, 0], [10, 10], [0, 10]]},
-        "pattern": {"kind": "generator", "script": "G", "gap": 0}, "origin": [0, 0]})
-    assert made["sha256"] in err["message"] or "not trusted" in err["message"]
+        "pattern": {"kind": "generator", "gap": 0}, "origin": [0, 0]})
+    assert "no stored result" in err["message"]
 
 
 def test_the_mcp_scripting_tool_lists_the_script_methods(mcp):
     tools = {t["name"]: t for t in mcp.request("tools/list")["result"]["tools"]}
     assert "script.eval" in tools["scripting"]["description"]
+    assert tools["scripting"]["annotations"].get("openWorldHint") is True
     out = mcp.method_json("scripting", "script.eval", {"code": "return 1 + 1;", "mode": "read"})
     assert out["result"] == 2

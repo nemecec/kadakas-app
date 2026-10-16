@@ -35,6 +35,10 @@ sha2 = "0.10.9"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The clock of a script run in the browser.
+js-sys = "0.3"
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
 kadakas-print = { version = "0.1.0", path = "../kadakas-print" }

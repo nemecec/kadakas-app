@@ -83,7 +83,7 @@ pub enum Bond {
     BasketWeave,
     /// Your own unit shapes on a lattice of two repeat vectors (see [`module`]).
     Module,
-    /// A script makes the unit shapes (see [`generator`]).
+    /// A generator makes the unit shapes; the pattern stores the last result (see [`generator`]).
     Generator,
 }
 
@@ -186,9 +186,15 @@ impl Pattern {
             return Err("the gap must be a finite number of zero or more".into());
         }
         if self.bond == Bond::Generator {
+            // A generator pattern may have no result yet; a result must be sound.
             return match &self.generator {
-                Some(g) if !g.script.trim().is_empty() => Ok(()),
-                _ => Err("a generator pattern needs the name of a script".into()),
+                Some(g) if g.units.is_empty() => Ok(()),
+                Some(g) => g
+                    .units
+                    .cells(MAX_UNITS)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+                None => Err("a generator pattern needs a generator (generator: {units})".into()),
             };
         }
         if self.bond != Bond::Module {

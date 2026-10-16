@@ -621,8 +621,8 @@ impl Group {
     /// The names of the unit types, in the order of `Unit::kind`.
     pub fn kind_names(&self) -> Vec<String> {
         match &self.body {
-            Body::Pattern { pattern, place } if pattern.bond == super::Bond::Generator => {
-                super::generator::kind_names(&self.region, pattern, place)
+            Body::Pattern { pattern, .. } if pattern.bond == super::Bond::Generator => {
+                super::generator::kind_names(pattern)
             }
             Body::Pattern { pattern, .. } => pattern
                 .compile()

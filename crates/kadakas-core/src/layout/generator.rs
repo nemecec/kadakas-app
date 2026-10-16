@@ -1,22 +1,18 @@
-//! Generated patterns (PAT-09): a script makes the unit shapes, Kadakas lays them.
+//! Generated patterns (PAT-09): the unit shapes come from a generator, Kadakas lays them.
 //!
-//! A pattern of the kind `generator` names a script and gives it parameters. The core does not
-//! run scripts. A host installs a [`UnitGenerator`] for the thread (`kadakas-api` does, with the
-//! script engine), and the layout asks it for the cells of a region. A cell is a closed shape
-//! with a type name, **not clipped**: it can reach over the edge of the region or over a hole.
-//! Everything after that is the work of the engine, the same as for the other kinds: the cells are
-//! moved inward by half a gap, clipped to the region and its holes, sorted into whole and cut
-//! units, counted per type, checked and exported.
+//! A pattern of the kind `generator` holds a **stored result**: the unit shapes that a generator
+//! made, in drawing coordinates, **not clipped**. A shape is a closed outline with a type name; it
+//! can reach over the edge of the region or over a hole. Drawing, reports, the check and the
+//! exports use the stored result and run no code. Everything after the shapes is the work of the
+//! engine, the same as for the other kinds: the shapes are moved inward by half a gap, clipped to
+//! the region and its holes, sorted into whole and cut units, counted per type, checked and
+//! exported. Like the cells of a bond or a module, the shapes are the outlines at the centers of
+//! the joints, so a result works for any gap.
 //!
-//! Like the cells of a bond or a module, the shapes of a generator are the outlines at the
-//! centers of the joints, so a generator is written once and works for any gap.
-//!
-//! A generator is a pure function of the region, the parameters, the origin and the angle. The
-//! host runs it with fixed limits (fuel, time, memory, unit count) and may keep the result for
-//! the same input, so a pattern is "regenerated" when anything it depends on changes.
-
-use std::cell::RefCell;
-use std::sync::Arc;
+//! Who makes the result is not the business of the core. Today an agent does: `script.eval` runs a
+//! JavaScript program (it may call the API for the region) and writes the shapes into a pattern
+//! or a hardscape style. An installed package will do it later (PLAT-15); `label` and `params`
+//! record what made the result.
 
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
@@ -32,14 +28,47 @@ pub const MAX_CELL_VERTICES: usize = 2000;
 /// Longest name of a unit type, in characters.
 pub const MAX_KIND_NAME: usize = 64;
 
-/// Which script a generator pattern runs, and with what parameters.
+/// Rectangles, as numbers: `data` has cx, cy, length, width and the angle in degrees for each.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Rects {
+    /// The unit type of each rectangle (an index into `types`); empty means all type 0.
+    pub kind: Vec<u32>,
+    pub data: Vec<f64>,
+}
+
+/// Polygons, as numbers: `points` are x, y pairs of all polygons, and polygon `i` is the pairs
+/// from `start[i]` to `start[i + 1]`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Polygons {
+    pub kind: Vec<u32>,
+    pub start: Vec<u32>,
+    pub points: Vec<f64>,
+}
+
+/// The unit shapes of a generator, in the form they are stored in.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StoredUnits {
+    /// The names of the unit types. Empty means one type, `unit`.
+    pub types: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rects: Option<Rects>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub polygons: Option<Polygons>,
+}
+
+/// What made the shapes, and the shapes.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GeneratorSpec {
-    /// A script resource: its ID or its name.
-    pub script: String,
-    /// Passed to the script as `args.params`.
+    /// Who made the result, for the person who reads it: the name of a script or a package.
+    pub label: String,
+    /// The parameters the generator had, kept so that the result can be made again.
     pub params: Value,
+    /// The last result.
+    pub units: StoredUnits,
 }
 
 /// One cell: a unit type and a closed shape in drawing coordinates.
@@ -50,7 +79,7 @@ pub struct Cell {
     pub ring: Vec<DVec2>,
 }
 
-/// What a generator made.
+/// The shapes of a generator as closed rings.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Generated {
     /// The names of the unit types.
@@ -58,37 +87,118 @@ pub struct Generated {
     pub cells: Vec<Cell>,
 }
 
-/// What a generator is asked for.
-pub struct Request<'a> {
-    pub spec: &'a GeneratorSpec,
-    pub region: &'a Region,
-    /// Where the pattern starts, and how it is turned (degrees). The script may use them or not.
-    pub origin: DVec2,
-    pub angle: f64,
-    /// The width of a joint. The cells are the outlines at the centers of the joints.
-    pub gap: f64,
-    /// The most cells the generator may make. More is an error.
-    pub max_units: usize,
+fn kind_name(n: &str) -> String {
+    n.chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_KIND_NAME)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
-/// Makes cells for a region. The host implements it (the script engine).
-pub trait UnitGenerator {
-    fn generate(&self, request: &Request<'_>) -> Result<Arc<Generated>, String>;
-}
+impl StoredUnits {
+    /// The number of shapes.
+    pub fn len(&self) -> usize {
+        self.rects.as_ref().map_or(0, |r| r.data.len() / 5)
+            + self
+                .polygons
+                .as_ref()
+                .map_or(0, |p| p.start.len().saturating_sub(1))
+    }
 
-thread_local! {
-    static INSTALLED: RefCell<Option<Arc<dyn UnitGenerator>>> = const { RefCell::new(None) };
-}
+    /// True if there is nothing in it (no numbers at all). A result with broken numbers is not
+    /// empty: laying it says what is wrong.
+    pub fn is_empty(&self) -> bool {
+        self.rects.as_ref().is_none_or(|r| r.data.is_empty())
+            && self
+                .polygons
+                .as_ref()
+                .is_none_or(|p| p.points.is_empty() && p.start.len() <= 1)
+    }
 
-/// Installs the generator of this thread (`None` removes it). A layout of a generator pattern
-/// without one is an error that says so.
-pub fn install(generator: Option<Arc<dyn UnitGenerator>>) {
-    INSTALLED.with(|g| *g.borrow_mut() = generator);
-}
-
-/// The generator of this thread.
-pub fn installed() -> Option<Arc<dyn UnitGenerator>> {
-    INSTALLED.with(|g| g.borrow().clone())
+    /// The shapes as rings. Checks the numbers; more than `max_units` shapes is an error.
+    pub fn cells(&self, max_units: usize) -> Result<Generated, LayoutError> {
+        let bad = |m: String| Err(LayoutError::Invalid(m));
+        let kinds: Vec<String> = if self.types.is_empty() {
+            vec!["unit".to_string()]
+        } else {
+            let k: Vec<String> = self.types.iter().map(|t| kind_name(t)).collect();
+            if k.iter().any(String::is_empty) {
+                return bad("every name in 'types' must be non-empty text".into());
+            }
+            k
+        };
+        if self.len() > max_units {
+            return Err(LayoutError::TooMany(TooMany {
+                estimated: self.len() as u64,
+                max: max_units,
+            }));
+        }
+        let mut cells: Vec<Cell> = Vec::with_capacity(self.len());
+        if let Some(r) = &self.rects {
+            if r.data.len() % 5 != 0 {
+                return bad(format!(
+                    "rects.data has {} numbers, but a rectangle takes 5 (cx, cy, length, width, angle in degrees)",
+                    r.data.len()
+                ));
+            }
+            let n = r.data.len() / 5;
+            if !r.kind.is_empty() && r.kind.len() != n {
+                return bad(format!(
+                    "rects.kind has {} entries for {n} rectangles",
+                    r.kind.len()
+                ));
+            }
+            for (i, d) in r.data.chunks_exact(5).enumerate() {
+                let (c, l, w) = (DVec2::new(d[0], d[1]), d[2], d[3]);
+                if !d.iter().all(|v| v.is_finite()) || !(l > 0.0 && w > 0.0) {
+                    return bad(format!(
+                        "rectangle {i} needs finite numbers and a positive length and width"
+                    ));
+                }
+                let u = DVec2::from_angle(d[4].to_radians()) * (l / 2.0);
+                let v = DVec2::from_angle(d[4].to_radians()).perp() * (w / 2.0);
+                cells.push(Cell {
+                    kind: r.kind.get(i).map_or(0, |k| *k as usize),
+                    ring: vec![c - u - v, c + u - v, c + u + v, c - u + v],
+                });
+            }
+        }
+        if let Some(p) = &self.polygons {
+            if p.points.len() % 2 != 0 {
+                return bad("polygons.points holds x and y pairs".into());
+            }
+            let npts = p.points.len() / 2;
+            if p.start.len() < 2
+                || p.start[0] != 0
+                || p.start.windows(2).any(|w| w[0] > w[1])
+                || p.start.last().copied().unwrap_or(0) as usize != npts
+            {
+                return bad(format!(
+                    "polygons.start must have n + 1 entries that rise from 0 to the number of points ({npts})"
+                ));
+            }
+            let n = p.start.len() - 1;
+            if !p.kind.is_empty() && p.kind.len() != n {
+                return bad(format!(
+                    "polygons.kind has {} entries for {n} polygons",
+                    p.kind.len()
+                ));
+            }
+            for i in 0..n {
+                let ring: Vec<DVec2> = (p.start[i] as usize..p.start[i + 1] as usize)
+                    .map(|k| DVec2::new(p.points[2 * k], p.points[2 * k + 1]))
+                    .collect();
+                cells.push(Cell {
+                    kind: p.kind.get(i).map_or(0, |k| *k as usize),
+                    ring,
+                });
+            }
+        }
+        let g = Generated { kinds, cells };
+        check(&g, max_units)?;
+        Ok(g)
+    }
 }
 
 fn ring_area(r: &[DVec2]) -> f64 {
@@ -203,53 +313,22 @@ pub fn check(g: &Generated, max_units: usize) -> Result<(), LayoutError> {
     Ok(())
 }
 
-fn request<'a>(
-    spec: &'a GeneratorSpec,
-    region: &'a Region,
-    pattern: &Pattern,
-    place: &Placement,
-    max_units: usize,
-) -> Request<'a> {
-    let (origin, angle) = place.resolve(region);
-    Request {
-        spec,
-        region,
-        origin,
-        angle,
-        gap: pattern.gap,
-        max_units,
-    }
-}
-
-fn spec_of(pattern: &Pattern) -> Result<&GeneratorSpec, LayoutError> {
-    pattern.generator.as_ref().ok_or_else(|| {
-        LayoutError::Invalid("a generator pattern needs a script (generator.script)".into())
-    })
-}
-
-fn generate(
-    region: &Region,
-    pattern: &Pattern,
-    place: &Placement,
-    max_units: usize,
-) -> Result<Arc<Generated>, LayoutError> {
-    let spec = spec_of(pattern)?;
-    let host = installed().ok_or_else(|| {
-        LayoutError::Invalid(
-            "this pattern is made by a script, and no script engine is available here".into(),
-        )
+fn stored(pattern: &Pattern, max_units: usize) -> Result<Generated, LayoutError> {
+    let spec = pattern.generator.as_ref().ok_or_else(|| {
+        LayoutError::Invalid("a generator pattern needs the shapes of a generator".into())
     })?;
-    let g = host
-        .generate(&request(spec, region, pattern, place, max_units))
-        .map_err(LayoutError::Invalid)?;
-    check(&g, max_units)?;
-    Ok(g)
+    if spec.units.is_empty() {
+        return Err(LayoutError::Invalid(
+            "this generator pattern has no stored result yet. A generator (an agent with script.eval, or a package) must make the unit shapes first".into(),
+        ));
+    }
+    spec.units.cells(max_units)
 }
 
-/// The names of the unit types of a generator pattern for a region (empty if the generator fails).
-pub fn kind_names(region: &Region, pattern: &Pattern, place: &Placement) -> Vec<String> {
-    generate(region, pattern, place, super::MAX_UNITS)
-        .map(|g| g.kinds.clone())
+/// The names of the unit types of a generator pattern (empty if it has no valid result).
+pub fn kind_names(pattern: &Pattern) -> Vec<String> {
+    stored(pattern, super::MAX_UNITS)
+        .map(|g| g.kinds)
         .unwrap_or_default()
 }
 
@@ -261,7 +340,7 @@ pub(super) fn lay(
     limits: &Limits,
     f: &mut dyn FnMut(&Unit),
 ) -> Result<Stats, LayoutError> {
-    let g = generate(region, pattern, place, limits.max_units)?;
+    let g = stored(pattern, limits.max_units)?;
     let (origin, angle) = place.resolve(region);
     // The pieces of every cell, and the full area of each type: the largest cell of the type.
     let mut pieces: Vec<(usize, Vec<DVec2>)> = Vec::with_capacity(g.cells.len());
@@ -352,14 +431,6 @@ mod tests {
     use super::*;
     use crate::layout::units::lay_units;
 
-    struct Fixed(Generated);
-
-    impl UnitGenerator for Fixed {
-        fn generate(&self, _r: &Request<'_>) -> Result<Arc<Generated>, String> {
-            Ok(Arc::new(self.0.clone()))
-        }
-    }
-
     fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<DVec2> {
         vec![
             DVec2::new(x0, y0),
@@ -369,56 +440,52 @@ mod tests {
         ]
     }
 
-    fn pattern(gap: f64) -> Pattern {
+    /// A pattern whose stored result is these rings (kind, ring) and type names.
+    fn pattern(gap: f64, cells: &[(u32, Vec<DVec2>)], kinds: &[&str]) -> Pattern {
+        let mut p = Polygons {
+            start: vec![0],
+            ..Default::default()
+        };
+        for (k, ring) in cells {
+            p.kind.push(*k);
+            p.points.extend(ring.iter().flat_map(|v| [v.x, v.y]));
+            p.start.push((p.points.len() / 2) as u32);
+        }
         Pattern::of_generator(
             GeneratorSpec {
-                script: "s".into(),
+                label: "test".into(),
                 params: Value::Null,
+                units: StoredUnits {
+                    types: kinds.iter().map(|k| k.to_string()).collect(),
+                    rects: None,
+                    polygons: Some(p),
+                },
             },
             gap,
         )
     }
 
-    /// A 1000 x 500 mm region with three cells: two that fit (400 x 250 and 300 x 250) and one
-    /// that sticks out over the right edge by half.
-    fn setup(cells: Vec<Cell>, kinds: &[&str]) -> Region {
-        install(Some(Arc::new(Fixed(Generated {
-            kinds: kinds.iter().map(|k| k.to_string()).collect(),
-            cells,
-        }))));
+    fn region() -> Region {
         Region::from_rings(&rect(0.0, 0.0, 1000.0, 500.0), &[]).unwrap()
     }
 
     #[test]
     fn whole_and_cut_units_are_counted_per_type() {
-        let region = setup(
-            vec![
-                Cell {
-                    kind: 0,
-                    ring: rect(0.0, 0.0, 400.0, 250.0),
-                },
-                Cell {
-                    kind: 1,
-                    ring: rect(400.0, 0.0, 700.0, 250.0),
-                },
-                Cell {
-                    kind: 0,
-                    ring: rect(800.0, 0.0, 1200.0, 250.0),
-                },
+        // Two cells that fit (400 x 250 and 300 x 250) and one that sticks out over the right
+        // edge by half.
+        let p = pattern(
+            0.0,
+            &[
+                (0, rect(0.0, 0.0, 400.0, 250.0)),
+                (1, rect(400.0, 0.0, 700.0, 250.0)),
+                (0, rect(800.0, 0.0, 1200.0, 250.0)),
             ],
             &["big", "small"],
         );
-        let (units, stats) = lay_units(
-            &region,
-            &pattern(0.0),
-            &Placement::default(),
-            &Limits::default(),
-        )
-        .unwrap();
-        install(None);
+        let (units, stats) =
+            lay_units(&region(), &p, &Placement::default(), &Limits::default()).unwrap();
         assert_eq!(units.len(), 3);
-        let whole = units.iter().filter(|u| u.whole).count();
-        assert_eq!(whole, 2, "two fit; the third is cut at x = 1000");
+        assert_eq!(units.iter().filter(|u| u.whole).count(), 2);
         let cut = units.iter().find(|u| !u.whole).unwrap();
         assert!((cut.area - 200.0 * 250.0).abs() < 1e-6, "{}", cut.area);
         assert!((cut.share - 0.5).abs() < 1e-9, "half of a 400 x 250 unit");
@@ -427,25 +494,42 @@ mod tests {
         assert!((stats.kinds[0].1 - 100_000.0).abs() < 1e-6);
         assert!((stats.kinds[1].1 - 75_000.0).abs() < 1e-6);
         assert_eq!(stats.units, 3);
+        assert_eq!(kind_names(&p), ["big", "small"]);
+    }
+
+    #[test]
+    fn rectangles_in_numbers_are_laid_like_polygons() {
+        // The same three cells as rectangles: cx, cy, length, width, angle.
+        let p = Pattern::of_generator(
+            GeneratorSpec {
+                units: StoredUnits {
+                    types: vec!["a".into()],
+                    rects: Some(Rects {
+                        kind: vec![],
+                        data: vec![
+                            200.0, 125.0, 400.0, 250.0, 0.0, 1000.0, 125.0, 400.0, 250.0, 0.0,
+                        ],
+                    }),
+                    polygons: None,
+                },
+                ..Default::default()
+            },
+            0.0,
+        );
+        let (units, _) =
+            lay_units(&region(), &p, &Placement::default(), &Limits::default()).unwrap();
+        assert_eq!(units.len(), 2);
+        assert!(
+            units[0].whole && !units[1].whole,
+            "the second is cut in half at x = 1000"
+        );
     }
 
     #[test]
     fn the_gap_takes_half_a_gap_off_every_side_of_a_cell() {
-        let region = setup(
-            vec![Cell {
-                kind: 0,
-                ring: rect(100.0, 100.0, 400.0, 300.0),
-            }],
-            &["a"],
-        );
-        let (units, stats) = lay_units(
-            &region,
-            &pattern(10.0),
-            &Placement::default(),
-            &Limits::default(),
-        )
-        .unwrap();
-        install(None);
+        let p = pattern(10.0, &[(0, rect(100.0, 100.0, 400.0, 300.0))], &["a"]);
+        let (units, stats) =
+            lay_units(&region(), &p, &Placement::default(), &Limits::default()).unwrap();
         // 300 x 200 minus 5 mm on each side: 290 x 190.
         assert!((units[0].area - 290.0 * 190.0).abs() < 1e-6);
         assert!((stats.full_unit_area - 290.0 * 190.0).abs() < 1e-6);
@@ -454,29 +538,17 @@ mod tests {
 
     #[test]
     fn a_hole_cuts_a_unit_and_a_cell_outside_the_region_is_dropped() {
-        install(Some(Arc::new(Fixed(Generated {
-            kinds: vec!["a".into()],
-            cells: vec![
-                Cell {
-                    kind: 0,
-                    ring: rect(0.0, 0.0, 400.0, 400.0),
-                },
-                Cell {
-                    kind: 0,
-                    ring: rect(2000.0, 0.0, 2400.0, 400.0),
-                },
+        let p = pattern(
+            0.0,
+            &[
+                (0, rect(0.0, 0.0, 400.0, 400.0)),
+                (0, rect(2000.0, 0.0, 2400.0, 400.0)),
             ],
-        }))));
+            &["a"],
+        );
         let hole = rect(100.0, 100.0, 200.0, 200.0);
         let region = Region::from_rings(&rect(0.0, 0.0, 1000.0, 500.0), &[hole]).unwrap();
-        let (units, _) = lay_units(
-            &region,
-            &pattern(0.0),
-            &Placement::default(),
-            &Limits::default(),
-        )
-        .unwrap();
-        install(None);
+        let (units, _) = lay_units(&region, &p, &Placement::default(), &Limits::default()).unwrap();
         assert_eq!(units.len(), 1, "the cell far outside is not a unit");
         assert!(!units[0].whole);
         assert!((units[0].area - (160_000.0 - 10_000.0)).abs() < 1e-6);
@@ -484,50 +556,78 @@ mod tests {
     }
 
     #[test]
-    fn too_many_cells_is_an_error_and_so_is_a_missing_generator() {
-        let region = setup(
-            (0..5)
-                .map(|i| Cell {
-                    kind: 0,
-                    ring: rect(i as f64 * 100.0, 0.0, i as f64 * 100.0 + 90.0, 90.0),
-                })
-                .collect(),
-            &["a"],
-        );
-        let r = lay_units(
-            &region,
-            &pattern(0.0),
-            &Placement::default(),
-            &Limits::new(4),
-        );
+    fn too_many_cells_no_result_and_bad_numbers_are_errors() {
+        let cells: Vec<(u32, Vec<DVec2>)> = (0..5)
+            .map(|i| {
+                let x = i as f64 * 100.0;
+                (0, rect(x, 0.0, x + 90.0, 90.0))
+            })
+            .collect();
+        let p = pattern(0.0, &cells, &["a"]);
+        let r = lay_units(&region(), &p, &Placement::default(), &Limits::new(4));
         assert!(matches!(r, Err(LayoutError::TooMany(_))), "{r:?}");
-        install(None);
+        let empty = Pattern::of_generator(GeneratorSpec::default(), 0.0);
+        let r = lay_units(&region(), &empty, &Placement::default(), &Limits::default());
+        assert!(matches!(r, Err(LayoutError::Invalid(m)) if m.contains("no stored result")));
+        let bad_type = pattern(0.0, &[(3, rect(0.0, 0.0, 10.0, 10.0))], &["a"]);
         let r = lay_units(
-            &region,
-            &pattern(0.0),
+            &region(),
+            &bad_type,
             &Placement::default(),
             &Limits::default(),
         );
-        assert!(matches!(r, Err(LayoutError::Invalid(m)) if m.contains("no script engine")));
+        assert!(matches!(r, Err(LayoutError::Invalid(m)) if m.contains("unit 0")));
+        let mut uneven = StoredUnits {
+            rects: Some(Rects {
+                kind: vec![],
+                data: vec![1.0; 6],
+            }),
+            ..Default::default()
+        };
+        assert!(uneven.cells(10).is_err(), "6 numbers are not a rectangle");
+        uneven.rects = Some(Rects {
+            kind: vec![0, 0],
+            data: vec![0.0, 0.0, 10.0, 10.0, 0.0],
+        });
+        assert!(uneven.cells(10).is_err(), "two kinds for one rectangle");
+        uneven.rects = Some(Rects {
+            kind: vec![],
+            data: vec![0.0, 0.0, -1.0, 10.0, 0.0],
+        });
+        assert!(uneven.cells(10).is_err(), "a negative length");
+        let poly = |start: Vec<u32>, points: Vec<f64>| StoredUnits {
+            polygons: Some(Polygons {
+                kind: vec![],
+                start,
+                points,
+            }),
+            ..Default::default()
+        };
+        assert!(
+            poly(vec![0, 3], vec![0.0; 4]).cells(10).is_err(),
+            "start past the points"
+        );
+        assert!(
+            poly(vec![0, 2], vec![0.0; 3]).cells(10).is_err(),
+            "odd number of points"
+        );
+        assert!(
+            poly(vec![0, 1, 0], vec![0.0; 2]).cells(10).is_err(),
+            "start goes down"
+        );
+        let named = StoredUnits {
+            types: vec!["  ".into()],
+            ..Default::default()
+        };
+        assert!(named.cells(10).is_err(), "an empty name");
     }
 
     #[test]
-    fn a_bad_answer_is_refused_with_the_unit_number() {
-        let region = setup(
-            vec![Cell {
-                kind: 3,
-                ring: rect(0.0, 0.0, 10.0, 10.0),
-            }],
-            &["a"],
-        );
-        let r = lay_units(
-            &region,
-            &pattern(0.0),
-            &Placement::default(),
-            &Limits::default(),
-        );
-        install(None);
-        assert!(matches!(r, Err(LayoutError::Invalid(m)) if m.contains("unit 0")));
+    fn a_stored_result_survives_json() {
+        let p = pattern(5.0, &[(0, rect(0.0, 0.0, 10.0, 10.0))], &["a"]);
+        let text = serde_json::to_string(&p).unwrap();
+        let back: Pattern = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, p);
     }
 
     #[test]

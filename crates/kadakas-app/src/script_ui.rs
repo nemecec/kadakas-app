@@ -45,8 +45,15 @@ pub struct ScriptUi {
     queue: VecDeque<ResetJob>,
     /// The plug-in object whose script the user reviews in the "Trust this plug-in?" dialog.
     review: Option<ObjectId>,
-    /// The JavaScript script of the document that the user reviews in the "Trust this script?" dialog.
-    js_review: Option<String>,
+    /// A JavaScript program that runs now, on a worker thread (the session serves its calls in the
+    /// frames). A window blocks the drawing until it ends.
+    js_run: Option<JsRun>,
+}
+
+/// A JavaScript run and what the console needs when it ends.
+struct JsRun {
+    run: kadakas_api::ScriptRun,
+    label: String,
 }
 
 /// A reset on a worker thread.
@@ -104,21 +111,68 @@ impl ScriptUi {
         path.extension().is_some_and(|e| e == "js")
     }
 
-    /// Runs a script in the session (`script.eval`) and writes what it did to the console. The
-    /// run is one undo step. It runs on this thread, within the limits of the session.
+    /// True while a JavaScript program runs: the drawing must not be edited meanwhile.
+    pub fn busy(&self) -> bool {
+        self.js_run.is_some()
+    }
+
+    fn console(&mut self, stream: Stream, text: String) {
+        let n = self.lines.len();
+        self.lines.push(Line { n, stream, text });
+    }
+
+    /// Starts a program in the session (`script.eval`). The engine runs on a worker thread. The
+    /// whole run is one undo step. The browser has no threads: there the run is done at once, within
+    /// its fuel.
     fn run_js(&mut self, session: &mut Session, params: Value, label: &str, status: &mut String) {
-        let line = |this: &mut Self, stream: Stream, text: String| {
-            let n = this.lines.len();
-            this.lines.push(Line { n, stream, text });
-        };
-        line(self, Stream::Info, label.to_string());
-        match session.handle("script.eval", params) {
+        self.console(Stream::Info, label.to_string());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match session.script_start(&params) {
+                Ok(run) => {
+                    self.js_run = Some(JsRun {
+                        run,
+                        label: label.to_string(),
+                    });
+                }
+                Err(e) => self.js_failed(&e, status),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let answer = session.handle("script.eval", params);
+            self.js_ended(session, answer, status);
+        }
+    }
+
+    fn js_failed(&mut self, e: &kadakas_api::RpcError, status: &mut String) {
+        let log = e
+            .details
+            .as_ref()
+            .and_then(|d| d["log"].as_str())
+            .unwrap_or("")
+            .to_string();
+        for l in log.lines() {
+            self.console(Stream::Out, l.to_string());
+        }
+        *status = tr!("script-ui-js-failed", message = e.message.clone());
+        self.console(Stream::Err, status.clone());
+    }
+
+    /// Writes the end of a run to the console.
+    fn js_ended(
+        &mut self,
+        session: &mut Session,
+        answer: Result<Value, kadakas_api::RpcError>,
+        status: &mut String,
+    ) {
+        match answer {
             Ok(v) => {
                 for l in v["log"].as_str().unwrap_or("").lines() {
-                    line(self, Stream::Out, l.to_string());
+                    self.console(Stream::Out, l.to_string());
                 }
                 if !v["result"].is_null() {
-                    line(self, Stream::Out, v["result"].to_string());
+                    self.console(Stream::Out, v["result"].to_string());
                 }
                 *status = tr!(
                     "script-ui-js-ran",
@@ -126,25 +180,53 @@ impl ScriptUi {
                     steps = v["undo_steps"].as_u64().unwrap_or(0),
                     ms = v["elapsed_ms"].as_u64().unwrap_or(0)
                 );
-                line(self, Stream::Info, status.clone());
+                self.console(Stream::Info, status.clone());
             }
-            Err(e) => {
-                let log = e
-                    .details
-                    .as_ref()
-                    .and_then(|d| d["log"].as_str())
-                    .unwrap_or("")
-                    .to_string();
-                for l in log.lines() {
-                    line(self, Stream::Out, l.to_string());
-                }
-                *status = tr!("script-ui-js-failed", message = e.message);
-                line(self, Stream::Err, status.clone());
-            }
+            Err(e) => self.js_failed(&e, status),
         }
         session
             .selection
             .retain(|id| session.editor.doc().object(*id).is_some());
+    }
+
+    /// Serves the calls of the running program for a few milliseconds, and shows the window that
+    /// blocks the drawing and stops the program.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pump_js(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String) {
+        let Some(mut job) = self.js_run.take() else {
+            return;
+        };
+        match session.script_pump(&mut job.run, std::time::Duration::from_millis(8)) {
+            Some(answer) => self.js_ended(session, answer, status),
+            None => {
+                egui::Modal::new(egui::Id::new("modal-js-run")).show(ctx, |ui| {
+                    ui.heading(tr!("script-ui-js-running"));
+                    ui.label(&job.label);
+                    ui.label(tr!(
+                        "script-ui-js-running-detail",
+                        seconds = job.run.elapsed_ms() / 1000,
+                        calls = job.run.calls()
+                    ));
+                    ui.small(tr!("script-ui-js-edits-blocked"));
+                    let stopping = job.run.stopping();
+                    if ui
+                        .add_enabled(
+                            !stopping,
+                            egui::Button::new(if stopping {
+                                tr!("script-ui-js-stopping")
+                            } else {
+                                tr!("script-ui-js-stop")
+                            }),
+                        )
+                        .clicked()
+                    {
+                        job.run.stop();
+                    }
+                });
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+                self.js_run = Some(job);
+            }
+        }
     }
 
     /// Starts a script as the user asked. The app has made sure that a live session address exists
@@ -215,7 +297,8 @@ impl ScriptUi {
         self.poll(session);
         self.tick(ctx, session, status);
         self.review_dialog(ctx, session, status);
-        self.js_review_dialog(ctx, session, status);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.pump_js(ctx, session, status);
         let running = self.status.as_ref().is_some_and(Status::is_running);
         if running {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -228,18 +311,12 @@ impl ScriptUi {
             .id(egui::Id::new("win-scripts"))
             .open(&mut open)
             .default_width(520.0)
-            .show(ctx, |ui| self.window_body(ui, session, status, running));
+            .show(ctx, |ui| self.window_body(ui, session, running));
         self.open = open;
         self.want_run.take()
     }
 
-    fn window_body(
-        &mut self,
-        ui: &mut Ui,
-        session: &mut Session,
-        status: &mut String,
-        running: bool,
-    ) {
+    fn window_body(&mut self, ui: &mut Ui, session: &mut Session, running: bool) {
         match python::discover() {
             Some(py) => ui.small(tr!("script-ui-python", version = py.describe())),
             None => ui.colored_label(
@@ -305,7 +382,6 @@ impl ScriptUi {
                 ui.label(st.name());
             }
         });
-        self.document_scripts(ui, session, status);
         ui.separator();
         ui.strong(tr!("script-ui-console"));
         egui::ScrollArea::vertical()
@@ -323,102 +399,6 @@ impl ScriptUi {
                     });
                 }
             });
-    }
-
-    /// The scripts that the document holds (JavaScript resources): trust, run, review.
-    fn document_scripts(&mut self, ui: &mut Ui, session: &mut Session, status: &mut String) {
-        let scripts = kadakas_api::script_states(session);
-        ui.separator();
-        ui.strong(tr!("script-ui-document-scripts"));
-        if scripts.is_empty() {
-            ui.weak(tr!("script-ui-no-document-scripts"));
-            return;
-        }
-        for s in scripts {
-            ui.horizontal(|ui| {
-                ui.label(&s.name).on_hover_text(&s.description);
-                if s.trusted {
-                    ui.weak(tr!("script-ui-js-trusted"));
-                    if ui.button(tr!("script-ui-run")).clicked() {
-                        self.run_js(session, json!({"script": s.name}), &s.name, status);
-                    }
-                    if ui.button(tr!("script-ui-js-stop-trusting")).clicked()
-                        && let Err(e) = kadakas_api::untrust_script(session, &s.sha256)
-                    {
-                        *status = e;
-                    }
-                } else {
-                    ui.colored_label(
-                        Color32::from_rgb(200, 120, 0),
-                        tr!("script-ui-js-not-trusted"),
-                    );
-                    if ui.button(tr!("script-ui-review-script")).clicked() {
-                        self.js_review = Some(s.name.clone());
-                    }
-                }
-            });
-        }
-    }
-
-    /// The "Trust this script?" dialog for a JavaScript script of the document: the whole text,
-    /// its hash, and the choice. Trust is for this exact text.
-    fn js_review_dialog(
-        &mut self,
-        ctx: &egui::Context,
-        session: &mut Session,
-        status: &mut String,
-    ) {
-        let Some(name) = self.js_review.clone() else {
-            return;
-        };
-        let Ok(info) = session.handle("script_resource.get", json!({"id": name})) else {
-            self.js_review = None;
-            return;
-        };
-        let mut decision = None;
-        egui::Window::new(tr!("script-ui-js-trust-title"))
-            .id(egui::Id::new("win-trust-js-script"))
-            .collapsible(false)
-            .default_width(560.0)
-            .show(ctx, |ui| {
-                ui.strong(info["name"].as_str().unwrap_or(""));
-                ui.small(tr!(
-                    "script-ui-script-hash-sha-256",
-                    hash = info["sha256"].as_str().unwrap_or("")
-                ));
-                ui.colored_label(
-                    Color32::from_rgb(200, 120, 0),
-                    tr!("script-ui-js-trust-note"),
-                );
-                egui::ScrollArea::vertical()
-                    .max_height(320.0)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(info["code"].as_str().unwrap_or("")).monospace(),
-                        );
-                    });
-                ui.horizontal(|ui| {
-                    if ui.button(tr!("script-ui-trust-this-script")).clicked() {
-                        decision = Some(true);
-                    }
-                    if ui.button(tr!("script-ui-do-not-trust")).clicked() {
-                        decision = Some(false);
-                    }
-                });
-                ui.small(tr!("script-ui-trust-is-for-this-exact-text-a"));
-            });
-        match decision {
-            Some(true) => {
-                let shown = info["sha256"].as_str().unwrap_or("").to_string();
-                if let Err(e) = kadakas_api::trust_script(session, &name, &shown) {
-                    *status = e;
-                }
-                self.js_review = None;
-            }
-            Some(false) => self.js_review = None,
-            None => {}
-        }
     }
 
     // ------------------------------------------------------------------ Object Info

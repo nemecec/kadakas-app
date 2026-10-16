@@ -1,14 +1,17 @@
 // Radial fan: rings of wedge-shaped units around the origin of the pattern, like a fan of
-// cobbles round a fountain. A generator for a pattern of the kind "generator" (PAT-09).
+// cobbles round a fountain. A generator program for a pattern of the kind "generator" (PAT-09):
+// run it with script.eval (see docs/scripting-javascript.md), then write what it returns into a
+// pattern; the document stores the result and runs no code.
 //
-// params: { ring: 500,       width of a ring (mm)
-//           unit: 300,       about how long a wedge is along the middle of its ring (mm)
-//           count: 0,        units in every ring; 0 = choose from `unit` for each ring
-//           step: 5 }        degrees of an arc piece (arcs are cut into straight pieces)
+// args.region.box = [x0, y0, x1, y1]: the area to cover (mm).
+// args.origin = [x, y] and args.angle (degrees): where the fan is and where its first joint points.
+// args.params = { ring: 500,   width of a ring (mm)
+//                 unit: 300,   about how long a wedge is along the middle of its ring (mm)
+//                 count: 0,    units in every ring; 0 = choose from `unit` for each ring
+//                 step: 5 }    degrees of an arc piece (arcs are cut into straight pieces)
 //
-// The fan starts at args.origin and turns with args.angle, so the pattern origin and angle of
-// the object set where the fan is and where its first joint points. Two unit types alternate
-// from ring to ring. The shapes are not clipped; Kadakas cuts them to the region.
+// Two unit types alternate from ring to ring. The shapes are not clipped; Kadakas cuts them
+// to the region.
 const p = args.params || {};
 const ring = p.ring || 500;
 const unit = p.unit || 300;

@@ -2666,6 +2666,7 @@ dependencies = [
  "getrandom 0.4.3",
  "glam",
  "image",
+ "js-sys",
  "kadakas-annot",
  "kadakas-collab",
  "kadakas-collab-ws",

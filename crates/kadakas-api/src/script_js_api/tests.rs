@@ -62,7 +62,7 @@ fn an_error_takes_back_the_whole_run() {
     let mut s = Session::default();
     let e = eval(
         &mut s,
-        json!({"code": format!("{ADD_CIRCLES} throw new Error('boom');"), "args": {"$kn": 3}}),
+        json!({"code": format!("{ADD_CIRCLES} throw new Error('boom');"), "args": {"n": 3}}),
     )
     .unwrap_err();
     assert!(e.message.contains("boom"), "{}", e.message);
@@ -111,7 +111,7 @@ fn read_mode_refuses_every_call_that_changes_the_document() {
         json!({"mode": "read", "code": "kadakas.call('export.file', {path: '/tmp/never.dxf'});"}),
     )
     .unwrap_err();
-    assert!(e.message.contains("writes a file"), "{}", e.message);
+    assert!(e.message.contains("read-only"), "{}", e.message);
     // The same call is fine in edit mode.
     ok(
         &mut s,
@@ -219,49 +219,6 @@ fn script_info_says_how_scripts_run() {
 }
 
 #[test]
-fn a_script_of_the_document_runs_only_after_a_person_trusted_its_text() {
-    let mut s = Session::default();
-    let made = s
-        .handle(
-            "script_resource.create",
-            json!({"name": "Count", "code": "return 41 + 1;"}),
-        )
-        .unwrap();
-    assert_eq!(made["trusted"], json!(false));
-    let sha = made["sha256"].as_str().unwrap().to_string();
-    let e = eval(&mut s, json!({"script": "Count"})).unwrap_err();
-    assert_eq!(e.kind, "policy", "{e:?}");
-    assert!(e.message.contains(&sha));
-    // A wrong hash trusts nothing.
-    assert!(crate::trust_script(&mut s, "Count", "00").is_err());
-    assert!(eval(&mut s, json!({"script": "Count"})).is_err());
-    crate::trust_script(&mut s, "Count", &sha).unwrap();
-    assert_eq!(ok(&mut s, json!({"script": "Count"}))["result"], json!(42));
-    // A new text is a new hash and needs trust again.
-    let upd = s
-        .handle(
-            "script_resource.update",
-            json!({"id": "Count", "code": "return 43;"}),
-        )
-        .unwrap();
-    assert_eq!(upd["trusted"], json!(false));
-    assert!(eval(&mut s, json!({"script": "Count"})).is_err());
-    // The list shows it.
-    let l = s.handle("script_resource.list", json!({})).unwrap();
-    assert_eq!(l["scripts"].as_array().unwrap().len(), 1);
-    // The text an agent sends itself needs no trust.
-    assert_eq!(ok(&mut s, json!({"code": "return 7;"}))["result"], json!(7));
-    // A second script with the same name is refused.
-    let e = s
-        .handle(
-            "script_resource.create",
-            json!({"name": "count", "code": "1"}),
-        )
-        .unwrap_err();
-    assert_eq!(e.kind, "conflict");
-}
-
-#[test]
 fn a_typed_array_in_the_answer_of_a_call_and_in_the_result_is_written_out() {
     let mut s = Session::default();
     let r = ok(
@@ -284,19 +241,15 @@ fn a_typed_array_in_the_answer_of_a_call_and_in_the_result_is_written_out() {
     );
 }
 
-/// A script resource that is trusted, for the generator tests.
-fn trusted_script(s: &mut Session, name: &str, code: &str) {
-    let made = s
-        .handle(
-            "script_resource.create",
-            json!({"name": name, "code": code}),
-        )
-        .unwrap();
-    crate::trust_script(s, name, made["sha256"].as_str().unwrap()).unwrap();
+/// Runs the body of a generator on `args` and passes its result on to `call`, a program of an
+/// agent: the generator makes the shapes, the program writes them where they are stored.
+fn with_generator(generator: &str, call: &str) -> String {
+    format!(
+        "const generate = (args) => {{ {generator}\n}};\nconst result = generate(args);\n{call}"
+    )
 }
 
-/// A grid of rectangles 200 x 100 over the box of the region; the rows alternate between two
-/// unit types.
+/// A grid of rectangles over the box of the region; the rows alternate between two unit types.
 const GRID: &str = r#"
     const b = args.region.box;
     const w = args.params.w, h = args.params.h;
@@ -310,29 +263,57 @@ const GRID: &str = r#"
     return {types: ["even", "odd"], rects: {kind, data}};
 "#;
 
-fn layout(s: &mut Session, extra: Value) -> Result<Value, RpcError> {
-    let mut p = json!({
-        "region": {"outline": [[0, 0], [1000, 0], [1000, 250], [0, 250]]},
-        "pattern": {"kind": "generator", "script": "Grid", "params": {"w": 200, "h": 100}, "gap": 0},
-        "origin": [0, 0],
-        "limit": 100,
-    });
-    for (k, v) in extra.as_object().unwrap() {
-        p[k] = v.clone();
-    }
-    s.handle("unit_pattern.layout", p)
+const ASHLAR: &str = include_str!("../../../../docs/scripts/random-ashlar.js");
+const FAN: &str = include_str!("../../../../docs/scripts/radial-fan.js");
+
+/// The program of an agent: make the shapes with `generator` for the region `outline` (a
+/// rectangle from 0, 0), then lay them with `unit_pattern.layout` and return the answer.
+fn layout_program(generator: &str) -> String {
+    with_generator(
+        generator,
+        r#"return kadakas.call("unit_pattern.layout", {
+            region: {outline: args.outline},
+            pattern: {kind: "generator", label: "test", params: args.params, gap: args.gap || 0,
+                      types: result.types, rects: result.rects, polygons: result.polygons},
+            origin: args.origin, limit: args.limit === undefined ? 1000 : args.limit});"#,
+    )
+}
+
+fn args(w: f64, h: f64, params: Value) -> Value {
+    json!({
+        "outline": [[0, 0], [w, 0], [w, h], [0, h]],
+        "params": params,
+        "origin": [w / 2.0, h / 2.0],
+        "angle": 0,
+        "region": {"box": [0, 0, w, h]},
+    })
+}
+
+fn lay(s: &mut Session, generator: &str, a: Value) -> Result<Value, RpcError> {
+    eval(
+        s,
+        json!({"code": layout_program(generator), "args": a, "mode": "read"}),
+    )
+    .map(|r| r["result"].clone())
 }
 
 #[test]
-fn a_generator_pattern_is_laid_clipped_and_counted_like_any_other_kind() {
+fn a_program_makes_shapes_and_the_engine_lays_clips_and_counts_them() {
     let mut s = Session::default();
-    trusted_script(&mut s, "Grid", GRID);
-    let l = layout(&mut s, json!({})).unwrap();
+    // 1000 x 250 with units of 200 x 100: five columns, two whole rows, and a third row cut in
+    // half (hand-checked: 15 units, 10 whole, 5 cut with half a unit each).
+    let l = lay(
+        &mut s,
+        GRID,
+        args(1000.0, 250.0, json!({"w": 200, "h": 100})),
+    )
+    .unwrap();
     let sum = &l["summary"];
-    // 5 columns and 3 rows of 200 x 100: two whole rows, and a third row cut at y = 250 (half).
     assert_eq!(l["units_total"], json!(15), "{l}");
-    assert_eq!(sum["whole_units"], json!(10), "{l}");
-    assert_eq!(sum["cut_units"], json!(5), "{l}");
+    assert_eq!(
+        (sum["whole_units"].clone(), sum["cut_units"].clone()),
+        (json!(10), json!(5))
+    );
     assert_eq!(sum["by_unit"][0]["name"], json!("even"));
     assert_eq!(sum["by_unit"][0]["whole_units"], json!(5));
     assert_eq!(sum["by_unit"][0]["cut_units"], json!(5));
@@ -349,92 +330,338 @@ fn a_generator_pattern_is_laid_clipped_and_counted_like_any_other_kind() {
         cut[0]
     );
     assert!((cut[0]["share"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+    // Other parameters, another result; the same parameters, the same result.
+    let again = lay(
+        &mut s,
+        GRID,
+        args(1000.0, 250.0, json!({"w": 200, "h": 100})),
+    )
+    .unwrap();
+    assert_eq!(l, again);
+    let other = lay(
+        &mut s,
+        GRID,
+        args(1000.0, 250.0, json!({"w": 250, "h": 125})),
+    )
+    .unwrap();
+    assert_eq!(other["units_total"], json!(8), "4 columns and 2 rows");
 }
 
 #[test]
-fn the_same_input_gives_the_same_layout_and_a_change_makes_a_new_one() {
+fn the_unit_count_of_the_session_bounds_a_stored_result() {
     let mut s = Session::default();
-    trusted_script(&mut s, "Grid", GRID);
-    let a = layout(&mut s, json!({})).unwrap();
-    let b = layout(&mut s, json!({})).unwrap();
-    assert_eq!(a, b, "deterministic");
-    // Other parameters, the script, and the region each give a new answer.
-    let c = layout(
-        &mut s,
-        json!({"pattern": {"kind": "generator", "script": "Grid", "params": {"w": 250, "h": 125}, "gap": 0}}),
-    )
-    .unwrap();
-    assert_eq!(c["units_total"], json!(8), "4 columns and 2 rows");
-    s.handle(
-        "script_resource.update",
-        json!({"id": "Grid", "code": GRID.replace("r % 2", "0")}),
-    )
-    .unwrap();
-    let e = layout(&mut s, json!({})).unwrap_err();
-    assert!(
-        e.message.contains("not trusted"),
-        "a new text needs trust: {}",
-        e.message
-    );
-}
-
-#[test]
-fn a_generator_that_is_not_trusted_or_missing_or_wrong_is_an_error_with_the_reason() {
-    let mut s = Session::default();
-    let e = layout(&mut s, json!({})).unwrap_err();
-    assert!(e.message.contains("none with that name"), "{}", e.message);
-    s.handle(
-        "script_resource.create",
-        json!({"name": "Grid", "code": GRID}),
-    )
-    .unwrap();
-    let e = layout(&mut s, json!({})).unwrap_err();
-    assert!(e.message.contains("not trusted"), "{}", e.message);
-    trusted_script(&mut s, "Bad", "return 5;");
-    let e = layout(
-        &mut s,
-        json!({"pattern": {"kind": "generator", "script": "Bad", "gap": 0}}),
-    )
-    .unwrap_err();
-    assert!(e.message.contains("must return an object"), "{}", e.message);
-    trusted_script(
-        &mut s,
-        "Calls",
-        "kadakas.call('document.summary', {}); return {};",
-    );
-    let e = layout(
-        &mut s,
-        json!({"pattern": {"kind": "generator", "script": "Calls", "gap": 0}}),
-    )
-    .unwrap_err();
-    assert!(e.message.contains("cannot call"), "{}", e.message);
-    trusted_script(&mut s, "Loop", "for (;;) {}");
-    s.set_limits(SessionLimits {
-        script_js_fuel: 20_000_000,
-        ..SessionLimits::default()
-    });
-    let e = layout(
-        &mut s,
-        json!({"pattern": {"kind": "generator", "script": "Loop", "gap": 0}}),
-    )
-    .unwrap_err();
-    assert!(e.message.contains("fuel"), "{}", e.message);
-}
-
-#[test]
-fn the_unit_count_of_the_session_bounds_a_generator() {
-    let mut s = Session::default();
-    trusted_script(&mut s, "Grid", GRID);
     s.set_limits(SessionLimits {
         pattern_units: 10,
         ..SessionLimits::default()
     });
-    let e = layout(&mut s, json!({})).unwrap_err();
+    let e = lay(
+        &mut s,
+        GRID,
+        args(1000.0, 250.0, json!({"w": 200, "h": 100})),
+    )
+    .unwrap_err();
     assert!(
         e.message.contains("limit of 10") || e.message.contains("more than"),
         "{}",
         e.message
     );
+}
+
+#[test]
+fn a_bad_result_is_refused_with_the_reason() {
+    let mut s = Session::default();
+    let e = lay(
+        &mut s,
+        "return {types: ['a'], rects: {data: [1, 2, 3]}};",
+        args(100.0, 100.0, json!({})),
+    )
+    .unwrap_err();
+    assert!(e.message.contains("takes 5"), "{}", e.message);
+    let e = lay(
+        &mut s,
+        "return {rects: {kind: [4], data: [50, 50, 10, 10, 0]}};",
+        args(100.0, 100.0, json!({})),
+    )
+    .unwrap_err();
+    assert!(e.message.contains("unit 0"), "{}", e.message);
+    // No shapes at all: the pattern has no result.
+    let e = lay(&mut s, "return {};", args(100.0, 100.0, json!({}))).unwrap_err();
+    assert!(e.message.contains("no stored result"), "{}", e.message);
+}
+
+#[test]
+fn the_example_ashlar_covers_the_region_in_courses_of_three_lengths() {
+    let mut s = Session::default();
+    let run = |s: &mut Session, seed: u32| {
+        lay(
+            s,
+            ASHLAR,
+            args(
+                3000.0,
+                1000.0,
+                json!({"seed": seed, "course": 200, "lengths": [300, 450, 600]}),
+            ),
+        )
+        .unwrap()
+    };
+    let a = run(&mut s, 1);
+    let sum = &a["summary"];
+    // Five courses of 200 mm over 1000 mm: every cut unit is cut at the left or right edge, at
+    // most two per course.
+    assert!(sum["cut_units"].as_u64().unwrap() <= 10, "{sum}");
+    let area = sum["area_laid_m2"].as_f64().unwrap();
+    assert!(
+        (area - 3.0).abs() < 1e-9,
+        "the courses fill the region: {area}"
+    );
+    let names: Vec<&str> = sum["by_unit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["300x200", "450x200", "600x200"]);
+    assert_eq!(a, run(&mut s, 1), "the same seed, the same wall");
+    assert_ne!(a["units"], run(&mut s, 2)["units"]);
+}
+
+#[test]
+fn the_example_fan_has_the_counts_of_a_hand_checked_small_case() {
+    let mut s = Session::default();
+    // A 2000 x 2000 mm square with the fan at its middle: rings of 500 mm, 8 wedges in each.
+    // Radius 500 and 1000 lie inside the square (a wedge of the second ring touches the sides at
+    // the axes), so rings 1 and 2 give 16 whole units. The farthest corner is 1414 mm away: a
+    // third ring of 8 wedges, and each of them is cut by a side of the square.
+    let l = lay(
+        &mut s,
+        FAN,
+        args(2000.0, 2000.0, json!({"ring": 500, "count": 8})),
+    )
+    .unwrap();
+    let sum = &l["summary"];
+    assert_eq!(l["units_total"], json!(24), "{sum}");
+    assert_eq!(sum["whole_units"], json!(16), "{sum}");
+    assert_eq!(sum["cut_units"], json!(8), "{sum}");
+    // The wedges tile the square up to the sag of the arcs (about 1 mm at 1 m).
+    let area = sum["area_laid_m2"].as_f64().unwrap();
+    assert!((area - 4.0).abs() < 4.0 * 2e-3, "{area}");
+    let by: Vec<(u64, u64)> = sum["by_unit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| {
+            (
+                u["whole_units"].as_u64().unwrap(),
+                u["cut_units"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(by, [(8, 8), (8, 0)]);
+}
+
+#[test]
+fn a_program_stores_its_result_in_a_style_and_the_hardscape_uses_it_without_code() {
+    let mut s = Session::default();
+    // The agent makes the shapes and writes them into a style, in one run (one undo step).
+    let code = with_generator(
+        GRID,
+        r#"kadakas.call("hardscape_style.create", {name: "Generated", joints: {kind: "generator", spacing: 0,
+             generator: {label: "grid", params: args.params,
+               units: {types: result.types, rects: result.rects}}}});
+           return kadakas.call("hardscape.add", {boundary: args.outline, style: "Generated"}).id;"#,
+    );
+    let r = ok(
+        &mut s,
+        json!({"code": code, "args": args(1000.0, 250.0, json!({"w": 200, "h": 100}))}),
+    );
+    assert_eq!(r["undo_steps"], json!(1));
+    let h = r["result"].clone();
+    // From here on no code runs: the engine is not even asked. A session without an engine
+    // reports, checks and exports the same.
+    let rep = s
+        .handle("report.unit_pattern", json!({"ids": [h]}))
+        .unwrap();
+    let row = &rep["rows"][0];
+    assert_eq!(row["bond"], json!("generator"));
+    assert_eq!(
+        (row["whole_units"].clone(), row["cut_units"].clone()),
+        (json!(10), json!(5))
+    );
+    assert_eq!(row["order_units"], json!(15));
+    let c = s.handle("unit_pattern.check", json!({"ids": [h]})).unwrap();
+    assert_eq!(c["objects"][0]["findings"], json!([]), "{c}");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("out.dxf");
+    let e = s
+        .handle(
+            "export.file",
+            json!({"path": path, "format": "dxf", "options": {"patterns": "units"}}),
+        )
+        .unwrap();
+    assert!(
+        e["report"]["notes"][0]
+            .as_str()
+            .unwrap()
+            .contains("10 whole and 5 cut"),
+        "{e}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .matches("LWPOLYLINE")
+            .count(),
+        16
+    );
+    let made = s
+        .handle("unit_pattern.to_objects", json!({"id": h}))
+        .unwrap();
+    assert_eq!(made["units"], json!(15), "{made}");
+    // The stored result survives a save and a load of the document.
+    let doc = s.handle("document.get", json!({})).unwrap();
+    let mut s2 = Session::default();
+    s2.handle("document.load", json!({"document": doc}))
+        .unwrap();
+    let rep2 = s2
+        .handle("report.unit_pattern", json!({"ids": [h]}))
+        .unwrap();
+    assert_eq!(rep2["rows"][0]["whole_units"], json!(10));
+    // A style without a result says so.
+    s2.handle(
+        "hardscape_style.create",
+        json!({"name": "Empty", "joints": {"kind": "generator", "generator": {"label": "x"}}}),
+    )
+    .unwrap();
+    let h2 = s2
+        .handle(
+            "hardscape.add",
+            json!({"boundary": [[0,0],[100,0],[100,100],[0,100]], "style": "Empty"}),
+        )
+        .unwrap()["id"]
+        .clone();
+    let e = s2
+        .handle("report.unit_pattern", json!({"ids": [h2]}))
+        .unwrap();
+    assert!(
+        e["rows"][0]["error"].as_str().is_some()
+            || e["rows"][0]["pattern"]["error"].as_str().is_some()
+            || e.to_string().contains("no stored result"),
+        "{e}"
+    );
+}
+
+#[test]
+fn read_mode_refuses_a_method_that_is_not_read_only_before_it_runs() {
+    let mut s = Session::default();
+    // The call is refused up front, so nothing ran: not even a rolled back change.
+    let revision = s.editor.revision();
+    let r = ok(
+        &mut s,
+        json!({"mode": "read", "code": r#"
+        const out = [];
+        for (const m of ["execute", "export.file", "selection.set", "gis.sources", "plugins.install"]) {
+            try { kadakas.call(m, {}); out.push("ran"); } catch (e) { out.push([e.code, e.message.includes("read-only")]); }
+        }
+        return out;"#}),
+    );
+    assert_eq!(r["result"], json!(vec![json!([4, true]); 5]));
+    assert_eq!(
+        s.editor.revision(),
+        revision,
+        "nothing ran, not even to be taken back"
+    );
+}
+
+#[test]
+fn a_method_that_is_not_classified_is_denied() {
+    let mut s = Session::default();
+    let e = eval(
+        &mut s,
+        json!({"code": "kadakas.call('made.up_method', {});"}),
+    )
+    .unwrap_err();
+    assert!(e.message.contains("not classified"), "{}", e.message);
+}
+
+#[test]
+fn while_a_run_is_open_a_call_from_outside_is_refused() {
+    let mut s = Session::default();
+    // A script cannot make a call from outside, so open a run the way a window does.
+    let mut run = s
+        .script_start(&json!({"code": "let n = 0; for (let i = 0; i < 3; i++) n += kadakas.call('document.summary', {}).layers.length; return n;"}))
+        .unwrap();
+    let e = s.handle("document.summary", json!({})).unwrap_err();
+    assert_eq!(e.kind, "conflict", "{e:?}");
+    assert!(
+        s.script_start(&json!({"code": "1"})).is_err(),
+        "one run at a time"
+    );
+    let answer = loop {
+        if let Some(a) = s.script_pump(&mut run, std::time::Duration::from_millis(8)) {
+            break a;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    };
+    assert_eq!(answer.unwrap()["result"], json!(3));
+    assert_eq!(run.calls(), 3);
+    s.handle("document.summary", json!({})).unwrap();
+}
+
+#[test]
+fn a_worker_run_can_be_stopped_also_when_it_makes_no_calls() {
+    let mut s = Session::default();
+    s.set_limits(SessionLimits {
+        script_js_fuel: u64::MAX / 2,
+        script_timeout: std::time::Duration::from_secs(60),
+        script_js_time: std::time::Duration::from_secs(600),
+        ..SessionLimits::default()
+    });
+    s.handle(
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Before"}}),
+    )
+    .unwrap();
+    let depth = s.editor.undo_depth();
+    let mut run = s
+        .script_start(&json!({"code": "kadakas.call('execute', {command: {op: 'add_layer', name: 'In the run'}}); for (;;) {}"}))
+        .unwrap();
+    let started = std::time::Instant::now();
+    let mut stopped = false;
+    let answer = loop {
+        if let Some(a) = s.script_pump(&mut run, std::time::Duration::from_millis(8)) {
+            break a;
+        }
+        if !stopped && run.calls() >= 1 && started.elapsed() > std::time::Duration::from_millis(300)
+        {
+            run.stop();
+            stopped = true;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the run did not stop"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    };
+    let e = answer.unwrap_err();
+    assert_eq!(e.kind, "limit", "{e:?}");
+    assert!(e.message.contains("stopped by the person"), "{}", e.message);
+    assert_eq!(s.editor.undo_depth(), depth, "the layer of the run is gone");
+    assert!(s.editor.doc().layers.iter().all(|l| l.name != "In the run"));
+}
+
+#[test]
+fn the_whole_run_is_bounded_by_its_time_also_without_calls() {
+    let mut s = Session::default();
+    s.set_limits(SessionLimits {
+        script_js_fuel: u64::MAX / 2,
+        script_timeout: std::time::Duration::from_secs(600),
+        script_js_time: std::time::Duration::from_millis(300),
+        ..SessionLimits::default()
+    });
+    let started = std::time::Instant::now();
+    let e = eval(&mut s, json!({"code": "for (;;) {}"})).unwrap_err();
+    assert_eq!(e.kind, "limit", "{e:?}");
+    assert!(e.message.contains("in all"), "{}", e.message);
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }
 
 /// Measures what a call from a script costs against the same call from Rust. Run it with
@@ -506,151 +733,4 @@ fn measure_call_overhead() {
         ),
         Ok(r) => println!("{r}"),
     }
-}
-
-const ASHLAR: &str = include_str!("../../../../docs/scripts/random-ashlar.js");
-const FAN: &str = include_str!("../../../../docs/scripts/radial-fan.js");
-
-fn pattern_of(script: &str, params: Value) -> Value {
-    json!({"kind": "generator", "script": script, "params": params, "gap": 0})
-}
-
-#[test]
-fn the_example_ashlar_covers_the_region_in_courses_of_three_lengths() {
-    let mut s = Session::default();
-    trusted_script(&mut s, "Ashlar", ASHLAR);
-    let run = |s: &mut Session, seed: u32| {
-        layout(
-            s,
-            json!({
-                "region": {"outline": [[0, 0], [3000, 0], [3000, 1000], [0, 1000]]},
-                "pattern": pattern_of("Ashlar", json!({"seed": seed})),
-                "limit": 1000,
-            }),
-        )
-        .unwrap()
-    };
-    let a = run(&mut s, 1);
-    let sum = &a["summary"];
-    // Five courses of 200 mm over 1000 mm: no unit is cut at the top or the bottom, so every
-    // cut unit is cut at the left or right edge, at most two per course.
-    assert!(sum["cut_units"].as_u64().unwrap() <= 10, "{sum}");
-    let area = sum["area_laid_m2"].as_f64().unwrap();
-    assert!(
-        (area - 3.0).abs() < 1e-9,
-        "the courses fill the region: {area}"
-    );
-    // Three unit types, named by their size.
-    let names: Vec<&str> = sum["by_unit"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|u| u["name"].as_str().unwrap())
-        .collect();
-    assert_eq!(names, ["300x200", "450x200", "600x200"]);
-    let total: u64 = sum["by_unit"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|u| u["whole_units"].as_u64().unwrap() + u["cut_units"].as_u64().unwrap())
-        .sum();
-    assert_eq!(total, a["units_total"].as_u64().unwrap());
-    // The same seed gives the same wall, another seed another one.
-    assert_eq!(a, run(&mut s, 1));
-    assert_ne!(a["units"], run(&mut s, 2)["units"]);
-}
-
-#[test]
-fn the_example_fan_has_the_counts_of_a_hand_checked_small_case() {
-    let mut s = Session::default();
-    trusted_script(&mut s, "Fan", FAN);
-    // A 2000 x 2000 mm square with the fan at its middle: rings of 500 mm, 8 wedges in each.
-    // Radius 500 and 1000 lie inside the square (a wedge of the second ring touches the sides at
-    // the axes), so rings 1 and 2 give 16 whole units. The farthest corner is 1414 mm away: a
-    // third ring of 8 wedges, and each of them is cut by a side of the square.
-    let l = layout(
-        &mut s,
-        json!({
-            "region": {"outline": [[-1000, -1000], [1000, -1000], [1000, 1000], [-1000, 1000]]},
-            "pattern": pattern_of("Fan", json!({"ring": 500, "count": 8})),
-            "origin": [0, 0],
-            "limit": 0,
-        }),
-    )
-    .unwrap();
-    let sum = &l["summary"];
-    assert_eq!(l["units_total"], json!(24), "{sum}");
-    assert_eq!(sum["whole_units"], json!(16), "{sum}");
-    assert_eq!(sum["cut_units"], json!(8), "{sum}");
-    // The wedges tile the square up to the sag of the arcs (about 1 mm at 1 m).
-    let area = sum["area_laid_m2"].as_f64().unwrap();
-    assert!((area - 4.0).abs() < 4.0 * 2e-3, "{area}");
-    let by: Vec<(u64, u64)> = sum["by_unit"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|u| {
-            (
-                u["whole_units"].as_u64().unwrap(),
-                u["cut_units"].as_u64().unwrap(),
-            )
-        })
-        .collect();
-    // Even rings: the first and the third (8 + 8 wedges, the third cut); odd: the second.
-    assert_eq!(by, [(8, 8), (8, 0)]);
-}
-
-#[test]
-fn a_hardscape_with_a_generator_style_is_reported_checked_and_exported() {
-    let mut s = Session::default();
-    trusted_script(&mut s, "Grid", GRID);
-    s.handle(
-        "hardscape_style.create",
-        json!({"name": "Generated", "joints": {"kind": "generator",
-            "generator": {"script": "Grid", "params": {"w": 200, "h": 100}}, "spacing": 0}}),
-    )
-    .unwrap();
-    let h = s
-        .handle(
-            "hardscape.add",
-            json!({"boundary": [[0, 0], [1000, 0], [1000, 250], [0, 250]], "style": "Generated"}),
-        )
-        .unwrap()["id"]
-        .clone();
-    let r = s
-        .handle("report.unit_pattern", json!({"ids": [h]}))
-        .unwrap();
-    let row = &r["rows"][0];
-    assert_eq!(row["bond"], json!("generator"));
-    assert_eq!(
-        (row["whole_units"].clone(), row["cut_units"].clone()),
-        (json!(10), json!(5))
-    );
-    assert_eq!(row["order_units"], json!(15));
-    // The check finds nothing wrong in a clean generated pattern.
-    let c = s.handle("unit_pattern.check", json!({"ids": [h]})).unwrap();
-    assert_eq!(c["objects"][0]["findings"], json!([]), "{c}");
-    // The DXF has every unit as a polyline (and the outline of the hardscape).
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("out.dxf");
-    let e = s
-        .handle(
-            "export.file",
-            json!({"path": path, "format": "dxf", "options": {"patterns": "units"}}),
-        )
-        .unwrap();
-    assert!(
-        e["report"]["notes"][0]
-            .as_str()
-            .unwrap()
-            .contains("10 whole and 5 cut"),
-        "{e}"
-    );
-    let text = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(text.matches("LWPOLYLINE").count(), 16);
-    // The units can be made ordinary objects too.
-    let made = s
-        .handle("unit_pattern.to_objects", json!({"id": h}))
-        .unwrap();
-    assert_eq!(made["units"], json!(15), "{made}");
 }

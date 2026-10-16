@@ -42,8 +42,6 @@ pub enum ResourceBody {
     Render(Box<crate::present::RenderResource>),
     /// A picture file with its thumbnail (see `crate::picture`). Plant styles refer to it.
     Image(Box<crate::picture::ImageResource>),
-    /// The text of a script (see `crate::script`).
-    Script(Box<crate::script::ScriptResource>),
     Unknown(serde_json::Value),
 }
 
@@ -74,7 +72,6 @@ impl Serialize for ResourceBody {
             ResourceBody::Annot(a) => a.serialize(s),
             ResourceBody::Render(r) => r.serialize(s),
             ResourceBody::Image(i) => tagged(i.as_ref(), "image", s),
-            ResourceBody::Script(c) => tagged(c.as_ref(), "script", s),
             ResourceBody::Unknown(v) => v.serialize(s),
         }
     }
@@ -221,15 +218,6 @@ impl<'de> Deserialize<'de> for ResourceBody {
                 }))
             }
             Some("irrigation_catalog") => Ok(ResourceBody::IrrigationCatalog(v)),
-            // A script in a form this version cannot read (a language from a newer app) is kept.
-            Some("script") => Ok(serde_json::from_value::<crate::script::ScriptResource>(
-                v.clone(),
-            )
-            .ok()
-            .filter(|c| c.language == crate::script::LANGUAGE)
-            .map_or(ResourceBody::Unknown(v), |c| {
-                ResourceBody::Script(Box::new(c))
-            })),
             Some(crate::provenance::BASE_TYPE) => {
                 let (drawing, revision) = (v["drawing"].clone(), v["revision"].clone());
                 match read_import_base(v) {
@@ -307,7 +295,6 @@ impl ResourceBody {
             ResourceBody::Annot(a) => a.type_name(),
             ResourceBody::Render(r) => r.type_name(),
             ResourceBody::Image(_) => "image",
-            ResourceBody::Script(_) => "script",
             ResourceBody::Unknown(_) => "unknown",
         }
     }
@@ -343,7 +330,6 @@ impl ResourceBody {
             ResourceBody::Annot(a) => a.validate(),
             ResourceBody::Render(r) => r.validate(),
             ResourceBody::Image(i) => i.validate(),
-            ResourceBody::Script(c) => c.validate(),
             ResourceBody::Unknown(_) => Ok(()),
         }
     }

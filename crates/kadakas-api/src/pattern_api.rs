@@ -62,7 +62,7 @@ fn describe_base() -> Value {
     json!({
         "unit_pattern": "The layout engine lays equal units in a bond (running_bond, stack, herringbone, basket_weave) or the unit shapes of a module over a closed shape with holes. The pattern is a set of cells that run at the centers of the joints; a unit is its cell moved inward by half the gap. So every whole unit of a bond is exactly unit_length by unit_width, for any ratio, and the gap is a real gap. Units are cut exactly to the outline minus the holes. Hardscapes use the engine for their joint pattern; their holes, origin, angle and align_to_edge are settings of the object (hardscape.add, hardscape.set).",
         "modules": "A module pattern is one or more closed shapes (unit types, each with a name; curves and concave outlines are allowed) and two repeat vectors a and b (the lattice). The shapes are the outlines at the centers of the joints; the gap moves each inward by half the gap. The shapes must not overlap each other or their copies on the neighbouring lattice points (a, b, a+b, a-b); spaces between shapes are allowed and show as gaps. Counts, reports and the DXF export are per unit type (report by_unit; DXF extended data KADAKAS_UNIT on every unit polyline; unit_type on the objects of unit_pattern.to_objects). The four bonds are built from the same machinery. Ways to define a module: JSON (pattern: {kind: module, units: [{name, outline}], a, b, gap}), a preset (unit_pattern.module_preset: hexagon, octagon_square, i_shape), closed shapes in the drawing (unit_pattern.module_from_shapes), or a block of a DXF file (unit_pattern.module_from_block). The same JSON is the joints of a hardscape style: hardscape_style.create {joints: {kind: module, units, a, b, spacing}}.",
-        "generators": "A generator pattern (PAT-09) lets a JavaScript script make the unit shapes: pattern: {kind: generator, script: <name or ID of a script resource>, params: {...any JSON the script reads as args.params...}, gap}, or in a hardscape style joints: {kind: generator, generator: {script, params}, spacing}. The script gets args = {params, origin: [x, y], angle (degrees), gap, max_units, region: {box: [x0, y0, x1, y1], area, outer: Float64Array (stride 2), holes: [Float64Array], shapes: [{outer, holes}]}} and returns the shapes, NOT clipped, as typed arrays: {types: [\"name\", ...], rects: {kind: Uint32Array, data: Float64Array (cx, cy, length, width, angle in degrees per unit)}, polygons: {kind: Uint32Array, start: Uint32Array (n + 1 entries), points: Float64Array (x, y pairs)}}. Like the cells of a bond, the shapes are the outlines at the centers of the joints; the gap moves each inward by half the gap. Kadakas does the rest as for every other kind: clipping to the outline and the holes, whole and cut units, counts per type (the full area of a type is its largest cell), unit_pattern.check, reports, to_objects and the DXF export. The result is made again whenever the region, the parameters, the origin, the angle, the gap or the text of the script change (the answer is kept for the same input), so the pattern stays editable: change generator.params or the script and every layout follows. A generator is a pure function: no calls to the API, no clock, a fixed Math.random. It runs only if the script is trusted (a person trusted its exact text in the app, or the host lets agents run scripts). Limits: fuel, a time limit, memory, and the unit count of the session (limits.pattern_units); more is an error that says how many. Example generators are in docs/scripting-javascript.md (a random ashlar of three sizes and a radial fan).",
+        "generators": "A generator pattern (PAT-09) lays unit shapes that a generator made. The pattern stores the last result of the generator, so drawing, reports, unit_pattern.check, to_objects and the DXF export use the stored shapes and run no code; a document holds no program. In a call: pattern: {kind: generator, types: [\"name\", ...], rects: {kind: [type index per unit], data: [cx, cy, length, width, angle in degrees per unit]}, polygons: {kind: [...], start: [n + 1 entries], points: [x, y, ...]}, label? (who made it), params? (what it was made with), gap}, or the same inside pattern.generator: {label, params, units: {types, rects, polygons}}. In a hardscape style: joints: {kind: generator, generator: {label, params, units}, spacing}. The shapes are NOT clipped and are in drawing coordinates: like the cells of a bond, they are the outlines at the centers of the joints, and the gap moves each inward by half the gap. Kadakas does the rest as for every other kind: clipping to the outline and the holes (of each zone and course too), whole and cut units, counts per type (the full area of a type is its largest cell), unit_pattern.check, reports, to_objects and the DXF export. At most limits.pattern_units shapes. To make a result an agent runs a program with script.eval (it may call objects.get and the like for the region) and passes the typed arrays to hardscape_style.update or unit_pattern.layout in the same program; regeneration is the agent's job: run the program again with other parameters. An installed package will make results later (PLAT-15). Example programs are in docs/scripting-javascript.md (a random ashlar of three sizes and a radial fan).",
         "workflow_parking_lot": [
             {"step": 1, "method": "import.file", "params": {"path": "parking.dxf"}, "why": "Read the survey of the lot."},
             {"step": 2, "method": "document.summary", "params": {}, "why": "The classes list gives the ID of the class of the lot layer."},
@@ -78,7 +78,7 @@ fn describe_base() -> Value {
             {"step": 12, "method": "export.file", "params": {"path": "parking-paving.dxf", "format": "dxf", "options": {"patterns": "blocks"}}, "why": "Whole units as INSERTs of one block per unit type, cut units as closed polylines, each zone and course on its own layers. patterns units writes every unit as a polyline. The counts equal report.unit_pattern."}
         ],
         "examples": [
-            {"method": "unit_pattern.layout", "params": {"region": {"outline": [[0, 0], [6000, 0], [6000, 3000], [0, 3000]]}, "pattern": {"kind": "generator", "script": "Ashlar", "params": {"seed": 7}, "gap": 10}, "origin": [0, 0], "limit": 0}},
+            {"method": "unit_pattern.layout", "params": {"region": {"outline": [[0, 0], [6000, 0], [6000, 3000], [0, 3000]]}, "pattern": {"kind": "generator", "label": "ashlar", "types": ["300x200"], "rects": {"kind": [0, 0], "data": [150, 100, 300, 200, 0, 450, 100, 300, 200, 0]}, "gap": 10}, "origin": [0, 0], "limit": 0}},
             {"method": "unit_pattern.layout", "params": {"id": "00000000-0000-0000-0000-000000000010", "pattern": {"bond": "herringbone", "unit_length": 200, "unit_width": 100, "gap": 4}, "angle": 45, "include": ["units"], "limit": 100}},
             {"method": "unit_pattern.layout", "params": {"region": {"outline": [[0, 0], [8000, 0], [8000, 5000], [0, 5000]], "holes": [[[3000, 1500], [4500, 1500], [4500, 3000], [3000, 3000]]]}, "pattern": {"unit_length": 600, "unit_width": 300, "gap": 3, "bond": "stack"}, "origin": [0, 0]}},
             {"method": "unit_pattern.module_preset", "params": {"preset": "hexagon", "across_flats": 200}},
@@ -191,6 +191,37 @@ fn module_of(g: &Map<String, Value>) -> Result<Module, RpcError> {
     })
 }
 
+/// The generator of a pattern from the call: `generator: {label?, params?, units: {types, rects?,
+/// polygons?}}`, or the same fields at the top of the pattern (`label`, `params`, `types`, `rects`,
+/// `polygons`).
+fn generator_param(g: &Map<String, Value>) -> Result<layout::generator::GeneratorSpec, RpcError> {
+    if let Some(v) = g.get("generator") {
+        return serde_json::from_value(v.clone()).map_err(|e| {
+            bad(format!(
+                "'generator' must be {{label?, params?, units}}: {e}"
+            ))
+        });
+    }
+    let units: Map<String, Value> = ["types", "rects", "polygons"]
+        .iter()
+        .filter_map(|k| g.get(*k).map(|v| ((*k).to_string(), v.clone())))
+        .collect();
+    let units = serde_json::from_value(Value::Object(units)).map_err(|e| {
+        bad(format!(
+            "a generator pattern takes types, rects: {{kind, data}} and polygons: {{kind, start, points}}: {e}"
+        ))
+    })?;
+    Ok(layout::generator::GeneratorSpec {
+        label: g
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        params: g.get("params").cloned().unwrap_or(Value::Null),
+        units,
+    })
+}
+
 /// The pattern from the call, on top of a base (the pattern of the object).
 fn pattern_param(m: &Map<String, Value>, base: Option<Pattern>) -> Result<Pattern, RpcError> {
     let given = match m.get("pattern") {
@@ -216,14 +247,7 @@ fn pattern_param(m: &Map<String, Value>, base: Option<Pattern>) -> Result<Patter
         } else if is_generator {
             p.bond = Bond::Generator;
             p.module = None;
-            let script = g.get("script").and_then(Value::as_str).ok_or_else(|| {
-                bad("a generator pattern needs 'script' (the name or ID of a script resource)")
-            })?;
-            let params = g.get("params").cloned().unwrap_or(Value::Null);
-            p.generator = Some(layout::generator::GeneratorSpec {
-                script: script.to_string(),
-                params,
-            });
+            p.generator = Some(generator_param(g)?);
         } else if is_module || g.contains_key("units") {
             p.bond = Bond::Module;
             p.module = Some(module_of(g)?);
@@ -242,7 +266,8 @@ fn pattern_param(m: &Map<String, Value>, base: Option<Pattern>) -> Result<Patter
         for (k, v) in g {
             match k.as_str() {
                 "bond" | "kind" | "preset" | "units" | "a" | "b" => {}
-                "script" | "params" if is_generator => {}
+                "label" | "params" | "types" | "rects" | "polygons" | "generator"
+                    if is_generator => {}
                 "unit_length" => p.unit_length = number(v, "unit_length")?,
                 "unit_width" => p.unit_width = number(v, "unit_width")?,
                 "gap" | "spacing" => p.gap = number(v, "gap")?,

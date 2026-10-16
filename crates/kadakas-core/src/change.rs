@@ -372,6 +372,16 @@ impl ChangeLog {
         }
     }
 
+    /// Forgets the change sets after `revision` (those made by a run that is merged into one step
+    /// or taken back: nobody has read them, because nothing else ran meanwhile).
+    pub fn remove_after(&mut self, revision: u64) {
+        while self.entries.back().is_some_and(|c| c.revision > revision) {
+            if let Some(old) = self.entries.pop_back() {
+                self.ids -= old.added.len() + old.changed.len() + old.removed.len();
+            }
+        }
+    }
+
     pub fn last(&self) -> Option<&ChangeSet> {
         self.entries.back()
     }

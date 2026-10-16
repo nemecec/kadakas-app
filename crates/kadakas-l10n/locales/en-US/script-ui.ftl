@@ -34,15 +34,13 @@ script-ui-run-the-script-again = Run the script again
 script-ui-waiting-to-run-the-script = Waiting to run the script...
 script-ui-running-the-script-seconds = Running the script... { $seconds } s
 
-## script-ui: JavaScript scripts of the document (SCR-08)
+## script-ui: JavaScript programs (SCR-08)
 
-script-ui-document-scripts = Scripts in this document
-script-ui-no-document-scripts = The document has no scripts.
-script-ui-js-trusted = trusted
-script-ui-js-not-trusted = not trusted
-script-ui-js-stop-trusting = Stop trusting
-script-ui-js-trust-title = Trust this script?
-script-ui-js-trust-note = This script runs in a sandbox inside Kadakas. It has no files, no network and no clock, and it can do only what the API does. It can still change your drawing or make a wrong pattern. Read it first.
+script-ui-js-running = Script running
+script-ui-js-running-detail = { $seconds } s, { $calls } calls
+script-ui-js-edits-blocked = The drawing cannot be edited until the script ends. The whole run is one undo step.
+script-ui-js-stop = Stop
+script-ui-js-stopping = Stopping...
 script-ui-js-ran = Script finished: { $calls } calls, { $steps } undo step, { $ms } ms
 script-ui-js-failed = Script failed: { $message }
 script-ui-js-cannot-read = Cannot read { $path }: { $e }

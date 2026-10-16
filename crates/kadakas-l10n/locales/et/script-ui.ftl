@@ -34,15 +34,13 @@ script-ui-run-the-script-again = Käivita skript uuesti
 script-ui-waiting-to-run-the-script = Ootan skripti käivitamist...
 script-ui-running-the-script-seconds = Skript töötab... { $seconds } s
 
-## script-ui: dokumendi JavaScripti skriptid (SCR-08)
+## script-ui: JavaScripti programmid (SCR-08)
 
-script-ui-document-scripts = Selle dokumendi skriptid
-script-ui-no-document-scripts = Dokumendis pole skripte.
-script-ui-js-trusted = usaldatud
-script-ui-js-not-trusted = pole usaldatud
-script-ui-js-stop-trusting = Lõpeta usaldamine
-script-ui-js-trust-title = Kas usaldada seda skripti?
-script-ui-js-trust-note = See skript töötab Kadakase sees liivakastis. Tal pole faile, võrku ega kella ning ta saab teha ainult seda, mida API lubab. Ta võib siiski sinu joonist muuta või teha vale mustri. Loe see kõigepealt läbi.
+script-ui-js-running = Skript töötab
+script-ui-js-running-detail = { $seconds } s, { $calls } kutset
+script-ui-js-edits-blocked = Joonist ei saa muuta enne, kui skript lõpeb. Kogu käivitus on üks tagasivõtusamm.
+script-ui-js-stop = Peata
+script-ui-js-stopping = Peatan...
 script-ui-js-ran = Skript lõpetas: { $calls } kutset, { $steps } tagasivõtusamm, { $ms } ms
 script-ui-js-failed = Skript ebaõnnestus: { $message }
 script-ui-js-cannot-read = Faili { $path } ei saa lugeda: { $e }

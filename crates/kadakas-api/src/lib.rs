@@ -101,7 +101,8 @@ pub use plugin_api::{
     DATA_KEY as PLUGIN_DATA_KEY, ResetJob, ScriptingState, UNTRUSTED_CODE, instance_info,
     trust_plugin, user_finish, user_prepare, user_set_params,
 };
-pub use script_js_api::{ScriptState, script_states, trust_script, untrust_script};
+#[cfg(not(target_arch = "wasm32"))]
+pub use script_js_api::ScriptRun;
 pub use wasm_plugin_api::{
     DATA_KEY as WASM_PLUGIN_DATA_KEY, WasmPluginState, commit_tool_result as commit_wasm_tool,
     forget_module as forget_wasm_plugin, install_module as install_wasm_plugin,
@@ -199,7 +200,7 @@ pub struct Session {
     pub scripting: ScriptingState,
     /// WebAssembly plug-ins: the installed modules and their trust (see `wasm_plugin_api`).
     pub wasm_plugins: WasmPluginState,
-    /// JavaScript scripts and generator patterns: the engine and the cache (see `script_js_api`).
+    /// JavaScript programs: the engine and the state of an open run (see `script_js_api`).
     script_js: script_js_api::ScriptJsState,
     /// The parsed history of versions of the open document (see `review_api`).
     review: review_api::ReviewCache,
@@ -883,10 +884,6 @@ pub const METHODS: &[(&str, &str)] = &[
     feedback_api::FEEDBACK_WITHDRAW,
     script_js_api::SCRIPT_EVAL,
     script_js_api::SCRIPT_JS_INFO,
-    script_js_api::SCRIPT_RESOURCE_CREATE,
-    script_js_api::SCRIPT_RESOURCE_UPDATE,
-    script_js_api::SCRIPT_RESOURCE_GET,
-    script_js_api::SCRIPT_RESOURCE_LIST,
 ];
 
 impl Default for Session {
@@ -1227,7 +1224,11 @@ impl Session {
     /// Runs one request. The limits of the session (`SessionLimits`) apply: a call that breaks one
     /// is undone and fails with a limit error.
     pub fn handle(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
-        self.sync_generators();
+        if self.script_js.busy() {
+            return Err(RpcError::conflict(
+                "a script is running: its calls are the only calls served until it ends",
+            ));
+        }
         let depth = self.editor.undo_depth();
         let revision = self.editor.revision();
         #[cfg(not(target_arch = "wasm32"))]

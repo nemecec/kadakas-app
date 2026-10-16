@@ -1,9 +1,12 @@
 // Random ashlar: courses of equal height, in each course units of three lengths in a random
-// order. A generator for a pattern of the kind "generator" (PAT-09).
+// order. A generator program for a pattern of the kind "generator" (PAT-09): it makes the unit
+// shapes. Run it with script.eval (see docs/scripting-javascript.md), then write what it
+// returns into a pattern; the document stores the result and runs no code.
 //
-// params: { course: 200,                    height of a course (mm)
-//           lengths: [300, 450, 600],       the three unit lengths (mm)
-//           seed: 1 }                       the same seed gives the same wall
+// args.region.box = [x0, y0, x1, y1]: the area to cover (mm), for example the box of a hardscape.
+// args.params = { course: 200,              height of a course (mm)
+//                 lengths: [300, 450, 600], the three unit lengths (mm)
+//                 seed: 1 }                 the same seed gives the same wall
 //
 // The shapes are the cells at the centers of the joints, not clipped. Kadakas moves them inward
 // by half the gap and cuts them to the region and its holes.

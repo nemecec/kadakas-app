@@ -1750,6 +1750,10 @@ impl KadakasApp {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
+        // A JavaScript program runs: the drawing is not edited until it ends.
+        if self.script_ui.busy() {
+            return;
+        }
         // The Shortcuts window is waiting for a key, or took one in this frame.
         if self.profiles.grabs_keys() {
             return;
@@ -2825,9 +2829,6 @@ impl eframe::App for KadakasApp {
         }
         self.dark = theme::is_dark(&ctx);
         icon_size::set(&ctx, self.prefs.icon_size);
-        // The layout of a generator pattern runs its script: the thread needs the generator of
-        // this document (cheap when nothing changed).
-        self.session.sync_generators();
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(agent) = &self.agent {
             let mut fx = file_io::AgentEffects::default();
