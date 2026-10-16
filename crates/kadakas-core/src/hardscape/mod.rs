@@ -47,6 +47,7 @@ pub fn wants_drape(obj: &Object) -> bool {
 pub fn translate_object_data(obj: &mut Object, delta: DVec2) {
     data::translate_data(obj, delta);
     crate::landscape::translate_data(obj, delta);
+    crate::layout::plan::translate_data(obj, delta);
 }
 
 /// The attributes of an object with the fields of its style where the object has none of its own.

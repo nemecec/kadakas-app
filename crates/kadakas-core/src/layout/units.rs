@@ -567,7 +567,7 @@ pub fn for_each_unit(
         .iter()
         .map(|k| (k.name.clone(), k.area))
         .collect();
-    let mut stats = Stats {
+    let stats = Stats {
         origin,
         angle,
         full_unit_area: kinds.first().map_or(0.0, |k| k.1),
@@ -594,7 +594,7 @@ pub fn for_each_unit(
         .iter()
         .map(|k| (k.hi - k.lo).max_element())
         .fold(0.0, f64::max);
-    let mut local = Local::new(region, origin, angle, extent);
+    let local = Local::new(region, origin, angle, extent);
     let (lo, hi) = (local.lo, local.hi);
     // The job in the box of the region may be larger than the region (a long, thin, diagonal shape).
     let ((i0, i1), (j0, j1)) = lattice_range(&comp, lo, hi);
@@ -611,10 +611,16 @@ pub fn for_each_unit(
         .iter()
         .map(|k| k.pieces.iter().map(|p| min_width(p)).collect())
         .collect();
-    let mut inside_cache: std::collections::HashMap<(usize, usize), bool> = Default::default();
+    let mut placer = Placer::new(
+        local,
+        origin,
+        turn,
+        limits.trim.max(0.0),
+        max_units,
+        estimated,
+        stats,
+    );
     let mut buf: Vec<DVec2> = Vec::new();
-    let mut near: Vec<u32> = Vec::new();
-    let trim = limits.trim.max(0.0);
     for j in j0..=j1 {
         for i in i0..=i1 {
             let t = comp.a * i as f64 + comp.b * j as f64;
@@ -630,135 +636,207 @@ pub fn for_each_unit(
                 for (pi, piece) in kind.pieces.iter().enumerate() {
                     buf.clear();
                     buf.extend(piece.iter().map(|p| *p + t));
-                    let (mut plo, mut phi) =
-                        (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
-                    for p in &buf {
-                        plo = plo.min(*p);
-                        phi = phi.max(*p);
-                    }
-                    if phi.x < lo.x || plo.x > hi.x || phi.y < lo.y || plo.y > hi.y {
-                        continue;
-                    }
-                    local.index.near(plo, phi, &mut local.stamp, &mut near);
-                    let touching = near.iter().any(|&e| {
-                        let (a, b) = local.index.edges[e as usize];
-                        seg_hits_poly(a, b, &buf, plo, phi)
-                    });
-                    let piece_area = ring_area(piece);
-                    if !touching {
-                        let p0 = buf[0];
-                        let inside = if near.is_empty() {
-                            let key = local.index.cell_xy(p0);
-                            *inside_cache
-                                .entry(key)
-                                .or_insert_with(|| local.index.inside(p0, &mut local.stamp))
-                        } else {
-                            local.index.inside(p0, &mut local.stamp)
-                        };
-                        if inside {
-                            if stats.units >= max_units {
-                                return Err(too_many(estimated.max(stats.units as u64 + 1)));
-                            }
-                            stats.units += 1;
-                            let u = whole_unit(
-                                &buf,
-                                origin,
-                                turn,
-                                ki,
-                                piece_area,
-                                kind.area,
-                                widths[ki][pi],
-                            );
-                            f(&u);
-                        }
-                        continue;
-                    }
-                    // The unit meets an edge: cut it. Rings far from the unit cannot matter.
-                    let mut clip: Vec<Vec<[f64; 2]>> = Vec::new();
-                    for (ri, ring) in local.rings.iter().enumerate() {
-                        let (blo, bhi) = local.ring_box[ri];
-                        if bhi.x < plo.x || blo.x > phi.x || bhi.y < plo.y || blo.y > phi.y {
-                            continue;
-                        }
-                        let cut = clip_ring(ring, plo, phi);
-                        if cut.len() >= 3 {
-                            clip.push(cut.iter().map(|p| [p.x, p.y]).collect());
-                        }
-                    }
-                    let subject = vec![buf.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()];
-                    let shapes = subject.overlay(&clip, OverlayRule::Intersect, FillRule::EvenOdd);
-                    // Noise: the unit crosses the edge by less than the trim. It counts as whole.
-                    if trim > 0.0 && is_trimmed(&buf, &shapes, piece_area, &local, &near, trim) {
-                        if stats.units >= max_units {
-                            return Err(too_many(estimated.max(stats.units as u64 + 1)));
-                        }
-                        stats.units += 1;
-                        stats.trimmed += 1;
-                        let u = whole_unit(
-                            &buf,
-                            origin,
-                            turn,
-                            ki,
-                            piece_area,
-                            kind.area,
-                            widths[ki][pi],
-                        );
-                        f(&u);
-                        continue;
-                    }
-                    // Every connected piece is a unit of its own: a notch that splits a unit in
-                    // two makes two cut units.
-                    let mut made: Vec<Unit> = Vec::new();
-                    for shape in &shapes {
-                        let pts: Vec<Vec<DVec2>> = shape
-                            .iter()
-                            .map(|r| r.iter().map(|p| DVec2::new(p[0], p[1])).collect())
-                            .collect();
-                        let a: f64 = pts
-                            .iter()
-                            .enumerate()
-                            .map(|(n, r)| {
-                                let a = ring_area(r).abs();
-                                if n == 0 { a } else { -a }
-                            })
-                            .sum();
-                        if a < DUST_AREA {
-                            stats.dust_pieces += 1;
-                            continue;
-                        }
-                        made.push(Unit {
-                            rings: pts
-                                .iter()
-                                .enumerate()
-                                .map(|(n, r)| UnitRing {
-                                    points: r.iter().map(|p| origin + turn.rotate(*p)).collect(),
-                                    hole: n > 0,
-                                })
-                                .collect(),
-                            whole: false,
-                            area: a,
-                            share: a / kind.area,
-                            kind: ki,
-                            width: min_width(&pts[0]),
-                        });
-                    }
-                    // Counted after the dust is gone: one piece, no hole, and all of the unit.
-                    let single = made.len() == 1;
-                    for mut u in made {
-                        if single && u.rings.len() == 1 && u.area >= piece_area * (1.0 - 1e-9) {
-                            u.whole = true;
-                        }
-                        if stats.units >= max_units {
-                            return Err(too_many(estimated.max(stats.units as u64 + 1)));
-                        }
-                        stats.units += 1;
-                        f(&u);
-                    }
+                    placer.place(&buf, ki, ring_area(piece), kind.area, widths[ki][pi], f)?;
                 }
             }
         }
     }
-    Ok(stats)
+    Ok(placer.stats)
+}
+
+/// Puts pieces (cells of a pattern, in the frame of the pattern) into a region: whole, trimmed or
+/// cut. The engine and the courses (PAT-08) share it.
+pub(super) struct Placer {
+    pub local: Local,
+    inside_cache: std::collections::HashMap<(usize, usize), bool>,
+    near: Vec<u32>,
+    origin: DVec2,
+    turn: DVec2,
+    trim: f64,
+    max_units: usize,
+    estimated: u64,
+    pub stats: Stats,
+}
+
+impl Placer {
+    pub(super) fn new(
+        local: Local,
+        origin: DVec2,
+        turn: DVec2,
+        trim: f64,
+        max_units: usize,
+        estimated: u64,
+        stats: Stats,
+    ) -> Placer {
+        Placer {
+            local,
+            inside_cache: Default::default(),
+            near: Vec::new(),
+            origin,
+            turn,
+            trim,
+            max_units,
+            estimated,
+            stats,
+        }
+    }
+
+    fn too_many(&self) -> LayoutError {
+        LayoutError::TooMany(TooMany {
+            estimated: self.estimated.max(self.stats.units as u64 + 1),
+            max: self.max_units,
+        })
+    }
+
+    /// One piece `buf` (a polygon in the frame of the pattern) of unit shape `ki`, whose full area
+    /// is `piece_area` (the whole piece) and `kind_area` (all pieces of the shape). Calls `f` for
+    /// each unit that results.
+    pub(super) fn place(
+        &mut self,
+        buf: &[DVec2],
+        ki: usize,
+        piece_area: f64,
+        kind_area: f64,
+        width: f64,
+        f: &mut dyn FnMut(&Unit),
+    ) -> Result<(), LayoutError> {
+        let (lo, hi) = (self.local.lo, self.local.hi);
+        let (mut plo, mut phi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+        for p in buf {
+            plo = plo.min(*p);
+            phi = phi.max(*p);
+        }
+        if phi.x < lo.x || plo.x > hi.x || phi.y < lo.y || plo.y > hi.y {
+            return Ok(());
+        }
+        self.local
+            .index
+            .near(plo, phi, &mut self.local.stamp, &mut self.near);
+        let touching = self.near.iter().any(|&e| {
+            let (a, b) = self.local.index.edges[e as usize];
+            seg_hits_poly(a, b, buf, plo, phi)
+        });
+        if !touching {
+            let p0 = buf[0];
+            let inside = if self.near.is_empty() {
+                let key = self.local.index.cell_xy(p0);
+                match self.inside_cache.get(&key) {
+                    Some(v) => *v,
+                    None => {
+                        let v = self.local.index.inside(p0, &mut self.local.stamp);
+                        self.inside_cache.insert(key, v);
+                        v
+                    }
+                }
+            } else {
+                self.local.index.inside(p0, &mut self.local.stamp)
+            };
+            if inside {
+                if self.stats.units >= self.max_units {
+                    return Err(self.too_many());
+                }
+                self.stats.units += 1;
+                let u = whole_unit(
+                    buf,
+                    self.origin,
+                    self.turn,
+                    ki,
+                    piece_area,
+                    kind_area,
+                    width,
+                );
+                f(&u);
+            }
+            return Ok(());
+        }
+        // The unit meets an edge: cut it. Rings far from the unit cannot matter.
+        let mut clip: Vec<Vec<[f64; 2]>> = Vec::new();
+        for (ri, ring) in self.local.rings.iter().enumerate() {
+            let (blo, bhi) = self.local.ring_box[ri];
+            if bhi.x < plo.x || blo.x > phi.x || bhi.y < plo.y || blo.y > phi.y {
+                continue;
+            }
+            let cut = clip_ring(ring, plo, phi);
+            if cut.len() >= 3 {
+                clip.push(cut.iter().map(|p| [p.x, p.y]).collect());
+            }
+        }
+        let subject = vec![buf.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()];
+        let shapes = subject.overlay(&clip, OverlayRule::Intersect, FillRule::EvenOdd);
+        // Noise: the unit crosses the edge by less than the trim. It counts as whole.
+        if self.trim > 0.0
+            && is_trimmed(buf, &shapes, piece_area, &self.local, &self.near, self.trim)
+        {
+            if self.stats.units >= self.max_units {
+                return Err(self.too_many());
+            }
+            self.stats.units += 1;
+            self.stats.trimmed += 1;
+            let u = whole_unit(
+                buf,
+                self.origin,
+                self.turn,
+                ki,
+                piece_area,
+                kind_area,
+                width,
+            );
+            f(&u);
+            return Ok(());
+        }
+        // Every connected piece is a unit of its own: a notch that splits a unit in two makes two
+        // cut units.
+        let mut made: Vec<Unit> = Vec::new();
+        for shape in &shapes {
+            let pts: Vec<Vec<DVec2>> = shape
+                .iter()
+                .map(|r| r.iter().map(|p| DVec2::new(p[0], p[1])).collect())
+                .collect();
+            let a: f64 = pts
+                .iter()
+                .enumerate()
+                .map(|(n, r)| {
+                    let a = ring_area(r).abs();
+                    if n == 0 { a } else { -a }
+                })
+                .sum();
+            if a < DUST_AREA {
+                self.stats.dust_pieces += 1;
+                continue;
+            }
+            made.push(Unit {
+                rings: pts
+                    .iter()
+                    .enumerate()
+                    .map(|(n, r)| UnitRing {
+                        points: r
+                            .iter()
+                            .map(|p| self.origin + self.turn.rotate(*p))
+                            .collect(),
+                        hole: n > 0,
+                    })
+                    .collect(),
+                whole: false,
+                area: a,
+                share: a / kind_area,
+                kind: ki,
+                width: min_width(&pts[0]),
+            });
+        }
+        // Counted after the dust is gone: one piece, no hole, and all of the unit.
+        let single = made.len() == 1;
+        for mut u in made {
+            if single && u.rings.len() == 1 && u.area >= piece_area * (1.0 - 1e-9) {
+                u.whole = true;
+            }
+            if self.stats.units >= self.max_units {
+                return Err(self.too_many());
+            }
+            self.stats.units += 1;
+            f(&u);
+        }
+        Ok(())
+    }
 }
 
 fn whole_unit(

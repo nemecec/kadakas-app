@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use super::units::{LayoutError, Limits, Tally, Unfillable};
+use super::units::{LayoutError, Limits, Stats, Tally, Unfillable, for_each_unit};
 use super::{MAX_GAP_SEGMENTS, MAX_UNITS, Pattern, Placement, Region, gaps};
 
 /// Default share of a full unit below which a cut unit counts as a sliver.
@@ -92,6 +92,9 @@ pub struct Summary {
     pub gap_mm: f64,
     /// The widest joint. It is the gap, except in a basket weave whose blocks do not fit exactly.
     pub widest_joint_mm: f64,
+    /// The narrowest joint, in mm. Only for a course on a curve, where the joints taper.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub narrowest_joint_mm: Option<f64>,
     /// Set when the widest joint is wider than the gap by more than `max_extra_joint_mm`: the text
     /// says by how much. The pattern is laid anyway (the hard limit is in the pattern); for
     /// trafficked paving, change the unit size, the gap or the bond.
@@ -145,6 +148,34 @@ pub fn with_waste(n: usize, percent: f64) -> usize {
     ((n as u128 * (10_000 + basis)).div_ceil(10_000)) as usize
 }
 
+/// A layout that calls its argument for each unit and returns the stats of the layout.
+pub type UnitRun<'a> =
+    dyn FnMut(&mut dyn FnMut(&super::units::Unit)) -> Result<Stats, LayoutError> + 'a;
+
+/// What a summary says about the pattern, besides the counts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Desc {
+    pub bond: &'static str,
+    pub unit_length_mm: Option<f64>,
+    pub unit_width_mm: Option<f64>,
+    pub gap_mm: f64,
+    pub widest_joint_mm: f64,
+    pub narrowest_joint_mm: Option<f64>,
+}
+
+impl Desc {
+    pub fn of(pattern: &Pattern) -> Desc {
+        Desc {
+            bond: pattern.bond.id(),
+            unit_length_mm: (pattern.module.is_none()).then_some(pattern.unit_length),
+            unit_width_mm: (pattern.module.is_none()).then_some(pattern.unit_width),
+            gap_mm: pattern.gap,
+            widest_joint_mm: pattern.widest_joint(),
+            narrowest_joint_mm: None,
+        }
+    }
+}
+
 /// Counts the units of a layout and measures the gaps.
 pub fn summarize(
     region: &Region,
@@ -152,24 +183,40 @@ pub fn summarize(
     place: &Placement,
     opts: &SummaryOptions,
 ) -> Result<Summary, LayoutError> {
-    let mut tally = Tally::default();
-    let unfillable = Unfillable {
-        share: opts.unfillable_share,
-        width: opts.min_width,
-    };
     let limits = Limits {
         max_units: opts.max_units,
         trim: opts.trim,
     };
-    let stats = super::units::for_each_unit(region, pattern, place, &limits, &mut |u| {
-        tally.add(u, opts.sliver_share, &unfillable)
-    })?;
     let gap_length_m = if opts.gap_length {
         let g = gaps::gap_lines(region, pattern, place, opts.max_gap_segments, false);
         (!g.truncated).then(|| gaps::length(&g.segments) / 1000.0)
     } else {
         None
     };
+    summarize_stream(
+        Desc::of(pattern),
+        region.area,
+        opts,
+        gap_length_m,
+        &mut |f| for_each_unit(region, pattern, place, &limits, f),
+    )
+}
+
+/// Counts the units that `run` makes (it calls its argument for each unit and returns the stats of
+/// the layout). The pattern is described by `desc`.
+pub fn summarize_stream(
+    desc: Desc,
+    region_area: f64,
+    opts: &SummaryOptions,
+    gap_length_m: Option<f64>,
+    run: &mut UnitRun,
+) -> Result<Summary, LayoutError> {
+    let mut tally = Tally::default();
+    let unfillable = Unfillable {
+        share: opts.unfillable_share,
+        width: opts.min_width,
+    };
+    let stats = run(&mut |u| tally.add(u, opts.sliver_share, &unfillable))?;
     tally.kinds.resize(stats.kinds.len(), Default::default());
     // The unit shapes with the same name are counted together.
     let mut by_unit: Vec<UnitCount> = Vec::new();
@@ -217,20 +264,26 @@ pub fn summarize(
     let order_min = whole + (cut_share - 1e-9).max(0.0).ceil() as usize;
     let area = tally.area();
     Ok(Summary {
-        bond: pattern.bond.id(),
-        unit_length_mm: (pattern.module.is_none()).then_some(pattern.unit_length),
-        unit_width_mm: (pattern.module.is_none()).then_some(pattern.unit_width),
-        gap_mm: pattern.gap,
-        widest_joint_mm: pattern.widest_joint(),
+        bond: desc.bond,
+        unit_length_mm: desc.unit_length_mm,
+        unit_width_mm: desc.unit_width_mm,
+        gap_mm: desc.gap_mm,
+        widest_joint_mm: desc.widest_joint_mm,
+        narrowest_joint_mm: desc.narrowest_joint_mm,
         joint_warning: {
-            let extra = pattern.widest_joint() - pattern.gap;
+            let extra = desc.widest_joint_mm - desc.gap_mm;
             (extra > opts.max_extra_joint_mm).then(|| {
-                format!(
-                    "the joints get up to {:.1} mm wide, {:.1} mm more than the gap of {} mm: the blocks of this basket weave do not fit the unit size exactly (the units keep their size). Change the unit size or the gap if the paving is trafficked",
-                    pattern.widest_joint(),
-                    extra,
-                    pattern.gap
-                )
+                if desc.bond == "course" {
+                    format!(
+                        "the joints of the course get up to {:.1} mm wide, {:.1} mm more than the gap of {} mm: the units are straight and the path bends. Use shorter units on the bend if the paving is trafficked",
+                        desc.widest_joint_mm, extra, desc.gap_mm
+                    )
+                } else {
+                    format!(
+                        "the joints get up to {:.1} mm wide, {:.1} mm more than the gap of {} mm: the blocks of this basket weave do not fit the unit size exactly (the units keep their size). Change the unit size or the gap if the paving is trafficked",
+                        desc.widest_joint_mm, extra, desc.gap_mm
+                    )
+                }
             })
         },
         origin: [stats.origin.x, stats.origin.y],
@@ -244,10 +297,10 @@ pub fn summarize(
         trimmed_units: stats.trimmed,
         unit_area_m2: (stats.kinds.len() == 1 || by_unit.len() == 1)
             .then_some(stats.full_unit_area / 1e6),
-        region_area_m2: region.area / 1e6,
+        region_area_m2: region_area / 1e6,
         area_laid_m2: area / 1e6,
         cut_area_m2: tally.kinds.iter().map(|k| k.cut_area).sum::<f64>() / 1e6,
-        gap_area_m2: ((region.area - area) / 1e6).max(0.0),
+        gap_area_m2: ((region_area - area) / 1e6).max(0.0),
         gap_length_m,
         order_units: order,
         order_units_max: whole + cut,

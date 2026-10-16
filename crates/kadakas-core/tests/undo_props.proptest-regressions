@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2f565041f83bde5d1e8c0ad8f44d9c145074b1d7be1493e3611c2c49bfe62d50 # shrinks to cmds = [Batch { commands: [AddObject { shape: Line { a: DVec2(0.0, 0.0), b: DVec2(0.0, 0.0) }, layer: None, class: None, attrs: Attributes { pen: None, fill: None, line_weight: None } }] }]
+cc bde0314266734329b606348d0b1ad842e4836583112b47f283b3fd0b70cf01eb # shrinks to cmds = [Batch { commands: [AddObject { shape: Hardscape { boundary: [DVec2(0.0, 0.0), DVec2(-3168.3560146800282, 0.0), DVec2(0.0, 0.0)], material: "Gravel" }, layer: None, class: None, attrs: Attributes { pen: None, fill: None, line_weight: None } }] }]
+cc 377b8f1178a40fb0f9b0b9c43808c65431d54215b30bb5c14e998cad6dcc8b03 # shrinks to cmds = [Batch { commands: [AddObject { shape: Line { a: DVec2(0.0, 0.0), b: DVec2(0.0, 0.0) }, layer: None, class: None, attrs: Attributes { pen: None, fill: None, line_weight: None } }] }, Batch { commands: [AddLayer { name: "a", elevation: 0.0, scale: None }, DeleteLayer { id: 3 }] }]

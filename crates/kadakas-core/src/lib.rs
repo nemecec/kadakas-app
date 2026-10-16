@@ -3,6 +3,7 @@
 //! This crate has no UI dependencies and compiles to native and WebAssembly.
 
 pub mod annot;
+pub mod arrangement;
 pub mod blob;
 pub mod cache;
 pub mod change;
@@ -39,6 +40,7 @@ pub mod present;
 pub mod props;
 pub mod provenance;
 pub mod record;
+pub mod regions;
 pub mod resource;
 pub mod schema;
 pub mod section;

@@ -40,6 +40,8 @@ pub fn transform_object(o: &mut Object, xf: &Xf) -> Result<(), String> {
     } else {
         o.shape = map_shape(&o.shape, xf)?;
     }
+    // The zones and courses of a hardscape turn, mirror and scale with it.
+    crate::layout::plan::transform_data(o, xf);
     if is_plant && xf.similarity().is_some() {
         let old = crate::plants::link::rotation(o);
         let new = if xf.is_reflection() {

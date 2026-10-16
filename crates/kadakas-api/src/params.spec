@@ -857,6 +857,81 @@ report.unit_pattern
   tolerance num = 1
   format enum(csv)
 
+region.from_curves
+  ids object[] # default: the selection
+  tolerance num = 1 # mm, the widest gap that is closed
+  create enum(hardscape,landscape_area,polyline)
+  depths enum(even,odd,all)
+  regions (int|point)[] # region indexes or points: make exactly these regions
+  style ref # hardscape style, for create hardscape
+  name str # landscape area name
+  min_area_m2 num
+  layer layer
+  class class
+  delete_source bool
+  dry_run bool
+
+hardscape.split
+  id! object
+  lines (object|vertex[])[] # replaces the split lines; [] removes them
+  follow bool = true
+  zones obj[] # [{index?, seed?, name?, pattern?, origin?, angle?, align_to_edge?, align_to_split?}]
+  tolerance num = 1 # mm
+  zone_units enum(cut,centroid) = cut
+
+hardscape.course
+  id! object
+  courses obj[] # [{name, path | source | along, side?, offset?, closed?, orientation?, unit_length?, unit_width?, gap?, corner?, unit?, align_field?}]
+  name str # the fields of one course directly in the params
+  path vertex[]
+  source object
+  along str
+  side enum(left,right,center,inside,outside)
+  offset num
+  closed bool
+  orientation enum(soldier,stretcher)
+  unit_length num
+  unit_width num
+  gap num
+  corner enum(miter,butt,corner_unit)
+  unit str
+  align_field bool
+
+hardscape.course_remove
+  id! object
+  names str[]
+  all bool
+
+hardscape.plan
+  id! object
+  outlines bool
+
+hardscape.plan_clear
+  id object
+  ids object[]
+  @one_of id,ids
+  what enum(all,splits,zones,courses) = all
+
+unit_pattern.check
+  ids object[] # default: every hardscape with a joint pattern
+  visible_only bool
+  overlap_mm2 num = 1
+  overlap_depth_mm num = 0.15
+  min_joint_mm num
+  max_joint_mm num
+  min_share num = 0.05
+  min_width_mm num
+  size_tol_mm num = 0.05
+  coverage_tol num = 0.02
+  trim num = 0.1
+  max_findings int = 200 # per kind, at most 10000
+  pattern obj
+  origin point
+  angle num
+  align_to_edge int
+  tolerance num
+
+
 landscape_area.add
   boundary! vertex[]
   name str
@@ -880,6 +955,7 @@ landscape_area.set
   drape bool
 
 report.hardscape
+  ids object[] # default: every hardscape
   format enum(csv)
   pattern bool # false leaves out the unit pattern block
   sliver_share num = 0.25

@@ -188,8 +188,10 @@ struct Ctx<'a> {
     layer_mode: LayerMode,
     doc: &'a Document,
     plant_blocks: BTreeSet<String>,
-    /// Anonymous blocks of native dimensions (`*D1`, ...).
+    /// Anonymous blocks of native dimensions (`*D1`, ...) and the blocks of whole units.
     anon_blocks: Vec<native::AnonBlock>,
+    /// The blocks of whole units (PAT-11): unit type and shape to block name.
+    pattern_blocks: std::collections::BTreeMap<String, String>,
     native_annotations: bool,
     site_mesh: crate::options::SiteMesh,
     mesh_entity: crate::options::MeshEntity,
@@ -283,6 +285,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         doc,
         plant_blocks: BTreeSet::new(),
         anon_blocks: Vec::new(),
+        pattern_blocks: Default::default(),
         native_annotations: opts.native_annotations,
         site_mesh: opts.site_mesh,
         mesh_entity: opts.mesh_entity,
@@ -329,7 +332,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
             let mark = ents.buf.len();
             let used = patterns::write(
                 &mut ents,
-                &cx,
+                &mut cx,
                 o,
                 &layer,
                 hidden_layer,
