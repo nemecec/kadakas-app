@@ -14,6 +14,9 @@ ezdxf = pytest.importorskip("ezdxf", reason="run with: uv run --with pytest --wi
 def survey(path, rev):
     doc = ezdxf.new("R2018", setup=True)
     doc.header["$INSUNITS"] = 4
+    # The same drawing in both files, with a new version GUID in the second.
+    doc.header["$FINGERPRINTGUID"] = "{22EC1F40-E951-4969-BE7E-FC7E0D809D8B}"
+    doc.header["$VERSIONGUID"] = "{1111111%d-0000-0000-0000-000000000000}" % rev
     doc.layers.add("Trees")
     doc.layers.add("Fence")
     if rev == 2:
