@@ -59,7 +59,7 @@ impl ScriptLimits {
     /// The limits of the desktop and the server.
     pub fn native() -> Self {
         ScriptLimits {
-            fuel: 2_000_000_000,
+            fuel: 10_000_000_000,
             segment_millis: 1_500,
             memory_bytes: 128 << 20,
             output_bytes: 16 << 20,

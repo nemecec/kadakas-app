@@ -528,10 +528,13 @@ struct SessionHost<'a> {
     mode: Mode,
     clock: &'a Clock,
     budget_ms: u64,
+    /// The calls that came here (the script cannot tell if it was stopped by a limit).
+    calls: u64,
 }
 
 impl ScriptHost for SessionHost<'_> {
     fn call(&mut self, method: &str, params: Value, _typed: bool) -> Result<Value, HostError> {
+        self.calls += 1;
         if let Some(why) = refusal(method, self.mode) {
             return Err(HostError::Failure(failure_of(RpcError::policy(why))));
         }
@@ -636,14 +639,16 @@ fn eval(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let revision = s.editor.revision();
     let origin = s.editor.origin();
     s.editor.set_origin(kadakas_core::change::Origin::Script);
+    let mut host_calls = 0;
     let result = {
         let mut host = SessionHost {
             s,
             mode,
             clock: &clock,
             budget_ms,
+            calls: 0,
         };
-        engine.run(
+        let r = engine.run(
             &Request {
                 code: &code,
                 args: &args,
@@ -651,7 +656,9 @@ fn eval(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                 seed,
             },
             &mut host,
-        )
+        );
+        host_calls = host.calls;
+        r
     };
     let steps = s.editor.undo_depth().saturating_sub(depth);
     match result {
@@ -678,7 +685,7 @@ fn eval(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         Err(f) => {
             s.editor.rollback(steps);
             s.editor.set_origin(origin);
-            Err(script_error(f.error, f.log, f.calls))
+            Err(script_error(f.error, f.log, f.calls.max(host_calls)))
         }
     }
 }

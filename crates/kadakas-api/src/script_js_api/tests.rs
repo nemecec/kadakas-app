@@ -427,3 +427,87 @@ fn measure_call_overhead() {
         Ok(r) => println!("{r}"),
     }
 }
+
+const ASHLAR: &str = include_str!("../../../../docs/scripts/random-ashlar.js");
+const FAN: &str = include_str!("../../../../docs/scripts/radial-fan.js");
+
+fn pattern_of(script: &str, params: Value) -> Value {
+    json!({"kind": "generator", "script": script, "params": params, "gap": 0})
+}
+
+#[test]
+fn the_example_ashlar_covers_the_region_in_courses_of_three_lengths() {
+    let mut s = Session::default();
+    trusted_script(&mut s, "Ashlar", ASHLAR);
+    let run = |s: &mut Session, seed: u32| {
+        layout(
+            s,
+            json!({
+                "region": {"outline": [[0, 0], [3000, 0], [3000, 1000], [0, 1000]]},
+                "pattern": pattern_of("Ashlar", json!({"seed": seed})),
+                "limit": 1000,
+            }),
+        )
+        .unwrap()
+    };
+    let a = run(&mut s, 1);
+    let sum = &a["summary"];
+    // Five courses of 200 mm over 1000 mm: no unit is cut at the top or the bottom, so every
+    // cut unit is cut at the left or right edge, at most two per course.
+    assert!(sum["cut_units"].as_u64().unwrap() <= 10, "{sum}");
+    let area = sum["area_laid_m2"].as_f64().unwrap();
+    assert!((area - 3.0).abs() < 1e-9, "the courses fill the region: {area}");
+    // Three unit types, named by their size.
+    let names: Vec<&str> = sum["by_unit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["300x200", "450x200", "600x200"]);
+    let total: u64 = sum["by_unit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["whole_units"].as_u64().unwrap() + u["cut_units"].as_u64().unwrap())
+        .sum();
+    assert_eq!(total, a["units_total"].as_u64().unwrap());
+    // The same seed gives the same wall, another seed another one.
+    assert_eq!(a, run(&mut s, 1));
+    assert_ne!(a["units"], run(&mut s, 2)["units"]);
+}
+
+#[test]
+fn the_example_fan_has_the_counts_of_a_hand_checked_small_case() {
+    let mut s = Session::default();
+    trusted_script(&mut s, "Fan", FAN);
+    // A 2000 x 2000 mm square with the fan at its middle: rings of 500 mm, 8 wedges in each.
+    // Radius 500 and 1000 lie inside the square (a wedge of the second ring touches the sides at
+    // the axes), so rings 1 and 2 give 16 whole units. The farthest corner is 1414 mm away: a
+    // third ring of 8 wedges, and each of them is cut by a side of the square.
+    let l = layout(
+        &mut s,
+        json!({
+            "region": {"outline": [[-1000, -1000], [1000, -1000], [1000, 1000], [-1000, 1000]]},
+            "pattern": pattern_of("Fan", json!({"ring": 500, "count": 8})),
+            "origin": [0, 0],
+            "limit": 0,
+        }),
+    )
+    .unwrap();
+    let sum = &l["summary"];
+    assert_eq!(l["units_total"], json!(24), "{sum}");
+    assert_eq!(sum["whole_units"], json!(16), "{sum}");
+    assert_eq!(sum["cut_units"], json!(8), "{sum}");
+    // The wedges tile the square up to the sag of the arcs (about 1 mm at 1 m).
+    let area = sum["area_laid_m2"].as_f64().unwrap();
+    assert!((area - 4.0).abs() < 4.0 * 2e-3, "{area}");
+    let by: Vec<(u64, u64)> = sum["by_unit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| (u["whole_units"].as_u64().unwrap(), u["cut_units"].as_u64().unwrap()))
+        .collect();
+    // Even rings: the first and the third (8 + 8 wedges, the third cut); odd: the second.
+    assert_eq!(by, [(8, 8), (8, 0)]);
+}

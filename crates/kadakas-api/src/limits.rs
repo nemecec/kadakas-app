@@ -184,7 +184,7 @@ impl SessionLimits {
             picture_bytes: 2 * 1024 * 1024,
             picture_pixels: 4_000_000,
             pattern_units: 100_000,
-            script_js_fuel: 400_000_000,
+            script_js_fuel: 1_000_000_000,
             script_js_memory_bytes: 64 << 20,
             script_js_output_bytes: 4 << 20,
             script_js_calls: 100_000,
