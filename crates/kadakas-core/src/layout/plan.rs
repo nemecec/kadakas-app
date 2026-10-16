@@ -23,7 +23,8 @@ use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::single::SingleFloatOverlay;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use super::course::{self, Corner, Joints, Side};
 use super::summary::{Desc, Summary, SummaryOptions, UnitCount, summarize_stream, with_waste};
@@ -224,20 +225,20 @@ impl Plan {
         }
         for (i, z) in self.zones.iter().enumerate() {
             if !z.seed.is_finite() {
-                return Err(format!("zone setting {} has no finite seed point", i + 1));
+                return Err(format!("zone setting {} has no finite seed point", i));
             }
             if z.angle.is_some_and(|a| !a.is_finite()) || z.origin.is_some_and(|o| !o.is_finite()) {
-                return Err(format!("zone setting {}: numbers must be finite", i + 1));
+                return Err(format!("zone setting {}: numbers must be finite", i));
             }
             if let Some(p) = &z.pattern {
                 p.validate()
-                    .map_err(|e| format!("zone setting {}: {e}", i + 1))?;
+                    .map_err(|e| format!("zone setting {}: {e}", i))?;
                 if p.bond != super::Bond::Module
                     && (p.unit_length < Pattern::MIN_UNIT || p.unit_width < Pattern::MIN_UNIT)
                 {
                     return Err(format!(
                         "zone setting {}: units must be at least {} mm",
-                        i + 1,
+                        i,
                         Pattern::MIN_UNIT
                     ));
                 }
@@ -245,7 +246,7 @@ impl Plan {
             if z.align_to_split.is_some_and(|n| n >= self.splits.len()) {
                 return Err(format!(
                     "zone setting {}: align_to_split names a split line that does not exist",
-                    i + 1
+                    i
                 ));
             }
         }
@@ -299,6 +300,12 @@ pub fn translate_data(obj: &mut Object, delta: DVec2) {
     );
 }
 
+/// An angle in degrees (the direction of the rows of a pattern) after a transform.
+pub fn turn_angle(xf: &crate::edit2d::Xf, degrees: f64) -> f64 {
+    let d = xf.m * DVec2::from_angle(degrees.to_radians());
+    d.y.atan2(d.x).to_degrees()
+}
+
 /// Moves the positions of the plan with a transform of the object (turn, mirror, scale). A mirror
 /// puts a course on the other side of its path.
 pub fn transform_data(obj: &mut Object, xf: &crate::edit2d::Xf) {
@@ -313,12 +320,18 @@ pub fn transform_data(obj: &mut Object, xf: &crate::edit2d::Xf) {
         if let Some(o) = &mut z.origin {
             *o = xf.apply(*o);
         }
+        // The rows of the pattern turn with the drawing.
+        z.angle = z.angle.map(|a| turn_angle(xf, a));
     }
     for c in &mut p.courses {
         for v in &mut c.path {
             v.p = xf.apply(v.p);
         }
-        if xf.is_reflection() {
+        // A path that is copied is mirrored, so the course goes to the other side of it. A course
+        // that follows the edge of the hardscape is made again from the (mirrored) edge, which
+        // always runs counterclockwise: its side stays. A course that follows a drawn line takes
+        // the line as it is then.
+        if xf.is_reflection() && c.edge.is_none() && c.source.is_none() {
             c.side = match c.side {
                 Side::Left => Side::Right,
                 Side::Right => Side::Left,
@@ -402,19 +415,86 @@ pub enum Body {
 }
 
 /// A zone whose units are the units of a shared lattice that have their center in it.
+///
+/// The lattice is laid once for all the zones that share it. Every unit goes to one zone by a
+/// grid over the boxes of the zones, and each zone keeps its own list of units. The lists live
+/// as long as the zones do.
 #[derive(Clone, Debug)]
 pub struct Owner {
     /// The zone, in `zones`.
     pub index: usize,
     /// All zones that share the lattice, in the order that decides a center on an edge.
     pub zones: Arc<Vec<Region>>,
+    shared: Arc<Shared>,
 }
 
-impl Owner {
-    /// The zone that holds the point: the first that contains it, else the nearest.
-    fn zone_of(&self, p: DVec2) -> usize {
-        if let Some(i) = self.zones.iter().position(|z| zones::region_contains(z, p)) {
-            return i;
+/// What the zones of one lattice share.
+#[derive(Debug, Default)]
+struct Shared {
+    /// The laid lattice, for each trim limit that was asked.
+    laid: Mutex<HashMap<u64, Arc<Laid>>>,
+}
+
+/// A lattice that was laid and given out to its zones.
+#[derive(Debug)]
+struct Laid {
+    per_zone: Vec<Vec<Unit>>,
+    /// The dust pieces and the trimmed units of each zone.
+    dust: Vec<usize>,
+    trimmed: Vec<usize>,
+    stats: Stats,
+    total: usize,
+}
+
+/// A uniform grid over the boxes of some regions: the regions that can hold a point.
+struct ZoneGrid {
+    lo: DVec2,
+    cell: DVec2,
+    n: usize,
+    cells: Vec<Vec<u32>>,
+}
+
+impl ZoneGrid {
+    fn new(zones: &[Region]) -> Self {
+        let (mut lo, mut hi) = (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN));
+        for z in zones {
+            lo = lo.min(z.lo);
+            hi = hi.max(z.hi);
+        }
+        let n = ((zones.len() as f64).sqrt().ceil() as usize).clamp(1, 256);
+        let cell = ((hi - lo) / n as f64).max(DVec2::splat(1e-6));
+        let mut g = ZoneGrid {
+            lo,
+            cell,
+            n,
+            cells: vec![Vec::new(); n * n],
+        };
+        for (i, z) in zones.iter().enumerate() {
+            let (x0, y0) = g.at(z.lo);
+            let (x1, y1) = g.at(z.hi);
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    g.cells[y * n + x].push(i as u32);
+                }
+            }
+        }
+        g
+    }
+
+    fn at(&self, p: DVec2) -> (usize, usize) {
+        let q = ((p - self.lo) / self.cell).floor();
+        let c = |v: f64| (v.max(0.0) as usize).min(self.n - 1);
+        (c(q.x), c(q.y))
+    }
+
+    /// The first zone that contains the point, else the nearest.
+    fn zone_of(&self, zones: &[Region], p: DVec2) -> usize {
+        let (x, y) = self.at(p);
+        if let Some(&i) = self.cells[y * self.n + x]
+            .iter()
+            .find(|&&i| zones::region_contains(&zones[i as usize], p))
+        {
+            return i as usize;
         }
         let dist = |z: &Region| {
             z.rings()
@@ -422,9 +502,77 @@ impl Owner {
                 .map(|(a, b)| crate::geom::dist_to_segment(p, a, b))
                 .fold(f64::MAX, f64::min)
         };
-        (0..self.zones.len())
-            .min_by(|&a, &b| dist(&self.zones[a]).total_cmp(&dist(&self.zones[b])))
+        (0..zones.len())
+            .min_by(|&a, &b| dist(&zones[a]).total_cmp(&dist(&zones[b])))
             .unwrap_or(0)
+    }
+}
+
+impl Owner {
+    /// The owner of zone `index` among `zones`.
+    pub fn new(index: usize, zones: Arc<Vec<Region>>) -> Self {
+        Owner {
+            index,
+            zones,
+            shared: Arc::default(),
+        }
+    }
+
+    /// The same lattice for another zone of the set.
+    pub fn sibling(&self, index: usize) -> Self {
+        Owner {
+            index,
+            zones: self.zones.clone(),
+            shared: self.shared.clone(),
+        }
+    }
+
+    /// The units of the zone, and the stats of the whole lattice. The lattice is laid when the
+    /// first zone asks and not again.
+    fn units(
+        &self,
+        region: &Region,
+        pattern: &Pattern,
+        place: &Placement,
+        limits: &Limits,
+    ) -> Result<Arc<Laid>, LayoutError> {
+        let key = limits.trim.to_bits();
+        let mut map = self.shared.laid.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(l) = map.get(&key) {
+            if l.total > limits.max_units {
+                return Err(LayoutError::TooMany(super::units::TooMany {
+                    estimated: l.total as u64,
+                    max: limits.max_units,
+                }));
+            }
+            return Ok(l.clone());
+        }
+        let grid = ZoneGrid::new(&self.zones);
+        let mut per_zone: Vec<Vec<Unit>> = vec![Vec::new(); self.zones.len()];
+        let mut total = 0usize;
+        let stats = super::for_each_unit(region, pattern, place, limits, &mut |u| {
+            let Some(ring) = u.rings.first() else { return };
+            let c = ring.points.iter().copied().sum::<DVec2>() / ring.points.len() as f64;
+            per_zone[grid.zone_of(&self.zones, c)].push(u.clone());
+            total += 1;
+        })?;
+        let count = |at: &[DVec2]| {
+            let mut n = vec![0usize; self.zones.len()];
+            for &p in at {
+                n[grid.zone_of(&self.zones, p)] += 1;
+            }
+            n
+        };
+        let (dust, trimmed) = (count(&stats.dust_at), count(&stats.trimmed_at));
+        let laid = Arc::new(Laid {
+            per_zone,
+            dust,
+            trimmed,
+            stats,
+            total,
+        });
+        map.insert(key, laid.clone());
+        Ok(laid)
     }
 }
 
@@ -529,18 +677,17 @@ impl Group {
                 let Some(owner) = &self.owner else {
                     return super::for_each_unit(&self.region, pattern, place, limits, f);
                 };
-                let mut kept = 0usize;
-                let mut stats =
-                    super::for_each_unit(&self.region, pattern, place, limits, &mut |u| {
-                        let Some(ring) = u.rings.first() else { return };
-                        let c =
-                            ring.points.iter().copied().sum::<DVec2>() / ring.points.len() as f64;
-                        if owner.zone_of(c) == owner.index {
-                            kept += 1;
-                            f(u);
-                        }
-                    })?;
-                stats.units = kept;
+                let laid = owner.units(&self.region, pattern, place, limits)?;
+                let mut stats = laid.stats.clone();
+                let mine = &laid.per_zone[owner.index];
+                for u in mine {
+                    f(u);
+                }
+                stats.units = mine.len();
+                stats.dust_pieces = laid.dust[owner.index];
+                stats.trimmed = laid.trimmed[owner.index];
+                stats.dust_at.clear();
+                stats.trimmed_at.clear();
                 stats.region_area = owner.zones[owner.index].area;
                 Ok(stats)
             }
@@ -562,6 +709,8 @@ impl Group {
                     units: 0,
                     dust_pieces: 0,
                     trimmed: 0,
+                    dust_at: Vec::new(),
+                    trimmed_at: Vec::new(),
                 };
                 let mut placer = Placer::new(
                     local,
@@ -737,7 +886,7 @@ pub fn effective_splits(
                     None => {
                         notes.push(format!(
                             "split line {} follows an object that is not a line, arc or polyline: the saved points are used",
-                            i + 1
+                            i
                         ));
                         (s.points.clone(), false)
                     }
@@ -746,7 +895,7 @@ pub fn effective_splits(
                     if let Some(id) = s.source {
                         notes.push(format!(
                             "split line {} followed the object {id}, which is gone: the saved points are used",
-                            i + 1
+                            i
                         ));
                     }
                     (s.points.clone(), false)
@@ -1036,13 +1185,13 @@ pub fn plan_groups(
             for e in &split.loose_ends {
                 out.notes.push(format!(
                     "split line {} stops inside the area at ({:.1}, {:.1}), {:.1} mm from the nearest edge or line: it cuts nothing there",
-                    e.line + 1, e.at.x, e.at.y, e.gap
+                    e.line, e.at.x, e.at.y, e.gap
                 ));
             }
             for i in &split.unused_lines {
                 out.notes.push(format!(
                     "split line {} cuts nothing: it does not cross the area",
-                    i + 1
+                    i
                 ));
             }
             // Settings by seed.
@@ -1063,13 +1212,13 @@ pub fn plan_groups(
                     Some(zi) if spec_of[zi].is_none() => spec_of[zi] = Some(si),
                     Some(zi) => out.notes.push(format!(
                         "zone setting {} and {} are both tied to zone {}: the first one is used",
-                        spec_of[zi].unwrap_or(0) + 1,
-                        si + 1,
-                        zi + 1
+                        spec_of[zi].unwrap_or(0),
+                        si,
+                        zi
                     )),
                     None => out.notes.push(format!(
                         "zone setting {}{} is tied to ({:.0}, {:.0}), which is in no zone now: it is not used",
-                        si + 1,
+                        si,
                         z.name.as_ref().map(|n| format!(" ({n})")).unwrap_or_default(),
                         z.seed.x,
                         z.seed.y
@@ -1109,11 +1258,12 @@ pub fn plan_groups(
                 subtract(&field, &cut_shapes)?
             };
             let mut center_index = 0usize;
+            let mut first_owner: Option<Owner> = None;
             for (zi, zone) in split.zones.iter().enumerate() {
                 let spec = spec_of[zi].map(|i| &plan.zones[i]);
                 let name = spec
                     .and_then(|s| s.name.clone())
-                    .unwrap_or_else(|| format!("zone {}", zi + 1));
+                    .unwrap_or_else(|| format!("zone {zi}"));
                 let zregion = Region::from_shapes(vec![zone.shape.clone()])?;
                 let mut zpattern = pattern.clone();
                 let mut zplace = place;
@@ -1128,10 +1278,10 @@ pub fn plan_groups(
                     }
                     if let Some(n) = s.align_to_split {
                         let line = out.splits.get(n).ok_or_else(|| {
-                            format!("zone '{name}': split line {} does not exist", n + 1)
+                            format!("zone '{name}': split line {} does not exist", n)
                         })?;
                         if line.len() < 2 {
-                            return Err(format!("zone '{name}': split line {} is empty", n + 1));
+                            return Err(format!("zone '{name}': split line {} is empty", n));
                         }
                         let d = line[1] - line[0];
                         zplace = Placement {
@@ -1159,10 +1309,13 @@ pub fn plan_groups(
                     spec: spec_of[zi],
                 });
                 let (region_of_group, owner) = if by_center[zi] {
-                    let o = Owner {
-                        index: center_index,
-                        zones: center_zones.clone(),
+                    let o = match &first_owner {
+                        Some(f) => f.sibling(center_index),
+                        None => Owner::new(center_index, center_zones.clone()),
                     };
+                    if first_owner.is_none() {
+                        first_owner = Some(o.clone());
+                    }
                     center_index += 1;
                     (center_region.clone().unwrap_or(zregion), Some(o))
                 } else {

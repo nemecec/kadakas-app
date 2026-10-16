@@ -439,7 +439,94 @@ fn a_hole_in_a_course_is_found() {
         .find(|f| f.kind == Kind::Coverage)
         .unwrap();
     assert!(
-        f.message.contains("leaves") && f.at[1] > 0.0 && f.at[1] < 205.0,
+        f.message.contains("hole") && f.at[1] > 0.0 && f.at[1] < 205.0,
         "{f:?}"
     );
+}
+
+#[test]
+fn a_small_hole_in_a_long_course_is_found() {
+    use crate::curve::Vertex;
+    let spec = course::Spec {
+        path: vec![
+            Vertex::corner(v(0.0, 0.0)),
+            Vertex::corner(v(1_000_000.0, 0.0)),
+        ],
+        closed: false,
+        side: course::Side::Left,
+        offset: 0.0,
+        along: 100.0,
+        depth: 200.0,
+        gap: 5.0,
+        corner: course::Corner::Miter,
+    };
+    let laid = course::lay(&spec, 100_000).unwrap();
+    let make = |pieces: Vec<course::Piece>| {
+        let n = pieces.len();
+        Group {
+            name: "kerb".into(),
+            slug: "COURSE-KERB".into(),
+            role: Role::Course,
+            region: rect(-100.0, -100.0, 1_000_100.0, 400.0),
+            owner: None,
+            body: Body::Course(Box::new(CourseBody {
+                pieces,
+                piece_kind: vec![0; n],
+                kinds: vec![("100x200".into(), 20_000.0)],
+                joints: laid.joints,
+                corners: 0,
+                length: 1_000_000.0,
+                along: 100.0,
+                depth: 200.0,
+                gap: 5.0,
+                band: laid.band.clone(),
+            })),
+        }
+    };
+    let area = rect(-100.0, -100.0, 1_000_100.0, 400.0);
+    let full = check(
+        &[make(laid.pieces.clone())],
+        &area,
+        &CheckOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(full.counts["coverage"], 0);
+    // One unit of 20,000 mm2 is missing on 1 km of kerb.
+    let mut pieces = laid.pieces.clone();
+    pieces.remove(5000);
+    let r = check(&[make(pieces)], &area, &CheckOptions::default()).unwrap();
+    assert_eq!(r.counts["coverage"], 1, "{:?}", r.findings);
+    let f = r
+        .findings
+        .iter()
+        .find(|f| f.kind == Kind::Coverage)
+        .unwrap();
+    assert!(
+        f.size > 20_000.0 && f.size < 60_000.0 && (f.at[0] - 525_000.0).abs() < 200.0,
+        "{f:?}"
+    );
+}
+
+#[test]
+fn zones_that_own_their_units_by_center_are_clean_where_units_reach_over_the_edge() {
+    use crate::layout::plan::Owner;
+    let field = rect(0.0, 0.0, 4000.0, 2000.0);
+    // The edge at x = 1010 cuts through the middle of a unit.
+    let zones: Vec<Region> = vec![
+        rect(0.0, 0.0, 1010.0, 2000.0),
+        rect(1010.0, 0.0, 4000.0, 2000.0),
+    ];
+    let first = Owner::new(0, std::sync::Arc::new(zones));
+    let groups: Vec<Group> = (0..2)
+        .map(|i| {
+            let mut g = group(&format!("zone {i}"), field.clone(), Bond::Stack, 0.0);
+            g.role = Role::Zone;
+            g.owner = Some(first.sibling(i));
+            g
+        })
+        .collect();
+    let r = check(&groups, &field, &CheckOptions::default()).unwrap();
+    assert_eq!(r.counts["coverage"], 0, "{:?}", r.findings);
+    assert_eq!(r.counts["overlap"], 0, "{:?}", r.findings);
+    assert_eq!(r.units, 400);
 }

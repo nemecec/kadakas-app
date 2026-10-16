@@ -688,8 +688,7 @@ fn zones_keep_their_names_and_can_be_given_by_center() {
     let id = slab(&mut s, 8000.0, 4000.0);
     let l = line(&mut s, [3010.0, -50.0], [3010.0, 4050.0]);
     let r = ok(&mut s, "hardscape.split", json!({"id": id, "lines": [l]}));
-    assert_eq!(r["zones"][0]["number"], 1);
-    assert_eq!(r["zones"][1]["name"], "zone 2");
+    assert_eq!(r["zones"][1]["name"], "zone 1");
     assert!(r["zone_edge_cuts"]["whole_units_lost"].as_u64().unwrap() > 5);
     assert!(
         r["zone_edge_note"]
@@ -706,7 +705,7 @@ fn zones_keep_their_names_and_can_be_given_by_center() {
         json!({"command": {"op": "move_objects", "ids": [l], "delta": [3000, 0]}}),
     );
     let p = ok(&mut s, "hardscape.plan", json!({"id": id}));
-    assert_eq!(p["zones"][0]["name"], "zone 1");
+    assert_eq!(p["zones"][0]["name"], "zone 0");
     let r = ok(
         &mut s,
         "hardscape.split",
@@ -779,4 +778,64 @@ fn a_course_along_the_outline_follows_the_edge_and_crossing_courses_are_clean() 
         (Some(0), Some(0), Some(0)),
         "{chk}"
     );
+}
+
+#[test]
+fn a_circle_and_a_chain_of_arcs_that_stall_lines_run_up_to_are_not_paved_by_default() {
+    let mut s = Session::with_sequential_ids();
+    let mut ids = vec![
+        line(&mut s, [0.0, 0.0], [20_000.0, 0.0]),
+        line(&mut s, [20_000.0, 0.0], [20_000.0, 10_000.0]),
+        line(&mut s, [20_000.0, 10_000.0], [0.0, 10_000.0]),
+        line(&mut s, [0.0, 10_000.0], [0.0, 0.0]),
+    ];
+    // A circle island and a tree island of two arcs, with rows of stalls on both sides of each.
+    ids.push(add(
+        &mut s,
+        json!({"kind": "circle", "center": [10_000, 5_000], "radius": 1500}),
+    ));
+    let pi = std::f64::consts::PI;
+    for (a, b) in [(0.0, pi), (pi, 2.0 * pi)] {
+        ids.push(add(
+            &mut s,
+            json!({"kind": "arc", "center": [16_000, 5_000], "radius": 1000, "start": a, "end": b}),
+        ));
+    }
+    ids.push(line(&mut s, [0.0, 5_000.0], [8_500.0, 5_000.0]));
+    ids.push(line(&mut s, [11_500.0, 5_000.0], [15_000.0, 5_000.0]));
+    ids.push(line(&mut s, [17_000.0, 5_000.0], [20_000.0, 5_000.0]));
+    let st = style(&mut s, "running_bond");
+    let r = ok(
+        &mut s,
+        "region.from_curves",
+        json!({"ids": ids, "create": "hardscape", "style": st, "dry_run": true}),
+    );
+    let regions = r["regions"].as_array().unwrap();
+    let doubtful: Vec<f64> = regions
+        .iter()
+        .filter(|x| x["role"] == "island?")
+        .map(|x| x["area_m2"].as_f64().unwrap())
+        .collect();
+    assert_eq!(doubtful.len(), 2, "{regions:#?}");
+    assert!(
+        doubtful.iter().any(|a| (a - 7.0686).abs() < 0.01),
+        "{doubtful:?}"
+    );
+    assert!(
+        doubtful
+            .iter()
+            .any(|a| (a - std::f64::consts::PI).abs() < 0.01),
+        "{doubtful:?}"
+    );
+    // The two halves of the lot are made, the islands are not.
+    let made: Vec<u64> = r["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["region"].as_u64().unwrap())
+        .collect();
+    assert_eq!(made.len(), 2, "{r:#?}");
+    for m in made {
+        assert_ne!(regions[m as usize]["role"], "island?");
+    }
 }

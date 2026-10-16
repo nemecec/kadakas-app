@@ -408,3 +408,58 @@ fn directions_at_the_seam_and_many_crossings() {
     let r = build(&many, 0.1);
     assert!(r.is_ok() || matches!(r, Err(BuildError::TooMany(_))));
 }
+
+#[test]
+fn a_closed_loop_in_a_drawing_is_found_only_when_nothing_else_touches_its_outline() {
+    // Two lots side by side, drawn as separate squares: both touch the outside.
+    let mut c = rect_lines(0.0, 0.0, 1000.0, 1000.0);
+    c.extend(rect_lines(1000.0, 0.0, 2000.0, 1000.0));
+    let a = build(&c, 1.0).unwrap();
+    assert_eq!(a.faces.len(), 2);
+    assert!(a.faces.iter().all(|f| !f.closed_loop));
+    // A lot with a divider: the halves share curves with the lot.
+    let mut c = rect_lines(0.0, 0.0, 1000.0, 1000.0);
+    c.push(Curve::line(v(500.0, 0.0), v(500.0, 1000.0)));
+    let a = build(&c, 1.0).unwrap();
+    assert!(a.faces.iter().all(|f| !f.closed_loop));
+    // A square island joined to the lot by two lines that end on it: one loop.
+    let mut c = rect_lines(0.0, 0.0, 4000.0, 2000.0);
+    c.extend(rect_lines(1500.0, 750.0, 2500.0, 1250.0));
+    c.push(Curve::line(v(0.0, 1000.0), v(1500.0, 1000.0)));
+    c.push(Curve::line(v(2500.0, 1000.0), v(4000.0, 1000.0)));
+    let a = build(&c, 1.0).unwrap();
+    let loops: Vec<_> = a.faces.iter().filter(|f| f.closed_loop).collect();
+    assert_eq!(
+        loops.len(),
+        1,
+        "{:?}",
+        a.faces.iter().map(|f| f.area).collect::<Vec<_>>()
+    );
+    assert!((loops[0].area - 500_000.0).abs() < 1e-6);
+}
+
+#[test]
+fn the_sliver_width_is_capped_and_dropped_faces_are_listed() {
+    // A long thin triangle: 10 m long and `w` mm wide at the far end.
+    let thin = |w: f64| {
+        vec![
+            Curve::line(v(0.0, 0.0), v(10_000.0, 0.0)),
+            Curve::line(v(0.0, 0.0), v(10_000.0, w)),
+            Curve::line(v(10_000.0, 0.0), v(10_000.0, w)),
+        ]
+    };
+    // 6 mm wide at the far end is a real face at a tolerance of 5 mm, although 0.5 * 5 mm is
+    // more than its mean width of 3 mm.
+    let a = build(&thin(6.0), 5.0).unwrap();
+    assert_eq!(a.faces.len(), 1);
+    assert_eq!(a.dropped_slivers, 0);
+    // 1.5 mm wide at the far end (0.75 mm on the mean) is a sliver at a tolerance of 1 mm.
+    let a = build(&thin(1.5), 1.0).unwrap();
+    assert_eq!(a.dropped_slivers, 1);
+    assert_eq!(a.dropped_sliver_list.len(), 1);
+    let s = a.dropped_sliver_list[0];
+    assert!(
+        (s.area - 7_500.0).abs() < 1.0 && (s.at.x - 6_666.0).abs() < 10.0,
+        "{s:?}"
+    );
+}

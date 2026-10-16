@@ -841,8 +841,13 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
             open_share: if meaningful { open } else { 0.0 },
             expected_open_share: expected,
         });
-        let c = centroid(&g.region.shapes[0][0]);
-        if laid > region * (1.0 + 1e-6) + noise_area(&g.region.shapes[0][0]) && meaningful {
+        // A zone that owns its units by their centers may hold units that reach over its edge.
+        let ring = match &g.owner {
+            Some(o) => &o.zones[o.index].shapes[0][0],
+            None => &g.region.shapes[0][0],
+        };
+        let c = centroid(ring);
+        if laid > region * (1.0 + 1e-6) + noise_area(ring) && meaningful && g.owner.is_none() {
             add(
                 Kind::Coverage,
                 Finding {
@@ -909,22 +914,10 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
         let covered = dilated.overlay(&empty, OverlayRule::Union, FillRule::NonZero);
         let covered: Vec<Vec<[f64; 2]>> = covered.into_iter().flatten().collect();
         let subject: Vec<Vec<[f64; 2]>> = inside.into_iter().flatten().collect();
-        let band_area: f64 = cb
-            .band
-            .iter()
-            .map(|s| {
-                s.iter()
-                    .enumerate()
-                    .map(|(i, r)| {
-                        let a = crate::geom::polygon_area(r);
-                        if i == 0 { a } else { -a }
-                    })
-                    .sum::<f64>()
-            })
-            .sum();
         let left = subject.overlay(&covered, OverlayRule::Difference, FillRule::EvenOdd);
-        let mut total = 0.0;
-        let mut worst: Option<(f64, DVec2)> = None;
+        // A hole is a piece of the band that no unit or joint covers and that is more than a
+        // twentieth of a unit. The limit does not depend on the length of the course.
+        let limit = 0.05 * cb.along * cb.depth;
         for s in &left {
             let mut a = 0.0;
             let mut c = DVec2::ZERO;
@@ -938,29 +931,23 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
                     a -= ar;
                 }
             }
-            total += a;
-            if worst.is_none_or(|(w, _)| a > w) {
-                worst = Some((a, c));
+            if a > limit {
+                add(
+                    Kind::Coverage,
+                    Finding {
+                        kind: Kind::Coverage,
+                        group: g.name.clone(),
+                        other_group: None,
+                        at: [c.x, c.y],
+                        size: a,
+                        message: format!(
+                            "the course '{}' has a hole of {:.0} mm2 without a unit or a joint",
+                            g.name, a
+                        ),
+                    },
+                    &mut counts,
+                );
             }
-        }
-        if total > (100.0f64).max(0.003 * band_area)
-            && let Some((_, at)) = worst
-        {
-            add(
-                Kind::Coverage,
-                Finding {
-                    kind: Kind::Coverage,
-                    group: g.name.clone(),
-                    other_group: None,
-                    at: [at.x, at.y],
-                    size: total,
-                    message: format!(
-                        "the course '{}' leaves {:.1} mm2 of its area without a unit or a joint (the largest hole is here)",
-                        g.name, total
-                    ),
-                },
-                &mut counts,
-            );
         }
     }
     for k in Kind::ALL {

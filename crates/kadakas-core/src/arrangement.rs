@@ -425,7 +425,24 @@ pub struct Face {
     /// enclosed by one face, as an island is, although it is joined to it by lines (a stall line
     /// that ends on the kerb of an island).
     pub enclosed: bool,
+    /// True if the whole outline is made of curves that lie on this outline and nowhere else (a
+    /// circle, a closed shape, a closed chain of arcs) and no edge of it borders the outside of
+    /// the drawing: a closed shape inside the outline of its drawing, joined to the rest by lines
+    /// that end on it (stall lines that end on an island), so that no face encloses it.
+    pub closed_loop: bool,
 }
+
+/// A face that was left out because it is thinner than the tolerance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DroppedSliver {
+    pub at: DVec2,
+    /// In mm2.
+    pub area: f64,
+}
+
+/// The widest sliver that is left out, in mm: a bigger tolerance closes bigger gaps but does not
+/// make a bigger face disappear.
+pub const MAX_SLIVER_WIDTH: f64 = 1.0;
 
 /// The result of [`build`].
 #[derive(Clone, Debug, Default)]
@@ -447,6 +464,10 @@ pub struct Arrangement {
     /// Faces thinner than the tolerance (slivers between curves that nearly coincide) that were
     /// left out.
     pub dropped_slivers: usize,
+    /// True when no thin face is dropped (the faces must add up to the area, as zones do).
+    pub keep_slivers: bool,
+    /// Where the first of them lie and their areas (cut at [`MAX_LISTED`]).
+    pub dropped_sliver_list: Vec<DroppedSliver>,
     /// The sum of the distances that the points moved to their nodes, in mm.
     pub node_movement: f64,
     /// Nodes that joined points more than the tolerance apart through a chain of points.
@@ -570,7 +591,7 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
             }
         }
     }
-    let mut out = build_inner(&split, &split_ranks, tol)?;
+    let mut out = build_inner(&split, &split_ranks, tol, !ranks.is_empty())?;
     for e in &mut out.edges {
         e.source = origin[e.source];
     }
@@ -591,7 +612,12 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
     Ok(out)
 }
 
-fn build_inner(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangement, BuildError> {
+fn build_inner(
+    curves: &[Curve],
+    ranks: &[u8],
+    tol: f64,
+    keep_slivers: bool,
+) -> Result<Arrangement, BuildError> {
     if curves.len() > MAX_CURVES * 2 {
         return Err(BuildError::TooMany(format!(
             "an arrangement takes at most {MAX_CURVES} curves, not {}",
@@ -851,6 +877,8 @@ fn build_inner(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangement, 
             });
         }
     }
+    // Zones (ranked curves) cut a region into parts that must add up to it: no face is dropped.
+    out.keep_slivers = keep_slivers;
     prune_and_trace(&mut out, curves.len(), &short, &merged, tol);
     Ok(out)
 }
@@ -1122,6 +1150,13 @@ fn trace_faces(out: &mut Arrangement, tol: f64) {
             owner.insert((e, fwd), fi);
         }
     }
+    // The curves that cover each edge.
+    let mut covering: Vec<Vec<usize>> = vec![Vec::new(); out.edges.len()];
+    for (c, es) in out.curve_edges.iter().enumerate() {
+        for &e in es {
+            covering[e].push(c);
+        }
+    }
     for fi in 0..faces.len() {
         let comp = faces[fi].comp;
         // A sliver between curves that nearly coincide is noise, not an area.
@@ -1131,8 +1166,16 @@ fn trace_faces(out: &mut Arrangement, tol: f64) {
             .iter()
             .map(|&(e, _)| out.edges[e].curve.length())
             .sum();
-        if faces[fi].area < 0.5 * tol * perimeter {
+        if !out.keep_slivers && faces[fi].area < 0.5 * tol.min(MAX_SLIVER_WIDTH) * perimeter {
             out.dropped_slivers += 1;
+            if out.dropped_sliver_list.len() < MAX_LISTED {
+                let ring = &faces[fi].ring;
+                let at = ring.iter().copied().sum::<DVec2>() / ring.len().max(1) as f64;
+                out.dropped_sliver_list.push(DroppedSliver {
+                    at,
+                    area: faces[fi].area,
+                });
+            }
             continue;
         }
         let mut others: Vec<Option<usize>> = cycles[faces[fi].cycle]
@@ -1144,6 +1187,22 @@ fn trace_faces(out: &mut Arrangement, tol: f64) {
         others.sort_unstable();
         others.dedup();
         let enclosed = others.len() == 1 && others[0].is_some_and(|o| o != fi);
+        let closed_loop =
+            !others.is_empty() && others.iter().all(|o| o.is_some_and(|o| o != fi)) && {
+                let ring: std::collections::HashSet<usize> = cycles[faces[fi].cycle]
+                    .0
+                    .edges
+                    .iter()
+                    .map(|&(e, _)| e)
+                    .collect();
+                let own: std::collections::HashSet<usize> =
+                    ring.iter().map(|&e| out.edges[e].source).collect();
+                own.iter()
+                    .all(|&c| out.curve_edges[c].iter().all(|e| ring.contains(e)))
+                    && ring
+                        .iter()
+                        .all(|&e| covering[e].iter().all(|c| own.contains(c)))
+            };
         let d = depth_of(comp, &parent_of_comp, &faces, &mut comp_depth);
         let hole_cycles: Vec<Cycle> = holes_of[fi]
             .iter()
@@ -1165,6 +1224,7 @@ fn trace_faces(out: &mut Arrangement, tol: f64) {
             inside,
             component: faces[fi].comp,
             enclosed,
+            closed_loop,
         });
     }
 }

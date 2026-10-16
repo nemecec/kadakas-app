@@ -795,6 +795,31 @@ pub fn align_start(
     Ok(p)
 }
 
+/// Turns, mirrors or scales the data that holds positions with the object: the center line of a
+/// path, the holes, the origin of the pattern and the angle of its rows.
+pub fn transform_data(obj: &mut Object, xf: &crate::edit2d::Xf) {
+    let Some(mut d) = data(obj) else { return };
+    for v in d.center.iter_mut().chain(d.holes.iter_mut().flatten()) {
+        v.p = xf.apply(v.p);
+    }
+    if let Some(o) = &mut d.origin {
+        *o = xf.apply(*o);
+    }
+    if let Some(a) = &mut d.angle {
+        *a = crate::layout::plan::turn_angle(xf, *a);
+    }
+    if d.mode == Mode::Path
+        && !d.center.is_empty()
+        && let Shape::Hardscape { boundary, .. } = &mut obj.shape
+    {
+        let outline = d.outline();
+        if outline.len() >= 3 {
+            *boundary = outline;
+        }
+    }
+    set_data(obj, &d);
+}
+
 /// Moves the data that holds positions with the object: the center line of a path, the holes and
 /// the origin of the pattern.
 pub fn translate_data(obj: &mut Object, delta: DVec2) {

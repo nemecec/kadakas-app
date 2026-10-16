@@ -159,6 +159,10 @@ pub struct FoundRegion {
     /// True if the region is enclosed by one other region on all sides although lines join it to
     /// that one: it may be an island that touches the outline.
     pub enclosed: bool,
+    /// True if the outline is a closed shape (or a closed chain of curves) that lies inside the
+    /// outline of its drawing and is joined to the rest only by lines that end on it: it may be
+    /// an island.
+    pub closed_loop: bool,
     /// The box of the outline.
     pub lo: DVec2,
     pub hi: DVec2,
@@ -178,6 +182,8 @@ pub struct Found {
     pub duplicates: usize,
     /// Faces thinner than the tolerance that were left out.
     pub dropped_slivers: usize,
+    /// Where the first of them lie and their areas.
+    pub dropped_sliver_list: Vec<arrangement::DroppedSliver>,
     /// The sum of the distances that points moved to their nodes, in mm.
     pub node_movement: f64,
     /// Nodes that joined points more than the tolerance apart through a chain of points.
@@ -200,6 +206,7 @@ pub fn from_curves(curves: &[Curve], tolerance: f64) -> Result<Found, arrangemen
         ignored_short: a.ignored_short,
         duplicates: a.duplicates,
         dropped_slivers: a.dropped_slivers,
+        dropped_sliver_list: a.dropped_sliver_list.clone(),
         node_movement: a.node_movement,
         chained_nodes: a.chained_nodes,
         curve_edges: a.curve_edges.clone(),
@@ -234,6 +241,7 @@ pub fn from_curves(curves: &[Curve], tolerance: f64) -> Result<Found, arrangemen
             curves: sources.into_iter().collect(),
             edges: edges.into_iter().collect(),
             enclosed: f.enclosed,
+            closed_loop: f.closed_loop,
             lo,
             hi,
         });

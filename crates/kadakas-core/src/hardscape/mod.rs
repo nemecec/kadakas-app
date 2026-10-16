@@ -50,6 +50,13 @@ pub fn translate_object_data(obj: &mut Object, delta: DVec2) {
     crate::layout::plan::translate_data(obj, delta);
 }
 
+/// Turns, mirrors or scales the data that holds positions (see [`translate_object_data`]) and the
+/// zones and courses.
+pub fn transform_object_data(obj: &mut Object, xf: &crate::edit2d::Xf) {
+    data::transform_data(obj, xf);
+    crate::layout::plan::transform_data(obj, xf);
+}
+
 /// The attributes of an object with the fields of its style where the object has none of its own.
 pub fn styled_attrs(doc: &Document, obj: &Object, mut a: Attributes) -> Attributes {
     let (fill, pen, weight) = match &obj.shape {

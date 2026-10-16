@@ -137,7 +137,7 @@ fn zone_settings_are_tied_by_seed_and_change_the_pattern() {
     assert_eq!(r.groups.len(), 3);
     assert_eq!(r.zones.len(), 3);
     let names: Vec<&str> = r.groups.iter().map(|g| g.name.as_str()).collect();
-    assert_eq!(names, ["Stalls", "Aisle", "zone 3"]);
+    assert_eq!(names, ["Stalls", "Aisle", "zone 2"]);
     assert!(r.groups.iter().all(|g| g.role == Role::Zone));
     assert_eq!(r.groups[0].slug, "ZONE-STALLS");
     let Body::Pattern { pattern, place } = &r.groups[0].body else {
@@ -212,7 +212,7 @@ fn bad_alignments_and_too_many_zones_are_refused() {
         ..Default::default()
     }];
     set_plan(&mut ed, id, &p);
-    assert!(planned(&ed, id).unwrap_err().contains("zone 'zone 1'"));
+    assert!(planned(&ed, id).unwrap_err().contains("zone 'zone 0'"));
     // A pattern that cannot be laid.
     p.zones[0].align_to_edge = None;
     p.zones[0].pattern = Some(Pattern::new(Bond::Stack, 300.0, 150.0, 4.0));
@@ -593,6 +593,38 @@ fn zones_by_center_have_no_false_cuts_and_the_cuts_are_counted() {
     let cutu: usize = parts.iter().map(|s| s.cut_units).sum();
     assert_eq!((whole, cutu), (one.whole_units, one.cut_units));
     assert!(whole > whole_cut);
+    // The dust and the trimmed units of the lattice are counted once in the totals, as for the
+    // same lot laid without zones.
+    for trim in [0.0, 30.0, 120.0] {
+        let o = SummaryOptions {
+            trim,
+            ..SummaryOptions::default()
+        };
+        let parts: Vec<_> = centered
+            .groups
+            .iter()
+            .map(|g| g.summarize(&o).unwrap())
+            .collect();
+        let one = kadakas_core::layout::summary::summarize(
+            &region_of(ed.doc(), ed.doc().object(id).unwrap(), 1.0).unwrap(),
+            &Pattern::new(Bond::RunningBond, 200.0, 100.0, 5.0),
+            &kadakas_core::layout::Placement {
+                origin: Some(v(0.0, 0.0)),
+                angle: 0.0,
+            },
+            &o,
+        )
+        .unwrap();
+        let total = merge(&parts, 32e6, &o);
+        assert_eq!(
+            (total.dust_pieces, total.trimmed_units),
+            (one.dust_pieces, one.trimmed_units),
+            "trim {trim}"
+        );
+        if trim == 120.0 {
+            assert!(total.trimmed_units > 0);
+        }
+    }
     // The units are not counted twice, and the check finds nothing.
     clean(&ed, id, &centered.groups);
     assert_eq!(centered.groups.len(), 3);
@@ -649,4 +681,55 @@ fn an_edge_course_follows_the_outline_and_the_plan_follows_a_turn() {
     let r = plan::data(&o2).unwrap();
     assert_eq!(r.courses[0].side, Side::Right);
     assert!((r.zones[0].seed - v(50.0, -50.0)).length() < 1e-9);
+}
+
+#[test]
+fn the_data_of_a_hardscape_turns_and_mirrors_but_a_hardscape_itself_is_not_turned() {
+    use kadakas_core::edit2d::{Transform, Xf};
+    let (mut ed, id) = slab(false);
+    let mut edge = course_def("Kerb", &[(0.0, 0.0), (8000.0, 0.0)], Side::Left);
+    edge.edge = Some("outline".into());
+    let mut p = Plan::default();
+    p.zones = vec![ZoneSpec {
+        seed: v(1000.0, 1000.0),
+        angle: Some(90.0),
+        ..Default::default()
+    }];
+    p.courses = vec![
+        edge,
+        course_def("Aisle", &[(4200.0, 400.0), (4200.0, 3600.0)], Side::Left),
+    ];
+    set_plan(&mut ed, id, &p);
+    // The editor refuses to turn or mirror a hardscape (a rule of the model), so the plan never
+    // meets a turn there.
+    let turn = Command::TransformObjects {
+        ids: vec![id],
+        transform: Transform::Rotate {
+            center: v(0.0, 0.0),
+            angle: 0.5,
+        },
+        copy: false,
+    };
+    assert!(ed.execute(&turn).is_err());
+    // The data functions are ready for a place that does turn, and keep rows and sides right.
+    let mut o = ed.doc().object(id).unwrap().clone();
+    let xf = Xf::rotate(v(1234.0, 567.0), 30f64.to_radians());
+    kadakas_core::hardscape::transform_object_data(&mut o, &xf);
+    let q = plan::data(&o).unwrap();
+    assert!((q.zones[0].angle.unwrap() - 120.0).abs() < 1e-9);
+    assert!((plan::turn_angle(&xf, 0.0) - 30.0).abs() < 1e-9);
+    let d = kadakas_core::hardscape::data(&o).unwrap();
+    assert!((d.angle.unwrap() - 30.0).abs() < 1e-9);
+    assert!((d.origin.unwrap() - xf.apply(v(0.0, 0.0))).length() < 1e-9);
+    let mirror = Xf::mirror(v(0.0, 0.0), v(1.0, 0.0)).unwrap();
+    let mut m = ed.doc().object(id).unwrap().clone();
+    kadakas_core::hardscape::transform_object_data(&mut m, &mirror);
+    let q = plan::data(&m).unwrap();
+    // The course with a copied path goes to the other side; the course on the edge keeps its side.
+    assert_eq!(q.courses[0].side, Side::Left);
+    assert_eq!(q.courses[1].side, Side::Right);
+    assert!(
+        (q.zones[0].angle.unwrap() + 90.0).abs() < 1e-9
+            || (q.zones[0].angle.unwrap() - 90.0).abs() < 1e-9
+    );
 }
