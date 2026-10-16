@@ -432,6 +432,18 @@ pub struct Face {
     pub closed_loop: bool,
 }
 
+/// A face that was left out because it is thinner than the tolerance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DroppedSliver {
+    pub at: DVec2,
+    /// In mm2.
+    pub area: f64,
+}
+
+/// The widest sliver that is left out, in mm: a bigger tolerance closes bigger gaps but does not
+/// make a bigger face disappear.
+pub const MAX_SLIVER_WIDTH: f64 = 1.0;
+
 /// The result of [`build`].
 #[derive(Clone, Debug, Default)]
 pub struct Arrangement {
@@ -452,6 +464,8 @@ pub struct Arrangement {
     /// Faces thinner than the tolerance (slivers between curves that nearly coincide) that were
     /// left out.
     pub dropped_slivers: usize,
+    /// Where the first of them lie and their areas (cut at [`MAX_LISTED`]).
+    pub dropped_sliver_list: Vec<DroppedSliver>,
     /// The sum of the distances that the points moved to their nodes, in mm.
     pub node_movement: f64,
     /// Nodes that joined points more than the tolerance apart through a chain of points.
@@ -1143,8 +1157,16 @@ fn trace_faces(out: &mut Arrangement, tol: f64) {
             .iter()
             .map(|&(e, _)| out.edges[e].curve.length())
             .sum();
-        if faces[fi].area < 0.5 * tol * perimeter {
+        if faces[fi].area < 0.5 * tol.min(MAX_SLIVER_WIDTH) * perimeter {
             out.dropped_slivers += 1;
+            if out.dropped_sliver_list.len() < MAX_LISTED {
+                let ring = &faces[fi].ring;
+                let at = ring.iter().copied().sum::<DVec2>() / ring.len().max(1) as f64;
+                out.dropped_sliver_list.push(DroppedSliver {
+                    at,
+                    area: faces[fi].area,
+                });
+            }
             continue;
         }
         let mut others: Vec<Option<usize>> = cycles[faces[fi].cycle]

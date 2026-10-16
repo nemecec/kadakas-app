@@ -182,6 +182,8 @@ pub struct Found {
     pub duplicates: usize,
     /// Faces thinner than the tolerance that were left out.
     pub dropped_slivers: usize,
+    /// Where the first of them lie and their areas.
+    pub dropped_sliver_list: Vec<arrangement::DroppedSliver>,
     /// The sum of the distances that points moved to their nodes, in mm.
     pub node_movement: f64,
     /// Nodes that joined points more than the tolerance apart through a chain of points.
@@ -204,6 +206,7 @@ pub fn from_curves(curves: &[Curve], tolerance: f64) -> Result<Found, arrangemen
         ignored_short: a.ignored_short,
         duplicates: a.duplicates,
         dropped_slivers: a.dropped_slivers,
+        dropped_sliver_list: a.dropped_sliver_list.clone(),
         node_movement: a.node_movement,
         chained_nodes: a.chained_nodes,
         curve_edges: a.curve_edges.clone(),

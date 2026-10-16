@@ -384,6 +384,9 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         "ignored_short": found.ignored_short,
         "duplicates": found.duplicates,
         "dropped_slivers": found.dropped_slivers,
+        "dropped_sliver_list": found.dropped_sliver_list.iter()
+            .map(|s| json!({"at": xy(s.at), "area_mm2": s.area}))
+            .collect::<Vec<_>>(),
         "warnings": notes,
         "tolerance_mm": tol,
         "dry_run": dry_run,

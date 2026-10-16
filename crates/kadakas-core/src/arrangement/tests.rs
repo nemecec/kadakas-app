@@ -432,3 +432,26 @@ fn a_closed_loop_in_a_drawing_is_found_only_when_nothing_else_touches_its_outlin
     assert_eq!(loops.len(), 1, "{:?}", a.faces.iter().map(|f| f.area).collect::<Vec<_>>());
     assert!((loops[0].area - 500_000.0).abs() < 1e-6);
 }
+
+#[test]
+fn the_sliver_width_is_capped_and_dropped_faces_are_listed() {
+    // A long thin triangle: 10 m long and `w` mm wide at the far end.
+    let thin = |w: f64| {
+        vec![
+            Curve::line(v(0.0, 0.0), v(10_000.0, 0.0)),
+            Curve::line(v(0.0, 0.0), v(10_000.0, w)),
+            Curve::line(v(10_000.0, 0.0), v(10_000.0, w)),
+        ]
+    };
+    // 6 mm wide at the far end is a real face at a tolerance of 5 mm, although 0.5 * 5 mm is
+    // more than its mean width of 3 mm.
+    let a = build(&thin(6.0), 5.0).unwrap();
+    assert_eq!(a.faces.len(), 1);
+    assert_eq!(a.dropped_slivers, 0);
+    // 1.5 mm wide at the far end (0.75 mm on the mean) is a sliver at a tolerance of 1 mm.
+    let a = build(&thin(1.5), 1.0).unwrap();
+    assert_eq!(a.dropped_slivers, 1);
+    assert_eq!(a.dropped_sliver_list.len(), 1);
+    let s = a.dropped_sliver_list[0];
+    assert!((s.area - 7_500.0).abs() < 1.0 && (s.at.x - 6_666.0).abs() < 10.0, "{s:?}");
+}
