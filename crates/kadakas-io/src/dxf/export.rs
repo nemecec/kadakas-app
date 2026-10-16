@@ -258,6 +258,8 @@ const H_LAYER_ZERO: &str = "27";
 const H_STYLE_STANDARD: &str = "29";
 const H_APPID_ACAD: &str = "2A";
 const H_DIMSTYLE_STANDARD: &str = "2B";
+/// The extension dictionary of the model space block record. It holds the GEODATA object.
+const H_GEO_XDICT: &str = "2C";
 /// First handle of entities and of records that depend on the drawing.
 const FIRST_HANDLE: u64 = 0x100;
 
@@ -287,6 +289,12 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         }
     }
     cx.shift = shift;
+    // The georeference becomes a GEODATA object when the CRS is an EPSG code.
+    let geo_epsg = doc
+        .georef
+        .as_ref()
+        .filter(|g| !g.crs.trim().is_empty())
+        .and_then(native::epsg_of);
     let mut ents = W::new(FIRST_HANDLE);
     ents.owner = H_MODEL_RECORD.into();
     // The entities of unit patterns come last and are not scanned for layer names: they are many.
@@ -602,7 +610,18 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         H_BLOCK_RECORD_TABLE,
         2 + plant_names.len() + cx.anon_blocks.len(),
     );
-    tables.record("BLOCK_RECORD", H_MODEL_RECORD, H_BLOCK_RECORD_TABLE);
+    if geo_epsg.is_some() {
+        // Readers find the GEODATA object through the extension dictionary of the model space.
+        tables.pair(0, "BLOCK_RECORD");
+        tables.pair(5, H_MODEL_RECORD);
+        tables.pair(102, "{ACAD_XDICTIONARY");
+        tables.pair(360, H_GEO_XDICT);
+        tables.pair(102, "}");
+        tables.pair(330, H_BLOCK_RECORD_TABLE);
+        tables.pair(100, "AcDbSymbolTableRecord");
+    } else {
+        tables.record("BLOCK_RECORD", H_MODEL_RECORD, H_BLOCK_RECORD_TABLE);
+    }
     tables.pair(100, "AcDbBlockTableRecord");
     tables.pair(2, "*Model_Space");
     tables.pair(340, H_MODEL_LAYOUT);
@@ -831,36 +850,43 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         objects.pair(6, "BYLAYER");
     }
 
-    // The georeference as a GEODATA object, when the CRS is an EPSG code.
+    // The georeference as a GEODATA object, owned by the extension dictionary of the model space.
     let mut geodata = false;
-    if let Some(g) = &doc.georef
-        && !g.crs.trim().is_empty()
-    {
-        match native::epsg_of(g) {
-            Some(epsg) => {
-                let unit_mm = opts.unit.mm_per_unit();
-                // The drawing axes are the model axes in both modes (a rotation is not applied to the
-                // coordinates), so grid north is turned by the rotation of the georeference.
-                let north = DVec2::new(g.rotation.sin(), g.rotation.cos());
-                let design = match opts.origin {
-                    ExportOrigin::File => g.origin * 1000.0 / unit_mm,
-                    ExportOrigin::Document => DVec2::ZERO,
-                };
-                native::geodata(
-                    &mut objects,
-                    &epsg,
-                    design,
-                    g.origin,
-                    north,
-                    opts.unit.insunits(),
-                    unit_mm / 1000.0,
-                );
-                geodata = true;
-            }
-            None => report.note(
-                "the CRS is not an EPSG code, so the file has no GEODATA object. The coordinates are still real-world numbers",
-            ),
-        }
+    if let (Some(g), Some(epsg)) = (&doc.georef, &geo_epsg) {
+        let unit_mm = opts.unit.mm_per_unit();
+        // The drawing axes are the model axes in both modes (a rotation is not applied to the
+        // coordinates), so grid north is turned by the rotation of the georeference.
+        let north = DVec2::new(g.rotation.sin(), g.rotation.cos());
+        let design = match opts.origin {
+            ExportOrigin::File => g.origin * 1000.0 / unit_mm,
+            ExportOrigin::Document => DVec2::ZERO,
+        };
+        let handle = native::geodata(
+            &mut objects,
+            H_GEO_XDICT,
+            epsg,
+            design,
+            g.origin,
+            north,
+            opts.unit.insunits(),
+            unit_mm / 1000.0,
+        );
+        objects.pair(0, "DICTIONARY");
+        objects.pair(5, H_GEO_XDICT);
+        objects.pair(102, "{ACAD_REACTORS");
+        objects.pair(330, H_MODEL_RECORD);
+        objects.pair(102, "}");
+        objects.pair(330, H_MODEL_RECORD);
+        objects.pair(100, "AcDbDictionary");
+        objects.pair(281, 1);
+        objects.pair(3, "ACAD_GEOGRAPHICDATA");
+        objects.pair(360, handle);
+        geodata = true;
+        report.georeferenced = true;
+    } else if doc.georef.as_ref().is_some_and(|g| !g.crs.trim().is_empty()) {
+        report.note(
+            "the CRS is not an EPSG code, so the file has no GEODATA object. The coordinates are still real-world numbers",
+        );
     }
 
     let mut hdr = W::new(0);

@@ -466,24 +466,27 @@ pub(super) fn epsg_of(g: &Georeference) -> Option<String> {
         .then(|| format!("EPSG:{digits}"))
 }
 
-/// The GEODATA object for the georeference. `design` is the point in drawing coordinates that has the
-/// map position `g.origin`-based `reference` (meters). `unit_m` is meters per drawing unit.
+/// The GEODATA object for the georeference, owned by the dictionary `owner` (the extension
+/// dictionary of the model space block record). Returns its handle. `design` is the point in drawing
+/// coordinates that has the map position `g.origin`-based `reference` (meters). `unit_m` is meters per
+/// drawing unit.
 pub(super) fn geodata(
     objects: &mut W,
+    owner: &str,
     epsg: &str,
     design: DVec2,
     reference: DVec2,
     north: DVec2,
     insunits: i64,
     unit_m: f64,
-) {
+) -> String {
     objects.pair(0, "GEODATA");
     let h = objects.handle();
-    objects.pair(5, h);
+    objects.pair(5, &h);
     objects.pair(102, "{ACAD_REACTORS");
-    objects.pair(330, H_MODEL_RECORD);
+    objects.pair(330, owner);
     objects.pair(102, "}");
-    objects.pair(330, H_MODEL_RECORD);
+    objects.pair(330, owner);
     objects.pair(100, "AcDbGeoData");
     objects.pair(90, 2);
     objects.pair(330, H_MODEL_RECORD);
@@ -517,6 +520,7 @@ pub(super) fn geodata(
     );
     objects.pair(93, 0);
     objects.pair(96, 0);
+    h
 }
 
 #[cfg(test)]
