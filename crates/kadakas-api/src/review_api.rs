@@ -36,7 +36,7 @@ use kadakas_review::history::{
 use kadakas_review::restore::{self, without_stacking_keys};
 use kadakas_review::{History, Limits, ReviewError, State, VersionInfo};
 
-use crate::errors::{REASON_HISTORY_READONLY, REASON_VERSION_LIMIT, bad};
+use crate::errors::{REASON_HISTORY_READONLY, REASON_PARTS_MISSING, REASON_VERSION_LIMIT, bad};
 use crate::{RpcError, Session, SessionLimits};
 
 /// The most versions the thresholds of a session can be set to (a file within them is never read
@@ -105,6 +105,20 @@ pub fn describe() -> Value {
     })
 }
 
+/// A history that still waits in the file the document was opened from (DOC-21).
+pub(crate) struct Pending {
+    loader: Arc<dyn kadakas_core::history::HistoryLoader>,
+    /// The revision of the editor right after the open.
+    rev: u64,
+    /// True if the document in memory is the document in the file (the open changed nothing in
+    /// it). Then, as long as the revision is `rev`, the document is the anchor of the history.
+    exact: bool,
+    /// Set when the last try to read the history failed: the revision and the state of the file
+    /// then. A new try is made only when one of them is another (the answer would be the same,
+    /// and the try reads the drawing again).
+    failed: Option<String>,
+}
+
 /// What the cache holds for one history.
 struct Cached {
     serial: u64,
@@ -119,6 +133,9 @@ struct Cached {
 #[derive(Default)]
 pub struct ReviewCache {
     cached: Option<Cached>,
+    /// The history waits in the file; it is read, checked and put into the document when a call
+    /// needs it (`resolve`). While it is set, `Document::history` is `None`.
+    pub(crate) pending: Option<Pending>,
     /// The state of the newest version, for the serial of the history it was made from.
     tip: Option<(u64, Option<Arc<State>>)>,
     /// The anchors of the histories that this session has had (see the module text of
@@ -131,6 +148,9 @@ pub struct ReviewCache {
     /// against (as loaded). A save writes the changes from the current drawing back to it (the
     /// `base` entry), so that the versions can be rebuilt after the drawing was edited.
     opaque_base: Option<Arc<State>>,
+    /// Why a history that waits in the file could not be read: `not_found` (the file or the drive
+    /// is away or another file is there; the versions come back when it is) or `damaged`.
+    pub(crate) unreadable: Option<&'static str>,
     /// How often the JSON was parsed, and how often the newest state was rebuilt by replay. Tests
     /// count them.
     pub(crate) parses: u32,
@@ -138,6 +158,25 @@ pub struct ReviewCache {
 }
 
 impl ReviewCache {
+    /// Tells the cache the revision of the editor right after the open, and whether the document
+    /// is the one in the file (`Pending::exact`).
+    pub(crate) fn arm(&mut self, rev: u64, exact: bool) {
+        if let Some(p) = &mut self.pending {
+            p.rev = rev;
+            // A file with a drawing of its own for the versions (an edited document was saved with
+            // them waiting): the open drawing is not that drawing.
+            p.exact = exact && !p.loader.separate_anchor();
+        }
+    }
+
+    /// True while the history waits in the file and the document in memory is the one in the
+    /// file: a save may copy the entries of the history as they are.
+    pub(crate) fn waits_unchanged(&self, revision: u64) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|p| p.exact && p.rev == revision)
+    }
+
     /// Keeps a history that is the parsed form of this JSON.
     fn keep(&mut self, data: &HistoryData, history: Arc<History>, notes: Vec<String>) {
         self.cached = Some(Cached {
@@ -195,11 +234,45 @@ impl SessionLimits {
 /// the anchor of the history in memory.
 pub fn vet_document(doc: &mut Document, caps: ReadCaps) -> ReviewCache {
     let mut cache = ReviewCache::default();
+    // A history that waits in the file is read when it is used (`resolve`).
+    if doc.history.is_none()
+        && let Some(loader) = doc.lazy_history.clone()
+    {
+        cache.pending = Some(Pending {
+            loader,
+            rev: 0,
+            exact: false,
+            failed: None,
+        });
+        return cache;
+    }
     let Some(data) = doc.history.clone() else {
         return cache;
     };
+    let vetted = vet(doc, data, caps);
+    doc.history = Some(vetted.data);
+    for n in vetted.notes {
+        doc.add_load_note(n);
+    }
+    vetted.cache
+}
+
+/// The result of the check of a history (see [`vet`]).
+struct Vetted {
+    /// The history, with the anchor drawing that it keeps alive.
+    data: HistoryData,
+    cache: ReviewCache,
+    /// What could not be read, and the sentence about the read only state.
+    notes: Vec<String>,
+}
+
+/// Checks a history against the drawing it was written against. `doc` is that drawing.
+fn vet(doc: &Document, data: HistoryData, caps: ReadCaps) -> Vetted {
+    let mut cache = ReviewCache::default();
+    let mut out = Vec::new();
     let (history, notes) = read_history(doc, &data, &[], caps);
     cache.parses += 1;
+    let mut data = data;
     // The drawing is the anchor of the history now: the session keeps it, because the drawing
     // changes with the first edit.
     if let Some(h) = &history {
@@ -208,13 +281,11 @@ pub fn vet_document(doc: &mut Document, caps: ReadCaps) -> ReviewCache {
         // (so an undo back to it can read it, however the drawing was edited).
         let anchor = h.anchor_pair().1;
         let bytes = anchor.bytes();
-        doc.history = Some(data.clone().with_keepalive(anchor, bytes));
+        data = data.with_keepalive(anchor, bytes);
     }
-    for n in &notes {
-        doc.add_load_note(n.clone());
-    }
+    out.extend(notes.iter().cloned());
     if !notes.is_empty() {
-        doc.add_load_note(
+        out.push(
             "The versions of this file are kept as they are and are read only until you choose to keep only the part that could be read."
                 .into(),
         );
@@ -223,7 +294,95 @@ pub fn vet_document(doc: &mut Document, caps: ReadCaps) -> ReviewCache {
         cache.opaque_base = written_against(data.top(), data.blob_list(), doc);
     }
     cache.keep(&data, Arc::new(history.unwrap_or_default()), notes);
-    cache
+    Vetted {
+        data,
+        cache,
+        notes: out,
+    }
+}
+
+/// Reads the history that waits in the file, checks it and puts it into the document (DOC-21). A
+/// call that uses the history does this first (`read`). The history is checked against the drawing
+/// as the file holds it: the document in memory if it is that drawing still, else the drawing read
+/// again from the file. If the file cannot be read (it changed on disk, an entry is damaged) the
+/// history stays unread, the session treats it as read only, and a save is refused until the
+/// person decides (`version.repair {confirm: true}` drops it).
+pub(crate) fn resolve(s: &mut Session) {
+    let Some(p) = s.review.pending.take() else {
+        return;
+    };
+    let key = format!("{}:{}", s.editor.revision(), p.loader.state_key());
+    if p.failed.as_deref() == Some(key.as_str()) && s.review.cached.is_some() {
+        // The same file and the same drawing as at the last try: the answer is the same.
+        s.review.pending = Some(p);
+        return;
+    }
+    let failed = |s: &mut Session, mut p: Pending, why: String, key: String| {
+        // A file that is away or changed is not a file that is damaged: the first comes back.
+        let away = why.contains("changed on disk")
+            || why.contains("not in the file")
+            || why.contains("cannot be read now")
+            || why.contains("No such file")
+            || why.contains("not in the container");
+        let note = if away {
+            format!(
+                "the versions of this file cannot be found now: {why}. They stay in the file, and come back when the file (or the drive) can be read again. Until then they are read only"
+            )
+        } else {
+            format!(
+                "the versions of this file could not be read: {why}. They stay in the file as they are, and are read only"
+            )
+        };
+        s.review.unreadable = Some(if away { "not_found" } else { "damaged" });
+        s.review.cached = Some(Cached {
+            serial: 0,
+            history: Arc::new(History::new()),
+            notes: vec![note],
+        });
+        p.failed = Some(key);
+        s.review.pending = Some(p);
+    };
+    // The size of the entries and of the pictures they list is known from the directory: a history
+    // over the bound is not read at all (the bound is checked before the read, not after it).
+    let caps = s.limits.read_caps();
+    let size = p.loader.bytes();
+    if size > caps.max_bytes.saturating_mul(JSON_FACTOR) {
+        let why = format!(
+            "the history of versions has {size} bytes, more than is read ({} bytes)",
+            caps.max_bytes.saturating_mul(JSON_FACTOR)
+        );
+        return failed(s, p, why, key);
+    }
+    let data = match p.loader.load() {
+        Ok(d) => d,
+        Err(e) => return failed(s, p, e, key),
+    };
+    let anchor_doc;
+    let drawing: &Document = if p.exact && s.editor.revision() == p.rev {
+        s.editor.doc()
+    } else {
+        match p.loader.anchor() {
+            Ok(d) => {
+                anchor_doc = d;
+                &anchor_doc
+            }
+            Err(e) => return failed(s, p, e, key),
+        }
+    };
+    // The state of the drawing is made from its pictures too.
+    if let Err(e) = drawing.check_blobs() {
+        return failed(s, p, e.to_string(), key);
+    }
+    let vetted = vet(drawing, data, caps);
+    s.load_notes.extend(vetted.notes.iter().cloned());
+    s.editor.adopt_history(Some(vetted.data), vetted.notes);
+    s.review = vetted.cache;
+}
+
+/// True while the history cannot be changed: it waits in a file that cannot be read, or it was
+/// read with notes.
+fn read_only(s: &Session) -> bool {
+    s.review.pending.is_some() || (s.editor.doc().history.is_some() && !notes(s).is_empty())
 }
 
 /// Reads a history. Returns the history that could be read, and what could not.
@@ -281,6 +440,15 @@ fn limit_reached(info: &LimitInfo) -> RpcError {
 /// The history of the open document (an empty one if there is none) and what could not be read.
 /// A history with notes is read only.
 pub(crate) fn read(s: &mut Session) -> Arc<History> {
+    resolve(s);
+    if s.review.pending.is_some() {
+        // The history waits in a file that cannot be read: nothing of it is shown.
+        return s
+            .review
+            .cached
+            .as_ref()
+            .map_or_else(|| Arc::new(History::new()), |c| c.history.clone());
+    }
     let Some(data) = s.editor.doc().history.clone() else {
         s.review.forget();
         return Arc::new(History::new());
@@ -308,10 +476,52 @@ fn notes(s: &Session) -> &[String] {
     s.review.cached.as_ref().map_or(&[], |c| &c.notes)
 }
 
+/// Checks that the pictures of the document that stay in a file can be read: the file is the one
+/// that was opened. The state of the document, for a version or a compare, is worked out from
+/// the pictures too, and a picture that cannot be read would make its object look deleted. A
+/// call that works out that state asks first (a conflict that says the file changed).
+pub(crate) fn pictures_readable(s: &Session) -> Result<(), RpcError> {
+    s.editor.doc().check_blobs().map_err(|e| {
+        let pictures = s.editor.doc().unreadable_pictures();
+        if pictures.is_empty() {
+            return RpcError::conflict(format!("{e}"));
+        }
+        missing_error(&kadakas_file::Missing {
+            file: s
+                .file_source
+                .as_ref()
+                .map_or_else(String::new, |f| f.label()),
+            pictures,
+            history: false,
+            other: Vec::new(),
+        })
+    })
+}
+
+/// The error of a save that cannot find parts of the document in the file it was opened from.
+/// Nothing was written. The person decides: put the file back, or save without them (the pictures
+/// become small placeholders and the versions are left out): `file.save` with `allow_missing`.
+/// The token (`details.consent_token`) is given by the session (`Session::issue_consent`).
+pub fn missing_error(m: &kadakas_file::Missing) -> RpcError {
+    let missing =
+        json!({"file": m.file, "pictures": m.pictures, "history": m.history, "other": m.other});
+    RpcError::conflict(m.message())
+        .with_reason(REASON_PARTS_MISSING)
+        .with_details(json!({
+            "missing": missing,
+            "options": [
+                {"action": "restore", "how": "Put the file (or its .bak) back where it was, then save again."},
+                {"action": "save_without", "how": "Ask the person. Then call file.save again with allow_missing set to the value of consent_token of this error (not true; the token is good for this one save of this document as it is): the missing pictures become small gray placeholders, the versions that cannot be found are left out, and the file is saved."}
+            ],
+            "ask_the_person": true,
+        }))
+}
+
 /// The history, for a call that changes it: refused while the history is read only.
 fn writable(s: &mut Session) -> Result<Arc<History>, RpcError> {
+    pictures_readable(s)?;
     let h = read(s);
-    if s.editor.doc().history.is_some() && !notes(s).is_empty() {
+    if read_only(s) {
         return Err(read_only_error(notes(s)));
     }
     Ok(h)
@@ -427,6 +637,25 @@ impl Session {
     /// drawing written into its objects and layers, so that the file gives the versions back
     /// when it is read. A history that could not be read completely is written as it is.
     pub fn document_for_save(&mut self) -> Result<Cow<'_, Document>, RpcError> {
+        self.document_for_save_in(false)
+    }
+
+    /// Like [`Session::document_for_save`], told whether the save is a container (DOC-20). A
+    /// history that waits in the file, and a document that is still the one in the file, need no
+    /// work for a container: the writer copies the entries of the history as they are, without
+    /// reading them. Everything else reads the history first.
+    pub fn document_for_save_in(&mut self, container: bool) -> Result<Cow<'_, Document>, RpcError> {
+        if container && self.review.waits_unchanged(self.editor.revision()) {
+            return Ok(Cow::Borrowed(self.editor.doc()));
+        }
+        pictures_readable(self)?;
+        if container && self.review.pending.is_some() {
+            // The versions wait in the file. A save never reads them just to write them again
+            // (that would parse the drawing a second time) and never stops because they cannot be
+            // read: the writer copies their entries as they are, and, if the drawing was edited,
+            // the drawing of the file as their anchor (`needs_anchor`).
+            return Ok(Cow::Borrowed(self.editor.doc()));
+        }
         let Some(kind) = self.file_history()? else {
             return Ok(Cow::Borrowed(self.editor.doc()));
         };
@@ -439,9 +668,77 @@ impl Session {
         Ok(Cow::Owned(out))
     }
 
+    /// True if a container save must write the drawing of the file as the anchor of the versions:
+    /// the versions wait in the file, and the drawing was edited since the open.
+    pub fn needs_anchor(&self) -> bool {
+        self.review.pending.is_some() && !self.review.waits_unchanged(self.editor.revision())
+    }
+
+    /// What a save cannot find now: the pictures of the document that stay in a file that is gone
+    /// or changed, and the versions that wait in a file that cannot be read.
+    pub fn missing_for_save(&mut self) -> kadakas_file::Missing {
+        resolve(self);
+        let history = self.review.pending.is_some() && !notes(self).is_empty();
+        kadakas_file::Missing {
+            file: self
+                .file_source
+                .as_ref()
+                .map_or_else(String::new, |f| f.label()),
+            pictures: self.editor.doc().unreadable_pictures(),
+            history,
+            other: Vec::new(),
+        }
+    }
+
+    /// The document for a save when the person chose to save without what cannot be found: a
+    /// copy in which the missing pictures are small gray placeholders and the versions that wait in
+    /// the file are left out.
+    pub fn document_without_missing(&mut self, m: &kadakas_file::Missing) -> Document {
+        let mut doc = self.editor.doc().clone();
+        let set: std::collections::HashSet<String> = m.pictures.iter().cloned().collect();
+        doc.replace_missing_pictures(&set);
+        if m.history {
+            doc.history = None;
+            doc.lazy_history = None;
+        }
+        doc
+    }
+
+    /// After a save without what was missing: the session no longer refers to it. The pictures
+    /// of the document become the placeholders (no undo step: the pictures were gone already),
+    /// and the versions that could not be found are dropped.
+    pub fn accept_missing(&mut self, m: &kadakas_file::Missing) {
+        let set: std::collections::HashSet<String> = m.pictures.iter().cloned().collect();
+        // One undo step. The undo brings back the handles of pictures that no file has; the next
+        // save asks again.
+        self.editor.replace_missing_pictures_with_undo(&set);
+        if m.history {
+            self.editor.adopt_history(None, Vec::new());
+            self.review = ReviewCache::default();
+        }
+    }
+
     /// What a file needs of the history of this session to write it for a drawing (see
     /// `FileHistory::write_for`). `None` if the session has no history.
     fn file_history(&mut self) -> Result<Option<FileHistory>, RpcError> {
+        resolve(self);
+        if self.review.pending.is_some() {
+            let why = notes(self).first().cloned().unwrap_or_default();
+            // The plain JSON form holds the versions inside, so it cannot be written without them.
+            let mut e = missing_error(&kadakas_file::Missing {
+                file: self
+                    .file_source
+                    .as_ref()
+                    .map_or_else(String::new, |f| f.label()),
+                pictures: Vec::new(),
+                history: true,
+                other: Vec::new(),
+            });
+            e.message = format!(
+                "{why}. The plain JSON form holds the versions and cannot be written without them. Save a container (.kad) instead, which keeps them as they are, or save without the versions if the person agrees"
+            );
+            return Err(e);
+        }
         let Some(data) = self.editor.doc().history.clone() else {
             return Ok(None);
         };
@@ -481,9 +778,13 @@ impl Session {
     /// `vet_document`), without the other changes that `replace_document` makes. For a host that
     /// starts a session with a file.
     pub fn adopt_document(&mut self, mut doc: Document) {
-        let cache = vet_document(&mut doc, self.limits.read_caps());
+        let mut cache = vet_document(&mut doc, self.limits.read_caps());
         self.load_notes = doc.load_notes().to_vec();
+        // An old file has no project GUID: it gets one here, and then the document is no longer
+        // exactly the document of the file.
+        let exact = !doc.ensure_project_guid();
         self.editor = kadakas_core::command::Editor::new(doc);
+        cache.arm(self.editor.revision(), exact);
         self.review = cache;
     }
 }
@@ -698,7 +999,7 @@ fn list(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let h = read(s);
     let versions: Vec<Value> = h.versions().map(|v| meta_json(&h, v.id)).collect();
     let l = s.limits.version_limits().clamped();
-    let read_only = s.editor.doc().history.is_some() && !notes(s).is_empty();
+    let read_only = read_only(s);
     let mut out = json!({
         "read_only": read_only,
         "versions": versions,
@@ -722,6 +1023,7 @@ fn list(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     // The comparison of the whole document with the newest version costs a pass over the
     // document, so a caller that polls can leave it out.
     if current {
+        pictures_readable(s)?;
         out["current_is_newest"] = match tip(s, &h)? {
             None => Value::Null,
             Some(t) => json!(State::of(s.editor.doc(), Some(&t)) == *t),
@@ -729,6 +1031,9 @@ fn list(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     }
     if read_only {
         out["notes"] = json!(notes(s));
+        // `not_found`: the file or the drive is away and the versions come back; `damaged`: they
+        // do not (only `version.repair` helps).
+        out["unreadable_kind"] = json!(s.review.unreadable.unwrap_or("damaged"));
     }
     Ok(out)
 }
@@ -863,19 +1168,67 @@ fn delete(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     Ok(json!({"deleted": deleted, "count": h.len()}))
 }
 
+/// Brings a history that waits in the file into the document for `version.repair`: what the file
+/// holds is read as it is and checked against the best drawing there is (the anchor of the file,
+/// else the open drawing), so that the repair keeps every version that is readable and is the same
+/// step as for a history that was read with notes. Returns false if the entries cannot be read at
+/// all (then nothing is readable and there is nothing to keep).
+fn revive_for_repair(s: &mut Session) -> bool {
+    let Some(p) = s.review.pending.take() else {
+        return true;
+    };
+    let Ok(data) = p.loader.load() else {
+        s.review.pending = Some(p);
+        return false;
+    };
+    let caps = s.limits.read_caps();
+    let anchor = if p.exact && s.editor.revision() == p.rev {
+        None
+    } else {
+        p.loader.anchor().ok()
+    };
+    let vetted = match &anchor {
+        Some(d) => vet(d, data, caps),
+        None => vet(s.editor.doc(), data, caps),
+    };
+    s.load_notes.extend(vetted.notes.iter().cloned());
+    s.editor.adopt_history(Some(vetted.data), vetted.notes);
+    s.review = vetted.cache;
+    true
+}
+
 fn repair(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     if m.get("confirm") != Some(&Value::Bool(true)) {
         return Err(bad(
             "version.repair loses the versions that could not be read. Ask the person, and pass confirm: true only if they agree",
         ));
     }
+    let before = if s.review.pending.is_some() {
+        notes(s).to_vec()
+    } else {
+        Vec::new()
+    };
+    if s.review.pending.is_some() && !revive_for_repair(s) {
+        // The entries of the file cannot be read at all: nothing is readable, so nothing is kept.
+        let reasons = notes(s).to_vec();
+        s.editor.adopt_history(None, Vec::new());
+        s.review = ReviewCache::default();
+        // There is nothing in memory to bring back, so this one is not an undo step. The file is
+        // not changed until the person saves.
+        return Ok(json!({"kept": 0, "notes": reasons, "undoable": false}));
+    }
     let h = read(s);
-    let reasons = notes(s).to_vec();
+    let mut reasons = notes(s).to_vec();
+    if reasons.is_empty() && !before.is_empty() && s.editor.doc().history.is_some() {
+        // The versions were read now (the file is readable again): nothing is lost.
+        return Ok(json!({"kept": h.len(), "notes": before}));
+    }
     if s.editor.doc().history.is_none() || reasons.is_empty() {
         return Err(RpcError::conflict(
             "the history of this file was read completely: there is nothing to repair",
         ));
     }
+    reasons.extend(before);
     let detail = json!({"repaired": {"notes": reasons, "kept": h.len()}});
     let kept = h.len();
     if h.is_empty() {
@@ -957,6 +1310,7 @@ fn diff(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     };
     let h = read(s);
     let tip_state = if matches!(from, Side::Current) || matches!(to, Side::Current) {
+        pictures_readable(s)?;
         tip(s, &h)?
     } else {
         None
@@ -974,6 +1328,9 @@ fn diff(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bound_tests;
 
 #[cfg(test)]
 mod cache_tests;

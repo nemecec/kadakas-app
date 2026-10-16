@@ -508,7 +508,12 @@ impl VersionsUi {
     /// choose to keep only what could be read.
     fn read_only_notice(&mut self, ui: &mut Ui, session: &mut Session, status: &mut String) {
         ui.separator();
-        ui.colored_label(Color32::from_rgb(200, 120, 0), tr!("versions-ui-read-only"));
+        let notice = if self.list.not_found {
+            tr!("versions-ui-not-found")
+        } else {
+            tr!("versions-ui-read-only")
+        };
+        ui.colored_label(Color32::from_rgb(200, 120, 0), notice);
         for note in &self.list.notes {
             ui.small(note);
         }
@@ -518,9 +523,14 @@ impl VersionsUi {
             None => tr!("versions-ui-readable-only"),
         };
         if self.confirm == Some(Confirm::Repair) {
-            ui.label(match self.list.unreadable {
-                Some(n) => tr!("versions-ui-confirm-repair-count", count = n),
-                None => tr!("versions-ui-confirm-repair"),
+            // Undo brings the versions back only when they were read (the count is known). When the
+            // entries of the file could not be read at all, there is nothing in memory to bring
+            // back, so the text must not promise it. A file that is away is told apart from a file
+            // that is damaged: the versions of the first come back with the file.
+            ui.label(match (self.list.unreadable, self.list.not_found) {
+                (Some(n), _) => tr!("versions-ui-confirm-repair-count", count = n),
+                (None, true) => tr!("versions-ui-confirm-repair-not-found"),
+                (None, false) => tr!("versions-ui-confirm-repair"),
             });
             ui.horizontal(|ui| {
                 if ui.button(&button).clicked() {

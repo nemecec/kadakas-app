@@ -260,7 +260,7 @@ fn bad_models_and_underlays_are_skipped_with_a_reason() {
             max: DVec2::splat(1000.0),
             width: 1,
             height: 1,
-            png: kadakas_core::underlay::PngData(std::sync::Arc::new(img.to_png())),
+            png: kadakas_core::underlay::PngData::new(img.to_png()),
             opacity: 1.0,
             source: String::new(),
         })),

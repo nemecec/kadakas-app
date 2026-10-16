@@ -224,6 +224,13 @@ impl Session {
                 self.editor.rollback(steps);
                 self.prune_selection();
                 let detail = LAST_PANIC.with(|p| p.borrow_mut().take());
+                // A picture of the document that stays in its file could not be read because the
+                // file changed (DOC-21). That is no bug of Kadakas, and the call is refused with
+                // the reason. (Many methods put the shape of an object into their answer, and
+                // the shape holds the picture.)
+                if let Some(why) = detail.as_deref().and_then(changed_file) {
+                    return Err(RpcError::conflict(why));
+                }
                 let detail = scrub::harsh(&detail.unwrap_or_else(|| "panic".into()));
                 self.tainted = true;
                 let method = scrub::text(method, 80);
@@ -238,6 +245,21 @@ impl Session {
             }
         }
     }
+}
+
+/// The sentence of a panic that says that the file of a document changed on disk (the error of a
+/// lazy picture that was read while an answer was made), if it is one.
+fn changed_file(detail: &str) -> Option<String> {
+    const MARK: &str = "changed on disk after it was opened";
+    if !detail.contains(MARK) {
+        return None;
+    }
+    let open = "Error(\"";
+    let start = detail.find(open).map_or(0, |i| i + open.len());
+    let end = detail[start..]
+        .find("\", line")
+        .map_or(detail.len(), |i| start + i);
+    Some(detail[start..end].to_string())
 }
 
 fn now() -> u64 {

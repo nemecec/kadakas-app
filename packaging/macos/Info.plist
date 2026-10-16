@@ -8,7 +8,7 @@
   <true/>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.graphics-design</string>
-  <!-- The .kad document type. The files are JSON, so the type conforms to JSON and other tools can still read them. -->
+  <!-- The .kad document type. The files are ZIP containers, so the type conforms to the ZIP archive and other tools can still open them. -->
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>
@@ -18,7 +18,7 @@
       <string>Kadakas drawing</string>
       <key>UTTypeConformsTo</key>
       <array>
-        <string>public.json</string>
+        <string>public.zip-archive</string>
       </array>
       <key>UTTypeTagSpecification</key>
       <dict>
@@ -27,7 +27,7 @@
           <string>kad</string>
         </array>
         <key>public.mime-type</key>
-        <string>application/vnd.kadakas.drawing+json</string>
+        <string>application/vnd.kadakas.drawing+zip</string>
       </dict>
     </dict>
   </array>

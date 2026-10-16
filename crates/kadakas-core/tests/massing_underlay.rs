@@ -1,7 +1,5 @@
 //! Massing models and image underlays in the core: commands, files, 2D (SVG) and 3D (mesh).
 
-use std::sync::Arc;
-
 use glam::DVec2;
 use kadakas_core::command::{Command, CommandError, Editor};
 use kadakas_core::curve::corners;
@@ -48,7 +46,7 @@ fn underlay(min: DVec2, max: DVec2) -> Shape {
         max,
         width: 2,
         height: 2,
-        png: PngData(Arc::new(img.to_png())),
+        png: PngData::new(img.to_png()),
         opacity: 0.5,
         source: "test".into(),
     }))
@@ -73,7 +71,7 @@ fn commands_check_the_values() {
     let Shape::Underlay(mut u) = underlay(DVec2::ZERO, DVec2::splat(100.0)) else {
         panic!()
     };
-    u.png = PngData(Arc::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]));
+    u.png = PngData::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
     assert!(
         add(&mut ed, Shape::Underlay(u))
             .unwrap_err()

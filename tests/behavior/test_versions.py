@@ -5,7 +5,7 @@ The versions belong to the file. Each change of them is one undo step."""
 
 import json
 
-from helpers import McpClient, plant_cmd, rect_cmd, uid
+from helpers import McpClient, plant_cmd, read_doc, rect_cmd, uid
 
 
 def objects(cad):
@@ -110,7 +110,7 @@ def test_versions_are_saved_in_the_file_and_open_again(make_serve, tmp_path):
     first.execute(plant_cmd(2000, 0, species="Salix alba"))
     first.result("version.create", {"name": "Two trees", "now_ms": 8})
     first.result("file.save", {"path": str(path)})
-    on_disk = json.loads(path.read_text())
+    on_disk = read_doc(path)
     history = on_disk["history"]
     assert history["format"] == 2
     assert len(history["versions"]) == 2
@@ -137,7 +137,7 @@ def test_a_file_without_history_opens_and_gets_one(make_serve, tmp_path):
     writer = make_serve()
     writer.execute(rect_cmd(0, 0, 10, 10))
     writer.result("file.save", {"path": str(path)})
-    assert "history" not in json.loads(path.read_text())
+    assert "history" not in read_doc(path)
     reader = make_serve(path)
     assert reader.result("version.list")["count"] == 0
     reader.result("version.create", {"name": "Start"})
@@ -170,7 +170,7 @@ def test_a_save_after_more_edits_keeps_every_version(make_serve, tmp_path):
 def saved_file(cad, tmp_path):
     path = tmp_path / "h.kad"
     cad.result("file.save", {"path": str(path)})
-    return json.loads(path.read_text())
+    return read_doc(path)
 
 
 def test_a_history_that_cannot_be_read_stays_as_it_is_and_is_read_only(make_serve, tmp_path):
@@ -204,7 +204,7 @@ def test_a_history_that_cannot_be_read_stays_as_it_is_and_is_read_only(make_serv
     # A save writes the history as it was.
     again = tmp_path / "again.kad"
     reader.result("file.save", {"path": str(again)})
-    assert json.loads(again.read_text())["history"] == original
+    assert read_doc(again)["history"] == original
     # The repair needs a yes.
     assert reader.error("version.repair", {})["code"] == -32602
     kept = reader.result("version.repair", {"confirm": True})
@@ -228,7 +228,7 @@ def test_nonsense_in_the_history_field_is_kept_and_reported(cad, tmp_path):
         assert cad.result("version.list")["read_only"] is True
         out = tmp_path / "out.kad"
         cad.result("file.save", {"path": str(out)})
-        assert json.loads(out.read_text())["history"] == bad
+        assert read_doc(out)["history"] == bad
 
 
 def test_the_limit_stops_the_save_and_lists_the_versions(cad):

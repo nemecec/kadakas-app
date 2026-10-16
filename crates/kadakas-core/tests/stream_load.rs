@@ -85,7 +85,7 @@ fn big_document(objects: u64, picture_bytes: usize) -> Document {
         max: DVec2::new(1000.0, 1000.0),
         width: 100,
         height: 100,
-        png: PngData(std::sync::Arc::new(png)),
+        png: PngData::new(png),
         opacity: 1.0,
         source: String::new(),
     };
@@ -226,7 +226,7 @@ fn saved_bytes_equal_the_pretty_text_of_serde_json() {
             max: DVec2::ONE,
             width: 1,
             height: 1,
-            png: PngData(std::sync::Arc::new(png)),
+            png: PngData::new(png),
             opacity: 1.0,
             source: String::new(),
         };

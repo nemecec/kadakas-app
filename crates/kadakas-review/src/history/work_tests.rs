@@ -84,7 +84,7 @@ fn a_picture_is_stored_once_however_many_versions_move_it() {
         let Shape::Underlay(u) = &built.doc.objects.values().next().unwrap().shape else {
             panic!("an underlay")
         };
-        assert!(u.png.0.len() > 7 * 1024 * 1024);
+        assert!(u.png.len() > 7 * 1024 * 1024);
     }
     // The memory form round trips; the file form leaves out the picture that the drawing holds.
     let again = History::load_with(&h.to_value(), ed.doc(), &[h.anchor_pair()]);

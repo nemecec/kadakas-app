@@ -9,6 +9,7 @@
 //!   last manual save is dropped, so a late autosave never overwrites a newer Save.
 //! - Autosave never touches the `.bak` file of the user.
 
+use kadakas_file::SeenFiles;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -19,6 +20,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use kadakas_core::model::Document;
+use kadakas_l10n::tr;
 use kadakas_sys::fsio;
 use serde_json::{Value, json};
 
@@ -154,6 +156,16 @@ pub struct Job {
     /// Something the person must know about this copy (for example that the versions are not in
     /// it). Saved in the meta file.
     pub note: Option<String>,
+    /// The files the document was opened from. Their pictures are kept (also those that only an
+    /// undo step holds), and a save over one of them moves them to the new file. Without them a
+    /// save over the file of the person would leave the undo steps without their pictures.
+    pub sources: Vec<Arc<kadakas_file::FileSource>>,
+    /// The drawing was edited and its versions wait in the file: the drawing of the file is
+    /// written as their anchor.
+    pub anchor: bool,
+    /// The files that the session saw. The save over the file of the person checks the file
+    /// against it (any form), and notes its own write.
+    pub seen: Option<SeenFiles>,
 }
 
 /// What `write_version` did with the file of the user.
@@ -163,22 +175,155 @@ pub enum Over {
     Written,
     /// A manual save came after the job was made. The file was not touched.
     Stale,
+    /// Pictures or versions of the document cannot be found in the file they stay in (it changed
+    /// on disk). The file of the person was not touched: a copy with placeholders never replaces
+    /// it without the person.
+    Missing(kadakas_file::Missing),
+    /// Another program changed the file of the person since the document was opened from it (two
+    /// instances, a sync conflict copy). The file was not touched: the recovery copy is on disk,
+    /// and the person decides at the next Save.
+    Changed(PathBuf),
+}
+
+/// What the recovery copy had to leave out or change.
+#[derive(Default)]
+struct CopyReport {
+    /// What could not be found in the file the document was opened from. The copy has
+    /// placeholders for the pictures and no versions that wait in that file.
+    missing: Option<kadakas_file::Missing>,
+    /// The copy is the plain JSON form, because the container form would be over a limit.
+    json: Option<String>,
+    /// Other things to tell (the versions that could not be read are not in the JSON form).
+    notes: Vec<String>,
+}
+
+/// The copy of the document for the recovery folder. It never depends on the file of the person:
+/// it writes what it can, and records what it could not (the meta file has it). A copy of a
+/// document over the limits of the container form is written as the plain JSON form, so there
+/// is always a copy.
+fn write_recovery_copy(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<CopyReport> {
+    let path = dir.join(version_name(id, seq));
+    let mut report = CopyReport::default();
+    let mut patched: Option<Document> = None;
+    let mut skip = false;
+    loop {
+        let doc: &Document = patched.as_ref().unwrap_or(&job.doc);
+        let opts = kadakas_file::WriteOptions {
+            generator: kadakas_file::generator(),
+            keep: job.sources.clone(),
+            anchor: job.anchor && doc.lazy_history.is_some(),
+            skip_missing: skip,
+            allow_overwrite: false,
+        };
+        let failure = std::cell::RefCell::new(None);
+        let written = write_durable_with(&path, Access::Private, ".tmp", |w| {
+            kadakas_file::write_container(w, doc, &opts)
+                .map(|_| ())
+                .map_err(|e| {
+                    let io = io::Error::other(e.to_string());
+                    *failure.borrow_mut() = Some(e);
+                    io
+                })
+        });
+        match (written, failure.into_inner()) {
+            (Ok(()), _) => return Ok(report),
+            (Err(_), Some(kadakas_file::FileError::Missing(m))) if !skip => {
+                // Placeholders for the pictures that are gone and no versions that wait in the
+                // file that changed. The meta file says so.
+                let mut d = doc.clone();
+                let set: std::collections::HashSet<String> = m.pictures.iter().cloned().collect();
+                d.replace_missing_pictures(&set);
+                if m.history {
+                    d.history = None;
+                    d.lazy_history = None;
+                }
+                patched = Some(d);
+                report.missing = Some(m);
+                skip = true;
+            }
+            (Err(_), Some(kadakas_file::FileError::Limit(why))) => {
+                report.json = Some(why);
+                return write_json_copy(&path, doc, &mut report).map(|()| report);
+            }
+            (Err(e), _) => return Err(e),
+        }
+    }
+}
+
+/// The plain JSON form as the recovery copy (the name of the file is the same: a reader finds the
+/// form by the first bytes). The versions that wait in the file are read as they are.
+fn write_json_copy(path: &Path, doc: &Document, report: &mut CopyReport) -> io::Result<()> {
+    let mut d = doc.clone();
+    let unreadable = d.unreadable_pictures();
+    if !unreadable.is_empty() {
+        let set: std::collections::HashSet<String> = unreadable.iter().cloned().collect();
+        d.replace_missing_pictures(&set);
+        report.missing.get_or_insert_with(Default::default).pictures = unreadable;
+    }
+    // The versions that wait in the file are read only up to the bound of a session (the same bound
+    // as the Versions window): a history over it is not read into memory for a recovery copy.
+    let cap = usize::try_from(kadakas_api::SessionLimits::default().history_read_bytes)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(kadakas_review::history::JSON_FACTOR);
+    let too_big = d
+        .lazy_history
+        .as_ref()
+        .map(|l| l.bytes())
+        .filter(|b| *b > cap && d.history.is_none());
+    if let Some(bytes) = too_big {
+        d.lazy_history = None;
+        report.notes.push(format!(
+            "the versions are not in this copy: they have {bytes} bytes, more than is read"
+        ));
+        report.missing.get_or_insert_with(Default::default).history = true;
+    } else if let Err(e) = kadakas_file::resolve_history(&mut d) {
+        d.lazy_history = None;
+        d.history = None;
+        report
+            .notes
+            .push(format!("the versions are not in this copy: {e}"));
+        report.missing.get_or_insert_with(Default::default).history = true;
+    }
+    write_durable_with(path, Access::Private, ".tmp", |w| {
+        kadakas_file::write_json(w, &d).map_err(|e| io::Error::other(e.to_string()))
+    })
 }
 
 /// Writes one version, its meta file, and rotates. Runs on the writer thread.
 pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Over> {
     create_private_dir(dir)?;
-    write_durable_with(
-        &dir.join(version_name(id, seq)),
-        Access::Private,
-        ".tmp",
-        |w| job.doc.write_compact(w),
-    )?;
+    // The copy for the recovery is a container, like the file of the person: the pictures that are
+    // still in the file of the person are copied from there without decoding them.
+    let copy = write_recovery_copy(dir, id, seq, job)?;
     let secs = now_unix();
+    let mut note = job.note.clone().unwrap_or_default();
+    let mut add = |text: String| {
+        if !note.is_empty() {
+            note.push(' ');
+        }
+        note.push_str(&text);
+    };
+    if let Some(m) = &copy.missing {
+        add(tr!(
+            "autosave-copy-missing",
+            file = m.file.clone(),
+            what = missing_text(m)
+        ));
+    }
+    if let Some(why) = &copy.json {
+        add(tr!("autosave-copy-as-json", why = why.clone()));
+    }
+    for n in &copy.notes {
+        add(n.clone());
+    }
     let meta = json!({
         "original": job.original.as_ref().map(|p| p.display().to_string()),
         "saved_unix": secs,
-        "note": job.note,
+        "note": (!note.is_empty()).then_some(note),
+        "missing": copy.missing.as_ref().map(|m| json!({
+            "file": m.file, "pictures": m.pictures, "history": m.history, "other": m.other,
+        })),
+        "form": if copy.json.is_some() { "json" } else { "container" },
     });
     write_durable(
         &dir.join(meta_name(id)),
@@ -196,15 +341,118 @@ pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Ov
     if manual_saves(path) != job.manual_seen {
         return Ok(Over::Stale); // No need to write a copy that is stale already.
     }
+    // The file at the path must still be the file that the document was opened from.
+    if changed_by_another(path, &job.sources, job.seen.as_ref()) {
+        return Ok(Over::Changed(path.clone()));
+    }
+    // The form follows the extension of the file of the person, like Save.
+    let form = kadakas_file::Form::from_extension(path);
+    let mut report = None;
+    let failure = std::cell::RefCell::new(None);
     let staged = fsio::stage_durable(path, Access::KeepExisting, ".autosave.tmp", |w| {
-        job.doc.write_pretty(w)
-    })?;
-    commit_if_fresh(staged, path, job.manual_seen)
+        let fail = |e: kadakas_file::FileError| {
+            let io = io::Error::other(e.to_string());
+            *failure.borrow_mut() = Some(e);
+            io
+        };
+        match form {
+            kadakas_file::Form::Json => {
+                // The plain form holds the versions inside: the ones that wait are read now.
+                let mut d;
+                let doc = if job.doc.lazy_history.is_some() && job.doc.history.is_none() {
+                    d = job.doc.clone();
+                    kadakas_file::resolve_history(&mut d).map_err(fail)?;
+                    &d
+                } else {
+                    &job.doc
+                };
+                kadakas_file::write_json(w, doc).map_err(fail)
+            }
+            kadakas_file::Form::Container => {
+                let opts = kadakas_file::WriteOptions {
+                    generator: kadakas_file::generator(),
+                    keep: job.sources.clone(),
+                    anchor: job.anchor,
+                    skip_missing: false,
+                    allow_overwrite: false,
+                };
+                kadakas_file::write_container(w, &job.doc, &opts)
+                    .map(|(_, r)| report = Some(r))
+                    .map_err(fail)
+            }
+        }
+    });
+    // Looked at once more before the rename: the copy took time.
+    if changed_by_another(path, &job.sources, job.seen.as_ref()) {
+        return Ok(Over::Changed(path.clone()));
+    }
+    let staged = match (staged, failure.into_inner()) {
+        (Ok(s), _) => s,
+        (Err(_), Some(kadakas_file::FileError::Missing(m))) => return Ok(Over::Missing(m)),
+        (Err(e), _) => return Err(e),
+    };
+    // The file under the pictures of the document is a new file at the moment of the rename:
+    // the sources move to it under the same lock, so a manual save cannot come in between.
+    commit_if_fresh(staged, path, job.manual_seen, || {
+        if let Some(report) = &report {
+            let _ = kadakas_file::native::rebind_sources(report, path);
+        }
+    })
+    .inspect(|over| {
+        // The file is what this program wrote: it is not "changed by another program" later.
+        if *over == Over::Written
+            && let Some(seen) = &job.seen
+        {
+            seen.note(path);
+        }
+    })
+}
+
+/// True if a source of the document is the file at `path` and the file has another content now.
+fn changed_by_another(
+    path: &Path,
+    sources: &[Arc<kadakas_file::FileSource>],
+    seen: Option<&SeenFiles>,
+) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    if seen.is_some_and(|s| s.changed(path)) {
+        return true;
+    }
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    sources.iter().any(|s| {
+        s.path()
+            .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+            .is_some_and(|p| p == target)
+            && !s.same_file()
+    })
+}
+
+/// The text of what is missing, for a note.
+pub(crate) fn missing_text(m: &kadakas_file::Missing) -> String {
+    let mut what = Vec::new();
+    if !m.pictures.is_empty() {
+        what.push(tr!("autosave-missing-pictures", count = m.pictures.len()));
+    }
+    if m.history {
+        what.push(tr!("autosave-missing-versions"));
+    }
+    if !m.other.is_empty() {
+        what.push(tr!("autosave-missing-other", count = m.other.len()));
+    }
+    what.join(", ")
 }
 
 /// The rename of a staged copy, under the lock of `manual_save`: it happens only if no manual
-/// save of the file came after the job was made (`seen`). Otherwise the copy is deleted.
-fn commit_if_fresh(staged: fsio::Staged, path: &Path, seen: u64) -> io::Result<Over> {
+/// save of the file came after the job was made (`seen`). Otherwise the copy is deleted. `after`
+/// runs under the same lock, after the rename.
+fn commit_if_fresh(
+    staged: fsio::Staged,
+    path: &Path,
+    seen: u64,
+    after: impl FnOnce(),
+) -> io::Result<Over> {
     let all = MANUAL_SAVES.lock().unwrap_or_else(|e| e.into_inner());
     let now = all
         .as_ref()
@@ -215,6 +463,7 @@ fn commit_if_fresh(staged: fsio::Staged, path: &Path, seen: u64) -> io::Result<O
         return Ok(Over::Stale);
     }
     staged.commit()?;
+    after();
     drop(all);
     Ok(Over::Written)
 }
@@ -262,6 +511,22 @@ impl Recovery {
                 .spawn(move || {
                     for (seq, job) in rx {
                         match write_version(&dir, &id, seq, &job) {
+                            Ok(Over::Changed(file)) => {
+                                completed.store(seq, Ordering::SeqCst);
+                                *errors.lock().unwrap() = Some(tr!(
+                                    "autosave-over-changed",
+                                    file = file.display().to_string()
+                                ));
+                            }
+                            Ok(Over::Missing(m)) => {
+                                // The copy is on disk; the file of the person was left alone.
+                                completed.store(seq, Ordering::SeqCst);
+                                *errors.lock().unwrap() = Some(tr!(
+                                    "autosave-over-missing",
+                                    file = m.file.clone(),
+                                    what = missing_text(&m)
+                                ));
+                            }
                             Ok(_) => {
                                 completed.store(seq, Ordering::SeqCst);
                                 *errors.lock().unwrap() = None;
@@ -514,6 +779,9 @@ mod tests {
             over: None,
             manual_seen: 0,
             note: None,
+            sources: Vec::new(),
+            anchor: false,
+            seen: None,
         }
     }
 
@@ -523,6 +791,75 @@ mod tests {
         j.over = Some(target.to_path_buf());
         j.manual_seen = manual_saves(target);
         j
+    }
+
+    /// A document with an underlay whose picture is big enough to be a blob of a container.
+    fn doc_with_picture() -> Document {
+        use kadakas_core::underlay::{PngData, Underlay};
+        let mut doc = doc_with_circles(2);
+        let mut png = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+        png.extend((0..20_000u32).map(|i| i.wrapping_mul(2_654_435_761) as u8));
+        let u = Underlay {
+            name: "map".into(),
+            min: DVec2::ZERO,
+            max: DVec2::new(100.0, 100.0),
+            width: 10,
+            height: 10,
+            png: PngData::new(png),
+            opacity: 1.0,
+            source: String::new(),
+        };
+        let mut e = Editor::new(doc);
+        e.execute(&Command::AddObject {
+            shape: Shape::Underlay(Box::new(u)),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        doc = e.doc().clone();
+        doc
+    }
+
+    #[test]
+    fn the_copy_over_my_file_is_a_container_and_the_pictures_keep_reading_from_it() {
+        let dir = temp("over-lazy");
+        let target = dir.join("mine.kad");
+        let original = doc_with_picture();
+        file_io::write_document_raw(&target, &original).unwrap();
+        // The document of the person: opened lazily, so its picture is in the file.
+        let opened = file_io::open_file(&target).unwrap();
+        assert!(opened.source.is_some());
+        let doc = opened.doc;
+        assert_eq!(doc, original);
+        // The autosave writes the file of the person (a container, copying the picture from
+        // the file that it replaces) and a recovery copy.
+        let seen = manual_saves(&target);
+        let mut j = job(&doc, Some(target.clone()), 2);
+        j.over = Some(target.clone());
+        j.manual_seen = seen;
+        let out = write_version(&dir.join("rec"), "s1", 1, &j).unwrap();
+        assert_eq!(out, Over::Written);
+        assert!(std::fs::read(&target).unwrap().starts_with(b"PK"));
+        let copy = dir.join("rec").join("s1.000001.autosave.kad");
+        assert!(std::fs::read(&copy).unwrap().starts_with(b"PK"));
+        assert_eq!(file_io::read_document(&copy).unwrap(), original);
+        // The picture of the open document is read from the new file, not reported as changed.
+        assert_eq!(doc, original);
+        assert_eq!(file_io::read_document(&target).unwrap(), original);
+        // The form of the copy follows the extension: a JSON file gets the plain form.
+        let json_target = dir.join("mine.json");
+        file_io::write_document_raw(&json_target, &original).unwrap();
+        let mut j = job(&doc, Some(json_target.clone()), 2);
+        j.over = Some(json_target.clone());
+        j.manual_seen = manual_saves(&json_target);
+        assert_eq!(
+            write_version(&dir.join("rec"), "s1", 2, &j).unwrap(),
+            Over::Written
+        );
+        assert!(std::fs::read(&json_target).unwrap().starts_with(b"{"));
+        assert_eq!(file_io::read_document(&json_target).unwrap(), original);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn wait_for(mut done: impl FnMut() -> bool) {
@@ -541,8 +878,10 @@ mod tests {
         let doc = doc_with_circles(3);
         let out = write_version(&dir, "s1", 1, &job(&doc, Some("/a/b.kad".into()), 5)).unwrap();
         assert_eq!(out, Over::NotAsked);
-        let text = std::fs::read_to_string(dir.join("s1.000001.autosave.kad")).unwrap();
-        assert_eq!(Document::from_json(&text).unwrap(), doc);
+        // The copy is a container; it reads back through the same door as every other file.
+        let copy = dir.join("s1.000001.autosave.kad");
+        assert!(std::fs::read(&copy).unwrap().starts_with(b"PK"));
+        assert_eq!(file_io::read_document(&copy).unwrap(), doc);
         let meta: Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("s1.meta.json")).unwrap())
                 .unwrap();
@@ -799,7 +1138,10 @@ mod tests {
         .unwrap();
         // The manual save comes after the copy was staged and before its rename.
         manual_save(&target, || std::fs::write(&target, "newer save").unwrap());
-        assert_eq!(commit_if_fresh(staged, &target, seen).unwrap(), Over::Stale);
+        assert_eq!(
+            commit_if_fresh(staged, &target, seen, || ()).unwrap(),
+            Over::Stale
+        );
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "newer save");
         assert!(!dir.join("late.kad.autosave.tmp").exists());
         let staged = fsio::stage_durable(&target, Access::KeepExisting, ".autosave.tmp", |w| {
@@ -808,9 +1150,326 @@ mod tests {
         .unwrap();
         let seen = manual_saves(&target);
         assert_eq!(
-            commit_if_fresh(staged, &target, seen).unwrap(),
+            commit_if_fresh(staged, &target, seen, || ()).unwrap(),
             Over::Written
         );
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "copy");
+    }
+
+    /// A session on a file with a picture, as the app has it.
+    fn session_on(path: &Path) -> kadakas_api::Session {
+        let opened = file_io::open_file(path).unwrap();
+        let mut session = kadakas_api::Session::with_document(opened.doc);
+        session.file_source = opened.source;
+        session
+    }
+
+    fn underlay_id(session: &kadakas_api::Session) -> kadakas_core::model::ObjectId {
+        session
+            .editor
+            .doc()
+            .objects
+            .iter()
+            .find(|(_, o)| matches!(o.shape, Shape::Underlay(_)))
+            .map(|(id, _)| *id)
+            .unwrap()
+    }
+
+    /// The job that the app makes for a session.
+    fn session_job(session: &mut kadakas_api::Session, target: &Path) -> Job {
+        let anchor = session.needs_anchor();
+        // As the app makes it: the drawing as it is when the session cannot make the file form.
+        let doc = match session.document_for_save_in(true) {
+            Ok(doc) => doc.into_owned(),
+            Err(_) => session.editor.doc().clone(),
+        };
+        let mut j = over_job(&doc, target);
+        j.sources = session.file_source.iter().cloned().collect();
+        j.anchor = anchor;
+        j
+    }
+
+    #[test]
+    fn an_autosave_over_my_file_keeps_the_picture_that_only_an_undo_step_holds() {
+        // B2: open with an underlay, delete it, autosave over the file, undo, save, reopen.
+        let dir = temp("over-undo");
+        let target = dir.join("mine.kad");
+        let original = doc_with_picture();
+        file_io::write_document_raw(&target, &original).unwrap();
+        let mut session = session_on(&target);
+        let id = underlay_id(&session);
+        session
+            .editor
+            .execute(&Command::DeleteObjects { ids: vec![id] })
+            .unwrap();
+        let job = session_job(&mut session, &target);
+        assert_eq!(
+            write_version(&dir.join("rec"), "s1", 1, &job).unwrap(),
+            Over::Written
+        );
+        // The file has no underlay in its drawing, but still the picture: the undo step needs it.
+        assert!(session.editor.undo());
+        let spec = file_io::SaveSpec {
+            anchor: session.needs_anchor(),
+            ..file_io::SaveSpec::from_extension(
+                &target,
+                session.file_source.iter().cloned().collect(),
+            )
+        };
+        let doc = session.document_for_save_in(true).unwrap();
+        file_io::write_document_as(&target, &doc, &spec).unwrap();
+        drop(doc);
+        let back = file_io::read_document(&target).unwrap();
+        assert_eq!(back.objects, original.objects);
+        let (before, after) = (underlay_png(&original), underlay_png(&back));
+        assert_eq!(before, after, "the picture is there");
+    }
+
+    fn underlay_png(doc: &Document) -> Vec<u8> {
+        doc.objects
+            .values()
+            .find_map(|o| match &o.shape {
+                Shape::Underlay(u) => Some((*u.png.bytes().unwrap()).clone()),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn the_recovery_copy_and_the_autosave_over_my_file_survive_a_changed_file() {
+        // B1: touch, rename, replace and delete the file under the open document, then autosave.
+        for change in [
+            "touch",
+            "rename",
+            "replace",
+            "replace-same",
+            "delete",
+            "delete-bak",
+        ] {
+            let dir = temp(&format!("changed-{change}"));
+            let target = dir.join("mine.kad");
+            let original = doc_with_picture();
+            file_io::write_document_raw(&target, &original).unwrap();
+            let mut session = session_on(&target);
+            // An edit (the picture stays in the drawing, so the copies need it).
+            session
+                .editor
+                .execute(&Command::AddObject {
+                    shape: Shape::Circle {
+                        center: DVec2::new(5.0, 5.0),
+                        radius: 1.0,
+                    },
+                    layer: None,
+                    class: None,
+                    attrs: Attributes::default(),
+                })
+                .unwrap();
+            let old = std::fs::read(&target).unwrap();
+            std::thread::sleep(Duration::from_millis(30));
+            match change {
+                "touch" => std::fs::write(&target, &old).unwrap(),
+                "rename" => std::fs::rename(&target, dir.join("moved.kad")).unwrap(),
+                "replace" => {
+                    file_io::write_document_raw(&target, &doc_with_circles(5)).unwrap();
+                    let _ = std::fs::remove_file(dir.join("mine.kad.bak"));
+                }
+                // The same pictures in another file.
+                "replace-same" => {
+                    let mut e = Editor::new(original.clone());
+                    e.execute(&Command::AddObject {
+                        shape: Shape::Circle {
+                            center: DVec2::ZERO,
+                            radius: 9.0,
+                        },
+                        layer: None,
+                        class: None,
+                        attrs: Attributes::default(),
+                    })
+                    .unwrap();
+                    file_io::write_document_raw(&target, e.doc()).unwrap();
+                    let _ = std::fs::remove_file(dir.join("mine.kad.bak"));
+                }
+                "delete" => std::fs::remove_file(&target).unwrap(),
+                _ => {
+                    std::fs::write(dir.join("mine.kad.bak"), &old).unwrap();
+                    std::fs::remove_file(&target).unwrap();
+                }
+            }
+            // What the copy of the recovery folder can find, and what the autosave over the file
+            // does: it replaces the file only if it is still the file that was opened.
+            let finds = matches!(change, "touch" | "replace-same" | "delete-bak");
+            let theirs = std::fs::read(&target).ok();
+            let job = session_job(&mut session, &target);
+            let rec = dir.join("rec");
+            // The recovery copy is always written, whatever happened to the file.
+            let out =
+                write_version(&rec, "s1", 1, &job).unwrap_or_else(|e| panic!("{change}: {e}"));
+            let copy = rec.join("s1.000001.autosave.kad");
+            assert!(copy.exists(), "{change}");
+            let meta: Value =
+                serde_json::from_slice(&std::fs::read(rec.join("s1.meta.json")).unwrap()).unwrap();
+            if finds {
+                assert!(meta["missing"].is_null(), "{change}: {meta}");
+            } else {
+                // The copy records what it could not find.
+                assert!(
+                    meta["missing"]["pictures"]
+                        .as_array()
+                        .is_some_and(|a| !a.is_empty()),
+                    "{change}: {meta}"
+                );
+                assert!(!meta["note"].is_null(), "{change}: {meta}");
+            }
+            assert_eq!(
+                file_io::read_document(&copy).unwrap().objects.len(),
+                4,
+                "{change}"
+            );
+            match change {
+                "touch" | "delete-bak" => {
+                    assert_eq!(out, Over::Written, "{change}");
+                    assert_eq!(file_io::read_document(&target).unwrap().objects.len(), 4);
+                }
+                // Another program wrote the file: the file of the person is left alone.
+                "replace" | "replace-same" => {
+                    assert!(matches!(out, Over::Changed(_)), "{change}: {out:?}");
+                    assert_eq!(std::fs::read(&target).ok(), theirs, "{change}");
+                }
+                // The file is gone, and the picture is nowhere: the file is not written with a
+                // placeholder.
+                _ => assert!(matches!(out, Over::Missing(_)), "{change}: {out:?}"),
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn the_json_copy_has_the_versions_that_wait_in_the_file_and_placeholders() {
+        // The plain JSON form as the recovery copy: the versions that wait in the file are read
+        // as they are, and a picture that is gone becomes a placeholder.
+        let dir = temp("json-copy-small");
+        let target = dir.join("mine.kad");
+        let mut s = kadakas_api::Session::with_document(doc_with_picture());
+        s.handle("version.create", serde_json::json!({"name": "v1"}))
+            .unwrap();
+        let saved = s.document_for_save_in(true).unwrap().into_owned();
+        file_io::write_document_raw(&target, &saved).unwrap();
+        let opened = file_io::open_file(&target).unwrap();
+        assert!(opened.doc.lazy_history.is_some());
+        let mut report = CopyReport::default();
+        let json = dir.join("copy.json");
+        write_json_copy(&json, &opened.doc, &mut report).unwrap();
+        assert!(report.missing.is_none());
+        let back = file_io::read_document(&json).unwrap();
+        assert_eq!(
+            back.history.as_ref().and_then(|h| h.version_count()),
+            Some(1)
+        );
+        // The file goes away: the picture and the versions cannot be found.
+        std::fs::remove_file(&target).unwrap();
+        let mut report = CopyReport::default();
+        write_json_copy(&json, &opened.doc, &mut report).unwrap();
+        let missing = report.missing.expect("recorded");
+        assert!(!missing.pictures.is_empty() && missing.history);
+        let back = file_io::read_document(&json).unwrap();
+        assert!(back.history.is_none());
+        assert_eq!(
+            underlay_png(&back),
+            kadakas_core::underlay::placeholder_png()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "heavy: a picture of 100 MiB; run with --ignored (best in release mode)"]
+    fn a_copy_over_the_limits_of_the_container_is_the_plain_json_form() {
+        // S5: a picture of more than 128 MiB as text cannot be in a container. The recovery copy is
+        // written as JSON, so that there is a copy.
+        use kadakas_core::underlay::{PngData, Underlay};
+        let dir = temp("json-copy");
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+        bytes.resize(100 * 1024 * 1024, 7);
+        let mut doc = doc_with_circles(1);
+        let mut e = Editor::new(std::mem::take(&mut doc));
+        e.execute(&Command::AddObject {
+            shape: Shape::Underlay(Box::new(Underlay {
+                name: "huge".into(),
+                min: DVec2::ZERO,
+                max: DVec2::new(10.0, 10.0),
+                width: 10,
+                height: 10,
+                png: PngData::new(bytes),
+                opacity: 1.0,
+                source: String::new(),
+            })),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        let j = job(e.doc(), None, 2);
+        write_version(&dir.join("rec"), "s1", 1, &j).unwrap();
+        let copy = dir.join("rec").join("s1.000001.autosave.kad");
+        assert!(
+            std::fs::read(&copy).unwrap().starts_with(b"{"),
+            "plain JSON"
+        );
+        let meta: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("rec").join("s1.meta.json")).unwrap())
+                .unwrap();
+        assert_eq!(meta["form"], "json");
+        assert!(meta["note"].as_str().unwrap().contains("limit"), "{meta}");
+        drop(e);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_copies_of_an_edited_document_keep_the_versions_that_wait_in_the_file() {
+        // S1: the versions were not used, the drawing was edited, and the autosave writes the
+        // recovery copy and the file of the person. The versions are in both, with the drawing
+        // they belong to, and read without a note.
+        let dir = temp("copies-waiting");
+        let target = dir.join("mine.kad");
+        let mut first = kadakas_api::Session::with_document(doc_with_picture());
+        first
+            .handle("version.create", serde_json::json!({"name": "v1"}))
+            .unwrap();
+        let saved = first.document_for_save_in(true).unwrap().into_owned();
+        file_io::write_document_raw(&target, &saved).unwrap();
+        let mut session = session_on(&target);
+        assert!(session.editor.doc().lazy_history.is_some());
+        session
+            .editor
+            .execute(&Command::AddObject {
+                shape: Shape::Circle {
+                    center: DVec2::new(9.0, 9.0),
+                    radius: 3.0,
+                },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
+        assert!(session.needs_anchor());
+        let job = session_job(&mut session, &target);
+        assert!(job.anchor);
+        assert_eq!(
+            write_version(&dir.join("rec"), "s1", 1, &job).unwrap(),
+            Over::Written
+        );
+        for copy in [
+            dir.join("rec").join("s1.000001.autosave.kad"),
+            target.clone(),
+        ] {
+            let opened = file_io::open_file(&copy).unwrap();
+            let mut back = kadakas_api::Session::with_document(opened.doc);
+            back.file_source = opened.source;
+            let list = back
+                .handle("version.list", serde_json::json!({"current": false}))
+                .unwrap();
+            assert_eq!(list["count"], 1, "{copy:?}: {list}");
+            assert_eq!(list["read_only"], false, "{copy:?}: {list}");
+            assert!(back.load_notes().is_empty(), "{:?}", back.load_notes());
+        }
     }
 }

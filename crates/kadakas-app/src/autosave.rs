@@ -140,6 +140,14 @@ pub fn age_text(secs: u64) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::autosave_fs::*;
 
+/// The files that the session saw (see `kadakas_file::SeenFiles`). The browser has no files.
+#[cfg(not(target_arch = "wasm32"))]
+pub type SeenFiles = kadakas_file::SeenFiles;
+/// The files that the session saw. The browser has no files.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Debug, Default)]
+pub struct SeenFiles;
+
 /// The browser keeps one autosaved copy in `localStorage`. A browser tab has no clean exit that
 /// the page can rely on, so the copy stays until the user saves (downloads), discards or opens it.
 #[cfg(target_arch = "wasm32")]

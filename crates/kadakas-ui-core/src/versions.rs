@@ -48,6 +48,9 @@ pub struct VersionList {
     pub notes: Vec<String>,
     /// With `read_only`: how many versions `version.repair` would delete. `None`: not known.
     pub unreadable: Option<usize>,
+    /// With `read_only`: the versions cannot be found now (the file or the drive is away, or another
+    /// file is there) and come back when it can be read again. False: they are damaged.
+    pub not_found: bool,
 }
 
 impl VersionList {
@@ -87,6 +90,7 @@ impl VersionList {
             unreadable: v["unreadable_versions"]
                 .as_u64()
                 .and_then(|n| usize::try_from(n).ok()),
+            not_found: v["unreadable_kind"].as_str() == Some("not_found"),
         }
     }
 
@@ -463,6 +467,9 @@ mod tests {
         assert!(!VersionList::parse(&json!({})).read_only);
         let l = VersionList::parse(&json!({"read_only": true, "unreadable_versions": 7}));
         assert_eq!(l.unreadable, Some(7));
+        assert!(!l.not_found);
+        let l = VersionList::parse(&json!({"read_only": true, "unreadable_kind": "not_found"}));
+        assert!(l.not_found);
         assert_eq!(
             VersionList::parse(&json!({"read_only": true})).unreadable,
             None

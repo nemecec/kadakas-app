@@ -1,13 +1,14 @@
 """Scenario: a designer gives the model materials, sets the sun and checks the 3D picture and the hidden-line drawing."""
 
 import base64
+import json
 import statistics
 import struct
 import zlib
 
 import pytest
 
-from helpers import plant_cmd, uid
+from helpers import plant_cmd, read_doc, uid
 from test_render_png import BACKGROUND, decode_png, render
 
 
@@ -94,7 +95,7 @@ def test_images_are_stored_in_the_document_and_survive_saving(make_serve, tmp_pa
     other = make_serve()
     other.result("file.open", {"path": str(path)})
     assert other.result("material.get", {"id": "Photo"})["texture"] == tex
-    assert "png_base64" in path.read_text()
+    assert "png_base64" in json.dumps(read_doc(path))
     # A file that is not an image is refused.
     bad = tmp_path / "x.png"
     bad.write_bytes(b"not an image")

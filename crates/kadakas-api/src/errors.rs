@@ -85,6 +85,16 @@ pub const REASON_VERSION_LIMIT: &str = "version_limit";
 /// `version.create`, `version.restore`, `version.delete`: the history of the file could not be
 /// read completely. It is kept as it is and read only, until the person calls `version.repair`.
 pub const REASON_HISTORY_READONLY: &str = "history_read_only";
+/// `file.save`: parts of the document that stay in the file it was opened from (pictures, versions)
+/// cannot be found any more, because the file changed on disk. Nothing was written. `details`
+/// has `missing` {file, pictures, history, other} and `consent_token`. The caller asks the person,
+/// then saves again with `allow_missing` set to that token (not `true`).
+pub const REASON_PARTS_MISSING: &str = "parts_missing";
+/// `file.save`: the file at the path was changed by another program since the document was opened
+/// from it (two instances, a sync conflict copy). Nothing was written. `details` has `file`,
+/// `consent_token`, `ask_the_person`. The caller asks the person, then saves again with
+/// `allow_overwrite` set to the token. A token is good for one save of that document as it is.
+pub const REASON_FILE_CHANGED: &str = "file_changed";
 /// `import.file`: the drawing has more entities than an import keeps for updates and the option
 /// `base` is `auto`. `details` has `{entities, cap}`. The caller may ask the person, then pass
 /// `base: "link"` or `base: "none"`.

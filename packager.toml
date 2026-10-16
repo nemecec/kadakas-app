@@ -56,7 +56,7 @@ icons = [
 extensions = ["kad"]
 name = "Kadakas drawing"
 description = "Kadakas drawing"
-mime-type = "application/vnd.kadakas.drawing+json"
+mime-type = "application/vnd.kadakas.drawing+zip"
 role = "editor"
 
 [macos]
