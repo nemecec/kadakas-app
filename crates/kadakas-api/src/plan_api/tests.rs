@@ -482,3 +482,75 @@ fn the_check_names_its_options() {
     );
     assert!(id.as_uid().is_some());
 }
+
+#[test]
+fn the_plan_moves_with_the_hardscape_and_undoes() {
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 8000.0, 4000.0);
+    ok(
+        &mut s,
+        "hardscape.split",
+        json!({"id": id, "lines": [[[3000, -50], [3000, 4050]]],
+               "zones": [{"index": 1, "name": "Aisle", "angle": 90}]}),
+    );
+    ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "path": [[0, 0], [8000, 0]], "align_field": true}),
+    );
+    let before = ok(&mut s, "report.unit_pattern", json!({"ids": [id]}));
+    let plan = ok(
+        &mut s,
+        "hardscape.plan",
+        json!({"id": id, "outlines": true}),
+    );
+    assert_eq!(plan["zones"][1]["name"], "Aisle");
+    assert_eq!(
+        plan["zones"][0]["outline"][0][0].as_array().unwrap().len(),
+        4
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "move_objects", "ids": [id], "delta": [5000, 3000]}}),
+    );
+    let after = ok(&mut s, "report.unit_pattern", json!({"ids": [id]}));
+    for k in ["whole_units", "cut_units", "order_units"] {
+        assert_eq!(before["rows"][0][k], after["rows"][0][k], "{k}");
+    }
+    let plan = ok(&mut s, "hardscape.plan", json!({"id": id}));
+    assert_eq!(plan["zones"][1]["name"], "Aisle");
+    assert_eq!(
+        plan["plan"]["splits"][0]["points"][0],
+        json!([8000.0, 2950.0])
+    );
+    // One undo takes the move back; another takes the course away.
+    ok(&mut s, "undo", json!({}));
+    ok(&mut s, "undo", json!({}));
+    let plan = ok(&mut s, "hardscape.plan", json!({"id": id}));
+    assert_eq!(plan["courses"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        plan["plan"]["splits"][0]["points"][0],
+        json!([3000.0, -50.0])
+    );
+    // A hardscape without a joint pattern cannot be split.
+    let bare = ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": [[0, 0], [1000, 0], [1000, 1000]]}),
+    )["id"]
+        .clone();
+    assert!(
+        fail(&mut s, "hardscape.split", json!({"id": bare, "lines": []}))
+            .contains("no joint pattern")
+    );
+    assert!(
+        fail(
+            &mut s,
+            "hardscape.plan_clear",
+            json!({"id": id, "what": "x"})
+        )
+        .contains("what")
+    );
+    assert!(fail(&mut s, "hardscape.plan_clear", json!({})).contains("id"));
+}

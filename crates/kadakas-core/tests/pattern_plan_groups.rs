@@ -1,3 +1,4 @@
+#![allow(clippy::field_reassign_with_default)]
 //! The groups of a hardscape with a plan: zone settings, notes, followed lines, the counts of all
 //! groups added up, and the refusals (PAT-07, PAT-08).
 
