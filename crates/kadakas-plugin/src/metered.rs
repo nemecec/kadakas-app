@@ -27,8 +27,8 @@ use std::rc::Rc;
 
 use crate::harden::{FUEL_EXPORT, HardenLimits, PAGE, harden};
 use crate::runtime::{
-    CallKind, HOSTED_EXPORTS, HOSTED_MEMORY_BYTES, HostCall, HostReply, HostedModule, Limits, LoadedModule, MaybeSend,
-    PluginError, PluginRuntime, REQUIRED_EXPORTS,
+    CallKind, HOSTED_EXPORTS, HOSTED_MEMORY_BYTES, HostCall, HostReply, HostedModule, Limits,
+    LoadedModule, MaybeSend, PluginError, PluginRuntime, REQUIRED_EXPORTS,
 };
 use kadakas_plugin_abi::guest::unpack;
 
@@ -223,7 +223,9 @@ struct Link {
 impl HostLink for Link {
     fn call(&self, request: &[u8]) -> Result<u32, RawError> {
         let Some(host) = self.host.get() else {
-            return Err(RawError::Trap("the module called the host after the run".into()));
+            return Err(RawError::Trap(
+                "the module called the host after the run".into(),
+            ));
         };
         // SAFETY: the pointer is set in `MeteredHosted::run` from a `&mut` that lives until the
         // run ends, and cleared before `run` returns. The browser has one thread, and the native

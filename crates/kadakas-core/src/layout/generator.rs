@@ -391,14 +391,28 @@ mod tests {
     fn whole_and_cut_units_are_counted_per_type() {
         let region = setup(
             vec![
-                Cell { kind: 0, ring: rect(0.0, 0.0, 400.0, 250.0) },
-                Cell { kind: 1, ring: rect(400.0, 0.0, 700.0, 250.0) },
-                Cell { kind: 0, ring: rect(800.0, 0.0, 1200.0, 250.0) },
+                Cell {
+                    kind: 0,
+                    ring: rect(0.0, 0.0, 400.0, 250.0),
+                },
+                Cell {
+                    kind: 1,
+                    ring: rect(400.0, 0.0, 700.0, 250.0),
+                },
+                Cell {
+                    kind: 0,
+                    ring: rect(800.0, 0.0, 1200.0, 250.0),
+                },
             ],
             &["big", "small"],
         );
-        let (units, stats) =
-            lay_units(&region, &pattern(0.0), &Placement::default(), &Limits::default()).unwrap();
+        let (units, stats) = lay_units(
+            &region,
+            &pattern(0.0),
+            &Placement::default(),
+            &Limits::default(),
+        )
+        .unwrap();
         install(None);
         assert_eq!(units.len(), 3);
         let whole = units.iter().filter(|u| u.whole).count();
@@ -416,11 +430,19 @@ mod tests {
     #[test]
     fn the_gap_takes_half_a_gap_off_every_side_of_a_cell() {
         let region = setup(
-            vec![Cell { kind: 0, ring: rect(100.0, 100.0, 400.0, 300.0) }],
+            vec![Cell {
+                kind: 0,
+                ring: rect(100.0, 100.0, 400.0, 300.0),
+            }],
             &["a"],
         );
-        let (units, stats) =
-            lay_units(&region, &pattern(10.0), &Placement::default(), &Limits::default()).unwrap();
+        let (units, stats) = lay_units(
+            &region,
+            &pattern(10.0),
+            &Placement::default(),
+            &Limits::default(),
+        )
+        .unwrap();
         install(None);
         // 300 x 200 minus 5 mm on each side: 290 x 190.
         assert!((units[0].area - 290.0 * 190.0).abs() < 1e-6);
@@ -433,14 +455,25 @@ mod tests {
         install(Some(Arc::new(Fixed(Generated {
             kinds: vec!["a".into()],
             cells: vec![
-                Cell { kind: 0, ring: rect(0.0, 0.0, 400.0, 400.0) },
-                Cell { kind: 0, ring: rect(2000.0, 0.0, 2400.0, 400.0) },
+                Cell {
+                    kind: 0,
+                    ring: rect(0.0, 0.0, 400.0, 400.0),
+                },
+                Cell {
+                    kind: 0,
+                    ring: rect(2000.0, 0.0, 2400.0, 400.0),
+                },
             ],
         }))));
         let hole = rect(100.0, 100.0, 200.0, 200.0);
         let region = Region::from_rings(&rect(0.0, 0.0, 1000.0, 500.0), &[hole]).unwrap();
-        let (units, _) =
-            lay_units(&region, &pattern(0.0), &Placement::default(), &Limits::default()).unwrap();
+        let (units, _) = lay_units(
+            &region,
+            &pattern(0.0),
+            &Placement::default(),
+            &Limits::default(),
+        )
+        .unwrap();
         install(None);
         assert_eq!(units.len(), 1, "the cell far outside is not a unit");
         assert!(!units[0].whole);
@@ -452,24 +485,45 @@ mod tests {
     fn too_many_cells_is_an_error_and_so_is_a_missing_generator() {
         let region = setup(
             (0..5)
-                .map(|i| Cell { kind: 0, ring: rect(i as f64 * 100.0, 0.0, i as f64 * 100.0 + 90.0, 90.0) })
+                .map(|i| Cell {
+                    kind: 0,
+                    ring: rect(i as f64 * 100.0, 0.0, i as f64 * 100.0 + 90.0, 90.0),
+                })
                 .collect(),
             &["a"],
         );
-        let r = lay_units(&region, &pattern(0.0), &Placement::default(), &Limits::new(4));
+        let r = lay_units(
+            &region,
+            &pattern(0.0),
+            &Placement::default(),
+            &Limits::new(4),
+        );
         assert!(matches!(r, Err(LayoutError::TooMany(_))), "{r:?}");
         install(None);
-        let r = lay_units(&region, &pattern(0.0), &Placement::default(), &Limits::default());
+        let r = lay_units(
+            &region,
+            &pattern(0.0),
+            &Placement::default(),
+            &Limits::default(),
+        );
         assert!(matches!(r, Err(LayoutError::Invalid(m)) if m.contains("no script engine")));
     }
 
     #[test]
     fn a_bad_answer_is_refused_with_the_unit_number() {
         let region = setup(
-            vec![Cell { kind: 3, ring: rect(0.0, 0.0, 10.0, 10.0) }],
+            vec![Cell {
+                kind: 3,
+                ring: rect(0.0, 0.0, 10.0, 10.0),
+            }],
             &["a"],
         );
-        let r = lay_units(&region, &pattern(0.0), &Placement::default(), &Limits::default());
+        let r = lay_units(
+            &region,
+            &pattern(0.0),
+            &Placement::default(),
+            &Limits::default(),
+        );
         install(None);
         assert!(matches!(r, Err(LayoutError::Invalid(m)) if m.contains("unit 0")));
     }
@@ -479,8 +533,15 @@ mod tests {
         let r = inset(&rect(0.0, 0.0, 100.0, 50.0), 5.0);
         assert_eq!(r.len(), 1);
         assert!((ring_area(&r[0]) - 90.0 * 40.0).abs() < 1e-9);
-        assert!(inset(&rect(0.0, 0.0, 8.0, 50.0), 5.0).is_empty(), "too thin");
-        let tri = vec![DVec2::new(0.0, 0.0), DVec2::new(100.0, 0.0), DVec2::new(0.0, 100.0)];
+        assert!(
+            inset(&rect(0.0, 0.0, 8.0, 50.0), 5.0).is_empty(),
+            "too thin"
+        );
+        let tri = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(100.0, 0.0),
+            DVec2::new(0.0, 100.0),
+        ];
         let t = inset(&tri, 5.0);
         assert_eq!(t.len(), 1);
         assert!(ring_area(&t[0]) < 5000.0 && ring_area(&t[0]) > 3000.0);

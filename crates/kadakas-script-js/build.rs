@@ -99,10 +99,7 @@ fn read_pins() -> Pinned {
             }
         }
     }
-    Pinned {
-        version,
-        tag,
-    }
+    Pinned { version, tag }
 }
 
 /// A toolchain that can compile C to wasm32.
@@ -143,10 +140,7 @@ fn sdk_version(dir: &Path) -> Option<String> {
 }
 
 fn sdk_toolchain(dir: &Path, pins: &Pinned) -> Result<Toolchain, String> {
-    println!(
-        "cargo:rerun-if-changed={}",
-        dir.join("VERSION").display()
-    );
+    println!("cargo:rerun-if-changed={}", dir.join("VERSION").display());
     let found = sdk_version(dir).ok_or_else(|| {
         format!(
             "{} is not a wasi-sdk (it has no VERSION file).\n\n{}",
@@ -188,7 +182,8 @@ fn brew_prefix(formula: &str) -> Option<PathBuf> {
 
 fn homebrew_toolchain() -> Option<Toolchain> {
     let env_path = |k: &str| env::var_os(k).map(PathBuf::from);
-    let clang = env_path("WASI_CLANG").or_else(|| brew_prefix("llvm").map(|p| p.join("bin/clang")))?;
+    let clang =
+        env_path("WASI_CLANG").or_else(|| brew_prefix("llvm").map(|p| p.join("bin/clang")))?;
     let wasm_ld =
         env_path("WASI_WASM_LD").or_else(|| brew_prefix("lld").map(|p| p.join("bin/wasm-ld")))?;
     let sysroot = env_path("WASI_SYSROOT")
@@ -337,9 +332,13 @@ fn build() -> Result<(), String> {
         .args(SOURCES)
         .arg("-lm");
     let started = std::time::Instant::now();
-    let output = cmd
-        .output()
-        .map_err(|e| format!("cannot run {}: {e}\n\n{}", tc.clang.display(), install_help(&pins)))?;
+    let output = cmd.output().map_err(|e| {
+        format!(
+            "cannot run {}: {e}\n\n{}",
+            tc.clang.display(),
+            install_help(&pins)
+        )
+    })?;
     if !output.status.success() {
         return Err(format!(
             "{} failed:\n{}{}\n\n{}",
@@ -366,10 +365,7 @@ fn build() -> Result<(), String> {
         let _ = fs::write(&cached, &bytes);
     }
     println!("cargo:rustc-env=KADAKAS_JS_TOOLCHAIN={}", tc.label);
-    println!(
-        "cargo:rustc-env=KADAKAS_JS_WASM={}",
-        wasm.display()
-    );
+    println!("cargo:rustc-env=KADAKAS_JS_WASM={}", wasm.display());
     Ok(())
 }
 

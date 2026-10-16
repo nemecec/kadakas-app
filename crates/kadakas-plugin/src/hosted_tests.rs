@@ -103,7 +103,10 @@ fn an_endless_loop_and_a_memory_bomb_are_limits_on_both_engines() {
         let mut host = |_: &[u8]| HostReply::Reply(Vec::new());
         let m = load(&*rt, &spin).unwrap();
         let e = m.run(b"x", &mut host).unwrap_err();
-        assert!(matches!(&e, PluginError::Limit(m) if m.contains("fuel")), "{name}: {e:?}");
+        assert!(
+            matches!(&e, PluginError::Limit(m) if m.contains("fuel")),
+            "{name}: {e:?}"
+        );
         let m = load(&*rt, &grow).unwrap();
         let e = m.run(b"x", &mut host).unwrap_err();
         assert!(
@@ -122,7 +125,10 @@ fn a_bad_answer_is_refused() {
         let mut host = |_: &[u8]| HostReply::Reply(Vec::new());
         let e = load(&*rt, &none).unwrap().run(b"x", &mut host).unwrap_err();
         assert!(matches!(e, PluginError::BadOutput(_)), "{name}: {e:?}");
-        let e = load(&*rt, &outside).unwrap().run(b"x", &mut host).unwrap_err();
+        let e = load(&*rt, &outside)
+            .unwrap()
+            .run(b"x", &mut host)
+            .unwrap_err();
         assert!(matches!(e, PluginError::BadOutput(_)), "{name}: {e:?}");
         let e = load(&*rt, &long).unwrap().run(b"x", &mut host).unwrap_err();
         assert!(matches!(e, PluginError::Limit(_)), "{name}: {e:?}");
@@ -168,8 +174,13 @@ fn a_hosted_module_may_import_only_the_two_host_functions() {
             ("unknown name", &unknown_name),
             ("no run", &no_run),
         ] {
-            let e = load(&*rt, wasm).err().unwrap_or_else(|| panic!("{name}: {what} loaded"));
-            assert!(matches!(e, PluginError::Invalid(_)), "{name}: {what}: {e:?}");
+            let e = load(&*rt, wasm)
+                .err()
+                .unwrap_or_else(|| panic!("{name}: {what} loaded"));
+            assert!(
+                matches!(e, PluginError::Invalid(_)),
+                "{name}: {what}: {e:?}"
+            );
         }
         // Not a module at all.
         assert!(load(&*rt, b"not wasm").is_err(), "{name}");

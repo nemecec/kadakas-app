@@ -585,7 +585,9 @@ fn script_error(e: ScriptError, log: String, calls: u64) -> RpcError {
         }
         ScriptError::Limit(_) => RpcError::limit(&e),
         ScriptError::Trap(_) => RpcError::internal(&e),
-        ScriptError::Unavailable(_) => RpcError::new(crate::errors::CODE_GENERIC, "unavailable", &e),
+        ScriptError::Unavailable(_) => {
+            RpcError::new(crate::errors::CODE_GENERIC, "unavailable", &e)
+        }
     };
     err.with_details(details)
 }
@@ -628,11 +630,14 @@ fn eval(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             }
             script.code.clone()
         }
-        (None, None) => return Err(bad("give 'code' (the text of a script) or 'script' (a script resource)")),
+        (None, None) => {
+            return Err(bad(
+                "give 'code' (the text of a script) or 'script' (a script resource)",
+            ));
+        }
     };
-    let engine = engine(s).map_err(|e| {
-        RpcError::new(crate::errors::CODE_GENERIC, "unavailable", e)
-    })?;
+    let engine =
+        engine(s).map_err(|e| RpcError::new(crate::errors::CODE_GENERIC, "unavailable", e))?;
     let clock = Clock::start();
     let budget_ms = u64::try_from(s.limits.script_js_time.as_millis()).unwrap_or(u64::MAX);
     let depth = s.editor.undo_depth();
@@ -669,9 +674,9 @@ fn eval(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                 steps
             };
             s.editor.set_origin(origin);
-            let value = out
-                .json()
-                .map_err(|e| RpcError::validation(format!("the result cannot be written out: {e}")))?;
+            let value = out.json().map_err(|e| {
+                RpcError::validation(format!("the result cannot be written out: {e}"))
+            })?;
             let _ = merged;
             Ok(json!({
                 "result": value,

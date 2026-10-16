@@ -3,6 +3,7 @@
 #
 # `kadakas-core` has the feature `fault-injection`: a command can be made to panic, so that tests
 # can check that a panic leaves no trace. Only the dev-dependencies of `kadakas-api` turn it on.
+# `testkit` (kadakas-collab, kadakas-plugin) gives tests a fake server or a plain wasm compiler.
 # A release program must never have it. The check reads the feature tree of the shipped programs
 # (normal and build dependencies, all targets) and looks for the names in HOOKS.
 #
@@ -13,7 +14,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Add the name of every new test-only feature here.
-HOOKS='fault-injection|test-hook'
+HOOKS='fault-injection|test-hook|testkit'
 PATTERN="feature \"(${HOOKS})\""
 
 shipped=$(cargo tree -e normal,build,features --target all \

@@ -142,10 +142,7 @@ impl RawModule for PlainModule {
         self.make(None)
     }
 
-    fn instantiate_hosted(
-        &self,
-        link: Rc<dyn HostLink>,
-    ) -> Result<Box<dyn RawInstance>, RawError> {
+    fn instantiate_hosted(&self, link: Rc<dyn HostLink>) -> Result<Box<dyn RawInstance>, RawError> {
         self.make(Some(link))
     }
 }

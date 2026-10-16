@@ -43,7 +43,10 @@ fn a_script_returns_a_value_and_reads_the_document() {
 #[test]
 fn a_run_with_many_changes_is_one_undo_step() {
     let mut s = Session::default();
-    let r = ok(&mut s, json!({"code": format!("{ADD_CIRCLES} return ids.length;"), "args": {"n": 5}}));
+    let r = ok(
+        &mut s,
+        json!({"code": format!("{ADD_CIRCLES} return ids.length;"), "args": {"n": 5}}),
+    );
     assert_eq!(r["result"], json!(5));
     assert_eq!(r["calls"], json!(5));
     assert_eq!(r["undo_steps"], json!(1));
@@ -119,8 +122,18 @@ fn read_mode_refuses_every_call_that_changes_the_document() {
 #[test]
 fn some_methods_are_never_called_by_a_script() {
     let mut s = Session::default();
-    for m in ["script.eval", "undo", "document.load", "collab.connect", "events.poll"] {
-        let e = eval(&mut s, json!({"code": format!("kadakas.call('{m}', {{}});")})).unwrap_err();
+    for m in [
+        "script.eval",
+        "undo",
+        "document.load",
+        "collab.connect",
+        "events.poll",
+    ] {
+        let e = eval(
+            &mut s,
+            json!({"code": format!("kadakas.call('{m}', {{}});")}),
+        )
+        .unwrap_err();
         assert!(e.message.contains("cannot call"), "{m}: {}", e.message);
     }
 }
@@ -140,7 +153,10 @@ fn the_parameters_of_script_eval_are_checked() {
         assert_eq!(e.code, -32602, "{p}: {e:?}");
     }
     let e = eval(&mut s, json!({"code": "return (;"})).unwrap_err();
-    assert!(e.message.contains("SyntaxError") || e.details.is_some(), "{e:?}");
+    assert!(
+        e.message.contains("SyntaxError") || e.details.is_some(),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -165,8 +181,11 @@ fn limits_of_the_session_stop_a_script() {
     let e = eval(&mut s, json!({"code": "for (;;) {}"})).unwrap_err();
     assert_eq!(e.kind, "limit", "{e:?}");
     assert!(e.message.contains("fuel"), "{}", e.message);
-    let e = eval(&mut s, json!({"code": "for (let i = 0; i < 50; i++) kadakas.call('document.summary', {});"}))
-        .unwrap_err();
+    let e = eval(
+        &mut s,
+        json!({"code": "for (let i = 0; i < 50; i++) kadakas.call('document.summary', {});"}),
+    )
+    .unwrap_err();
     assert_eq!(e.kind, "limit", "{e:?}");
     assert_eq!(e.details.as_ref().unwrap()["calls"], json!(10));
     // The session still works.
@@ -203,7 +222,10 @@ fn script_info_says_how_scripts_run() {
 fn a_script_of_the_document_runs_only_after_a_person_trusted_its_text() {
     let mut s = Session::default();
     let made = s
-        .handle("script_resource.create", json!({"name": "Count", "code": "return 41 + 1;"}))
+        .handle(
+            "script_resource.create",
+            json!({"name": "Count", "code": "return 41 + 1;"}),
+        )
         .unwrap();
     assert_eq!(made["trusted"], json!(false));
     let sha = made["sha256"].as_str().unwrap().to_string();
@@ -217,7 +239,10 @@ fn a_script_of_the_document_runs_only_after_a_person_trusted_its_text() {
     assert_eq!(ok(&mut s, json!({"script": "Count"}))["result"], json!(42));
     // A new text is a new hash and needs trust again.
     let upd = s
-        .handle("script_resource.update", json!({"id": "Count", "code": "return 43;"}))
+        .handle(
+            "script_resource.update",
+            json!({"id": "Count", "code": "return 43;"}),
+        )
         .unwrap();
     assert_eq!(upd["trusted"], json!(false));
     assert!(eval(&mut s, json!({"script": "Count"})).is_err());
@@ -228,7 +253,10 @@ fn a_script_of_the_document_runs_only_after_a_person_trusted_its_text() {
     assert_eq!(ok(&mut s, json!({"code": "return 7;"}))["result"], json!(7));
     // A second script with the same name is refused.
     let e = s
-        .handle("script_resource.create", json!({"name": "count", "code": "1"}))
+        .handle(
+            "script_resource.create",
+            json!({"name": "count", "code": "1"}),
+        )
         .unwrap_err();
     assert_eq!(e.kind, "conflict");
 }
@@ -246,14 +274,23 @@ fn a_typed_array_in_the_answer_of_a_call_and_in_the_result_is_written_out() {
             return {summary: l.summary, pts};
         "#}),
     );
-    assert_eq!(r["result"]["pts"], json!([[0.0, 0.0], [4000.0, 0.0], [4000.0, 3000.0], [0.0, 3000.0]]));
-    assert!(r["result"]["summary"].is_object() || r["result"]["summary"].is_null(), "{r}");
+    assert_eq!(
+        r["result"]["pts"],
+        json!([[0.0, 0.0], [4000.0, 0.0], [4000.0, 3000.0], [0.0, 3000.0]])
+    );
+    assert!(
+        r["result"]["summary"].is_object() || r["result"]["summary"].is_null(),
+        "{r}"
+    );
 }
 
 /// A script resource that is trusted, for the generator tests.
 fn trusted_script(s: &mut Session, name: &str, code: &str) {
     let made = s
-        .handle("script_resource.create", json!({"name": name, "code": code}))
+        .handle(
+            "script_resource.create",
+            json!({"name": name, "code": code}),
+        )
         .unwrap();
     crate::trust_script(s, name, made["sha256"].as_str().unwrap()).unwrap();
 }
@@ -301,9 +338,16 @@ fn a_generator_pattern_is_laid_clipped_and_counted_like_any_other_kind() {
     assert_eq!(sum["by_unit"][0]["cut_units"], json!(5));
     assert_eq!(sum["by_unit"][1]["whole_units"], json!(5));
     let units = l["units"].as_array().unwrap();
-    let cut: Vec<&Value> = units.iter().filter(|u| u["whole"] == json!(false)).collect();
+    let cut: Vec<&Value> = units
+        .iter()
+        .filter(|u| u["whole"] == json!(false))
+        .collect();
     assert_eq!(cut.len(), 5);
-    assert!((cut[0]["area_m2"].as_f64().unwrap() - 0.01).abs() < 1e-9, "{}", cut[0]);
+    assert!(
+        (cut[0]["area_m2"].as_f64().unwrap() - 0.01).abs() < 1e-9,
+        "{}",
+        cut[0]
+    );
     assert!((cut[0]["share"].as_f64().unwrap() - 0.5).abs() < 1e-9);
 }
 
@@ -327,7 +371,11 @@ fn the_same_input_gives_the_same_layout_and_a_change_makes_a_new_one() {
     )
     .unwrap();
     let e = layout(&mut s, json!({})).unwrap_err();
-    assert!(e.message.contains("not trusted"), "a new text needs trust: {}", e.message);
+    assert!(
+        e.message.contains("not trusted"),
+        "a new text needs trust: {}",
+        e.message
+    );
 }
 
 #[test]
@@ -335,22 +383,41 @@ fn a_generator_that_is_not_trusted_or_missing_or_wrong_is_an_error_with_the_reas
     let mut s = Session::default();
     let e = layout(&mut s, json!({})).unwrap_err();
     assert!(e.message.contains("none with that name"), "{}", e.message);
-    s.handle("script_resource.create", json!({"name": "Grid", "code": GRID}))
-        .unwrap();
+    s.handle(
+        "script_resource.create",
+        json!({"name": "Grid", "code": GRID}),
+    )
+    .unwrap();
     let e = layout(&mut s, json!({})).unwrap_err();
     assert!(e.message.contains("not trusted"), "{}", e.message);
     trusted_script(&mut s, "Bad", "return 5;");
-    let e = layout(&mut s, json!({"pattern": {"kind": "generator", "script": "Bad", "gap": 0}})).unwrap_err();
+    let e = layout(
+        &mut s,
+        json!({"pattern": {"kind": "generator", "script": "Bad", "gap": 0}}),
+    )
+    .unwrap_err();
     assert!(e.message.contains("must return an object"), "{}", e.message);
-    trusted_script(&mut s, "Calls", "kadakas.call('document.summary', {}); return {};");
-    let e = layout(&mut s, json!({"pattern": {"kind": "generator", "script": "Calls", "gap": 0}})).unwrap_err();
+    trusted_script(
+        &mut s,
+        "Calls",
+        "kadakas.call('document.summary', {}); return {};",
+    );
+    let e = layout(
+        &mut s,
+        json!({"pattern": {"kind": "generator", "script": "Calls", "gap": 0}}),
+    )
+    .unwrap_err();
     assert!(e.message.contains("cannot call"), "{}", e.message);
     trusted_script(&mut s, "Loop", "for (;;) {}");
     s.set_limits(SessionLimits {
         script_js_fuel: 20_000_000,
         ..SessionLimits::default()
     });
-    let e = layout(&mut s, json!({"pattern": {"kind": "generator", "script": "Loop", "gap": 0}})).unwrap_err();
+    let e = layout(
+        &mut s,
+        json!({"pattern": {"kind": "generator", "script": "Loop", "gap": 0}}),
+    )
+    .unwrap_err();
     assert!(e.message.contains("fuel"), "{}", e.message);
 }
 
@@ -363,7 +430,11 @@ fn the_unit_count_of_the_session_bounds_a_generator() {
         ..SessionLimits::default()
     });
     let e = layout(&mut s, json!({})).unwrap_err();
-    assert!(e.message.contains("limit of 10") || e.message.contains("more than"), "{}", e.message);
+    assert!(
+        e.message.contains("limit of 10") || e.message.contains("more than"),
+        "{}",
+        e.message
+    );
 }
 
 /// Measures what a call from a script costs against the same call from Rust. Run it with
@@ -376,7 +447,10 @@ fn measure_call_overhead() {
     let mut s = Session::default();
     let t = Instant::now();
     ok(&mut s, json!({"code": "return 1;", "mode": "read"}));
-    println!("first run (compile of the module, start): {:?}", t.elapsed());
+    println!(
+        "first run (compile of the module, start): {:?}",
+        t.elapsed()
+    );
     let t = Instant::now();
     for _ in 0..20 {
         ok(&mut s, json!({"code": "return 1;", "mode": "read"}));
@@ -388,7 +462,10 @@ fn measure_call_overhead() {
         s.handle("selection.get", json!({})).unwrap();
     }
     let rust = t.elapsed();
-    println!("{N} calls of selection.get from Rust: {rust:?} ({:?} per call)", rust / N as u32);
+    println!(
+        "{N} calls of selection.get from Rust: {rust:?} ({:?} per call)",
+        rust / N as u32
+    );
 
     let code = format!("for (let i = 0; i < {N}; i++) kadakas.call('selection.get', {{}});");
     let t = Instant::now();
@@ -423,7 +500,10 @@ fn measure_call_overhead() {
         ..SessionLimits::default()
     });
     match eval(&mut s, json!({"code": code, "mode": "read"})) {
-        Err(e) => println!("100M fuel stops the loop of calls: {}", e.details.unwrap()["calls"]),
+        Err(e) => println!(
+            "100M fuel stops the loop of calls: {}",
+            e.details.unwrap()["calls"]
+        ),
         Ok(r) => println!("{r}"),
     }
 }
@@ -456,7 +536,10 @@ fn the_example_ashlar_covers_the_region_in_courses_of_three_lengths() {
     // cut unit is cut at the left or right edge, at most two per course.
     assert!(sum["cut_units"].as_u64().unwrap() <= 10, "{sum}");
     let area = sum["area_laid_m2"].as_f64().unwrap();
-    assert!((area - 3.0).abs() < 1e-9, "the courses fill the region: {area}");
+    assert!(
+        (area - 3.0).abs() < 1e-9,
+        "the courses fill the region: {area}"
+    );
     // Three unit types, named by their size.
     let names: Vec<&str> = sum["by_unit"]
         .as_array()
@@ -506,7 +589,12 @@ fn the_example_fan_has_the_counts_of_a_hand_checked_small_case() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|u| (u["whole_units"].as_u64().unwrap(), u["cut_units"].as_u64().unwrap()))
+        .map(|u| {
+            (
+                u["whole_units"].as_u64().unwrap(),
+                u["cut_units"].as_u64().unwrap(),
+            )
+        })
         .collect();
     // Even rings: the first and the third (8 + 8 wedges, the third cut); odd: the second.
     assert_eq!(by, [(8, 8), (8, 0)]);

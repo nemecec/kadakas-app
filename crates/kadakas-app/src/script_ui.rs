@@ -233,7 +233,13 @@ impl ScriptUi {
         self.want_run.take()
     }
 
-    fn window_body(&mut self, ui: &mut Ui, session: &mut Session, status: &mut String, running: bool) {
+    fn window_body(
+        &mut self,
+        ui: &mut Ui,
+        session: &mut Session,
+        status: &mut String,
+        running: bool,
+    ) {
         match python::discover() {
             Some(py) => ui.small(tr!("script-ui-python", version = py.describe())),
             None => ui.colored_label(
@@ -342,7 +348,10 @@ impl ScriptUi {
                         *status = e;
                     }
                 } else {
-                    ui.colored_label(Color32::from_rgb(200, 120, 0), tr!("script-ui-js-not-trusted"));
+                    ui.colored_label(
+                        Color32::from_rgb(200, 120, 0),
+                        tr!("script-ui-js-not-trusted"),
+                    );
                     if ui.button(tr!("script-ui-review-script")).clicked() {
                         self.js_review = Some(s.name.clone());
                     }
@@ -353,8 +362,15 @@ impl ScriptUi {
 
     /// The "Trust this script?" dialog for a JavaScript script of the document: the whole text,
     /// its hash, and the choice. Trust is for this exact text.
-    fn js_review_dialog(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String) {
-        let Some(name) = self.js_review.clone() else { return };
+    fn js_review_dialog(
+        &mut self,
+        ctx: &egui::Context,
+        session: &mut Session,
+        status: &mut String,
+    ) {
+        let Some(name) = self.js_review.clone() else {
+            return;
+        };
         let Ok(info) = session.handle("script_resource.get", json!({"id": name})) else {
             self.js_review = None;
             return;

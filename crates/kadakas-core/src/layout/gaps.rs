@@ -155,19 +155,20 @@ pub fn gap_lines(
         Bond::Stack | Bond::RunningBond => {
             row_lines(region, pattern, place, max_segments, coarse_fallback)
         }
-        Bond::Generator => match super::generator::outline_lines(region, pattern, place, max_segments)
-        {
-            Some(segments) => Gaps {
-                segments,
-                truncated: false,
-                coarsened: false,
-            },
-            None => Gaps {
-                segments: Vec::new(),
-                truncated: true,
-                coarsened: false,
-            },
-        },
+        Bond::Generator => {
+            match super::generator::outline_lines(region, pattern, place, max_segments) {
+                Some(segments) => Gaps {
+                    segments,
+                    truncated: false,
+                    coarsened: false,
+                },
+                None => Gaps {
+                    segments: Vec::new(),
+                    truncated: true,
+                    coarsened: false,
+                },
+            }
+        }
         _ => cell_lines(region, pattern, place, max_segments, coarse_fallback),
     }
 }

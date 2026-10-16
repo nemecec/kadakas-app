@@ -278,10 +278,9 @@ impl ScriptEngine {
     /// Runs a script. Every call of the script goes to `host`.
     pub fn run(&self, request: &Request<'_>, host: &mut dyn ScriptHost) -> Result<Output, Failure> {
         let Some(module) = &self.module else {
-            return Err(ScriptError::Unavailable(
-                self.unavailable.clone().unwrap_or_default(),
-            )
-            .into());
+            return Err(
+                ScriptError::Unavailable(self.unavailable.clone().unwrap_or_default()).into(),
+            );
         };
         let options = json!({
             "memory": self.limits.memory_bytes / 4 * 3,
@@ -290,7 +289,9 @@ impl ScriptEngine {
             "max_calls": self.limits.max_calls,
         });
         let args = serde_json::to_vec(request.args).map_err(|e| {
-            Failure::from(ScriptError::Trap(format!("the arguments cannot be sent: {e}")))
+            Failure::from(ScriptError::Trap(format!(
+                "the arguments cannot be sent: {e}"
+            )))
         })?;
         let options = serde_json::to_vec(&options).expect("options are JSON");
         let mut parts: Vec<&[u8]> = vec![request.code.as_bytes(), &args, &options];
@@ -367,7 +368,9 @@ fn serve_call(bytes: &[u8], host: &mut dyn ScriptHost) -> HostReply {
 fn parse_answer(answer: &[u8]) -> Result<Output, Failure> {
     let parts = frame::decode(answer)
         .filter(|p| p.len() >= 4)
-        .ok_or_else(|| Failure::from(ScriptError::Trap("the engine gave a broken answer".into())))?;
+        .ok_or_else(|| {
+            Failure::from(ScriptError::Trap("the engine gave a broken answer".into()))
+        })?;
     let text = |i: usize| String::from_utf8_lossy(parts[i]).into_owned();
     let calls = text(2).parse::<u64>().unwrap_or(0);
     let log = text(3);
@@ -417,7 +420,10 @@ fn parse_answer(answer: &[u8]) -> Result<Output, Failure> {
                 data: info.get("data").filter(|d| !d.is_null()).cloned(),
             }))
         }
-        _ => Err(fail(ScriptError::Trap(format!("the engine failed: {}", text(1))))),
+        _ => Err(fail(ScriptError::Trap(format!(
+            "the engine failed: {}",
+            text(1)
+        )))),
     }
 }
 

@@ -234,7 +234,9 @@ impl Hosted {
         memory.write(&mut *store, ptr as usize, request)?;
         let packed = run.call(&mut *store, (ptr, len))?;
         if packed == 0 {
-            return Ok(Err(PluginError::BadOutput("the module gave no answer".into())));
+            return Ok(Err(PluginError::BadOutput(
+                "the module gave no answer".into(),
+            )));
         }
         let (ptr, len) = unpack(packed);
         let (ptr, len) = (ptr as usize, len as usize);
@@ -250,9 +252,7 @@ impl Hosted {
             .data(&*store)
             .get(ptr..ptr.saturating_add(len))
             .map(<[u8]>::to_vec)
-            .ok_or_else(|| {
-                PluginError::BadOutput("the answer points outside the memory".into())
-            }))
+            .ok_or_else(|| PluginError::BadOutput("the answer points outside the memory".into())))
     }
 
     fn classify(&self, store: &mut Store<HostState>, e: wasmtime::Error) -> PluginError {
@@ -282,4 +282,3 @@ impl Hosted {
         }
     }
 }
-

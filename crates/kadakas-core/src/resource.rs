@@ -227,7 +227,9 @@ impl<'de> Deserialize<'de> for ResourceBody {
             )
             .ok()
             .filter(|c| c.language == crate::script::LANGUAGE)
-            .map_or(ResourceBody::Unknown(v), |c| ResourceBody::Script(Box::new(c)))),
+            .map_or(ResourceBody::Unknown(v), |c| {
+                ResourceBody::Script(Box::new(c))
+            })),
             Some(crate::provenance::BASE_TYPE) => {
                 let (drawing, revision) = (v["drawing"].clone(), v["revision"].clone());
                 match read_import_base(v) {

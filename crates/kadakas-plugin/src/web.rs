@@ -180,10 +180,7 @@ impl RawModule for JsModule {
         self.build(&Object::new(), Vec::new(), Rc::default())
     }
 
-    fn instantiate_hosted(
-        &self,
-        link: Rc<dyn HostLink>,
-    ) -> Result<Box<dyn RawInstance>, RawError> {
+    fn instantiate_hosted(&self, link: Rc<dyn HostLink>) -> Result<Box<dyn RawInstance>, RawError> {
         // The imports need the memory of the instance, which exists only after the instance. The
         // closures find it in this cell.
         let memory: Rc<RefCell<Option<WebAssembly::Memory>>> = Rc::default();
@@ -201,7 +198,9 @@ impl RawModule for JsModule {
             if end > u64::from(buffer.byte_length()) {
                 return Err(JsValue::from_str("the request is outside the memory"));
             }
-            Ok(Uint8Array::new_with_byte_offset_and_length(&buffer, ptr, len))
+            Ok(Uint8Array::new_with_byte_offset_and_length(
+                &buffer, ptr, len,
+            ))
         };
         let call = {
             let (link, memory) = (link.clone(), memory.clone());
@@ -226,8 +225,12 @@ impl RawModule for JsModule {
             Reflect::set(&host, &JsValue::from_str(name), f).map_err(|e| raw_error(&e))?;
         }
         let imports = Object::new();
-        Reflect::set(&imports, &JsValue::from_str(crate::runtime::HOST_MODULE), &host)
-            .map_err(|e| raw_error(&e))?;
+        Reflect::set(
+            &imports,
+            &JsValue::from_str(crate::runtime::HOST_MODULE),
+            &host,
+        )
+        .map_err(|e| raw_error(&e))?;
         self.build(&imports, vec![Box::new(call), Box::new(read)], memory)
     }
 }

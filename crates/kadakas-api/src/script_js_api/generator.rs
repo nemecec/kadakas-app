@@ -33,7 +33,9 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use glam::DVec2;
-use kadakas_core::layout::generator::{Cell, Generated, Request, UnitGenerator, install, installed};
+use kadakas_core::layout::generator::{
+    Cell, Generated, Request, UnitGenerator, install, installed,
+};
 use kadakas_script_js::{CallFailure, HostError, Output, ScriptHost, ScriptLimits};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -72,7 +74,9 @@ impl Cache {
     fn put(&mut self, key: String, g: Arc<Generated>) {
         self.cells += g.cells.len();
         self.entries.push_back((key, g));
-        while self.entries.len() > CACHE_ENTRIES || (self.cells > CACHE_CELLS && self.entries.len() > 1) {
+        while self.entries.len() > CACHE_ENTRIES
+            || (self.cells > CACHE_CELLS && self.entries.len() > 1)
+        {
             if let Some((_, old)) = self.entries.pop_front() {
                 self.cells -= old.cells.len();
             }
@@ -230,7 +234,12 @@ impl UnitGenerator for JsGenerator {
             h.update(b);
         }
         let key = format!("{:x}", h.finalize());
-        if let Some(hit) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        if let Some(hit) = self
+            .cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+        {
             return Ok(hit);
         }
         let engine = self.engine.get(self.limits)?;
@@ -245,10 +254,12 @@ impl UnitGenerator for JsGenerator {
                 &mut NoCalls,
             )
             .map_err(|f| format!("the generator script '{}' failed: {}", entry.name, f.error))?;
-        let made = Arc::new(
-            parse(&out, req.max_units)
-                .map_err(|e| format!("the generator script '{}' gave a bad answer: {e}", entry.name))?,
-        );
+        let made = Arc::new(parse(&out, req.max_units).map_err(|e| {
+            format!(
+                "the generator script '{}' gave a bad answer: {e}",
+                entry.name
+            )
+        })?);
         self.cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -274,7 +285,9 @@ fn numbers(v: &Value, out: &Output, what: &str) -> Result<Vec<f64>, String> {
     }
     let mut acc = Vec::new();
     if !flat(&v, &mut acc) {
-        return Err(format!("'{what}' must be a typed array or a list of numbers"));
+        return Err(format!(
+            "'{what}' must be a typed array or a list of numbers"
+        ));
     }
     Ok(acc)
 }
@@ -286,7 +299,9 @@ fn whole_numbers(v: &Value, out: &Output, what: &str) -> Result<Vec<usize>, Stri
             if n >= 0.0 && n.fract() == 0.0 && n < 4e9 {
                 Ok(n as usize)
             } else {
-                Err(format!("'{what}' holds a number that is not a whole number from 0"))
+                Err(format!(
+                    "'{what}' holds a number that is not a whole number from 0"
+                ))
             }
         })
         .collect()
@@ -320,7 +335,11 @@ fn parse(out: &Output, max_units: usize) -> Result<Generated, String> {
     };
     let mut cells: Vec<Cell> = Vec::new();
     if let Some(r) = obj.get("rects").filter(|v| !v.is_null()) {
-        let data = numbers(r.get("data").ok_or("'rects' needs 'data'")?, out, "rects.data")?;
+        let data = numbers(
+            r.get("data").ok_or("'rects' needs 'data'")?,
+            out,
+            "rects.data",
+        )?;
         if data.len() % 5 != 0 {
             return Err(format!(
                 "rects.data has {} numbers, but a rectangle takes 5 (cx, cy, length, width, angle in degrees)",
@@ -329,14 +348,19 @@ fn parse(out: &Output, max_units: usize) -> Result<Generated, String> {
         }
         let n = data.len() / 5;
         if n > max_units {
-            return Err(format!("the generator made {n} rectangles, more than the limit of {max_units}"));
+            return Err(format!(
+                "the generator made {n} rectangles, more than the limit of {max_units}"
+            ));
         }
         let kind = match r.get("kind").filter(|v| !v.is_null()) {
             Some(k) => whole_numbers(k, out, "rects.kind")?,
             None => vec![0; n],
         };
         if kind.len() != n {
-            return Err(format!("rects.kind has {} entries for {n} rectangles", kind.len()));
+            return Err(format!(
+                "rects.kind has {} entries for {n} rectangles",
+                kind.len()
+            ));
         }
         for (i, d) in data.chunks_exact(5).enumerate() {
             let (c, l, w) = (DVec2::new(d[0], d[1]), d[2], d[3]);
@@ -352,13 +376,25 @@ fn parse(out: &Output, max_units: usize) -> Result<Generated, String> {
         }
     }
     if let Some(p) = obj.get("polygons").filter(|v| !v.is_null()) {
-        let pts = numbers(p.get("points").ok_or("'polygons' needs 'points'")?, out, "polygons.points")?;
-        let start = whole_numbers(p.get("start").ok_or("'polygons' needs 'start'")?, out, "polygons.start")?;
+        let pts = numbers(
+            p.get("points").ok_or("'polygons' needs 'points'")?,
+            out,
+            "polygons.points",
+        )?;
+        let start = whole_numbers(
+            p.get("start").ok_or("'polygons' needs 'start'")?,
+            out,
+            "polygons.start",
+        )?;
         if pts.len() % 2 != 0 {
             return Err("polygons.points holds x and y pairs".into());
         }
         let npts = pts.len() / 2;
-        if start.len() < 2 || start.windows(2).any(|w| w[0] > w[1]) || *start.last().unwrap_or(&0) != npts || start[0] != 0 {
+        if start.len() < 2
+            || start.windows(2).any(|w| w[0] > w[1])
+            || *start.last().unwrap_or(&0) != npts
+            || start[0] != 0
+        {
             return Err(format!(
                 "polygons.start must have n + 1 entries that rise from 0 to the number of points ({npts})"
             ));
@@ -375,7 +411,10 @@ fn parse(out: &Output, max_units: usize) -> Result<Generated, String> {
             None => vec![0; n],
         };
         if kind.len() != n {
-            return Err(format!("polygons.kind has {} entries for {n} polygons", kind.len()));
+            return Err(format!(
+                "polygons.kind has {} entries for {n} polygons",
+                kind.len()
+            ));
         }
         for i in 0..n {
             cells.push(Cell {

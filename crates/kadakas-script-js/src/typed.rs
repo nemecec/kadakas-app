@@ -43,7 +43,11 @@ fn elements(kind: &str, bytes: &[u8]) -> Result<Vec<Value>, String> {
             .map(|c| number(f64::from_le_bytes(c.try_into().expect("8 bytes"))))
             .collect(),
         "f32" => chunks::<4>(bytes)?
-            .map(|c| number(f64::from(f32::from_le_bytes(c.try_into().expect("4 bytes")))))
+            .map(|c| {
+                number(f64::from(f32::from_le_bytes(
+                    c.try_into().expect("4 bytes"),
+                )))
+            })
             .collect(),
         "i32" => Ok(chunks::<4>(bytes)?
             .map(|c| Value::from(i32::from_le_bytes(c.try_into().expect("4 bytes"))))
@@ -176,7 +180,10 @@ mod tests {
     fn a_marker_with_a_stride_becomes_a_list_of_points() {
         let mut v = json!({"points": {"$t": "f64", "i": 0, "n": 2}, "close": true});
         resolve(&mut v, &[f64s(&[1.0, 2.0, 3.5, 4.0])]).unwrap();
-        assert_eq!(v, json!({"points": [[1.0, 2.0], [3.5, 4.0]], "close": true}));
+        assert_eq!(
+            v,
+            json!({"points": [[1.0, 2.0], [3.5, 4.0]], "close": true})
+        );
     }
 
     #[test]
@@ -192,7 +199,10 @@ mod tests {
         let b = [f64s(&[1.0, 2.0, 3.0])];
         let cut = |mut v: Value| resolve(&mut v, &b);
         assert!(cut(json!({"$t": "f64", "i": 5})).is_err(), "no such buffer");
-        assert!(cut(json!({"$t": "f64", "i": 0, "n": 2})).is_err(), "3 numbers in pairs");
+        assert!(
+            cut(json!({"$t": "f64", "i": 0, "n": 2})).is_err(),
+            "3 numbers in pairs"
+        );
         assert!(cut(json!({"$t": "f16", "i": 0})).is_err(), "unknown kind");
         let nan = [f64s(&[f64::NAN])];
         assert!(resolve(&mut json!({"$t": "f64", "i": 0}), &nan).is_err());

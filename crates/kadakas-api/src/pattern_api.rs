@@ -216,10 +216,9 @@ fn pattern_param(m: &Map<String, Value>, base: Option<Pattern>) -> Result<Patter
         } else if is_generator {
             p.bond = Bond::Generator;
             p.module = None;
-            let script = g
-                .get("script")
-                .and_then(Value::as_str)
-                .ok_or_else(|| bad("a generator pattern needs 'script' (the name or ID of a script resource)"))?;
+            let script = g.get("script").and_then(Value::as_str).ok_or_else(|| {
+                bad("a generator pattern needs 'script' (the name or ID of a script resource)")
+            })?;
             let params = g.get("params").cloned().unwrap_or(Value::Null);
             p.generator = Some(layout::generator::GeneratorSpec {
                 script: script.to_string(),
