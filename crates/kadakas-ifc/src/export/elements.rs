@@ -37,6 +37,9 @@ impl<W: Write> Exporter<'_, W> {
             } => skip("texture bed: IFC has no textures, the terrain keeps its plain color"),
             Shape::SiteModifier { .. } => skip("site modifier: its effect is in the terrain"),
             Shape::Viewport(_) | Shape::TitleBlock(_) => skip("sheet object (paper space)"),
+            Shape::Irrigation(_) => skip(
+                "irrigation object: IFC export does not write irrigation yet (the DXF export does)",
+            ),
             Shape::Locus3d { .. } | Shape::Polyline3d { .. } if !self.opts.include_2d => skip(
                 "survey geometry: the terrain carries it (set include_2d to export it as IfcAnnotation)",
             ),

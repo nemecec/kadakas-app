@@ -170,3 +170,22 @@ fn walls_are_ifc_walls_with_type_and_materials() {
     let (f2, _) = export(&d, &o2);
     assert!(named(&f2, "IFCWALL").iter().all(|e| e.attrs.len() == 8));
 }
+
+#[test]
+fn irrigation_is_skipped_with_a_reason_that_says_so() {
+    let mut ed = Editor::with_sequential_ids();
+    add(
+        &mut ed,
+        Shape::Irrigation(Box::new(
+            kadakas_core::irrigation::IrrigationShape::Controller {
+                at: DVec2::ZERO,
+                name: "C1".into(),
+                stations: 4,
+            },
+        )),
+    );
+    let (_, report) = export(ed.doc(), &IfcOptions::default());
+    let s = &report.skipped[0];
+    assert_eq!(s.entity, "irrigation_controller");
+    assert!(s.reason.contains("irrigation"), "{}", s.reason);
+}
