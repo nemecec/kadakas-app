@@ -23,7 +23,7 @@ sha2 = "0.10.9"
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 thiserror = "2.0.21"
 roxmltree = { version = "0.21.1", optional = true }
-zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"], optional = true }
+zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2"], optional = true }
 
 [dev-dependencies]
 proptest = "1.11.0"

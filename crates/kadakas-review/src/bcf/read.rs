@@ -120,7 +120,8 @@ impl<'a> Entries<'a> {
             let f = zip
                 .by_index_raw(i)
                 .map_err(|e| BcfError::Archive(e.to_string()))?;
-            let name = safe_name(f.name(), limits)?;
+            let raw = f.name().map_err(|e| BcfError::Archive(e.to_string()))?;
+            let name = safe_name(&raw, limits)?;
             if f.is_dir() || name.ends_with('/') {
                 continue;
             }

@@ -67,7 +67,6 @@ yanked = "deny"
 ignore = [
   { id = "RUSTSEC-2026-0192", reason = "ttf-parser is unmaintained (a notice, not a bug). It comes through ab_glyph in kadakas-print, which reads fonts that ship with the program. Move the PDF text code to skrifa later." },
   { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained (a notice, not a bug). It is pulled in only by egui_dock; no maintained upgrade." },
-  { crate = "zip@8.6.0", reason = "Yanked with no advisory; every 8.x release is yanked and the 9.0 releases are from October 2026, newer than our two-week rule. Upgrade to zip 9.0.4 or later from 2026-10-30 and remove this entry." },
 ]
 
 [sources]
