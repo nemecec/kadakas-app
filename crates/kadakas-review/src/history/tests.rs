@@ -637,7 +637,7 @@ proptest! {
     /// A history that was changed in one place reads as it was given, or it says what it changed.
     #[test]
     fn a_damaged_history_reads_the_same_or_gives_notes(
-        s in steps(),
+        s in steps().prop_filter("a history needs a step", |s| !s.is_empty()),
         path in prop::collection::vec(0usize..40, 1..6),
         with in any_json(),
         file_form in any::<bool>(),
