@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 description = "The host for Kadakas WebAssembly plug-ins: a runtime-neutral interface, trust by module hash, limits and checks of the answer. The wasmtime backend is native only; the browser build has a stub."
 
+[features]
+# A plain wasmtime compiler for the metered engine (the engine of the browser), to test that engine
+# on the desktop. For the tests of this workspace only.
+testkit = []
+
 [dependencies]
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-plugin-abi = { version = "0.1.0", path = "../kadakas-plugin-abi" }

@@ -50,6 +50,7 @@ joint-ui-bond-stack = Stack
 joint-ui-bond-herringbone = Herringbone
 joint-ui-bond-basket-weave = Basket weave
 joint-ui-bond-module = Module (own shapes)
+joint-ui-bond-generator = Generator (script)
 joint-ui-unit-length = Unit length
 joint-ui-unit-width = Unit width
 joint-ui-gap = Joint width

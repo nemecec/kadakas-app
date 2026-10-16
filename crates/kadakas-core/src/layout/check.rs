@@ -612,7 +612,11 @@ pub fn check_cancellable(
             if !bad && u.ring.len() == 4 {
                 let (s0, s1) = (u.ring[0].distance(u.ring[1]), u.ring[1].distance(u.ring[2]));
                 let expect = match &g.body {
-                    Body::Pattern { pattern, .. } if pattern.module.is_none() => {
+                    // A generator has no unit size of its own: its cells have the sizes the script gave.
+                    Body::Pattern { pattern, .. }
+                        if pattern.module.is_none()
+                            && pattern.bond != crate::layout::Bond::Generator =>
+                    {
                         Some((pattern.unit_length, pattern.unit_width))
                     }
                     Body::Course(cb) if u.kind == 0 => Some((cb.along, cb.depth)),

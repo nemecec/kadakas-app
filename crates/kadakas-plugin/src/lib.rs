@@ -31,15 +31,22 @@ pub mod plugin;
 pub mod registry;
 pub mod runtime;
 pub mod store;
+#[cfg(all(any(test, feature = "testkit"), not(target_arch = "wasm32")))]
+pub mod testkit;
 pub mod trust;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 
 pub use plugin::{Generated, Plugin, ToolCall, ToolDone, ToolStep};
 pub use registry::{Registry, StoreReport};
-pub use runtime::{Limits, LoadedModule, PluginError, PluginRuntime, default_runtime};
+pub use runtime::{
+    HostCall, HostReply, HostedModule, Limits, LoadedModule, PluginError, PluginRuntime, Watch,
+    default_runtime,
+};
 pub use store::{MemoryBackend, ModuleStore, StoreBackend, StoreError};
 pub use trust::{ModuleTrust, Permit};
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod hosted_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;

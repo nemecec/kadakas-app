@@ -206,10 +206,10 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "scripting",
-        summary: "Python scripts, Python plug-in objects (plugin.*) and sandboxed WebAssembly plug-ins (plugins.*).",
+        summary: "JavaScript programs that run inside the session (script.eval: the program calls the methods of this API, the whole run is one undo step, mode read for checks and reports; it can reach files and the network as far as the methods it calls can), Python scripts, Python plug-in objects (plugin.*) and sandboxed WebAssembly plug-ins (plugins.*).",
         prefixes: &["script", "plugin", "plugins"],
         read_only: false,
-        open_world: false,
+        open_world: true,
     },
 ];
 

@@ -22,9 +22,13 @@
 //! thread, and a worker cannot be called without waiting for it. The fuel is the bound: a module
 //! stops after its fuel. How long that takes depends on the computer.
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
 use crate::harden::{FUEL_EXPORT, HardenLimits, PAGE, harden};
 use crate::runtime::{
-    CallKind, Limits, LoadedModule, MaybeSend, PluginError, PluginRuntime, REQUIRED_EXPORTS,
+    CallKind, HOSTED_EXPORTS, HOSTED_MEMORY_BYTES, HostCall, HostReply, HostedModule, Limits,
+    LoadedModule, MaybeSend, PluginError, PluginRuntime, REQUIRED_EXPORTS, Watch,
 };
 use kadakas_plugin_abi::guest::unpack;
 
@@ -37,8 +41,22 @@ pub enum RawError {
     Trap(String),
 }
 
+/// What the two imports of a hosted module reach (`kadakas.call` and `kadakas.read`). The compiler
+/// builds the imports around it.
+pub trait HostLink {
+    /// The import `call`: the bytes of a request. Returns the length of the reply, which `take_reply`
+    /// then gives. An error stops the module (the compiler makes it a trap).
+    fn call(&self, request: &[u8]) -> Result<u32, RawError>;
+    /// The import `read`: the reply of the last call.
+    fn take_reply(&self) -> Vec<u8>;
+}
+
 /// A running instance of a rewritten module.
 pub trait RawInstance {
+    /// Calls `_initialize` if the module exports it (a hosted module made with a C library does).
+    fn initialize(&mut self) -> Result<(), RawError> {
+        Ok(())
+    }
     /// Calls the export `alloc` and returns the address.
     fn alloc(&mut self, len: u32) -> Result<u32, RawError>;
     /// Writes bytes into the linear memory. An address outside the memory is an error.
@@ -64,6 +82,15 @@ pub trait RawModule: MaybeSend {
     fn import_count(&self) -> usize;
     /// Makes a new instance. Every call uses a new one.
     fn instantiate(&self) -> Result<Box<dyn RawInstance>, RawError>;
+    /// Makes a new instance of a hosted module, whose imports reach `link`.
+    fn instantiate_hosted(
+        &self,
+        _link: Rc<dyn HostLink>,
+    ) -> Result<Box<dyn RawInstance>, RawError> {
+        Err(RawError::Trap(
+            "this compiler cannot run hosted modules".into(),
+        ))
+    }
 }
 
 /// Compiles the bytes of a rewritten module with some engine.
@@ -88,12 +115,43 @@ impl<C: Compiler> PluginRuntime for MeteredRuntime<C> {
         self.compiler.name()
     }
 
+    fn load_hosted(
+        &self,
+        wasm: &[u8],
+        limits: &Limits,
+    ) -> Result<Box<dyn HostedModule>, PluginError> {
+        // The same bytes for any limits, so that the module can be compiled in advance. The host
+        // sets the fuel of each run.
+        let hardened = harden(
+            wasm,
+            &HardenLimits {
+                fuel: i64::MAX as u64,
+                memory_bytes: HOSTED_MEMORY_BYTES,
+                host_imports: true,
+            },
+        )?;
+        let module = self.compiler.compile(&hardened)?;
+        let exports = module.exports();
+        for name in HOSTED_EXPORTS.iter().chain(&[FUEL_EXPORT]) {
+            if !exports.iter().any(|e| e == name) {
+                return Err(PluginError::Invalid(format!(
+                    "the module does not export '{name}'"
+                )));
+            }
+        }
+        Ok(Box::new(MeteredHosted {
+            module,
+            limits: *limits,
+        }))
+    }
+
     fn load(&self, wasm: &[u8], limits: &Limits) -> Result<Box<dyn LoadedModule>, PluginError> {
         let hardened = harden(
             wasm,
             &HardenLimits {
                 fuel: limits.start_fuel(),
                 memory_bytes: limits.memory_bytes,
+                host_imports: false,
             },
         )?;
         let module = self.compiler.compile(&hardened)?;
@@ -130,28 +188,176 @@ struct Metered {
     limits: Limits,
 }
 
-impl Metered {
-    fn classify(&self, inst: &mut dyn RawInstance, e: RawError, budget: u64) -> PluginError {
-        if inst.fuel_left().is_some_and(|f| f < 0) {
-            return PluginError::Limit(format!(
-                "the module used all of its {budget} fuel units (an endless loop?)"
-            ));
-        }
-        match e {
-            RawError::Stack(_) => PluginError::Limit("the module overflowed its stack".into()),
-            RawError::Trap(m) => {
-                // A memory.grow over the cap returns -1. A module that then fails ends up here
-                // with its memory at the cap.
-                if inst.memory_bytes() as u64 / PAGE >= self.limits.memory_bytes as u64 / PAGE {
-                    PluginError::Limit(format!(
-                        "the module needs more than {} bytes of memory ({m})",
-                        self.limits.memory_bytes
-                    ))
-                } else {
-                    PluginError::Trap(m)
-                }
+/// Tells a limit from a trap after a call failed.
+fn classify(limits: &Limits, inst: &mut dyn RawInstance, e: RawError, budget: u64) -> PluginError {
+    if inst.fuel_left().is_some_and(|f| f < 0) {
+        return PluginError::Limit(format!(
+            "the module used all of its {budget} fuel units (an endless loop?)"
+        ));
+    }
+    match e {
+        RawError::Stack(_) => PluginError::Limit("the module overflowed its stack".into()),
+        RawError::Trap(m) => {
+            // A memory.grow over the cap returns -1. A module that then fails ends up here
+            // with its memory at the cap.
+            if inst.memory_bytes() as u64 / PAGE >= limits.memory_bytes as u64 / PAGE {
+                PluginError::Limit(format!(
+                    "the module needs more than {} bytes of memory ({m})",
+                    limits.memory_bytes
+                ))
+            } else {
+                PluginError::Trap(m)
             }
         }
+    }
+}
+
+/// The function that serves the calls of a run, with its lifetime erased. It is used only while
+/// `run` is on the stack.
+type ErasedHost = *mut (dyn FnMut(&[u8]) -> HostReply + 'static);
+/// The watcher of a run, with its lifetime erased in the same way.
+type ErasedWatch = *const (dyn Fn() -> Option<PluginError> + 'static);
+
+/// The host side of a hosted run: the function that serves the calls, the reply that waits for
+/// `read`, and why the host stopped the run.
+struct Link {
+    host: Cell<Option<ErasedHost>>,
+    watch: Cell<Option<ErasedWatch>>,
+    pending: RefCell<Vec<u8>>,
+    aborted: RefCell<Option<PluginError>>,
+}
+
+impl HostLink for Link {
+    fn call(&self, request: &[u8]) -> Result<u32, RawError> {
+        let Some(host) = self.host.get() else {
+            return Err(RawError::Trap(
+                "the module called the host after the run".into(),
+            ));
+        };
+        // SAFETY: the pointers are set in `MeteredHosted::run` from references that live until the
+        // run ends, and cleared before `run` returns (also when a panic unwinds through it). The
+        // browser has one thread, and the native test engine calls from the thread of `run`.
+        if let Some(watch) = self.watch.get()
+            && let Some(stop) = unsafe { (*watch)() }
+        {
+            *self.aborted.borrow_mut() = Some(stop);
+            return Err(RawError::Trap("the run was stopped".into()));
+        }
+        let reply = unsafe { (*host)(request) };
+        match reply {
+            HostReply::Reply(bytes) => {
+                let n = u32::try_from(bytes.len())
+                    .map_err(|_| RawError::Trap("the reply is too large".into()))?;
+                *self.pending.borrow_mut() = bytes;
+                Ok(n)
+            }
+            HostReply::Abort(e) => {
+                *self.aborted.borrow_mut() = Some(e);
+                Err(RawError::Trap("the host stopped the run".into()))
+            }
+        }
+    }
+
+    fn take_reply(&self) -> Vec<u8> {
+        std::mem::take(&mut self.pending.borrow_mut())
+    }
+}
+
+struct MeteredHosted {
+    module: Box<dyn RawModule>,
+    limits: Limits,
+}
+
+/// Clears the pointers of a link when the run ends, also by a panic.
+struct Clear<'a>(&'a Link);
+
+impl Drop for Clear<'_> {
+    fn drop(&mut self) {
+        self.0.host.set(None);
+        self.0.watch.set(None);
+    }
+}
+
+impl HostedModule for MeteredHosted {
+    fn run(
+        &self,
+        request: &[u8],
+        host: HostCall<'_>,
+        watch: Watch<'_>,
+    ) -> Result<Vec<u8>, PluginError> {
+        let link = Rc::new(Link {
+            // SAFETY: only the lifetime changes; see `Link::call`.
+            watch: Cell::new(Some(unsafe {
+                std::mem::transmute::<*const (dyn Fn() -> Option<PluginError> + '_), ErasedWatch>(
+                    watch as *const _,
+                )
+            })),
+            // SAFETY: only the lifetime changes; see `Link::call`.
+            host: Cell::new(Some(unsafe {
+                std::mem::transmute::<*mut (dyn FnMut(&[u8]) -> HostReply + '_), ErasedHost>(
+                    host as *mut _,
+                )
+            })),
+            pending: RefCell::new(Vec::new()),
+            aborted: RefCell::new(None),
+        });
+        let _clear = Clear(&link);
+        self.run_with(&link, request)
+    }
+}
+
+impl MeteredHosted {
+    fn run_with(&self, link: &Rc<Link>, request: &[u8]) -> Result<Vec<u8>, PluginError> {
+        let mut inst = self
+            .module
+            .instantiate_hosted(link.clone())
+            .map_err(|e| match e {
+                RawError::Stack(m) => PluginError::Limit(m),
+                RawError::Trap(m) => PluginError::Trap(m),
+            })?;
+        let inst = inst.as_mut();
+        let budget = self.limits.fuel;
+        let go = |inst: &mut dyn RawInstance| -> Result<u64, RawError> {
+            inst.set_fuel(i64::try_from(budget).unwrap_or(i64::MAX))?;
+            inst.initialize()?;
+            let len = u32::try_from(request.len())
+                .map_err(|_| RawError::Trap("the request is too large".into()))?;
+            let ptr = inst.alloc(len)?;
+            if ptr == 0 {
+                return Err(RawError::Trap(
+                    "the module is out of memory (it has no room for the request)".into(),
+                ));
+            }
+            inst.write(ptr, request)?;
+            inst.call("run", &[ptr, len])
+        };
+        let packed = match go(inst) {
+            Ok(p) => p,
+            Err(e) => {
+                if let Some(stop) = link.aborted.borrow_mut().take() {
+                    return Err(stop);
+                }
+                return Err(classify(&self.limits, inst, e, budget));
+            }
+        };
+        if packed == 0 {
+            return Err(PluginError::BadOutput("the module gave no answer".into()));
+        }
+        let (ptr, len) = unpack(packed);
+        if len as usize > self.limits.max_output_bytes {
+            return Err(PluginError::Limit(format!(
+                "the answer has {len} bytes. The limit is {}",
+                self.limits.max_output_bytes
+            )));
+        }
+        inst.read(ptr, len)
+            .ok_or_else(|| PluginError::BadOutput("the answer points outside the memory".into()))
+    }
+}
+
+impl Metered {
+    fn classify(&self, inst: &mut dyn RawInstance, e: RawError, budget: u64) -> PluginError {
+        classify(&self.limits, inst, e, budget)
     }
 
     fn run(

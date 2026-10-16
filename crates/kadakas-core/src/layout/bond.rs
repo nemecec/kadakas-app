@@ -145,6 +145,7 @@ pub fn compile(p: &Pattern) -> Result<Compiled, String> {
             )
         }
         Bond::Module => return Err("a module is not a bond".into()),
+        Bond::Generator => return Err("a generator is not a bond".into()),
     };
     let det = a.perp_dot(b);
     Ok(Compiled { kinds, a, b, det })

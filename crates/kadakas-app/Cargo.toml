@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [features]
+default = ["script-js"]
+# The JavaScript engine (SCR-08). Needs a wasi-sdk to build, see docs/dev-guide.md.
+script-js = ["kadakas-api/script-js"]
 # The browser test hook (`window.kadakasTest`, see `collab_ui.rs`). Off by default: only
 # `scripts/test-browser.sh` of kadakas-server builds the web build with it.
 test-hook = []
@@ -15,13 +18,14 @@ test-hook = []
 base64 = "0.22.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
-kadakas-api = { version = "0.1.0", path = "../kadakas-api" }
+kadakas-api = { version = "0.1.0", path = "../kadakas-api", default-features = false }
 kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
 kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws" }
 kadakas-print = { version = "0.1.0", path = "../kadakas-print" }
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
 kadakas-plugin = { version = "0.1.0", path = "../kadakas-plugin" }
+kadakas-script-js = { version = "0.1.0", path = "../kadakas-script-js" }
 kadakas-l10n = { version = "0.1.0", path = "../kadakas-l10n" }
 kadakas-units = { version = "0.1.0", path = "../kadakas-units" }
 kadakas-ui-core = { version = "0.1.0", path = "../kadakas-ui-core" }
@@ -52,7 +56,7 @@ sys-locale = "0.3.2"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 wgpu = { version = "29", default-features = false, features = ["webgpu", "webgl"] }
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Storage", "Crypto", "Navigator", "Location", "History", "Event", "EventTarget", "BeforeUnloadEvent", "File"] }
+web-sys = { version = "0.3", features = ["console", "Window", "Document", "Element", "HtmlCanvasElement", "Storage", "Crypto", "Navigator", "Location", "History", "Event", "EventTarget", "BeforeUnloadEvent", "File"] }
 js-sys = "0.3"
 
 [dev-dependencies]

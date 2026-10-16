@@ -45,7 +45,8 @@ fn probe_binaries_are_the_compiled_text() {
                     &compiled,
                     &crate::harden::HardenLimits {
                         fuel: 1000,
-                        memory_bytes: 1 << 20
+                        memory_bytes: 1 << 20,
+                        host_imports: false,
                     }
                 )
                 .is_err(),

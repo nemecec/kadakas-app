@@ -8,7 +8,7 @@ You can do three things:
 2. Run `.py` files from the **Scripts** palette in the app. They work on the open drawing, live.
 3. Make a **plug-in object**: an object with parameters. A short Python script draws its shapes again each time you change a parameter.
 
-For plug-in objects and tools that must run the same everywhere, in a sandbox, see [plugins.md](plugins.md) (WebAssembly plug-ins). Python stays the tool for automation.
+For plug-in objects and tools that must run the same everywhere, in a sandbox, see [plugins.md](plugins.md) (WebAssembly plug-ins). Python stays the tool for automation. For scripts that run inside the session, in one undo step and also in the browser, see [scripting-javascript.md](scripting-javascript.md) (JavaScript).
 
 Python is not part of Kadakas. Kadakas starts the Python that is on your computer.
 

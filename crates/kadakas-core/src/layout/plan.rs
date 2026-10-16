@@ -233,7 +233,7 @@ impl Plan {
             if let Some(p) = &z.pattern {
                 p.validate()
                     .map_err(|e| format!("zone setting {}: {e}", i))?;
-                if p.bond != super::Bond::Module
+                if !matches!(p.bond, super::Bond::Module | super::Bond::Generator)
                     && (p.unit_length < Pattern::MIN_UNIT || p.unit_width < Pattern::MIN_UNIT)
                 {
                     return Err(format!(
@@ -676,6 +676,9 @@ impl Group {
     /// The names of the unit types, in the order of `Unit::kind`.
     pub fn kind_names(&self) -> Vec<String> {
         match &self.body {
+            Body::Pattern { pattern, .. } if pattern.bond == super::Bond::Generator => {
+                super::generator::kind_names(pattern)
+            }
             Body::Pattern { pattern, .. } => pattern
                 .compile()
                 .map(|c| c.kinds.iter().map(|k| k.name.clone()).collect())

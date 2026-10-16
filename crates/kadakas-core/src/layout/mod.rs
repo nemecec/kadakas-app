@@ -30,6 +30,7 @@ pub mod bond;
 pub mod check;
 pub mod course;
 pub mod gaps;
+pub mod generator;
 pub mod module;
 pub mod object;
 pub mod plan;
@@ -82,6 +83,8 @@ pub enum Bond {
     BasketWeave,
     /// Your own unit shapes on a lattice of two repeat vectors (see [`module`]).
     Module,
+    /// A generator makes the unit shapes; the pattern stores the last result (see [`generator`]).
+    Generator,
 }
 
 impl Bond {
@@ -100,6 +103,7 @@ impl Bond {
             Bond::Herringbone => "herringbone",
             Bond::BasketWeave => "basket_weave",
             Bond::Module => "module",
+            Bond::Generator => "generator",
         }
     }
 
@@ -107,7 +111,7 @@ impl Bond {
         let key = s.trim().replace([' ', '-'], "_");
         Self::ALL
             .into_iter()
-            .chain([Bond::Module])
+            .chain([Bond::Module, Bond::Generator])
             .find(|k| k.id().eq_ignore_ascii_case(&key))
     }
 }
@@ -123,6 +127,9 @@ pub struct Pattern {
     pub gap: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub module: Option<Module>,
+    /// Generator: the script and its parameters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generator: Option<std::sync::Arc<generator::GeneratorSpec>>,
 }
 
 impl Pattern {
@@ -137,6 +144,22 @@ impl Pattern {
             unit_width,
             gap,
             module: None,
+            generator: None,
+        }
+    }
+
+    /// A pattern whose unit shapes a script makes (see [`generator`]).
+    pub fn of_generator(
+        spec: impl Into<std::sync::Arc<generator::GeneratorSpec>>,
+        gap: f64,
+    ) -> Pattern {
+        Pattern {
+            bond: Bond::Generator,
+            unit_length: 0.0,
+            unit_width: 0.0,
+            gap,
+            module: None,
+            generator: Some(spec.into()),
         }
     }
 
@@ -148,6 +171,7 @@ impl Pattern {
             unit_width: 0.0,
             gap,
             module: Some(module),
+            generator: None,
         }
     }
 
@@ -164,6 +188,13 @@ impl Pattern {
         if !(self.gap.is_finite() && self.gap >= 0.0 && self.gap <= crate::model::MAX_COORD) {
             return Err("the gap must be a finite number of zero or more".into());
         }
+        if self.bond == Bond::Generator {
+            // A generator pattern may have no result yet; a result must be sound.
+            return match &self.generator {
+                Some(g) => g.validate(),
+                None => Err("a generator pattern needs a generator (generator: {units})".into()),
+            };
+        }
         if self.bond != Bond::Module {
             let ok = |v: f64| v.is_finite() && v > 0.0 && v <= crate::model::MAX_COORD;
             if !ok(self.unit_length) || !ok(self.unit_width) {
@@ -179,6 +210,9 @@ impl Pattern {
             (Bond::Module, Some(m)) => m.compile(self.gap),
             (Bond::Module, None) => {
                 Err("a module pattern needs its units and repeat vectors".into())
+            }
+            (Bond::Generator, _) => {
+                Err("a generator pattern has no lattice: a script makes its units".into())
             }
             _ => bond::compile(self),
         }

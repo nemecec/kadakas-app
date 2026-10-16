@@ -4,11 +4,11 @@ script-ui-script = Skript: { $e }
 script-ui-scripts = Skriptid
 script-ui-python = Python: { $version }
 script-ui-no-python-found-install-python3-or-uv = Pythonit ei leitud. Paigalda python3 või uv või sea KADAKAS_PYTHON.
-script-ui-a-script-runs-only-when-you-press = Skript käivitub ainult siis, kui vajutad nuppu „Käivita“. See võib avatud dokumenti muuta.
+script-ui-a-script-runs-only-when-you-press = Skript käivitub ainult siis, kui vajutad nuppu „Käivita“. See võib avatud dokumenti muuta. Fail .js töötab Kadakase sees liivakastis ühe tagasivõtusammuna; fail .py töötab programmina Kadakase kõrval.
 script-ui-folder = Kaust
 script-ui-choose = Vali...
 script-ui-refresh = Värskenda
-script-ui-no-py-files-in-this-folder = Selles kaustas pole .py-faile.
+script-ui-no-py-files-in-this-folder = Selles kaustas pole .py- ega .js-faile.
 script-ui-run = Käivita
 script-ui-stop = Peata
 script-ui-clear-console = Tühjenda konsool
@@ -33,3 +33,15 @@ script-ui-reset = Lähtesta
 script-ui-run-the-script-again = Käivita skript uuesti
 script-ui-waiting-to-run-the-script = Ootan skripti käivitamist...
 script-ui-running-the-script-seconds = Skript töötab... { $seconds } s
+
+## script-ui: JavaScripti programmid (SCR-08)
+
+script-ui-js-running = Skript töötab
+script-ui-js-running-detail = { $seconds } s, { $calls } kutset
+script-ui-js-edits-blocked = Joonist ei saa muuta enne, kui skript lõpeb. Kogu käivitus on üks tagasivõtusamm.
+script-ui-js-stop = Peata
+script-ui-js-stopping = Peatan...
+script-ui-js-ran = Skript lõpetas: { $calls } kutset, { $steps } tagasivõtusamm, { $ms } ms
+script-ui-js-failed = Skript ebaõnnestus: { $message }
+script-ui-js-cannot-read = Faili { $path } ei saa lugeda: { $e }
+script-ui-js-blocked = Skript töötab. Oota, kuni see lõpeb.

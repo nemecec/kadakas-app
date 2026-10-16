@@ -50,6 +50,7 @@ joint-ui-bond-stack = Ridasidus
 joint-ui-bond-herringbone = Kalaluumuster
 joint-ui-bond-basket-weave = Korvmuster
 joint-ui-bond-module = Moodul (oma kujud)
+joint-ui-bond-generator = Generaator (skript)
 joint-ui-unit-length = Kivi pikkus
 joint-ui-unit-width = Kivi laius
 joint-ui-gap = Vuugi laius

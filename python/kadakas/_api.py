@@ -3248,6 +3248,15 @@ if TYPE_CHECKING:
         'id': Required[str],
     }, total=False)
 
+    ScriptEvalParams = TypedDict("ScriptEvalParams", {
+        'args': Any,
+        'code': Required[str],
+        'mode': Literal['edit', 'read'],
+        'seed': int,
+    }, total=False)
+
+    ScriptJsInfoParams = TypedDict("ScriptJsInfoParams", {}, total=False)
+
 
 
 class Api:
@@ -4019,7 +4028,7 @@ class Api:
         return self._call("hardscape_style.get", params or None)
 
     def hardscape_style_create(self, **params: "Unpack[HardscapeStyleCreateParams]") -> Any:
-        """Create a hardscape style. params: {name, material? (surface material), fill?, pen? ([r,g,b,a]), thickness? (surface layer, mm, default 60), components? ([{name, material, thickness, color?}], layers below the surface from top to bottom), border? ({width, material, color?, sides? (both|left|right; a path only)} or null), joints? ({kind (running_bond|stack|herringbone|basket_weave), unit_length, unit_width, spacing (joint width), angle (degrees), color?} or null), custom? ({key: text})}. Returns {id}.
+        """Create a hardscape style. params: {name, material? (surface material), fill?, pen? ([r,g,b,a]), thickness? (surface layer, mm, default 60), components? ([{name, material, thickness, color?}], layers below the surface from top to bottom), border? ({width, material, color?, sides? (both|left|right; a path only)} or null), joints? ({kind (running_bond|stack|herringbone|basket_weave|module|generator; a generator takes generator: {label, params, units: {types, rects, polygons}}, the stored result of a program, instead of unit sizes, see describe unit_patterns), unit_length, unit_width, spacing (joint width), angle (degrees), color?} or null), custom? ({key: text})}. Returns {id}.
 
         JSON-RPC method ``hardscape_style.create``."""
         return self._call("hardscape_style.create", params or None)
@@ -5710,6 +5719,18 @@ class Api:
         JSON-RPC method ``feedback.withdraw``."""
         return self._call("feedback.withdraw", params or None)
 
+    def script_eval(self, **params: "Unpack[ScriptEvalParams]") -> Any:
+        """Run a JavaScript program in the session. The code is the body of a function, runs in a sandbox (QuickJS in WebAssembly: no files, no network, no clock) and calls the methods of this API: kadakas.call(method, params) returns the result or throws an Error with code, message, data and method. Everything heavy is a native call; the program only coordinates. params: {code, mode? ("edit" (default) | "read": a read-only run may call read-only methods only; any other method is refused before it runs), args? (any JSON; the program sees it as `args`), seed? (seeds Math.random; the same seed gives the same numbers)}. The program may call every method except the ones that would end the run or change the session from outside (script.*, undo, redo, document.load, collab.*, events.*, feedback.*, plugin.* (Python)); files, the network and plug-in installs follow the policy of the session, as for a direct call. All changes of the run are one undo step with the change origin script, and an error takes back all of them. While the run is open, calls from outside are refused (a conflict). Returns {result (the value the program returned; a typed array is written out as numbers), log (what console.log wrote, at most 64 KiB), calls (how many calls the program made), changed, undo_steps (0 or 1), elapsed_ms}. Limits: fuel, a time limit for each stretch and for the whole run, memory, the size of the answer and of each call, the number of calls; see script.js_info. A document holds no code: a generator pattern stores the shapes that a program made (describe, section unit_patterns). See describe, section scripting.javascript.
+
+        JSON-RPC method ``script.eval``."""
+        return self._call("script.eval", params or None)
+
+    def script_js_info(self, **params: "Unpack[ScriptJsInfoParams]") -> Any:
+        """How JavaScript programs run here. Returns {engine, upstream, toolchain, available, limits: {fuel, segment_ms (time for each stretch of the program between two calls), run_ms (time for the whole run), memory_bytes, output_bytes, max_calls}, agent_scripts_allowed}. available is false when this build has no script engine.
+
+        JSON-RPC method ``script.js_info``."""
+        return self._call("script.js_info", params or None)
+
 
 METHOD_NAMES: tuple[str, ...] = (
     "describe",
@@ -6121,6 +6142,8 @@ METHOD_NAMES: tuple[str, ...] = (
     "feedback.list",
     "feedback.get",
     "feedback.withdraw",
+    "script.eval",
+    "script.js_info",
 )
 
 COMMAND_OPS_EXAMPLED: tuple[str, ...] = ('add_layer', 'add_object', 'add_resource', 'add_sheet', 'add_worksheet_table', 'arrange', 'attach_record', 'batch', 'detach_record', 'move_layer', 'move_objects', 'restore_view', 'set_layer_site', 'set_project', 'set_record_fields', 'set_vertex', 'set_worksheet_table')

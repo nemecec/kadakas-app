@@ -4,11 +4,11 @@ script-ui-script = Script: { $e }
 script-ui-scripts = Scripts
 script-ui-python = Python: { $version }
 script-ui-no-python-found-install-python3-or-uv = No Python found. Install python3 or uv, or set KADAKAS_PYTHON.
-script-ui-a-script-runs-only-when-you-press = A script runs only when you press Run. It can change the open document.
+script-ui-a-script-runs-only-when-you-press = A script runs only when you press Run. It can change the open document. A .js file runs inside Kadakas in a sandbox, as one undo step; a .py file runs as a program next to it.
 script-ui-folder = Folder
 script-ui-choose = Choose...
 script-ui-refresh = Refresh
-script-ui-no-py-files-in-this-folder = No .py files in this folder.
+script-ui-no-py-files-in-this-folder = No .py or .js files in this folder.
 script-ui-run = Run
 script-ui-stop = Stop
 script-ui-clear-console = Clear console
@@ -33,3 +33,15 @@ script-ui-reset = Reset
 script-ui-run-the-script-again = Run the script again
 script-ui-waiting-to-run-the-script = Waiting to run the script...
 script-ui-running-the-script-seconds = Running the script... { $seconds } s
+
+## script-ui: JavaScript programs (SCR-08)
+
+script-ui-js-running = Script running
+script-ui-js-running-detail = { $seconds } s, { $calls } calls
+script-ui-js-edits-blocked = The drawing cannot be edited until the script ends. The whole run is one undo step.
+script-ui-js-stop = Stop
+script-ui-js-stopping = Stopping...
+script-ui-js-ran = Script finished: { $calls } calls, { $steps } undo step, { $ms } ms
+script-ui-js-failed = Script failed: { $message }
+script-ui-js-cannot-read = Cannot read { $path }: { $e }
+script-ui-js-blocked = A script is running. Wait until it ends.

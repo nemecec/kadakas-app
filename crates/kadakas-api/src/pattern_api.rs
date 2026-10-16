@@ -62,6 +62,7 @@ fn describe_base() -> Value {
     json!({
         "unit_pattern": "The layout engine lays equal units in a bond (running_bond, stack, herringbone, basket_weave) or the unit shapes of a module over a closed shape with holes. The pattern is a set of cells that run at the centers of the joints; a unit is its cell moved inward by half the gap. So every whole unit of a bond is exactly unit_length by unit_width, for any ratio, and the gap is a real gap. Units are cut exactly to the outline minus the holes. Hardscapes use the engine for their joint pattern; their holes, origin, angle and align_to_edge are settings of the object (hardscape.add, hardscape.set).",
         "modules": "A module pattern is one or more closed shapes (unit types, each with a name; curves and concave outlines are allowed) and two repeat vectors a and b (the lattice). The shapes are the outlines at the centers of the joints; the gap moves each inward by half the gap. The shapes must not overlap each other or their copies on the neighbouring lattice points (a, b, a+b, a-b); spaces between shapes are allowed and show as gaps. Counts, reports and the DXF export are per unit type (report by_unit; DXF extended data KADAKAS_UNIT on every unit polyline; unit_type on the objects of unit_pattern.to_objects). The four bonds are built from the same machinery. Ways to define a module: JSON (pattern: {kind: module, units: [{name, outline}], a, b, gap}), a preset (unit_pattern.module_preset: hexagon, octagon_square, i_shape), closed shapes in the drawing (unit_pattern.module_from_shapes), or a block of a DXF file (unit_pattern.module_from_block). The same JSON is the joints of a hardscape style: hardscape_style.create {joints: {kind: module, units, a, b, spacing}}.",
+        "generators": "A generator pattern (PAT-09) lays unit shapes that a generator made. The pattern stores the last result of the generator, so drawing, reports, unit_pattern.check, to_objects and the DXF export use the stored shapes and run no code; a document holds no program. In a call: pattern: {kind: generator, types: [\"name\", ...], rects: {kind: [type index per unit], data: [cx, cy, length, width, angle in degrees per unit]}, polygons: {kind: [...], start: [n + 1 entries], points: [x, y, ...]}, label? (who made it), params? (what it was made with), gap}, or the same inside pattern.generator: {label, params, units: {types, rects, polygons}}. In a hardscape style: joints: {kind: generator, generator: {label, params, units}, spacing}. The shapes are NOT clipped and are in drawing coordinates: like the cells of a bond, they are the outlines at the centers of the joints, and the gap moves each inward by half the gap. Kadakas does the rest as for every other kind: clipping to the outline and the holes (of each zone and course too), whole and cut units, counts per type (the full area of a type is its largest cell), unit_pattern.check, reports, to_objects and the DXF export. At most limits.pattern_units shapes. To make a result an agent runs a program with script.eval (it may call objects.get and the like for the region) and passes the typed arrays to hardscape_style.update or unit_pattern.layout in the same program; regeneration is the agent's job: run the program again with other parameters. An installed package will make results later (PLAT-15). Example programs are in docs/scripting-javascript.md (a random ashlar of three sizes and a radial fan).",
         "workflow_parking_lot": [
             {"step": 1, "method": "import.file", "params": {"path": "parking.dxf"}, "why": "Read the survey of the lot."},
             {"step": 2, "method": "document.summary", "params": {}, "why": "The classes list gives the ID of the class of the lot layer."},
@@ -77,6 +78,7 @@ fn describe_base() -> Value {
             {"step": 12, "method": "export.file", "params": {"path": "parking-paving.dxf", "format": "dxf", "options": {"patterns": "blocks"}}, "why": "Whole units as INSERTs of one block per unit type, cut units as closed polylines, each zone and course on its own layers. patterns units writes every unit as a polyline. The counts equal report.unit_pattern."}
         ],
         "examples": [
+            {"method": "unit_pattern.layout", "params": {"region": {"outline": [[0, 0], [6000, 0], [6000, 3000], [0, 3000]]}, "pattern": {"kind": "generator", "label": "ashlar", "types": ["300x200"], "rects": {"kind": [0, 0], "data": [150, 100, 300, 200, 0, 450, 100, 300, 200, 0]}, "gap": 10}, "origin": [0, 0], "limit": 0}},
             {"method": "unit_pattern.layout", "params": {"id": "00000000-0000-0000-0000-000000000010", "pattern": {"bond": "herringbone", "unit_length": 200, "unit_width": 100, "gap": 4}, "angle": 45, "include": ["units"], "limit": 100}},
             {"method": "unit_pattern.layout", "params": {"region": {"outline": [[0, 0], [8000, 0], [8000, 5000], [0, 5000]], "holes": [[[3000, 1500], [4500, 1500], [4500, 3000], [3000, 3000]]]}, "pattern": {"unit_length": 600, "unit_width": 300, "gap": 3, "bond": "stack"}, "origin": [0, 0]}},
             {"method": "unit_pattern.module_preset", "params": {"preset": "hexagon", "across_flats": 200}},
@@ -189,6 +191,33 @@ fn module_of(g: &Map<String, Value>) -> Result<Module, RpcError> {
     })
 }
 
+/// The generator of a pattern from the call: `generator: {label?, params?, units: {types, rects?,
+/// polygons?}}`, or the same fields at the top of the pattern (`label`, `params`, `types`, `rects`,
+/// `polygons`).
+fn generator_param(g: &Map<String, Value>) -> Result<layout::generator::GeneratorSpec, RpcError> {
+    if let Some(v) = g.get("generator") {
+        return serde_json::from_value(v.clone()).map_err(|e| {
+            bad(format!(
+                "'generator' must be {{label?, params?, units}}: {e}"
+            ))
+        });
+    }
+    let units: Map<String, Value> = ["types", "rects", "polygons"]
+        .iter()
+        .filter_map(|k| g.get(*k).map(|v| ((*k).to_string(), v.clone())))
+        .collect();
+    let units = serde_json::from_value(Value::Object(units)).map_err(|e| {
+        bad(format!(
+            "a generator pattern takes types, rects: {{kind, data}} and polygons: {{kind, start, points}}: {e}"
+        ))
+    })?;
+    Ok(layout::generator::GeneratorSpec::new(
+        g.get("label").and_then(Value::as_str).unwrap_or_default(),
+        g.get("params").cloned().unwrap_or(Value::Null),
+        units,
+    ))
+}
+
 /// The pattern from the call, on top of a base (the pattern of the object).
 fn pattern_param(m: &Map<String, Value>, base: Option<Pattern>) -> Result<Pattern, RpcError> {
     let given = match m.get("pattern") {
@@ -205,17 +234,22 @@ fn pattern_param(m: &Map<String, Value>, base: Option<Pattern>) -> Result<Patter
             .or_else(|| g.get("kind"))
             .and_then(Value::as_str);
         let is_module = kind.is_some_and(|k| k.trim().eq_ignore_ascii_case("module"));
+        let is_generator = kind.is_some_and(|k| k.trim().eq_ignore_ascii_case("generator"));
         if let Some(name) = g.get("preset").and_then(Value::as_str) {
             let num = |k: &str| g.get(k).and_then(Value::as_f64);
             let module = layout::module::preset(name, &num).map_err(bad)?;
             p.bond = Bond::Module;
             p.module = Some(module);
+        } else if is_generator {
+            p.bond = Bond::Generator;
+            p.module = None;
+            p.generator = Some(std::sync::Arc::new(generator_param(g)?));
         } else if is_module || g.contains_key("units") {
             p.bond = Bond::Module;
             p.module = Some(module_of(g)?);
         } else if let Some(k) = kind {
             p.bond = Bond::from_name(k).ok_or_else(|| {
-                bad("'bond' must be running_bond, stack, herringbone, basket_weave or module")
+                bad("'bond' must be running_bond, stack, herringbone, basket_weave, module or generator")
             })?;
             if p.bond == Bond::Module {
                 return Err(bad(
@@ -223,10 +257,13 @@ fn pattern_param(m: &Map<String, Value>, base: Option<Pattern>) -> Result<Patter
                 ));
             }
             p.module = None;
+            p.generator = None;
         }
         for (k, v) in g {
             match k.as_str() {
                 "bond" | "kind" | "preset" | "units" | "a" | "b" => {}
+                "label" | "params" | "types" | "rects" | "polygons" | "generator"
+                    if is_generator => {}
                 "unit_length" => p.unit_length = number(v, "unit_length")?,
                 "unit_width" => p.unit_width = number(v, "unit_width")?,
                 "gap" | "spacing" => p.gap = number(v, "gap")?,
@@ -237,7 +274,7 @@ fn pattern_param(m: &Map<String, Value>, base: Option<Pattern>) -> Result<Patter
             }
         }
     }
-    if p.bond != Bond::Module {
+    if !matches!(p.bond, Bond::Module | Bond::Generator) {
         if p.unit_length.is_nan() || p.unit_width.is_nan() {
             return Err(bad(
                 "give a pattern with unit_length and unit_width (an object with a joint pattern needs none)",

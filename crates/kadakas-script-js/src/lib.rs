@@ -1,0 +1,502 @@
+//! In-process JavaScript scripts (SCR-08).
+//!
+//! A script is JavaScript on QuickJS (quickjs-ng). QuickJS is built to WebAssembly and runs inside
+//! the plug-in host (`kadakas-plugin`), so the same script runs the same way on the desktop, the
+//! server and the browser. The module has no files, no network and no clock; its only way out is
+//! `kadakas.call(method, params)`, which asks the host to run an API method. The host
+//! ([`ScriptHost`]) decides what the call does: in Kadakas it goes through the same dispatch and
+//! the same checks as a JSON-RPC request.
+//!
+//! This crate has no knowledge of documents. It has:
+//!
+//! - [`ScriptEngine`]: loads the module and runs a script with a host.
+//! - [`typed`]: typed arrays across the boundary (`Float64Array` with a `stride`).
+//! - [`frame`]: the byte format of the messages.
+//!
+//! **Scripts only coordinate.** Every heavy operation is a native call that works on many items.
+//! A script that needs a loop over many items to do geometry shows that a native call is missing.
+//!
+//! The engine needs the cargo feature `engine` (it builds QuickJS with a wasi-sdk, see
+//! `docs/dev-guide.md`). Without it [`ScriptEngine::new`] returns [`ScriptError::Unavailable`].
+
+use std::fmt;
+
+use kadakas_plugin::{HostReply, HostedModule, Limits, PluginError};
+use serde_json::{Value, json};
+
+pub mod frame;
+pub mod typed;
+
+#[cfg(feature = "engine")]
+const MODULE: &[u8] = include_bytes!(env!("KADAKAS_JS_WASM"));
+#[cfg(not(feature = "engine"))]
+const MODULE: &[u8] = &[];
+
+/// The toolchain that built the module, for display (for example `wasi-sdk 34.0 (...)`).
+pub const TOOLCHAIN: &str = env!("KADAKAS_JS_TOOLCHAIN");
+
+/// The upstream of the module, for the About dialog.
+pub const UPSTREAM: &str = "quickjs-ng 0.17.0 (MIT)";
+
+/// The limits of one run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScriptLimits {
+    /// Work units for the whole run (about one per WebAssembly instruction). The time spent in
+    /// the host (the calls) is not counted.
+    pub fuel: u64,
+    /// Wall-clock milliseconds for one stretch of the script between two calls (native only; the
+    /// browser has no deadline).
+    pub segment_millis: u64,
+    /// Most bytes of memory of the script module. At most `HOSTED_MEMORY_BYTES` (128 MiB), the
+    /// same on every engine: the browser module has that maximum whatever the limits are. The engine
+    /// inside keeps three quarters of it for itself.
+    pub memory_bytes: usize,
+    /// Most bytes in the answer of a run (the value, the log and the typed arrays).
+    pub output_bytes: usize,
+    /// Most calls of `kadakas.call` in one run.
+    pub max_calls: u64,
+}
+
+impl ScriptLimits {
+    /// The limits of the desktop and the server.
+    pub fn native() -> Self {
+        ScriptLimits {
+            fuel: 10_000_000_000,
+            segment_millis: 1_500,
+            memory_bytes: kadakas_plugin::runtime::HOSTED_MEMORY_BYTES,
+            output_bytes: 16 << 20,
+            max_calls: 1_000_000,
+        }
+    }
+
+    /// The limits of the browser, where fuel is the only bound of the time (as for plug-ins).
+    pub fn browser() -> Self {
+        ScriptLimits {
+            fuel: 400_000_000,
+            ..Self::native()
+        }
+    }
+}
+
+impl Default for ScriptLimits {
+    fn default() -> Self {
+        if cfg!(target_arch = "wasm32") {
+            Self::browser()
+        } else {
+            Self::native()
+        }
+    }
+}
+
+/// What a script run needs.
+pub struct Request<'a> {
+    /// The body of a function. It gets `args`, and its `return` value is the result.
+    pub code: &'a str,
+    /// The value of `args`. A typed array in it is a marker (see [`typed`]) for a buffer of
+    /// `buffers`.
+    pub args: &'a Value,
+    /// The bytes of the typed arrays of `args`.
+    pub buffers: &'a [Vec<u8>],
+    /// Seeds `Math.random`. The same seed gives the same numbers.
+    pub seed: u32,
+}
+
+/// The result of a run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Output {
+    /// The returned value as JSON. A typed array in it is a marker (see [`typed`]).
+    pub value: Value,
+    /// The bytes of the typed arrays of `value`.
+    pub buffers: Vec<Vec<u8>>,
+    /// What `console.log` wrote (at most 64 KiB; more lines are counted, not kept).
+    pub log: String,
+    /// How many times the script called the host.
+    pub calls: u64,
+}
+
+impl Output {
+    /// The value with the typed arrays written out as numbers.
+    pub fn json(&self) -> Result<Value, String> {
+        let mut v = self.value.clone();
+        typed::resolve(&mut v, &self.buffers)?;
+        Ok(v)
+    }
+}
+
+/// An error that the host gives back to the script. The script sees an `Error` with `code`,
+/// `data` and `method`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CallFailure {
+    pub code: i64,
+    pub message: String,
+    pub data: Option<Value>,
+}
+
+/// Why a call did not give a value.
+#[derive(Clone, Debug, PartialEq)]
+pub enum HostError {
+    /// The call failed. The script can catch the error.
+    Failure(CallFailure),
+    /// Stop the whole run (a limit of the host). The script cannot catch it.
+    Stop(String),
+}
+
+/// What serves `kadakas.call`.
+pub trait ScriptHost {
+    /// Runs `method`. `params` has the typed arrays written out already. With `typed`, the script
+    /// wants long lists of points and numbers in the answer as typed arrays (the engine does that
+    /// to the returned value).
+    fn call(&mut self, method: &str, params: Value, typed: bool) -> Result<Value, HostError>;
+}
+
+/// What a script threw.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScriptThrow {
+    pub message: String,
+    /// The `name` of the error (`TypeError`, `SyntaxError`, ...).
+    pub name: String,
+    pub stack: String,
+    /// Set when a call to the host failed and the script did not catch it.
+    pub method: Option<String>,
+    pub code: Option<i64>,
+    pub data: Option<Value>,
+}
+
+/// Why a run failed.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ScriptError {
+    /// The script threw (or did not compile).
+    Script(Box<ScriptThrow>),
+    /// A limit stopped the run: fuel, time, memory, calls, output size or the stack.
+    Limit(String),
+    /// The module trapped, or the host did something that it should not.
+    Trap(String),
+    /// This build has no script engine.
+    Unavailable(String),
+}
+
+impl fmt::Display for ScriptError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ScriptError::Script(t) => {
+                let ScriptThrow {
+                    message,
+                    method,
+                    stack,
+                    ..
+                } = &**t;
+                match method {
+                    Some(m) => write!(f, "the script failed at {m}: {message}")?,
+                    None => write!(f, "the script failed: {message}")?,
+                }
+                if let Some(line) = stack.lines().find(|l| l.contains("<eval>")) {
+                    write!(f, " ({})", line.trim())?;
+                }
+                Ok(())
+            }
+            ScriptError::Limit(m) => write!(f, "the script went over a limit: {m}"),
+            ScriptError::Trap(m) => write!(f, "the script engine crashed: {m}"),
+            ScriptError::Unavailable(m) => f.write_str(m),
+        }
+    }
+}
+
+impl std::error::Error for ScriptError {}
+
+/// A failed run, with what the script logged before it failed (if the engine could tell).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Failure {
+    pub error: ScriptError,
+    pub log: String,
+    pub calls: u64,
+}
+
+impl From<ScriptError> for Failure {
+    fn from(error: ScriptError) -> Self {
+        Failure {
+            error,
+            log: String::new(),
+            calls: 0,
+        }
+    }
+}
+
+/// The script engine: the loaded module and the limits.
+pub struct ScriptEngine {
+    module: Box<dyn HostedModule>,
+    limits: ScriptLimits,
+}
+
+impl ScriptEngine {
+    /// Loads the module with the engine of this build (wasmtime on the desktop). Compiling the
+    /// module takes a moment the first time in a process; the compiled module is shared.
+    pub fn new(limits: ScriptLimits) -> Result<Self, ScriptError> {
+        Self::with_runtime(&*kadakas_plugin::default_runtime(), limits)
+    }
+
+    /// Like [`ScriptEngine::new`], on the engine you give (the tests run the metered engine of
+    /// the browser on the desktop).
+    pub fn with_runtime(
+        runtime: &dyn kadakas_plugin::PluginRuntime,
+        limits: ScriptLimits,
+    ) -> Result<Self, ScriptError> {
+        if MODULE.is_empty() {
+            return Err(ScriptError::Unavailable(
+                "this build has no script engine (kadakas-script-js was built without the feature `engine`)"
+                    .into(),
+            ));
+        }
+        let module = runtime
+            .load_hosted(MODULE, &plugin_limits(&limits))
+            .map_err(|e| match e {
+                PluginError::Unsupported(m) => ScriptError::Unavailable(m),
+                other => ScriptError::Trap(other.to_string()),
+            })?;
+        Ok(ScriptEngine { module, limits })
+    }
+
+    /// Compiles the module in advance, asynchronously. **The browser needs this** before the first
+    /// script: Chrome refuses the synchronous compile of a module of this size on the main thread.
+    /// Call it once at start. It does not depend on the limits.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn precompile() -> Result<(), ScriptError> {
+        if MODULE.is_empty() {
+            return Ok(());
+        }
+        kadakas_plugin::web::precompile_hosted(MODULE)
+            .await
+            .map_err(|e| ScriptError::Trap(e.to_string()))
+    }
+
+    pub fn limits(&self) -> &ScriptLimits {
+        &self.limits
+    }
+
+    /// True if this build can run scripts.
+    pub fn built_in() -> bool {
+        !MODULE.is_empty()
+    }
+
+    /// Runs a script. Every call of the script goes to `host`.
+    pub fn run(&self, request: &Request<'_>, host: &mut dyn ScriptHost) -> Result<Output, Failure> {
+        self.run_watched(request, host, &|| None)
+    }
+
+    /// Like [`ScriptEngine::run`], and `watch` is asked before every call of the script and at
+    /// every tick of the clock of the engine (about every 50 ms) while the script runs on its
+    /// own. If it gives a reason, the run stops with a limit error that names it. This is how a
+    /// person stops a script and how the time of the whole run is bounded, also for a script
+    /// that makes no calls. The browser engine has no tick: it asks at the calls only.
+    pub fn run_watched(
+        &self,
+        request: &Request<'_>,
+        host: &mut dyn ScriptHost,
+        watch: &dyn Fn() -> Option<String>,
+    ) -> Result<Output, Failure> {
+        let module = &self.module;
+        let options = json!({
+            "memory": self.limits.memory_bytes.min(kadakas_plugin::runtime::HOSTED_MEMORY_BYTES) / 4 * 3,
+            "stack": 256 * 1024,
+            "seed": request.seed,
+            "max_calls": self.limits.max_calls,
+        });
+        let args = serde_json::to_vec(request.args).expect("a JSON value is JSON");
+        let options = serde_json::to_vec(&options).expect("options are JSON");
+        let mut parts: Vec<&[u8]> = vec![request.code.as_bytes(), &args, &options];
+        parts.extend(request.buffers.iter().map(Vec::as_slice));
+        let frame = frame::encode(&parts);
+        let mut server = Server {
+            host,
+            calls: 0,
+            max_calls: self.limits.max_calls,
+            cap: self.limits.output_bytes,
+        };
+        let mut serve = |bytes: &[u8]| server.serve(bytes);
+        let watch_plugin = || watch().map(PluginError::Limit);
+        let answer = module
+            .run(&frame, &mut serve, &watch_plugin)
+            .map_err(plugin_failure)?;
+        parse_answer(&answer)
+    }
+}
+
+fn plugin_limits(l: &ScriptLimits) -> Limits {
+    Limits {
+        fuel: l.fuel,
+        fuel_describe: l.fuel,
+        fuel_move: l.fuel,
+        max_millis: l.segment_millis,
+        memory_bytes: l
+            .memory_bytes
+            .min(kadakas_plugin::runtime::HOSTED_MEMORY_BYTES),
+        max_output_bytes: l.output_bytes,
+        ..Limits::default()
+    }
+}
+
+fn plugin_failure(e: PluginError) -> Failure {
+    let error = match e {
+        PluginError::Limit(m) => ScriptError::Limit(m),
+        PluginError::Unsupported(m) => ScriptError::Unavailable(m),
+        other => ScriptError::Trap(other.to_string()),
+    };
+    error.into()
+}
+
+fn error_reply(code: i64, message: &str, data: Option<&Value>) -> HostReply {
+    let body = json!({"code": code, "message": message, "data": data});
+    HostReply::Reply(frame::encode(&[b"err", body.to_string().as_bytes()]))
+}
+
+/// Serves the calls of one run: counts them, bounds the size of each request and reply, and asks
+/// the host.
+struct Server<'a> {
+    host: &'a mut dyn ScriptHost,
+    calls: u64,
+    max_calls: u64,
+    /// The most bytes of a request or a reply (the output limit of the run).
+    cap: usize,
+}
+
+impl Server<'_> {
+    /// Serves one `kadakas.call`: decode the request, ask the host, encode the reply.
+    fn serve(&mut self, bytes: &[u8]) -> HostReply {
+        self.calls += 1;
+        if self.calls > self.max_calls {
+            return HostReply::Abort(PluginError::Limit(format!(
+                "the script made more than {} calls",
+                self.max_calls
+            )));
+        }
+        serve_call(bytes, self.host, self.cap)
+    }
+}
+
+/// Serves one `kadakas.call`.
+fn serve_call(bytes: &[u8], host: &mut dyn ScriptHost, cap: usize) -> HostReply {
+    if bytes.len() > cap {
+        return error_reply(
+            -32600,
+            &format!("the call has {} bytes. The limit is {cap}", bytes.len()),
+            None,
+        );
+    }
+    let Some(parts) = frame::decode(bytes).filter(|p| p.len() >= 2) else {
+        return error_reply(-32600, "the call is broken", None);
+    };
+    let Ok(method) = std::str::from_utf8(parts[0]) else {
+        return error_reply(-32600, "the method is not text", None);
+    };
+    let mut params: Value = match serde_json::from_slice(parts[1]) {
+        Ok(v) => v,
+        Err(e) => return error_reply(-32602, &format!("the parameters are not JSON: {e}"), None),
+    };
+    let wants_typed = params
+        .as_object_mut()
+        .and_then(|m| m.remove("$ktyped"))
+        .is_some_and(|v| v == Value::Bool(true));
+    // A number as JSON takes far more memory than its bytes in a buffer: bound their count.
+    if let Err(e) = typed::resolve_limited(&mut params, &parts[2..], cap / 16) {
+        return error_reply(-32602, &e, None);
+    }
+    match host.call(method, params, wants_typed) {
+        Ok(mut value) => {
+            let buffers = if wants_typed {
+                typed::extract(&mut value)
+            } else {
+                Vec::new()
+            };
+            let text = value.to_string();
+            let size = text.len() + buffers.iter().map(Vec::len).sum::<usize>();
+            if size > cap {
+                return error_reply(
+                    -32603,
+                    &format!("the reply has {size} bytes. The limit is {cap}"),
+                    None,
+                );
+            }
+            let mut out: Vec<&[u8]> = vec![b"ok", text.as_bytes()];
+            out.extend(buffers.iter().map(Vec::as_slice));
+            HostReply::Reply(frame::encode(&out))
+        }
+        Err(HostError::Failure(f)) => error_reply(f.code, &f.message, f.data.as_ref()),
+        Err(HostError::Stop(m)) => HostReply::Abort(PluginError::Limit(m)),
+    }
+}
+
+fn parse_answer(answer: &[u8]) -> Result<Output, Failure> {
+    let parts = frame::decode(answer)
+        .filter(|p| p.len() >= 4)
+        .ok_or_else(|| {
+            Failure::from(ScriptError::Trap("the engine gave a broken answer".into()))
+        })?;
+    let text = |i: usize| String::from_utf8_lossy(parts[i]).into_owned();
+    let calls = text(2).parse::<u64>().unwrap_or(0);
+    let log = text(3);
+    let status = text(0);
+    let fail = |error: ScriptError| Failure {
+        error,
+        log: log.clone(),
+        calls,
+    };
+    match status.as_str() {
+        "ok" => {
+            let value: Value = serde_json::from_slice(parts[1])
+                .map_err(|e| fail(ScriptError::Trap(format!("the result is not JSON: {e}"))))?;
+            Ok(Output {
+                value,
+                buffers: parts[4..].iter().map(|b| b.to_vec()).collect(),
+                log,
+                calls,
+            })
+        }
+        "limit" | "error" => {
+            let info: Value = serde_json::from_slice(parts[1]).unwrap_or(Value::Null);
+            let s = |k: &str| {
+                info.get(k)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let message = s("message");
+            // The module says which errors are its limits (out of memory, a string that is too
+            // long, a deep recursion, too many calls): the text of a message decides nothing.
+            if status == "limit" {
+                let what = if message.is_empty() {
+                    "out of memory".to_string()
+                } else {
+                    format!(
+                        "{message} (a limit of the script engine: memory, size or recursion depth)"
+                    )
+                };
+                return Err(fail(ScriptError::Limit(what)));
+            }
+            Err(fail(ScriptError::Script(Box::new(ScriptThrow {
+                message,
+                name: s("name"),
+                stack: s("stack"),
+                method: info.get("method").and_then(Value::as_str).map(String::from),
+                code: info.get("code").and_then(Value::as_i64),
+                data: info.get("data").filter(|d| !d.is_null()).cloned(),
+            }))))
+        }
+        _ => Err(fail(ScriptError::Trap(format!(
+            "the engine failed: {}",
+            text(1)
+        )))),
+    }
+}
+
+#[cfg(all(test, feature = "engine", not(target_arch = "wasm32")))]
+mod tests;
+#[cfg(all(test, not(feature = "engine")))]
+mod tests_without_engine {
+    use super::*;
+
+    #[test]
+    fn a_build_without_the_engine_says_so() {
+        assert!(!ScriptEngine::built_in());
+        let e = ScriptEngine::new(ScriptLimits::default()).err().unwrap();
+        assert!(matches!(e, ScriptError::Unavailable(m) if m.contains("without the feature")));
+    }
+}

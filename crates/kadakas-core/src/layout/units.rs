@@ -565,6 +565,9 @@ pub fn for_each_unit(
     if let Err(e) = pattern.validate() {
         return Err(LayoutError::Invalid(e));
     }
+    if pattern.bond == super::Bond::Generator {
+        return super::generator::lay(region, pattern, place, limits, f);
+    }
     let comp = pattern.compile().map_err(LayoutError::Invalid)?;
     let (origin, angle) = place.resolve(region);
     let kinds: Vec<(String, f64)> = comp

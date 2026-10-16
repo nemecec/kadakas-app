@@ -68,6 +68,7 @@ mod tests {
             units: Vec::new(),
             a: None,
             b: None,
+            generator: None,
         }
     }
 

@@ -14,7 +14,7 @@ LIB_MIN=95
 # lower because some start-up error paths (a broken terminal, a closed stdout) cannot be reached.
 CLI_MIN=90
 
-LIBS=(units l10n sys container file crs plants core props review collab collab-ws render io annot gis ifc x3d irrigation script plugin-abi plugin site sheet print api update sign-manifest ui-core feedback)
+LIBS=(units l10n sys container file crs plants core props review collab collab-ws render io annot gis ifc x3d irrigation script script-js plugin-abi plugin site sheet print api update sign-manifest ui-core feedback)
 
 if [ "$#" -gt 0 ]; then
   CRATES=("$@")
@@ -30,7 +30,10 @@ for c in "${CRATES[@]}"; do
   # Profile data of an earlier run, or of an older tree, would be counted again and gives wrong
   # totals. Start every crate from clean profile data.
   cargo llvm-cov clean --workspace
-  if ! cargo llvm-cov -p "kadakas-$c" --summary-only --fail-under-lines "$min"; then
+  # The script engine needs its feature to be built (and a wasi-sdk, see docs/dev-guide.md).
+  features=()
+  if [ "$c" = "script-js" ]; then features=(--features engine); fi
+  if ! cargo llvm-cov -p "kadakas-$c" ${features[@]+"${features[@]}"} --summary-only --fail-under-lines "$min"; then
     echo "!! kadakas-$c is below ${min}% line coverage"
     failed=1
   fi

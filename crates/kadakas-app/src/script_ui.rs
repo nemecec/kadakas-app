@@ -45,6 +45,15 @@ pub struct ScriptUi {
     queue: VecDeque<ResetJob>,
     /// The plug-in object whose script the user reviews in the "Trust this plug-in?" dialog.
     review: Option<ObjectId>,
+    /// A JavaScript program that runs now, on a worker thread (the session serves its calls in the
+    /// frames). A window blocks the drawing until it ends.
+    js_run: Option<JsRun>,
+}
+
+/// A JavaScript run and what the console needs when it ends.
+struct JsRun {
+    run: kadakas_api::ScriptRun,
+    label: String,
 }
 
 /// A reset on a worker thread.
@@ -81,7 +90,7 @@ fn list_scripts(folder: &Path) -> Vec<PathBuf> {
         .flatten()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "py"))
+        .filter(|p| p.extension().is_some_and(|e| e == "py" || e == "js"))
         .collect();
     v.sort();
     v
@@ -97,8 +106,148 @@ impl ScriptUi {
         self.files = list_scripts(Path::new(&self.folder));
     }
 
-    /// Starts a script as the user asked. The app has made sure that a live session address exists.
+    /// True for a JavaScript file: it runs inside the session, not as a program next to it.
+    pub fn is_js(path: &Path) -> bool {
+        path.extension().is_some_and(|e| e == "js")
+    }
+
+    /// True while a JavaScript program runs: the drawing must not be edited meanwhile.
+    pub fn busy(&self) -> bool {
+        self.js_run.is_some()
+    }
+
+    fn console(&mut self, stream: Stream, text: String) {
+        let n = self.lines.len();
+        self.lines.push(Line { n, stream, text });
+    }
+
+    /// Starts a program in the session (`script.eval`). The engine runs on a worker thread. The
+    /// whole run is one undo step. The browser has no threads: there the run is done at once, within
+    /// its fuel.
+    fn run_js(&mut self, session: &mut Session, params: Value, label: &str, status: &mut String) {
+        self.console(Stream::Info, label.to_string());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match session.script_start(&params) {
+                Ok(run) => {
+                    self.js_run = Some(JsRun {
+                        run,
+                        label: label.to_string(),
+                    });
+                }
+                Err(e) => self.js_failed(&e, status),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let answer = session.handle("script.eval", params);
+            self.js_ended(session, answer, status);
+        }
+    }
+
+    fn js_failed(&mut self, e: &kadakas_api::RpcError, status: &mut String) {
+        let log = e
+            .details
+            .as_ref()
+            .and_then(|d| d["log"].as_str())
+            .unwrap_or("")
+            .to_string();
+        for l in log.lines() {
+            self.console(Stream::Out, l.to_string());
+        }
+        *status = tr!("script-ui-js-failed", message = e.message.clone());
+        self.console(Stream::Err, status.clone());
+    }
+
+    /// Writes the end of a run to the console.
+    fn js_ended(
+        &mut self,
+        session: &mut Session,
+        answer: Result<Value, kadakas_api::RpcError>,
+        status: &mut String,
+    ) {
+        match answer {
+            Ok(v) => {
+                for l in v["log"].as_str().unwrap_or("").lines() {
+                    self.console(Stream::Out, l.to_string());
+                }
+                if !v["result"].is_null() {
+                    self.console(Stream::Out, v["result"].to_string());
+                }
+                *status = tr!(
+                    "script-ui-js-ran",
+                    calls = v["calls"].as_u64().unwrap_or(0),
+                    steps = v["undo_steps"].as_u64().unwrap_or(0),
+                    ms = v["elapsed_ms"].as_u64().unwrap_or(0)
+                );
+                self.console(Stream::Info, status.clone());
+            }
+            Err(e) => self.js_failed(&e, status),
+        }
+        session
+            .selection
+            .retain(|id| session.editor.doc().object(*id).is_some());
+    }
+
+    /// Serves the calls of the running program for a few milliseconds, and shows the window that
+    /// blocks the drawing and stops the program.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pump_js(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String) {
+        let Some(mut job) = self.js_run.take() else {
+            return;
+        };
+        match session.script_pump(&mut job.run, std::time::Duration::from_millis(8)) {
+            Some(answer) => self.js_ended(session, answer, status),
+            None => {
+                egui::Modal::new(egui::Id::new("modal-js-run")).show(ctx, |ui| {
+                    ui.heading(tr!("script-ui-js-running"));
+                    ui.label(&job.label);
+                    ui.label(tr!(
+                        "script-ui-js-running-detail",
+                        seconds = job.run.elapsed_ms() / 1000,
+                        calls = job.run.calls()
+                    ));
+                    ui.small(tr!("script-ui-js-edits-blocked"));
+                    let stopping = job.run.stopping();
+                    if ui
+                        .add_enabled(
+                            !stopping,
+                            egui::Button::new(if stopping {
+                                tr!("script-ui-js-stopping")
+                            } else {
+                                tr!("script-ui-js-stop")
+                            }),
+                        )
+                        .clicked()
+                    {
+                        job.run.stop();
+                    }
+                });
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+                self.js_run = Some(job);
+            }
+        }
+    }
+
+    /// Starts a script as the user asked. The app has made sure that a live session address exists
+    /// (not needed for a JavaScript file).
     pub fn start(&mut self, session: &mut Session, path: PathBuf, status: &mut String) {
+        if Self::is_js(&path) {
+            let name = path.display().to_string();
+            match std::fs::read_to_string(&path) {
+                Ok(code) => self.run_js(session, json!({"code": code}), &name, status),
+                Err(e) => {
+                    *status = tr!("script-ui-js-cannot-read", path = name, e = e.to_string());
+                    let n = self.lines.len();
+                    self.lines.push(Line {
+                        n,
+                        stream: Stream::Err,
+                        text: status.clone(),
+                    });
+                }
+            }
+            return;
+        }
         self.lines.clear();
         self.next_line = 0;
         let spec = RunSpec {
@@ -148,6 +297,8 @@ impl ScriptUi {
         self.poll(session);
         self.tick(ctx, session, status);
         self.review_dialog(ctx, session, status);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.pump_js(ctx, session, status);
         let running = self.status.as_ref().is_some_and(Status::is_running);
         if running {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -260,6 +411,11 @@ impl ScriptUi {
 
     /// Takes the result of the running reset and starts the next one.
     fn tick(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String) {
+        // The jobs of Python plug-in objects write to the document: they wait for a script run to
+        // end, so they do not become part of its undo step.
+        if self.js_run.is_some() {
+            return;
+        }
         if let Some(r) = &self.running {
             match r.rx.try_recv() {
                 Ok((job, result)) => {

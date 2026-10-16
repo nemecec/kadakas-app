@@ -1040,6 +1040,28 @@ class Document:
         """Turn the units (and gaps) of a layout into ordinary objects in one group."""
         return self.api.unit_pattern_to_objects(**params)
 
+    def script_eval(
+        self,
+        code: str,
+        *,
+        mode: str = "edit",
+        args: Any = None,
+        seed: int | None = None,
+    ) -> JsonDict:
+        """Run a JavaScript program inside the session (SCR-08). The code is the body of a function
+        in a sandbox (QuickJS in WebAssembly: no files, no network, no clock); it calls the methods
+        of the API with ``kadakas.call(method, params)``. All changes of the run are one undo step,
+        and an error (``KadakasError``) takes back all of them. ``mode="read"`` allows read-only
+        methods only and refuses any other before it runs. A document holds no code: the program
+        is the text you give. Returns ``{result, log, calls, changed, undo_steps, elapsed_ms}``;
+        see ``script.eval`` in ``describe``."""
+        params: JsonDict = {"code": code, "mode": mode}
+        if args is not None:
+            params["args"] = args
+        if seed is not None:
+            params["seed"] = seed
+        return self.api.script_eval(**params)
+
     def export_file(self, path: str | Path, **options: Any) -> JsonDict:
         """Export to DXF, GeoJSON (or IFC when the path ends in ``.ifc``). DXF options include
         ``patterns`` (``"none"`` | ``"gaps"`` | ``"units"``): the unit pattern of hardscapes, with

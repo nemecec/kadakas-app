@@ -155,6 +155,10 @@ impl PluginUi {
                 kadakas_plugin::store::WEB_TOTAL_CAP,
             );
             kadakas_plugin::web::precompile_stored(&store, &limits).await;
+            // The script engine is a large module: the browser compiles it only asynchronously.
+            if let Err(e) = kadakas_script_js::ScriptEngine::precompile().await {
+                web_sys::console::warn_1(&format!("the script engine: {e}").into());
+            }
             boot.set(true);
             ctx.request_repaint();
         });

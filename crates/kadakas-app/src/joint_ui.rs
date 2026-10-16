@@ -100,6 +100,7 @@ fn bond_label(k: JointKind) -> String {
         JointKind::Herringbone => tr!("joint-ui-bond-herringbone"),
         JointKind::BasketWeave => tr!("joint-ui-bond-basket-weave"),
         JointKind::Module => tr!("joint-ui-bond-module"),
+        JointKind::Generator => tr!("joint-ui-bond-generator"),
     }
 }
 

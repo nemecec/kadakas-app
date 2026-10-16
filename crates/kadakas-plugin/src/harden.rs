@@ -15,7 +15,10 @@
 //!   fuel of a call starts full.
 //! - **Memory.** The memory section gets a maximum: the memory cap in pages. A module that needs
 //!   more at the start is refused. A `memory.grow` over the cap returns -1, as in any engine.
-//! - **No imports.** A module with an import is refused.
+//! - **No imports.** A module with an import is refused. Only a hosted module (the script
+//!   engine, see `crate::runtime::HostedModule`) may import `kadakas.call` and `kadakas.read`, both
+//!   functions, and nothing else (`HardenLimits::host_imports`). The imports come first in the
+//!   function index space and the rewrite adds no function, so no index changes.
 //!
 //! - **Tables.** Every table gets a maximum of [`MAX_TABLE_ELEMENTS`] elements, a module whose table
 //!   starts bigger is refused, and a module has at most [`MAX_TABLES`] tables (as in the native
@@ -93,6 +96,8 @@ pub struct HardenLimits {
     pub fuel: u64,
     /// Most bytes of linear memory.
     pub memory_bytes: usize,
+    /// Allow the two imports of a hosted module (`kadakas.call` and `kadakas.read`, functions).
+    pub host_imports: bool,
 }
 
 #[derive(Debug)]
@@ -377,10 +382,24 @@ pub fn harden(wasm: &[u8], limits: &HardenLimits) -> Result<Vec<u8>, PluginError
     let mut has_global_section = false;
     for payload in Parser::new(0).parse_all(wasm) {
         match payload.map_err(|e| PluginError::Invalid(e.to_string()))? {
-            Payload::ImportSection(r) if r.count() > 0 => {
+            Payload::ImportSection(r) if r.count() > 0 && !limits.host_imports => {
                 return Err(PluginError::Invalid(
                     "the module has imports. A plug-in may import nothing".into(),
                 ));
+            }
+            Payload::ImportSection(r) => {
+                for i in r.into_imports() {
+                    let i = i.map_err(|e| PluginError::Invalid(e.to_string()))?;
+                    let known = i.module == crate::runtime::HOST_MODULE
+                        && crate::runtime::HOST_IMPORTS.contains(&i.name)
+                        && matches!(i.ty, wasmparser::TypeRef::Func(_));
+                    if !known {
+                        return Err(PluginError::Invalid(format!(
+                            "the module imports '{}.{}'. A script module may import only kadakas.call and kadakas.read (functions)",
+                            i.module, i.name
+                        )));
+                    }
+                }
             }
             Payload::TableSection(r) if r.count() > MAX_TABLES => {
                 return Err(PluginError::Limit(format!(
@@ -434,6 +453,7 @@ mod tests {
     const LIMITS: HardenLimits = HardenLimits {
         fuel: 100_000,
         memory_bytes: 4 * PAGE as usize,
+        host_imports: false,
     };
 
     fn wat(src: &str) -> Vec<u8> {
@@ -692,6 +712,7 @@ mod tests {
         let limits = HardenLimits {
             fuel: 200_000_000,
             memory_bytes: 64 << 20,
+            host_imports: false,
         };
         let hard = harden(planter, &limits).unwrap();
         let (mut store, instance) = instantiate(&hard);

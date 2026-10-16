@@ -143,6 +143,11 @@ impl Session {
     /// `events.reset` instead of the missed changes. A client that missed changes that the
     /// bounded log dropped gets `events.reset` too.
     pub fn take_notifications(&mut self, conn: u64) -> Vec<Value> {
+        // While a script runs, its steps are not announced (they may be taken back). The cursor
+        // stays: at the end the run is one change, or none.
+        if self.script_js.open() {
+            return vec![];
+        }
         let revision = self.editor.revision();
         let Some(sub) = self.events.subs.get_mut(&conn) else {
             return vec![];

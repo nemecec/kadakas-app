@@ -1,0 +1,41 @@
+name: wasi-sdk
+description: >
+  Installs the pinned wasi-sdk (the toolchain that builds the script engine, SCR-08) with
+  scripts/install-wasi-sdk.sh, and caches both the toolchain and the module that it builds.
+  The version and the hashes are in crates/kadakas-script-js/wasi-sdk.env.
+inputs:
+  cache-module:
+    description: Cache the finished module and let the build take it from the cache (CI). A release build sets this to false and always builds from the source.
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: Read the pinned version
+      shell: bash
+      run: |
+        version="$(grep '^WASI_SDK_VERSION=' crates/kadakas-script-js/wasi-sdk.env | cut -d= -f2)"
+        # The build script is a Windows program on Windows: it needs a Windows path (C:/...).
+        home="$HOME"
+        if command -v cygpath >/dev/null 2>&1; then home="$(cygpath -m "$HOME")"; fi
+        echo "WASI_SDK_VERSION=$version" >> "$GITHUB_ENV"
+        echo "WASI_SDK_PATH=$home/.local/share/wasi-sdk/$version" >> "$GITHUB_ENV"
+        if [ "${{ inputs.cache-module }}" = "true" ]; then
+          echo "KADAKAS_JS_CACHE_DIR=$home/.cache/kadakas-quickjs" >> "$GITHUB_ENV"
+        fi
+    # The toolchain: one folder per version, for each operating system and processor.
+    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      id: sdk
+      with:
+        path: ~/.local/share/wasi-sdk
+        key: wasi-sdk-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/kadakas-script-js/wasi-sdk.env') }}
+    - if: steps.sdk.outputs.cache-hit != 'true'
+      shell: bash
+      run: scripts/install-wasi-sdk.sh
+    # The module: keyed by the vendored source, the shim, the build script and the pinned
+    # version (which carries the flags). build.rs names the file by the hash of its input too, so
+    # a stale entry is never used.
+    - if: inputs.cache-module == 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ~/.cache/kadakas-quickjs
+        key: quickjs-wasm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/kadakas-script-js/quickjs/**', 'crates/kadakas-script-js/c/**', 'crates/kadakas-script-js/build.rs', 'crates/kadakas-script-js/wasi-sdk.env') }}
