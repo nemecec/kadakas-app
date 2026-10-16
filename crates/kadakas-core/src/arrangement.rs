@@ -1,0 +1,1072 @@
+//! The planar arrangement of loose lines and arcs: where they cross, where they nearly meet, and
+//! the faces (areas) that they enclose, with holes.
+//!
+//! This is the geometry under `region.from_curves` (PAT-06) and under the zones of a region
+//! (PAT-07). It is pure and has no knowledge of the document.
+//!
+//! How it works:
+//!
+//! 1. Every input curve is a line or a circular arc ([`Curve`]).
+//! 2. Curves are split where they cross, and where an end lies within the tolerance of the middle
+//!    of another curve (a T-junction with a small gap or a small overshoot).
+//! 3. Points within the tolerance of each other become one node. A node that joins ends which were
+//!    not at one point is a closed gap: it is reported with its position and size.
+//! 4. Edges that lead to a dead end are removed, and the dead ends are reported (position, length,
+//!    and the nearest other open end). Nothing is guessed: a gap bigger than the tolerance stays
+//!    open, and the faces on its two sides are not made.
+//! 5. The faces are traced with a half-edge walk. A component of the drawing that lies inside a face
+//!    of another component (an island) is a hole of that face. The nesting depth is kept.
+//!
+//! Two faces that share an edge use the same nodes, so they share the edge exactly.
+
+use std::collections::HashMap;
+use std::f64::consts::{PI, TAU};
+
+use glam::DVec2;
+
+use crate::curve::{Vertex, VertexKind};
+
+/// Most input curves of one arrangement.
+pub const MAX_CURVES: usize = 200_000;
+/// Most nodes of one arrangement after splitting.
+pub const MAX_EDGES: usize = 1_000_000;
+/// Most dead ends and closed gaps that a report lists. The counts are always exact.
+pub const MAX_LISTED: usize = 1000;
+/// Chord error when an arc is cut into straight pieces for tests (mm).
+const FLAT_ERR: f64 = 0.02;
+
+/// A line or a circular arc.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Curve {
+    Line {
+        a: DVec2,
+        b: DVec2,
+    },
+    /// The arc starts at angle `start` (radians) and turns by `sweep` (positive: counterclockwise).
+    Arc {
+        c: DVec2,
+        r: f64,
+        start: f64,
+        sweep: f64,
+    },
+}
+
+impl Curve {
+    pub fn line(a: DVec2, b: DVec2) -> Curve {
+        Curve::Line { a, b }
+    }
+
+    /// An arc from angle `start` to angle `end`, counterclockwise.
+    pub fn arc_ccw(c: DVec2, r: f64, start: f64, end: f64) -> Curve {
+        let mut sweep = (end - start).rem_euclid(TAU);
+        if sweep == 0.0 && end != start {
+            sweep = TAU;
+        }
+        Curve::Arc {
+            c,
+            r,
+            start,
+            sweep,
+        }
+    }
+
+    /// The arc through three points, or a line if the points are on one line.
+    pub fn through(a: DVec2, m: DVec2, b: DVec2) -> Curve {
+        match circumcircle(a, m, b) {
+            Some((c, r)) => {
+                let sa = (a - c).to_angle();
+                let sm = (m - c).to_angle();
+                let sb = (b - c).to_angle();
+                let ccw = (sm - sa).rem_euclid(TAU);
+                let end = (sb - sa).rem_euclid(TAU);
+                let sweep = if ccw <= end { end } else { end - TAU };
+                Curve::Arc {
+                    c,
+                    r,
+                    start: sa,
+                    sweep,
+                }
+            }
+            None => Curve::Line { a, b },
+        }
+    }
+
+    pub fn from(&self) -> DVec2 {
+        self.at(0.0)
+    }
+
+    pub fn to(&self) -> DVec2 {
+        self.at(1.0)
+    }
+
+    /// The point at `t` in 0..1 (1 is the end).
+    pub fn at(&self, t: f64) -> DVec2 {
+        match *self {
+            Curve::Line { a, b } => a.lerp(b, t),
+            Curve::Arc { c, r, start, sweep } => c + DVec2::from_angle(start + sweep * t) * r,
+        }
+    }
+
+    pub fn length(&self) -> f64 {
+        match *self {
+            Curve::Line { a, b } => a.distance(b),
+            Curve::Arc { r, sweep, .. } => r * sweep.abs(),
+        }
+    }
+
+    /// The curve the other way round.
+    pub fn reversed(&self) -> Curve {
+        match *self {
+            Curve::Line { a, b } => Curve::Line { a: b, b: a },
+            Curve::Arc { c, r, start, sweep } => Curve::Arc {
+                c,
+                r,
+                start: start + sweep,
+                sweep: -sweep,
+            },
+        }
+    }
+
+    /// The direction of travel at the start.
+    pub fn start_tangent(&self) -> DVec2 {
+        match *self {
+            Curve::Line { a, b } => (b - a).normalize_or_zero(),
+            Curve::Arc { start, sweep, .. } => {
+                let d = DVec2::from_angle(start).perp();
+                if sweep >= 0.0 { d } else { -d }
+            }
+        }
+    }
+
+    /// The signed curvature: positive turns left.
+    pub fn curvature(&self) -> f64 {
+        match *self {
+            Curve::Line { .. } => 0.0,
+            Curve::Arc { r, sweep, .. } => sweep.signum() / r,
+        }
+    }
+
+    /// The box of the curve.
+    pub fn bounds(&self) -> (DVec2, DVec2) {
+        match *self {
+            Curve::Line { a, b } => (a.min(b), a.max(b)),
+            Curve::Arc { c, r, start, sweep } => {
+                let (a, b) = (self.from(), self.to());
+                let (mut lo, mut hi) = (a.min(b), a.max(b));
+                let (s0, s1) = if sweep >= 0.0 {
+                    (start, start + sweep)
+                } else {
+                    (start + sweep, start)
+                };
+                for k in 0..4 {
+                    let ang = k as f64 * PI / 2.0;
+                    // The extreme angle lies in the sweep if some multiple of a quarter turn does.
+                    let n = ((s0 - ang) / TAU).ceil();
+                    if ang + n * TAU <= s1 {
+                        let p = c + DVec2::from_angle(ang) * r;
+                        lo = lo.min(p);
+                        hi = hi.max(p);
+                    }
+                }
+                (lo, hi)
+            }
+        }
+    }
+
+    /// The closest point of the curve to `p`: the point, the parameter t in 0..1 and the distance.
+    pub fn closest(&self, p: DVec2) -> (DVec2, f64, f64) {
+        match *self {
+            Curve::Line { a, b } => {
+                let ab = b - a;
+                let l2 = ab.length_squared();
+                let t = if l2 == 0.0 {
+                    0.0
+                } else {
+                    ((p - a).dot(ab) / l2).clamp(0.0, 1.0)
+                };
+                let q = a + ab * t;
+                (q, t, q.distance(p))
+            }
+            Curve::Arc { c, r, start, sweep } => {
+                let v = p - c;
+                if v.length_squared() > 0.0 {
+                    let ang = v.to_angle();
+                    if let Some(t) = arc_param(start, sweep, ang, 0.0) {
+                        let q = c + v.normalize() * r;
+                        return (q, t, q.distance(p));
+                    }
+                }
+                let (e0, e1) = (self.from(), self.to());
+                if p.distance(e0) <= p.distance(e1) {
+                    (e0, 0.0, p.distance(e0))
+                } else {
+                    (e1, 1.0, p.distance(e1))
+                }
+            }
+        }
+    }
+
+    /// Points of the curve, cut so that a chord is at most `err` from the curve. Includes both ends.
+    pub fn flatten(&self, err: f64) -> Vec<DVec2> {
+        match *self {
+            Curve::Line { a, b } => vec![a, b],
+            Curve::Arc { r, .. } => {
+                let step = 2.0 * (1.0 - (err / r).min(1.0)).acos().max(1e-4);
+                let n = ((self.sweep_abs() / step).ceil() as usize).clamp(1, 20_000);
+                (0..=n).map(|i| self.at(i as f64 / n as f64)).collect()
+            }
+        }
+    }
+
+    fn sweep_abs(&self) -> f64 {
+        match *self {
+            Curve::Line { .. } => 0.0,
+            Curve::Arc { sweep, .. } => sweep.abs(),
+        }
+    }
+
+    /// The part between the parameters `t0` and `t1`.
+    pub fn part(&self, t0: f64, t1: f64) -> Curve {
+        match *self {
+            Curve::Line { .. } => Curve::Line {
+                a: self.at(t0),
+                b: self.at(t1),
+            },
+            Curve::Arc { c, r, start, sweep } => Curve::Arc {
+                c,
+                r,
+                start: start + sweep * t0,
+                sweep: sweep * (t1 - t0),
+            },
+        }
+    }
+}
+
+/// The circle through three points. `None` if they lie on one line (within a very small angle).
+fn circumcircle(a: DVec2, b: DVec2, c: DVec2) -> Option<(DVec2, f64)> {
+    let (ba, ca) = (b - a, c - a);
+    let d = 2.0 * ba.perp_dot(ca);
+    let scale = ba.length() * ca.length();
+    if scale == 0.0 || (d / (2.0 * scale)).abs() < 1e-10 {
+        return None;
+    }
+    let (b2, c2) = (ba.length_squared(), ca.length_squared());
+    let ux = (ca.y * b2 - ba.y * c2) / d;
+    let uy = (ba.x * c2 - ca.x * b2) / d;
+    let centre = a + DVec2::new(ux, uy);
+    let r = centre.distance(a);
+    (r.is_finite() && r > 0.0).then_some((centre, r))
+}
+
+/// The parameter in 0..1 of the angle `ang` on an arc, or `None` if it is outside the sweep by
+/// more than `slack` radians.
+fn arc_param(start: f64, sweep: f64, ang: f64, slack: f64) -> Option<f64> {
+    if sweep.abs() >= TAU - 1e-12 {
+        let d = (ang - start).rem_euclid(TAU);
+        let d = if sweep < 0.0 { (TAU - d) % TAU } else { d };
+        return Some((d / sweep.abs()).clamp(0.0, 1.0));
+    }
+    let mut d = if sweep >= 0.0 {
+        (ang - start).rem_euclid(TAU)
+    } else {
+        (start - ang).rem_euclid(TAU)
+    };
+    let s = sweep.abs();
+    if d > s {
+        // Just before the start or just after the end.
+        if d - s <= slack {
+            d = s;
+        } else if TAU - d <= slack {
+            d = 0.0;
+        } else {
+            return None;
+        }
+    }
+    Some(d / s)
+}
+
+/// Points where two curves cross or touch. Parallel lines that overlap give none: their ends are
+/// handled as T-junctions.
+fn intersections(p: &Curve, q: &Curve, out: &mut Vec<DVec2>) {
+    match (*p, *q) {
+        (Curve::Line { a: a0, b: a1 }, Curve::Line { a: b0, b: b1 }) => {
+            let (d1, d2) = (a1 - a0, b1 - b0);
+            let den = d1.perp_dot(d2);
+            if den.abs() < 1e-14 * d1.length() * d2.length() {
+                return;
+            }
+            let w = b0 - a0;
+            let t = w.perp_dot(d2) / den;
+            let u = w.perp_dot(d1) / den;
+            let eps = 1e-9;
+            if (-eps..=1.0 + eps).contains(&t) && (-eps..=1.0 + eps).contains(&u) {
+                out.push(a0 + d1 * t.clamp(0.0, 1.0));
+            }
+        }
+        (Curve::Line { a, b }, arc @ Curve::Arc { .. })
+        | (arc @ Curve::Arc { .. }, Curve::Line { a, b }) => {
+            if let Curve::Arc { c, r, start, sweep } = arc {
+                let d = b - a;
+                let f = a - c;
+                let qa = d.length_squared();
+                if qa == 0.0 {
+                    return;
+                }
+                let qb = 2.0 * f.dot(d);
+                let qc = f.length_squared() - r * r;
+                let disc = qb * qb - 4.0 * qa * qc;
+                if disc < 0.0 {
+                    // Tangent within noise?
+                    if disc > -1e-12 * qb * qb {
+                    } else {
+                        return;
+                    }
+                }
+                let sq = disc.max(0.0).sqrt();
+                for t in [(-qb - sq) / (2.0 * qa), (-qb + sq) / (2.0 * qa)] {
+                    if (-1e-9..=1.0 + 1e-9).contains(&t) {
+                        let pt = a + d * t.clamp(0.0, 1.0);
+                        if arc_param(start, sweep, (pt - c).to_angle(), 1e-9).is_some() {
+                            out.push(pt);
+                        }
+                    }
+                }
+            }
+        }
+        (
+            Curve::Arc {
+                c: c0,
+                r: r0,
+                start: s0,
+                sweep: w0,
+            },
+            Curve::Arc {
+                c: c1,
+                r: r1,
+                start: s1,
+                sweep: w1,
+            },
+        ) => {
+            let d = c0.distance(c1);
+            if d < 1e-12 || d > r0 + r1 + 1e-9 || d < (r0 - r1).abs() - 1e-9 {
+                return;
+            }
+            let a = (r0 * r0 - r1 * r1 + d * d) / (2.0 * d);
+            let h = (r0 * r0 - a * a).max(0.0).sqrt();
+            let u = (c1 - c0) / d;
+            let m = c0 + u * a;
+            let pts = if h < 1e-9 {
+                vec![m]
+            } else {
+                vec![m + u.perp() * h, m - u.perp() * h]
+            };
+            for pt in pts {
+                if arc_param(s0, w0, (pt - c0).to_angle(), 1e-9).is_some()
+                    && arc_param(s1, w1, (pt - c1).to_angle(), 1e-9).is_some()
+                {
+                    out.push(pt);
+                }
+            }
+        }
+    }
+}
+
+/// A closed gap: the ends of curves that were joined, or an end that was joined to the middle of a
+/// curve.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClosedGap {
+    pub at: DVec2,
+    /// The size of the gap that was closed, in mm.
+    pub size: f64,
+}
+
+/// A dead end: a curve end that joins nothing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeadEnd {
+    pub at: DVec2,
+    /// The length of the dangling curves from this end to the first node that has other curves, mm.
+    pub length: f64,
+    /// The nearest other dead end, and the distance to it (mm).
+    pub nearest: Option<(DVec2, f64)>,
+}
+
+/// One node-to-node piece of the drawing.
+#[derive(Clone, Debug)]
+pub struct Edge {
+    pub a: usize,
+    pub b: usize,
+    pub curve: Curve,
+    /// The index of the input curve it comes from.
+    pub source: usize,
+}
+
+/// A closed boundary: the edges in order and whether each is walked forward.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cycle {
+    pub edges: Vec<(usize, bool)>,
+}
+
+/// An area of the drawing, with its holes.
+#[derive(Clone, Debug)]
+pub struct Face {
+    pub outer: Cycle,
+    /// The outer boundaries of the components that lie inside this face.
+    pub holes: Vec<Cycle>,
+    /// The area with the holes taken off, in mm2.
+    pub area: f64,
+    /// How many faces enclose this one as a hole: 0 for the outermost.
+    pub depth: usize,
+    /// A point inside the face (not inside a hole).
+    pub inside: DVec2,
+    /// The component of the drawing that this face belongs to.
+    pub component: usize,
+}
+
+/// The result of [`build`].
+#[derive(Clone, Debug, Default)]
+pub struct Arrangement {
+    pub nodes: Vec<DVec2>,
+    pub edges: Vec<Edge>,
+    pub faces: Vec<Face>,
+    pub closed_gaps: Vec<ClosedGap>,
+    /// The number of closed gaps (the list is cut at [`MAX_LISTED`]).
+    pub closed_gap_count: usize,
+    pub dead_ends: Vec<DeadEnd>,
+    pub dead_end_count: usize,
+    /// Curves shorter than the tolerance that were dropped (they do not make a piece of an edge).
+    pub ignored_short: usize,
+    /// Edges that lie on top of each other and were merged.
+    pub duplicates: usize,
+}
+
+/// Why an arrangement was not made.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BuildError {
+    TooMany(String),
+}
+
+impl std::fmt::Display for BuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BuildError::TooMany(s) => f.write_str(s),
+        }
+    }
+}
+
+impl std::error::Error for BuildError {}
+
+struct Union {
+    p: Vec<usize>,
+}
+
+impl Union {
+    fn new(n: usize) -> Union {
+        Union { p: (0..n).collect() }
+    }
+    fn find(&mut self, mut x: usize) -> usize {
+        while self.p[x] != x {
+            self.p[x] = self.p[self.p[x]];
+            x = self.p[x];
+        }
+        x
+    }
+    fn join(&mut self, a: usize, b: usize) {
+        let (a, b) = (self.find(a), self.find(b));
+        if a != b {
+            self.p[b] = a;
+        }
+    }
+}
+
+/// A node point of a curve: where it is, and its parameter on the curve.
+#[derive(Clone, Copy)]
+struct Hit {
+    curve: usize,
+    t: f64,
+    p: DVec2,
+    /// The size of the closed gap this hit stands for (0 for a crossing or an exact join).
+    gap: f64,
+}
+
+/// Builds the arrangement of `curves` with the node tolerance `tol` (mm).
+pub fn build(curves: &[Curve], tol: f64) -> Result<Arrangement, BuildError> {
+    if curves.len() > MAX_CURVES {
+        return Err(BuildError::TooMany(format!(
+            "an arrangement takes at most {MAX_CURVES} curves, not {}",
+            curves.len()
+        )));
+    }
+    let tol = tol.max(1e-9);
+    let mut out = Arrangement::default();
+    // Curves shorter than the tolerance are noise: they could not make a piece of an edge.
+    let mut live: Vec<usize> = Vec::new();
+    for (i, c) in curves.iter().enumerate() {
+        if c.length() < tol && !matches!(c, Curve::Arc { sweep, .. } if sweep.abs() > 1.0) {
+            out.ignored_short += 1;
+        } else {
+            live.push(i);
+        }
+    }
+    let boxes: Vec<(DVec2, DVec2)> = curves
+        .iter()
+        .map(|c| {
+            let (lo, hi) = c.bounds();
+            (lo - DVec2::splat(tol), hi + DVec2::splat(tol))
+        })
+        .collect();
+    // Candidate pairs by a sweep over x.
+    let mut order = live.clone();
+    order.sort_by(|&a, &b| boxes[a].0.x.total_cmp(&boxes[b].0.x));
+    let mut hits: Vec<Hit> = Vec::new();
+    // Ends of every curve are nodes.
+    for &i in &live {
+        hits.push(Hit {
+            curve: i,
+            t: 0.0,
+            p: curves[i].from(),
+            gap: 0.0,
+        });
+        hits.push(Hit {
+            curve: i,
+            t: 1.0,
+            p: curves[i].to(),
+            gap: 0.0,
+        });
+    }
+    let mut tmp: Vec<DVec2> = Vec::new();
+    for (oi, &i) in order.iter().enumerate() {
+        for &j in &order[oi + 1..] {
+            if boxes[j].0.x > boxes[i].1.x {
+                break;
+            }
+            if boxes[j].0.y > boxes[i].1.y || boxes[j].1.y < boxes[i].0.y {
+                continue;
+            }
+            let (ci, cj) = (&curves[i], &curves[j]);
+            tmp.clear();
+            intersections(ci, cj, &mut tmp);
+            for &p in &tmp {
+                let (_, ti, _) = ci.closest(p);
+                let (_, tj, _) = cj.closest(p);
+                hits.push(Hit {
+                    curve: i,
+                    t: ti,
+                    p,
+                    gap: 0.0,
+                });
+                hits.push(Hit {
+                    curve: j,
+                    t: tj,
+                    p,
+                    gap: 0.0,
+                });
+            }
+            // An end of one that lies near the middle of the other: a T-junction.
+            for (a, b, ca, cb) in [(i, j, ci, cj), (j, i, cj, ci)] {
+                for e in [ca.from(), ca.to()] {
+                    let (q, t, d) = cb.closest(e);
+                    if d <= tol {
+                        let near_end = q.distance(cb.from()) <= tol || q.distance(cb.to()) <= tol;
+                        if !near_end {
+                            hits.push(Hit {
+                                curve: b,
+                                t,
+                                p: q,
+                                gap: d,
+                            });
+                            // The end of `a` meets `q`: remember that they are one node.
+                            let (te, _) = if e == ca.from() { (0.0, 0) } else { (1.0, 1) };
+                            hits.push(Hit {
+                                curve: a,
+                                t: te,
+                                p: q,
+                                gap: d,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Cluster the hit points: all within tol of each other make one node.
+    let n = hits.len();
+    let mut uf = Union::new(n);
+    let cell = tol.max(1e-9);
+    let key = |p: DVec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, h) in hits.iter().enumerate() {
+        let (kx, ky) = key(h.p);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                if let Some(v) = grid.get(&(kx + dx, ky + dy)) {
+                    for &j in v {
+                        if hits[j].p.distance(h.p) <= tol {
+                            uf.join(i, j);
+                        }
+                    }
+                }
+            }
+        }
+        grid.entry((kx, ky)).or_default().push(i);
+    }
+    // Hits that stand for the same T-junction must be one node even if the end is far from the
+    // projection by almost the tolerance: they were pushed with the same point `q` already, and
+    // the end itself is within `gap` of it.
+    let mut node_of_root: HashMap<usize, usize> = HashMap::new();
+    let mut hit_node = vec![0usize; n];
+    let mut members: Vec<Vec<usize>> = Vec::new();
+    for i in 0..n {
+        let r = uf.find(i);
+        let id = *node_of_root.entry(r).or_insert_with(|| {
+            members.push(Vec::new());
+            members.len() - 1
+        });
+        hit_node[i] = id;
+        members[id].push(i);
+    }
+    for m in &members {
+        let sum: DVec2 = m.iter().map(|&i| hits[i].p).sum();
+        out.nodes.push(sum / m.len() as f64);
+    }
+    // A node whose members are not all at one point closed a gap.
+    for (id, m) in members.iter().enumerate() {
+        let mut size = 0.0f64;
+        for &i in m {
+            size = size.max(hits[i].gap);
+            for &j in m {
+                size = size.max(hits[i].p.distance(hits[j].p));
+            }
+        }
+        if size > 1e-6 {
+            out.closed_gap_count += 1;
+            if out.closed_gaps.len() < MAX_LISTED {
+                out.closed_gaps.push(ClosedGap {
+                    at: out.nodes[id],
+                    size,
+                });
+            }
+        }
+    }
+    // Edges: the nodes of each curve in order along it.
+    let mut per_curve: Vec<Vec<(f64, usize)>> = vec![Vec::new(); curves.len()];
+    for (i, h) in hits.iter().enumerate() {
+        per_curve[h.curve].push((h.t, hit_node[i]));
+    }
+    let mut seen: HashMap<(usize, usize, i64, i64), usize> = HashMap::new();
+    for &ci in &live {
+        let list = &mut per_curve[ci];
+        list.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Equal nodes in a row are one.
+        list.dedup_by(|b, a| a.1 == b.1);
+        let curve = &curves[ci];
+        for w in list.windows(2) {
+            let ((t0, n0), (t1, n1)) = (w[0], w[1]);
+            if n0 == n1 {
+                continue;
+            }
+            let (p0, p1) = (out.nodes[n0], out.nodes[n1]);
+            let part = curve.part(t0, t1);
+            let geom = match part {
+                Curve::Line { .. } => Curve::Line { a: p0, b: p1 },
+                Curve::Arc { .. } => {
+                    let moved = part.from().distance(p0).max(part.to().distance(p1));
+                    if moved < 1e-7 {
+                        part
+                    } else {
+                        Curve::through(p0, part.at(0.5), p1)
+                    }
+                }
+            };
+            if out.edges.len() >= MAX_EDGES {
+                return Err(BuildError::TooMany(format!(
+                    "the drawing makes more than {MAX_EDGES} pieces"
+                )));
+            }
+            // Duplicates: the same ends and the same middle.
+            let (lo, hi) = (n0.min(n1), n0.max(n1));
+            let mid = geom.at(0.5);
+            let k = (
+                lo,
+                hi,
+                (mid.x / tol).round() as i64,
+                (mid.y / tol).round() as i64,
+            );
+            if seen.contains_key(&k) {
+                out.duplicates += 1;
+                continue;
+            }
+            seen.insert(k, out.edges.len());
+            out.edges.push(Edge {
+                a: n0,
+                b: n1,
+                curve: geom,
+                source: ci,
+            });
+        }
+    }
+    prune_and_trace(&mut out);
+    Ok(out)
+}
+
+/// Removes dead ends, then traces the faces.
+fn prune_and_trace(out: &mut Arrangement) {
+    let nn = out.nodes.len();
+    let mut deg = vec![0usize; nn];
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); nn];
+    for (i, e) in out.edges.iter().enumerate() {
+        deg[e.a] += 1;
+        deg[e.b] += 1;
+        adj[e.a].push(i);
+        adj[e.b].push(i);
+    }
+    // The dead ends of the drawing as it is: each free end, with the length of its chain of
+    // nodes of degree 2 up to the first node that joins more.
+    let free: Vec<usize> = (0..nn).filter(|&v| deg[v] == 1).collect();
+    let mut dead: Vec<(usize, f64)> = Vec::new();
+    for &v0 in &free {
+        let (mut v, mut prev_edge, mut length) = (v0, usize::MAX, 0.0);
+        loop {
+            let Some(&ei) = adj[v].iter().find(|&&e| e != prev_edge) else {
+                break;
+            };
+            length += out.edges[ei].curve.length();
+            let e = &out.edges[ei];
+            let w = if e.a == v { e.b } else { e.a };
+            prev_edge = ei;
+            v = w;
+            if deg[v] != 2 {
+                break;
+            }
+        }
+        dead.push((v0, length));
+    }
+    out.dead_end_count = dead.len();
+    let ends: Vec<DVec2> = dead.iter().map(|d| out.nodes[d.0]).collect();
+    for (i, (v, length)) in dead.iter().enumerate() {
+        if out.dead_ends.len() >= MAX_LISTED {
+            break;
+        }
+        let at = out.nodes[*v];
+        let mut nearest: Option<(DVec2, f64)> = None;
+        for (j, q) in ends.iter().enumerate() {
+            if i != j {
+                let d = at.distance(*q);
+                if nearest.is_none_or(|(_, bd)| d < bd) {
+                    nearest = Some((*q, d));
+                }
+            }
+        }
+        out.dead_ends.push(DeadEnd {
+            at,
+            length: *length,
+            nearest,
+        });
+    }
+    // Remove the dead branches: a node of degree 1 loses its edge, and so on.
+    let mut removed = vec![false; out.edges.len()];
+    let mut queue: Vec<usize> = free;
+    while let Some(v) = queue.pop() {
+        if deg[v] != 1 {
+            continue;
+        }
+        let Some(&ei) = adj[v].iter().find(|&&e| !removed[e]) else {
+            continue;
+        };
+        removed[ei] = true;
+        let e = &out.edges[ei];
+        let w = if e.a == v { e.b } else { e.a };
+        deg[v] -= 1;
+        deg[w] -= 1;
+        if deg[w] == 1 {
+            queue.push(w);
+        }
+    }
+    if removed.iter().any(|r| *r) {
+        let old = std::mem::take(&mut out.edges);
+        out.edges = old
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !removed[*i])
+            .map(|(_, e)| e)
+            .collect();
+    }
+    trace_faces(out);
+}
+
+fn trace_faces(out: &mut Arrangement) {
+    let ne = out.edges.len();
+    if ne == 0 {
+        return;
+    }
+    // Half-edge h = 2 * edge + (0 forward, 1 backward).
+    let nn = out.nodes.len();
+    let mut around: Vec<Vec<usize>> = vec![Vec::new(); nn];
+    let curve_of = |e: &Edge, back: bool| if back { e.curve.reversed() } else { e.curve };
+    for (i, e) in out.edges.iter().enumerate() {
+        around[e.a].push(2 * i);
+        around[e.b].push(2 * i + 1);
+    }
+    let mut key: Vec<(f64, f64)> = vec![(0.0, 0.0); 2 * ne];
+    for (i, e) in out.edges.iter().enumerate() {
+        for back in [false, true] {
+            let c = curve_of(e, back);
+            let t = c.start_tangent();
+            key[2 * i + back as usize] = (t.y.atan2(t.x), c.curvature());
+        }
+    }
+    let target = |h: usize| {
+        let e = &out.edges[h / 2];
+        if h % 2 == 0 { e.b } else { e.a }
+    };
+    let mut pos = vec![0usize; 2 * ne];
+    for list in around.iter_mut() {
+        list.sort_by(|&a, &b| {
+            let (ka, kb) = (key[a], key[b]);
+            if (ka.0 - kb.0).abs() < 1e-9 {
+                ka.1.total_cmp(&kb.1)
+            } else {
+                ka.0.total_cmp(&kb.0)
+            }
+        });
+        for (k, &h) in list.iter().enumerate() {
+            pos[h] = k;
+        }
+    }
+    let next = |h: usize| -> usize {
+        let v = target(h);
+        let twin = h ^ 1;
+        let list = &around[v];
+        let k = pos[twin];
+        list[(k + list.len() - 1) % list.len()]
+    };
+    let mut cycle_of = vec![usize::MAX; 2 * ne];
+    let mut cycles: Vec<(Cycle, f64)> = Vec::new();
+    for start in 0..2 * ne {
+        if cycle_of[start] != usize::MAX {
+            continue;
+        }
+        let id = cycles.len();
+        let mut h = start;
+        let mut edges = Vec::new();
+        let mut guard = 0usize;
+        while cycle_of[h] == usize::MAX {
+            cycle_of[h] = id;
+            edges.push((h / 2, h % 2 == 0));
+            h = next(h);
+            guard += 1;
+            if guard > 2 * ne + 1 {
+                break;
+            }
+        }
+        let area = cycle_area(out, &edges);
+        cycles.push((Cycle { edges }, area));
+    }
+    // Components of the edge graph.
+    let mut uf = Union::new(nn);
+    for e in &out.edges {
+        uf.join(e.a, e.b);
+    }
+    let comp_of_edge: Vec<usize> = out.edges.iter().map(|e| uf.find(e.a)).collect();
+    let mut comp_ids: HashMap<usize, usize> = HashMap::new();
+    let mut comp_index = |c: usize| {
+        let n = comp_ids.len();
+        *comp_ids.entry(c).or_insert(n)
+    };
+    // Positive cycles are faces. For each component, the negative cycle is its outer boundary.
+    struct FaceTmp {
+        cycle: usize,
+        comp: usize,
+        ring: Vec<DVec2>,
+        lo: DVec2,
+        hi: DVec2,
+        area: f64,
+    }
+    let mut faces: Vec<FaceTmp> = Vec::new();
+    let mut outers: Vec<(usize, usize)> = Vec::new(); // (cycle, comp)
+    for (ci, (cy, area)) in cycles.iter().enumerate() {
+        let comp = comp_index(comp_of_edge[cy.edges[0].0]);
+        if *area > 0.0 {
+            let ring = cycle_ring(out, cy);
+            let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+            for p in &ring {
+                lo = lo.min(*p);
+                hi = hi.max(*p);
+            }
+            faces.push(FaceTmp {
+                cycle: ci,
+                comp,
+                ring,
+                lo,
+                hi,
+                area: *area,
+            });
+        } else if *area < 0.0 {
+            outers.push((ci, comp));
+        }
+    }
+    // Which face (of another component) holds each component?
+    let mut by_area: Vec<usize> = (0..faces.len()).collect();
+    by_area.sort_by(|&a, &b| faces[a].area.total_cmp(&faces[b].area));
+    let mut parent_of_comp: HashMap<usize, usize> = HashMap::new();
+    let mut holes_of: Vec<Vec<usize>> = vec![Vec::new(); faces.len()];
+    for &(cy, comp) in &outers {
+        let probe = out.nodes[out.edges[cycles[cy].0.edges[0].0].a];
+        for &f in &by_area {
+            let fc = &faces[f];
+            if fc.comp == comp {
+                continue;
+            }
+            if probe.x < fc.lo.x || probe.x > fc.hi.x || probe.y < fc.lo.y || probe.y > fc.hi.y {
+                continue;
+            }
+            if crate::geom::point_in_polygon(probe, &fc.ring) {
+                parent_of_comp.insert(comp, f);
+                holes_of[f].push(cy);
+                break;
+            }
+        }
+    }
+    // Depth of each component: 0 if it has no parent face, else the depth of that face's component + 1.
+    let mut comp_depth: HashMap<usize, usize> = HashMap::new();
+    fn depth_of(
+        comp: usize,
+        parent: &HashMap<usize, usize>,
+        faces: &[FaceTmp],
+        memo: &mut HashMap<usize, usize>,
+    ) -> usize {
+        if let Some(d) = memo.get(&comp) {
+            return *d;
+        }
+        let d = match parent.get(&comp) {
+            None => 0,
+            Some(&f) => depth_of(faces[f].comp, parent, faces, memo) + 1,
+        };
+        memo.insert(comp, d);
+        d
+    }
+    for fi in 0..faces.len() {
+        let comp = faces[fi].comp;
+        let d = depth_of(comp, &parent_of_comp, &faces, &mut comp_depth);
+        let hole_cycles: Vec<Cycle> = holes_of[fi]
+            .iter()
+            .map(|&cy| {
+                let mut c = cycles[cy].0.clone();
+                // Walk it the other way round: counterclockwise like the outer boundary.
+                c.edges = c.edges.iter().rev().map(|&(e, f)| (e, !f)).collect();
+                c
+            })
+            .collect();
+        let hole_area: f64 = holes_of[fi].iter().map(|&cy| -cycles[cy].1).sum();
+        let ring_holes: Vec<Vec<DVec2>> = hole_cycles.iter().map(|c| cycle_ring(out, c)).collect();
+        let inside = interior_point(&faces[fi].ring, &ring_holes);
+        out.faces.push(Face {
+            outer: cycles[faces[fi].cycle].0.clone(),
+            holes: hole_cycles,
+            area: faces[fi].area - hole_area,
+            depth: d,
+            inside,
+            component: faces[fi].comp,
+        });
+    }
+}
+
+/// The signed area of a cycle (counterclockwise is positive), arcs included.
+fn cycle_area(out: &Arrangement, edges: &[(usize, bool)]) -> f64 {
+    let mut poly = 0.0;
+    let mut bulge = 0.0;
+    for &(ei, fwd) in edges {
+        let e = &out.edges[ei];
+        let c = if fwd { e.curve } else { e.curve.reversed() };
+        let (p, q) = if fwd {
+            (out.nodes[e.a], out.nodes[e.b])
+        } else {
+            (out.nodes[e.b], out.nodes[e.a])
+        };
+        poly += p.perp_dot(q);
+        if let Curve::Arc { r, sweep, .. } = c {
+            bulge += r * r / 2.0 * (sweep - sweep.sin());
+        }
+    }
+    poly / 2.0 + bulge
+}
+
+/// The ring of a cycle as points (arcs cut into chords), without a repeated first point.
+pub fn cycle_ring(out: &Arrangement, cy: &Cycle) -> Vec<DVec2> {
+    let mut ring = Vec::new();
+    for &(ei, fwd) in &cy.edges {
+        let e = &out.edges[ei];
+        let c = if fwd { e.curve } else { e.curve.reversed() };
+        let (p, q) = if fwd {
+            (out.nodes[e.a], out.nodes[e.b])
+        } else {
+            (out.nodes[e.b], out.nodes[e.a])
+        };
+        ring.push(p);
+        if let Curve::Arc { .. } = c {
+            let pts = c.flatten(FLAT_ERR);
+            ring.extend(pts[1..pts.len() - 1].iter().copied());
+        }
+        let _ = q;
+    }
+    ring
+}
+
+/// The vertices of a cycle for a curved polyline: corners, and a point on every arc.
+pub fn cycle_vertices(out: &Arrangement, cy: &Cycle) -> Vec<Vertex> {
+    let mut v = Vec::new();
+    for &(ei, fwd) in &cy.edges {
+        let e = &out.edges[ei];
+        let c = if fwd { e.curve } else { e.curve.reversed() };
+        let p = if fwd { out.nodes[e.a] } else { out.nodes[e.b] };
+        v.push(Vertex::corner(p));
+        if let Curve::Arc { .. } = c {
+            v.push(Vertex::new(c.at(0.5), VertexKind::PointOnArc));
+        }
+    }
+    v
+}
+
+/// A point inside the ring and outside the holes. Scans horizontal lines and takes the middle of
+/// the widest stretch inside.
+pub fn interior_point(ring: &[DVec2], holes: &[Vec<DVec2>]) -> DVec2 {
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for p in ring {
+        lo = lo.min(p.y);
+        hi = hi.max(p.y);
+    }
+    let mut best: Option<(f64, DVec2)> = None;
+    for k in 1..=15 {
+        let y = lo + (hi - lo) * (k as f64 / 16.0);
+        // The crossings of the line with the ring and the holes, sorted.
+        let mut xs: Vec<f64> = Vec::new();
+        let mut cross = |poly: &[DVec2]| {
+            let n = poly.len();
+            for i in 0..n {
+                let (a, b) = (poly[i], poly[(i + 1) % n]);
+                if (a.y > y) != (b.y > y) {
+                    xs.push(a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y));
+                }
+            }
+        };
+        cross(ring);
+        for h in holes {
+            cross(h);
+        }
+        xs.sort_by(f64::total_cmp);
+        for w in xs.chunks(2) {
+            if w.len() == 2 {
+                let width = w[1] - w[0];
+                if best.is_none_or(|(bw, _)| width > bw) {
+                    best = Some((width, DVec2::new((w[0] + w[1]) / 2.0, y)));
+                }
+            }
+        }
+    }
+    best.map_or_else(
+        || ring.first().copied().unwrap_or(DVec2::ZERO),
+        |(_, p)| p,
+    )
+}
+
+#[cfg(test)]
+mod tests;
