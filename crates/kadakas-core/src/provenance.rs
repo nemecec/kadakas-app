@@ -609,6 +609,119 @@ pub fn base_users(doc: &Document, drawing: &str, revision: &str) -> (Vec<ObjectI
 /// Drops the tag from the data of a copy: a copy is new work and does not come from the file.
 pub fn strip_copy(data: &mut BTreeMap<String, Value>) {
     data.remove(KEY);
+    data.remove(SITE_SOURCES_KEY);
+}
+
+/// The key in the data of a site model that holds the tags of its source points and lines.
+pub const SITE_SOURCES_KEY: &str = "import_sources";
+
+/// The value of `ImportTag::obj` of a source that was edited before it went into a site model.
+/// It never equals the state of a source, so the source shows as edited.
+pub const EDITED_OBJ: &str = "ffffffffffffffff";
+
+/// Where a source point or line of a site model came from: the tag of the DXF entity, and the
+/// DXF layer (the name of the layer or class that the importer gave the object). `tag.obj` is
+/// the state of the source (`point_state`, `line_state`) right after the import.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRef {
+    pub tag: ImportTag,
+    #[serde(default)]
+    pub dxf_layer: String,
+}
+
+/// The tags of the source points and lines of a site model, one entry for each point and line,
+/// in the same order (`None` for a source that does not come from a drawing). A site model that
+/// was made from imported 3D loci and 3D polylines keeps them, so a later import of a new
+/// revision of the drawing (`kadakas_io::dxf::update`) finds the sources inside the model.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SiteSources {
+    #[serde(default)]
+    pub points: Vec<Option<SourceRef>>,
+    #[serde(default)]
+    pub lines: Vec<Option<SourceRef>>,
+}
+
+impl SiteSources {
+    /// No tag in any entry.
+    pub fn is_empty(&self) -> bool {
+        self.points.iter().chain(&self.lines).all(Option::is_none)
+    }
+
+    /// The tags of a site model. `None` if there are none, or if the lists do not fit the points
+    /// and lines of the model (a command or a program edited them without the tags: the tags then
+    /// say nothing true). A tag that is not valid is left out.
+    pub fn read(obj: &Object) -> Option<SiteSources> {
+        let Shape::SiteModel { points, lines, .. } = &obj.shape else {
+            return None;
+        };
+        let mut s: SiteSources =
+            serde_json::from_value(obj.data.get(SITE_SOURCES_KEY)?.clone()).ok()?;
+        if s.points.len() != points.len() || s.lines.len() != lines.len() {
+            return None;
+        }
+        for r in s.points.iter_mut().chain(s.lines.iter_mut()) {
+            if r.as_ref().is_some_and(|r| r.tag.problem().is_some()) {
+                *r = None;
+            }
+        }
+        (!s.is_empty()).then_some(s)
+    }
+
+    /// The value for the data key `SITE_SOURCES_KEY`.
+    pub fn to_value(&self) -> Value {
+        serde_json::to_value(self).expect("tags are plain data")
+    }
+
+    /// Entries for a model of `points` points and `lines` lines, none of them tagged.
+    pub fn blank(points: usize, lines: usize) -> SiteSources {
+        SiteSources {
+            points: vec![None; points],
+            lines: vec![None; lines],
+        }
+    }
+}
+
+/// The state of a source point: its position.
+pub fn point_state(p: glam::DVec3) -> String {
+    let mut h = Hasher::new();
+    h.str("point");
+    [p.x, p.y, p.z].into_iter().for_each(|v| h.f64(v));
+    hex(h.finish())
+}
+
+/// The state of a source line: its points and whether it is closed.
+pub fn line_state(l: &crate::site::SiteLine) -> String {
+    let mut h = Hasher::new();
+    h.str("line");
+    h.u64(u64::from(l.closed));
+    h.u64(l.points.len() as u64);
+    l.points
+        .iter()
+        .for_each(|p| [p.x, p.y, p.z].into_iter().for_each(|v| h.f64(v)));
+    hex(h.finish())
+}
+
+/// The reference of a source that goes into a site model from an object: its tag, with the state
+/// of the source as the state at the import, and the DXF layer. `None` for an object without a
+/// tag. An object that the person edited keeps that: its state never matches.
+pub fn source_ref(doc: &Document, o: &Object, state: String) -> Option<SourceRef> {
+    let mut tag = tag(&o.data)?;
+    let edited = is_edited(o) == Some(true);
+    tag.obj = if edited {
+        EDITED_OBJ.to_string()
+    } else {
+        state
+    };
+    let dxf_layer = doc
+        .layer(o.layer)
+        .and_then(|l| l.extra.get(LAYER_KEY))
+        .and_then(LayerSource::of)
+        .map(|s| s.dxf_layer)
+        .filter(|n| !n.is_empty())
+        .or_else(|| doc.class(o.class).map(|c| c.name.clone()))
+        .unwrap_or_default();
+    Some(SourceRef { tag, dxf_layer })
 }
 
 /// Removes the tags that are not valid, from a document that was just loaded. Bad tags come from
@@ -677,6 +790,144 @@ mod tests {
 
     fn tag_value() -> Value {
         json!({"drawing": "plan.dxf", "revision": "00ff00ff00ff00ff", "handle": "2F", "kind": "LINE", "hash": "0123456789abcdef", "obj": "fedcba9876543210"})
+    }
+
+    #[test]
+    fn the_tags_of_site_sources_are_read_only_when_they_fit_the_model() {
+        use crate::model::{Shape, SiteSettings};
+        let tag = ImportTag::of(&tag_value()).unwrap();
+        let point = glam::DVec3::new(1.0, 2.0, 3.0);
+        let line = crate::site::SiteLine {
+            points: vec![point, glam::DVec3::new(4.0, 5.0, 6.0)],
+            closed: false,
+        };
+        // The state changes with every number and with `closed`.
+        assert_eq!(point_state(point), point_state(point));
+        assert_ne!(
+            point_state(point),
+            point_state(glam::DVec3::new(1.0, 2.0, 3.5))
+        );
+        let closed = crate::site::SiteLine {
+            closed: true,
+            ..line.clone()
+        };
+        assert_ne!(line_state(&line), line_state(&closed));
+        let mut o = Object::new(
+            ObjectId::from_num(1),
+            LayerId::from_num(1),
+            ClassId::from_num(0),
+            Shape::SiteModel {
+                points: vec![point, point],
+                lines: vec![line],
+                settings: SiteSettings::default(),
+            },
+        );
+        assert!(SiteSources::read(&o).is_none(), "no data");
+        let mut s = SiteSources::blank(2, 1);
+        assert!(s.is_empty());
+        s.points[1] = Some(SourceRef {
+            tag: tag.clone(),
+            dxf_layer: "SPOT".into(),
+        });
+        o.data.insert(SITE_SOURCES_KEY.into(), s.to_value());
+        assert_eq!(SiteSources::read(&o), Some(s.clone()));
+        // A tag that is not valid is left out; a list of the wrong length says nothing.
+        let mut bad = s.clone();
+        bad.points[1].as_mut().unwrap().tag.hash = "x".into();
+        o.data.insert(SITE_SOURCES_KEY.into(), bad.to_value());
+        assert!(SiteSources::read(&o).is_none(), "nothing valid is left");
+        o.data
+            .insert(SITE_SOURCES_KEY.into(), SiteSources::blank(1, 1).to_value());
+        assert!(SiteSources::read(&o).is_none());
+        o.data.insert(SITE_SOURCES_KEY.into(), json!("nonsense"));
+        assert!(SiteSources::read(&o).is_none());
+        // Another shape has no sources, and a copy loses them.
+        let mut other = o.clone();
+        other.shape = Shape::Locus3d { p: point };
+        assert!(SiteSources::read(&other).is_none());
+        strip_copy(&mut o.data);
+        assert!(!o.data.contains_key(SITE_SOURCES_KEY));
+    }
+
+    #[test]
+    fn a_source_reference_takes_the_dxf_layer_and_remembers_an_edit() {
+        use crate::command::{Command, Editor};
+        let mut ed = Editor::default();
+        let class = ClassId(
+            ed.execute(&Command::AddClass {
+                name: "SPOT_LEVELS".into(),
+                attrs: Default::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let p = glam::DVec3::new(1.0, 2.0, 3.0);
+        let id = ObjectId(
+            ed.execute(&Command::AddObject {
+                shape: Shape::Locus3d { p },
+                layer: None,
+                class: Some(class),
+                attrs: Default::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let mut t = ImportTag::of(&tag_value()).unwrap();
+        let o = ed.doc().object(id).unwrap();
+        t.obj = state_hash(&o.shape, &o.attrs, o.layer, o.class);
+        ed.execute(&Command::SetData {
+            id,
+            set: [(KEY.to_string(), t.to_value())].into(),
+            remove: vec![],
+        })
+        .unwrap();
+        let o = ed.doc().object(id).unwrap();
+        let r = source_ref(ed.doc(), o, point_state(p)).unwrap();
+        assert_eq!(r.dxf_layer, "SPOT_LEVELS", "the class names the DXF layer");
+        assert_eq!(r.tag.obj, point_state(p));
+        // An object that was edited before it went into the model stays edited.
+        ed.execute(&Command::MoveObjects {
+            ids: vec![id],
+            delta: glam::DVec2::new(5.0, 0.0),
+        })
+        .unwrap();
+        let o = ed.doc().object(id).unwrap();
+        assert_eq!(
+            source_ref(ed.doc(), o, "x".into()).unwrap().tag.obj,
+            EDITED_OBJ
+        );
+        // The layer of the import names the DXF layer first.
+        let layer_id = o.layer;
+        let src = LayerSource {
+            drawing: "plan.dxf".into(),
+            revision: "r".into(),
+            dxf_layer: "TOPO".into(),
+            unit_scale: 1.0,
+            shift: [0.0, 0.0],
+            link: None,
+        };
+        ed.execute(&Command::SetLayerSource {
+            id: layer_id,
+            source: Some(src),
+        })
+        .unwrap();
+        let o = ed.doc().object(id).unwrap();
+        assert_eq!(
+            source_ref(ed.doc(), o, "x".into()).unwrap().dxf_layer,
+            "TOPO"
+        );
+        // An object without a tag has no reference.
+        let plain = ObjectId(
+            ed.execute(&Command::AddObject {
+                shape: Shape::Locus3d { p },
+                layer: None,
+                class: None,
+                attrs: Default::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
+        assert!(source_ref(ed.doc(), ed.doc().object(plain).unwrap(), "x".into()).is_none());
     }
 
     #[test]

@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use kadakas_core::command::Command;
 use kadakas_core::model::{Attributes, Document, LayerId, ObjectId, Shape, SiteLine, SiteSettings};
+use kadakas_core::provenance::{self, SiteSources};
 use kadakas_site::{SiteResult, Surface};
 
 use crate::{RpcError, Session, params};
@@ -34,6 +35,20 @@ struct Update {
     remove_points: Vec<usize>,
     #[serde(default)]
     remove_lines: Vec<usize>,
+    /// Sources that other objects replace: the new object takes the place (the index) of the old
+    /// source, with its own tag.
+    #[serde(default)]
+    replace: Vec<Replace>,
+}
+
+/// One source of a site model and the object that replaces it. Give `point` or `line`.
+#[derive(Deserialize)]
+struct Replace {
+    #[serde(default)]
+    point: Option<usize>,
+    #[serde(default)]
+    line: Option<usize>,
+    with: ObjectId,
 }
 
 #[derive(Deserialize)]
@@ -53,26 +68,41 @@ fn surface_of(name: Option<&str>) -> Result<Surface, RpcError> {
     }
 }
 
-/// Takes 3D loci and 3D polylines out of objects. Fails for any other kind of object.
+/// Takes 3D loci and 3D polylines out of objects, with the import tags that they carry. Fails for
+/// any other kind of object.
 fn take_sources(
     doc: &Document,
     ids: &[ObjectId],
     points: &mut Vec<glam::DVec3>,
     lines: &mut Vec<SiteLine>,
+    sources: &mut SiteSources,
 ) -> Result<(), RpcError> {
     for id in ids {
         let o = doc
             .object(*id)
             .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
         match &o.shape {
-            Shape::Locus3d { p } => points.push(*p),
+            Shape::Locus3d { p } => {
+                points.push(*p);
+                sources
+                    .points
+                    .push(provenance::source_ref(doc, o, provenance::point_state(*p)));
+            }
             Shape::Polyline3d {
                 points: pts,
                 closed,
-            } => lines.push(SiteLine {
-                points: pts.clone(),
-                closed: *closed,
-            }),
+            } => {
+                let line = SiteLine {
+                    points: pts.clone(),
+                    closed: *closed,
+                };
+                sources.lines.push(provenance::source_ref(
+                    doc,
+                    o,
+                    provenance::line_state(&line),
+                ));
+                lines.push(line);
+            }
             other => {
                 return Err(RpcError::invalid_params(format!(
                     "object {id} is a {}: only locus3d and polyline3d can be site model sources",
@@ -82,6 +112,24 @@ fn take_sources(
         }
     }
     Ok(())
+}
+
+/// The command that stores the tags of the sources in the data of the site model, or clears
+/// them when no source has one.
+fn sources_command(id: ObjectId, sources: &SiteSources) -> Command {
+    if sources.is_empty() {
+        Command::SetData {
+            id,
+            set: Default::default(),
+            remove: vec![provenance::SITE_SOURCES_KEY.to_string()],
+        }
+    } else {
+        Command::SetData {
+            id,
+            set: [(provenance::SITE_SOURCES_KEY.to_string(), sources.to_value())].into(),
+            remove: Vec::new(),
+        }
+    }
 }
 
 /// Merges the fields of `patch` into the settings. A field set to null goes back to its default.
@@ -116,7 +164,8 @@ impl Session {
                 }
                 let doc = self.editor.doc();
                 let (mut points, mut lines) = (Vec::new(), Vec::new());
-                take_sources(doc, &source_ids, &mut points, &mut lines)?;
+                let mut sources = SiteSources::default();
+                take_sources(doc, &source_ids, &mut points, &mut lines, &mut sources)?;
                 let settings = merge_settings(&SiteSettings::default(), &settings)?;
                 if let Some(l) = layer
                     && doc.layer(l).is_none()
@@ -134,11 +183,16 @@ impl Session {
                     class: None,
                     attrs: Attributes::default(),
                 };
+                let mut commands = vec![create];
+                if !sources.is_empty() {
+                    // The tags travel with the source data, so a later update from a new revision of
+                    // the drawing finds the sources inside the model.
+                    commands.push(sources_command(ObjectId(doc.next_ids(1)[0]), &sources));
+                }
+                commands.push(Command::DeleteObjects { ids: source_ids });
                 let out = self
                     .editor
-                    .execute(&Command::Batch {
-                        commands: vec![create, Command::DeleteObjects { ids: source_ids }],
-                    })
+                    .execute(&Command::Batch { commands })
                     .map_err(RpcError::from)?;
                 self.prune_selection();
                 Ok(json!({ "id": out.created[0] }))
@@ -150,6 +204,7 @@ impl Session {
                     add_source_ids,
                     remove_points,
                     remove_lines,
+                    replace,
                 } = params(p)?;
                 let doc = self.editor.doc();
                 let obj = doc
@@ -166,6 +221,8 @@ impl Session {
                     )));
                 };
                 let (mut points, mut lines) = (points.clone(), lines.clone());
+                let mut sources = SiteSources::read(obj)
+                    .unwrap_or_else(|| SiteSources::blank(points.len(), lines.len()));
                 for (what, list, len) in [
                     ("point", &remove_points, points.len()),
                     ("line", &remove_lines, lines.len()),
@@ -177,21 +234,86 @@ impl Session {
                         )));
                     }
                 }
-                let keep = |len: usize, remove: &[usize]| -> Vec<bool> {
-                    (0..len).map(|i| !remove.contains(&i)).collect()
-                };
-                let kp = keep(points.len(), &remove_points);
-                let kl = keep(lines.len(), &remove_lines);
-                let mut it = kp.iter();
-                points.retain(|_| *it.next().unwrap());
-                let mut it = kl.iter();
-                lines.retain(|_| *it.next().unwrap());
-                if add_source_ids.contains(&id) {
+                if add_source_ids.contains(&id) || replace.iter().any(|r| r.with == id) {
                     return Err(RpcError::invalid_params(
                         "a site model cannot be its own source",
                     ));
                 }
-                take_sources(doc, &add_source_ids, &mut points, &mut lines)?;
+                // A replacement takes the place of an old source: the new coordinates and the tag
+                // of the new object, in the same place of the list.
+                let mut consumed: Vec<ObjectId> = Vec::new();
+                for r in &replace {
+                    let (what, index, len) = match (r.point, r.line) {
+                        (Some(i), None) => ("point", i, points.len()),
+                        (None, Some(i)) => ("line", i, lines.len()),
+                        _ => {
+                            return Err(RpcError::invalid_params(
+                                "a replacement names a point or a line, one of them",
+                            ));
+                        }
+                    };
+                    if index >= len {
+                        return Err(RpcError::invalid_params(format!(
+                            "{what} index {index} is out of range (0 to {})",
+                            len.saturating_sub(1)
+                        )));
+                    }
+                    let removed = if what == "point" {
+                        &remove_points
+                    } else {
+                        &remove_lines
+                    };
+                    if removed.contains(&index) {
+                        return Err(RpcError::invalid_params(format!(
+                            "{what} {index} is replaced and removed in one call"
+                        )));
+                    }
+                    let (mut np, mut nl) = (Vec::new(), Vec::new());
+                    let mut ns = SiteSources::default();
+                    take_sources(doc, &[r.with], &mut np, &mut nl, &mut ns)?;
+                    match (what, np.pop(), nl.pop()) {
+                        ("point", Some(p), None) => {
+                            points[index] = p;
+                            sources.points[index] = ns.points.pop().flatten();
+                        }
+                        ("line", None, Some(l)) => {
+                            lines[index] = l;
+                            sources.lines[index] = ns.lines.pop().flatten();
+                        }
+                        _ => {
+                            return Err(RpcError::invalid_params(format!(
+                                "object {} cannot replace a {what}: a point is replaced by a locus3d, a line by a polyline3d",
+                                r.with
+                            )));
+                        }
+                    }
+                    consumed.push(r.with);
+                }
+                let mut index = 0usize;
+                points.retain(|_| {
+                    let keep = !remove_points.contains(&index);
+                    index += 1;
+                    keep
+                });
+                let mut index = 0usize;
+                sources.points.retain(|_| {
+                    let keep = !remove_points.contains(&index);
+                    index += 1;
+                    keep
+                });
+                let mut index = 0usize;
+                lines.retain(|_| {
+                    let keep = !remove_lines.contains(&index);
+                    index += 1;
+                    keep
+                });
+                let mut index = 0usize;
+                sources.lines.retain(|_| {
+                    let keep = !remove_lines.contains(&index);
+                    index += 1;
+                    keep
+                });
+                take_sources(doc, &add_source_ids, &mut points, &mut lines, &mut sources)?;
                 let settings = merge_settings(current, &settings)?;
                 let (np, nl) = (points.len(), lines.len());
                 let modify = Command::ModifyObject {
@@ -206,10 +328,13 @@ impl Session {
                     attrs: None,
                 };
                 let mut commands = vec![modify];
-                if !add_source_ids.is_empty() {
-                    commands.push(Command::DeleteObjects {
-                        ids: add_source_ids,
-                    });
+                let tagged = !sources.is_empty();
+                if tagged || obj.data.contains_key(provenance::SITE_SOURCES_KEY) {
+                    commands.push(sources_command(id, &sources));
+                }
+                consumed.extend(add_source_ids);
+                if !consumed.is_empty() {
+                    commands.push(Command::DeleteObjects { ids: consumed });
                 }
                 self.editor
                     .execute(&Command::Batch { commands })
@@ -452,6 +577,145 @@ mod tests {
         assert_eq!(e.code, -32602);
         // A failed create leaves the document alone.
         assert!(s.editor.doc().object(ObjectId(locus)).is_some());
+    }
+
+    fn tag(handle: &str) -> Value {
+        json!({"drawing": "d", "revision": "r1", "handle": handle, "kind": "POINT", "hash": "0123456789abcdef", "obj": "0000000000000000"})
+    }
+
+    fn tagged_locus(s: &mut Session, x: i64, handle: &str) -> kadakas_core::uid::Uid {
+        let id = exec(
+            s,
+            json!({"op": "add_object", "shape": {"kind": "locus3d", "p": [x, 0, x]}}),
+        );
+        exec_ok(
+            s,
+            json!({"op": "set_data", "id": id, "set": {"import": tag(handle)}}),
+        );
+        id
+    }
+
+    fn exec_ok(s: &mut Session, command: Value) {
+        call(s, "execute", json!({"command": command})).unwrap();
+    }
+
+    #[test]
+    fn the_sources_keep_their_tags_in_the_model_and_site_update_keeps_them_in_step() {
+        let mut s = Session::with_sequential_ids();
+        let a = tagged_locus(&mut s, 0, "A");
+        let b = tagged_locus(&mut s, 1000, "B");
+        let c = exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "locus3d", "p": [2000, 0, 5]}}),
+        );
+        let d = tagged_locus(&mut s, 3000, "D");
+        let id =
+            call(&mut s, "site.create", json!({"source_ids": [a, b, c, d]})).unwrap()["id"].clone();
+        let data = |s: &mut Session| {
+            call(s, "objects.get", json!({"id": id})).unwrap()["data"]["import_sources"].clone()
+        };
+        let handles = |v: &Value| -> Vec<Value> {
+            v["points"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["tag"]["handle"].clone())
+                .collect()
+        };
+        let v = data(&mut s);
+        assert_eq!(
+            v["points"][2],
+            Value::Null,
+            "a source without a tag has none"
+        );
+        assert_eq!(
+            handles(&v),
+            vec![json!("A"), json!("B"), Value::Null, json!("D")]
+        );
+        // These objects do not match the state in their tag (they were edited since the import),
+        // and a source that was edited stays edited when it goes into the model.
+        assert_eq!(
+            v["points"][0]["tag"]["obj"],
+            kadakas_core::provenance::EDITED_OBJ
+        );
+        // Removing a point removes its tag; a replacement takes the tag of the new object.
+        call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "remove_points": [0]}),
+        )
+        .unwrap();
+        assert_eq!(
+            handles(&data(&mut s)),
+            vec![json!("B"), Value::Null, json!("D")]
+        );
+        let n = tagged_locus(&mut s, 9000, "N");
+        call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "replace": [{"point": 1, "with": n}]}),
+        )
+        .unwrap();
+        assert_eq!(
+            handles(&data(&mut s)),
+            vec![json!("B"), json!("N"), json!("D")]
+        );
+        let o = call(&mut s, "objects.get", json!({"id": id})).unwrap();
+        assert_eq!(o["shape"]["points"][1], json!([9000.0, 0.0, 9000.0]));
+        assert!(
+            s.editor.doc().object(ObjectId(n)).is_none(),
+            "the replacing object is consumed"
+        );
+        // An added source comes with its tag, and the replace checks its input.
+        let m = tagged_locus(&mut s, 11_000, "M");
+        call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "add_source_ids": [m]}),
+        )
+        .unwrap();
+        assert_eq!(handles(&data(&mut s)).last(), Some(&json!("M")));
+        let m = tagged_locus(&mut s, 12_000, "M2");
+        let e = call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "replace": [{"point": 0, "line": 0, "with": m}]}),
+        )
+        .unwrap_err();
+        assert!(e.message.contains("one of them"), "{}", e.message);
+        let e = call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "remove_points": [0], "replace": [{"point": 0, "with": m}]}),
+        )
+        .unwrap_err();
+        assert!(e.message.contains("replaced and removed"), "{}", e.message);
+        let e = call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "replace": [{"line": 0, "with": m}]}),
+        )
+        .unwrap_err();
+        assert!(e.message.contains("out of range"), "{}", e.message);
+        let e = call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "replace": [{"point": 0, "with": id}]}),
+        )
+        .unwrap_err();
+        assert!(e.message.contains("own source"), "{}", e.message);
+        // Removing every tagged source clears the key.
+        call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "remove_points": [0, 1, 2, 3]}),
+        )
+        .unwrap();
+        let o = call(&mut s, "objects.get", json!({"id": id})).unwrap();
+        assert!(
+            o.get("data")
+                .is_none_or(|d| d.get("import_sources").is_none())
+        );
     }
 
     #[test]

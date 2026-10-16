@@ -1656,6 +1656,8 @@ site.update
   add_source_ids object[] # 3D loci and 3D polylines that move into the site model
   remove_points int[] # indexes in the source points
   remove_lines int[] # indexes in the source lines
+  replace obj[] # [{point: index | line: index, with: id}]: the locus3d or polyline3d takes the place of that source
+
 
 site.texture
   id! object
@@ -1746,7 +1748,6 @@ tree.import_survey
   on_terrain bool = true # each tree stands on the ground of the site model that covers it
   layer layer
   class class
-
 
 site.check
   id! object
