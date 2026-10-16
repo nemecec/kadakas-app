@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use kadakas_core::DVec2;
 use kadakas_core::command::{Command, Editor};
 use kadakas_core::curve::{self, corners};
-use kadakas_core::hardscape::HardscapePatch;
 use kadakas_core::hardscape::style::{HardscapeStyle, JointKind, JointPattern};
+use kadakas_core::hardscape::{self, HardscapePatch};
 use kadakas_core::layout::summary::{SummaryOptions, summarize};
 use kadakas_core::layout::{self, object};
 use kadakas_core::model::{Attributes, Document, ObjectId};
@@ -608,4 +608,33 @@ fn a_dxf_file_without_an_entities_section_still_gives_its_block() {
     let o = block_outlines(text.as_bytes(), "B").unwrap();
     assert_eq!(o.len(), 1);
     assert_eq!(o[0].layer, "A");
+}
+
+#[test]
+fn only_a_count_over_the_limit_gets_the_limit_text() {
+    // A long thin lot at an angle to the pattern: not too many units, but a scan that is too wide.
+    let (mut ed, id) = lot(JointKind::Stack, 100.0, 100.0, vec![], None, None);
+    let o = ed.doc().object(id).unwrap().clone();
+    let style = hardscape::data::style_id(&o).unwrap();
+    ed.execute(&Command::AddHardscape {
+        boundary: Some(corners(&[
+            DVec2::new(0.0, 0.0),
+            DVec2::new(2_000_000.0, 2_000_000.0),
+            DVec2::new(2_000_000.0, 2_000_100.0),
+            DVec2::new(0.0, 100.0),
+        ])),
+        patch: Box::new(HardscapePatch {
+            style: Some(style),
+            ..Default::default()
+        }),
+        layer: None,
+        class: None,
+        attrs: Attributes::default(),
+    })
+    .unwrap();
+    let err = export(ed.doc(), PatternExport::Units)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("Turn the pattern"), "{err}");
+    assert!(!err.contains("limit of a DXF export"), "{err}");
 }

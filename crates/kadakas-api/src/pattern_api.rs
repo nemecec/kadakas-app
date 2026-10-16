@@ -43,7 +43,7 @@ pub const UNIT_PATTERN_MODULE_FROM_BLOCK: (&str, &str) = (
 );
 pub const REPORT_UNIT_PATTERN: (&str, &str) = (
     "report.unit_pattern",
-    "Counts and quantities of unit patterns. params: {ids? (default: every hardscape with a joint pattern), pattern?, origin?, angle?, align_to_edge? (as unit_pattern.layout; with several ids they apply to each), sliver_share? (cut units under this part of a full unit are slivers, default 0.25), unfillable_share? (cut units under this part are too small to lay, default 0.05), min_width? (mm: cut units narrower than this cannot be laid, default off), exclude_unfillable? (default false: leave the unfillable pieces out of order_units), trim? (mm, default 0.1: a unit that crosses the edge by less than this counts as whole, so drawing noise makes no cut units; 0 turns it off), waste_percent? (no default: without it the order has no waste added), gap_length? (measure the length of the gap lines, default false), visible_only? (skip hardscapes on hidden layers, default false), tolerance? (curve flattening in mm, default 1; the DXF export has its own tolerance, default 1, and gives the same counts when the two are equal), format?: csv}. Returns {rows: [{id, name, whole_units, cut_units, slivers, unfillable_pieces, area_laid_m2, cut_area_m2, region_area_m2, gap_area_m2, gap_length_m?, order_units, order_units_max, order_units_min, order_units_with_waste, by_unit: [{name, whole_units, cut_units, ...}], ...} or {id, error}], totals: {..., complete}}. order_units is an upper bound: the whole units plus the cut units, every cut unit counted as one unit, no offcut used twice. order_units_min is a lower bound: the whole units plus the sum of the shares of the cut units, rounded up. waste_percent adds that percent to the total, rounded up, in whole numbers. Hardscapes are counted inside their kerb border and outside their holes. complete is false when a row is an error. The counts match the polylines on the layers <layer>-UNITS-WHOLE and <layer>-UNITS-CUT of export.file with patterns: \"units\".",
+    "Counts and quantities of unit patterns. params: {ids? (default: every hardscape with a joint pattern), pattern?, origin?, angle?, align_to_edge? (as unit_pattern.layout; with several ids they apply to each), sliver_share? (cut units under this part of a full unit are slivers, default 0.25), unfillable_share? (cut units under this part are too small to lay, default 0.05), min_width? (mm: cut units narrower than this cannot be laid, default off), exclude_unfillable? (default false: leave the unfillable pieces out of order_units), trim? (mm, default 0.1: a unit that crosses the edge by less than this counts as whole, so drawing noise makes no cut units; 0 turns it off), waste_percent? (no default: without it the order has no waste added), gap_length? (measure the length of the gap lines, default false), max_extra_joint_mm? (default 2: a basket weave whose joints get wider than the gap by more than this has a joint_warning in its summary; a much larger difference is refused), visible_only? (skip hardscapes on hidden layers, default false), tolerance? (curve flattening in mm, default 1; the DXF export has its own tolerance, default 1, and gives the same counts when the two are equal), format?: csv}. Returns {rows: [{id, name, whole_units, cut_units, slivers, unfillable_pieces, area_laid_m2, cut_area_m2, region_area_m2, gap_area_m2, gap_length_m?, order_units, order_units_max, order_units_min, order_units_with_waste, by_unit: [{name, whole_units, cut_units, ...}], ...} or {id, error}], totals: {..., complete}}. order_units is an upper bound: the whole units plus the cut units, every cut unit counted as one unit, no offcut used twice. order_units_min is a lower bound: the whole units plus the sum of the shares of the cut units, rounded up. waste_percent adds that percent to the total, rounded up, in whole numbers. Hardscapes are counted inside their kerb border and outside their holes. complete is false when a row is an error. The counts match the polylines on the layers <layer>-UNITS-WHOLE and <layer>-UNITS-CUT of export.file with patterns: \"units\".",
 );
 
 /// Extra text for `describe`.
@@ -409,6 +409,13 @@ pub(crate) fn summary_options(
         }
         o.trim = x;
     }
+    if let Some(v) = m.get("max_extra_joint_mm").filter(|v| !v.is_null()) {
+        let x = number(v, "max_extra_joint_mm")?;
+        if !(0.0..=1000.0).contains(&x) {
+            return Err(bad("'max_extra_joint_mm' must be between 0 and 1000"));
+        }
+        o.max_extra_joint_mm = x;
+    }
     o.exclude_unfillable = flag(m, "exclude_unfillable")?;
     o.gap_length = flag(m, "gap_length")?;
     if let Some(v) = m.get("waste_percent").filter(|v| !v.is_null()) {
@@ -708,22 +715,49 @@ fn label(doc: &Document, o: &Object) -> String {
         .unwrap_or_else(|| o.shape.kind().to_string())
 }
 
+/// The product of a row: the style (by ID, with its name for display), or a pattern given in the
+/// call.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Product {
+    pub id: Option<String>,
+    pub name: String,
+}
+
+/// The product of an object whose pattern comes from its style, or `custom` when the call gives a
+/// pattern.
+fn product_of(doc: &Document, o: &Object, custom: bool) -> Product {
+    if custom {
+        return Product {
+            id: None,
+            name: "custom".into(),
+        };
+    }
+    Product {
+        id: kadakas_core::hardscape::data::style_id(o).map(|id| id.to_string()),
+        name: label(doc, o),
+    }
+}
+
 /// The sums of several summaries: one JSON for the total row. The waste is applied to the total
 /// order, not to each row. `items` are the pattern label (the style, or `custom`) and the summary.
 /// The top-level counts add the units of different products, so they are for the order of one
 /// product only; `by_unit` never adds different products together: it is keyed by the pattern
 /// label and the unit type (a bond names its unit type by its size, `200x100`).
-pub fn totals_json(items: &[(String, &Summary)], errors: usize, opts: &SummaryOptions) -> Value {
+pub fn totals_json(items: &[(Product, &Summary)], errors: usize, opts: &SummaryOptions) -> Value {
     let sums: Vec<&Summary> = items.iter().map(|(_, s)| *s).collect();
     let sum = |f: &dyn Fn(&Summary) -> usize| sums.iter().map(|s| f(s)).sum::<usize>();
     let order = sum(&|s| s.order_units);
-    let mut by_unit: Vec<(String, summary::UnitCount)> = Vec::new();
-    for (label, s) in items {
+    let mut by_unit: Vec<(Product, summary::UnitCount)> = Vec::new();
+    for (product, s) in items {
         for u in &s.by_unit {
-            match by_unit
-                .iter_mut()
-                .find(|(l, x)| l == label && x.name == u.name)
-            {
+            match by_unit.iter_mut().find(|(p, x)| {
+                x.name == u.name
+                    && if p.id.is_some() || product.id.is_some() {
+                        p.id == product.id
+                    } else {
+                        p.name == product.name
+                    }
+            }) {
                 Some((_, x)) => {
                     x.whole_units += u.whole_units;
                     x.cut_units += u.cut_units;
@@ -733,22 +767,29 @@ pub fn totals_json(items: &[(String, &Summary)], errors: usize, opts: &SummaryOp
                     x.order_units += u.order_units;
                     x.cut_share += u.cut_share;
                 }
-                None => by_unit.push((label.clone(), u.clone())),
+                None => by_unit.push((product.clone(), u.clone())),
             }
         }
     }
     let by_unit: Vec<Value> = by_unit
         .into_iter()
-        .map(|(label, mut u)| {
+        .map(|(product, mut u)| {
             u.set_min();
+            u.order_units_with_waste = opts.waste_percent.map(|w| with_waste(u.order_units, w));
             let mut v = serde_json::to_value(&u).expect("json");
-            v["pattern"] = json!(label);
+            v["pattern"] = json!(product.name);
+            v["pattern_id"] = json!(product.id);
             v
         })
         .collect();
-    let products: std::collections::BTreeSet<&str> = by_unit
+    let products: std::collections::BTreeSet<String> = by_unit
         .iter()
-        .filter_map(|u| u["pattern"].as_str())
+        .map(|u| {
+            u["pattern_id"]
+                .as_str()
+                .unwrap_or(u["pattern"].as_str().unwrap_or(""))
+                .to_string()
+        })
         .collect();
     let gap = sums.iter().map(|s| s.gap_length_m).collect::<Vec<_>>();
     json!({
@@ -811,7 +852,7 @@ pub fn report_rows(
             .collect()
     });
     let mut rows = Vec::new();
-    let mut good: Vec<(String, Summary)> = Vec::new();
+    let mut good: Vec<(Product, Summary)> = Vec::new();
     let mut errors = 0;
     for id in list {
         let Some(o) = doc.object(id) else {
@@ -825,12 +866,7 @@ pub fn report_rows(
                 row["id"] = json!(id);
                 row["name"] = json!(label(doc, o));
                 rows.push(row);
-                let product = if m.contains_key("pattern") {
-                    "custom".to_string()
-                } else {
-                    label(doc, o)
-                };
-                good.push((product, sum));
+                good.push((product_of(doc, o, m.contains_key("pattern")), sum));
             }
             Err(e) => {
                 errors += 1;
@@ -838,7 +874,7 @@ pub fn report_rows(
             }
         }
     }
-    let refs: Vec<(String, &Summary)> = good.iter().map(|(l, s)| (l.clone(), s)).collect();
+    let refs: Vec<(Product, &Summary)> = good.iter().map(|(p, s)| (p.clone(), s)).collect();
     Ok((rows, totals_json(&refs, errors, opts)))
 }
 

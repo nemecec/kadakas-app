@@ -32,10 +32,10 @@ pub struct Unit {
     pub share: f64,
     /// The unit shape (the index into `Stats::kinds`). Always 0 in the four bonds.
     pub kind: usize,
-    /// How wide the piece is, in mm: the width of its narrowest strip, which is the smallest
-    /// width of the convex hull of its outline over all directions (the minimum width of its
-    /// rotated bounding box). It is the short side of a rectangle, also when the piece is long. A
-    /// piece with a long thin tail has the width of the tail.
+    /// How wide the piece is, in mm: the smallest width of the convex hull of its outline over
+    /// all directions. It is the short side of a rectangle, also when the piece is long. The hull
+    /// hides a thin tail or a notch of a concave piece, so the width can be overstated for such a
+    /// piece (a piece may be flagged as too narrow less often than it should, never more often).
     pub width: f64,
 }
 
@@ -783,9 +783,10 @@ fn whole_unit(
     }
 }
 
-/// The width of the narrowest strip that holds the ring: the smallest width of its convex hull
-/// over all directions. The inscribed-circle diameter would be smaller for a long piece and
-/// needs more work; the strip is what a cutter sees.
+/// The smallest width of the convex hull of the ring over all directions (the narrowest strip
+/// that holds it). For a concave ring the hull hides a thin tail, so the width is overstated, on
+/// the safe side for a test of "too narrow". The inscribed-circle diameter would be smaller for a
+/// long piece and needs more work.
 pub fn min_width(ring: &[DVec2]) -> f64 {
     let mut pts: Vec<DVec2> = ring.to_vec();
     pts.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));

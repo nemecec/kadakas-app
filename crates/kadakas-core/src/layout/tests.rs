@@ -1109,3 +1109,74 @@ fn measure_bounds() {
         assert_eq!(units.len(), n);
     }
 }
+
+#[test]
+fn a_wide_joint_in_a_basket_weave_is_a_warning() {
+    let r = region(&rect(3000.0, 2000.0), &[]);
+    let place = Placement::default();
+    // 200 x 100 with a gap of 5: the widest joint is 7.5 mm, 2.5 mm more than the gap.
+    let s = summarize(
+        &r,
+        &pat(Bond::BasketWeave, 5.0),
+        &place,
+        &SummaryOptions::default(),
+    )
+    .unwrap();
+    let w = s.joint_warning.expect("a warning");
+    assert!(w.contains("7.5") && w.contains("2.5"), "{w}");
+    // With a gap of 3 the extra is 1.5 mm: no warning. A looser option takes the first one away.
+    let s = summarize(
+        &r,
+        &pat(Bond::BasketWeave, 3.0),
+        &place,
+        &SummaryOptions::default(),
+    )
+    .unwrap();
+    assert!(s.joint_warning.is_none() && (s.widest_joint_mm - 4.5).abs() < 1e-9);
+    let s = summarize(
+        &r,
+        &pat(Bond::BasketWeave, 5.0),
+        &place,
+        &SummaryOptions {
+            max_extra_joint_mm: 3.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(s.joint_warning.is_none());
+    // The other bonds have the gap as their joint.
+    let s = summarize(
+        &r,
+        &pat(Bond::Herringbone, 5.0),
+        &place,
+        &SummaryOptions::default(),
+    )
+    .unwrap();
+    assert!(s.joint_warning.is_none());
+}
+
+#[test]
+fn the_waste_is_worked_out_for_each_unit_type() {
+    let r = region(&rect(3000.0, 2000.0), &[]);
+    let p = Pattern::of_module(module::octagon_square(100.0).unwrap(), 4.0);
+    let s = summarize(
+        &r,
+        &p,
+        &Placement::default(),
+        &SummaryOptions {
+            waste_percent: Some(10.0),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for u in &s.by_unit {
+        assert_eq!(
+            u.order_units_with_waste,
+            Some(with_waste(u.order_units, 10.0)),
+            "{}",
+            u.name
+        );
+    }
+    let s = summarize(&r, &p, &Placement::default(), &SummaryOptions::default()).unwrap();
+    assert!(s.by_unit.iter().all(|u| u.order_units_with_waste.is_none()));
+}

@@ -31,6 +31,9 @@ pub struct SummaryOptions {
     pub max_gap_segments: usize,
     /// Measure the length of the gap lines. Off by default: it is more work than the counts.
     pub gap_length: bool,
+    /// A joint wider than the gap by more than this (mm) is reported in `joint_warning`. The
+    /// joints of a basket weave get wider when its blocks do not fit exactly.
+    pub max_extra_joint_mm: f64,
 }
 
 impl Default for SummaryOptions {
@@ -45,6 +48,7 @@ impl Default for SummaryOptions {
             max_units: MAX_UNITS,
             max_gap_segments: MAX_GAP_SEGMENTS,
             gap_length: false,
+            max_extra_joint_mm: 2.0,
         }
     }
 }
@@ -63,6 +67,9 @@ pub struct UnitCount {
     /// The lower bound of the order of this unit type: the whole units plus the rounded-up sum of
     /// the shares of its cut units.
     pub order_units_min: usize,
+    /// `order_units` plus the waste of this unit type, in whole numbers and rounded up. `None`
+    /// without `waste_percent`. A contractor who orders two stones gets the waste per product.
+    pub order_units_with_waste: Option<usize>,
     /// The sum of the shares of the cut units (not in the JSON; it is what rows are added up with).
     #[serde(skip)]
     pub cut_share: f64,
@@ -85,6 +92,10 @@ pub struct Summary {
     pub gap_mm: f64,
     /// The widest joint. It is the gap, except in a basket weave whose blocks do not fit exactly.
     pub widest_joint_mm: f64,
+    /// Set when the widest joint is wider than the gap by more than `max_extra_joint_mm`: the text
+    /// says by how much. The pattern is laid anyway (the hard limit is in the pattern); for
+    /// trafficked paving, change the unit size, the gap or the bond.
+    pub joint_warning: Option<String>,
     /// Where the pattern starts, in drawing coordinates (mm).
     pub origin: [f64; 2],
     pub angle_deg: f64,
@@ -190,12 +201,14 @@ pub fn summarize(
                 area_laid_m2: k.area / 1e6,
                 order_units: order,
                 order_units_min: 0,
+                order_units_with_waste: None,
                 cut_share: k.cut_share,
             }),
         }
     }
     for u in &mut by_unit {
         u.set_min();
+        u.order_units_with_waste = opts.waste_percent.map(|w| with_waste(u.order_units, w));
     }
     let (whole, cut) = (tally.whole(), tally.cut());
     let unfill = tally.unfillable();
@@ -209,6 +222,17 @@ pub fn summarize(
         unit_width_mm: (pattern.module.is_none()).then_some(pattern.unit_width),
         gap_mm: pattern.gap,
         widest_joint_mm: pattern.widest_joint(),
+        joint_warning: {
+            let extra = pattern.widest_joint() - pattern.gap;
+            (extra > opts.max_extra_joint_mm).then(|| {
+                format!(
+                    "the joints get up to {:.1} mm wide, {:.1} mm more than the gap of {} mm: the blocks of this basket weave do not fit the unit size exactly (the units keep their size). Change the unit size or the gap if the paving is trafficked",
+                    pattern.widest_joint(),
+                    extra,
+                    pattern.gap
+                )
+            })
+        },
         origin: [stats.origin.x, stats.origin.y],
         angle_deg: stats.angle,
         whole_units: whole,

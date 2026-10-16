@@ -117,6 +117,11 @@ pub(super) fn write(
                     }
                 })
                 .map_err(|e| {
+                    // Only a count over the limit is the limit of the export; a pattern that
+                    // cannot be laid (or a region that cannot be scanned) says its own reason.
+                    if !matches!(e, layout::LayoutError::TooMany(_)) {
+                        return IoError::Option(format!("{name}: {e}"));
+                    }
                     let why = if limit < MAX_EXPORT_UNITS {
                         format!(
                             "the file holds at most {MAX_EXPORT_FILE_UNITS} units in all objects"
