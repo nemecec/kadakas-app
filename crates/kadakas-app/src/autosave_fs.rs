@@ -9,6 +9,7 @@
 //!   last manual save is dropped, so a late autosave never overwrites a newer Save.
 //! - Autosave never touches the `.bak` file of the user.
 
+use kadakas_file::SeenFiles;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -162,6 +163,9 @@ pub struct Job {
     /// The drawing was edited and its versions wait in the file: the drawing of the file is
     /// written as their anchor.
     pub anchor: bool,
+    /// The files that the session saw. The save over the file of the person checks the file
+    /// against it (any form), and notes its own write.
+    pub seen: Option<SeenFiles>,
 }
 
 /// What `write_version` did with the file of the user.
@@ -338,7 +342,7 @@ pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Ov
         return Ok(Over::Stale); // No need to write a copy that is stale already.
     }
     // The file at the path must still be the file that the document was opened from.
-    if changed_by_another(path, &job.sources) {
+    if changed_by_another(path, &job.sources, job.seen.as_ref()) {
         return Ok(Over::Changed(path.clone()));
     }
     // The form follows the extension of the file of the person, like Save.
@@ -379,7 +383,7 @@ pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Ov
         }
     });
     // Looked at once more before the rename: the copy took time.
-    if changed_by_another(path, &job.sources) {
+    if changed_by_another(path, &job.sources, job.seen.as_ref()) {
         return Ok(Over::Changed(path.clone()));
     }
     let staged = match (staged, failure.into_inner()) {
@@ -394,12 +398,27 @@ pub fn write_version(dir: &Path, id: &str, seq: u64, job: &Job) -> io::Result<Ov
             let _ = kadakas_file::native::rebind_sources(report, path);
         }
     })
+    .inspect(|over| {
+        // The file is what this program wrote: it is not "changed by another program" later.
+        if *over == Over::Written
+            && let Some(seen) = &job.seen
+        {
+            seen.note(path);
+        }
+    })
 }
 
 /// True if a source of the document is the file at `path` and the file has another content now.
-fn changed_by_another(path: &Path, sources: &[Arc<kadakas_file::FileSource>]) -> bool {
+fn changed_by_another(
+    path: &Path,
+    sources: &[Arc<kadakas_file::FileSource>],
+    seen: Option<&SeenFiles>,
+) -> bool {
     if !path.exists() {
         return false;
+    }
+    if seen.is_some_and(|s| s.changed(path)) {
+        return true;
     }
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     sources.iter().any(|s| {
@@ -762,6 +781,7 @@ mod tests {
             note: None,
             sources: Vec::new(),
             anchor: false,
+            seen: None,
         }
     }
 

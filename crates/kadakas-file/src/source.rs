@@ -20,6 +20,12 @@ pub struct FileSource {
     /// that a handle still uses, also when the document no longer has them (the undo steps hold
     /// them).
     live: Mutex<Live>,
+    /// True once the file was found changed and the live pictures were read into memory (see
+    /// [`FileSource::rescue_if_changed`]). A save over the file or a rebind starts again.
+    rescued: std::sync::atomic::AtomicBool,
+    /// How many pictures that only undo could bring back the person was told about (see
+    /// [`FileSource::tell_undo_lost`]).
+    undo_told: std::sync::atomic::AtomicUsize,
 }
 
 /// The weak handles of the pictures in use, and the size at which the dead ones are dropped. The
@@ -52,6 +58,8 @@ impl FileSource {
         Arc::new(FileSource {
             part: ContainerSource::new(container),
             live: Mutex::default(),
+            rescued: Default::default(),
+            undo_told: Default::default(),
         })
     }
 
@@ -65,6 +73,8 @@ impl FileSource {
         Ok(Arc::new(FileSource {
             part: ContainerSource::from_path(path, limits)?,
             live: Mutex::default(),
+            rescued: Default::default(),
+            undo_told: Default::default(),
         }))
     }
 
@@ -93,19 +103,84 @@ impl FileSource {
     /// hash in the new file.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn rebind(&self, path: &std::path::Path) -> Result<(), ContainerError> {
+        self.rescued
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         self.part.rebind(path)
     }
 
     /// Opens the file again after a save over it, and keeps the new container. The pictures of
     /// the document are found by hash in the new file.
     pub fn refresh(&self) -> Result<(), ContainerError> {
+        self.rescued
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         self.part.refresh()
     }
 
     /// Checks that the file has the content that was opened. A new stamp with the same manifest
     /// is fine; another content is an error.
     pub fn check_unchanged(&self) -> Result<(), ContainerError> {
-        self.part.check_unchanged()
+        let r = self.part.check_unchanged();
+        if r.is_err() {
+            self.rescue_live();
+        }
+        r
+    }
+
+    /// Looks at the file once (if it was not found changed before) and, if it is not the file
+    /// that was opened, reads the pictures that a handle still uses into memory (the drawing and
+    /// the undo steps hold them), as far as some file (the one at the path, or the `.bak`) still
+    /// has them. It is done at the first moment the change is seen, because a second save by
+    /// another program replaces the `.bak`. The pictures that were not read stay lazy, so a
+    /// file that did not change costs nothing. Returns the number of pictures read.
+    pub fn rescue_if_changed(&self) -> usize {
+        if self.rescued.load(std::sync::atomic::Ordering::Relaxed) || self.part.same_file() {
+            return 0;
+        }
+        self.rescue_live()
+    }
+
+    /// Reads the live pictures into memory, once for a change of the file.
+    fn rescue_live(&self) -> usize {
+        if self
+            .rescued
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            return 0;
+        }
+        let handles: Vec<Arc<LazyBlob>> = {
+            let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+            live.map
+                .values()
+                .flat_map(|ws| ws.iter().filter_map(Weak::upgrade))
+                .collect()
+        };
+        let mut n = 0;
+        for h in handles {
+            if !h.is_pinned() && self.has_blob(h.hash()) && h.pin().is_ok() {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// The words for the person when a save left out `lost` pictures that only an undo step held
+    /// (`Written::undo_pictures_lost`): `Some` the first time, and again only when the number
+    /// changes. A save that lost none resets it.
+    pub fn tell_undo_lost(&self, lost: usize) -> Option<String> {
+        let before = self
+            .undo_told
+            .swap(lost, std::sync::atomic::Ordering::Relaxed);
+        (lost > 0 && before != lost).then(|| undo_lost_text(lost))
+    }
+
+    /// The text of a picture that was read into memory by [`FileSource::rescue_if_changed`].
+    pub fn pinned_text(&self, hash: &str) -> Option<Arc<str>> {
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        live.map
+            .get(hash)?
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find_map(|h| h.pinned_text())
     }
 
     /// True if some file (the one at the path, or its `.bak`) can give the blob now.
@@ -116,7 +191,11 @@ impl FileSource {
     /// True if the file at the path has the content that was opened (its manifest is read again).
     /// A save asks it once for each source.
     pub fn same_file(&self) -> bool {
-        self.part.same_file()
+        let same = self.part.same_file();
+        if !same {
+            self.rescue_live();
+        }
+        same
     }
 
     /// True if the directory of the opened file has the blob (nothing is looked at on disk).
@@ -165,6 +244,13 @@ impl FileSource {
     }
 }
 
+/// What the person is told when pictures that only undo could bring back are in no file any more.
+pub fn undo_lost_text(lost: usize) -> String {
+    format!(
+        "{lost} picture(s) that only undo could bring back are no longer in any file; undo will show them empty"
+    )
+}
+
 impl BlobSource for FileSource {
     fn blob_len(&self, hash: &str) -> Option<u64> {
         // The name of a blob is the hash of its text. An entry with another content is not it. The
@@ -175,11 +261,10 @@ impl BlobSource for FileSource {
     }
 
     fn is_import_base(&self, hash: &str) -> Option<bool> {
+        // Every file of this format marks the blobs of its import bases (the writer always does),
+        // so a blob that is not marked is not one, also in a file that marks none: the open
+        // estimate counts the marked blobs, and nothing else is parsed as a base.
         let c = self.part.container();
-        // A file that marks none of its blobs (an older file) gives no answer.
-        if !c.entries().iter().any(|e| e.role.is_some()) {
-            return None;
-        }
         Some(
             c.entry(&blob_name(hash))
                 .is_some_and(|e| e.role.as_deref() == Some(crate::layout::ROLE_IMPORT_BASE)),

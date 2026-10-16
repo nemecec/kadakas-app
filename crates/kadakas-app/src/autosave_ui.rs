@@ -49,6 +49,8 @@ pub struct SaveCopy {
     pub sources: Vec<std::sync::Arc<kadakas_file::FileSource>>,
     /// The drawing was edited and its versions wait in the file (see `Job::anchor`).
     pub anchor: bool,
+    /// The files that the session saw, for the guard of the save over the file (see `Job::seen`).
+    pub seen: Option<crate::autosave::SeenFiles>,
 }
 
 impl AutosaveUi {
@@ -123,8 +125,9 @@ impl AutosaveUi {
             note,
             sources,
             anchor,
+            seen,
         } = doc();
-        self.submit(&doc, path, note.clone(), sources, anchor);
+        self.submit(&doc, path, note.clone(), sources, anchor, seen);
         if let Some(why) = note {
             self.error = Some(tr!("autosave-ui-versions-left-out", e = why));
         }
@@ -151,6 +154,7 @@ impl AutosaveUi {
         note: Option<String>,
         sources: Vec<std::sync::Arc<kadakas_file::FileSource>>,
         anchor: bool,
+        seen: Option<crate::autosave::SeenFiles>,
     ) {
         if let Some(r) = &mut self.recovery {
             let over = path
@@ -166,6 +170,7 @@ impl AutosaveUi {
                 note,
                 sources,
                 anchor,
+                seen,
             });
             if self.keep.is_some() {
                 self.keep_until = Some(seq);
@@ -185,6 +190,7 @@ impl AutosaveUi {
         _note: Option<String>,
         _sources: Vec<std::sync::Arc<kadakas_file::FileSource>>,
         _anchor: bool,
+        _seen: Option<crate::autosave::SeenFiles>,
     ) {
         self.error = match serde_json::to_string(doc) {
             Ok(text) if crate::autosave::fits_browser_storage(text.len()) => {
@@ -484,6 +490,7 @@ mod tests {
             note: None,
             sources: Vec::new(),
             anchor: false,
+            seen: None,
         }
     }
 
@@ -577,6 +584,7 @@ mod tests {
             note: None,
             sources: Vec::new(),
             anchor: false,
+            seen: None,
         });
         let seq = ui.keep_until.expect("a job is waiting");
         while ui.recovery.as_ref().unwrap().completed() < seq {
@@ -587,6 +595,7 @@ mod tests {
             note: None,
             sources: Vec::new(),
             anchor: false,
+            seen: None,
         });
         assert!(ui.keep.is_none());
         assert!(find_crashed_with(&dir, Duration::ZERO).is_empty());
@@ -607,6 +616,7 @@ mod tests {
             note: Some("the versions could not be written".to_string()),
             sources: Vec::new(),
             anchor: false,
+            seen: None,
         });
         for _ in 0..2000 {
             if ui.recovery.as_ref().unwrap().completed() >= 1 {

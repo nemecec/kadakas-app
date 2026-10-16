@@ -440,20 +440,19 @@ impl ContainerSource {
 
     /// The part with this name and SHA-256 as it is stored, from any file that has it.
     ///
-    /// A deflated entry is decoded and checked first when it comes from another file than the one
-    /// that was opened (the file at the path after a change, or the `.bak`): a stored entry is
-    /// checked while it is copied, but the compressed bytes of a deflated one are copied as they
-    /// are, and nothing else would look at them.
+    /// A deflated entry that comes from another file than the one that was opened (the file at
+    /// the path after a change, or the `.bak`) is checked while it is copied (see
+    /// [`Container::raw_verified`]): a stored entry is checked while it is copied, but the
+    /// compressed bytes of a deflated one are copied as they are, and nothing else would look at
+    /// them. The bytes are read once, so what is checked is what is copied.
     pub fn raw_by_content(&self, name: &str, sha: &[u8; 32]) -> Result<RawEntry, ContainerError> {
         let own = self.container();
         self.with_entry(name, sha, |c| {
-            if !std::sync::Arc::ptr_eq(c.medium(), own.medium())
-                && c.entry(name)
-                    .is_some_and(|e| e.method == crate::Method::Deflate)
-            {
-                c.verify_entry(name)?;
+            if std::sync::Arc::ptr_eq(c.medium(), own.medium()) {
+                c.raw(name)
+            } else {
+                c.raw_verified(name)
             }
-            c.raw(name)
         })
     }
 

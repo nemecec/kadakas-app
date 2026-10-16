@@ -1545,9 +1545,21 @@ impl Document {
         &mut self,
         source: &std::sync::Arc<dyn crate::blob::BlobSource>,
     ) -> usize {
+        self.relink_placeholders_noted(source).0
+    }
+
+    /// [`Document::relink_placeholders`] with the notes for the person. The marker of a placeholder
+    /// is text in a file, so a picture is checked like any picture of an underlay or an image
+    /// resource first (the size, the form of the file): a picture that fails stays a placeholder,
+    /// and a note says so.
+    pub fn relink_placeholders_noted(
+        &mut self,
+        source: &std::sync::Arc<dyn crate::blob::BlobSource>,
+    ) -> (usize, Vec<String>) {
         use crate::blob::{BlobText, LazyBlob};
         use crate::underlay::{PngData, placeholder_of};
         let mut count = 0;
+        let mut refused = 0usize;
         let found = |hash: &str| -> Option<std::sync::Arc<LazyBlob>> {
             source.blob_len(hash)?;
             source.check_blob(hash).ok()?;
@@ -1565,10 +1577,17 @@ impl Document {
             {
                 let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
                 let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
-                u.source = old.to_string();
-                u.png = PngData::from_lazy(blob);
-                u.width = w;
-                u.height = h;
+                let mut candidate = (**u).clone();
+                candidate.source = old.to_string();
+                candidate.png = PngData::from_lazy(blob);
+                candidate.width = w;
+                candidate.height = h;
+                // The same rules as for any underlay (at most MAX_SIDE_PX a side, a PNG).
+                if candidate.problem().is_some() {
+                    refused += 1;
+                    continue;
+                }
+                **u = candidate;
                 count += 1;
             }
         }
@@ -1579,16 +1598,28 @@ impl Document {
                 && let Ok(text) = blob.text()
                 && let Ok(facts) = crate::picture::facts_of_text(&text)
             {
-                i.source = old.to_string();
-                i.sha256 = facts.sha256;
-                i.format = facts.format;
-                i.width = facts.width;
-                i.height = facts.height;
-                i.data = BlobText::from(blob);
+                let mut candidate = i.clone();
+                candidate.source = old.to_string();
+                candidate.sha256 = facts.sha256;
+                candidate.format = facts.format;
+                candidate.width = facts.width;
+                candidate.height = facts.height;
+                candidate.data = BlobText::from(blob);
+                if candidate.validate().is_err() {
+                    refused += 1;
+                    continue;
+                }
+                *i = candidate;
                 count += 1;
             }
         }
-        count
+        let mut notes = Vec::new();
+        if refused > 0 {
+            notes.push(format!(
+                "{refused} picture(s) were found for placeholders but are not valid pictures (too big or not a picture file); the placeholders stay"
+            ));
+        }
+        (count, notes)
     }
 
     /// Replaces the pictures with these hashes (they cannot be found any more and the person chose
@@ -3222,5 +3253,66 @@ mod tests {
             Document::from_value(j),
             Err(LoadError::Invalid(_))
         ));
+    }
+
+    /// A document with one placeholder underlay for the blob `hash`.
+    fn doc_with_placeholder(hash: &str) -> Document {
+        use crate::underlay::{PngData, Underlay, placeholder_png};
+        let mut doc = Document::default();
+        let id = ObjectId::from_num(5);
+        let mut o = obj(Shape::Underlay(Box::new(Underlay {
+            name: "map".into(),
+            min: DVec2::ZERO,
+            max: DVec2::new(10.0, 10.0),
+            width: 1,
+            height: 1,
+            png: PngData::new(placeholder_png()),
+            opacity: 1.0,
+            source: format!("{}{hash}:old.png", crate::underlay::MISSING_PREFIX),
+        })));
+        o.id = id;
+        doc.objects.insert(id, o);
+        doc
+    }
+
+    /// The first 33 bytes of a PNG that says it has this size.
+    fn png_header(w: u32, h: u32) -> Vec<u8> {
+        let mut b = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10, 0, 0, 0, 13];
+        b.extend_from_slice(b"IHDR");
+        b.extend_from_slice(&w.to_be_bytes());
+        b.extend_from_slice(&h.to_be_bytes());
+        b.extend_from_slice(&[8, 6, 0, 0, 0]);
+        b
+    }
+
+    #[test]
+    fn a_placeholder_is_relinked_only_to_a_picture_that_passes_the_checks_of_an_underlay() {
+        use crate::blob::testutil::MapSource;
+        use crate::underlay::base64_encode;
+        // A hostile marker and a PNG header of 100000 x 100000 pixels: the placeholder stays.
+        let src = std::sync::Arc::new(MapSource::default());
+        let hash = src.put(&base64_encode(&png_header(100_000, 100_000)));
+        let mut doc = doc_with_placeholder(&hash);
+        let blobs: std::sync::Arc<dyn crate::blob::BlobSource> = src.clone();
+        let (n, notes) = doc.relink_placeholders_noted(&blobs);
+        assert_eq!(n, 0);
+        assert!(
+            notes.iter().any(|m| m.contains("not valid pictures")),
+            "{notes:?}"
+        );
+        assert_eq!(doc.placeholder_hashes(), std::slice::from_ref(&hash));
+        let Shape::Underlay(u) = &doc.objects.values().next().unwrap().shape else {
+            unreachable!()
+        };
+        assert_eq!((u.width, u.height), (1, 1));
+        // The same bound for a side of 4097 pixels, and a picture within it is relinked.
+        let big = src.put(&base64_encode(&png_header(4097, 10)));
+        let mut doc = doc_with_placeholder(&big);
+        assert_eq!(doc.relink_placeholders_noted(&blobs).0, 0);
+        let fine = src.put(&base64_encode(&png_header(4096, 10)));
+        let mut doc = doc_with_placeholder(&fine);
+        let (n, notes) = doc.relink_placeholders_noted(&blobs);
+        assert_eq!((n, notes.len()), (1, 0));
+        assert!(doc.placeholder_hashes().is_empty());
     }
 }

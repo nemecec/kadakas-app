@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 mod annotation_api;
 mod collab_api;
+#[cfg(not(target_arch = "wasm32"))]
+mod consent;
 pub use collab_api::EndpointFactory;
 mod errors;
 pub mod events;
@@ -152,6 +154,10 @@ pub struct Session {
     /// Folder of the open document. It is always an allowed folder. The host keeps it up to date.
     #[cfg(not(target_arch = "wasm32"))]
     pub doc_dir: Option<std::path::PathBuf>,
+    /// The files that the document was opened from or saved to, with what they held then: a save
+    /// over one of them that another program changed since asks the person (any form).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub seen: kadakas_file::SeenFiles,
     /// The container file that the open document was read from (DOC-21). Its pictures stay in the
     /// file until they are used, and a save copies the unchanged parts from it. `None`: the
     /// document is new, came from the plain JSON form, or was loaded from JSON.
@@ -163,6 +169,9 @@ pub struct Session {
     site_cache: kadakas_site::SiteCache,
     /// Annotation primitives and legend rows by document revision (see `render.svg`).
     annot_cache: kadakas_annot::AnnotCache,
+    /// The secret of the session and the consent tokens that are alive (see `consent`).
+    #[cfg(not(target_arch = "wasm32"))]
+    consent: consent::ConsentState,
     /// Site and annotation results for the ghosts of a compare, for the old document that was
     /// drawn last (one document, so it is bounded by the ghost limits of the overlay).
     ghost_caches: GhostCaches,
@@ -881,11 +890,15 @@ impl Session {
             paths: PathPolicy::default(),
             #[cfg(not(target_arch = "wasm32"))]
             doc_dir: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            seen: Default::default(),
             file_source: None,
             #[cfg(not(target_arch = "wasm32"))]
             gis: GisState::default(),
             site_cache: kadakas_site::SiteCache::default(),
             annot_cache: kadakas_annot::AnnotCache::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            consent: consent::ConsentState::default(),
             ghost_caches: GhostCaches::default(),
             worksheet_cache: kadakas_sheet::WorksheetCache::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -963,7 +976,15 @@ impl Session {
     /// Replaces the document, as `document.load` does. Sets the `replaced` flag. The history of
     /// versions of the new document is checked against the limits of the session; what was
     /// repaired or dropped is returned as notes (they are also the load notes of the document).
-    pub fn replace_document(&mut self, mut doc: Document) -> Vec<String> {
+    pub fn replace_document(&mut self, doc: Document) -> Vec<String> {
+        self.replace_document_as(doc, true)
+    }
+
+    /// [`Session::replace_document`]. `is_file_drawing` is false when the drawing is not the one
+    /// that is stored in the file (for example gray placeholders were replaced by the real
+    /// pictures at the open): then a history that waits in the file does not take the drawing
+    /// for the anchor of its versions, and does not become read only because they differ.
+    pub fn replace_document_as(&mut self, mut doc: Document, is_file_drawing: bool) -> Vec<String> {
         let mut cache = review_api::vet_document(&mut doc, self.limits.read_caps());
         let mut notes = doc.load_notes().to_vec();
         notes.extend(doc.placeholder_note());
@@ -991,7 +1012,7 @@ impl Session {
             ..fresh
         };
         self.events = hub;
-        cache.arm(self.editor.revision(), exact);
+        cache.arm(self.editor.revision(), exact && is_file_drawing);
         self.review = cache;
         self.feedback = feedback;
         self.collab = collab;

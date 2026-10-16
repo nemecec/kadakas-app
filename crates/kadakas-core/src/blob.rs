@@ -62,10 +62,10 @@ pub trait BlobSource: Send + Sync + std::fmt::Debug {
     fn blob_len(&self, hash: &str) -> Option<u64>;
     /// The first [`HEAD_CHARS`] characters of the text (fewer if it is shorter).
     fn blob_head(&self, hash: &str) -> Result<String, BlobError>;
-    /// Tells whether the blob is marked as the summaries of an import base: `Some(false)` if the
-    /// file marks its blobs and this one is not marked, `None` if the file marks none (an older
-    /// file), where the bound of the size is all that holds. The estimate of the memory of an
-    /// open counts the marked blobs, so a blob that is not marked is not parsed as a base.
+    /// Tells whether the blob is marked as the summaries of an import base: `Some(false)` if it is
+    /// not marked, `None` if the source cannot say (a source in memory, a test), where the bound
+    /// of the size is all that holds. The estimate of the memory of an open counts the marked
+    /// blobs, so a blob that is not marked is not parsed as a base.
     fn is_import_base(&self, _hash: &str) -> Option<bool> {
         None
     }
@@ -101,6 +101,8 @@ pub struct LazyBlob {
     source: Arc<dyn BlobSource>,
     text: Mutex<Option<Weak<str>>>,
     bytes: Mutex<Weak<Vec<u8>>>,
+    /// The text held in memory (see [`LazyBlob::pin`]), for a picture whose file went away.
+    pinned: Mutex<Option<Arc<str>>>,
 }
 
 impl std::fmt::Debug for LazyBlob {
@@ -133,7 +135,36 @@ impl LazyBlob {
             source,
             text: Mutex::new(None),
             bytes: Mutex::new(Weak::new()),
+            pinned: Mutex::new(None),
         })
+    }
+
+    /// Reads the text now and keeps it in memory for the life of the handle. A host does this for
+    /// a picture that is still readable when the file it comes from is found changed, because a
+    /// later save over the file could take the last copy away.
+    pub fn pin(&self) -> Result<(), BlobError> {
+        if self.is_pinned() {
+            return Ok(());
+        }
+        let t = self.text()?;
+        *self.pinned.lock().unwrap_or_else(|e| e.into_inner()) = Some(t);
+        Ok(())
+    }
+
+    /// True if the text is held in memory by [`LazyBlob::pin`].
+    pub fn is_pinned(&self) -> bool {
+        self.pinned
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+    }
+
+    /// The text held by [`LazyBlob::pin`].
+    pub fn pinned_text(&self) -> Option<Arc<str>> {
+        self.pinned
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// The SHA-256 of the text, as 64 hex digits.
@@ -159,6 +190,9 @@ impl LazyBlob {
     /// The text. Read from the file, checked against the hash. While some caller holds the
     /// result, another call gives the same memory.
     pub fn text(&self) -> Result<Arc<str>, BlobError> {
+        if let Some(t) = self.pinned_text() {
+            return Ok(t);
+        }
         let mut cache = self.text.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(t) = cache.as_ref().and_then(Weak::upgrade) {
             return Ok(t);

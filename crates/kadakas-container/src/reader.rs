@@ -673,6 +673,33 @@ impl Container {
         })
     }
 
+    /// [`Container::raw`], and a deflated entry is checked while it is read: the compressed bytes
+    /// pass to the caller and, at the same time, through a decoder that checks the size, the
+    /// CRC-32 and the SHA-256. The bytes are read once (what is checked is what is copied), with
+    /// no extra memory. The last read fails if the entry is damaged, so a copy that reads to the
+    /// end never takes a bad entry as good. A stored entry is checked by [`Container::raw`].
+    pub fn raw_verified(&self, name: &str) -> Result<RawEntry, ContainerError> {
+        let mut raw = self.raw(name)?;
+        if raw.method == Method::Deflate {
+            let tee = TeeVerify {
+                name: raw.name.clone(),
+                size: raw.size,
+                crc32: raw.crc32,
+                sha256: raw.sha256,
+                decoder: Some(flate2::write::DeflateDecoder::new(Check {
+                    crc: Crc::new(),
+                    sha: Sha256::new(),
+                    got: 0,
+                    limit: raw.size,
+                })),
+                inner: raw.data,
+                done: false,
+            };
+            raw.data = Box::new(tee);
+        }
+        Ok(raw)
+    }
+
     /// Reads the entry to its end and checks it (size, CRC-32, SHA-256), and drops the bytes.
     pub fn verify_entry(&self, name: &str) -> Result<(), ContainerError> {
         self.reader(name)?.finish()
@@ -681,6 +708,97 @@ impl Container {
     /// The manifest entry in the directory (its size is the size of `manifest.json`).
     pub fn manifest_size(&self) -> u64 {
         self.manifest_entry.size
+    }
+}
+
+/// What the decoder of [`TeeVerify`] writes to: the checks of the decoded bytes.
+struct Check {
+    crc: Crc,
+    sha: Sha256,
+    got: u64,
+    limit: u64,
+}
+
+impl std::io::Write for Check {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.got += buf.len() as u64;
+        if self.got > self.limit {
+            return Err(std::io::Error::other(format!(
+                "it has more than the {} bytes that the directory declares",
+                self.limit
+            )));
+        }
+        self.crc.update(buf);
+        self.sha.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The compressed bytes of a deflated entry, passed on as they are, and checked on the way (see
+/// [`Container::raw_verified`]).
+struct TeeVerify {
+    name: String,
+    size: u64,
+    crc32: u32,
+    sha256: [u8; 32],
+    decoder: Option<flate2::write::DeflateDecoder<Check>>,
+    inner: Box<dyn Read + Send>,
+    done: bool,
+}
+
+impl TeeVerify {
+    fn fail(&mut self, reason: String) -> std::io::Error {
+        self.done = true;
+        ContainerError::entry(&self.name, reason).into()
+    }
+}
+
+impl Read for TeeVerify {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.done || buf.is_empty() {
+            return Ok(0);
+        }
+        let n = self.inner.read(buf)?;
+        if n > 0 {
+            let fed = match self.decoder.as_mut() {
+                Some(d) => std::io::Write::write_all(d, &buf[..n]),
+                None => Ok(()),
+            };
+            if let Err(e) = fed {
+                return Err(self.fail(format!("it cannot be decoded: {e}")));
+            }
+            return Ok(n);
+        }
+        // The end of the compressed bytes: the decoder must be at the end of the stream, and the
+        // decoded bytes must be what the manifest says.
+        self.done = true;
+        let Some(d) = self.decoder.take() else {
+            return Ok(0);
+        };
+        let check = match d.finish() {
+            Ok(c) => c,
+            Err(e) => return Err(self.fail(format!("it cannot be decoded: {e}"))),
+        };
+        if check.got != self.size {
+            return Err(self.fail(format!(
+                "it has {} bytes, the directory declares {} (the file is cut short or damaged)",
+                check.got, self.size
+            )));
+        }
+        if check.crc.sum() != self.crc32 {
+            return Err(self.fail("its CRC-32 does not match (the data is damaged)".into()));
+        }
+        if <[u8; 32]>::from(check.sha.finalize()) != self.sha256 {
+            return Err(self.fail(
+                "its SHA-256 does not match the manifest (the data is damaged or was changed)"
+                    .into(),
+            ));
+        }
+        Ok(0)
     }
 }
 

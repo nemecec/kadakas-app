@@ -23,6 +23,7 @@ kadakas-review = { version = "0.1.0", path = "../kadakas-review" }
 kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }
 kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
 glam = { version = "0.34.1", features = ["serde"] }
+sha2 = "0.10.9"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 

@@ -259,6 +259,9 @@ pub fn inspect(path: &Path) -> Result<Inspect, FileError> {
                 .filter(|e| e.name.starts_with("history/") && e.name != crate::HISTORY_ANCHOR)
                 .map(|e| e.size)
                 .sum();
+            // Only a blob that the file marks is read as the summaries of an import base (see
+            // `FileSource::is_import_base`: a blob that is not marked is refused), so these are
+            // all the bases that an open can parse, whether the file marks some or none.
             let base_bytes = c
                 .entries()
                 .iter()

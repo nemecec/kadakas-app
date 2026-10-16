@@ -498,17 +498,10 @@ pub(crate) fn pictures_readable(s: &Session) -> Result<(), RpcError> {
     })
 }
 
-/// The token that binds the consent of the person to one refusal: the SHA-256 of the kind and of
-/// the facts of the refusal. An agent gets it in the error and passes it back after the person
-/// agreed; a token from another refusal (other parts, another file) does not match.
-pub fn consent_token(kind: &str, facts: &Value) -> String {
-    kadakas_core::blob::text_hash(&format!("{kind}:{facts}"))
-}
-
 /// The error of a save that cannot find parts of the document in the file it was opened from.
 /// Nothing was written. The person decides: put the file back, or save without them (the pictures
-/// become small placeholders and the versions are left out): `file.save` with
-/// `allow_missing: true`.
+/// become small placeholders and the versions are left out): `file.save` with `allow_missing`.
+/// The token (`details.consent_token`) is given by the session (`Session::issue_consent`).
 pub fn missing_error(m: &kadakas_file::Missing) -> RpcError {
     let missing =
         json!({"file": m.file, "pictures": m.pictures, "history": m.history, "other": m.other});
@@ -516,10 +509,9 @@ pub fn missing_error(m: &kadakas_file::Missing) -> RpcError {
         .with_reason(REASON_PARTS_MISSING)
         .with_details(json!({
             "missing": missing,
-            "consent_token": consent_token("parts_missing", &missing),
             "options": [
                 {"action": "restore", "how": "Put the file (or its .bak) back where it was, then save again."},
-                {"action": "save_without", "how": "Ask the person. Then save again with allow_missing: true: the missing pictures become small gray placeholders, the versions that cannot be found are left out, and the file is saved."}
+                {"action": "save_without", "how": "Ask the person. Then call file.save again with allow_missing set to the value of consent_token of this error (not true; the token is good for this one save of this document as it is): the missing pictures become small gray placeholders, the versions that cannot be found are left out, and the file is saved."}
             ],
             "ask_the_person": true,
         }))

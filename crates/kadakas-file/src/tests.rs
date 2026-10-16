@@ -16,7 +16,11 @@ use serde_json::{Value, json};
 use super::*;
 
 fn png_bytes(seed: u8, len: usize) -> Vec<u8> {
-    let mut png = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+    // The header of a PNG of 10 x 10 pixels, then bytes that are no image.
+    let mut png = vec![
+        0x89, b'P', b'N', b'G', 13, 10, 26, 10, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 0, 0, 0, 10,
+        0, 0, 0, 10, 8, 6, 0, 0, 0,
+    ];
     png.extend((0..len).map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed)));
     png
 }
@@ -1696,7 +1700,7 @@ fn entries_of_a_newer_program_are_kept_with_a_note_also_under_history() {
 }
 
 #[test]
-fn an_import_base_must_be_marked_when_the_file_marks_its_blobs() {
+fn an_import_base_must_be_marked_also_when_the_file_marks_no_blob() {
     let mut doc = Document::with_sequential_ids();
     doc.resources.push(Resource {
         id: ResourceId::from_num(31),
@@ -1726,12 +1730,13 @@ fn an_import_base_must_be_marked_when_the_file_marks_its_blobs() {
         }
         w.finish().unwrap()
     };
-    // Marked: it opens. Not marked, in a file that marks other blobs: refused. Not marked at all
-    // (an older file, no roles anywhere): it opens, as before.
+    // Marked: it opens. Not marked is refused, also in a file that marks no blob at all (the open
+    // estimate counts only the marked blobs, so nothing else may be read as an import base).
     assert!(read_bytes(build(true, true), Limits::default(), ReadMode::Lazy).is_ok());
     let e = read_bytes(build(false, true), Limits::default(), ReadMode::Lazy).unwrap_err();
     assert!(e.to_string().contains("does not mark"), "{e}");
-    assert!(read_bytes(build(false, false), Limits::default(), ReadMode::Lazy).is_ok());
+    let e = read_bytes(build(false, false), Limits::default(), ReadMode::Lazy).unwrap_err();
+    assert!(e.to_string().contains("does not mark"), "{e}");
 }
 
 #[test]
@@ -2267,6 +2272,102 @@ mod disk {
         assert_eq!(ij.form, Form::Json);
         assert_eq!(ij.resident_bytes(), ij.file_bytes);
         assert!(inspect(&d.join("none")).is_err());
+    }
+
+    #[test]
+    fn the_size_estimate_of_the_drawing_counts_the_vertices_of_every_shape() {
+        use kadakas_core::model::Vertex;
+        let mut doc = Document::with_sequential_ids();
+        let base = crate::write::estimate_document_bytes(&doc);
+        let id = ObjectId::from_num(9);
+        let points: Vec<Vertex> = (0..100_000)
+            .map(|i| Vertex {
+                p: DVec2::new(i as f64, 0.0),
+                ..Vertex::default()
+            })
+            .collect();
+        doc.objects.insert(
+            id,
+            Object::new(
+                id,
+                FIRST_LAYER,
+                NONE_CLASS,
+                Shape::Polyline {
+                    points,
+                    closed: true,
+                },
+            ),
+        );
+        // 100 000 vertices at about 70 bytes each, and the object.
+        assert!(crate::write::estimate_document_bytes(&doc) >= base + 7_000_000);
+    }
+
+    #[test]
+    fn a_content_stamp_tells_a_change_from_a_touch_in_both_forms() {
+        let d = dir("seen");
+        let doc = sample_doc();
+        let seen = SeenFiles::default();
+        for name in ["a.kad", "a.json"] {
+            let p = d.join(name);
+            assert!(!seen.changed(&p) && !seen.knows(&p));
+            let form = Form::from_extension(&p);
+            save_path(&p, &doc, form, &WriteOptions::default()).unwrap();
+            // Never seen: no guard. Seen: the same file is not changed, also after a touch.
+            assert!(!seen.changed(&p));
+            seen.note(&p);
+            assert!(seen.knows(&p) && !seen.changed(&p));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let bytes = std::fs::read(&p).unwrap();
+            std::fs::write(&p, &bytes).unwrap();
+            assert!(!seen.changed(&p), "{name}: a touch");
+            // Another content is a change; a deleted file is not.
+            let mut other = sample_doc();
+            other.drawing.project.name = "other".into();
+            save_path(&p, &other, form, &WriteOptions::default()).unwrap();
+            assert!(seen.changed(&p), "{name}: another content");
+            seen.note(&p);
+            assert!(!seen.changed(&p));
+            std::fs::remove_file(&p).unwrap();
+            assert!(!seen.changed(&p), "{name}: gone");
+        }
+    }
+
+    #[test]
+    fn the_pictures_in_use_are_read_into_memory_when_the_file_is_first_found_changed() {
+        let d = dir("rescue");
+        let k = d.join("a.kad");
+        let doc = sample_doc();
+        save_path(&k, &doc, Form::Container, &WriteOptions::default()).unwrap();
+        let o = open_path(&k, u64::MAX, ReadMode::Lazy).unwrap();
+        let source = o.source.clone().unwrap();
+        let handles: Vec<_> = o
+            .doc
+            .objects
+            .values()
+            .filter_map(|ob| match &ob.shape {
+                Shape::Underlay(u) => u.png.lazy().cloned(),
+                _ => None,
+            })
+            .collect();
+        assert!(!handles.is_empty());
+        // Nothing changed: nothing is read, and a second call does nothing either.
+        assert_eq!(source.rescue_if_changed(), 0);
+        assert!(handles.iter().all(|h| !h.is_pinned()));
+        // Another program saves over the file (our file is its .bak): the first look reads them.
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let mut other = Document::with_sequential_ids();
+        other.drawing.project.name = "other".into();
+        save_path(&k, &other, Form::Container, &WriteOptions::default()).unwrap();
+        assert!(source.rescue_if_changed() >= handles.len());
+        assert!(handles.iter().all(|h| h.is_pinned()));
+        assert_eq!(source.rescue_if_changed(), 0, "once for a change");
+        // The .bak goes too: the pictures are still there, from memory.
+        std::fs::remove_file(d.join("a.kad.bak")).unwrap();
+        for h in &handles {
+            let text = h.text().unwrap();
+            assert_eq!(kadakas_core::blob::text_hash(&text), h.hash());
+            assert!(source.pinned_text(h.hash()).is_some());
+        }
     }
 
     #[test]

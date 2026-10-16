@@ -23,6 +23,8 @@ mod history;
 mod layout;
 mod lazy;
 mod read;
+#[cfg(not(target_arch = "wasm32"))]
+mod seen;
 mod source;
 mod write;
 
@@ -37,6 +39,8 @@ pub use layout::{
 };
 pub use lazy::FileHistory;
 pub use read::{Opened, ReadMode, read_bytes, read_source};
+#[cfg(not(target_arch = "wasm32"))]
+pub use seen::{SeenFiles, Stamp, stamp_of};
 pub use source::FileSource;
 pub use write::{
     DOCUMENT_LEVEL, WriteOptions, Written, resolve_history, write_container, write_json,

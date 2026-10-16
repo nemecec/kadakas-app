@@ -351,7 +351,13 @@ def test_parts_that_are_gone_are_saved_only_with_the_consent_of_the_person(make_
     assert err["data"]["reason"] == "parts_missing" and err["data"]["ask_the_person"] is True, err
     assert not (tmp_path / "a.kad").exists()
     # The consent is bound to the refusal: `true` is not enough, and neither is a token of another one.
-    for bad in (True, "0" * 64):
+    # The token has a secret in it: the hash of the kind and the facts, which anybody can compute,
+    # is no consent, and neither is a token that was made up.
+    import hashlib
+
+    facts = json.dumps(err["data"]["missing"], sort_keys=True, separators=(",", ":"))
+    forged = hashlib.sha256(f"parts_missing:{facts}".encode()).hexdigest()
+    for bad in (True, "0" * 64, forged):
         refused = work.error("file.save", {"path": str(tmp_path / "a.kad"), "allow_missing": bad})
         assert refused["code"] in (-32602, 5), refused
         assert not (tmp_path / "a.kad").exists()

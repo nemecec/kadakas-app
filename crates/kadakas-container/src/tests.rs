@@ -1737,7 +1737,12 @@ mod probes {
         let mut bak = sample();
         bak[30 + "document.json".len() + 2] ^= 0xFF;
         std::fs::write(d.join("f.kad.bak"), &bak).unwrap();
-        let e = s.raw_part("document.json").unwrap_err();
+        // The bytes pass once and are checked on the way: the copy fails at the end of the
+        // entry, or earlier, and never takes the damaged bytes as good.
+        let raw = s.raw_part("document.json").unwrap();
+        let mut copied = Vec::new();
+        let e = std::io::copy(&mut { raw.data }, &mut copied).unwrap_err();
+        let e = ContainerError::from_io(e);
         assert_eq!(e.entry_name(), Some("document.json"), "{e}");
         // A stored entry of the same .bak is checked while it is copied.
         assert!(s.raw_part("blobs/aa").is_ok());
@@ -1745,7 +1750,28 @@ mod probes {
         let t = ContainerSource::from_path(&d.join("f.kad.bak"), Limits::default()).unwrap();
         let raw = t.raw_part("document.json").unwrap();
         assert_eq!(raw.name, "document.json");
+        // The good entry of the other file copies whole (the compressed bytes as they are).
+        let mut ok = Vec::new();
+        let good = s2_good_copy(&d);
+        std::io::copy(&mut { good.data }, &mut ok).unwrap();
+        assert_eq!(ok.len() as u64, good.compressed);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The raw `document.json` of a source whose file was replaced and whose `.bak` is whole.
+    fn s2_good_copy(d: &std::path::Path) -> RawEntry {
+        let p = d.join("g.kad");
+        std::fs::write(&p, sample()).unwrap();
+        let s = ContainerSource::from_path(&p, Limits::default()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(d.join("g.kad.bak"), sample()).unwrap();
+        std::fs::write(&p, write(&[("other", Compression::Stored, b"x")])).unwrap();
+        let raw = s.raw_part("document.json").unwrap();
+        // The size is only known from the directory: read it through the check.
+        RawEntry {
+            compressed: raw.compressed,
+            ..raw
+        }
     }
 
     #[test]

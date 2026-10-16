@@ -80,8 +80,8 @@ pub struct Written {
     /// What the person should know (entries of a newer program that were copied as they are).
     pub notes: Vec<String>,
     /// Pictures that only an undo step held and that no file has any more: the drawing is saved,
-    /// and an undo that needs them shows no picture. It is no note of the save, because it would
-    /// repeat at every save as long as the undo step stays.
+    /// and an undo that needs them shows them empty. The host tells the person (see
+    /// [`FileSource::tell_undo_lost`]), once for each count.
     pub undo_pictures_lost: usize,
     /// The drawing of the old file was written as the anchor of the history.
     pub anchor_written: bool,
@@ -188,13 +188,18 @@ fn plan_blobs(doc: &Document, history: Option<&Plan>, opts: &WriteOptions) -> Pl
                 .or_insert_with(|| Planned::History(text.clone()));
         }
     }
-    // Pictures that only a live handle uses (the undo steps).
+    // Pictures that only a live handle uses (the undo steps). If the file was found changed, the
+    // pictures that some file still had were read into memory then, and are written from memory.
     for source in &opts.keep {
+        source.rescue_if_changed();
         for hash in source.live_hashes() {
             plans
                 .blobs
-                .entry(hash)
-                .or_insert_with(|| Planned::Live(source.clone()));
+                .entry(hash.clone())
+                .or_insert_with(|| match source.pinned_text(&hash) {
+                    Some(text) => Planned::Text(BlobText::from(text)),
+                    None => Planned::Live(source.clone()),
+                });
         }
     }
     plans
@@ -214,8 +219,9 @@ impl Planned {
     /// file has too) is written from memory, because the file may have changed.
     fn file(&self) -> Option<Arc<FileSource>> {
         match self {
-            Planned::Picture(p) => p.lazy().and_then(|l| file_of(l)),
-            Planned::Text(t) => t.lazy().and_then(|l| file_of(l)),
+            // A picture that was read into memory when its file changed is written from memory.
+            Planned::Picture(p) => p.lazy().filter(|l| !l.is_pinned()).and_then(|l| file_of(l)),
+            Planned::Text(t) => t.lazy().filter(|l| !l.is_pinned()).and_then(|l| file_of(l)),
             Planned::Kept(s) | Planned::Live(s) => Some(s.clone()),
             _ => None,
         }
@@ -522,14 +528,21 @@ pub(crate) fn copy_entry<W: Write>(
 /// A drawing of at least this many bytes (estimated) is written as one that may pass 4 GiB.
 const BIG_DOCUMENT_BYTES: u64 = 3 << 30;
 
-/// A rough size of the text of the drawing: about 600 bytes for an object and 70 for a point of a
-/// site model. It is only for the hint of the ZIP64 field, so it does not have to be exact.
+/// A rough size of the text of the drawing: about 600 bytes for an object and 70 for each vertex
+/// or point of any shape (a contour, a boundary, a profile, a site model with its lines). It is
+/// only for the hint of the ZIP64 field, so it does not have to be exact.
 pub(crate) fn estimate_document_bytes(doc: &Document) -> u64 {
+    use kadakas_core::model::Shape;
     let mut n = doc.objects.len() as u64 * 600;
     for o in doc.objects.values() {
-        if let kadakas_core::model::Shape::SiteModel { points, .. } = &o.shape {
-            n += points.len() as u64 * 70;
-        }
+        let points = match &o.shape {
+            Shape::Polyline3d { points, .. } => points.len(),
+            Shape::SiteModel { points, lines, .. } => {
+                points.len() + lines.iter().map(|l| l.points.len()).sum::<usize>()
+            }
+            other => other.vertices().map_or(0, Vec::len),
+        };
+        n += points as u64 * 70;
     }
     n
 }

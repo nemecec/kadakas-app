@@ -715,19 +715,26 @@ impl KadakasApp {
         } = opened;
         // The gray placeholders of an earlier save without the pictures: the real ones come back
         // when the file (or its .bak) has them.
-        let relinked = source.as_ref().map_or(0, |src| {
+        let (relinked, relink_notes) = source.as_ref().map_or((0, Vec::new()), |src| {
             let blobs: std::sync::Arc<dyn kadakas_core::blob::BlobSource> = src.clone();
-            doc.relink_placeholders(&blobs)
+            doc.relink_placeholders_noted(&blobs)
         });
         // Keep the rest of the session: the event subscriptions, the limits, the allowed folders
         // and addresses, and the scripting policy. `replace_document` keeps the view and snapping.
-        let mut notes = self.session.replace_document(doc);
+        // The drawing is not the drawing of the file after a relink (see `replace_document_as`).
+        let mut notes = self.session.replace_document_as(doc, relinked == 0);
+        notes.extend(relink_notes);
         if relinked > 0 {
             notes.push(format!(
                 "{relinked} gray placeholder(s) were replaced by the real pictures"
             ));
         }
         self.session.file_source = source;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = &path {
+            // What the file holds now: a later save asks if another program changed it.
+            self.session.seen.note(p);
+        }
         // The app handles this change itself: agents must not see it as a `document.load`.
         self.session.take_replaced();
         // A compare of the old document means nothing for the new one.
@@ -1293,7 +1300,12 @@ impl KadakasApp {
         spec.anchor = container && self.session.needs_anchor();
         let mut written: Result<Vec<String>, String> = Err(String::new());
         for _ in 0..2 {
+            let seen = self.session.seen.clone();
             let first = match self.session.document_for_save_in(container) {
+                // The file at the path is another program's file, in any form: the person decides.
+                Ok(_) if !spec.allow_overwrite && seen.changed(&path) => {
+                    Err(file_io::SaveFailure::Changed(path.display().to_string()))
+                }
                 Ok(doc) => file_io::try_write_document(&path, &doc, &spec),
                 Err(e) => Err(file_io::SaveFailure::from_rpc(e)),
             };
@@ -1317,6 +1329,7 @@ impl KadakasApp {
         }
         match written {
             Ok(notes) => {
+                self.session.seen.note(&path);
                 self.status = if notes.is_empty() {
                     tr!("app-saved", name = path.display())
                 } else {
@@ -1370,7 +1383,12 @@ impl KadakasApp {
         };
         let mut retry = retry;
         let mut notes = loop {
-            match file_io::try_write_document(path, &doc, &retry) {
+            let attempt = if !retry.allow_overwrite && self.session.seen.changed(path) {
+                Err(file_io::SaveFailure::Changed(path.display().to_string()))
+            } else {
+                file_io::try_write_document(path, &doc, &retry)
+            };
+            match attempt {
                 Ok(notes) => break notes,
                 // The file at the path is also another program's file: a second question.
                 Err(file_io::SaveFailure::Changed(_)) if !retry.allow_overwrite => {
@@ -2819,12 +2837,17 @@ impl eframe::App for KadakasApp {
             || {
                 let sources: Vec<_> = self.session.file_source.iter().cloned().collect();
                 let anchor = self.session.needs_anchor();
+                #[cfg(not(target_arch = "wasm32"))]
+                let seen = Some(self.session.seen.clone());
+                #[cfg(target_arch = "wasm32")]
+                let seen = None;
                 match self.session.document_for_save_in(true) {
                     Ok(doc) => crate::autosave_ui::SaveCopy {
                         doc: doc.into_owned(),
                         note: None,
                         sources,
                         anchor,
+                        seen,
                     },
                     // The drawing is worth more than a copy that has nothing: write it, and say
                     // what is not in it. The versions that were read are in the memory form,
@@ -2843,6 +2866,7 @@ impl eframe::App for KadakasApp {
                             note,
                             sources,
                             anchor,
+                            seen,
                         }
                     }
                 }
@@ -4739,6 +4763,39 @@ mod tests {
         file_io::test_answer::set(None);
         assert_eq!(r["result"]["ok"], true, "{r}");
         assert!(target.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_save_over_a_json_file_that_another_program_changed_asks_the_person() {
+        let dir = std::env::temp_dir().join(format!("kadakas-save-json-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("mine.json");
+        file_io::write_document_raw(&file, &Document::default()).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.open_path(&ctx, file.clone());
+        assert_eq!(app.path.as_deref(), Some(file.as_path()));
+        app.exec(&add_rect_command(0.0));
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        // Another program writes the file.
+        let mut theirs = Document::default();
+        theirs.drawing.project.name = "the other copy".into();
+        file_io::write_document_raw(&file, &theirs).unwrap();
+        let theirs_bytes = std::fs::read(&file).unwrap();
+        file_io::test_answer::set(Some(false));
+        app.save(false, &ctx);
+        assert_eq!(std::fs::read(&file).unwrap(), theirs_bytes);
+        assert!(app.status.contains("another program"), "{}", app.status);
+        file_io::test_answer::set(Some(true));
+        app.save(false, &ctx);
+        file_io::test_answer::set(None);
+        assert_ne!(std::fs::read(&file).unwrap(), theirs_bytes);
+        // Its own save is what the session saw: no question the next time.
+        app.exec(&add_rect_command(5.0));
+        app.save(false, &ctx);
+        assert!(app.status.contains("Saved"), "{}", app.status);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
