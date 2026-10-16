@@ -71,6 +71,39 @@ fn measure(
     );
 }
 
+/// Like [`measure`], with two commands in one push: both change sets are compared with the final
+/// document, as a client does after several edits between two syncs.
+fn measure_push(
+    name: &str,
+    ed: &mut Editor,
+    shadow: &mut kadakas_props::replica::Replica,
+    cmds: impl Fn(usize, &[ObjectId]) -> [serde_json::Value; 2],
+) {
+    let mut total = Duration::ZERO;
+    let mut ops_count = 0;
+    for n in 0..EDITS {
+        let ids: Vec<ObjectId> = ed.doc().objects.keys().copied().collect();
+        let rev = ed.revision();
+        for c in cmds(n, &ids) {
+            ed.execute(&serde_json::from_value::<Command>(c).unwrap())
+                .unwrap();
+        }
+        let changes: Vec<_> = ed.changes_since(rev).changes.into_iter().cloned().collect();
+        let t = Instant::now();
+        for cs in &changes {
+            let ops = ops_from_change(shadow, ed.doc(), cs);
+            ops_count += ops.len();
+            shadow.apply_all(Writer::BASELINE, &ops);
+        }
+        total += t.elapsed();
+    }
+    println!(
+        "{name:<28} {:>10.3} ms per push, {:.1} operations per push",
+        total.as_secs_f64() * 1000.0 / EDITS as f64,
+        ops_count as f64 / EDITS as f64
+    );
+}
+
 #[test]
 #[ignore = "a benchmark: run it by hand in release"]
 fn time_per_edit_in_a_large_document() {
@@ -102,5 +135,20 @@ fn time_per_edit_in_a_large_document() {
         &mut ed,
         &mut shadow,
         |_, _| json!({"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [5, 5]}}),
+    );
+    let rect = json!({"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [5, 5]}});
+    measure_push("add two objects, one push", &mut ed, &mut shadow, |_, _| {
+        [rect.clone(), rect.clone()]
+    });
+    measure_push(
+        "arrange and add, one push",
+        &mut ed,
+        &mut shadow,
+        |n, ids| {
+            [
+                json!({"op": "arrange", "ids": [ids[4000 + n * 977].0], "how": "forward"}),
+                rect.clone(),
+            ]
+        },
     );
 }

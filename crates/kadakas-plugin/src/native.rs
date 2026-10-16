@@ -84,7 +84,12 @@ impl<T: Clone> Lru<T> {
 struct Shared {
     engine: Engine,
     ticker: Weak<Ticker>,
+    /// Keyed by the SHA-256 of the module bytes alone: the configuration of the engine is fixed
+    /// (`WasmtimeRuntime::engine`) and there is one engine, so the bytes decide the code. A second
+    /// configuration would need its own cache or a key with the configuration in it.
     modules: Lru<Module>,
+    /// How many modules this engine compiled (for the tests).
+    compiled: usize,
 }
 
 static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
@@ -124,6 +129,7 @@ impl WasmtimeRuntime {
             engine: Self::engine(),
             ticker: Weak::new(),
             modules: Lru::new(MODULE_CACHE_ENTRIES),
+            compiled: 0,
         });
         let engine = sh.engine.clone();
         // One ticker for the engine: a second one would make every deadline shorter.
@@ -148,8 +154,10 @@ impl WasmtimeRuntime {
     }
 
     /// A thread that advances the epoch until the returned ticker is dropped. It looks at the stop
-    /// flag after each wait, before it advances, so a stopped ticker never ticks again (a new one
-    /// may start for the same engine at once).
+    /// flag after each wait, before it advances, so a stopped ticker ticks at most once more (when
+    /// the flag is set between the look and the tick). A new ticker may start for the same engine
+    /// at once, so a deadline can end at most one tick early; every deadline has one tick to spare
+    /// (`Loaded::call`).
     fn start_ticker(engine: &Engine) -> Ticker {
         let stop = Arc::new(AtomicBool::new(false));
         let (ticker, flag) = (engine.clone(), stop.clone());
@@ -167,25 +175,36 @@ impl WasmtimeRuntime {
 
     /// The compiled module for these bytes: from the cache of the process, or compiled now.
     fn compile(&self, wasm: &[u8]) -> Result<Module, PluginError> {
-        let key: [u8; 32] = Sha256::digest(wasm).into();
-        let cached = shared()
-            .as_mut()
-            .filter(|sh| Engine::same(&sh.engine, &self.engine))
-            .and_then(|sh| sh.modules.get(&key));
-        if let Some(m) = cached {
-            return Ok(m);
-        }
-        // Compile without the lock: other sessions go on meanwhile.
-        let module =
-            Module::new(&self.engine, wasm).map_err(|e| PluginError::Invalid(format!("{e:#}")))?;
-        if let Some(sh) = shared()
-            .as_mut()
-            .filter(|sh| Engine::same(&sh.engine, &self.engine))
-        {
-            sh.modules.insert(key, module.clone());
-        }
-        Ok(module)
+        compile_in(&SHARED, &self.engine, wasm)
     }
+}
+
+/// The compiled module for these bytes from the cache in `shared`, or compiled now and kept there.
+/// The cache serves only its own engine.
+fn compile_in(
+    shared: &Mutex<Option<Shared>>,
+    engine: &Engine,
+    wasm: &[u8],
+) -> Result<Module, PluginError> {
+    let lock = || shared.lock().unwrap_or_else(|e| e.into_inner());
+    let key: [u8; 32] = Sha256::digest(wasm).into();
+    let cached = lock()
+        .as_mut()
+        .filter(|sh| Engine::same(&sh.engine, engine))
+        .and_then(|sh| sh.modules.get(&key));
+    if let Some(m) = cached {
+        return Ok(m);
+    }
+    // Compile without the lock: other sessions go on meanwhile.
+    let module = Module::new(engine, wasm).map_err(|e| PluginError::Invalid(format!("{e:#}")))?;
+    if let Some(sh) = lock()
+        .as_mut()
+        .filter(|sh| Engine::same(&sh.engine, engine))
+    {
+        sh.compiled += 1;
+        sh.modules.insert(key, module.clone());
+    }
+    Ok(module)
 }
 
 impl PluginRuntime for WasmtimeRuntime {
@@ -411,29 +430,54 @@ mod cache_tests {
     }
 
     #[test]
-    fn runtimes_share_the_engine_and_a_compiled_module() {
-        let wasm = include_bytes!("../tests/fixtures/raised_planter.wasm");
+    fn runtimes_share_the_engine() {
         let a = WasmtimeRuntime::new();
         let b = WasmtimeRuntime::new();
         assert!(Engine::same(&a.engine, &b.engine));
+        let wasm = include_bytes!("../tests/fixtures/raised_planter.wasm");
         let limits = Limits::default();
         a.load(wasm, &limits).unwrap();
-        let key: [u8; 32] = Sha256::digest(wasm).into();
-        // The second runtime finds the module of the first one. (Other tests of this process load
-        // modules too, but far fewer than the bound in between.)
-        let cached = shared().as_mut().and_then(|sh| sh.modules.get(&key));
-        assert!(cached.is_some());
         b.load(wasm, &limits).unwrap();
+    }
+
+    #[test]
+    fn a_compiled_module_is_kept_and_a_bad_one_is_not() {
+        // A cache of its own, so the other tests of the process do not change what it holds.
+        let engine = WasmtimeRuntime::engine();
+        let cache = Mutex::new(Some(Shared {
+            engine: engine.clone(),
+            ticker: Weak::new(),
+            modules: Lru::new(MODULE_CACHE_ENTRIES),
+            compiled: 0,
+        }));
+        let compiled = || cache.lock().unwrap().as_ref().unwrap().compiled;
+        let wasm = include_bytes!("../tests/fixtures/raised_planter.wasm");
+        compile_in(&cache, &engine, wasm).unwrap();
+        compile_in(&cache, &engine, wasm).unwrap();
+        assert_eq!(compiled(), 1, "the second load comes from the cache");
         // A module that does not compile is refused every time and not kept.
-        let bad = b"not a module";
-        assert!(matches!(a.load(bad, &limits), Err(PluginError::Invalid(_))));
-        let bad_key: [u8; 32] = Sha256::digest(bad).into();
-        assert!(
-            shared()
-                .as_mut()
-                .and_then(|sh| sh.modules.get(&bad_key))
-                .is_none()
+        for _ in 0..2 {
+            assert!(matches!(
+                compile_in(&cache, &engine, b"not a module"),
+                Err(PluginError::Invalid(_))
+            ));
+        }
+        assert_eq!(compiled(), 1);
+        assert_eq!(
+            cache
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .modules
+                .entries
+                .len(),
+            1
         );
+        // Another engine does not use this cache.
+        let other = WasmtimeRuntime::engine();
+        compile_in(&cache, &other, wasm).unwrap();
+        assert_eq!(compiled(), 1);
     }
 
     #[test]
@@ -446,12 +490,9 @@ mod cache_tests {
         let second = WasmtimeRuntime::new();
         assert!(Engine::same(&second.engine, &engine));
         assert!(!second.ticker.stop.load(Ordering::Relaxed));
-        let mut store = Store::new(&second.engine, ());
-        store.set_fuel(u64::MAX).unwrap();
-        store.set_epoch_deadline(1);
-        let end = std::time::Instant::now() + Duration::from_secs(10);
         // (module (func (export "spin") (loop br 0))): without a ticker the endless loop would
-        // never stop (the fuel is endless); the epoch ends it.
+        // never stop (the fuel is endless); the epoch ends it. It runs in a thread, so a broken
+        // ticker fails the test instead of hanging it.
         let spin_wasm: &[u8] = &[
             0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic, version
             0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type () -> ()
@@ -460,11 +501,20 @@ mod cache_tests {
             0x0a, 0x09, 0x01, 0x07, 0x00, 0x03, 0x40, 0x0c, 0x00, 0x0b, 0x0b, // loop br 0
         ];
         let module = Module::new(&second.engine, spin_wasm).unwrap();
-        let instance = wasmtime::Instance::new(&mut store, &module, &[]).unwrap();
-        let spin = instance
-            .get_typed_func::<(), ()>(&mut store, "spin")
-            .unwrap();
-        assert!(spin.call(&mut store, ()).is_err());
-        assert!(std::time::Instant::now() < end);
+        let engine = second.engine.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut store = Store::new(&engine, ());
+            store.set_fuel(u64::MAX).unwrap();
+            store.set_epoch_deadline(1);
+            let instance = wasmtime::Instance::new(&mut store, &module, &[]).unwrap();
+            let spin = instance
+                .get_typed_func::<(), ()>(&mut store, "spin")
+                .unwrap();
+            let _ = tx.send(spin.call(&mut store, ()).is_err());
+        });
+        let stopped = rx.recv_timeout(Duration::from_secs(10));
+        assert_eq!(stopped, Ok(true), "the epoch must end the endless loop");
+        drop(second);
     }
 }

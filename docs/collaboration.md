@@ -186,10 +186,13 @@ treats an invalid key as no key.
 - When the user changes the order locally (`arrange` to front, back, forward or backward,
   `move_layer`, a move to another layer, or a new object), the client gives keys to the objects that
   the change touched, between the keys of their nearest untouched neighbours in the list of all
-  objects. A touched object whose key already lies between them keeps it, so one object that moves
-  needs one new key. Only when the neighbours do not tell (a neighbour has no key, or their keys are
-  not in order) does the client look at the whole list: it keeps the longest run whose keys already
-  increase and gives new keys to the others. The layers are one short list of their own, which the
+  objects. In each run of touched objects, the longest part whose keys strictly increase between the
+  two neighbours keeps its keys, and only the others get new ones, so one object that moves needs
+  one new key. Only when the neighbours do not tell does the client look at the whole list: when a
+  neighbour has no key, or the key before is not strictly below the key after (two equal keys of
+  concurrent inserts count as not in order). Then it keeps the longest run whose keys strictly
+  increase and gives new keys to the others. An object that a later change of the same sync adds is
+  not a neighbour: that change places it. The layers are one short list of their own, which the
   client checks whole when a change touches layers. The keys are `set` operations like any other.
 - Two users who insert at the same place at the same time may make the same key. Both objects stay,
   the ID decides which is first, and the client of the next change gives one of them a new key.
