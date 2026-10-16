@@ -116,6 +116,18 @@ pub struct SessionLimits {
     /// `report.hardscape`) counts, and that one DXF export file writes in all objects. Never
     /// above `kadakas_core::layout::MAX_UNITS`.
     pub pattern_units: usize,
+    /// Fuel of one JavaScript run (`script.eval`, a generator): about one unit per WebAssembly
+    /// instruction. A bytecode of the script costs about 100.
+    pub script_js_fuel: u64,
+    /// Most bytes of memory of the JavaScript engine in one run.
+    pub script_js_memory_bytes: usize,
+    /// Most bytes in the answer of a run (the value, the log and the typed arrays).
+    pub script_js_output_bytes: usize,
+    /// Most calls that one run makes into the API.
+    pub script_js_calls: u64,
+    /// Wall-clock time of a whole run, with the time of the calls it makes. (`script_timeout` is
+    /// the limit for each stretch of the script between two calls.)
+    pub script_js_time: Duration,
 }
 
 impl Default for SessionLimits {
@@ -143,6 +155,11 @@ impl Default for SessionLimits {
             picture_bytes: kadakas_core::picture::MAX_PICTURE_BYTES as u64,
             picture_pixels: kadakas_core::picture::MAX_PICTURE_PIXELS,
             pattern_units: kadakas_core::layout::MAX_UNITS,
+            script_js_fuel: kadakas_script_js::ScriptLimits::default().fuel,
+            script_js_memory_bytes: kadakas_script_js::ScriptLimits::default().memory_bytes,
+            script_js_output_bytes: kadakas_script_js::ScriptLimits::default().output_bytes,
+            script_js_calls: kadakas_script_js::ScriptLimits::default().max_calls,
+            script_js_time: Duration::from_secs(120),
         }
     }
 }
@@ -167,6 +184,11 @@ impl SessionLimits {
             picture_bytes: 2 * 1024 * 1024,
             picture_pixels: 4_000_000,
             pattern_units: 100_000,
+            script_js_fuel: 400_000_000,
+            script_js_memory_bytes: 64 << 20,
+            script_js_output_bytes: 4 << 20,
+            script_js_calls: 100_000,
+            script_js_time: Duration::from_secs(10),
             ..SessionLimits::default()
         }
     }

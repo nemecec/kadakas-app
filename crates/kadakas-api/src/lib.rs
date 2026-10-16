@@ -46,6 +46,7 @@ mod plugin_util;
 mod present_api;
 mod query_api;
 mod review_api;
+mod script_js_api;
 pub use compare_api::{CompareCache, CompareMode, CompareSpec, ShownDoc};
 pub use review_api::{Side as CompareSide, VERSION_BYTES_MAX, VERSIONS_MAX, VERSIONS_WARN};
 mod rules_api;
@@ -99,6 +100,7 @@ pub use plugin_api::{
     DATA_KEY as PLUGIN_DATA_KEY, ResetJob, ScriptingState, UNTRUSTED_CODE, instance_info,
     trust_plugin, user_finish, user_prepare, user_set_params,
 };
+pub use script_js_api::{ScriptState, script_states, trust_script, untrust_script};
 pub use wasm_plugin_api::{
     DATA_KEY as WASM_PLUGIN_DATA_KEY, WasmPluginState, commit_tool_result as commit_wasm_tool,
     forget_module as forget_wasm_plugin, install_module as install_wasm_plugin,
@@ -196,6 +198,8 @@ pub struct Session {
     pub scripting: ScriptingState,
     /// WebAssembly plug-ins: the installed modules and their trust (see `wasm_plugin_api`).
     pub wasm_plugins: WasmPluginState,
+    /// JavaScript scripts and generator patterns: the engine and the cache (see `script_js_api`).
+    script_js: script_js_api::ScriptJsState,
     /// The parsed history of versions of the open document (see `review_api`).
     review: review_api::ReviewCache,
     /// States, overlays and one document of the visual compare (see `compare_api`).
@@ -302,6 +306,12 @@ struct ObjectFilter {
 
 /// Method names with a short description, for discovery by agents.
 pub const METHODS: &[(&str, &str)] = &[
+    script_js_api::SCRIPT_EVAL,
+    script_js_api::SCRIPT_JS_INFO,
+    script_js_api::SCRIPT_RESOURCE_CREATE,
+    script_js_api::SCRIPT_RESOURCE_UPDATE,
+    script_js_api::SCRIPT_RESOURCE_GET,
+    script_js_api::SCRIPT_RESOURCE_LIST,
     ("describe", "List methods and command examples."),
     (
         "execute",
@@ -940,6 +950,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             scripting: ScriptingState::default(),
             wasm_plugins: WasmPluginState::default(),
+            script_js: Default::default(),
             review: Default::default(),
             compare: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1186,6 +1197,7 @@ impl Session {
     /// Runs one request. The limits of the session (`SessionLimits`) apply: a call that breaks one
     /// is undone and fails with a limit error.
     pub fn handle(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
+        self.sync_generators();
         let depth = self.editor.undo_depth();
         let revision = self.editor.revision();
         #[cfg(not(target_arch = "wasm32"))]
@@ -1215,6 +1227,9 @@ impl Session {
     fn dispatch(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
         if feedback_api::knows(method) {
             return feedback_api::handle(self, method, p).expect("a feedback method");
+        }
+        if script_js_api::knows(method) {
+            return script_js_api::handle(self, method, p).expect("a script method");
         }
         if let Some(r) = events::handle(self, method, p.clone()) {
             return r;
@@ -1300,13 +1315,16 @@ impl Session {
                 "feedback": feedback_api::describe(),
                 "unknown_shapes": "A file from a newer Kadakas may hold shapes of a kind that this version does not know. They load as kind 'unknown' (the original kind is in shape.kind of objects.get). They are listed in document.summary (objects_by_kind.unknown and unknown_shapes), they are not drawn, they save back unchanged, and only delete_objects can change them.",
                 });
+                d["scripting"] = json!({"javascript": script_js_api::describe()});
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     d["io"] = io::describe();
                     d["io"]["update"] = update_api::describe();
                     d["review"]["dxf_compare"] = dxf_compare_api::describe();
                     d["gis"] = gis_api::describe();
+                    let js = d["scripting"]["javascript"].take();
                     d["scripting"] = plugin_api::describe();
+                    d["scripting"]["javascript"] = js;
                 }
                 d["plugins"] = wasm_plugin_api::describe();
                 d["review"]["issues"] = issue_api::describe();

@@ -6,6 +6,13 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# The JavaScript engine (SCR-08): builds QuickJS to WebAssembly and embeds it. Needs a wasi-sdk (see
+# docs/dev-guide.md). Without it `script.eval` and generator patterns say that the engine is not
+# built in; everything else works.
+default = ["script-js"]
+script-js = ["kadakas-script-js/engine"]
+
 [dependencies]
 base64 = "0.22.1"
 kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
@@ -18,6 +25,7 @@ kadakas-file = { version = "0.1.0", path = "../kadakas-file" }
 kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
 kadakas-plugin = { version = "0.1.0", path = "../kadakas-plugin" }
 kadakas-plugin-abi = { version = "0.1.0", path = "../kadakas-plugin-abi" }
+kadakas-script-js = { version = "0.1.0", path = "../kadakas-script-js" }
 kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
 kadakas-review = { version = "0.1.0", path = "../kadakas-review" }
 kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }

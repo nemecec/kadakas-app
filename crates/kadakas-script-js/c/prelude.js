@@ -72,7 +72,8 @@
 
   function call(method, params, options) {
     if (typeof method !== "string") throw new TypeError("kadakas.call: the method must be a string");
-    if (++calls > maxCalls) throw new Error("the script made more than " + maxCalls + " calls");
+    if (calls >= maxCalls) throw new Error("the script made more than " + maxCalls + " calls");
+    calls++;
     const bufs = [];
     const body = params === undefined ? {} : pack(params, bufs);
     if (options && options.typed) {
