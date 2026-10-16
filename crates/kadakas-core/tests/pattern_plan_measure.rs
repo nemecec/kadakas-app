@@ -12,7 +12,7 @@ use kadakas_core::arrangement::Curve;
 use kadakas_core::curve::{Vertex, VertexKind};
 use kadakas_core::layout::check::{CheckOptions, check};
 use kadakas_core::layout::course::{self, Corner, Side};
-use kadakas_core::layout::plan::{Body, Group, Role};
+use kadakas_core::layout::plan::{Body, Group, Owner, Role};
 use kadakas_core::layout::summary::{SummaryOptions, summarize};
 use kadakas_core::layout::{Bond, Pattern, Placement, Region, zones};
 use kadakas_core::regions;
@@ -324,6 +324,67 @@ fn measure_check() {
     let rep = check(&turned, &r, &CheckOptions::default()).unwrap();
     println!(
         "check at 45 degrees: {} units in {:.2} s; findings {:?}",
+        rep.units,
+        t.elapsed().as_secs_f64(),
+        rep.counts
+    );
+}
+
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn measure_centroid_zones() {
+    // A lot of 90 m by 45 m (about 200,000 units of 200 x 100 mm) in 20 x 15 = 300 zones that
+    // give each unit to the zone of its center.
+    let (w, h) = (90_000.0, 45_000.0);
+    let r = lot(w, h);
+    let mut lines: Vec<Vec<DVec2>> = Vec::new();
+    for k in 1..20 {
+        lines.push(vec![v(k as f64 * w / 20.0, -100.0), v(k as f64 * w / 20.0, h + 100.0)]);
+    }
+    for k in 1..15 {
+        lines.push(vec![v(-100.0, k as f64 * h / 15.0), v(w + 100.0, k as f64 * h / 15.0)]);
+    }
+    let s = zones::split(&r, &lines, 1.0).unwrap();
+    assert_eq!(s.zones.len(), 300);
+    let regions: Vec<Region> = s
+        .zones
+        .iter()
+        .map(|z| Region::from_shapes(vec![z.shape.clone()]).unwrap())
+        .collect();
+    let first = Owner::new(0, std::sync::Arc::new(regions));
+    let groups: Vec<Group> = (0..300)
+        .map(|i| {
+            let mut g = group(&format!("zone {i}"), r.clone(), 0.0);
+            g.owner = Some(first.sibling(i));
+            g
+        })
+        .collect();
+    let opts = SummaryOptions::default();
+    let t = Instant::now();
+    let mut units = 0;
+    for g in &groups {
+        let sum = g.summarize(&opts).unwrap();
+        units += sum.whole_units + sum.cut_units;
+    }
+    println!(
+        "centroid zones, report: 300 zones, {} units in {:.2} s",
+        units,
+        t.elapsed().as_secs_f64()
+    );
+    let t = Instant::now();
+    let mut n = 0usize;
+    for g in &groups {
+        g.for_each_unit(&Default::default(), &mut |_| n += 1).unwrap();
+    }
+    println!(
+        "centroid zones, export walk: {} units in {:.2} s",
+        n,
+        t.elapsed().as_secs_f64()
+    );
+    let t = Instant::now();
+    let rep = check(&groups, &r, &CheckOptions::default()).unwrap();
+    println!(
+        "centroid zones, check: {} units in {:.2} s; findings {:?}",
         rep.units,
         t.elapsed().as_secs_f64(),
         rep.counts

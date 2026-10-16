@@ -491,3 +491,27 @@ fn a_small_hole_in_a_long_course_is_found() {
     let f = r.findings.iter().find(|f| f.kind == Kind::Coverage).unwrap();
     assert!(f.size > 20_000.0 && f.size < 60_000.0 && (f.at[0] - 525_000.0).abs() < 200.0, "{f:?}");
 }
+
+#[test]
+fn zones_that_own_their_units_by_center_are_clean_where_units_reach_over_the_edge() {
+    use crate::layout::plan::Owner;
+    let field = rect(0.0, 0.0, 4000.0, 2000.0);
+    // The edge at x = 1010 cuts through the middle of a unit.
+    let zones: Vec<Region> = vec![
+        rect(0.0, 0.0, 1010.0, 2000.0),
+        rect(1010.0, 0.0, 4000.0, 2000.0),
+    ];
+    let first = Owner::new(0, std::sync::Arc::new(zones));
+    let groups: Vec<Group> = (0..2)
+        .map(|i| {
+            let mut g = group(&format!("zone {i}"), field.clone(), Bond::Stack, 0.0);
+            g.role = Role::Zone;
+            g.owner = Some(first.sibling(i));
+            g
+        })
+        .collect();
+    let r = check(&groups, &field, &CheckOptions::default()).unwrap();
+    assert_eq!(r.counts["coverage"], 0, "{:?}", r.findings);
+    assert_eq!(r.counts["overlap"], 0, "{:?}", r.findings);
+    assert_eq!(r.units, 400);
+}

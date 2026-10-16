@@ -841,8 +841,13 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
             open_share: if meaningful { open } else { 0.0 },
             expected_open_share: expected,
         });
-        let c = centroid(&g.region.shapes[0][0]);
-        if laid > region * (1.0 + 1e-6) + noise_area(&g.region.shapes[0][0]) && meaningful {
+        // A zone that owns its units by their centers may hold units that reach over its edge.
+        let ring = match &g.owner {
+            Some(o) => &o.zones[o.index].shapes[0][0],
+            None => &g.region.shapes[0][0],
+        };
+        let c = centroid(ring);
+        if laid > region * (1.0 + 1e-6) + noise_area(ring) && meaningful && g.owner.is_none() {
             add(
                 Kind::Coverage,
                 Finding {
