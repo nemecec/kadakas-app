@@ -46,9 +46,78 @@ fn col(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
 }
 
-/// Points along a path, curves cut into short lines.
-fn flatten(segs: &[PSeg]) -> Vec<DVec2> {
-    kadakas_print::display::sample(segs, 12)
+/// The subpaths of a path, curves cut into short lines. A `Move` starts a subpath: a path with
+/// many (the units of a pattern) is not one line.
+fn flatten(segs: &[PSeg]) -> Vec<Vec<DVec2>> {
+    kadakas_print::display::sample_subpaths(segs, 12)
+}
+
+fn ring_area(r: &[DVec2]) -> f64 {
+    (0..r.len())
+        .map(|i| r[i].perp_dot(r[(i + 1) % r.len()]))
+        .sum::<f64>()
+        .abs()
+        / 2.0
+}
+
+fn inside_ring(poly: &[DVec2], p: DVec2) -> bool {
+    let mut c = false;
+    for i in 0..poly.len() {
+        let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
+            c = !c;
+        }
+    }
+    c
+}
+
+/// The rings of a filled path, grouped as outlines with their holes. Which ring is an outline and
+/// which a hole is decided by nesting, not by the direction of the ring (a ring inside one ring is
+/// a hole, inside two it is an outline again): the paths of the sheets promise only that a hole runs
+/// the other way, and some shapes (the poche of a section) may not even do that. The closing point
+/// that repeats the first one is dropped.
+fn fill_groups(subs: &[Vec<DVec2>]) -> Vec<Vec<Vec<DVec2>>> {
+    let rings: Vec<Vec<DVec2>> = subs
+        .iter()
+        .map(|s| {
+            let mut r = s.clone();
+            if r.len() > 1 && r.first() == r.last() {
+                r.pop();
+            }
+            r
+        })
+        .filter(|r| r.len() >= 3)
+        .collect();
+    // The rings that hold each ring.
+    let holders: Vec<Vec<usize>> = (0..rings.len())
+        .map(|i| {
+            (0..rings.len())
+                .filter(|&j| j != i && inside_ring(&rings[j], rings[i][0]))
+                .collect()
+        })
+        .collect();
+    let mut groups: Vec<Vec<Vec<DVec2>>> = Vec::new();
+    let mut group_of: Vec<Option<usize>> = vec![None; rings.len()];
+    for i in 0..rings.len() {
+        if holders[i].len().is_multiple_of(2) {
+            group_of[i] = Some(groups.len());
+            groups.push(vec![rings[i].clone()]);
+        }
+    }
+    for i in 0..rings.len() {
+        if !holders[i].len().is_multiple_of(2) {
+            // The hole of the smallest ring that holds it and is an outline.
+            let parent = holders[i]
+                .iter()
+                .copied()
+                .filter(|&j| holders[j].len().is_multiple_of(2))
+                .min_by(|&a, &b| ring_area(&rings[a]).total_cmp(&ring_area(&rings[b])));
+            if let Some(g) = parent.and_then(|j| group_of[j]) {
+                groups[g].push(rings[i].clone());
+            }
+        }
+    }
+    groups
 }
 
 impl SheetUi {
@@ -78,43 +147,57 @@ impl SheetUi {
                     stack.pop();
                 }
                 Prim::Path(path) => {
-                    let pts = flatten(&path.segs);
-                    let sp: Vec<Pos2> = pts.iter().map(|q| view.to_screen(*q)).collect();
-                    if let (Some(f), true) = (path.fill, path.closed)
+                    let subs = flatten(&path.segs);
+                    if let Some(f) = path.fill
                         && f[3] > 0
-                        && pts.len() >= 3
                     {
-                        let mut mesh = egui::epaint::Mesh::default();
-                        for q in &sp {
-                            mesh.colored_vertex(*q, col(f));
+                        for group in fill_groups(&subs) {
+                            let (pts, tris) = tess::triangulate_with_holes(&group);
+                            let mut mesh = egui::epaint::Mesh::default();
+                            for q in &pts {
+                                mesh.colored_vertex(view.to_screen(*q), col(f));
+                            }
+                            for t in tris {
+                                mesh.add_triangle(t[0] as u32, t[1] as u32, t[2] as u32);
+                            }
+                            p.add(mesh);
                         }
-                        for t in tess::triangulate(&pts) {
-                            mesh.add_triangle(t[0] as u32, t[1] as u32, t[2] as u32);
-                        }
-                        p.add(mesh);
                     }
                     if let Some(s) = path.stroke {
                         let w = ((path.width * view.zoom) as f32).max(0.8);
-                        match path.dash {
-                            Some([d, g]) => {
-                                let mut pts = sp.clone();
-                                if path.closed {
-                                    pts.push(sp[0]);
-                                }
-                                p.extend(egui::Shape::dashed_line(
-                                    &pts,
-                                    Stroke::new(w, col(s)),
-                                    (d * view.zoom) as f32,
-                                    (g * view.zoom) as f32,
-                                ));
+                        for sub in &subs {
+                            let mut sp: Vec<Pos2> =
+                                sub.iter().map(|q| view.to_screen(*q)).collect();
+                            if sp.len() < 2 {
+                                continue;
                             }
-                            None => {
-                                p.add(egui::epaint::PathShape {
-                                    points: sp,
-                                    closed: path.closed,
-                                    fill: Color32::TRANSPARENT,
-                                    stroke: PathStroke::new(w, col(s)),
-                                });
+                            // A ring that returns to its start is closed.
+                            let mut closed = path.closed;
+                            if sub.len() > 2 && sub.first() == sub.last() {
+                                sp.pop();
+                                closed = true;
+                            }
+                            match path.dash {
+                                Some([d, g]) => {
+                                    let mut pts = sp.clone();
+                                    if closed {
+                                        pts.push(sp[0]);
+                                    }
+                                    p.extend(egui::Shape::dashed_line(
+                                        &pts,
+                                        Stroke::new(w, col(s)),
+                                        (d * view.zoom) as f32,
+                                        (g * view.zoom) as f32,
+                                    ));
+                                }
+                                None => {
+                                    p.add(egui::epaint::PathShape {
+                                        points: sp,
+                                        closed,
+                                        fill: Color32::TRANSPARENT,
+                                        stroke: PathStroke::new(w, col(s)),
+                                    });
+                                }
                             }
                         }
                     }
@@ -410,5 +493,56 @@ pub fn capture(session: &Session, name: &str, zoom: f64, pan: DVec2) -> SavedVie
         view: Some(session.view.view.id().to_string()),
         projection: Some(session.view.projection.id().to_string()),
         mode: Some(session.view.mode.id().to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn square(x0: f64, y0: f64, x1: f64, y1: f64, ccw: bool) -> Vec<DVec2> {
+        let mut r = vec![
+            DVec2::new(x0, y0),
+            DVec2::new(x1, y0),
+            DVec2::new(x1, y1),
+            DVec2::new(x0, y1),
+        ];
+        if !ccw {
+            r.reverse();
+        }
+        r
+    }
+
+    #[test]
+    fn a_hole_is_a_ring_inside_a_ring_whatever_the_direction() {
+        // A clockwise outline with a counterclockwise hole.
+        let g = fill_groups(&[
+            square(0.0, 0.0, 10.0, 10.0, false),
+            square(3.0, 3.0, 6.0, 6.0, true),
+        ]);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].len(), 2);
+        // Both the same direction: still a hole.
+        let g = fill_groups(&[
+            square(0.0, 0.0, 10.0, 10.0, true),
+            square(3.0, 3.0, 6.0, 6.0, true),
+        ]);
+        assert_eq!((g.len(), g[0].len()), (1, 2));
+        // An island in the hole is an outline again; two separate shapes are two groups; the closing
+        // point that repeats the first is dropped.
+        let mut closed = square(20.0, 0.0, 30.0, 10.0, true);
+        closed.push(closed[0]);
+        let g = fill_groups(&[
+            square(0.0, 0.0, 10.0, 10.0, true),
+            square(2.0, 2.0, 8.0, 8.0, false),
+            square(4.0, 4.0, 5.0, 5.0, true),
+            closed,
+        ]);
+        assert_eq!(g.len(), 3);
+        let sizes: Vec<usize> = g.iter().map(Vec::len).collect();
+        assert_eq!(sizes, vec![2, 1, 1]);
+        assert_eq!(g[2][0].len(), 4);
+        // Rings that are too small are dropped.
+        assert!(fill_groups(&[vec![DVec2::ZERO, DVec2::X]]).is_empty());
     }
 }

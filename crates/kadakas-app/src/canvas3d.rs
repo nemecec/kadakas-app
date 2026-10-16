@@ -156,6 +156,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         None => view3d.look(doc, &scene, rev, style.textures),
     };
     let geometry = view3d.geometry_key(&scene, rev);
+    let not_in_3d = view3d.untextured(doc, rev);
     let light = light_for(doc, &style);
     let gpu_style = GpuStyle {
         mode: style.mode,
@@ -190,6 +191,15 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
             ],
         },
     ));
+    if not_in_3d > 0 {
+        ui.painter_at(rect).text(
+            rect.left_bottom() + egui::vec2(8.0, -8.0),
+            egui::Align2::LEFT_BOTTOM,
+            tr!("canvas3d-pattern-not-drawn-in-3d", count = not_in_3d),
+            egui::FontId::proportional(11.0),
+            ui.visuals().weak_text_color(),
+        );
+    }
     if compare.is_none()
         && let Some(issues) = issues
     {

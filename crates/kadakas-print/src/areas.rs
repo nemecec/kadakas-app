@@ -12,6 +12,18 @@ use kadakas_core::plants::style::PlantGraphic;
 use crate::display::*;
 use crate::plan::{Style, Xf};
 
+thread_local! {
+    /// Tests that measure change the bound of the units on a sheet.
+    static BOUND: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Sets the bound of the units that a viewport draws one by one on this thread (`None`: the
+/// default, [`kadakas_core::hardscape::draw::PRINT_BOUND`]). For measurements.
+#[doc(hidden)]
+pub fn set_bound_for_measurement(bound: Option<usize>) {
+    BOUND.with(|b| b.set(bound));
+}
+
 /// Joint units smaller than this on paper (mm) are not drawn: they would only make a gray area.
 const MIN_UNIT_ON_PAPER: f64 = 0.6;
 /// Thin lines of the extras, in mm on paper.
@@ -49,6 +61,182 @@ fn circle(
     line(&pts, true, stroke, fill, width, dash)
 }
 
+/// The color of the fill that marks a cut unit: the pen of the pattern at 18 percent.
+fn cut_fill(color: Option<Rgba>) -> Rgba {
+    let [r, g, b, _] = color.unwrap_or([0, 0, 0, 255]);
+    [r, g, b, 46]
+}
+
+/// A ring as segments, closed by a line to its first point, and turned the way a fill needs it
+/// (outline counterclockwise, hole clockwise) so that the holes of a unit stay open.
+fn ring_segs(ring: &[DVec2], hole: bool, xf: &Xf) -> Vec<PSeg> {
+    let mut pts: Vec<DVec2> = ring.iter().map(|p| xf.p(*p)).collect();
+    // The paper has y up, as the model, so the turn of a ring is the same on paper.
+    let ccw = kadakas_core::geom::signed_area(&pts) >= 0.0;
+    if ccw == hole {
+        pts.reverse();
+    }
+    let mut segs = PathPrim::polyline(&pts);
+    if let Some(first) = pts.first() {
+        segs.push(PSeg::Line(*first));
+    }
+    segs
+}
+
+/// The pattern plan of a hardscape on paper: the real units of the part in view (whole units as
+/// outlines, cut units with a light fill) when the view holds at most `PRINT_BOUND` units, else
+/// the gap lines of the plan and a note on the sheet. Zones and courses are in it, laid by the same
+/// engine as the report.
+fn pattern_prims(doc: &Document, obj: &Object, color: Option<Rgba>, xf: &Xf, out: &mut Vec<Prim>) {
+    use kadakas_core::hardscape::draw::{self, Detail, DrawOptions};
+    let Some(prepared) = draw::prepared(doc, obj) else {
+        return;
+    };
+    // Notes stand one above the other at the lower left of the part of the object that is in view.
+    let mut notes = 0usize;
+    let mut note = |bounds: (DVec2, DVec2), text: String, out: &mut Vec<Prim>| {
+        let (lo, hi) = match xf.window {
+            Some((wlo, whi)) => (bounds.0.max(wlo), bounds.1.min(whi)),
+            None => bounds,
+        };
+        let at = xf.p(DVec2::new(lo.x, lo.y.min(hi.y)));
+        out.push(Prim::Text(TextPrim {
+            at: at + DVec2::new(1.0, 1.5 + 2.4 * notes as f64),
+            text,
+            height: 2.0,
+            color: color.unwrap_or([0, 0, 0, 255]),
+            align: Align::Left,
+        }));
+        notes += 1;
+    };
+    let prepared = match prepared {
+        Ok(p) => p,
+        Err(e) => {
+            // The plan cannot be laid: the reason is on the sheet.
+            let (lo, hi) = doc.object_bounds(obj);
+            if lo.is_finite() && hi.is_finite() {
+                note((lo, hi), format!("Pattern not drawn: {e}"), out);
+            }
+            return;
+        }
+    };
+    let (blo, bhi) = prepared.bounds();
+    if let Some((wlo, whi)) = xf.window
+        && (bhi.x < wlo.x || blo.x > whi.x || bhi.y < wlo.y || blo.y > whi.y)
+    {
+        return;
+    }
+    // Units smaller than this on paper are not drawn: they would only make a gray area.
+    let min_unit_mm = if xf.k > 0.0 {
+        MIN_UNIT_ON_PAPER / xf.k
+    } else {
+        0.0
+    };
+    let drawn = prepared.draw(
+        xf.window,
+        &DrawOptions::units(BOUND.with(|b| b.get()).unwrap_or(draw::PRINT_BOUND))
+            .hiding_units_under(min_unit_mm),
+    );
+    if drawn.has_hidden() {
+        note(
+            (blo, bhi),
+            format!(
+                "pattern not drawn for units smaller than {MIN_UNIT_ON_PAPER} mm on paper at this scale"
+            ),
+            out,
+        );
+    }
+    let hair = THIN;
+    for g in &drawn.groups {
+        // The units show a course; its band is drawn when the units are hidden.
+        if g.hidden && !g.outline.is_empty() {
+            let segs: Vec<PSeg> = g
+                .outline
+                .iter()
+                .flat_map(|r| ring_segs(r, false, xf))
+                .collect();
+            out.push(Prim::Path(PathPrim {
+                segs,
+                closed: false,
+                stroke: color,
+                fill: None,
+                width: hair,
+                dash: None,
+            }));
+        }
+        if !g.joints.is_empty() {
+            let mut segs = Vec::with_capacity(g.joints.len() * 2);
+            for (a, b) in &g.joints {
+                segs.push(PSeg::Move(xf.p(*a)));
+                segs.push(PSeg::Line(xf.p(*b)));
+            }
+            out.push(Prim::Path(PathPrim {
+                segs,
+                closed: false,
+                stroke: color,
+                fill: None,
+                width: hair,
+                dash: None,
+            }));
+        }
+        if !g.whole.is_empty() {
+            let segs: Vec<PSeg> = g
+                .whole
+                .iter()
+                .flat_map(|r| ring_segs(r, false, xf))
+                .collect();
+            out.push(Prim::Path(PathPrim {
+                segs,
+                closed: false,
+                stroke: color,
+                fill: None,
+                width: hair,
+                dash: None,
+            }));
+        }
+        for u in &g.cut {
+            let segs: Vec<PSeg> = u
+                .iter()
+                .enumerate()
+                .flat_map(|(i, r)| ring_segs(r, i > 0, xf))
+                .collect();
+            out.push(Prim::Path(PathPrim {
+                segs,
+                closed: false,
+                stroke: color,
+                fill: Some(cut_fill(color)),
+                width: hair,
+                dash: None,
+            }));
+        }
+    }
+    for ring in &drawn.zone_edges {
+        out.push(line(
+            &ring.iter().map(|p| xf.p(*p)).collect::<Vec<_>>(),
+            true,
+            color,
+            None,
+            hair,
+            Some([2.0, 1.0]),
+        ));
+    }
+    if let Detail::Preview {
+        units_in_view,
+        bound,
+        ..
+    } = drawn.detail
+    {
+        note(
+            (blo, bhi),
+            format!(
+                "{} ({units_in_view} units in view, more than {bound}): enlarge the scale or the viewport for the real units",
+                draw::PREVIEW_LABEL
+            ),
+            out,
+        );
+    }
+}
+
 /// Adds the extras of a hardscape or a landscape area. `st` is the pen and fill of the object.
 pub fn extras(doc: &Document, obj: &Object, st: &Style, xf: &Xf, out: &mut Vec<Prim>) {
     let map = |pts: &[DVec2]| -> Vec<DVec2> { pts.iter().map(|p| xf.p(*p)).collect() };
@@ -58,15 +246,9 @@ pub fn extras(doc: &Document, obj: &Object, st: &Style, xf: &Xf, out: &mut Vec<P
                 return;
             };
             let ring = curve::flatten(boundary, true, (0.1 / xf.k).max(1.0));
-            if let Some(j) = &style.joints
-                && xf.len(j.unit_width.min(j.unit_length)) >= MIN_UNIT_ON_PAPER
-            {
+            if let Some(j) = &style.joints {
                 let color = j.color.map(|c| c.0).or(st.stroke);
-                for (a, b) in
-                    hardscape::drawn_joints(doc, obj, j, kadakas_core::layout::TOLERANCE).segments
-                {
-                    out.push(line(&[xf.p(a), xf.p(b)], false, color, None, THIN, None));
-                }
+                pattern_prims(doc, obj, color, xf, out);
             }
             if let Some(b) = &style.border {
                 let color = b.color.map(|c| c.0).or(st.stroke);

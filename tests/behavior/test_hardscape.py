@@ -270,7 +270,7 @@ def test_the_plan_shows_joint_patterns_borders_holes_and_plants(cad):
     meadow(cad)
     bed(cad, show_plants=True, holes=[[[1000, 1000], [2000, 1000], [2000, 2000]]])
     svg = cad.result("render.svg", {"width": 1000})["svg"]
-    assert 'data-part="joints"' in svg and 'data-pattern="running_bond"' in svg
+    assert 'data-part="units-whole"' in svg and 'data-pattern="running_bond"' in svg
     assert 'data-part="border"' in svg and 'data-part="hole"' in svg and 'data-part="plants"' in svg
     again = cad.result("render.svg", {"width": 1000})["svg"]
     assert again == svg  # the scatter is deterministic

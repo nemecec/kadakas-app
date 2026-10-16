@@ -506,6 +506,40 @@ impl Region {
         })
     }
 
+    /// The part of the region inside the box `lo..hi`, or `None` if nothing is left. Where the box
+    /// does not cut the region, the points stay exactly as they are.
+    pub fn clipped_to_box(&self, lo: DVec2, hi: DVec2) -> Option<Region> {
+        if hi.x < self.lo.x || lo.x > self.hi.x || hi.y < self.lo.y || lo.y > self.hi.y {
+            return None;
+        }
+        if lo.x <= self.lo.x && lo.y <= self.lo.y && hi.x >= self.hi.x && hi.y >= self.hi.y {
+            return Some(self.clone());
+        }
+        let rect = vec![vec![[lo.x, lo.y], [hi.x, lo.y], [hi.x, hi.y], [lo.x, hi.y]]];
+        let mut out: Vec<Vec<Vec<DVec2>>> = Vec::new();
+        for shape in &self.shapes {
+            // A shape that lies inside the box stays as it is.
+            let (mut slo, mut shi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+            for p in &shape[0] {
+                slo = slo.min(*p);
+                shi = shi.max(*p);
+            }
+            if shi.x < lo.x || slo.x > hi.x || shi.y < lo.y || slo.y > hi.y {
+                continue;
+            }
+            if slo.x >= lo.x && slo.y >= lo.y && shi.x <= hi.x && shi.y <= hi.y {
+                out.push(shape.clone());
+                continue;
+            }
+            out.extend(to_shapes(paths(shape).overlay(
+                &rect,
+                OverlayRule::Intersect,
+                FillRule::EvenOdd,
+            )));
+        }
+        Region::from_shapes(out).ok()
+    }
+
     /// All rings: outer rings and holes.
     pub fn rings(&self) -> impl Iterator<Item = &Vec<DVec2>> {
         self.shapes.iter().flatten()

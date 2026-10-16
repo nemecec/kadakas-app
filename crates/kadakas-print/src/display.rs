@@ -158,6 +158,49 @@ pub fn sample(segs: &[PSeg], per_curve: usize) -> Vec<DVec2> {
     out
 }
 
+/// Like [`sample`], one list of points for each subpath: a `Move` starts a new one. A path with
+/// many subpaths (the units of a pattern) is drawn with this, not with `sample`.
+pub fn sample_subpaths(segs: &[PSeg], per_curve: usize) -> Vec<Vec<DVec2>> {
+    let mut out: Vec<Vec<DVec2>> = Vec::new();
+    let mut cur = DVec2::ZERO;
+    for s in segs {
+        match *s {
+            PSeg::Move(p) => {
+                out.push(vec![p]);
+                cur = p;
+            }
+            PSeg::Line(p) => {
+                if out.is_empty() {
+                    out.push(Vec::new());
+                }
+                if let Some(last) = out.last_mut() {
+                    last.push(p);
+                }
+                cur = p;
+            }
+            PSeg::Cubic(c1, c2, p) => {
+                if out.is_empty() {
+                    out.push(Vec::new());
+                }
+                if let Some(last) = out.last_mut() {
+                    for i in 1..=per_curve {
+                        let t = i as f64 / per_curve as f64;
+                        let u = 1.0 - t;
+                        last.push(
+                            cur * (u * u * u)
+                                + c1 * (3.0 * u * u * t)
+                                + c2 * (3.0 * u * t * t)
+                                + p * (t * t * t),
+                        );
+                    }
+                }
+                cur = p;
+            }
+        }
+    }
+    out
+}
+
 /// A rough width of a text in mm, for layout. Real fonts differ a little.
 pub fn text_width(text: &str, height: f64) -> f64 {
     text.chars().count() as f64 * height * 0.52
@@ -315,5 +358,31 @@ mod beside_tests {
         // Both outputs draw it.
         assert!(crate::svg::page_svg(&both).contains("Before"));
         assert!(crate::png::page_png(&both, 20.0).is_ok());
+    }
+
+    #[test]
+    fn the_subpaths_of_a_path_are_cut_at_each_move() {
+        let a = DVec2::new(0.0, 0.0);
+        let b = DVec2::new(1.0, 0.0);
+        let c = DVec2::new(1.0, 1.0);
+        let segs = [
+            PSeg::Move(a),
+            PSeg::Line(b),
+            PSeg::Line(c),
+            PSeg::Line(a),
+            PSeg::Move(c),
+            PSeg::Cubic(c + b, c + b, c + c),
+        ];
+        let subs = sample_subpaths(&segs, 4);
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs[0], vec![a, b, c, a]);
+        // The curve is cut into 4 lines from the point where its subpath began.
+        assert_eq!(subs[1].len(), 1 + 4);
+        assert_eq!(subs[1][0], c);
+        assert!((subs[1][4] - (c + c)).length() < 1e-12);
+        // Lines without a Move start a subpath of their own, and an empty path has none.
+        assert_eq!(sample_subpaths(&[PSeg::Line(a), PSeg::Line(b)], 4).len(), 1);
+        assert_eq!(sample_subpaths(&[PSeg::Cubic(a, b, c)], 2)[0].len(), 2);
+        assert!(sample_subpaths(&[], 4).is_empty());
     }
 }

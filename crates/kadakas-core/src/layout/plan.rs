@@ -527,6 +527,61 @@ impl Owner {
         }
     }
 
+    /// The units of this zone that lie in `window` (a part of the region of the lattice), laid on
+    /// that part only: the lattice of the region is not laid whole. A unit goes to the zone of its
+    /// center, as in [`Owner::units`], so the units are the same as the ones that the whole lattice
+    /// gives this zone, for every unit that the window holds whole. `place` must have its origin
+    /// (the origin of the whole region). Used by the drawing, for a lattice that is too big to lay.
+    pub fn units_near(
+        &self,
+        window: &Region,
+        pattern: &Pattern,
+        place: &Placement,
+        limits: &Limits,
+        f: &mut dyn FnMut(&Unit),
+    ) -> Result<(), LayoutError> {
+        let grid = ZoneGrid::new(&self.zones);
+        super::for_each_unit(window, pattern, place, limits, &mut |u| {
+            let Some(ring) = u.rings.first() else { return };
+            let c = ring.points.iter().copied().sum::<DVec2>() / ring.points.len() as f64;
+            if grid.zone_of(&self.zones, c) == self.index {
+                f(u);
+            }
+        })
+        .map(|_| ())
+    }
+
+    /// Like [`Owner::units_near`], for every zone of the lattice at once: the window is laid one
+    /// time and each unit goes to the list of the zone of its center. The index is the zone.
+    pub fn units_near_all(
+        &self,
+        window: &Region,
+        pattern: &Pattern,
+        place: &Placement,
+        limits: &Limits,
+    ) -> Result<Vec<Vec<Unit>>, LayoutError> {
+        let grid = ZoneGrid::new(&self.zones);
+        let mut per_zone: Vec<Vec<Unit>> = vec![Vec::new(); self.zones.len()];
+        super::for_each_unit(window, pattern, place, limits, &mut |u| {
+            let Some(ring) = u.rings.first() else { return };
+            let c = ring.points.iter().copied().sum::<DVec2>() / ring.points.len() as f64;
+            per_zone[grid.zone_of(&self.zones, c)].push(u.clone());
+        })?;
+        Ok(per_zone)
+    }
+
+    /// The units of the zone that the whole lattice gives it (the lattice is laid whole and kept
+    /// when the first zone asks). Used to prepare the drawing in the background.
+    pub fn warm(
+        &self,
+        region: &Region,
+        pattern: &Pattern,
+        place: &Placement,
+        limits: &Limits,
+    ) -> Result<(), LayoutError> {
+        self.units(region, pattern, place, limits).map(|_| ())
+    }
+
     /// The units of the zone, and the stats of the whole lattice. The lattice is laid when the
     /// first zone asks and not again.
     fn units(

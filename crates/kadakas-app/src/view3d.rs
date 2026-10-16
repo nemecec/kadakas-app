@@ -40,6 +40,8 @@ pub struct View3d {
     selection_cache: Option<SelectionCache>,
     overlay_rev: u64,
     look_cache: Option<LookCache>,
+    /// How many hardscapes with a pattern have a paving texture left out, for a scene revision.
+    untextured: Option<(u64, usize)>,
     texture_cache: TextureCache,
     geometry: Option<(u64, u64)>,
 }
@@ -70,6 +72,7 @@ impl Default for View3d {
             selection_cache: None,
             overlay_rev: 0,
             look_cache: None,
+            untextured: None,
             texture_cache: TextureCache::new(),
             geometry: None,
         }
@@ -104,6 +107,19 @@ impl View3d {
             look: look.clone(),
         });
         look
+    }
+
+    /// How many hardscapes with a joint pattern have a paving texture left out of the 3D view (see
+    /// `kadakas_render::look::patterned_untextured`). Counted once for each revision.
+    pub fn untextured(&mut self, doc: &Document, scene_rev: u64) -> usize {
+        match self.untextured {
+            Some((rev, n)) if rev == scene_rev => n,
+            _ => {
+                let n = kadakas_render::look::patterned_untextured(doc);
+                self.untextured = Some((scene_rev, n));
+                n
+            }
+        }
     }
 
     /// A fingerprint of the geometry of the scene. An edit that does not change the geometry keeps

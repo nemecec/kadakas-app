@@ -377,6 +377,17 @@ fn pattern_settings(
     let Some(joints) = hardscape::data::style_of(doc, obj).and_then(|(_, s)| s.joints) else {
         return;
     };
+    // A view setting, not part of the document: the findings of unit_pattern.check on the plan.
+    let mut check = crate::plan_draw::show_check();
+    if ui
+        .checkbox(&mut check, tr!("area-ui-show-pattern-check"))
+        .on_hover_text(tr!(
+            "area-ui-the-check-marks-overlaps-small-pieces-wrong-joints-and-holes"
+        ))
+        .changed()
+    {
+        crate::plan_draw::set_show_check(check);
+    }
     let units = kadakas_units::current();
     ui.horizontal(|ui| {
         match d.origin {
@@ -508,7 +519,6 @@ fn landscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
 /// object or a style changes, not at every frame.
 #[derive(Default)]
 struct Extras {
-    joints: Vec<(DVec2, DVec2)>,
     plants: Vec<(DVec2, f64, Option<kadakas_core::model::Color>, Option<f64>)>,
 }
 
@@ -559,12 +569,6 @@ fn extras(doc: &Document, o: &Object) -> Rc<Extras> {
     }
     let mut e = Extras::default();
     match &o.shape {
-        Shape::Hardscape { .. } => {
-            if let Some(j) = hardscape::data::style_of(doc, o).and_then(|(_, s)| s.joints) {
-                e.joints =
-                    hardscape::drawn_joints(doc, o, &j, kadakas_core::layout::TOLERANCE).segments;
-            }
-        }
         Shape::LandscapeArea { .. } if landscape::shows_plants(doc, o) => {
             for p in landscape::scatter(doc, o) {
                 if let Some(s) = doc.resources.plant_style(p.plant) {
@@ -615,14 +619,19 @@ pub fn draw_extras(
             let Some((_, style)) = hardscape::data::style_of(doc, o) else {
                 return;
             };
-            if let Some(j) = &style.joints
-                && j.unit_width.min(j.unit_length) * view.zoom >= 3.0
-            {
+            if let Some(j) = &style.joints {
+                // Groups with units under 3 px are hidden by the drawing, with a label.
                 let color = j.color.map_or(st.pen.gamma_multiply(0.5), color32);
-                let stroke = Stroke::new(1.0, color);
-                for (a, b) in extras(doc, o).joints.iter().take(40_000) {
-                    painter.line_segment([s(*a), s(*b)], stroke);
-                }
+                crate::plan_draw::draw_plan(
+                    painter,
+                    view,
+                    doc,
+                    o,
+                    current_revision(),
+                    color,
+                    st.pen,
+                    offset,
+                );
             }
             if let Some(b) = &style.border {
                 let color = b.color.map_or(st.pen, color32);

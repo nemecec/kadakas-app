@@ -43,6 +43,8 @@ selection.set
 
 render.svg
   width int # pixels
+  region num[] # [x0, y0, x1, y1] in drawing coordinates (mm): draw only this part, and draw the units of the paved areas in it one by one when there are at most 60,000; above that the paved areas are a preview (marked in the picture)
+  show_check bool # mark the findings of unit_pattern.check (overlaps, small pieces, joints, holes) on the paved areas
   compare obj # {from, to, mode?, hide_unchanged?, ...}: draw the changes since a version
 
 render.png

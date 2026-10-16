@@ -69,3 +69,19 @@ joint-ui-shapes =
     }
 joint-ui-save = Salvesta
 joint-ui-close = Sulge
+
+## area-ui: plan_draw.rs (the pattern plan on the canvas)
+
+area-ui-show-pattern-check = Näita mustri kontrolli plaanil
+area-ui-the-check-marks-overlaps-small-pieces-wrong-joints-and-holes = Märgib unit_pattern.check leiud vaikesätetega (mitte varasema kutse sätetega): kattuvused, väikesed tükid, valed vuugid ja augud katvuses. Igast liigist märgitakse kuni 200; silt ütleb, kui palju neid on
+plan-draw-preview = eelvaade: suumi sisse, et näha tegelikku mustrit
+plan-draw-preview-too-fine = { $label } (kivid on liiga peenikesed: mõned vuugid jäetakse välja)
+plan-draw-not-drawn = Mustrit ei joonistata: { $reason }
+plan-draw-check-failed = Mustri kontroll ebaõnnestus: { $reason }
+plan-draw-hidden = muster peidetud sellel suumil (kivid < 3 px)
+plan-draw-updating = muster uueneb...
+plan-draw-laying = muster paigutatakse...
+plan-draw-checking = mustrit kontrollitakse...
+plan-draw-check-summary = Mustri kontroll (vaikesätted): { $total } leidu, { $listed } märgitud
+plan-draw-check-summary-cut = Mustri kontroll (vaikesätted): { $total } leidu, { $listed } märgitud (liikide { $kinds } nimekiri on lõigatud 200 juures iga liigi kohta)
+plan-draw-checking-pauses = mustrit kontrollitakse: leht on hetkeks peatatud...

@@ -69,3 +69,19 @@ joint-ui-shapes =
     }
 joint-ui-save = Save
 joint-ui-close = Close
+
+## area-ui: plan_draw.rs (the pattern plan on the canvas)
+
+area-ui-show-pattern-check = Show pattern check on the plan
+area-ui-the-check-marks-overlaps-small-pieces-wrong-joints-and-holes = Marks the findings of unit_pattern.check with its default options (not the options of an earlier call): overlaps, small pieces, wrong joints and holes in the coverage. At most 200 of each kind are marked; the label says how many there are
+plan-draw-preview = preview: zoom in for the real pattern
+plan-draw-preview-too-fine = { $label } (the units are too fine: some joints are left out)
+plan-draw-not-drawn = Pattern not drawn: { $reason }
+plan-draw-check-failed = Pattern check failed: { $reason }
+plan-draw-hidden = pattern hidden at this zoom (units < 3 px)
+plan-draw-updating = updating pattern...
+plan-draw-laying = laying the pattern...
+plan-draw-checking = checking pattern...
+plan-draw-check-summary = Pattern check (default options): { $total } findings, { $listed } marked
+plan-draw-check-summary-cut = Pattern check (default options): { $total } findings, { $listed } marked (the list of { $kinds } is cut at 200 for each kind)
+plan-draw-checking-pauses = checking pattern: the page pauses...
