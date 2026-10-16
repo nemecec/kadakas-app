@@ -175,6 +175,40 @@ pub trait LoadedModule: MaybeSend {
     fn tool(&self, request: &[u8], light: bool) -> Result<Vec<u8>, PluginError>;
 }
 
+/// The answer of the host to a call that a hosted module makes (see [`HostedModule`]).
+pub enum HostReply {
+    /// The bytes of the reply. The module reads them with `kadakas.read`.
+    Reply(Vec<u8>),
+    /// Stop the run now with this error (a time limit of the whole run, for example).
+    Abort(PluginError),
+}
+
+/// The function that serves the calls of a hosted module. It gets the bytes of a request frame.
+pub type HostCall<'a> = &'a mut dyn FnMut(&[u8]) -> HostReply;
+
+/// The exports that a hosted module must have: the memory, `alloc`, `dealloc` and `run`. An export
+/// `_initialize` is called first when it is there.
+pub const HOSTED_EXPORTS: [&str; 4] = ["memory", "alloc", "dealloc", "run"];
+
+/// The two imports that a hosted module may have (module [`HOST_MODULE`]): `call(ptr, len) -> i32`
+/// sends a request to the host and returns the length of the reply (or -1); `read(dst)` copies the
+/// reply to the memory of the module. A hosted module imports nothing else: no files, no network
+/// and no clock.
+pub const HOST_MODULE: &str = "kadakas";
+pub const HOST_IMPORTS: [&str; 2] = ["call", "read"];
+
+/// A module that can call back into the host while it runs (the script engine, SCR-08). It makes
+/// the calls through the two imports above, so it can ask the host to do the heavy work, and the
+/// host decides what it answers. The limits are the same as for a plug-in: fuel and memory for the
+/// whole run, and a time limit for each stretch of the module between two calls (the time that the
+/// host spends in a call is the business of the host, which can stop the run with
+/// [`HostReply::Abort`]).
+pub trait HostedModule: MaybeSend {
+    /// Runs the export `run` with the bytes of a request and returns the bytes of the answer.
+    /// `host` serves the calls of the module.
+    fn run(&self, request: &[u8], host: HostCall<'_>) -> Result<Vec<u8>, PluginError>;
+}
+
 /// A WebAssembly engine.
 pub trait PluginRuntime: MaybeSend {
     /// The name of the engine, for display.
@@ -182,6 +216,17 @@ pub trait PluginRuntime: MaybeSend {
     /// Checks and compiles a module. The module must have no imports and must export `memory`,
     /// `alloc`, `dealloc`, `describe`, `reset` and `tool`. The limits apply to every call of the module.
     fn load(&self, wasm: &[u8], limits: &Limits) -> Result<Box<dyn LoadedModule>, PluginError>;
+    /// Checks and compiles a hosted module (see [`HostedModule`]). An engine that cannot run one
+    /// says so.
+    fn load_hosted(
+        &self,
+        _wasm: &[u8],
+        _limits: &Limits,
+    ) -> Result<Box<dyn HostedModule>, PluginError> {
+        Err(PluginError::Unsupported(
+            "this engine cannot run scripts".into(),
+        ))
+    }
 }
 
 /// The engine of this build: wasmtime on native targets, the browser engine on wasm32.

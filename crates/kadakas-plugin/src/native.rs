@@ -25,6 +25,8 @@
 //! that does not compile is not kept. The checks of a module (no imports, the exports) run at every
 //! load, also for a module from the cache.
 
+mod hosted;
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -210,6 +212,14 @@ fn compile_in(
 impl PluginRuntime for WasmtimeRuntime {
     fn name(&self) -> &'static str {
         "wasmtime"
+    }
+
+    fn load_hosted(
+        &self,
+        wasm: &[u8],
+        limits: &Limits,
+    ) -> Result<Box<dyn crate::runtime::HostedModule>, PluginError> {
+        self.load_hosted_module(wasm, limits)
     }
 
     fn load(&self, wasm: &[u8], limits: &Limits) -> Result<Box<dyn LoadedModule>, PluginError> {

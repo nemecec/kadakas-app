@@ -1,0 +1,25 @@
+[package]
+name = "kadakas-script-js"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "In-process JavaScript scripts (SCR-08): QuickJS (quickjs-ng) built to WebAssembly and run inside the plug-in host. No egui; the host side builds for wasm32 too."
+build = "build.rs"
+
+[features]
+default = []
+# Builds QuickJS to WebAssembly (needs a wasi-sdk, see docs/dev-guide.md) and embeds the module.
+# Without it the crate has the protocol and the helpers, and `ScriptEngine::new` says that the
+# engine was not built in.
+engine = []
+
+[dependencies]
+kadakas-plugin = { version = "0.1.0", path = "../kadakas-plugin" }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+sha2 = "0.11.0"
+
+[build-dependencies]
+# Checks the imports and exports of the module that the build made.
+wasmparser = { version = "0.258.3", default-features = false, features = ["std"] }

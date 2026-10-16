@@ -3056,6 +3056,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kadakas-script-js"
+version = "0.1.0"
+dependencies = [
+ "kadakas-plugin",
+ "serde_json",
+ "sha2 0.11.0",
+ "wasmparser",
+]
+
+[[package]]
 name = "kadakas-sheet"
 version = "0.1.0"
 dependencies = [
