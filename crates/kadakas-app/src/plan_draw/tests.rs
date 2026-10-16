@@ -208,10 +208,10 @@ fn a_frame_paints_the_joint_lines_cut_units_and_zone_edges_of_the_plan() {
 
 #[test]
 fn a_view_with_more_units_than_the_bound_paints_a_preview_with_its_label() {
-    // 60 m x 30 m: 90,000 units. At 0.05 px/mm a unit of 100 mm is 5 px.
+    // 60 m x 30 m: 90,000 units. At 0.032 px/mm a unit of 100 mm is 3.2 px.
     let (ed, id) = lot(60_000.0, 30_000.0, false);
     let view = View {
-        zoom: 0.05,
+        zoom: 0.032,
         origin: DVec2::new(-200.0, 700.0),
     };
     let painted = frame(&ed, id, &view, 1);
