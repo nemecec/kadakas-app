@@ -43,6 +43,9 @@ pub const MIN_BLOB_TEXT: usize = 4 * 1024;
 /// refuses a bigger entry when the reference is read, so a hostile file cannot make a read
 /// allocate more.
 pub const MAX_BLOB_TEXT: usize = 128 * 1024 * 1024;
+/// The largest text of the summaries of an import base (a blob that `recs` refers to): 8 MiB of
+/// JSON, the bound of the resource. A reference to a bigger blob is refused.
+pub const MAX_BASE_PART_BYTES: usize = 8 * 1024 * 1024;
 /// How many characters of the start of a blob a lazy handle keeps (to look at the type of a
 /// picture without reading it).
 pub const HEAD_CHARS: usize = 8;
@@ -59,6 +62,13 @@ pub trait BlobSource: Send + Sync + std::fmt::Debug {
     fn blob_len(&self, hash: &str) -> Option<u64>;
     /// The first [`HEAD_CHARS`] characters of the text (fewer if it is shorter).
     fn blob_head(&self, hash: &str) -> Result<String, BlobError>;
+    /// Tells whether the blob is marked as the summaries of an import base: `Some(false)` if the
+    /// file marks its blobs and this one is not marked, `None` if the file marks none (an older
+    /// file), where the bound of the size is all that holds. The estimate of the memory of an
+    /// open counts the marked blobs, so a blob that is not marked is not parsed as a base.
+    fn is_import_base(&self, _hash: &str) -> Option<bool> {
+        None
+    }
     /// The text of the blob. It matches the hash, or this is an error.
     fn blob_text(&self, hash: &str) -> Result<Arc<str>, BlobError>;
     /// For a program that knows the kind of the source (the copy of a blob into a new file).
@@ -370,7 +380,18 @@ impl LoadScope {
 /// the budget of the read before they are read.
 pub(crate) fn read_ref_text(hash: &str) -> Result<Arc<str>, String> {
     let (scope, source) = ref_scope(hash)?;
+    if source.is_import_base(hash) == Some(false) {
+        return Err(format!(
+            "the summaries of an import base refer to the blob {hash}, which the file does not mark as such"
+        ));
+    }
     let blob = LazyBlob::new(source, hash).map_err(|e| e.to_string())?;
+    if blob.text_len() > MAX_BASE_PART_BYTES {
+        return Err(format!(
+            "the summaries of an import base are in the blob {hash}, which has {} bytes, more than the {MAX_BASE_PART_BYTES} that they may have",
+            blob.text_len()
+        ));
+    }
     scope.charge(blob.text_len(), hash)?;
     blob.text().map_err(|e| e.to_string())
 }
@@ -985,6 +1006,55 @@ mod tests {
             1,
             "the file was read once for 3 references"
         );
+    }
+
+    /// A source that marks which of its blobs are summaries of an import base.
+    #[derive(Debug)]
+    struct Marked(MapSource, Option<bool>);
+
+    impl BlobSource for Marked {
+        fn blob_len(&self, hash: &str) -> Option<u64> {
+            self.0.blob_len(hash)
+        }
+        fn blob_head(&self, hash: &str) -> Result<String, BlobError> {
+            self.0.blob_head(hash)
+        }
+        fn is_import_base(&self, _hash: &str) -> Option<bool> {
+            self.1
+        }
+        fn blob_text(&self, hash: &str) -> Result<Arc<str>, BlobError> {
+            self.0.blob_text(hash)
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+            self
+        }
+    }
+
+    #[test]
+    fn the_summaries_of_an_import_base_are_a_marked_blob_of_at_most_8_mib() {
+        let small = "s".repeat(100);
+        let big = "b".repeat(MAX_BASE_PART_BYTES + 1);
+        for (mark, text, want) in [
+            (Some(true), &small, Ok(())),
+            (None, &small, Ok(())),
+            (Some(false), &small, Err("does not mark")),
+            (Some(true), &big, Err("more than")),
+            (None, &big, Err("more than")),
+        ] {
+            let src = Arc::new(Marked(MapSource::default(), mark));
+            let h = src.0.put(text);
+            let r = with_load_budget(src, LoadKind::Eager, u64::MAX, || read_ref_text(&h));
+            match want {
+                Ok(()) => assert_eq!(r.unwrap().len(), text.len()),
+                Err(part) => {
+                    let e = r.unwrap_err();
+                    assert!(e.contains(part), "{mark:?}: {e}");
+                }
+            }
+        }
     }
 
     #[test]

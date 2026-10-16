@@ -36,6 +36,27 @@ pub struct SaveSpec {
     pub anchor: bool,
     /// The person chose to save without what cannot be found (`allow_missing`).
     pub skip_missing: bool,
+    /// The person chose to replace a file that another program changed (`allow_overwrite`).
+    pub allow_overwrite: bool,
+}
+
+/// What a save asks the person (see [`ConsentFn`]).
+pub enum Ask<'a> {
+    /// Save without parts that cannot be found.
+    Missing(&'a kadakas_file::Missing),
+    /// Replace a file that another program changed since it was opened.
+    Overwrite(&'a Path),
+}
+
+/// Decides whether the person agrees. The second argument is true when the caller passed the
+/// token of the refusal (`allow_missing` or `allow_overwrite`). A host without a person (`kadakas
+/// serve`, `kadakas mcp`) agrees exactly when the token matches; the app asks the person, whatever
+/// the token says, and the default answer is no.
+pub type ConsentFn<'a> = dyn FnMut(Ask<'_>, bool) -> bool + 'a;
+
+/// The consent of a host without a person: the token of the refusal.
+pub fn consent_by_token(_ask: Ask<'_>, token_matches: bool) -> bool {
+    token_matches
 }
 
 impl SaveSpec {
@@ -47,6 +68,7 @@ impl SaveSpec {
             keep,
             anchor: false,
             skip_missing: false,
+            allow_overwrite: false,
         }
     }
 
@@ -57,6 +79,7 @@ impl SaveSpec {
             keep: Vec::new(),
             anchor: false,
             skip_missing: false,
+            allow_overwrite: false,
         }
     }
 }
@@ -124,12 +147,41 @@ fn write_error(path: &Path, e: FileError) -> RpcError {
     }
     match e {
         FileError::Missing(m) => crate::review_api::missing_error(&m),
+        FileError::FileChanged(file) => file_changed_error(&file),
         FileError::Container(ContainerError::Changed(msg)) => RpcError::conflict(msg),
         FileError::Container(ContainerError::Limit(msg)) | FileError::Limit(msg) => {
             RpcError::limit(format!("cannot write {}: {msg}", path.display()))
         }
         FileError::Io(msg) => RpcError::app(msg),
         other => RpcError::app(format!("cannot write {}: {other}", path.display())),
+    }
+}
+
+/// The error of a save that would replace a file that another program changed.
+fn file_changed_error(file: &str) -> RpcError {
+    let facts = json!({"file": file});
+    RpcError::conflict(FileError::FileChanged(file.to_string()))
+        .with_reason(crate::errors::REASON_FILE_CHANGED)
+        .with_details(json!({
+            "file": file,
+            "consent_token": crate::review_api::consent_token("file_changed", &facts),
+            "options": [
+                {"action": "open_again", "how": "Open the file again to see what the other program wrote, then redo the changes."},
+                {"action": "overwrite", "how": "Ask the person. Then save again with allow_overwrite set to consent_token: the file of the other program is replaced (the old file stays as the .bak)."}
+            ],
+            "ask_the_person": true,
+        }))
+}
+
+/// The consent parameter of a save: the token that the refusal gave. `true` is not enough, so that
+/// an agent cannot consent in advance to something it has not seen.
+fn consent_param(params: &Value, key: &str) -> Result<Option<String>, RpcError> {
+    match params.get(key) {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => Ok(None),
+        Some(Value::String(t)) if !t.is_empty() => Ok(Some(t.clone())),
+        Some(_) => Err(RpcError::invalid_params(format!(
+            "params.{key} is the consent_token of the refusal that the person agreed to (not true)"
+        ))),
     }
 }
 
@@ -189,11 +241,14 @@ pub fn file_call(
     method: &str,
     params: &Value,
     write: &mut WriteFn<'_>,
+    consent: &mut ConsentFn<'_>,
 ) -> Result<FileDone, RpcError> {
     // A panic in a reader or a writer becomes an internal error, as for every other method. The
     // call and its error go to the call log of the session, so a bug report has them.
     let note = crate::feedback_api::begin(method, params);
-    let r = s.guarded(method, |s| file_call_inner(s, method, params, write));
+    let r = s.guarded(method, |s| {
+        file_call_inner(s, method, params, write, consent)
+    });
     let ring = match &r {
         Ok(_) => Ok(Value::Null),
         Err(e) => Err(RpcError::new(e.code, e.kind, &e.message)),
@@ -207,6 +262,7 @@ fn file_call_inner(
     method: &str,
     params: &Value,
     write: &mut WriteFn<'_>,
+    consent: &mut ConsentFn<'_>,
 ) -> Result<FileDone, RpcError> {
     let path = params
         .get("path")
@@ -217,77 +273,119 @@ fn file_call_inner(
         .check_path(Path::new(path), saving, &DOC_EXTS)
         .map_err(RpcError::policy)?;
     if saving {
-        let allow = match params.get("allow_missing") {
-            None | Some(Value::Null) => false,
-            Some(Value::Bool(b)) => *b,
-            Some(_) => {
-                return Err(RpcError::invalid_params(
-                    "params.allow_missing is true or false",
-                ));
-            }
-        };
+        let allow_missing = consent_param(params, "allow_missing")?;
+        let allow_overwrite = consent_param(params, "allow_overwrite")?;
         let form = save_form(params, &p)?;
         let container = form == Form::Container;
-        let spec = SaveSpec {
+        let mut spec = SaveSpec {
             form,
             keep: s.file_source.iter().cloned().collect(),
             anchor: container && s.needs_anchor(),
             skip_missing: false,
+            allow_overwrite: false,
         };
-        let first = match s.document_for_save_in(container) {
-            Ok(doc) => write(&p, &doc, &spec).map_err(|e| write_error(&p, e)),
-            Err(e) => Err(e),
+        // What the person agreed to save without, once they did.
+        let mut without: Option<kadakas_file::Missing> = None;
+        let token_of = |e: &RpcError| {
+            e.details
+                .as_ref()
+                .and_then(|d| d["consent_token"].as_str())
+                .unwrap_or_default()
+                .to_string()
         };
-        let notes = match first {
-            Ok(notes) => notes,
-            // The file that the pictures stay in changed, and the person agrees to save without
-            // what cannot be found: placeholders for the pictures, no versions that wait in the
-            // file, and the rest is saved.
-            Err(e) if allow && e.reason == Some(crate::errors::REASON_PARTS_MISSING) => {
-                let m = s.missing_for_save();
-                let doc = s.document_without_missing(&m);
-                let retry = SaveSpec {
-                    anchor: container && s.needs_anchor() && !m.history,
-                    skip_missing: true,
-                    ..spec
-                };
-                let mut notes = write(&p, &doc, &retry).map_err(|e| write_error(&p, e))?;
-                s.accept_missing(&m);
-                let mut what = Vec::new();
-                if !m.pictures.is_empty() {
-                    what.push(format!(
-                        "{} picture(s) became placeholders",
-                        m.pictures.len()
-                    ));
+        let notes = loop {
+            let result = match &without {
+                None => match s.document_for_save_in(container) {
+                    Ok(doc) => write(&p, &doc, &spec).map_err(|e| write_error(&p, e)),
+                    Err(e) => Err(e),
+                },
+                Some(m) => {
+                    let doc = s.document_without_missing(m);
+                    write(&p, &doc, &spec).map_err(|e| write_error(&p, e))
                 }
-                if m.history {
-                    what.push("the versions were left out".to_string());
-                }
-                notes.push(format!(
-                    "Saved without what could not be found in {}: {}",
-                    if m.file.is_empty() {
-                        "the old file"
-                    } else {
-                        &m.file
-                    },
-                    if what.is_empty() {
-                        "other parts were left out".into()
-                    } else {
-                        what.join(", ")
+            };
+            match result {
+                Ok(notes) => break notes,
+                // Another program changed the file since the open: the person decides.
+                Err(e)
+                    if e.reason == Some(crate::errors::REASON_FILE_CHANGED)
+                        && !spec.allow_overwrite =>
+                {
+                    let agreed = allow_overwrite
+                        .as_ref()
+                        .is_some_and(|t| consent(Ask::Overwrite(&p), *t == token_of(&e)));
+                    if !agreed {
+                        return Err(e);
                     }
-                ));
-                notes
+                    spec.allow_overwrite = true;
+                }
+                // The file that the pictures stay in changed. If the person agrees to save without
+                // what cannot be found: placeholders for the pictures, no versions that wait in the
+                // file, and the rest is saved.
+                Err(e)
+                    if e.reason == Some(crate::errors::REASON_PARTS_MISSING)
+                        && without.is_none() =>
+                {
+                    let m = s.missing_for_save();
+                    let agreed = allow_missing
+                        .as_ref()
+                        .is_some_and(|t| consent(Ask::Missing(&m), *t == token_of(&e)));
+                    if !agreed {
+                        return Err(e);
+                    }
+                    spec.skip_missing = true;
+                    spec.anchor = container && s.needs_anchor() && !m.history;
+                    without = Some(m);
+                }
+                Err(e) => return Err(e),
             }
-            Err(e) => return Err(e),
         };
+        let mut notes = notes;
+        if let Some(m) = &without {
+            s.accept_missing(m);
+            let mut what = Vec::new();
+            if !m.pictures.is_empty() {
+                what.push(format!(
+                    "{} picture(s) became placeholders (the pictures are marked with their hash, and come back when a file that has them is opened; undo takes the placeholders back)",
+                    m.pictures.len()
+                ));
+            }
+            if m.history {
+                what.push("the versions were left out".to_string());
+            }
+            notes.push(format!(
+                "Saved without what could not be found in {}: {}",
+                if m.file.is_empty() {
+                    "the old file"
+                } else {
+                    &m.file
+                },
+                if what.is_empty() {
+                    "other parts were left out".into()
+                } else {
+                    what.join(", ")
+                }
+            ));
+        }
         s.collab_mark_saved();
         s.doc_dir = dir_of(&p);
         Ok(FileDone::Saved(p, form, notes))
     } else {
-        let opened = open_document(&p, s.limits.document_file_bytes, ReadMode::Lazy)?;
+        let mut opened = open_document(&p, s.limits.document_file_bytes, ReadMode::Lazy)?;
         s.check_document_fits(&opened.doc)?;
         let form = opened.form;
-        let notes = s.replace_document(opened.doc);
+        // Placeholders of a save without the pictures: the real ones come back when the file (or
+        // its .bak) has them.
+        let relinked = opened.source.as_ref().map_or(0, |src| {
+            let blobs: Arc<dyn kadakas_core::blob::BlobSource> = src.clone();
+            opened.doc.relink_placeholders(&blobs)
+        });
+        let mut notes = s.replace_document(opened.doc);
+        if relinked > 0 {
+            notes.push(format!(
+                "{relinked} gray placeholder(s) were replaced by the real pictures, which this file has"
+            ));
+        }
         s.take_replaced();
         s.file_source = opened.source;
         s.doc_dir = dir_of(&p);
@@ -308,6 +406,7 @@ pub fn write_document(
         keep: spec.keep.clone(),
         anchor: spec.anchor,
         skip_missing: spec.skip_missing,
+        allow_overwrite: spec.allow_overwrite,
     };
     let saved = native::save_path(path, doc, spec.form, &opts)?;
     let mut notes = saved.notes;
@@ -367,7 +466,13 @@ pub fn handle_file_request(s: &mut Session, req: &Value) -> String {
     let id = req.get("id").cloned().unwrap_or(Value::Null);
     let method = req["method"].as_str().unwrap_or_default();
     let params = req.get("params").cloned().unwrap_or(Value::Null);
-    let r = file_call(s, method, &params, &mut write_document);
+    let r = file_call(
+        s,
+        method,
+        &params,
+        &mut write_document,
+        &mut consent_by_token,
+    );
     file_reply(s, method, id, r)
 }
 
@@ -625,7 +730,14 @@ mod tests {
         add_circle(&mut s);
         for limit in [0, 40, 400] {
             let params = json!({"path": f});
-            let e = file_call(&mut s, "file.save", &params, &mut failing_hook(limit)).unwrap_err();
+            let e = file_call(
+                &mut s,
+                "file.save",
+                &params,
+                &mut failing_hook(limit),
+                &mut consent_by_token,
+            )
+            .unwrap_err();
             assert!(e.message.contains("disk full"), "{}", e.message);
             assert_eq!(std::fs::read(&f).unwrap(), old, "limit {limit}");
             assert_eq!(names(&dir), ["a.kad"], "limit {limit}");
@@ -838,7 +950,11 @@ mod tests {
         // by its hash, and the document can be read and saved.
         assert!(b.handle("document.get", json!({})).is_ok());
         add_circle(&mut b);
+        // The file at the path is another program's file now: the save asks the person.
         let r = call(&mut b, "file.save", &f);
+        assert_eq!(r["error"]["data"]["reason"], "file_changed", "{r}");
+        let token = r["error"]["data"]["consent_token"].clone();
+        let r = save_with(&mut b, json!({"path": f, "allow_overwrite": token}));
         assert_eq!(r["result"]["ok"], true, "{r}");
         let mut c = restricted(&dir);
         call(&mut c, "file.open", &f);
@@ -864,11 +980,13 @@ mod tests {
         std::fs::rename(&elsewhere, &f).unwrap();
         assert!(!dir.join("a.kad.bak").exists());
         let other_bytes = std::fs::read(&f).unwrap();
+        let f2 = dir.join("target.kad");
         // The document cannot be given out: a picture is read from the file now.
         let e = b.handle("document.get", json!({})).unwrap_err();
         assert!(e.message.contains("changed on disk"), "{}", e.message);
         // A save says what is missing and asks the person; nothing is written.
-        let r = call(&mut b, "file.save", &f);
+        let r = call(&mut b, "file.save", &f2);
+        let first = r.clone();
         assert_eq!(r["error"]["code"], 5, "{r}");
         assert_eq!(r["error"]["data"]["ask_the_person"], true, "{r}");
         assert_eq!(
@@ -884,15 +1002,27 @@ mod tests {
         let r = call(&mut b, "file.save", &g);
         assert_eq!(r["error"]["code"], 5, "{r}");
         assert!(!g.exists());
+        // The consent is bound to the refusal: `true` and a token of something else do not count.
+        let token = first["error"]["data"]["consent_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        for bad in [json!(true), json!("not the token"), json!("0".repeat(64))] {
+            let req = json!({"jsonrpc":"2.0","id":1,"method":"file.save",
+                "params":{"path": f2, "allow_missing": bad}});
+            let r: Value = serde_json::from_str(&handle_file_request(&mut b, &req)).unwrap();
+            assert!(r.get("error").is_some(), "{bad}: {r}");
+            assert_eq!(std::fs::read(&f).unwrap(), other_bytes);
+        }
         // With the consent the picture becomes a placeholder, and the rest is saved.
         let req = json!({"jsonrpc":"2.0","id":1,"method":"file.save",
-            "params":{"path": f, "allow_missing": true}});
+            "params":{"path": f2, "allow_missing": token}});
         let r: Value = serde_json::from_str(&handle_file_request(&mut b, &req)).unwrap();
         assert_eq!(r["result"]["ok"], true, "{r}");
         let notes = r["result"]["notes"].to_string();
         assert!(notes.contains("placeholder"), "{r}");
         let mut c = restricted(&dir);
-        call(&mut c, "file.open", &f);
+        call(&mut c, "file.open", &f2);
         let placeholder = kadakas_core::underlay::placeholder_png();
         let pngs: Vec<Vec<u8>> = c
             .editor
@@ -908,7 +1038,7 @@ mod tests {
         // The session refers to the placeholder now: the next save is whole, without a question.
         assert_eq!(b.editor.doc().unreadable_pictures().len(), 0);
         assert!(b.handle("document.get", json!({})).is_ok());
-        let r = call(&mut b, "file.save", &f);
+        let r = call(&mut b, "file.save", &f2);
         assert_eq!(r["result"]["ok"], true, "{r}");
         assert!(r["result"].get("notes").is_none(), "{r}");
     }
@@ -945,5 +1075,127 @@ mod tests {
         let doc = b.handle("document.get", json!({})).unwrap();
         b.handle("document.load", json!({"document": doc})).unwrap();
         assert!(b.file_source.is_none());
+    }
+    fn save_with(s: &mut Session, params: Value) -> Value {
+        let req = json!({"jsonrpc":"2.0","id":1,"method":"file.save","params":params});
+        serde_json::from_str(&handle_file_request(s, &req)).unwrap()
+    }
+
+    #[test]
+    fn a_save_over_a_file_that_another_program_changed_asks_the_person() {
+        let dir = tmp("overwrite");
+        let mut a = restricted(&dir);
+        add_picture(&mut a, 30_000);
+        let f = dir.join("a.kad");
+        call(&mut a, "file.save", &f);
+        let mut b = restricted(&dir);
+        call(&mut b, "file.open", &f);
+        add_circle(&mut b);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        // Another program saves over the file (the old file becomes the .bak).
+        let mut other = restricted(&dir);
+        add_circle(&mut other);
+        call(&mut other, "file.save", &f);
+        let theirs = std::fs::read(&f).unwrap();
+        // The save is refused, with the reason and the token of this refusal.
+        let r = call(&mut b, "file.save", &f);
+        assert_eq!(r["error"]["code"], 5, "{r}");
+        assert_eq!(r["error"]["data"]["reason"], "file_changed", "{r}");
+        assert_eq!(r["error"]["data"]["ask_the_person"], true, "{r}");
+        let token = r["error"]["data"]["consent_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(std::fs::read(&f).unwrap(), theirs);
+        // True, and a token of another refusal, are not the consent of the person.
+        for bad in [json!(true), json!("0".repeat(64)), json!("parts")] {
+            let r = save_with(&mut b, json!({"path": f, "allow_overwrite": bad}));
+            assert!(r.get("error").is_some(), "{bad}: {r}");
+            assert_eq!(std::fs::read(&f).unwrap(), theirs);
+        }
+        // A new file is not "over the file of the other program": the pictures are in the .bak.
+        let g = dir.join("copy.kad");
+        assert_eq!(call(&mut b, "file.save", &g)["result"]["ok"], true);
+        // With the token the file is replaced, and the old file stays as the .bak.
+        let r = save_with(&mut b, json!({"path": f, "allow_overwrite": token}));
+        assert_eq!(r["result"]["ok"], true, "{r}");
+        assert_ne!(std::fs::read(&f).unwrap(), theirs);
+        assert_eq!(std::fs::read(dir.join("a.kad.bak")).unwrap(), theirs);
+        // The next save over our own file is not refused, also after a touch (a new stamp).
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let same = std::fs::read(&f).unwrap();
+        std::fs::write(&f, &same).unwrap();
+        add_circle(&mut b);
+        assert_eq!(call(&mut b, "file.save", &f)["result"]["ok"], true);
+    }
+
+    #[test]
+    fn a_save_without_the_pictures_marks_the_placeholders_and_can_be_taken_back() {
+        let dir = tmp("placeholders");
+        let mut a = restricted(&dir);
+        add_picture(&mut a, 30_000);
+        let f = dir.join("a.kad");
+        call(&mut a, "file.save", &f);
+        let original = std::fs::read(&f).unwrap();
+        let mut b = restricted(&dir);
+        call(&mut b, "file.open", &f);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let mut other = restricted(&dir);
+        add_circle(&mut other);
+        let elsewhere = dir.join("other.kad");
+        call(&mut other, "file.save", &elsewhere);
+        std::fs::rename(&elsewhere, &f).unwrap();
+        let _ = std::fs::remove_file(dir.join("a.kad.bak"));
+        // Replacing the other program's file needs the token of that refusal; then the pictures
+        // are missing, and that needs a token too.
+        let g = dir.join("g.kad");
+        let r = call(&mut b, "file.save", &g);
+        let token = r["error"]["data"]["consent_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let r = save_with(&mut b, json!({"path": g, "allow_missing": token}));
+        assert_eq!(r["result"]["ok"], true, "{r}");
+        // The placeholder says which picture it stands for.
+        let marks = b.editor.doc().placeholder_hashes();
+        assert_eq!(marks.len(), 1, "{marks:?}");
+        let mut c = restricted(&dir);
+        let opened = call(&mut c, "file.open", &g);
+        assert!(
+            opened["result"]["notes"]
+                .to_string()
+                .contains("gray placeholders"),
+            "{opened}"
+        );
+        // Undo takes the placeholders back (one step); the next save asks again.
+        assert!(b.editor.undo());
+        assert!(b.editor.doc().placeholder_hashes().is_empty());
+        let r = call(&mut b, "file.save", &dir.join("h.kad"));
+        assert_eq!(r["error"]["data"]["reason"], "parts_missing", "{r}");
+        assert!(b.editor.redo());
+        assert_eq!(b.editor.doc().placeholder_hashes(), marks);
+        // The real picture comes back when a file with it is opened: the original is the .bak of
+        // g now (put it there), and the real bytes are read from it.
+        std::fs::write(dir.join("g.kad.bak"), &original).unwrap();
+        let mut d = restricted(&dir);
+        let opened = call(&mut d, "file.open", &g);
+        assert!(
+            opened["result"]["notes"]
+                .to_string()
+                .contains("replaced by the real"),
+            "{opened}"
+        );
+        assert!(d.editor.doc().placeholder_hashes().is_empty());
+        let png = d
+            .editor
+            .doc()
+            .objects
+            .values()
+            .find_map(|o| match &o.shape {
+                Shape::Underlay(u) => Some(u.png.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(png.is_lazy() && png.len() > 1000);
     }
 }

@@ -270,7 +270,18 @@ impl Container {
                         "a file in several parts is not supported",
                     ));
                 }
-                (total, le64(&rec, 40), le64(&rec, 48), rec_at)
+                let (zsize, zoff) = (le64(&rec, 40), le64(&rec, 48));
+                // A 32 bit field that is not "see the ZIP64 record" must say the same as the
+                // ZIP64 record: two readers must not find two directories.
+                if (count != 0xFFFF && u64::from(count) != total)
+                    || (dir_size != 0xFFFF_FFFF && u64::from(dir_size) != zsize)
+                    || (dir_offset != 0xFFFF_FFFF && u64::from(dir_offset) != zoff)
+                {
+                    return Err(ContainerError::format(
+                        "the end record and the ZIP64 end record say different things",
+                    ));
+                }
+                (total, zsize, zoff, rec_at)
             }
             None if saturated => {
                 return Err(ContainerError::format(
@@ -534,7 +545,7 @@ impl Container {
             if comp == ZIP64_AT || size == ZIP64_AT {
                 let extra = read_exact(&*self.medium, e.offset + want, extra_len)
                     .map_err(|err| as_entry(err, &e.name))?;
-                let big = zip64_values(&extra, [true, true, false], &e.name)?;
+                let big = zip64_values(&extra, [true, true, false, false], &e.name)?;
                 size = big[0].unwrap_or(size);
                 comp = big[1].unwrap_or(comp);
             }
@@ -662,6 +673,11 @@ impl Container {
         })
     }
 
+    /// Reads the entry to its end and checks it (size, CRC-32, SHA-256), and drops the bytes.
+    pub fn verify_entry(&self, name: &str) -> Result<(), ContainerError> {
+        self.reader(name)?.finish()
+    }
+
     /// The manifest entry in the directory (its size is the size of `manifest.json`).
     pub fn manifest_size(&self) -> u64 {
         self.manifest_entry.size
@@ -726,41 +742,52 @@ impl ContainerError {
 
 /// The 64 bit values of the ZIP64 extra field (id 1). A value is in the field only if the 32 bit
 /// field next to it holds 0xFFFFFFFF, and the values come in this order: size, compressed size,
-/// offset. `want` says which of the three are there.
-fn zip64_values(
+/// offset, and (4 bytes) the number of the disk. `want` says which of the four are there. A second
+/// ZIP64 field is refused: two readers could take different values.
+pub(crate) fn zip64_values(
     extra: &[u8],
-    want: [bool; 3],
+    want: [bool; 4],
     name: &str,
-) -> Result<[Option<u64>; 3], ContainerError> {
+) -> Result<[Option<u64>; 4], ContainerError> {
     let mut at = 0usize;
+    let mut found: Option<[Option<u64>; 4]> = None;
     while at + 4 <= extra.len() {
         let (id, n) = (le16(extra, at), usize::from(le16(extra, at + 2)));
         let body = extra
             .get(at + 4..at + 4 + n)
             .ok_or_else(|| ContainerError::entry(name, "its extra field is cut short"))?;
         if id == 1 {
-            let mut out = [None; 3];
+            if found.is_some() {
+                return Err(ContainerError::entry(name, "it has two ZIP64 fields"));
+            }
+            let mut out = [None; 4];
             let mut pos = 0usize;
             for (i, w) in want.iter().enumerate() {
                 if *w {
-                    let v = body.get(pos..pos + 8).ok_or_else(|| {
+                    let len = if i == 3 { 4 } else { 8 };
+                    let v = body.get(pos..pos + len).ok_or_else(|| {
                         ContainerError::entry(name, "its ZIP64 field is too short")
                     })?;
-                    out[i] = Some(le64(v, 0));
-                    pos += 8;
+                    out[i] = Some(if i == 3 {
+                        u64::from(le32(v, 0))
+                    } else {
+                        le64(v, 0)
+                    });
+                    pos += len;
                 }
             }
-            return Ok(out);
+            found = Some(out);
         }
         at += 4 + n;
     }
-    if want.iter().any(|w| *w) {
-        return Err(ContainerError::entry(
+    match found {
+        Some(f) => Ok(f),
+        None if want.iter().any(|w| *w) => Err(ContainerError::entry(
             name,
             "a value needs a ZIP64 field, and the entry has none",
-        ));
+        )),
+        None => Ok([None; 4]),
     }
-    Ok([None; 3])
 }
 
 fn parse_directory(
@@ -810,15 +837,16 @@ fn parse_directory(
                 "it is encrypted, which is not supported",
             ));
         }
-        if disk != 0 && disk != 0xFFFF {
-            return Err(ContainerError::entry(&name, "it is on another disk"));
-        }
         let want = [
             u64::from(size) == ZIP64_AT,
             u64::from(compressed) == ZIP64_AT,
             u64::from(offset) == ZIP64_AT,
+            disk == 0xFFFF,
         ];
         let big = zip64_values(extra, want, &name)?;
+        if big[3].unwrap_or(u64::from(disk)) != 0 {
+            return Err(ContainerError::entry(&name, "it is on another disk"));
+        }
         let size = big[0].unwrap_or(u64::from(size));
         let compressed = big[1].unwrap_or(u64::from(compressed));
         let offset = big[2].unwrap_or(u64::from(offset));

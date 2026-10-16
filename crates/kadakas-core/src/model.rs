@@ -1498,6 +1498,99 @@ impl Document {
         out.into_iter().collect()
     }
 
+    /// A sentence for the person when the document has placeholders (see
+    /// `underlay::MISSING_PREFIX`), else `None`.
+    pub fn placeholder_note(&self) -> Option<String> {
+        let placeholders = self.placeholder_hashes();
+        if placeholders.is_empty() {
+            return None;
+        }
+        let short: Vec<String> = placeholders
+            .iter()
+            .take(3)
+            .map(|h| h.chars().take(8).collect())
+            .collect();
+        Some(format!(
+            "{} picture(s) are gray placeholders: they could not be found when the file was saved ({}). The real pictures come back when a file that has them is opened",
+            placeholders.len(),
+            short.join(", ")
+        ))
+    }
+
+    /// The hashes of the pictures that are placeholders (see `underlay::MISSING_PREFIX`).
+    pub fn placeholder_hashes(&self) -> Vec<String> {
+        let mut out = std::collections::BTreeSet::new();
+        for o in self.objects.values() {
+            if let Shape::Underlay(u) = &o.shape
+                && let Some((h, _)) = crate::underlay::placeholder_of(&u.source)
+            {
+                out.insert(h.to_string());
+            }
+        }
+        for r in self.resources.iter() {
+            if let crate::resource::ResourceBody::Image(i) = &r.body
+                && let Some((h, _)) = crate::underlay::placeholder_of(&i.source)
+            {
+                out.insert(h.to_string());
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    /// Puts the real pictures back for the placeholders whose pictures the source has now (found
+    /// by their hash, in the file or in its backup). Returns how many were put back. The picture
+    /// stays in the file (a lazy handle); the size of an underlay and the facts of an image come
+    /// from the picture.
+    pub fn relink_placeholders(
+        &mut self,
+        source: &std::sync::Arc<dyn crate::blob::BlobSource>,
+    ) -> usize {
+        use crate::blob::{BlobText, LazyBlob};
+        use crate::underlay::{PngData, placeholder_of};
+        let mut count = 0;
+        let found = |hash: &str| -> Option<std::sync::Arc<LazyBlob>> {
+            source.blob_len(hash)?;
+            source.check_blob(hash).ok()?;
+            LazyBlob::new(source.clone(), hash)
+                .ok()
+                .map(std::sync::Arc::new)
+        };
+        for o in self.objects.values_mut() {
+            if let Shape::Underlay(u) = &mut o.shape
+                && let Some((hash, old)) = placeholder_of(&u.source)
+                && let Some(blob) = found(hash)
+                && let Ok(bytes) = blob.bytes()
+                && bytes.len() >= 24
+                && bytes.starts_with(&[0x89, b'P', b'N', b'G'])
+            {
+                let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+                let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+                u.source = old.to_string();
+                u.png = PngData::from_lazy(blob);
+                u.width = w;
+                u.height = h;
+                count += 1;
+            }
+        }
+        for r in self.resources.iter_mut() {
+            if let crate::resource::ResourceBody::Image(i) = &mut r.body
+                && let Some((hash, old)) = placeholder_of(&i.source)
+                && let Some(blob) = found(hash)
+                && let Ok(text) = blob.text()
+                && let Ok(facts) = crate::picture::facts_of_text(&text)
+            {
+                i.source = old.to_string();
+                i.sha256 = facts.sha256;
+                i.format = facts.format;
+                i.width = facts.width;
+                i.height = facts.height;
+                i.data = BlobText::from(blob);
+                count += 1;
+            }
+        }
+        count
+    }
+
     /// Replaces the pictures with these hashes (they cannot be found any more and the person chose
     /// to save without them) by a small gray picture, and returns how many pictures were replaced.
     /// An underlay gets a raster of one pixel; an image resource gets a consistent one-pixel image
@@ -1511,18 +1604,29 @@ impl Document {
         let png = placeholder_png();
         for o in self.objects.values_mut() {
             if let Shape::Underlay(u) = &mut o.shape
-                && u.png.lazy().is_some_and(|l| missing.contains(l.hash()))
+                && let Some(hash) = u
+                    .png
+                    .lazy()
+                    .map(|l| l.hash().to_string())
+                    .filter(|h| missing.contains(h))
             {
                 u.png = PngData::new(png.clone());
                 u.width = 1;
                 u.height = 1;
+                // The original hash stays on the picture (see `underlay::MISSING_PREFIX`).
+                u.source = format!("{}{hash}:{}", crate::underlay::MISSING_PREFIX, u.source);
                 count += 1;
             }
         }
         for r in self.resources.iter_mut() {
             if let crate::resource::ResourceBody::Image(i) = &mut r.body
-                && i.data.lazy().is_some_and(|l| missing.contains(l.hash()))
+                && let Some(hash) = i
+                    .data
+                    .lazy()
+                    .map(|l| l.hash().to_string())
+                    .filter(|h| missing.contains(h))
             {
+                i.source = format!("{}{hash}:{}", crate::underlay::MISSING_PREFIX, i.source);
                 let text = base64_encode(&png);
                 i.sha256 = crate::picture::sha256_hex(&png);
                 i.format = crate::picture::PictureFormat::Png;

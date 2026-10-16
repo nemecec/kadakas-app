@@ -14,8 +14,8 @@ pub mod feedback_api;
 pub mod files;
 pub use errors::{
     REASON_ALREADY_CONNECTED, REASON_BASE_TOO_LARGE, REASON_BASE_TOO_MANY, REASON_EDITS_WAIT,
-    REASON_HISTORY_READONLY, REASON_PARTS_MISSING, REASON_UNSAVED_CHANGES, REASON_VERSION_LIMIT,
-    RpcError,
+    REASON_FILE_CHANGED, REASON_HISTORY_READONLY, REASON_PARTS_MISSING, REASON_UNSAVED_CHANGES,
+    REASON_VERSION_LIMIT, RpcError,
 };
 #[cfg(test)]
 mod care_api_tests;
@@ -956,7 +956,8 @@ impl Session {
     /// repaired or dropped is returned as notes (they are also the load notes of the document).
     pub fn replace_document(&mut self, mut doc: Document) -> Vec<String> {
         let mut cache = review_api::vet_document(&mut doc, self.limits.read_caps());
-        let notes = doc.load_notes().to_vec();
+        let mut notes = doc.load_notes().to_vec();
+        notes.extend(doc.placeholder_note());
         #[cfg(not(target_arch = "wasm32"))]
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
         #[cfg(not(target_arch = "wasm32"))]

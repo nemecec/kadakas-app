@@ -249,11 +249,26 @@ impl<W: Write> Writer<W> {
 
     /// Writes an entry. `fill` writes its bytes into the writer it is given. If `fill` fails,
     /// the error is returned and the writer must be dropped (the output is incomplete). The
-    /// sizes follow the data in a data descriptor (64 bit).
+    /// sizes follow the data in a data descriptor (32 bit sizes; 64 bit from 4 GiB).
     pub fn add_with(
         &mut self,
         name: &str,
         how: Compression,
+        fill: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
+    ) -> Result<(), ContainerError> {
+        self.add_with_hint(name, how, false, fill)
+    }
+
+    /// Like [`Writer::add_with`]. With `may_pass_4gib` the local header has the ZIP64 extra field
+    /// (version 45) and the data descriptor has 64 bit sizes, as the APPNOTE says (4.3.9.2), so a
+    /// reader that goes through the stream reads the sizes right when the entry passes 4 GiB. Use
+    /// it for an entry that may be that big. A small entry without the hint has the 32 bit
+    /// descriptor that the stream readers of Java and others expect.
+    pub fn add_with_hint(
+        &mut self,
+        name: &str,
+        how: Compression,
+        may_pass_4gib: bool,
         fill: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
     ) -> Result<(), ContainerError> {
         self.begin(name)?;
@@ -269,7 +284,7 @@ impl<W: Write> Writer<W> {
             crc: 0,
             compressed: 0,
             size: 0,
-            zip64: false,
+            zip64: may_pass_4gib,
         })?;
         let start = self.out.count;
         let (crc, sha, size) = match how {
@@ -294,7 +309,7 @@ impl<W: Write> Writer<W> {
             }
         };
         let compressed = self.out.count - start;
-        self.descriptor(crc, compressed, size)?;
+        self.descriptor(crc, compressed, size, may_pass_4gib)?;
         self.names.insert(name.to_string());
         self.manifest.push(ManifestEntry {
             name: name.to_string(),
@@ -310,17 +325,23 @@ impl<W: Write> Writer<W> {
             compressed,
             size,
             offset,
-            zip64_local: false,
+            zip64_local: may_pass_4gib,
         });
         Ok(())
     }
 
     /// The data descriptor after the data of a streamed entry: 32 bit sizes, or 64 bit sizes if
     /// the entry is 4 GiB or more.
-    fn descriptor(&mut self, crc: u32, compressed: u64, size: u64) -> std::io::Result<()> {
+    fn descriptor(
+        &mut self,
+        crc: u32,
+        compressed: u64,
+        size: u64,
+        wide: bool,
+    ) -> std::io::Result<()> {
         put32(&mut self.out, DESCRIPTOR_SIG)?;
         put32(&mut self.out, crc)?;
-        if compressed >= ZIP64_AT || size >= ZIP64_AT {
+        if wide || compressed >= ZIP64_AT || size >= ZIP64_AT {
             put64(&mut self.out, compressed)?;
             put64(&mut self.out, size)
         } else {
@@ -462,7 +483,7 @@ impl<W: Write> Writer<W> {
             enc.finish()?;
         }
         let compressed = self.out.count - start;
-        self.descriptor(crc.sum(), compressed, bytes.len() as u64)?;
+        self.descriptor(crc.sum(), compressed, bytes.len() as u64, false)?;
         self.central.push(Central {
             name: MANIFEST_NAME.to_string(),
             method: Method::Deflate,

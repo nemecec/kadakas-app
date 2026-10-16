@@ -319,7 +319,11 @@ def test_a_file_that_is_replaced_but_has_the_old_file_as_bak_is_found_by_content
     other.result("file.save", {"path": str(path)})
     assert (tmp_path / "plan.kad.bak").exists()
     work.execute(rect_cmd(50, 50, 60, 60))
-    for name in ("plan.kad", "copy.kad", "plain.json"):
+    # The file at the path is another program's file: replacing it needs the person.
+    err = work.error("file.save", {"path": str(path)})
+    assert err["code"] == 5 and err["data"]["reason"] == "file_changed", err
+    assert err["data"]["ask_the_person"] is True, err
+    for name in ("copy.kad", "plain.json"):
         assert work.result("file.save", {"path": str(tmp_path / name)})["ok"] is True, name
     check = make_serve(tmp_path / "copy.kad")
     assert check.doc()["objects"], "the document is there"
@@ -346,8 +350,15 @@ def test_parts_that_are_gone_are_saved_only_with_the_consent_of_the_person(make_
     assert err["code"] == 5, err
     assert err["data"]["reason"] == "parts_missing" and err["data"]["ask_the_person"] is True, err
     assert not (tmp_path / "a.kad").exists()
+    # The consent is bound to the refusal: `true` is not enough, and neither is a token of another one.
+    for bad in (True, "0" * 64):
+        refused = work.error("file.save", {"path": str(tmp_path / "a.kad"), "allow_missing": bad})
+        assert refused["code"] in (-32602, 5), refused
+        assert not (tmp_path / "a.kad").exists()
     # With the consent of the person the rest is saved, and the reply has notes.
-    done = work.result("file.save", {"path": str(tmp_path / "a.kad"), "allow_missing": True})
+    done = work.result(
+        "file.save", {"path": str(tmp_path / "a.kad"), "allow_missing": err["data"]["consent_token"]}
+    )
     assert done["ok"] is True and "placeholder" in json.dumps(done["notes"]), done
     again = work.result("file.save", {"path": str(tmp_path / "b.kad")})
     assert "notes" not in again, "the next save is whole"

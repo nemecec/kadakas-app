@@ -105,3 +105,9 @@ app-save-missing-text =
     Save without them? The pictures become small gray placeholders and the versions that cannot be found are left out; everything else is saved. Or answer No, put the file (or its .bak copy) back, and save again.
 app-save-missing-cancelled = Not saved: parts of the file cannot be found. Put the file (or its .bak copy) back and save again, or save without them.
 app-save-missing-done = Not found, and left out of the file: { $what }.
+app-save-overwrite-title = The file was changed by another program
+app-save-overwrite-text =
+    The file { $file } was changed by another program since you opened it (another copy of Kadakas, or a sync program). If you save, that work is replaced. The old file stays as the .bak copy next to it.
+
+    Replace it?
+app-save-overwrite-cancelled = Not saved: the file was changed by another program since you opened it. Open it again to see what changed, or save under another name.

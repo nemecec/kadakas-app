@@ -707,10 +707,23 @@ impl KadakasApp {
             self.status = tr!("collab-ui-blocked-replace");
             return false;
         }
-        let kadakas_file::Opened { doc, source, .. } = opened;
+        let kadakas_file::Opened {
+            mut doc, source, ..
+        } = opened;
+        // The gray placeholders of an earlier save without the pictures: the real ones come back
+        // when the file (or its .bak) has them.
+        let relinked = source.as_ref().map_or(0, |src| {
+            let blobs: std::sync::Arc<dyn kadakas_core::blob::BlobSource> = src.clone();
+            doc.relink_placeholders(&blobs)
+        });
         // Keep the rest of the session: the event subscriptions, the limits, the allowed folders
         // and addresses, and the scripting policy. `replace_document` keeps the view and snapping.
-        let notes = self.session.replace_document(doc);
+        let mut notes = self.session.replace_document(doc);
+        if relinked > 0 {
+            notes.push(format!(
+                "{relinked} gray placeholder(s) were replaced by the real pictures"
+            ));
+        }
         self.session.file_source = source;
         // The app handles this change itself: agents must not see it as a `document.load`.
         self.session.take_replaced();
@@ -1275,18 +1288,30 @@ impl KadakasApp {
         );
         let container = spec.form == kadakas_file::Form::Container;
         spec.anchor = container && self.session.needs_anchor();
-        let first = match self.session.document_for_save_in(container) {
-            Ok(doc) => file_io::try_write_document(&path, &doc, &spec),
-            Err(e) => Err(file_io::SaveFailure::from_rpc(e)),
-        };
-        let written = match first {
-            // The file that the pictures stay in changed on disk. Nothing was written. The
-            // person decides: cancel (and put the file back), or save without what is missing.
-            Err(file_io::SaveFailure::Missing(from_writer)) => {
-                self.save_without_missing(&path, spec, from_writer)
+        let mut written: Result<Vec<String>, String> = Err(String::new());
+        for _ in 0..2 {
+            let first = match self.session.document_for_save_in(container) {
+                Ok(doc) => file_io::try_write_document(&path, &doc, &spec),
+                Err(e) => Err(file_io::SaveFailure::from_rpc(e)),
+            };
+            match first {
+                // Another program wrote the file since it was opened. The person decides.
+                Err(file_io::SaveFailure::Changed(_)) if !spec.allow_overwrite => {
+                    if file_io::ask_overwrite(&path.display().to_string()) {
+                        spec.allow_overwrite = true;
+                        continue;
+                    }
+                    written = Err(tr!("app-save-overwrite-cancelled"));
+                }
+                // The file that the pictures stay in changed on disk. Nothing was written. The
+                // person decides: cancel (and put the file back), or save without what is missing.
+                Err(file_io::SaveFailure::Missing(from_writer)) => {
+                    written = self.save_without_missing(&path, spec.clone(), from_writer);
+                }
+                other => written = other.map_err(file_io::SaveFailure::text),
             }
-            other => other.map_err(file_io::SaveFailure::text),
-        };
+            break;
+        }
         match written {
             Ok(notes) => {
                 self.status = if notes.is_empty() {
@@ -1340,7 +1365,20 @@ impl KadakasApp {
             anchor: container && self.session.needs_anchor() && !m.history,
             ..spec
         };
-        let mut notes = file_io::write_document_as(path, &doc, &retry)?;
+        let mut retry = retry;
+        let mut notes = loop {
+            match file_io::try_write_document(path, &doc, &retry) {
+                Ok(notes) => break notes,
+                // The file at the path is also another program's file: a second question.
+                Err(file_io::SaveFailure::Changed(_)) if !retry.allow_overwrite => {
+                    if !file_io::ask_overwrite(&path.display().to_string()) {
+                        return Err(tr!("app-save-overwrite-cancelled"));
+                    }
+                    retry.allow_overwrite = true;
+                }
+                Err(e) => return Err(e.text()),
+            }
+        };
         self.session.accept_missing(&m);
         notes.push(tr!(
             "app-save-missing-done",
@@ -4575,13 +4613,14 @@ mod tests {
         std::fs::rename(&other, &file).unwrap();
         let _ = std::fs::remove_file(dir.join("mine.kad.bak"));
         let other_bytes = std::fs::read(&file).unwrap();
-        // No: nothing is written, and the status says what to do.
-        file_io::test_answer::set(Some(false));
+        // The picture cannot be found: the question is about saving without it (no). Nothing is
+        // written, and the status says what to do.
+        file_io::test_answer::queue(&[false]);
         app.save(false, &ctx);
         assert_eq!(std::fs::read(&file).unwrap(), other_bytes);
         assert!(app.status.contains(".bak"), "{}", app.status);
-        // Yes: the picture is a placeholder, the edit is saved, the status has the note.
-        file_io::test_answer::set(Some(true));
+        // Yes to both (without the picture, and replacing the other program's file): the picture is a placeholder, the edit is saved, the status has the note.
+        file_io::test_answer::queue(&[true, true]);
         app.save(false, &ctx);
         file_io::test_answer::set(None);
         assert!(
@@ -4604,6 +4643,99 @@ mod tests {
         app.save(false, &ctx);
         assert!(!app.status.contains("placeholder"), "{}", app.status);
         assert_eq!(file_io::read_document(&file).unwrap().objects.len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn a_save_over_a_file_that_another_program_changed_asks_the_person() {
+        let dir = std::env::temp_dir().join(format!("kadakas-save-over-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("mine.kad");
+        file_io::write_document_raw(&file, &doc_with_big_picture()).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.open_path(&ctx, file.clone());
+        app.exec(&add_rect_command(0.0));
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        // Another copy of the program wrote the file (the pictures are in it too).
+        let mut theirs = doc_with_big_picture();
+        theirs.drawing.project.name = "the other copy".into();
+        file_io::write_document_raw(&file, &theirs).unwrap();
+        let theirs_bytes = std::fs::read(&file).unwrap();
+        // No: nothing is written, and the status says so.
+        file_io::test_answer::set(Some(false));
+        app.save(false, &ctx);
+        assert_eq!(std::fs::read(&file).unwrap(), theirs_bytes);
+        assert!(app.status.contains("another program"), "{}", app.status);
+        // Yes: the file is replaced, and the old file is the .bak.
+        file_io::test_answer::set(Some(true));
+        app.save(false, &ctx);
+        file_io::test_answer::set(None);
+        assert_ne!(std::fs::read(&file).unwrap(), theirs_bytes);
+        assert_eq!(
+            std::fs::read(dir.join("mine.kad.bak")).unwrap(),
+            theirs_bytes
+        );
+        assert_eq!(file_io::read_document(&file).unwrap().objects.len(), 2);
+        // A touch of our own file is no change by another program: no question.
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let same = std::fs::read(&file).unwrap();
+        std::fs::write(&file, &same).unwrap();
+        app.save(false, &ctx);
+        assert!(app.status.contains("Saved"), "{}", app.status);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_agent_that_passes_a_consent_token_does_not_decide_for_the_person() {
+        let dir =
+            std::env::temp_dir().join(format!("kadakas-agent-consent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("mine.kad");
+        file_io::write_document_raw(&file, &doc_with_big_picture()).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.open_path(&ctx, file.clone());
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let other = dir.join("other.kad");
+        file_io::write_document_raw(&other, &Document::default()).unwrap();
+        std::fs::rename(&other, &file).unwrap();
+        let _ = std::fs::remove_file(dir.join("mine.kad.bak"));
+        let target = dir.join("agent.kad");
+        let mut path = app.path.clone();
+        let mut fx = file_io::AgentEffects::default();
+        let mut send = |app: &mut KadakasApp, params: serde_json::Value| -> serde_json::Value {
+            let line =
+                serde_json::json!({"jsonrpc":"2.0","id":1,"method":"file.save","params":params})
+                    .to_string();
+            let reply =
+                file_io::agent_line(&mut app.session, &mut path, 1, &line, &mut fx).unwrap();
+            serde_json::from_str(&reply).unwrap()
+        };
+        let refusal = send(&mut app, serde_json::json!({"path": target}));
+        assert_eq!(
+            refusal["error"]["data"]["reason"], "parts_missing",
+            "{refusal}"
+        );
+        let token = refusal["error"]["data"]["consent_token"].clone();
+        // The agent passes the right token, but the person says no: nothing is written.
+        file_io::test_answer::set(Some(false));
+        let r = send(
+            &mut app,
+            serde_json::json!({"path": target, "allow_missing": token}),
+        );
+        assert!(r.get("error").is_some(), "{r}");
+        assert!(!target.exists());
+        // The person says yes: it is saved.
+        file_io::test_answer::set(Some(true));
+        let r = send(
+            &mut app,
+            serde_json::json!({"path": target, "allow_missing": token}),
+        );
+        file_io::test_answer::set(None);
+        assert_eq!(r["result"]["ok"], true, "{r}");
+        assert!(target.exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

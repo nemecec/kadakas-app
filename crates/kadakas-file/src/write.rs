@@ -56,6 +56,9 @@ pub struct WriteOptions {
     /// [`Written::skipped`]). A picture of the drawing is never skipped: the caller replaces it
     /// first (`Document::replace_missing_pictures`).
     pub skip_missing: bool,
+    /// The person agreed to replace the file at the path although another program changed it
+    /// since it was opened (`native::save_path` refuses otherwise).
+    pub allow_overwrite: bool,
 }
 
 /// What a container save did.
@@ -74,6 +77,12 @@ pub struct Written {
     /// Entries of the old file that this code does not know (from a newer program), copied as
     /// they are.
     pub unknown_copied: usize,
+    /// What the person should know (entries of a newer program that were copied as they are).
+    pub notes: Vec<String>,
+    /// Pictures that only an undo step held and that no file has any more: the drawing is saved,
+    /// and an undo that needs them shows no picture. It is no note of the save, because it would
+    /// repeat at every save as long as the undo step stays.
+    pub undo_pictures_lost: usize,
     /// The drawing of the old file was written as the anchor of the history.
     pub anchor_written: bool,
     /// Parts that could not be found and were left out (`WriteOptions::skip_missing`).
@@ -122,8 +131,12 @@ pub(crate) enum Planned {
     Text(BlobText),
     Base(Arc<Value>),
     History(Arc<str>),
-    /// Copied from a file: only a live handle uses it, or the history or its anchor.
+    /// Copied from a file: the history or its anchor needs it.
     Kept(Arc<FileSource>),
+    /// Copied from a file: only a live handle (an undo step) uses it. If no file has it any more,
+    /// the drawing is still saved: the undo step loses its picture, and the save says so in a
+    /// note.
+    Live(Arc<FileSource>),
 }
 
 fn base_text(body: &Value) -> Option<String> {
@@ -181,7 +194,7 @@ fn plan_blobs(doc: &Document, history: Option<&Plan>, opts: &WriteOptions) -> Pl
             plans
                 .blobs
                 .entry(hash)
-                .or_insert_with(|| Planned::Kept(source.clone()));
+                .or_insert_with(|| Planned::Live(source.clone()));
         }
     }
     plans
@@ -203,7 +216,7 @@ impl Planned {
         match self {
             Planned::Picture(p) => p.lazy().and_then(|l| file_of(l)),
             Planned::Text(t) => t.lazy().and_then(|l| file_of(l)),
-            Planned::Kept(s) => Some(s.clone()),
+            Planned::Kept(s) | Planned::Live(s) => Some(s.clone()),
             _ => None,
         }
     }
@@ -216,7 +229,7 @@ impl Planned {
             // An import base is at most 8 MiB (the limit of the resource).
             Planned::Base(_) => 0,
             Planned::History(t) => t.len(),
-            Planned::Kept(_) => 0,
+            Planned::Kept(_) | Planned::Live(_) => 0,
         }
     }
 }
@@ -322,8 +335,20 @@ fn waiting_history(doc: &Document) -> Result<Option<Arc<FileHistory>>, FileError
 /// (a newer program may add entries): they are copied, not dropped.
 fn unknown_entries(
     sources: &[Arc<FileSource>],
-    known: &dyn Fn(&str) -> bool,
+    history_waits: bool,
 ) -> Vec<(Arc<FileSource>, String)> {
+    // The history entries that this code knows. A name under `history/` that is not one of them is
+    // an entry of a newer program too; while the history waits in the file, all its entries are
+    // copied as they are (see `Extras::waiting`), so none of them is unknown.
+    const KNOWN: [&str; 7] = [
+        crate::layout::HISTORY_TOP,
+        crate::layout::HISTORY_VERSIONS,
+        crate::layout::HISTORY_NEWEST,
+        crate::layout::HISTORY_BLOBS,
+        crate::layout::HISTORY_RAW,
+        HISTORY_ANCHOR,
+        HISTORY_ANCHOR_BLOBS,
+    ];
     let mut out: Vec<(Arc<FileSource>, String)> = Vec::new();
     for s in sources {
         for e in s.container().entries() {
@@ -331,8 +356,7 @@ fn unknown_entries(
             if n == DOCUMENT
                 || n == MANIFEST_NAME
                 || n.starts_with(BLOB_DIR)
-                || n.starts_with("history/")
-                || known(n)
+                || (n.starts_with("history/") && (history_waits || KNOWN.contains(&n)))
                 || out.iter().any(|(_, o)| o == n)
             {
                 continue;
@@ -355,6 +379,7 @@ fn preflight(
     root: Option<&Arc<FileSource>>,
     skip: bool,
     max_entries: usize,
+    lost_for_undo: &mut usize,
 ) -> Result<usize, FileError> {
     // The size of the texts: a file that is written must be a file that can be read.
     for (hash, planned) in &plans.blobs {
@@ -372,23 +397,51 @@ fn preflight(
     };
     let mut skipped = 0usize;
     let mut drop_blobs: Vec<String> = Vec::new();
+    // The file is looked at once for each source: if it has the content that was opened, its
+    // directory answers (no stamp is read for each of 250 000 pictures); if it is another file (a
+    // replacement with the same stamp is found here too), each part is looked for by its hash.
+    let mut same: Vec<(usize, bool)> = Vec::new();
+    let mut avail_blob = |source: &Arc<FileSource>, hash: &str| -> bool {
+        let key = Arc::as_ptr(source) as usize;
+        let ok = match same.iter().find(|(k, _)| *k == key) {
+            Some((_, ok)) => *ok,
+            None => {
+                let ok = source.same_file();
+                same.push((key, ok));
+                ok
+            }
+        };
+        if ok {
+            source.lists_blob(hash)
+        } else {
+            source.has_blob(hash)
+        }
+    };
     for (hash, planned) in &plans.blobs {
         if let Some(source) = planned.file()
-            && !source.has_blob(hash)
+            && !avail_blob(&source, hash)
         {
             if missing.file.is_empty() {
                 missing.file = source.label();
             }
-            if skip && matches!(planned, Planned::Kept(_)) {
+            if matches!(planned, Planned::Live(_)) || (skip && matches!(planned, Planned::Kept(_)))
+            {
                 drop_blobs.push(hash.clone());
+                if matches!(planned, Planned::Live(_)) {
+                    *lost_for_undo += 1;
+                }
             } else {
                 missing.pictures.push(hash.clone());
             }
         }
     }
     for h in &drop_blobs {
+        // A picture that only an undo step held is not counted as skipped by consent: it is told
+        // apart in the note.
+        if !matches!(plans.blobs.get(h), Some(Planned::Live(_))) {
+            skipped += 1;
+        }
         plans.blobs.remove(h);
-        skipped += 1;
     }
     if let Some(h) = &extras.waiting {
         for name in h.entry_names() {
@@ -400,7 +453,7 @@ fn preflight(
     if let Some((source, hashes)) = &extras.anchor {
         let mut gone = !source.has_entry(DOCUMENT);
         for hash in hashes {
-            if !source.has_blob(hash) {
+            if !avail_blob(source, hash) {
                 gone = true;
             }
         }
@@ -452,12 +505,33 @@ pub(crate) fn copy_entry<W: Write>(
             name: name.to_string(),
             reason: "it is not in the file that was opened".into(),
         })?;
+    // A part of the history is small and is not decoded by anyone else when it is copied as it is:
+    // it is read and checked here (the anchor drawing is checked when it comes from another file,
+    // see `ContainerSource::raw_by_content`).
+    if name.starts_with("history/") && name != HISTORY_ANCHOR {
+        source.parts().read_by_content(name, &sha)?;
+    }
     let mut raw = source.parts().raw_by_content(name, &sha)?;
     if let Some(n) = new_name {
         raw.name = n.to_string();
     }
     writer.copy_raw(raw)?;
     Ok(())
+}
+
+/// A drawing of at least this many bytes (estimated) is written as one that may pass 4 GiB.
+const BIG_DOCUMENT_BYTES: u64 = 3 << 30;
+
+/// A rough size of the text of the drawing: about 600 bytes for an object and 70 for a point of a
+/// site model. It is only for the hint of the ZIP64 field, so it does not have to be exact.
+pub(crate) fn estimate_document_bytes(doc: &Document) -> u64 {
+    let mut n = doc.objects.len() as u64 * 600;
+    for o in doc.objects.values() {
+        if let kadakas_core::model::Shape::SiteModel { points, .. } = &o.shape {
+            n += points.len() as u64 * 70;
+        }
+    }
+    n
 }
 
 /// Writes the container form of a document into `w`.
@@ -521,8 +595,8 @@ pub fn write_container<W: Write>(
         .map(history::part_names)
         .unwrap_or_default();
     let all_sources = plans.sources.clone();
-    let known = |n: &str| history_names.iter().any(|(k, _)| *k == n);
-    extras.unknown = unknown_entries(&all_sources, &known);
+    extras.unknown = unknown_entries(&all_sources, waiting.is_some());
+    let mut lost_for_undo = 0usize;
     let skipped = preflight(
         &mut plans,
         history_names.len(),
@@ -533,6 +607,7 @@ pub fn write_container<W: Write>(
             .or_else(|| opts.keep.first()),
         opts.skip_missing,
         MAX_ENTRIES,
+        &mut lost_for_undo,
     )?;
 
     let mut writer = Writer::new(w).generator(&opts.generator);
@@ -540,15 +615,24 @@ pub fn write_container<W: Write>(
         skipped,
         ..Written::default()
     };
+    report.undo_pictures_lost = lost_for_undo;
     let refs = SaveRefs {
         skip_history: true,
         import_bases: std::mem::take(&mut plans.bases),
     };
-    writer.add_with(DOCUMENT, Compression::Deflate(DOCUMENT_LEVEL), |sink| {
-        let mut bw = BufWriter::with_capacity(256 * 1024, sink);
-        with_blob_refs(refs, || doc.write_pretty(&mut bw))?;
-        bw.flush()
-    })?;
+    // The size of the drawing is not known before it is written. A drawing that may pass 4 GiB gets
+    // the ZIP64 field in its local header and a 64 bit data descriptor (APPNOTE 4.3.9.2).
+    let big = estimate_document_bytes(doc) >= BIG_DOCUMENT_BYTES;
+    writer.add_with_hint(
+        DOCUMENT,
+        Compression::Deflate(DOCUMENT_LEVEL),
+        big,
+        |sink| {
+            let mut bw = BufWriter::with_capacity(256 * 1024, sink);
+            with_blob_refs(refs, || doc.write_pretty(&mut bw))?;
+            bw.flush()
+        },
+    )?;
 
     for (hash, planned) in &plans.blobs {
         let name = blob_name(hash);
@@ -567,7 +651,7 @@ pub fn write_container<W: Write>(
                 .into());
             }
             writer.copy_raw(raw)?;
-            if matches!(planned, Planned::Kept(_)) {
+            if matches!(planned, Planned::Kept(_) | Planned::Live(_)) {
                 report.blobs_kept += 1;
             } else {
                 report.blobs_copied += 1;
@@ -585,7 +669,7 @@ pub fn write_container<W: Write>(
             })?,
             Planned::Base(body) => Arc::from(base_text(body).unwrap_or_default()),
             Planned::History(t) => t.clone(),
-            Planned::Kept(_) => unreachable!("handled above"),
+            Planned::Kept(_) | Planned::Live(_) => unreachable!("handled above"),
         };
         writer.add_bytes(&name, Compression::Stored, text.as_bytes())?;
         if matches!(planned, Planned::Base(_)) {
@@ -631,6 +715,12 @@ pub fn write_container<W: Write>(
         copy_entry(&mut writer, source, name, None)?;
         report.unknown_copied += 1;
     }
+    if report.unknown_copied > 0 {
+        report.notes.push(format!(
+            "{} entries of a newer program were copied as they are. They may not match the changes made since the file was opened",
+            report.unknown_copied
+        ));
+    }
     report.entries = writer.len();
     for s in std::mem::take(&mut plans.sources) {
         if !report.sources.iter().any(|k| Arc::ptr_eq(k, &s)) {
@@ -647,5 +737,5 @@ pub(crate) fn preflight_for_test(
     extras: &mut Extras,
     max_entries: usize,
 ) -> Result<usize, FileError> {
-    preflight(plans, 0, extras, None, false, max_entries)
+    preflight(plans, 0, extras, None, false, max_entries, &mut 0)
 }

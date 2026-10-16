@@ -116,6 +116,21 @@ pub fn save_path(
     form: Form,
     opts: &WriteOptions,
 ) -> Result<Saved, FileError> {
+    // The file at the path must still be the file that was opened (the same manifest). A touch or a
+    // copy that keeps the content is fine; a file that another program wrote since is not replaced
+    // without the person (two instances, a sync conflict copy).
+    if !opts.allow_overwrite && path.exists() {
+        let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        for s in &opts.keep {
+            let same = s
+                .path()
+                .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+                .is_some_and(|p| p == target);
+            if same && !s.same_file() {
+                return Err(FileError::FileChanged(path.display().to_string()));
+            }
+        }
+    }
     let mut written: Option<Written> = None;
     let mut failure: Option<FileError> = None;
     let result = fsio::write_atomic_with(path, |w| {
@@ -133,10 +148,13 @@ pub fn save_path(
         return Err(failure
             .unwrap_or_else(|| FileError::Io(format!("cannot write {}: {e}", path.display()))));
     }
-    let notes = match (&written, form) {
+    let mut notes = match (&written, form) {
         (Some(rep), Form::Container) => rebind_sources(rep, path),
         _ => Vec::new(),
     };
+    if let Some(rep) = &written {
+        notes.extend(rep.notes.iter().cloned());
+    }
     Ok(Saved {
         form,
         written,
@@ -157,6 +175,7 @@ pub fn convert(from: &Path, to: &Path, form: Form, max_bytes: u64) -> Result<Sav
         keep: opened.source.iter().cloned().collect(),
         anchor: false,
         skip_missing: false,
+        allow_overwrite: false,
     };
     save_path(to, &opened.doc, form, &opts)
 }

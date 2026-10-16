@@ -148,6 +148,9 @@ pub struct ReviewCache {
     /// against (as loaded). A save writes the changes from the current drawing back to it (the
     /// `base` entry), so that the versions can be rebuilt after the drawing was edited.
     opaque_base: Option<Arc<State>>,
+    /// Why a history that waits in the file could not be read: `not_found` (the file or the drive
+    /// is away or another file is there; the versions come back when it is) or `damaged`.
+    pub(crate) unreadable: Option<&'static str>,
     /// How often the JSON was parsed, and how often the newest state was rebuilt by replay. Tests
     /// count them.
     pub(crate) parses: u32,
@@ -315,9 +318,22 @@ pub(crate) fn resolve(s: &mut Session) {
         return;
     }
     let failed = |s: &mut Session, mut p: Pending, why: String, key: String| {
-        let note = format!(
-            "the versions of this file could not be read: {why}. They stay in the file as they are, and are read only"
-        );
+        // A file that is away or changed is not a file that is damaged: the first comes back.
+        let away = why.contains("changed on disk")
+            || why.contains("not in the file")
+            || why.contains("cannot be read now")
+            || why.contains("No such file")
+            || why.contains("not in the container");
+        let note = if away {
+            format!(
+                "the versions of this file cannot be found now: {why}. They stay in the file, and come back when the file (or the drive) can be read again. Until then they are read only"
+            )
+        } else {
+            format!(
+                "the versions of this file could not be read: {why}. They stay in the file as they are, and are read only"
+            )
+        };
+        s.review.unreadable = Some(if away { "not_found" } else { "damaged" });
         s.review.cached = Some(Cached {
             serial: 0,
             history: Arc::new(History::new()),
@@ -482,15 +498,25 @@ pub(crate) fn pictures_readable(s: &Session) -> Result<(), RpcError> {
     })
 }
 
+/// The token that binds the consent of the person to one refusal: the SHA-256 of the kind and of
+/// the facts of the refusal. An agent gets it in the error and passes it back after the person
+/// agreed; a token from another refusal (other parts, another file) does not match.
+pub fn consent_token(kind: &str, facts: &Value) -> String {
+    kadakas_core::blob::text_hash(&format!("{kind}:{facts}"))
+}
+
 /// The error of a save that cannot find parts of the document in the file it was opened from.
 /// Nothing was written. The person decides: put the file back, or save without them (the pictures
 /// become small placeholders and the versions are left out): `file.save` with
 /// `allow_missing: true`.
 pub fn missing_error(m: &kadakas_file::Missing) -> RpcError {
+    let missing =
+        json!({"file": m.file, "pictures": m.pictures, "history": m.history, "other": m.other});
     RpcError::conflict(m.message())
         .with_reason(REASON_PARTS_MISSING)
         .with_details(json!({
-            "missing": {"file": m.file, "pictures": m.pictures, "history": m.history, "other": m.other},
+            "missing": missing,
+            "consent_token": consent_token("parts_missing", &missing),
             "options": [
                 {"action": "restore", "how": "Put the file (or its .bak) back where it was, then save again."},
                 {"action": "save_without", "how": "Ask the person. Then save again with allow_missing: true: the missing pictures become small gray placeholders, the versions that cannot be found are left out, and the file is saved."}
@@ -691,9 +717,9 @@ impl Session {
     /// and the versions that could not be found are dropped.
     pub fn accept_missing(&mut self, m: &kadakas_file::Missing) {
         let set: std::collections::HashSet<String> = m.pictures.iter().cloned().collect();
-        self.editor.repair_without_undo(|d| {
-            d.replace_missing_pictures(&set);
-        });
+        // One undo step. The undo brings back the handles of pictures that no file has; the next
+        // save asks again.
+        self.editor.replace_missing_pictures_with_undo(&set);
         if m.history {
             self.editor.adopt_history(None, Vec::new());
             self.review = ReviewCache::default();
@@ -1013,6 +1039,9 @@ fn list(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     }
     if read_only {
         out["notes"] = json!(notes(s));
+        // `not_found`: the file or the drive is away and the versions come back; `damaged`: they
+        // do not (only `version.repair` helps).
+        out["unreadable_kind"] = json!(s.review.unreadable.unwrap_or("damaged"));
     }
     Ok(out)
 }

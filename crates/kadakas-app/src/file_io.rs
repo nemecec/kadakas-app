@@ -71,6 +71,7 @@ pub fn container_bytes(session: &mut Session) -> Result<Vec<u8>, String> {
         keep,
         anchor,
         skip_missing: false,
+        allow_overwrite: false,
     };
     kadakas_file::write_container(Vec::new(), &doc, &opts)
         .map(|(bytes, _)| bytes)
@@ -188,6 +189,9 @@ pub enum SaveFailure {
     /// Parts of the document cannot be found in the file it was opened from (the file changed on
     /// disk). Nothing was written. The person decides (see [`ask_save_without`]).
     Missing(kadakas_file::Missing),
+    /// Another program changed the file at the path since it was opened, and the save would
+    /// replace it (the path). Nothing was written. The person decides (see [`ask_overwrite`]).
+    Changed(String),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -196,6 +200,8 @@ impl SaveFailure {
     pub fn from_rpc(e: kadakas_api::RpcError) -> SaveFailure {
         if e.reason == Some(kadakas_api::REASON_PARTS_MISSING) {
             SaveFailure::Missing(kadakas_file::Missing::default())
+        } else if e.reason == Some(kadakas_api::REASON_FILE_CHANGED) {
+            SaveFailure::Changed(String::new())
         } else {
             SaveFailure::Text(e.message)
         }
@@ -206,6 +212,7 @@ impl SaveFailure {
         match self {
             SaveFailure::Text(t) => t,
             SaveFailure::Missing(m) => m.message(),
+            SaveFailure::Changed(file) => kadakas_file::FileError::FileChanged(file).to_string(),
         }
     }
 }
@@ -222,12 +229,13 @@ pub fn try_write_document(
     {
         Ok(notes) => Ok(notes),
         Err(FileError::Missing(m)) => Err(SaveFailure::Missing(m)),
+        Err(FileError::FileChanged(f)) => Err(SaveFailure::Changed(f)),
         Err(e) => Err(SaveFailure::Text(write_error(path, e))),
     }
 }
 
 /// [`write_document`] with the form and the files to copy from.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), test))]
 pub fn write_document_as(
     path: &Path,
     doc: &Document,
@@ -258,21 +266,50 @@ pub fn ask_save_without(m: &kadakas_file::Missing) -> bool {
         == rfd::MessageDialogResult::Yes
 }
 
+/// Asks the person whether to replace a file that another program changed since it was opened
+/// (two instances, a sync conflict copy). The default is no.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ask_overwrite(file: &str) -> bool {
+    #[cfg(test)]
+    if let Some(answer) = test_answer::get() {
+        return answer;
+    }
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title(tr!("app-save-overwrite-title"))
+        .set_description(tr!("app-save-overwrite-text", file = file))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes
+}
+
 /// The answer of the person to [`ask_save_without`], set by a test.
 #[cfg(all(not(target_arch = "wasm32"), test))]
 pub mod test_answer {
     use std::cell::Cell;
 
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+
     thread_local! {
         static ANSWER: Cell<Option<bool>> = const { Cell::new(None) };
+        static QUEUE: RefCell<VecDeque<bool>> = const { RefCell::new(VecDeque::new()) };
     }
 
+    /// The answer to every question (None: no test answer).
     pub fn set(answer: Option<bool>) {
         ANSWER.with(|a| a.set(answer));
     }
 
+    /// The answers to the next questions, in order (a save can ask twice).
+    pub fn queue(answers: &[bool]) {
+        QUEUE.with(|q| *q.borrow_mut() = answers.iter().copied().collect());
+    }
+
     pub fn get() -> Option<bool> {
-        ANSWER.with(Cell::get)
+        QUEUE
+            .with(|q| q.borrow_mut().pop_front())
+            .or_else(|| ANSWER.with(Cell::get))
     }
 }
 
@@ -347,9 +384,20 @@ pub fn agent_line(
     // An agent may only use the allowed folders (see `Session::paths`) and only document files.
     // The same handler serves `kadakas serve` and `kadakas mcp`. A save here counts as a manual save.
     let params = req.get("params").cloned().unwrap_or(Value::Null);
-    let result = kadakas_api::files::file_call(session, method, &params, &mut |p, doc, spec| {
-        crate::autosave::manual_save(p, || kadakas_api::files::write_document(p, doc, spec))
-    });
+    // An agent that passes a consent token does not decide for the person: the app asks them (the
+    // default answer is no).
+    let result = kadakas_api::files::file_call(
+        session,
+        method,
+        &params,
+        &mut |p, doc, spec| {
+            crate::autosave::manual_save(p, || kadakas_api::files::write_document(p, doc, spec))
+        },
+        &mut |ask, _token_matches| match ask {
+            kadakas_api::files::Ask::Missing(m) => ask_save_without(m),
+            kadakas_api::files::Ask::Overwrite(p) => ask_overwrite(&p.display().to_string()),
+        },
+    );
     match &result {
         Ok(kadakas_api::files::FileDone::Saved(p, ..)) => {
             *path = Some(p.clone());

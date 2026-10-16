@@ -479,10 +479,13 @@ fn a_file_that_is_touched_or_moved_is_followed_by_content() {
         if !finds {
             // With the consent of the person the rest is saved, the picture is a placeholder, and
             // the versions that cannot be found are left out.
+            let refusal = rpc(&mut s, "file.save", json!({"path": dir.join("rest.kad")}));
+            let token = refusal["error"]["data"]["consent_token"].clone();
+            assert!(token.is_string(), "{change}: {refusal}");
             let r = ok(
                 &mut s,
                 "file.save",
-                json!({"path": dir.join("rest.kad"), "allow_missing": true}),
+                json!({"path": dir.join("rest.kad"), "allow_missing": token}),
             );
             assert!(
                 r["notes"].to_string().contains("placeholder"),

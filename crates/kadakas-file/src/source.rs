@@ -113,6 +113,22 @@ impl FileSource {
         parse_hash(hash).is_some_and(|sha| self.part.has_by_content(&blob_name(hash), &sha))
     }
 
+    /// True if the file at the path has the content that was opened (its manifest is read again).
+    /// A save asks it once for each source.
+    pub fn same_file(&self) -> bool {
+        self.part.same_file()
+    }
+
+    /// True if the directory of the opened file has the blob (nothing is looked at on disk).
+    pub fn lists_blob(&self, hash: &str) -> bool {
+        parse_hash(hash).is_some_and(|sha| {
+            self.part
+                .container()
+                .entry(&blob_name(hash))
+                .is_some_and(|e| e.sha256 == sha)
+        })
+    }
+
     /// True if some file can give the entry that the opened file has under this name.
     pub fn has_entry(&self, name: &str) -> bool {
         self.part.has_part(name)
@@ -151,10 +167,23 @@ impl FileSource {
 
 impl BlobSource for FileSource {
     fn blob_len(&self, hash: &str) -> Option<u64> {
-        let container = self.part.container();
-        let e = container.entry(&blob_name(hash))?;
-        // The name of a blob is the hash of its text. An entry with another content is not it.
-        (kadakas_container::hex(&e.sha256) == hash).then_some(e.size)
+        // The name of a blob is the hash of its text. An entry with another content is not it. The
+        // file that was opened first, then the file at the path and the .bak (a picture that
+        // came back there).
+        let sha = parse_hash(hash)?;
+        self.part.size_by_content(&blob_name(hash), &sha)
+    }
+
+    fn is_import_base(&self, hash: &str) -> Option<bool> {
+        let c = self.part.container();
+        // A file that marks none of its blobs (an older file) gives no answer.
+        if !c.entries().iter().any(|e| e.role.is_some()) {
+            return None;
+        }
+        Some(
+            c.entry(&blob_name(hash))
+                .is_some_and(|e| e.role.as_deref() == Some(crate::layout::ROLE_IMPORT_BASE)),
+        )
     }
 
     fn blob_head(&self, hash: &str) -> Result<String, BlobError> {

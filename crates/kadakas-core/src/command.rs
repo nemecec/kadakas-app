@@ -2024,6 +2024,39 @@ impl Editor {
         }
     }
 
+    /// Replaces the pictures that cannot be found by placeholders (see
+    /// `Document::replace_missing_pictures`) as one undo step, so the person can take it back. The
+    /// undo brings back the handles of the pictures that are not there; the next save asks again.
+    /// Returns how many pictures were replaced.
+    pub fn replace_missing_pictures_with_undo(
+        &mut self,
+        missing: &std::collections::HashSet<String>,
+    ) -> usize {
+        let mut count = 0;
+        let ids: Vec<ObjectId> = self
+            .doc
+            .objects
+            .iter()
+            .filter(|(_, o)| {
+                matches!(&o.shape, Shape::Underlay(u)
+                    if u.png.lazy().is_some_and(|l| missing.contains(l.hash())))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        let _ = self.transact(
+            || "replace_missing_pictures".to_string(),
+            None,
+            |tx, _| {
+                for id in &ids {
+                    tx.touch(*id);
+                }
+                count = tx.doc.replace_missing_pictures(missing);
+                Ok(())
+            },
+        );
+        count
+    }
+
     /// Changes the document without an undo step and without a new revision. For a repair that
     /// makes the memory equal to the file that was just saved (the pictures that could not be
     /// found became placeholders in the file): it is no edit by the person.

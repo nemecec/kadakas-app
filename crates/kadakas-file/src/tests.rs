@@ -272,6 +272,7 @@ fn a_history_that_waits_is_copied_without_being_read_and_the_plain_form_needs_it
         keep: vec![source.clone()],
         anchor: false,
         skip_missing: false,
+        allow_overwrite: false,
     };
     let (bytes, report) = write_container(Vec::new(), &first.doc, &opts).unwrap();
     assert_eq!(report.parts_copied, 4, "{report:?}");
@@ -388,6 +389,7 @@ fn raw_copy_keeps_the_compressed_bytes_of_unchanged_entries() {
         keep: vec![source.clone()],
         anchor: false,
         skip_missing: false,
+        allow_overwrite: false,
     };
     let (bytes, report) = write_container(Vec::new(), &first.doc, &opts).unwrap();
     // Every blob is in the old file: the pictures and the import base are copied, and the picture
@@ -958,6 +960,7 @@ fn a_history_that_was_read_copies_its_unchanged_parts_on_the_next_save() {
         keep: vec![source],
         anchor: false,
         skip_missing: false,
+        allow_overwrite: false,
     };
     let (bytes, report) = write_container(Vec::new(), &again, &opts).unwrap();
     assert_eq!(report.parts_copied, 4, "{report:?}");
@@ -1491,16 +1494,19 @@ fn what_only_an_undo_step_or_a_newer_program_needs_is_skipped_only_when_asked() 
     let FileError::Missing(m) = write_container(Vec::new(), &o.doc, &opts).unwrap_err() else {
         panic!("not Missing")
     };
-    assert_eq!(m.pictures.len(), 1, "{m:?}");
+    // The picture that only an undo step holds does not stop the save: the drawing is saved, and
+    // a note says what the undo step lost. An entry of a newer program needs the person.
+    assert!(m.pictures.is_empty(), "{m:?}");
     assert_eq!(m.other, ["extra/x"]);
     assert!(!m.history && !m.is_empty());
-    assert!(m.message().contains("1 picture") && m.message().contains("1 other part"));
+    assert!(m.message().contains("1 other part"));
     let ask = WriteOptions {
         skip_missing: true,
         ..opts
     };
     let (out, report) = write_container(Vec::new(), &o.doc, &ask).unwrap();
-    assert_eq!(report.skipped, 2, "{report:?}");
+    assert_eq!(report.skipped, 1, "{report:?}");
+    assert_eq!(report.undo_pictures_lost, 1, "{report:?}");
     let c = Container::from_bytes(out, Limits::default()).unwrap();
     assert!(!c.contains("extra/x"));
     drop(held);
@@ -1646,6 +1652,167 @@ fn a_history_whose_picture_entry_is_another_picture_is_found_at_the_read() {
     assert!(note.contains("not the picture of its name"), "{note}");
 }
 
+// ---- round 2 ----
+
+#[test]
+fn entries_of_a_newer_program_are_kept_with_a_note_also_under_history() {
+    let mut doc = sample_doc();
+    doc.history = Some(sample_history());
+    let good = Container::from_bytes(container_bytes(&doc), Limits::default()).unwrap();
+    let mut w = Writer::new(Vec::new());
+    for e in good.entries() {
+        w.copy_raw(good.raw(&e.name).unwrap()).unwrap();
+    }
+    w.add_bytes("history/graph.json", Compression::Stored, b"{}")
+        .unwrap();
+    w.add_bytes("extra/x", Compression::Stored, b"from a newer program")
+        .unwrap();
+    let o = open(w.finish().unwrap());
+    let source = o.source.clone().unwrap();
+    // The history is read into memory: it is written from there, and the unknown entry under
+    // history/ is not dropped either.
+    let mut again = o.doc;
+    resolve_history(&mut again).unwrap();
+    let opts = WriteOptions {
+        keep: vec![source.clone()],
+        ..WriteOptions::default()
+    };
+    let (out, report) = write_container(Vec::new(), &again, &opts).unwrap();
+    assert_eq!(report.unknown_copied, 2, "{report:?}");
+    assert!(
+        report.notes.iter().any(|n| n.contains("newer program")),
+        "{report:?}"
+    );
+    let c = Container::from_bytes(out, Limits::default()).unwrap();
+    assert!(c.contains("history/graph.json") && c.contains("extra/x"));
+    // While the history waits, all its entries are copied, and none is counted twice.
+    let o = open(container_bytes(&doc));
+    let waiting = WriteOptions {
+        keep: o.source.iter().cloned().collect(),
+        ..WriteOptions::default()
+    };
+    let (_, report) = write_container(Vec::new(), &o.doc, &waiting).unwrap();
+    assert_eq!(report.unknown_copied, 0);
+}
+
+#[test]
+fn an_import_base_must_be_marked_when_the_file_marks_its_blobs() {
+    let mut doc = Document::with_sequential_ids();
+    doc.resources.push(Resource {
+        id: ResourceId::from_num(31),
+        name: "Base".into(),
+        body: ResourceBody::ImportBase(Arc::new(base_body(200))),
+    });
+    let good = Container::from_bytes(container_bytes(&doc), Limits::default()).unwrap();
+    let base_blob = good
+        .entries()
+        .iter()
+        .find(|e| e.role.is_some())
+        .unwrap()
+        .name
+        .clone();
+    let build = |keep_role: bool, other_role: bool| {
+        let mut w = Writer::new(Vec::new());
+        for e in good.entries() {
+            let mut raw = good.raw(&e.name).unwrap();
+            if e.name == base_blob && !keep_role {
+                raw.role = None;
+            }
+            w.copy_raw(raw).unwrap();
+        }
+        if other_role {
+            w.add_bytes("extra/y", Compression::Stored, b"1").unwrap();
+            w.set_role("extra/y", "something");
+        }
+        w.finish().unwrap()
+    };
+    // Marked: it opens. Not marked, in a file that marks other blobs: refused. Not marked at all
+    // (an older file, no roles anywhere): it opens, as before.
+    assert!(read_bytes(build(true, true), Limits::default(), ReadMode::Lazy).is_ok());
+    let e = read_bytes(build(false, true), Limits::default(), ReadMode::Lazy).unwrap_err();
+    assert!(e.to_string().contains("does not mark"), "{e}");
+    assert!(read_bytes(build(false, false), Limits::default(), ReadMode::Lazy).is_ok());
+}
+
+#[test]
+fn a_placeholder_keeps_the_hash_of_the_picture_and_the_real_picture_comes_back() {
+    let mut doc = sample_doc();
+    doc.resources.iter_mut().for_each(|_| ());
+    let original = open(container_bytes(&doc));
+    let source_a = original.source.clone().unwrap();
+    // The two pictures and the image are in file A. A copy of the document with placeholders.
+    let hashes: std::collections::HashSet<String> = {
+        let mut set = std::collections::HashSet::new();
+        for o in original.doc.objects.values() {
+            if let Shape::Underlay(u) = &o.shape {
+                set.insert(u.png.lazy().unwrap().hash().to_string());
+            }
+        }
+        for r in original.doc.resources.iter() {
+            if let ResourceBody::Image(i) = &r.body {
+                set.insert(i.data.lazy().unwrap().hash().to_string());
+            }
+        }
+        set
+    };
+    assert_eq!(hashes.len(), 3);
+    let mut with = original.doc.clone();
+    assert_eq!(with.replace_missing_pictures(&hashes), 3);
+    assert_eq!(with.placeholder_hashes().len(), 3);
+    assert!(with.placeholder_note().unwrap().contains("3 picture"));
+    // The placeholders are in the file of the person: the gray pixel is not written as the picture.
+    let saved = open(container_bytes(&with));
+    assert_eq!(saved.doc.placeholder_hashes().len(), 3);
+    let mut back = saved.doc;
+    let Shape::Underlay(u) = &back.objects[&ObjectId::from_num(11)].shape else {
+        panic!()
+    };
+    assert!(u.source.starts_with("missing:"), "{}", u.source);
+    assert_eq!((u.width, u.height), (1, 1));
+    // A source that has the pictures (file A, or its .bak) puts them back, with their facts.
+    let blobs: Arc<dyn kadakas_core::blob::BlobSource> = source_a;
+    assert_eq!(back.relink_placeholders(&blobs), 3);
+    assert!(back.placeholder_hashes().is_empty());
+    let Shape::Underlay(u) = &back.objects[&ObjectId::from_num(11)].shape else {
+        panic!()
+    };
+    assert_eq!(*u.png.bytes().unwrap(), png_bytes(1, 20_000));
+    assert_eq!(u.source, "");
+    let image = back.resources.image(ResourceId::from_num(30)).unwrap();
+    assert_eq!((image.width, image.height), (2, 2));
+    assert_eq!(image.source, "leaf.png");
+    // Nothing to put back from a source that lacks the pictures.
+    let mut again = saved_again(&with);
+    assert_eq!(again.relink_placeholders(&nothing_source()), 0);
+}
+
+fn saved_again(doc: &Document) -> Document {
+    open(container_bytes(doc)).doc
+}
+
+fn nothing_source() -> Arc<dyn kadakas_core::blob::BlobSource> {
+    open(container_bytes(&Document::with_sequential_ids()))
+        .source
+        .unwrap()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_state_key_of_the_loader_includes_the_bak() {
+    let dir = std::env::temp_dir().join(format!("kf-key-bak-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("a.kad");
+    let mut doc = sample_doc();
+    doc.history = Some(sample_history());
+    crate::native::save_path(&p, &doc, Form::Container, &WriteOptions::default()).unwrap();
+    let o = crate::native::open_path(&p, u64::MAX, ReadMode::Lazy).unwrap();
+    let loader = o.doc.lazy_history.clone().unwrap();
+    let before = loader.state_key();
+    std::fs::write(dir.join("a.kad.bak"), b"a backup appears").unwrap();
+    assert_ne!(loader.state_key(), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod disk {
     use super::*;
@@ -1664,6 +1831,7 @@ mod disk {
             keep: o.source.iter().cloned().collect(),
             anchor: false,
             skip_missing: false,
+            allow_overwrite: false,
         }
     }
 
@@ -1795,9 +1963,15 @@ mod disk {
         };
         let e = u.png.bytes().unwrap_err();
         assert!(e.to_string().contains("changed on disk"), "{e}");
-        // A save that needs the old pictures says which are missing, and leaves the other
-        // program's file alone.
+        // A save over the file that another program wrote is refused, and leaves that file alone.
         let e = save_path(&p, &o.doc, Form::Container, &opts(&o)).unwrap_err();
+        assert!(matches!(e, FileError::FileChanged(_)), "{e}");
+        assert_eq!(std::fs::read(&p).unwrap(), other);
+        // The person agrees to replace it. The pictures are not in any file: the save says which
+        // are missing, and still leaves the file alone.
+        let mut agreed = opts(&o);
+        agreed.allow_overwrite = true;
+        let e = save_path(&p, &o.doc, Form::Container, &agreed).unwrap_err();
         let FileError::Missing(m) = &e else {
             panic!("{e}")
         };
@@ -1895,13 +2069,23 @@ mod disk {
             ] {
                 let target = d.join(to);
                 let before = std::fs::read(&target).ok();
+                // Another program wrote the file at the path: a save over it asks the person
+                // first (the other targets are new files).
+                let mut options = opts(&o);
+                if to == "a.kad" && matches!(change, ReplaceWithTheSamePictures | ReplaceWithOther)
+                {
+                    let e = save_path(&target, &o.doc, form, &options).unwrap_err();
+                    assert!(matches!(e, FileError::FileChanged(_)), "{change:?}: {e}");
+                    assert_eq!(std::fs::read(&target).ok(), before);
+                    options.allow_overwrite = true;
+                }
                 let r = if form == Form::Json {
                     // The plain form needs the versions resolved, as the session does.
                     let mut doc = o.doc.clone();
                     resolve_history(&mut doc)
-                        .and_then(|()| save_path(&target, &doc, form, &opts(&o)).map(|_| ()))
+                        .and_then(|()| save_path(&target, &doc, form, &options).map(|_| ()))
                 } else {
-                    save_path(&target, &o.doc, form, &opts(&o)).map(|_| ())
+                    save_path(&target, &o.doc, form, &options).map(|_| ())
                 };
                 if finds {
                     r.unwrap_or_else(|e| panic!("{change:?} -> {to}: {e}"));

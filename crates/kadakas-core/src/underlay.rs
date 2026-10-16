@@ -16,6 +16,18 @@ use crate::blob::{BlobError, LazyBlob, MIN_BLOB_TEXT};
 /// Largest side of the embedded raster in pixels. Larger rasters are scaled down when they are made.
 pub const MAX_SIDE_PX: u32 = 4096;
 
+/// The start of the `source` of a picture that is a placeholder: `missing:<hash of the blob>:<the
+/// source it had>`. The original hash stays on the picture, so a program can find the real
+/// picture again, and a person is told. Nothing writes the gray pixel as if it were the picture.
+pub const MISSING_PREFIX: &str = "missing:";
+
+/// The hash and the old source in the `source` of a placeholder, if it is one.
+pub fn placeholder_of(source: &str) -> Option<(&str, &str)> {
+    let rest = source.strip_prefix(MISSING_PREFIX)?;
+    let (hash, old) = rest.split_once(':').unwrap_or((rest, ""));
+    crate::blob::is_hash(hash).then_some((hash, old))
+}
+
 /// A PNG of one pixel (gray, opaque): the picture that stands for a picture that could not be
 /// found, when the person chose to save without it.
 pub fn placeholder_png() -> Vec<u8> {

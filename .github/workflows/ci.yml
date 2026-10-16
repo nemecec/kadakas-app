@@ -35,6 +35,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
       - run: PERF_SIZES=10000 cargo test --release -p kadakas-core -p kadakas-container -p kadakas-site -p kadakas-api -p kadakas-io -- --ignored
+  # A short run of the fuzzer of the container reader (crates/kadakas-container/tests/fuzz_open.rs):
+  # changed containers must be errors, never panics. The seed is printed; KADAKAS_FUZZ_SEED repeats a run.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - run: KADAKAS_FUZZ_SECS=60 cargo test --release -p kadakas-container --test fuzz_open -- --nocapture
   wasm:
     runs-on: ubuntu-latest
     steps:

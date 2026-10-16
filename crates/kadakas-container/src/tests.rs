@@ -1613,3 +1613,188 @@ fn a_source_over_memory_follows_the_content_rules_without_a_file() {
     let e = damaged.read_part("blobs/aa").unwrap_err();
     assert_eq!(e.entry_name(), Some("blobs/aa"), "{e}");
 }
+
+// ---- round 2: ZIP64 details, a streamed entry that may pass 4 GiB, checks of copies from other files ----
+
+#[test]
+fn the_end_record_must_agree_with_the_zip64_end_record() {
+    let wrong = |edit: &dyn Fn(&mut Vec<u8>)| {
+        let mut s = sparse_zip64(true);
+        let parts = Arc::get_mut(&mut s.parts).unwrap();
+        let last = parts.len() - 1;
+        edit(&mut parts[last].1);
+        Container::open(Arc::new(s), Limits::default())
+            .unwrap_err()
+            .to_string()
+    };
+    // The end record is the last 22 bytes: the count at +10, the size of the directory at +12.
+    let e = wrong(&|t| {
+        let n = t.len();
+        t[n - 22 + 8..n - 22 + 10].copy_from_slice(&2u16.to_le_bytes());
+        t[n - 22 + 10..n - 22 + 12].copy_from_slice(&2u16.to_le_bytes());
+    });
+    assert!(e.contains("say different things"), "{e}");
+    let e = wrong(&|t| {
+        let n = t.len();
+        t[n - 22 + 12..n - 22 + 16].copy_from_slice(&5u32.to_le_bytes());
+    });
+    assert!(e.contains("say different things"), "{e}");
+    // A count that is the same in both places is fine.
+    assert!(Container::open(Arc::new(sparse_zip64(true)), Limits::default()).is_ok());
+}
+
+#[test]
+fn the_zip64_field_is_read_once_and_with_the_disk_number() {
+    use crate::reader::zip64_values;
+    let field = |data: &[u8]| {
+        let mut v = vec![1, 0];
+        v.extend((data.len() as u16).to_le_bytes());
+        v.extend(data);
+        v
+    };
+    let eight = 7u64.to_le_bytes();
+    // One field: fine.
+    let got = zip64_values(&field(&eight), [true, false, false, false], "x").unwrap();
+    assert_eq!(got[0], Some(7));
+    // Two ZIP64 fields: two readers could take different values.
+    let mut two = field(&eight);
+    two.extend(field(&eight));
+    let e = zip64_values(&two, [true, false, false, false], "x").unwrap_err();
+    assert!(e.to_string().contains("two ZIP64 fields"), "{e}");
+    // Another field before it is skipped.
+    let mut other = vec![0x34, 0x12, 2, 0, 9, 9];
+    other.extend(field(&eight));
+    assert_eq!(
+        zip64_values(&other, [true, false, false, false], "x").unwrap()[0],
+        Some(7)
+    );
+    // The number of the disk is 4 bytes, after the three 8 byte values.
+    let mut body = Vec::new();
+    body.extend(eight);
+    body.extend(3u32.to_le_bytes());
+    let got = zip64_values(&field(&body), [true, false, false, true], "x").unwrap();
+    assert_eq!((got[0], got[3]), (Some(7), Some(3)));
+    let e = zip64_values(&field(&eight), [true, false, false, true], "x").unwrap_err();
+    assert!(e.to_string().contains("too short"), "{e}");
+}
+
+#[test]
+fn a_streamed_entry_that_may_pass_4_gib_has_the_zip64_field_and_a_64_bit_descriptor() {
+    let mut w = Writer::new(Vec::new());
+    w.add_with_hint("big", Compression::Stored, true, |f| f.write_all(b"abc"))
+        .unwrap();
+    w.add_bytes("small", Compression::Stored, b"x").unwrap();
+    let bytes = w.finish().unwrap();
+    // Version 45, flag bit 3, an extra field of 20 bytes (id 1, 16 bytes of sizes).
+    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 45);
+    assert_eq!(u16::from_le_bytes([bytes[6], bytes[7]]) & 8, 8);
+    assert_eq!(u16::from_le_bytes([bytes[28], bytes[29]]), 20);
+    assert_eq!(&bytes[33..37], &[1, 0, 16, 0]);
+    let data = 30 + 3 + 20;
+    assert_eq!(&bytes[data..data + 3], b"abc");
+    // The descriptor: the signature, the CRC-32, and two 64 bit sizes.
+    let d = data + 3;
+    assert_eq!(&bytes[d..d + 4], &0x0807_4b50u32.to_le_bytes());
+    assert_eq!(&bytes[d + 8..d + 16], &3u64.to_le_bytes());
+    assert_eq!(&bytes[d + 16..d + 24], &3u64.to_le_bytes());
+    assert_eq!(
+        &bytes[d + 24..d + 28],
+        &0x0403_4b50u32.to_le_bytes(),
+        "the next entry"
+    );
+    let c = open(&bytes).unwrap();
+    assert_eq!(c.read("big").unwrap(), b"abc");
+    assert_eq!(c.read("small").unwrap(), b"x");
+    // The plain call has no field and a 32 bit descriptor.
+    let mut w = Writer::new(Vec::new());
+    w.add_with("a", Compression::Stored, |f| f.write_all(b"abc"))
+        .unwrap();
+    let plain = w.finish().unwrap();
+    assert_eq!(u16::from_le_bytes([plain[28], plain[29]]), 0);
+}
+
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+mod probes {
+    use super::*;
+
+    fn dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("kc-probe-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn a_deflated_entry_that_comes_from_another_file_is_checked_before_it_is_copied() {
+        let d = dir("verify");
+        let p = d.join("f.kad");
+        std::fs::write(&p, sample()).unwrap();
+        let s = ContainerSource::from_path(&p, Limits::default()).unwrap();
+        // The file is replaced; its .bak has the entries, but a byte of the deflated drawing is
+        // damaged (the directory and the manifest are right).
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(&p, write(&[("other", Compression::Stored, b"x")])).unwrap();
+        let mut bak = sample();
+        bak[30 + "document.json".len() + 2] ^= 0xFF;
+        std::fs::write(d.join("f.kad.bak"), &bak).unwrap();
+        let e = s.raw_part("document.json").unwrap_err();
+        assert_eq!(e.entry_name(), Some("document.json"), "{e}");
+        // A stored entry of the same .bak is checked while it is copied.
+        assert!(s.raw_part("blobs/aa").is_ok());
+        // From the file that was opened, nothing is decoded: the copy is as cheap as before.
+        let t = ContainerSource::from_path(&d.join("f.kad.bak"), Limits::default()).unwrap();
+        let raw = t.raw_part("document.json").unwrap();
+        assert_eq!(raw.name, "document.json");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_bak_next_to_the_real_file_is_found_through_a_link() {
+        let d = dir("link");
+        std::fs::create_dir_all(d.join("real")).unwrap();
+        std::fs::create_dir_all(d.join("link")).unwrap();
+        let real = d.join("real").join("f.kad");
+        let link = d.join("link").join("f.kad");
+        std::fs::write(&real, sample()).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let s = ContainerSource::from_path(&link, Limits::default()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        // A save through the link replaced the real file and kept the old one next to the real
+        // file, not next to the link.
+        std::fs::write(d.join("real").join("f.kad.bak"), sample()).unwrap();
+        std::fs::write(&real, write(&[("other", Compression::Stored, b"x")])).unwrap();
+        assert!(s.has_part("blobs/aa"));
+        assert_eq!(s.read_part("blobs/aa").unwrap(), b"picture bytes");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_same_size_same_time_replacement_is_found_by_the_check_of_the_file() {
+        let d = dir("same-stamp");
+        let p = d.join("f.kad");
+        let a = write(&[("blobs/aa", Compression::Stored, b"picture bytes")]);
+        let b = (0..200)
+            .map(|pad| {
+                let mut w = Writer::new(Vec::new()).generator(&"x".repeat(pad));
+                w.add_bytes("blobs/aa", Compression::Stored, b"PICTURE BYTES")
+                    .unwrap();
+                w.finish().unwrap()
+            })
+            .find(|b| b.len() == a.len())
+            .unwrap();
+        std::fs::write(&p, &a).unwrap();
+        let s = ContainerSource::from_path(&p, Limits::default()).unwrap();
+        assert!(s.same_file());
+        let mtime = std::fs::metadata(&p).unwrap().modified().unwrap();
+        std::fs::write(&p, &b).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        // The stamp is the same, the content is not: the check reads the manifest.
+        assert!(!s.same_file());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}

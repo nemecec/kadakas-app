@@ -90,6 +90,11 @@ pub const REASON_HISTORY_READONLY: &str = "history_read_only";
 /// has `missing` {file, pictures, history, other}. The caller asks the person, then saves again
 /// with `allow_missing: true`.
 pub const REASON_PARTS_MISSING: &str = "parts_missing";
+/// `file.save`: the file at the path was changed by another program since the document was opened
+/// from it (two instances, a sync conflict copy). Nothing was written. `details` has `file`,
+/// `consent_token`, `ask_the_person`. The caller asks the person, then saves again with
+/// `allow_overwrite` set to the token.
+pub const REASON_FILE_CHANGED: &str = "file_changed";
 /// `import.file`: the drawing has more entities than an import keeps for updates and the option
 /// `base` is `auto`. `details` has `{entities, cap}`. The caller may ask the person, then pass
 /// `base: "link"` or `base: "none"`.

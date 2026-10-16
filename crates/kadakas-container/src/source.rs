@@ -181,11 +181,13 @@ impl ContainerSource {
         self.place().path.is_some()
     }
 
-    /// The files that can hold a part: the file at the path (it may have been replaced) and the
-    /// `.bak` of the last save. Each is opened again only when its stamp changed since the last
-    /// look, so a save that looks for 65 000 parts opens a file once. `force` opens them again.
+    /// The files that can hold a part: the file at the path (it may have been replaced), or the
+    /// `.bak` of the last save (next to the path, and next to the real file if the path is a link).
+    /// Each is opened again only when its stamp changed since the last look, so a save that looks
+    /// for 65 000 parts opens a file once. `force` opens them again. The `.bak` is not opened
+    /// unless `baks` asks for it: a check of the file at the path must not read a second manifest.
     #[cfg(not(target_arch = "wasm32"))]
-    fn probe(&self, force: bool) -> Vec<Container> {
+    fn probe(&self, force: bool, baks: bool) -> Vec<Container> {
         let (path, limits) = {
             let p = self.place();
             let Some(path) = p.path.clone() else {
@@ -193,11 +195,26 @@ impl ContainerSource {
             };
             (path, p.limits)
         };
-        let mut bak = path.clone().into_os_string();
-        bak.push(".bak");
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        if baks {
+            let with_bak = |p: &std::path::Path| {
+                let mut b = p.to_path_buf().into_os_string();
+                b.push(".bak");
+                std::path::PathBuf::from(b)
+            };
+            files.push(with_bak(&path));
+            if let Ok(real) = std::fs::canonicalize(&path) {
+                let other = with_bak(&real);
+                if !files.contains(&other) {
+                    files.push(other);
+                }
+            }
+        } else {
+            files.push(path);
+        }
         let mut probes = self.probes.lock().unwrap_or_else(|e| e.into_inner());
         let mut out = Vec::new();
-        for file in [path, std::path::PathBuf::from(bak)] {
+        for file in files {
             let stamp = stamp_of(&file);
             let at = probes.iter().position(|p| p.path == file);
             let fresh = !force && at.is_some_and(|i| probes[i].stamp == stamp);
@@ -236,7 +253,7 @@ impl ContainerSource {
         };
         let label = path.display().to_string();
         let now = self
-            .probe(force)
+            .probe(force, false)
             .into_iter()
             .find(|c| c.medium().label() == label);
         let Some(now) = now else {
@@ -332,14 +349,15 @@ impl ContainerSource {
                 }
                 Err(changed) => changed,
             };
-            for c in self.probe(false) {
-                if has(&c) {
-                    match f(&c) {
-                        Ok(v) => return Ok(v),
-                        Err(e) => {
-                            if !matches!(error, ContainerError::Changed(_)) {
-                                error = e;
-                            }
+            // The file at the path first, and the .bak only if the path does not have the part.
+            for baks in [false, true] {
+                for c in self.probe(false, baks) {
+                    if has(&c) {
+                        match f(&c) {
+                            Ok(v) => return Ok(v),
+                            // A file that has the part, but the part is damaged: that is the
+                            // error to show (it names the entry).
+                            Err(e) => error = e,
                         }
                     }
                 }
@@ -368,12 +386,31 @@ impl ContainerSource {
             if self.reconcile_with(false).is_ok() && has(&self.container()) {
                 return true;
             }
-            self.probe(false).iter().any(has)
+            self.probe(false, false).iter().any(has) || self.probe(false, true).iter().any(has)
         }
         #[cfg(target_arch = "wasm32")]
         {
             has(&c)
         }
+    }
+
+    /// The size of the part with this name and SHA-256 in any file that has it (the opened one,
+    /// the file at the path, the `.bak`). Only the directories are looked at.
+    pub fn size_by_content(&self, name: &str, sha: &[u8; 32]) -> Option<u64> {
+        let size = |c: &Container| c.entry(name).filter(|e| &e.sha256 == sha).map(|e| e.size);
+        if let Some(n) = size(&self.container()) {
+            return Some(n);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.place().path.as_ref()?;
+            for baks in [false, true] {
+                if let Some(n) = self.probe(false, baks).iter().find_map(size) {
+                    return Some(n);
+                }
+            }
+        }
+        None
     }
 
     /// A container that has the entry with this name and SHA-256 (for reading the entry as a
@@ -402,8 +439,29 @@ impl ContainerSource {
     }
 
     /// The part with this name and SHA-256 as it is stored, from any file that has it.
+    ///
+    /// A deflated entry is decoded and checked first when it comes from another file than the one
+    /// that was opened (the file at the path after a change, or the `.bak`): a stored entry is
+    /// checked while it is copied, but the compressed bytes of a deflated one are copied as they
+    /// are, and nothing else would look at them.
     pub fn raw_by_content(&self, name: &str, sha: &[u8; 32]) -> Result<RawEntry, ContainerError> {
-        self.with_entry(name, sha, |c| c.raw(name))
+        let own = self.container();
+        self.with_entry(name, sha, |c| {
+            if !std::sync::Arc::ptr_eq(c.medium(), own.medium())
+                && c.entry(name)
+                    .is_some_and(|e| e.method == crate::Method::Deflate)
+            {
+                c.verify_entry(name)?;
+            }
+            c.raw(name)
+        })
+    }
+
+    /// True if the file at the path has the content that was opened, found by reading its
+    /// manifest again (once: a save asks this once for each source, and then looks at the
+    /// directory only). If it is not, each part is looked for by [`ContainerSource::has_by_content`].
+    pub fn same_file(&self) -> bool {
+        self.reconcile().is_ok()
     }
 }
 

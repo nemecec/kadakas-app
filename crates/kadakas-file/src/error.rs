@@ -27,6 +27,12 @@ pub enum FileError {
     /// The file has more bytes than the limit of the caller.
     #[error("the file is {len} bytes; the limit is {max} bytes")]
     TooLarge { len: u64, max: u64 },
+    /// The file at the path was changed by another program since it was opened, and this save
+    /// would replace it. Nothing was written. The person decides (`WriteOptions::allow_overwrite`).
+    #[error(
+        "The file {0} was changed by another program since you opened it. Nothing was saved, so that nothing of the other program is lost"
+    )]
+    FileChanged(String),
     /// A part of the document is too big for the form (the format limits of the container).
     #[error("{0}")]
     Limit(String),

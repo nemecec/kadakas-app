@@ -752,6 +752,7 @@ fn save_as(
         keep: from.cloned().into_iter().collect(),
         anchor: false,
         skip_missing: false,
+        allow_overwrite: false,
     };
     let notes = kadakas_api::files::write_document(path, doc, &spec).map_err(|e| match e {
         kadakas_file::FileError::Io(m) => m,

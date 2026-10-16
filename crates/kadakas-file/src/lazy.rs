@@ -120,15 +120,29 @@ impl HistoryLoader for FileHistory {
     fn state_key(&self) -> String {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Some(path) = self.source.path()
-                && let Ok(m) = std::fs::metadata(&path)
-            {
-                let t = m
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map_or(0, |d| d.as_nanos());
-                return format!("{}:{}:{t}", path.display(), m.len());
+            // The state of the file and of its .bak: the versions can be found in either.
+            let stamp = |p: &std::path::Path| {
+                std::fs::metadata(p).map_or_else(
+                    |_| "none".to_string(),
+                    |m| {
+                        let t = m
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map_or(0, |d| d.as_nanos());
+                        format!("{}:{t}", m.len())
+                    },
+                )
+            };
+            if let Some(path) = self.source.path() {
+                let mut bak = path.clone().into_os_string();
+                bak.push(".bak");
+                return format!(
+                    "{}:{}:{}",
+                    path.display(),
+                    stamp(&path),
+                    stamp(std::path::Path::new(&bak))
+                );
             }
         }
         String::new()
