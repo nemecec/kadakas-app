@@ -38,6 +38,17 @@ const FLOORS_FIELDS: [&str; 9] = [
     "floor_count",
 ];
 
+/// The key in the data of a massing model that holds the ID of the shape it was made from. The
+/// model does not follow the shape by itself: `source_footprint` gives the footprint to follow.
+pub const SOURCE_KEY: &str = "massing_source";
+
+/// The footprint that a massing model would have now, if it followed its source shape. `None` if
+/// the model has no link, the shape is gone or it can no longer be a footprint.
+pub fn source_footprint(doc: &Document, model: &Object) -> Option<Vec<Vertex>> {
+    let id: ObjectId = serde_json::from_value(model.data.get(SOURCE_KEY)?.clone()).ok()?;
+    footprint_of(doc.object(id)?).ok()
+}
+
 /// Default fill of a massing model in plans.
 pub const PLAN_FILL: Color = Color([226, 221, 212, 255]);
 
@@ -274,11 +285,19 @@ pub fn from_shapes(doc: &Document, ids: &[ObjectId], opts: &FromShapesOptions) -
             },
         });
         let new_id = ObjectId(next.take());
-        // The data of the shape (the properties of the feature) goes along.
-        if !o.data.is_empty() {
+        // The data of the shape (the properties of the feature) goes along. The import tag does
+        // not: it says where the shape came from, and the shape stays the object of the drawing
+        // (a copy is new work). A later update from a new revision of the drawing then finds the
+        // shape alone, with no edited copy next to it. The model keeps a link to the shape.
+        let mut data = o.data.clone();
+        crate::provenance::strip_copy(&mut data);
+        if !opts.delete_source {
+            data.insert(SOURCE_KEY.to_string(), serde_json::json!(id));
+        }
+        if !data.is_empty() {
             commands.push(Command::SetData {
                 id: new_id,
-                set: o.data.clone(),
+                set: data,
                 remove: Vec::new(),
             });
         }
@@ -433,6 +452,23 @@ mod tests {
             panic!()
         };
         assert_eq!(m.height, 700.0);
+        // The model has the properties of the shape but not its import tag, and a link to it.
+        let model = ed.doc().object(made.created[0].1).unwrap();
+        assert!(!model.data.contains_key(crate::provenance::KEY));
+        assert_eq!(model.data.get(SOURCE_KEY), Some(&json!(a)));
+        assert_eq!(model.data.get("h_m"), Some(&json!("7")));
+        let footprint = source_footprint(ed.doc(), model).unwrap();
+        assert_eq!(
+            Some(footprint),
+            footprint_of(ed.doc().object(a).unwrap()).ok()
+        );
+        // A model without a link, or with a link to a shape that is gone, follows nothing.
+        let source = ed.doc().object(a).unwrap().clone();
+        assert!(source_footprint(ed.doc(), &source).is_none());
+        ed.execute(&Command::DeleteObjects { ids: vec![a] })
+            .unwrap();
+        let model = ed.doc().object(made.created[0].1).unwrap();
+        assert!(source_footprint(ed.doc(), model).is_none());
         assert!(
             FromShapesOptions {
                 default_height: 0.0,

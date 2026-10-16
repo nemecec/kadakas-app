@@ -482,6 +482,7 @@ pub const METHODS: &[(&str, &str)] = &[
     massing_api::MASSING_SET,
     massing_api::MASSING_GET,
     massing_api::MASSING_FROM_SHAPES,
+    massing_api::MASSING_FOLLOW_SOURCES,
     massing_api::MASSING_REPORT,
     // Extrude, sweep and 3D polygon (see solid_api.rs).
     solid_api::EXTRUDE_ADD,

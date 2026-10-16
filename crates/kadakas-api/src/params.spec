@@ -582,6 +582,10 @@ massing.from_shapes
   delete_source bool = true
   dry_run bool
 
+massing.follow_sources
+  ids object[] # default: all models with a link to their shape
+
+
 massing.report
   ids id[]
   format str
@@ -1657,7 +1661,6 @@ site.update
   remove_points int[] # indexes in the source points
   remove_lines int[] # indexes in the source lines
   replace obj[] # [{point: index | line: index, with: id}]: the locus3d or polyline3d takes the place of that source
-
 
 site.texture
   id! object

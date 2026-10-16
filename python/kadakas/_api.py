@@ -724,6 +724,10 @@ if TYPE_CHECKING:
         'roof': Literal['flat', 'gable', 'hip'],
     }, total=False)
 
+    MassingFollowSourcesParams = TypedDict("MassingFollowSourcesParams", {
+        'ids': list[str],
+    }, total=False)
+
     MassingReportParams = TypedDict("MassingReportParams", {
         'format': str,
         'ids': list[str],
@@ -1203,7 +1207,9 @@ if TYPE_CHECKING:
         'angle': float,
         'arc': float,
         'boundary': list[Any],
+        'class': str,
         'inset': float,
+        'layer': str,
         'model': Required[str],
         'object': str,
         'pattern': Literal['square', 'triangular'],
@@ -1213,7 +1219,9 @@ if TYPE_CHECKING:
 
     IrrigationLayoutEdgeParams = TypedDict("IrrigationLayoutEdgeParams", {
         'arc': float,
+        'class': str,
         'closed': bool,
+        'layer': str,
         'model': Required[str],
         'object': str,
         'path': list[Any],
@@ -1225,9 +1233,11 @@ if TYPE_CHECKING:
     IrrigationLayoutDripParams = TypedDict("IrrigationLayoutDripParams", {
         'angle': float,
         'boundary': list[Any],
+        'class': str,
         'emitter_flow': float,
         'emitter_spacing': float,
         'inset': float,
+        'layer': str,
         'material': str,
         'object': str,
         'place': bool,
@@ -2090,6 +2100,7 @@ if TYPE_CHECKING:
         'id': Required[str],
         'remove_lines': list[int],
         'remove_points': list[int],
+        'replace': list[dict[str, Any]],
         'settings': dict[str, Any],
     }, total=False)
 
@@ -3792,10 +3803,16 @@ class Api:
         return self._call("massing.get", params or None)
 
     def massing_from_shapes(self, **params: "Unpack[MassingFromShapesParams]") -> Any:
-        """Create massing from shapes: convert closed polygons (closed polylines, rectangles, circles, landscape areas, hardscapes, for example imported WFS building footprints) into massing models in one undo step. The height comes from a data field of the shape (the properties of an imported feature are kept in its data). params: {ids? (default: the selection), height_field? (default: height, building_height, building:height, ...), floors_field? (default: floors, levels, building:levels, ...), height_scale? (mm per unit of the height field, default 1000: the field is in meters), name_field?, default_height? (mm, default 3000, used when the shape has no height and no floors), floor_height?, roof?, pitch?, require_height? (leave out shapes without a height), delete_source? (default true), dry_run?}. A shape in a group gives a massing model in the same group. The data of the shape moves to the massing model. Returns {created: [{source, id, how}], skipped: [{id, reason}]}.
+        """Create massing from shapes: convert closed polygons (closed polylines, rectangles, circles, landscape areas, hardscapes, for example imported WFS building footprints) into massing models in one undo step. The height comes from a data field of the shape (the properties of an imported feature are kept in its data). params: {ids? (default: the selection), height_field? (default: height, building_height, building:height, ...), floors_field? (default: floors, levels, building:levels, ...), height_scale? (mm per unit of the height field, default 1000: the field is in meters), name_field?, default_height? (mm, default 3000, used when the shape has no height and no floors), floor_height?, roof?, pitch?, require_height? (leave out shapes without a height), delete_source? (default true; false keeps the shapes unchanged and links each model to its shape, see massing.follow_sources), dry_run?}. A shape in a group gives a massing model in the same group. The data of the shape moves to the massing model. Returns {created: [{source, id, how}], skipped: [{id, reason}]}.
 
         JSON-RPC method ``massing.from_shapes``."""
         return self._call("massing.from_shapes", params or None)
+
+    def massing_follow_sources(self, **params: "Unpack[MassingFollowSourcesParams]") -> Any:
+        """Give massing models the footprint that their source shape has now. A model made by massing.from_shapes with delete_source false keeps a link to its shape (data.massing_source) but does not follow it by itself, for example after an update from a new revision of the drawing moved a corner of the shape. params: {ids?} (default all models with a link). Returns {changed: [ids], unchanged: [ids], source_missing: [ids] (the shape is gone or is not a footprint any more)}. One undo step.
+
+        JSON-RPC method ``massing.follow_sources``."""
+        return self._call("massing.follow_sources", params or None)
 
     def massing_report(self, **params: "Unpack[MassingReportParams]") -> Any:
         """Quantities of massing models. params: {ids?, format?: csv}. Returns {rows: [{id, name, layer, floors, roof, footprint_m2, gross_floor_area_m2, eave_height_m, ridge_height_m, volume_m3, volume_to_eave_m3, roof_area_m2, wall_area_m2, base_elevation_m}], totals: {count, footprint_m2, gross_floor_area_m2, volume_m3}}. The gross floor area is the footprint times the number of floors; the volume is the volume of the closed solid with its roof.
@@ -4092,19 +4109,19 @@ class Api:
         return self._call("irrigation.calculate", params or None)
 
     def irrigation_layout_fill(self, **params: "Unpack[IrrigationLayoutFillParams]") -> Any:
-        """Fill an area with heads. params: {boundary: [[x, y], ...] | object (ID of a rect, closed polyline, landscape area or hardscape), model, spacing? (head-to-head, mm; default the radius of the model), pattern? (square | triangular), angle? (degrees), inset? (mm from the edge), arc? (default 360), place? (default true: add the outlets in one undo step)}. Returns {count, points, ids}.
+        """Fill an area with heads. params: {boundary: [[x, y], ...] | object (ID of a rect, closed polyline, landscape area or hardscape), model, spacing? (head-to-head, mm; default the radius of the model), pattern? (square | triangular), angle? (degrees), inset? (mm from the edge), arc? (default 360), place? (default true: add the outlets in one undo step), layer?, class?}. Returns {count, points, ids}.
 
         JSON-RPC method ``irrigation.layout.fill``."""
         return self._call("irrigation.layout.fill", params or None)
 
     def irrigation_layout_edge(self, **params: "Unpack[IrrigationLayoutEdgeParams]") -> Any:
-        """Place heads along an edge. params: {path: [[x, y], ...] | object (ID of a polyline or area), closed? (the path is a ring), model, spacing? (default the radius of the model; the heads are spread evenly at most this far apart), arc? (default 180), side? (left | right of the direction of the path: the way the heads face, default left), place?}. Returns {count, points, ids}.
+        """Place heads along an edge. params: {path: [[x, y], ...] | object (ID of a polyline or area), closed? (the path is a ring), model, spacing? (default the radius of the model; the heads are spread evenly at most this far apart), arc? (default 180), side? (left | right of the direction of the path: the way the heads face, default left), place?, layer?, class?}. Returns {count, points, ids}.
 
         JSON-RPC method ``irrigation.layout.edge``."""
         return self._call("irrigation.layout.edge", params or None)
 
     def irrigation_layout_drip(self, **params: "Unpack[IrrigationLayoutDripParams]") -> Any:
-        """Draw parallel drip lines in an area. params: {boundary | object, spacing (mm between lines), angle? (degrees), inset? (mm), size? (default "16"), material? (default "PE"), emitter_spacing?, emitter_flow?, place?}. Each line runs from the lower to the higher turned coordinate. Returns {count, lines: [[a, b]], ids, total_length_m}.
+        """Draw parallel drip lines in an area. params: {boundary | object, spacing (mm between lines), angle? (degrees), inset? (mm), size? (default "16"), material? (default "PE"), emitter_spacing?, emitter_flow?, place?, layer?, class?}. Each line runs from the lower to the higher turned coordinate. Returns {count, lines: [[a, b]], ids, total_length_m}.
 
         JSON-RPC method ``irrigation.layout.drip``."""
         return self._call("irrigation.layout.drip", params or None)
@@ -4686,13 +4703,13 @@ class Api:
         return self._call("library.favorite_remove", params or None)
 
     def site_create(self, **params: "Unpack[SiteCreateParams]") -> Any:
-        """Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], layer? (design layer of the site model; default: the layer of the first source), settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh), and the 3D look surface_look (color | texture | elevation), texture (material resource id), texture_tile (mm), texture_offset ([x, y]), texture_rotation (degrees), elevation_bands, elevation_ramp ([[r, g, b, a]]), elevation_range ([low, high]), elevation_bands_at_contours; site.texture sets them with checks. Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}.
+        """Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], layer? (design layer of the site model; default: the layer of the first source), settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh), and the 3D look surface_look (color | texture | elevation), texture (material resource id), texture_tile (mm), texture_offset ([x, y]), texture_rotation (degrees), elevation_bands, elevation_ramp ([[r, g, b, a]]), elevation_range ([low, high]), elevation_bands_at_contours; site.texture sets them with checks. Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. The sources keep the import tags of the objects they came from (data.import_sources of the site model, one entry for each point and line), so import.update and import.apply replace, add and remove them inside the model. Plants, trees, hardscapes, landscape areas, massing models and walls stand on the site model that covers their place, on any design layer (a layer or an object can name one with the command set_layer_site or data.site_model). Returns {id}.
 
         JSON-RPC method ``site.create``."""
         return self._call("site.create", params or None)
 
     def site_update(self, **params: "Unpack[SiteUpdateParams]") -> Any:
-        """Change a site model. params: {id, settings?, add_source_ids?, remove_points?: [index], remove_lines?: [index]}. settings has the same fields as in site.create, including the 3D look: surface_look (color | texture | elevation), texture (material resource id or null), texture_tile (mm), texture_offset ([x, y] mm), texture_rotation (degrees), elevation_bands (1 to 64), elevation_ramp ([[r, g, b, a]], 1 to 16 colors), elevation_range ([low, high] mm or null), elevation_bands_at_contours (bool); null puts a field back to its default. site.texture sets the look with its own checks. Returns {id, points, lines}.
+        """Change a site model. params: {id, settings?, add_source_ids? (3D loci and 3D polylines that move into the model), remove_points?: [index], remove_lines?: [index], replace? ([{point: index | line: index, with: id}]: the locus3d or polyline3d takes the place of that source, with its own import tag, instead of standing next to it)}. settings has the same fields as in site.create, including the 3D look: surface_look (color | texture | elevation), texture (material resource id or null), texture_tile (mm), texture_offset ([x, y] mm), texture_rotation (degrees), elevation_bands (1 to 64), elevation_ramp ([[r, g, b, a]], 1 to 16 colors), elevation_range ([low, high] mm or null), elevation_bands_at_contours (bool); null puts a field back to its default. site.texture sets the look with its own checks. Returns {id, points, lines}.
 
         JSON-RPC method ``site.update``."""
         return self._call("site.update", params or None)
@@ -5609,6 +5626,7 @@ METHOD_NAMES: tuple[str, ...] = (
     "massing.set",
     "massing.get",
     "massing.from_shapes",
+    "massing.follow_sources",
     "massing.report",
     "extrude.add",
     "extrude.set",

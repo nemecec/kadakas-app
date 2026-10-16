@@ -9,7 +9,7 @@ use kadakas_core::command::Command;
 use kadakas_core::csv::write_rows as write_csv;
 use kadakas_core::curve::Vertex;
 use kadakas_core::massing::{Massing, RoofStyle};
-use kadakas_core::massing_batch::{self, FromShapesOptions};
+use kadakas_core::massing_batch::{self, FromShapesOptions, SOURCE_KEY, source_footprint};
 use kadakas_core::model::{Attributes, ClassId, LayerId, ObjectId, Shape};
 use kadakas_site::SiteTerrain;
 
@@ -30,7 +30,11 @@ pub const MASSING_GET: (&str, &str) = (
 );
 pub const MASSING_FROM_SHAPES: (&str, &str) = (
     "massing.from_shapes",
-    "Create massing from shapes: convert closed polygons (closed polylines, rectangles, circles, landscape areas, hardscapes, for example imported WFS building footprints) into massing models in one undo step. The height comes from a data field of the shape (the properties of an imported feature are kept in its data). params: {ids? (default: the selection), height_field? (default: height, building_height, building:height, ...), floors_field? (default: floors, levels, building:levels, ...), height_scale? (mm per unit of the height field, default 1000: the field is in meters), name_field?, default_height? (mm, default 3000, used when the shape has no height and no floors), floor_height?, roof?, pitch?, require_height? (leave out shapes without a height), delete_source? (default true), dry_run?}. A shape in a group gives a massing model in the same group. The data of the shape moves to the massing model. Returns {created: [{source, id, how}], skipped: [{id, reason}]}.",
+    "Create massing from shapes: convert closed polygons (closed polylines, rectangles, circles, landscape areas, hardscapes, for example imported WFS building footprints) into massing models in one undo step. The height comes from a data field of the shape (the properties of an imported feature are kept in its data). params: {ids? (default: the selection), height_field? (default: height, building_height, building:height, ...), floors_field? (default: floors, levels, building:levels, ...), height_scale? (mm per unit of the height field, default 1000: the field is in meters), name_field?, default_height? (mm, default 3000, used when the shape has no height and no floors), floor_height?, roof?, pitch?, require_height? (leave out shapes without a height), delete_source? (default true; false keeps the shapes unchanged and links each model to its shape, see massing.follow_sources), dry_run?}. A shape in a group gives a massing model in the same group. The data of the shape moves to the massing model. Returns {created: [{source, id, how}], skipped: [{id, reason}]}.",
+);
+pub const MASSING_FOLLOW_SOURCES: (&str, &str) = (
+    "massing.follow_sources",
+    "Give massing models the footprint that their source shape has now. A model made by massing.from_shapes with delete_source false keeps a link to its shape (data.massing_source) but does not follow it by itself, for example after an update from a new revision of the drawing moved a corner of the shape. params: {ids?} (default all models with a link). Returns {changed: [ids], unchanged: [ids], source_missing: [ids] (the shape is gone or is not a footprint any more)}. One undo step.",
 );
 pub const MASSING_REPORT: (&str, &str) = (
     "massing.report",
@@ -64,6 +68,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
         "massing.set" => set(s, m),
         "massing.get" => get(s, m),
         "massing.from_shapes" => from_shapes(s, m),
+        "massing.follow_sources" => follow_sources(s, m),
         "massing.report" => report(s, m),
         other => Err(RpcError::method_not_found(other)),
     })
@@ -299,11 +304,65 @@ fn from_shapes(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         // The new models become the selection.
         s.selection = made.created.iter().map(|c| c.1).collect();
     }
+    let linked = !opts.delete_source;
     Ok(json!({
-        "created": made.created.iter().map(|c| json!({"source": c.0, "id": c.1, "how": c.2})).collect::<Vec<_>>(),
+        "created": made.created.iter().map(|c| json!({"source": c.0, "id": c.1, "how": c.2, "follows_source": false})).collect::<Vec<_>>(),
         "skipped": made.skipped.iter().map(|c| json!({"id": c.0, "reason": c.1})).collect::<Vec<_>>(),
         "dry_run": dry_run,
+        "note": if linked {
+            "The shapes stay as they are and each model keeps a link to its shape (data.massing_source). A model does not follow its shape by itself: after the shape changes (an update from a new revision of the drawing), call massing.follow_sources."
+        } else {
+            "The shapes were replaced by the models."
+        },
     }))
+}
+
+/// `massing.follow_sources`: the footprints of models that were made from shapes (and kept them)
+/// become the footprints of those shapes now.
+fn follow_sources(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    let want: Option<Vec<ObjectId>> = match m.get("ids") {
+        Some(v) => Some(serde_json::from_value(v.clone()).map_err(bad)?),
+        None => None,
+    };
+    let doc = s.editor.doc();
+    let (mut commands, mut changed, mut same, mut lost) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for o in doc.objects.values() {
+        let Shape::Massing(model) = &o.shape else {
+            continue;
+        };
+        if want.as_ref().is_some_and(|w| !w.contains(&o.id)) || !o.data.contains_key(SOURCE_KEY) {
+            continue;
+        }
+        match source_footprint(doc, o) {
+            None => lost.push(o.id),
+            Some(f) if f == model.footprint => same.push(o.id),
+            Some(f) => {
+                let mut new = model.as_ref().clone();
+                new.footprint = f;
+                if let Some(why) = new.problem() {
+                    return Err(bad(format!(
+                        "the shape of model {} is not a footprint: {why}",
+                        o.id
+                    )));
+                }
+                commands.push(Command::ModifyObject {
+                    id: o.id,
+                    shape: Some(Shape::Massing(Box::new(new))),
+                    layer: None,
+                    class: None,
+                    attrs: None,
+                });
+                changed.push(o.id);
+            }
+        }
+    }
+    if !commands.is_empty() {
+        s.editor
+            .execute(&Command::Batch { commands })
+            .map_err(RpcError::from)?;
+    }
+    Ok(json!({"changed": changed, "unchanged": same, "source_missing": lost}))
 }
 
 fn report(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
