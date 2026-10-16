@@ -67,6 +67,11 @@ pub struct SessionLimits {
     /// Most bytes of changes and pictures that a file's history may hold for the session to read
     /// it (see `history_read_versions`).
     pub history_read_bytes: u64,
+    /// The most bytes of pictures that only an undo step holds that the session reads into memory
+    /// when the file they come from is found changed (so that a second save by another program
+    /// cannot take the last copy away). Pictures over it stay in the file; the note of the save
+    /// says how many could not be kept.
+    pub rescue_bytes: u64,
     /// Time budget of one call. A call that takes longer fails with a limit error; if it changed
     /// the document, the change is undone. The check runs after the call, so it does not stop a
     /// long calculation: it keeps its result from the document. `None`: no budget. Native only.
@@ -123,6 +128,7 @@ impl Default for SessionLimits {
             max_version_bytes: crate::VERSION_BYTES_MAX,
             history_read_versions: kadakas_review::history::HARD_MAX_VERSIONS,
             history_read_bytes: kadakas_review::history::HARD_MAX_BYTES as u64,
+            rescue_bytes: 256 * 1024 * 1024,
             request_time: None,
             render_side: 2048,
             render_pixels: 4_000_000,

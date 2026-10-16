@@ -108,6 +108,25 @@ pub fn rebind_sources(report: &Written, path: &Path) -> Vec<String> {
     notes
 }
 
+/// A writer that hashes the bytes that pass through it.
+struct HashWriter<'a> {
+    inner: &'a mut dyn std::io::Write,
+    hash: sha2::Sha256,
+}
+
+impl std::io::Write for HashWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        use sha2::Digest as _;
+        let n = self.inner.write(buf)?;
+        self.hash.update(&buf[..n]);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// Saves the document to `path` in the given form, atomically. `opts.keep` names the files the
 /// document was opened from (unchanged entries are copied from them).
 pub fn save_path(
@@ -133,9 +152,20 @@ pub fn save_path(
     }
     let mut written: Option<Written> = None;
     let mut failure: Option<FileError> = None;
+    // The hash of the bytes of the plain form as they go out (for the stamp of the file).
+    let mut json_sha: Option<[u8; 32]> = None;
     let result = fsio::write_atomic_with(path, |w| {
         let r = match form {
-            Form::Json => write_json(w, doc),
+            Form::Json => {
+                let mut hw = HashWriter {
+                    inner: w,
+                    hash: <sha2::Sha256 as sha2::Digest>::new(),
+                };
+                write_json(&mut hw, doc).map(|()| {
+                    use sha2::Digest as _;
+                    json_sha = Some(hw.hash.finalize().into());
+                })
+            }
             Form::Container => write_container(w, doc, opts).map(|(_, rep)| written = Some(rep)),
         };
         r.map_err(|e| {
@@ -147,6 +177,16 @@ pub fn save_path(
     if let Err(e) = result {
         return Err(failure
             .unwrap_or_else(|| FileError::Io(format!("cannot write {}: {e}", path.display()))));
+    }
+    // What the file holds, from the bytes that were written: the session does not read it again.
+    match (form, &written, json_sha) {
+        (Form::Container, Some(rep), _) => {
+            crate::seen::record_written(path, crate::seen::stamp_of_manifest(&rep.manifest_sha256))
+        }
+        (Form::Json, _, Some(sha)) => {
+            crate::seen::record_written(path, crate::seen::stamp_of_content(sha))
+        }
+        _ => {}
     }
     let mut notes = match (&written, form) {
         (Some(rep), Form::Container) => rebind_sources(rep, path),

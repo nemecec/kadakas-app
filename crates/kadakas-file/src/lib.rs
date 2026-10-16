@@ -40,10 +40,11 @@ pub use layout::{
 pub use lazy::FileHistory;
 pub use read::{Opened, ReadMode, read_bytes, read_source};
 #[cfg(not(target_arch = "wasm32"))]
-pub use seen::{SeenFiles, Stamp, stamp_of};
+pub use seen::{SeenFiles, Stamp, record_written, stamp_of, stamp_of_content, stamp_of_manifest};
 pub use source::FileSource;
 pub use write::{
-    DOCUMENT_LEVEL, WriteOptions, Written, resolve_history, write_container, write_json,
+    DOCUMENT_LEVEL, WriteOptions, Written, drawing_hashes, resolve_history, write_container,
+    write_json,
 };
 
 /// The text for the `generator` field of the manifest.

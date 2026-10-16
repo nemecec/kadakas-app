@@ -482,6 +482,12 @@ fn notes(s: &Session) -> &[String] {
 /// call that works out that state asks first (a conflict that says the file changed).
 pub(crate) fn pictures_readable(s: &Session) -> Result<(), RpcError> {
     s.editor.doc().check_blobs().map_err(|e| {
+        // The file changed: the pictures that only an undo step holds are read into memory now,
+        // while some file still has them (the first look at the change).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(src) = &s.file_source {
+            src.rescue_if_changed(|| kadakas_file::drawing_hashes(s.editor.doc()));
+        }
         let pictures = s.editor.doc().unreadable_pictures();
         if pictures.is_empty() {
             return RpcError::conflict(format!("{e}"));

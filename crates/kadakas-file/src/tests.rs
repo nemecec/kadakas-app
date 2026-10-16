@@ -1700,7 +1700,7 @@ fn entries_of_a_newer_program_are_kept_with_a_note_also_under_history() {
 }
 
 #[test]
-fn an_import_base_must_be_marked_also_when_the_file_marks_no_blob() {
+fn an_unmarked_import_base_is_left_out_with_a_note_and_the_drawing_opens() {
     let mut doc = Document::with_sequential_ids();
     doc.resources.push(Resource {
         id: ResourceId::from_num(31),
@@ -1730,13 +1730,30 @@ fn an_import_base_must_be_marked_also_when_the_file_marks_no_blob() {
         }
         w.finish().unwrap()
     };
-    // Marked: it opens. Not marked is refused, also in a file that marks no blob at all (the open
-    // estimate counts only the marked blobs, so nothing else may be read as an import base).
-    assert!(read_bytes(build(true, true), Limits::default(), ReadMode::Lazy).is_ok());
-    let e = read_bytes(build(false, true), Limits::default(), ReadMode::Lazy).unwrap_err();
-    assert!(e.to_string().contains("does not mark"), "{e}");
-    let e = read_bytes(build(false, false), Limits::default(), ReadMode::Lazy).unwrap_err();
-    assert!(e.to_string().contains("does not mark"), "{e}");
+    // Marked: it opens whole. Not marked, also in a file that marks no blob at all (the open
+    // estimate counts only the marked blobs, so nothing else may be read as an import base): the
+    // drawing opens, the base is left out, and a note names the drawing that loses its data.
+    let whole = read_bytes(build(true, true), Limits::default(), ReadMode::Lazy).unwrap();
+    assert!(whole.doc.load_notes().is_empty());
+    assert!(kadakas_core::provenance::base_recs(&whole.doc, "d", "r").is_some());
+    for (keep_role, other_role) in [(false, true), (false, false)] {
+        let opened = read_bytes(
+            build(keep_role, other_role),
+            Limits::default(),
+            ReadMode::Lazy,
+        )
+        .unwrap();
+        let notes = opened.doc.load_notes().join(" ");
+        assert!(
+            notes.contains("\"d\"") && notes.contains("left out") && notes.contains("old file"),
+            "{notes}"
+        );
+        assert!(kadakas_core::provenance::base_recs(&opened.doc, "d", "r").is_none());
+        // The rest of the drawing is there, and it saves and opens again.
+        assert_eq!(opened.doc.objects.len(), whole.doc.objects.len());
+        let again = open(container_bytes(&opened.doc));
+        assert_eq!(again.doc.objects.len(), whole.doc.objects.len());
+    }
 }
 
 #[test]
@@ -2333,7 +2350,50 @@ mod disk {
     }
 
     #[test]
-    fn the_pictures_in_use_are_read_into_memory_when_the_file_is_first_found_changed() {
+    fn a_save_records_the_stamp_of_the_bytes_it_wrote_and_a_file_is_hashed_only_when_it_differs() {
+        let d = dir("seen-written");
+        let doc = sample_doc();
+        for name in ["w.kad", "w.json"] {
+            let p = d.join(name);
+            let form = Form::from_extension(&p);
+            save_path(&p, &doc, form, &WriteOptions::default()).unwrap();
+            let want = stamp_of(&p).unwrap();
+            let seen = SeenFiles::default();
+            seen.note(&p);
+            assert!(seen.knows(&p) && !seen.changed(&p));
+            // The recorded stamp is the one of the bytes that were written: a note takes it
+            // without reading the file. Same size and time, other bytes: the note has the stamp
+            // of the write (so it did not read), and the check does not hash the file either,
+            // because neither the size nor the time differs.
+            let bytes = std::fs::read(&p).unwrap();
+            let mtime = std::fs::metadata(&p).unwrap().modified().unwrap();
+            let mut other = bytes.clone();
+            let last = other.len() - 1;
+            other[last] ^= 0xFF;
+            std::fs::write(&p, &other).unwrap();
+            let f = std::fs::File::options().write(true).open(&p).unwrap();
+            f.set_modified(mtime).unwrap();
+            drop(f);
+            assert_ne!(stamp_of(&p).unwrap(), want, "{name}: the bytes differ");
+            let seen = SeenFiles::default();
+            seen.note(&p);
+            assert!(
+                !seen.changed(&p),
+                "{name}: not hashed again, size and time are the same"
+            );
+            // Another size or time is hashed, and found different.
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            std::fs::write(&p, &other).unwrap();
+            assert!(
+                seen.changed(&p),
+                "{name}: the time differs and the content is another"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_pictures_that_the_drawing_does_not_use_are_read_when_the_file_changes() {
+        use std::collections::HashSet;
         let d = dir("rescue");
         let k = d.join("a.kad");
         let doc = sample_doc();
@@ -2349,21 +2409,39 @@ mod disk {
                 _ => None,
             })
             .collect();
-        assert!(!handles.is_empty());
-        // Nothing changed: nothing is read, and a second call does nothing either.
-        assert_eq!(source.rescue_if_changed(), 0);
+        assert!(handles.len() >= 2, "the sample has two pictures");
+        // Every picture and image that a handle holds (the underlays and the image resource).
+        let all: HashSet<String> = source.live_hashes().into_iter().collect();
+        // Nothing changed: nothing is read.
+        assert_eq!(source.rescue_if_changed(HashSet::new), 0);
         assert!(handles.iter().all(|h| !h.is_pinned()));
-        // Another program saves over the file (our file is its .bak): the first look reads them.
+        // Another program saves over the file (our file is its .bak).
         std::thread::sleep(std::time::Duration::from_millis(30));
         let mut other = Document::with_sequential_ids();
         other.drawing.project.name = "other".into();
         save_path(&k, &other, Form::Container, &WriteOptions::default()).unwrap();
-        assert!(source.rescue_if_changed() >= handles.len());
-        assert!(handles.iter().all(|h| h.is_pinned()));
-        assert_eq!(source.rescue_if_changed(), 0, "once for a change");
-        // The .bak goes too: the pictures are still there, from memory.
+        // The pictures that the drawing uses stay as they are (the refusal and the consent cover
+        // them): nothing is read.
+        assert_eq!(source.rescue_if_changed(|| all.clone()), 0);
+        assert!(handles.iter().all(|h| !h.is_pinned()));
+        // The limit of the session: nothing fits, and the words say so.
+        source.set_rescue_limit(0);
+        assert_eq!(source.rescue_if_changed(HashSet::new), 0);
+        let told = source.tell_undo_lost(handles.len()).unwrap();
+        assert!(
+            told.contains("could not be kept in memory") && told.contains("0 MiB"),
+            "{told}"
+        );
+        // Only the undo-only pictures are read, as many as the limit allows.
+        let first = handles[0].hash().to_string();
+        let only_first_in_drawing: HashSet<String> = std::iter::once(first.clone()).collect();
+        source.set_rescue_limit(u64::MAX);
+        let n = source.rescue_if_changed(|| only_first_in_drawing.clone());
+        assert_eq!(n, all.len() - 1);
+        assert!(!handles[0].is_pinned() && handles[1..].iter().all(|h| h.is_pinned()));
+        // The .bak goes too: those pictures are still there, from memory.
         std::fs::remove_file(d.join("a.kad.bak")).unwrap();
-        for h in &handles {
+        for h in &handles[1..] {
             let text = h.text().unwrap();
             assert_eq!(kadakas_core::blob::text_hash(&text), h.hash());
             assert!(source.pinned_text(h.hash()).is_some());

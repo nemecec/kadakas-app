@@ -219,8 +219,27 @@ impl<'de> Deserialize<'de> for ResourceBody {
             }
             Some("irrigation_catalog") => Ok(ResourceBody::IrrigationCatalog(v)),
             Some(crate::provenance::BASE_TYPE) => {
-                let shared = read_import_base(v).map_err(serde::de::Error::custom)?;
-                Ok(ResourceBody::ImportBase(shared))
+                let (drawing, revision) = (v["drawing"].clone(), v["revision"].clone());
+                match read_import_base(v) {
+                    Ok(shared) => Ok(ResourceBody::ImportBase(shared)),
+                    // The summaries are in a blob that the file does not mark as such. The
+                    // drawing is not lost for it: the base is left out (it is kept as a resource
+                    // of an unknown kind, which a reader passes on), a note says which drawing
+                    // loses its update data, and the update asks for the old file.
+                    Err(e) if e.starts_with(crate::blob::NOT_MARKED) => {
+                        let name = drawing.as_str().unwrap_or("?").to_string();
+                        crate::blob::note_load(format!(
+                            "the saved summaries of the drawing \"{name}\" (the data for updating it) are not in a form this program trusts and were left out; updating from that drawing will ask for the old file"
+                        ));
+                        Ok(ResourceBody::Unknown(serde_json::json!({
+                            "type": "import_base_unavailable",
+                            "drawing": drawing,
+                            "revision": revision,
+                            "why": e,
+                        })))
+                    }
+                    Err(e) => Err(serde::de::Error::custom(e)),
+                }
             }
             Some("hardscape_style") => serde_json::from_value::<HardscapeStyle>(v)
                 .map(|s| ResourceBody::HardscapeStyle(Box::new(s)))

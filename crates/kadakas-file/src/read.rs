@@ -141,8 +141,10 @@ pub(crate) fn read_entry_document(
                     .map_err(std::io::Error::from)
             },
             |doc| {
+                // What the read left out or repaired (an import base that is not marked).
+                let load_notes = kadakas_core::blob::take_load_notes();
                 if !attach || !history::present(&dir) {
-                    return Ok(Vec::new());
+                    return Ok(load_notes);
                 }
                 if doc.history.is_some() {
                     return Err(LoadError::Invalid(
@@ -153,7 +155,7 @@ pub(crate) fn read_entry_document(
                     // The history stays in the file until a program uses it (DOC-21).
                     doc.lazy_history = FileHistory::of(source)
                         .map(|h| h as Arc<dyn kadakas_core::history::HistoryLoader>);
-                    return Ok(Vec::new());
+                    return Ok(load_notes);
                 }
                 // A copy that is read to be used (a library, an import) has no use for the
                 // versions. If they cannot be read the drawing still loads, and a note says so
@@ -161,11 +163,15 @@ pub(crate) fn read_entry_document(
                 match history::read(source) {
                     Ok(h) => {
                         doc.history = h;
-                        Ok(Vec::new())
+                        Ok(load_notes)
                     }
-                    Err(e) => Ok(vec![format!(
-                        "the versions of this file could not be read and are not part of this copy: {e}"
-                    )]),
+                    Err(e) => {
+                        let mut notes = load_notes;
+                        notes.push(format!(
+                            "the versions of this file could not be read and are not part of this copy: {e}"
+                        ));
+                        Ok(notes)
+                    }
                 }
             },
         )

@@ -3,9 +3,11 @@
 //! A refusal that asks the person (`parts_missing`, `file_changed`) carries a token. The agent
 //! passes it back (`allow_missing`, `allow_overwrite`) after the person agreed. The token is an
 //! HMAC-SHA-256 with a random secret of the session over the kind, the facts of the refusal and a
-//! nonce, so nobody can compute it without a refusal. It is good for one save: it is used up when
-//! it is redeemed, it is dropped after a save, and it stops matching after any edit of the
-//! document or when the open file is another one.
+//! nonce, so nobody can compute it without a refusal. The secret and the nonces come from the
+//! operating system (`getrandom`); if the system gives none, the session gives no token and no
+//! consent can be given. A token is good for one save: it is used up when it is redeemed, it is
+//! dropped after a save, and it stops matching after any edit of the document or when the open
+//! file is another one.
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -20,49 +22,32 @@ struct Issued {
     nonce: [u8; 16],
     /// The revision of the document and the open file when the token was given.
     revision: u64,
-    source: usize,
+    source: u64,
 }
 
 /// The secret of a session and the tokens that are alive.
 #[derive(Debug)]
 pub(crate) struct ConsentState {
-    secret: [u8; 32],
+    /// `None`: the system gave no random bytes, so no token is given.
+    secret: Option<[u8; 32]>,
     issued: Vec<Issued>,
 }
 
 impl Default for ConsentState {
     fn default() -> Self {
         ConsentState {
-            secret: random_bytes(),
+            secret: random_bytes::<32>(),
             issued: Vec::new(),
         }
     }
 }
 
-/// 32 random bytes: the operating system's source where there is one, else the random keys that
-/// the standard library seeds its hash tables with (and the time).
-fn random_bytes() -> [u8; 32] {
-    #[cfg(unix)]
-    {
-        use std::io::Read;
-        let mut out = [0u8; 32];
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom")
-            && f.read_exact(&mut out).is_ok()
-        {
-            return out;
-        }
-    }
-    use std::hash::{BuildHasher, Hasher};
-    let mut out = [0u8; 32];
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos() as u64);
-    for (i, chunk) in out.chunks_mut(8).enumerate() {
-        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-        h.write_u64(now.wrapping_add(i as u64));
-        chunk.copy_from_slice(&h.finish().to_le_bytes());
-    }
-    out
+/// `N` random bytes from the operating system (`getrandom`), or `None` if it has none. Nothing
+/// else is used: a secret that is not random would make the tokens guessable.
+fn random_bytes<const N: usize>() -> Option<[u8; N]> {
+    let mut out = [0u8; N];
+    getrandom::fill(&mut out).ok()?;
+    Some(out)
 }
 
 /// HMAC-SHA-256 (RFC 2104) as a hex string.
@@ -103,31 +88,37 @@ fn kind_and_facts(e: &RpcError) -> Option<(&'static str, Value)> {
 }
 
 impl Session {
-    fn consent_mark(&self) -> (u64, usize) {
+    /// The state of the document and of the open file: a token is good only while it is the same.
+    /// The file is named by a number of its source (`FileSource::id`), not by an address.
+    fn consent_mark(&self) -> (u64, u64) {
         (
             self.editor.revision(),
-            self.file_source
-                .as_ref()
-                .map_or(0, |f| std::sync::Arc::as_ptr(f) as usize),
+            self.file_source.as_ref().map_or(0, |f| f.id()),
         )
     }
 
-    fn consent_token(&self, kind: &str, facts: &Value, nonce: &[u8; 16]) -> String {
+    fn consent_token(&self, kind: &str, facts: &Value, nonce: &[u8; 16]) -> Option<String> {
+        let secret = self.consent.secret.as_ref()?;
         let mut m = format!("{kind}:{facts}:").into_bytes();
         m.extend_from_slice(nonce);
-        hmac_hex(&self.consent.secret, &m)
+        Some(hmac_hex(secret, &m))
     }
 
     /// Gives the refusal its token (`details.consent_token`). Any error that is not a refusal that
     /// asks the person is returned as it is. A session keeps the last few tokens alive (a client
-    /// may ask about two paths before it decides); each is good once.
+    /// may ask about two paths before it decides); each is good once. If the system has no random
+    /// bytes, the refusal has no token.
     pub(crate) fn issue_consent(&mut self, mut e: RpcError) -> RpcError {
         const ALIVE: usize = 8;
         let Some((kind, facts)) = kind_and_facts(&e) else {
             return e;
         };
-        let nonce: [u8; 16] = random_bytes()[..16].try_into().unwrap_or_default();
-        let token = self.consent_token(kind, &facts, &nonce);
+        let Some(nonce) = random_bytes::<16>() else {
+            return e;
+        };
+        let Some(token) = self.consent_token(kind, &facts, &nonce) else {
+            return e;
+        };
         let (revision, source) = self.consent_mark();
         self.drop_stale_consent();
         if self.consent.issued.len() >= ALIVE {
@@ -161,7 +152,10 @@ impl Session {
         };
         self.drop_stale_consent();
         let hit = self.consent.issued.iter().position(|i| {
-            i.kind == kind && same(&self.consent_token(kind, &facts, &i.nonce), token)
+            i.kind == kind
+                && self
+                    .consent_token(kind, &facts, &i.nonce)
+                    .is_some_and(|t| same(&t, token))
         });
         match hit {
             Some(pos) => {
@@ -200,10 +194,23 @@ mod tests {
     }
 
     #[test]
-    fn the_secret_is_different_in_each_session() {
-        assert_ne!(
-            ConsentState::default().secret,
-            ConsentState::default().secret
-        );
+    fn the_secret_comes_from_the_system_and_differs_in_each_session() {
+        let (a, b) = (ConsentState::default(), ConsentState::default());
+        assert!(a.secret.is_some() && b.secret.is_some());
+        assert_ne!(a.secret, b.secret);
+    }
+
+    #[test]
+    fn a_session_without_a_secret_gives_no_token() {
+        let mut s = Session::with_sequential_ids();
+        s.consent.secret = None;
+        let e = crate::review_api::missing_error(&kadakas_file::Missing {
+            file: "a.kad".into(),
+            pictures: vec!["ab".repeat(32)],
+            ..kadakas_file::Missing::default()
+        });
+        let e = s.issue_consent(e);
+        assert!(e.details.as_ref().unwrap().get("consent_token").is_none());
+        assert!(!s.redeem_consent(&e, "anything"));
     }
 }

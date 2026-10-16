@@ -268,6 +268,8 @@ struct Memo {
     bases: RefCell<HashMap<String, Arc<serde_json::Value>>>,
     /// The bytes that this load may still read from the file.
     budget: std::cell::Cell<u64>,
+    /// What the load left out or repaired, for the person (see [`note_load`]).
+    notes: RefCell<Vec<String>>,
 }
 
 /// The source of a read and how it is used.
@@ -409,6 +411,31 @@ impl LoadScope {
     }
 }
 
+/// Starts the text of the error of a reference to a blob that the file does not mark as the
+/// summaries of an import base (see [`read_ref_text`]). A reader that can go on without the base
+/// looks for it.
+pub const NOT_MARKED: &str = "the summaries of an import base refer to the blob";
+
+/// Adds a note for the person to the load that is running (nothing if no load is). A note
+/// says what the load left out or repaired without stopping the open.
+pub fn note_load(note: String) {
+    LOAD.with(|c| {
+        if let Some(scope) = c.borrow().as_ref() {
+            scope.memo.notes.borrow_mut().push(note);
+        }
+    });
+}
+
+/// The notes of the load that is running (see [`note_load`]), emptied.
+pub fn take_load_notes() -> Vec<String> {
+    LOAD.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|scope| std::mem::take(&mut *scope.memo.notes.borrow_mut()))
+            .unwrap_or_default()
+    })
+}
+
 /// The text of a reference, for a value that is read eagerly (the summaries of an import base).
 /// The bound of a blob and the hash are checked like for a picture, and the bytes are charged to
 /// the budget of the read before they are read.
@@ -416,7 +443,7 @@ pub(crate) fn read_ref_text(hash: &str) -> Result<Arc<str>, String> {
     let (scope, source) = ref_scope(hash)?;
     if source.is_import_base(hash) == Some(false) {
         return Err(format!(
-            "the summaries of an import base refer to the blob {hash}, which the file does not mark as such"
+            "{NOT_MARKED} {hash}, which the file does not mark as such"
         ));
     }
     let blob = LazyBlob::new(source, hash).map_err(|e| e.to_string())?;

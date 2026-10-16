@@ -20,9 +20,13 @@ pub struct FileSource {
     /// that a handle still uses, also when the document no longer has them (the undo steps hold
     /// them).
     live: Mutex<Live>,
-    /// True once the file was found changed and the live pictures were read into memory (see
-    /// [`FileSource::rescue_if_changed`]). A save over the file or a rebind starts again.
-    rescued: std::sync::atomic::AtomicBool,
+    /// The most bytes of pictures that [`FileSource::rescue_if_changed`] may hold in memory (a
+    /// limit of the session).
+    rescue_limit: std::sync::atomic::AtomicU64,
+    /// How many pictures the last rescue left alone because of the limit.
+    rescue_skipped: std::sync::atomic::AtomicUsize,
+    /// A number that names this source (it is not an address, and no other source has it).
+    id: u64,
     /// How many pictures that only undo could bring back the person was told about (see
     /// [`FileSource::tell_undo_lost`]).
     undo_told: std::sync::atomic::AtomicUsize,
@@ -46,6 +50,14 @@ impl Default for Live {
     }
 }
 
+/// The default of the limit of [`FileSource::set_rescue_limit`]: 256 MiB.
+pub const DEFAULT_RESCUE_BYTES: u64 = 256 * 1024 * 1024;
+
+fn next_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl std::fmt::Debug for FileSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "FileSource({})", self.part.label())
@@ -58,7 +70,9 @@ impl FileSource {
         Arc::new(FileSource {
             part: ContainerSource::new(container),
             live: Mutex::default(),
-            rescued: Default::default(),
+            rescue_limit: std::sync::atomic::AtomicU64::new(DEFAULT_RESCUE_BYTES),
+            rescue_skipped: Default::default(),
+            id: next_id(),
             undo_told: Default::default(),
         })
     }
@@ -73,7 +87,9 @@ impl FileSource {
         Ok(Arc::new(FileSource {
             part: ContainerSource::from_path(path, limits)?,
             live: Mutex::default(),
-            rescued: Default::default(),
+            rescue_limit: std::sync::atomic::AtomicU64::new(DEFAULT_RESCUE_BYTES),
+            rescue_skipped: Default::default(),
+            id: next_id(),
             undo_told: Default::default(),
         }))
     }
@@ -103,50 +119,50 @@ impl FileSource {
     /// hash in the new file.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn rebind(&self, path: &std::path::Path) -> Result<(), ContainerError> {
-        self.rescued
-            .store(false, std::sync::atomic::Ordering::Relaxed);
         self.part.rebind(path)
     }
 
     /// Opens the file again after a save over it, and keeps the new container. The pictures of
     /// the document are found by hash in the new file.
     pub fn refresh(&self) -> Result<(), ContainerError> {
-        self.rescued
-            .store(false, std::sync::atomic::Ordering::Relaxed);
         self.part.refresh()
     }
 
     /// Checks that the file has the content that was opened. A new stamp with the same manifest
     /// is fine; another content is an error.
     pub fn check_unchanged(&self) -> Result<(), ContainerError> {
-        let r = self.part.check_unchanged();
-        if r.is_err() {
-            self.rescue_live();
-        }
-        r
+        self.part.check_unchanged()
     }
 
-    /// Looks at the file once (if it was not found changed before) and, if it is not the file
-    /// that was opened, reads the pictures that a handle still uses into memory (the drawing and
-    /// the undo steps hold them), as far as some file (the one at the path, or the `.bak`) still
-    /// has them. It is done at the first moment the change is seen, because a second save by
-    /// another program replaces the `.bak`. The pictures that were not read stay lazy, so a
-    /// file that did not change costs nothing. Returns the number of pictures read.
-    pub fn rescue_if_changed(&self) -> usize {
-        if self.rescued.load(std::sync::atomic::Ordering::Relaxed) || self.part.same_file() {
-            return 0;
-        }
-        self.rescue_live()
+    /// A number that names this source for the length of the process.
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
-    /// Reads the live pictures into memory, once for a change of the file.
-    fn rescue_live(&self) -> usize {
-        if self
-            .rescued
-            .swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
+    /// Sets the most bytes of pictures that a rescue may hold in memory (a limit of the session).
+    pub fn set_rescue_limit(&self, bytes: u64) {
+        self.rescue_limit
+            .store(bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Looks at the file and, if it is not the file that was opened, reads the pictures that only
+    /// an undo step holds into memory, as far as some file (the one at the path, or the `.bak`)
+    /// still has them. `in_drawing` gives the hashes of the pictures that the current drawing
+    /// uses; those are left alone, because a picture of the drawing that cannot be found is
+    /// handled by the refusal that asks the person (`parts_missing`), and reading all of them at
+    /// once could take hundreds of megabytes. At most the limit of the session is held (the
+    /// pictures over it are counted, and the note to the person says so). It is done at the
+    /// first look at the change, because a second save by another program replaces the `.bak`;
+    /// the pictures that were not read stay lazy, so a file that did not change costs nothing.
+    /// Returns the number of pictures read.
+    pub fn rescue_if_changed(
+        &self,
+        in_drawing: impl FnOnce() -> std::collections::HashSet<String>,
+    ) -> usize {
+        if self.part.same_file() {
             return 0;
         }
+        let drawing = in_drawing();
         let handles: Vec<Arc<LazyBlob>> = {
             let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
             live.map
@@ -154,23 +170,54 @@ impl FileSource {
                 .flat_map(|ws| ws.iter().filter_map(Weak::upgrade))
                 .collect()
         };
-        let mut n = 0;
+        let limit = self.rescue_limit.load(std::sync::atomic::Ordering::Relaxed);
+        let mut held: u64 = handles
+            .iter()
+            .filter(|h| h.is_pinned())
+            .map(|h| h.text_len() as u64)
+            .sum();
+        let (mut n, mut skipped) = (0, 0);
         for h in handles {
-            if !h.is_pinned() && self.has_blob(h.hash()) && h.pin().is_ok() {
+            if h.is_pinned() || drawing.contains(h.hash()) || !self.has_blob(h.hash()) {
+                continue;
+            }
+            let len = h.text_len() as u64;
+            if held.saturating_add(len) > limit {
+                skipped += 1;
+                continue;
+            }
+            if h.pin().is_ok() {
+                held += len;
                 n += 1;
             }
         }
+        self.rescue_skipped
+            .store(skipped, std::sync::atomic::Ordering::Relaxed);
         n
     }
 
     /// The words for the person when a save left out `lost` pictures that only an undo step held
     /// (`Written::undo_pictures_lost`): `Some` the first time, and again only when the number
-    /// changes. A save that lost none resets it.
+    /// changes. A save that lost none resets it. The words say how many could not be kept in
+    /// memory because of the limit of the session, if any.
     pub fn tell_undo_lost(&self, lost: usize) -> Option<String> {
         let before = self
             .undo_told
             .swap(lost, std::sync::atomic::Ordering::Relaxed);
-        (lost > 0 && before != lost).then(|| undo_lost_text(lost))
+        if lost == 0 || before == lost {
+            return None;
+        }
+        let mut text = undo_lost_text(lost);
+        let skipped = self
+            .rescue_skipped
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if skipped > 0 {
+            let mib = self.rescue_limit.load(std::sync::atomic::Ordering::Relaxed) / (1024 * 1024);
+            text.push_str(&format!(
+                ". {skipped} of them could not be kept in memory when the file changed, because of the limit of {mib} MiB for that (the limit of the session can be raised)"
+            ));
+        }
+        Some(text)
     }
 
     /// The text of a picture that was read into memory by [`FileSource::rescue_if_changed`].
@@ -191,11 +238,7 @@ impl FileSource {
     /// True if the file at the path has the content that was opened (its manifest is read again).
     /// A save asks it once for each source.
     pub fn same_file(&self) -> bool {
-        let same = self.part.same_file();
-        if !same {
-            self.rescue_live();
-        }
-        same
+        self.part.same_file()
     }
 
     /// True if the directory of the opened file has the blob (nothing is looked at on disk).

@@ -976,6 +976,15 @@ impl Session {
     /// Replaces the document, as `document.load` does. Sets the `replaced` flag. The history of
     /// versions of the new document is checked against the limits of the session; what was
     /// repaired or dropped is returned as notes (they are also the load notes of the document).
+    /// Sets the file that the open document was read from, with the limit of the session for the
+    /// pictures that a rescue holds in memory (`SessionLimits::rescue_bytes`).
+    pub fn set_file_source(&mut self, source: Option<Arc<kadakas_file::FileSource>>) {
+        if let Some(src) = &source {
+            src.set_rescue_limit(self.limits.rescue_bytes);
+        }
+        self.file_source = source;
+    }
+
     pub fn replace_document(&mut self, doc: Document) -> Vec<String> {
         self.replace_document_as(doc, true)
     }

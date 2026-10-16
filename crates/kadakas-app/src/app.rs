@@ -729,7 +729,7 @@ impl KadakasApp {
                 "{relinked} gray placeholder(s) were replaced by the real pictures"
             ));
         }
-        self.session.file_source = source;
+        self.session.set_file_source(source);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(p) = &path {
             // What the file holds now: a later save asks if another program changed it.

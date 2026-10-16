@@ -455,7 +455,13 @@ impl<W: Write> Writer<W> {
 
     /// Writes the manifest and the central directory, and returns the output. The output is not
     /// flushed.
-    pub fn finish(mut self) -> Result<W, ContainerError> {
+    pub fn finish(self) -> Result<W, ContainerError> {
+        self.finish_with_manifest().map(|(w, _)| w)
+    }
+
+    /// [`Writer::finish`], and the SHA-256 of the bytes of `manifest.json` that it wrote (the
+    /// name of the content of the container, `Container::manifest_sha256`).
+    pub fn finish_with_manifest(mut self) -> Result<(W, [u8; 32]), ContainerError> {
         let manifest = Manifest {
             format: FORMAT.to_string(),
             format_version: VERSION,
@@ -463,6 +469,7 @@ impl<W: Write> Writer<W> {
             entries: std::mem::take(&mut self.manifest),
         };
         let bytes = manifest.to_bytes();
+        let manifest_sha = <[u8; 32]>::from(sha2::Sha256::digest(&bytes));
         // The manifest takes the last entry slot; `begin` kept one free.
         let offset = self.out.count;
         self.local_header(&Local {
@@ -579,6 +586,6 @@ impl<W: Write> Writer<W> {
         put32(out, dir_size.min(ZIP64_AT) as u32)?;
         put32(out, dir_offset.min(ZIP64_AT) as u32)?;
         put16(out, 0)?;
-        Ok(self.out.inner)
+        Ok((self.out.inner, manifest_sha))
     }
 }

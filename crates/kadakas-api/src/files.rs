@@ -394,7 +394,7 @@ fn file_call_inner(
             ));
         }
         s.take_replaced();
-        s.file_source = opened.source;
+        s.set_file_source(opened.source);
         s.doc_dir = dir_of(&p);
         s.seen.note(&p);
         Ok(FileDone::Opened(p, notes, form))

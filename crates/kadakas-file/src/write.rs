@@ -85,6 +85,8 @@ pub struct Written {
     pub undo_pictures_lost: usize,
     /// The drawing of the old file was written as the anchor of the history.
     pub anchor_written: bool,
+    /// The SHA-256 of the manifest of the container that was written (its content stamp).
+    pub manifest_sha256: [u8; 32],
     /// Parts that could not be found and were left out (`WriteOptions::skip_missing`).
     pub skipped: usize,
     /// The old files that were read from. After the rename of the save the caller moves them to
@@ -191,7 +193,7 @@ fn plan_blobs(doc: &Document, history: Option<&Plan>, opts: &WriteOptions) -> Pl
     // Pictures that only a live handle uses (the undo steps). If the file was found changed, the
     // pictures that some file still had were read into memory then, and are written from memory.
     for source in &opts.keep {
-        source.rescue_if_changed();
+        source.rescue_if_changed(|| plans.blobs.keys().cloned().collect());
         for hash in source.live_hashes() {
             plans
                 .blobs
@@ -203,6 +205,22 @@ fn plan_blobs(doc: &Document, history: Option<&Plan>, opts: &WriteOptions) -> Pl
         }
     }
     plans
+}
+
+/// The hashes of the pictures and texts that the drawing refers to (the pictures that a rescue
+/// leaves alone, see [`FileSource::rescue_if_changed`]).
+pub fn drawing_hashes(doc: &Document) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    doc.for_each_blob(&mut |b| match b {
+        DocBlob::Picture(p) if p.is_blob() => {
+            out.insert(p.blob_hash());
+        }
+        DocBlob::Image(t) if t.is_blob() => {
+            out.insert(t.hash());
+        }
+        _ => {}
+    });
+    out
 }
 
 /// The file behind a lazy handle, if it is a file of this crate.
@@ -740,7 +758,9 @@ pub fn write_container<W: Write>(
             report.sources.push(s);
         }
     }
-    Ok((writer.finish()?, report))
+    let (out, manifest) = writer.finish_with_manifest()?;
+    report.manifest_sha256 = manifest;
+    Ok((out, report))
 }
 
 /// The check of the limits of the format for a test (no file is looked at).

@@ -36,6 +36,8 @@ kadakas-x3d = { version = "0.1.0", path = "../kadakas-x3d" }
 kadakas-gis = { version = "0.1.0", path = "../kadakas-gis" }
 kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
 tempfile = "3"
+# The consent secret comes from the operating system (the same crate that tempfile uses).
+getrandom = "0.4"
 
 [dev-dependencies]
 kadakas-container = { version = "0.1.0", path = "../kadakas-container" }
