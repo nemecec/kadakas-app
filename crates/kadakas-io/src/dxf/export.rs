@@ -22,6 +22,7 @@ use super::nearest_aci;
 use crate::options::{ExportOrigin, LayerMode};
 use crate::{ExportOptions, ExportResult, IoError, Report};
 
+mod kinds;
 mod native;
 pub mod patterns;
 
@@ -194,6 +195,12 @@ struct Ctx<'a> {
     mesh_entity: crate::options::MeshEntity,
     /// Shift (mm) that was added to the shapes for real-world coordinates. Derived data (contours) needs it too.
     shift: DVec2,
+    /// The site models, for the base of massing models.
+    site_cache: kadakas_site::SiteCache,
+    /// The number of plants per style and layer, for plant tags.
+    tag_counts: kadakas_core::plants::tag::TagCounts,
+    /// True once an object has written XDATA of the application `KADAKAS`.
+    xdata: bool,
 }
 
 impl Ctx<'_> {
@@ -277,6 +284,9 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         site_mesh: opts.site_mesh,
         mesh_entity: opts.mesh_entity,
         shift: DVec2::ZERO,
+        site_cache: kadakas_site::SiteCache::default(),
+        tag_counts: kadakas_core::plants::tag::tag_counts(doc),
+        xdata: false,
     };
     // Real-world coordinates: the origin of the georeference goes back into the numbers (a rotation is not applied).
     let mut shift = DVec2::ZERO;
@@ -512,7 +522,11 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     tables.table("UCS", H_UCS_TABLE, 0);
     tables.pair(0, "ENDTAB");
     // APPID
-    tables.table("APPID", H_APPID_TABLE, 1 + usize::from(pattern_xdata));
+    tables.table(
+        "APPID",
+        H_APPID_TABLE,
+        1 + usize::from(pattern_xdata) + usize::from(cx.xdata),
+    );
     tables.record("APPID", H_APPID_ACAD, H_APPID_TABLE);
     tables.pair(100, "AcDbRegAppTableRecord");
     tables.pair(2, "ACAD");
@@ -522,6 +536,13 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         tables.record("APPID", &h, H_APPID_TABLE);
         tables.pair(100, "AcDbRegAppTableRecord");
         tables.pair(2, patterns::XDATA_APP);
+        tables.pair(70, 0);
+    }
+    if cx.xdata {
+        let h = tables.handle();
+        tables.record("APPID", &h, H_APPID_TABLE);
+        tables.pair(100, "AcDbRegAppTableRecord");
+        tables.pair(2, kinds::XDATA_APP);
         tables.pair(70, 0);
     }
     tables.pair(0, "ENDTAB");
@@ -883,7 +904,11 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         objects.pair(360, handle);
         geodata = true;
         report.georeferenced = true;
-    } else if doc.georef.as_ref().is_some_and(|g| !g.crs.trim().is_empty()) {
+    } else if doc
+        .georef
+        .as_ref()
+        .is_some_and(|g| !g.crs.trim().is_empty())
+    {
         report.note(
             "the CRS is not an EPSG code, so the file has no GEODATA object. The coordinates are still real-world numbers",
         );
@@ -1192,8 +1217,9 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
         // An annotation is written as lines and text (exploded), because its look comes from styles
         // and live data. Dimensions, callouts, tags, legends and so on look the same in the CAD program.
         Shape::Annotation(_) => annotation_entities(w, cx, o, layer, hidden),
-        // A plant tag is a label that the drawing makes from a style. There is nothing to write.
-        Shape::PlantTag { .. } => return false,
+        Shape::PlantTag { .. } => kinds::plant_tag(w, cx, o, layer, hidden),
+        Shape::Massing(m) => kinds::massing(w, cx, o, layer, hidden, m),
+        Shape::Irrigation(i) => kinds::irrigation(w, cx, o, hidden, i),
         // Other crates add shape kinds. They are reported as skipped, not guessed.
         #[allow(unreachable_patterns)]
         _ => return false,
