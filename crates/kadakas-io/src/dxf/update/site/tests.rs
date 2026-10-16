@@ -88,7 +88,7 @@ fn tagged_sources_become_virtual_objects_with_a_place_and_an_edit_flag() {
     let h = homes(ed.doc(), &found);
     assert_eq!(h.get("spot"), Some(&id));
     assert_eq!(h.get("contour"), Some(&id));
-    assert!(h.get("trees").is_none());
+    assert!(!h.contains_key("trees"));
 }
 
 #[test]

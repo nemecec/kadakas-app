@@ -5912,6 +5912,6 @@ METHOD_NAMES: tuple[str, ...] = (
     "feedback.withdraw",
 )
 
-COMMAND_OPS_EXAMPLED: tuple[str, ...] = ('add_layer', 'add_object', 'add_resource', 'add_sheet', 'add_worksheet_table', 'arrange', 'attach_record', 'batch', 'detach_record', 'move_layer', 'move_objects', 'restore_view', 'set_project', 'set_record_fields', 'set_vertex', 'set_worksheet_table')
+COMMAND_OPS_EXAMPLED: tuple[str, ...] = ('add_layer', 'add_object', 'add_resource', 'add_sheet', 'add_worksheet_table', 'arrange', 'attach_record', 'batch', 'detach_record', 'move_layer', 'move_objects', 'restore_view', 'set_layer_site', 'set_project', 'set_record_fields', 'set_vertex', 'set_worksheet_table')
 
 UNITS: str = 'millimeters, Y axis up, angles in radians'

@@ -1857,7 +1857,8 @@ fn command_examples() -> Value {
         {"op": "add_object", "layer": "00000000-0000-0000-0000-000000000003", "shape": {"kind": "viewport", "min": [15, 55], "max": [405, 282], "center": [10000, 5000], "scale": 100, "layers": ["00000000-0000-0000-0000-000000000001"]}},
         {"op": "add_object", "layer": "00000000-0000-0000-0000-000000000003", "shape": {"kind": "title_block", "grid_columns": 6, "grid_rows": 4}},
         {"op": "restore_view", "name": "Planting only"},
-        {"op": "add_object", "shape": {"kind": "site_modifier", "modifier": {"type": "grade_limit"}, "boundary": [[1000,1000],[7000,1000],[7000,6000],[1000,6000]]}}
+        {"op": "add_object", "shape": {"kind": "site_modifier", "modifier": {"type": "grade_limit"}, "boundary": [[1000,1000],[7000,1000],[7000,6000],[1000,6000]]}},
+        {"op": "set_layer_site", "id": "00000000-0000-0000-0000-000000000001", "site": "00000000-0000-0000-0000-000000000002"}
     ])
 }
 
