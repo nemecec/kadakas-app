@@ -530,6 +530,35 @@ fn shifted(pts: &[DVec2], closed: bool, shift: f64) -> Vec<DVec2> {
         .collect()
 }
 
+/// The first point of the course path (on the path itself, not moved by `offset`) and the
+/// direction of its first leg. The pattern next to a course can start from them (see
+/// [`field_origin`]).
+pub fn first_leg(path: &[Vertex], closed: bool) -> Option<(DVec2, DVec2)> {
+    let flat = flatten(path, closed);
+    let a = *flat.pts.first()?;
+    let b = flat.pts.iter().find(|p| p.distance(a) > 1e-9)?;
+    Some((a, (*b - a).normalize()))
+}
+
+/// Where the pattern of the field must start so that its first row is whole at the edge of the
+/// course: the origin and the angle in degrees. `unit_width` is the size of a unit across the
+/// rows of the field. The field lies on the far side of the course, one gap from its units.
+pub fn field_origin(spec: &Spec, unit_width: f64) -> Option<(DVec2, f64)> {
+    let (p0, u) = first_leg(&spec.path, spec.closed)?;
+    let n = left(u);
+    let (lo, hi) = spec.side.extents(spec.depth);
+    let g = spec.gap;
+    // The field is on the left of a left or centered course, and on the right of a right course.
+    let (e, up) = match spec.side {
+        Side::Left | Side::Center => (spec.offset + hi + g, true),
+        Side::Right => (spec.offset + lo - g, false),
+    };
+    let y0 = if up { e - g / 2.0 } else { e - unit_width - g / 2.0 };
+    let along = p0.dot(u) - g / 2.0;
+    let origin = u * along + n * (p0.dot(n) + y0);
+    Some((origin, u.y.atan2(u.x).to_degrees()))
+}
+
 /// Lays a course. `max_units` is the most pieces that may be made: a job over it is an error that
 /// says how many it would make.
 pub fn lay(spec: &Spec, max_units: usize) -> Result<Course, String> {

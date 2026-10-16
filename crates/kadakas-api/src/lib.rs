@@ -35,6 +35,7 @@ mod issue_api;
 mod libfiles;
 mod massing_api;
 mod pattern_api;
+mod plan_api;
 mod picture_api;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod picture_api_tests;
@@ -513,6 +514,13 @@ pub const METHODS: &[(&str, &str)] = &[
     #[cfg(not(target_arch = "wasm32"))]
     pattern_api::UNIT_PATTERN_MODULE_FROM_BLOCK,
     pattern_api::REPORT_UNIT_PATTERN,
+    plan_api::REGION_FROM_CURVES,
+    plan_api::HARDSCAPE_SPLIT,
+    plan_api::HARDSCAPE_COURSE,
+    plan_api::HARDSCAPE_COURSE_REMOVE,
+    plan_api::HARDSCAPE_PLAN,
+    plan_api::HARDSCAPE_PLAN_CLEAR,
+    plan_api::UNIT_PATTERN_CHECK,
     hardscape_api::LANDSCAPE_AREA_ADD,
     hardscape_api::LANDSCAPE_AREA_SET,
     hardscape_api::REPORT_HARDSCAPE,
@@ -1644,6 +1652,9 @@ impl Session {
                     return r;
                 }
                 if let Some(r) = hardscape_api::handle(self, method, p.clone()) {
+                    return r;
+                }
+                if let Some(r) = plan_api::handle(self, method, p.clone()) {
                     return r;
                 }
                 if let Some(r) = pattern_api::handle(self, method, p.clone()) {

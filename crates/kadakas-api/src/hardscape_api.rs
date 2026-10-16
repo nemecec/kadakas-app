@@ -586,6 +586,11 @@ fn opt_id(m: &Map<String, Value>, key: &str) -> Result<Option<kadakas_core::uid:
     }
 }
 
+/// A hardscape style by ID or name (other modules of the API use it).
+pub(crate) fn hardscape_style_ref(doc: &Document, v: &Value) -> Result<ResourceId, RpcError> {
+    style_ref(doc, v, Kind::Hardscape)
+}
+
 /// The outline of an object as a hole.
 fn outline_of(doc: &Document, id: ObjectId) -> Result<Vec<Vertex>, RpcError> {
     let o = doc

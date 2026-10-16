@@ -10,6 +10,7 @@ use kadakas_core::DVec2;
 use kadakas_core::command::Command;
 use kadakas_core::curve::Vertex;
 use kadakas_core::layout::object::{outline_of, pattern_of, region_of};
+use kadakas_core::layout::plan::{self, Body, Group, Role};
 use kadakas_core::layout::summary::{self, Summary, SummaryOptions, with_waste};
 use kadakas_core::layout::{
     self, Bond, LayoutError, Limits, MAX_GAP_SEGMENTS, MAX_UNITS, Module, ModuleUnit, Pattern,
@@ -48,6 +49,16 @@ pub const REPORT_UNIT_PATTERN: (&str, &str) = (
 
 /// Extra text for `describe`.
 pub fn describe() -> Value {
+    let mut d = describe_base();
+    if let (Some(a), Some(b)) = (d.as_object_mut(), crate::plan_api::describe().as_object()) {
+        for (k, v) in b {
+            a.insert(k.clone(), v.clone());
+        }
+    }
+    d
+}
+
+fn describe_base() -> Value {
     json!({
         "unit_pattern": "The layout engine lays equal units in a bond (running_bond, stack, herringbone, basket_weave) or the unit shapes of a module over a closed shape with holes. The pattern is a set of cells that run at the centers of the joints; a unit is its cell moved inward by half the gap. So every whole unit of a bond is exactly unit_length by unit_width, for any ratio, and the gap is a real gap. Units are cut exactly to the outline minus the holes. Hardscapes use the engine for their joint pattern; their holes, origin, angle and align_to_edge are settings of the object (hardscape.add, hardscape.set).",
         "modules": "A module pattern is one or more closed shapes (unit types, each with a name; curves and concave outlines are allowed) and two repeat vectors a and b (the lattice). The shapes are the outlines at the centers of the joints; the gap moves each inward by half the gap. The shapes must not overlap each other or their copies on the neighbouring lattice points (a, b, a+b, a-b); spaces between shapes are allowed and show as gaps. Counts, reports and the DXF export are per unit type (report by_unit; DXF extended data KADAKAS_UNIT on every unit polyline; unit_type on the objects of unit_pattern.to_objects). The four bonds are built from the same machinery. Ways to define a module: JSON (pattern: {kind: module, units: [{name, outline}], a, b, gap}), a preset (unit_pattern.module_preset: hexagon, octagon_square, i_shape), closed shapes in the drawing (unit_pattern.module_from_shapes), or a block of a DXF file (unit_pattern.module_from_block). The same JSON is the joints of a hardscape style: hardscape_style.create {joints: {kind: module, units, a, b, spacing}}.",
@@ -97,12 +108,27 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
 
 /// What a call works on: the region, the pattern and where it starts.
 struct Subject {
+    /// The area of the whole subject (a hardscape inside its kerb border and outside its holes).
     region: Region,
-    pattern: Pattern,
-    place: Placement,
+    /// The parts that are laid on their own: the field, its zones and the courses of a hardscape
+    /// (PAT-07, PAT-08). A subject without a plan has one group.
+    groups: Vec<Group>,
+    /// Things the person must read (a split line that stops short, ...).
+    notes: Vec<String>,
     /// The layer and class of the object, when the subject is an object.
     layer: Option<LayerId>,
     class: Option<ClassId>,
+}
+
+impl Subject {
+    fn planned(&self) -> bool {
+        self.groups.len() > 1 || self.groups.iter().any(|g| g.role != Role::Field)
+    }
+
+    /// The names of the unit types of each group.
+    fn names(&self) -> Vec<Vec<String>> {
+        self.groups.iter().map(Group::kind_names).collect()
+    }
 }
 
 fn number(v: &Value, what: &str) -> Result<f64, RpcError> {
@@ -225,6 +251,25 @@ fn pattern_param(m: &Map<String, Value>, base: Option<Pattern>) -> Result<Patter
     Ok(p)
 }
 
+/// The pattern of the field `pattern` of a call, on top of a base pattern.
+pub(crate) fn pattern_from_params(
+    m: &Map<String, Value>,
+    base: Option<Pattern>,
+) -> Result<Pattern, RpcError> {
+    pattern_param(m, base)
+}
+
+/// What the check needs of an object: its area, its groups (field, zones, courses) and the notes.
+pub(crate) fn subject_for_check(
+    doc: &Document,
+    o: &Object,
+    m: &Map<String, Value>,
+    max_units: usize,
+) -> Result<(Region, Vec<Group>, Vec<String>), String> {
+    let sub = subject_of(doc, o, m, max_units).map_err(|e| e.message)?;
+    Ok((sub.region, sub.groups, sub.notes))
+}
+
 fn region_param(v: &Value, tol: f64) -> Result<(Region, Vec<Vertex>), RpcError> {
     let o = v
         .as_object()
@@ -243,7 +288,12 @@ fn region_param(v: &Value, tol: f64) -> Result<(Region, Vec<Vertex>), RpcError> 
     Ok((region, outline))
 }
 
-fn subject_of(doc: &Document, o: &Object, m: &Map<String, Value>) -> Result<Subject, RpcError> {
+fn subject_of(
+    doc: &Document,
+    o: &Object,
+    m: &Map<String, Value>,
+    max_units: usize,
+) -> Result<Subject, RpcError> {
     let tol = tolerance(m)?;
     let region = region_of(doc, o, tol).map_err(bad)?;
     let own = pattern_of(doc, o);
@@ -253,10 +303,11 @@ fn subject_of(doc: &Document, o: &Object, m: &Map<String, Value>) -> Result<Subj
     };
     let pattern = pattern_param(m, own_pattern)?;
     let place = placement(m, Some((doc, o)), own_place, &[])?;
+    let planned = plan::plan_groups(doc, o, region.clone(), pattern, place, max_units).map_err(bad)?;
     Ok(Subject {
         region,
-        pattern,
-        place,
+        groups: planned.groups,
+        notes: planned.notes,
         layer: Some(o.layer),
         class: Some(o.class),
     })
@@ -290,6 +341,7 @@ fn placement(
 
 fn subject(s: &Session, m: &Map<String, Value>) -> Result<Subject, RpcError> {
     let doc = s.editor.doc();
+    let max_units = s.limits().pattern_units.min(MAX_UNITS);
     match (m.get("id"), m.get("region")) {
         (Some(_), Some(_)) => Err(bad("give 'id' or 'region', not both")),
         (Some(id), None) => {
@@ -297,16 +349,22 @@ fn subject(s: &Session, m: &Map<String, Value>) -> Result<Subject, RpcError> {
             let o = doc
                 .object(id)
                 .ok_or_else(|| bad(format!("object {id} does not exist")))?;
-            subject_of(doc, o, m)
+            subject_of(doc, o, m, max_units)
         }
         (None, Some(r)) => {
             let (region, outline) = region_param(r, tolerance(m)?)?;
             let pattern = pattern_param(m, None)?;
             let place = placement(m, None, None, &outline)?;
             Ok(Subject {
+                groups: vec![Group {
+                    name: "field".into(),
+                    slug: "FIELD".into(),
+                    role: Role::Field,
+                    region: region.clone(),
+                    body: Body::Pattern { pattern, place },
+                }],
                 region,
-                pattern,
-                place,
+                notes: Vec::new(),
                 layer: None,
                 class: None,
             })
@@ -428,35 +486,97 @@ pub(crate) fn summary_options(
     Ok(o)
 }
 
+/// The counts of every group, and of the whole subject. The units of all groups together stay
+/// under the limit of the options.
+fn summarize_all(
+    sub: &Subject,
+    opts: &SummaryOptions,
+) -> Result<(Summary, Vec<Summary>), LayoutError> {
+    let mut parts: Vec<Summary> = Vec::with_capacity(sub.groups.len());
+    let mut left = opts.max_units;
+    for g in &sub.groups {
+        let o = SummaryOptions {
+            max_units: left,
+            ..opts.clone()
+        };
+        let part = g.summarize(&o)?;
+        left = left.saturating_sub(part.whole_units + part.cut_units);
+        parts.push(part);
+    }
+    let total = if parts.len() == 1 {
+        parts[0].clone()
+    } else {
+        plan::merge(&parts, sub.region.area, opts)
+    };
+    Ok((total, parts))
+}
+
+/// A group with its counts, as JSON.
+fn group_json(g: &Group, sum: &Summary) -> Value {
+    let mut v = serde_json::to_value(sum).expect("json");
+    v["name"] = json!(g.name);
+    v["role"] = json!(g.role);
+    v["layer_suffix"] = json!(g.slug);
+    if let Body::Course(c) = &g.body {
+        v["course"] = json!({
+            "length_m": c.length / 1000.0,
+            "corners": c.corners,
+            "joints": {
+                "count": c.joints.count,
+                "narrowest_mm": (c.joints.count > 0).then_some(c.joints.narrowest),
+                "widest_mm": (c.joints.count > 0).then_some(c.joints.widest),
+            },
+        });
+    }
+    v
+}
+
 fn layout_call(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let sub = subject(s, m)?;
     let (want_units, want_gaps) = include(m, &["units", "gaps"])?;
     let offset = m.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
     let limit = (m.get("limit").and_then(Value::as_u64).unwrap_or(1000) as usize).min(20_000);
     let opts = summary_options(m, s.limits().pattern_units)?;
-    let sum =
-        summary::summarize(&sub.region, &sub.pattern, &sub.place, &opts).map_err(layout_error)?;
-    let names: Vec<String> = sub
-        .pattern
-        .compile()
-        .map(|c| c.kinds.iter().map(|k| k.name.clone()).collect())
-        .unwrap_or_default();
+    let (sum, parts) = summarize_all(&sub, &opts).map_err(layout_error)?;
+    let all_names = sub.names();
+    let planned = sub.planned();
     let mut out = json!({ "summary": sum });
+    if planned {
+        out["groups"] = json!(
+            sub.groups
+                .iter()
+                .zip(&parts)
+                .map(|(g, p)| group_json(g, p))
+                .collect::<Vec<_>>()
+        );
+    }
+    if !sub.notes.is_empty() {
+        out["notes"] = json!(sub.notes);
+    }
     let mut next: Option<usize> = None;
     if want_units {
         let mut page = Vec::new();
         let mut i = 0usize;
-        let limits = Limits {
-            max_units: opts.max_units,
-            trim: opts.trim,
-        };
-        layout::for_each_unit(&sub.region, &sub.pattern, &sub.place, &limits, &mut |u| {
-            if i >= offset && page.len() < limit {
-                page.push(unit_json(u, &names));
-            }
-            i += 1;
-        })
-        .map_err(layout_error)?;
+        let mut left = opts.max_units;
+        for (gi, g) in sub.groups.iter().enumerate() {
+            let limits = Limits {
+                max_units: left,
+                trim: opts.trim,
+            };
+            let before = i;
+            g.for_each_unit(&limits, &mut |u| {
+                if i >= offset && page.len() < limit {
+                    let mut v = unit_json(u, &all_names[gi]);
+                    if planned {
+                        v["group"] = json!(g.name);
+                    }
+                    page.push(v);
+                }
+                i += 1;
+            })
+            .map_err(layout_error)?;
+            left = left.saturating_sub(i - before);
+        }
         if limit > 0 && offset + page.len() < i {
             next = Some(offset + page.len());
         }
@@ -464,21 +584,9 @@ fn layout_call(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         out["units"] = json!(page);
     }
     if want_gaps {
-        let g = gaps::gap_lines(
-            &sub.region,
-            &sub.pattern,
-            &sub.place,
-            MAX_GAP_SEGMENTS,
-            false,
-        );
-        if g.truncated {
-            return Err(RpcError::limit(
-                "the pattern has too many gap lines. Use larger units or a smaller region",
-            ));
-        }
-        let total = g.segments.len();
-        let page: Vec<Value> = g
-            .segments
+        let segments = gap_segments(&sub, MAX_GAP_SEGMENTS)?;
+        let total = segments.len();
+        let page: Vec<Value> = segments
             .iter()
             .skip(offset)
             .take(limit)
@@ -492,6 +600,24 @@ fn layout_call(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
     }
     out["next_offset"] = json!(next);
     Ok(out)
+}
+
+/// The gap center lines of all groups that have a pattern (a course has none).
+fn gap_segments(sub: &Subject, max: usize) -> Result<Vec<layout::Segment>, RpcError> {
+    let mut all: Vec<layout::Segment> = Vec::new();
+    for g in &sub.groups {
+        let Body::Pattern { pattern, place } = &g.body else {
+            continue;
+        };
+        let got = gaps::gap_lines(&g.region, pattern, place, max.saturating_sub(all.len()), false);
+        if got.truncated {
+            return Err(RpcError::limit(
+                "the pattern has too many gap lines. Use larger units or a smaller region",
+            ));
+        }
+        all.extend(got.segments);
+    }
+    Ok(all)
 }
 
 /// Most objects that `unit_pattern.to_objects` makes in one call.
@@ -521,46 +647,46 @@ fn to_objects(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
     // (shape, unit type)
     let mut shapes: Vec<(Shape, Option<String>)> = Vec::new();
     let (mut units, mut gap_count) = (0usize, 0usize);
-    let tag = sub.pattern.module.is_some();
-    let names: Vec<String> = sub
-        .pattern
-        .compile()
-        .map(|c| c.kinds.iter().map(|k| k.name.clone()).collect())
-        .unwrap_or_default();
+    let all_names = sub.names();
     if want_units {
-        let limits = Limits::new(MAX_OBJECTS.min(s.limits().pattern_units));
-        layout::for_each_unit(&sub.region, &sub.pattern, &sub.place, &limits, &mut |u| {
-            units += 1;
-            for r in &u.rings {
-                shapes.push((
-                    Shape::Polyline {
-                        points: kadakas_core::curve::corners(&r.points),
-                        closed: true,
-                    },
-                    (tag && !r.hole).then(|| names.get(u.kind).cloned().unwrap_or_default()),
-                ));
-            }
-        })
-        .map_err(|e| match e {
-            LayoutError::TooMany(t) => RpcError::limit(format!(
-                "{t}. One call makes at most {MAX_OBJECTS} objects: split the region"
-            )),
-            other => layout_error(other),
-        })?;
+        let mut left = MAX_OBJECTS.min(s.limits().pattern_units);
+        for (gi, g) in sub.groups.iter().enumerate() {
+            let tag = match &g.body {
+                Body::Pattern { pattern, .. } => pattern.module.is_some(),
+                Body::Course(_) => false,
+            };
+            let limits = Limits::new(left);
+            let before = units;
+            g.for_each_unit(&limits, &mut |u| {
+                units += 1;
+                for r in &u.rings {
+                    shapes.push((
+                        Shape::Polyline {
+                            points: kadakas_core::curve::corners(&r.points),
+                            closed: true,
+                        },
+                        (tag && !r.hole)
+                            .then(|| all_names[gi].get(u.kind).cloned().unwrap_or_default()),
+                    ));
+                }
+            })
+            .map_err(|e| match e {
+                LayoutError::TooMany(t) => RpcError::limit(format!(
+                    "{t}. One call makes at most {MAX_OBJECTS} objects: split the region"
+                )),
+                other => layout_error(other),
+            })?;
+            left = left.saturating_sub(units - before);
+        }
     }
     if want_gaps {
-        let g = gaps::gap_lines(&sub.region, &sub.pattern, &sub.place, MAX_OBJECTS, false);
-        if g.truncated {
-            return Err(RpcError::limit(format!(
+        let segments = gap_segments(&sub, MAX_OBJECTS).map_err(|_| {
+            RpcError::limit(format!(
                 "the gaps are more than {MAX_OBJECTS} lines: split the region or leave the gaps out"
-            )));
-        }
-        gap_count = g.segments.len();
-        shapes.extend(
-            g.segments
-                .iter()
-                .map(|(a, b)| (Shape::Line { a: *a, b: *b }, None)),
-        );
+            ))
+        })?;
+        gap_count = segments.len();
+        shapes.extend(segments.iter().map(|(a, b)| (Shape::Line { a: *a, b: *b }, None)));
     }
     if shapes.len() > MAX_OBJECTS {
         return Err(RpcError::limit(format!(
@@ -812,15 +938,37 @@ pub fn totals_json(items: &[(Product, &Summary)], errors: usize, opts: &SummaryO
     })
 }
 
-/// The summary of the pattern of one object, or why it has none.
+/// The summary of the pattern of one object, or why it has none. For a hardscape with zones or
+/// courses it is the sum of all parts.
 pub fn object_summary(
     doc: &Document,
     o: &Object,
     m: &Map<String, Value>,
     opts: &SummaryOptions,
 ) -> Result<Summary, String> {
-    let sub = subject_of(doc, o, m).map_err(|e| e.message)?;
-    summary::summarize(&sub.region, &sub.pattern, &sub.place, opts).map_err(|e| e.to_string())
+    object_summary_groups(doc, o, m, opts).map(|r| r.0)
+}
+
+/// Like [`object_summary`], with the counts of each part (for a hardscape with zones or courses;
+/// the list is empty for a plain one) and the notes of the plan.
+pub fn object_summary_groups(
+    doc: &Document,
+    o: &Object,
+    m: &Map<String, Value>,
+    opts: &SummaryOptions,
+) -> Result<(Summary, Vec<Value>, Vec<String>), String> {
+    let sub = subject_of(doc, o, m, opts.max_units).map_err(|e| e.message)?;
+    let (total, parts) = summarize_all(&sub, opts).map_err(|e| e.to_string())?;
+    let groups = if sub.planned() {
+        sub.groups
+            .iter()
+            .zip(&parts)
+            .map(|(g, p)| group_json(g, p))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok((total, groups, sub.notes))
 }
 
 /// The pattern block of one hardscape for `report.hardscape`: the summary as JSON, or an error.
@@ -860,11 +1008,17 @@ pub fn report_rows(
             rows.push(json!({"id": id, "error": "no such object"}));
             continue;
         };
-        match object_summary(doc, o, m, opts) {
-            Ok(sum) => {
+        match object_summary_groups(doc, o, m, opts) {
+            Ok((sum, groups, notes)) => {
                 let mut row = serde_json::to_value(&sum).expect("json");
                 row["id"] = json!(id);
                 row["name"] = json!(label(doc, o));
+                if !groups.is_empty() {
+                    row["groups"] = json!(groups);
+                }
+                if !notes.is_empty() {
+                    row["notes"] = json!(notes);
+                }
                 rows.push(row);
                 good.push((product_of(doc, o, m.contains_key("pattern")), sum));
             }
@@ -923,7 +1077,21 @@ fn csv(rows: &[Value]) -> String {
         }),
         other => other.to_string(),
     };
+    let mut flat: Vec<Value> = Vec::new();
     for r in rows {
+        flat.push(r.clone());
+        for g in r["groups"].as_array().into_iter().flatten() {
+            let mut g = g.clone();
+            g["id"] = r["id"].clone();
+            g["name"] = json!(format!(
+                "{} / {}",
+                r["name"].as_str().unwrap_or(""),
+                g["name"].as_str().unwrap_or("")
+            ));
+            flat.push(g);
+        }
+    }
+    for r in &flat {
         let units = r["by_unit"].as_array().cloned().unwrap_or_default();
         if units.len() > 1 {
             for u in &units {
