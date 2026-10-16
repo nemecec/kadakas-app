@@ -404,3 +404,14 @@ def test_relinking_a_plant_to_a_style_that_now_locks_a_field(cad):
     cad.result("plants.set_style", {"ids": [plant_id], "style": "Lavender"})
     overrides = cad.result("objects.get", {"id": plant_id})["data"]["plant"]["overrides"]
     assert "spread" not in overrides and overrides["price"] == 9
+
+
+def test_hardscape_style_name_material_and_criteria(cad):
+    sid = setts(cad, name="Plaza granite")
+    cad.result("hardscape.add", {"boundary": SQUARE, "style": sid})
+    cad.execute({"op": "add_object", "shape": {"kind": "hardscape", "boundary": SQUARE, "material": "Gravel"}})
+    rows = cad.result("objects.query", {"criteria": 'Kind = "hardscape"', "columns": ["Style", "Name", "Material"]})
+    assert sorted(r["values"] for r in rows["rows"]) == [["Gravel", "Gravel", "Gravel"], ["Plaza granite", "Plaza granite", "Granite"]]
+    assert cad.result("objects.query", {"criteria": 'Style = "Plaza granite"'})["count"] == 1
+    assert cad.result("objects.query", {"criteria": 'Material = "Granite"'})["count"] == 1
+    assert sorted(r["name"] for r in cad.result("report.areas")["rows"]) == ["Gravel", "Plaza granite"]

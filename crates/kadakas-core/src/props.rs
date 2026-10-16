@@ -270,6 +270,13 @@ fn landscape_area(
     Some((q.gross_area_m2, q.net_area_m2, ratio))
 }
 
+/// The name of a hardscape: its style name, or its material when it has no style.
+pub fn hardscape_label(doc: &Document, obj: &Object, material: &str) -> String {
+    crate::hardscape::data::style_id(obj)
+        .and_then(|id| doc.resources.get(id))
+        .map_or_else(|| material.to_string(), |r| r.name.clone())
+}
+
 /// Properties of irrigation objects: `Model`, `Zone`, `Arc`, `Direction`, `Radius` (outlets),
 /// `LineType`, `Size`, `Material`, `Length` in m (lines), `StaticPressure` in kPa and
 /// `AvailableFlow` in l/min (POCs), `Kv`, `Controller`, `Station` (valves), `Stations`
@@ -395,7 +402,8 @@ fn builtin(
             Shape::Massing(m) => text(m.name.clone()),
             Shape::Extrude(e) => text(e.name.clone()),
             Shape::Sweep(s) => text(s.name.clone()),
-            Shape::Hardscape { material, .. } => text(material.clone()),
+            // The style name, like a plant. Without a style: the material, as the report does.
+            Shape::Hardscape { material, .. } => text(hardscape_label(doc, obj, material)),
             Shape::Text { text: t, .. } => text(t.clone()),
             _ => Prop::NotApplicable,
         },
@@ -836,6 +844,9 @@ mod tests {
         assert_eq!(p(&ed, h, &["PlanArea"]), v(json!(q.plan_area_m2)));
         assert_eq!(p(&ed, h, &["SurfaceArea"]), v(json!(q.surface_area_m2)));
         assert_eq!(p(&ed, h, &["Perimeter"]), v(json!(q.perimeter_m)));
+        // Style and Name are the style name, not the material.
+        assert_eq!(p(&ed, h, &["Style"]), v(json!("Paving")));
+        assert_eq!(p(&ed, h, &["Name"]), v(json!("Paving")));
         assert_eq!(p(&ed, h, &["GrossArea"]), Prop::NotApplicable);
         // A slope makes the surface larger than the plan.
         ed.execute(&Command::SetHardscape {
