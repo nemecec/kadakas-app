@@ -40,8 +40,57 @@ fn canonical(recs: &[Rec], max: usize) -> (Vec<usize>, bool) {
     (idx, cut)
 }
 
+/// The scopes of block definitions that have another key in the new file. A file that is saved
+/// again can number the BLOCK_RECORD of an unchanged block differently, and the entities of a
+/// block are never matched across scopes: all of them would be removed and added. A definition that
+/// is only in the base file and one with the same name that is only in the new file are one
+/// definition. Gives the new records with the scope of the base file where that is so, or `None`
+/// when no definition needs it.
+fn align_blocks(base: &[Rec], new: &[Rec]) -> Option<Vec<Rec>> {
+    let scopes = |recs: &[Rec]| -> HashMap<String, String> {
+        recs.iter()
+            .filter(|r| r.scope.starts_with("block:") && !r.block.is_empty())
+            .map(|r| (r.scope.clone(), r.block.clone()))
+            .collect()
+    };
+    let (b, n) = (scopes(base), scopes(new));
+    let only = |a: &HashMap<String, String>, other: &HashMap<String, String>| {
+        let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
+        for (scope, name) in a.iter().filter(|(s, _)| !other.contains_key(*s)) {
+            by_name.entry(name.clone()).or_default().push(scope.clone());
+        }
+        by_name
+    };
+    let (b_only, n_only) = (only(&b, &n), only(&n, &b));
+    let alias: HashMap<&str, &str> = n_only
+        .iter()
+        .filter_map(
+            |(name, news)| match (news.as_slice(), b_only.get(name)?.as_slice()) {
+                ([new_scope], [base_scope]) => Some((new_scope.as_str(), base_scope.as_str())),
+                _ => None,
+            },
+        )
+        .collect();
+    if alias.is_empty() {
+        return None;
+    }
+    Some(
+        new.iter()
+            .map(|r| {
+                let mut r = r.clone();
+                if let Some(s) = alias.get(r.scope.as_str()) {
+                    r.scope = (*s).to_string();
+                }
+                r
+            })
+            .collect(),
+    )
+}
+
 /// Matches two lists of records. See the module text.
 pub fn diff(base: &[Rec], new: &[Rec], opts: &Options) -> Diff {
+    let aligned = align_blocks(base, new);
+    let new = aligned.as_deref().unwrap_or(new);
     let (bi, cut_b) = canonical(base, opts.max_entities);
     let (ni, cut_n) = canonical(new, opts.max_entities);
     let mut m = Matcher {

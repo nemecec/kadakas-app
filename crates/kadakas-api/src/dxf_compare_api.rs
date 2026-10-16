@@ -205,17 +205,23 @@ fn annot_cloud(points: &[DVec2], bump: f64, name: &str) -> Shape {
     })))
 }
 
-/// The same cloud as a closed polyline (for the 3D renderer, which draws no annotations).
+/// The same cloud as a polyline (for the 3D renderer, which draws no annotations). The line is
+/// open and ends where it starts: a closed polyline would be drawn as a filled plane that hides
+/// the changes inside the cloud, and a revision cloud is only an outline.
 fn line_cloud(points: &[DVec2], bump: f64) -> Shape {
+    let mut outline = cloud_outline(points, bump);
+    if let Some(first) = outline.first().copied() {
+        outline.push(first);
+    }
     Shape::Polyline {
-        points: cloud_outline(points, bump)
+        points: outline
             .into_iter()
             .map(|p| Vertex {
                 p,
                 ..Vertex::default()
             })
             .collect(),
-        closed: true,
+        closed: false,
     }
 }
 
