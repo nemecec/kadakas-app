@@ -2729,6 +2729,7 @@ dependencies = [
  "kadakas-render",
  "kadakas-review",
  "kadakas-script",
+ "kadakas-script-js",
  "kadakas-sheet",
  "kadakas-site",
  "kadakas-sys",

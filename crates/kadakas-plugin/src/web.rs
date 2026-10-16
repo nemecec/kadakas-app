@@ -84,15 +84,16 @@ pub async fn precompile(wasm: &[u8], limits: &Limits) -> Result<(), PluginError>
 }
 
 /// Like [`precompile`], for a hosted module (the script engine, see `crate::runtime::HostedModule`):
-/// it may import `kadakas.call` and `kadakas.read`, and it has the fuel of a whole run. The app
+/// it may import `kadakas.call` and `kadakas.read`. The app
 /// calls it once, before the first script runs, because the synchronous compile of a module of
 /// this size is refused on the main thread of Chrome.
-pub async fn precompile_hosted(wasm: &[u8], limits: &Limits) -> Result<(), PluginError> {
+pub async fn precompile_hosted(wasm: &[u8]) -> Result<(), PluginError> {
+    // The same rewrite as `MeteredRuntime::load_hosted`, so the key is the same.
     let hardened = harden(
         wasm,
         &HardenLimits {
-            fuel: limits.fuel,
-            memory_bytes: limits.memory_bytes,
+            fuel: i64::MAX as u64,
+            memory_bytes: crate::runtime::HOSTED_MEMORY_BYTES,
             host_imports: true,
         },
     )?;

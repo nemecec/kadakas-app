@@ -197,6 +197,12 @@ pub const HOSTED_EXPORTS: [&str; 4] = ["memory", "alloc", "dealloc", "run"];
 pub const HOST_MODULE: &str = "kadakas";
 pub const HOST_IMPORTS: [&str; 2] = ["call", "read"];
 
+/// The memory maximum that the rewrite gives a hosted module in the browser, whatever the limits of
+/// the session are. The rewritten module is compiled once in advance (a large module cannot be
+/// compiled in the call), so it must not depend on the limits; the engine inside the module
+/// (QuickJS) keeps its own limit, three quarters of the memory limit of the run.
+pub const HOSTED_MEMORY_BYTES: usize = 256 << 20;
+
 /// A module that can call back into the host while it runs (the script engine, SCR-08). It makes
 /// the calls through the two imports above, so it can ask the host to do the heavy work, and the
 /// host decides what it answers. The limits are the same as for a plug-in: fuel and memory for the

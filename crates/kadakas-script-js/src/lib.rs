@@ -255,13 +255,13 @@ impl ScriptEngine {
 
     /// Compiles the module in advance, asynchronously. **The browser needs this** before the first
     /// script: Chrome refuses the synchronous compile of a module of this size on the main thread.
-    /// Call it once at start, with the limits that the engine will have.
+    /// Call it once at start. It does not depend on the limits.
     #[cfg(target_arch = "wasm32")]
-    pub async fn precompile(limits: &ScriptLimits) -> Result<(), ScriptError> {
+    pub async fn precompile() -> Result<(), ScriptError> {
         if MODULE.is_empty() {
             return Ok(());
         }
-        kadakas_plugin::web::precompile_hosted(MODULE, &plugin_limits(limits))
+        kadakas_plugin::web::precompile_hosted(MODULE)
             .await
             .map_err(|e| ScriptError::Trap(e.to_string()))
     }

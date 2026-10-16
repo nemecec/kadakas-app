@@ -27,7 +27,7 @@ use std::rc::Rc;
 
 use crate::harden::{FUEL_EXPORT, HardenLimits, PAGE, harden};
 use crate::runtime::{
-    CallKind, HOSTED_EXPORTS, HostCall, HostReply, HostedModule, Limits, LoadedModule, MaybeSend,
+    CallKind, HOSTED_EXPORTS, HOSTED_MEMORY_BYTES, HostCall, HostReply, HostedModule, Limits, LoadedModule, MaybeSend,
     PluginError, PluginRuntime, REQUIRED_EXPORTS,
 };
 use kadakas_plugin_abi::guest::unpack;
@@ -120,11 +120,13 @@ impl<C: Compiler> PluginRuntime for MeteredRuntime<C> {
         wasm: &[u8],
         limits: &Limits,
     ) -> Result<Box<dyn HostedModule>, PluginError> {
+        // The same bytes for any limits, so that the module can be compiled in advance. The host
+        // sets the fuel of each run.
         let hardened = harden(
             wasm,
             &HardenLimits {
-                fuel: limits.fuel,
-                memory_bytes: limits.memory_bytes,
+                fuel: i64::MAX as u64,
+                memory_bytes: HOSTED_MEMORY_BYTES,
                 host_imports: true,
             },
         )?;
