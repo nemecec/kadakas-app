@@ -2392,6 +2392,190 @@ mod disk {
     }
 
     #[test]
+    fn the_hashes_of_the_drawing_are_those_of_its_pictures_and_images() {
+        let doc = sample_doc();
+        let mut want = std::collections::HashSet::new();
+        for o in doc.objects.values() {
+            if let Shape::Underlay(u) = &o.shape {
+                want.insert(u.png.blob_hash());
+            }
+        }
+        for r in doc.resources.iter() {
+            if let ResourceBody::Image(i) = &r.body {
+                want.insert(i.data.hash());
+            }
+        }
+        assert!(want.len() >= 3, "two pictures and an image");
+        assert_eq!(crate::write::drawing_hashes(&doc), want);
+        // A drawing without pictures has none, and a small text is not a blob.
+        assert!(crate::write::drawing_hashes(&Document::with_sequential_ids()).is_empty());
+    }
+
+    #[test]
+    fn the_size_estimate_counts_the_points_of_3d_shapes_and_site_models() {
+        use glam::DVec3;
+        use kadakas_core::site::{SiteLine, SiteSettings};
+        let mut doc = Document::with_sequential_ids();
+        let base = crate::write::estimate_document_bytes(&doc);
+        let pts = |n: usize| {
+            (0..n)
+                .map(|i| DVec3::new(i as f64, 0.0, 1.0))
+                .collect::<Vec<_>>()
+        };
+        let a = ObjectId::from_num(1);
+        doc.objects.insert(
+            a,
+            Object::new(
+                a,
+                FIRST_LAYER,
+                NONE_CLASS,
+                Shape::Polyline3d {
+                    points: pts(10_000),
+                    closed: false,
+                },
+            ),
+        );
+        let with_line = crate::write::estimate_document_bytes(&doc);
+        assert!(with_line >= base + 700_000, "{base} {with_line}");
+        let b = ObjectId::from_num(2);
+        doc.objects.insert(
+            b,
+            Object::new(
+                b,
+                FIRST_LAYER,
+                NONE_CLASS,
+                Shape::SiteModel {
+                    points: pts(1_000),
+                    lines: vec![SiteLine {
+                        points: pts(2_000),
+                        closed: false,
+                    }],
+                    settings: SiteSettings::default(),
+                },
+            ),
+        );
+        // 3000 more points (the points and the points of the line), and the object.
+        assert!(crate::write::estimate_document_bytes(&doc) >= with_line + 600 + 3_000 * 70);
+    }
+
+    #[test]
+    fn a_picture_that_only_undo_held_is_written_from_memory_after_the_file_changed() {
+        let d = dir("undo-memory");
+        let k = d.join("a.kad");
+        save_path(&k, &sample_doc(), Form::Container, &WriteOptions::default()).unwrap();
+        let mut o = open_path(&k, u64::MAX, ReadMode::Lazy).unwrap();
+        let source = o.source.clone().unwrap();
+        // The pictures are held by handles only (as an undo step would hold them): the drawing
+        // lost its objects.
+        let held: Vec<_> = o
+            .doc
+            .objects
+            .values()
+            .filter_map(|ob| match &ob.shape {
+                Shape::Underlay(u) => u.png.lazy().cloned(),
+                _ => None,
+            })
+            .collect();
+        assert!(!held.is_empty());
+        let ids: Vec<_> = o.doc.objects.keys().copied().collect();
+        for id in ids {
+            o.doc.objects.shift_remove(&id);
+        }
+        // Another program saves over the file: our file is its .bak. The first look at the change
+        // reads the pictures into memory; then the program saves again, and the .bak has no
+        // picture any more. The pictures are in no file, only in memory.
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let other = Document::with_sequential_ids();
+        save_path(&k, &other, Form::Container, &WriteOptions::default()).unwrap();
+        // (The image of the document is held by a handle too.)
+        assert!(source.rescue_if_changed(std::collections::HashSet::new) >= held.len());
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        save_path(&k, &other, Form::Container, &WriteOptions::default()).unwrap();
+        assert!(
+            !source.has_blob(held[0].hash()),
+            "no file has the picture now"
+        );
+        let opts = WriteOptions {
+            keep: vec![source.clone()],
+            ..WriteOptions::default()
+        };
+        let (bytes, report) = write_container(Vec::new(), &o.doc, &opts).unwrap();
+        assert_eq!(report.undo_pictures_lost, 0, "{report:?}");
+        // The pictures are in the new file, byte for byte.
+        let written = Container::from_bytes(bytes, Limits::default()).unwrap();
+        for h in &held {
+            let name = crate::blob_name(h.hash());
+            assert!(written.entry(&name).is_some(), "{name}");
+            let stored = written.read(&name).unwrap();
+            assert_eq!(
+                kadakas_core::blob::text_hash(std::str::from_utf8(&stored).unwrap()),
+                h.hash()
+            );
+        }
+    }
+
+    #[test]
+    fn the_count_of_lost_pictures_is_told_once_and_a_source_has_its_own_number() {
+        let d = dir("told-once");
+        let k = d.join("a.kad");
+        save_path(&k, &sample_doc(), Form::Container, &WriteOptions::default()).unwrap();
+        let a = open_path(&k, u64::MAX, ReadMode::Lazy)
+            .unwrap()
+            .source
+            .unwrap();
+        let b = open_path(&k, u64::MAX, ReadMode::Lazy)
+            .unwrap()
+            .source
+            .unwrap();
+        assert_ne!(a.id(), b.id());
+        assert_eq!(a.id(), a.id());
+        assert!(a.tell_undo_lost(0).is_none());
+        let first = a.tell_undo_lost(2).unwrap();
+        assert!(first.contains("2 picture"), "{first}");
+        assert!(
+            a.tell_undo_lost(2).is_none(),
+            "the same count is not told again"
+        );
+        assert!(a.tell_undo_lost(3).unwrap().contains("3 picture"));
+        assert!(a.tell_undo_lost(0).is_none());
+        assert!(
+            a.tell_undo_lost(3).is_some(),
+            "a save that lost none resets it"
+        );
+        assert!(
+            b.tell_undo_lost(3).is_some(),
+            "each source has its own count"
+        );
+    }
+
+    #[test]
+    fn seen_files_forget_a_file_that_cannot_be_read_and_keep_a_bounded_table() {
+        let d = dir("seen-forget");
+        let doc = sample_doc();
+        let p = d.join("f.json");
+        save_path(&p, &doc, Form::Json, &WriteOptions::default()).unwrap();
+        let seen = SeenFiles::default();
+        seen.note(&p);
+        assert!(seen.knows(&p));
+        // The file is replaced by a folder: it cannot be read, so it is not kept as seen.
+        std::fs::remove_file(&p).unwrap();
+        std::fs::create_dir(&p).unwrap();
+        seen.note(&p);
+        assert!(!seen.knows(&p), "a folder is no file that was seen");
+        // Many writes in a row: the table of the written stamps stays small, and the newest
+        // write is still taken by a note.
+        let last = d.join("last.json");
+        for i in 0..70 {
+            let q = d.join(format!("w{i}.json"));
+            save_path(&q, &doc, Form::Json, &WriteOptions::default()).unwrap();
+        }
+        save_path(&last, &doc, Form::Json, &WriteOptions::default()).unwrap();
+        let s2 = SeenFiles::default();
+        s2.note(&last);
+        assert!(s2.knows(&last) && !s2.changed(&last));
+    }
+
+    #[test]
     fn only_the_pictures_that_the_drawing_does_not_use_are_read_when_the_file_changes() {
         use std::collections::HashSet;
         let d = dir("rescue");
