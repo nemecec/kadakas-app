@@ -684,8 +684,9 @@ impl Client {
         Ok(op_id)
     }
 
-    /// Tells the client what the host's document shows. Call it after the host built its document
-    /// from the view, and when the client starts with a document that equals the state.
+    /// Tells the client what the host's document shows. Call it with a document that the host
+    /// built from the state (`Client::materialize`), carrying its stacking keys: the shadow holds
+    /// exactly the keys of the document and makes up none.
     pub fn set_shadow(&mut self, doc: &Document) {
         self.shadow = Some(docsync::shadow_of(doc));
     }

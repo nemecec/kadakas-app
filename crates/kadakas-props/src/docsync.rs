@@ -482,10 +482,18 @@ fn local_object_order(
 ) -> Option<Vec<Op>> {
     let at_index = |i: usize| doc.objects.get_index(i).map(|(id, _)| *id);
     let target = |id: ObjectId| Target::new(Kind::Object, id.0);
-    // A thing that the replica has deleted stays deleted: it takes no key and is no neighbour.
+    // A thing that the replica has deleted stays deleted: it takes no key and is no neighbour. An
+    // untouched object that the shadow does not hold yet is new in a later change set of the same
+    // push (each change set is compared with the final document): that change set places it, so
+    // here it is no neighbour either. An untouched object that the shadow holds without a key
+    // stays a neighbour, and then the whole list is checked.
     let in_list = |id: ObjectId| {
         let t = target(id);
-        shadow.alive(t).is_some() || !shadow.contains(t)
+        if touched.contains(&id) {
+            shadow.alive(t).is_some() || !shadow.contains(t)
+        } else {
+            shadow.alive(t).is_some()
+        }
     };
     let mut at: Vec<usize> = touched
         .iter()
@@ -529,26 +537,27 @@ fn local_object_order(
         {
             return None;
         }
-        let keys: Vec<Option<String>> = run.iter().map(|t| key_in(shadow, *t)).collect();
-        let fits = keys.iter().all(Option::is_some) && {
-            let seq: Vec<&str> = lo
-                .iter()
-                .chain(keys.iter().flatten())
-                .chain(hi.iter())
-                .map(String::as_str)
-                .collect();
-            seq.windows(2).all(|w| w[0] < w[1])
-        };
-        if fits {
-            continue;
-        }
-        let new = crate::order::keys_between(lo.as_deref(), hi.as_deref(), run.len());
-        for (t, k) in run.iter().zip(new) {
-            ops.push(Op::Set {
-                target: *t,
-                prop: "order".into(),
-                value: Value::String(k),
-            });
+        // The run between its bounds. A key outside the bounds counts as none, so the bounds always
+        // keep their keys (they are in every longest increasing run), and inside the run only the
+        // objects that do not fit get a new key, as in the check of the whole list.
+        let inside =
+            |k: &String| lo.as_ref().is_none_or(|l| l < k) && hi.as_ref().is_none_or(|h| k < h);
+        let first = usize::from(lo.is_some());
+        let seq: Vec<Option<String>> = lo
+            .iter()
+            .cloned()
+            .map(Some)
+            .chain(run.iter().map(|t| key_in(shadow, *t).filter(inside)))
+            .chain(hi.iter().cloned().map(Some))
+            .collect();
+        for (i, k) in crate::order::rekey(&seq) {
+            if let Some(t) = i.checked_sub(first).and_then(|i| run.get(i)) {
+                ops.push(Op::Set {
+                    target: *t,
+                    prop: "order".into(),
+                    value: Value::String(k),
+                });
+            }
         }
     }
     Some(ops)
@@ -1130,9 +1139,15 @@ mod tests {
         }
         // A new object at the end: one key. Moving an object to another layer keeps its place,
         // so it needs no key.
-        let keys = sim.run(&[json!({"op": "add_object",
-            "shape": {"kind": "rect", "min": [0, 0], "max": [5, 5]}})]);
+        let rect = json!({"op": "add_object",
+            "shape": {"kind": "rect", "min": [0, 0], "max": [5, 5]}});
+        let keys = sim.run(std::slice::from_ref(&rect));
         assert_eq!(keys.len(), 1);
+        // Two new objects in one push: the first change set is compared with the final document,
+        // where the second object is already there without a key. It is no neighbour: one key each.
+        let keys = sim.run(&[rect.clone(), rect]);
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        assert!(sim.others_build_my_order());
         let layer = base.layers[0].id.0.to_string();
         let keys = sim.run(&[json!({"op": "modify_object", "id": ids[5], "layer": layer})]);
         assert!(keys.is_empty(), "{keys:?}");
