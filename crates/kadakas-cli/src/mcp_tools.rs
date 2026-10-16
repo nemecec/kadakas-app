@@ -254,6 +254,35 @@ fn description(domain: &Domain, methods: &[(&str, &str)]) -> String {
     text
 }
 
+/// The JSON Schema of the params of a method, from the table of the API (`params.spec`): the same
+/// table that makes the API refuse a parameter it does not take. A method without an entry takes
+/// any object. `compact` leaves out the descriptions (the domain tools list the schemas of all
+/// their methods, and the text of the methods is in their description).
+pub fn method_schema(method: &str, compact: bool) -> Value {
+    let Some(spec) = kadakas_api::spec::table().get(method) else {
+        return json!({"type": "object", "additionalProperties": true});
+    };
+    let mut schema = kadakas_api::spec::json_schema(spec);
+    if let Some(o) = schema.as_object_mut() {
+        o.remove("$schema");
+    }
+    if compact {
+        strip_descriptions(&mut schema);
+    }
+    schema
+}
+
+fn strip_descriptions(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            m.remove("description");
+            m.values_mut().for_each(strip_descriptions);
+        }
+        Value::Array(a) => a.iter_mut().for_each(strip_descriptions),
+        _ => {}
+    }
+}
+
 /// One tool per domain.
 pub fn domain_tools() -> Vec<Value> {
     DOMAINS
@@ -261,6 +290,16 @@ pub fn domain_tools() -> Vec<Value> {
         .map(|d| {
             let methods = methods_of(d);
             let names: Vec<&str> = methods.iter().map(|(m, _)| *m).collect();
+            // The schema of the params depends on the method: one `if` for each.
+            let by_method: Vec<Value> = names
+                .iter()
+                .map(|m| {
+                    json!({
+                        "if": {"properties": {"method": {"const": m}}, "required": ["method"]},
+                        "then": {"properties": {"params": method_schema(m, true)}},
+                    })
+                })
+                .collect();
             let mut annotations = json!({"readOnlyHint": d.read_only});
             if !d.read_only {
                 annotations["destructiveHint"] = json!(true);
@@ -275,9 +314,10 @@ pub fn domain_tools() -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "method": {"type": "string", "enum": names, "description": "The method to call."},
-                        "params": {"type": "object", "additionalProperties": true, "description": "The params of the method."}
+                        "params": {"type": "object", "additionalProperties": true, "description": "The params of the method. A name the method does not take is an error that names the nearest known one."}
                     },
-                    "required": ["method"]
+                    "required": ["method"],
+                    "allOf": by_method,
                 },
                 "annotations": annotations,
             })
@@ -295,7 +335,7 @@ pub fn flat_tools() -> Vec<Value> {
     METHODS
         .iter()
         .filter(|(m, _)| !STREAM_METHODS.contains(m) && !m.starts_with("feedback."))
-        .map(|(m, d)| json!({"name": flat_name(m), "description": d, "inputSchema": {"type": "object", "additionalProperties": true}}))
+        .map(|(m, d)| json!({"name": flat_name(m), "description": d, "inputSchema": method_schema(m, false)}))
         .collect()
 }
 
@@ -576,5 +616,47 @@ mod tests {
         );
         assert_eq!(resolve(true, "objects", &json!({})), Call::UnknownTool);
         assert_eq!(flat_tools().len(), all_methods().count());
+    }
+
+    #[test]
+    fn the_tool_schemas_come_from_the_table_of_parameters() {
+        // A flat tool: the schema of the method, with required names, values and descriptions.
+        let flat = flat_tools();
+        let place = flat.iter().find(|t| t["name"] == "plants_place").unwrap();
+        let schema = &place["inputSchema"];
+        assert_eq!(schema["required"], json!(["mode"]));
+        assert_eq!(schema["additionalProperties"], false);
+        assert!(
+            schema["properties"]["mode"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("grid"))
+        );
+        assert_eq!(schema["properties"]["layer"]["x-kadakas-ref"], "layer");
+        assert!(schema.get("$schema").is_none());
+        // Every flat tool has a schema of an object.
+        assert!(flat.iter().all(|t| t["inputSchema"]["type"] == "object"));
+        // A domain tool: one `if` for each method, without the descriptions.
+        let domains = domain_tools();
+        let plants = domains.iter().find(|t| t["name"] == "plants").unwrap();
+        let all = plants["inputSchema"]["allOf"].as_array().unwrap();
+        let one = all
+            .iter()
+            .find(|c| c["if"]["properties"]["method"]["const"] == "plants.place")
+            .unwrap();
+        let params = &one["then"]["properties"]["params"];
+        assert_eq!(params["required"], json!(["mode"]));
+        assert!(params["properties"]["layer"].get("description").is_none());
+        assert!(
+            plants["inputSchema"]["properties"]["params"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("nearest")
+        );
+        // A method without an entry takes any object.
+        assert_eq!(
+            method_schema("no.such", false)["additionalProperties"],
+            true
+        );
     }
 }

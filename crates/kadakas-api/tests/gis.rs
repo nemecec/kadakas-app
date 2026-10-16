@@ -526,7 +526,7 @@ fn massing_methods() {
             "massing.add",
             json!({"footprint": [[0, 0], [1000, 0], [0, 1000]], "color": 1})
         )
-        .contains("unknown field")
+        .contains("unknown parameter")
     );
     assert!(
         err(

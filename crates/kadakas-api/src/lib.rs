@@ -50,6 +50,7 @@ pub use review_api::{Side as CompareSide, VERSION_BYTES_MAX, VERSIONS_MAX, VERSI
 mod rules_api;
 mod sheets_api;
 mod solid_api;
+pub mod spec;
 mod survey_api;
 mod symbols_api;
 mod wasm_plugin_api;
@@ -1188,7 +1189,12 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         let start = std::time::Instant::now();
         let note = feedback_api::begin(method, &p);
-        let mut result = self.dispatch(method, p);
+        // The table of parameters (spec.rs): unknown parameters are refused, names of layers and
+        // classes become IDs.
+        let mut result = match spec::prepare(self.editor.doc(), method, p) {
+            Ok(p) => self.dispatch(method, p),
+            Err(e) => Err(e),
+        };
         feedback_api::finish(self, note, &result);
         #[cfg(not(target_arch = "wasm32"))]
         let elapsed = Some(start.elapsed());
@@ -1269,6 +1275,11 @@ impl Session {
         let doc = self.editor.doc();
         Ok(match method {
             "describe" => {
+                // One method with the JSON Schema of its parameters (spec.rs).
+                if let Some(name) = p.get("method").and_then(Value::as_str) {
+                    return spec::describe_method(name);
+                }
+                let want_schemas = p.get("schemas").and_then(Value::as_bool) == Some(true);
                 let want_schema = p.get("schema").and_then(Value::as_bool) == Some(true);
                 #[allow(unused_mut)]
                 let mut d = json!({
@@ -1319,6 +1330,12 @@ impl Session {
                 });
                 if want_schema {
                     d["command_schema"] = kadakas_core::schema::command_schema();
+                }
+                d["parameters"] = json!(
+                    "Every method refuses a parameter that it does not take, and says which one and what the nearest known name is. The JSON Schema of the parameters of a method (names, types, required, allowed values, defaults) comes from describe {method: \"plants.place\"}; describe {schemas: true} returns them all in method_schemas (about 300 KB). A parameter of the type layer or class takes an ID or the unique name of the layer or class; a name that matches none or several is an error that lists the candidates."
+                );
+                if want_schemas {
+                    d["method_schemas"] = Value::Object(spec::all_schemas());
                 }
                 d
             }

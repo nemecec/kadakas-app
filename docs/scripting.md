@@ -127,7 +127,11 @@ New objects inside the block are `Pending`. Their `.id` is known only after the 
 
 Every object, layer, class and resource has an ID. An ID is a UUID text such as `0192f3c4-7b1a-7c2e-9d41-5e6f7a8b9c0d`. IDs are unique in the world, so a client that works offline never makes an ID that another client made. A file from an older format version, with number IDs, does not open: the loader says "unsupported old format".
 
-In Python, an ID is a `str` (`kadakas.Id`). Use `kadakas.is_id(text)` to test one. Wherever a layer, class or resource is expected, you can give its ID or its name.
+In Python, an ID is a `str` (`kadakas.Id`). Use `kadakas.is_id(text)` to test one. Wherever a layer, class or resource is expected, you can give its ID or its name. A name must be unique: one that matches no layer or class, or several, is an error that lists the candidates (give the ID then).
+
+### Parameters
+
+A method refuses a parameter that it does not take, and the error names it and the nearest known name (`plants.place` with `lyaer` says "did you mean 'layer'?"). `describe {method: "plants.place"}` returns the JSON Schema of the parameters of one method (names, types, required ones, allowed values, defaults), and `describe {schemas: true}` returns them for all methods. The Python package has a `TypedDict` for each method in `kadakas/_api.py`, so a type checker finds a wrong name before the call runs.
 
 For tests that need IDs that you can predict, start the session with the flag `--sequential-ids`. New IDs then count up from `00000000-0000-0000-0000-000000000002`. Do not use this flag for documents that you merge with others.
 

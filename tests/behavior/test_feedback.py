@@ -87,9 +87,12 @@ def test_an_agent_cannot_approve_or_send_attachments(cad):
     r = cad.result("feedback.submit", {"kind": "bug", "title": "Waiting for a person"})
     for method in ("feedback.approve", "feedback.send", "feedback.review"):
         assert cad.error(method, {"id": r["id"]})["code"] == -32601
-    # Extra fields change nothing.
-    cad.result("feedback.get", {"id": r["id"], "status": "approved", "approve": True})
-    cad.result("feedback.submit", {"kind": "bug", "title": "Waiting for a person", "status": "approved"})
+    # Extra fields are refused and change nothing.
+    for method, params in (
+        ("feedback.get", {"id": r["id"], "status": "approved", "approve": True}),
+        ("feedback.submit", {"kind": "bug", "title": "Waiting for a person", "status": "approved"}),
+    ):
+        assert "unknown parameter" in cad.error(method, params)["message"]
     assert cad.result("feedback.get", {"id": r["id"]})["status"] == "needs_review"
 
 

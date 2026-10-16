@@ -141,7 +141,7 @@ fn material_crud_and_validation() {
         (json!({"name": "x", "base_color": [1, 2, 300]}), "0 to 255"),
         (
             json!({"name": "x", "color": [1, 2, 3]}),
-            "unknown material field",
+            "unknown parameter",
         ),
         (json!({"name": "x", "texture": "marble"}), "unknown pattern"),
         (json!({"name": "x", "texture": 5}), "texture"),
@@ -522,7 +522,7 @@ fn assigning_materials_and_resolution_order_in_the_api() {
             "material.assign",
             json!({"material": "Grass", "class": "x"})
         )
-        .contains("class ID")
+        .contains("no class is named \"x\"")
     );
     assert!(
         fail(
@@ -538,7 +538,7 @@ fn assigning_materials_and_resolution_order_in_the_api() {
             "material.assign",
             json!({"material": "Grass", "object": a, "colour": 4})
         )
-        .contains("unknown key")
+        .contains("unknown parameter")
     );
 }
 
@@ -598,10 +598,7 @@ fn render_styles_crud_and_names() {
         (json!({"name": "x", "edges": "yes"}), "true or false"),
         (json!({"name": "x", "line_weight": 99}), "line weight"),
         (json!({"name": "x", "background": "white"}), "background"),
-        (
-            json!({"name": "x", "fog": true}),
-            "unknown render style field",
-        ),
+        (json!({"name": "x", "fog": true}), "unknown parameter"),
         (json!({}), "name"),
     ] {
         assert!(
@@ -692,7 +689,7 @@ fn sun_set_and_get_give_published_positions() {
         (json!({"time": "12:75"}), "time"),
         (json!({"tz_offset": 30}), "time zone"),
         (json!({"north_angle": "up"}), "number"),
-        (json!({"colour": 1}), "unknown key"),
+        (json!({"colour": 1}), "unknown parameter"),
         (json!({"from_georef": true}), "georeference"),
         (json!({"off": 1}), "true or false"),
     ] {
@@ -908,7 +905,7 @@ fn hidden_line_output_has_nine_edges_for_a_cube() {
     assert_eq!(segs.iter().filter(|g| g["hidden"] == true).count(), 3);
     assert_eq!(segs.iter().filter(|g| g["hidden"] == false).count(), 9);
     assert!(d["svg"].as_str().unwrap().contains("stroke-dasharray"));
-    assert!(fail(&mut s, "render.hidden_line", json!({"colour": 1})).contains("unknown key"));
+    assert!(fail(&mut s, "render.hidden_line", json!({"colour": 1})).contains("unknown parameter"));
     assert!(
         fail(&mut s, "render.hidden_line", json!({"view": "sideways"})).contains("unknown view")
     );

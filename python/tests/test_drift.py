@@ -69,9 +69,7 @@ def test_the_wrappers_only_use_methods_that_exist(describe):
     assert len(api_calls) > 40, "the scan found too little: has the code style changed?"
     missing = sorted(a for a in api_calls if a not in by_python)
     assert not missing, f"the wrappers call API methods that describe does not list: {missing}"
-    # file.open and file.save are answered by the program (CLI or app) that holds the file paths, so
-    # describe does not list them.
-    assert sorted(r for r in raw_calls if r not in names and r not in {"file.open", "file.save"}) == []
+    assert sorted(r for r in raw_calls if r not in names) == []
 
 
 def test_command_ops_used_by_the_wrappers_are_known(describe, kadakas_bin):

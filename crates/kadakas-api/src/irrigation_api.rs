@@ -73,15 +73,15 @@ pub const CALCULATE: (&str, &str) = (
 );
 pub const LAYOUT_FILL: (&str, &str) = (
     "irrigation.layout.fill",
-    "Fill an area with heads. params: {boundary: [[x, y], ...] | object (ID of a rect, closed polyline, landscape area or hardscape), model, spacing? (head-to-head, mm; default the radius of the model), pattern? (square | triangular), angle? (degrees), inset? (mm from the edge), arc? (default 360), place? (default true: add the outlets in one undo step)}. Returns {count, points, ids}.",
+    "Fill an area with heads. params: {boundary: [[x, y], ...] | object (ID of a rect, closed polyline, landscape area or hardscape), model, spacing? (head-to-head, mm; default the radius of the model), pattern? (square | triangular), angle? (degrees), inset? (mm from the edge), arc? (default 360), place? (default true: add the outlets in one undo step), layer?, class?}. Returns {count, points, ids}.",
 );
 pub const LAYOUT_EDGE: (&str, &str) = (
     "irrigation.layout.edge",
-    "Place heads along an edge. params: {path: [[x, y], ...] | object (ID of a polyline or area), closed? (the path is a ring), model, spacing? (default the radius of the model; the heads are spread evenly at most this far apart), arc? (default 180), side? (left | right of the direction of the path: the way the heads face, default left), place?}. Returns {count, points, ids}.",
+    "Place heads along an edge. params: {path: [[x, y], ...] | object (ID of a polyline or area), closed? (the path is a ring), model, spacing? (default the radius of the model; the heads are spread evenly at most this far apart), arc? (default 180), side? (left | right of the direction of the path: the way the heads face, default left), place?, layer?, class?}. Returns {count, points, ids}.",
 );
 pub const LAYOUT_DRIP: (&str, &str) = (
     "irrigation.layout.drip",
-    "Draw parallel drip lines in an area. params: {boundary | object, spacing (mm between lines), angle? (degrees), inset? (mm), size? (default \"16\"), material? (default \"PE\"), emitter_spacing?, emitter_flow?, place?}. Each line runs from the lower to the higher turned coordinate. Returns {count, lines: [[a, b]], ids, total_length_m}.",
+    "Draw parallel drip lines in an area. params: {boundary | object, spacing (mm between lines), angle? (degrees), inset? (mm), size? (default \"16\"), material? (default \"PE\"), emitter_spacing?, emitter_flow?, place?, layer?, class?}. Each line runs from the lower to the higher turned coordinate. Returns {count, lines: [[a, b]], ids, total_length_m}.",
 );
 pub const REPORT_ZONES: (&str, &str) = (
     "irrigation.report.zones",

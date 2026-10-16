@@ -249,7 +249,7 @@ def test_render_styles_are_resources_and_the_active_one_applies(cad):
     assert cad.result("render_style.list")["active"] == plan
     copy = cad.result("render_style.duplicate", {"id": plan})["id"]
     assert cad.result("render_style.get", {"id": copy})["name"] == "Plan lines copy"
-    assert "unknown render style field" in cad.error("render_style.create", {"name": "x", "fog": 1})["message"]
+    assert "unknown parameter" in cad.error("render_style.create", {"name": "x", "fog": 1})["message"]
 
 
 def test_sheet_viewports_use_hidden_line_as_vector_lines(cad):
