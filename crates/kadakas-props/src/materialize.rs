@@ -199,7 +199,14 @@ pub fn materialize_with(
         let parsed = validate_entity(Kind::Object, id, &props)
             .and_then(|()| read::<Object>(Kind::Object, id, &props));
         match parsed {
-            Ok(o) => objects.push(o),
+            Ok(mut o) => {
+                // Two clients may change the outline and the holes of a hardscape at the same
+                // time. The merge keeps both, so holes can end up outside the outline: cut them.
+                if let Some(note) = kadakas_core::hardscape::data::repair_holes(&mut o) {
+                    cx.repair(note);
+                }
+                objects.push(o)
+            }
             Err(e) => cx.quarantine(Kind::Object, id, e),
         }
     }

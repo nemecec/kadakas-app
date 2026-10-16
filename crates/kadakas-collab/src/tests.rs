@@ -1158,9 +1158,13 @@ fn bad_presence_from_the_server_is_ignored() {
 #[test]
 fn document_changes_travel_as_operations() {
     use kadakas_core::command::{Command, Editor};
-    let mut ed_a = Editor::with_sequential_ids();
-    let ed_b = Editor::with_sequential_ids();
-    let base = replica_of(ed_a.doc());
+    let empty = Editor::with_sequential_ids();
+    let base = replica_of(empty.doc());
+    // The host builds its document from the state (with the stacking keys), as `collab.connect`
+    // does, and the shadow is that document.
+    let built = crate::materialize::materialize(&base, empty.doc()).doc;
+    let mut ed_a = Editor::new(built.clone());
+    let ed_b = Editor::new(built);
     let mut a = Client::with_state(cfg(1), base.clone(), 0, "log-1");
     let mut b = Client::with_state(cfg(2), base.clone(), 0, "log-1");
     a.set_shadow(ed_a.doc());

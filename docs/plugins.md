@@ -341,7 +341,7 @@ The host is split so that the engine can change:
 
 - `kadakas-plugin-abi` is pure Rust. It builds for `wasm32-unknown-unknown`, so it works in the browser build and in plug-ins.
 - `kadakas-plugin` has two traits, `PluginRuntime` and `LoadedModule`. Everything above them (manifest checks, trust, parameter checks, shape checks, tool checks) is the same for all engines.
-- Native builds (the desktop app and the server) use the `wasmtime` engine.
+- Native builds (the desktop app and the server) use the `wasmtime` engine. All sessions of a process share one engine and keep the last 16 compiled modules (`native::MODULE_CACHE_ENTRIES`), found by the SHA-256 of the module, so a module that one session compiled is not compiled again by another. The checks of a module run at every load, also for a module from this cache. A module that does not compile is not kept.
 - The browser build uses the `WebAssembly` API of the page. The code is split in three parts: `harden.rs` rewrites a module, `metered.rs` makes the calls and finds the cause of a failure, and `web.rs` is the thin glue to `js-sys`. The first two are plain Rust. They are tested on the desktop with a test compiler on wasmtime that has no limits of its own, so only the glue (about 300 lines) has no test in this repository.
 
 **How the browser enforces the limits.** A browser gives no fuel, no memory cap and no deadline. So the host rewrites the module before the browser compiles it:

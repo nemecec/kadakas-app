@@ -370,15 +370,20 @@ pub fn replica_of(doc: &Document) -> Replica {
 }
 
 /// Reads a document that was built from a replica (the shadow of a client). Like [`replica_of`],
-/// but every key the document carries stays, also two equal keys of concurrent inserts (the list
-/// is sorted by key, then by ID): the shadow must hold the keys that the view holds, or the keys
-/// of the next local edit are made between the wrong neighbours.
+/// but the keys are exactly the keys that the document carries: two equal keys of concurrent
+/// inserts stay (the list is sorted by key, then by ID), and a thing without a key (made by an
+/// older client) gets none. The shadow must hold the keys that the view holds, or the keys of the
+/// next local edit are made between the wrong neighbours.
 pub fn shadow_of(doc: &Document) -> Replica {
     replica_with_keys(doc, true)
 }
 
-fn replica_with_keys(doc: &Document, keep_ties: bool) -> Replica {
-    let keys = document_keys(doc, keep_ties);
+fn replica_with_keys(doc: &Document, as_carried: bool) -> Replica {
+    let keys = if as_carried {
+        carried_keys(doc)
+    } else {
+        document_keys(doc)
+    };
     let mut r = Replica::new();
     for t in all_targets(doc) {
         if let Some(mut props) = props_of(doc, t) {
@@ -400,19 +405,32 @@ fn stored_key(extra: &Map<String, Value>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The stacking keys of a document: the keys that its objects and layers carry, if every one of a
-/// list has a key and the keys are increasing (`keep_ties`: or equal); else new keys by position.
-fn document_keys(doc: &Document, keep_ties: bool) -> BTreeMap<Target, String> {
-    fn lists_keys(
-        items: Vec<(Target, Option<String>)>,
-        keep_ties: bool,
-        out: &mut BTreeMap<Target, String>,
-    ) {
+/// The keys that the objects and layers of a document carry, as they are: a thing without a valid
+/// key gets none. The shadow of a client must hold exactly the keys of the view that the document
+/// was built from. A key made up here would be a neighbour that no other client knows: the keys of
+/// the next local edit would be made next to it, and the others would build another order. A thing
+/// without a key gets a real key, as an operation, when an edit needs one (`order_ops`).
+fn carried_keys(doc: &Document) -> BTreeMap<Target, String> {
+    let layers = doc
+        .layers
+        .iter()
+        .map(|l| (Target::new(Kind::Layer, l.id.0), &l.extra));
+    let objects = doc
+        .objects
+        .values()
+        .map(|o| (Target::new(Kind::Object, o.id.0), &o.extra));
+    layers
+        .chain(objects)
+        .filter_map(|(t, extra)| stored_key(extra).map(|k| (t, k)))
+        .collect()
+}
+
+/// The stacking keys for a new replica of a document: the keys that its objects and layers carry,
+/// if every one of a list has a key and the keys are increasing; else new keys by position.
+fn document_keys(doc: &Document) -> BTreeMap<Target, String> {
+    fn lists_keys(items: Vec<(Target, Option<String>)>, out: &mut BTreeMap<Target, String>) {
         let given: Vec<Option<String>> = items.iter().map(|(_, k)| k.clone()).collect();
-        let sorted = given.iter().all(Option::is_some)
-            && given
-                .windows(2)
-                .all(|w| w[0] < w[1] || keep_ties && w[0] == w[1]);
+        let sorted = given.iter().all(Option::is_some) && given.windows(2).all(|w| w[0] < w[1]);
         let keys: Vec<String> = if sorted {
             given.into_iter().flatten().collect()
         } else {
@@ -428,17 +446,14 @@ fn document_keys(doc: &Document, keep_ties: bool) -> BTreeMap<Target, String> {
             .iter()
             .map(|l| (Target::new(Kind::Layer, l.id.0), stored_key(&l.extra)))
             .collect(),
-        keep_ties,
         &mut out,
     );
-    // The objects are one list over all layers: the stacking order of the document is one list
-    // (it is the drawing order), and `materialize` sorts all objects by key.
+    // The objects are one list over all layers (section 3.3.1 of `docs/collaboration.md`).
     lists_keys(
         doc.objects
             .values()
             .map(|o| (Target::new(Kind::Object, o.id.0), stored_key(&o.extra)))
             .collect(),
-        keep_ties,
         &mut out,
     );
     out
@@ -454,12 +469,8 @@ fn key_in(r: &Replica, t: Target) -> Option<String> {
 
 /// The operations that give a new key to every object that is out of place in the list of all
 /// objects (if `objects_too`), and to every layer out of place in the list of layers (if
-/// `layers_too`). The keys of the others stay.
-///
-/// The objects are **one** list, not a list for each layer: the stacking order of the document is
-/// the order of all objects (the drawing order), and every client builds it by sorting all
-/// objects by key (`materialize`). Keys that only increase inside each layer would let the
-/// document of the author keep an order that the others do not build.
+/// `layers_too`). The keys of the others stay. The objects are one list over all layers (section
+/// 3.3.1 of `docs/collaboration.md`).
 fn order_ops(shadow: &Replica, doc: &Document, objects_too: bool, layers_too: bool) -> Vec<Op> {
     let mut ops = Vec::new();
     let mut emit = |items: Vec<Target>| {
@@ -494,6 +505,98 @@ fn order_ops(shadow: &Replica, doc: &Document, objects_too: bool, layers_too: bo
         );
     }
     ops
+}
+
+/// The keys for the objects that an edit touched, found near them only. For each run of touched
+/// objects in the list of all objects, the keys of the nearest untouched neighbours come from
+/// `shadow`. A run whose keys already lie in order between them needs nothing; another run gets new
+/// keys between them. The other objects are not looked at, so an edit costs about the same in a
+/// small and in a large document.
+///
+/// `None` when the neighbours do not tell where the run goes (a neighbour without a key, or two
+/// neighbours whose keys are not in order, for example because a later change set of the same push
+/// moved one of them): the caller then checks the whole list (`order_ops`).
+///
+/// Why it is enough: the untouched objects are in key order, because the document was built from
+/// the view and the shadow holds the keys of the view. After each change set the touched objects
+/// are in order with their neighbours, so after the last one the whole list is.
+fn local_object_order(
+    shadow: &Replica,
+    doc: &Document,
+    touched: &BTreeSet<ObjectId>,
+) -> Option<Vec<Op>> {
+    let at_index = |i: usize| doc.objects.get_index(i).map(|(id, _)| *id);
+    let target = |id: ObjectId| Target::new(Kind::Object, id.0);
+    // A thing that the replica has deleted stays deleted: it takes no key and is no neighbour.
+    let in_list = |id: ObjectId| {
+        let t = target(id);
+        shadow.alive(t).is_some() || !shadow.contains(t)
+    };
+    let mut at: Vec<usize> = touched
+        .iter()
+        .filter(|id| in_list(**id))
+        .filter_map(|id| doc.objects.get_index_of(id))
+        .collect();
+    at.sort_unstable();
+    let mut ops = Vec::new();
+    let mut done = 0; // the positions below this are handled
+    for &start in &at {
+        if start < done {
+            continue;
+        }
+        // The run: the touched objects from `start` on, passing over things that are not in the
+        // list; it ends at the first untouched object (`next`) or at the end of the list.
+        let mut run = Vec::new();
+        let mut i = start;
+        let next = loop {
+            match at_index(i) {
+                None => break None,
+                Some(id) if !in_list(id) => {}
+                Some(id) if touched.contains(&id) => run.push(target(id)),
+                Some(id) => break Some(target(id)),
+            }
+            i += 1;
+        };
+        done = i;
+        let prev = (0..start)
+            .rev()
+            .filter_map(at_index)
+            .find(|id| in_list(*id))
+            .map(target);
+        // The key of a neighbour; no neighbour is an open end, a neighbour without a key is `None`.
+        let bound = |t: Option<Target>| match t {
+            None => Some(None),
+            Some(t) => key_in(shadow, t).map(Some),
+        };
+        let (lo, hi) = (bound(prev)?, bound(next)?);
+        if let (Some(a), Some(b)) = (&lo, &hi)
+            && a >= b
+        {
+            return None;
+        }
+        let keys: Vec<Option<String>> = run.iter().map(|t| key_in(shadow, *t)).collect();
+        let fits = keys.iter().all(Option::is_some) && {
+            let seq: Vec<&str> = lo
+                .iter()
+                .chain(keys.iter().flatten())
+                .chain(hi.iter())
+                .map(String::as_str)
+                .collect();
+            seq.windows(2).all(|w| w[0] < w[1])
+        };
+        if fits {
+            continue;
+        }
+        let new = crate::order::keys_between(lo.as_deref(), hi.as_deref(), run.len());
+        for (t, k) in run.iter().zip(new) {
+            ops.push(Op::Set {
+                target: *t,
+                prop: "order".into(),
+                value: Value::String(k),
+            });
+        }
+    }
+    Some(ops)
 }
 
 /// The operations that change the properties of `e` into `props`.
@@ -595,18 +698,27 @@ pub fn ops_from_change(view: &Replica, doc: &Document, cs: &ChangeSet) -> Vec<Op
         .into_iter()
         .flat_map(|t| diff_thing(view, t, props_of(doc, t)))
         .collect();
-    // Objects that were added or changed may have a new place in the stacking order.
-    let objects_too = cs
+    // Objects that were added or changed may have a new place in the stacking order. They are
+    // checked where they are, and the whole list only when their neighbours do not tell.
+    let touched: BTreeSet<ObjectId> = cs
         .added
         .objects
         .iter()
         .chain(&cs.changed.objects)
-        .any(|id| doc.object(*id).is_some());
+        .filter(|id| doc.object(**id).is_some())
+        .copied()
+        .collect();
     let layers_too = cs.op == "move_layer"
         || [&cs.added, &cs.changed, &cs.removed]
             .iter()
             .any(|ids| !ids.layers.is_empty());
-    ops.extend(order_ops(view, doc, objects_too, layers_too));
+    match local_object_order(view, doc, &touched) {
+        Some(keys) => {
+            ops.extend(keys);
+            ops.extend(order_ops(view, doc, false, layers_too));
+        }
+        None => ops.extend(order_ops(view, doc, true, layers_too)),
+    }
     order(ops)
 }
 
@@ -958,5 +1070,190 @@ mod tests {
         let m = crate::materialize::materialize(&view, &Document::default());
         assert_eq!(m.doc.drawing.project.name, "Garden");
         assert!(m.quarantined.is_empty());
+    }
+
+    /// A client in a few lines: the view, the shadow and the document that was built from the view.
+    /// Edits go to the view and the shadow as the operations of their change sets.
+    struct Sim {
+        view: Replica,
+        shadow: Replica,
+        ed: Editor,
+    }
+
+    impl Sim {
+        fn new(view: Replica, base: &Document) -> Sim {
+            let doc = crate::materialize::materialize(&view, base).doc;
+            Sim {
+                shadow: shadow_of(&doc),
+                ed: Editor::new(doc),
+                view,
+            }
+        }
+
+        /// Runs the commands, then turns all their change sets into operations at once (like one
+        /// push of a client). Returns the operations on `order`.
+        fn run(&mut self, cmds: &[serde_json::Value]) -> Vec<Op> {
+            let rev = self.ed.revision();
+            for c in cmds {
+                self.exec(c);
+            }
+            self.push(rev)
+        }
+
+        fn exec(&mut self, cmd: &serde_json::Value) {
+            // A command may fail (an ID that is gone): that is normal.
+            let _ = self
+                .ed
+                .execute(&serde_json::from_value(cmd.clone()).unwrap());
+        }
+
+        /// The change sets since `rev` as operations, in one push.
+        fn push(&mut self, rev: u64) -> Vec<Op> {
+            let changes: Vec<ChangeSet> = self
+                .ed
+                .changes_since(rev)
+                .changes
+                .into_iter()
+                .cloned()
+                .collect();
+            let mut keys = Vec::new();
+            for cs in &changes {
+                let ops = ops_from_change(&self.shadow, self.ed.doc(), cs);
+                self.shadow.apply_all(crate::op::Writer::BASELINE, &ops);
+                self.view.apply_all(crate::op::Writer::BASELINE, &ops);
+                keys.extend(ops.into_iter().filter(|o| o.prop() == Some("order")));
+            }
+            keys
+        }
+
+        /// The order that every other client builds from the view is the order of this document.
+        fn others_build_my_order(&self) -> bool {
+            let built = crate::materialize::materialize(&self.view, self.ed.doc()).doc;
+            built.objects.keys().eq(self.ed.doc().objects.keys())
+        }
+
+        fn ids(&self) -> Vec<String> {
+            self.ed
+                .doc()
+                .objects
+                .keys()
+                .map(|k| k.0.to_string())
+                .collect()
+        }
+    }
+
+    /// A shared state with `n` rectangles over two layers (every second one on the second layer),
+    /// with keys.
+    fn two_layer_state(n: usize) -> (Replica, Document, String) {
+        let mut ed = editor();
+        ed.execute(&serde_json::from_value(json!({"op": "add_layer", "name": "Two"})).unwrap())
+            .unwrap();
+        let second = ed.doc().layers[1].id.0.to_string();
+        for i in 0..n {
+            let mut c = json!({"op": "add_object",
+                "shape": {"kind": "rect", "min": [i as f64 * 20.0, 0.0], "max": [i as f64 * 20.0 + 10.0, 5.0]}});
+            if i % 2 == 1 {
+                c["layer"] = json!(second);
+            }
+            ed.execute(&serde_json::from_value(c).unwrap()).unwrap();
+        }
+        (replica_of(ed.doc()), ed.doc().clone(), second)
+    }
+
+    #[test]
+    fn an_arrange_gives_keys_near_the_moved_object_only() {
+        let (view, base, _) = two_layer_state(40);
+        let mut sim = Sim::new(view, &base);
+        let ids = sim.ids();
+        // One object one step forward (past its neighbour on the same layer): one new key.
+        let keys = sim.run(&[json!({"op": "arrange", "ids": [ids[10]], "how": "forward"})]);
+        assert_eq!(keys.len(), 1, "{keys:?}");
+        assert!(sim.others_build_my_order());
+        // To the front and to the back: one key each.
+        for how in ["front", "back"] {
+            let keys = sim.run(&[json!({"op": "arrange", "ids": [ids[20]], "how": how})]);
+            assert_eq!(keys.len(), 1, "{how}: {keys:?}");
+            assert!(sim.others_build_my_order(), "{how}");
+        }
+        // A new object at the end: one key. Moving an object to another layer keeps its place,
+        // so it needs no key.
+        let keys = sim.run(&[json!({"op": "add_object",
+            "shape": {"kind": "rect", "min": [0, 0], "max": [5, 5]}})]);
+        assert_eq!(keys.len(), 1);
+        let layer = base.layers[0].id.0.to_string();
+        let keys = sim.run(&[json!({"op": "modify_object", "id": ids[5], "layer": layer})]);
+        assert!(keys.is_empty(), "{keys:?}");
+        assert!(sim.others_build_my_order());
+    }
+
+    /// Many edits in one push: a later change set moves the neighbours of an earlier one, so the
+    /// neighbours do not tell, and the whole list is checked. Every order is the one the others
+    /// build.
+    #[test]
+    fn local_keys_keep_the_order_over_many_edits_in_one_push() {
+        let (view, base, second) = two_layer_state(12);
+        let mut sim = Sim::new(view, &base);
+        let first = base.layers[0].id.0.to_string();
+        let mut seed = 7u64;
+        let mut next = |n: usize| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((seed >> 33) as usize) % n
+        };
+        for round in 0..200 {
+            let rev = sim.ed.revision();
+            let mut cmds = Vec::new();
+            for _ in 0..1 + round % 4 {
+                let ids = sim.ids();
+                let pick = ids[next(ids.len())].clone();
+                let other = ids[next(ids.len())].clone();
+                let layer = if next(2) == 0 { &first } else { &second };
+                let how = ["front", "back", "forward", "backward"][next(4)];
+                let cmd = match next(4) {
+                    0 => json!({"op": "add_object", "layer": layer,
+                        "shape": {"kind": "rect", "min": [0, 0], "max": [5, 5]}}),
+                    1 => json!({"op": "modify_object", "id": pick, "layer": layer}),
+                    _ => json!({"op": "arrange", "ids": [pick, other], "how": how}),
+                };
+                // The command runs at once, so the next one picks from the new list.
+                sim.exec(&cmd);
+                cmds.push(cmd);
+            }
+            // The change sets of the round become operations together.
+            sim.push(rev);
+            assert!(sim.others_build_my_order(), "round {round}: {cmds:?}");
+        }
+    }
+
+    /// A thing without a key (made by an older client) has no key in the view, so the shadow must
+    /// not give it one: before, the shadow numbered the whole list again, a later arrange made its
+    /// key next to the made-up keys, and the others built another order.
+    #[test]
+    fn a_thing_without_a_key_gets_a_real_key_when_its_place_matters() {
+        let mut ed = editor();
+        let ids: Vec<ObjectId> = (0..3)
+            .map(|i| add_line(&mut ed, f64::from(i) * 20.0))
+            .collect();
+        let mut view = replica_of(ed.doc());
+        // The first object came from an older client: no key.
+        let old = Target::new(Kind::Object, ids[0].0);
+        view.apply(
+            crate::op::Writer::BASELINE,
+            &Op::Unset {
+                target: old,
+                prop: "order".into(),
+            },
+        );
+        let mut sim = Sim::new(view, ed.doc());
+        let shadow_key = key_in(&sim.shadow, old);
+        // The last object goes to the back, in front of nothing: before the one without a key.
+        let last = ids[2].0.to_string();
+        let keys = sim.run(&[json!({"op": "arrange", "ids": [last], "how": "back"})]);
+        assert_eq!(sim.ids()[0], last);
+        assert!(sim.others_build_my_order(), "{keys:?}");
+        assert_eq!(shadow_key, None, "the shadow invents no key");
+        // The object without a key got a real key, as an operation.
+        assert!(key_in(&sim.view, old).is_some());
     }
 }

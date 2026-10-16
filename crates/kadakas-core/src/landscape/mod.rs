@@ -108,12 +108,6 @@ pub struct LandscapePatch {
     pub name: Option<String>,
 }
 
-fn inside_or_on(ring: &[DVec2], p: DVec2) -> bool {
-    let n = ring.len();
-    geom::point_in_polygon(p, ring)
-        || (0..n).any(|i| geom::dist_to_segment(p, ring[i], ring[(i + 1) % n]) < 1e-6)
-}
-
 /// Applies a patch to a landscape area object. The style must exist (the caller checks).
 /// Nothing changes on error.
 pub fn apply_patch(obj: &mut Object, patch: &LandscapePatch) -> Result<(), String> {
@@ -157,10 +151,7 @@ pub fn apply_patch(obj: &mut Object, patch: &LandscapePatch) -> Result<(), Strin
             {
                 return Err("numbers must be finite".into());
             }
-            if !curve::flatten(hole, true, TOLERANCE)
-                .iter()
-                .all(|p| inside_or_on(&ring, *p))
-            {
+            if !crate::layout::ring_within(&curve::flatten(hole, true, TOLERANCE), &ring) {
                 return Err(format!("hole {} is not inside the area", i + 1));
             }
         }
@@ -175,17 +166,16 @@ pub fn apply_patch(obj: &mut Object, patch: &LandscapePatch) -> Result<(), Strin
     Ok(())
 }
 
-/// True if every hole lies inside the boundary (or on its edge).
+/// True if every hole lies inside the boundary (or on its edge, or leaves it by less than noise:
+/// see `layout::ring_within`). A hole that pokes into a concave notch does not fit.
 pub fn holes_fit(boundary: &[Vertex], holes: &[Vec<Vertex>]) -> bool {
     if holes.is_empty() {
         return true;
     }
     let ring = curve::flatten(boundary, true, TOLERANCE);
-    holes.iter().all(|h| {
-        curve::flatten(h, true, TOLERANCE)
-            .iter()
-            .all(|p| inside_or_on(&ring, *p))
-    })
+    holes
+        .iter()
+        .all(|h| crate::layout::ring_within(&curve::flatten(h, true, TOLERANCE), &ring))
 }
 
 fn ccw(ring: &[DVec2]) -> Vec<[f64; 2]> {

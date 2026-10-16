@@ -1059,9 +1059,11 @@ mod real_commands {
 
     #[derive(Clone, Debug)]
     enum Act {
+        /// `l`: a layer to draw on (an index into the layers of the session), or the active layer.
         AddRect {
             s: bool,
             x: i32,
+            l: Option<u8>,
         },
         AddLayer {
             s: bool,
@@ -1137,6 +1139,7 @@ mod real_commands {
             s: bool,
             x: i32,
             v: u8,
+            l: Option<u8>,
         },
         AddSite {
             s: bool,
@@ -1203,8 +1206,9 @@ mod real_commands {
 
     fn act() -> impl Strategy<Value = Act> {
         prop_oneof![
-            4 => (any::<bool>(), -500i32..500).prop_map(|(s, x)| Act::AddRect { s, x }),
-            1 => (any::<bool>(), 0u8..4).prop_map(|(s, n)| Act::AddLayer { s, n }),
+            4 => (any::<bool>(), -500i32..500, prop::option::of(any::<u8>()))
+                .prop_map(|(s, x, l)| Act::AddRect { s, x, l }),
+            2 => (any::<bool>(), 0u8..4).prop_map(|(s, n)| Act::AddLayer { s, n }),
             2 => (any::<bool>(), any::<u8>()).prop_map(|(s, i)| Act::Delete { s, i }),
             2 => (any::<bool>(), any::<u8>()).prop_map(|(s, i)| Act::Move { s, i }),
             2 => (any::<bool>(), any::<u8>(), any::<u8>()).prop_map(|(s, i, j)| Act::Group { s, i, j }),
@@ -1221,7 +1225,8 @@ mod real_commands {
             1 => any::<bool>().prop_map(|s| Act::Redo { s }),
             1 => (any::<bool>(), -500i32..500).prop_map(|(s, x)| Act::Place { s, x }),
             2 => (any::<bool>(), any::<u8>(), 50u16..200).prop_map(|(s, i, w)| Act::SetParams { s, i, w }),
-            1 => (any::<bool>(), -500i32..500, 0u8..2).prop_map(|(s, x, v)| Act::Underlay { s, x, v }),
+            1 => (any::<bool>(), -500i32..500, 0u8..2, prop::option::of(any::<u8>()))
+                .prop_map(|(s, x, v, l)| Act::Underlay { s, x, v, l }),
             1 => (any::<bool>(), 1u16..300).prop_map(|(s, n)| Act::AddSite { s, n }),
             1 => (any::<bool>(), any::<u8>(), 0u16..300).prop_map(|(s, i, k)| Act::EditSite { s, i, k }),
             3 => (any::<bool>(), 0u8..4).prop_map(|(s, n)| Act::AddIssue { s, n }),
@@ -1292,6 +1297,15 @@ mod real_commands {
         (!v.is_empty()).then(|| v[i as usize % v.len()].clone())
     }
 
+    /// The command with the layer `l` of the session (an index, modulo the number of layers), or
+    /// as it is (the active layer).
+    fn on_layer(s: &Session, l: Option<u8>, mut cmd: Value) -> Value {
+        if let Some(layer) = l.and_then(|l| pick(&layer_ids(s), l)) {
+            cmd["layer"] = json!(layer);
+        }
+        cmd
+    }
+
     fn exec(s: &mut Session, cmd: Value) {
         // A command may fail (an ID is gone, a layer is not empty): this is normal.
         let _ = s.handle("execute", json!({"command": cmd}));
@@ -1302,11 +1316,16 @@ mod real_commands {
         hub.set_time(*now);
         let idx = |s: bool| usize::from(s);
         match a {
-            Act::AddRect { s, x } => exec(
-                &mut sessions[idx(*s)],
-                json!({"op": "add_object", "shape": {"kind": "rect",
-                    "min": [x, 0], "max": [x + 100, 50]}}),
-            ),
+            Act::AddRect { s, x, l } => {
+                let ss = &mut sessions[idx(*s)];
+                let cmd = on_layer(
+                    ss,
+                    *l,
+                    json!({"op": "add_object", "shape": {"kind": "rect",
+                        "min": [x, 0], "max": [x + 100, 50]}}),
+                );
+                exec(ss, cmd);
+            }
             Act::AddLayer { s, n } => exec(
                 &mut sessions[idx(*s)],
                 json!({"op": "add_layer", "name": format!("L{n}")}),
@@ -1418,12 +1437,17 @@ mod real_commands {
                     );
                 }
             }
-            Act::Underlay { s, x, v } => exec(
-                &mut sessions[idx(*s)],
-                json!({"op": "add_object", "shape": {"kind": "underlay",
-                    "min": [x, 0], "max": [x + 6400, 6400], "width": 64, "height": 64,
-                    "png": noisy_png_base64(64, u32::from(*v)), "opacity": 1.0}}),
-            ),
+            Act::Underlay { s, x, v, l } => {
+                let ss = &mut sessions[idx(*s)];
+                let cmd = on_layer(
+                    ss,
+                    *l,
+                    json!({"op": "add_object", "shape": {"kind": "underlay",
+                        "min": [x, 0], "max": [x + 6400, 6400], "width": 64, "height": 64,
+                        "png": noisy_png_base64(64, u32::from(*v)), "opacity": 1.0}}),
+                );
+                exec(ss, cmd);
+            }
             Act::AddSite { s, n } => {
                 let points: Vec<Value> = (0..*n)
                     .map(|i| json!([f64::from(i) * 10.0, f64::from(i % 9) * 5.0, 0.0]))
@@ -1656,17 +1680,23 @@ mod real_commands {
     #[test]
     fn an_insert_after_a_tie_of_keys_keeps_the_shared_order() {
         let acts = [
-            Act::AddRect { s: false, x: 0 },
+            Act::AddRect {
+                s: false,
+                x: 0,
+                l: None,
+            },
             Act::Place { s: false, x: 0 },
             Act::Underlay {
                 s: true,
                 x: 0,
                 v: 0,
+                l: None,
             },
             Act::Underlay {
                 s: false,
                 x: 0,
                 v: 0,
+                l: None,
             },
             Act::Undo { s: false },
             Act::Sync { s: true },
@@ -1676,7 +1706,11 @@ mod real_commands {
                 j: 197,
                 how: 2,
             },
-            Act::AddRect { s: false, x: 314 },
+            Act::AddRect {
+                s: false,
+                x: 314,
+                l: None,
+            },
             Act::Delete { s: true, i: 191 },
             Act::Redo { s: false },
             Act::Sync { s: true },
@@ -1684,6 +1718,7 @@ mod real_commands {
                 s: true,
                 x: -148,
                 v: 1,
+                l: None,
             },
         ];
         let a = seeded(1);
@@ -1729,8 +1764,8 @@ mod real_commands {
             }
             c
         };
-        // 1. A draws P on the first layer, adds a second layer and draws Q on it. Sync: P and Q
-        //    both get the key `a0` (each is the first of its layer, before the fix).
+        // 1. A draws P on the first layer, adds a second layer and draws Q on it. Sync. (Before
+        //    the fix, P and Q would both get the key `a0`: each was the first of its layer.)
         let a = &mut sessions[0];
         exec(a, rect(0, None));
         exec(a, json!({"op": "add_layer", "name": "Two"}));
@@ -1771,13 +1806,21 @@ mod real_commands {
             &mut sessions,
             &hub,
             &mut now,
-            &Act::AddRect { s: false, x: 0 },
+            &Act::AddRect {
+                s: false,
+                x: 0,
+                l: None,
+            },
         );
         apply(
             &mut sessions,
             &hub,
             &mut now,
-            &Act::AddRect { s: true, x: 500 },
+            &Act::AddRect {
+                s: true,
+                x: 500,
+                l: None,
+            },
         );
         settle(&mut sessions, &hub, &mut now);
         assert!(same(&sessions[0], &sessions[1]));
@@ -1785,7 +1828,12 @@ mod real_commands {
         for s in [false, true] {
             let ss = &mut sessions[usize::from(s)];
             let before = object_ids(ss);
-            apply(&mut sessions, &hub, &mut now, &Act::AddRect { s, x: 900 });
+            apply(
+                &mut sessions,
+                &hub,
+                &mut now,
+                &Act::AddRect { s, x: 900, l: None },
+            );
             let ss = &mut sessions[usize::from(s)];
             let new: Vec<String> = object_ids(ss)
                 .into_iter()
@@ -1800,6 +1848,156 @@ mod real_commands {
             assert!(same(&sessions[0], &sessions[1]));
         }
         assert_eq!(object_count(&mut sessions[0]), 4);
+    }
+
+    /// Two sessions run the actions, come back online and settle. Then both documents are the
+    /// same, valid, and both clients match the server.
+    fn converge(acts: &[Act]) -> Result<(), TestCaseError> {
+        let a = seeded(1);
+        let hub = Hub::new(Sequencer::new(docsync::replica_of(a.editor.doc())));
+        let mut sessions = [a, seeded(2)];
+        // Compiling the plug-in takes most of the time of a case: only the cases that use it
+        // install it.
+        let planter = acts
+            .iter()
+            .any(|a| matches!(a, Act::Place { .. } | Act::SetParams { .. }));
+        for s in &mut sessions {
+            if planter {
+                let _ = s.handle("plugins.install", json!({"path": PLANTER}));
+            }
+            s.set_collab_endpoint(Box::new(hub.endpoint()));
+            let r = s.handle("collab.connect", json!({"now_ms": 1}));
+            prop_assert!(r.is_ok());
+        }
+        let mut now = 1_000;
+        for a in acts {
+            apply(&mut sessions, &hub, &mut now, a);
+        }
+        // Everybody comes back and the network settles.
+        for s in &mut sessions {
+            let _ = s.handle("collab.connect", json!({"now_ms": now}));
+        }
+        // A busy server may still owe refusals: the waits are 30 s at most, so each round
+        // jumps over one. The refusals are finite.
+        for _ in 0..40 {
+            for s in &mut sessions {
+                now += 31_000;
+                hub.set_time(now);
+                let r = s.handle("collab.sync", json!({"now_ms": now}));
+                prop_assert!(r.is_ok());
+                assert_clean(&r);
+            }
+            let waiting: usize = sessions
+                .iter()
+                .map(|s| s.collab_client().unwrap().pending().len())
+                .sum();
+            if waiting == 0 {
+                break;
+            }
+        }
+        for _ in 0..8 {
+            for s in &mut sessions {
+                now += 100;
+                hub.set_time(now);
+                let r = s.handle("collab.sync", json!({"now_ms": now}));
+                prop_assert!(r.is_ok());
+                assert_clean(&r);
+            }
+        }
+        for s in &mut sessions {
+            prop_assert_eq!(s.collab_client().unwrap().pending().len(), 0);
+            // The document is valid for the core.
+            let mut doc = s.editor.doc().clone();
+            prop_assert!(doc.validate().is_ok(), "{:?}", doc.validate());
+        }
+        prop_assert!(same(&sessions[0], &sessions[1]));
+        // Both match the server. Every acked transaction is in the log: the server state
+        // equals what each client confirmed.
+        let server = hub.with(|s| s.replica().canonical_text());
+        for s in &sessions {
+            let c = s.collab_client().unwrap();
+            prop_assert_eq!(c.confirmed().canonical_text(), server.clone());
+            prop_assert_eq!(c.view().canonical_text(), server.clone());
+        }
+        Ok(())
+    }
+
+    /// Actions that change the stacking order across layers: objects drawn on any layer, new layers,
+    /// arrange, moves to another layer and of layers, with undo and sync between.
+    fn stacking_act() -> impl Strategy<Value = Act> {
+        prop_oneof![
+            4 => (any::<bool>(), -500i32..500, prop::option::of(any::<u8>()))
+                .prop_map(|(s, x, l)| Act::AddRect { s, x, l }),
+            2 => (any::<bool>(), 0u8..4).prop_map(|(s, n)| Act::AddLayer { s, n }),
+            5 => (any::<bool>(), any::<u8>(), any::<u8>(), 0u8..4)
+                .prop_map(|(s, i, j, how)| Act::Arrange { s, i, j, how }),
+            3 => (any::<bool>(), any::<u8>(), any::<u8>()).prop_map(|(s, i, l)| Act::ToLayer { s, i, l }),
+            1 => (any::<bool>(), any::<u8>(), 0u8..4).prop_map(|(s, l, at)| Act::MoveLayer { s, l, at }),
+            1 => (any::<bool>(), any::<u8>()).prop_map(|(s, i)| Act::Delete { s, i }),
+            4 => any::<bool>().prop_map(|s| Act::Sync { s }),
+            2 => any::<bool>().prop_map(|s| Act::Undo { s }),
+            1 => any::<bool>().prop_map(|s| Act::Redo { s }),
+        ]
+    }
+
+    /// Earlier failing cases of the proptest below, kept as plain steps: a change of the action
+    /// strategy changes what their saved seeds make.
+    #[test]
+    fn earlier_failing_cases_converge() {
+        let cases = [
+            vec![Act::Place { s: true, x: 0 }, Act::Redo { s: true }],
+            vec![
+                Act::Data {
+                    s: true,
+                    i: 185,
+                    v: 1,
+                },
+                Act::Underlay {
+                    s: false,
+                    x: -282,
+                    v: 0,
+                    l: None,
+                },
+                Act::Refuse {
+                    n: 0,
+                    internal: false,
+                },
+                Act::Sync { s: false },
+            ],
+            vec![
+                Act::AddLayer { s: false, n: 0 },
+                Act::Underlay {
+                    s: true,
+                    x: 0,
+                    v: 0,
+                    l: None,
+                },
+                Act::RenameLayer {
+                    s: true,
+                    l: 0,
+                    n: 0,
+                },
+                Act::DeleteLayer { s: false, l: 20 },
+                Act::Underlay {
+                    s: false,
+                    x: 0,
+                    v: 0,
+                    l: None,
+                },
+                Act::Undo { s: true },
+                Act::Sync { s: false },
+                Act::AddSite { s: false, n: 1 },
+                Act::Arrange {
+                    s: false,
+                    i: 142,
+                    j: 57,
+                    how: 2,
+                },
+            ],
+        ];
+        for acts in &cases {
+            converge(acts).unwrap();
+        }
     }
 
     proptest! {
@@ -1851,65 +2049,18 @@ mod real_commands {
 
         #[test]
         fn two_sessions_with_real_commands_converge(acts in prop::collection::vec(act(), 1..45)) {
-            let a = seeded(1);
-            let hub = Hub::new(Sequencer::new(docsync::replica_of(a.editor.doc())));
-            let mut sessions = [a, seeded(2)];
-            for s in &mut sessions {
-                let _ = s.handle("plugins.install", json!({"path": PLANTER}));
-                s.set_collab_endpoint(Box::new(hub.endpoint()));
-                let r = s.handle("collab.connect", json!({"now_ms": 1}));
-                prop_assert!(r.is_ok());
-            }
-            let mut now = 1_000;
-            for a in &acts {
-                apply(&mut sessions, &hub, &mut now, a);
-            }
-            // Everybody comes back and the network settles.
-            for s in &mut sessions {
-                let _ = s.handle("collab.connect", json!({"now_ms": now}));
-            }
-            // A busy server may still owe refusals: the waits are 30 s at most, so each round
-            // jumps over one. The refusals are finite.
-            for _ in 0..40 {
-                for s in &mut sessions {
-                    now += 31_000;
-                    hub.set_time(now);
-                    let r = s.handle("collab.sync", json!({"now_ms": now}));
-                    prop_assert!(r.is_ok());
-                    assert_clean(&r);
-                }
-                let waiting: usize = sessions
-                    .iter()
-                    .map(|s| s.collab_client().unwrap().pending().len())
-                    .sum();
-                if waiting == 0 {
-                    break;
-                }
-            }
-            for _ in 0..8 {
-                for s in &mut sessions {
-                    now += 100;
-                    hub.set_time(now);
-                    let r = s.handle("collab.sync", json!({"now_ms": now}));
-                    prop_assert!(r.is_ok());
-                    assert_clean(&r);
-                }
-            }
-            for s in &mut sessions {
-                prop_assert_eq!(s.collab_client().unwrap().pending().len(), 0);
-                // The document is valid for the core.
-                let mut doc = s.editor.doc().clone();
-                prop_assert!(doc.validate().is_ok(), "{:?}", doc.validate());
-            }
-            prop_assert!(same(&sessions[0], &sessions[1]));
-            // Both match the server. Every acked transaction is in the log: the server state
-            // equals what each client confirmed.
-            let server = hub.with(|s| s.replica().canonical_text());
-            for s in &sessions {
-                let c = s.collab_client().unwrap();
-                prop_assert_eq!(c.confirmed().canonical_text(), server.clone());
-                prop_assert_eq!(c.view().canonical_text(), server.clone());
-            }
+            converge(&acts)?;
+        }
+    }
+
+    proptest! {
+        // A case needs no plug-in, so it takes a few milliseconds.
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        /// The stacking order over several layers: the author and the others build one order.
+        #[test]
+        fn two_sessions_converge_on_the_stacking_order(acts in prop::collection::vec(stacking_act(), 1..40)) {
+            converge(&acts)?;
         }
     }
 }

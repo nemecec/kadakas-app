@@ -139,6 +139,13 @@ pub struct HardscapeData {
     pub drape: bool,
     /// Act as a pad on the site model.
     pub site_modifier: bool,
+    /// Parts of the surface that stay open, for example a planting island or a manhole.
+    pub holes: Vec<Vec<Vertex>>,
+    /// Where the joint pattern starts, in drawing coordinates. `None`: the middle of the box of
+    /// the outline, or what the style says.
+    pub origin: Option<DVec2>,
+    /// Angle of the joint pattern in degrees. It replaces the angle of the style.
+    pub angle: Option<f64>,
 }
 
 impl Default for HardscapeData {
@@ -155,9 +162,15 @@ impl Default for HardscapeData {
             slope: Slope::None,
             drape: false,
             site_modifier: false,
+            holes: Vec::new(),
+            origin: None,
+            angle: None,
         }
     }
 }
+
+/// Most holes in one hardscape.
+pub const MAX_HOLES: usize = 1000;
 
 impl HardscapeData {
     /// Checks the numbers and the rules between the fields.
@@ -176,6 +189,31 @@ impl HardscapeData {
         }
         if !self.offset.is_finite() || self.offset.abs() > MAX_COORD {
             return Err("the offset must be a finite number".into());
+        }
+        if self.holes.len() > MAX_HOLES {
+            return Err(format!("a hardscape has at most {MAX_HOLES} holes"));
+        }
+        for (i, h) in self.holes.iter().enumerate() {
+            if h.len() < 3 {
+                return Err(format!("hole {} needs 3 or more points", i + 1));
+            }
+            if h.len() > MAX_VERTICES {
+                return Err(format!("a hole has at most {MAX_VERTICES} points"));
+            }
+            if h.iter()
+                .any(|v| !v.is_finite() || v.p.abs().max_element() > MAX_COORD)
+            {
+                return Err("numbers must be finite".into());
+            }
+        }
+        if self
+            .origin
+            .is_some_and(|o| !o.is_finite() || o.abs().max_element() > MAX_COORD)
+        {
+            return Err("the origin must be a finite point".into());
+        }
+        if self.angle.is_some_and(|a| !a.is_finite() || a.abs() > 1e6) {
+            return Err("the angle must be a finite number".into());
         }
         if self.center.len() > MAX_VERTICES {
             return Err(format!("a path has at most {MAX_VERTICES} points"));
@@ -330,6 +368,19 @@ pub struct HardscapePatch {
     pub slope: Option<Slope>,
     pub drape: Option<bool>,
     pub site_modifier: Option<bool>,
+    /// New holes. They replace the old ones. Each hole must lie inside the outline.
+    pub holes: Option<Vec<Vec<Vertex>>>,
+    /// Where the joint pattern starts.
+    pub origin: Option<DVec2>,
+    /// Remove the origin of the object.
+    pub clear_origin: bool,
+    /// Angle of the joint pattern, in degrees.
+    pub angle: Option<f64>,
+    /// Remove the angle of the object: the style gives it again.
+    pub clear_angle: bool,
+    /// Start the pattern at vertex `n` of the outline and run it along the edge to vertex `n + 1`
+    /// (sets the origin and the angle).
+    pub align_to_edge: Option<usize>,
     /// Material of a hardscape without style.
     pub material: Option<String>,
     /// Thickness of a hardscape without style.
@@ -394,6 +445,45 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
     }
     if let Some(v) = patch.site_modifier {
         d.site_modifier = v;
+    }
+    if let Some(h) = &patch.holes {
+        d.holes = h.clone();
+    }
+    if patch.clear_origin {
+        d.origin = None;
+    }
+    if patch.clear_angle {
+        d.angle = None;
+    }
+    if let Some(i) = patch.align_to_edge {
+        let Shape::Hardscape { boundary, .. } = &obj.shape else {
+            unreachable!("checked above")
+        };
+        // The edge of the outline after this patch: a new center line moves the outline.
+        let outline = if d.mode == Mode::Path {
+            d.outline()
+        } else {
+            boundary.clone()
+        };
+        // Inside a kerb border the pattern starts on the inner border line.
+        let style = if patch.unstyle {
+            None
+        } else {
+            patch.style.or(d.style)
+        };
+        let border = style
+            .and_then(|id| doc.resources.hardscape_style(id))
+            .and_then(|st| st.border.as_ref())
+            .map(|b| (b.width, b.sides));
+        let p = align_start(&outline, &d, border, i)?;
+        d.origin = p.origin;
+        d.angle = Some(p.angle);
+    }
+    if let Some(o) = patch.origin {
+        d.origin = Some(o);
+    }
+    if let Some(a) = patch.angle {
+        d.angle = Some(a);
     }
     if patch.unstyle {
         // Keep what the style gave.
@@ -461,6 +551,17 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
             boundary.len()
         ));
     }
+    if !d.holes.is_empty() {
+        let Shape::Hardscape { boundary, .. } = &shape else {
+            unreachable!("checked above")
+        };
+        let ring = curve::flatten(boundary, true, TOLERANCE);
+        for (i, h) in d.holes.iter().enumerate() {
+            if !crate::layout::ring_within(&curve::flatten(h, true, TOLERANCE), &ring) {
+                return Err(format!("hole {} is not inside the outline", i + 1));
+            }
+        }
+    }
     obj.shape = shape;
     set_data(obj, &d);
     sync_shape(doc, obj);
@@ -491,14 +592,221 @@ pub fn fix_edge_elevations(before: &Object, after: &mut Object) {
     set_data(after, &d);
 }
 
-/// Moves the center line of a path with the object.
+/// The holes of a hardscape as flat rings: merged where they overlap and cut to the outline. A
+/// hole that touches or crosses the outline is part of the outline then, and not in the list.
+/// Each ring runs clockwise, so a consumer that wants outer rings counterclockwise and holes
+/// clockwise can use them as they are. `None` if there are no holes.
+pub fn merged_holes(
+    boundary: &[Vertex],
+    holes: &[Vec<Vertex>],
+    tolerance: f64,
+) -> Option<Vec<Vec<DVec2>>> {
+    if holes.is_empty() {
+        return None;
+    }
+    let region = crate::layout::Region::new(boundary, holes, tolerance).ok()?;
+    Some(
+        region
+            .shapes
+            .iter()
+            .flat_map(|s| s.iter().skip(1))
+            .cloned()
+            .collect(),
+    )
+}
+
+/// Cuts the holes of a hardscape to its outline, when a merge of two edits (or a file) put them
+/// partly outside. Returns a note when something changed.
+pub fn repair_holes(obj: &mut Object) -> Option<String> {
+    let mut d = data(obj)?;
+    let Shape::Hardscape { boundary, .. } = &obj.shape else {
+        return None;
+    };
+    if d.holes.is_empty() {
+        return None;
+    }
+    let ring = curve::flatten(boundary, true, TOLERANCE);
+    let mut kept: Vec<Vec<Vertex>> = Vec::new();
+    let mut changed = false;
+    for h in &d.holes {
+        let flat = curve::flatten(h, true, TOLERANCE);
+        if crate::layout::ring_within(&flat, &ring) {
+            kept.push(h.clone());
+            continue;
+        }
+        changed = true;
+        for piece in crate::layout::clip_ring_to(&flat, &ring) {
+            if piece.len() >= 3 {
+                kept.push(curve::corners(&piece));
+            }
+        }
+    }
+    if !changed {
+        return None;
+    }
+    d.holes = kept;
+    set_data(obj, &d);
+    Some(format!(
+        "object {}: holes that lay outside the hardscape outline were cut to it",
+        obj.id
+    ))
+}
+
+/// The direction of travel at the start of a segment.
+fn start_direction(seg: &curve::Seg) -> DVec2 {
+    match *seg {
+        curve::Seg::Line { from, to } => to - from,
+        curve::Seg::Arc { start, sweep, .. } => {
+            DVec2::new(-start.sin(), start.cos()) * sweep.signum()
+        }
+        curve::Seg::Quad { from, c, to } => {
+            if c != from {
+                c - from
+            } else {
+                to - from
+            }
+        }
+        curve::Seg::Cubic { from, c1, c2, to } => [c1 - from, c2 - from, to - from]
+            .into_iter()
+            .find(|d| d.length_squared() > 0.0)
+            .unwrap_or(DVec2::ZERO),
+    }
+}
+
+/// The directions of the outline at corner `index`: arriving and leaving. At the end of an arc
+/// this is the tangent of the arc, not the chord. Corners that a fillet changed fall back to the
+/// chords.
+fn corner_directions(outline: &[Vertex], index: usize) -> (DVec2, DVec2) {
+    let pts = curve::positions(outline);
+    let n = pts.len();
+    let p = pts[index];
+    let chord_in = (p - pts[(index + n - 1) % n]).normalize_or_zero();
+    let chord_out = (pts[(index + 1) % n] - p).normalize_or_zero();
+    let path = curve::path(outline, true);
+    let arriving = path
+        .segs
+        .iter()
+        .find(|s| s.to().distance(p) < 1e-6)
+        .map(|s| s.end_direction().normalize_or_zero())
+        .filter(|d| *d != DVec2::ZERO);
+    let leaving = path
+        .segs
+        .iter()
+        .find(|s| s.from().distance(p) < 1e-6)
+        .map(|s| start_direction(s).normalize_or_zero())
+        .filter(|d| *d != DVec2::ZERO);
+    (arriving.unwrap_or(chord_in), leaving.unwrap_or(chord_out))
+}
+
+/// The corner `index` of a closed outline moved inward: the point where the two edges at the
+/// corner, the edge before it moved inward by `d_before` and the edge after it by `d_after`, meet.
+/// An edge next to an arc counts as the tangent of the arc at the corner. Used for the start of a
+/// pattern inside a kerb border.
+pub fn inset_corner(outline: &[Vertex], index: usize, d_before: f64, d_after: f64) -> DVec2 {
+    let pts = curve::positions(outline);
+    let p = pts[index];
+    if d_before == 0.0 && d_after == 0.0 {
+        return p;
+    }
+    let ring = curve::flatten(outline, true, 1.0);
+    let ccw = crate::geom::signed_area(&ring) >= 0.0;
+    let inward = |dir: DVec2| {
+        let left = DVec2::new(-dir.y, dir.x);
+        if ccw { left } else { -left }
+    };
+    let (u1, u2) = corner_directions(outline, index);
+    let (n1, n2) = (inward(u1), inward(u2));
+    let cross = u1.perp_dot(u2);
+    if cross.abs() < 1e-9 {
+        return if d_after != 0.0 {
+            p + n2 * d_after
+        } else {
+            p + n1 * d_before
+        };
+    }
+    // Solve p + n1 d1 + s u1 = p + n2 d2 + t u2 for the meeting point.
+    let r = n2 * d_after - n1 * d_before;
+    let s = r.perp_dot(u2) / cross;
+    p + n1 * d_before + u1 * s
+}
+
+/// How far the pattern starts inside the edge `edge` of the outline of `d`: the width of the kerb
+/// border on that edge, or 0. A slab has the border on all edges. A path has it on its long
+/// sides, as the style says, and not on its ends.
+fn border_on_edge(
+    outline: &[Vertex],
+    d: &HardscapeData,
+    border: (f64, super::style::Sides),
+    edge: usize,
+) -> f64 {
+    let (width, sides) = border;
+    if d.mode != Mode::Path {
+        return width;
+    }
+    let pts = curve::positions(outline);
+    let n = pts.len();
+    let mid = (pts[edge % n] + pts[(edge + 1) % n]) / 2.0;
+    let axis = d.axis();
+    let mut best: Option<(f64, f64)> = None; // (distance, side)
+    for w in axis.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let Some(u) = (b - a).try_normalize() else {
+            continue;
+        };
+        let t = (mid - a).dot(u).clamp(0.0, a.distance(b));
+        let q = a + u * t;
+        let dist = q.distance(mid);
+        if best.is_none_or(|(bd, _)| dist < bd) {
+            best = Some((dist, u.perp_dot(mid - q)));
+        }
+    }
+    let Some((dist, side)) = best else { return 0.0 };
+    // An edge across the end of a path is on the center line: no border there.
+    if dist < d.width * 0.25 {
+        return 0.0;
+    }
+    use super::style::Sides;
+    let on = match sides {
+        Sides::Both => true,
+        Sides::Left => side > 0.0,
+        Sides::Right => side < 0.0,
+    };
+    if on { width } else { 0.0 }
+}
+
+/// A placement that starts at vertex `index` of `outline` and runs along the edge to the next
+/// vertex. With a kerb border (`border`: the width and the sides), the start is on the inner
+/// border line: the corner of the paved part, where the border of the two edges at the corner
+/// meet (an edge without border does not move it). A curved edge counts as its chord for the
+/// angle.
+pub fn align_start(
+    outline: &[Vertex],
+    d: &HardscapeData,
+    border: Option<(f64, super::style::Sides)>,
+    index: usize,
+) -> Result<crate::layout::Placement, String> {
+    let mut p = crate::layout::Placement::along_edge(outline, index)?;
+    if let Some(b) = border.filter(|b| b.0 > 0.0) {
+        let n = outline.len();
+        let before = border_on_edge(outline, d, b, (index + n - 1) % n);
+        let after = border_on_edge(outline, d, b, index);
+        p.origin = Some(inset_corner(outline, index, before, after));
+    }
+    Ok(p)
+}
+
+/// Moves the data that holds positions with the object: the center line of a path, the holes and
+/// the origin of the pattern.
 pub fn translate_data(obj: &mut Object, delta: DVec2) {
     let Some(mut d) = data(obj) else { return };
-    if d.center.is_empty() {
+    if d.center.is_empty() && d.holes.is_empty() && d.origin.is_none() {
         return;
     }
-    for v in &mut d.center {
+    for v in d.center.iter_mut().chain(d.holes.iter_mut().flatten()) {
         v.p += delta;
+    }
+    if let Some(o) = &mut d.origin {
+        *o += delta;
     }
     // The outline comes from the center line again, so the two always agree to the last bit.
     if d.mode == Mode::Path

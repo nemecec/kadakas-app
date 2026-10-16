@@ -184,14 +184,13 @@ treats an invalid key as no key.
   document is the order of all its objects (it is the drawing order), and building the document
   sorts all objects by key (section 3.4). The layers are a second list.
 - When the user changes the order locally (`arrange` to front, back, forward or backward,
-  `move_layer`, or a new object), the client looks at the list of all objects (and, for a change of
-  layers, at the list of layers), keeps the longest run whose keys already increase, and gives new
-  keys between the neighbours to the others. One object that moves needs one new key. The keys are
-  `set` operations like any other. (Clients before 2026-10 made the keys in the list of each layer
-  only. Then an object could get a key below an object of another layer that it is in front of:
-  its author kept one order and the others built another, until the next change. The messages and
-  the merge rules did not change, so the protocol version stays 1; a session with such a client
-  converges in the replica, and the documents agree again when they are next built.)
+  `move_layer`, a move to another layer, or a new object), the client gives keys to the objects that
+  the change touched, between the keys of their nearest untouched neighbours in the list of all
+  objects. A touched object whose key already lies between them keeps it, so one object that moves
+  needs one new key. Only when the neighbours do not tell (a neighbour has no key, or their keys are
+  not in order) does the client look at the whole list: it keeps the longest run whose keys already
+  increase and gives new keys to the others. The layers are one short list of their own, which the
+  client checks whole when a change touches layers. The keys are `set` operations like any other.
 - Two users who insert at the same place at the same time may make the same key. Both objects stay,
   the ID decides which is first, and the client of the next change gives one of them a new key.
 - The key of an object is in the field `order` of the object in the document (in `extra`), so a saved
@@ -200,7 +199,15 @@ treats an invalid key as no key.
 - Undo of a creation deletes the object, and its key with it. Undo of an `arrange` puts the old key
   back (when no other client changed it).
 - A thing that has no key (made by an older client) sorts first, by ID, until a client gives it a
-  key.
+  key. The client never makes up a key for it in its own copy of the state; it sends a real key when
+  a change needs one next to that thing.
+- **Compatibility.** Clients before 2026-10 made the keys in the list of each layer only, and could
+  make up keys for things without one in their own copy. Then an object could get a key below an
+  object of another layer that it is in front of, and its author kept one order while the others
+  built another, until its next build. The messages and the merge rules did not change, so the
+  protocol version stays 1: a session with such a client converges in the replica, and the documents
+  agree again when they are next built. A first change next to many objects without a key (a
+  document from clients before the stacking order) sends a key for each of them once.
 
 ### 3.3.2 Things that a program makes again and again
 

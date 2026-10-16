@@ -37,6 +37,7 @@ mod icons;
 mod io_dialog;
 mod irrigation_ui;
 mod issues_ui;
+mod joint_ui;
 mod keymap;
 mod layout;
 mod locale;
