@@ -688,7 +688,7 @@ fn zones_keep_their_names_and_can_be_given_by_center() {
     let id = slab(&mut s, 8000.0, 4000.0);
     let l = line(&mut s, [3010.0, -50.0], [3010.0, 4050.0]);
     let r = ok(&mut s, "hardscape.split", json!({"id": id, "lines": [l]}));
-        assert_eq!(r["zones"][1]["name"], "zone 1");
+    assert_eq!(r["zones"][1]["name"], "zone 1");
     assert!(r["zone_edge_cuts"]["whole_units_lost"].as_u64().unwrap() > 5);
     assert!(
         r["zone_edge_note"]
@@ -817,8 +817,16 @@ fn a_circle_and_a_chain_of_arcs_that_stall_lines_run_up_to_are_not_paved_by_defa
         .map(|x| x["area_m2"].as_f64().unwrap())
         .collect();
     assert_eq!(doubtful.len(), 2, "{regions:#?}");
-    assert!(doubtful.iter().any(|a| (a - 7.0686).abs() < 0.01), "{doubtful:?}");
-    assert!(doubtful.iter().any(|a| (a - 3.1416).abs() < 0.01), "{doubtful:?}");
+    assert!(
+        doubtful.iter().any(|a| (a - 7.0686).abs() < 0.01),
+        "{doubtful:?}"
+    );
+    assert!(
+        doubtful
+            .iter()
+            .any(|a| (a - std::f64::consts::PI).abs() < 0.01),
+        "{doubtful:?}"
+    );
     // The two halves of the lot are made, the islands are not.
     let made: Vec<u64> = r["created"]
         .as_array()

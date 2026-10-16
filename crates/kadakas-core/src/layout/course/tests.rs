@@ -399,11 +399,7 @@ fn bad_input_is_refused() {
     )
     .unwrap();
     assert_eq!(c.notes.len(), 1, "{:?}", c.notes);
-    assert!(
-        c.notes[0].contains("turns by"),
-        "{:?}",
-        c.notes
-    );
+    assert!(c.notes[0].contains("turns by"), "{:?}", c.notes);
     assert_eq!(Side::from_name("Left"), Some(Side::Left));
     assert_eq!(Corner::from_name("corner unit"), Some(Corner::CornerUnit));
     assert_eq!(Corner::from_name("x"), None);
@@ -773,7 +769,15 @@ fn a_sharp_corner_never_overlaps_inside_and_is_covered_inside() {
             let a = (sign * turn).to_radians();
             let end = v(3000.0 + 3000.0 * a.cos(), 3000.0 * a.sin());
             for side in [Side::Left, Side::Right, Side::Center] {
-                let c = lay(&spec(&[(0.0, 0.0), (3000.0, 0.0), (end.x, end.y)], side, Corner::Miter), 10_000).unwrap();
+                let c = lay(
+                    &spec(
+                        &[(0.0, 0.0), (3000.0, 0.0), (end.x, end.y)],
+                        side,
+                        Corner::Miter,
+                    ),
+                    10_000,
+                )
+                .unwrap();
                 let label = format!("{turn} {sign} {side:?}");
                 assert_eq!(c.notes.len(), 1, "{label}");
                 // Legs far enough apart do not overlap: the legs are 3 m long, the strip 0.2 m.
@@ -784,7 +788,11 @@ fn a_sharp_corner_never_overlaps_inside_and_is_covered_inside() {
                     Side::Center => true,
                 };
                 if inside || turn < 175.0 {
-                    assert!(max_overlap(&c) < 1e-6, "{label}: overlap {}", max_overlap(&c));
+                    assert!(
+                        max_overlap(&c) < 1e-6,
+                        "{label}: overlap {}",
+                        max_overlap(&c)
+                    );
                 }
                 if inside && side != Side::Center && turn <= 170.0 {
                     let (lo, hi) = side.extents(200.0);
@@ -798,8 +806,12 @@ fn a_sharp_corner_never_overlaps_inside_and_is_covered_inside() {
                         let mut x = 0.0;
                         while x <= 3200.0 {
                             let d = v(x, y) - cp;
-                            let in1 = (lo..=hi).contains(&d.dot(l1)) && d.dot(nn) <= 0.0 && d.dot(u1) >= -2500.0;
-                            let in2 = (lo..=hi).contains(&d.dot(l2)) && d.dot(nn) >= 0.0 && d.dot(u2) <= 2500.0;
+                            let in1 = (lo..=hi).contains(&d.dot(l1))
+                                && d.dot(nn) <= 0.0
+                                && d.dot(u1) >= -2500.0;
+                            let in2 = (lo..=hi).contains(&d.dot(l2))
+                                && d.dot(nn) >= 0.0
+                                && d.dot(u2) <= 2500.0;
                             if in1 || in2 {
                                 worst = worst.max(nearest(&c, v(x, y)));
                             }
@@ -807,7 +819,10 @@ fn a_sharp_corner_never_overlaps_inside_and_is_covered_inside() {
                         }
                         y += 23.0;
                     }
-                    assert!(worst <= 5.0 + 1e-6, "{label}: a point of the band is {worst} mm from a unit");
+                    assert!(
+                        worst <= 5.0 + 1e-6,
+                        "{label}: a point of the band is {worst} mm from a unit"
+                    );
                 }
             }
         }
@@ -816,14 +831,22 @@ fn a_sharp_corner_never_overlaps_inside_and_is_covered_inside() {
 
 fn band_has(c: &Course, p: DVec2) -> bool {
     c.band.iter().any(|s| {
-        crate::geom::point_in_polygon(p, &s[0]) && !s.iter().skip(1).any(|h| crate::geom::point_in_polygon(p, h))
+        crate::geom::point_in_polygon(p, &s[0])
+            && !s
+                .iter()
+                .skip(1)
+                .any(|h| crate::geom::point_in_polygon(p, h))
     })
 }
 
 #[test]
 fn the_band_of_a_course_away_from_its_path_does_not_reach_the_path_at_a_corner() {
     // The path turns right; the course lies 500 mm to the left, on the outer side of the corner.
-    let mut s = spec(&[(0.0, 0.0), (3000.0, 0.0), (3000.0, -3000.0)], Side::Left, Corner::Miter);
+    let mut s = spec(
+        &[(0.0, 0.0), (3000.0, 0.0), (3000.0, -3000.0)],
+        Side::Left,
+        Corner::Miter,
+    );
     s.offset = 500.0;
     let c = lay(&s, 100_000).unwrap();
     // In the wedge near the vertex, between the path and the course, the field is free.
@@ -838,7 +861,11 @@ fn the_band_of_a_course_away_from_its_path_does_not_reach_the_path_at_a_corner()
 #[test]
 fn the_band_on_the_inner_side_of_a_sharp_bend_stays_inside_the_legs() {
     // A 120 degree turn to the left with short legs of 300 mm; the course lies on the left.
-    let s = spec(&[(0.0, 0.0), (300.0, 0.0), (300.0 - 150.0, 259.8)], Side::Left, Corner::Miter);
+    let s = spec(
+        &[(0.0, 0.0), (300.0, 0.0), (300.0 - 150.0, 259.8)],
+        Side::Left,
+        Corner::Miter,
+    );
     let c = lay(&s, 100_000).unwrap();
     // The inner offset line of the first leg would cross the second one 346 mm before the vertex,
     // behind the start of the path: nothing of the band lies there.

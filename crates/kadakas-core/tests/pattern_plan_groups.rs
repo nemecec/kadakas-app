@@ -663,13 +663,19 @@ fn the_data_of_a_hardscape_turns_and_mirrors_but_a_hardscape_itself_is_not_turne
         angle: Some(90.0),
         ..Default::default()
     }];
-    p.courses = vec![edge, course_def("Aisle", &[(4200.0, 400.0), (4200.0, 3600.0)], Side::Left)];
+    p.courses = vec![
+        edge,
+        course_def("Aisle", &[(4200.0, 400.0), (4200.0, 3600.0)], Side::Left),
+    ];
     set_plan(&mut ed, id, &p);
     // The editor refuses to turn or mirror a hardscape (a rule of the model), so the plan never
     // meets a turn there.
     let turn = Command::TransformObjects {
         ids: vec![id],
-        transform: Transform::Rotate { center: v(0.0, 0.0), angle: 0.5 },
+        transform: Transform::Rotate {
+            center: v(0.0, 0.0),
+            angle: 0.5,
+        },
         copy: false,
     };
     assert!(ed.execute(&turn).is_err());
@@ -690,5 +696,8 @@ fn the_data_of_a_hardscape_turns_and_mirrors_but_a_hardscape_itself_is_not_turne
     // The course with a copied path goes to the other side; the course on the edge keeps its side.
     assert_eq!(q.courses[0].side, Side::Left);
     assert_eq!(q.courses[1].side, Side::Right);
-    assert!((q.zones[0].angle.unwrap() + 90.0).abs() < 1e-9 || (q.zones[0].angle.unwrap() - 90.0).abs() < 1e-9);
+    assert!(
+        (q.zones[0].angle.unwrap() + 90.0).abs() < 1e-9
+            || (q.zones[0].angle.unwrap() - 90.0).abs() < 1e-9
+    );
 }

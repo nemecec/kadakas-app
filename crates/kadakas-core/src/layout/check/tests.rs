@@ -448,7 +448,10 @@ fn a_hole_in_a_course_is_found() {
 fn a_small_hole_in_a_long_course_is_found() {
     use crate::curve::Vertex;
     let spec = course::Spec {
-        path: vec![Vertex::corner(v(0.0, 0.0)), Vertex::corner(v(1_000_000.0, 0.0))],
+        path: vec![
+            Vertex::corner(v(0.0, 0.0)),
+            Vertex::corner(v(1_000_000.0, 0.0)),
+        ],
         closed: false,
         side: course::Side::Left,
         offset: 0.0,
@@ -481,15 +484,27 @@ fn a_small_hole_in_a_long_course_is_found() {
         }
     };
     let area = rect(-100.0, -100.0, 1_000_100.0, 400.0);
-    let full = check(&[make(laid.pieces.clone())], &area, &CheckOptions::default()).unwrap();
+    let full = check(
+        &[make(laid.pieces.clone())],
+        &area,
+        &CheckOptions::default(),
+    )
+    .unwrap();
     assert_eq!(full.counts["coverage"], 0);
     // One unit of 20,000 mm2 is missing on 1 km of kerb.
     let mut pieces = laid.pieces.clone();
     pieces.remove(5000);
     let r = check(&[make(pieces)], &area, &CheckOptions::default()).unwrap();
     assert_eq!(r.counts["coverage"], 1, "{:?}", r.findings);
-    let f = r.findings.iter().find(|f| f.kind == Kind::Coverage).unwrap();
-    assert!(f.size > 20_000.0 && f.size < 60_000.0 && (f.at[0] - 525_000.0).abs() < 200.0, "{f:?}");
+    let f = r
+        .findings
+        .iter()
+        .find(|f| f.kind == Kind::Coverage)
+        .unwrap();
+    assert!(
+        f.size > 20_000.0 && f.size < 60_000.0 && (f.at[0] - 525_000.0).abs() < 200.0,
+        "{f:?}"
+    );
 }
 
 #[test]

@@ -1178,9 +1178,8 @@ fn trace_faces(out: &mut Arrangement, tol: f64) {
         others.sort_unstable();
         others.dedup();
         let enclosed = others.len() == 1 && others[0].is_some_and(|o| o != fi);
-        let closed_loop = !others.is_empty()
-            && others.iter().all(|o| o.is_some_and(|o| o != fi))
-            && {
+        let closed_loop =
+            !others.is_empty() && others.iter().all(|o| o.is_some_and(|o| o != fi)) && {
                 let ring: std::collections::HashSet<usize> = cycles[faces[fi].cycle]
                     .0
                     .edges
@@ -1189,8 +1188,11 @@ fn trace_faces(out: &mut Arrangement, tol: f64) {
                     .collect();
                 let own: std::collections::HashSet<usize> =
                     ring.iter().map(|&e| out.edges[e].source).collect();
-                own.iter().all(|&c| out.curve_edges[c].iter().all(|e| ring.contains(e)))
-                    && ring.iter().all(|&e| covering[e].iter().all(|c| own.contains(c)))
+                own.iter()
+                    .all(|&c| out.curve_edges[c].iter().all(|e| ring.contains(e)))
+                    && ring
+                        .iter()
+                        .all(|&e| covering[e].iter().all(|c| own.contains(c)))
             };
         let d = depth_of(comp, &parent_of_comp, &faces, &mut comp_depth);
         let hole_cycles: Vec<Cycle> = holes_of[fi]

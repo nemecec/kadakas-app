@@ -339,10 +339,16 @@ fn measure_centroid_zones() {
     let r = lot(w, h);
     let mut lines: Vec<Vec<DVec2>> = Vec::new();
     for k in 1..20 {
-        lines.push(vec![v(k as f64 * w / 20.0, -100.0), v(k as f64 * w / 20.0, h + 100.0)]);
+        lines.push(vec![
+            v(k as f64 * w / 20.0, -100.0),
+            v(k as f64 * w / 20.0, h + 100.0),
+        ]);
     }
     for k in 1..15 {
-        lines.push(vec![v(-100.0, k as f64 * h / 15.0), v(w + 100.0, k as f64 * h / 15.0)]);
+        lines.push(vec![
+            v(-100.0, k as f64 * h / 15.0),
+            v(w + 100.0, k as f64 * h / 15.0),
+        ]);
     }
     let s = zones::split(&r, &lines, 1.0).unwrap();
     assert_eq!(s.zones.len(), 300);
@@ -374,7 +380,8 @@ fn measure_centroid_zones() {
     let t = Instant::now();
     let mut n = 0usize;
     for g in &groups {
-        g.for_each_unit(&Default::default(), &mut |_| n += 1).unwrap();
+        g.for_each_unit(&Default::default(), &mut |_| n += 1)
+            .unwrap();
     }
     println!(
         "centroid zones, export walk: {} units in {:.2} s",

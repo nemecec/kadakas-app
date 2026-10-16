@@ -1096,7 +1096,8 @@ fn band(
     let vertices = if closed { 0..n } else { 1..n - 1 };
     for i in vertices {
         let (n0, n1) = (normals[(i + segs - 1) % segs], normals[i % segs]);
-        let turn = unit_dir(pts[(i + n - 1) % n], pts[i]).perp_dot(unit_dir(pts[i], pts[(i + 1) % n]));
+        let turn =
+            unit_dir(pts[(i + n - 1) % n], pts[i]).perp_dot(unit_dir(pts[i], pts[(i + 1) % n]));
         if turn.abs() < 1e-12 {
             continue;
         }

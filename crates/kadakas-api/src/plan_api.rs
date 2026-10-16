@@ -721,9 +721,9 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             match item {
                 Value::String(_) => {
                     let id = object_id(item, "lines")?;
-                    let src = doc.object(id).ok_or_else(|| {
-                        bad(format!("line {}: object {id} does not exist", i))
-                    })?;
+                    let src = doc
+                        .object(id)
+                        .ok_or_else(|| bad(format!("line {}: object {id} does not exist", i)))?;
                     let (points, _) = plan::path_of(&src.shape).ok_or_else(|| {
                         bad(format!(
                             "line {}: object {id} is a {}, not a line, arc or polyline",
@@ -786,10 +786,7 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             .map_err(|e| bad(format!("zone {}: {}", i, e.message)))?;
             let seed = match (z.get("index"), z.get("seed")) {
                 (Some(_), Some(_)) => {
-                    return Err(bad(format!(
-                        "zone {}: give 'index' or 'seed', not both",
-                        i
-                    )));
+                    return Err(bad(format!("zone {}: give 'index' or 'seed', not both", i)));
                 }
                 (Some(ix), None) => {
                     let ix = ix

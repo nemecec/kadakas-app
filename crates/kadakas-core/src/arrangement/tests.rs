@@ -429,7 +429,12 @@ fn a_closed_loop_in_a_drawing_is_found_only_when_nothing_else_touches_its_outlin
     c.push(Curve::line(v(2500.0, 1000.0), v(4000.0, 1000.0)));
     let a = build(&c, 1.0).unwrap();
     let loops: Vec<_> = a.faces.iter().filter(|f| f.closed_loop).collect();
-    assert_eq!(loops.len(), 1, "{:?}", a.faces.iter().map(|f| f.area).collect::<Vec<_>>());
+    assert_eq!(
+        loops.len(),
+        1,
+        "{:?}",
+        a.faces.iter().map(|f| f.area).collect::<Vec<_>>()
+    );
     assert!((loops[0].area - 500_000.0).abs() < 1e-6);
 }
 
@@ -453,5 +458,8 @@ fn the_sliver_width_is_capped_and_dropped_faces_are_listed() {
     assert_eq!(a.dropped_slivers, 1);
     assert_eq!(a.dropped_sliver_list.len(), 1);
     let s = a.dropped_sliver_list[0];
-    assert!((s.area - 7_500.0).abs() < 1.0 && (s.at.x - 6_666.0).abs() < 10.0, "{s:?}");
+    assert!(
+        (s.area - 7_500.0).abs() < 1.0 && (s.at.x - 6_666.0).abs() < 10.0,
+        "{s:?}"
+    );
 }
