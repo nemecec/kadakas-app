@@ -765,7 +765,7 @@ const IMAGE_PART_BYTES: u64 = 1024;
 fn object_bytes(o: &Object) -> u64 {
     OBJECT_BYTES
         + match &o.shape {
-            Shape::Underlay(u) => u.png.0.len() as u64,
+            Shape::Underlay(u) => u.png.resident_len() as u64,
             _ => 0,
         }
 }
@@ -2188,6 +2188,61 @@ impl Editor {
         }
     }
 
+    /// Puts the history that waited in the file into the document (DOC-21), with the notes of
+    /// the check. It is no change of the document: there is no undo step and the revision stays,
+    /// because the history was always the document's, only not read yet.
+    pub fn adopt_history(
+        &mut self,
+        history: Option<crate::history::HistoryData>,
+        notes: Vec<String>,
+    ) {
+        self.doc.history = history;
+        self.doc.lazy_history = None;
+        for n in notes {
+            self.doc.add_load_note(n);
+        }
+    }
+
+    /// Replaces the pictures that cannot be found by placeholders (see
+    /// `Document::replace_missing_pictures`) as one undo step, so the person can take it back. The
+    /// undo brings back the handles of the pictures that are not there; the next save asks again.
+    /// Returns how many pictures were replaced.
+    pub fn replace_missing_pictures_with_undo(
+        &mut self,
+        missing: &std::collections::HashSet<String>,
+    ) -> usize {
+        let mut count = 0;
+        let ids: Vec<ObjectId> = self
+            .doc
+            .objects
+            .iter()
+            .filter(|(_, o)| {
+                matches!(&o.shape, Shape::Underlay(u)
+                    if u.png.lazy().is_some_and(|l| missing.contains(l.hash())))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        let _ = self.transact(
+            || "replace_missing_pictures".to_string(),
+            None,
+            |tx, _| {
+                for id in &ids {
+                    tx.touch(*id);
+                }
+                count = tx.doc.replace_missing_pictures(missing);
+                Ok(())
+            },
+        );
+        count
+    }
+
+    /// Changes the document without an undo step and without a new revision. For a repair that
+    /// makes the memory equal to the file that was just saved (the pictures that could not be
+    /// found became placeholders in the file): it is no edit by the person.
+    pub fn repair_without_undo(&mut self, f: impl FnOnce(&mut crate::model::Document)) {
+        f(&mut self.doc);
+    }
+
     /// Sets or clears the history of the document (the named versions, see `crate::history`) as
     /// one undo step. Returns false if nothing changed.
     pub fn set_history(&mut self, history: Option<crate::history::HistoryData>) -> bool {
@@ -2435,7 +2490,15 @@ impl Editor {
         let mut found = Vec::new();
         cmd.pictures(&mut found);
         for p in found {
-            if p.byte_len() > bytes {
+            // A picture that stays in the file has a size up to 2 bytes too big (the padding is
+            // not known without reading it): give it that much room, so a file of exactly the
+            // limit is never refused for it.
+            let len = if p.data.is_lazy() {
+                p.byte_len().saturating_sub(2)
+            } else {
+                p.byte_len()
+            };
+            if len > bytes {
                 return Err(CommandError::Invalid(format!(
                     "the picture file is larger than {bytes} bytes"
                 )));

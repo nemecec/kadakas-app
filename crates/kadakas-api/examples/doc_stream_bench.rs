@@ -7,6 +7,13 @@
 //! doc_stream_bench gen  <megabytes> <file>      make a file of about that size
 //! doc_stream_bench load <file> reader|slice     load with `from_reader` (the app) or `from_slice`
 //! doc_stream_bench save <file> <out>            load, then save with the streaming atomic save
+//! doc_stream_bench genv <megabytes> <file>      like gen, with one named version in the file
+//! doc_stream_bench history <file> [noedit]      load lazily, edit (not with `noedit`), use the
+//!                                               versions (after an edit the drawing of the file
+//!                                               is read again for their anchor)
+//! doc_stream_bench savehist <file> <out>        load lazily, edit, save a container: the versions
+//!                                               wait in the file, so the drawing of the file is
+//!                                               written as their anchor (no second parse)
 //! ```
 //!
 //! The file is a mix: half of its bytes in plain objects (circles, rectangles, polylines), a
@@ -15,15 +22,16 @@
 //! The folder of the file is the caller's choice: use a temporary folder.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::time::Instant;
 
 use glam::{DVec2, DVec3};
+use kadakas_api::files::SaveSpec;
 use kadakas_core::model::SiteSettings;
 use kadakas_core::model::{Document, FIRST_LAYER, NONE_CLASS, Object, ObjectId, Shape, Vertex};
 use kadakas_core::underlay::{PngData, Underlay};
+use kadakas_file::ReadMode;
 
 struct Counting;
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
@@ -122,7 +130,7 @@ fn make(megabytes: usize) -> Document {
             max: DVec2::new(1000.0, 1000.0),
             width: 100,
             height: 100,
-            png: PngData(std::sync::Arc::new(png)),
+            png: PngData::new(png),
             opacity: 1.0,
             source: String::new(),
         };
@@ -146,39 +154,154 @@ fn main() {
     let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or_default();
     let started = Instant::now();
     match arg(0) {
+        // The form follows the extension: `.json` is the plain JSON form (the file of DOC-19), anything
+        // else the container (DOC-20).
         "gen" => {
             let file = Path::new(arg(2));
             let doc = make(arg(1).parse().expect("megabytes"));
-            let mut w = BufWriter::new(std::fs::File::create(file).expect("create"));
-            doc.write_pretty(&mut w).expect("write");
-            w.flush().expect("flush");
+            let spec = SaveSpec::from_extension(file, Vec::new());
+            kadakas_api::files::write_document(file, &doc, &spec).expect("write");
             report("gen", file, started);
         }
+        // Like `gen`, with a named version: the file has the entries of `history/`.
+        "genv" => {
+            let file = Path::new(arg(2));
+            let doc = make(arg(1).parse().expect("megabytes"));
+            let mut session = kadakas_api::Session::with_document(doc);
+            session
+                .handle("version.create", serde_json::json!({"name": "first"}))
+                .expect("version");
+            let doc = session.document_for_save_in(true).expect("save form");
+            let spec = SaveSpec::from_extension(file, Vec::new());
+            kadakas_api::files::write_document(file, &doc, &spec).expect("write");
+            report("genv", file, started);
+        }
+        // Open lazily, edit, and use the versions. The history is checked against the drawing as
+        // the file holds it, which is read again (the open drawing was edited).
+        "history" => {
+            let file = Path::new(arg(1));
+            let o =
+                kadakas_api::files::open_document(file, u64::MAX, ReadMode::Lazy).expect("load");
+            let mut session = kadakas_api::Session::with_document(o.doc);
+            session.file_source = o.source;
+            let loaded = Instant::now();
+            let base = CURRENT.load(Relaxed);
+            PEAK.store(base, Relaxed);
+            if arg(2) != "noedit" {
+                session
+                    .handle(
+                        "execute",
+                        serde_json::json!({"command": {"op": "add_object",
+                            "shape": {"kind": "circle", "center": [1, 2], "radius": 3}}}),
+                    )
+                    .expect("edit");
+            }
+            let list = session
+                .handle("version.list", serde_json::json!({"current": false}))
+                .expect("list");
+            println!(
+                "history: {} versions, time {:.2} s, heap above the load {:.1} MB (peak {:.1} MB, load {:.1} MB)",
+                list["count"],
+                loaded.elapsed().as_secs_f64(),
+                (PEAK.load(Relaxed) - base) as f64 / MB as f64,
+                PEAK.load(Relaxed) as f64 / MB as f64,
+                base as f64 / MB as f64
+            );
+        }
+        // Open lazily, edit, save a container with the versions waiting in the file.
+        "savehist" => {
+            let file = Path::new(arg(1));
+            let o =
+                kadakas_api::files::open_document(file, u64::MAX, ReadMode::Lazy).expect("load");
+            let mut session = kadakas_api::Session::with_document(o.doc);
+            session.file_source = o.source;
+            session
+                .handle(
+                    "execute",
+                    serde_json::json!({"command": {"op": "add_object",
+                        "shape": {"kind": "circle", "center": [1, 2], "radius": 3}}}),
+                )
+                .expect("edit");
+            let loaded = Instant::now();
+            PEAK.store(CURRENT.load(Relaxed), Relaxed);
+            let out = Path::new(arg(2));
+            let spec = SaveSpec {
+                anchor: session.needs_anchor(),
+                ..SaveSpec::from_extension(out, session.file_source.iter().cloned().collect())
+            };
+            let doc = session.document_for_save_in(true).expect("save form");
+            kadakas_api::files::write_document(out, &doc, &spec).expect("save");
+            report("savehist", out, loaded);
+        }
+        // `lazy` keeps the pictures of a container in the file, `eager` reads them (and is what a
+        // plain JSON file always does), `slice` reads the whole file into memory first.
         "load" => {
             let file = Path::new(arg(1));
-            let doc = match arg(2) {
+            let (doc, source) = match arg(2) {
                 "slice" => {
                     let bytes = std::fs::read(file).expect("read");
-                    Document::from_slice(&bytes).expect("load")
+                    (Document::from_slice(&bytes).expect("load"), None)
                 }
-                _ => kadakas_api::files::read_document(file).expect("load"),
+                "eager" => {
+                    let o = kadakas_api::files::open_document(file, u64::MAX, ReadMode::Eager)
+                        .expect("load");
+                    (o.doc, o.source)
+                }
+                _ => {
+                    let o = kadakas_api::files::open_document(file, u64::MAX, ReadMode::Lazy)
+                        .expect("load");
+                    (o.doc, o.source)
+                }
             };
+            let mut lazy = 0;
+            doc.for_each_blob(&mut |b| {
+                if let kadakas_core::model::DocBlob::Picture(p) = b {
+                    lazy += usize::from(p.is_lazy());
+                }
+            });
             report(
-                &format!("load {} ({} objects)", arg(2), doc.objects.len()),
+                &format!(
+                    "load {} ({} objects, {lazy} pictures in the file, source {})",
+                    arg(2),
+                    doc.objects.len(),
+                    source.is_some()
+                ),
                 file,
                 started,
             );
         }
+        // Load lazily, then save to another path (copies the pictures from the first file).
         "save" => {
             let file = Path::new(arg(1));
-            let doc = kadakas_api::files::read_document(file).expect("load");
+            let o =
+                kadakas_api::files::open_document(file, u64::MAX, ReadMode::Lazy).expect("load");
             let loaded = Instant::now();
             PEAK.store(CURRENT.load(Relaxed), Relaxed);
-            kadakas_api::files::write_document_file(Path::new(arg(2)), &doc).expect("save");
-            report("save", Path::new(arg(2)), loaded);
+            let out = Path::new(arg(2));
+            let spec = SaveSpec::from_extension(out, o.source.iter().cloned().collect());
+            kadakas_api::files::write_document(out, &o.doc, &spec).expect("save");
+            report("save", out, loaded);
+        }
+        // Load lazily, change one object, save over the same file (the pictures are copied from the
+        // file that is replaced).
+        "saveover" => {
+            let file = Path::new(arg(1));
+            let mut o =
+                kadakas_api::files::open_document(file, u64::MAX, ReadMode::Lazy).expect("load");
+            let loaded = Instant::now();
+            PEAK.store(CURRENT.load(Relaxed), Relaxed);
+            if let Some(obj) = o.doc.objects.values_mut().next() {
+                obj.shape = Shape::Circle {
+                    center: DVec2::new(1.0, 2.0),
+                    radius: 3.0,
+                };
+            }
+            let spec = SaveSpec::from_extension(file, o.source.iter().cloned().collect());
+            kadakas_api::files::write_document(file, &o.doc, &spec).expect("save over");
+            report("saveover", file, loaded);
         }
         _ => eprintln!(
-            "usage: doc_stream_bench gen <megabytes> <file> | load <file> reader|slice | save <file> <out>"
+            "usage: doc_stream_bench gen <megabytes> <file.kad|file.json> | load <file> lazy|eager|slice | save <file> <out> | saveover <file>"
         ),
     }
 }

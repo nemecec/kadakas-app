@@ -31,7 +31,10 @@ fn library_calls_use_the_file_size_limit_of_the_session() {
         json!({"library": "Shared"}),
     );
     let file = dir.join("Shared.kad");
-    let len = std::fs::metadata(&file).unwrap().len();
+    // The limit is for the size of the file and for the bytes of its entries together
+    // (uncompressed, from the manifest): a small file must not hide a big document.
+    let info = kadakas_file::native::inspect(&file).unwrap();
+    let len = info.file_bytes.max(info.uncompressed_bytes);
 
     // A session whose limit is one byte too small refuses the file in every library call.
     let strict = SessionLimits {

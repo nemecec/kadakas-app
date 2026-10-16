@@ -14,6 +14,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub use crate::blob::BlobText;
+
 /// Largest picture file in bytes.
 pub const MAX_PICTURE_BYTES: usize = 8 * 1024 * 1024;
 /// Most pixels (width times height) of a picture.
@@ -133,8 +135,9 @@ pub struct ImageResource {
     pub format: PictureFormat,
     pub width: u32,
     pub height: u32,
-    /// The file, as base64 text.
-    pub data: SharedText,
+    /// The file, as base64 text. It can stay in the file the document was opened from (DOC-21):
+    /// [`ImageResource::data_text`] reads it.
+    pub data: BlobText,
     /// A PNG of at most [`MAX_THUMB_SIDE`] pixels on a side, as base64 text. The thumbnail is a
     /// hint of the sender: programs that show the picture derive their own from the file.
     pub thumb: SharedText,
@@ -338,9 +341,43 @@ impl ImageResource {
     /// Reads the file and checks it against the fields: format, header size and SHA-256. It
     /// costs time in proportion to the size. Run it once when the data first arrives (a command, a
     /// file load, a blob), not on every change.
+    ///
+    /// A file that stays in the document's file (DOC-21) is not read here: the cheap checks and the
+    /// first characters of the text are checked, and the text has been checked against its hash
+    /// by the container. [`ImageResource::verify_data_read`] reads it.
     pub fn verify_data(&self) -> Result<(), String> {
+        if self.data.is_lazy() {
+            self.validate()?;
+            let head = self.data.head();
+            let ok = match self.format {
+                PictureFormat::Png => head.starts_with("iVBOR"),
+                PictureFormat::Jpeg => head.starts_with("/9j/"),
+            };
+            return if ok {
+                Ok(())
+            } else {
+                Err(format!(
+                    "the picture data is not a {} file",
+                    self.format.id()
+                ))
+            };
+        }
+        self.verify_data_read()
+    }
+
+    /// Like [`ImageResource::verify_data`], and reads the file even if it stays in the file.
+    pub fn verify_data_read(&self) -> Result<(), String> {
         self.validate()?;
-        self.check_facts(&facts_of_text(&self.data)?)
+        let text = self.data_text()?;
+        self.check_facts(&facts_of_text(&text)?)
+    }
+
+    /// The base64 text of the file. A file that stays in the document's file is read now; the
+    /// error says why it could not be.
+    pub fn data_text(&self) -> Result<Arc<str>, String> {
+        self.data
+            .text()
+            .map_err(|e| format!("the picture data cannot be read: {e}"))
     }
 
     /// Compares the fields with the facts of the file.
@@ -362,7 +399,7 @@ impl ImageResource {
 
     /// The file bytes. `None` if the data is not valid.
     pub fn bytes(&self) -> Option<Vec<u8>> {
-        decode_base64(&self.data, MAX_PICTURE_BYTES).ok()
+        decode_base64(&self.data.text().ok()?, MAX_PICTURE_BYTES).ok()
     }
 
     /// The thumbnail PNG bytes. `None` if the data is not valid.
@@ -372,7 +409,14 @@ impl ImageResource {
 
     /// The file size in bytes, computed from the text without decoding it.
     pub fn byte_len(&self) -> usize {
-        let pad = self.data.bytes().rev().take_while(|b| *b == b'=').count();
+        // A file that stays in the document's file is not read: the padding of the last quad is
+        // not known, so the size can be up to two bytes too big. The only comparison with
+        // `MAX_PICTURE_BYTES` that reads this size is `Editor::check_pictures`, which allows for it;
+        // the other callers show the size.
+        let pad = self
+            .data
+            .mem_text()
+            .map_or(0, |t| t.bytes().rev().take_while(|b| *b == b'=').count());
         (self.data.len() / 4 * 3).saturating_sub(pad)
     }
 

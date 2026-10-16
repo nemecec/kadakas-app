@@ -9,8 +9,14 @@ use serde_json::{Value, json};
 
 /// Methods that the CLI itself answers (the document files of a headless session).
 pub const FILE_METHODS: &[(&str, &str)] = &[
-    ("file.save", "Save the document. params: {path}."),
-    ("file.open", "Open a document. params: {path}."),
+    (
+        "file.save",
+        "Save the document atomically (the old file stays as .bak). params: {path, format?}. format is \"container\" (a ZIP file with the drawing, the pictures and the versions; the default) or \"json\" (one readable JSON file with the pictures as base64, for git and diffs). Without format the extension decides: .json is JSON, anything else the container. Returns {ok, format}.",
+    ),
+    (
+        "file.open",
+        "Open a document of either form (told by the first bytes). params: {path}. The pictures of a container stay in the file until they are used. A file over the size limit, or a container whose entries together are over it, is refused with the way to raise the limit. Returns {ok, format, notes?}.",
+    ),
 ];
 
 /// One domain tool.

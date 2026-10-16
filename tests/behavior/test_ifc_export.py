@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from pytest import approx
 
-from helpers import BIN, isolated_env
+from helpers import BIN, isolated_env, read_doc
 
 CHECK = Path(__file__).with_name("ifc_check.py")
 SQUARE = [[0, 0], [3000, 0], [3000, 2000], [0, 2000]]
@@ -184,7 +184,7 @@ def test_cli_export_leaves_the_input_file_alone(cad, tmp_path):
     garden(cad)
     src = tmp_path / "garden.kad"
     cad.result("file.save", {"path": str(src)})
-    doc = json.loads(src.read_text())
+    doc = read_doc(src)
     del doc["drawing"]["project"]["guid"]
     src.write_text(json.dumps(doc))
     src.chmod(stat.S_IRUSR)

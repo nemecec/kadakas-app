@@ -93,3 +93,17 @@ app-solids-made =
        *[other] Tehti { $count } keha
     }
 app-solids-made-skipped = Tehtud kehi: { $count }, vahele jäetud: { $skipped }
+app-saved-with-notes = Salvestatud: { $name }. { $notes }
+app-save-missing-title = Faili osi ei leita
+app-save-missing-text =
+    Faili { $file } muudeti väljaspool Kadakast ja selles ei ole enam { $what }. Midagi ei salvestatud.
+
+    Kas salvestada ilma nendeta? Pildid asendatakse väikeste hallide kohatäidetega ja versioonid, mida ei leita, jäetakse välja; kõik muu salvestatakse. Või vasta Ei, pane fail (või selle .bak koopia) tagasi ja salvesta uuesti.
+app-save-missing-cancelled = Ei salvestatud: faili osi ei leita. Pane fail (või selle .bak koopia) tagasi ja salvesta uuesti või salvesta ilma nendeta.
+app-save-missing-done = Ei leitud ja jäeti failist välja: { $what }.
+app-save-overwrite-title = Faili muutis teine programm
+app-save-overwrite-text =
+    Faili { $file } muutis teine programm pärast seda, kui sa selle avasid (teine Kadakase aken või sünkroonimisprogramm). Kui salvestad, asendatakse see töö. Vana fail jääb kõrvale .bak koopiana.
+
+    Kas asendada?
+app-save-overwrite-cancelled = Ei salvestatud: teine programm muutis faili pärast seda, kui sa selle avasid. Ava fail uuesti, et näha, mis muutus, või salvesta teise nimega.

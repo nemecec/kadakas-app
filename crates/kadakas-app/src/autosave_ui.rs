@@ -39,6 +39,20 @@ pub struct AutosaveUi {
     web_copy: Option<String>,
 }
 
+/// The document for one autosave copy, as a save writes it, and what the writer needs to know.
+pub struct SaveCopy {
+    pub doc: Document,
+    /// Something the person must know about this copy (for example that the versions are not in
+    /// it).
+    pub note: Option<String>,
+    /// The files the document was opened from (see `Job::sources`).
+    pub sources: Vec<std::sync::Arc<kadakas_file::FileSource>>,
+    /// The drawing was edited and its versions wait in the file (see `Job::anchor`).
+    pub anchor: bool,
+    /// The files that the session saw, for the guard of the save over the file (see `Job::seen`).
+    pub seen: Option<crate::autosave::SeenFiles>,
+}
+
 impl AutosaveUi {
     /// No autosave and no files touched. `begin` turns it on.
     pub fn inert() -> Self {
@@ -88,7 +102,7 @@ impl AutosaveUi {
         ctx: &egui::Context,
         revision: u64,
         path: Option<&std::path::Path>,
-        doc: impl FnOnce() -> (Document, Option<String>),
+        doc: impl FnOnce() -> SaveCopy,
     ) {
         let now = ctx.input(|i| i.time);
         if self.settings.enabled {
@@ -106,8 +120,14 @@ impl AutosaveUi {
         // the versions cannot be written, the copy is the drawing without them, with a note in
         // the meta file of the copy and a visible note: a copy in another form of the versions
         // would not read back, and no copy at all would lose the drawing.
-        let (doc, note) = doc();
-        self.submit(&doc, path, note.clone());
+        let SaveCopy {
+            doc,
+            note,
+            sources,
+            anchor,
+            seen,
+        } = doc();
+        self.submit(&doc, path, note.clone(), sources, anchor, seen);
         if let Some(why) = note {
             self.error = Some(tr!("autosave-ui-versions-left-out", e = why));
         }
@@ -127,7 +147,15 @@ impl AutosaveUi {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn submit(&mut self, doc: &Document, path: Option<&std::path::Path>, note: Option<String>) {
+    fn submit(
+        &mut self,
+        doc: &Document,
+        path: Option<&std::path::Path>,
+        note: Option<String>,
+        sources: Vec<std::sync::Arc<kadakas_file::FileSource>>,
+        anchor: bool,
+        seen: Option<crate::autosave::SeenFiles>,
+    ) {
         if let Some(r) = &mut self.recovery {
             let over = path
                 .filter(|_| self.settings.save_over_file)
@@ -140,6 +168,9 @@ impl AutosaveUi {
                 over,
                 manual_seen,
                 note,
+                sources,
+                anchor,
+                seen,
             });
             if self.keep.is_some() {
                 self.keep_until = Some(seq);
@@ -152,7 +183,15 @@ impl AutosaveUi {
 
     /// The browser has no writer thread. Large documents are skipped: local storage holds about 5 MB.
     #[cfg(target_arch = "wasm32")]
-    fn submit(&mut self, doc: &Document, _path: Option<&std::path::Path>, _note: Option<String>) {
+    fn submit(
+        &mut self,
+        doc: &Document,
+        _path: Option<&std::path::Path>,
+        _note: Option<String>,
+        _sources: Vec<std::sync::Arc<kadakas_file::FileSource>>,
+        _anchor: bool,
+        _seen: Option<crate::autosave::SeenFiles>,
+    ) {
         self.error = match serde_json::to_string(doc) {
             Ok(text) if crate::autosave::fits_browser_storage(text.len()) => {
                 crate::autosave::web::put(&text)
@@ -449,6 +488,9 @@ mod tests {
             over: None,
             manual_seen: 0,
             note: None,
+            sources: Vec::new(),
+            anchor: false,
+            seen: None,
         }
     }
 
@@ -537,12 +579,24 @@ mod tests {
 
         // The next frame saves the recovered document. Only then are the old files released.
         let ctx = egui::Context::default();
-        ui.tick(&ctx, 0, None, || (r.doc.clone(), None));
+        ui.tick(&ctx, 0, None, || SaveCopy {
+            doc: r.doc.clone(),
+            note: None,
+            sources: Vec::new(),
+            anchor: false,
+            seen: None,
+        });
         let seq = ui.keep_until.expect("a job is waiting");
         while ui.recovery.as_ref().unwrap().completed() < seq {
             std::thread::sleep(Duration::from_millis(5));
         }
-        ui.tick(&ctx, 0, None, || (r.doc.clone(), None));
+        ui.tick(&ctx, 0, None, || SaveCopy {
+            doc: r.doc.clone(),
+            note: None,
+            sources: Vec::new(),
+            anchor: false,
+            seen: None,
+        });
         assert!(ui.keep.is_none());
         assert!(find_crashed_with(&dir, Duration::ZERO).is_empty());
         ui.finish();
@@ -557,11 +611,12 @@ mod tests {
         ui.recovery = Some(Recovery::start(dir.clone()).unwrap());
         ui.force = true;
         let ctx = egui::Context::default();
-        ui.tick(&ctx, 0, None, || {
-            (
-                Document::default(),
-                Some("the versions could not be written".to_string()),
-            )
+        ui.tick(&ctx, 0, None, || SaveCopy {
+            doc: Document::default(),
+            note: Some("the versions could not be written".to_string()),
+            sources: Vec::new(),
+            anchor: false,
+            seen: None,
         });
         for _ in 0..2000 {
             if ui.recovery.as_ref().unwrap().completed() >= 1 {

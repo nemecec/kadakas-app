@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 mod annotation_api;
 mod collab_api;
+#[cfg(not(target_arch = "wasm32"))]
+mod consent;
 pub use collab_api::EndpointFactory;
 mod errors;
 pub mod events;
@@ -14,8 +16,9 @@ pub mod feedback_api;
 pub mod files;
 pub use errors::{
     REASON_ALREADY_CONNECTED, REASON_BASE_TOO_LARGE, REASON_BASE_TOO_MANY, REASON_BCF_CONFLICT,
-    REASON_BCF_UNFIT, REASON_CONFIRM_NEEDED, REASON_EDITS_WAIT, REASON_HISTORY_READONLY,
-    REASON_UNSAVED_CHANGES, REASON_VERSION_LIMIT, RpcError,
+    REASON_BCF_UNFIT, REASON_CONFIRM_NEEDED, REASON_EDITS_WAIT, REASON_FILE_CHANGED,
+    REASON_HISTORY_READONLY, REASON_PARTS_MISSING, REASON_UNSAVED_CHANGES, REASON_VERSION_LIMIT,
+    RpcError,
 };
 #[cfg(test)]
 mod care_api_tests;
@@ -156,6 +159,14 @@ pub struct Session {
     /// Folder of the open document. It is always an allowed folder. The host keeps it up to date.
     #[cfg(not(target_arch = "wasm32"))]
     pub doc_dir: Option<std::path::PathBuf>,
+    /// The files that the document was opened from or saved to, with what they held then: a save
+    /// over one of them that another program changed since asks the person (any form).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub seen: kadakas_file::SeenFiles,
+    /// The container file that the open document was read from (DOC-21). Its pictures stay in the
+    /// file until they are used, and a save copies the unchanged parts from it. `None`: the
+    /// document is new, came from the plain JSON form, or was loaded from JSON.
+    pub file_source: Option<Arc<kadakas_file::FileSource>>,
     /// Map services and GIS calls: the list of addresses that agents may fetch (default: none), the
     /// tile cache and the running network jobs (see `gis_api`).
     #[cfg(not(target_arch = "wasm32"))]
@@ -163,6 +174,9 @@ pub struct Session {
     site_cache: kadakas_site::SiteCache,
     /// Annotation primitives and legend rows by document revision (see `render.svg`).
     annot_cache: kadakas_annot::AnnotCache,
+    /// The secret of the session and the consent tokens that are alive (see `consent`).
+    #[cfg(not(target_arch = "wasm32"))]
+    consent: consent::ConsentState,
     /// Site and annotation results for the ghosts of a compare, for the old document that was
     /// drawn last (one document, so it is bounded by the ghost limits of the overlay).
     ghost_caches: GhostCaches,
@@ -900,9 +914,14 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             doc_dir: None,
             #[cfg(not(target_arch = "wasm32"))]
+            seen: Default::default(),
+            file_source: None,
+            #[cfg(not(target_arch = "wasm32"))]
             gis: GisState::default(),
             site_cache: kadakas_site::SiteCache::default(),
             annot_cache: kadakas_annot::AnnotCache::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            consent: consent::ConsentState::default(),
             ghost_caches: GhostCaches::default(),
             worksheet_cache: kadakas_sheet::WorksheetCache::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -953,30 +972,45 @@ impl Session {
 
     /// A session for an opened document, with empty history and selection.
     pub fn with_document(mut doc: Document) -> Self {
-        let cache = review_api::vet_document(&mut doc, SessionLimits::default().read_caps());
+        let mut cache = review_api::vet_document(&mut doc, SessionLimits::default().read_caps());
         let notes = doc.load_notes().to_vec();
-        let mut s = Session::with_vetted_document(doc);
+        let (mut s, exact) = Session::with_vetted_document(doc);
         s.load_notes = notes;
+        cache.arm(s.editor.revision(), exact);
         s.review = cache;
         s
     }
 
-    /// Like `with_document`, for a document whose history was checked already.
-    fn with_vetted_document(mut doc: Document) -> Self {
+    /// Like `with_document`, for a document whose history was checked already. The flag is true
+    /// when the document is as it was read (an old file gets a project GUID in memory, which it
+    /// had not in the file).
+    fn with_vetted_document(mut doc: Document) -> (Self, bool) {
         // An old file has no project GUID. It gets one in memory, and the next save writes it.
-        doc.ensure_project_guid();
-        Session {
-            editor: Editor::new(doc),
-            ..Session::blank()
-        }
+        let exact = !doc.ensure_project_guid();
+        (
+            Session {
+                editor: Editor::new(doc),
+                ..Session::blank()
+            },
+            exact,
+        )
     }
 
     /// Replaces the document, as `document.load` does. Sets the `replaced` flag. The history of
     /// versions of the new document is checked against the limits of the session; what was
     /// repaired or dropped is returned as notes (they are also the load notes of the document).
-    pub fn replace_document(&mut self, mut doc: Document) -> Vec<String> {
-        let cache = review_api::vet_document(&mut doc, self.limits.read_caps());
-        let notes = doc.load_notes().to_vec();
+    pub fn replace_document(&mut self, doc: Document) -> Vec<String> {
+        self.replace_document_as(doc, true)
+    }
+
+    /// [`Session::replace_document`]. `is_file_drawing` is false when the drawing is not the one
+    /// that is stored in the file (for example gray placeholders were replaced by the real
+    /// pictures at the open): then a history that waits in the file does not take the drawing
+    /// for the anchor of its versions, and does not become read only because they differ.
+    pub fn replace_document_as(&mut self, mut doc: Document, is_file_drawing: bool) -> Vec<String> {
+        let mut cache = review_api::vet_document(&mut doc, self.limits.read_caps());
+        let mut notes = doc.load_notes().to_vec();
+        notes.extend(doc.placeholder_note());
         #[cfg(not(target_arch = "wasm32"))]
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
         #[cfg(not(target_arch = "wasm32"))]
@@ -993,13 +1027,15 @@ impl Session {
         let mut hub = std::mem::take(&mut self.events);
         hub.document_replaced();
         let sequential = self.sequential_ids;
+        let (fresh, exact) = Session::with_vetted_document(doc);
         *self = Session {
             replaced: true,
             view: self.view,
             snap: self.snap,
-            ..Session::with_vetted_document(doc)
+            ..fresh
         };
         self.events = hub;
+        cache.arm(self.editor.revision(), exact && is_file_drawing);
         self.review = cache;
         self.feedback = feedback;
         self.collab = collab;
@@ -1243,6 +1279,7 @@ impl Session {
                 "collaboration": collab_api::describe(),
                 "review": review_api::describe(),
                 "errors": errors::describe(),
+                "files": limits::describe_files(),
                 "feedback": feedback_api::describe(),
                 "unknown_shapes": "A file from a newer Kadakas may hold shapes of a kind that this version does not know. They load as kind 'unknown' (the original kind is in shape.kind of objects.get). They are listed in document.summary (objects_by_kind.unknown and unknown_shapes), they are not drawn, they save back unchanged, and only delete_objects can change them.",
                 });
@@ -1315,7 +1352,15 @@ impl Session {
             }
             "document.get" => {
                 // The versions have their own methods (version.*) and can be large.
-                let mut v = serde_json::to_value(doc).unwrap();
+                // A picture that stays in the file is read now; the file may have changed.
+                let mut v = serde_json::to_value(doc).map_err(|e| {
+                    let why = format!("the document cannot be read: {e}");
+                    if why.contains("changed on disk after it was opened") {
+                        RpcError::conflict(why)
+                    } else {
+                        RpcError::app(why)
+                    }
+                })?;
                 if let Some(m) = v.as_object_mut() {
                     m.remove("history");
                 }
@@ -1884,6 +1929,13 @@ mod tests {
         let expected: Vec<&str> = METHODS.iter().map(|(n, _)| *n).collect();
         assert_eq!(names, expected);
         assert!(d["units"].as_str().unwrap().contains("millimeters"));
+        assert!(
+            d["files"]["forms"]["container"]
+                .as_str()
+                .unwrap()
+                .contains("ZIP")
+        );
+        assert!(d["files"]["file.save"].as_str().unwrap().contains("format"));
         assert!(d["command_examples"].as_array().unwrap().len() >= 10);
 
         // Every advertised method is handled: none of them is "unknown method".

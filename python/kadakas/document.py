@@ -913,11 +913,13 @@ class Document:
 
     # -- files, import, export, rendering -------------------------------------------------------
 
-    def save(self, path: str | Path) -> None:
-        self.call("file.save", path=str(path))
+    def save(self, path: str | Path, format: str | None = None) -> JsonDict:
+        """Save the document atomically. ``format`` is ``"container"`` (the default for ``.kad``) or ``"json"`` (one readable JSON file with the pictures as base64; the default for ``.json``). Returns ``{"ok": True, "format": ...}``."""
+        return self.call("file.save", path=str(path), **({"format": format} if format else {}))
 
-    def open(self, path: str | Path) -> None:
-        self.call("file.open", path=str(path))
+    def open(self, path: str | Path) -> JsonDict:
+        """Open a document of either form. Returns ``{"ok": True, "format": ..., "notes": [...]}`` (``notes`` only if the load repaired something)."""
+        return self.call("file.open", path=str(path))
 
     def import_file(self, path: str | Path, **options: Any) -> JsonDict:
         """Import DXF, Shapefile or GeoJSON as one undo step."""

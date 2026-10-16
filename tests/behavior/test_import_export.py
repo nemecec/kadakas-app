@@ -8,7 +8,7 @@ from pytest import approx
 
 import pytest
 
-from helpers import REPO, JsonRpc
+from helpers import REPO, JsonRpc, read_doc
 
 FIXTURES = REPO / "crates" / "kadakas-io" / "tests" / "fixtures"
 
@@ -406,7 +406,7 @@ def test_agents_can_only_use_allowed_folders(tmp_path):
     finally:
         srv.close()
     # The folder of the document is allowed too.
-    (outside / "doc.kad").write_text(json.dumps(REPO and json.loads(open(inside / "doc.kad").read())))
+    (outside / "doc.kad").write_text(json.dumps(REPO and read_doc(inside / "doc.kad")))
     other = JsonRpc(["serve", str(outside / "doc.kad"), "--allow-dir", str(inside)])
     try:
         assert other.result("import.file", {"path": str(outside / "secret.dxf")})["imported"] == 1

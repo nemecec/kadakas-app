@@ -279,6 +279,21 @@ def run_cli(*args, timeout=60):
     )
 
 
+def read_doc(path) -> dict:
+    """The document JSON of a .kad file, whatever its form: the plain JSON form is read as it is,
+    a container is turned into JSON by ``kadakas convert`` (the pictures inline, the versions in
+    the field ``history``)."""
+    import tempfile
+
+    data = Path(path).read_bytes()
+    if data.lstrip()[:1] == b"{":
+        return json.loads(data)
+    out = Path(tempfile.mkdtemp(prefix="kadakas-read-doc-")) / "doc.json"
+    p = run_cli("convert", str(path), str(out), "--format", "json")
+    assert p.returncode == 0, p.stderr
+    return json.loads(out.read_text())
+
+
 def svg_object_ids(svg_text: str) -> list[str]:
     """Each drawn object carries data-id on exactly one element."""
     root = ET.fromstring(svg_text)

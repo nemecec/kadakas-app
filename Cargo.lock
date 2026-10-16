@@ -2668,9 +2668,11 @@ dependencies = [
  "kadakas-annot",
  "kadakas-collab",
  "kadakas-collab-ws",
+ "kadakas-container",
  "kadakas-core",
  "kadakas-crs",
  "kadakas-feedback",
+ "kadakas-file",
  "kadakas-gis",
  "kadakas-ifc",
  "kadakas-io",
@@ -2691,6 +2693,7 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "wat",
  "zip",
@@ -2714,6 +2717,7 @@ dependencies = [
  "kadakas-collab-ws",
  "kadakas-core",
  "kadakas-feedback",
+ "kadakas-file",
  "kadakas-gis",
  "kadakas-irrigation",
  "kadakas-l10n",
@@ -2751,6 +2755,7 @@ dependencies = [
  "kadakas-collab-ws",
  "kadakas-core",
  "kadakas-feedback",
+ "kadakas-file",
  "kadakas-sys",
  "serde_json",
 ]
@@ -2785,6 +2790,18 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
  "webpki-roots",
+]
+
+[[package]]
+name = "kadakas-container"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2823,6 +2840,21 @@ dependencies = [
  "serde",
  "serde_json",
  "ureq",
+]
+
+[[package]]
+name = "kadakas-file"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "kadakas-container",
+ "kadakas-core",
+ "kadakas-sys",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -1815,3 +1815,80 @@ fn many_issues_give_a_note_and_nothing_is_refused_until_the_cap() {
     assert_eq!(e.kind, "validation");
     assert!(e.message.contains("100000"), "{}", e.message);
 }
+
+#[test]
+fn issue_snapshots_survive_a_save_and_a_lazy_reopen_in_the_container() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("doc.kad").display().to_string();
+    let mut s = session();
+    rect(&mut s, 0);
+    // A picture that does not compress, so that it is big enough to be a part of its own.
+    let mut img = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut img, 96, 96);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut x = 12345u32;
+        let noise: Vec<u8> = (0..96 * 96 * 4)
+            .map(|_| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (x >> 24) as u8
+            })
+            .collect();
+        enc.write_header()
+            .unwrap()
+            .write_image_data(&noise)
+            .unwrap();
+    }
+    let id = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "With picture", "now_ms": 1,
+               "viewpoint": {"snapshot_base64": base64::engine::general_purpose::STANDARD.encode(&img)}}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ok(
+        &mut s,
+        "issue.comment",
+        json!({"id": id, "text": "a note", "now_ms": 2}),
+    );
+    let hash = snapshot_hash(&mut s, &id);
+    let file_call = |s: &mut Session, method: &str, path: &str| {
+        let req = json!({"jsonrpc":"2.0","id":1,"method":method,"params":{"path":path}});
+        let r: Value = serde_json::from_str(&crate::files::handle_file_request(s, &req)).unwrap();
+        assert!(r.get("error").is_none(), "{method}: {r}");
+    };
+    file_call(&mut s, "file.save", &path);
+    // The container keeps the picture once, as a part of its own.
+    let zip = std::fs::File::open(&path).unwrap();
+    let names: Vec<String> = zip::ZipArchive::new(zip)
+        .unwrap()
+        .file_names()
+        .map(String::from)
+        .collect();
+    assert!(
+        names.iter().any(|n| n.starts_with("blobs/")),
+        "the picture is a part of the file: {names:?}"
+    );
+    // A new session opens it (the pictures stay in the file), and the issue has its snapshot.
+    let mut t = session();
+    file_call(&mut t, "file.open", &path);
+    assert_eq!(t.editor.doc().issues.len(), 1);
+    assert_eq!(snapshot_hash(&mut t, &id), hash);
+    let g = ok(&mut t, "issue.get", json!({"id": id, "snapshots": true}));
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(g["viewpoints"][0]["snapshot_base64"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(kadakas_core::picture::sha256_hex(&png), hash);
+    assert_eq!(g["comments"].as_array().unwrap().len(), 1);
+    // Saving again from the reopened document keeps the picture.
+    let again = dir.path().join("again.kad").display().to_string();
+    file_call(&mut t, "file.save", &again);
+    let mut u = session();
+    file_call(&mut u, "file.open", &again);
+    assert_eq!(snapshot_hash(&mut u, &id), hash);
+    let g = ok(&mut u, "issue.get", json!({"id": id, "snapshots": true}));
+    assert!(g["viewpoints"][0]["snapshot_base64"].is_string());
+}

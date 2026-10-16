@@ -3,6 +3,7 @@
 //! This crate has no UI dependencies and compiles to native and WebAssembly.
 
 pub mod annot;
+pub mod blob;
 pub mod cache;
 pub mod change;
 pub mod command;

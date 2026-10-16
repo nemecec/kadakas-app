@@ -14,6 +14,7 @@ kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
 kadakas-crs = { version = "0.1.0", path = "../kadakas-crs" }
 kadakas-feedback = { version = "0.1.0", path = "../kadakas-feedback" }
+kadakas-file = { version = "0.1.0", path = "../kadakas-file" }
 kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
 kadakas-plugin = { version = "0.1.0", path = "../kadakas-plugin" }
 kadakas-plugin-abi = { version = "0.1.0", path = "../kadakas-plugin-abi" }
@@ -22,6 +23,7 @@ kadakas-review = { version = "0.1.0", path = "../kadakas-review" }
 kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }
 kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
 glam = { version = "0.34.1", features = ["serde"] }
+sha2 = "0.10.9"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 
@@ -36,6 +38,7 @@ kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
 tempfile = "3"
 
 [dev-dependencies]
+kadakas-container = { version = "0.1.0", path = "../kadakas-container" }
 # The tests make a command panic (`kadakas_core::fault`). Not shipped.
 kadakas-core = { version = "0.1.0", path = "../kadakas-core", features = ["fault-injection"] }
 png = "0.18"

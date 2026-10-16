@@ -11,13 +11,36 @@ use std::time::Duration;
 use crate::{RpcError, Session};
 
 /// The default for [`SessionLimits::document_file_bytes`]: 512 MiB, the document limit of the paid
-/// collaboration tier. A loaded drawing needs 1.1 to 1.7 times the file size in memory
+/// collaboration tier. A loaded drawing needs 1.1 to 1.9 times the bytes of its text in memory
 /// (`docs/doc-load-benchmark.md`).
 pub const DEFAULT_DOCUMENT_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 /// The value of [`SessionLimits::document_file_bytes`] in `strict()`: 32 MiB, the snapshot limit of
 /// the free collaboration tier.
 pub const STRICT_DOCUMENT_FILE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// The part of `describe` about document files (DOC-20 to DOC-22): the two forms, `file.open` and
+/// `file.save`, and the limits. The methods are answered by the host (`kadakas serve`, `kadakas
+/// mcp`, the app), so they are not in `methods`.
+pub(crate) fn describe_files() -> serde_json::Value {
+    serde_json::json!({
+        "forms": {
+            "container": "The default, extension .kad: a ZIP file with document.json (the drawing, deflated), blobs/<sha256> (each picture of 4 KiB or more, stored once, with the hash of collaboration), history/ (the versions) and manifest.json (every entry with its size and SHA-256). Other ZIP tools read it. The pictures and the versions stay in the file until a call uses them.",
+            "json": "One readable JSON file, extension .json: the text of the document with the pictures as base64 and the versions in the field history. For git, diffs and debugging.",
+        },
+        "file.save": "params: {path, format?, allow_missing?, allow_overwrite?}. format is \"container\" or \"json\"; without it the extension decides (.json is JSON, anything else the container). The save is atomic and the old file stays as <path>.bak. Returns {ok, format, notes?}; notes is what the person should know (a part that was left out, an entry of a newer program that was copied, a source that could not be opened again). The content of the file that the document was opened from is what counts, not its time of change: a touched file, or a file that was replaced but still has the pictures (or has them in its .bak), is fine. Two refusals ask the person, each with code 5 (conflict), data.ask_the_person and data.consent_token (a secret token that this session gave for exactly this refusal: it is good for one save, and an edit, another open file or a new refusal makes it stale): (1) data.reason parts_missing, data.missing {file, pictures, history, other}: a picture or the versions cannot be found in any file, nothing is written; if the person agrees, call again with allow_missing set to the consent_token: the missing pictures become small gray placeholders (marked with their hash, and one undo step), the versions that cannot be found are left out, and the rest is saved. (2) data.reason file_changed: another program changed the file at the path since the document was opened from it (two copies of Kadakas, a sync conflict copy), nothing is written; if the person agrees to replace it, call again with allow_overwrite set to the consent_token. A bare true is refused, and a token that was made up, used before, given for another refusal or another state of the document does not match; in the app the person is asked whatever the token says.",
+        "file.open": "params: {path}. The form is told by the first bytes. Returns {ok, format, notes?}. A file over the size limit, or a container whose entries together are over it, is refused (code 3) with the way to raise the limit (kadakas serve --max-document-mib). A damaged or hostile container is an error that names the entry.",
+        "cli": "kadakas convert <input> <output> [--format container|json] converts between the forms and checks the input.",
+        "limits": {
+            "document_file_bytes": "The most bytes of a file that file.open reads, and the most bytes of all entries of a container together (uncompressed, from the manifest).",
+            "entries": MAX_CONTAINER_ENTRIES,
+            "inflate_ratio": "An entry above 1 MiB that inflates more than 200 times is refused as a compression bomb.",
+        },
+    })
+}
+
+/// The most entries a container holds (the 16 bit count of ZIP, less one).
+const MAX_CONTAINER_ENTRIES: usize = 65_534;
 
 /// The limits of one session. `Default` gives the limits that Kadakas always had, and no limit
 /// for the number of objects, the memory and the time of a request.
@@ -57,9 +80,11 @@ pub struct SessionLimits {
     /// The most text that an import reads, in bytes.
     pub import_text_bytes: u64,
     /// The largest document file that `file.open` reads, in bytes. The size is checked before the
-    /// file is read. An agent cannot be asked, so this is a hard limit; the error says how to raise
-    /// it (`kadakas serve --max-document-mib`). The desktop app does not use it for the files of
-    /// the person: it asks (`kadakas_ui_core::open_limit`).
+    /// file is read. For a container (DOC-20) the sum of the sizes of its entries, uncompressed
+    /// (from the manifest), is checked against it too, as is the size of each entry, so a small
+    /// file cannot hide a big document. An agent cannot be asked, so this is a hard limit; the
+    /// error says how to raise it (`kadakas serve --max-document-mib`). The desktop app does not
+    /// use it for the files of the person: it asks (`kadakas_ui_core::open_limit`).
     pub document_file_bytes: u64,
     /// Most entities whose summaries a DXF or DWG import keeps for updates (`base: "auto"`). A
     /// drawing over it is refused with the choices `link` and `none`. It can be lowered, never
@@ -176,7 +201,7 @@ pub(crate) fn document_bytes(doc: &kadakas_core::model::Document) -> u64 {
         .objects
         .values()
         .map(|o| match &o.shape {
-            kadakas_core::model::Shape::Underlay(u) => u.png.0.len() as u64,
+            kadakas_core::model::Shape::Underlay(u) => u.png.resident_len() as u64,
             _ => 0,
         })
         .sum();
@@ -184,7 +209,9 @@ pub(crate) fn document_bytes(doc: &kadakas_core::model::Document) -> u64 {
         .resources
         .iter()
         .map(|r| match &r.body {
-            kadakas_core::resource::ResourceBody::Image(i) => (i.data.len() + i.thumb.len()) as u64,
+            kadakas_core::resource::ResourceBody::Image(i) => {
+                (i.data.resident_len() + i.thumb.len()) as u64
+            }
             _ => 0,
         })
         .sum();

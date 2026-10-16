@@ -1133,12 +1133,19 @@ pub struct Document {
     pub drawing: crate::sheets::Drawing,
     /// The named versions of this file (REV-01), as JSON that `kadakas-review` reads. It is local
     /// to the file: collaboration does not share it. Older files have none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "history_unwritten")]
     pub history: Option<crate::history::HistoryData>,
     /// Review issues and their comments (REV-04). They are review data, not drawing objects.
     /// Older files have none.
     #[serde(default, skip_serializing_if = "crate::issue::Issues::is_empty")]
     pub issues: crate::issue::Issues,
+    /// The history of versions that waits in the file this document was opened from, not read yet
+    /// (`crate::history::HistoryLoader`, DOC-21). While it is set, `history` is `None`. A host
+    /// resolves it before it uses the history or writes the document in any other way than a
+    /// copy of the container (`kadakas-api` does this in `Session`). It is not saved and takes no
+    /// part in equality.
+    #[serde(skip)]
+    pub lazy_history: Option<std::sync::Arc<dyn crate::history::HistoryLoader>>,
     /// The generator of new IDs (see `crate::uid`). It is not saved.
     #[serde(skip)]
     ids: IdGen,
@@ -1246,6 +1253,22 @@ impl<'de> Deserialize<'de> for VersionProbe {
     }
 }
 
+/// True if the field `history` is not written: there is none, or a container save writes it as
+/// entries of its own (`crate::blob::with_blob_refs`).
+fn history_unwritten(h: &Option<crate::history::HistoryData>) -> bool {
+    h.is_none() || crate::blob::history_hidden()
+}
+
+/// A big text of a document that a container file stores as a blob (`Document::for_each_blob`).
+pub enum DocBlob<'a> {
+    /// The picture of an underlay.
+    Picture(&'a crate::underlay::PngData),
+    /// The file of an image resource.
+    Image(&'a crate::blob::BlobText),
+    /// The summaries of an import base (the body of the resource).
+    ImportBase(&'a std::sync::Arc<Value>),
+}
+
 /// The error for a text that does not parse as a document. `first` is the error of the typed
 /// parse. `probe` reads only the version, so a newer or older file says so, and a file without a
 /// version says that. A reader error (a failed read) is reported as it is.
@@ -1313,6 +1336,7 @@ impl Default for Document {
             drawing: Default::default(),
             history: None,
             issues: Default::default(),
+            lazy_history: None,
             ids: IdGen::default(),
             load_notes: Vec::new(),
             extra: Default::default(),
@@ -1331,7 +1355,7 @@ impl Document {
     /// this for bytes and `from_reader` for files: parsing a slice is faster than parsing a reader.
     /// There is no `serde_json::Value` copy of the document: the typed parser reads the bytes.
     pub fn from_slice(bytes: &[u8]) -> Result<Document, LoadError> {
-        match serde_json::from_slice::<Document>(bytes) {
+        match crate::blob::with_intern_scope(|| serde_json::from_slice::<Document>(bytes)) {
             Ok(doc) => doc.checked(),
             Err(e) => Err(explain_failure(e, || {
                 serde_json::from_slice::<VersionProbe>(bytes)
@@ -1352,11 +1376,41 @@ impl Document {
     pub fn from_reader<R: std::io::Read + std::io::Seek>(
         mut reader: R,
     ) -> Result<Document, LoadError> {
-        match serde_json::from_reader::<_, Document>(&mut reader) {
+        match crate::blob::with_intern_scope(|| serde_json::from_reader::<_, Document>(&mut reader))
+        {
             Ok(doc) => doc.checked(),
             Err(e) => Err(explain_failure(e, || {
                 reader.rewind().map_err(serde_json::Error::io)?;
                 serde_json::from_reader::<_, VersionProbe>(&mut reader)
+            })),
+        }
+    }
+
+    /// Like `from_reader`, for a reader that cannot seek (an entry of a container). `reopen` gives
+    /// the reader again for the second pass on the error path (see `from_reader`). `attach` runs
+    /// after the parse and before the checks of the load: a container puts the history, which is
+    /// not in the text, into the document there. It returns notes for the person, which the
+    /// document keeps after the notes of the checks.
+    pub fn from_reader_with<R: std::io::Read, P: std::io::Read>(
+        reader: R,
+        reopen: impl FnOnce() -> std::io::Result<P>,
+        attach: impl FnOnce(&mut Document) -> Result<Vec<String>, LoadError>,
+    ) -> Result<Document, LoadError> {
+        match crate::blob::with_intern_scope(|| serde_json::from_reader::<_, Document>(reader)) {
+            Ok(mut doc) => {
+                check_version(u64::from(doc.format_version))?;
+                // The notes of the attach come after the notes of the checks, which start the
+                // list again.
+                let notes = attach(&mut doc)?;
+                let mut doc = doc.finish_load()?;
+                for n in notes {
+                    doc.add_load_note(n);
+                }
+                Ok(doc)
+            }
+            Err(e) => Err(explain_failure(e, || {
+                let again = reopen().map_err(serde_json::Error::io)?;
+                serde_json::from_reader::<_, VersionProbe>(again)
             })),
         }
     }
@@ -1367,6 +1421,262 @@ impl Document {
         self.finish_load()
     }
 
+    /// Calls `f` for every big text of the document that a container file stores as a blob: the
+    /// picture of an underlay, the file of an image resource and the summaries of an import
+    /// base (a text of at least `MIN_BLOB_TEXT` bytes, see `crate::blob`). The order is the order
+    /// of the document.
+    pub fn for_each_blob(&self, f: &mut dyn FnMut(DocBlob<'_>)) {
+        for o in self.objects.values() {
+            if let Shape::Underlay(u) = &o.shape {
+                f(DocBlob::Picture(&u.png));
+            }
+        }
+        for r in self.resources.iter() {
+            match &r.body {
+                crate::resource::ResourceBody::Image(i) => f(DocBlob::Image(&i.data)),
+                crate::resource::ResourceBody::ImportBase(v) => f(DocBlob::ImportBase(v)),
+                _ => {}
+            }
+        }
+    }
+
+    /// Checks that every picture that stays in a file can still be read from it. A host calls it
+    /// before it works out the state of the document for the versions or a compare, because a
+    /// picture that cannot be read makes its object look as if it were not there. A file that is
+    /// not the one that was opened is fine as long as it (or its backup) still has the pictures
+    /// that the document uses, found by their hash.
+    pub fn check_blobs(&self) -> Result<(), crate::blob::BlobError> {
+        let mut sources: Vec<(usize, bool)> = Vec::new();
+        let mut result = Ok(());
+        let mut one = |lazy: Option<&std::sync::Arc<crate::blob::LazyBlob>>| {
+            let Some(l) = lazy else { return };
+            if result.is_err() {
+                return;
+            }
+            let key = std::sync::Arc::as_ptr(l.source()) as *const () as usize;
+            // The file as a whole is looked at once; only when it is not the one that was opened
+            // is each picture looked for by its hash.
+            let whole = match sources.iter().find(|(k, _)| *k == key) {
+                Some((_, ok)) => *ok,
+                None => {
+                    let ok = l.source().check().is_ok();
+                    sources.push((key, ok));
+                    ok
+                }
+            };
+            if !whole {
+                result = l.source().check_blob(l.hash());
+            }
+        };
+        self.for_each_blob(&mut |b| match b {
+            DocBlob::Picture(p) => one(p.lazy()),
+            DocBlob::Image(t) => one(t.lazy()),
+            DocBlob::ImportBase(_) => {}
+        });
+        result
+    }
+
+    /// The hashes of the pictures that stay in a file and cannot be read now (the file changed on
+    /// disk and no file has them).
+    pub fn unreadable_pictures(&self) -> Vec<String> {
+        let mut out = std::collections::BTreeSet::new();
+        let mut whole: Vec<(usize, bool)> = Vec::new();
+        let mut one = |lazy: Option<&std::sync::Arc<crate::blob::LazyBlob>>| {
+            let Some(l) = lazy else { return };
+            let key = std::sync::Arc::as_ptr(l.source()) as *const () as usize;
+            let ok = match whole.iter().find(|(k, _)| *k == key) {
+                Some((_, ok)) => *ok,
+                None => {
+                    let ok = l.source().check().is_ok();
+                    whole.push((key, ok));
+                    ok
+                }
+            };
+            if !ok && l.source().check_blob(l.hash()).is_err() {
+                out.insert(l.hash().to_string());
+            }
+        };
+        self.for_each_blob(&mut |b| match b {
+            DocBlob::Picture(p) => one(p.lazy()),
+            DocBlob::Image(t) => one(t.lazy()),
+            DocBlob::ImportBase(_) => {}
+        });
+        out.into_iter().collect()
+    }
+
+    /// A sentence for the person when the document has placeholders (see
+    /// `underlay::MISSING_PREFIX`), else `None`.
+    pub fn placeholder_note(&self) -> Option<String> {
+        let placeholders = self.placeholder_hashes();
+        if placeholders.is_empty() {
+            return None;
+        }
+        let short: Vec<String> = placeholders
+            .iter()
+            .take(3)
+            .map(|h| h.chars().take(8).collect())
+            .collect();
+        Some(format!(
+            "{} picture(s) are gray placeholders: they could not be found when the file was saved ({}). The real pictures come back when a file that has them is opened",
+            placeholders.len(),
+            short.join(", ")
+        ))
+    }
+
+    /// The hashes of the pictures that are placeholders (see `underlay::MISSING_PREFIX`).
+    pub fn placeholder_hashes(&self) -> Vec<String> {
+        let mut out = std::collections::BTreeSet::new();
+        for o in self.objects.values() {
+            if let Shape::Underlay(u) = &o.shape
+                && let Some((h, _)) = crate::underlay::placeholder_of(&u.source)
+            {
+                out.insert(h.to_string());
+            }
+        }
+        for r in self.resources.iter() {
+            if let crate::resource::ResourceBody::Image(i) = &r.body
+                && let Some((h, _)) = crate::underlay::placeholder_of(&i.source)
+            {
+                out.insert(h.to_string());
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    /// Puts the real pictures back for the placeholders whose pictures the source has now (found
+    /// by their hash, in the file or in its backup). Returns how many were put back. The picture
+    /// stays in the file (a lazy handle); the size of an underlay and the facts of an image come
+    /// from the picture.
+    pub fn relink_placeholders(
+        &mut self,
+        source: &std::sync::Arc<dyn crate::blob::BlobSource>,
+    ) -> usize {
+        self.relink_placeholders_noted(source).0
+    }
+
+    /// [`Document::relink_placeholders`] with the notes for the person. The marker of a placeholder
+    /// is text in a file, so a picture is checked like any picture of an underlay or an image
+    /// resource first (the size, the form of the file): a picture that fails stays a placeholder,
+    /// and a note says so.
+    pub fn relink_placeholders_noted(
+        &mut self,
+        source: &std::sync::Arc<dyn crate::blob::BlobSource>,
+    ) -> (usize, Vec<String>) {
+        use crate::blob::{BlobText, LazyBlob};
+        use crate::underlay::{PngData, placeholder_of};
+        let mut count = 0;
+        let mut refused = 0usize;
+        let found = |hash: &str| -> Option<std::sync::Arc<LazyBlob>> {
+            source.blob_len(hash)?;
+            source.check_blob(hash).ok()?;
+            LazyBlob::new(source.clone(), hash)
+                .ok()
+                .map(std::sync::Arc::new)
+        };
+        for o in self.objects.values_mut() {
+            if let Shape::Underlay(u) = &mut o.shape
+                && let Some((hash, old)) = placeholder_of(&u.source)
+                && let Some(blob) = found(hash)
+                && let Ok(bytes) = blob.bytes()
+                && bytes.len() >= 24
+                && bytes.starts_with(&[0x89, b'P', b'N', b'G'])
+            {
+                let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+                let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+                let mut candidate = (**u).clone();
+                candidate.source = old.to_string();
+                candidate.png = PngData::from_lazy(blob);
+                candidate.width = w;
+                candidate.height = h;
+                // The same rules as for any underlay (at most MAX_SIDE_PX a side, a PNG).
+                if candidate.problem().is_some() {
+                    refused += 1;
+                    continue;
+                }
+                **u = candidate;
+                count += 1;
+            }
+        }
+        for r in self.resources.iter_mut() {
+            if let crate::resource::ResourceBody::Image(i) = &mut r.body
+                && let Some((hash, old)) = placeholder_of(&i.source)
+                && let Some(blob) = found(hash)
+                && let Ok(text) = blob.text()
+                && let Ok(facts) = crate::picture::facts_of_text(&text)
+            {
+                let mut candidate = i.clone();
+                candidate.source = old.to_string();
+                candidate.sha256 = facts.sha256;
+                candidate.format = facts.format;
+                candidate.width = facts.width;
+                candidate.height = facts.height;
+                candidate.data = BlobText::from(blob);
+                if candidate.validate().is_err() {
+                    refused += 1;
+                    continue;
+                }
+                *i = candidate;
+                count += 1;
+            }
+        }
+        let mut notes = Vec::new();
+        if refused > 0 {
+            notes.push(format!(
+                "{refused} picture(s) were found for placeholders but are not valid pictures (too big or not a picture file); the placeholders stay"
+            ));
+        }
+        (count, notes)
+    }
+
+    /// Replaces the pictures with these hashes (they cannot be found any more and the person chose
+    /// to save without them) by a small gray picture, and returns how many pictures were replaced.
+    /// An underlay gets a raster of one pixel; an image resource gets a consistent one-pixel image
+    /// (hash, size and thumbnail). It is no edit: there is no undo step.
+    pub fn replace_missing_pictures(
+        &mut self,
+        missing: &std::collections::HashSet<String>,
+    ) -> usize {
+        use crate::underlay::{PngData, base64_encode, placeholder_png};
+        let mut count = 0;
+        let png = placeholder_png();
+        for o in self.objects.values_mut() {
+            if let Shape::Underlay(u) = &mut o.shape
+                && let Some(hash) = u
+                    .png
+                    .lazy()
+                    .map(|l| l.hash().to_string())
+                    .filter(|h| missing.contains(h))
+            {
+                u.png = PngData::new(png.clone());
+                u.width = 1;
+                u.height = 1;
+                // The original hash stays on the picture (see `underlay::MISSING_PREFIX`).
+                u.source = format!("{}{hash}:{}", crate::underlay::MISSING_PREFIX, u.source);
+                count += 1;
+            }
+        }
+        for r in self.resources.iter_mut() {
+            if let crate::resource::ResourceBody::Image(i) = &mut r.body
+                && let Some(hash) = i
+                    .data
+                    .lazy()
+                    .map(|l| l.hash().to_string())
+                    .filter(|h| missing.contains(h))
+            {
+                i.source = format!("{}{hash}:{}", crate::underlay::MISSING_PREFIX, i.source);
+                let text = base64_encode(&png);
+                i.sha256 = crate::picture::sha256_hex(&png);
+                i.format = crate::picture::PictureFormat::Png;
+                i.width = 1;
+                i.height = 1;
+                i.data = text.clone().into();
+                i.thumb = text.into();
+                count += 1;
+            }
+        }
+        count
+    }
+
     /// Like `from_json`, for JSON that is already parsed.
     pub fn from_value(value: Value) -> Result<Document, LoadError> {
         let version = value
@@ -1374,8 +1684,8 @@ impl Document {
             .and_then(Value::as_u64)
             .ok_or_else(|| LoadError::Parse("missing format_version".into()))?;
         check_version(version)?;
-        let doc: Document =
-            serde_json::from_value(value).map_err(|e| LoadError::Parse(e.to_string()))?;
+        let doc: Document = crate::blob::with_intern_scope(|| serde_json::from_value(value))
+            .map_err(|e| LoadError::Parse(e.to_string()))?;
         doc.finish_load()
     }
 
@@ -2600,7 +2910,7 @@ mod tests {
         assert_eq!(a, b);
         assert!(matches!(
             &a.objects.values().next().unwrap().shape,
-            Shape::Underlay(x) if x.png.0.len() == 9
+            Shape::Underlay(x) if x.png.len() == 9
         ));
         let broken = after.replace(&png, "!!!!");
         let e = load(&broken).unwrap_err();
@@ -2950,5 +3260,66 @@ mod tests {
             Document::from_value(j),
             Err(LoadError::Invalid(_))
         ));
+    }
+
+    /// A document with one placeholder underlay for the blob `hash`.
+    fn doc_with_placeholder(hash: &str) -> Document {
+        use crate::underlay::{PngData, Underlay, placeholder_png};
+        let mut doc = Document::default();
+        let id = ObjectId::from_num(5);
+        let mut o = obj(Shape::Underlay(Box::new(Underlay {
+            name: "map".into(),
+            min: DVec2::ZERO,
+            max: DVec2::new(10.0, 10.0),
+            width: 1,
+            height: 1,
+            png: PngData::new(placeholder_png()),
+            opacity: 1.0,
+            source: format!("{}{hash}:old.png", crate::underlay::MISSING_PREFIX),
+        })));
+        o.id = id;
+        doc.objects.insert(id, o);
+        doc
+    }
+
+    /// The first 33 bytes of a PNG that says it has this size.
+    fn png_header(w: u32, h: u32) -> Vec<u8> {
+        let mut b = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10, 0, 0, 0, 13];
+        b.extend_from_slice(b"IHDR");
+        b.extend_from_slice(&w.to_be_bytes());
+        b.extend_from_slice(&h.to_be_bytes());
+        b.extend_from_slice(&[8, 6, 0, 0, 0]);
+        b
+    }
+
+    #[test]
+    fn a_placeholder_is_relinked_only_to_a_picture_that_passes_the_checks_of_an_underlay() {
+        use crate::blob::testutil::MapSource;
+        use crate::underlay::base64_encode;
+        // A hostile marker and a PNG header of 100000 x 100000 pixels: the placeholder stays.
+        let src = std::sync::Arc::new(MapSource::default());
+        let hash = src.put(&base64_encode(&png_header(100_000, 100_000)));
+        let mut doc = doc_with_placeholder(&hash);
+        let blobs: std::sync::Arc<dyn crate::blob::BlobSource> = src.clone();
+        let (n, notes) = doc.relink_placeholders_noted(&blobs);
+        assert_eq!(n, 0);
+        assert!(
+            notes.iter().any(|m| m.contains("not valid pictures")),
+            "{notes:?}"
+        );
+        assert_eq!(doc.placeholder_hashes(), std::slice::from_ref(&hash));
+        let Shape::Underlay(u) = &doc.objects.values().next().unwrap().shape else {
+            unreachable!()
+        };
+        assert_eq!((u.width, u.height), (1, 1));
+        // The same bound for a side of 4097 pixels, and a picture within it is relinked.
+        let big = src.put(&base64_encode(&png_header(4097, 10)));
+        let mut doc = doc_with_placeholder(&big);
+        assert_eq!(doc.relink_placeholders_noted(&blobs).0, 0);
+        let fine = src.put(&base64_encode(&png_header(4096, 10)));
+        let mut doc = doc_with_placeholder(&fine);
+        let (n, notes) = doc.relink_placeholders_noted(&blobs);
+        assert_eq!((n, notes.len()), (1, 0));
+        assert!(doc.placeholder_hashes().is_empty());
     }
 }

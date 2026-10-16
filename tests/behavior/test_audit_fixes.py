@@ -2,7 +2,7 @@
 
 import json
 
-from helpers import McpClient, rect_cmd, run_cli
+from helpers import McpClient, read_doc, rect_cmd, run_cli
 
 from conftest import ALLOW
 
@@ -10,15 +10,15 @@ from conftest import ALLOW
 def test_serve_saves_and_opens_kad(cad, make_serve, tmp_path):
     cad.execute(rect_cmd(0, 0, 1, 1))
     f = tmp_path / "plan.kad"
-    assert cad.result("file.save", {"path": str(f)}) == {"ok": True}
-    assert json.loads(f.read_text())["format_version"] == 3
+    assert cad.result("file.save", {"path": str(f)}) == {"ok": True, "format": "container"}
+    assert read_doc(f)["format_version"] == 3
     other = make_serve()
-    assert other.result("file.open", {"path": str(f)}) == {"ok": True}
+    assert other.result("file.open", {"path": str(f)}) == {"ok": True, "format": "container"}
     assert other.result("document.summary")["object_count"] == 1
     # A second save keeps the first file as .bak.
     cad.execute(rect_cmd(2, 2, 3, 3))
     cad.result("file.save", {"path": str(tmp_path / "plan.kad")})
-    assert json.loads((tmp_path / "plan.kad.bak").read_text())["objects"][0]["id"]
+    assert read_doc(tmp_path / "plan.kad.bak")["objects"][0]["id"]
     assert cad.error("file.save", {"path": str(tmp_path / "x.txt")})["code"] == 4
 
 
@@ -28,9 +28,9 @@ def test_mcp_saves_and_opens_kad(tmp_path):
     mcp.initialize()
     try:
         mcp.tool_json("execute", {"command": rect_cmd(0, 0, 1, 1)})
-        assert mcp.tool_json("file_save", {"path": str(f)}) == {"ok": True}
+        assert mcp.tool_json("file_save", {"path": str(f)}) == {"ok": True, "format": "container"}
         assert f.exists()
-        assert mcp.tool_json("file_open", {"path": str(f)}) == {"ok": True}
+        assert mcp.tool_json("file_open", {"path": str(f)}) == {"ok": True, "format": "container"}
     finally:
         mcp.close()
 
@@ -59,7 +59,7 @@ def test_future_shapes_and_fields_survive_open_and_save(cad, make_serve, tmp_pat
     assert summary["unknown_shapes"][0]["kind"] == "spiral"
     out = tmp_path / "again.kad"
     cad.result("file.save", {"path": str(out)})
-    assert json.loads(out.read_text()) == doc
+    assert read_doc(out) == doc
     oid = summary["unknown_shapes"][0]["id"]
     assert cad.error("execute", {"command": {"op": "move_objects", "ids": [oid], "delta": [1, 1]}})["code"] == 3
     cad.execute({"op": "delete_objects", "ids": [oid]})

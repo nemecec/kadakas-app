@@ -42,7 +42,7 @@ scripts/notices.sh
 
 ## macOS notes
 
-- `packaging/macos/Info.plist` is merged into the one that the packager writes. It declares the type `net.kadakas.drawing` (it conforms to `public.json`) and makes Kadakas the owner of `.kad` files.
+- `packaging/macos/Info.plist` is merged into the one that the packager writes. It declares the type `net.kadakas.drawing` (it conforms to `public.zip-archive`, because a `.kad` file is a ZIP container) and makes Kadakas the owner of `.kad` files.
 - The `.app` build was checked on macOS 26 (Apple silicon). The `.dmg` step runs a Finder script for the window layout. It needs a normal desktop session, and it timed out in a headless run. Run it on a Mac with a user logged in.
 - The bundle id is `net.kadakas.Kadakas`. Test the double click on a `.kad` file on a real Mac before the first release.
 

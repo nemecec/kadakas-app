@@ -3,11 +3,14 @@ entity, change a layer, delete, add, renumber the handles, rename the file, save
 tags in the import result are checked through the API: the handle, the drawing and revision, the
 hashes, the layers, blocks, the stored base, save and copy."""
 
+import json
 import re
 
 import pytest
 
 ezdxf = pytest.importorskip("ezdxf", reason="run with: uv run --with pytest --with ezdxf pytest tests/behavior")
+
+from helpers import read_doc
 
 HASH = re.compile(r"^[0-9a-f]{16}$")
 GUID = re.compile(r"^guid:\{[0-9A-F-]+\}$")
@@ -281,9 +284,10 @@ def test_a_tag_that_is_not_valid_is_refused(cad, tmp_path):
     # A document file with a bad tag opens, and the tag is dropped.
     saved = tmp_path / "plan.kad"
     cad.result("file.save", {"path": str(saved)})
-    text = saved.read_text().replace('"kind": "CIRCLE"', '"kind": ""')
-    assert text != saved.read_text()
-    saved.write_text(text)
+    text = json.dumps(read_doc(saved), indent=2)
+    edited = text.replace('"kind": "CIRCLE"', '"kind": ""')
+    assert edited != text
+    saved.write_text(edited)
     cad.result("file.open", {"path": str(saved)})
     assert len(tags(cad)) == 5
 

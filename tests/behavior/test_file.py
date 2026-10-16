@@ -2,7 +2,7 @@
 
 import json
 
-from helpers import plant_cmd, rect_cmd, uid
+from helpers import plant_cmd, read_doc, rect_cmd, uid
 
 
 def test_save_then_open_in_a_fresh_process_round_trips(make_serve, tmp_path):
@@ -14,11 +14,11 @@ def test_save_then_open_in_a_fresh_process_round_trips(make_serve, tmp_path):
     first.execute({"op": "add_class", "name": "Paths"})
     first.execute(plant_cmd(500, 500, species="Ilex aquifolium"))
     saved = first.result("file.save", {"path": str(path)})
-    assert saved == {"ok": True}
+    assert saved == {"ok": True, "format": "container"}
     expected = first.doc()
 
     second = make_serve()
-    assert second.result("file.open", {"path": str(path)}) == {"ok": True}
+    assert second.result("file.open", {"path": str(path)}) == {"ok": True, "format": "container"}
     assert second.doc() == expected
 
 
@@ -27,7 +27,7 @@ def test_saved_file_is_the_document_json(make_serve, tmp_path):
     cad = make_serve()
     cad.execute(rect_cmd(0, 0, 10, 10))
     cad.result("file.save", {"path": str(path)})
-    on_disk = json.loads(path.read_text())
+    on_disk = read_doc(path)
     assert on_disk == cad.doc()
     assert on_disk["format_version"] == 3
 
