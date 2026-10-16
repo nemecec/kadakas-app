@@ -632,7 +632,12 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
         hit_node[i] = id;
         members[id].push(i);
     }
-    let rank_of = |i: usize| ranks.get(hits[i].curve).copied().unwrap_or(0);
+    // An end of a curve outranks a crossing in the middle of a curve of the same rank.
+    let rank_of = |i: usize| {
+        let h = &hits[i];
+        let end = h.t == 0.0 || h.t == 1.0;
+        2 * ranks.get(h.curve).copied().unwrap_or(0) + end as u8
+    };
     for m in &members {
         let top = m.iter().map(|&i| rank_of(i)).max().unwrap_or(0);
         let first: Vec<usize> = m.iter().copied().filter(|&i| rank_of(i) == top).collect();
