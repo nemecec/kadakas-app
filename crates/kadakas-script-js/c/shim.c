@@ -13,7 +13,7 @@
  *
  * A frame is a u32 count and then, for each part, a u32 length and the bytes (little endian).
  *
- *   run request:      [code, args_json, options_json]
+ *   run request:      [code, args_json, options_json, buffer...]
  *   run reply:        [status ("ok" | "error"), payload, calls, log, buffer...]
  *   host call:        [method, params_json, buffer...]
  *   host call reply:  [status ("ok" | "error"), json, buffer...]
@@ -356,9 +356,10 @@ static int64_t opt_int(JSContext *ctx, JSValueConst o, const char *key, int64_t 
 
 EXPORT("run") uint64_t kad_run(const uint8_t *req, uint32_t req_len)
 {
-    const uint8_t *pp[8];
-    uint32_t pl[8];
-    if (frame_parts(req, req_len, pp, pl, 8) != 3)
+    const uint8_t *pp[1024];
+    uint32_t pl[1024];
+    int nparts = frame_parts(req, req_len, pp, pl, 1024);
+    if (nparts < 3)
         return error_frame("error", "{\"message\":\"the run request is broken\"}");
 
     JSRuntime *rt = JS_NewRuntime();
@@ -396,13 +397,18 @@ EXPORT("run") uint64_t kad_run(const uint8_t *req, uint32_t req_len)
     JS_FreeValue(ctx, pre);
 
     JSValue run_fn = JS_GetPropertyStr(ctx, global, "__run");
-    JSValue args[3];
+    JSValue args[4];
     args[0] = JS_NewStringLen(ctx, (const char *)pp[0], pl[0]);
     args[1] = JS_NewStringLen(ctx, (const char *)pp[1], pl[1]);
     args[2] = JS_IsException(opts) ? JS_UNDEFINED : opts;
-    JSValue r = JS_Call(ctx, run_fn, JS_UNDEFINED, 3, args);
+    args[3] = JS_NewArray(ctx);
+    for (int i = 3; i < nparts; i++)
+        JS_SetPropertyUint32(ctx, args[3], (uint32_t)(i - 3),
+                             JS_NewArrayBufferCopy(ctx, pp[i], pl[i]));
+    JSValue r = JS_Call(ctx, run_fn, JS_UNDEFINED, 4, args);
     JS_FreeValue(ctx, args[0]);
     JS_FreeValue(ctx, args[1]);
+    JS_FreeValue(ctx, args[3]);
     JS_FreeValue(ctx, run_fn);
     if (JS_IsException(r)) {
         JSValue ex = JS_GetException(ctx);

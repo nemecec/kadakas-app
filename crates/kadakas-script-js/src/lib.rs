@@ -90,8 +90,11 @@ impl Default for ScriptLimits {
 pub struct Request<'a> {
     /// The body of a function. It gets `args`, and its `return` value is the result.
     pub code: &'a str,
-    /// The value of `args`.
+    /// The value of `args`. A typed array in it is a marker (see [`typed`]) for a buffer of
+    /// `buffers`.
     pub args: &'a Value,
+    /// The bytes of the typed arrays of `args`.
+    pub buffers: &'a [Vec<u8>],
     /// Seeds `Math.random`. The same seed gives the same numbers.
     pub seed: u32,
 }
@@ -270,7 +273,9 @@ impl ScriptEngine {
             Failure::from(ScriptError::Trap(format!("the arguments cannot be sent: {e}")))
         })?;
         let options = serde_json::to_vec(&options).expect("options are JSON");
-        let frame = frame::encode(&[request.code.as_bytes(), &args, &options]);
+        let mut parts: Vec<&[u8]> = vec![request.code.as_bytes(), &args, &options];
+        parts.extend(request.buffers.iter().map(Vec::as_slice));
+        let frame = frame::encode(&parts);
         let mut serve = |bytes: &[u8]| serve_call(bytes, host);
         let answer = module.run(&frame, &mut serve).map_err(plugin_failure)?;
         parse_answer(&answer)

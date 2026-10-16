@@ -156,12 +156,12 @@
     return next;
   }
 
-  global.__run = function (code, argsJson, options) {
+  global.__run = function (code, argsJson, options, inputs) {
     const opts = options || {};
     if (typeof opts.max_calls === "number") maxCalls = opts.max_calls;
     Math.random = seeded(typeof opts.seed === "number" ? opts.seed : 0);
     try {
-      const args = JSON.parse(argsJson);
+      const args = unpack(JSON.parse(argsJson), inputs || []);
       const fn = (0, eval)('(function (args) { "use strict"; ' + code + "\n})");
       const value = fn(args);
       const bufs = [];

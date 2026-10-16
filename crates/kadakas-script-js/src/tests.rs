@@ -26,6 +26,7 @@ fn run(code: &str) -> Result<Output, Failure> {
         &Request {
             code,
             args: &json!({"a": 1}),
+            buffers: &[],
             seed: 0,
         },
         &mut host,
@@ -46,6 +47,7 @@ fn run_with(limits: ScriptLimits, code: &str) -> (Result<Output, Failure>, Vec<(
         &Request {
             code,
             args: &json!(null),
+            buffers: &[],
             seed: 7,
         },
         &mut host,
@@ -248,6 +250,7 @@ fn a_typed_answer_arrives_as_a_typed_array_with_its_stride() {
                 code: r#"const r = kadakas.call("ring", {}, {typed: true}).ring;
                          return {kind: r.constructor.name, len: r.length, stride: r.stride, last: r[19], same: r};"#,
                 args: &json!(null),
+                buffers: &[],
                 seed: 0,
             },
             &mut Ring,
@@ -272,6 +275,7 @@ fn a_new_engine_per_run_leaves_no_state_between_runs() {
             &Request {
                 code,
                 args: &json!(null),
+                buffers: &[],
                 seed: 0,
             },
             &mut host,
@@ -279,4 +283,26 @@ fn a_new_engine_per_run_leaves_no_state_between_runs() {
     };
     assert_eq!(go("globalThis.leak = 1; return 1;").unwrap().value, json!(1));
     assert_eq!(go("return typeof globalThis.leak;").unwrap().value, json!("undefined"));
+}
+
+#[test]
+fn typed_arrays_can_be_arguments() {
+    let engine = ScriptEngine::new(small()).unwrap();
+    let mut host = Echo { seen: vec![] };
+    let ring: Vec<u8> = [0.0f64, 0.0, 4.0, 0.0, 4.0, 3.0]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    let out = engine
+        .run(
+            &Request {
+                code: "const r = args.ring; return {n: r.length, stride: r.stride, last: r[5], tag: args.tag};",
+                args: &json!({"ring": {"$t": "f64", "i": 0, "n": 2}, "tag": "x"}),
+                buffers: &[ring],
+                seed: 0,
+            },
+            &mut host,
+        )
+        .unwrap();
+    assert_eq!(out.value, json!({"n": 6, "stride": 2, "last": 3, "tag": "x"}));
 }
