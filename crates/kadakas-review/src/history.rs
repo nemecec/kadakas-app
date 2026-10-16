@@ -1533,6 +1533,11 @@ fn read(
             repaired = true;
         }
     }
+    // An empty change is written by leaving it out, so a list written out is not the usual form.
+    repaired |= list.iter().any(|v| {
+        v.get("delta")
+            .is_some_and(|d| d.as_array().is_some_and(Vec::is_empty))
+    });
     let mut seen: HashSet<u64> = HashSet::new();
     let mut given_via: Vec<Option<Value>> = Vec::new();
     for (i, (mut meta, delta, via)) in kept.into_iter().enumerate() {
@@ -1570,12 +1575,15 @@ fn read(
         }
         repaired |=
             old_parents.first().copied() != before || old_parents.len() != meta.parents.len();
-        let branch = cut(meta.branch.trim(), BRANCH_MAX);
+        // A branch name that is cut, trimmed or empty is changed, and that is a repair.
+        let given_branch = std::mem::take(&mut meta.branch);
+        let branch = cut(given_branch.trim(), BRANCH_MAX);
         meta.branch = if branch.is_empty() {
             main_branch()
         } else {
             branch
         };
+        repaired |= meta.branch != given_branch;
         let bytes = ops_bytes(&delta) + meta_bytes(&meta);
         history.versions.push(Version {
             meta,
