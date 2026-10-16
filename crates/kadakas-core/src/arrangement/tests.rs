@@ -315,3 +315,96 @@ fn a_line_that_touches_an_arc_and_a_branching_dead_end() {
     let a = build(&c, 1.0).unwrap();
     assert_eq!(a.closed_gap_count, 1);
 }
+
+#[test]
+fn a_small_face_far_from_the_origin_keeps_its_area() {
+    // Survey coordinates in mm: 650 km east, 6,588 km north.
+    let (x, y) = (650_000_000.0, 6_588_000_000.0);
+    let a = build(&rect_lines(x, y, x + 100.0, y + 100.0), 1.0).unwrap();
+    assert_eq!(a.faces.len(), 1);
+    assert!(
+        (a.faces[0].area - 10_000.0).abs() < 1e-3,
+        "{}",
+        a.faces[0].area
+    );
+}
+
+#[test]
+fn an_arc_that_nearly_closes_on_itself_is_a_face() {
+    // 359.9 degrees of a circle of 500 mm: the ends are 0.87 mm apart.
+    let c = vec![Curve::arc_ccw(
+        v(0.0, 0.0),
+        500.0,
+        0.0,
+        359.9f64.to_radians(),
+    )];
+    let a = build(&c, 1.0).unwrap();
+    assert_eq!(a.faces.len(), 1, "{a:?}");
+    assert!((a.faces[0].area - PI * 500.0 * 500.0).abs() < 600.0);
+    assert_eq!(a.closed_gap_count, 1);
+    assert_eq!(a.ignored_short, 0);
+    assert!(a.lost_curves.iter().all(|l| !l));
+}
+
+#[test]
+fn an_end_near_the_middle_and_near_the_end_of_a_line_joins() {
+    // The right side stops 0.9 mm short of the bottom line, 0.6 mm before its end.
+    let c = vec![
+        Curve::line(v(0.0, 0.0), v(1000.0, 0.0)),
+        Curve::line(v(999.4, 0.9), v(999.4, 1000.0)),
+        Curve::line(v(999.4, 1000.0), v(0.0, 1000.0)),
+        Curve::line(v(0.0, 1000.0), v(0.0, 0.0)),
+    ];
+    let a = build(&c, 1.0).unwrap();
+    assert_eq!(a.faces.len(), 1, "{a:?}");
+    assert_eq!(a.open_dead_ends, 0);
+}
+
+#[test]
+fn near_coincident_arcs_are_one_and_islands_that_touch_are_enclosed() {
+    let c = vec![
+        Curve::through(v(0.0, 0.0), v(500.0, 100.0), v(1000.0, 0.0)),
+        Curve::through(v(0.0, 0.0), v(500.0, 100.6), v(1000.0, 0.0)),
+    ];
+    let a = build(&c, 1.0).unwrap();
+    assert_eq!(a.duplicates, 1);
+    // A lot, an island in it, and a stall line from the island to the outline.
+    let mut c = rect_lines(0.0, 0.0, 1000.0, 1000.0);
+    c.extend(rect_lines(400.0, 400.0, 600.0, 600.0));
+    c.push(Curve::line(v(500.0, 600.0), v(500.0, 1000.0)));
+    let a = build(&c, 1.0).unwrap();
+    let island = a
+        .faces
+        .iter()
+        .find(|f| (f.area - 40_000.0).abs() < 1.0)
+        .unwrap();
+    assert!(island.enclosed && island.depth == 0);
+    let lot = a.faces.iter().find(|f| f.area > 900_000.0).unwrap();
+    assert!(!lot.enclosed);
+    // A lot split by a line is not enclosed.
+    let mut c = rect_lines(0.0, 0.0, 1000.0, 1000.0);
+    c.push(Curve::line(v(500.0, 0.0), v(500.0, 1000.0)));
+    let a = build(&c, 1.0).unwrap();
+    assert!(a.faces.iter().all(|f| !f.enclosed));
+}
+
+#[test]
+fn directions_at_the_seam_and_many_crossings() {
+    // Four lines leave one node, two of them pointing to -x (angle +pi and -pi within noise).
+    let c = vec![
+        Curve::line(v(0.0, 0.0), v(-1000.0, 1e-7)),
+        Curve::line(v(0.0, 0.0), v(-1000.0, -1e-7)),
+        Curve::line(v(-1000.0, 1e-7), v(-1000.0, -1e-7)),
+    ];
+    assert!(build(&c, 1e-3).is_ok());
+    // Lines that all cross each other: a bound on the crossings is an error, not memory.
+    let n = 1500;
+    let many: Vec<Curve> = (0..n)
+        .map(|k| {
+            let t = k as f64;
+            Curve::line(v(t, 0.0), v(t * 0.37, 1.0e6 + t))
+        })
+        .collect();
+    let r = build(&many, 0.1);
+    assert!(r.is_ok() || matches!(r, Err(BuildError::TooMany(_))));
+}

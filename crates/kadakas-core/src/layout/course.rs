@@ -27,7 +27,7 @@
 //!   angle), and both runs stop a gap short of it.
 //!
 //! A corner that turns by less than [`MIN_RULE_TURN_DEG`] is always a mitre. A corner sharper than
-//! [`MAX_TURN_DEG`] is refused: its mitre would be very long.
+//! [`MAX_TURN_DEG`] has no rule: both legs end flush there, and the course says so in `notes`.
 //!
 //! **The area that the course takes.** The patterns next to a course must not overlap it, and must
 //! keep a gap from it. [`Course::band`] is the union of the strip along the path (the depth plus a
@@ -218,6 +218,8 @@ pub struct Course {
     pub corners: usize,
     /// The length of the reference line, in mm.
     pub length: f64,
+    /// Things the person must read: a corner that is too sharp for a rule.
+    pub notes: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -620,20 +622,12 @@ pub fn lay(spec: &Spec, max_units: usize) -> Result<Course, String> {
         if turn < SMOOTH_DEG.to_radians() {
             continue;
         }
-        if turn.to_degrees() > MAX_TURN_DEG {
-            return Err(format!(
-                "the path turns by {:.0} degrees at point {} ({:.0}, {:.0}), more than the {MAX_TURN_DEG} degrees that a course corner takes. Split the path there",
-                turn.to_degrees(),
-                i,
-                pts[i].x,
-                pts[i].y
-            ));
-        }
         corners.push(i);
     }
     // The runs between corners.
     let mut runs: Vec<Run> = Vec::new();
     let mut extra: Vec<Piece> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
     let slice = |a: usize, b: usize| -> Vec<DVec2> {
         // From point a to point b along the path, wrapping for a closed path. The same point
         // twice is the whole way round.
@@ -704,22 +698,61 @@ pub fn lay(spec: &Spec, max_units: usize) -> Result<Course, String> {
         let nr = runs.len();
         for (ci, &c) in corners.iter().enumerate() {
             // Run before the corner and run after it.
-            let (r1, r2) = if spec.closed {
+            let (r1i, r2i) = if spec.closed {
                 ((ci + nr - 1) % nr, ci % nr)
             } else {
                 (ci, ci + 1)
             };
             let cp = pts[c];
             let (u1, u2) = (dir_in(c), dir_out(c));
-            let rule = if u1.angle_to(u2).abs().to_degrees() < MIN_RULE_TURN_DEG {
+            let turn_deg = u1.angle_to(u2).abs().to_degrees();
+            if turn_deg > MAX_TURN_DEG {
+                // The mitre of such a corner is very long: both legs end flush at the corner.
+                runs[r1i].end = Some(Plane { p: cp, n: -u1 });
+                runs[r2i].start = Some(Plane { p: cp, n: u2 });
+                runs[r2i].anchor = 0.0;
+                notes.push(format!(
+                    "the path turns by {turn_deg:.0} degrees at ({:.0}, {:.0}), more than the {MAX_TURN_DEG} degrees that a corner rule takes: both legs end flush at the corner and the corner itself has no units",
+                    cp.x, cp.y
+                ));
+                continue;
+            }
+            let rule = if turn_deg < MIN_RULE_TURN_DEG {
                 Corner::Miter
             } else {
                 spec.corner
             };
+            let (l1, l2) = (left(u1), left(u2));
+            // The strip of leg 1 crosses the strip of leg 2 between two edge lines of leg 2, and
+            // the other way round. Walking along u1, the strip of leg 2 is entered at the edge
+            // `lo` or `hi`, depending on the way the edge lines slope.
+            let r1 = u1.dot(l2);
+            let r2d = u2.dot(l1);
+            // A plane that keeps the side of the edge line `l` at offset `e`: `before` is the
+            // side with smaller offsets.
+            let plane_at = |l: DVec2, e: f64, before: bool| -> Plane {
+                if before {
+                    Plane {
+                        p: cp + l * e,
+                        n: -l,
+                    }
+                } else {
+                    Plane {
+                        p: cp + l * e,
+                        n: l,
+                    }
+                }
+            };
+            // Leg 2 starts after the strip of leg 1, one gap behind its far edge.
+            let start2 = if r2d > 0.0 {
+                plane_at(l1, hi + g, false)
+            } else {
+                plane_at(l1, lo - g, true)
+            };
             match rule {
                 Corner::Miter => {
                     let nn = (u1 + u2).try_normalize().unwrap_or(u1);
-                    runs[r1].end = Some(Plane {
+                    runs[r1i].end = Some(Plane {
                         p: cp - nn * (g / 2.0),
                         n: -nn,
                     });
@@ -727,28 +760,20 @@ pub fn lay(spec: &Spec, max_units: usize) -> Result<Course, String> {
                         p: cp + nn * (g / 2.0),
                         n: nn,
                     };
-                    runs[r2].anchor = (pl.p - cp).dot(pl.n) / u2.dot(pl.n);
-                    runs[r2].start = Some(pl);
+                    runs[r2i].anchor = (pl.p - cp).dot(pl.n) / u2.dot(pl.n);
+                    runs[r2i].start = Some(pl);
                 }
                 Corner::Butt => {
-                    let ts = u1.perp_dot(u2).signum();
-                    let (l1, l2) = (left(u1), left(u2));
-                    let s_end = [lo, hi].iter().map(|e| e * l2.dot(u1)).fold(0.0, f64::max);
-                    runs[r1].end = Some(Plane {
-                        p: cp + u1 * s_end,
-                        n: -u1,
+                    // Leg 1 runs on through the corner, to the far edge of the strip of leg 2.
+                    runs[r1i].end = Some(if r1 > 0.0 {
+                        plane_at(l2, hi, true)
+                    } else {
+                        plane_at(l2, lo, false)
                     });
-                    let t = l1 * ts;
-                    let hi_t = [lo, hi].iter().map(|e| e * ts).fold(f64::MIN, f64::max);
-                    let pl = Plane {
-                        p: cp + t * (hi_t + g),
-                        n: t,
-                    };
-                    runs[r2].anchor = (pl.p - cp).dot(pl.n) / u2.dot(pl.n);
-                    runs[r2].start = Some(pl);
+                    runs[r2i].anchor = (start2.p - cp).dot(start2.n) / u2.dot(start2.n);
+                    runs[r2i].start = Some(start2);
                 }
                 Corner::CornerUnit => {
-                    let (l1, l2) = (left(u1), left(u2));
                     let cross = u1.perp_dot(u2);
                     let meet = |e1: f64, e2: f64| -> DVec2 {
                         let w = l2 * e2 - l1 * e1;
@@ -759,18 +784,14 @@ pub fn lay(spec: &Spec, max_units: usize) -> Result<Course, String> {
                     if area(&q) < 0.0 {
                         q.reverse();
                     }
-                    let min_u1 = q.iter().map(|v| (*v - cp).dot(u1)).fold(f64::MAX, f64::min);
-                    let max_u2 = q.iter().map(|v| (*v - cp).dot(u2)).fold(f64::MIN, f64::max);
-                    runs[r1].end = Some(Plane {
-                        p: cp + u1 * (min_u1 - g),
-                        n: -u1,
+                    // Leg 1 stops one gap before the strip of leg 2, along its edge line.
+                    runs[r1i].end = Some(if r1 > 0.0 {
+                        plane_at(l2, lo - g, true)
+                    } else {
+                        plane_at(l2, hi + g, false)
                     });
-                    let pl = Plane {
-                        p: cp + u2 * (max_u2 + g),
-                        n: u2,
-                    };
-                    runs[r2].anchor = (pl.p - cp).dot(pl.n) / u2.dot(pl.n);
-                    runs[r2].start = Some(pl);
+                    runs[r2i].anchor = (start2.p - cp).dot(start2.n) / u2.dot(start2.n);
+                    runs[r2i].start = Some(start2);
                     let a = area(&q).abs();
                     extra.push(Piece {
                         poly: q,
@@ -783,6 +804,7 @@ pub fn lay(spec: &Spec, max_units: usize) -> Result<Course, String> {
         }
     }
     let mut out = Course {
+        notes,
         length: total_len,
         corners: corners.len(),
         pieces: extra,
@@ -832,7 +854,7 @@ fn lay_run(
             }
         }
         let sag = kmax * a * a / 8.0 + spec.depth * (kmax * a / 2.0).powi(2) / 2.0;
-        sag <= g / 2.0
+        sag <= 0.05
     };
     let s_anchor = ext + run.anchor;
     let mut starts: Vec<f64> = Vec::new();
@@ -975,7 +997,7 @@ fn lay_run(
 }
 
 /// A convex polygon grown by `r` all round (corners are rounded).
-fn dilate(poly: &[DVec2], r: f64) -> Vec<DVec2> {
+pub fn dilate(poly: &[DVec2], r: f64) -> Vec<DVec2> {
     let n = poly.len();
     let mut out = Vec::new();
     for i in 0..n {

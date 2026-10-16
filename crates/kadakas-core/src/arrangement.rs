@@ -373,6 +373,8 @@ pub struct ClosedGap {
     pub at: DVec2,
     /// The size of the gap that was closed, in mm.
     pub size: f64,
+    /// How far the points of the node moved to the node, at most, in mm.
+    pub moved: f64,
 }
 
 /// A dead end: a curve end that joins nothing.
@@ -419,6 +421,10 @@ pub struct Face {
     pub inside: DVec2,
     /// The component of the drawing that this face belongs to.
     pub component: usize,
+    /// True if every edge of the outline has the same other face on its other side: the face is
+    /// enclosed by one face, as an island is, although it is joined to it by lines (a stall line
+    /// that ends on the kerb of an island).
+    pub enclosed: bool,
 }
 
 /// The result of [`build`].
@@ -438,6 +444,18 @@ pub struct Arrangement {
     pub ignored_short: usize,
     /// Edges that lie on top of each other and were merged.
     pub duplicates: usize,
+    /// Faces thinner than the tolerance (slivers between curves that nearly coincide) that were
+    /// left out.
+    pub dropped_slivers: usize,
+    /// The sum of the distances that the points moved to their nodes, in mm.
+    pub node_movement: f64,
+    /// Nodes that joined points more than the tolerance apart through a chain of points.
+    pub chained_nodes: usize,
+    /// For each input curve: the edges that cover it (also an edge that a duplicate was merged
+    /// into).
+    pub curve_edges: Vec<Vec<usize>>,
+    /// For each input curve: true if a piece of it was dropped (too short, or a dead end).
+    pub lost_curves: Vec<bool>,
 }
 
 /// Why an arrangement was not made.
@@ -530,13 +548,65 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
             curves.len()
         )));
     }
+    // An arc of more than a half circle is cut in two, so that an arc that nearly closes on itself
+    // is not taken for a short curve, and its ends can join.
+    let mut split: Vec<Curve> = Vec::with_capacity(curves.len());
+    let mut split_ranks: Vec<u8> = Vec::with_capacity(curves.len());
+    let mut origin: Vec<usize> = Vec::with_capacity(curves.len());
+    for (i, c) in curves.iter().enumerate() {
+        let rank = ranks.get(i).copied().unwrap_or(0);
+        match *c {
+            Curve::Arc { sweep, .. } if sweep.abs() > PI => {
+                for part in [c.part(0.0, 0.5), c.part(0.5, 1.0)] {
+                    split.push(part);
+                    split_ranks.push(rank);
+                    origin.push(i);
+                }
+            }
+            other => {
+                split.push(other);
+                split_ranks.push(rank);
+                origin.push(i);
+            }
+        }
+    }
+    let mut out = build_inner(&split, &split_ranks, tol)?;
+    for e in &mut out.edges {
+        e.source = origin[e.source];
+    }
+    let mut curve_edges: Vec<Vec<usize>> = vec![Vec::new(); curves.len()];
+    let mut lost = vec![false; curves.len()];
+    for (k, edges) in out.curve_edges.iter().enumerate() {
+        curve_edges[origin[k]].extend(edges);
+    }
+    for (k, l) in out.lost_curves.iter().enumerate() {
+        lost[origin[k]] |= *l;
+    }
+    for list in &mut curve_edges {
+        list.sort_unstable();
+        list.dedup();
+    }
+    out.curve_edges = curve_edges;
+    out.lost_curves = lost;
+    Ok(out)
+}
+
+fn build_inner(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangement, BuildError> {
+    if curves.len() > MAX_CURVES * 2 {
+        return Err(BuildError::TooMany(format!(
+            "an arrangement takes at most {MAX_CURVES} curves, not {}",
+            curves.len()
+        )));
+    }
     let tol = tol.max(1e-9);
     let mut out = Arrangement::default();
     // Curves shorter than the tolerance are noise: they could not make a piece of an edge.
     let mut live: Vec<usize> = Vec::new();
+    let mut short: Vec<usize> = Vec::new();
     for (i, c) in curves.iter().enumerate() {
-        if c.length() < tol && !matches!(c, Curve::Arc { sweep, .. } if sweep.abs() > 1.0) {
+        if c.length() < tol {
             out.ignored_short += 1;
+            short.push(i);
         } else {
             live.push(i);
         }
@@ -578,6 +648,11 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
             if boxes[j].0.y > boxes[i].1.y || boxes[j].1.y < boxes[i].0.y {
                 continue;
             }
+            if hits.len() > MAX_EDGES {
+                return Err(BuildError::TooMany(format!(
+                    "the curves cross each other so often that the drawing would make more than {MAX_EDGES} pieces"
+                )));
+            }
             let (ci, cj) = (&curves[i], &curves[j]);
             tmp.clear();
             intersections(ci, cj, &mut tmp);
@@ -603,26 +678,26 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
             for (a, b, ca, cb) in [(i, j, ci, cj), (j, i, cj, ci)] {
                 for e in [ca.from(), ca.to()] {
                     let (q, t, d) = cb.closest(e);
-                    if d <= tol {
-                        let near_end = q.distance(cb.from()) <= tol || q.distance(cb.to()) <= tol;
-                        if !near_end {
-                            hits.push(Hit {
-                                curve: b,
-                                t,
-                                p: q,
-                                gap: d,
-                                proj: true,
-                            });
-                            // The end of `a` stays where it is: the clustering joins it to `q`.
-                            let te = if e == ca.from() { 0.0 } else { 1.0 };
-                            hits.push(Hit {
-                                curve: a,
-                                t: te,
-                                p: e,
-                                gap: d,
-                                proj: false,
-                            });
-                        }
+                    // Where the closest point is an end of the other curve the two ends meet as
+                    // ends do (the clustering and the corner rule below handle them).
+                    if d <= tol && t > 1e-9 && t < 1.0 - 1e-9 {
+                        // Also near an end of the other curve: the chain of points joins them.
+                        hits.push(Hit {
+                            curve: b,
+                            t,
+                            p: q,
+                            gap: d,
+                            proj: true,
+                        });
+                        // The end of `a` stays where it is: the clustering joins it to `q`.
+                        let te = if e == ca.from() { 0.0 } else { 1.0 };
+                        hits.push(Hit {
+                            curve: a,
+                            t: te,
+                            p: e,
+                            gap: d,
+                            proj: false,
+                        });
                     }
                 }
             }
@@ -694,8 +769,10 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
     // A node whose members are not all at one point closed a gap.
     for (id, m) in members.iter().enumerate() {
         let mut size = 0.0f64;
+        let mut moved = 0.0f64;
         for &i in m {
             size = size.max(hits[i].gap);
+            moved = moved.max(hits[i].p.distance(out.nodes[id]));
             if m.len() <= 32 {
                 for &j in m {
                     size = size.max(hits[i].p.distance(hits[j].p));
@@ -704,12 +781,17 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
                 size = size.max(2.0 * hits[i].p.distance(out.nodes[id]));
             }
         }
+        out.node_movement += moved;
+        if size > tol * (1.0 + 1e-9) {
+            out.chained_nodes += 1;
+        }
         if size > 1e-6 {
             out.closed_gap_count += 1;
             if out.closed_gaps.len() < MAX_LISTED {
                 out.closed_gaps.push(ClosedGap {
                     at: out.nodes[id],
                     size,
+                    moved,
                 });
             }
         }
@@ -719,7 +801,9 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
     for (i, h) in hits.iter().enumerate() {
         per_curve[h.curve].push((h.t, hit_node[i]));
     }
-    let mut seen: HashMap<(usize, usize, i64, i64), usize> = HashMap::new();
+    let mut seen: HashMap<(usize, usize), Vec<(DVec2, usize)>> = HashMap::new();
+    // (curve, edge): a curve whose piece was merged into an edge of another curve.
+    let mut merged: Vec<(usize, usize)> = Vec::new();
     for &ci in &live {
         let list = &mut per_curve[ci];
         list.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -750,19 +834,15 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
                 )));
             }
             // Duplicates: the same ends and the same middle.
-            let (lo, hi) = (n0.min(n1), n0.max(n1));
+            let key = (n0.min(n1), n0.max(n1));
             let mid = geom.at(0.5);
-            let k = (
-                lo,
-                hi,
-                (mid.x / tol).round() as i64,
-                (mid.y / tol).round() as i64,
-            );
-            if seen.contains_key(&k) {
+            let list = seen.entry(key).or_default();
+            if let Some((_, edge)) = list.iter().find(|(m, _)| m.distance(mid) <= tol) {
                 out.duplicates += 1;
+                merged.push((ci, *edge));
                 continue;
             }
-            seen.insert(k, out.edges.len());
+            list.push((mid, out.edges.len()));
             out.edges.push(Edge {
                 a: n0,
                 b: n1,
@@ -771,12 +851,18 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
             });
         }
     }
-    prune_and_trace(&mut out);
+    prune_and_trace(&mut out, curves.len(), &short, &merged, tol);
     Ok(out)
 }
 
 /// Removes dead ends, then traces the faces.
-fn prune_and_trace(out: &mut Arrangement) {
+fn prune_and_trace(
+    out: &mut Arrangement,
+    ncurves: usize,
+    short: &[usize],
+    merged: &[(usize, usize)],
+    tol: f64,
+) {
     let nn = out.nodes.len();
     let mut deg = vec![0usize; nn];
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); nn];
@@ -847,19 +933,36 @@ fn prune_and_trace(out: &mut Arrangement) {
             queue.push(w);
         }
     }
-    if removed.iter().any(|r| *r) {
-        let old = std::mem::take(&mut out.edges);
-        out.edges = old
-            .into_iter()
-            .enumerate()
-            .filter(|(i, _)| !removed[*i])
-            .map(|(_, e)| e)
-            .collect();
+    let mut lost = vec![false; ncurves];
+    for &c in short {
+        lost[c] = true;
     }
-    trace_faces(out);
+    let mut remap: Vec<Option<usize>> = vec![None; out.edges.len()];
+    let old = std::mem::take(&mut out.edges);
+    for (i, e) in old.into_iter().enumerate() {
+        if removed[i] {
+            lost[e.source] = true;
+        } else {
+            remap[i] = Some(out.edges.len());
+            out.edges.push(e);
+        }
+    }
+    let mut curve_edges: Vec<Vec<usize>> = vec![Vec::new(); ncurves];
+    for (i, e) in out.edges.iter().enumerate() {
+        curve_edges[e.source].push(i);
+    }
+    for &(c, edge) in merged {
+        match remap[edge] {
+            Some(n) => curve_edges[c].push(n),
+            None => lost[c] = true,
+        }
+    }
+    out.curve_edges = curve_edges;
+    out.lost_curves = lost;
+    trace_faces(out, tol);
 }
 
-fn trace_faces(out: &mut Arrangement) {
+fn trace_faces(out: &mut Arrangement, tol: f64) {
     let ne = out.edges.len();
     if ne == 0 {
         return;
@@ -877,7 +980,13 @@ fn trace_faces(out: &mut Arrangement) {
         for back in [false, true] {
             let c = curve_of(e, back);
             let t = c.start_tangent();
-            key[2 * i + back as usize] = (t.y.atan2(t.x), c.curvature());
+            // The direction is rounded, so that directions that are equal within noise are equal
+            // for the order (a strict weak order), also at the seam of +-pi.
+            let mut q = (t.y.atan2(t.x) * 1e9).round();
+            if q >= (PI * 1e9).round() {
+                q = -q;
+            }
+            key[2 * i + back as usize] = (q, c.curvature());
         }
     }
     let target = |h: usize| {
@@ -888,11 +997,7 @@ fn trace_faces(out: &mut Arrangement) {
     for list in around.iter_mut() {
         list.sort_by(|&a, &b| {
             let (ka, kb) = (key[a], key[b]);
-            if (ka.0 - kb.0).abs() < 1e-9 {
-                ka.1.total_cmp(&kb.1)
-            } else {
-                ka.0.total_cmp(&kb.0)
-            }
+            ka.0.total_cmp(&kb.0).then(ka.1.total_cmp(&kb.1))
         });
         for (k, &h) in list.iter().enumerate() {
             pos[h] = k;
@@ -1010,8 +1115,35 @@ fn trace_faces(out: &mut Arrangement) {
         memo.insert(comp, d);
         d
     }
+    // Which face lies on the other side of each edge of a face?
+    let mut owner: HashMap<(usize, bool), usize> = HashMap::new();
+    for (fi, f) in faces.iter().enumerate() {
+        for &(e, fwd) in &cycles[f.cycle].0.edges {
+            owner.insert((e, fwd), fi);
+        }
+    }
     for fi in 0..faces.len() {
         let comp = faces[fi].comp;
+        // A sliver between curves that nearly coincide is noise, not an area.
+        let perimeter: f64 = cycles[faces[fi].cycle]
+            .0
+            .edges
+            .iter()
+            .map(|&(e, _)| out.edges[e].curve.length())
+            .sum();
+        if faces[fi].area < 0.5 * tol * perimeter {
+            out.dropped_slivers += 1;
+            continue;
+        }
+        let mut others: Vec<Option<usize>> = cycles[faces[fi].cycle]
+            .0
+            .edges
+            .iter()
+            .map(|&(e, fwd)| owner.get(&(e, !fwd)).copied())
+            .collect();
+        others.sort_unstable();
+        others.dedup();
+        let enclosed = others.len() == 1 && others[0].is_some_and(|o| o != fi);
         let d = depth_of(comp, &parent_of_comp, &faces, &mut comp_depth);
         let hole_cycles: Vec<Cycle> = holes_of[fi]
             .iter()
@@ -1032,6 +1164,7 @@ fn trace_faces(out: &mut Arrangement) {
             depth: d,
             inside,
             component: faces[fi].comp,
+            enclosed,
         });
     }
 }
@@ -1040,13 +1173,19 @@ fn trace_faces(out: &mut Arrangement) {
 fn cycle_area(out: &Arrangement, edges: &[(usize, bool)]) -> f64 {
     let mut poly = 0.0;
     let mut bulge = 0.0;
+    // Relative to the first point: sums of absolute coordinates lose the area of a small face far
+    // from the origin (survey coordinates are millions of mm).
+    let o = edges.first().map_or(DVec2::ZERO, |&(ei, fwd)| {
+        let e = &out.edges[ei];
+        out.nodes[if fwd { e.a } else { e.b }]
+    });
     for &(ei, fwd) in edges {
         let e = &out.edges[ei];
         let c = if fwd { e.curve } else { e.curve.reversed() };
         let (p, q) = if fwd {
-            (out.nodes[e.a], out.nodes[e.b])
+            (out.nodes[e.a] - o, out.nodes[e.b] - o)
         } else {
-            (out.nodes[e.b], out.nodes[e.a])
+            (out.nodes[e.b] - o, out.nodes[e.a] - o)
         };
         poly += p.perp_dot(q);
         if let Curve::Arc { r, sweep, .. } = c {

@@ -154,6 +154,11 @@ pub struct FoundRegion {
     pub inside: DVec2,
     /// The input curves that form the outline and the holes (indexes into the list given).
     pub curves: Vec<usize>,
+    /// The edges (pieces between nodes) of the outline and the holes.
+    pub edges: Vec<usize>,
+    /// True if the region is enclosed by one other region on all sides although lines join it to
+    /// that one: it may be an island that touches the outline.
+    pub enclosed: bool,
     /// The box of the outline.
     pub lo: DVec2,
     pub hi: DVec2,
@@ -171,6 +176,16 @@ pub struct Found {
     pub open_dead_ends: usize,
     pub ignored_short: usize,
     pub duplicates: usize,
+    /// Faces thinner than the tolerance that were left out.
+    pub dropped_slivers: usize,
+    /// The sum of the distances that points moved to their nodes, in mm.
+    pub node_movement: f64,
+    /// Nodes that joined points more than the tolerance apart through a chain of points.
+    pub chained_nodes: usize,
+    /// For each input curve: the edges that cover it.
+    pub curve_edges: Vec<Vec<usize>>,
+    /// For each input curve: true if a piece of it was dropped (too short, or a dead end).
+    pub lost_curves: Vec<bool>,
 }
 
 /// Joins `curves` into regions. The tolerance (mm) is the biggest gap that is closed.
@@ -184,6 +199,11 @@ pub fn from_curves(curves: &[Curve], tolerance: f64) -> Result<Found, arrangemen
         open_dead_ends: a.open_dead_ends,
         ignored_short: a.ignored_short,
         duplicates: a.duplicates,
+        dropped_slivers: a.dropped_slivers,
+        node_movement: a.node_movement,
+        chained_nodes: a.chained_nodes,
+        curve_edges: a.curve_edges.clone(),
+        lost_curves: a.lost_curves.clone(),
         ..Default::default()
     };
     for f in &a.faces {
@@ -194,9 +214,11 @@ pub fn from_curves(curves: &[Curve], tolerance: f64) -> Result<Found, arrangemen
             hi = hi.max(*p);
         }
         let mut sources: BTreeSet<usize> = BTreeSet::new();
+        let mut edges: BTreeSet<usize> = BTreeSet::new();
         for cy in std::iter::once(&f.outer).chain(f.holes.iter()) {
             for &(e, _) in &cy.edges {
                 sources.insert(a.edges[e].source);
+                edges.insert(e);
             }
         }
         found.regions.push(FoundRegion {
@@ -210,6 +232,8 @@ pub fn from_curves(curves: &[Curve], tolerance: f64) -> Result<Found, arrangemen
             depth: f.depth,
             inside: f.inside,
             curves: sources.into_iter().collect(),
+            edges: edges.into_iter().collect(),
+            enclosed: f.enclosed,
             lo,
             hi,
         });

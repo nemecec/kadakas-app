@@ -427,13 +427,21 @@ fn course_input_is_checked() {
         )
         .contains("one of")
     );
-    // A hairpin is refused with the point.
-    let e = fail(
+    // A hairpin has no corner rule: the legs end flush, and the reply says so.
+    let r = ok(
         &mut s,
         "hardscape.course",
         json!({"id": id, "name": "a", "path": [[0, 0], [3000, 0], [0, 50]]}),
     );
-    assert!(e.contains("turns by"), "{e}");
+    assert!(r["notes"][0].as_str().unwrap().contains("turns by"), "{r}");
+    assert!(
+        fail(
+            &mut s,
+            "hardscape.course",
+            json!({"id": id, "name": "b", "along": 5, "path": [[0, 0], [9, 9]]})
+        )
+        .contains("along")
+    );
     // A course along a drawn line is followed.
     let l = line(&mut s, [0.0, 0.0], [5000.0, 0.0]);
     ok(
@@ -451,7 +459,13 @@ fn course_input_is_checked() {
     );
     let after = ok(&mut s, "hardscape.plan", json!({"id": id}));
     assert_eq!(after["courses"][0]["length_m"].as_f64().unwrap(), before);
-    assert!(after["notes"][0].as_str().unwrap().contains("gone"));
+    assert!(
+        after["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("gone"))
+    );
 }
 
 #[test]
@@ -553,4 +567,216 @@ fn the_plan_moves_with_the_hardscape_and_undoes() {
         .contains("what")
     );
     assert!(fail(&mut s, "hardscape.plan_clear", json!({})).contains("id"));
+}
+
+#[test]
+fn an_island_that_touches_the_outline_is_not_paved_unless_asked() {
+    let mut s = Session::with_sequential_ids();
+    // A lot of 10 m by 6 m, an island of 2 m by 1 m inside it, and a stall line that runs from the
+    // top of the lot down to the island: the lines are one drawing.
+    let rect = |s: &mut Session, x0: f64, y0: f64, x1: f64, y1: f64| -> Vec<Value> {
+        vec![
+            line(s, [x0, y0], [x1, y0]),
+            line(s, [x1, y0], [x1, y1]),
+            line(s, [x1, y1], [x0, y1]),
+            line(s, [x0, y1], [x0, y0]),
+        ]
+    };
+    let mut ids = rect(&mut s, 0.0, 0.0, 10_000.0, 6_000.0);
+    ids.extend(rect(&mut s, 4000.0, 2000.0, 6000.0, 3000.0));
+    ids.push(line(&mut s, [5000.0, 3000.0], [5000.0, 6000.0]));
+    let st = style(&mut s, "running_bond");
+    let r = ok(
+        &mut s,
+        "region.from_curves",
+        json!({"ids": ids, "create": "hardscape", "style": st, "dry_run": true}),
+    );
+    let roles: Vec<&str> = r["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["role"].as_str().unwrap())
+        .collect();
+    assert!(roles.contains(&"island?"), "{roles:?}");
+    assert!(
+        r["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("may be an island"))
+    );
+    // The island is not made by default: only the two halves of the lot.
+    let made: Vec<_> = r["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["region"].as_u64().unwrap())
+        .collect();
+    for m in &made {
+        assert_ne!(r["regions"][*m as usize]["role"], "island?");
+    }
+    // Asking for a region by its number or by a point makes exactly that one.
+    let island = r["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|x| x["role"] == "island?")
+        .unwrap();
+    let r2 = ok(
+        &mut s,
+        "region.from_curves",
+        json!({"ids": ids, "create": "polyline", "regions": [island, [5500, 2500]]}),
+    );
+    assert_eq!(r2["created"].as_array().unwrap().len(), 1);
+    assert!(
+        fail(
+            &mut s,
+            "region.from_curves",
+            json!({"ids": ids, "create": "polyline", "regions": [99]})
+        )
+        .contains("no region 99")
+    );
+    assert!(
+        fail(
+            &mut s,
+            "region.from_curves",
+            json!({"ids": ids, "create": "polyline", "regions": [[-5, -5]]})
+        )
+        .contains("no region holds")
+    );
+    assert!(
+        fail(
+            &mut s,
+            "region.from_curves",
+            json!({"ids": ids, "create": "polyline", "regions": 3})
+        )
+        .contains("regions")
+    );
+    assert!(
+        fail(
+            &mut s,
+            "region.from_curves",
+            json!({"ids": ids, "depths": 4})
+        )
+        .contains("depths")
+    );
+    // The sources are deleted only when every piece is in a region that was made.
+    let r3 = ok(
+        &mut s,
+        "region.from_curves",
+        json!({"ids": ids, "create": "polyline", "regions": [0], "delete_source": true}),
+    );
+    assert!(!r3["kept_sources"].as_array().unwrap().is_empty());
+    // A tolerance over 10 mm is a warning.
+    let r4 = ok(
+        &mut s,
+        "region.from_curves",
+        json!({"ids": ids, "tolerance": 20, "dry_run": true}),
+    );
+    assert!(
+        r4["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("more than 10 mm"))
+    );
+}
+
+#[test]
+fn zones_keep_their_names_and_can_be_given_by_center() {
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 8000.0, 4000.0);
+    let l = line(&mut s, [3010.0, -50.0], [3010.0, 4050.0]);
+    let r = ok(&mut s, "hardscape.split", json!({"id": id, "lines": [l]}));
+    assert_eq!(r["zones"][0]["number"], 1);
+    assert_eq!(r["zones"][1]["name"], "zone 2");
+    assert!(r["zone_edge_cuts"]["whole_units_lost"].as_u64().unwrap() > 5);
+    assert!(
+        r["zone_edge_note"]
+            .as_str()
+            .unwrap()
+            .contains("not buildable")
+    );
+    assert_eq!(r["zones_area_m2"], r["area_m2"]);
+    assert_eq!(r["courses_area_m2"], 0.0);
+    // The line moves past the middle: the names stay with the places where they were made.
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "move_objects", "ids": [l], "delta": [3000, 0]}}),
+    );
+    let p = ok(&mut s, "hardscape.plan", json!({"id": id}));
+    assert_eq!(p["zones"][0]["name"], "zone 1");
+    let r = ok(
+        &mut s,
+        "hardscape.split",
+        json!({"id": id, "zone_units": "centroid"}),
+    );
+    assert_eq!(r["zone_units"], "centroid");
+    assert!(r["zone_edge_cuts"].is_null());
+    let rep = ok(&mut s, "report.unit_pattern", json!({"ids": [id]}));
+    let groups = rep["rows"][0]["groups"].as_array().unwrap();
+    let area: f64 = groups
+        .iter()
+        .map(|g| g["region_area_m2"].as_f64().unwrap())
+        .sum();
+    assert!((area - 32.0).abs() < 1e-6, "{area}");
+    assert!(
+        fail(
+            &mut s,
+            "hardscape.split",
+            json!({"id": id, "zone_units": "x"})
+        )
+        .contains("zone_units")
+    );
+    assert!(
+        fail(
+            &mut s,
+            "hardscape.split",
+            json!({"id": id, "zones": [{"index": 0, "align_to_edge": 1.5}]})
+        )
+        .contains("whole number")
+    );
+    ok(
+        &mut s,
+        "hardscape.split",
+        json!({"id": id, "zone_units": "cut"}),
+    );
+    let chk = ok(&mut s, "unit_pattern.check", json!({"ids": [id]}));
+    assert_eq!(chk["totals"]["counts"]["overlap"], 0);
+}
+
+#[test]
+fn a_course_along_the_outline_follows_the_edge_and_crossing_courses_are_clean() {
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 8000.0, 4000.0);
+    ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "courses": [
+            {"name": "Kerb", "along": "outline"},
+            {"name": "Aisle", "path": [[4000, 0], [4000, 4000]], "side": "left"}
+        ]}),
+    );
+    let plan = ok(&mut s, "hardscape.plan", json!({"id": id}));
+    assert_eq!(plan["plan"]["courses"][0]["edge"], "outline");
+    assert!(
+        plan["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("overlaps an earlier course")),
+        "{plan}"
+    );
+    let chk = ok(&mut s, "unit_pattern.check", json!({"ids": [id]}));
+    let c = &chk["totals"]["counts"];
+    assert_eq!(
+        (
+            c["overlap"].as_u64(),
+            c["coverage"].as_u64(),
+            c["joint_too_narrow"].as_u64()
+        ),
+        (Some(0), Some(0), Some(0)),
+        "{chk}"
+    );
 }

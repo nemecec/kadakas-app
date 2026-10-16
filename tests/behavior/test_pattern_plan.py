@@ -343,3 +343,23 @@ def test_describe_and_mcp_list_the_new_methods(cad, mcp):
     assert r["objects"] == [] and r["totals"]["complete"] is True
     result = mcp.method("hardscape_landscape", "region.from_curves", {"ids": []})
     assert result["isError"] is True
+
+
+def test_an_island_that_touches_the_outline_is_checked_before_it_is_paved(cad):
+    def line(a, b):
+        return cad.execute({"op": "add_object", "shape": {"kind": "line", "a": a, "b": b}})[0]
+
+    def box(x0, y0, x1, y1):
+        return [line([x0, y0], [x1, y0]), line([x1, y0], [x1, y1]), line([x1, y1], [x0, y1]), line([x0, y1], [x0, y0])]
+
+    ids = box(0, 0, 10_000, 6_000) + box(4_000, 2_000, 6_000, 3_000)
+    ids.append(line([5_000, 3_000], [5_000, 6_000]))  # a stall line from the island kerb to the lot
+    st = style(cad)
+    r = cad.result("region.from_curves", {"ids": ids, "tolerance": 1, "create": "hardscape", "style": st, "dry_run": True})
+    roles = [x["role"] for x in r["regions"]]
+    assert "island?" in roles and any("may be an island" in w for w in r["warnings"])
+    island = roles.index("island?")
+    assert all(c["region"] != island for c in r["created"])
+    # A doubtful region is only made when the caller lists it.
+    r = cad.result("region.from_curves", {"ids": ids, "create": "polyline", "regions": [island]})
+    assert [c["region"] for c in r["created"]] == [island]

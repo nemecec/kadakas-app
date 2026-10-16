@@ -7,7 +7,9 @@ use kadakas_core::command::{Command, Editor};
 use kadakas_core::curve::{Vertex, VertexKind, corners};
 use kadakas_core::hardscape::HardscapePatch;
 use kadakas_core::hardscape::style::{Border, HardscapeStyle, JointKind, JointPattern};
+use kadakas_core::layout::check::{CheckOptions, check};
 use kadakas_core::layout::course::{Corner, Side};
+use kadakas_core::layout::object::region_of;
 use kadakas_core::layout::plan::{
     self, Body, CourseDef, Group, Plan, Role, SplitLine, ZoneSpec, groups_of, merge,
 };
@@ -458,4 +460,193 @@ fn course_groups_count_units_by_the_stone_and_corner_units_by_shape() {
         "{:?}",
         s.widest_joint_mm
     );
+}
+
+fn course_def(name: &str, path: &[(f64, f64)], side: Side) -> CourseDef {
+    CourseDef {
+        name: name.into(),
+        path: path.iter().map(|p| vx(p.0, p.1)).collect(),
+        side,
+        along: 100.0,
+        depth: 200.0,
+        gap: 5.0,
+        ..Default::default()
+    }
+}
+
+fn clean(ed: &Editor, id: ObjectId, groups: &[Group]) {
+    let doc = ed.doc();
+    let region = region_of(doc, doc.object(id).unwrap(), 1.0).unwrap();
+    let r = check(groups, &region, &CheckOptions::default()).unwrap();
+    for k in [
+        "overlap",
+        "joint_too_narrow",
+        "outside_area",
+        "coverage",
+        "wrong_size",
+    ] {
+        assert_eq!(
+            r.counts[k],
+            0,
+            "{k}: {:?}",
+            r.findings
+                .iter()
+                .filter(|f| f.kind.id() == k)
+                .take(3)
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn courses_that_cross_or_meet_never_overlap_each_other_or_the_field() {
+    // An aisle course that starts on the kerb course and crosses it.
+    for (a, b) in [
+        (
+            course_def("Kerb", &[(0.0, 0.0), (8000.0, 0.0)], Side::Left),
+            course_def("Aisle", &[(4000.0, 0.0), (4000.0, 4000.0)], Side::Left),
+        ),
+        // The same two courses the other way round, and an aisle that goes right through the kerb.
+        (
+            course_def("Aisle", &[(4000.0, -300.0), (4000.0, 4000.0)], Side::Left),
+            course_def("Kerb", &[(0.0, 0.0), (8000.0, 0.0)], Side::Left),
+        ),
+        // Two courses that meet at a corner of the lot.
+        (
+            course_def("Bottom", &[(0.0, 0.0), (8000.0, 0.0)], Side::Left),
+            course_def("Side", &[(0.0, 0.0), (0.0, 4000.0)], Side::Right),
+        ),
+        // The same course twice: the second has no units.
+        (
+            course_def("One", &[(0.0, 0.0), (8000.0, 0.0)], Side::Left),
+            course_def("Two", &[(0.0, 0.0), (8000.0, 0.0)], Side::Left),
+        ),
+    ] {
+        let (mut ed, id) = slab(false);
+        let mut p = Plan::default();
+        p.courses = vec![a, b];
+        p.splits = vec![vline(2500.0)];
+        set_plan(&mut ed, id, &p);
+        let r = planned(&ed, id).unwrap();
+        assert!(
+            r.notes
+                .iter()
+                .any(|n| n.contains("overlaps an earlier course") || n.contains("entirely inside")),
+            "{:?}",
+            r.notes
+        );
+        clean(&ed, id, &r.groups);
+        // The field and the courses add up to the area: nothing is taken twice or lost.
+        let doc = ed.doc();
+        let region = region_of(doc, doc.object(id).unwrap(), 1.0).unwrap();
+        let field: f64 = r
+            .groups
+            .iter()
+            .filter(|g| g.role != Role::Course)
+            .map(|g| g.area())
+            .sum();
+        assert!(field < region.area && field > 0.5 * region.area);
+    }
+}
+
+#[test]
+fn zones_by_center_have_no_false_cuts_and_the_cuts_are_counted() {
+    let (mut ed, id) = slab(false);
+    let mut p = Plan::default();
+    p.splits = vec![vline(3010.0), vline(6020.0)];
+    set_plan(&mut ed, id, &p);
+    let cut = planned(&ed, id).unwrap();
+    let opts = SummaryOptions::default();
+    let edge_cuts = cut
+        .zone_edge_cuts(&opts)
+        .expect("zones that continue the pattern");
+    assert!(
+        edge_cuts.whole_lost >= 10 && edge_cuts.extra_pieces >= 10,
+        "{edge_cuts:?}"
+    );
+    let whole_cut: usize = cut
+        .groups
+        .iter()
+        .map(|g| g.summarize(&opts).unwrap().whole_units)
+        .sum();
+    p.zone_units = plan::ZoneUnits::Centroid;
+    set_plan(&mut ed, id, &p);
+    let centered = planned(&ed, id).unwrap();
+    assert!(centered.zone_edge_cuts(&opts).is_none());
+    let parts: Vec<_> = centered
+        .groups
+        .iter()
+        .map(|g| g.summarize(&opts).unwrap())
+        .collect();
+    // The units are the units of one lattice: exactly the whole units of the field as one area.
+    let one = kadakas_core::layout::summary::summarize(
+        &region_of(ed.doc(), ed.doc().object(id).unwrap(), 1.0).unwrap(),
+        &Pattern::new(Bond::RunningBond, 200.0, 100.0, 5.0),
+        &kadakas_core::layout::Placement {
+            origin: Some(v(0.0, 0.0)),
+            angle: 0.0,
+        },
+        &opts,
+    )
+    .unwrap();
+    let whole: usize = parts.iter().map(|s| s.whole_units).sum();
+    let cutu: usize = parts.iter().map(|s| s.cut_units).sum();
+    assert_eq!((whole, cutu), (one.whole_units, one.cut_units));
+    assert!(whole > whole_cut);
+    // The units are not counted twice, and the check finds nothing.
+    clean(&ed, id, &centered.groups);
+    assert_eq!(centered.groups.len(), 3);
+    assert!((centered.groups.iter().map(|g| g.area()).sum::<f64>() - 32e6).abs() < 1.0);
+}
+
+#[test]
+fn an_edge_course_follows_the_outline_and_the_plan_follows_a_turn() {
+    let (mut ed, id) = slab(true);
+    let mut c = course_def("Kerb", &[], Side::Left);
+    c.edge = Some("outline".into());
+    let mut p = Plan::default();
+    p.courses = vec![c];
+    set_plan(&mut ed, id, &p);
+    let before = planned(&ed, id).unwrap();
+    assert_eq!(before.courses[0].corners, 4);
+    // The border of 150 mm is not paved: the course starts at its inner edge.
+    let Body::Course(cb) = &before.groups[1].body else {
+        panic!("a course")
+    };
+    assert!(
+        cb.pieces
+            .iter()
+            .flat_map(|q| &q.poly)
+            .all(|q| q.x >= 150.0 - 1e-6 && q.y >= 150.0 - 1e-6)
+    );
+    // A turn of the hardscape moves the plan with it.
+    use kadakas_core::edit2d::Xf;
+    let mut o = ed.doc().object(id).unwrap().clone();
+    let mut q = Plan::default();
+    q.splits = vec![vline(100.0)];
+    q.zones = vec![ZoneSpec {
+        seed: v(50.0, 50.0),
+        origin: Some(v(5.0, 6.0)),
+        ..Default::default()
+    }];
+    q.courses = vec![course_def("K", &[(0.0, 0.0), (1000.0, 0.0)], Side::Left)];
+    o.data
+        .insert(plan::KEY.into(), serde_json::to_value(&q).unwrap());
+    plan::transform_data(
+        &mut o,
+        &Xf::rotate(v(0.0, 0.0), std::f64::consts::FRAC_PI_2),
+    );
+    let r = plan::data(&o).unwrap();
+    assert!((r.splits[0].points[0].p - v(50.0, 100.0)).length() < 1e-9);
+    assert!((r.zones[0].seed - v(-50.0, 50.0)).length() < 1e-9);
+    assert!((r.courses[0].path[1].p - v(0.0, 1000.0)).length() < 1e-9);
+    assert_eq!(r.courses[0].side, Side::Left);
+    // A mirror puts the course on the other side of its path.
+    let mut o2 = ed.doc().object(id).unwrap().clone();
+    o2.data
+        .insert(plan::KEY.into(), serde_json::to_value(&q).unwrap());
+    plan::transform_data(&mut o2, &Xf::mirror(v(0.0, 0.0), v(1.0, 0.0)).unwrap());
+    let r = plan::data(&o2).unwrap();
+    assert_eq!(r.courses[0].side, Side::Right);
+    assert!((r.zones[0].seed - v(50.0, -50.0)).length() < 1e-9);
 }

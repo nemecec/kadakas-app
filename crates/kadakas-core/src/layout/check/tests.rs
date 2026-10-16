@@ -18,6 +18,7 @@ fn group(name: &str, region: Region, bond: Bond, angle: f64) -> Group {
         slug: name.to_uppercase(),
         role: Role::Field,
         region,
+        owner: None,
         body: Body::Pattern {
             pattern: Pattern::new(bond, 200.0, 100.0, 5.0),
             place: Placement {
@@ -248,6 +249,7 @@ fn a_whole_unit_of_the_wrong_size_is_found() {
         slug: "COURSE-KERB".into(),
         role: Role::Course,
         region: rect(-100.0, -100.0, 1100.0, 400.0),
+        owner: None,
         body: Body::Course(Box::new(CourseBody {
             pieces: laid.pieces,
             piece_kind: vec![0; n],
@@ -258,6 +260,7 @@ fn a_whole_unit_of_the_wrong_size_is_found() {
             along: 100.0,
             depth: 200.0,
             gap: 5.0,
+            band: Vec::new(),
         })),
     };
     let r = check(
@@ -375,4 +378,68 @@ fn narrow_pieces_and_the_unit_limit() {
         ]
     );
     assert_eq!(MAX_UNITS, 500_000);
+}
+
+#[test]
+fn a_hole_in_a_course_is_found() {
+    use crate::curve::Vertex;
+    let spec = course::Spec {
+        path: vec![
+            Vertex::corner(v(0.0, 0.0)),
+            Vertex::corner(v(2000.0, 0.0)),
+            Vertex::corner(v(2000.0, 1500.0)),
+        ],
+        closed: false,
+        side: course::Side::Left,
+        offset: 0.0,
+        along: 100.0,
+        depth: 200.0,
+        gap: 5.0,
+        corner: course::Corner::Miter,
+    };
+    let laid = course::lay(&spec, 10_000).unwrap();
+    let make = |pieces: Vec<course::Piece>| {
+        let n = pieces.len();
+        Group {
+            name: "kerb".into(),
+            slug: "COURSE-KERB".into(),
+            role: Role::Course,
+            region: rect(-300.0, -300.0, 2300.0, 1800.0),
+            owner: None,
+            body: Body::Course(Box::new(CourseBody {
+                pieces,
+                piece_kind: vec![0; n],
+                kinds: vec![("100x200".into(), 20_000.0)],
+                joints: laid.joints,
+                corners: 1,
+                length: 3500.0,
+                along: 100.0,
+                depth: 200.0,
+                gap: 5.0,
+                band: laid.band.clone(),
+            })),
+        }
+    };
+    let area = rect(-300.0, -300.0, 2300.0, 1800.0);
+    let full = check(
+        &[make(laid.pieces.clone())],
+        &area,
+        &CheckOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(full.counts["coverage"], 0, "{:?}", full.findings);
+    // Take out 6 units in a row: the band has a hole there.
+    let mut pieces = laid.pieces.clone();
+    pieces.drain(10..16);
+    let r = check(&[make(pieces)], &area, &CheckOptions::default()).unwrap();
+    assert_eq!(r.counts["coverage"], 1, "{:?}", r.findings);
+    let f = r
+        .findings
+        .iter()
+        .find(|f| f.kind == Kind::Coverage)
+        .unwrap();
+    assert!(
+        f.message.contains("leaves") && f.at[1] > 0.0 && f.at[1] < 205.0,
+        "{f:?}"
+    );
 }

@@ -98,6 +98,7 @@ fn group(name: &str, region: Region, angle: f64) -> Group {
         slug: name.to_uppercase().replace(' ', "-"),
         role: Role::Zone,
         region,
+        owner: None,
         body: Body::Pattern {
             pattern: Pattern::new(Bond::RunningBond, 200.0, 100.0, 5.0),
             place: Placement {

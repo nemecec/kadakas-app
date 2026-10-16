@@ -23,6 +23,7 @@ use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::single::SingleFloatOverlay;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use super::course::{self, Corner, Joints, Side};
 use super::summary::{Desc, Summary, SummaryOptions, UnitCount, summarize_stream, with_waste};
@@ -37,6 +38,8 @@ pub const KEY: &str = "pattern_plan";
 pub const MAX_ZONES: usize = 1000;
 /// Most courses of one hardscape.
 pub const MAX_COURSES: usize = 100;
+/// Flattening tolerance of the arcs of split lines, in mm.
+pub const SPLIT_FLATTEN: f64 = 0.1;
 /// Most zones that the split lines of one hardscape may make. Measured (`measure_zones`): 10,000
 /// zones are cut in 19 ms and laid in 0.34 s, so time is not the reason for the bound; every zone
 /// is a group with its own layers in the DXF and its own row in the report.
@@ -75,6 +78,17 @@ pub struct ZoneSpec {
     pub align_to_split: Option<usize>,
 }
 
+impl ZoneSpec {
+    /// True if the setting changes the pattern or where it starts.
+    pub fn has_overrides(&self) -> bool {
+        self.pattern.is_some()
+            || self.origin.is_some()
+            || self.angle.is_some()
+            || self.align_to_edge.is_some()
+            || self.align_to_split.is_some()
+    }
+}
+
 /// A course along a path.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -85,6 +99,10 @@ pub struct CourseDef {
     pub source: Option<ObjectId>,
     pub path: Vec<Vertex>,
     pub closed: bool,
+    /// The edge of the hardscape that the course follows: `outline` or `hole:N`. The path is made
+    /// again from the edge each time, inside the kerb border.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge: Option<String>,
     pub side: Side,
     pub offset: f64,
     /// The unit size along the path (mm).
@@ -105,6 +123,7 @@ impl Default for CourseDef {
             source: None,
             path: Vec::new(),
             closed: false,
+            edge: None,
             side: Side::Left,
             offset: 0.0,
             along: 100.0,
@@ -116,6 +135,20 @@ impl Default for CourseDef {
     }
 }
 
+/// What happens to a unit that a zone edge crosses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneUnits {
+    /// The unit is cut at the zone edge: each zone gets its piece (the default). A zone edge has
+    /// no joint, so the two pieces touch.
+    #[default]
+    Cut,
+    /// The unit goes whole to the zone that holds its center, and is not cut by the zone edge.
+    /// Only for zones that continue the pattern of the hardscape. Quantities have no false cuts;
+    /// the zone edge becomes the line of the units, and units may reach over it.
+    Centroid,
+}
+
 /// The plan of a hardscape.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -125,6 +158,7 @@ pub struct Plan {
     pub courses: Vec<CourseDef>,
     /// The node tolerance of the zones (mm): a split line that ends this close to an edge joins it.
     pub tolerance: f64,
+    pub zone_units: ZoneUnits,
 }
 
 impl Default for Plan {
@@ -134,6 +168,7 @@ impl Default for Plan {
             zones: Vec::new(),
             courses: Vec::new(),
             tolerance: zones::DEFAULT_TOLERANCE,
+            zone_units: ZoneUnits::Cut,
         }
     }
 }
@@ -180,7 +215,7 @@ impl Plan {
             .validate()
             .or_else(|e| {
                 // A course that follows a drawing may have no copy of the path yet.
-                if c.source.is_some() && c.path.is_empty() {
+                if (c.source.is_some() || c.edge.is_some()) && c.path.is_empty() {
                     Ok(())
                 } else {
                     Err(format!("course '{}': {e}", c.name))
@@ -264,6 +299,40 @@ pub fn translate_data(obj: &mut Object, delta: DVec2) {
     );
 }
 
+/// Moves the positions of the plan with a transform of the object (turn, mirror, scale). A mirror
+/// puts a course on the other side of its path.
+pub fn transform_data(obj: &mut Object, xf: &crate::edit2d::Xf) {
+    let Some(mut p) = data(obj) else { return };
+    for s in &mut p.splits {
+        for v in &mut s.points {
+            v.p = xf.apply(v.p);
+        }
+    }
+    for z in &mut p.zones {
+        z.seed = xf.apply(z.seed);
+        if let Some(o) = &mut z.origin {
+            *o = xf.apply(*o);
+        }
+    }
+    for c in &mut p.courses {
+        for v in &mut c.path {
+            v.p = xf.apply(v.p);
+        }
+        if xf.is_reflection() {
+            c.side = match c.side {
+                Side::Left => Side::Right,
+                Side::Right => Side::Left,
+                Side::Center => Side::Center,
+            };
+            c.offset = -c.offset;
+        }
+    }
+    obj.data.insert(
+        KEY.into(),
+        serde_json::to_value(&p).expect("a plan is JSON"),
+    );
+}
+
 /// The vertices of a drawn object that a split line or a course can follow: a line, an arc or a
 /// polyline. `None` for another shape.
 pub fn path_of(shape: &Shape) -> Option<(Vec<Vertex>, bool)> {
@@ -322,12 +391,41 @@ pub struct CourseBody {
     pub along: f64,
     pub depth: f64,
     pub gap: f64,
+    /// The area that the course takes from the field (see [`course::Course::band`]).
+    pub band: Vec<Vec<Vec<DVec2>>>,
 }
 
 #[derive(Clone, Debug)]
 pub enum Body {
     Pattern { pattern: Pattern, place: Placement },
     Course(Box<CourseBody>),
+}
+
+/// A zone whose units are the units of a shared lattice that have their center in it.
+#[derive(Clone, Debug)]
+pub struct Owner {
+    /// The zone, in `zones`.
+    pub index: usize,
+    /// All zones that share the lattice, in the order that decides a center on an edge.
+    pub zones: Arc<Vec<Region>>,
+}
+
+impl Owner {
+    /// The zone that holds the point: the first that contains it, else the nearest.
+    fn zone_of(&self, p: DVec2) -> usize {
+        if let Some(i) = self.zones.iter().position(|z| zones::region_contains(z, p)) {
+            return i;
+        }
+        let dist = |z: &Region| {
+            z.rings()
+                .flat_map(|r| (0..r.len()).map(move |i| (r[i], r[(i + 1) % r.len()])))
+                .map(|(a, b)| crate::geom::dist_to_segment(p, a, b))
+                .fold(f64::MAX, f64::min)
+        };
+        (0..self.zones.len())
+            .min_by(|&a, &b| dist(&self.zones[a]).total_cmp(&dist(&self.zones[b])))
+            .unwrap_or(0)
+    }
 }
 
 /// A part of a hardscape that is laid on its own.
@@ -340,6 +438,9 @@ pub struct Group {
     /// Where the units are cut to.
     pub region: Region,
     pub body: Body,
+    /// Set when the units are laid over a bigger region and the group keeps those whose center
+    /// is in its zone.
+    pub owner: Option<Owner>,
 }
 
 fn number_text(x: f64) -> String {
@@ -380,6 +481,14 @@ impl Group {
         }
     }
 
+    /// The area of the group, in mm2: its zone when units are given by center.
+    pub fn area(&self) -> f64 {
+        match &self.owner {
+            Some(o) => o.zones[o.index].area,
+            None => self.region.area,
+        }
+    }
+
     pub fn pattern(&self) -> Option<&Pattern> {
         match &self.body {
             Body::Pattern { pattern, .. } => Some(pattern),
@@ -417,7 +526,23 @@ impl Group {
     ) -> Result<Stats, LayoutError> {
         match &self.body {
             Body::Pattern { pattern, place } => {
-                super::for_each_unit(&self.region, pattern, place, limits, f)
+                let Some(owner) = &self.owner else {
+                    return super::for_each_unit(&self.region, pattern, place, limits, f);
+                };
+                let mut kept = 0usize;
+                let mut stats =
+                    super::for_each_unit(&self.region, pattern, place, limits, &mut |u| {
+                        let Some(ring) = u.rings.first() else { return };
+                        let c =
+                            ring.points.iter().copied().sum::<DVec2>() / ring.points.len() as f64;
+                        if owner.zone_of(c) == owner.index {
+                            kept += 1;
+                            f(u);
+                        }
+                    })?;
+                stats.units = kept;
+                stats.region_area = owner.zones[owner.index].area;
+                Ok(stats)
             }
             Body::Course(c) => {
                 if c.pieces.len() > limits.max_units {
@@ -478,7 +603,16 @@ impl Group {
     pub fn summarize(&self, opts: &SummaryOptions) -> Result<Summary, LayoutError> {
         match &self.body {
             Body::Pattern { pattern, place } => {
-                super::summary::summarize(&self.region, pattern, place, opts)
+                if self.owner.is_none() {
+                    return super::summary::summarize(&self.region, pattern, place, opts);
+                }
+                let limits = Limits {
+                    max_units: opts.max_units,
+                    trim: opts.trim,
+                };
+                summarize_stream(Desc::of(pattern), self.area(), opts, None, &mut |f| {
+                    self.for_each_unit(&limits, f)
+                })
             }
             Body::Course(c) => {
                 let limits = Limits {
@@ -510,8 +644,11 @@ pub struct ZoneInfo {
     pub inside: DVec2,
     pub lo: DVec2,
     pub hi: DVec2,
-    /// True if a zone setting of the plan is tied to this zone.
+    /// True if a zone setting of the plan changes the pattern of this zone (pattern, origin,
+    /// angle or alignment).
     pub has_setting: bool,
+    /// The zone setting of the plan that is tied to this zone (its place in the plan), if any.
+    pub spec: Option<usize>,
 }
 
 /// The groups of a hardscape and what to tell the person about them.
@@ -525,6 +662,37 @@ pub struct Planned {
     pub splits: Vec<Vec<DVec2>>,
     /// The courses: the name, the units, the corners and the joints.
     pub courses: Vec<CourseInfo>,
+    /// The field, its pattern and its start, when all zones continue it: to count the units that
+    /// are cut only by zone edges.
+    pub lattice: Option<(Region, Pattern, Placement)>,
+}
+
+/// Units that only the zone edges cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZoneEdgeCuts {
+    /// Whole units of the lattice that a zone edge turned into pieces.
+    pub whole_lost: usize,
+    /// Pieces more than the lattice has: the units that a zone edge splits in two.
+    pub extra_pieces: usize,
+}
+
+impl Planned {
+    /// How many units the zone edges cut, compared with the same field as one area. `None` unless
+    /// the field has two zones or more that all continue the pattern of the hardscape.
+    pub fn zone_edge_cuts(&self, opts: &SummaryOptions) -> Option<ZoneEdgeCuts> {
+        let (region, pattern, place) = self.lattice.as_ref()?;
+        let whole = super::summary::summarize(region, pattern, place, opts).ok()?;
+        let (mut w, mut c) = (0usize, 0usize);
+        for g in self.groups.iter().filter(|g| g.role == Role::Zone) {
+            let s = g.summarize(opts).ok()?;
+            w += s.whole_units;
+            c += s.cut_units;
+        }
+        Some(ZoneEdgeCuts {
+            whole_lost: whole.whole_units.saturating_sub(w),
+            extra_pieces: c.saturating_sub(whole.cut_units),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -584,7 +752,8 @@ pub fn effective_splits(
                     (s.points.clone(), false)
                 }
             };
-            let mut flat = curve::flatten(&pts, closed, tol);
+            // Arcs of a split line are cut finely: the tolerance of the zones is a distance to join.
+            let mut flat = curve::flatten(&pts, closed, SPLIT_FLATTEN.min(tol));
             if closed && let Some(f) = flat.first().copied() {
                 flat.push(f);
             }
@@ -593,22 +762,100 @@ pub fn effective_splits(
         .collect()
 }
 
-/// The course path now: a followed object read again, else the saved path.
+/// The outline or a hole of a hardscape as a path that runs counterclockwise, and how far the
+/// kerb border moves the course from it (to the left of the path).
+pub fn edge_path(doc: &Document, obj: &Object, which: &str) -> Result<(Vec<Vertex>, f64), String> {
+    let (outer, holes) = super::object::outline_of(obj)?;
+    let outline = which == "outline";
+    let mut ring = if outline {
+        outer
+    } else {
+        let n: usize = which
+            .strip_prefix("hole:")
+            .and_then(|n| n.trim().parse().ok())
+            .ok_or_else(|| "'along' must be outline or hole:N".to_string())?;
+        holes
+            .get(n)
+            .cloned()
+            .ok_or_else(|| format!("the hardscape has no hole {n} (it has {})", holes.len()))?
+    };
+    let flat = curve::flatten(&ring, true, 1.0);
+    if crate::geom::signed_area(&flat) < 0.0 {
+        ring.reverse();
+    }
+    // The kerb border is not paved: the course starts at its inner edge.
+    let border = crate::hardscape::data::style_of(doc, obj)
+        .and_then(|(_, s)| s.border)
+        .map_or(0.0, |b| b.width);
+    Ok((ring, if outline { border } else { -border }))
+}
+
+/// The course path now: the edge of the hardscape or a followed object read again, else the saved
+/// path. The last number is what the kerb border adds to the offset.
 pub fn effective_path(
     doc: &Document,
+    obj: &Object,
     c: &CourseDef,
     notes: &mut Vec<String>,
-) -> (Vec<Vertex>, bool) {
+) -> (Vec<Vertex>, bool, f64) {
+    if let Some(which) = &c.edge {
+        match edge_path(doc, obj, which) {
+            Ok((p, off)) => return (p, true, off),
+            Err(e) => notes.push(format!(
+                "course '{}' follows the {which} of the hardscape, which cannot be read now ({e}): the saved path is used",
+                c.name
+            )),
+        }
+    }
     if let Some(id) = c.source {
         match doc.object(id).and_then(|o| path_of(&o.shape)) {
-            Some((p, closed)) => return (p, closed),
+            Some((p, closed)) => return (p, closed, 0.0),
             None => notes.push(format!(
                 "course '{}' followed the object {id}, which is gone or no longer a line, arc or polyline: the saved path is used",
                 c.name
             )),
         }
     }
-    (c.path.clone(), c.closed)
+    (c.path.clone(), c.closed, 0.0)
+}
+
+/// The geometry input of a course, as it is now.
+pub fn course_spec(
+    doc: &Document,
+    obj: &Object,
+    c: &CourseDef,
+    notes: &mut Vec<String>,
+) -> course::Spec {
+    let (path, closed, extra) = effective_path(doc, obj, c, notes);
+    course::Spec {
+        path,
+        closed,
+        side: c.side,
+        offset: c.offset + extra,
+        along: c.along,
+        depth: c.depth,
+        gap: c.gap,
+        corner: c.corner,
+    }
+}
+
+/// The union of shapes (each an outline and holes).
+fn union_shapes(shapes: &[Vec<Vec<DVec2>>]) -> Vec<Vec<Vec<DVec2>>> {
+    let subject: Vec<Vec<[f64; 2]>> = shapes
+        .iter()
+        .flatten()
+        .map(|r| r.iter().map(|p| [p.x, p.y]).collect())
+        .collect();
+    let empty: Vec<Vec<[f64; 2]>> = Vec::new();
+    subject
+        .overlay(&empty, OverlayRule::Union, FillRule::NonZero)
+        .into_iter()
+        .map(|s| {
+            s.into_iter()
+                .map(|r| r.into_iter().map(|p| DVec2::new(p[0], p[1])).collect())
+                .collect()
+        })
+        .collect()
 }
 
 fn subtract(region: &Region, band: &[Vec<Vec<DVec2>>]) -> Result<Option<Region>, String> {
@@ -630,10 +877,9 @@ fn subtract(region: &Region, band: &[Vec<Vec<DVec2>>]) -> Result<Option<Region>,
     if shapes.is_empty() {
         return Ok(None);
     }
-    match Region::from_shapes(shapes) {
-        Ok(r) => Ok(Some(r)),
-        Err(_) => Ok(None),
-    }
+    Region::from_shapes(shapes).map(Some).map_err(|e| {
+        format!("the area that is left when the courses are taken off cannot be made: {e}")
+    })
 }
 
 /// Makes the groups of a hardscape. `region` is where the pattern goes (the outline inside the
@@ -661,6 +907,7 @@ pub fn plan_groups(
             slug: "FIELD".into(),
             role: Role::Field,
             region,
+            owner: None,
             body: Body::Pattern { pattern, place },
         });
         return Ok(out);
@@ -674,23 +921,47 @@ pub fn plan_groups(
         origin: Some(origin),
         angle,
     };
-    // Courses first: they take their area from the field.
+    // Courses first: they take their area from the field. A course is cut by the courses before it.
     let mut bands: Vec<Vec<Vec<DVec2>>> = Vec::new();
     let mut course_groups: Vec<Group> = Vec::new();
     let mut budget = max_units;
     for c in &plan.courses {
-        let (path, closed) = effective_path(doc, c, &mut out.notes);
-        let spec = course::Spec {
-            path,
-            closed,
-            side: c.side,
-            offset: c.offset,
-            along: c.along,
-            depth: c.depth,
-            gap: c.gap,
-            corner: c.corner,
-        };
+        let spec = course_spec(doc, obj, c, &mut out.notes);
         let laid = course::lay(&spec, budget).map_err(|e| format!("course '{}': {e}", c.name))?;
+        for n in &laid.notes {
+            out.notes.push(format!("course '{}': {n}", c.name));
+        }
+        // Where this course meets the courses before it, its units are cut.
+        let mut course_region = Some(region.clone());
+        if !bands.is_empty() {
+            let overlap: f64 = laid
+                .band
+                .iter()
+                .flat_map(|a| bands.iter().map(move |b| super::shapes_overlap(a, b)))
+                .sum();
+            if overlap > 1.0 {
+                out.notes.push(format!(
+                    "course '{}' overlaps an earlier course by {:.3} m2: its units are cut where they meet, with the joint kept",
+                    c.name,
+                    overlap / 1e6
+                ));
+                course_region = subtract(&region, &bands)?;
+            }
+        }
+        let Some(course_region) = course_region else {
+            out.notes.push(format!(
+                "course '{}' lies entirely inside the earlier courses: it has no units",
+                c.name
+            ));
+            out.courses.push(CourseInfo {
+                name: c.name.clone(),
+                units: 0,
+                corners: laid.corners,
+                length: laid.length,
+                joints: laid.joints,
+            });
+            continue;
+        };
         budget = budget.saturating_sub(laid.pieces.len());
         let unit = if c.unit.trim().is_empty() {
             super::bond::size_name(c.along, c.depth)
@@ -721,12 +992,13 @@ pub fn plan_groups(
             length: laid.length,
             joints: laid.joints,
         });
-        bands.extend(laid.band.iter().cloned());
+        bands = union_shapes(&[bands, laid.band.clone()].concat());
         course_groups.push(Group {
             name: c.name.clone(),
             slug: format!("COURSE-{}", slug(&c.name)),
             role: Role::Course,
-            region: region.clone(),
+            region: course_region,
+            owner: None,
             body: Body::Course(Box::new(CourseBody {
                 pieces: laid.pieces,
                 piece_kind,
@@ -737,6 +1009,7 @@ pub fn plan_groups(
                 along: c.along,
                 depth: c.depth,
                 gap: c.gap,
+                band: laid.band,
             })),
         });
     }
@@ -748,6 +1021,7 @@ pub fn plan_groups(
                 slug: "FIELD".into(),
                 role: Role::Field,
                 region: field,
+                owner: None,
                 body: Body::Pattern { pattern, place },
             });
         } else {
@@ -803,6 +1077,38 @@ pub fn plan_groups(
                 }
             }
             let single = split.zones.len() == 1;
+            // Zones that continue the pattern and give each unit to the zone of its center.
+            let by_center: Vec<bool> = (0..split.zones.len())
+                .map(|zi| {
+                    plan.zone_units == ZoneUnits::Centroid
+                        && !single
+                        && !spec_of[zi].is_some_and(|i| plan.zones[i].has_overrides())
+                })
+                .collect();
+            let center_zones: Vec<Region> = split
+                .zones
+                .iter()
+                .zip(&by_center)
+                .filter(|(_, c)| **c)
+                .map(|(z, _)| Region::from_shapes(vec![z.shape.clone()]))
+                .collect::<Result<_, _>>()?;
+            let center_zones = Arc::new(center_zones);
+            // The lattice of the centered zones: the field less the zones that are cut.
+            let cut_shapes: Vec<Vec<Vec<DVec2>>> = split
+                .zones
+                .iter()
+                .zip(&by_center)
+                .filter(|(_, c)| !**c)
+                .map(|(z, _)| z.shape.clone())
+                .collect();
+            let center_region = if center_zones.is_empty() {
+                None
+            } else if cut_shapes.is_empty() {
+                Some(field.clone())
+            } else {
+                subtract(&field, &cut_shapes)?
+            };
+            let mut center_index = 0usize;
             for (zi, zone) in split.zones.iter().enumerate() {
                 let spec = spec_of[zi].map(|i| &plan.zones[i]);
                 let name = spec
@@ -849,8 +1155,19 @@ pub fn plan_groups(
                     inside: zone.inside,
                     lo: zone.lo,
                     hi: zone.hi,
-                    has_setting: spec.is_some(),
+                    has_setting: spec.is_some_and(ZoneSpec::has_overrides),
+                    spec: spec_of[zi],
                 });
+                let (region_of_group, owner) = if by_center[zi] {
+                    let o = Owner {
+                        index: center_index,
+                        zones: center_zones.clone(),
+                    };
+                    center_index += 1;
+                    (center_region.clone().unwrap_or(zregion), Some(o))
+                } else {
+                    (zregion, None)
+                };
                 out.groups.push(Group {
                     slug: if single {
                         "FIELD".into()
@@ -863,12 +1180,19 @@ pub fn plan_groups(
                         name
                     },
                     role: if single { Role::Field } else { Role::Zone },
-                    region: zregion,
+                    region: region_of_group,
+                    owner,
                     body: Body::Pattern {
                         pattern: zpattern,
                         place: zplace,
                     },
                 });
+            }
+            let all_continue = !single
+                && plan.zone_units == ZoneUnits::Cut
+                && out.zones.iter().all(|z| !z.has_setting);
+            if all_continue {
+                out.lattice = Some((field.clone(), pattern.clone(), place));
             }
         }
     } else {
@@ -877,12 +1201,13 @@ pub fn plan_groups(
     }
     out.groups.extend(course_groups);
     // Zone names are layer suffixes: two zones with one slug would share layers.
-    let mut seen = std::collections::HashMap::<String, usize>::new();
+    let mut used = std::collections::HashSet::<String>::new();
     for g in &mut out.groups {
-        let n = seen.entry(g.slug.clone()).or_insert(0);
-        *n += 1;
-        if *n > 1 {
-            g.slug = format!("{}-{}", g.slug, n);
+        let base = g.slug.clone();
+        let mut n = 2;
+        while !used.insert(g.slug.clone()) {
+            g.slug = format!("{base}-{n}");
+            n += 1;
         }
     }
     Ok(out)

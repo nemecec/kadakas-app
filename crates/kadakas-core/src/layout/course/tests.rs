@@ -388,8 +388,8 @@ fn bad_input_is_refused() {
         .is_err()
     );
     assert!(lay(&spec(&[(0.0, 0.0)], Side::Left, Corner::Miter), 100).is_err());
-    // A hairpin is refused with the point.
-    let e = lay(
+    // A hairpin has no rule: both legs end flush at the corner, and the course says so.
+    let c = lay(
         &spec(
             &[(0.0, 0.0), (1000.0, 0.0), (0.0, 50.0)],
             Side::Left,
@@ -397,8 +397,13 @@ fn bad_input_is_refused() {
         ),
         1000,
     )
-    .unwrap_err();
-    assert!(e.contains("turns by"), "{e}");
+    .unwrap();
+    assert_eq!(c.notes.len(), 1, "{:?}", c.notes);
+    assert!(
+        c.notes[0].contains("turns by") && c.notes[0].contains("flush"),
+        "{:?}",
+        c.notes
+    );
     assert_eq!(Side::from_name("Left"), Some(Side::Left));
     assert_eq!(Corner::from_name("corner unit"), Some(Corner::CornerUnit));
     assert_eq!(Corner::from_name("x"), None);
@@ -461,6 +466,12 @@ proptest! {
             }
         }
         prop_assume!(apart > 2.0 * (depth + along));
+        // A path that doubles back (a turn of more than 150 degrees) lies over itself.
+        for w in path.windows(3) {
+            let d0 = v(w[1].0 - w[0].0, w[1].1 - w[0].1);
+            let d1 = v(w[2].0 - w[1].0, w[2].1 - w[1].1);
+            prop_assume!(d0.angle_to(d1).abs().to_degrees() <= MAX_TURN_DEG);
+        }
         let min_leg = path.windows(2).map(|w| (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1)).fold(f64::MAX, f64::min);
         prop_assume!(min_leg > 3.0 * depth + 3.0 * along);
         prop_assert!(max_overlap(&c) < 1e-3, "overlap {}", max_overlap(&c));
@@ -686,4 +697,71 @@ fn center_and_right_courses_take_every_corner_rule() {
     let c = lay(&s, 10_000).unwrap();
     assert_eq!(c.corners, 3);
     assert!(max_overlap(&c) < 1e-6);
+}
+
+/// The distance from `p` to the nearest unit of the course.
+fn nearest(c: &Course, p: DVec2) -> f64 {
+    c.pieces
+        .iter()
+        .map(|q| dist_to_poly(p, &q.poly))
+        .fold(f64::MAX, f64::min)
+}
+
+#[test]
+fn corner_rules_cover_the_band_at_every_angle() {
+    // The path goes east for 3 m, then turns by `turn` degrees to the left or to the right and goes
+    // on for 3 m. Every point of the two strips (cut at the mitre line) is in a unit or within a
+    // joint of one: no unpaved hole is left by any rule at any angle, inside or outside.
+    for turn in [35.0f64, 45.0, 60.0, 90.0, 120.0, 150.0] {
+        for sign in [1.0, -1.0] {
+            let a = (sign * turn).to_radians();
+            let end = v(3000.0 + 3000.0 * a.cos(), 3000.0 * a.sin());
+            for side in [Side::Left, Side::Right, Side::Center] {
+                for rule in [Corner::Miter, Corner::Butt, Corner::CornerUnit] {
+                    let c = lay(
+                        &spec(&[(0.0, 0.0), (3000.0, 0.0), (end.x, end.y)], side, rule),
+                        10_000,
+                    )
+                    .unwrap();
+                    let label = format!("{turn} degrees {sign} {side:?} {rule:?}");
+                    assert!(c.notes.is_empty(), "{label}");
+                    assert!(
+                        max_overlap(&c) < 1e-6,
+                        "{label}: overlap {}",
+                        max_overlap(&c)
+                    );
+                    let (lo, hi) = side.extents(200.0);
+                    let (u1, u2) = (v(1.0, 0.0), DVec2::from_angle(a));
+                    let (l1, l2) = (left(u1), left(u2));
+                    let nn = (u1 + u2).normalize();
+                    let cp = v(3000.0, 0.0);
+                    let mut worst: f64 = 0.0;
+                    let (mut x, mut y);
+                    y = -3500.0;
+                    while y <= 3500.0 {
+                        x = -500.0;
+                        while x <= 6500.0 {
+                            let p = v(x, y);
+                            let d = p - cp;
+                            let in1 = (lo..=hi).contains(&d.dot(l1))
+                                && d.dot(nn) <= 0.0
+                                && d.dot(u1) >= -3000.0;
+                            let in2 = (lo..=hi).contains(&d.dot(l2))
+                                && d.dot(nn) >= 0.0
+                                && d.dot(u2) <= 3000.0;
+                            if in1 || in2 {
+                                worst = worst.max(nearest(&c, p));
+                            }
+                            x += 41.0;
+                        }
+                        y += 41.0;
+                    }
+                    assert!(
+                        worst <= 5.0 + 1e-6,
+                        "{label}: a point of the band is {worst} mm from a unit"
+                    );
+                }
+            }
+        }
+    }
 }

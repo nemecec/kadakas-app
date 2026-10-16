@@ -30,7 +30,7 @@ use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::single::SingleFloatOverlay;
 use serde::Serialize;
 
-use super::plan::{Body, Group};
+use super::plan::{Body, Group, Role};
 use super::units::{LayoutError, Limits, Unit};
 use super::{Region, noise_area};
 
@@ -454,10 +454,10 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
     let mut counts = [0usize; 7];
     let idx = |k: Kind| Kind::ALL.iter().position(|x| *x == k).unwrap_or(0);
     let mut findings: Vec<Finding> = Vec::new();
+    // Every kind keeps its own count of listed findings.
     let mut add = |k: Kind, f: Finding, counts: &mut [usize; 7]| {
         counts[idx(k)] += 1;
-        let listed = findings.iter().filter(|x| x.kind == k).count();
-        if listed < opts.max_findings {
+        if counts[idx(k)] <= opts.max_findings {
             findings.push(f);
         }
     };
@@ -685,6 +685,7 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
             })
         })
     };
+    let mut told: std::collections::HashSet<(usize, usize)> = Default::default();
     for (i, u) in us.iter().enumerate() {
         let n = u.ring.len();
         let (min_j, max_j) = (
@@ -726,8 +727,8 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
             let Some((d, j, mid)) = best.filter(|_| !skip_edge) else {
                 continue;
             };
-            if j < i {
-                // The other unit finds the same joint from its side.
+            // The other unit may find the same joint from its side: a joint is told once.
+            if !told.insert((i.min(j), i.max(j))) {
                 continue;
             }
             let other = &us[j];
@@ -746,7 +747,12 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
             let at = mid + out * (d / 2.0);
             if d < min_j {
                 // Units of two groups that meet at the edge of a zone have no joint by design.
-                let abut = u.group != other.group && d < 0.2 && group_edges_near(u.group, mid);
+                let meets_by_design = |r: Role| matches!(r, Role::Zone | Role::Field);
+                let abut = u.group != other.group
+                    && meets_by_design(groups[u.group].role)
+                    && meets_by_design(groups[other.group].role)
+                    && d < 0.2
+                    && group_edges_near(u.group, mid);
                 if !abut {
                     add(
                         Kind::JointTooNarrow,
@@ -809,7 +815,7 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
     // Coverage per group.
     for (gi, g) in groups.iter().enumerate() {
         let (n, laid) = per_group[gi];
-        let region = g.region.area;
+        let region = g.area();
         let open = if region > 0.0 {
             (1.0 - laid / region).max(0.0)
         } else {
@@ -871,6 +877,86 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
                         g.name,
                         open * 100.0,
                         exp * 100.0
+                    ),
+                },
+                &mut counts,
+            );
+        }
+    }
+    // A course must fill its band: a hole in it is area that the field gave up and no unit has.
+    for g in groups {
+        let Body::Course(cb) = &g.body else { continue };
+        if cb.band.is_empty() {
+            continue;
+        }
+        let ring = |r: &Vec<DVec2>| r.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>();
+        let band: Vec<Vec<[f64; 2]>> = cb.band.iter().flatten().map(ring).collect();
+        let reg: Vec<Vec<[f64; 2]>> = g.region.rings().map(ring).collect();
+        let inside = band.overlay(&reg, OverlayRule::Intersect, FillRule::EvenOdd);
+        let margin = cb.gap * 1.02 + 0.05;
+        let dilated: Vec<Vec<[f64; 2]>> = cb
+            .pieces
+            .iter()
+            .map(|p| {
+                let mut d = super::course::dilate(&p.poly, margin);
+                if crate::geom::signed_area(&d) < 0.0 {
+                    d.reverse();
+                }
+                d.iter().map(|q| [q.x, q.y]).collect()
+            })
+            .collect();
+        let empty: Vec<Vec<[f64; 2]>> = Vec::new();
+        let covered = dilated.overlay(&empty, OverlayRule::Union, FillRule::NonZero);
+        let covered: Vec<Vec<[f64; 2]>> = covered.into_iter().flatten().collect();
+        let subject: Vec<Vec<[f64; 2]>> = inside.into_iter().flatten().collect();
+        let band_area: f64 = cb
+            .band
+            .iter()
+            .map(|s| {
+                s.iter()
+                    .enumerate()
+                    .map(|(i, r)| {
+                        let a = crate::geom::polygon_area(r);
+                        if i == 0 { a } else { -a }
+                    })
+                    .sum::<f64>()
+            })
+            .sum();
+        let left = subject.overlay(&covered, OverlayRule::Difference, FillRule::EvenOdd);
+        let mut total = 0.0;
+        let mut worst: Option<(f64, DVec2)> = None;
+        for s in &left {
+            let mut a = 0.0;
+            let mut c = DVec2::ZERO;
+            for (i, r) in s.iter().enumerate() {
+                let pts: Vec<DVec2> = r.iter().map(|q| DVec2::new(q[0], q[1])).collect();
+                let ar = crate::geom::polygon_area(&pts);
+                if i == 0 {
+                    a += ar;
+                    c = centroid(&pts);
+                } else {
+                    a -= ar;
+                }
+            }
+            total += a;
+            if worst.is_none_or(|(w, _)| a > w) {
+                worst = Some((a, c));
+            }
+        }
+        if total > (100.0f64).max(0.003 * band_area)
+            && let Some((_, at)) = worst
+        {
+            add(
+                Kind::Coverage,
+                Finding {
+                    kind: Kind::Coverage,
+                    group: g.name.clone(),
+                    other_group: None,
+                    at: [at.x, at.y],
+                    size: total,
+                    message: format!(
+                        "the course '{}' leaves {:.1} mm2 of its area without a unit or a joint (the largest hole is here)",
+                        g.name, total
                     ),
                 },
                 &mut counts,

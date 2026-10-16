@@ -14,8 +14,9 @@ use kadakas_core::hardscape::HardscapePatch;
 use kadakas_core::landscape::LandscapePatch;
 use kadakas_core::layout::check::{self, CheckOptions};
 use kadakas_core::layout::course::{Corner, Side};
-use kadakas_core::layout::object::{outline_of, region_of};
+use kadakas_core::layout::object::region_of;
 use kadakas_core::layout::plan::{self, CourseDef, Plan, SplitLine, ZoneSpec};
+use kadakas_core::layout::summary::SummaryOptions;
 use kadakas_core::model::{Attributes, ClassId, Document, LayerId, Object, ObjectId, Shape};
 use kadakas_core::regions;
 
@@ -24,15 +25,15 @@ use crate::{RpcError, Session};
 
 pub const REGION_FROM_CURVES: (&str, &str) = (
     "region.from_curves",
-    "Join loose lines, arcs, circles, rectangles and open or closed polylines into closed regions with holes (for example a parking lot drawn as separate lines and arcs). The curves are split where they cross; ends that lie within the tolerance of each other or of another curve are joined (a gap or a small overshoot is closed); dead ends are cut off; the areas that are left are traced. Nothing is guessed: a gap wider than the tolerance stays open, the area behind it is not made, and the dead ends are reported with their position, their length and the nearest other end, so that you can draw the place. A dead end is open (part of a shape that does not close) or a stub (a line that overshoots a corner or stops at a junction: harmless, but listed). params: {ids? (default: the selection), tolerance? (mm, default 1: the widest gap that is closed), create? (hardscape | landscape_area | polyline: make objects from the regions in one undo step; without it nothing is created), depths? (even | odd | all: which regions become objects; default even for hardscape and landscape_area, all for polyline; an even depth is an area to fill, an odd depth is an island inside a hole of an area), style? (hardscape style, ID or name, for create hardscape), name? (landscape area name), min_area_m2? (leave out smaller regions), layer?, class? (default: those of the first source object), delete_source? (delete the curves that only made created regions), dry_run?}. Returns {regions: [{index, outline: [vertices] (counterclockwise; a point on each arc is a vertex of kind point_on_arc), holes: [[vertices]], area_m2, depth, role (area | island), inside: [x, y], bbox: {lo, hi}, sources: [object IDs]}], closed_gaps: {count, listed: [{at, size_mm}]}, dead_ends: {count, listed: [{at, length_mm, nearest: {at, distance_mm}}]}, complete (no dead ends), skipped: [{id, reason}], ignored_short, duplicates, created: [{region, id, kind}], tolerance_mm, dry_run}. A region inside a hole of another region is an island: its own region has an odd depth, and the outer region lists it as a hole, so create hardscape (even depths) makes the lot with the island as a hole.",
+    "Join loose lines, arcs, circles, rectangles and open or closed polylines into closed regions with holes (for example a parking lot drawn as separate lines and arcs). The curves are split where they cross; ends that lie within the tolerance of each other or of another curve are joined (a gap or a small overshoot is closed); dead ends are cut off; the areas that are left are traced. Nothing is guessed: a gap wider than the tolerance stays open, the area behind it is not made, and the dead ends are reported with their position, their length and the nearest other end, so that you can draw the place. A dead end is open (part of a shape that does not close) or a stub (a line that overshoots a corner or stops at a junction: harmless, but listed). params: {ids? (default: the selection), tolerance? (mm, default 1: the widest gap that is closed; use up to 10, above that closing a gap moves corners and warnings say so), create? (hardscape | landscape_area | polyline: make objects from the regions in one undo step; without it nothing is created), depths? (even | odd | all: which regions become objects; even means the regions with role area (the default for hardscape and landscape_area), odd the regions with role island, all every region including the doubtful ones (the default for polyline)), regions? ([region index or [x, y] point]: make exactly these regions, whatever their role), style? (hardscape style, ID or name, for create hardscape), name? (landscape area name), min_area_m2? (leave out smaller regions), layer?, class? (default: those of the first source object), delete_source? (delete a source only when every piece of it, also a piece that was cut off, lies in regions that are made and in no region that is left out; kept_sources lists the others with the reason), dry_run?}. Returns {regions: [{index, outline: [vertices] (counterclockwise; a point on each arc is a vertex of kind point_on_arc), holes: [[vertices]], area_m2, depth, role (area | island), inside: [x, y], bbox: {lo, hi}, sources: [object IDs]}], closed_gaps: {count, listed: [{at, size_mm}]}, dead_ends: {count, listed: [{at, length_mm, nearest: {at, distance_mm}}]}, complete (no dead ends), skipped: [{id, reason}], ignored_short, duplicates, created: [{region, id, kind}], tolerance_mm, dry_run}. A region inside a hole of another region is an island: its own region has an odd depth, and the outer region lists it as a hole, so create hardscape (the regions with role area) makes the lot with the island as a hole. An island that lines join to the outline (a stall line that ends on its kerb) is a face next to the lot, not a hole: its role is island? (also when the closed shapes of the drawing say a region is an island or an area against its lines), it has a doubt text, and create does not make it unless you list it in regions. Look at the regions and warnings before you create.",
 );
 pub const HARDSCAPE_SPLIT: (&str, &str) = (
     "hardscape.split",
-    "Split a hardscape (it needs a style with a joint pattern) into zones with lines (stall rows, a driveway, a fire lane): the zones share their edges exactly, so there are no slivers and no overlaps, and the areas of the zones add up to the area of the hardscape. Each zone can have a pattern, origin, angle or alignment of its own. The split lines and the zone settings are data of the hardscape (undoable, they move with it). A split line that follows a drawn line, arc or polyline (source) is read again each time: move the line and the zones follow. params: {id, lines? ([object IDs or [vertices]]: replaces the split lines; [] removes them; an ID follows the object unless follow is false), follow? (default true), zones? ([{index? (the number of the zone in the reply, from 1... see zones in the reply: index counts from 0), seed? ([x, y]: a point inside the zone; the settings belong to the zone that holds it, also after a line moves), name?, pattern? (as the pattern of unit_pattern.layout), origin?, angle?, align_to_edge? (n: start at vertex n of the outline of the zone), align_to_split? (n: start at the first point of split line n and run along its first segment)}]: replaces the zone settings), tolerance? (mm, default 1: an end of a line this close to an edge joins it; the edge of the hardscape never moves)}. A zone without settings continues the pattern of the hardscape (the same lattice, cut at the zone edge). Returns {zones: [{index, name, area_m2, inside: [x, y], bbox: {lo, hi}, has_settings}], split_lines, area_m2, zones_area_m2, notes: [text]} . A split line that stops short of the edge, or cuts nothing, is a note with its position and the gap. Counts per zone and in total are in report.unit_pattern (groups), the check in unit_pattern.check, the DXF has layers per zone.",
+    "Split a hardscape (it needs a style with a joint pattern) into zones with lines (stall rows, a driveway, a fire lane): the zones share their edges exactly, so there are no slivers and no overlaps, and the areas of the zones add up to the area of the hardscape. Each zone can have a pattern, origin, angle or alignment of its own. The split lines and the zone settings are data of the hardscape (undoable, they move with it). A split line that follows a drawn line, arc or polyline (source) is read again each time: move the line and the zones follow. params: {id, lines? ([object IDs or [vertices]]: replaces the split lines; [] removes them; an ID follows the object unless follow is false), follow? (default true), zones? ([{index? (the index of the zone in the reply, counted from 0; the name is zone N with N = index + 1), seed? ([x, y]: a point inside the zone; the settings belong to the zone that holds it, also after a line moves), name?, pattern? (as the pattern of unit_pattern.layout), origin?, angle?, align_to_edge? (n: start at vertex n of the outline of the zone), align_to_split? (n: start at the first point of split line n and run along its first segment)}]: replaces the zone settings), tolerance? (mm, default 1: an end of a line this close to an edge joins it; the edge of the hardscape never moves)}. A zone without settings continues the pattern of the hardscape (the same lattice, cut at the zone edge). Returns {zones: [{index, number (index + 1), name, area_m2, inside: [x, y], bbox: {lo, hi}, has_settings (a pattern, origin, angle or alignment of its own)}], split_lines, area_m2 (the hardscape), zones_area_m2 (the sum of the zones: the field), courses_area_m2 (what courses take: area less zones), zone_units, zone_edge_cuts ({whole_units_lost, extra_pieces}: the units that only the zone edges cut, when the zones continue the pattern), zone_edge_note, notes: [text]}. Every zone gets a setting with its name and a seed point, so a name stays with its place when a line moves. zone_units? (cut (default): a unit that a zone edge crosses is cut, and the two pieces touch with no joint, which is not buildable; centroid: the unit goes whole to the zone that holds its center, only for zones without a pattern of their own). A split line that stops short of the edge, or cuts nothing, is a note with its position and the gap. Counts per zone and in total are in report.unit_pattern (groups), the check in unit_pattern.check, the DXF has layers per zone.",
 );
 pub const HARDSCAPE_COURSE: (&str, &str) = (
     "hardscape.course",
-    "Add or replace courses along a path: a row of units along a polyline or a curve, on one side of the line or centered (a soldier course along a kerb, a border round an island). The course takes its area from the pattern next to it: the field is cut by the course with a joint of the gap kept, so they never overlap. The units are counted, reported and exported like the others (the unit type has the name of the stone, so a soldier course and the field of the same stone are added up). Corner rules: miter (the units of both legs are cut at the mitre line), butt (the first leg runs on to the end of the corner, the second butts against it), corner_unit (one unit of its own fills the corner). On a curve the units stay straight and are placed along the curve; the joints taper, and the reply and the report give the narrowest and the widest joint. params: {id, courses: [{name, path? ([vertices], curves allowed) | source? (a line, arc or polyline: followed, read again each time) | along? (outline | \"hole:N\": the edge of the hardscape or of its Nth hole, inside the kerb border), side? (left | right | center | inside | outside; default for outline: inside, for a hole: outside), offset? (mm to the left of the path), closed?, orientation? (soldier: the long side of the stone across the path (default) | stretcher: along it), unit_length? (mm, along the path) and unit_width? (mm, across) (default: from the stone of the style by orientation), gap? (default: the joint of the style), corner? (default miter), unit? (name of the unit type, default the size of the stone of the style), align_field? (true: the pattern of the hardscape starts at the inner edge of the course, so the first row of the field is whole and the joint to the course is the gap; sets the origin and the angle of the hardscape; needs a bond, not a module)}] (or the fields of one course directly in params)}. A course with the same name is replaced. Returns {courses: [{name, units, corners, length_m, joints: {count, narrowest_mm, widest_mm}}], notes}. A corner that turns by more than 150 degrees is refused.",
+    "Add or replace courses along a path: a row of units along a polyline or a curve, on one side of the line or centered (a soldier course along a kerb, a border round an island). The course takes its area from the pattern next to it: the field is cut by the course with a joint of the gap kept, so they never overlap. The units are counted, reported and exported like the others (the unit type has the name of the stone, so a soldier course and the field of the same stone are added up). Corner rules: miter (the units of both legs are cut at the mitre line), butt (the first leg runs on to the end of the corner, the second butts against it), corner_unit (one unit of its own fills the corner). On a curve the units stay straight and are placed along the curve; the joints taper, and the reply and the report give the narrowest and the widest joint. params: {id, courses: [{name, path? ([vertices], curves allowed) | source? (a line, arc or polyline: followed, read again each time) | along? (outline | \"hole:N\": the edge of the hardscape or of its Nth hole, inside the kerb border), side? (left | right | center | inside | outside; default for outline: inside, for a hole: outside), offset? (mm to the left of the path), closed?, orientation? (soldier: the long side of the stone across the path (default) | stretcher: along it), unit_length? (mm, along the path) and unit_width? (mm, across) (default: from the stone of the style by orientation), gap? (default: the joint of the style), corner? (default miter), unit? (name of the unit type, default the size of the stone of the style), align_field? (true: the pattern of the hardscape starts at the inner edge of the course, so the first row of the field is whole and the joint to the course is the gap; sets the origin and the angle of the hardscape; needs a bond, not a module)}] (or the fields of one course directly in params)}. A course with the same name is replaced. Returns {courses: [{name, units, corners, length_m, joints: {count, narrowest_mm, widest_mm}}], notes}. A corner that turns by more than 150 degrees has no rule: both legs end flush there and a note says so. Corners under 30 degrees are always mitres. When the path is along: outline or hole:N the path is made again from the edge each time, so a change of the outline moves the course; a course that overlaps an earlier course is cut where they meet (a note says so).",
 );
 pub const HARDSCAPE_COURSE_REMOVE: (&str, &str) = (
     "hardscape.course_remove",
@@ -100,6 +101,17 @@ fn opt_number(m: &Map<String, Value>, k: &str) -> Result<Option<f64>, RpcError> 
     match m.get(k) {
         None | Some(Value::Null) => Ok(None),
         Some(v) => number(v, k).map(Some),
+    }
+}
+
+/// A whole number of zero or more, or nothing.
+fn whole_number(m: &Map<String, Value>, k: &str) -> Result<Option<usize>, RpcError> {
+    match m.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .map(|n| Some(n as usize))
+            .ok_or_else(|| bad(format!("'{k}' must be a whole number of zero or more"))),
     }
 }
 
@@ -181,6 +193,7 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
             "class",
             "delete_source",
             "dry_run",
+            "regions",
         ],
     )?;
     let doc = s.editor.doc();
@@ -204,7 +217,7 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
                 .ok_or_else(|| bad("'create' must be hardscape, landscape_area or polyline"))?,
         ),
     };
-    let depths = match m.get("depths").and_then(Value::as_str) {
+    let depths = match m.get("depths").filter(|v| !v.is_null()) {
         None => {
             if create == Some("polyline") {
                 "all"
@@ -212,7 +225,12 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
                 "even"
             }
         }
-        Some(d) if ["even", "odd", "all"].contains(&d) => d,
+        Some(Value::String(d)) if ["even", "odd", "all"].contains(&d.as_str()) => {
+            ["even", "odd", "all"]
+                .into_iter()
+                .find(|x| x == d)
+                .unwrap_or("even")
+        }
         Some(_) => return Err(bad("'depths' must be even, odd or all")),
     };
     let min_area = opt_number(m, "min_area_m2")?.unwrap_or(0.0) * 1e6;
@@ -224,6 +242,9 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
     let mut skipped: Vec<Value> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut used_objects: Vec<ObjectId> = Vec::new();
+    // The closed shapes among the objects: they say what is inside what, as the outlines of
+    // hardscape.from_shapes do.
+    let mut loops: Vec<Vec<DVec2>> = Vec::new();
     for id in ids {
         if !seen.insert(id) {
             continue;
@@ -232,6 +253,17 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
             skipped.push(json!({"id": id, "reason": "no such object"}));
             continue;
         };
+        if let Ok((outer, _)) = kadakas_core::layout::object::outline_of(o)
+            && !matches!(
+                o.shape,
+                Shape::Hardscape { .. } | Shape::LandscapeArea { .. }
+            )
+        {
+            loops.push(kadakas_core::geom::open_ring(
+                &curve::flatten(&outer, true, 0.5),
+                1e-9,
+            ));
+        }
         match regions::curves_of(&o.shape) {
             Ok(cs) => {
                 owner.extend(std::iter::repeat_n(id, cs.len()));
@@ -251,6 +283,49 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         v.dedup();
         v
     };
+    // The role of a region: its depth in the drawing says area or island. Two things make that
+    // doubtful: a region that lines join to an enclosing region on all sides (a stall line that
+    // ends on the kerb of an island), and closed shapes that say something else.
+    let mut notes: Vec<String> = Vec::new();
+    let roles: Vec<(&str, Option<String>)> = found
+        .regions
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let inside_loops = loops
+                .iter()
+                .filter(|l| kadakas_core::geom::point_in_polygon(r.inside, l))
+                .count();
+            let by_shapes = (inside_loops >= 1).then(|| (inside_loops - 1) % 2);
+            let why = if r.depth % 2 == 1 {
+                match by_shapes {
+                    Some(0) => Some(format!(
+                        "region {i} is inside a hole of another region, but the closed shapes say it is an area"
+                    )),
+                    _ => None,
+                }
+            } else if r.enclosed {
+                Some(format!(
+                    "region {i} is enclosed on all sides by one other region and joined to it by lines: it may be an island that touches the outline"
+                ))
+            } else if by_shapes == Some(1) {
+                Some(format!(
+                    "region {i} lies inside {inside_loops} closed shapes, which says it is an island, but its lines make it an area"
+                ))
+            } else {
+                None
+            };
+            let role = match (&why, r.depth % 2) {
+                (Some(_), _) => "island?",
+                (None, 1) => "island",
+                _ => "area",
+            };
+            if let Some(w) = &why {
+                notes.push(format!("{w}. Check it, and list the regions to create with 'regions'"));
+            }
+            (role, why)
+        })
+        .collect();
     let region_json: Vec<Value> = found
         .regions
         .iter()
@@ -262,18 +337,32 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
                 "holes": r.holes.iter().map(|h| vertices_json(h)).collect::<Vec<_>>(),
                 "area_m2": r.area / 1e6,
                 "depth": r.depth,
-                "role": if r.depth % 2 == 0 { "area" } else { "island" },
+                "role": roles[i].0,
+                "doubt": roles[i].1,
                 "inside": xy(r.inside),
                 "bbox": {"lo": xy(r.lo), "hi": xy(r.hi)},
                 "sources": sources_of(r),
             })
         })
         .collect();
+    if tol > 10.0 {
+        notes.push(format!(
+            "the tolerance of {tol} mm is more than 10 mm: gaps that wide are usually drawing errors, and closing them moves the corners"
+        ));
+    }
+    if found.chained_nodes > 0 {
+        notes.push(format!(
+            "{} nodes joined points more than the tolerance apart through a chain of points: look at the closed gaps",
+            found.chained_nodes
+        ));
+    }
     let mut out = json!({
         "regions": region_json,
         "closed_gaps": {
             "count": found.closed_gap_count,
-            "listed": found.closed_gaps.iter().map(|g| json!({"at": xy(g.at), "size_mm": g.size})).collect::<Vec<_>>(),
+            "total_movement_mm": found.node_movement,
+            "chained_nodes": found.chained_nodes,
+            "listed": found.closed_gaps.iter().map(|g| json!({"at": xy(g.at), "size_mm": g.size, "moved_mm": g.moved})).collect::<Vec<_>>(),
         },
         "dead_ends": {
             "count": found.dead_end_count,
@@ -290,6 +379,8 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         "skipped": skipped,
         "ignored_short": found.ignored_short,
         "duplicates": found.duplicates,
+        "dropped_slivers": found.dropped_slivers,
+        "warnings": notes,
         "tolerance_mm": tol,
         "dry_run": dry_run,
     });
@@ -297,20 +388,71 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         out["created"] = json!([]);
         return Ok(out);
     };
-    // Which regions become objects.
-    let chosen: Vec<usize> = found
-        .regions
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| {
-            r.area >= min_area
-                && match depths {
-                    "even" => r.depth % 2 == 0,
-                    "odd" => r.depth % 2 == 1,
-                    _ => true,
+    // Which regions become objects: those listed, else those of the depths asked for.
+    let chosen: Vec<usize> = match m.get("regions").filter(|v| !v.is_null()) {
+        Some(list) => {
+            let list = list.as_array().ok_or_else(|| {
+                bad("'regions' must be a list of region numbers or [x, y] points")
+            })?;
+            let mut v: Vec<usize> = Vec::new();
+            for item in list {
+                let i = match item {
+                    Value::Number(n) => n
+                        .as_u64()
+                        .map(|n| n as usize)
+                        .filter(|n| *n < found.regions.len())
+                        .ok_or_else(|| {
+                            bad(format!(
+                                "there is no region {item}: the drawing has {} regions (numbered from 0)",
+                                found.regions.len()
+                            ))
+                        })?,
+                    Value::Array(_) => {
+                        let pt = point(item, "regions")?;
+                        found
+                            .regions
+                            .iter()
+                            .position(|r| {
+                                let outer = curve::flatten(&r.outer, true, 0.5);
+                                kadakas_core::geom::point_in_polygon(pt, &outer)
+                                    && !r.holes.iter().any(|h| {
+                                        kadakas_core::geom::point_in_polygon(
+                                            pt,
+                                            &curve::flatten(h, true, 0.5),
+                                        )
+                                    })
+                            })
+                            .ok_or_else(|| bad(format!("no region holds the point {item}")))?
+                    }
+                    _ => {
+                        return Err(bad(
+                            "'regions' must be a list of region numbers or [x, y] points",
+                        ));
+                    }
+                };
+                if !v.contains(&i) {
+                    v.push(i);
                 }
-        })
-        .map(|(i, _)| i)
+            }
+            v
+        }
+        None => found
+            .regions
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| {
+                r.area >= min_area
+                    && match depths {
+                        "even" => roles[*i].0 == "area",
+                        "odd" => roles[*i].0 == "island",
+                        _ => true,
+                    }
+            })
+            .map(|(i, _)| i)
+            .collect(),
+    };
+    let left_out: Vec<usize> = (0..found.regions.len())
+        .filter(|i| !chosen.contains(i))
         .collect();
     let first = used_objects.first().and_then(|id| doc.object(*id));
     let layer = match m.get("layer").filter(|v| !v.is_null()) {
@@ -377,6 +519,7 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         });
     }
     let mut created: Vec<Value> = Vec::new();
+    let mut kept: Vec<Value> = Vec::new();
     if !commands.is_empty() {
         let mut next = doc.id_plan();
         let ids: Vec<ObjectId> = commands.iter().map(|_| ObjectId(next.take())).collect();
@@ -384,21 +527,39 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
             created.push(json!({"region": i, "id": id, "kind": kind}));
         }
         if delete_source {
-            // Only curves that made created regions, and no region that stays on paper.
-            let kept: std::collections::HashSet<ObjectId> = found
-                .regions
+            // A source goes only if every piece of it, also the pieces that were cut off, lies in
+            // regions that are made, and in no region that is left out.
+            let made: std::collections::HashSet<usize> = chosen
                 .iter()
-                .enumerate()
-                .filter(|(i, _)| !chosen.contains(i))
-                .flat_map(|(_, r)| sources_of(r))
+                .flat_map(|&i| found.regions[i].edges.iter().copied())
                 .collect();
-            let gone: Vec<ObjectId> = chosen
+            let other: std::collections::HashSet<usize> = left_out
                 .iter()
-                .flat_map(|&i| sources_of(&found.regions[i]))
-                .filter(|id| !kept.contains(id))
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
+                .flat_map(|&i| found.regions[i].edges.iter().copied())
                 .collect();
+            let mut gone: Vec<ObjectId> = Vec::new();
+            for &id in &used_objects {
+                let mine: Vec<usize> = (0..owner.len()).filter(|&c| owner[c] == id).collect();
+                let reason = if mine.iter().any(|&c| found.lost_curves[c]) {
+                    Some("a piece of it is a dead end or too short, so it is not all in a region")
+                } else if mine
+                    .iter()
+                    .any(|&c| found.curve_edges[c].iter().any(|e| other.contains(e)))
+                {
+                    Some("it also bounds a region that was not made")
+                } else if mine.iter().any(|&c| {
+                    found.curve_edges[c].is_empty()
+                        || found.curve_edges[c].iter().any(|e| !made.contains(e))
+                }) {
+                    Some("a piece of it is not in a region that was made")
+                } else {
+                    None
+                };
+                match reason {
+                    None => gone.push(id),
+                    Some(why) => kept.push(json!({"id": id, "reason": why})),
+                }
+            }
             if !gone.is_empty() {
                 commands.push(Command::DeleteObjects { ids: gone });
             }
@@ -412,6 +573,7 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         }
     }
     out["created"] = json!(created);
+    out["kept_sources"] = json!(kept);
     Ok(out)
 }
 
@@ -447,6 +609,7 @@ fn zones_json(p: &plan::Planned, with_outline: Option<&plan::Planned>) -> Vec<Va
         .map(|(i, z)| {
             let mut v = json!({
                 "index": i,
+                "number": i + 1,
                 "name": z.name,
                 "area_m2": z.area / 1e6,
                 "inside": xy(z.inside),
@@ -525,13 +688,23 @@ fn store(s: &mut Session, o: &Object, p: &Plan) -> Result<(), RpcError> {
 // ------------------------------------------------------------------ hardscape.split
 
 fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
-    unknown_fields(m, &["id", "lines", "follow", "zones", "tolerance"])?;
+    unknown_fields(
+        m,
+        &["id", "lines", "follow", "zones", "tolerance", "zone_units"],
+    )?;
     let doc = s.editor.doc();
     let o = hardscape(doc, m)?;
     let mut p = current_plan(o);
     let follow = flag(m, "follow", true)?;
     if let Some(v) = opt_number(m, "tolerance")? {
         p.tolerance = v;
+    }
+    if let Some(u) = m.get("zone_units").filter(|v| !v.is_null()) {
+        p.zone_units = match u.as_str() {
+            Some("cut") => plan::ZoneUnits::Cut,
+            Some("centroid") => plan::ZoneUnits::Centroid,
+            _ => return Err(bad("'zone_units' must be cut or centroid")),
+        };
     }
     if let Some(lines) = m.get("lines").filter(|v| !v.is_null()) {
         let list = lines
@@ -649,58 +822,47 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                     None => None,
                 },
                 angle: opt_number(z, "angle")?,
-                align_to_edge: z
-                    .get("align_to_edge")
-                    .and_then(Value::as_u64)
-                    .map(|n| n as usize),
-                align_to_split: z
-                    .get("align_to_split")
-                    .and_then(Value::as_u64)
-                    .map(|n| n as usize),
+                align_to_edge: whole_number(z, "align_to_edge")?,
+                align_to_split: whole_number(z, "align_to_split")?,
             });
         }
     }
     p.validate().map_err(bad)?;
-    let after = plan_state(doc, &with_plan(o, &p), max_units)?;
+    let mut after = plan_state(doc, &with_plan(o, &p), max_units)?;
+    // Every zone gets a setting with its name and a seed, so that its name stays with it when a
+    // line moves. A setting without a pattern, origin, angle or alignment changes nothing else.
+    if after.zones.len() > 1 {
+        for z in &after.zones {
+            if z.spec.is_none() {
+                p.zones.push(ZoneSpec {
+                    name: Some(z.name.clone()),
+                    seed: z.inside,
+                    ..Default::default()
+                });
+            }
+        }
+        p.validate().map_err(bad)?;
+        after = plan_state(doc, &with_plan(o, &p), max_units)?;
+    }
     let region = region_of(doc, o, kadakas_core::layout::TOLERANCE).map_err(bad)?;
     let o = o.clone();
     store(s, &o, &p)?;
     let zones_area: f64 = after.zones.iter().map(|z| z.area).sum();
+    let cuts = after.zone_edge_cuts(&SummaryOptions::default());
     Ok(json!({
         "zones": zones_json(&after, None),
         "split_lines": p.splits.len(),
         "area_m2": region.area / 1e6,
         "zones_area_m2": zones_area / 1e6,
+        "courses_area_m2": ((region.area - zones_area) / 1e6).max(0.0),
+        "zone_units": p.zone_units,
+        "zone_edge_cuts": cuts.map(|c| json!({"whole_units_lost": c.whole_lost, "extra_pieces": c.extra_pieces})),
+        "zone_edge_note": "units of two zones meet at the zone edge with no joint: that is not buildable. Put the zone edge in a joint of the pattern, or use zone_units centroid to give each unit whole to the zone of its center",
         "notes": after.notes,
     }))
 }
 
 // ------------------------------------------------------------------ courses
-
-/// The outline or a hole of a hardscape as a closed path running counterclockwise.
-fn edge_path(doc: &Document, o: &Object, which: &str) -> Result<Vec<Vertex>, RpcError> {
-    let (outer, holes) = outline_of(o).map_err(bad)?;
-    let mut ring = if which == "outline" {
-        outer
-    } else {
-        let n: usize = which
-            .strip_prefix("hole:")
-            .and_then(|n| n.trim().parse().ok())
-            .ok_or_else(|| bad("'along' must be outline or hole:N"))?;
-        holes.get(n).cloned().ok_or_else(|| {
-            bad(format!(
-                "the hardscape has no hole {n} (it has {})",
-                holes.len()
-            ))
-        })?
-    };
-    let flat = curve::flatten(&ring, true, 1.0);
-    if kadakas_core::geom::signed_area(&flat) < 0.0 {
-        ring.reverse();
-    }
-    let _ = doc;
-    Ok(ring)
-}
 
 fn course_from(
     doc: &Document,
@@ -780,15 +942,17 @@ fn course_from(
         },
     };
     let side_text = c.get("side").and_then(Value::as_str);
-    let mut offset = opt_number(c, "offset").map_err(fail)?.unwrap_or(0.0);
+    let offset = opt_number(c, "offset").map_err(fail)?.unwrap_or(0.0);
     let (path, closed, source, side);
-    let border = kadakas_core::hardscape::data::style_of(doc, o)
-        .and_then(|(_, st)| st.border)
-        .map_or(0.0, |b| b.width);
+    let mut edge: Option<String> = None;
     match (
         c.get("path").filter(|v| !v.is_null()),
         c.get("source").filter(|v| !v.is_null()),
-        c.get("along").and_then(Value::as_str),
+        match c.get("along").filter(|v| !v.is_null()) {
+            None => None,
+            Some(Value::String(s)) => Some(s.as_str()),
+            Some(_) => return Err(fail(bad("'along' must be outline or hole:N"))),
+        },
     ) {
         (Some(p), None, None) => {
             path = serde_json::from_value::<Vec<Vertex>>(p.clone())
@@ -822,9 +986,11 @@ fn course_from(
             };
         }
         (None, None, Some(which)) => {
-            path = edge_path(doc, o, which).map_err(fail)?;
+            // The path is made again from the edge each time; this copy is for when it cannot be.
+            path = plan::edge_path(doc, o, which).map_err(|e| fail(bad(e)))?.0;
             closed = true;
             source = None;
+            edge = Some(which.to_string());
             let outline = which == "outline";
             // The ring runs counterclockwise: the left is inside it. A course goes on the side of
             // the paving: inside the outline, outside a hole.
@@ -842,10 +1008,6 @@ fn course_from(
                     fail(bad("'side' must be inside, outside, left, right or center"))
                 })?,
             };
-            // The kerb border is not paved: the course starts at its inner edge.
-            if border > 0.0 {
-                offset += if outline { border } else { -border };
-            }
         }
         _ => {
             return Err(fail(bad(
@@ -856,6 +1018,7 @@ fn course_from(
     Ok(CourseDef {
         name,
         source,
+        edge,
         path,
         closed,
         side,
@@ -916,21 +1079,11 @@ fn course(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             .iter()
             .find(|d| d.name.eq_ignore_ascii_case(name))
             .ok_or_else(|| bad("align_field needs a named course"))?;
-        let (path, closed) = plan::effective_path(doc, def, &mut Vec::new());
         let width = kadakas_core::layout::object::pattern_of(doc, o)
             .filter(|(pt, _)| pt.module.is_none())
             .map(|(pt, _)| pt.unit_width)
             .ok_or_else(|| bad("align_field needs a joint pattern of a bond (not a module)"))?;
-        let spec = kadakas_core::layout::course::Spec {
-            path,
-            closed,
-            side: def.side,
-            offset: def.offset,
-            along: def.along,
-            depth: def.depth,
-            gap: def.gap,
-            corner: def.corner,
-        };
+        let spec = plan::course_spec(doc, o, def, &mut Vec::new());
         aligned = kadakas_core::layout::course::field_origin(&spec, width);
     }
     let planned = plan_state(doc, &with_plan(o, &p), s.limits().pattern_units)?;
@@ -1014,6 +1167,7 @@ fn plan_get(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> 
             "area_m2": g.region.area / 1e6,
         })).collect::<Vec<_>>(),
         "notes": planned.notes,
+        "zone_edge_cuts": planned.zone_edge_cuts(&SummaryOptions::default()).map(|c| json!({"whole_units_lost": c.whole_lost, "extra_pieces": c.extra_pieces})),
         "area_m2": region_of(doc, o, kadakas_core::layout::TOLERANCE).map(|r| r.area / 1e6).unwrap_or(0.0),
     }))
 }
