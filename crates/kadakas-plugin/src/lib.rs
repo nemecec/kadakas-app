@@ -40,7 +40,7 @@ pub mod web;
 pub use plugin::{Generated, Plugin, ToolCall, ToolDone, ToolStep};
 pub use registry::{Registry, StoreReport};
 pub use runtime::{
-    HostCall, HostReply, HostedModule, Limits, LoadedModule, PluginError, PluginRuntime,
+    HostCall, HostReply, HostedModule, Limits, LoadedModule, PluginError, PluginRuntime, Watch,
     default_runtime,
 };
 pub use store::{MemoryBackend, ModuleStore, StoreBackend, StoreError};

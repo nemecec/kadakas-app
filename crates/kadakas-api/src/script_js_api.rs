@@ -219,7 +219,7 @@ pub fn describe() -> Value {
         "resources": "script_resource.create {name, code}, script_resource.update, script_resource.get, script_resource.list. Delete with resource.delete. A hardscape style can use a script as a generator for its units (describe, section unit_patterns, generators).",
         "examples": [
             {"method": "script.eval", "params": {"code": "return kadakas.call('document.summary', {}).layers.length;", "mode": "read"}},
-            {"method": "script.eval", "params": {"code": "const ids = []; for (let i = 0; i < args.n; i++) { ids.push(kadakas.call('execute', {command: {op: 'add_object', shape: {kind: 'circle', center: [i * 1000, 0], radius: 300}}}).created[0]); } return ids;", "args": {"n": 3}}},
+            {"method": "script.eval", "params": {"code": "const ids = []; for (let i = 0; i < args.n; i++) { ids.push(kadakas.call('execute', {command: {op: 'add_object', shape: {kind: 'circle', center: [i * 1000, 0], radius: 300}}}).created[0]); } return ids;", "args": {"$kn": 3}}},
             {"method": "script_resource.create", "params": {"name": "Ashlar", "code": "return {types: ['a'], rects: {kind: new Uint32Array([0]), data: new Float64Array([500, 250, 1000, 500, 0])}};"}},
             {"method": "script.js_info", "params": {}}
         ]

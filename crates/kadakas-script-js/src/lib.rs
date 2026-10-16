@@ -47,7 +47,9 @@ pub struct ScriptLimits {
     /// Wall-clock milliseconds for one stretch of the script between two calls (native only; the
     /// browser has no deadline).
     pub segment_millis: u64,
-    /// Most bytes of memory of the script module.
+    /// Most bytes of memory of the script module. At most `HOSTED_MEMORY_BYTES` (128 MiB), the
+    /// same on every engine: the browser module has that maximum whatever the limits are. The engine
+    /// inside keeps three quarters of it for itself.
     pub memory_bytes: usize,
     /// Most bytes in the answer of a run (the value, the log and the typed arrays).
     pub output_bytes: usize,
@@ -61,7 +63,7 @@ impl ScriptLimits {
         ScriptLimits {
             fuel: 10_000_000_000,
             segment_millis: 1_500,
-            memory_bytes: 128 << 20,
+            memory_bytes: kadakas_plugin::runtime::HOSTED_MEMORY_BYTES,
             output_bytes: 16 << 20,
             max_calls: 1_000_000,
         }
@@ -277,9 +279,23 @@ impl ScriptEngine {
 
     /// Runs a script. Every call of the script goes to `host`.
     pub fn run(&self, request: &Request<'_>, host: &mut dyn ScriptHost) -> Result<Output, Failure> {
+        self.run_watched(request, host, &|| None)
+    }
+
+    /// Like [`ScriptEngine::run`], and `watch` is asked before every call of the script and at
+    /// every tick of the clock of the engine (about every 50 ms) while the script runs on its
+    /// own. If it gives a reason, the run stops with a limit error that names it. This is how a
+    /// person stops a script and how the time of the whole run is bounded, also for a script
+    /// that makes no calls. The browser engine has no tick: it asks at the calls only.
+    pub fn run_watched(
+        &self,
+        request: &Request<'_>,
+        host: &mut dyn ScriptHost,
+        watch: &dyn Fn() -> Option<String>,
+    ) -> Result<Output, Failure> {
         let module = &self.module;
         let options = json!({
-            "memory": self.limits.memory_bytes / 4 * 3,
+            "memory": self.limits.memory_bytes.min(kadakas_plugin::runtime::HOSTED_MEMORY_BYTES) / 4 * 3,
             "stack": 256 * 1024,
             "seed": request.seed,
             "max_calls": self.limits.max_calls,
@@ -289,8 +305,17 @@ impl ScriptEngine {
         let mut parts: Vec<&[u8]> = vec![request.code.as_bytes(), &args, &options];
         parts.extend(request.buffers.iter().map(Vec::as_slice));
         let frame = frame::encode(&parts);
-        let mut serve = |bytes: &[u8]| serve_call(bytes, host);
-        let answer = module.run(&frame, &mut serve).map_err(plugin_failure)?;
+        let mut server = Server {
+            host,
+            calls: 0,
+            max_calls: self.limits.max_calls,
+            cap: self.limits.output_bytes,
+        };
+        let mut serve = |bytes: &[u8]| server.serve(bytes);
+        let watch_plugin = || watch().map(PluginError::Limit);
+        let answer = module
+            .run(&frame, &mut serve, &watch_plugin)
+            .map_err(plugin_failure)?;
         parse_answer(&answer)
     }
 }
@@ -301,7 +326,9 @@ fn plugin_limits(l: &ScriptLimits) -> Limits {
         fuel_describe: l.fuel,
         fuel_move: l.fuel,
         max_millis: l.segment_millis,
-        memory_bytes: l.memory_bytes,
+        memory_bytes: l
+            .memory_bytes
+            .min(kadakas_plugin::runtime::HOSTED_MEMORY_BYTES),
         max_output_bytes: l.output_bytes,
         ..Limits::default()
     }
@@ -321,8 +348,39 @@ fn error_reply(code: i64, message: &str, data: Option<&Value>) -> HostReply {
     HostReply::Reply(frame::encode(&[b"err", body.to_string().as_bytes()]))
 }
 
-/// Serves one `kadakas.call`: decode the request, ask the host, encode the reply.
-fn serve_call(bytes: &[u8], host: &mut dyn ScriptHost) -> HostReply {
+/// Serves the calls of one run: counts them, bounds the size of each request and reply, and asks
+/// the host.
+struct Server<'a> {
+    host: &'a mut dyn ScriptHost,
+    calls: u64,
+    max_calls: u64,
+    /// The most bytes of a request or a reply (the output limit of the run).
+    cap: usize,
+}
+
+impl Server<'_> {
+    /// Serves one `kadakas.call`: decode the request, ask the host, encode the reply.
+    fn serve(&mut self, bytes: &[u8]) -> HostReply {
+        self.calls += 1;
+        if self.calls > self.max_calls {
+            return HostReply::Abort(PluginError::Limit(format!(
+                "the script made more than {} calls",
+                self.max_calls
+            )));
+        }
+        serve_call(bytes, self.host, self.cap)
+    }
+}
+
+/// Serves one `kadakas.call`.
+fn serve_call(bytes: &[u8], host: &mut dyn ScriptHost, cap: usize) -> HostReply {
+    if bytes.len() > cap {
+        return error_reply(
+            -32600,
+            &format!("the call has {} bytes. The limit is {cap}", bytes.len()),
+            None,
+        );
+    }
     let Some(parts) = frame::decode(bytes).filter(|p| p.len() >= 2) else {
         return error_reply(-32600, "the call is broken", None);
     };
@@ -335,9 +393,10 @@ fn serve_call(bytes: &[u8], host: &mut dyn ScriptHost) -> HostReply {
     };
     let wants_typed = params
         .as_object_mut()
-        .and_then(|m| m.remove("$typed"))
+        .and_then(|m| m.remove("$ktyped"))
         .is_some_and(|v| v == Value::Bool(true));
-    if let Err(e) = typed::resolve(&mut params, &parts[2..]) {
+    // A number as JSON takes far more memory than its bytes in a buffer: bound their count.
+    if let Err(e) = typed::resolve_limited(&mut params, &parts[2..], cap / 16) {
         return error_reply(-32602, &e, None);
     }
     match host.call(method, params, wants_typed) {
@@ -348,6 +407,14 @@ fn serve_call(bytes: &[u8], host: &mut dyn ScriptHost) -> HostReply {
                 Vec::new()
             };
             let text = value.to_string();
+            let size = text.len() + buffers.iter().map(Vec::len).sum::<usize>();
+            if size > cap {
+                return error_reply(
+                    -32603,
+                    &format!("the reply has {size} bytes. The limit is {cap}"),
+                    None,
+                );
+            }
             let mut out: Vec<&[u8]> = vec![b"ok", text.as_bytes()];
             out.extend(buffers.iter().map(Vec::as_slice));
             HostReply::Reply(frame::encode(&out))
@@ -383,7 +450,7 @@ fn parse_answer(answer: &[u8]) -> Result<Output, Failure> {
                 calls,
             })
         }
-        "error" => {
+        "limit" | "error" => {
             let info: Value = serde_json::from_slice(parts[1]).unwrap_or(Value::Null);
             let s = |k: &str| {
                 info.get(k)
@@ -392,20 +459,21 @@ fn parse_answer(answer: &[u8]) -> Result<Output, Failure> {
                     .to_string()
             };
             let message = s("message");
-            let name = s("name");
-            // QuickJS reports a spent memory limit and a string or array that is too long as
-            // `InternalError`, and a deep recursion as `RangeError`.
-            if name == "InternalError" || message.contains("call stack size") {
-                return Err(fail(ScriptError::Limit(format!(
-                    "{message} (a limit of the script engine: memory, size or recursion depth)"
-                ))));
-            }
-            if message.contains("more than") && message.contains("calls") {
-                return Err(fail(ScriptError::Limit(message)));
+            // The module says which errors are its limits (out of memory, a string that is too
+            // long, a deep recursion, too many calls): the text of a message decides nothing.
+            if status == "limit" {
+                let what = if message.is_empty() {
+                    "out of memory".to_string()
+                } else {
+                    format!(
+                        "{message} (a limit of the script engine: memory, size or recursion depth)"
+                    )
+                };
+                return Err(fail(ScriptError::Limit(what)));
             }
             Err(fail(ScriptError::Script(Box::new(ScriptThrow {
                 message,
-                name,
+                name: s("name"),
                 stack: s("stack"),
                 method: info.get("method").and_then(Value::as_str).map(String::from),
                 code: info.get("code").and_then(Value::as_i64),

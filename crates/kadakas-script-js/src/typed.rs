@@ -3,7 +3,7 @@
 //! In a script, geometry can be a `Float64Array` (or `Float32Array`, `Int32Array`, `Uint32Array`,
 //! `Uint8Array`) with a `stride` (2 for `[x, y]`, 3 for `[x, y, z]`). It crosses the sandbox as
 //! bytes, not as JSON text. In the JSON of a call it is a marker
-//! `{"$t": "f64", "i": 0, "n": 2}`: the kind, the index of the buffer and the stride.
+//! `{"$kt": "f64", "$ki": 0, "$kn": 2}`: the kind, the index of the buffer and the stride.
 //!
 //! - [`resolve`] turns the markers of a request into plain JSON (flat numbers, or a list of
 //!   `n`-tuples), so every method of the API sees the parameters it knows.
@@ -19,7 +19,7 @@ pub const MIN_POINTS: usize = 8;
 pub const MIN_NUMBERS: usize = 64;
 
 fn is_marker(m: &Map<String, Value>) -> bool {
-    m.get("$t").is_some_and(Value::is_string) && m.get("i").is_some_and(Value::is_u64)
+    m.get("$kt").is_some_and(Value::is_string) && m.get("$ki").is_some_and(Value::is_u64)
 }
 
 fn number(v: f64) -> Result<Value, String> {
@@ -65,23 +65,57 @@ fn elements(kind: &str, bytes: &[u8]) -> Result<Vec<Value>, String> {
 /// Replaces every marker in `value` by the array it stands for. `buffers[i]` is the bytes of
 /// buffer `i`.
 pub fn resolve<B: AsRef<[u8]>>(value: &mut Value, buffers: &[B]) -> Result<(), String> {
+    resolve_limited(value, buffers, usize::MAX)
+}
+
+/// Like [`resolve`], and refuses when the markers would make more than `max_numbers` numbers
+/// together (a number as JSON takes far more memory than its 8 bytes in a buffer).
+pub fn resolve_limited<B: AsRef<[u8]>>(
+    value: &mut Value,
+    buffers: &[B],
+    max_numbers: usize,
+) -> Result<(), String> {
+    let mut left = max_numbers;
+    resolve_in(value, buffers, &mut left)
+}
+
+fn resolve_in<B: AsRef<[u8]>>(
+    value: &mut Value,
+    buffers: &[B],
+    left: &mut usize,
+) -> Result<(), String> {
     match value {
         Value::Array(items) => {
             // A list that starts with a number holds no marker (the script side does the same).
             if matches!(items.first(), Some(Value::Number(_))) {
                 return Ok(());
             }
-            items.iter_mut().try_for_each(|v| resolve(v, buffers))
+            items
+                .iter_mut()
+                .try_for_each(|v| resolve_in(v, buffers, left))
         }
         Value::Object(map) => {
             if is_marker(map) {
-                let kind = map["$t"].as_str().unwrap_or_default();
-                let at = map["i"].as_u64().unwrap_or(u64::MAX) as usize;
-                let stride = map.get("n").and_then(Value::as_u64).unwrap_or(1) as usize;
+                let kind = map["$kt"].as_str().unwrap_or_default();
+                let at = map["$ki"].as_u64().unwrap_or(u64::MAX) as usize;
+                let stride = map.get("$kn").and_then(Value::as_u64).unwrap_or(1) as usize;
                 let bytes = buffers
                     .get(at)
                     .ok_or_else(|| format!("typed array {at} is not there"))?
                     .as_ref();
+                // 1 to 8 bytes make a number; refuse before the list is built.
+                let count = bytes.len()
+                    / if kind == "u8" {
+                        1
+                    } else if kind.ends_with("32") {
+                        4
+                    } else {
+                        8
+                    };
+                if count > *left {
+                    return Err("the typed arrays hold too many numbers".into());
+                }
+                *left -= count;
                 let flat = elements(kind, bytes)?;
                 *value = if stride <= 1 {
                     Value::Array(flat)
@@ -100,7 +134,8 @@ pub fn resolve<B: AsRef<[u8]>>(value: &mut Value, buffers: &[B]) -> Result<(), S
                 };
                 return Ok(());
             }
-            map.values_mut().try_for_each(|v| resolve(v, buffers))
+            map.values_mut()
+                .try_for_each(|v| resolve_in(v, buffers, left))
         }
         _ => Ok(()),
     }
@@ -112,10 +147,10 @@ fn f64_bytes(values: impl Iterator<Item = f64>) -> Vec<u8> {
 
 fn marker(index: usize, stride: usize) -> Value {
     let mut m = Map::new();
-    m.insert("$t".into(), Value::from("f64"));
-    m.insert("i".into(), Value::from(index));
+    m.insert("$kt".into(), Value::from("f64"));
+    m.insert("$ki".into(), Value::from(index));
     if stride > 1 {
-        m.insert("n".into(), Value::from(stride));
+        m.insert("$kn".into(), Value::from(stride));
     }
     Value::Object(m)
 }
@@ -180,7 +215,7 @@ mod tests {
 
     #[test]
     fn a_marker_with_a_stride_becomes_a_list_of_points() {
-        let mut v = json!({"points": {"$t": "f64", "i": 0, "n": 2}, "close": true});
+        let mut v = json!({"points": {"$kt": "f64", "$ki": 0, "$kn": 2}, "close": true});
         resolve(&mut v, &[f64s(&[1.0, 2.0, 3.5, 4.0])]).unwrap();
         assert_eq!(
             v,
@@ -190,7 +225,7 @@ mod tests {
 
     #[test]
     fn a_flat_marker_becomes_numbers_and_integers_stay_integers() {
-        let mut v = json!([{"ids": {"$t": "u32", "i": 0}}]);
+        let mut v = json!([{"ids": {"$kt": "u32", "$ki": 0}}]);
         let ids: Vec<u8> = [7u32, 9].iter().flat_map(|n| n.to_le_bytes()).collect();
         resolve(&mut v, &[ids]).unwrap();
         assert_eq!(v, json!([{"ids": [7, 9]}]));
@@ -200,26 +235,32 @@ mod tests {
     fn bad_markers_are_refused() {
         let b = [f64s(&[1.0, 2.0, 3.0])];
         let cut = |mut v: Value| resolve(&mut v, &b);
-        assert!(cut(json!({"$t": "f64", "i": 5})).is_err(), "no such buffer");
         assert!(
-            cut(json!({"$t": "f64", "i": 0, "n": 2})).is_err(),
+            cut(json!({"$kt": "f64", "$ki": 5})).is_err(),
+            "no such buffer"
+        );
+        assert!(
+            cut(json!({"$kt": "f64", "$ki": 0, "$kn": 2})).is_err(),
             "3 numbers in pairs"
         );
-        assert!(cut(json!({"$t": "f16", "i": 0})).is_err(), "unknown kind");
+        assert!(
+            cut(json!({"$kt": "f16", "$ki": 0})).is_err(),
+            "unknown kind"
+        );
         let nan = [f64s(&[f64::NAN])];
-        assert!(resolve(&mut json!({"$t": "f64", "i": 0}), &nan).is_err());
+        assert!(resolve(&mut json!({"$kt": "f64", "$ki": 0}), &nan).is_err());
         let odd = [vec![0u8; 7]];
-        assert!(resolve(&mut json!({"$t": "f64", "i": 0}), &odd).is_err());
+        assert!(resolve(&mut json!({"$kt": "f64", "$ki": 0}), &odd).is_err());
     }
 
     #[test]
     fn long_lists_of_points_leave_as_typed_arrays_and_come_back_equal() {
         let pts: Vec<Value> = (0..10).map(|i| json!([i as f64, i as f64 * 0.5])).collect();
-        let original = json!({"ring": pts, "short": [[0.0, 1.0], [2.0, 3.0]], "n": 3});
+        let original = json!({"ring": pts, "short": [[0.0, 1.0], [2.0, 3.0]], "$kn": 3});
         let mut v = original.clone();
         let bufs = extract(&mut v);
         assert_eq!(bufs.len(), 1);
-        assert_eq!(v["ring"], json!({"$t": "f64", "i": 0, "n": 2}));
+        assert_eq!(v["ring"], json!({"$kt": "f64", "$ki": 0, "$kn": 2}));
         assert_eq!(v["short"], original["short"], "short lists stay JSON");
         resolve(&mut v, &bufs).unwrap();
         assert_eq!(v, original);
@@ -230,7 +271,7 @@ mod tests {
         let nums: Vec<Value> = (0..MIN_NUMBERS).map(|i| json!(i as f64)).collect();
         let mut v = json!({"d": nums});
         let bufs = extract(&mut v);
-        assert_eq!(v["d"], json!({"$t": "f64", "i": 0}));
+        assert_eq!(v["d"], json!({"$kt": "f64", "$ki": 0}));
         assert_eq!(bufs[0].len(), MIN_NUMBERS * 8);
     }
 }

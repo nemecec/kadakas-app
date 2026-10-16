@@ -199,7 +199,7 @@ mod unit {
     #[test]
     fn a_broken_call_gets_an_error_reply_not_a_crash() {
         let bad = |parts: &[&[u8]]| {
-            let r = reply(serve_call(&frame::encode(parts), &mut Nothing));
+            let r = reply(serve_call(&frame::encode(parts), &mut Nothing, 1 << 20));
             assert_eq!(r[0], b"err");
             String::from_utf8(r[1].clone()).unwrap()
         };
@@ -207,8 +207,12 @@ mod unit {
         assert!(bad(&[b"only one part"]).contains("broken"));
         assert!(bad(&[&[0xff, 0xfe], b"{}"]).contains("not text"));
         assert!(bad(&[b"m", b"{not json"]).contains("not JSON"));
-        assert!(bad(&[b"m", br#"{"x": {"$t": "f64", "i": 4}}"#]).contains("not there"));
-        let ok = reply(serve_call(&frame::encode(&[b"m", b"{}"]), &mut Nothing));
+        assert!(bad(&[b"m", br#"{"x": {"$kt": "f64", "$ki": 4}}"#]).contains("not there"));
+        let ok = reply(serve_call(
+            &frame::encode(&[b"m", b"{}"]),
+            &mut Nothing,
+            1 << 20,
+        ));
         assert_eq!(ok[0], b"ok");
     }
 
@@ -227,21 +231,24 @@ mod unit {
         assert!(matches!(fatal.error, ScriptError::Trap(m) if m.contains("why")));
         assert_eq!((fatal.log.as_str(), fatal.calls), ("log", 3));
         let calls = f(&[
-            b"error",
-            br#"{"message": "the script made more than 5 calls", "name": "Error"}"#,
+            b"limit",
+            br#"{"message": "the script made more than 5 calls"}"#,
             b"5",
             b"",
         ])
         .unwrap_err();
         assert!(matches!(calls.error, ScriptError::Limit(_)));
-        let internal = f(&[
+        let oom = f(&[b"limit", b"{\"message\":\"\"}", b"0", b""]).unwrap_err();
+        assert!(matches!(&oom.error, ScriptError::Limit(m) if m == "out of memory"));
+        // The text of a message decides nothing: the module says what is a limit.
+        let text_only = f(&[
             b"error",
-            br#"{"message": "string too long", "name": "InternalError"}"#,
+            br#"{"message": "out of memory", "name": "InternalError"}"#,
             b"0",
             b"",
         ])
         .unwrap_err();
-        assert!(matches!(internal.error, ScriptError::Limit(_)));
+        assert!(matches!(text_only.error, ScriptError::Script(_)));
         let not_json = f(&[b"error", b"???", b"0", b""]).unwrap_err();
         assert!(matches!(not_json.error, ScriptError::Script(_)));
     }
@@ -253,10 +260,11 @@ mod unit {
             .flat_map(|v| v.to_le_bytes())
             .collect();
         let i32s: Vec<u8> = [-7i32, 9].iter().flat_map(|v| v.to_le_bytes()).collect();
-        let mut v = json!([{"$t": "f32", "i": 0}, {"$t": "i32", "i": 1}, {"$t": "u8", "i": 2}]);
+        let mut v =
+            json!([{"$kt": "f32", "$ki": 0}, {"$kt": "i32", "$ki": 1}, {"$kt": "u8", "$ki": 2}]);
         typed::resolve(&mut v, &[f32s, i32s, vec![1, 2, 255]]).unwrap();
         assert_eq!(v, json!([[1.5, -2.0], [-7, 9], [1, 2, 255]]));
-        let mut cut = json!({"$t": "f32", "i": 0});
+        let mut cut = json!({"$kt": "f32", "$ki": 0});
         assert!(
             typed::resolve(&mut cut, &[vec![0u8; 5]]).is_err(),
             "5 bytes of 4-byte numbers"
@@ -266,8 +274,81 @@ mod unit {
         let mut v =
             json!({"p": pts3, "q": (0..9).map(|i| json!([i, i, i, i])).collect::<Vec<_>>()});
         let bufs = typed::extract(&mut v);
-        assert_eq!(v["p"], json!({"$t": "f64", "i": 0, "n": 3}));
+        assert_eq!(v["p"], json!({"$kt": "f64", "$ki": 0, "$kn": 3}));
         assert!(v["q"].is_array());
         assert_eq!(bufs.len(), 1);
+    }
+}
+
+mod caps {
+    use super::*;
+
+    struct Nothing;
+    impl ScriptHost for Nothing {
+        fn call(&mut self, _: &str, _: Value, _: bool) -> Result<Value, HostError> {
+            Ok(json!(1))
+        }
+    }
+
+    struct Big;
+    impl ScriptHost for Big {
+        fn call(&mut self, _: &str, _: Value, _: bool) -> Result<Value, HostError> {
+            Ok(json!({"text": "x".repeat(10_000)}))
+        }
+    }
+
+    #[test]
+    fn a_request_and_a_reply_over_the_cap_are_refused_and_so_are_too_many_numbers() {
+        let ok = |r: HostReply| {
+            frame::decode(&match r {
+                HostReply::Reply(b) => b,
+                HostReply::Abort(e) => panic!("{e:?}"),
+            })
+            .unwrap()[0]
+                .to_vec()
+        };
+        assert_eq!(
+            ok(serve_call(
+                &frame::encode(&[b"m", b"{}"]),
+                &mut Big,
+                1 << 20
+            )),
+            b"ok"
+        );
+        // The reply has 10,000 bytes and the cap is 1,000.
+        assert_eq!(
+            ok(serve_call(&frame::encode(&[b"m", b"{}"]), &mut Big, 1000)),
+            b"err"
+        );
+        // The request has more bytes than the cap.
+        let long = vec![b'x'; 2000];
+        assert_eq!(
+            ok(serve_call(&frame::encode(&[b"m", &long]), &mut Big, 1000)),
+            b"err"
+        );
+        // 2,000 numbers of 8 bytes: with a cap of 1,000 bytes, at most 62 numbers may be written out.
+        let nums = vec![0u8; 16_000];
+        let req = frame::encode(&[b"m", br#"{"x": {"$kt": "f64", "$ki": 0}}"#, &nums]);
+        assert_eq!(ok(serve_call(&req, &mut Big, 1 << 16)), b"ok");
+        let r = serve_call(&req, &mut Big, 16_100);
+        assert_eq!(ok(r), b"err");
+    }
+
+    #[test]
+    fn the_number_of_calls_is_bounded_by_the_host_not_only_by_the_script() {
+        let mut host = Nothing;
+        let mut server = Server {
+            host: &mut host,
+            calls: 0,
+            max_calls: 2,
+            cap: 1 << 20,
+        };
+        let req = frame::encode(&[b"m", b"{}"]);
+        assert!(matches!(server.serve(&req), HostReply::Reply(_)));
+        assert!(matches!(server.serve(&req), HostReply::Reply(_)));
+        assert!(matches!(
+            server.serve(&req),
+            HostReply::Abort(PluginError::Limit(_))
+        ));
     }
 }

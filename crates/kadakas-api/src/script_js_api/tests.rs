@@ -62,7 +62,7 @@ fn an_error_takes_back_the_whole_run() {
     let mut s = Session::default();
     let e = eval(
         &mut s,
-        json!({"code": format!("{ADD_CIRCLES} throw new Error('boom');"), "args": {"n": 3}}),
+        json!({"code": format!("{ADD_CIRCLES} throw new Error('boom');"), "args": {"$kn": 3}}),
     )
     .unwrap_err();
     assert!(e.message.contains("boom"), "{}", e.message);

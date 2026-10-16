@@ -204,7 +204,7 @@ impl UnitGenerator for JsGenerator {
         let mut buffers: Vec<Vec<u8>> = Vec::new();
         let mut marker = |points: &[DVec2]| {
             buffers.push(f64_bytes(points));
-            json!({"$t": "f64", "i": buffers.len() - 1, "n": 2})
+            json!({"$kt": "f64", "$ki": buffers.len() - 1, "$kn": 2})
         };
         let shapes: Vec<Value> = req
             .region

@@ -29,8 +29,8 @@
     const kind = kindOf(v);
     if (kind !== null) {
       const bytes = v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength);
-      const m = { $t: kind, i: bufs.length };
-      if (typeof v.stride === "number" && v.stride > 1) m.n = v.stride;
+      const m = { $kt: kind, $ki: bufs.length };
+      if (typeof v.stride === "number" && v.stride > 1) m.$kn = v.stride;
       bufs.push(bytes);
       return m;
     }
@@ -57,10 +57,10 @@
       for (let i = 0; i < v.length; i++) v[i] = unpack(v[i], bufs);
       return v;
     }
-    if (typeof v.$t === "string" && typeof v.i === "number") {
-      const ctor = CTORS[v.$t];
-      const arr = new ctor(bufs[v.i]);
-      arr.stride = typeof v.n === "number" ? v.n : 1;
+    if (typeof v.$kt === "string" && typeof v.$ki === "number") {
+      const ctor = CTORS[v.$kt];
+      const arr = new ctor(bufs[v.$ki]);
+      arr.stride = typeof v.$kn === "number" ? v.$kn : 1;
       return arr;
     }
     for (const k of Object.keys(v)) v[k] = unpack(v[k], bufs);
@@ -72,7 +72,11 @@
 
   function call(method, params, options) {
     if (typeof method !== "string") throw new TypeError("kadakas.call: the method must be a string");
-    if (calls >= maxCalls) throw new Error("the script made more than " + maxCalls + " calls");
+    if (calls >= maxCalls) {
+      const e = new Error("the script made more than " + maxCalls + " calls");
+      e.kadakasLimit = true;
+      throw e;
+    }
     calls++;
     const bufs = [];
     const body = params === undefined ? {} : pack(params, bufs);
@@ -80,7 +84,7 @@
       if (body === null || typeof body !== "object" || Array.isArray(body)) {
         throw new TypeError("kadakas.call: the parameters must be an object");
       }
-      body.$typed = true;
+      body.$ktyped = true;
     }
     const r = host.call(method, JSON.stringify(body), bufs);
     const status = r[0];
@@ -165,27 +169,43 @@
       const args = unpack(JSON.parse(argsJson), inputs || []);
       const fn = (0, eval)('(function (args) { "use strict"; ' + code + "\n})");
       const value = fn(args);
+      if (value !== null && (typeof value === "object" || typeof value === "function") && typeof value.then === "function") {
+        throw new TypeError("async functions and promises are not supported: return the value itself");
+      }
       const bufs = [];
       const body = pack(value === undefined ? null : value, bufs);
       const text = JSON.stringify(body === undefined ? null : body);
       return ["ok", text === undefined ? "null" : text, String(calls)].concat(bufs);
     } catch (e) {
-      let info;
-      if (e instanceof Error) {
-        info = { message: String(e.message), name: e.name, stack: String(e.stack || "") };
-        if (e.method !== undefined) info.method = e.method;
-        if (e.code !== undefined) info.code = e.code;
-        if (e.data !== undefined) info.data = e.data;
-      } else {
-        info = { message: "the script threw " + fmt(e) };
+      // Whatever the script threw, the answer must be built without running more code of the
+      // script than needed: a getter or toString that throws is the end of the story.
+      let info = { message: "the script threw a value that cannot be shown" };
+      let status = "error";
+      try {
+        if (e instanceof Error) {
+          info = { message: String(e.message), name: String(e.name), stack: String(e.stack || "") };
+          if (e.method !== undefined) info.method = String(e.method);
+          if (typeof e.code === "number") info.code = e.code;
+          if (e.data !== undefined) info.data = e.data;
+          // The engine's own limits: out of memory, a string that is too long, a deep recursion,
+          // too many calls. (InternalError is the class of QuickJS for them.)
+          if (e.kadakasLimit === true || e instanceof InternalError ||
+              (e instanceof RangeError && /call stack/.test(info.message))) {
+            status = "limit";
+          }
+        } else {
+          info = { message: "the script threw " + fmt(e) };
+        }
+      } catch (e2) {
+        info = { message: "the script threw an error that cannot be read" };
       }
       let text;
       try {
         text = JSON.stringify(info);
       } catch (e2) {
-        text = JSON.stringify({ message: info.message });
+        text = JSON.stringify({ message: String(info.message) });
       }
-      return ["error", text, String(calls)];
+      return [status, text, String(calls)];
     }
   };
 })(globalThis);

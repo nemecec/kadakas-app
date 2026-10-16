@@ -70,10 +70,10 @@ fn the_host_serves_the_calls_of_a_module_on_both_engines() {
             reply.reverse();
             HostReply::Reply(reply)
         };
-        let out = m.run(b"hello, host", &mut host).unwrap();
+        let out = m.run(b"hello, host", &mut host, &|| None).unwrap();
         assert_eq!(out, b"tsoh ,olleh", "{name}");
         // A second run is a new instance: nothing stays.
-        assert_eq!(m.run(b"ab", &mut host).unwrap(), b"ba", "{name}");
+        assert_eq!(m.run(b"ab", &mut host, &|| None).unwrap(), b"ba", "{name}");
         drop(host);
         assert_eq!(seen, [b"hello, host".to_vec(), b"ab".to_vec()], "{name}");
     }
@@ -84,7 +84,7 @@ fn the_host_can_stop_a_run_with_its_own_error() {
     for (name, rt) in runtimes() {
         let m = load(&*rt, &echo_module(ECHO, "")).unwrap();
         let mut host = |_: &[u8]| HostReply::Abort(PluginError::Limit("the host said stop".into()));
-        let e = m.run(b"x", &mut host).unwrap_err();
+        let e = m.run(b"x", &mut host, &|| None).unwrap_err();
         assert_eq!(e, PluginError::Limit("the host said stop".into()), "{name}");
     }
 }
@@ -102,13 +102,13 @@ fn an_endless_loop_and_a_memory_bomb_are_limits_on_both_engines() {
     for (name, rt) in runtimes() {
         let mut host = |_: &[u8]| HostReply::Reply(Vec::new());
         let m = load(&*rt, &spin).unwrap();
-        let e = m.run(b"x", &mut host).unwrap_err();
+        let e = m.run(b"x", &mut host, &|| None).unwrap_err();
         assert!(
             matches!(&e, PluginError::Limit(m) if m.contains("fuel")),
             "{name}: {e:?}"
         );
         let m = load(&*rt, &grow).unwrap();
-        let e = m.run(b"x", &mut host).unwrap_err();
+        let e = m.run(b"x", &mut host, &|| None).unwrap_err();
         assert!(
             matches!(e, PluginError::Limit(_) | PluginError::Trap(_)),
             "{name}: {e:?}"
@@ -123,14 +123,20 @@ fn a_bad_answer_is_refused() {
     let long = echo_module("(i64.const 0x0000100000100000)", "");
     for (name, rt) in runtimes() {
         let mut host = |_: &[u8]| HostReply::Reply(Vec::new());
-        let e = load(&*rt, &none).unwrap().run(b"x", &mut host).unwrap_err();
+        let e = load(&*rt, &none)
+            .unwrap()
+            .run(b"x", &mut host, &|| None)
+            .unwrap_err();
         assert!(matches!(e, PluginError::BadOutput(_)), "{name}: {e:?}");
         let e = load(&*rt, &outside)
             .unwrap()
-            .run(b"x", &mut host)
+            .run(b"x", &mut host, &|| None)
             .unwrap_err();
         assert!(matches!(e, PluginError::BadOutput(_)), "{name}: {e:?}");
-        let e = load(&*rt, &long).unwrap().run(b"x", &mut host).unwrap_err();
+        let e = load(&*rt, &long)
+            .unwrap()
+            .run(b"x", &mut host, &|| None)
+            .unwrap_err();
         assert!(matches!(e, PluginError::Limit(_)), "{name}: {e:?}");
     }
 }
@@ -244,7 +250,73 @@ fn the_deadline_starts_again_after_a_call_into_the_host() {
         HostReply::Reply(Vec::new())
     };
     // The answer has length 0 at address 8192: the module returns 0x2000_0000_0000 = ptr 0x2000, len 0.
-    let out = m.run(b"x", &mut host).unwrap();
+    let out = m.run(b"x", &mut host, &|| None).unwrap();
     assert!(out.is_empty());
     assert_eq!(calls, 30);
+}
+
+#[test]
+fn the_watcher_stops_a_run_at_a_call_and_while_the_module_runs_alone() {
+    for (name, rt) in runtimes() {
+        // At a call: the watcher says stop before the host is asked.
+        let m = load(&*rt, &echo_module(ECHO, "")).unwrap();
+        let mut asked = false;
+        let mut host = |_: &[u8]| {
+            asked = true;
+            HostReply::Reply(Vec::new())
+        };
+        let stop = || Some(PluginError::Limit("stopped by the person".into()));
+        let e = m.run(b"x", &mut host, &stop).unwrap_err();
+        assert_eq!(
+            e,
+            PluginError::Limit("stopped by the person".into()),
+            "{name}"
+        );
+        assert!(!asked, "{name}: the host was not asked");
+    }
+    // While the module runs alone (native only: the clock of the engine ticks): an endless loop
+    // with a lot of fuel is stopped by the watcher, with its reason.
+    let spin = echo_module("(loop $l (br $l)) (i64.const 0)", "");
+    let rt = WasmtimeRuntime::new();
+    let limits = Limits {
+        fuel: u64::MAX / 2,
+        max_millis: 60_000,
+        ..small()
+    };
+    let m = rt.load_hosted(&spin, &limits).unwrap();
+    let started = std::time::Instant::now();
+    let watch = move || {
+        (started.elapsed() > std::time::Duration::from_millis(200))
+            .then(|| PluginError::Limit("the whole run took too long".into()))
+    };
+    let mut host = |_: &[u8]| HostReply::Reply(Vec::new());
+    let e = m.run(b"x", &mut host, &watch).unwrap_err();
+    assert_eq!(e, PluginError::Limit("the whole run took too long".into()));
+}
+
+#[test]
+fn a_module_that_cannot_allocate_is_out_of_memory() {
+    // An allocator that always answers 0.
+    let nomem = wat::parse_str(format!(
+        r#"(module
+          (import "{HOST_MODULE}" "call" (func $call (param i32 i32) (result i32)))
+          (import "{HOST_MODULE}" "read" (func $read (param i32)))
+          (memory (export "memory") 2)
+          (func (export "alloc") (param i32) (result i32) (i32.const 0))
+          (func (export "dealloc") (param i32 i32))
+          (func (export "run") (param i32 i32) (result i64) (i64.const 0)))"#
+    ))
+    .unwrap();
+    for (name, rt) in runtimes() {
+        let mut host = |_: &[u8]| HostReply::Reply(Vec::new());
+        let e = load(&*rt, &nomem)
+            .unwrap()
+            .run(b"x", &mut host, &|| None)
+            .unwrap_err();
+        assert!(
+            matches!(e, PluginError::Limit(_) | PluginError::Trap(_)),
+            "{name}: {e:?}"
+        );
+        assert!(e.to_string().contains("out of memory"), "{name}: {e}");
+    }
 }

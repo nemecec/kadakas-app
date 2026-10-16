@@ -300,6 +300,8 @@ pub(super) fn lay(
         units: 0,
         dust_pieces: vanished,
         trimmed: 0,
+        dust_at: Vec::new(),
+        trimmed_at: Vec::new(),
     };
     // The cells are in drawing coordinates: the frame of the engine is the drawing.
     let local = Local::new(region, DVec2::ZERO, 0.0, extent.max(1.0));

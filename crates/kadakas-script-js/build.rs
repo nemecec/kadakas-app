@@ -40,7 +40,7 @@ const SOURCES: [&str; 5] = [
 ];
 
 /// The flags of the compile and link. A change here is a change of the module.
-const FLAGS: [&str; 9] = [
+const FLAGS: [&str; 10] = [
     "--target=wasm32-wasip1",
     "-O2",
     "-DNDEBUG",
@@ -48,6 +48,9 @@ const FLAGS: [&str; 9] = [
     "-fno-exceptions",
     "-mexec-model=reactor",
     "-Wl,-z,stack-size=1048576",
+    // The stack below the data: an overflow runs out of memory and traps, and does not write over
+    // the data of the module.
+    "-Wl,--stack-first",
     "-Wl,--export-memory",
     "-w",
 ];
@@ -260,10 +263,16 @@ fn input_hash(toolchain_id: &str) -> Result<String, String> {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(toolchain_id.as_bytes());
-    for f in FLAGS {
+    for f in FLAGS
+        .iter()
+        .chain(SOURCES.iter())
+        .chain(["-lm", "-Iquickjs"].iter())
+    {
         h.update(f.as_bytes());
         h.update([0]);
     }
+    // This script too: it decides the steps of the build.
+    h.update(fs::read("build.rs").map_err(|e| format!("build.rs: {e}"))?);
     for dir in ["c", "quickjs"] {
         let mut files: Vec<PathBuf> = fs::read_dir(dir)
             .map_err(|e| format!("{dir}: {e}"))?

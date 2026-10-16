@@ -291,7 +291,7 @@ fn typed_arrays_can_be_arguments() {
         .run(
             &Request {
                 code: "const r = args.ring; return {n: r.length, stride: r.stride, last: r[5], tag: args.tag};",
-                args: &json!({"ring": {"$t": "f64", "i": 0, "n": 2}, "tag": "x"}),
+                args: &json!({"ring": {"$kt": "f64", "$ki": 0, "$kn": 2}, "tag": "x"}),
                 buffers: &[ring],
                 seed: 0,
             },
@@ -299,4 +299,31 @@ fn typed_arrays_can_be_arguments() {
         )
         .unwrap();
     assert_eq!(out.value, json!({"n": 6, "stride": 2, "last": 3, "tag": "x"}));
+}
+
+#[test]
+fn the_entry_points_of_the_prelude_are_not_reachable_from_a_script() {
+    let (r, _) = run_with(small(), "return [typeof __run, typeof __host, typeof globalThis.__run];");
+    assert_eq!(r.unwrap().value, json!(["undefined", "undefined", "undefined"]));
+}
+
+#[test]
+fn strange_values_thrown_or_returned_are_script_errors_not_crashes() {
+    for code in [
+        "throw { toString() { throw 1; } };",
+        "const e = new Error('x'); Object.defineProperty(e, 'message', { get() { throw 2; } }); throw e;",
+        "return { toJSON() { throw new Error('no json'); } };",
+        "return (async () => 1)();",
+        "return Promise.resolve(1);",
+        "throw Symbol('s');",
+    ] {
+        let (r, _) = run_with(small(), code);
+        let f = r.unwrap_err();
+        assert!(matches!(f.error, ScriptError::Script(_)), "{code}: {f:?}");
+    }
+    let (r, _) = run_with(small(), "return (async () => 1)();");
+    assert!(r.unwrap_err().error.to_string().contains("promises"));
+    // A result that contains itself runs out of stack while it is written out: a limit.
+    let (r, _) = run_with(small(), "const a = {}; a.self = a; return a;");
+    assert!(matches!(r.unwrap_err().error, ScriptError::Limit(_)));
 }

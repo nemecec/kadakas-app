@@ -28,7 +28,7 @@ use std::rc::Rc;
 use crate::harden::{FUEL_EXPORT, HardenLimits, PAGE, harden};
 use crate::runtime::{
     CallKind, HOSTED_EXPORTS, HOSTED_MEMORY_BYTES, HostCall, HostReply, HostedModule, Limits,
-    LoadedModule, MaybeSend, PluginError, PluginRuntime, REQUIRED_EXPORTS,
+    LoadedModule, MaybeSend, PluginError, PluginRuntime, REQUIRED_EXPORTS, Watch,
 };
 use kadakas_plugin_abi::guest::unpack;
 
@@ -215,11 +215,14 @@ fn classify(limits: &Limits, inst: &mut dyn RawInstance, e: RawError, budget: u6
 /// The function that serves the calls of a run, with its lifetime erased. It is used only while
 /// `run` is on the stack.
 type ErasedHost = *mut (dyn FnMut(&[u8]) -> HostReply + 'static);
+/// The watcher of a run, with its lifetime erased in the same way.
+type ErasedWatch = *const (dyn Fn() -> Option<PluginError> + 'static);
 
 /// The host side of a hosted run: the function that serves the calls, the reply that waits for
 /// `read`, and why the host stopped the run.
 struct Link {
     host: Cell<Option<ErasedHost>>,
+    watch: Cell<Option<ErasedWatch>>,
     pending: RefCell<Vec<u8>>,
     aborted: RefCell<Option<PluginError>>,
 }
@@ -231,9 +234,15 @@ impl HostLink for Link {
                 "the module called the host after the run".into(),
             ));
         };
-        // SAFETY: the pointer is set in `MeteredHosted::run` from a `&mut` that lives until the
-        // run ends, and cleared before `run` returns. The browser has one thread, and the native
-        // test engine calls from the thread of `run`.
+        // SAFETY: the pointers are set in `MeteredHosted::run` from references that live until the
+        // run ends, and cleared before `run` returns (also when a panic unwinds through it). The
+        // browser has one thread, and the native test engine calls from the thread of `run`.
+        if let Some(watch) = self.watch.get()
+            && let Some(stop) = unsafe { (*watch)() }
+        {
+            *self.aborted.borrow_mut() = Some(stop);
+            return Err(RawError::Trap("the run was stopped".into()));
+        }
         let reply = unsafe { (*host)(request) };
         match reply {
             HostReply::Reply(bytes) => {
@@ -259,9 +268,30 @@ struct MeteredHosted {
     limits: Limits,
 }
 
+/// Clears the pointers of a link when the run ends, also by a panic.
+struct Clear<'a>(&'a Link);
+
+impl Drop for Clear<'_> {
+    fn drop(&mut self) {
+        self.0.host.set(None);
+        self.0.watch.set(None);
+    }
+}
+
 impl HostedModule for MeteredHosted {
-    fn run(&self, request: &[u8], host: HostCall<'_>) -> Result<Vec<u8>, PluginError> {
+    fn run(
+        &self,
+        request: &[u8],
+        host: HostCall<'_>,
+        watch: Watch<'_>,
+    ) -> Result<Vec<u8>, PluginError> {
         let link = Rc::new(Link {
+            // SAFETY: only the lifetime changes; see `Link::call`.
+            watch: Cell::new(Some(unsafe {
+                std::mem::transmute::<*const (dyn Fn() -> Option<PluginError> + '_), ErasedWatch>(
+                    watch as *const _,
+                )
+            })),
             // SAFETY: only the lifetime changes; see `Link::call`.
             host: Cell::new(Some(unsafe {
                 std::mem::transmute::<*mut (dyn FnMut(&[u8]) -> HostReply + '_), ErasedHost>(
@@ -271,9 +301,8 @@ impl HostedModule for MeteredHosted {
             pending: RefCell::new(Vec::new()),
             aborted: RefCell::new(None),
         });
-        let result = self.run_with(&link, request);
-        link.host.set(None);
-        result
+        let _clear = Clear(&link);
+        self.run_with(&link, request)
     }
 }
 
@@ -294,6 +323,11 @@ impl MeteredHosted {
             let len = u32::try_from(request.len())
                 .map_err(|_| RawError::Trap("the request is too large".into()))?;
             let ptr = inst.alloc(len)?;
+            if ptr == 0 {
+                return Err(RawError::Trap(
+                    "the module is out of memory (it has no room for the request)".into(),
+                ));
+            }
             inst.write(ptr, request)?;
             inst.call("run", &[ptr, len])
         };

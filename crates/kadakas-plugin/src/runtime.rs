@@ -186,6 +186,10 @@ pub enum HostReply {
 /// The function that serves the calls of a hosted module. It gets the bytes of a request frame.
 pub type HostCall<'a> = &'a mut dyn FnMut(&[u8]) -> HostReply;
 
+/// Asked before every call of a hosted module and at every tick of the clock of the engine (native
+/// only) while it runs. A reason stops the run with that error.
+pub type Watch<'a> = &'a dyn Fn() -> Option<PluginError>;
+
 /// The exports that a hosted module must have: the memory, `alloc`, `dealloc` and `run`. An export
 /// `_initialize` is called first when it is there.
 pub const HOSTED_EXPORTS: [&str; 4] = ["memory", "alloc", "dealloc", "run"];
@@ -197,11 +201,12 @@ pub const HOSTED_EXPORTS: [&str; 4] = ["memory", "alloc", "dealloc", "run"];
 pub const HOST_MODULE: &str = "kadakas";
 pub const HOST_IMPORTS: [&str; 2] = ["call", "read"];
 
-/// The memory maximum that the rewrite gives a hosted module in the browser, whatever the limits of
-/// the session are. The rewritten module is compiled once in advance (a large module cannot be
+/// The largest memory of a hosted module, on every engine. The browser rewrite gives a hosted module
+/// this maximum whatever the limits of the session are, and the native engine caps the memory of a
+/// run at the limit you give, never above it. The rewritten module is compiled once in advance (a large module cannot be
 /// compiled in the call), so it must not depend on the limits; the engine inside the module
 /// (QuickJS) keeps its own limit, three quarters of the memory limit of the run.
-pub const HOSTED_MEMORY_BYTES: usize = 256 << 20;
+pub const HOSTED_MEMORY_BYTES: usize = 128 << 20;
 
 /// A module that can call back into the host while it runs (the script engine, SCR-08). It makes
 /// the calls through the two imports above, so it can ask the host to do the heavy work, and the
@@ -212,7 +217,12 @@ pub const HOSTED_MEMORY_BYTES: usize = 256 << 20;
 pub trait HostedModule: MaybeSend {
     /// Runs the export `run` with the bytes of a request and returns the bytes of the answer.
     /// `host` serves the calls of the module.
-    fn run(&self, request: &[u8], host: HostCall<'_>) -> Result<Vec<u8>, PluginError>;
+    fn run(
+        &self,
+        request: &[u8],
+        host: HostCall<'_>,
+        watch: Watch<'_>,
+    ) -> Result<Vec<u8>, PluginError>;
 }
 
 /// A WebAssembly engine.

@@ -272,16 +272,17 @@ static JSValue js_call(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     JS_FreeCString(ctx, params);
     for (uint32_t i = 0; i < nb; i++) {
         JSValue b = JS_GetPropertyUint32(ctx, argv[2], i);
-        size_t blen;
+        size_t blen = 0;
         uint8_t *bp = JS_GetArrayBuffer(ctx, &blen, b);
-        if (!bp && blen == 0 && !JS_IsException(b)) {
-            buf_part(&req, "", 0);
-        } else if (!bp) {
+        if (bp) {
+            buf_part(&req, bp, blen);
+        } else if (JS_HasException(ctx)) {
+            /* not an ArrayBuffer (or detached): the exception is pending */
             JS_FreeValue(ctx, b);
             free(req.d);
             return JS_EXCEPTION;
         } else {
-            buf_part(&req, bp, blen);
+            buf_part(&req, "", 0); /* an empty ArrayBuffer */
         }
         JS_FreeValue(ctx, b);
     }
@@ -326,10 +327,25 @@ static JSValue js_call(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
 
 #include "prelude.h" /* const char PRELUDE[]: the JavaScript of prelude.js */
 
+/* The answer when memory is gone: a frame in static memory (4 parts: "limit", the message, "0" and an
+   empty log), so it needs no allocation. */
+static const uint8_t OOM_FRAME[] = {
+    4, 0, 0, 0,
+    5, 0, 0, 0, 'l', 'i', 'm', 'i', 't',
+    14, 0, 0, 0, '{', '"', 'm', 'e', 's', 's', 'a', 'g', 'e', '"', ':', '"', '"', '}',
+    1, 0, 0, 0, '0',
+    0, 0, 0, 0,
+};
+
+static uint64_t oom_frame(void)
+{
+    return ((uint64_t)(uintptr_t)OOM_FRAME << 32) | (uint64_t)sizeof(OOM_FRAME);
+}
+
 static uint64_t pack_frame(Buf *b)
 {
     if (b->failed || !b->d)
-        return 0;
+        return oom_frame();
     return ((uint64_t)(uintptr_t)b->d << 32) | (uint64_t)b->len;
 }
 
@@ -364,10 +380,10 @@ EXPORT("run") uint64_t kad_run(const uint8_t *req, uint32_t req_len)
 
     JSRuntime *rt = JS_NewRuntime();
     if (!rt)
-        return error_frame("error", "{\"message\":\"out of memory\"}");
+        return oom_frame();
     JSContext *ctx = JS_NewContext(rt);
     if (!ctx)
-        return error_frame("error", "{\"message\":\"out of memory\"}");
+        return oom_frame();
 
     /* Options: {"memory": bytes, "stack": bytes, "seed": n, "max_calls": n} as JSON. */
     JSValue opts = JS_ParseJSON(ctx, (const char *)pp[2], pl[2], "<options>");
@@ -396,7 +412,14 @@ EXPORT("run") uint64_t kad_run(const uint8_t *req, uint32_t req_len)
     }
     JS_FreeValue(ctx, pre);
 
+    /* The entry point of the prelude is taken out of the global object before the script runs, so
+       the script cannot call it again with other options (a new seed, more calls). */
     JSValue run_fn = JS_GetPropertyStr(ctx, global, "__run");
+    {
+        JSAtom atom = JS_NewAtom(ctx, "__run");
+        JS_DeleteProperty(ctx, global, atom, 0);
+        JS_FreeAtom(ctx, atom);
+    }
     JSValue args[4];
     args[0] = JS_NewStringLen(ctx, (const char *)pp[0], pl[0]);
     args[1] = JS_NewStringLen(ctx, (const char *)pp[1], pl[1]);

@@ -9,12 +9,12 @@
 
 use std::sync::Arc;
 
-use wasmtime::{Caller, Engine, Extern, Linker, Module, Store, Trap};
+use wasmtime::{Caller, Engine, Extern, Linker, Module, Store, Trap, UpdateDeadline};
 
 use super::{TICK_MILLIS, Ticker, WasmtimeRuntime};
 use crate::runtime::{
     HOST_IMPORTS, HOST_MODULE, HOSTED_EXPORTS, HostCall, HostReply, HostedModule, Limits,
-    PluginError,
+    PluginError, Watch,
 };
 use kadakas_plugin_abi::guest::unpack;
 
@@ -27,6 +27,12 @@ struct HostPtr(*mut (dyn FnMut(&[u8]) -> HostReply + 'static));
 // that thread, while `run` is on the stack.
 unsafe impl Send for HostPtr {}
 
+/// The function that watches the run, with its lifetime erased (used while `run` is on the stack).
+struct WatchPtr(*const (dyn Fn() -> Option<PluginError> + 'static));
+
+// SAFETY: as for `HostPtr`: used on the thread of `run`, while `run` is on the stack.
+unsafe impl Send for WatchPtr {}
+
 /// The state of one run.
 struct HostState {
     max_memory: usize,
@@ -36,8 +42,11 @@ struct HostState {
     pending: Vec<u8>,
     /// Why the host stopped the run.
     aborted: Option<PluginError>,
-    /// Ticks of the deadline of one stretch of the module.
-    ticks: u64,
+    watch: WatchPtr,
+    /// Ticks of the clock since the module last came back from the host (or started).
+    segment_ticks: u64,
+    /// Ticks that one stretch of the module may take.
+    max_ticks: u64,
 }
 
 impl wasmtime::ResourceLimiter for HostState {
@@ -139,14 +148,18 @@ fn linker(engine: &Engine) -> Linker<HostState> {
                         .ok_or_else(|| wasmtime::Error::msg("the request is outside the memory"))?
                         .to_vec()
                 };
-                // SAFETY: the pointer was made from the `&mut` of `Hosted::run`, which is alive
-                // for as long as the store exists, and nothing else uses it meanwhile: the run
-                // is on this thread and the store is dropped before `run` returns.
+                // SAFETY: the pointers were made from the references of `Hosted::run`, which are
+                // alive for as long as the store exists, and nothing else uses them meanwhile: the
+                // run is on this thread and the store is dropped before `run` returns.
+                let watch = unsafe { &*caller.data().watch.0 };
+                if let Some(stop) = watch() {
+                    caller.data_mut().aborted = Some(stop);
+                    return Err(wasmtime::Error::msg("the run was stopped"));
+                }
                 let host = unsafe { &mut *caller.data().host.0 };
                 let reply = host(&request);
-                // The deadline of the stretch starts again.
-                let ticks = caller.data().ticks;
-                wasmtime::AsContextMut::as_context_mut(&mut caller).set_epoch_deadline(ticks);
+                // The clock of the stretch starts again.
+                caller.data_mut().segment_ticks = 0;
                 match reply {
                     HostReply::Reply(bytes) => {
                         let n = i32::try_from(bytes.len())
@@ -178,9 +191,14 @@ fn linker(engine: &Engine) -> Linker<HostState> {
 }
 
 impl HostedModule for Hosted {
-    fn run(&self, request: &[u8], host: HostCall<'_>) -> Result<Vec<u8>, PluginError> {
-        // SAFETY: only the lifetime changes. The pointer is used while this function runs: the
-        // store, the instance and every host function that could use it are dropped before it
+    fn run(
+        &self,
+        request: &[u8],
+        host: HostCall<'_>,
+        watch: Watch<'_>,
+    ) -> Result<Vec<u8>, PluginError> {
+        // SAFETY: only the lifetimes change. The pointers are used while this function runs: the
+        // store, the instance and every host function that could use them are dropped before it
         // returns.
         let host: *mut (dyn FnMut(&[u8]) -> HostReply + 'static) = unsafe {
             std::mem::transmute::<
@@ -188,7 +206,13 @@ impl HostedModule for Hosted {
                 *mut (dyn FnMut(&[u8]) -> HostReply + 'static),
             >(host as *mut _)
         };
-        let ticks = self.limits.max_millis.div_ceil(TICK_MILLIS) + 1;
+        let watch: *const (dyn Fn() -> Option<PluginError> + 'static) = unsafe {
+            std::mem::transmute::<
+                *const (dyn Fn() -> Option<PluginError> + '_),
+                *const (dyn Fn() -> Option<PluginError> + 'static),
+            >(watch as *const _)
+        };
+        let max_ticks = self.limits.max_millis.div_ceil(TICK_MILLIS) + 1;
         let mut store = Store::new(
             &self.engine,
             HostState {
@@ -197,11 +221,28 @@ impl HostedModule for Hosted {
                 host: HostPtr(host),
                 pending: Vec::new(),
                 aborted: None,
-                ticks,
+                watch: WatchPtr(watch),
+                segment_ticks: 0,
+                max_ticks,
             },
         );
         store.limiter(|s| s);
-        store.set_epoch_deadline(ticks);
+        // The clock of the engine calls this at every tick: it enforces the time of a stretch of
+        // the module and asks the watcher (a stop, the time of the whole run).
+        store.epoch_deadline_callback(|mut ctx| {
+            let st = ctx.data_mut();
+            st.segment_ticks += 1;
+            // SAFETY: see above.
+            if let Some(stop) = unsafe { &*st.watch.0 }() {
+                st.aborted = Some(stop);
+                return Err(wasmtime::Error::msg("the run was stopped"));
+            }
+            if st.segment_ticks > st.max_ticks {
+                return Err(Trap::Interrupt.into());
+            }
+            Ok(UpdateDeadline::Continue(1))
+        });
+        store.set_epoch_deadline(1);
         store
             .set_fuel(self.limits.fuel)
             .expect("fuel is switched on in the engine");
@@ -231,6 +272,12 @@ impl Hosted {
         let len = u32::try_from(request.len())
             .map_err(|_| wasmtime::Error::msg("the request is too large"))?;
         let ptr = alloc.call(&mut *store, len)?;
+        if ptr == 0 {
+            // The allocator of the module is out of memory.
+            return Ok(Err(PluginError::Limit(
+                "the module is out of memory (it has no room for the request)".into(),
+            )));
+        }
         memory.write(&mut *store, ptr as usize, request)?;
         let packed = run.call(&mut *store, (ptr, len))?;
         if packed == 0 {
