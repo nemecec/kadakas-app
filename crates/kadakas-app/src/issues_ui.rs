@@ -327,7 +327,15 @@ impl IssuesUi {
             self.pins = Some(PinsCache {
                 revision,
                 filters: self.filters.clone(),
-                pins: logic::pins(session.editor.doc(), &self.filters),
+                pins: {
+                    let doc = session.editor.doc();
+                    let ground = kadakas_site::SiteTerrain::new(
+                        session.site_cache(),
+                        session.editor.revision(),
+                        doc,
+                    );
+                    logic::pins_at(doc, &self.filters, &|o, p| ground.pin_height(o, p))
+                },
             });
         }
         &self.pins.as_ref().expect("made above").pins

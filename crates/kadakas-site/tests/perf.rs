@@ -71,3 +71,69 @@ fn tin_of_5k_points_builds_in_any_mode() {
     .unwrap();
     assert!(tin.triangles.len() > 5_000);
 }
+
+/// 20 000 plants over three site models on different layers: the lookup of the model must not
+/// grow with the number of models or objects. Run in release mode.
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn perf_ground_under_20000_objects_with_three_site_models() {
+    use glam::DVec2;
+    use kadakas_core::command::{Command, Editor};
+    use kadakas_core::ground::GroundSource;
+    use kadakas_core::model::{Attributes, LayerId, Object, ObjectId, Shape, SiteSettings};
+    let mut ed = Editor::default();
+    let mut layers = Vec::new();
+    for i in 0..3 {
+        let id = ed
+            .execute(&Command::AddLayer {
+                name: format!("Site {i}"),
+                elevation: i as f64 * 1000.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0];
+        layers.push(LayerId(id));
+        let mut points = Vec::new();
+        for x in 0..40 {
+            for y in 0..40 {
+                points.push(DVec3::new(
+                    i as f64 * 400_000.0 + x as f64 * 10_000.0,
+                    y as f64 * 10_000.0,
+                    (x + y) as f64 * 50.0,
+                ));
+            }
+        }
+        ed.execute(&Command::AddObject {
+            shape: Shape::SiteModel {
+                points,
+                lines: vec![],
+                settings: SiteSettings::default(),
+            },
+            layer: Some(LayerId(id)),
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+    }
+    let mut seed = 99;
+    let plants: Vec<DVec2> = (0..20_000)
+        .map(|_| DVec2::new(rng(&mut seed) * 1_200_000.0, rng(&mut seed) * 390_000.0))
+        .collect();
+    let cache = SiteCache::default();
+    let start = Instant::now();
+    let terrain = SiteTerrain::new(&cache, ed.revision(), ed.doc());
+    let o = Object::new(
+        ObjectId::from_num(0),
+        layers[1],
+        kadakas_core::model::NONE_CLASS,
+        Shape::Locus3d { p: DVec3::ZERO },
+    );
+    let found = plants
+        .iter()
+        .filter(|p| terrain.elevation(&o, **p).is_some())
+        .count();
+    let elapsed = start.elapsed();
+    println!("20 000 lookups over 3 site models: {elapsed:?} ({found} found)");
+    assert!(found > 0);
+}

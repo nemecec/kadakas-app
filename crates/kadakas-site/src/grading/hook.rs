@@ -8,7 +8,7 @@ use kadakas_core::mesh::SceneSink;
 use kadakas_core::model::{Document, Object, Shape};
 
 use super::draw::{Drawn, Label, Poly};
-use super::{SiteGround, analysis, grade, host, section, spot, wall};
+use super::{SiteGround, analysis, grade, host_near, section, spot, wall};
 use crate::model::{SiteCache, Surface};
 
 fn scale_of(doc: &Document, obj: &Object) -> f64 {
@@ -29,7 +29,7 @@ pub fn extras_at(
     scale: f64,
 ) -> Drawn {
     if let Some(d) = wall::data(obj) {
-        let site = host(doc, cache, revision, obj.layer, d.site);
+        let site = host_near(doc, cache, revision, obj.layer, d.site, anchor_of(obj));
         let ground = site.as_ref().map(|s| SiteGround::new(s));
         let dz = site_dz(doc, site.as_deref(), obj);
         if let Some(w) = wall::evaluate_at(
@@ -43,14 +43,14 @@ pub fn extras_at(
     } else if let Some(d) = grade::data(obj) {
         let site = d
             .snap
-            .and_then(|_| host(doc, cache, revision, obj.layer, d.site));
+            .and_then(|_| host_near(doc, cache, revision, obj.layer, d.site, anchor_of(obj)));
         let ground = site.as_ref().map(|s| SiteGround::new(s));
         if let Some((d, g)) = grade::evaluate(obj, ground.as_ref().map(|g| g as super::Ground<'_>))
         {
             return grade::draw(obj.id, &d, &g, scale);
         }
     } else if let (Some(d), Shape::Circle { center, radius }) = (spot::data(obj), &obj.shape) {
-        let text = match host(doc, cache, revision, obj.layer, d.site) {
+        let text = match host_near(doc, cache, revision, obj.layer, d.site, *center) {
             Some(site) => spot::label(
                 &d,
                 &spot::read_at(&site, *center),
@@ -79,6 +79,16 @@ pub fn extras_at(
         }
     }
     Drawn::default()
+}
+
+/// The place of an object for the choice of its site model: the middle of its box.
+fn anchor_of(obj: &Object) -> DVec2 {
+    let (lo, hi) = obj.shape.bounds();
+    if lo.is_finite() && hi.is_finite() {
+        (lo + hi) / 2.0
+    } else {
+        DVec2::ZERO
+    }
 }
 
 /// The height of the layer of `obj` above the layer of the site model.
@@ -176,7 +186,7 @@ pub fn wall_of(
     obj: &Object,
 ) -> Option<wall::Wall> {
     let d = wall::data(obj)?;
-    let site = host(doc, cache, revision, obj.layer, d.site);
+    let site = host_near(doc, cache, revision, obj.layer, d.site, anchor_of(obj));
     let ground = site.as_ref().map(|s| SiteGround::new(s));
     let dz = site_dz(doc, site.as_deref(), obj);
     wall::evaluate_at(

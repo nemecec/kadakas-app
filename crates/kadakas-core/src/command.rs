@@ -194,6 +194,13 @@ pub enum Command {
         #[serde(default)]
         source: Option<crate::provenance::LayerSource>,
     },
+    /// Name the site model that the objects of a layer stand on (`site::SITE_KEY` in the data of the
+    /// layer), or clear it. Without a name an object uses the site model that covers its place.
+    SetLayerSite {
+        id: LayerId,
+        #[serde(default)]
+        site: Option<ObjectId>,
+    },
     /// Delete an empty layer.
     DeleteLayer {
         id: LayerId,
@@ -1560,6 +1567,30 @@ impl<'a> Tx<'a> {
                         serde_json::to_value(s).expect("plain data"),
                     ),
                     None => l.extra.remove(crate::provenance::LAYER_KEY),
+                };
+            }
+            Command::SetLayerSite { id, site } => {
+                if let Some(s) = site
+                    && !matches!(
+                        self.doc.object(*s).map(|o| &o.shape),
+                        Some(Shape::SiteModel { .. })
+                    )
+                {
+                    return Err(CommandError::Invalid(format!(
+                        "object {s} is not a site model"
+                    )));
+                }
+                let l = self
+                    .doc
+                    .layers
+                    .iter_mut()
+                    .find(|l| l.id == *id)
+                    .ok_or(CommandError::NoLayer(*id))?;
+                match site {
+                    Some(s) => l
+                        .extra
+                        .insert(crate::site::SITE_KEY.into(), serde_json::json!(s)),
+                    None => l.extra.remove(crate::site::SITE_KEY),
                 };
             }
             Command::DeleteLayer { id } => {

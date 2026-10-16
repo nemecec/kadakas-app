@@ -23,7 +23,7 @@ pub const SURVEY_IMPORT_POINTS: (&str, &str) = (
 );
 pub const TREE_IMPORT_SURVEY: (&str, &str) = (
     "tree.import_survey",
-    "Import a tree survey from delimited text as existing trees. The first line is a header: ID, E (or X), N (or Y), Species, DBH, Height, Spread, Condition, Action, Notes. A unit in the header ((cm), [mm], _m) wins. params: {text | path, delimiter?, unit? (N and E, default m), dbh_unit? (default cm), size_unit? (height and spread, default m), crs?, shift?, layer?, class?}. Returns {imported, skipped, georeference?, ids_from, ids_to}. The report is report.existing_trees.",
+    "Import a tree survey from delimited text as existing trees. The first line is a header: ID, E (or X), N (or Y), Species, DBH, Height, Spread, Condition, Action, Notes. A unit in the header ((cm), [mm], _m) wins. params: {text | path, delimiter?, unit? (N and E, default m), dbh_unit? (default cm), size_unit? (height and spread, default m), crs?, shift?, on_terrain? (default true: each tree stands on the ground of the site model that covers it, on any design layer; the answer has warnings when a tree has no site model or lies outside every model), layer?, class?}. Returns {imported, skipped, georeference?, ids_from, ids_to}. The report is report.existing_trees.",
 );
 pub const SITE_CHECK: (&str, &str) = (
     "site.check",
@@ -325,6 +325,10 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
     let (mut first, mut last) = (None, None);
     let mut n = 0usize;
     let mut bad_rows: Vec<(usize, String)> = Vec::new();
+    // The trees stand on the ground of the site model that covers them, on any layer.
+    let on_terrain = m.get("on_terrain").and_then(Value::as_bool).unwrap_or(true);
+    let terrain = kadakas_site::SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);
+    let (mut outside, mut off_ground) = (0usize, 0usize);
     for (t, p) in parsed.rows.iter().zip(&positions) {
         let shape = Shape::ExistingTree {
             at: *p,
@@ -352,6 +356,35 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
         });
         let mut set = std::collections::BTreeMap::new();
         set.insert("tree_id".to_string(), json!(t.id));
+        if on_terrain {
+            use kadakas_core::ground::GroundSource;
+            let probe = kadakas_core::model::Object::new(
+                ObjectId::from_num(0),
+                layer.unwrap_or(doc.active_layer),
+                class.unwrap_or(doc.active_class),
+                Shape::ExistingTree {
+                    at: *p,
+                    species: String::new(),
+                    dbh: 100.0,
+                    spread: 1000.0,
+                    height: 1000.0,
+                    condition: t.condition,
+                    action: t.action,
+                    rpz_factor: None,
+                    rpz_cap: None,
+                },
+            );
+            match terrain.absolute(&probe, *p) {
+                Some(z) => {
+                    outside += usize::from(!terrain.covered(&probe, *p));
+                    set.insert(
+                        kadakas_core::plants::link::GROUND_Z_KEY.to_string(),
+                        json!(z),
+                    );
+                }
+                None => off_ground += 1,
+            }
+        }
         if !t.note.is_empty() {
             set.insert("note".to_string(), json!(t.note));
         }
@@ -365,6 +398,7 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
         });
         n += 1;
     }
+    drop(terrain);
     if n == 0 {
         return Err(RpcError::validation("all trees are out of range"));
     }
@@ -374,14 +408,19 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
     s.prune_selection();
     let mut skipped = parsed.skipped;
     skipped.extend(bad_rows);
-    Ok(json!({
+    let mut out = json!({
         "imported": n,
         "skipped": skipped_json(&skipped),
         "skipped_count": skipped.len(),
         "georeference": new_georef,
         "ids_from": first,
         "ids_to": last,
-    }))
+    });
+    let warnings = crate::plants_api::ground_warnings(false, n - off_ground, outside, off_ground);
+    if on_terrain && !warnings.is_empty() {
+        out["warnings"] = json!(warnings);
+    }
+    Ok(out)
 }
 
 fn site_sources(

@@ -105,12 +105,41 @@ pub fn host(
     if let Some(id) = named {
         return cache.get(revision, doc, id).ok();
     }
+    let visible = |o: &&Object| matches!(o.shape, Shape::SiteModel { .. }) && doc.is_visible(o);
+    // The layer of the object first, then any layer: the ground does not stop at a layer.
     doc.objects
         .values()
-        .filter(|o| {
-            o.layer == layer && matches!(o.shape, Shape::SiteModel { .. }) && doc.is_visible(o)
-        })
+        .filter(visible)
+        .filter(|o| o.layer == layer)
+        .chain(doc.objects.values().filter(visible))
         .find_map(|o| cache.get(revision, doc, o.id).ok())
+}
+
+/// Like [`host`], for an object at a place: the named site model, else the one that covers `at`
+/// (on the layer of the object first, then on any layer), else the one that [`host`] finds.
+pub fn host_near(
+    doc: &Document,
+    cache: &SiteCache,
+    revision: u64,
+    layer: kadakas_core::model::LayerId,
+    named: Option<ObjectId>,
+    at: DVec2,
+) -> Option<Arc<SiteResult>> {
+    if named.is_none() {
+        let terrain = crate::terrain::SiteTerrain::new(cache, revision, doc);
+        let probe = Object::new(
+            ObjectId::from_num(0),
+            layer,
+            kadakas_core::model::NONE_CLASS,
+            Shape::Locus3d {
+                p: glam::DVec3::ZERO,
+            },
+        );
+        if let Some((_, result)) = terrain.host_at(Some(&probe), at) {
+            return Some(result);
+        }
+    }
+    host(doc, cache, revision, layer, named)
 }
 
 /// Checks that a number is finite.

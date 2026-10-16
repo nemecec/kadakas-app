@@ -147,7 +147,7 @@ fn draped_landscape_area_follows_the_ground_in_3d_and_in_the_report() {
         "{:?}",
         r.rows[0].surface_area_m2
     );
-    // Hardscapes on another layer have no ground.
+    // Hardscapes on another layer stand on the same ground.
     let layer = ed
         .execute(&Command::AddLayer {
             name: "Other".into(),
@@ -182,7 +182,8 @@ fn draped_landscape_area_follows_the_ground_in_3d_and_in_the_report() {
     .unwrap();
     let terrain = SiteTerrain::new(&cache, ed.revision(), ed.doc());
     let report = hardscape::report::report(ed.doc(), &terrain);
-    assert!(!report.rows[0].quantities.draped);
+    // The ground does not stop at a layer: the site model under the slab serves it.
+    assert!(report.rows[0].quantities.draped);
 }
 
 #[test]

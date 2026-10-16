@@ -164,6 +164,9 @@ fn add(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         },
     };
     let out = s.editor.execute(&command).map_err(RpcError::from)?;
+    let id = ObjectId(out.created[0]);
+    let mut warnings = warnings;
+    warnings.extend(ground_warning(s, id));
     Ok(json!({"id": out.created[0], "quantities": quantities, "warnings": warnings}))
 }
 
@@ -205,7 +208,32 @@ fn set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     s.editor
         .execute(&Command::Batch { commands })
         .map_err(RpcError::from)?;
+    for id in &ids {
+        if let Some(w) = ground_warning(s, *id) {
+            warnings.push(json!({"id": id, "warning": w}));
+        }
+    }
     Ok(json!({"changed": ids, "warnings": warnings}))
+}
+
+/// The warning for a massing model that has no base of its own and that no site model covers: it
+/// stands at the elevation of its layer, not on the ground. `None` when it stands on the ground.
+fn ground_warning(s: &Session, id: ObjectId) -> Option<String> {
+    let doc = s.editor.doc();
+    let o = doc.object(id)?;
+    let Shape::Massing(m) = &o.shape else {
+        return None;
+    };
+    let terrain = SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);
+    if terrain.massing_on_ground(o, m) {
+        return None;
+    }
+    Some(if terrain.has_site_models() {
+        "no site model covers the footprint: the base stands at the elevation of the layer (0 above it). Move it onto a site model or give base".to_string()
+    } else {
+        "the document has no site model: the base stands at the elevation of the layer (0 above it)"
+            .to_string()
+    })
 }
 
 /// The height of the base above the origin of the model: the layer elevation plus the base of the
@@ -235,7 +263,9 @@ fn get(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     v["pitch"] = json!(mm.pitch_deg);
     v["base_elevation_mm"] = json!(base_elevation(s, id));
     v["quantities"] = quantities_json(mm);
-    v["warnings"] = json!(mm.roof_warning().into_iter().collect::<Vec<_>>());
+    let mut warnings: Vec<String> = mm.roof_warning().into_iter().collect();
+    warnings.extend(ground_warning(s, id));
+    v["warnings"] = json!(warnings);
     Ok(v)
 }
 

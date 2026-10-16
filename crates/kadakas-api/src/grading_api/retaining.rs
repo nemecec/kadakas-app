@@ -124,8 +124,15 @@ impl Session {
         use kadakas_site::grading::{self, Follow};
         let doc = self.editor.doc();
         let layer = layer.unwrap_or(doc.active_layer);
-        let Some(site) = grading::host(doc, &self.site_cache, self.editor.revision(), layer, None)
-        else {
+        let at = boundary.first().map_or(glam::DVec2::ZERO, |v| v.p);
+        let Some(site) = grading::host_near(
+            doc,
+            &self.site_cache,
+            self.editor.revision(),
+            layer,
+            None,
+            at,
+        ) else {
             return ("fill", 0.0);
         };
         let ground = grading::SiteGround::new(&site);

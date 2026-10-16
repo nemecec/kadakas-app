@@ -10,6 +10,27 @@ use crate::model::Color;
 use crate::present::{MappingKind, TextureMapping};
 use crate::resource::ResourceId;
 
+/// The key (in the data of an object, or in the extra fields of a layer) that names the site model
+/// the object stands on. An object that names none uses the site model that covers its place, on
+/// any design layer.
+pub const SITE_KEY: &str = "site_model";
+
+/// The site model that an object or its layer names. The object wins over its layer.
+pub fn named_site(
+    doc: &crate::model::Document,
+    obj: &crate::model::Object,
+) -> Option<crate::model::ObjectId> {
+    let read = |v: &serde_json::Value| {
+        v.as_str()
+            .and_then(crate::uid::Uid::parse)
+            .map(crate::model::ObjectId)
+    };
+    obj.data
+        .get(SITE_KEY)
+        .and_then(read)
+        .or_else(|| doc.layer(obj.layer)?.extra.get(SITE_KEY).and_then(read))
+}
+
 /// A 3D polygon or contour that is source data of a site model.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SiteLine {

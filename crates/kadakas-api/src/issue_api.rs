@@ -146,19 +146,24 @@ fn comment_count(doc: &Document, id: IssueId) -> usize {
     doc.issues.comment_count(id)
 }
 
-fn pin_of(doc: &Document, i: &Issue) -> Value {
+fn pin_of(doc: &Document, i: &Issue, ground: Option<&kadakas_site::SiteTerrain<'_>>) -> Value {
     let pos = |o: ObjectId| {
         doc.object(o).map(|ob| {
             let (lo, hi) = ob.shape.bounds();
             let c = (lo + hi) / 2.0;
-            [c.x, c.y, 0.0]
+            let z = match ground {
+                Some(g) => g.pin_height(ob, c),
+                None => doc.layer(ob.layer).map_or(0.0, |l| l.elevation),
+            };
+            [c.x, c.y, z]
         })
     };
     pin_position(i, &pos).map_or(Value::Null, |p| json!(p))
 }
 
-/// The short form of an issue, for lists and answers of changes.
-pub fn summary(doc: &Document, i: &Issue) -> Value {
+/// The short form of an issue, for lists and answers of changes. The pin stands on the ground
+/// where the site models say.
+fn summary_on(doc: &Document, i: &Issue, ground: Option<&kadakas_site::SiteTerrain<'_>>) -> Value {
     json!({
         "id": i.id,
         "title": i.title,
@@ -178,12 +183,17 @@ pub fn summary(doc: &Document, i: &Issue) -> Value {
         "viewpoints": i.viewpoints.len(),
         "comments": comment_count(doc, i.id),
         "point": i.point,
-        "pin": pin_of(doc, i),
+        "pin": pin_of(doc, i, ground),
     })
 }
 
 /// The whole issue with its comments.
-fn full(doc: &Document, i: &Issue, snapshots: bool) -> Value {
+fn full(
+    doc: &Document,
+    i: &Issue,
+    snapshots: bool,
+    ground: Option<&kadakas_site::SiteTerrain<'_>>,
+) -> Value {
     let mut v = serde_json::to_value(i).unwrap_or(Value::Null);
     let o = v.as_object_mut().expect("an issue is an object");
     o.insert("created_ms".into(), json!(i.created));
@@ -210,7 +220,7 @@ fn full(doc: &Document, i: &Issue, snapshots: bool) -> Value {
                 .collect::<Vec<_>>()
         ),
     );
-    o.insert("pin".into(), pin_of(doc, i));
+    o.insert("pin".into(), pin_of(doc, i, ground));
     let mut vps = Vec::new();
     for vp in &i.viewpoints {
         let mut x = serde_json::to_value(vp).unwrap_or(Value::Null);
@@ -407,11 +417,12 @@ impl Session {
             Some(_) => return Err(bad("sort is created, modified or status")),
         }
         let total = list.len();
+        let ground = self.ground();
         let shown: Vec<Value> = list
             .iter()
             .skip(offset)
             .take(limit)
-            .map(|i| summary(doc, i))
+            .map(|i| summary_on(doc, i, Some(&ground)))
             .collect();
         let next = offset.saturating_add(shown.len());
         let (assignees, labels) = facets(&doc.issues);
@@ -425,12 +436,17 @@ impl Session {
         }))
     }
 
+    /// The site models as ground, for the height of the pins.
+    fn ground(&self) -> kadakas_site::SiteTerrain<'_> {
+        kadakas_site::SiteTerrain::new(&self.site_cache, self.editor.revision(), self.editor.doc())
+    }
+
     fn issue_get(&mut self, p: &Value) -> Result<Value, RpcError> {
         let m = as_object(p)?;
         let id = issue_id(&m, "id")?;
         let snapshots = flag(&m, "snapshots")?;
         let doc = self.editor.doc();
-        Ok(full(doc, find(doc, id)?, snapshots))
+        Ok(full(doc, find(doc, id)?, snapshots, Some(&self.ground())))
     }
 
     /// Renders the model as a snapshot picture. `opts` are the params of `render.png`.
@@ -594,7 +610,7 @@ impl Session {
         Ok(json!({
             "id": id,
             "viewpoint": out.created[0],
-            "issue": summary(doc, find(doc, id)?),
+            "issue": summary_on(doc, find(doc, id)?, Some(&self.ground())),
         }))
     }
 
@@ -689,7 +705,7 @@ impl Session {
         let mut answer = json!({
             "id": id,
             "viewpoints": out.created[1..],
-            "issue": summary(doc, find(doc, id)?),
+            "issue": summary_on(doc, find(doc, id)?, Some(&self.ground())),
         });
         if let Some(note) = many_issues_note(doc) {
             answer["note"] = json!(note);
@@ -843,7 +859,9 @@ impl Session {
         self.editor.execute(&command).map_err(RpcError::from)?;
         let changed = self.editor.revision() != before;
         let doc = self.editor.doc();
-        Ok(json!({"id": id, "changed": changed, "issue": summary(doc, find(doc, id)?)}))
+        Ok(
+            json!({"id": id, "changed": changed, "issue": summary_on(doc, find(doc, id)?, Some(&self.ground()))}),
+        )
     }
 
     fn issue_comment(&mut self, p: &Value) -> Result<Value, RpcError> {
@@ -881,7 +899,9 @@ impl Session {
             })
             .map_err(RpcError::from)?;
         let doc = self.editor.doc();
-        Ok(json!({"comment": out.created[0], "issue": summary(doc, find(doc, id)?)}))
+        Ok(
+            json!({"comment": out.created[0], "issue": summary_on(doc, find(doc, id)?, Some(&self.ground()))}),
+        )
     }
 
     fn issue_resolve(&mut self, p: &Value) -> Result<Value, RpcError> {
@@ -928,7 +948,9 @@ impl Session {
             .map_err(RpcError::from)?;
         let changed = self.editor.revision() != before;
         let doc = self.editor.doc();
-        Ok(json!({"id": id, "changed": changed, "issue": summary(doc, find(doc, id)?)}))
+        Ok(
+            json!({"id": id, "changed": changed, "issue": summary_on(doc, find(doc, id)?, Some(&self.ground()))}),
+        )
     }
 
     /// The rule of consent: the work of somebody else is not removed unless `confirm` is true.
@@ -1295,7 +1317,7 @@ impl Session {
             let existing = doc.issues.get(t.issue.id).expect("a conflict has an issue");
             json!({
                 "id": t.issue.id,
-                "ours": summary(doc, existing),
+                "ours": summary_on(doc, existing, Some(&self.ground())),
                 "file": {
                     "title": t.issue.title, "status": t.issue.status.name(),
                     "modified": iso(t.issue.modified), "comments": t.comments.len(),
