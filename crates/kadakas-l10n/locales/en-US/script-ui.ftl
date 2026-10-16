@@ -44,3 +44,4 @@ script-ui-js-stopping = Stopping...
 script-ui-js-ran = Script finished: { $calls } calls, { $steps } undo step, { $ms } ms
 script-ui-js-failed = Script failed: { $message }
 script-ui-js-cannot-read = Cannot read { $path }: { $e }
+script-ui-js-blocked = A script is running. Wait until it ends.

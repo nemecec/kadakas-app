@@ -129,7 +129,7 @@ pub struct Pattern {
     pub module: Option<Module>,
     /// Generator: the script and its parameters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generator: Option<Box<generator::GeneratorSpec>>,
+    pub generator: Option<std::sync::Arc<generator::GeneratorSpec>>,
 }
 
 impl Pattern {
@@ -149,14 +149,17 @@ impl Pattern {
     }
 
     /// A pattern whose unit shapes a script makes (see [`generator`]).
-    pub fn of_generator(spec: generator::GeneratorSpec, gap: f64) -> Pattern {
+    pub fn of_generator(
+        spec: impl Into<std::sync::Arc<generator::GeneratorSpec>>,
+        gap: f64,
+    ) -> Pattern {
         Pattern {
             bond: Bond::Generator,
             unit_length: 0.0,
             unit_width: 0.0,
             gap,
             module: None,
-            generator: Some(Box::new(spec)),
+            generator: Some(spec.into()),
         }
     }
 
@@ -188,12 +191,7 @@ impl Pattern {
         if self.bond == Bond::Generator {
             // A generator pattern may have no result yet; a result must be sound.
             return match &self.generator {
-                Some(g) if g.units.is_empty() => Ok(()),
-                Some(g) => g
-                    .units
-                    .cells(MAX_UNITS)
-                    .map(|_| ())
-                    .map_err(|e| e.to_string()),
+                Some(g) => g.validate(),
                 None => Err("a generator pattern needs a generator (generator: {units})".into()),
             };
         }

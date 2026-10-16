@@ -15,8 +15,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
-use kadakas_core::change::Origin;
-use kadakas_core::command::RunMark;
 use kadakas_script_js::{HostError, Output, ScriptHost};
 use serde_json::{Map, Value};
 
@@ -37,8 +35,8 @@ pub struct ScriptRun {
     rx: Receiver<Msg>,
     stop: Arc<AtomicBool>,
     prepared: Prepared,
-    mark: RunMark,
-    origin: Origin,
+    id: u64,
+    abandoned: Arc<AtomicBool>,
     revision: u64,
     calls: u64,
 }
@@ -67,8 +65,10 @@ impl ScriptRun {
 
 impl Drop for ScriptRun {
     fn drop(&mut self) {
-        // A run that is dropped does not run on: its thread stops at the next call.
+        // A run that is dropped does not run on: its thread stops at the next call, and the
+        // session takes the run back (and gets its state back) at its next call.
         self.stop.store(true, Ordering::Relaxed);
+        self.abandoned.store(true, Ordering::Relaxed);
     }
 }
 
@@ -100,13 +100,14 @@ impl Session {
     /// Starts a program on a worker thread (see the module text). The parameters are those of
     /// `script.eval`. Call [`Session::script_pump`] in every frame until it gives the answer.
     pub fn script_start(&mut self, params: &Value) -> Result<ScriptRun, RpcError> {
-        if self.script_js.open {
+        self.recover_script_run();
+        if self.script_js.open() {
             return Err(RpcError::conflict("a script is running already"));
         }
         let empty = Map::new();
         let prepared = prepare(self, params.as_object().unwrap_or(&empty))?;
         let revision = self.editor.revision();
-        let (mark, origin) = open_run(self);
+        let (id, abandoned) = open_run(self);
         let (tx, rx) = channel();
         let stop = Arc::new(AtomicBool::new(false));
         let worker = {
@@ -123,7 +124,10 @@ impl Session {
                         p.expired()
                     }
                 };
-                let result = p.engine.run_watched(&p.request(), &mut host, &watch);
+                // The engine is made here, off the thread of the window.
+                let result = p
+                    .engine()
+                    .and_then(|engine| engine.run_watched(&p.request(), &mut host, &watch));
                 let _ = tx.send(Msg::Done(result));
             }
         };
@@ -131,17 +135,15 @@ impl Session {
             .name("kadakas-script".into())
             .spawn(worker)
         {
-            self.editor.rollback_run(mark);
-            self.editor.set_origin(origin);
-            self.script_js.open = false;
+            self.script_abort_run(id);
             return Err(RpcError::internal(format!("cannot start the thread: {e}")));
         }
         Ok(ScriptRun {
             rx,
             stop,
             prepared,
-            mark,
-            origin,
+            id,
+            abandoned,
             revision,
             calls: 0,
         })
@@ -155,6 +157,21 @@ impl Session {
         run: &mut ScriptRun,
         budget: Duration,
     ) -> Option<Result<Value, RpcError>> {
+        // The run belongs to this session only while it is the open run. If the document was
+        // replaced under it, the calls must not reach the new document.
+        if self.script_js.current.as_ref().map(|c| c.id) != Some(run.id) {
+            run.stop.store(true, Ordering::Relaxed);
+            run.abandoned.store(false, Ordering::Relaxed);
+            // Answer the calls that wait, so the thread ends.
+            while let Ok(m) = run.rx.try_recv() {
+                if let Msg::Call { reply, .. } = m {
+                    let _ = reply.send(Err(HostError::Stop("the run was dropped".into())));
+                }
+            }
+            return Some(Err(RpcError::conflict(
+                "the document was replaced while the script ran; the run was dropped",
+            )));
+        }
         let until = Instant::now() + budget;
         loop {
             match run.rx.try_recv() {
@@ -171,13 +188,11 @@ impl Session {
                     }
                 }
                 Ok(Msg::Done(result)) => {
-                    let (mark, origin, revision) = (run.mark, run.origin, run.revision);
                     return Some(close_run(
                         self,
                         &run.prepared,
-                        mark,
-                        origin,
-                        revision,
+                        run.id,
+                        run.revision,
                         result,
                         run.calls,
                     ));
@@ -189,13 +204,11 @@ impl Session {
                         kadakas_script_js::Failure::from(kadakas_script_js::ScriptError::Trap(
                             "the script thread ended without an answer".into(),
                         ));
-                    let (mark, origin, revision) = (run.mark, run.origin, run.revision);
                     return Some(close_run(
                         self,
                         &run.prepared,
-                        mark,
-                        origin,
-                        revision,
+                        run.id,
+                        run.revision,
                         Err(failure),
                         run.calls,
                     ));

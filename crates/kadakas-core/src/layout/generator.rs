@@ -14,6 +14,8 @@
 //! or a hardscape style. An installed package will do it later (PLAT-15); `label` and `params`
 //! record what made the result.
 
+use std::sync::{Arc, OnceLock};
+
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,6 +29,12 @@ pub const MAX_KINDS: usize = 64;
 pub const MAX_CELL_VERTICES: usize = 2000;
 /// Longest name of a unit type, in characters.
 pub const MAX_KIND_NAME: usize = 64;
+/// Most points in all polygons of a result together.
+pub const MAX_TOTAL_POINTS: usize = 2_000_000;
+/// Longest label, in characters.
+pub const MAX_LABEL: usize = 256;
+/// Most bytes of the parameters as JSON.
+pub const MAX_PARAMS_BYTES: usize = 64 * 1024;
 
 /// Rectangles, as numbers: `data` has cx, cy, length, width and the angle in degrees for each.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -59,16 +67,79 @@ pub struct StoredUnits {
     pub polygons: Option<Polygons>,
 }
 
+/// The parsed shapes of a spec, made once. A copy of the spec starts without it; a pattern that is
+/// copied often holds the spec in an `Arc`, so the copies share it.
+#[derive(Default)]
+struct Parsed(OnceLock<Result<Arc<Generated>, String>>);
+
+impl Clone for Parsed {
+    fn clone(&self) -> Self {
+        Parsed::default()
+    }
+}
+
+impl PartialEq for Parsed {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for Parsed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Parsed")
+    }
+}
+
 /// What made the shapes, and the shapes.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GeneratorSpec {
-    /// Who made the result, for the person who reads it: the name of a script or a package.
+    /// Who made the result, for the person who reads it: the name of a program or a package.
     pub label: String,
     /// The parameters the generator had, kept so that the result can be made again.
     pub params: Value,
     /// The last result.
     pub units: StoredUnits,
+    #[serde(skip)]
+    parsed: Parsed,
+}
+
+impl GeneratorSpec {
+    /// A spec with these fields.
+    pub fn new(label: impl Into<String>, params: Value, units: StoredUnits) -> Self {
+        GeneratorSpec {
+            label: label.into(),
+            params,
+            units,
+            parsed: Parsed::default(),
+        }
+    }
+
+    /// Checks the label, the parameters and the numbers of the result. It builds no rings, so it
+    /// is cheap: it reads each number once.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.label.chars().count() > MAX_LABEL || self.label.chars().any(char::is_control) {
+            return Err(format!(
+                "the label of a generator has at most {MAX_LABEL} characters and no control characters"
+            ));
+        }
+        if self.params.to_string().len() > MAX_PARAMS_BYTES {
+            return Err(format!(
+                "the parameters of a generator have at most {MAX_PARAMS_BYTES} bytes as JSON"
+            ));
+        }
+        self.units.validate().map_err(|e| e.to_string())
+    }
+
+    /// The shapes as rings, parsed once for this spec (and for every copy through its `Arc`).
+    /// The count against a limit of the session is the business of the caller.
+    pub fn generated(&self) -> Result<&Arc<Generated>, LayoutError> {
+        self.parsed
+            .0
+            .get_or_init(|| self.units.build().map(Arc::new).map_err(|e| e.to_string()))
+            .as_ref()
+            .map_err(|e| LayoutError::Invalid(e.clone()))
+    }
 }
 
 /// One cell: a unit type and a closed shape in drawing coordinates.
@@ -116,25 +187,28 @@ impl StoredUnits {
                 .is_none_or(|p| p.points.is_empty() && p.start.len() <= 1)
     }
 
-    /// The shapes as rings. Checks the numbers; more than `max_units` shapes is an error.
-    pub fn cells(&self, max_units: usize) -> Result<Generated, LayoutError> {
+    /// Checks the numbers of the result without building anything: the sizes first, then every
+    /// number once. Numbers must be finite and not larger than the limit of the drawing, a
+    /// rectangle needs a positive length and width, a polygon 3 or more points and an area.
+    pub fn validate(&self) -> Result<(), LayoutError> {
         let bad = |m: String| Err(LayoutError::Invalid(m));
-        let kinds: Vec<String> = if self.types.is_empty() {
-            vec!["unit".to_string()]
-        } else {
-            let k: Vec<String> = self.types.iter().map(|t| kind_name(t)).collect();
-            if k.iter().any(String::is_empty) {
-                return bad("every name in 'types' must be non-empty text".into());
-            }
-            k
-        };
-        if self.len() > max_units {
-            return Err(LayoutError::TooMany(TooMany {
-                estimated: self.len() as u64,
-                max: max_units,
-            }));
+        if self.types.len() > MAX_KINDS {
+            return bad(format!(
+                "the generator names {} unit types, at most {MAX_KINDS} are allowed",
+                self.types.len()
+            ));
         }
-        let mut cells: Vec<Cell> = Vec::with_capacity(self.len());
+        if self.types.iter().any(|t| kind_name(t).is_empty()) {
+            return bad("every name in 'types' must be non-empty text".into());
+        }
+        let kinds = self.types.len().max(1);
+        let coord = |v: f64| v.is_finite() && v.abs() <= crate::model::MAX_COORD;
+        let too_many = |n: usize| {
+            Err(LayoutError::TooMany(TooMany {
+                estimated: n as u64,
+                max: super::MAX_UNITS,
+            }))
+        };
         if let Some(r) = &self.rects {
             if r.data.len() % 5 != 0 {
                 return bad(format!(
@@ -143,6 +217,9 @@ impl StoredUnits {
                 ));
             }
             let n = r.data.len() / 5;
+            if n > super::MAX_UNITS {
+                return too_many(n);
+            }
             if !r.kind.is_empty() && r.kind.len() != n {
                 return bad(format!(
                     "rects.kind has {} entries for {n} rectangles",
@@ -150,18 +227,17 @@ impl StoredUnits {
                 ));
             }
             for (i, d) in r.data.as_chunks::<5>().0.iter().enumerate() {
-                let (c, l, w) = (DVec2::new(d[0], d[1]), d[2], d[3]);
-                if !d.iter().all(|v| v.is_finite()) || !(l > 0.0 && w > 0.0) {
+                if !d.iter().all(|v| coord(*v)) || !(d[2] > 0.0 && d[3] > 0.0) {
                     return bad(format!(
-                        "rectangle {i} needs finite numbers and a positive length and width"
+                        "rectangle {i} needs numbers up to 1e9 and a positive length and width"
                     ));
                 }
-                let u = DVec2::from_angle(d[4].to_radians()) * (l / 2.0);
-                let v = DVec2::from_angle(d[4].to_radians()).perp() * (w / 2.0);
-                cells.push(Cell {
-                    kind: r.kind.get(i).map_or(0, |k| *k as usize),
-                    ring: vec![c - u - v, c + u - v, c + u + v, c - u + v],
-                });
+                let k = r.kind.get(i).map_or(0, |k| *k as usize);
+                if k >= kinds {
+                    return bad(format!(
+                        "unit {i} has the type {k}, but the generator names {kinds} types"
+                    ));
+                }
             }
         }
         if let Some(p) = &self.polygons {
@@ -169,6 +245,11 @@ impl StoredUnits {
                 return bad("polygons.points holds x and y pairs".into());
             }
             let npts = p.points.len() / 2;
+            if npts > MAX_TOTAL_POINTS {
+                return bad(format!(
+                    "the polygons have {npts} points in all, at most {MAX_TOTAL_POINTS} are allowed"
+                ));
+            }
             if p.start.len() < 2
                 || p.start[0] != 0
                 || p.start.windows(2).any(|w| w[0] > w[1])
@@ -179,13 +260,83 @@ impl StoredUnits {
                 ));
             }
             let n = p.start.len() - 1;
+            if n > super::MAX_UNITS {
+                return too_many(n);
+            }
             if !p.kind.is_empty() && p.kind.len() != n {
                 return bad(format!(
                     "polygons.kind has {} entries for {n} polygons",
                     p.kind.len()
                 ));
             }
+            if !p.points.iter().all(|v| coord(*v)) {
+                return bad(
+                    "polygons.points has a number that is not finite or is over 1e9".into(),
+                );
+            }
             for i in 0..n {
+                let (a, b) = (p.start[i] as usize, p.start[i + 1] as usize);
+                if !(3..=MAX_CELL_VERTICES).contains(&(b - a)) {
+                    return bad(format!(
+                        "unit {i} has {} points. A unit needs 3 to {MAX_CELL_VERTICES}",
+                        b - a
+                    ));
+                }
+                let area: f64 = (a..b)
+                    .map(|k| {
+                        let next = if k + 1 == b { a } else { k + 1 };
+                        p.points[2 * k] * p.points[2 * next + 1]
+                            - p.points[2 * next] * p.points[2 * k + 1]
+                    })
+                    .sum::<f64>()
+                    / 2.0;
+                if area == 0.0 {
+                    return bad(format!("unit {i} has no area"));
+                }
+                let k = p.kind.get(i).map_or(0, |k| *k as usize);
+                if k >= kinds {
+                    return bad(format!(
+                        "unit {i} has the type {k}, but the generator names {kinds} types"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The shapes as rings. Checks the numbers first (see [`StoredUnits::validate`]), so nothing is
+    /// allocated for a result that is refused. More than `max_units` shapes is an error.
+    pub fn cells(&self, max_units: usize) -> Result<Generated, LayoutError> {
+        if self.len() > max_units {
+            return Err(LayoutError::TooMany(TooMany {
+                estimated: self.len() as u64,
+                max: max_units,
+            }));
+        }
+        self.build()
+    }
+
+    fn build(&self) -> Result<Generated, LayoutError> {
+        self.validate()?;
+        let kinds: Vec<String> = if self.types.is_empty() {
+            vec!["unit".to_string()]
+        } else {
+            self.types.iter().map(|t| kind_name(t)).collect()
+        };
+        let mut cells: Vec<Cell> = Vec::with_capacity(self.len());
+        if let Some(r) = &self.rects {
+            for (i, d) in r.data.as_chunks::<5>().0.iter().enumerate() {
+                let (c, l, w) = (DVec2::new(d[0], d[1]), d[2], d[3]);
+                let u = DVec2::from_angle(d[4].to_radians()) * (l / 2.0);
+                let v = DVec2::from_angle(d[4].to_radians()).perp() * (w / 2.0);
+                cells.push(Cell {
+                    kind: r.kind.get(i).map_or(0, |k| *k as usize),
+                    ring: vec![c - u - v, c + u - v, c + u + v, c - u + v],
+                });
+            }
+        }
+        if let Some(p) = &self.polygons {
+            for i in 0..p.start.len().saturating_sub(1) {
                 let ring: Vec<DVec2> = (p.start[i] as usize..p.start[i + 1] as usize)
                     .map(|k| DVec2::new(p.points[2 * k], p.points[2 * k + 1]))
                     .collect();
@@ -195,9 +346,7 @@ impl StoredUnits {
                 });
             }
         }
-        let g = Generated { kinds, cells };
-        check(&g, max_units)?;
-        Ok(g)
+        Ok(Generated { kinds, cells })
     }
 }
 
@@ -277,43 +426,7 @@ fn inset_rectangle(ring: &[DVec2], d: f64) -> Option<Option<Vec<DVec2>>> {
     Some(Some(r))
 }
 
-/// Checks what a generator returned.
-pub fn check(g: &Generated, max_units: usize) -> Result<(), LayoutError> {
-    let bad = |m: String| Err(LayoutError::Invalid(m));
-    if g.cells.len() > max_units {
-        return Err(LayoutError::TooMany(TooMany {
-            estimated: g.cells.len() as u64,
-            max: max_units,
-        }));
-    }
-    if g.kinds.len() > MAX_KINDS {
-        return bad(format!(
-            "the generator names {} unit types, at most {MAX_KINDS} are allowed",
-            g.kinds.len()
-        ));
-    }
-    for (i, c) in g.cells.iter().enumerate() {
-        if c.kind >= g.kinds.len() {
-            return bad(format!(
-                "unit {i} has the type {}, but the generator names {} types",
-                c.kind,
-                g.kinds.len()
-            ));
-        }
-        if c.ring.len() < 3 || c.ring.len() > MAX_CELL_VERTICES {
-            return bad(format!(
-                "unit {i} has {} points. A unit needs 3 to {MAX_CELL_VERTICES}",
-                c.ring.len()
-            ));
-        }
-        if c.ring.iter().any(|p| !p.is_finite()) {
-            return bad(format!("unit {i} has a number that is not finite"));
-        }
-    }
-    Ok(())
-}
-
-fn stored(pattern: &Pattern, max_units: usize) -> Result<Generated, LayoutError> {
+fn stored(pattern: &Pattern, max_units: usize) -> Result<Arc<Generated>, LayoutError> {
     let spec = pattern.generator.as_ref().ok_or_else(|| {
         LayoutError::Invalid("a generator pattern needs the shapes of a generator".into())
     })?;
@@ -322,13 +435,20 @@ fn stored(pattern: &Pattern, max_units: usize) -> Result<Generated, LayoutError>
             "this generator pattern has no stored result yet. A generator (an agent with script.eval, or a package) must make the unit shapes first".into(),
         ));
     }
-    spec.units.cells(max_units)
+    let g = spec.generated()?;
+    if g.cells.len() > max_units {
+        return Err(LayoutError::TooMany(TooMany {
+            estimated: g.cells.len() as u64,
+            max: max_units,
+        }));
+    }
+    Ok(g.clone())
 }
 
 /// The names of the unit types of a generator pattern (empty if it has no valid result).
 pub fn kind_names(pattern: &Pattern) -> Vec<String> {
     stored(pattern, super::MAX_UNITS)
-        .map(|g| g.kinds)
+        .map(|g| g.kinds.clone())
         .unwrap_or_default()
 }
 
@@ -347,7 +467,21 @@ pub(super) fn lay(
     let mut full = vec![0.0f64; g.kinds.len()];
     let mut vanished = 0usize;
     let mut extent: f64 = 0.0;
+    // Cells far from the region cannot matter: leave them out before any work on them.
+    let reach = pattern.gap.max(0.0);
+    let (lo, hi) = (
+        region.lo - DVec2::splat(reach),
+        region.hi + DVec2::splat(reach),
+    );
     for c in &g.cells {
+        let (mut clo, mut chi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+        for p in &c.ring {
+            clo = clo.min(*p);
+            chi = chi.max(*p);
+        }
+        if chi.x < lo.x || clo.x > hi.x || chi.y < lo.y || clo.y > hi.y {
+            continue;
+        }
         let mut ring = c.ring.clone();
         if ring_area(&ring) < 0.0 {
             ring.reverse();
@@ -452,15 +586,15 @@ mod tests {
             p.start.push((p.points.len() / 2) as u32);
         }
         Pattern::of_generator(
-            GeneratorSpec {
-                label: "test".into(),
-                params: Value::Null,
-                units: StoredUnits {
+            GeneratorSpec::new(
+                "test",
+                Value::Null,
+                StoredUnits {
                     types: kinds.iter().map(|k| k.to_string()).collect(),
                     rects: None,
                     polygons: Some(p),
                 },
-            },
+            ),
             gap,
         )
     }
@@ -647,5 +781,106 @@ mod tests {
         let t = inset(&tri, 5.0);
         assert_eq!(t.len(), 1);
         assert!(ring_area(&t[0]) < 5000.0 && ring_area(&t[0]) > 3000.0);
+    }
+
+    #[test]
+    fn hostile_results_are_refused_before_anything_is_built() {
+        let rect = |data: Vec<f64>| StoredUnits {
+            rects: Some(Rects { kind: vec![], data }),
+            ..Default::default()
+        };
+        assert!(rect(vec![0.0, 0.0, 10.0, 10.0, 0.0]).validate().is_ok());
+        for bad in [
+            vec![f64::NAN, 0.0, 10.0, 10.0, 0.0],
+            vec![f64::INFINITY, 0.0, 10.0, 10.0, 0.0],
+            vec![2e9, 0.0, 10.0, 10.0, 0.0],
+            vec![0.0, 0.0, 1e12, 10.0, 0.0],
+            vec![0.0, 0.0, 0.0, 10.0, 0.0],
+        ] {
+            assert!(rect(bad.clone()).validate().is_err(), "{bad:?}");
+        }
+        // A polygon with no area, with a coordinate over the limit, and with too few points.
+        let poly = |start: Vec<u32>, points: Vec<f64>| StoredUnits {
+            polygons: Some(Polygons {
+                kind: vec![],
+                start,
+                points,
+            }),
+            ..Default::default()
+        };
+        assert!(
+            poly(vec![0, 3], vec![0.0, 0.0, 1.0, 1.0, 2.0, 2.0])
+                .validate()
+                .is_err(),
+            "a line"
+        );
+        assert!(
+            poly(vec![0, 3], vec![0.0, 0.0, 5e9, 0.0, 0.0, 5e9])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            poly(vec![0, 2], vec![0.0, 0.0, 1.0, 0.0])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            poly(vec![0, 3], vec![0.0, 0.0, 4.0, 0.0, 0.0, 4.0])
+                .validate()
+                .is_ok()
+        );
+        // Sizes are checked before the numbers are read: this is refused by its count alone.
+        let many = StoredUnits {
+            rects: Some(Rects {
+                kind: vec![],
+                data: vec![1.0; 5 * (crate::layout::MAX_UNITS + 1)],
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(many.validate(), Err(LayoutError::TooMany(_))));
+        // The label and the parameters are bounded.
+        let mut spec = GeneratorSpec::default();
+        assert!(spec.validate().is_ok());
+        spec.label = "x".repeat(MAX_LABEL + 1);
+        assert!(spec.validate().is_err());
+        spec.label = "line\nbreak".into();
+        assert!(spec.validate().is_err());
+        spec.label = "ok".into();
+        spec.params = Value::String("p".repeat(MAX_PARAMS_BYTES));
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn the_parsed_shapes_are_made_once_and_shared_by_the_copies_of_a_pattern() {
+        let p = pattern(0.0, &[(0, rect(0.0, 0.0, 10.0, 10.0))], &["a"]);
+        let q = p.clone();
+        let (a, b) = (
+            p.generator.as_ref().unwrap().generated().unwrap(),
+            q.generator.as_ref().unwrap().generated().unwrap(),
+        );
+        assert!(
+            Arc::ptr_eq(a, b),
+            "the copy shares the spec and its parsed shapes"
+        );
+        // A spec that is copied by itself starts without the parsed shapes, and is equal.
+        let spec = (**p.generator.as_ref().unwrap()).clone();
+        assert_eq!(&spec, &**p.generator.as_ref().unwrap());
+    }
+
+    #[test]
+    fn cells_far_from_the_region_cost_nothing() {
+        // 10,000 cells far away and one inside: only the one inside is laid.
+        let mut cells: Vec<(u32, Vec<DVec2>)> = (0..10_000)
+            .map(|i| {
+                let x = 1.0e6 + f64::from(i) * 20.0;
+                (0, rect(x, 0.0, x + 10.0, 10.0))
+            })
+            .collect();
+        cells.push((0, rect(0.0, 0.0, 100.0, 100.0)));
+        let p = pattern(0.0, &cells, &["a"]);
+        let (units, stats) =
+            lay_units(&region(), &p, &Placement::default(), &Limits::default()).unwrap();
+        assert_eq!(units.len(), 1);
+        assert_eq!(stats.dust_pieces, 0);
     }
 }

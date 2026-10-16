@@ -338,6 +338,11 @@ impl CollabUi {
             self.tracker.reset();
             self.active = true;
         }
+        // A script run is open: its calls are the only calls the session serves. The sync waits;
+        // the heartbeat is a few seconds at most, and a run is bounded.
+        if session.script_running() {
+            return out;
+        }
         let revision = session.editor.revision();
         let sync = match session.handle("collab.sync", json!({"now_ms": now_ms})) {
             Ok(v) => v,

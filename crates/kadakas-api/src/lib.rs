@@ -1224,6 +1224,7 @@ impl Session {
     /// Runs one request. The limits of the session (`SessionLimits`) apply: a call that breaks one
     /// is undone and fails with a limit error.
     pub fn handle(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
+        self.recover_script_run();
         if self.script_js.busy() {
             return Err(RpcError::conflict(
                 "a script is running: its calls are the only calls served until it ends",

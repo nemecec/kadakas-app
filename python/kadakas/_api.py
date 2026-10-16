@@ -3990,7 +3990,7 @@ class Api:
         return self._call("hardscape_style.get", params or None)
 
     def hardscape_style_create(self, **params: "Unpack[HardscapeStyleCreateParams]") -> Any:
-        """Create a hardscape style. params: {name, material? (surface material), fill?, pen? ([r,g,b,a]), thickness? (surface layer, mm, default 60), components? ([{name, material, thickness, color?}], layers below the surface from top to bottom), border? ({width, material, color?, sides? (both|left|right; a path only)} or null), joints? ({kind (running_bond|stack|herringbone|basket_weave|module|generator; a generator takes generator: {script, params} instead of unit sizes, see describe unit_patterns), unit_length, unit_width, spacing (joint width), angle (degrees), color?} or null), custom? ({key: text})}. Returns {id}.
+        """Create a hardscape style. params: {name, material? (surface material), fill?, pen? ([r,g,b,a]), thickness? (surface layer, mm, default 60), components? ([{name, material, thickness, color?}], layers below the surface from top to bottom), border? ({width, material, color?, sides? (both|left|right; a path only)} or null), joints? ({kind (running_bond|stack|herringbone|basket_weave|module|generator; a generator takes generator: {label, params, units: {types, rects, polygons}}, the stored result of a program, instead of unit sizes, see describe unit_patterns), unit_length, unit_width, spacing (joint width), angle (degrees), color?} or null), custom? ({key: text})}. Returns {id}.
 
         JSON-RPC method ``hardscape_style.create``."""
         return self._call("hardscape_style.create", params or None)

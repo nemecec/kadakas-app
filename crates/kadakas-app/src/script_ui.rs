@@ -411,6 +411,11 @@ impl ScriptUi {
 
     /// Takes the result of the running reset and starts the next one.
     fn tick(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String) {
+        // The jobs of Python plug-in objects write to the document: they wait for a script run to
+        // end, so they do not become part of its undo step.
+        if self.js_run.is_some() {
+            return;
+        }
         if let Some(r) = &self.running {
             match r.rx.try_recv() {
                 Ok((job, result)) => {

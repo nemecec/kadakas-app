@@ -25,6 +25,7 @@
 //!   [`Session::script_pump`] (the worker asks for the calls, the thread of the session serves
 //!   them).
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use kadakas_core::change::Origin;
@@ -82,12 +83,23 @@ impl EngineSlot {
     }
 }
 
-/// The JavaScript engine of a session, and whether a run is open.
+/// The run that is open in a session.
+struct ActiveRun {
+    mark: RunMark,
+    origin: Origin,
+    /// Tells this run from every other (a document that was replaced has no such run).
+    id: u64,
+    /// Set when the handle of the run was dropped without an end: the session takes the run back
+    /// at its next call.
+    abandoned: Arc<AtomicBool>,
+}
+
+/// The JavaScript engine of a session, and the run that is open.
 #[derive(Default)]
 pub struct ScriptJsState {
     pub(crate) engine: Arc<EngineSlot>,
-    /// A run is open: the commands of the session belong to it.
-    open: bool,
+    /// The run that is open: the commands of the session belong to it.
+    current: Option<ActiveRun>,
     /// The session is serving a call of the run right now.
     serving: bool,
 }
@@ -95,7 +107,41 @@ pub struct ScriptJsState {
 impl ScriptJsState {
     /// True if a run is open and the call that comes now is not one of its own.
     pub(crate) fn busy(&self) -> bool {
-        self.open && !self.serving
+        self.current.is_some() && !self.serving
+    }
+
+    /// True if a run is open.
+    pub(crate) fn open(&self) -> bool {
+        self.current.is_some()
+    }
+}
+
+impl Session {
+    /// True while a JavaScript run is open. A host must not replace the document, open or save a
+    /// file, run a job that writes to the document, or take a copy for recovery meanwhile: the
+    /// session refuses its own calls, but these go around `handle`.
+    pub fn script_running(&self) -> bool {
+        self.script_js.open()
+    }
+
+    /// True if a call that comes now must wait for the run (see `Session::handle`).
+    pub(crate) fn script_js_busy(&mut self) -> bool {
+        self.recover_script_run();
+        self.script_js.busy()
+    }
+
+    /// Takes back a run whose handle was dropped without an end (see [`ScriptRun`]).
+    pub(crate) fn recover_script_run(&mut self) {
+        let abandoned = self
+            .script_js
+            .current
+            .as_ref()
+            .is_some_and(|c| c.abandoned.load(Ordering::Relaxed));
+        if abandoned && let Some(c) = self.script_js.current.take() {
+            self.script_js.serving = false;
+            self.editor.rollback_run(c.mark);
+            self.editor.set_origin(c.origin);
+        }
     }
 }
 
@@ -253,7 +299,10 @@ struct Prepared {
     read_only: bool,
     args: Value,
     seed: u32,
-    engine: Arc<ScriptEngine>,
+    /// The engine is made when the run starts, on the thread of the run (the first time takes
+    /// about a second).
+    engine: Arc<EngineSlot>,
+    limits: ScriptLimits,
     /// The time for the whole run, in milliseconds.
     total_ms: u64,
     clock: Clock,
@@ -268,6 +317,13 @@ impl Prepared {
                 self.total_ms
             )
         })
+    }
+
+    /// The engine, made now if it was not.
+    fn engine(&self) -> Result<Arc<ScriptEngine>, kadakas_script_js::Failure> {
+        self.engine
+            .get(self.limits)
+            .map_err(|e| kadakas_script_js::Failure::from(ScriptError::Unavailable(e)))
     }
 
     fn request(&self) -> Request<'_> {
@@ -305,17 +361,13 @@ fn prepare(s: &Session, m: &Map<String, Value>) -> Result<Prepared, RpcError> {
             "the code may have at most {MAX_CODE_BYTES} bytes"
         )));
     }
-    let engine = s
-        .script_js
-        .engine
-        .get(limits_of(s))
-        .map_err(|e| RpcError::new(crate::errors::CODE_GENERIC, "unavailable", e))?;
     Ok(Prepared {
         code,
         read_only,
         args: m.get("args").cloned().unwrap_or(Value::Null),
         seed,
-        engine,
+        engine: s.script_js.engine.clone(),
+        limits: limits_of(s),
         total_ms: u64::try_from(s.limits.script_js_time.as_millis()).unwrap_or(u64::MAX),
         clock: Clock::start(),
     })
@@ -335,29 +387,52 @@ fn serve(s: &mut Session, p: &Prepared, method: &str, params: Value) -> Result<V
     s.script_js.serving = true;
     let result = s.handle(method, params);
     s.script_js.serving = false;
+    // The history limit drops no step while a run is open. A run that keeps more than the limit
+    // allows ends instead.
+    if s.editor.undo_bytes() > s.limits.max_history_bytes {
+        return Err(HostError::Stop(format!(
+            "the run holds more undo data than the session allows ({} bytes, max_history_bytes)",
+            s.limits.max_history_bytes
+        )));
+    }
     result.map_err(|e| HostError::Failure(failure_of(e)))
 }
 
+static RUN_IDS: AtomicU64 = AtomicU64::new(1);
+
 /// Opens a run: the commands that follow are one undo step, with the origin `script`.
-fn open_run(s: &mut Session) -> (RunMark, Origin) {
+fn open_run(s: &mut Session) -> (u64, Arc<AtomicBool>) {
     let origin = s.editor.origin();
     s.editor.set_origin(Origin::Script);
-    s.script_js.open = true;
-    (s.editor.begin_run(), origin)
+    let mark = s.editor.begin_run();
+    let id = RUN_IDS.fetch_add(1, Ordering::Relaxed);
+    let abandoned = Arc::new(AtomicBool::new(false));
+    s.script_js.current = Some(ActiveRun {
+        mark,
+        origin,
+        id,
+        abandoned: abandoned.clone(),
+    });
+    (id, abandoned)
 }
 
-/// Ends a run: one undo step if it worked, nothing if it did not.
+/// Ends a run: one undo step if it worked, nothing if it did not. A run that is not the open one
+/// (the document was replaced under it) is only reported.
 fn close_run(
     s: &mut Session,
     p: &Prepared,
-    mark: RunMark,
-    origin: Origin,
+    id: u64,
     revision: u64,
     result: Result<Output, kadakas_script_js::Failure>,
     host_calls: u64,
 ) -> Result<Value, RpcError> {
-    s.script_js.open = false;
-    let depth0 = s.editor.undo_depth();
+    let Some(run) = s.script_js.current.take_if(|c| c.id == id) else {
+        return Err(RpcError::conflict(
+            "the document was replaced while the script ran; the run was dropped",
+        ));
+    };
+    s.script_js.serving = false;
+    let (mark, origin) = (run.mark, run.origin);
     let outcome = match result {
         Ok(out) => {
             if p.read_only && s.editor.run_steps(&mark) > 0 {
@@ -369,8 +444,7 @@ fn close_run(
                     "a program in mode read changed the document; the change was taken back",
                 ));
             }
-            let steps = s.editor.squash_run(mark, "script.eval");
-            let _ = steps;
+            s.editor.squash_run(mark, "script.eval");
             out.json()
                 .map(|value| (value, out.log, out.calls))
                 .map_err(|e| RpcError::validation(format!("the result cannot be written out: {e}")))
@@ -381,7 +455,6 @@ fn close_run(
         }
     };
     s.editor.set_origin(origin);
-    let _ = depth0;
     let (value, log, calls) = outcome?;
     Ok(json!({
         "result": value,
@@ -437,17 +510,39 @@ impl kadakas_script_js::ScriptHost for SyncHost<'_> {
 fn eval(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let prepared = prepare(s, m)?;
     let revision = s.editor.revision();
-    let (mark, origin) = open_run(s);
-    let mut host = SyncHost {
-        s,
-        p: &prepared,
-        calls: 0,
-    };
-    let result = prepared
-        .engine
-        .run_watched(&prepared.request(), &mut host, &|| prepared.expired());
-    let calls = host.calls;
-    close_run(s, &prepared, mark, origin, revision, result, calls)
+    let (id, _abandoned) = open_run(s);
+    let mut calls = 0;
+    // A panic in a method or in the engine must not leave the run open: the session would refuse
+    // every call from then on.
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let engine = prepared.engine()?;
+        let mut host = SyncHost {
+            s: &mut *s,
+            p: &prepared,
+            calls: 0,
+        };
+        let r = engine.run_watched(&prepared.request(), &mut host, &|| prepared.expired());
+        calls = host.calls;
+        r
+    }));
+    match ran {
+        Ok(result) => close_run(s, &prepared, id, revision, result, calls),
+        Err(panic) => {
+            s.script_abort_run(id);
+            std::panic::resume_unwind(panic)
+        }
+    }
+}
+
+impl Session {
+    /// Takes back the run with this id, whatever state it is in.
+    pub(crate) fn script_abort_run(&mut self, id: u64) {
+        if let Some(c) = self.script_js.current.take_if(|c| c.id == id) {
+            self.script_js.serving = false;
+            self.editor.rollback_run(c.mark);
+            self.editor.set_origin(c.origin);
+        }
+    }
 }
 
 #[cfg(all(test, feature = "script-js", not(target_arch = "wasm32")))]

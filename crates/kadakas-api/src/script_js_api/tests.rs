@@ -1,5 +1,7 @@
 use serde_json::{Value, json};
 
+use kadakas_core::model::Document;
+
 use crate::{RpcError, Session, SessionLimits};
 
 fn eval(s: &mut Session, params: Value) -> Result<Value, RpcError> {
@@ -733,4 +735,210 @@ fn measure_call_overhead() {
         ),
         Ok(r) => println!("{r}"),
     }
+}
+
+fn pump_to_end(s: &mut Session, run: &mut crate::ScriptRun) -> Result<Value, RpcError> {
+    let started = std::time::Instant::now();
+    loop {
+        if let Some(a) = s.script_pump(run, std::time::Duration::from_millis(8)) {
+            return a;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "the run did not end"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+const ADD_FOUR_IN_ONE: &str = r#"
+    const add = {op: "add_object", shape: {kind: "circle", center: [0, 0], radius: 5}};
+    let code = null;
+    try { kadakas.call("execute", {command: {op: "batch", commands: [add, add, add, add]}}); }
+    catch (e) { code = e.code; }
+"#;
+
+#[test]
+fn an_edit_before_the_run_survives_a_limit_inside_the_run_and_a_later_error() {
+    let strict = || SessionLimits {
+        max_objects: 3,
+        ..SessionLimits::default()
+    };
+    // The person's edit: one circle.
+    let person = |s: &mut Session| {
+        s.handle(
+            "execute",
+            json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [9, 9], "radius": 1}}}),
+        )
+        .unwrap();
+    };
+    // The run: a call that goes over the limit and is taken back by the session (inside the
+    // run), then an error. The edit before the run must stay.
+    let mut s = Session::default();
+    s.set_limits(strict());
+    person(&mut s);
+    let e = eval(
+        &mut s,
+        json!({"code": format!("{ADD_FOUR_IN_ONE} throw new Error('later');")}),
+    )
+    .unwrap_err();
+    assert!(e.message.contains("later"), "{}", e.message);
+    assert_eq!(objects(&mut s), 1, "the edit of the person stays");
+    s.handle("undo", json!({})).unwrap();
+    assert_eq!(objects(&mut s), 0, "and is still an undo step of its own");
+    // The same run with no error: the run is one step, and the person's edit is another.
+    let mut s = Session::default();
+    s.set_limits(strict());
+    person(&mut s);
+    let r = ok(
+        &mut s,
+        json!({"code": format!("{ADD_FOUR_IN_ONE} kadakas.call('execute', {{command: {{op: 'add_object', shape: {{kind: 'circle', center: [1, 1], radius: 1}}}}}}); return code;")}),
+    );
+    assert_eq!(
+        r["result"],
+        json!(6),
+        "the limit error reached the program (code 6)"
+    );
+    assert_eq!(r["undo_steps"], json!(1));
+    assert_eq!(objects(&mut s), 2);
+    s.handle("undo", json!({})).unwrap();
+    assert_eq!(objects(&mut s), 1, "one undo takes back the run only");
+    s.handle("undo", json!({})).unwrap();
+    assert_eq!(objects(&mut s), 0);
+}
+
+#[test]
+fn subscribers_hear_of_a_run_once_and_not_of_its_steps() {
+    let mut s = Session::default();
+    s.handle_as(
+        7,
+        kadakas_core::change::Origin::Agent,
+        "events.subscribe",
+        json!({}),
+    )
+    .unwrap();
+    let mut run = s
+        .script_start(&json!({"code": "for (let i = 0; i < 3; i++) kadakas.call('execute', {command: {op: 'add_object', shape: {kind: 'circle', center: [i, 0], radius: 1}}}); return 1;"}))
+        .unwrap();
+    // While the run is open nothing is announced, also after steps were made.
+    let started = std::time::Instant::now();
+    loop {
+        assert!(s.take_notifications(7).is_empty());
+        if let Some(a) = s.script_pump(&mut run, std::time::Duration::from_millis(2)) {
+            a.unwrap();
+            break;
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(60));
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let notes = s.take_notifications(7);
+    assert_eq!(notes.len(), 1, "one change for the run: {notes:?}");
+    assert_eq!(
+        notes[0]["params"]["added"]["objects"]
+            .as_array()
+            .map_or(0, Vec::len),
+        3,
+        "{notes:?}"
+    );
+    // A run that is taken back is not announced at all.
+    let mut run = s
+        .script_start(&json!({"code": "kadakas.call('execute', {command: {op: 'add_layer', name: 'L'}}); throw new Error('no');"}))
+        .unwrap();
+    assert!(pump_to_end(&mut s, &mut run).is_err());
+    assert!(s.take_notifications(7).is_empty());
+}
+
+#[test]
+fn a_dropped_run_is_taken_back_and_the_session_is_whole_again() {
+    let mut s = Session::default();
+    let origin = s.editor.origin();
+    let mut run = s
+        .script_start(&json!({"code": "kadakas.call('execute', {command: {op: 'add_layer', name: 'Half'}}); for (;;) {}"}))
+        .unwrap();
+    // Let it make its change.
+    let started = std::time::Instant::now();
+    while run.calls() == 0 {
+        s.script_pump(&mut run, std::time::Duration::from_millis(8));
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(s.script_running());
+    drop(run);
+    // The next call of the session takes the run back first.
+    let summary = s.handle("document.summary", json!({})).unwrap();
+    assert_eq!(
+        summary["layers"].as_array().unwrap().len(),
+        1,
+        "the layer of the run is gone"
+    );
+    assert!(!s.script_running());
+    assert_eq!(s.editor.origin(), origin);
+    // And a new run can start.
+    ok(&mut s, json!({"code": "return 1;"}));
+}
+
+#[test]
+fn a_run_cannot_reach_a_document_that_replaced_its_own() {
+    let mut s = Session::default();
+    let mut run = s
+        .script_start(&json!({"code": "let n = 0; for (let i = 0; i < 100000; i++) { kadakas.call('document.summary', {}); n++; } return n;"}))
+        .unwrap();
+    s.script_pump(&mut run, std::time::Duration::from_millis(2));
+    // The document is replaced under the run (a path that goes around `handle`).
+    s.replace_document(Document::default());
+    assert!(!s.script_running(), "the new session state has no run");
+    let answer = pump_to_end(&mut s, &mut run);
+    let e = answer.unwrap_err();
+    assert_eq!(e.kind, "conflict", "{e:?}");
+    assert!(e.message.contains("replaced"), "{}", e.message);
+    // The new document is whole and usable.
+    s.handle("document.summary", json!({})).unwrap();
+    ok(&mut s, json!({"code": "return 2;"}));
+}
+
+#[test]
+fn a_run_that_holds_more_undo_data_than_the_session_allows_ends() {
+    let mut s = Session::default();
+    s.set_limits(SessionLimits {
+        max_history_bytes: 3_000,
+        ..SessionLimits::default()
+    });
+    let e = eval(
+        &mut s,
+        json!({"code": "for (let i = 0; i < 200; i++) kadakas.call('execute', {command: {op: 'add_object', shape: {kind: 'circle', center: [i, 0], radius: 1}}});"}),
+    )
+    .unwrap_err();
+    assert_eq!(e.kind, "limit", "{e:?}");
+    assert!(e.message.contains("max_history_bytes"), "{}", e.message);
+    assert_eq!(objects(&mut s), 0, "and the run is taken back");
+}
+
+#[test]
+fn a_hostile_stored_result_is_refused_with_a_reason() {
+    let mut s = Session::default();
+    let layout = |s: &mut Session, pattern: Value| {
+        s.handle(
+            "unit_pattern.layout",
+            json!({"region": {"outline": [[0, 0], [10, 0], [10, 10], [0, 10]]}, "pattern": pattern, "origin": [0, 0]}),
+        )
+    };
+    let e = layout(
+        &mut s,
+        json!({"kind": "generator", "gap": 0, "rects": {"data": [1e12, 0, 5, 5, 0]}}),
+    )
+    .unwrap_err();
+    assert!(e.message.contains("up to 1e9"), "{}", e.message);
+    let e = layout(&mut s, json!({"kind": "generator", "gap": 0, "polygons": {"start": [0, 3], "points": [0, 0, 1, 1, 2, 2]}})).unwrap_err();
+    assert!(e.message.contains("no area"), "{}", e.message);
+    let e = layout(
+        &mut s,
+        json!({"kind": "generator", "gap": 0, "label": "a\nb", "rects": {"data": [5, 5, 5, 5, 0]}}),
+    )
+    .unwrap_err();
+    assert!(e.message.contains("label"), "{}", e.message);
+    let ok_one = layout(
+        &mut s,
+        json!({"kind": "generator", "gap": 0, "label": "fine", "rects": {"data": [5, 5, 5, 5, 0]}}),
+    );
+    assert!(ok_one.is_ok(), "{ok_one:?}");
 }

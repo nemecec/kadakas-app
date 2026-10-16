@@ -726,6 +726,10 @@ impl KadakasApp {
             self.status = tr!("collab-ui-blocked-replace");
             return false;
         }
+        if self.session.script_running() {
+            self.status = tr!("script-ui-js-blocked");
+            return false;
+        }
         let kadakas_file::Opened {
             mut doc, source, ..
         } = opened;
@@ -1232,6 +1236,10 @@ impl KadakasApp {
         // Check before the file picker: a person should not pick a file and then be refused.
         if self.collab.is_active() {
             self.status = tr!("collab-ui-blocked-replace");
+            return;
+        }
+        if self.session.script_running() {
+            self.status = tr!("script-ui-js-blocked");
             return;
         }
         let Some(path) = rfd::FileDialog::new()
@@ -2898,48 +2906,53 @@ impl eframe::App for KadakasApp {
         }
         #[cfg(target_arch = "wasm32")]
         self.take_web_files();
-        self.autosave.tick(
-            &ctx,
-            self.session.editor.revision(),
-            self.path.as_deref(),
-            || {
-                let sources: Vec<_> = self.session.file_source.iter().cloned().collect();
-                let anchor = self.session.needs_anchor();
-                #[cfg(not(target_arch = "wasm32"))]
-                let seen = Some(self.session.seen.clone());
-                #[cfg(target_arch = "wasm32")]
-                let seen = None;
-                match self.session.document_for_save_in(true) {
-                    Ok(doc) => crate::autosave_ui::SaveCopy {
-                        doc: doc.into_owned(),
-                        note: None,
-                        sources,
-                        anchor,
-                        seen,
-                    },
-                    // The drawing is worth more than a copy that has nothing: write it, and say
-                    // what is not in it. The versions that were read are in the memory form,
-                    // which a file does not hold, so they are left out; the versions that still
-                    // wait in the file are kept as they are (the writer copies their entries
-                    // and the drawing they belong to).
-                    Err(e) => {
-                        let mut doc = self.session.editor.doc().clone();
-                        let note = if doc.history.take().is_some() {
-                            Some(e.message)
-                        } else {
-                            None
-                        };
-                        crate::autosave_ui::SaveCopy {
-                            doc,
-                            note,
+        // No recovery copy of a half-done script run: the copy waits for the run to end.
+        if self.session.script_running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        } else {
+            self.autosave.tick(
+                &ctx,
+                self.session.editor.revision(),
+                self.path.as_deref(),
+                || {
+                    let sources: Vec<_> = self.session.file_source.iter().cloned().collect();
+                    let anchor = self.session.needs_anchor();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let seen = Some(self.session.seen.clone());
+                    #[cfg(target_arch = "wasm32")]
+                    let seen = None;
+                    match self.session.document_for_save_in(true) {
+                        Ok(doc) => crate::autosave_ui::SaveCopy {
+                            doc: doc.into_owned(),
+                            note: None,
                             sources,
                             anchor,
                             seen,
+                        },
+                        // The drawing is worth more than a copy that has nothing: write it, and say
+                        // what is not in it. The versions that were read are in the memory form,
+                        // which a file does not hold, so they are left out; the versions that still
+                        // wait in the file are kept as they are (the writer copies their entries
+                        // and the drawing they belong to).
+                        Err(e) => {
+                            let mut doc = self.session.editor.doc().clone();
+                            let note = if doc.history.take().is_some() {
+                                Some(e.message)
+                            } else {
+                                None
+                            };
+                            crate::autosave_ui::SaveCopy {
+                                doc,
+                                note,
+                                sources,
+                                anchor,
+                                seen,
+                            }
                         }
                     }
-                }
-            },
-        );
+                },
+            );
+        }
         self.about.show(&ctx);
         self.collab_frame(&ctx);
         #[cfg(target_arch = "wasm32")]

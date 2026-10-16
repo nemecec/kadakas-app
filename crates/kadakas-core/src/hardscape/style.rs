@@ -118,7 +118,7 @@ pub struct JointPattern {
     pub b: Option<[f64; 2]>,
     /// Generator: the script that makes the unit shapes, and its parameters (PAT-09).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub generator: Option<crate::layout::generator::GeneratorSpec>,
+    pub generator: Option<std::sync::Arc<crate::layout::generator::GeneratorSpec>>,
 }
 
 impl JointPattern {

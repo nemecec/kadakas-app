@@ -2161,12 +2161,10 @@ pub struct Editor {
     /// The largest picture file and the most pixels that a command may bring (see
     /// [`Editor::set_picture_limits`]).
     picture_limits: (usize, u64),
-    /// How many steps were pushed on the undo list in all (a count that the history limit cannot
-    /// change), for [`RunMark`].
-    pushes: u64,
-    /// While a run is open, the history limit does not drop old steps, so the steps of the run
-    /// can be merged or taken back by their number.
-    hold_trim: bool,
+    /// The run that is open now (see [`Editor::begin_run`]). While it is open, the history limit
+    /// does not drop old steps, so the steps of the run can be merged or taken back by their
+    /// number.
+    open_run: Option<u64>,
 }
 
 /// The start of a run of many commands that become one undo step (a script). See
@@ -2174,8 +2172,14 @@ pub struct Editor {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RunMark {
     revision: u64,
-    pushes: u64,
+    /// How many undo steps there were when the run began. While a run is open the history limit
+    /// drops none, so the steps of the run are the ones above this length.
+    undo_len: usize,
+    /// Tells this run from every other (a document that was replaced has no such run).
+    id: u64,
 }
+
+static RUN_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Default for Editor {
     fn default() -> Self {
@@ -2219,8 +2223,7 @@ impl Editor {
                 crate::picture::MAX_PICTURE_BYTES,
                 crate::picture::MAX_PICTURE_PIXELS,
             ),
-            pushes: 0,
-            hold_trim: false,
+            open_run: None,
         }
     }
 
@@ -2312,9 +2315,8 @@ impl Editor {
                     cs.detail = detail;
                     self.log.push(cs);
                     self.undo.push(patch);
-                    self.pushes += 1;
                     self.redo.clear();
-                    if !self.hold_trim {
+                    if self.open_run.is_none() {
                         self.trim_history();
                     }
                 }
@@ -2698,25 +2700,43 @@ impl Editor {
     /// back). The history limit does not drop steps until [`Editor::squash_run`] or
     /// [`Editor::rollback_run`], so the steps of the run are counted exactly.
     pub fn begin_run(&mut self) -> RunMark {
-        self.hold_trim = true;
+        let id = RUN_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.open_run = Some(id);
         RunMark {
             revision: self.revision,
-            pushes: self.pushes,
+            undo_len: self.undo.len(),
+            id,
         }
     }
 
-    /// How many undo steps the run has made so far.
+    /// True if this run is the one that is open in this editor.
+    pub fn run_is_open(&self, mark: &RunMark) -> bool {
+        self.open_run == Some(mark.id)
+    }
+
+    /// How many undo steps the run has made so far. Exact: it is the number of steps above the
+    /// length at the start, so a step that a command in the run took back again (a call that
+    /// failed and undid its own steps) is not counted, and no step from before the run is.
     pub fn run_steps(&self, mark: &RunMark) -> usize {
-        usize::try_from(self.pushes - mark.pushes).unwrap_or(usize::MAX)
+        self.undo.len().saturating_sub(mark.undo_len)
+    }
+
+    /// The bytes of the undo steps (an estimate), for a limit.
+    pub fn undo_bytes(&self) -> u64 {
+        self.history_bytes()
     }
 
     /// Ends a run and merges its steps into one. The change sets of the single steps leave the
     /// log (nobody read them) and the sum takes their place, so a follower of the log, such as
     /// the collaboration client or `events.poll`, sees the run once. Returns the number of steps
-    /// that the run had.
+    /// that the run had. A run that is not the open one of this editor (the document was
+    /// replaced) is left alone and gives 0.
     pub fn squash_run(&mut self, mark: RunMark, op: &str) -> usize {
+        if !self.run_is_open(&mark) {
+            return 0;
+        }
         let steps = self.run_steps(&mark);
-        self.hold_trim = false;
+        self.open_run = None;
         if steps >= 2 {
             self.log.remove_after(mark.revision);
             self.squash_last(steps, op);
@@ -2726,10 +2746,13 @@ impl Editor {
     }
 
     /// Ends a run and takes all of it back. The steps are forgotten (they cannot be redone) and
-    /// leave no trace in the log.
+    /// leave no trace in the log. A run that is not the open one of this editor is left alone.
     pub fn rollback_run(&mut self, mark: RunMark) {
+        if !self.run_is_open(&mark) {
+            return;
+        }
         let steps = self.run_steps(&mark);
-        self.hold_trim = false;
+        self.open_run = None;
         for _ in 0..steps {
             let Some(p) = self.undo.pop() else { break };
             p.apply(&mut self.doc, false);
@@ -2914,6 +2937,60 @@ mod tests {
         assert_eq!(ed.doc(), &before);
         assert!(ed.redo());
         assert_eq!(ed.doc(), &after);
+    }
+
+    #[test]
+    fn steps_that_a_command_of_the_run_took_back_are_not_counted_and_the_edit_before_the_run_stays()
+    {
+        let mut ed = Editor::with_sequential_ids();
+        ed.execute(&serde_json::from_value(line_json(0.0)).unwrap())
+            .unwrap();
+        let before_run = ed.doc().clone();
+        let mark = ed.begin_run();
+        // A call of the run that makes a step and takes it back (as a session limit does).
+        ed.execute(&serde_json::from_value(line_json(1.0)).unwrap())
+            .unwrap();
+        ed.rollback(1);
+        ed.execute(&serde_json::from_value(line_json(2.0)).unwrap())
+            .unwrap();
+        assert_eq!(ed.run_steps(&mark), 1, "exact: one step above the start");
+        // A failure takes back the step of the run and not the edit before it.
+        ed.rollback_run(mark);
+        assert_eq!(ed.doc(), &before_run, "the person's edit survives");
+        assert!(ed.can_undo(), "and can still be undone");
+        // The same in a run that works: the edit before the run is not merged into its step.
+        let mark = ed.begin_run();
+        ed.execute(&serde_json::from_value(line_json(5.0)).unwrap())
+            .unwrap();
+        ed.rollback(1);
+        ed.execute(&serde_json::from_value(line_json(6.0)).unwrap())
+            .unwrap();
+        ed.execute(&serde_json::from_value(line_json(7.0)).unwrap())
+            .unwrap();
+        let after = ed.doc().clone();
+        assert_eq!(ed.squash_run(mark, "script"), 2);
+        assert_eq!(ed.doc(), &after);
+        assert!(ed.undo());
+        assert_eq!(
+            ed.doc(),
+            &before_run,
+            "one undo takes back the run, not the edit before it"
+        );
+        assert!(ed.undo(), "the earlier edit is a step of its own");
+    }
+
+    #[test]
+    fn a_run_of_another_editor_is_left_alone() {
+        let mut a = Editor::with_sequential_ids();
+        let mut b = Editor::with_sequential_ids();
+        let mark = a.begin_run();
+        assert!(a.run_is_open(&mark) && !b.run_is_open(&mark));
+        b.execute(&serde_json::from_value(line_json(1.0)).unwrap())
+            .unwrap();
+        let doc = b.doc().clone();
+        assert_eq!(b.squash_run(mark, "x"), 0);
+        b.rollback_run(mark);
+        assert_eq!(b.doc(), &doc, "nothing of the foreign run was applied");
     }
 
     #[test]

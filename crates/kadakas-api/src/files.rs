@@ -250,6 +250,12 @@ pub fn file_call(
     write: &mut WriteFn<'_>,
     consent: &mut ConsentFn<'_>,
 ) -> Result<FileDone, RpcError> {
+    // These calls go around `Session::handle`, so the check for an open script run is here.
+    if s.script_js_busy() {
+        return Err(RpcError::conflict(
+            "a script is running: its calls are the only calls served until it ends",
+        ));
+    }
     // A panic in a reader or a writer becomes an internal error, as for every other method. The
     // call and its error go to the call log of the session, so a bug report has them.
     let note = crate::feedback_api::begin(method, params);

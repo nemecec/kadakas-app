@@ -44,3 +44,4 @@ script-ui-js-stopping = Peatan...
 script-ui-js-ran = Skript lõpetas: { $calls } kutset, { $steps } tagasivõtusamm, { $ms } ms
 script-ui-js-failed = Skript ebaõnnestus: { $message }
 script-ui-js-cannot-read = Faili { $path } ei saa lugeda: { $e }
+script-ui-js-blocked = Skript töötab. Oota, kuni see lõpeb.

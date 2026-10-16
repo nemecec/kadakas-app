@@ -211,15 +211,11 @@ fn generator_param(g: &Map<String, Value>) -> Result<layout::generator::Generato
             "a generator pattern takes types, rects: {{kind, data}} and polygons: {{kind, start, points}}: {e}"
         ))
     })?;
-    Ok(layout::generator::GeneratorSpec {
-        label: g
-            .get("label")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        params: g.get("params").cloned().unwrap_or(Value::Null),
+    Ok(layout::generator::GeneratorSpec::new(
+        g.get("label").and_then(Value::as_str).unwrap_or_default(),
+        g.get("params").cloned().unwrap_or(Value::Null),
         units,
-    })
+    ))
 }
 
 /// The pattern from the call, on top of a base (the pattern of the object).
@@ -247,7 +243,7 @@ fn pattern_param(m: &Map<String, Value>, base: Option<Pattern>) -> Result<Patter
         } else if is_generator {
             p.bond = Bond::Generator;
             p.module = None;
-            p.generator = Some(Box::new(generator_param(g)?));
+            p.generator = Some(std::sync::Arc::new(generator_param(g)?));
         } else if is_module || g.contains_key("units") {
             p.bond = Bond::Module;
             p.module = Some(module_of(g)?);
