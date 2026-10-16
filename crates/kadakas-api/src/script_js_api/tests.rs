@@ -599,3 +599,58 @@ fn the_example_fan_has_the_counts_of_a_hand_checked_small_case() {
     // Even rings: the first and the third (8 + 8 wedges, the third cut); odd: the second.
     assert_eq!(by, [(8, 8), (8, 0)]);
 }
+
+#[test]
+fn a_hardscape_with_a_generator_style_is_reported_checked_and_exported() {
+    let mut s = Session::default();
+    trusted_script(&mut s, "Grid", GRID);
+    s.handle(
+        "hardscape_style.create",
+        json!({"name": "Generated", "joints": {"kind": "generator",
+            "generator": {"script": "Grid", "params": {"w": 200, "h": 100}}, "spacing": 0}}),
+    )
+    .unwrap();
+    let h = s
+        .handle(
+            "hardscape.add",
+            json!({"boundary": [[0, 0], [1000, 0], [1000, 250], [0, 250]], "style": "Generated"}),
+        )
+        .unwrap()["id"]
+        .clone();
+    let r = s
+        .handle("report.unit_pattern", json!({"ids": [h]}))
+        .unwrap();
+    let row = &r["rows"][0];
+    assert_eq!(row["bond"], json!("generator"));
+    assert_eq!(
+        (row["whole_units"].clone(), row["cut_units"].clone()),
+        (json!(10), json!(5))
+    );
+    assert_eq!(row["order_units"], json!(15));
+    // The check finds nothing wrong in a clean generated pattern.
+    let c = s.handle("unit_pattern.check", json!({"ids": [h]})).unwrap();
+    assert_eq!(c["objects"][0]["findings"], json!([]), "{c}");
+    // The DXF has every unit as a polyline (and the outline of the hardscape).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("out.dxf");
+    let e = s
+        .handle(
+            "export.file",
+            json!({"path": path, "format": "dxf", "options": {"patterns": "units"}}),
+        )
+        .unwrap();
+    assert!(
+        e["report"]["notes"][0]
+            .as_str()
+            .unwrap()
+            .contains("10 whole and 5 cut"),
+        "{e}"
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text.matches("LWPOLYLINE").count(), 16);
+    // The units can be made ordinary objects too.
+    let made = s
+        .handle("unit_pattern.to_objects", json!({"id": h}))
+        .unwrap();
+    assert_eq!(made["units"], json!(15), "{made}");
+}

@@ -88,3 +88,51 @@ def test_a_generator_pattern_through_the_package(doc, tmp_path):
             origin=[0, 0],
         )
     assert "not trusted" in str(e.value)
+
+
+GRID = """
+const b = args.region.box, w = args.params.w, h = args.params.h;
+const cols = Math.ceil((b[2] - b[0]) / w), rows = Math.ceil((b[3] - b[1]) / h);
+const data = new Float64Array(cols * rows * 5), kind = new Uint32Array(cols * rows);
+let n = 0;
+for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+  data.set([b[0] + c * w + w / 2, b[1] + r * h + h / 2, w, h, 0], n * 5);
+  kind[n++] = r % 2;
+}
+return {types: ["even", "odd"], rects: {kind, data}};
+"""
+
+
+def test_a_generator_pattern_counts_units_when_the_host_lets_agents_run_scripts(open_doc):
+    """1000 x 250 mm, units of 200 x 100 mm from a script: five columns, two whole rows and a third
+    row cut at half (hand-checked: 15 units, 10 whole, 5 cut of half a unit)."""
+    doc = open_doc
+    doc.script_resource_create("Grid", GRID)
+    scripts = doc.script_resources()
+    assert scripts[0]["trusted"] is False and scripts[0]["runnable"] is True
+    layout = doc.pattern_layout(
+        region={"outline": [[0, 0], [1000, 0], [1000, 250], [0, 250]]},
+        pattern={"kind": "generator", "script": "Grid", "params": {"w": 200, "h": 100}, "gap": 0},
+        origin=[0, 0],
+    )
+    assert layout["units_total"] == 15
+    summary = layout["summary"]
+    assert (summary["whole_units"], summary["cut_units"]) == (10, 5)
+    assert [(u["name"], u["whole_units"], u["cut_units"]) for u in summary["by_unit"]] == [
+        ("even", 5, 5), ("odd", 5, 0)]
+    assert abs(summary["area_laid_m2"] - 0.25) < 1e-9
+    # The same script evaluated as a script of the document, with its own arguments.
+    r = doc.script_eval(script="Grid", args={"region": {"box": [0, 0, 400, 200]}, "params": {"w": 200, "h": 100}})
+    assert len(r["result"]["rects"]["data"]) == 20
+
+
+def test_the_units_of_a_generator_become_objects(open_doc):
+    doc = open_doc
+    doc.script_resource_create("Grid", GRID)
+    outline = doc.add.polyline([[0, 0], [400, 0], [400, 200], [0, 200]], closed=True)
+    made = doc.pattern_to_objects(
+        id=outline.id,
+        pattern={"kind": "generator", "script": "Grid", "params": {"w": 200, "h": 100}, "gap": 0},
+        origin=[0, 0],
+    )
+    assert made["units"] == 4 and made["objects"] >= 4
