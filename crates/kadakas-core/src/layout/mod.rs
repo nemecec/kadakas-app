@@ -31,6 +31,7 @@ pub mod course;
 pub mod gaps;
 pub mod module;
 pub mod object;
+pub mod plan;
 pub mod summary;
 pub mod units;
 pub mod zones;
