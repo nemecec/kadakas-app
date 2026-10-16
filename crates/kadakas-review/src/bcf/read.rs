@@ -426,10 +426,14 @@ pub fn read(bytes: &[u8], limits: &ReadLimits, now_ms: i64) -> Result<Imported, 
                 if !seen.insert(t.issue.id) {
                     cx.unfit.truncate(mark);
                     skipped.push(Skipped {
-                        topic: folder.clone(),
+                        topic: t.issue.id.to_string(),
                         reason: format!("the GUID {} is used by an earlier topic", t.issue.id),
                     });
                 } else {
+                    // One identity for a topic in every list: its GUID, not the folder.
+                    for u in &mut cx.unfit[mark..] {
+                        u.topic = t.issue.id.to_string();
+                    }
                     topics.push(t);
                 }
             }

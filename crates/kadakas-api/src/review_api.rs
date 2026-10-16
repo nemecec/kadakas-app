@@ -538,9 +538,18 @@ pub(crate) fn author(s: &Session, m: &Map<String, Value>) -> Result<String, RpcE
     if let Some(a) = text(m, "author")? {
         return Ok(a.trim().to_string());
     }
+    Ok(session_author(s))
+}
+
+/// Who this session is: the collaboration name in a shared session, else the name of the origin
+/// (`user`, `agent`, ...). The caller cannot change it: the consent to delete the work of
+/// somebody else is checked against this and not against a parameter.
+pub(crate) fn session_author(s: &Session) -> String {
     let name = crate::collab_api::display_name(s).filter(|n| !n.trim().is_empty());
-    let name = name.unwrap_or_else(|| origin_name(s.editor.origin()).to_string());
-    Ok(name.chars().take(AUTHOR_MAX).collect())
+    let name = name
+        .or_else(|| s.identity.clone())
+        .unwrap_or_else(|| origin_name(s.editor.origin()).to_string());
+    name.chars().take(AUTHOR_MAX).collect()
 }
 
 fn meta_json(h: &History, id: u64) -> Value {

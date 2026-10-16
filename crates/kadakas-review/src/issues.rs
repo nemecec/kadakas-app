@@ -200,11 +200,12 @@ pub fn match_ifc(global_id: &str) -> Option<ObjectId> {
     kadakas_core::guid::decode(global_id).map(|v| ObjectId(Uid::from_u128(v)))
 }
 
-/// True if two author names are the same person: without case and spaces at the ends. An author
-/// that is empty (not known) counts as the same, because there is nobody to ask for.
+/// True if two author names are the same person: without case and spaces at the ends. An empty
+/// name (not known) is never the same person: a caller must not get round the question by
+/// leaving its name out.
 fn same_author(a: &str, b: &str) -> bool {
     let (a, b) = (a.trim(), b.trim());
-    a.is_empty() || b.is_empty() || a.to_lowercase() == b.to_lowercase()
+    !a.is_empty() && !b.is_empty() && a.to_lowercase() == b.to_lowercase()
 }
 
 /// Why deleting an issue needs a yes from the person, or `None` when the one who deletes may do

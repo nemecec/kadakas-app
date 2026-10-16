@@ -131,7 +131,7 @@ fn color(rgb: [u8; 3]) -> Color32 {
 }
 
 /// The name of the person for the author of an issue: the user of the computer.
-fn author_name() -> String {
+pub(crate) fn author_name() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
         for key in ["USER", "USERNAME"] {

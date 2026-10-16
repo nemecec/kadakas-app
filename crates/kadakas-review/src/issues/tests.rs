@@ -263,9 +263,10 @@ fn done_follows_the_status() {
 fn deleting_the_work_of_others_needs_consent() {
     let mut mine = issue(1, "x");
     mine.origin = Origin::Agent;
-    assert_eq!(consent_reason(&mine, &[], Origin::Agent, ""), None);
+    mine.author = "Ann".into();
+    assert_eq!(consent_reason(&mine, &[], Origin::Agent, "Ann"), None);
     assert!(
-        consent_reason(&mine, &[], Origin::User, "")
+        consent_reason(&mine, &[], Origin::User, "Ann")
             .unwrap()
             .contains("agent")
     );
@@ -279,7 +280,7 @@ fn deleting_the_work_of_others_needs_consent() {
         viewpoint: None,
         edited: None,
     };
-    let why = consent_reason(&mine, &[&c], Origin::Agent, "").unwrap();
+    let why = consent_reason(&mine, &[&c], Origin::Agent, "Ann").unwrap();
     assert!(why.contains("1 comment"), "{why}");
     // The same origin with another author is somebody else.
     let mut alice = issue(5, "y");
@@ -291,11 +292,14 @@ fn deleting_the_work_of_others_needs_consent() {
             .unwrap()
             .contains("Alice")
     );
-    assert_eq!(
-        consent_reason(&alice, &[], Origin::Agent, ""),
-        None,
-        "no name, nobody to ask for"
+    assert!(
+        consent_reason(&alice, &[], Origin::Agent, "").is_some(),
+        "an empty name is never the same person"
     );
+    let mut nameless = issue(6, "z");
+    nameless.origin = Origin::Agent;
+    assert!(consent_reason(&nameless, &[], Origin::Agent, "Ann").is_some());
+    assert!(consent_reason(&nameless, &[], Origin::Agent, "").is_some());
     let c2 = Comment {
         author: "Bob".into(),
         origin: Origin::Agent,
@@ -308,7 +312,8 @@ fn deleting_the_work_of_others_needs_consent() {
     );
     let own = Comment {
         origin: Origin::Agent,
+        author: "Ann".into(),
         ..c
     };
-    assert_eq!(consent_reason(&mine, &[&own], Origin::Agent, ""), None);
+    assert_eq!(consent_reason(&mine, &[&own], Origin::Agent, "Ann"), None);
 }

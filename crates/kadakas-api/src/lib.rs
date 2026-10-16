@@ -134,6 +134,9 @@ pub struct Session {
     view_changed: bool,
     /// The collaboration client and where it connects (see `collab_api`).
     collab: collab_api::CollabState,
+    /// Who this session is, for the checks that need a name (the consent to delete the work of
+    /// somebody else). Set by the host; a caller of the API cannot change it.
+    identity: Option<String>,
     /// Who subscribed to the change events (see `events`), and the connection of the current call.
     events: events::EventHub,
     conn: u64,
@@ -830,6 +833,12 @@ impl Default for Session {
 }
 
 impl Session {
+    /// Names the person at this session (the app uses the name of the account). The API checks
+    /// the consent to delete the work of somebody else against it.
+    pub fn set_identity(&mut self, name: &str) {
+        self.identity = Some(name.trim().to_string()).filter(|n| !n.is_empty());
+    }
+
     /// Like `Session::with_sequential_ids()`, but the new IDs count 2, 3, 4 and so on, as small numbers, so a
     /// test or a fixture can predict them. They are not unique in the world: never use this for a
     /// document that is merged with others.
@@ -870,6 +879,7 @@ impl Session {
             replaced: false,
             view_changed: false,
             collab: Default::default(),
+            identity: None,
             events: Default::default(),
             conn: events::LOCAL,
             limits: SessionLimits::default(),

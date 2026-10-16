@@ -427,6 +427,8 @@ impl KadakasApp {
 
     fn blank() -> Self {
         let mut session = Session::default();
+        // The API checks the consent to delete the work of somebody else against this name.
+        session.set_identity(&crate::issues_ui::author_name());
         // The WebSocket for `collab.connect`; the same code runs in the browser and on the
         // desktop.
         session.set_collab_endpoint_factory(Box::new(|url, token| {

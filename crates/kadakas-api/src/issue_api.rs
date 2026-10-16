@@ -32,7 +32,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::errors::{REASON_BCF_CONFLICT, REASON_BCF_UNFIT, REASON_CONFIRM_NEEDED, bad};
-use crate::review_api::{author, default_now};
+use crate::review_api::{author, default_now, session_author};
 use crate::{RpcError, Session};
 
 pub const ISSUE_LIST: (&str, &str) = (
@@ -821,7 +821,7 @@ impl Session {
             let gone: Vec<ViewpointId> = serde_json::from_value(v.clone())
                 .map_err(|e| bad(format!("remove_viewpoints: {e}")))?;
             if !gone.is_empty() {
-                let my_author = author(self, &m)?;
+                let my_author = session_author(self);
                 self.check_consent(&[id], &my_author, flag(&m, "confirm")?)?;
             }
             commands.extend(
@@ -978,7 +978,8 @@ impl Session {
             _ => return Err(bad("give id or ids")),
         };
         let confirm = flag(&m, "confirm")?;
-        let my_author = author(self, &m)?;
+        // The consent is checked against who this session is, not against a parameter.
+        let my_author = session_author(self);
         self.check_consent(&ids, &my_author, confirm)?;
         let mut commands: Vec<Command> = ids
             .iter()
@@ -987,6 +988,11 @@ impl Session {
         // On request the pictures that no other issue uses go too (one undo step). A shared
         // document should not do this: another user may point to the picture at the same time.
         if flag(&m, "purge_snapshots")? {
+            if crate::collab_api::is_connected(self) {
+                return Err(RpcError::policy(
+                    "purge_snapshots is not allowed in a shared session: another user may point to a picture at the same time. Disconnect first, or delete the pictures later with resource.purge",
+                ));
+            }
             let doc = self.editor.doc();
             let kept: std::collections::BTreeSet<&str> = doc
                 .issues
@@ -1217,37 +1223,6 @@ impl Session {
         let me = self.editor.origin();
         let my_author = author(self, &m)?;
 
-        // What does not fit: found by the reader, and the pictures that cannot be made. It is
-        // listed, and the import goes on only when the caller says to skip these items.
-        let mut unfit: Vec<Value> = imported.unfit.iter().map(unfit_json).collect();
-        let keep_snapshot: HashSet<ViewpointId> = imported
-            .unfit
-            .iter()
-            .filter(|u| u.item == "snapshot")
-            .filter_map(|u| u.viewpoint)
-            .collect();
-        let keep_view: HashSet<ViewpointId> = imported
-            .unfit
-            .iter()
-            .filter(|u| u.item == "camera")
-            .filter_map(|u| u.viewpoint)
-            .collect();
-        let mut prepared: Vec<Option<Prepared>> = imported
-            .topics
-            .iter()
-            .map(|t| {
-                Some(Prepared::new(
-                    self,
-                    t,
-                    me,
-                    &my_author,
-                    &keep_snapshot,
-                    &keep_view,
-                    &mut unfit,
-                ))
-            })
-            .collect();
-
         // Sort the topics: new, the same, or a conflict.
         let doc = self.editor.doc();
         let (mut new, mut same, mut conflicts) = (Vec::new(), Vec::new(), Vec::new());
@@ -1264,6 +1239,57 @@ impl Session {
                 }
             }
         }
+        // What does not fit: found by the reader, the topics that could not be read at all, and
+        // the pictures that cannot be made. It is listed, and the import goes on only when the
+        // caller says to skip these items. A topic that is the same already, or that the caller
+        // keeps ours for (`skip`), brings nothing in, so nothing is asked about it.
+        let bringing: HashSet<String> = new
+            .iter()
+            .chain(if mode == Mode::Skip {
+                &[][..]
+            } else {
+                &conflicts[..]
+            })
+            .map(|n| imported.topics[*n].issue.id.to_string())
+            .collect();
+        let reader_unfit: Vec<&kadakas_review::bcf::Unfit> = imported
+            .unfit
+            .iter()
+            .filter(|u| bringing.contains(&u.topic))
+            .collect();
+        let mut unfit: Vec<Value> = reader_unfit.iter().map(|u| unfit_json(u)).collect();
+        unfit.extend(imported.skipped.iter().map(
+            |s| json!({"topic": s.topic, "item": "topic", "reason": s.reason, "viewpoint": null}),
+        ));
+        let keep_snapshot: HashSet<ViewpointId> = reader_unfit
+            .iter()
+            .filter(|u| u.item == "snapshot")
+            .filter_map(|u| u.viewpoint)
+            .collect();
+        let keep_view: HashSet<ViewpointId> = reader_unfit
+            .iter()
+            .filter(|u| u.item == "camera")
+            .filter_map(|u| u.viewpoint)
+            .collect();
+        let mut prepared: Vec<Option<Prepared>> = imported
+            .topics
+            .iter()
+            .enumerate()
+            .map(|(n, t)| {
+                (new.contains(&n) || (mode != Mode::Skip && conflicts.contains(&n))).then(|| {
+                    Prepared::new(
+                        self,
+                        t,
+                        me,
+                        &my_author,
+                        &keep_snapshot,
+                        &keep_view,
+                        &mut unfit,
+                    )
+                })
+            })
+            .collect();
+        let doc = self.editor.doc();
         let conflict_json = |n: usize| {
             let t = &imported.topics[n];
             let existing = doc.issues.get(t.issue.id).expect("a conflict has an issue");
@@ -1351,9 +1377,13 @@ impl Session {
             prep.add_commands(&mut commands);
         }
         for n in &conflicts {
+            if mode == Mode::Skip {
+                skipped_conflicts += 1;
+                continue;
+            }
             let mut prep = prepared[*n].take().expect("each topic once");
             match mode {
-                Mode::Skip => skipped_conflicts += 1,
+                Mode::Skip => unreachable!("handled above"),
                 Mode::KeepBoth => {
                     prep.renumber(doc, &mut taken_issues, &mut used_comments);
                     pictures += prep.pictures.len();

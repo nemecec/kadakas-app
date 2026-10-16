@@ -1070,10 +1070,24 @@ fn a_hostile_file_is_an_error_or_a_listed_skip() {
         .unwrap();
     std::io::Write::write_all(&mut z, b"<Markup><Topic/></Markup>").unwrap();
     let mixed = z.finish().unwrap().into_inner();
-    let r = ok(
+    // A topic that cannot be read is a question for the person, not a silent skip.
+    let e = fail(
         &mut s,
         "issue.import_bcf",
         json!({"base64": b64(&mixed), "now_ms": 5}),
+    );
+    assert_eq!(e.reason, Some("bcf_unfit"));
+    let d = e.details.as_ref().unwrap();
+    assert_eq!(d["unfit"][0]["item"], "topic");
+    assert_eq!(
+        d["unfit"][0]["topic"],
+        "bbbbbbbb-1111-4222-8333-444455556666"
+    );
+    assert_eq!(s.editor.doc().issues.len(), 0);
+    let r = ok(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": b64(&mixed), "now_ms": 5, "skip_items": true}),
     );
     assert_eq!(r["imported"], 1);
     assert_eq!(r["topics_skipped"].as_array().unwrap().len(), 1);
@@ -1393,40 +1407,201 @@ fn the_pictures_of_deleted_issues_stay_unless_the_caller_asks() {
 }
 
 #[test]
-fn the_consent_compares_the_author_too() {
+fn the_consent_checks_the_identity_of_the_session_and_ignores_the_caller() {
     let mut s = session();
-    // The same origin (agent), two authors.
+    s.set_identity("Ann");
+    // Ann's issue, with a viewpoint.
     let id = ok(
         &mut s,
         "issue.create",
         json!({"title": "Ann's", "author": "Ann", "capture": true, "now_ms": 1}),
     )["id"]
         .clone();
-    let e = fail(&mut s, "issue.delete", json!({"id": id, "author": "Bob"}));
-    assert_eq!(e.reason, Some("confirm_needed"));
-    // The viewpoints of the issue of Ann are not removed by Bob without the consent.
+    // The same session is Ann: no question, whatever `author` says is not looked at.
     let vp = ok(&mut s, "issue.get", json!({"id": id}))["viewpoints"][0]["id"].clone();
-    let e = fail(
+    ok(
         &mut s,
         "issue.update",
-        json!({"id": id, "remove_viewpoints": [vp], "author": "Bob"}),
+        json!({"id": id, "remove_viewpoints": [vp], "author": "Bob", "now_ms": 2}),
+    );
+    // Another session (Bob) cannot get round the question with a name, an empty name or Ann's.
+    let mut t = session();
+    t.set_identity("Bob");
+    let theirs = ok(
+        &mut t,
+        "issue.create",
+        json!({"title": "Ann's", "author": "Ann", "capture": true, "now_ms": 1}),
+    )["id"]
+        .clone();
+    let vp = ok(&mut t, "issue.get", json!({"id": theirs}))["viewpoints"][0]["id"].clone();
+    for author in [json!("Ann"), json!(""), json!(" ann "), Value::Null] {
+        let e = fail(
+            &mut t,
+            "issue.delete",
+            json!({"id": theirs, "author": author}),
+        );
+        assert_eq!(e.reason, Some("confirm_needed"), "{author}");
+        let e = fail(
+            &mut t,
+            "issue.update",
+            json!({"id": theirs, "remove_viewpoints": [vp], "author": author}),
+        );
+        assert_eq!(e.reason, Some("confirm_needed"), "{author}");
+    }
+    assert_eq!(t.editor.doc().issues.len(), 1);
+    // An issue without an author is nobody's: it needs the question too.
+    let mut doc = Document::default();
+    doc.issues = kadakas_core::issue::IssueData::from_vecs(
+        vec![kadakas_core::issue::Issue {
+            id: kadakas_core::issue::IssueId::from_num(77),
+            title: "No author".into(),
+            origin: Origin::Agent,
+            ..Default::default()
+        }],
+        vec![],
+    )
+    .into();
+    let mut u = Session::with_document(doc);
+    let e = fail(
+        &mut u,
+        "issue.delete",
+        json!({"id": kadakas_core::issue::IssueId::from_num(77), "author": ""}),
     );
     assert_eq!(e.reason, Some("confirm_needed"));
+    // With the consent of the person it goes.
+    ok(
+        &mut t,
+        "issue.delete",
+        json!({"id": theirs, "confirm": true}),
+    );
+}
+
+#[test]
+fn purging_pictures_is_refused_in_a_shared_session() {
+    use kadakas_collab::docsync;
+    use kadakas_collab::testkit::{Hub, Sequencer};
+    let mut s = Session::default();
+    let hub = Hub::new(Sequencer::new(docsync::replica_of(s.editor.doc())));
+    s.set_collab_endpoint(Box::new(hub.endpoint()));
+    ok(
+        &mut s,
+        "collab.connect",
+        json!({"name": "Ann", "now_ms": 1_000}),
+    );
+    s.set_identity("Ann");
+    let id = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "A", "capture": true, "now_ms": 1}),
+    )["id"]
+        .clone();
+    let e = fail(
+        &mut s,
+        "issue.delete",
+        json!({"id": id, "purge_snapshots": true, "confirm": true}),
+    );
+    assert_eq!(e.kind, "policy");
+    assert!(e.message.contains("shared"), "{}", e.message);
+    assert_eq!(s.editor.doc().issues.len(), 1);
+    // A plain delete works, and leaves the picture.
+    ok(&mut s, "issue.delete", json!({"id": id, "confirm": true}));
+    assert_eq!(s.editor.doc().issues.len(), 0);
+}
+
+#[test]
+fn topics_that_cannot_be_read_are_in_the_question_and_never_dropped() {
+    let mut s = session();
+    let g = |n: u32| format!("{n:08x}-1111-4222-8333-444455556666");
+    let comments: String = (0..=kadakas_core::issue::MAX_COMMENTS)
+        .map(|n| {
+            format!(
+                "<Comment Guid=\"{:08x}-2222-4222-8333-444455556666\"><Date>2026-01-02T00:00:00Z</Date><Author>b</Author><Comment>c{n}</Comment></Comment>",
+                n + 1
+            )
+        })
+        .collect();
+    let vps: String = (0..=kadakas_core::issue::MAX_VIEWPOINTS)
+        .map(|n| {
+            format!(
+                "<Viewpoints Guid=\"{:08x}-3333-4222-8333-444455556666\"/>",
+                n + 1
+            )
+        })
+        .collect();
+    let long = "t".repeat(kadakas_core::issue::MAX_TITLE_CHARS + 1);
+    let (m_long, m_none, m_comments, m_vps, m_ok) = (
+        markup(&g(1), &long, ""),
+        markup(&g(2), "", ""),
+        markup(&g(3), "many comments", &comments),
+        markup(&g(4), "many viewpoints", &vps),
+        markup(&g(5), "fine", ""),
+    );
+    let file = zip_of(&[
+        ("bcf.version", b"<Version VersionId=\"2.1\"/>"),
+        (&format!("{}/markup.bcf", g(1)), m_long.as_bytes()),
+        (&format!("{}/markup.bcf", g(2)), m_none.as_bytes()),
+        (&format!("{}/markup.bcf", g(3)), m_comments.as_bytes()),
+        (&format!("{}/markup.bcf", g(4)), m_vps.as_bytes()),
+        (&format!("{}/markup.bcf", g(5)), m_ok.as_bytes()),
+    ]);
+    // A dry run lists all four, and changes nothing.
+    let plan = ok(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": file, "dry_run": true}),
+    );
+    let items = plan["unfit"].as_array().unwrap();
+    assert_eq!(items.len(), 4, "{plan}");
+    assert!(items.iter().all(|i| i["item"] == "topic"));
+    assert_eq!(s.editor.doc().issues.len(), 0);
+    // The real import asks and imports nothing.
+    let e = fail(&mut s, "issue.import_bcf", json!({"base64": file}));
+    assert_eq!(e.reason, Some("bcf_unfit"));
     assert_eq!(
-        ok(&mut s, "issue.get", json!({"id": id}))["viewpoints"]
+        e.details.as_ref().unwrap()["unfit"]
             .as_array()
             .unwrap()
             .len(),
-        1
+        4
     );
+    assert_eq!(s.editor.doc().issues.len(), 0, "the good topic waits too");
+    // After the person agreed: the good topic comes in and the others are listed.
     let r = ok(
         &mut s,
-        "issue.update",
-        json!({"id": id, "remove_viewpoints": [vp], "author": "Bob", "confirm": true}),
+        "issue.import_bcf",
+        json!({"base64": file, "skip_items": true}),
     );
-    assert_eq!(r["changed"], true);
-    // Ann herself needs no consent.
-    ok(&mut s, "issue.delete", json!({"id": id, "author": "Ann"}));
+    assert_eq!(r["imported"], 1);
+    assert_eq!(r["topics_skipped"].as_array().unwrap().len(), 4);
+    assert_eq!(r["items_skipped"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn nothing_is_asked_about_topics_that_bring_nothing() {
+    // A conflict that the caller keeps ours for has unfit items that would not come in anyway.
+    let (mut s, _a, id) = full_session();
+    let g = "aaaaaaaa-1111-4222-8333-444455556666";
+    let body = r#"<Viewpoints Guid="dddddddd-1111-4222-8333-444455556666"><Snapshot>junk.png</Snapshot></Viewpoints>"#;
+    let file = zip_of(&[
+        ("bcf.version", b"<Version VersionId=\"2.1\"/>"),
+        (
+            &format!("{id}/markup.bcf"),
+            markup(&id, "Changed", body).as_bytes(),
+        ),
+        (&format!("{id}/junk.png"), b"not a picture"),
+        (
+            &format!("{g}/markup.bcf"),
+            markup(g, "New one", "").as_bytes(),
+        ),
+    ]);
+    let r = ok(
+        &mut s,
+        "issue.import_bcf",
+        json!({"base64": file, "on_conflict": "skip"}),
+    );
+    assert_eq!(r["imported"], 1);
+    assert_eq!(r["skipped_conflicts"], 1);
+    assert!(r["items_skipped"].as_array().unwrap().is_empty());
 }
 
 #[test]
