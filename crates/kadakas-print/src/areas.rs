@@ -49,6 +49,150 @@ fn circle(
     line(&pts, true, stroke, fill, width, dash)
 }
 
+/// The color of the fill that marks a cut unit: the pen of the pattern at 18 percent.
+fn cut_fill(color: Option<Rgba>) -> Rgba {
+    let [r, g, b, _] = color.unwrap_or([0, 0, 0, 255]);
+    [r, g, b, 46]
+}
+
+/// A ring as segments, closed by a line to its first point, and turned the way a fill needs it
+/// (outline counterclockwise, hole clockwise) so that the holes of a unit stay open.
+fn ring_segs(ring: &[DVec2], hole: bool, xf: &Xf) -> Vec<PSeg> {
+    let mut pts: Vec<DVec2> = ring.iter().map(|p| xf.p(*p)).collect();
+    // The paper has y up, as the model, so the turn of a ring is the same on paper.
+    let ccw = kadakas_core::geom::signed_area(&pts) >= 0.0;
+    if ccw == hole {
+        pts.reverse();
+    }
+    let mut segs = PathPrim::polyline(&pts);
+    if let Some(first) = pts.first() {
+        segs.push(PSeg::Line(*first));
+    }
+    segs
+}
+
+/// The pattern plan of a hardscape on paper: the real units of the part in view (whole units as
+/// outlines, cut units with a light fill) when the view holds at most `PRINT_BOUND` units, else
+/// the gap lines of the plan and a note on the sheet. Zones and courses are in it, laid by the same
+/// engine as the report.
+fn pattern_prims(
+    doc: &Document,
+    obj: &Object,
+    j: &hardscape::JointPattern,
+    color: Option<Rgba>,
+    xf: &Xf,
+    out: &mut Vec<Prim>,
+) {
+    use kadakas_core::hardscape::draw::{self, Detail, DrawOptions};
+    let Some(Ok(prepared)) = draw::prepared(doc, obj) else {
+        return;
+    };
+    let (blo, bhi) = prepared.bounds();
+    if let Some((wlo, whi)) = xf.window
+        && (bhi.x < wlo.x || blo.x > whi.x || bhi.y < wlo.y || blo.y > whi.y)
+    {
+        return;
+    }
+    let note = |text: String, out: &mut Vec<Prim>| {
+        let (lo, hi) = match xf.window {
+            Some((wlo, whi)) => (blo.max(wlo), bhi.min(whi)),
+            None => (blo, bhi),
+        };
+        let at = xf.p(DVec2::new(lo.x, lo.y.min(hi.y)));
+        out.push(Prim::Text(TextPrim {
+            at: at + DVec2::new(1.0, 1.5),
+            text,
+            height: 2.0,
+            color: color.unwrap_or([0, 0, 0, 255]),
+            align: Align::Left,
+        }));
+    };
+    if xf.len(j.unit_width.min(j.unit_length)) < MIN_UNIT_ON_PAPER
+        && j.kind != hardscape::JointKind::Module
+    {
+        note(
+            format!(
+                "pattern not drawn: units are smaller than {MIN_UNIT_ON_PAPER} mm on paper at this scale"
+            ),
+            out,
+        );
+        return;
+    }
+    let drawn = prepared.draw(xf.window, &DrawOptions::units(draw::PRINT_BOUND));
+    let hair = THIN;
+    for g in &drawn.groups {
+        if !g.joints.is_empty() {
+            let mut segs = Vec::with_capacity(g.joints.len() * 2);
+            for (a, b) in &g.joints {
+                segs.push(PSeg::Move(xf.p(*a)));
+                segs.push(PSeg::Line(xf.p(*b)));
+            }
+            out.push(Prim::Path(PathPrim {
+                segs,
+                closed: false,
+                stroke: color,
+                fill: None,
+                width: hair,
+                dash: None,
+            }));
+        }
+        if !g.whole.is_empty() {
+            let segs: Vec<PSeg> = g
+                .whole
+                .iter()
+                .flat_map(|r| ring_segs(r, false, xf))
+                .collect();
+            out.push(Prim::Path(PathPrim {
+                segs,
+                closed: false,
+                stroke: color,
+                fill: None,
+                width: hair,
+                dash: None,
+            }));
+        }
+        for u in &g.cut {
+            let segs: Vec<PSeg> = u
+                .iter()
+                .enumerate()
+                .flat_map(|(i, r)| ring_segs(r, i > 0, xf))
+                .collect();
+            out.push(Prim::Path(PathPrim {
+                segs,
+                closed: false,
+                stroke: color,
+                fill: Some(cut_fill(color)),
+                width: hair,
+                dash: None,
+            }));
+        }
+    }
+    for ring in &drawn.zone_edges {
+        out.push(line(
+            &ring.iter().map(|p| xf.p(*p)).collect::<Vec<_>>(),
+            true,
+            color,
+            None,
+            hair,
+            Some([2.0, 1.0]),
+        ));
+    }
+    if let Detail::Preview {
+        units_in_view,
+        bound,
+        ..
+    } = drawn.detail
+    {
+        note(
+            format!(
+                "{} ({units_in_view} units in view, more than {bound}): enlarge the scale or the viewport for the real units",
+                draw::PREVIEW_LABEL
+            ),
+            out,
+        );
+    }
+}
+
 /// Adds the extras of a hardscape or a landscape area. `st` is the pen and fill of the object.
 pub fn extras(doc: &Document, obj: &Object, st: &Style, xf: &Xf, out: &mut Vec<Prim>) {
     let map = |pts: &[DVec2]| -> Vec<DVec2> { pts.iter().map(|p| xf.p(*p)).collect() };
@@ -58,15 +202,9 @@ pub fn extras(doc: &Document, obj: &Object, st: &Style, xf: &Xf, out: &mut Vec<P
                 return;
             };
             let ring = curve::flatten(boundary, true, (0.1 / xf.k).max(1.0));
-            if let Some(j) = &style.joints
-                && xf.len(j.unit_width.min(j.unit_length)) >= MIN_UNIT_ON_PAPER
-            {
+            if let Some(j) = &style.joints {
                 let color = j.color.map(|c| c.0).or(st.stroke);
-                for (a, b) in
-                    hardscape::drawn_joints(doc, obj, j, kadakas_core::layout::TOLERANCE).segments
-                {
-                    out.push(line(&[xf.p(a), xf.p(b)], false, color, None, THIN, None));
-                }
+                pattern_prims(doc, obj, j, color, xf, out);
             }
             if let Some(b) = &style.border {
                 let color = b.color.map(|c| c.0).or(st.stroke);

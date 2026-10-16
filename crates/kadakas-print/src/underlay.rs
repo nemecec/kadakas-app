@@ -65,6 +65,7 @@ mod tests {
             model_center: DVec2::new(3000.0, 2500.0),
             paper_center: DVec2::new(100.0, 100.0),
             k: 0.01,
+            window: None,
         };
         let i = image_prim(&underlay(1.0), &xf).unwrap();
         assert_eq!(i.min, DVec2::new(80.0, 95.0));

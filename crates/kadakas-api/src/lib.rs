@@ -256,6 +256,29 @@ fn svg_of(
     overlay: Option<&dyn kadakas_core::svg_overlay::SvgOverlay>,
     ghost: Option<(&kadakas_site::SiteCache, &kadakas_annot::AnnotCache, u64)>,
 ) -> String {
+    svg_of_with(
+        doc,
+        width,
+        revision,
+        site_cache,
+        annot_cache,
+        overlay,
+        ghost,
+        &kadakas_core::svg::RenderOptions::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn svg_of_with(
+    doc: &Document,
+    width: u32,
+    revision: u64,
+    site_cache: &kadakas_site::SiteCache,
+    annot_cache: &kadakas_annot::AnnotCache,
+    overlay: Option<&dyn kadakas_core::svg_overlay::SvgOverlay>,
+    ghost: Option<(&kadakas_site::SiteCache, &kadakas_annot::AnnotCache, u64)>,
+    opts: &kadakas_core::svg::RenderOptions,
+) -> String {
     let site_ext = kadakas_site::draw::svg_ext(site_cache, revision);
     // A ghost of a compare is drawn against the document of the old side. It gets caches of its
     // own, so it never reads what was built for another document. A session passes its ghost
@@ -276,7 +299,7 @@ fn svg_of(
             kadakas_annot::svg::object_svg_with(d, o, style, out, ghost_annot, ghost_rev);
         }
     };
-    kadakas_core::svg::render_overlay(doc, width.clamp(16, 8192), Some(&ext), overlay)
+    kadakas_core::svg::render_overlay_with(doc, width.clamp(16, 8192), Some(&ext), overlay, opts)
 }
 
 /// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
@@ -305,6 +328,28 @@ fn elide_image(object: &mut Value) {
             "<PNG picture, {n} characters of base64, not shown>"
         ));
     }
+}
+
+/// The region of `render.svg`: `[x0, y0, x1, y1]` in drawing coordinates, two opposite corners.
+fn region_param(r: Option<[f64; 4]>) -> Result<Option<(glam::DVec2, glam::DVec2)>, RpcError> {
+    let Some([x0, y0, x1, y1]) = r else {
+        return Ok(None);
+    };
+    if ![x0, y0, x1, y1].iter().all(|v| v.is_finite()) {
+        return Err(RpcError::invalid_params(
+            "'region' must be four finite numbers",
+        ));
+    }
+    let (lo, hi) = (
+        glam::DVec2::new(x0.min(x1), y0.min(y1)),
+        glam::DVec2::new(x0.max(x1), y0.max(y1)),
+    );
+    if hi.x - lo.x < 1e-6 || hi.y - lo.y < 1e-6 {
+        return Err(RpcError::invalid_params(
+            "'region' must have a width and a height: [x0, y0, x1, y1]",
+        ));
+    }
+    Ok(Some((lo, hi)))
 }
 
 fn params<T: for<'de> Deserialize<'de>>(p: Value) -> Result<T, RpcError> {
@@ -995,7 +1040,13 @@ impl Session {
     /// command `kadakas render` and the app's SVG export all use this one function.
     /// The width is in px, 16 to 8192.
     pub fn render_svg(&self, width: u32) -> String {
-        svg_of(
+        self.render_svg_with(width, &kadakas_core::svg::RenderOptions::default())
+    }
+
+    /// Like [`Session::render_svg`], for a region of the drawing and with the findings of the
+    /// pattern check marked (`render.svg {region, show_check}`).
+    pub fn render_svg_with(&self, width: u32, opts: &kadakas_core::svg::RenderOptions) -> String {
+        svg_of_with(
             self.editor.doc(),
             width,
             self.editor.revision(),
@@ -1003,6 +1054,7 @@ impl Session {
             &self.annot_cache,
             None,
             None,
+            opts,
         )
     }
 
@@ -1532,11 +1584,25 @@ impl Session {
                 struct P {
                     width: Option<u32>,
                     compare: Option<Value>,
+                    region: Option<[f64; 4]>,
+                    show_check: Option<bool>,
                 }
-                let P { width, compare } = params(p)?;
+                let P {
+                    width,
+                    compare,
+                    region,
+                    show_check,
+                } = params(p)?;
+                let region = region_param(region)?;
                 match compare_api::CompareSpec::parse(compare.as_ref())? {
                     Some(spec) => self.render_svg_compare(width.unwrap_or(800), &spec)?,
-                    None => json!({ "svg": self.render_svg(width.unwrap_or(800)) }),
+                    None => json!({ "svg": self.render_svg_with(
+                        width.unwrap_or(800),
+                        &kadakas_core::svg::RenderOptions {
+                            region,
+                            show_check: show_check.unwrap_or(false),
+                        },
+                    ) }),
                 }
             }
             "render.png" => {

@@ -8,6 +8,7 @@
 
 pub mod batch;
 pub mod data;
+pub mod draw;
 pub mod joints;
 pub mod offset;
 pub mod report;
@@ -166,38 +167,11 @@ pub fn object_svg_extras(doc: &Document, obj: &Object, scale: f64, stroke: &str)
     }
 }
 
-/// The joint lines of a hardscape for drawing: inside the outline (less the kerb border), outside
-/// the holes, from the origin and the angle of the object. Curves are flattened to `tolerance`.
-pub fn drawn_joints(
-    doc: &Document,
-    obj: &Object,
-    j: &JointPattern,
-    tolerance: f64,
-) -> joints::Joints {
-    let d = data(obj).unwrap_or_default();
-    let Ok(region) = crate::layout::object::region_of(doc, obj, tolerance) else {
-        return joints::Joints::default();
-    };
-    let place = crate::layout::Placement {
-        origin: d.origin,
-        angle: d.angle.unwrap_or(j.angle),
-    };
-    crate::layout::gap_lines(&region, &j.layout(), &place, joints::MAX_SEGMENTS, true)
-}
-
 fn pts_attr(pts: &[DVec2]) -> String {
     pts.iter()
         .map(|p| format!("{},{}", p.x, -p.y))
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn path_d(segments: &[joints::Segment]) -> String {
-    let mut d = String::new();
-    for (a, b) in segments {
-        let _ = write!(d, "M {} {} L {} {} ", a.x, -a.y, b.x, -b.y);
-    }
-    d.trim_end().to_string()
 }
 
 /// Extra SVG elements of a hardscape drawn after its outline: the joint pattern and the border.
@@ -226,18 +200,14 @@ pub fn svg_extras(doc: &Document, obj: &Object, scale: f64, stroke: &str) -> Str
         );
     }
     if let Some(j) = &s.joints {
-        let lines = drawn_joints(doc, obj, j, crate::layout::TOLERANCE);
-        if !lines.segments.is_empty() {
-            let color = j.color.map_or_else(|| stroke.to_string(), Color::to_css);
-            let width = j.spacing.max(0.1 * scale);
-            let _ = writeln!(
-                out,
-                r#"<path d="{}" fill="none" stroke="{color}" stroke-width="{width}" data-part="joints" data-of="{}" data-pattern="{}"/>"#,
-                path_d(&lines.segments),
-                obj.id,
-                j.kind.id()
-            );
-        }
+        out.push_str(&draw::svg(
+            doc,
+            obj,
+            scale,
+            stroke,
+            j.color.map(Color::to_css),
+            j.kind.id(),
+        ));
     }
     if let Some(b) = &s.border {
         let color = b.color.map_or_else(|| stroke.to_string(), Color::to_css);
@@ -413,7 +383,7 @@ mod tests {
         let (ed, id, _) = setup();
         let o = ed.doc().object(id).unwrap();
         let svg = svg_extras(ed.doc(), o, 100.0, "rgba(0,0,0,1)");
-        assert!(svg.contains(r#"data-part="joints""#) && svg.contains("running_bond"));
+        assert!(svg.contains(r#"data-part="units-whole""#) && svg.contains("running_bond"));
         assert!(svg.contains(r#"data-part="border""#) && svg.contains("clip-path"));
         assert!(svg.contains("rgba(1,2,3,1.000)"));
         // A path with a border on the left only has one border line.

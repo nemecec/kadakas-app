@@ -200,15 +200,21 @@ fn styled_areas_draw_their_extras_in_a_viewport() {
         all.iter().any(|p| p.fill == Some(GREEN.0)),
         "the style fill of the hardscape"
     );
-    let thin = all
+    // The whole units are the subpaths of one path, each closed by a line back to its start.
+    let units: usize = all
         .iter()
         .filter(|p| {
-            !p.closed && (p.width - 0.1).abs() < 1e-9 && p.stroke.is_some() && p.segs.len() == 2
+            !p.closed
+                && (p.width - 0.1).abs() < 1e-9
+                && p.stroke.is_some()
+                && p.fill.is_none()
+                && p.dash.is_none()
         })
-        .count();
+        .map(|p| p.segs.iter().filter(|s| matches!(s, PSeg::Move(_))).count())
+        .sum();
     assert!(
-        thin > 8,
-        "joint lines of 0.5 m units at 1:50 are 10 mm on paper: {thin}"
+        units > 8,
+        "units of 0.5 m at 1:50 are 10 mm on paper: {units}"
     );
     assert!(
         all.iter().any(|p| p.dash == Some([2.0, 1.0])

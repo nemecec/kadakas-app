@@ -21,6 +21,9 @@ pub struct Xf {
     pub model_center: DVec2,
     pub paper_center: DVec2,
     pub k: f64,
+    /// The part of the model that the frame shows (lowest and highest corner), when known. Paved
+    /// areas draw only the units that are in it.
+    pub window: Option<(DVec2, DVec2)>,
 }
 
 impl Xf {
@@ -29,6 +32,7 @@ impl Xf {
         model_center: DVec2::ZERO,
         paper_center: DVec2::ZERO,
         k: 1.0,
+        window: None,
     };
 
     pub fn of(vp: &Viewport) -> Xf {
@@ -36,6 +40,7 @@ impl Xf {
             model_center: vp.center,
             paper_center: vp.frame_center(),
             k: 1.0 / vp.scale,
+            window: Some(vp.model_window()),
         }
     }
 
@@ -717,6 +722,7 @@ pub fn annotation_prims(doc: &Document, vp: &Viewport, a: &Annotation, out: &mut
                     model_center: DVec2::ZERO,
                     paper_center: vp.min,
                     k: 1.0,
+                    window: None,
                 };
                 crate::annot::push(
                     doc,
@@ -739,6 +745,7 @@ pub fn annotation_prims(doc: &Document, vp: &Viewport, a: &Annotation, out: &mut
                 model_center: DVec2::ZERO,
                 paper_center: vp.min,
                 k: 1.0,
+                window: None,
             };
             shape_prims(
                 doc,

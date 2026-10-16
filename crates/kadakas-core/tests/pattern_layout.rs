@@ -288,21 +288,19 @@ fn report_svg_and_scene_leave_the_holes_open() {
     let svg = hardscape::svg_extras(ed.doc(), ed.doc().object(holed).unwrap(), 100.0, "black");
     assert!(svg.contains(r#"data-part="hole""#) && svg.contains("evenodd"));
     assert_eq!(svg.matches(r#"data-part="border""#).count(), 2);
-    let joints = hardscape::drawn_joints(
-        ed.doc(),
-        ed.doc().object(holed).unwrap(),
-        &JointPattern {
-            kind: JointKind::Stack,
-            unit_length: 200.0,
-            unit_width: 100.0,
-            spacing: 5.0,
-            ..Default::default()
-        },
-        1.0,
-    );
+    let prepared = hardscape::draw::prepared(ed.doc(), ed.doc().object(holed).unwrap())
+        .unwrap()
+        .unwrap();
+    let joints = prepared.draw(None, &hardscape::draw::DrawOptions::canvas());
+    assert!(!joints.is_preview());
+    let joints = joints
+        .groups
+        .iter()
+        .flat_map(|g| g.joints.clone())
+        .collect::<Vec<_>>();
     let h = hole();
-    assert!(!joints.segments.is_empty());
-    for (p, q) in &joints.segments {
+    assert!(!joints.is_empty());
+    for (p, q) in &joints {
         let mid = (*p + *q) / 2.0;
         assert!(
             !(mid.x > 1001.0 && mid.x < 1599.0 && mid.y > 801.0 && mid.y < 1299.0),

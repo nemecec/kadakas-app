@@ -138,13 +138,51 @@ pub fn render_overlay(
     ext: Option<SvgExt<'_>>,
     overlay: Option<&dyn SvgOverlay>,
 ) -> String {
-    // A view that the overlay gives is the final box. Else the box is the drawing and the ghosts,
-    // with a margin.
-    let (lo, hi) = overlay.and_then(|o| o.view()).unwrap_or_else(|| {
+    render_overlay_with(doc, width_px, ext, overlay, &RenderOptions::default())
+}
+
+/// What a render of the plan adds to the drawing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RenderOptions {
+    /// Draw only this part of the model (lowest and highest corner, mm). The picture is the
+    /// region, and the paved areas in it are drawn with their real units when the region holds
+    /// at most `hardscape::draw::SVG_BOUND` of them. `None`: the whole drawing.
+    pub region: Option<(DVec2, DVec2)>,
+    /// Mark the findings of the pattern check on the paved areas.
+    pub show_check: bool,
+}
+
+/// Like [`render_overlay`], with a region and the findings of the pattern check.
+pub fn render_overlay_with(
+    doc: &Document,
+    width_px: u32,
+    ext: Option<SvgExt<'_>>,
+    overlay: Option<&dyn SvgOverlay>,
+    opts: &RenderOptions,
+) -> String {
+    // A region of the call, or a view that the overlay gives, is the final box. Else the box is
+    // the drawing and the ghosts, with a margin.
+    let given = opts.region.or_else(|| overlay.and_then(|o| o.view()));
+    let (lo, hi) = given.unwrap_or_else(|| {
         let (lo, hi) = overlay_bounds(doc, overlay).unwrap_or((DVec2::ZERO, DVec2::splat(1000.0)));
         let margin = ((hi - lo).max_element() * 0.05).max(1.0);
         (lo - margin, hi + margin)
     });
+    let ctx = crate::hardscape::draw::SvgContext {
+        view: given,
+        show_check: opts.show_check,
+        bound: crate::hardscape::draw::SVG_BOUND,
+    };
+    crate::hardscape::draw::with_context(ctx, || render_box(doc, width_px, ext, overlay, (lo, hi)))
+}
+
+fn render_box(
+    doc: &Document,
+    width_px: u32,
+    ext: Option<SvgExt<'_>>,
+    overlay: Option<&dyn SvgOverlay>,
+    (lo, hi): (DVec2, DVec2),
+) -> String {
     let size = hi - lo;
     let height_px = (width_px as f64 * size.y / size.x).round().max(1.0);
     let mut s = String::new();
