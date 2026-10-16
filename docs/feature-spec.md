@@ -624,6 +624,21 @@ Familiar to SketchUp users, with the same approach as the Vectorworks-like app: 
 | MOD-12 | Interop of surface models: OBJ, STL and glTF import and export, IFC export as faceted solids, DXF 3DFACE and MESH. The SketchUp file format is not read or written. | P1 | planned |
 | MOD-13 | The Vectorworks-like app shows surface models in the plan and in 3D, selects and moves them, and shows them in the Object Info palette. Sheets, hidden-line output and section drawings include them. | P1 | planned |
 
+### 4.24 Agent editing, human review
+
+A main use of Kadakas: an AI agent edits the model, and a person reviews and directs the work in the app (decided on 2026-10-16). The review interface must be first-rate: the person sees exactly what the agent made, sees what changed, can point at things, and can undo or reject any agent step. These rows come before P2 work.
+
+| ID | Feature | Pri | Status |
+|---|---|---|---|
+| AGR-01 | Same as the export: what the app draws (canvas, 3D, renders, sheets, PDF) equals the data, the reports and the exports. A simplified drawing (a preview at low zoom) carries a visible label. Paving zones, courses and real units first. | P1 | in progress |
+| AGR-02 | The agent drives the view: `view.zoom {ids | box | at, scale?}`, `view.pan`, a free 3D camera (`eye`, `target`, `up`, field of view), saved views, and `view.get`, which returns the person's camera, zoom, visible box, selection, active layer and visible layers and classes, so the agent knows what the person looks at. View changes by an agent are animated briefly and never change the document. | P1 | planned |
+| AGR-03 | The agent points: `view.highlight {ids | at | box, text?, color?, until?}` marks objects or places with a marker and a short text, without changing the drawing; the person sees where the agent looks, like a collaborator's cursor (presence of the agent, PLAT-08 style). Highlights are not saved in the document. | P1 | planned |
+| AGR-04 | The person points: the selection, a clicked point, a drawn box or a sketch on the canvas are readable by the agent as context (`view.get`, `view.pointed`), so instructions like "make this island bigger" work. A "Send to agent" action adds a short note to the context. | P1 | planned |
+| AGR-05 | What the agent changed: changes with the origin `agent` are highlighted on the plan and in 3D (added, changed, removed, as in REV-03), with a list of the changes of the last step or session; a click zooms to the object. The highlight clears when the person marks the changes as seen. | P1 | planned |
+| AGR-06 | Activity panel: each agent step (one call or one script run) with a short summary written by the API from its change set, the time, and undo back to any step. A named version is saved automatically when an agent session starts. | P1 | planned |
+| AGR-07 | Accept or reject: an agent can be set to propose instead of edit. Its changes collect as a pending change set that the person reviews in the plan (as in AGR-05) and accepts or rejects per object or as a whole. A lighter form of the branches of REV-10. | P1 | planned |
+| AGR-08 | Live quantities: a panel shows chosen key numbers (for example unit counts, areas, cut and fill, plant counts) and their change since the last agent step or the start of the session. | P1 | planned |
+
 ## 8. Platform wave
 
 The core stays headless and independent of any UI. Several UIs, a collaboration server and a browser editor use the same core. The server source lives in a separate repository, so that its license can be chosen separately.
