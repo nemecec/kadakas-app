@@ -47,4 +47,6 @@ pub use store::{MemoryBackend, ModuleStore, StoreBackend, StoreError};
 pub use trust::{ModuleTrust, Permit};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+mod hosted_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;

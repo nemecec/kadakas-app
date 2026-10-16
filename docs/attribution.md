@@ -97,6 +97,16 @@ We implement these from the public descriptions. No code or data is copied unles
 | ZIP file format (PKWARE APPNOTE, public) and DEFLATE (RFC 1951), CRC-32 of ZIP | `kadakas-container`: the container of a `.kad` file; ZIP64 is read and written, encryption is not used. Info-ZIP `unzip`, `bsdtar`, `ditto`, the Java stream reader and Python's `zipfile` read the files in the tests |
 | Vectorworks 2026 public help pages and shortcut list (app-help.vectorworks.net) | Workflow, terms and default keys follow them. We use public information only and copy no text, icon or graphic. See `docs/keyboard-shortcuts.md`. |
 
+## JavaScript script engine (SCR-08)
+
+Scripts (`script.eval`, generator patterns) run on **quickjs-ng 0.17.0** (https://github.com/quickjs-ng/quickjs), a maintained fork of QuickJS by Fabrice Bellard and Charlie Gordon; the authors of quickjs-ng are Ben Noordhuis, Saúl Ibarra Corretgé and others. License: MIT. The C source is vendored in `crates/kadakas-script-js/quickjs/` (tag `v0.17.0`, hash of the archive in `quickjs/README.md`) and is built to a WebAssembly module by `crates/kadakas-script-js/build.rs`. The module runs inside the plug-in host (`wasmtime` on the desktop, the `WebAssembly` API in the browser, see above).
+
+The module contains the C library of the toolchain: **wasi-libc** of wasi-sdk 34.0 (https://github.com/WebAssembly/wasi-libc, commit 2e6fb9d8ee0c; Apache-2.0 WITH LLVM-exception, Apache-2.0 and MIT, with musl (MIT), cloudlibc (BSD-2-Clause) and dlmalloc (CC0) inside). The module imports nothing from the system. The license texts are in `THIRD_PARTY_NOTICES.txt` (from `docs/notices-extra.txt`).
+
+The toolchain itself is **wasi-sdk 34.0** (https://github.com/WebAssembly/wasi-sdk; clang and LLVM: Apache-2.0 WITH LLVM-exception). It builds Kadakas and is not shipped. The installers get the finished module only. The version and the SHA-256 of each archive are in `crates/kadakas-script-js/wasi-sdk.env`; `scripts/install-wasi-sdk.sh` checks them. Developers may use the Homebrew packages `llvm`, `lld`, `wasi-libc` and `wasi-runtimes` instead (the module may differ byte for byte).
+
+The example generators in `docs/scripts/` (`random-ashlar.js`, `radial-fan.js`) are own work, under the project license (Apache-2.0 OR MIT). The small random generator in `random-ashlar.js` is xorshift32 (G. Marsaglia, "Xorshift RNGs", 2003, public); `Math.random` in a script is sfc32 (Chris Doty-Humphrey, PractRand, public domain).
+
 ## New Rust crates for review (REV-06)
 
 `zip` 8.6.0 (MIT; features `deflate-flate2` only, so it uses `flate2` and `typed-path`, `crc32fast`, `indexmap` and `memchr`) reads and writes the BCF archives, and `roxmltree` 0.21.1 (MIT OR Apache-2.0, already used by `kadakas-gis`) reads the XML. Both are in `THIRD_PARTY_NOTICES.txt`. The container format of DOC-20 uses the same `zip` crate.
@@ -106,7 +116,7 @@ We implement these from the public descriptions. No code or data is copied unles
 These tools build, test or check Kadakas. They are not part of the installers.
 
 - lxml (BSD-3-Clause; `uv run --with lxml` in the behavior test that validates BCF files against the buildingSMART schema files), pytest (MIT), ezdxf (MIT), ifcopenshell (LGPL-3.0, used only to read IFC files in tests), uv (Apache-2.0 OR MIT)
-- cargo-llvm-cov (Apache-2.0 OR MIT), cargo-deny (Apache-2.0 OR MIT), cargo-about (Apache-2.0 OR MIT), cargo-packager (Apache-2.0 OR MIT), trunk (Apache-2.0 OR MIT)
+- cargo-llvm-cov (Apache-2.0 OR MIT), cargo-deny (Apache-2.0 OR MIT), cargo-about (Apache-2.0 OR MIT), cargo-packager (Apache-2.0 OR MIT), trunk (Apache-2.0 OR MIT), wasi-sdk (Apache-2.0 WITH LLVM-exception; see the section on the JavaScript script engine)
 - Optional DWG converters that the user installs: the ODA File Converter (Open Design Alliance, own license) and LibreDWG (GPL-3.0). Kadakas only starts them as separate programs. See `docs/dwg.md`.
 
 ## Keep this page current
