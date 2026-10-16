@@ -767,6 +767,40 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.message.contains("more than one source"), "{}", e.message);
+        let e = call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "replace": [{"point": 0, "with": m}], "add_source_ids": [m]}),
+        )
+        .unwrap_err();
+        assert!(e.message.contains("added as a source"), "{}", e.message);
+        // A polyline cannot replace a point, and a replaced line cannot also be removed.
+        let l = exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "polyline3d", "closed": false, "points": [[0, 0, 0], [1000, 0, 100]]}}),
+        );
+        let e = call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "replace": [{"point": 0, "with": l}]}),
+        )
+        .unwrap_err();
+        assert!(
+            e.message.contains("cannot replace a point"),
+            "{}",
+            e.message
+        );
+        let e = call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "remove_lines": [0], "replace": [{"line": 0, "with": l}]}),
+        )
+        .unwrap_err();
+        assert!(
+            e.message.contains("out of range") || e.message.contains("replaced and removed"),
+            "{}",
+            e.message
+        );
         // Removing every tagged source clears the key.
         call(
             &mut s,

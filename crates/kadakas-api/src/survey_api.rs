@@ -734,6 +734,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn surveyed_trees_stand_on_the_site_model_and_say_when_they_are_outside() {
+        let mut s = Session::with_sequential_ids();
+        site_with_problems(&mut s);
+        let r = ok(
+            &mut s,
+            "tree.import_survey",
+            json!({"text": "ID,E,N,Species,DBH (cm)\nT1,2,2,Oak,50\nT2,100,100,Oak,50\n"}),
+        );
+        assert_eq!(r["imported"], 2);
+        assert!(r.get("note").is_none(), "{r}");
+        assert!(
+            r["warnings"][0]
+                .as_str()
+                .unwrap()
+                .contains("outside every site model"),
+            "{r}"
+        );
+        let o = ok(&mut s, "objects.get", json!({"id": r["ids_from"]}));
+        assert!(o["data"]["ground_z"].as_f64().is_some(), "{o}");
+        // A bad row of the table does not stop the others.
+        let r = ok(
+            &mut s,
+            "tree.import_survey",
+            json!({"text": "ID,E,N,Species,DBH (cm)\nT3,2,2,Oak,50\nT4,1e300,2,Oak,50\n"}),
+        );
+        assert_eq!(r["imported"], 1, "{r}");
+        // Drape refuses an object that is no plant.
+        let c = ok(
+            &mut s,
+            "execute",
+            json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 10}}}),
+        );
+        let e = s
+            .handle("plants.drape", json!({"ids": [c["created"][0]]}))
+            .unwrap_err();
+        assert!(
+            e.message.contains("only plants and existing trees"),
+            "{}",
+            e.message
+        );
+    }
+
     fn site_with_problems(s: &mut Session) -> kadakas_core::uid::Uid {
         let mut ids = Vec::new();
         for x in 0..6 {
