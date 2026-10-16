@@ -112,6 +112,10 @@ pub const REASON_BASE_TOO_MANY: &str = "base_too_many";
 /// `import.file`: the summaries of the entities are too large for a base and the option `base` is
 /// `auto`. `details` has `{entities, bytes, cap}`. The choices are the same.
 pub const REASON_BASE_TOO_LARGE: &str = "base_too_large";
+/// `view.zoom`, `view.pan`, `view.camera`, `view.set`: the person is dragging or zooming the view
+/// at this moment. The agent request was dropped and nothing moved. The caller may try again after
+/// a moment: the person always wins over the agent (AGR-02).
+pub const REASON_PERSON_NAVIGATING: &str = "person_navigating";
 
 impl RpcError {
     pub fn new(code: i64, kind: &'static str, e: impl std::fmt::Display) -> Self {

@@ -60,9 +60,43 @@ render.png
 view.list
 
 view.set
-  view str # a name from view.list
+  view str # a name from view.list, or the name of a saved view (its camera only)
   projection enum(ortho,perspective)
   mode enum(shaded,wireframe,hidden_line,dashed_hidden_line)
+
+view.get
+
+view.zoom
+  ids object[] # objects to frame
+  box num[] # [x0, y0, x1, y1] in drawing coordinates (mm)
+  at num[] # [x, y] or [x, y, z]: the new middle of the view
+  scale num # px per mm of the plan, 0.0001 to 100
+  margin num = 0.1 # space around ids or box, as a fraction of its size on each side (0 to 10)
+  @one_of ids,box,at
+
+view.pan
+  by num[] # [dx, dy] (3D also dz) in drawing mm, east and north
+  to num[] # [x, y] (3D also z): the new middle of the view
+  @one_of by,to
+
+view.camera
+  eye! num[] # [x, y, z] in drawing mm
+  target! num[] # [x, y, z] in drawing mm
+  up num[] # must point upward (z above 0): the camera has no roll
+  fov num # degrees; the camera has a fixed 45
+  projection enum(ortho,perspective)
+
+view.highlight
+  ids object[] # objects to mark with an outline glow
+  box num[] # [x0, y0, x1, y1] in drawing coordinates (mm)
+  at num[] # [x, y] or [x, y, z]: a marker at this place
+  text str # a short text, at most 80 characters, one line
+  color enum(agent,red,blue,green,orange) = agent
+  until str|int # next_change, dismissed (default) or a time in ms (1 to 3600000)
+  @one_of ids,box,at
+
+view.highlight_clear
+  id int # one pointer; all when left out
 
 report.plants
 
