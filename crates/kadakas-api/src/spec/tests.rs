@@ -401,6 +401,34 @@ fn describe_gives_the_schemas_on_request() {
 }
 
 #[test]
+fn one_id_is_a_list_of_one_and_feedback_attach_takes_false() {
+    let s = doc_with_layers();
+    let id = "00000000-0000-0000-0000-000000000001";
+    let p = prepare(s.editor.doc(), "wall.report", json!({"id": id})).unwrap();
+    assert_eq!(p, json!({"ids": [id]}));
+    // A method that has an `id` of its own keeps it.
+    let p = prepare(s.editor.doc(), "objects.get", json!({"id": id})).unwrap();
+    assert_eq!(p, json!({"id": id}));
+    // Both given: `ids` wins and `id` is an unknown parameter.
+    assert!(
+        prepare(
+            s.editor.doc(),
+            "wall.report",
+            json!({"id": id, "ids": [id]})
+        )
+        .is_err()
+    );
+    for attach in [json!(false), json!({"log": false})] {
+        prepare(
+            s.editor.doc(),
+            "feedback.submit",
+            json!({"kind": "bug", "title": "t", "attach": attach}),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
 fn a_name_added_earlier_in_the_batch_gets_a_clear_error_and_an_exact_name_wins() {
     let mut s = doc_with_layers();
     let e = s

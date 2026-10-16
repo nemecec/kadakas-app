@@ -164,7 +164,7 @@ The description of each tool lists its methods. Call `describe` first. For examp
 
 The `document` tool also has the file methods `file.open` and `file.save`. Layers and classes have no methods of
 their own: change them with commands of `execute`. Many methods change the drawing, not only `execute` (for example
-`plants.place`, `hardscape.add` and `import.file`). The tools carry MCP annotations: `describe`, `objects` and
+`plants.place`, `hardscape.add` and `import.file`). The tool descriptions list the methods; `describe {method}` gives the JSON Schema of one (start the server with `--mcp-schemas` to list all of them in the tools, about twice the size). The tools carry MCP annotations: `describe`, `objects` and
 `reports` are read-only. The others may change or delete data (`destructiveHint`), and `gis` may use the network.
 
 Some clients work better with one tool per method. Start the server with `--mcp-flat` to get the older listing of

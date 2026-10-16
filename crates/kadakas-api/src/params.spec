@@ -2612,7 +2612,7 @@ feedback.submit
   method str
   error str
   severity enum(low,medium,high)
-  attach obj # {excerpt?, screenshot?, calls?, log?, objects?, selection?, view?}
+  attach bool|obj # {excerpt?, screenshot?, calls?, log?, objects?, selection?, view?}
   client obj # added by the host; the program name and its version
 
 feedback.list

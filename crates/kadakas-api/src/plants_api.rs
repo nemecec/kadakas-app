@@ -660,6 +660,26 @@ fn drape(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     Ok(out)
 }
 
+/// A note for a document that was made before the ground height of plants and trees became a
+/// height above the origin (it was the height above the elevation of the layer of the site
+/// model). It matters only when a layer has an elevation. The note is part of the load notes, so
+/// the person sees it when the document opens, and `plants.drape` renews the heights.
+pub(crate) fn ground_height_note(doc: &kadakas_core::model::Document) -> Option<String> {
+    if doc.layers.iter().all(|l| l.elevation == 0.0) {
+        return None;
+    }
+    let n = doc
+        .objects
+        .values()
+        .filter(|o| link::ground_z(o).is_some())
+        .count();
+    (n > 0).then(|| {
+        format!(
+            "{n} plants or trees have a stored ground height, and some layers have an elevation. A document that an older version saved may have them relative to the layer of the site model. Run plants.drape to renew the heights"
+        )
+    })
+}
+
 /// What a call says when plants or trees did not find ground: never a silent height of 0.
 /// `outside` plants take the height of the nearest edge of a site model, `skipped` plants have no
 /// site model at all and stay at the elevation of their layer.

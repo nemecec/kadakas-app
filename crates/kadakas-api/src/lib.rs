@@ -348,7 +348,10 @@ pub const METHODS: &[(&str, &str)] = &[
     #[cfg(not(target_arch = "wasm32"))]
     files::FILE_OPEN,
     ("objects.list", "Objects. params: {layer?, class?, kind?}."),
-    ("objects.get", "One object. params: {id, sources? (true shows the import tags of the sources of a site model: data.import_sources, one entry for each point and line; by default the answer only counts them)}."),
+    (
+        "objects.get",
+        "One object. params: {id, sources? (true shows the import tags of the sources of a site model: data.import_sources, one entry for each point and line; by default the answer only counts them)}.",
+    ),
     ("selection.get", "Selected object IDs."),
     (
         "selection.set",
@@ -1006,7 +1009,8 @@ impl Session {
     /// A session for an opened document, with empty history and selection.
     pub fn with_document(mut doc: Document) -> Self {
         let mut cache = review_api::vet_document(&mut doc, SessionLimits::default().read_caps());
-        let notes = doc.load_notes().to_vec();
+        let mut notes = doc.load_notes().to_vec();
+        notes.extend(plants_api::ground_height_note(&doc));
         let (mut s, exact) = Session::with_vetted_document(doc);
         s.load_notes = notes;
         cache.arm(s.editor.revision(), exact);
@@ -1053,6 +1057,7 @@ impl Session {
         let mut cache = review_api::vet_document(&mut doc, self.limits.read_caps());
         let mut notes = doc.load_notes().to_vec();
         notes.extend(doc.placeholder_note());
+        notes.extend(plants_api::ground_height_note(&doc));
         #[cfg(not(target_arch = "wasm32"))]
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
         #[cfg(not(target_arch = "wasm32"))]

@@ -271,6 +271,20 @@ fn issue_pins_stand_on_the_ground() {
     let pin = call(&mut s, "issue.get", json!({"id": i["id"]}))["pin"].clone();
     let z = pin[2].as_f64().unwrap();
     assert!((z - 34_200.0).abs() < 1.0, "{pin}");
+    // A building is pinned at its base, the lowest ground under it, not at the ground in the middle.
+    let m = call(
+        &mut s,
+        "massing.add",
+        json!({"footprint": [[10_000, 10_000], [14_000, 10_000], [14_000, 14_000], [10_000, 14_000]]}),
+    );
+    let i = call(
+        &mut s,
+        "issue.create",
+        json!({"title": "Facade", "objects": [m["id"]]}),
+    );
+    let pin = call(&mut s, "issue.get", json!({"id": i["id"]}))["pin"].clone();
+    let z = pin[2].as_f64().unwrap();
+    assert!((z - 34_000.0).abs() < 1.0, "{pin}");
 }
 
 #[test]
@@ -445,6 +459,51 @@ fn a_pad_on_a_layer_without_a_site_model_acts_on_the_model_under_it() {
         "pad.add",
         json!({"boundary": [[5000, 5000], [15_000, 5000], [15_000, 15_000], [5000, 15_000]], "elevation": 5000, "layer": "Own site"}),
     );
+    // A pad over no site model says so, because no cut or fill will show it.
+    let far = call(
+        &mut s,
+        "pad.add",
+        json!({"boundary": [[900_000, 0], [910_000, 0], [910_000, 10_000], [900_000, 10_000]], "elevation": 5000, "layer": "Grading"}),
+    );
+    assert!(
+        far["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("no site model is affected"),
+        "{far}"
+    );
+    assert!(pad.get("warnings").is_none(), "{pad}");
     let cf1 = call(&mut s, "site.cut_fill", json!({"id": model}));
     assert!(!cf1["modifiers"].as_array().unwrap().contains(&pad2["id"]));
+}
+
+#[test]
+fn a_document_with_ground_heights_and_layer_elevations_loads_with_a_note() {
+    let mut s = Session::with_sequential_ids();
+    let site_layer = layer(&mut s, "Site", 2_000);
+    let _planting = layer(&mut s, "Planting", 0);
+    site(&mut s, &site_layer, [0, 0], 40_000, 1_000);
+    let oak = style(&mut s);
+    call(
+        &mut s,
+        "plants.place",
+        json!({"mode": "single", "at": [1000, 1000], "style": oak, "layer": "Planting", "on_terrain": true}),
+    );
+    let doc = call(&mut s, "document.get", json!({}));
+    let r = call(&mut s, "document.load", json!({"document": doc}));
+    let note = r["notes"][0].as_str().expect("a load note");
+    assert!(note.contains("plants.drape"), "{note}");
+    // Without a layer elevation the frames are the same: no note.
+    let mut flat = Session::with_sequential_ids();
+    let site_layer = layer(&mut flat, "Site", 0);
+    site(&mut flat, &site_layer, [0, 0], 40_000, 1_000);
+    let oak = style(&mut flat);
+    call(
+        &mut flat,
+        "plants.place",
+        json!({"mode": "single", "at": [1000, 1000], "style": oak, "on_terrain": true}),
+    );
+    let doc = call(&mut flat, "document.get", json!({}));
+    let r = call(&mut flat, "document.load", json!({"document": doc}));
+    assert!(r.get("notes").is_none(), "{r}");
 }

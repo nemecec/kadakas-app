@@ -274,6 +274,8 @@ pub struct SiteCache {
     /// `grading::analysis::for_site`). Bounded.
     pub(crate) analyses: Mutex<LruCache<u64, Arc<AnalysisResult>>>,
     pub(crate) analysis_runs: AtomicU64,
+    /// The grid over the site models for the last revision that asked (see `terrain`).
+    terrain: Mutex<Option<(u64, Arc<crate::terrain::Index>)>>,
 }
 
 impl Default for SiteCache {
@@ -282,6 +284,7 @@ impl Default for SiteCache {
             inner: Mutex::default(),
             analyses: Mutex::new(LruCache::new(crate::grading::analysis::CACHE_SIZE)),
             analysis_runs: AtomicU64::new(0),
+            terrain: Mutex::new(None),
         }
     }
 }
@@ -300,6 +303,24 @@ struct CacheInner {
 }
 
 impl SiteCache {
+    /// The index of the site models of `doc`, which must be the document of `revision`. One
+    /// index serves all the lookups of a revision.
+    pub(crate) fn terrain_index(
+        &self,
+        revision: u64,
+        doc: &Document,
+    ) -> Arc<crate::terrain::Index> {
+        let mut slot = self.terrain.lock().unwrap_or_else(|e| e.into_inner());
+        match slot.as_ref() {
+            Some((r, index)) if *r == revision => index.clone(),
+            _ => {
+                let index = Arc::new(crate::terrain::Index::new(doc));
+                *slot = Some((revision, index.clone()));
+                index
+            }
+        }
+    }
+
     /// The result for site model `id` in `doc`, which must be the document of `revision`.
     /// A site model with `auto_update` off keeps its old result when the geometry changes,
     /// until `update` is called. Use `is_stale` to ask.
@@ -477,7 +498,8 @@ pub(crate) mod tests {
         assert_eq!(r.cut_fill(), c);
         let _ = r.contours(Surface::Proposed).unwrap();
         assert!(r.contours(Surface::Proposed).is_ok());
-        // A modifier on another layer, or far away, does nothing.
+        // A modifier on a layer that has no site model acts on the model under it (on any layer);
+        // one that is far away does nothing.
         ed.execute(&Command::AddLayer {
             name: "Other".into(),
             elevation: 0.0,
@@ -506,7 +528,7 @@ pub(crate) mod tests {
                 boundary: sq(1e6, 1e6 + 10.0),
             },
         );
-        assert_eq!(modifiers_for(ed.doc(), id).len(), 1);
+        assert_eq!(modifiers_for(ed.doc(), id).len(), 2);
         add(
             &mut ed,
             Shape::SiteModifier {
@@ -514,7 +536,7 @@ pub(crate) mod tests {
                 boundary: sq(0.0, 9000.0),
             },
         );
-        assert_eq!(modifiers_for(ed.doc(), id).len(), 2);
+        assert_eq!(modifiers_for(ed.doc(), id).len(), 3);
         assert!(modifiers_for(ed.doc(), ObjectId::from_num(9999)).is_empty());
     }
 

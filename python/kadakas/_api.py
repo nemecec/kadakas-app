@@ -63,6 +63,7 @@ if TYPE_CHECKING:
 
     ObjectsGetParams = TypedDict("ObjectsGetParams", {
         'id': Required[str],
+        'sources': bool,
     }, total=False)
 
     SelectionGetParams = TypedDict("SelectionGetParams", {}, total=False)
@@ -3184,7 +3185,7 @@ if TYPE_CHECKING:
     }, total=False)
 
     FeedbackSubmitParams = TypedDict("FeedbackSubmitParams", {
-        'attach': dict[str, Any],
+        'attach': bool | dict[str, Any],
         'body': str,
         'client': dict[str, Any],
         'error': str,
@@ -3278,7 +3279,7 @@ class Api:
         return self._call("objects.list", params or None)
 
     def objects_get(self, **params: "Unpack[ObjectsGetParams]") -> Any:
-        """One object. params: {id}.
+        """One object. params: {id, sources? (true shows the import tags of the sources of a site model: data.import_sources, one entry for each point and line; by default the answer only counts them)}.
 
         JSON-RPC method ``objects.get``."""
         return self._call("objects.get", params or None)
@@ -3890,7 +3891,7 @@ class Api:
         return self._call("massing.from_shapes", params or None)
 
     def massing_follow_sources(self, **params: "Unpack[MassingFollowSourcesParams]") -> Any:
-        """Give massing models the footprint that their source shape has now. A model made by massing.from_shapes with delete_source false keeps a link to its shape (data.massing_source) but does not follow it by itself, for example after an update from a new revision of the drawing moved a corner of the shape. params: {ids?} (default all models with a link). Returns {changed: [ids], unchanged: [ids], source_missing: [ids] (the shape is gone or is not a footprint any more)}. One undo step.
+        """Give massing models the footprint that their source shape has now. A model made by massing.from_shapes with delete_source false keeps a link to its shape (data.massing_source) but does not follow it by itself, for example after an update from a new revision of the drawing moved a corner of the shape. params: {ids?} (default all models with a link). Returns {changed: [ids], unchanged: [ids], source_missing: [ids] (the shape is gone or is not a footprint any more), not_a_footprint: [{id, problem}] (the model would not be valid with the new footprint)}; a model that cannot follow never stops the others. One undo step.
 
         JSON-RPC method ``massing.follow_sources``."""
         return self._call("massing.follow_sources", params or None)

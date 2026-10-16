@@ -326,7 +326,12 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
     let mut n = 0usize;
     let mut bad_rows: Vec<(usize, String)> = Vec::new();
     // The trees stand on the ground of the site model that covers them, on any layer.
-    let on_terrain = m.get("on_terrain").and_then(Value::as_bool).unwrap_or(true);
+    let asked = m.get("on_terrain").filter(|v| !v.is_null());
+    let on_terrain = match asked {
+        None => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad("on_terrain must be true or false")),
+    };
     let terrain = kadakas_site::SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);
     let (mut outside, mut off_ground) = (0usize, 0usize);
     for (t, p) in parsed.rows.iter().zip(&positions) {
@@ -398,6 +403,9 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
         });
         n += 1;
     }
+    // A survey usually comes before the site model. When on_terrain was not asked for and there
+    // is no model yet, say it once in a note: the trees wait for plants.drape.
+    let no_model_yet = asked.is_none() && !terrain.has_site_models();
     drop(terrain);
     if n == 0 {
         return Err(RpcError::validation("all trees are out of range"));
@@ -417,7 +425,11 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
         "ids_to": last,
     });
     let warnings = crate::plants_api::ground_warnings(false, n - off_ground, outside, off_ground);
-    if on_terrain && !warnings.is_empty() {
+    if no_model_yet {
+        out["note"] = json!(
+            "The document has no site model yet, so the trees stand at the elevation of their layer. Create the site model with site.create, then run plants.drape to put them on the ground (on_terrain: false turns this note off)."
+        );
+    } else if on_terrain && !warnings.is_empty() {
         out["warnings"] = json!(warnings);
     }
     Ok(out)
@@ -691,6 +703,25 @@ mod tests {
             json!({"text": "ID;E;N;Species;DBH (cm);Height (m);Spread (m);Condition;Action\nT1;5;7;Oak;50;15;9;good;remove\n"}),
         );
         assert_eq!(r["imported"], 1);
+        // No site model yet: one note, and no warning.
+        assert!(
+            r["note"].as_str().unwrap().contains("no site model yet"),
+            "{r}"
+        );
+        assert!(r.get("warnings").is_none());
+        let off = ok(
+            &mut s,
+            "tree.import_survey",
+            json!({"text": "ID,E,N,Species,DBH (cm)\nT2,1,1,Oak,50\n", "on_terrain": false}),
+        );
+        assert!(off.get("note").is_none() && off.get("warnings").is_none());
+        let e = s
+            .handle(
+                "tree.import_survey",
+                json!({"text": "ID,E,N,Species,DBH (cm)\nT3,1,1,Oak,50\n", "on_terrain": "yes"}),
+            )
+            .unwrap_err();
+        assert!(e.message.contains("true or false"), "{}", e.message);
         let rows = ok(&mut s, "report.existing_trees", json!({}));
         assert_eq!(rows["rows"][0]["rpz_radius"], 6000.0);
         let o = ok(&mut s, "objects.get", json!({"id": r["ids_from"]}));

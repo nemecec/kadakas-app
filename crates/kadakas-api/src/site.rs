@@ -242,6 +242,7 @@ impl Session {
                 // A replacement takes the place of an old source: the new coordinates and the tag
                 // of the new object, in the same place of the list.
                 let mut consumed: Vec<ObjectId> = Vec::new();
+                let mut slots: std::collections::HashSet<(&str, usize)> = Default::default();
                 for r in &replace {
                     let (what, index, len) = match (r.point, r.line) {
                         (Some(i), None) => ("point", i, points.len()),
@@ -256,6 +257,23 @@ impl Session {
                         return Err(RpcError::invalid_params(format!(
                             "{what} index {index} is out of range (0 to {})",
                             len.saturating_sub(1)
+                        )));
+                    }
+                    if consumed.contains(&r.with) {
+                        return Err(RpcError::invalid_params(format!(
+                            "object {} replaces more than one source",
+                            r.with
+                        )));
+                    }
+                    if !slots.insert((what, index)) {
+                        return Err(RpcError::invalid_params(format!(
+                            "{what} {index} is replaced more than once"
+                        )));
+                    }
+                    if add_source_ids.contains(&r.with) {
+                        return Err(RpcError::invalid_params(format!(
+                            "object {} replaces a source and is added as a source in one call",
+                            r.with
                         )));
                     }
                     let removed = if what == "point" {
@@ -610,9 +628,19 @@ mod tests {
         assert_eq!(hidden["tagged_points"], 2, "{plain}");
         assert!(hidden.get("points").is_none());
         let full = call(&mut s, "objects.get", json!({"id": id, "sources": true})).unwrap();
-        assert_eq!(full["data"]["import_sources"]["points"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            full["data"]["import_sources"]["points"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
         // The list shows the count as well.
-        let list = call(&mut s, "objects.list", json!({"kind": "site_model", "include_data": true}));
+        let list = call(
+            &mut s,
+            "objects.list",
+            json!({"kind": "site_model", "include_data": true}),
+        );
         if let Ok(l) = list {
             assert!(!l.to_string().contains("\"handle\""), "{l}");
         }
@@ -723,6 +751,22 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.message.contains("own source"), "{}", e.message);
+        // One source is replaced once, and one object replaces one source.
+        let m2 = tagged_locus(&mut s, 13_000, "M3");
+        let e = call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "replace": [{"point": 0, "with": m}, {"point": 0, "with": m2}]}),
+        )
+        .unwrap_err();
+        assert!(e.message.contains("more than once"), "{}", e.message);
+        let e = call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "replace": [{"point": 0, "with": m}, {"point": 1, "with": m}]}),
+        )
+        .unwrap_err();
+        assert!(e.message.contains("more than one source"), "{}", e.message);
         // Removing every tagged source clears the key.
         call(
             &mut s,

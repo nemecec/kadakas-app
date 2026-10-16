@@ -859,6 +859,91 @@ mod tests {
         json!({"drawing": "plan.dxf", "revision": "00ff00ff00ff00ff", "handle": "2F", "kind": "LINE", "hash": "0123456789abcdef", "obj": "fedcba9876543210"})
     }
 
+    fn source(handle: &str, obj: String) -> Option<SourceRef> {
+        let mut tag = ImportTag::of(&tag_value()).unwrap();
+        tag.handle = Some(handle.into());
+        tag.obj = obj;
+        Some(SourceRef {
+            tag,
+            dxf_layer: "L".into(),
+        })
+    }
+
+    #[test]
+    fn tags_follow_the_points_and_lines_that_are_still_there_and_a_moved_model_keeps_them() {
+        use crate::site::SiteLine;
+        let p = |x: f64| glam::DVec3::new(x, 0.0, 1.0);
+        let line = |x: f64| SiteLine {
+            points: vec![p(x), p(x + 1.0)],
+            closed: false,
+        };
+        let old_points = vec![p(1.0), p(2.0), p(3.0)];
+        let old_lines = vec![line(10.0), line(20.0)];
+        let tags = SiteSources {
+            points: old_points
+                .iter()
+                .enumerate()
+                .map(|(i, q)| source(&format!("P{i}"), point_state(*q)))
+                .collect(),
+            lines: old_lines
+                .iter()
+                .enumerate()
+                .map(|(i, l)| source(&format!("L{i}"), line_state(l)))
+                .collect(),
+        };
+        // The first point is gone, the others move up in the list; a new point has no tag.
+        let carried = tags.carry(
+            (&old_points, &old_lines),
+            (&[p(3.0), p(2.0), p(9.0)], &[line(20.0)]),
+        );
+        let handle = |r: &Option<SourceRef>| r.as_ref().and_then(|r| r.tag.handle.clone());
+        assert_eq!(
+            carried.points.iter().map(handle).collect::<Vec<_>>(),
+            vec![Some("P2".into()), Some("P1".into()), None]
+        );
+        // Fewer lines: by identical geometry, never by place.
+        assert_eq!(
+            carried.lines.iter().map(handle).collect::<Vec<_>>(),
+            vec![Some("L1".into())]
+        );
+        // The same number of lines: by place.
+        let kept = tags.carry(
+            (&old_points, &old_lines),
+            (&old_points, &[line(10.0), line(21.0)]),
+        );
+        assert_eq!(
+            kept.lines.iter().map(handle).collect::<Vec<_>>(),
+            vec![Some("L0".into()), Some("L1".into())]
+        );
+        // A model that moves as a whole: a source that matched its tag still matches.
+        let shift = glam::DVec3::new(500.0, 0.0, 0.0);
+        let new_points: Vec<_> = old_points.iter().map(|q| *q + shift).collect();
+        let new_lines: Vec<_> = old_lines
+            .iter()
+            .map(|l| SiteLine {
+                points: l.points.iter().map(|q| *q + shift).collect(),
+                closed: l.closed,
+            })
+            .collect();
+        let mut edited = tags.clone();
+        edited.points[1] = source("P1", EDITED_OBJ.to_string());
+        let mut moved = edited.clone();
+        moved.moved((&old_points, &old_lines), (&new_points, &new_lines));
+        assert_eq!(
+            moved.points[0].as_ref().unwrap().tag.obj,
+            point_state(new_points[0])
+        );
+        assert_eq!(
+            moved.lines[1].as_ref().unwrap().tag.obj,
+            line_state(&new_lines[1])
+        );
+        assert_eq!(
+            moved.points[1].as_ref().unwrap().tag.obj,
+            EDITED_OBJ,
+            "an edit stays"
+        );
+    }
+
     #[test]
     fn a_tag_of_a_source_point_takes_about_170_bytes_in_the_document() {
         // Measured for 100 000 points of a survey (drawing name, revision, handle, kind, hashes).

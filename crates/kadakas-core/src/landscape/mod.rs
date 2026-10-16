@@ -404,6 +404,7 @@ pub fn scatter(doc: &Document, obj: &Object) -> Vec<Placed> {
     // same drawing must give the same picture (3D-13).
     let seed = ring.iter().fold(ring.len() as u64, |h, p| {
         let q = |v: f64| (v.round() as i64) as u64;
+        let p = *p - lo;
         (h.rotate_left(7) ^ q(p.x).wrapping_mul(0x9E37_79B9_7F4A_7C15))
             .wrapping_mul(0x2545_F491_4F6C_DD1D)
             ^ q(p.y)

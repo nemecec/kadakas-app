@@ -34,7 +34,7 @@ pub const MASSING_FROM_SHAPES: (&str, &str) = (
 );
 pub const MASSING_FOLLOW_SOURCES: (&str, &str) = (
     "massing.follow_sources",
-    "Give massing models the footprint that their source shape has now. A model made by massing.from_shapes with delete_source false keeps a link to its shape (data.massing_source) but does not follow it by itself, for example after an update from a new revision of the drawing moved a corner of the shape. params: {ids?} (default all models with a link). Returns {changed: [ids], unchanged: [ids], source_missing: [ids] (the shape is gone or is not a footprint any more)}. One undo step.",
+    "Give massing models the footprint that their source shape has now. A model made by massing.from_shapes with delete_source false keeps a link to its shape (data.massing_source) but does not follow it by itself, for example after an update from a new revision of the drawing moved a corner of the shape. params: {ids?} (default all models with a link). Returns {changed: [ids], unchanged: [ids], source_missing: [ids] (the shape is gone or is not a footprint any more), not_a_footprint: [{id, problem}] (the model would not be valid with the new footprint)}; a model that cannot follow never stops the others. One undo step.",
 );
 pub const MASSING_REPORT: (&str, &str) = (
     "massing.report",
@@ -325,8 +325,13 @@ fn follow_sources(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcE
         None => None,
     };
     let doc = s.editor.doc();
-    let (mut commands, mut changed, mut same, mut lost) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut commands, mut changed, mut same, mut lost, mut bad_shapes) = (
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::<Value>::new(),
+    );
     for o in doc.objects.values() {
         let Shape::Massing(model) = &o.shape else {
             continue;
@@ -340,11 +345,10 @@ fn follow_sources(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcE
             Some(f) => {
                 let mut new = model.as_ref().clone();
                 new.footprint = f;
+                // The other models still follow; this one is listed with the reason.
                 if let Some(why) = new.problem() {
-                    return Err(bad(format!(
-                        "the shape of model {} is not a footprint: {why}",
-                        o.id
-                    )));
+                    bad_shapes.push(json!({"id": o.id, "problem": why}));
+                    continue;
                 }
                 commands.push(Command::ModifyObject {
                     id: o.id,
@@ -362,7 +366,12 @@ fn follow_sources(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcE
             .execute(&Command::Batch { commands })
             .map_err(RpcError::from)?;
     }
-    Ok(json!({"changed": changed, "unchanged": same, "source_missing": lost}))
+    Ok(json!({
+        "changed": changed,
+        "unchanged": same,
+        "source_missing": lost,
+        "not_a_footprint": bad_shapes,
+    }))
 }
 
 fn report(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {

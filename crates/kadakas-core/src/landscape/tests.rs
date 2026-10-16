@@ -479,6 +479,29 @@ fn scatter_is_deterministic_inside_and_proportional() {
 }
 
 #[test]
+fn moving_an_area_moves_its_symbols_and_does_not_shuffle_them() {
+    let (mut ed, id, ..) = setup();
+    let before: Vec<DVec2> = scatter(ed.doc(), ed.doc().object(id).unwrap())
+        .iter()
+        .map(|p| p.at)
+        .collect();
+    let delta = DVec2::new(123_456.0, -78_000.0);
+    ed.execute(&Command::MoveObjects {
+        ids: vec![id],
+        delta,
+    })
+    .unwrap();
+    let after: Vec<DVec2> = scatter(ed.doc(), ed.doc().object(id).unwrap())
+        .iter()
+        .map(|p| p.at)
+        .collect();
+    assert_eq!(before.len(), after.len());
+    for (a, b) in before.iter().zip(&after) {
+        assert!((*a + delta - *b).length() < 1e-6, "{a} {b}");
+    }
+}
+
+#[test]
 fn scatter_edge_cases() {
     let (mut ed, id, ..) = setup();
     let line = Object::new(

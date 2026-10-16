@@ -523,6 +523,14 @@ pub fn prepare(doc: &Document, method: &str, p: Value) -> Result<Value, RpcError
     let Value::Object(mut map) = p else {
         return Ok(p);
     };
+    // A method that takes a list `ids` and has no `id` of its own accepts one `id` as a list of one.
+    if spec.param("ids").is_some()
+        && spec.param("id").is_none()
+        && !map.contains_key("ids")
+        && let Some(one) = map.remove("id")
+    {
+        map.insert("ids".into(), json!([one]));
+    }
     if !spec.open {
         let unknown: Vec<&String> = map.keys().filter(|k| spec.param(k).is_none()).collect();
         if !unknown.is_empty() {

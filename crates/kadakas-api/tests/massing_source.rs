@@ -51,7 +51,7 @@ fn the_model_links_to_its_shape_and_follows_on_request() {
     let f = call(&mut s, "massing.follow_sources", json!({}));
     assert_eq!(
         f,
-        json!({"changed": [], "unchanged": [model], "source_missing": []})
+        json!({"changed": [], "unchanged": [model], "source_missing": [], "not_a_footprint": []})
     );
     // The shape changes: the model keeps its footprint until it is asked.
     call(
@@ -89,4 +89,34 @@ fn the_model_links_to_its_shape_and_follows_on_request() {
     let m = call(&mut s, "objects.get", json!({"id": r["created"][0]["id"]}));
     assert!(m["data"].get("massing_source").is_none());
     assert!(r["note"].as_str().unwrap().contains("replaced"));
+}
+
+#[test]
+fn a_shape_that_is_no_footprint_any_more_is_listed_and_the_others_still_follow() {
+    let mut s = Session::with_sequential_ids();
+    let a = square(&mut s, 10_000);
+    let b = square(&mut s, 8000);
+    let r = call(
+        &mut s,
+        "massing.from_shapes",
+        json!({"ids": [a, b], "delete_source": false}),
+    );
+    let (ma, mb) = (r["created"][0]["id"].clone(), r["created"][1]["id"].clone());
+    // The first shape collapses to a line, the second grows.
+    call(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "modify_object", "id": a, "shape": {"kind": "polyline", "closed": true,
+            "points": [[0, 0], [5000, 0], [9000, 0]]}}}),
+    );
+    call(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "modify_object", "id": b, "shape": {"kind": "polyline", "closed": true,
+            "points": [[0, 0], [9000, 0], [9000, 8000], [0, 8000]]}}}),
+    );
+    let f = call(&mut s, "massing.follow_sources", json!({}));
+    assert_eq!(f["changed"], json!([mb]), "{f}");
+    assert_eq!(f["source_missing"], json!([ma]), "{f}");
+    assert_eq!(f["not_a_footprint"], json!([]), "{f}");
 }
