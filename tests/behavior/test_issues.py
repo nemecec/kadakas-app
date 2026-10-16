@@ -321,13 +321,18 @@ def test_hostile_bcf_archives_are_refused_or_listed(cad, tmp_path):
     garbage = tmp_path / "garbage.bcfzip"
     garbage.write_bytes(b"PK\x03\x04 this is not a real archive")
     assert cad.error("issue.import_bcf", {"path": str(garbage)})["data"]["kind"] == "validation"
-    # A DTD with entities is refused for the topic that has it, and the good topic comes in.
+    # A DTD with entities is refused for the topic that has it. That is a question for the person:
+    # nothing comes in until they agree to import without it.
     bomb = ("bbbbbbbb-1111-4222-8333-444455556666/markup.bcf",
             '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;&a;">]>'
             "<Markup><Topic Guid=\"bbbbbbbb-1111-4222-8333-444455556666\"><Title>&b;</Title></Topic></Markup>")
     path = tmp_path / "mixed.bcfzip"
     hostile(path, [version, good, bomb])
-    result = cad.result("issue.import_bcf", {"path": str(path), "now_ms": 5})
+    asked = cad.error("issue.import_bcf", {"path": str(path), "now_ms": 5})
+    assert asked["data"]["reason"] == "bcf_unfit"
+    assert asked["data"]["unfit"][0]["item"] == "topic"
+    assert cad.result("issue.list")["total"] == 0
+    result = cad.result("issue.import_bcf", {"path": str(path), "now_ms": 5, "skip_items": True})
     assert result["imported"] == 1
     assert [s["topic"] for s in result["topics_skipped"]] == ["bbbbbbbb-1111-4222-8333-444455556666"]
     assert cad.result("issue.list")["total"] == 1
