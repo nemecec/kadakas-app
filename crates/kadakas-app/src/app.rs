@@ -1751,6 +1751,7 @@ impl KadakasApp {
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
         // A JavaScript program runs: the drawing is not edited until it ends.
+        #[cfg(not(target_arch = "wasm32"))]
         if self.script_ui.busy() {
             return;
         }
