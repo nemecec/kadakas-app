@@ -1040,6 +1040,47 @@ class Document:
         """Turn the units (and gaps) of a layout into ordinary objects in one group."""
         return self.api.unit_pattern_to_objects(**params)
 
+    def script_eval(
+        self,
+        code: str | None = None,
+        *,
+        script: str | None = None,
+        mode: str = "edit",
+        args: Any = None,
+        seed: int | None = None,
+    ) -> JsonDict:
+        """Run a JavaScript script inside the session (SCR-08). The code is the body of a function
+        in a sandbox (QuickJS in WebAssembly: no files, no network, no clock); it calls the methods
+        of the API with ``kadakas.call(method, params)``. All changes of the run are one undo step,
+        and an error (``KadakasError``) takes back all of them. ``mode="read"`` refuses every call
+        that changes the document. Give ``code``, or ``script`` (a script resource that a person
+        trusted). Returns ``{result, log, calls, changed, undo_steps, elapsed_ms}``; see
+        ``script.eval`` in ``describe``."""
+        params: JsonDict = {"mode": mode}
+        if code is not None:
+            params["code"] = code
+        if script is not None:
+            params["script"] = script
+        if args is not None:
+            params["args"] = args
+        if seed is not None:
+            params["seed"] = seed
+        return self.api.script_eval(**params)
+
+    def script_resource_create(self, name: str, code: str, **params: Any) -> JsonDict:
+        """Store a script in the document. It runs (``script_eval(script=name)``, or as a
+        generator of a pattern) only after a person trusted its exact text in the app."""
+        return self.api.script_resource_create(name=name, code=code, **params)
+
+    def script_resource_update(self, script: str, **params: Any) -> JsonDict:
+        """Change the code, the name or the description of a script resource (a new text needs
+        trust again)."""
+        return self.api.script_resource_update(id=script, **params)
+
+    def script_resources(self) -> list[JsonDict]:
+        """The script resources of the document: ``[{id, name, sha256, trusted, runnable, ...}]``."""
+        return self.api.script_resource_list()["scripts"]
+
     def export_file(self, path: str | Path, **options: Any) -> JsonDict:
         """Export to DXF, GeoJSON (or IFC when the path ends in ``.ifc``). DXF options include
         ``patterns`` (``"none"`` | ``"gaps"`` | ``"units"``): the unit pattern of hardscapes, with

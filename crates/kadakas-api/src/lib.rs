@@ -306,12 +306,6 @@ struct ObjectFilter {
 
 /// Method names with a short description, for discovery by agents.
 pub const METHODS: &[(&str, &str)] = &[
-    script_js_api::SCRIPT_EVAL,
-    script_js_api::SCRIPT_JS_INFO,
-    script_js_api::SCRIPT_RESOURCE_CREATE,
-    script_js_api::SCRIPT_RESOURCE_UPDATE,
-    script_js_api::SCRIPT_RESOURCE_GET,
-    script_js_api::SCRIPT_RESOURCE_LIST,
     ("describe", "List methods and command examples."),
     (
         "execute",
@@ -859,6 +853,12 @@ pub const METHODS: &[(&str, &str)] = &[
     feedback_api::FEEDBACK_LIST,
     feedback_api::FEEDBACK_GET,
     feedback_api::FEEDBACK_WITHDRAW,
+    script_js_api::SCRIPT_EVAL,
+    script_js_api::SCRIPT_JS_INFO,
+    script_js_api::SCRIPT_RESOURCE_CREATE,
+    script_js_api::SCRIPT_RESOURCE_UPDATE,
+    script_js_api::SCRIPT_RESOURCE_GET,
+    script_js_api::SCRIPT_RESOURCE_LIST,
 ];
 
 impl Default for Session {

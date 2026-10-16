@@ -639,7 +639,7 @@ fn eval(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let revision = s.editor.revision();
     let origin = s.editor.origin();
     s.editor.set_origin(kadakas_core::change::Origin::Script);
-    let mut host_calls = 0;
+    let host_calls;
     let result = {
         let mut host = SessionHost {
             s,

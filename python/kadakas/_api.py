@@ -765,7 +765,7 @@ class Api:
         return self._call("hardscape_style.get", params or None)
 
     def hardscape_style_create(self, **params: Any) -> Any:
-        """Create a hardscape style. params: {name, material? (surface material), fill?, pen? ([r,g,b,a]), thickness? (surface layer, mm, default 60), components? ([{name, material, thickness, color?}], layers below the surface from top to bottom), border? ({width, material, color?, sides? (both|left|right; a path only)} or null), joints? ({kind (running_bond|stack|herringbone|basket_weave), unit_length, unit_width, spacing (joint width), angle (degrees), color?} or null), custom? ({key: text})}. Returns {id}.
+        """Create a hardscape style. params: {name, material? (surface material), fill?, pen? ([r,g,b,a]), thickness? (surface layer, mm, default 60), components? ([{name, material, thickness, color?}], layers below the surface from top to bottom), border? ({width, material, color?, sides? (both|left|right; a path only)} or null), joints? ({kind (running_bond|stack|herringbone|basket_weave|module|generator; a generator takes generator: {script, params} instead of unit sizes, see describe unit_patterns), unit_length, unit_width, spacing (joint width), angle (degrees), color?} or null), custom? ({key: text})}. Returns {id}.
 
         JSON-RPC method ``hardscape_style.create``."""
         return self._call("hardscape_style.create", params or None)
@@ -2414,6 +2414,42 @@ class Api:
         JSON-RPC method ``feedback.withdraw``."""
         return self._call("feedback.withdraw", params or None)
 
+    def script_eval(self, **params: Any) -> Any:
+        """Run a JavaScript script in the session. The script is the body of a function, runs in a sandbox (QuickJS in WebAssembly: no files, no network, no clock) and calls the methods of this API: kadakas.call(method, params) returns the result or throws an Error with code, message, data and method. Everything heavy is a native call; the script only coordinates. params: {code | script (the ID or name of a script resource; it must be trusted), mode? ("edit" (default) | "read": a read-only run refuses every method that changes the document, writes a file or uses the network), args? (any JSON; the script sees it as `args`), seed? (seeds Math.random; the same seed gives the same numbers)}. All changes of the run are one undo step with the change origin script, and an error takes back all of them. Returns {result (the value the script returned; a typed array is written out as numbers), log (what console.log wrote, at most 64 KiB), calls (how many calls the script made), changed, undo_steps (0 or 1), elapsed_ms}. Limits: fuel, a time limit, memory, output size, calls; see script.js_info. See describe, section scripting.javascript.
+
+        JSON-RPC method ``script.eval``."""
+        return self._call("script.eval", params or None)
+
+    def script_js_info(self, **params: Any) -> Any:
+        """How JavaScript scripts run here. Returns {engine, upstream, toolchain, available, limits: {fuel, segment_ms, run_ms, memory_bytes, output_bytes, max_calls}, agent_scripts_allowed}. available is false when this build has no script engine.
+
+        JSON-RPC method ``script.js_info``."""
+        return self._call("script.js_info", params or None)
+
+    def script_resource_create(self, **params: Any) -> Any:
+        """Store a script in the document as a resource (SCR-03). params: {name, code, description?}. A script from a document runs only after a person trusted its exact text in the app. Returns {id, name, sha256, trusted}.
+
+        JSON-RPC method ``script_resource.create``."""
+        return self._call("script_resource.create", params or None)
+
+    def script_resource_update(self, **params: Any) -> Any:
+        """Change a script resource. params: {id (ID or name), name?, code?, description?}. A changed text has a new SHA-256 and needs trust again. Returns the script as script_resource.get does.
+
+        JSON-RPC method ``script_resource.update``."""
+        return self._call("script_resource.update", params or None)
+
+    def script_resource_get(self, **params: Any) -> Any:
+        """One script resource. params: {id (ID or name)}. Returns {id, name, language, code, description, sha256, trusted (a person trusted this exact text), runnable (trusted, or the host lets agents run scripts), used_by: {patterns (hardscape styles with a generator that names it)}}.
+
+        JSON-RPC method ``script_resource.get``."""
+        return self._call("script_resource.get", params or None)
+
+    def script_resource_list(self, **params: Any) -> Any:
+        """The script resources of the document. Returns {scripts: [{id, name, description, sha256, bytes, trusted, runnable}]}. Delete one with resource.delete.
+
+        JSON-RPC method ``script_resource.list``."""
+        return self._call("script_resource.list", params or None)
+
 
 METHOD_NAMES: tuple[str, ...] = (
     "describe",
@@ -2815,6 +2851,12 @@ METHOD_NAMES: tuple[str, ...] = (
     "feedback.list",
     "feedback.get",
     "feedback.withdraw",
+    "script.eval",
+    "script.js_info",
+    "script_resource.create",
+    "script_resource.update",
+    "script_resource.get",
+    "script_resource.list",
 )
 
 COMMAND_OPS_EXAMPLED: tuple[str, ...] = ('add_layer', 'add_object', 'add_resource', 'add_sheet', 'add_worksheet_table', 'arrange', 'attach_record', 'batch', 'detach_record', 'move_layer', 'move_objects', 'restore_view', 'set_project', 'set_record_fields', 'set_vertex', 'set_worksheet_table')
