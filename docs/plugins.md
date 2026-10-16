@@ -381,6 +381,10 @@ Other gaps of the browser build:
 
 Because the shapes are plain data, a drawing with plug-in objects works in the browser even without the plug-in. Only changing the parameters needs a plug-in engine.
 
+## Hosted modules (the script engine)
+
+The same host also runs one more kind of module: a **hosted module**, which can call back into the host while it runs. The script engine (QuickJS, [scripting-javascript.md](scripting-javascript.md)) is one. It may import exactly two functions, `kadakas.call(ptr, len) -> i32` (send a request, get the length of the reply) and `kadakas.read(dst)` (copy the reply), and it exports `memory`, `alloc`, `dealloc`, `run` and optionally `_initialize`. Anything else it imports is refused, so it still has no files, no network and no clock. The limits are those of a plug-in: fuel and a memory cap for the whole run, and on the desktop a time limit for each stretch of the module between two calls (the time that the host spends in a call is the business of the host, which can stop the run). In the browser the rewrite (`harden`) lets the two imports through and adds nothing else.
+
 ## What is not done yet
 
 - Permissions. The host grants none.
