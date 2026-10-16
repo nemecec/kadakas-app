@@ -1352,6 +1352,96 @@ fn raster_viewport_of_an_empty_model_and_big_pages_still_render() {
     assert!(i.width <= 3000 && i.height <= 3000);
 }
 
+/// A sheet with a 3D viewport on a model with a site model and a building.
+fn terrain_sheet(mode: &str, with_site: bool) -> (Editor, LayerId) {
+    let mut ed = Editor::default();
+    let mut points = Vec::new();
+    for i in 0..5 {
+        for j in 0..5 {
+            let (x, y) = (f64::from(i) * 10_000.0, f64::from(j) * 10_000.0);
+            points.push(DVec3::new(x, y, 30_000.0 + x * 0.05 + y * 0.03));
+        }
+    }
+    if with_site {
+        add(
+            &mut ed,
+            Shape::SiteModel {
+                points,
+                lines: vec![],
+                settings: Default::default(),
+            },
+            None,
+            Attributes::default(),
+        );
+    }
+    let sheet = LayerId(
+        run(
+            &mut ed,
+            Command::AddSheet {
+                name: "S".into(),
+                paper: Some(PaperSize::A3),
+                orientation: None,
+                number: None,
+                title: None,
+            },
+        )[0],
+    );
+    let mut vp = Viewport::new(
+        v(10.0, 10.0),
+        v(400.0, 280.0),
+        v(20_000.0, 20_000.0),
+        200.0,
+        vec![FIRST_LAYER],
+    );
+    vp.view = "right_isometric".into();
+    vp.mode = mode.into();
+    vp.dpi = 50.0;
+    add(
+        &mut ed,
+        Shape::Viewport(Box::new(vp)),
+        Some(sheet),
+        Attributes::default(),
+    );
+    (ed, sheet)
+}
+
+#[test]
+fn a_3d_viewport_draws_the_terrain_of_the_site_model() {
+    // The shaded picture is filled where the terrain is.
+    let (ed, sheet) = terrain_sheet("shaded", true);
+    let page = compose_page(ed.doc(), sheet).unwrap();
+    let Some(Prim::Image(i)) = page.prims.get(1) else {
+        panic!("{:?}", page.prims.len())
+    };
+    let painted = i
+        .rgb
+        .chunks(3)
+        .filter(|p| p != &[255u8, 255, 255].as_slice())
+        .count();
+    assert!(
+        painted * 10 > (i.width * i.height) as usize,
+        "{painted} of {} pixels",
+        i.width * i.height
+    );
+
+    // The hidden-line drawing has the lines of the terrain, which the empty model does not have.
+    let lines = |with_site: bool| {
+        let (ed, sheet) = terrain_sheet("hidden_line", with_site);
+        compose_page(ed.doc(), sheet)
+            .unwrap()
+            .prims
+            .iter()
+            .filter(|p| matches!(p, Prim::Path(p) if p.stroke.is_some()))
+            .count()
+    };
+    assert!(
+        lines(true) > lines(false) + 10,
+        "{} {}",
+        lines(true),
+        lines(false)
+    );
+}
+
 // ---------------------------------------------------------------- SVG and PNG
 
 #[test]
