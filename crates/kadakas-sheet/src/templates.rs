@@ -126,7 +126,7 @@ pub fn template(id: &str) -> Option<WorksheetDef> {
             name: "Existing tree survey".into(),
             criteria: "Kind = \"existing_tree\"".into(),
             columns: vec![
-                col("Tree", "Id"),
+                col("Tree", "IF(LEN(TreeId) > 0, TreeId, Id)"),
                 col("Species", "Species"),
                 dec(col("Trunk diameter", "DBH"), 0, "mm"),
                 dec(col("Spread", "Spread / 1000"), 1, "m"),
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn tree_survey() {
-        let ed = scene();
+        let mut ed = scene();
         let c = compute(&template("tree_survey").unwrap(), ed.doc());
         assert_eq!(c.rows, 3);
         assert_eq!(
@@ -460,6 +460,25 @@ mod tests {
             ]
         );
         assert_eq!(c.grid()[2][1], "Ash");
+        // A tree without a survey number shows its ID; a tree with one shows the number.
+        let oak = ed
+            .doc()
+            .objects
+            .values()
+            .find(|o| matches!(&o.shape, Shape::ExistingTree { species, .. } if species == "Oak"))
+            .map(|o| o.id)
+            .unwrap();
+        assert_eq!(c.grid()[1][0], oak.0.to_string());
+        ed.execute(&Command::SetData {
+            id: oak,
+            set: [("tree_id".to_string(), serde_json::json!("T7"))].into(),
+            remove: Vec::new(),
+        })
+        .unwrap();
+        let c = compute(&template("tree_survey").unwrap(), ed.doc());
+        // The rows are sorted by this column: the ID of the ash sorts before "T7".
+        assert_eq!(c.grid()[2][..2], ["T7", "Oak"]);
+        assert_eq!(c.grid()[1][1], "Ash");
     }
     #[test]
     fn irrigation_templates_list_heads_and_pipes() {

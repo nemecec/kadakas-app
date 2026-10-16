@@ -90,16 +90,27 @@ pub struct Reading {
     /// `None` outside the site model.
     pub existing: Option<f64>,
     pub proposed: Option<f64>,
-    /// True when modifiers change the surface, so the two can differ.
+    /// True when the proposed surface differs from the existing one at this point.
     pub modified: bool,
 }
 
-/// Reads the heights of a site model at a point.
+/// The smallest difference between the two surfaces that counts as a change, in mm.
+const MODIFIED_EPS: f64 = 0.01;
+
+/// Reads the heights of a site model at a point. `modified` is true where the proposed surface
+/// differs from the existing one, so it is false outside every modifier.
 pub fn read_at(site: &SiteResult, p: DVec2) -> Reading {
+    let existing = site.surface(crate::Surface::Existing).elevation_at(p);
+    let proposed = site.elevation_at(p);
+    let modified = match (existing, proposed) {
+        (Some(e), Some(q)) => (e - q).abs() > MODIFIED_EPS,
+        (None, None) => false,
+        _ => true,
+    };
     Reading {
-        existing: site.surface(crate::Surface::Existing).elevation_at(p),
-        proposed: site.elevation_at(p),
-        modified: site.proposed.is_some(),
+        existing,
+        proposed,
+        modified,
     }
 }
 
@@ -247,6 +258,10 @@ mod tests {
                 && (r.existing.unwrap() - 300.0).abs() < 1e-9
         );
         assert!(r.modified);
+        // Outside every modifier the two surfaces are the same: the reading is not modified.
+        let outside = read_at(&s, DVec2::new(7000.0, 6000.0));
+        assert!(!outside.modified, "{outside:?}");
+        assert_eq!(outside.existing, outside.proposed);
         let out = read_at(&s, DVec2::new(-10.0, 0.0));
         assert_eq!((out.existing, out.proposed), (None, None));
     }

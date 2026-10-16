@@ -22,6 +22,15 @@ use serde_json::{Value, json};
 use crate::limits::DEFAULT_DOCUMENT_FILE_BYTES;
 use crate::{RpcError, Session};
 
+pub const FILE_SAVE: (&str, &str) = (
+    "file.save",
+    "Save the document atomically (the old file stays as .bak). params: {path, format?}. format is \"container\" (a ZIP file with the drawing, the pictures and the versions; the default) or \"json\" (one readable JSON file with the pictures as base64, for version control and diffs). Without format the extension decides: .json is JSON, anything else the container. Returns {ok, format}.",
+);
+pub const FILE_OPEN: (&str, &str) = (
+    "file.open",
+    "Open a document of either form (told by the first bytes). params: {path}. The pictures of a container stay in the file until they are used. A file over the size limit, or a container whose entries together are over it, is refused with the way to raise the limit. Returns {ok, format, notes?}.",
+);
+
 /// The extensions of a document file (lower case, no dot): the container and the plain JSON form.
 pub const DOC_EXTS: [&str; 2] = ["kad", "json"];
 
@@ -447,6 +456,32 @@ pub fn write_document_file(path: &Path, doc: &Document) -> Result<(), String> {
         })
 }
 
+/// The result of a file method, as JSON: `{ok, format, notes?}`.
+fn done_json(done: &FileDone) -> Value {
+    let notes = match done {
+        FileDone::Opened(_, notes, _) | FileDone::Saved(_, _, notes) => notes,
+    };
+    let mut v = json!({"ok": true, "format": done.form().name()});
+    if !notes.is_empty() {
+        v["notes"] = json!(notes);
+    }
+    v
+}
+
+/// `file.save` and `file.open` as a method of the session, for a host that has no person to ask
+/// (a test, a script over the API): the same work as `handle_file_request`, with the consent of
+/// the token of the refusal. The app and the CLI call `file_call` themselves.
+pub(crate) fn value_call(s: &mut Session, method: &str, params: &Value) -> Result<Value, RpcError> {
+    file_call_inner(
+        s,
+        method,
+        params,
+        &mut write_document,
+        &mut consent_by_token,
+    )
+    .map(|done| done_json(&done))
+}
+
 /// The JSON-RPC response for the result of `file_call`. An error carries the feedback hint and
 /// the `tainted` mark, like the errors of every other method.
 pub fn file_reply(
@@ -456,18 +491,7 @@ pub fn file_reply(
     result: Result<FileDone, RpcError>,
 ) -> String {
     match result {
-        // Like `document.load`: what the load repaired instead of refusing the file.
-        Ok(FileDone::Opened(_, notes, form)) if !notes.is_empty() => {
-            json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true, "format": form.name(), "notes": notes}}).to_string()
-        }
-        // `file.save` too: what the person should know (a part that could not be found and was left
-        // out, a source that could not be opened again).
-        Ok(FileDone::Saved(_, form, notes)) if !notes.is_empty() => {
-            json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true, "format": form.name(), "notes": notes}}).to_string()
-        }
-        Ok(done) => {
-            json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true, "format": done.form().name()}}).to_string()
-        }
+        Ok(done) => json!({"jsonrpc": "2.0", "id": id, "result": done_json(&done)}).to_string(),
         Err(e) => {
             let hint = crate::feedback_api::hint(method, e.kind, &e.message);
             crate::errors::error_response_with(id, &e, hint, s.is_tainted())
@@ -558,6 +582,25 @@ mod tests {
         );
         assert_eq!(t.editor.doc().objects.len(), 1);
         assert_eq!(t.doc_dir.as_deref(), Some(dir.as_path()));
+    }
+
+    #[test]
+    fn the_file_methods_are_methods_of_the_session_too() {
+        // They are in `describe` and a plain session runs them (a script over the API, a test).
+        let listed: Vec<&str> = crate::METHODS.iter().map(|(n, _)| *n).collect();
+        assert!(listed.contains(&"file.save") && listed.contains(&"file.open"));
+        let dir = tmp("as-methods");
+        let mut s = restricted(&dir);
+        add_circle(&mut s);
+        let f = dir.join("m.kad");
+        let r = s.handle("file.save", json!({"path": f})).unwrap();
+        assert_eq!(r, json!({"ok": true, "format": "container"}));
+        let mut t = restricted(&dir);
+        let r = t.handle("file.open", json!({"path": f})).unwrap();
+        assert_eq!(r["ok"], true);
+        assert_eq!(t.editor.doc().objects.len(), 1);
+        let e = t.handle("file.open", json!({})).unwrap_err();
+        assert_eq!(e.code, -32602);
     }
 
     #[test]

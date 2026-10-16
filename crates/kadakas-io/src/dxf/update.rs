@@ -205,6 +205,12 @@ pub struct ChangeItem {
     pub handle: Option<String>,
     /// The DXF layer.
     pub layer: String,
+    /// The handle of the entity in the old file, if it is in the old file and has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_handle: Option<String>,
+    /// The handle of the entity in the new file, if it is in the new file and has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_handle: Option<String>,
     /// What differs, for a changed entity.
     pub what: Vec<Prop>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1145,6 +1151,8 @@ pub(super) fn item(
         entity: rec.kind.clone(),
         handle: rec.handle.clone(),
         layer: rec.layer.clone(),
+        base_handle: b.and_then(|r| r.handle.clone()),
+        new_handle: n.and_then(|r| r.handle.clone()),
         what: e.changes.clone(),
         via: e.via,
         distance: e.distance,

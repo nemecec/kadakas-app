@@ -7,18 +7,6 @@
 use kadakas_api::METHODS;
 use serde_json::{Value, json};
 
-/// Methods that the CLI itself answers (the document files of a headless session).
-pub const FILE_METHODS: &[(&str, &str)] = &[
-    (
-        "file.save",
-        "Save the document atomically (the old file stays as .bak). params: {path, format?}. format is \"container\" (a ZIP file with the drawing, the pictures and the versions; the default) or \"json\" (one readable JSON file with the pictures as base64, for git and diffs). Without format the extension decides: .json is JSON, anything else the container. Returns {ok, format}.",
-    ),
-    (
-        "file.open",
-        "Open a document of either form (told by the first bytes). params: {path}. The pictures of a container stay in the file until they are used. A file over the size limit, or a container whose entries together are over it, is refused with the way to raise the limit. Returns {ok, format, notes?}.",
-    ),
-];
-
 /// One domain tool.
 pub struct Domain {
     pub name: &'static str,
@@ -114,7 +102,7 @@ pub const DOMAINS: &[Domain] = &[
     Domain {
         name: "site",
         summary: "Site models (terrain), contours, volumes, source data checks, survey point import, pads with retaining edges, texture beds, and the survey point of the georeference.",
-        prefixes: &["site", "pad", "bed", "survey", "georef"],
+        prefixes: &["site", "pad", "grade_limit", "bed", "survey", "georef"],
         read_only: false,
         open_world: false,
     },
@@ -238,13 +226,11 @@ pub fn domain_of(method: &str) -> Option<&'static Domain> {
 /// Methods that need a message stream. MCP tools return one result, so they are not offered.
 const STREAM_METHODS: &[&str] = &["events.subscribe", "events.unsubscribe"];
 
-/// Every method that the server offers as a tool: the API methods and the file methods of the
-/// CLI, except the ones that need a message stream and the feedback methods (the `feedback`
-/// tool covers them in both modes).
+/// Every method that the server offers as a tool: the API methods, except the ones that need a
+/// message stream and the feedback methods (the `feedback` tool covers them in both modes).
 pub fn all_methods() -> impl Iterator<Item = (&'static str, &'static str)> {
     METHODS
         .iter()
-        .chain(FILE_METHODS.iter())
         .copied()
         .filter(|(m, _)| !STREAM_METHODS.contains(m) && !m.starts_with("feedback."))
 }
@@ -306,15 +292,11 @@ pub fn flat_name(method: &str) -> String {
 
 /// One tool per method (the old listing, `--mcp-flat`).
 pub fn flat_tools() -> Vec<Value> {
-    let mut tools: Vec<Value> = METHODS
+    METHODS
         .iter()
         .filter(|(m, _)| !STREAM_METHODS.contains(m) && !m.starts_with("feedback."))
         .map(|(m, d)| json!({"name": flat_name(m), "description": d, "inputSchema": {"type": "object", "additionalProperties": true}}))
-        .collect();
-    for (m, d) in FILE_METHODS {
-        tools.push(json!({"name": flat_name(m), "description": d, "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}));
-    }
-    tools
+        .collect()
 }
 
 /// The `feedback` tool (API-47). It is in both modes, right after `describe`, so an agent sees it

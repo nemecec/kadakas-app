@@ -57,7 +57,7 @@ mod retaining;
 #[cfg(test)]
 mod tests;
 
-pub use retaining::{PAD_ADD, PAD_RETAINING_EDGE};
+pub use retaining::{GRADE_LIMIT_ADD, PAD_ADD, PAD_RETAINING_EDGE};
 
 pub const GRADE_ADD: (&str, &str) = (
     "grade.add",
@@ -150,6 +150,7 @@ pub fn knows(method: &str) -> bool {
             | "section.profile"
             | "section.place"
             | "pad.add"
+            | "grade_limit.add"
             | "pad.retaining_edge"
     )
 }
@@ -325,6 +326,7 @@ impl Session {
             "section.profile" => self.section_profile(m),
             "section.place" => self.section_place(m),
             "pad.add" => self.pad_add(Value::Object(m)),
+            "grade_limit.add" => self.grade_limit_add(Value::Object(m)),
             "pad.retaining_edge" => self.pad_retaining_edge(Value::Object(m)),
             _ => Err(RpcError::method_not_found(method)),
         }

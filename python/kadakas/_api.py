@@ -62,6 +62,18 @@ class Api:
         JSON-RPC method ``document.load``."""
         return self._call("document.load", params or None)
 
+    def file_save(self, **params: Any) -> Any:
+        """Save the document atomically (the old file stays as .bak). params: {path, format?}. format is "container" (a ZIP file with the drawing, the pictures and the versions; the default) or "json" (one readable JSON file with the pictures as base64, for version control and diffs). Without format the extension decides: .json is JSON, anything else the container. Returns {ok, format}.
+
+        JSON-RPC method ``file.save``."""
+        return self._call("file.save", params or None)
+
+    def file_open(self, **params: Any) -> Any:
+        """Open a document of either form (told by the first bytes). params: {path}. The pictures of a container stay in the file until they are used. A file over the size limit, or a container whose entries together are over it, is refused with the way to raise the limit. Returns {ok, format, notes?}.
+
+        JSON-RPC method ``file.open``."""
+        return self._call("file.open", params or None)
+
     def objects_list(self, **params: Any) -> Any:
         """Objects. params: {layer?, class?, kind?}.
 
@@ -123,13 +135,13 @@ class Api:
         return self._call("report.areas", params or None)
 
     def import_file(self, **params: Any) -> Any:
-        """Import a DXF, Shapefile or GeoJSON file as one undo step. params: {path, format?: dxf|shp|geojson, options?}. See describe.io for options. Returns {imported, skipped, report, georeference}.
+        """Import a file as one undo step: DXF, DWG (needs a converter), Shapefile, GeoJSON or IFC. params: {path, format?: dxf|dwg|shp|geojson|ifc (default: from the extension), options?}. See describe.io for the options of each format. Returns {imported, skipped, report, georeference}.
 
         JSON-RPC method ``import.file``."""
         return self._call("import.file", params or None)
 
     def export_file(self, **params: Any) -> Any:
-        """Export the document to a DXF or GeoJSON file. params: {path, format?: dxf|geojson, options?}. Returns {path, exported, report}.
+        """Export the document to a file: DXF, GeoJSON, DWG (needs a converter), IFC (IFC4, IFC2X3 or IFC4X3), glTF, GLB or OBJ (3D), or a sheet as PDF, SVG or PNG. params: {path, format?: dxf|geojson|dwg|ifc|gltf|glb|obj|pdf|sheet_svg|sheet_png (default: from the extension; the sheet formats need format), options?, overwrite? (replace an existing file; a server for agents needs it)}. See describe.io for the options of each format. Returns {path, exported, report}.
 
         JSON-RPC method ``export.file``."""
         return self._call("export.file", params or None)
@@ -1136,6 +1148,12 @@ class Api:
         JSON-RPC method ``pad.add``."""
         return self._call("pad.add", params or None)
 
+    def grade_limit_add(self, **params: Any) -> Any:
+        """Add grade limits: a site modifier (Site Modifiers tool, Grade Limits mode) that closes the area in which the proposed surface may differ from the existing one. The ground outside the boundary keeps its existing height, and a pad inside it gets sloping sides down to that ground; without grade limits a pad has a vertical edge. A thin method over the add_object command with a site_modifier shape. params: {boundary: [vertices] (3 or more, arcs allowed), layer? (the modifier acts on the site models of its layer), class?}. Returns {id}.
+
+        JSON-RPC method ``grade_limit.add``."""
+        return self._call("grade_limit.add", params or None)
+
     def pad_retaining_edge(self, **params: Any) -> Any:
         """Give a pad a retaining edge: a closed landscape wall along its boundary, with its top at the level of the pad plus top_offset, standing on the existing ground. The wall is centered on the edge. The pad must be level. Calling it again replaces the wall. params: {id (a pad), enabled? (false removes the wall; default true), thickness? (mm, default 300), top_offset? (mm, default 0), embed? (mm below the ground, default 0), style? (wall style ID or name), class?}. One undo step. Returns {id, wall, quantities} (the rows of wall.report).
 
@@ -1563,7 +1581,7 @@ class Api:
         return self._call("library.favorite_remove", params or None)
 
     def site_create(self, **params: Any) -> Any:
-        """Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh), and the 3D look surface_look (color | texture | elevation), texture (material resource id), texture_tile (mm), texture_offset ([x, y]), texture_rotation (degrees), elevation_bands, elevation_ramp ([[r, g, b, a]]), elevation_range ([low, high]), elevation_bands_at_contours; site.texture sets them with checks. Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}.
+        """Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], layer? (design layer of the site model; default: the layer of the first source), settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh), and the 3D look surface_look (color | texture | elevation), texture (material resource id), texture_tile (mm), texture_offset ([x, y]), texture_rotation (degrees), elevation_bands, elevation_ramp ([[r, g, b, a]]), elevation_range ([low, high]), elevation_bands_at_contours; site.texture sets them with checks. Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}.
 
         JSON-RPC method ``site.create``."""
         return self._call("site.create", params or None)
@@ -2283,7 +2301,7 @@ class Api:
         return self._call("issue.export_bcf", params or None)
 
     def dxf_compare(self, **params: Any) -> Any:
-        """Compare two DXF or DWG files without importing them (IOP-24). params: {base (the old file), new, options? {tolerance? (units of the drawing), layers? (only entities on these DXF layers), limit? (most changes listed, default 200, at most 1000), ...import options such as hatches}, render? {format: png|svg|pdf, revision_clouds? (draw revision clouds around the clusters of changes), width?, height?, palette?, unchanged?, dark?, ghosts?, previous?, view? (png, default top)}}. Returns {base, new, counts, changes: [{id, status: added|removed|changed, entity, handle?, layer, what?, via?, distance?, text?, objects, new_objects, object_ids}], listed, total_changes, notes, match, compare (the legend, counts and ghosts of the overlay, with render), image (with render: {format, svg | png_base64 | pdf_base64, width?, height?, clouds?})}. The matching is that of import.update: by handle first, else by content, geometry and nearest position. Nothing changes in the document. See describe.review.dxf_compare.
+        """Compare two DXF or DWG files without importing them (IOP-24). params: {base (the old file), new, options? {tolerance? (units of the drawing), layers? (only entities on these DXF layers), limit? (most changes listed, default 200, at most 1000), ...import options such as hatches}, render? {format: png|svg|pdf, revision_clouds? (draw revision clouds around the clusters of changes), width?, height?, palette?, unchanged?, dark?, ghosts?, previous?, view? (png, default top)}}. Returns {base, new, counts, changes: [{id, status: added|removed|changed, entity, handle?, layer, base_handle (the handle of the entity in the old file, or null), new_handle (in the new file, or null), what?, via?, distance?, text?, objects, new_objects}], listed, total_changes, notes, match, compare (the legend, counts and ghosts of the overlay, with render), image (with render: {format, svg | png_base64 | pdf_base64, width?, height?, clouds?})}. The matching is that of import.update: by handle first, else by content, geometry and nearest position. Nothing changes in the document. See describe.review.dxf_compare.
 
         JSON-RPC method ``dxf.compare``."""
         return self._call("dxf.compare", params or None)
@@ -2381,6 +2399,8 @@ METHOD_NAMES: tuple[str, ...] = (
     "document.summary",
     "document.get",
     "document.load",
+    "file.save",
+    "file.open",
     "objects.list",
     "objects.get",
     "selection.get",
@@ -2560,6 +2580,7 @@ METHOD_NAMES: tuple[str, ...] = (
     "section.profile",
     "section.place",
     "pad.add",
+    "grade_limit.add",
     "pad.retaining_edge",
     "plugin.define",
     "plugin.update",

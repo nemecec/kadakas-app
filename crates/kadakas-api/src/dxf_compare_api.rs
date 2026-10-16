@@ -40,7 +40,7 @@ use crate::{RpcError, Session, params};
 
 pub(crate) const DXF_COMPARE: (&str, &str) = (
     "dxf.compare",
-    "Compare two DXF or DWG files without importing them (IOP-24). params: {base (the old file), new, options? {tolerance? (units of the drawing), layers? (only entities on these DXF layers), limit? (most changes listed, default 200, at most 1000), ...import options such as hatches}, render? {format: png|svg|pdf, revision_clouds? (draw revision clouds around the clusters of changes), width?, height?, palette?, unchanged?, dark?, ghosts?, previous?, view? (png, default top)}}. Returns {base, new, counts, changes: [{id, status: added|removed|changed, entity, handle?, layer, what?, via?, distance?, text?, objects, new_objects, object_ids}], listed, total_changes, notes, match, compare (the legend, counts and ghosts of the overlay, with render), image (with render: {format, svg | png_base64 | pdf_base64, width?, height?, clouds?})}. The matching is that of import.update: by handle first, else by content, geometry and nearest position. Nothing changes in the document. See describe.review.dxf_compare.",
+    "Compare two DXF or DWG files without importing them (IOP-24). params: {base (the old file), new, options? {tolerance? (units of the drawing), layers? (only entities on these DXF layers), limit? (most changes listed, default 200, at most 1000), ...import options such as hatches}, render? {format: png|svg|pdf, revision_clouds? (draw revision clouds around the clusters of changes), width?, height?, palette?, unchanged?, dark?, ghosts?, previous?, view? (png, default top)}}. Returns {base, new, counts, changes: [{id, status: added|removed|changed, entity, handle?, layer, base_handle (the handle of the entity in the old file, or null), new_handle (in the new file, or null), what?, via?, distance?, text?, objects, new_objects}], listed, total_changes, notes, match, compare (the legend, counts and ghosts of the overlay, with render), image (with render: {format, svg | png_base64 | pdf_base64, width?, height?, clouds?})}. The matching is that of import.update: by handle first, else by content, geometry and nearest position. Nothing changes in the document. See describe.review.dxf_compare.",
 );
 
 /// Most changes that an answer lists.
@@ -57,10 +57,10 @@ const PDF_DPI: f64 = 150.0;
 pub(crate) fn describe() -> Value {
     json!({
         "what": "dxf.compare reads two DXF or DWG files and tells what changed from the first to the second, without importing either one into the document. Use it to see what an architect changed between two revisions, or before import.update.",
-        "diff": "The same classes and the same matching as import.update (by DXF handle, else by content, geometry and nearest position; renumbered handles are found). `changes` lists the added, removed and changed entities with stable IDs; `object_ids` are the objects of the temporary documents, they are not objects of the open document.",
+        "diff": "The same classes and the same matching as import.update (by DXF handle, else by content, geometry and nearest position; renumbered handles are found). `changes` lists the added, removed and changed entities with stable IDs; a change names its entities by their handles in the two files (`base_handle`, `new_handle`; null when the entity is not in that file or the file has no handles). The objects that the comparison makes live in temporary documents, so they are not listed.",
         "render": "With render the answer has an overlay picture of the new file with the changes: added objects green, changed orange, removed objects as red ghosts at their old place (palette color_blind: blue, vermillion, dark yellow), unchanged objects dimmed (unchanged: show, dim or hide). Color is never the only sign: added is solid with +, changed dotted with ~, removed dashed with -. Formats: svg (the plan, with a legend), png (top view of the 3D model, tints and ghosts), pdf (one page that holds the picture of the png, 150 dpi; the text of the legend is not in it, the legend is in `compare.legend`).",
         "revision_clouds": "revision_clouds: true draws a revision cloud (ANN-10) around each cluster of changes: changes less than 4 percent of the size of the drawing apart share a cloud. At most 64 clouds are drawn, the biggest clusters first (`image.clouds` says how many and how many were left out). The clouds exist only in the picture, not in the document.",
-        "issues": "REV-04 (review issues) does not exist yet. When it does, an agent can file one issue for each change or cluster from this answer: the change ID, the entity and the layer go into the title and the labels, and the box of `object_ids` anchors the issue. Until then, give the list of changes to the person.",
+        "issues": "REV-04 (review issues) does not exist yet. When it does, an agent can file one issue for each change or cluster from this answer: the change ID, the entity and the layer go into the title and the labels, and the handles anchor the issue in the files. Until then, give the list of changes to the person.",
         "limits": "Both files are read with the limits of import.file (max_bytes, import_text_bytes of the session, max_objects) and at most 1,000,000 entities each. The match has the bounds of kadakas_io::dxf::revision. A DWG file needs the converter and the policy of import.file. The size of a picture follows the limits of render.png.",
         "examples": [
             {"method": "dxf.compare", "params": {"base": "/data/site_rev1.dxf", "new": "/data/site_rev2.dxf"}},
@@ -355,6 +355,22 @@ fn change_boxes(c: &Compared) -> Vec<(DVec2, DVec2)> {
         .collect()
 }
 
+/// A change as JSON for the caller. The objects of a change are objects of the temporary documents
+/// of the comparison, so they do not exist in the open document: the change names its entities by
+/// their handles in the two files (`base_handle`, `new_handle`) instead.
+fn change_json(item: &kadakas_io::dxf::update::ChangeItem) -> Value {
+    let mut v = serde_json::to_value(item).expect("a change is JSON");
+    if let Some(o) = v.as_object_mut() {
+        for key in ["object_ids", "edited_ids", "conflict"] {
+            o.remove(key);
+        }
+        for key in ["base_handle", "new_handle"] {
+            o.entry(key).or_insert(Value::Null);
+        }
+    }
+    v
+}
+
 impl Session {
     pub(crate) fn dxf_compare(&mut self, p: Value) -> Result<Value, RpcError> {
         self.compare_impl(p, true)
@@ -413,7 +429,7 @@ impl Session {
             "base": {"name": old.name},
             "new": {"name": newer.name},
             "counts": c.counts,
-            "changes": c.items.iter().take(limit).collect::<Vec<_>>(),
+            "changes": c.items.iter().take(limit).map(change_json).collect::<Vec<_>>(),
             "listed": c.items.len().min(limit),
             "total_changes": c.items.len(),
             "notes": c.notes,

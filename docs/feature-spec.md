@@ -169,7 +169,7 @@ Non-goals
 | SIT-02 | Triangulated existing surface. | P0 | done |
 | SIT-03 | Proposed surface from modifiers. | P0 | done |
 | SIT-04 | Pad modifier. | P0 | done (flat or sloped by elevation at end; overlapping pads nest, the later one wins; exact vertical edge without grade limits, no gap) |
-| SIT-05 | Grade limits. The ground outside does not change (overlay of the existing triangles). | P0 | done |
+| SIT-05 | Grade limits. The ground outside does not change (overlay of the existing triangles). | P0 | done (API `grade_limit.add {boundary, layer?, class?}`; the Site Modifiers tool has the Grade Limits mode) |
 | SIT-11 | Site Modifiers tool with modes (Pad, Grade Limits, Texture Bed), crop boundary, Update Site Model (auto update off shows out of date), site.drape. | P1 | done |
 | SIT-06 | Cut and fill volumes (proposed minus existing). | P0 | done (exact on the overlay of both surfaces) |
 | SIT-07 | Contours for existing and proposed surfaces. | P0 | done (major and minor, smooth option, labels) |

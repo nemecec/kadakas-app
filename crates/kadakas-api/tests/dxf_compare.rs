@@ -131,6 +131,31 @@ fn the_diff_is_json_and_the_document_is_not_touched() {
     assert_eq!(changed["what"], json!(["geometry"]));
     assert_eq!(changed["via"], "handle");
     assert!(changed["id"].as_str().unwrap().starts_with('c'));
+    // A change names its entities by their handles in the two files. The objects of the
+    // temporary documents are not objects of the open document, so they are not listed.
+    assert_eq!(changed["base_handle"], "11");
+    assert_eq!(changed["new_handle"], "11");
+    for c in r["changes"].as_array().unwrap() {
+        for key in ["object_ids", "edited_ids", "conflict"] {
+            assert!(c.get(key).is_none(), "{key} in {c}");
+        }
+    }
+    let added = r["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["status"] == "added")
+        .unwrap();
+    assert_eq!(added["new_handle"], "14");
+    assert!(added["base_handle"].is_null());
+    let removed = r["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["status"] == "removed")
+        .unwrap();
+    assert_eq!(removed["base_handle"], "12");
+    assert!(removed["new_handle"].is_null());
     // Nothing was imported and nothing is pending.
     assert_eq!(s.editor.doc(), &before);
     assert!(s.update_pending().is_none());

@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use kadakas_core::command::Command;
-use kadakas_core::model::{Attributes, Document, ObjectId, Shape, SiteLine, SiteSettings};
+use kadakas_core::model::{Attributes, Document, LayerId, ObjectId, Shape, SiteLine, SiteSettings};
 use kadakas_site::{SiteResult, Surface};
 
 use crate::{RpcError, Session, params};
@@ -18,6 +18,9 @@ struct Create {
     source_ids: Vec<ObjectId>,
     #[serde(default)]
     settings: Value,
+    /// The design layer of the new site model. Default: the layer of the first source.
+    #[serde(default)]
+    layer: Option<LayerId>,
 }
 
 #[derive(Deserialize)]
@@ -104,6 +107,7 @@ impl Session {
                 let Create {
                     source_ids,
                     settings,
+                    layer,
                 } = params(p)?;
                 if source_ids.is_empty() {
                     return Err(RpcError::invalid_params(
@@ -114,7 +118,12 @@ impl Session {
                 let (mut points, mut lines) = (Vec::new(), Vec::new());
                 take_sources(doc, &source_ids, &mut points, &mut lines)?;
                 let settings = merge_settings(&SiteSettings::default(), &settings)?;
-                let layer = doc.object(source_ids[0]).map(|o| o.layer);
+                if let Some(l) = layer
+                    && doc.layer(l).is_none()
+                {
+                    return Err(RpcError::not_found(format!("layer {l} does not exist")));
+                }
+                let layer = layer.or_else(|| doc.object(source_ids[0]).map(|o| o.layer));
                 let create = Command::AddObject {
                     shape: Shape::SiteModel {
                         points,
@@ -365,6 +374,37 @@ mod tests {
         assert_eq!(o["shape"]["settings"]["display_2d"], "both");
         assert!(s.editor.undo());
         assert_eq!(s.editor.doc().objects.len(), 81);
+    }
+
+    #[test]
+    fn create_puts_the_site_model_on_the_layer_that_is_asked_for() {
+        let mut s = Session::with_sequential_ids();
+        let ids = grid(&mut s);
+        let site_layer = exec(
+            &mut s,
+            json!({"op": "add_layer", "name": "Site", "elevation": 0}),
+        );
+        let r = call(
+            &mut s,
+            "site.create",
+            json!({"source_ids": ids, "layer": site_layer}),
+        )
+        .unwrap();
+        let o = call(&mut s, "objects.get", json!({"id": r["id"]})).unwrap();
+        assert_eq!(o["layer"], json!(site_layer));
+        // Without `layer` the layer of the first source counts.
+        let ids = grid(&mut s);
+        let r = call(&mut s, "site.create", json!({"source_ids": ids})).unwrap();
+        let o = call(&mut s, "objects.get", json!({"id": r["id"]})).unwrap();
+        assert_ne!(o["layer"], json!(site_layer));
+        let ids = grid(&mut s);
+        let e = call(
+            &mut s,
+            "site.create",
+            json!({"source_ids": ids, "layer": "00000000-0000-0000-0000-0000000003e7"}),
+        )
+        .unwrap_err();
+        assert!(e.message.contains("does not exist"), "{}", e.message);
     }
 
     #[test]

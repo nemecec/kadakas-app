@@ -323,6 +323,10 @@ pub const METHODS: &[(&str, &str)] = &[
         "document.load",
         "Replace the document. params: {document}. Clears the undo history. If the document has no `history` field (document.get leaves it out), the versions of the current document stay: they are written for the new drawing. A document with a `history` field brings its own versions. Returns {ok, notes?}; notes lists values that were repaired instead of refusing the document (an invalid 3D look of a site model goes back to its defaults) and what could not be read of its versions.",
     ),
+    #[cfg(not(target_arch = "wasm32"))]
+    files::FILE_SAVE,
+    #[cfg(not(target_arch = "wasm32"))]
+    files::FILE_OPEN,
     ("objects.list", "Objects. params: {layer?, class?, kind?}."),
     ("objects.get", "One object. params: {id}."),
     ("selection.get", "Selected object IDs."),
@@ -357,12 +361,12 @@ pub const METHODS: &[(&str, &str)] = &[
     #[cfg(not(target_arch = "wasm32"))]
     (
         "import.file",
-        "Import a DXF, Shapefile or GeoJSON file as one undo step. params: {path, format?: dxf|shp|geojson, options?}. See describe.io for options. Returns {imported, skipped, report, georeference}.",
+        "Import a file as one undo step: DXF, DWG (needs a converter), Shapefile, GeoJSON or IFC. params: {path, format?: dxf|dwg|shp|geojson|ifc (default: from the extension), options?}. See describe.io for the options of each format. Returns {imported, skipped, report, georeference}.",
     ),
     #[cfg(not(target_arch = "wasm32"))]
     (
         "export.file",
-        "Export the document to a DXF or GeoJSON file. params: {path, format?: dxf|geojson, options?}. Returns {path, exported, report}.",
+        "Export the document to a file: DXF, GeoJSON, DWG (needs a converter), IFC (IFC4, IFC2X3 or IFC4X3), glTF, GLB or OBJ (3D), or a sheet as PDF, SVG or PNG. params: {path, format?: dxf|geojson|dwg|ifc|gltf|glb|obj|pdf|sheet_svg|sheet_png (default: from the extension; the sheet formats need format), options?, overwrite? (replace an existing file; a server for agents needs it)}. See describe.io for the options of each format. Returns {path, exported, report}.",
     ),
     // Updating an imported drawing from a new revision (see update_api.rs).
     #[cfg(not(target_arch = "wasm32"))]
@@ -558,6 +562,7 @@ pub const METHODS: &[(&str, &str)] = &[
     grading_api::SECTION_PROFILE,
     grading_api::SECTION_PLACE,
     grading_api::PAD_ADD,
+    grading_api::GRADE_LIMIT_ADD,
     grading_api::PAD_RETAINING_EDGE,
     // Plug-in objects and scripts (see plugin_api.rs).
     #[cfg(not(target_arch = "wasm32"))]
@@ -664,7 +669,7 @@ pub const METHODS: &[(&str, &str)] = &[
     symbols_api::LIBRARY_FAVORITE_REMOVE,
     (
         "site.create",
-        "Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh), and the 3D look surface_look (color | texture | elevation), texture (material resource id), texture_tile (mm), texture_offset ([x, y]), texture_rotation (degrees), elevation_bands, elevation_ramp ([[r, g, b, a]]), elevation_range ([low, high]), elevation_bands_at_contours; site.texture sets them with checks. Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}.",
+        "Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], layer? (design layer of the site model; default: the layer of the first source), settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh), and the 3D look surface_look (color | texture | elevation), texture (material resource id), texture_tile (mm), texture_offset ([x, y]), texture_rotation (degrees), elevation_bands, elevation_ramp ([[r, g, b, a]]), elevation_range ([low, high]), elevation_bands_at_contours; site.texture sets them with checks. Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}.",
     ),
     (
         "site.update",
@@ -1245,6 +1250,10 @@ impl Session {
             return Err(RpcError::conflict(format!(
                 "this session is connected to a shared document: use collab.{method}, which takes back only your own edits"
             )));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if files::is_file_method(method) {
+            return files::value_call(self, method, &p);
         }
         if method.starts_with("site.") {
             return self.handle_site(method, p);
