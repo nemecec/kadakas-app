@@ -36,6 +36,8 @@ pub struct ResourceUi {
     rename: Option<(ResourceId, String)>,
     /// The style editor windows (ANN-12).
     pub styles: crate::style_ui::StyleWindows,
+    /// The joint pattern editors of hardscape styles (PAT-05).
+    pub joints: crate::joint_ui::JointWindows,
     import_path: String,
     /// The question before a big library file is read (DOC-19). It holds the parameters of the call.
     #[cfg(not(target_arch = "wasm32"))]
@@ -204,7 +206,9 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                             _ => {
                                 // A double-click on the name opens the style editor.
                                 let name = ui.add(egui::Label::new(&r.name).sense(Sense::click()));
-                                if name.double_clicked() && crate::style_ui::has_editor(r.type_name)
+                                if name.double_clicked()
+                                    && (crate::style_ui::has_editor(r.type_name)
+                                        || r.type_name == "hardscape_style")
                                 {
                                     action = Some((r.id, "edit"));
                                 }
@@ -226,7 +230,8 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                         });
                     });
                     ui.menu_button("...", |ui| {
-                        if crate::style_ui::has_editor(r.type_name)
+                        if (crate::style_ui::has_editor(r.type_name)
+                            || r.type_name == "hardscape_style")
                             && ui.button(tr!("style-ui-edit")).clicked()
                         {
                             action = Some((r.id, "edit"));
@@ -255,7 +260,11 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
             }
             match action {
                 Some((id, "edit")) => {
-                    st.styles.open(session, id);
+                    if session.editor.doc().resources.hardscape_style(id).is_some() {
+                        st.joints.open(session, id);
+                    } else {
+                        st.styles.open(session, id);
+                    }
                 }
                 Some((id, "duplicate")) => {
                     call(session, "resource.duplicate", json!({"id": id}), status);

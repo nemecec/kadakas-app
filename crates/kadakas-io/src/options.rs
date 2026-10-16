@@ -322,6 +322,32 @@ pub enum MeshEntity {
     Face3d,
 }
 
+/// What a DXF export writes of the unit pattern of an object (a hardscape with a joint pattern).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatternExport {
+    /// Only the outline of the object. This is the default: a pattern can have hundreds of
+    /// thousands of units, and the file would be much larger.
+    #[default]
+    None,
+    /// The center lines of the gaps, as LINE entities on the layer `<layer>-GAPS`.
+    Gaps,
+    /// Every unit, whole or cut, as a closed polyline with the gap taken off, on the layers
+    /// `<layer>-UNITS-WHOLE` and `<layer>-UNITS-CUT`. A hole inside a cut unit is a closed
+    /// polyline on `<layer>-UNITS-VOID`.
+    Units,
+}
+
+impl PatternExport {
+    pub fn name(self) -> &'static str {
+        match self {
+            PatternExport::None => "none",
+            PatternExport::Gaps => "gaps",
+            PatternExport::Units => "units",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExportOptions {
@@ -342,6 +368,13 @@ pub struct ExportOptions {
     pub site_mesh: SiteMesh,
     /// DXF: how meshes (mesh objects and the site mesh) are written.
     pub mesh_entity: MeshEntity,
+    /// DXF: what to write of the unit pattern of hardscapes: `none` (default), `gaps` or `units`.
+    /// A pattern with more units than the export limit is an error that names the object.
+    pub patterns: PatternExport,
+    /// The most units (or gap lines) that the pattern export of one file may write in all objects.
+    /// A program sets it from its limits; it is not an option in JSON. `None`: the default bound.
+    #[serde(skip)]
+    pub pattern_budget: Option<usize>,
 }
 
 impl Default for ExportOptions {
@@ -355,6 +388,8 @@ impl Default for ExportOptions {
             native_annotations: true,
             site_mesh: SiteMesh::None,
             mesh_entity: MeshEntity::Polyface,
+            patterns: PatternExport::None,
+            pattern_budget: None,
         }
     }
 }

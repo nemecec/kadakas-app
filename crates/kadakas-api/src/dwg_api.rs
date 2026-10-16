@@ -114,7 +114,8 @@ impl Session {
         if checked && !self.paths.converters_allowed() {
             return Err(converters_off());
         }
-        let opts = ExportOptions::from_json(options).map_err(io_rpc)?;
+        let mut opts = ExportOptions::from_json(options).map_err(io_rpc)?;
+        opts.pattern_budget = Some(self.limits.pattern_units);
         let run = RunOptions::from_json(options).map_err(rpc)?;
         let path = if checked {
             self.check_path(&path, true, &["dwg"])

@@ -215,3 +215,44 @@ def test_open_a_document_file_and_describe(tmp_path: Path):
 def test_a_missing_program_is_reported():
     with pytest.raises(kadakas.ConnectionFailed):
         kadakas.open(binary="/no/such/kadakas")
+
+
+def test_paving_helpers(doc, tmp_path):
+    outer = doc.add.polyline([[0, 0], [4100, 0], [4100, 2100], [0, 2100]], closed=True)
+    island = doc.add.polyline([[1000, 800], [1800, 800], [1800, 1400], [1000, 1400]], closed=True)
+    doc.api.hardscape_style_create(
+        name="P", joints={"kind": "stack", "unit_length": 200, "unit_width": 100, "spacing": 5})
+    made = doc.hardscape_from_shapes([outer.id, island.id], style="P")
+    assert made["created"][0]["holes"] == 1
+    hid = made["created"][0]["id"]
+    doc.api.hardscape_set(id=hid, origin=[0, 0], angle=0)
+    row = doc.report.unit_pattern(waste_percent=10)["rows"][0]
+    assert row["order_units"] == row["whole_units"] + row["cut_units"]
+    assert row["order_units_with_waste"] > row["order_units"]
+    assert doc.report.hardscape()["rows"][0]["pattern"]["whole_units"] == row["whole_units"]
+    lay = doc.pattern_layout(id=hid, include=["units"], limit=3)
+    assert lay["units_total"] == row["order_units"] and len(lay["units"]) == 3
+    out = tmp_path / "p.dxf"
+    doc.export_file(out, patterns="units")
+    text = out.read_text()
+    assert "0-UNITS-WHOLE" in text
+    group = doc.pattern_to_objects(id=hid, name="Units")
+    assert group["units"] == row["order_units"]
+    # Module patterns: a preset, shapes of the drawing, and a block of a DXF file.
+    hexagon = doc.pattern_module_preset("hexagon", across_flats=200)["pattern"]
+    assert hexagon["kind"] == "module"
+    lay = doc.pattern_layout(
+        region={"outline": [[0, 0], [2000, 0], [2000, 1000], [0, 1000]]},
+        pattern={**hexagon, "gap": 4}, include=["units"], limit=0)
+    assert lay["summary"]["by_unit"][0]["name"] == "hexagon"
+    a = doc.add.rect([0, 0], [100, 100])
+    b = doc.add.rect([100, 0], [200, 100])
+    made = doc.pattern_module_from_shapes([a.id, b.id], names=["left", "right"])
+    assert [u["name"] for u in made["pattern"]["units"]] == ["left", "right"]
+    dxf = tmp_path / "block.dxf"
+    dxf.write_text(
+        "0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n8\n0\n2\nM\n70\n0\n10\n0\n20\n0\n"
+        "0\nLWPOLYLINE\n8\nONE\n90\n4\n70\n1\n10\n0\n20\n0\n10\n100\n20\n0\n10\n100\n20\n100\n10\n0\n20\n100\n"
+        "0\nENDBLK\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n")
+    blk = doc.pattern_module_from_block(dxf, "M")
+    assert blk["pattern"]["units"][0]["name"] == "ONE"

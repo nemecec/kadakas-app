@@ -22,6 +22,7 @@ pub mod hardscape;
 pub mod history;
 pub mod irrigation;
 pub mod landscape;
+pub mod layout;
 pub mod library;
 pub mod massing;
 pub mod massing_batch;

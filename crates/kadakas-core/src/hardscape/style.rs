@@ -89,49 +89,15 @@ impl Default for Border {
     }
 }
 
-/// The layout of paving units in the 2D drawing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum JointKind {
-    /// Rows, each row shifted by half a unit.
-    #[default]
-    RunningBond,
-    /// Rows and columns line up.
-    Stack,
-    /// Units at a right angle to each other, in diagonal stripes.
-    Herringbone,
-    /// Blocks of two units, turned by 90 degrees from block to block.
-    BasketWeave,
-}
-
-impl JointKind {
-    pub const ALL: [JointKind; 4] = [
-        JointKind::RunningBond,
-        JointKind::Stack,
-        JointKind::Herringbone,
-        JointKind::BasketWeave,
-    ];
-
-    pub fn id(self) -> &'static str {
-        match self {
-            JointKind::RunningBond => "running_bond",
-            JointKind::Stack => "stack",
-            JointKind::Herringbone => "herringbone",
-            JointKind::BasketWeave => "basket_weave",
-        }
-    }
-
-    pub fn from_name(s: &str) -> Option<Self> {
-        let key = s.trim().replace([' ', '-'], "_");
-        Self::ALL
-            .into_iter()
-            .find(|k| k.id().eq_ignore_ascii_case(&key))
-    }
-}
+/// The layout of paving units (the bond). The bonds are defined by the layout engine.
+pub use crate::layout::Bond as JointKind;
 
 /// A joint pattern: paving units of `unit_length` by `unit_width`, with `spacing` between them,
 /// turned by `angle` degrees.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+///
+/// With the kind `module` the pattern lays your own unit shapes (`units`) on the lattice of the two
+/// repeat vectors `a` and `b`; the unit length and width are not used then.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct JointPattern {
     pub kind: JointKind,
@@ -142,6 +108,38 @@ pub struct JointPattern {
     /// Rotation of the pattern in degrees, counterclockwise.
     pub angle: f64,
     pub color: Option<Color>,
+    /// Module: the unit shapes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub units: Vec<crate::layout::ModuleUnit>,
+    /// Module: the repeat vectors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<[f64; 2]>,
+}
+
+impl JointPattern {
+    /// The module of a module pattern, if this is one.
+    pub fn module(&self) -> Option<crate::layout::Module> {
+        (self.kind == JointKind::Module).then(|| crate::layout::Module {
+            units: self.units.clone(),
+            a: self.a.unwrap_or([0.0, 0.0]),
+            b: self.b.unwrap_or([0.0, 0.0]),
+        })
+    }
+
+    /// The pattern for the layout engine (the angle goes in the placement).
+    pub fn layout(&self) -> crate::layout::Pattern {
+        match self.module() {
+            Some(m) => crate::layout::Pattern::of_module(m, self.spacing),
+            None => crate::layout::Pattern::new(
+                self.kind,
+                self.unit_length,
+                self.unit_width,
+                self.spacing,
+            ),
+        }
+    }
 }
 
 impl Default for JointPattern {
@@ -153,6 +151,9 @@ impl Default for JointPattern {
             spacing: 5.0,
             angle: 0.0,
             color: None,
+            units: Vec::new(),
+            a: None,
+            b: None,
         }
     }
 }
@@ -220,10 +221,12 @@ impl HardscapeStyle {
             positive("border width", b.width)?;
         }
         if let Some(j) = &self.joints {
-            positive("unit length", j.unit_length)?;
-            positive("unit width", j.unit_width)?;
-            if j.unit_length < MIN_UNIT || j.unit_width < MIN_UNIT {
-                return Err(format!("paving units must be at least {MIN_UNIT} mm"));
+            if j.kind != JointKind::Module {
+                positive("unit length", j.unit_length)?;
+                positive("unit width", j.unit_width)?;
+                if j.unit_length < MIN_UNIT || j.unit_width < MIN_UNIT {
+                    return Err(format!("paving units must be at least {MIN_UNIT} mm"));
+                }
             }
             if !j.spacing.is_finite() || j.spacing < 0.0 || j.spacing > MAX_COORD {
                 return Err("joint spacing must be a finite number of zero or more".into());
@@ -231,6 +234,8 @@ impl HardscapeStyle {
             if !j.angle.is_finite() || j.angle.abs() > 1e6 {
                 return Err("joint angle must be a finite number".into());
             }
+            // The pattern must work: a module that overlaps itself, a basket weave that does not fit.
+            j.layout().validate()?;
         }
         Ok(())
     }
@@ -337,7 +342,8 @@ mod tests {
         let s: HardscapeStyle =
             serde_json::from_str(r#"{"material": "Setts", "joints": {"kind": "stack"}}"#).unwrap();
         assert_eq!(s.thickness, 60.0);
-        assert_eq!(s.joints.unwrap().kind, JointKind::Stack);
-        assert_eq!(s.joints.unwrap().unit_length, 200.0);
+        let j = s.joints.unwrap();
+        assert_eq!(j.kind, JointKind::Stack);
+        assert_eq!(j.unit_length, 200.0);
     }
 }

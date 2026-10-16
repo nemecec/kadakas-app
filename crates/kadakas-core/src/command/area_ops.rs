@@ -54,6 +54,15 @@ impl Tx<'_> {
         id: ObjectId,
         boundary: &[Vertex],
     ) -> Result<(), CommandError> {
+        if let Some(h) = self.doc.object(id).and_then(hardscape::data) {
+            return if landscape::holes_fit(boundary, &h.holes) {
+                Ok(())
+            } else {
+                Err(invalid(
+                    "the hardscape has holes that would lie outside the new outline. Move or clear the holes first",
+                ))
+            };
+        }
         let Some(d) = self.doc.object(id).and_then(landscape::data) else {
             return Ok(());
         };
