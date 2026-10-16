@@ -2555,6 +2555,53 @@ impl Editor {
         self.redo.clear();
     }
 
+    /// Merges the last `steps` undo steps into one, so that one undo takes back all of them (a
+    /// script that made many changes is one step for the person). Returns how many steps were
+    /// merged: `steps`, or fewer if the history has fewer (the oldest steps may have been dropped
+    /// by the history limit). Fewer than two steps are left as they are. The redo steps are
+    /// forgotten, as after any new change. The change log keeps the change sets of the single
+    /// steps and gets one more with the sum of them, named `op`, for the origin that is set now.
+    ///
+    /// The merged step is made from the document before and after, like a restore of a version, so
+    /// it holds exactly the net change; a step that undid another one disappears from it.
+    pub fn squash_last(&mut self, steps: usize, op: &str) -> usize {
+        let steps = steps.min(self.undo.len());
+        if steps < 2 {
+            return steps;
+        }
+        let after = self.doc.clone();
+        let mut popped: Vec<Patch> = Vec::with_capacity(steps);
+        for _ in 0..steps {
+            let p = self.undo.pop().expect("the history has this many steps");
+            p.apply(&mut self.doc, false);
+            popped.push(p);
+        }
+        self.redo.clear();
+        let (history, issues) = (after.history.clone(), after.issues.clone());
+        let merged = self.transact(
+            || op.to_string(),
+            None,
+            |tx, _| {
+                tx.replace_content(&after);
+                tx.doc.active_layer = after.active_layer;
+                tx.doc.active_class = after.active_class;
+                tx.doc.history = history;
+                tx.doc.issues = issues;
+                Ok(())
+            },
+        );
+        if merged.is_err() {
+            // The document was valid after the steps, so this does not happen. If it does, the
+            // steps come back as they were.
+            for p in popped.into_iter().rev() {
+                p.apply(&mut self.doc, true);
+                self.undo.push(p);
+            }
+            return 0;
+        }
+        steps
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
@@ -2613,6 +2660,40 @@ mod tests {
         assert_eq!(ed.doc(), &after, "redo, n = {n}");
         assert!(ed.undo());
         assert_eq!(ed.doc(), &before);
+    }
+
+    #[test]
+    fn squashed_steps_undo_and_redo_as_one() {
+        let mut ed = Editor::with_sequential_ids();
+        for k in 0..3 {
+            ed.execute(&serde_json::from_value(line_json(f64::from(k))).unwrap())
+                .unwrap();
+        }
+        let before = ed.doc().clone();
+        let depth = ed.undo_depth();
+        // Four steps: a layer, two lines, a delete of the first old line.
+        let steps = [
+            serde_json::json!({"op": "add_layer", "name": "Made by a script"}),
+            line_json(50.0),
+            line_json(60.0),
+            serde_json::json!({"op": "delete_objects", "ids": [ed.doc().objects.keys().next().unwrap()]}),
+        ];
+        for c in steps {
+            ed.execute(&serde_json::from_value(c).unwrap()).unwrap();
+        }
+        let after = ed.doc().clone();
+        assert_eq!(ed.undo_depth(), depth + 4);
+        assert_eq!(ed.squash_last(4, "script"), 4);
+        assert_eq!(ed.undo_depth(), depth + 1, "one step is left");
+        assert_eq!(ed.doc(), &after, "the document did not change");
+        assert!(ed.undo());
+        assert_eq!(ed.doc(), &before, "one undo takes back all of it");
+        assert!(ed.redo());
+        assert_eq!(ed.doc(), &after, "and one redo brings it back");
+        // Fewer than two steps are left alone; more than there are is cut to what exists.
+        assert_eq!(ed.squash_last(1, "x"), 1);
+        assert_eq!(ed.squash_last(1000, "x"), depth + 1);
+        assert_eq!(ed.undo_depth(), 1);
     }
 
     #[test]

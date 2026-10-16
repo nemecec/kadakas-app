@@ -43,6 +43,7 @@ pub mod record;
 pub mod regions;
 pub mod resource;
 pub mod schema;
+pub mod script;
 pub mod section;
 pub mod sheets;
 pub mod site;

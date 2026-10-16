@@ -116,6 +116,9 @@ pub struct JointPattern {
     pub a: Option<[f64; 2]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub b: Option<[f64; 2]>,
+    /// Generator: the script that makes the unit shapes, and its parameters (PAT-09).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generator: Option<crate::layout::generator::GeneratorSpec>,
 }
 
 impl JointPattern {
@@ -130,6 +133,12 @@ impl JointPattern {
 
     /// The pattern for the layout engine (the angle goes in the placement).
     pub fn layout(&self) -> crate::layout::Pattern {
+        if self.kind == JointKind::Generator {
+            return crate::layout::Pattern::of_generator(
+                self.generator.clone().unwrap_or_default(),
+                self.spacing,
+            );
+        }
         match self.module() {
             Some(m) => crate::layout::Pattern::of_module(m, self.spacing),
             None => crate::layout::Pattern::new(
@@ -154,6 +163,7 @@ impl Default for JointPattern {
             units: Vec::new(),
             a: None,
             b: None,
+            generator: None,
         }
     }
 }
@@ -221,7 +231,7 @@ impl HardscapeStyle {
             positive("border width", b.width)?;
         }
         if let Some(j) = &self.joints {
-            if j.kind != JointKind::Module {
+            if !matches!(j.kind, JointKind::Module | JointKind::Generator) {
                 positive("unit length", j.unit_length)?;
                 positive("unit width", j.unit_width)?;
                 if j.unit_length < MIN_UNIT || j.unit_width < MIN_UNIT {
