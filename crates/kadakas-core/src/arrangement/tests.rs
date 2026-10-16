@@ -408,3 +408,27 @@ fn directions_at_the_seam_and_many_crossings() {
     let r = build(&many, 0.1);
     assert!(r.is_ok() || matches!(r, Err(BuildError::TooMany(_))));
 }
+
+#[test]
+fn a_closed_loop_in_a_drawing_is_found_only_when_nothing_else_touches_its_outline() {
+    // Two lots side by side, drawn as separate squares: both touch the outside.
+    let mut c = rect_lines(0.0, 0.0, 1000.0, 1000.0);
+    c.extend(rect_lines(1000.0, 0.0, 2000.0, 1000.0));
+    let a = build(&c, 1.0).unwrap();
+    assert_eq!(a.faces.len(), 2);
+    assert!(a.faces.iter().all(|f| !f.closed_loop));
+    // A lot with a divider: the halves share curves with the lot.
+    let mut c = rect_lines(0.0, 0.0, 1000.0, 1000.0);
+    c.push(Curve::line(v(500.0, 0.0), v(500.0, 1000.0)));
+    let a = build(&c, 1.0).unwrap();
+    assert!(a.faces.iter().all(|f| !f.closed_loop));
+    // A square island joined to the lot by two lines that end on it: one loop.
+    let mut c = rect_lines(0.0, 0.0, 4000.0, 2000.0);
+    c.extend(rect_lines(1500.0, 750.0, 2500.0, 1250.0));
+    c.push(Curve::line(v(0.0, 1000.0), v(1500.0, 1000.0)));
+    c.push(Curve::line(v(2500.0, 1000.0), v(4000.0, 1000.0)));
+    let a = build(&c, 1.0).unwrap();
+    let loops: Vec<_> = a.faces.iter().filter(|f| f.closed_loop).collect();
+    assert_eq!(loops.len(), 1, "{:?}", a.faces.iter().map(|f| f.area).collect::<Vec<_>>());
+    assert!((loops[0].area - 500_000.0).abs() < 1e-6);
+}

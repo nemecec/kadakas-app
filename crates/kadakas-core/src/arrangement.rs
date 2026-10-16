@@ -425,6 +425,11 @@ pub struct Face {
     /// enclosed by one face, as an island is, although it is joined to it by lines (a stall line
     /// that ends on the kerb of an island).
     pub enclosed: bool,
+    /// True if the whole outline is made of curves that lie on this outline and nowhere else (a
+    /// circle, a closed shape, a closed chain of arcs) and no edge of it borders the outside of
+    /// the drawing: a closed shape inside the outline of its drawing, joined to the rest by lines
+    /// that end on it (stall lines that end on an island), so that no face encloses it.
+    pub closed_loop: bool,
 }
 
 /// The result of [`build`].
@@ -1122,6 +1127,13 @@ fn trace_faces(out: &mut Arrangement, tol: f64) {
             owner.insert((e, fwd), fi);
         }
     }
+    // The curves that cover each edge.
+    let mut covering: Vec<Vec<usize>> = vec![Vec::new(); out.edges.len()];
+    for (c, es) in out.curve_edges.iter().enumerate() {
+        for &e in es {
+            covering[e].push(c);
+        }
+    }
     for fi in 0..faces.len() {
         let comp = faces[fi].comp;
         // A sliver between curves that nearly coincide is noise, not an area.
@@ -1144,6 +1156,20 @@ fn trace_faces(out: &mut Arrangement, tol: f64) {
         others.sort_unstable();
         others.dedup();
         let enclosed = others.len() == 1 && others[0].is_some_and(|o| o != fi);
+        let closed_loop = !others.is_empty()
+            && others.iter().all(|o| o.is_some_and(|o| o != fi))
+            && {
+                let ring: std::collections::HashSet<usize> = cycles[faces[fi].cycle]
+                    .0
+                    .edges
+                    .iter()
+                    .map(|&(e, _)| e)
+                    .collect();
+                let own: std::collections::HashSet<usize> =
+                    ring.iter().map(|&e| out.edges[e].source).collect();
+                own.iter().all(|&c| out.curve_edges[c].iter().all(|e| ring.contains(e)))
+                    && ring.iter().all(|&e| covering[e].iter().all(|c| own.contains(c)))
+            };
         let d = depth_of(comp, &parent_of_comp, &faces, &mut comp_depth);
         let hole_cycles: Vec<Cycle> = holes_of[fi]
             .iter()
@@ -1165,6 +1191,7 @@ fn trace_faces(out: &mut Arrangement, tol: f64) {
             inside,
             component: faces[fi].comp,
             enclosed,
+            closed_loop,
         });
     }
 }

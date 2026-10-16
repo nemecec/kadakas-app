@@ -308,6 +308,10 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
                 Some(format!(
                     "region {i} is enclosed on all sides by one other region and joined to it by lines: it may be an island that touches the outline"
                 ))
+            } else if r.closed_loop {
+                Some(format!(
+                    "region {i} is a closed shape (or a closed chain of curves) inside the outline of the drawing, and lines end on it: it may be an island that the stall lines run up to"
+                ))
             } else if by_shapes == Some(1) {
                 Some(format!(
                     "region {i} lies inside {inside_loops} closed shapes, which says it is an island, but its lines make it an area"
