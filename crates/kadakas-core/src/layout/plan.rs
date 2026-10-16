@@ -224,20 +224,20 @@ impl Plan {
         }
         for (i, z) in self.zones.iter().enumerate() {
             if !z.seed.is_finite() {
-                return Err(format!("zone setting {} has no finite seed point", i + 1));
+                return Err(format!("zone setting {} has no finite seed point", i));
             }
             if z.angle.is_some_and(|a| !a.is_finite()) || z.origin.is_some_and(|o| !o.is_finite()) {
-                return Err(format!("zone setting {}: numbers must be finite", i + 1));
+                return Err(format!("zone setting {}: numbers must be finite", i));
             }
             if let Some(p) = &z.pattern {
                 p.validate()
-                    .map_err(|e| format!("zone setting {}: {e}", i + 1))?;
+                    .map_err(|e| format!("zone setting {}: {e}", i))?;
                 if p.bond != super::Bond::Module
                     && (p.unit_length < Pattern::MIN_UNIT || p.unit_width < Pattern::MIN_UNIT)
                 {
                     return Err(format!(
                         "zone setting {}: units must be at least {} mm",
-                        i + 1,
+                        i,
                         Pattern::MIN_UNIT
                     ));
                 }
@@ -245,7 +245,7 @@ impl Plan {
             if z.align_to_split.is_some_and(|n| n >= self.splits.len()) {
                 return Err(format!(
                     "zone setting {}: align_to_split names a split line that does not exist",
-                    i + 1
+                    i
                 ));
             }
         }
@@ -299,6 +299,12 @@ pub fn translate_data(obj: &mut Object, delta: DVec2) {
     );
 }
 
+/// An angle in degrees (the direction of the rows of a pattern) after a transform.
+pub fn turn_angle(xf: &crate::edit2d::Xf, degrees: f64) -> f64 {
+    let d = xf.m * DVec2::from_angle(degrees.to_radians());
+    d.y.atan2(d.x).to_degrees()
+}
+
 /// Moves the positions of the plan with a transform of the object (turn, mirror, scale). A mirror
 /// puts a course on the other side of its path.
 pub fn transform_data(obj: &mut Object, xf: &crate::edit2d::Xf) {
@@ -313,12 +319,18 @@ pub fn transform_data(obj: &mut Object, xf: &crate::edit2d::Xf) {
         if let Some(o) = &mut z.origin {
             *o = xf.apply(*o);
         }
+        // The rows of the pattern turn with the drawing.
+        z.angle = z.angle.map(|a| turn_angle(xf, a));
     }
     for c in &mut p.courses {
         for v in &mut c.path {
             v.p = xf.apply(v.p);
         }
-        if xf.is_reflection() {
+        // A path that is copied is mirrored, so the course goes to the other side of it. A course
+        // that follows the edge of the hardscape is made again from the (mirrored) edge, which
+        // always runs counterclockwise: its side stays. A course that follows a drawn line takes
+        // the line as it is then.
+        if xf.is_reflection() && c.edge.is_none() && c.source.is_none() {
             c.side = match c.side {
                 Side::Left => Side::Right,
                 Side::Right => Side::Left,
@@ -737,7 +749,7 @@ pub fn effective_splits(
                     None => {
                         notes.push(format!(
                             "split line {} follows an object that is not a line, arc or polyline: the saved points are used",
-                            i + 1
+                            i
                         ));
                         (s.points.clone(), false)
                     }
@@ -746,7 +758,7 @@ pub fn effective_splits(
                     if let Some(id) = s.source {
                         notes.push(format!(
                             "split line {} followed the object {id}, which is gone: the saved points are used",
-                            i + 1
+                            i
                         ));
                     }
                     (s.points.clone(), false)
@@ -1036,13 +1048,13 @@ pub fn plan_groups(
             for e in &split.loose_ends {
                 out.notes.push(format!(
                     "split line {} stops inside the area at ({:.1}, {:.1}), {:.1} mm from the nearest edge or line: it cuts nothing there",
-                    e.line + 1, e.at.x, e.at.y, e.gap
+                    e.line, e.at.x, e.at.y, e.gap
                 ));
             }
             for i in &split.unused_lines {
                 out.notes.push(format!(
                     "split line {} cuts nothing: it does not cross the area",
-                    i + 1
+                    i
                 ));
             }
             // Settings by seed.
@@ -1064,12 +1076,12 @@ pub fn plan_groups(
                     Some(zi) => out.notes.push(format!(
                         "zone setting {} and {} are both tied to zone {}: the first one is used",
                         spec_of[zi].unwrap_or(0) + 1,
-                        si + 1,
-                        zi + 1
+                        si,
+                        zi
                     )),
                     None => out.notes.push(format!(
                         "zone setting {}{} is tied to ({:.0}, {:.0}), which is in no zone now: it is not used",
-                        si + 1,
+                        si,
                         z.name.as_ref().map(|n| format!(" ({n})")).unwrap_or_default(),
                         z.seed.x,
                         z.seed.y
@@ -1113,7 +1125,7 @@ pub fn plan_groups(
                 let spec = spec_of[zi].map(|i| &plan.zones[i]);
                 let name = spec
                     .and_then(|s| s.name.clone())
-                    .unwrap_or_else(|| format!("zone {}", zi + 1));
+                    .unwrap_or_else(|| format!("zone {zi}"));
                 let zregion = Region::from_shapes(vec![zone.shape.clone()])?;
                 let mut zpattern = pattern.clone();
                 let mut zplace = place;
@@ -1128,10 +1140,10 @@ pub fn plan_groups(
                     }
                     if let Some(n) = s.align_to_split {
                         let line = out.splits.get(n).ok_or_else(|| {
-                            format!("zone '{name}': split line {} does not exist", n + 1)
+                            format!("zone '{name}': split line {} does not exist", n)
                         })?;
                         if line.len() < 2 {
-                            return Err(format!("zone '{name}': split line {} is empty", n + 1));
+                            return Err(format!("zone '{name}': split line {} is empty", n));
                         }
                         let d = line[1] - line[0];
                         zplace = Placement {

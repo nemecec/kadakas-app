@@ -688,8 +688,7 @@ fn zones_keep_their_names_and_can_be_given_by_center() {
     let id = slab(&mut s, 8000.0, 4000.0);
     let l = line(&mut s, [3010.0, -50.0], [3010.0, 4050.0]);
     let r = ok(&mut s, "hardscape.split", json!({"id": id, "lines": [l]}));
-    assert_eq!(r["zones"][0]["number"], 1);
-    assert_eq!(r["zones"][1]["name"], "zone 2");
+        assert_eq!(r["zones"][1]["name"], "zone 1");
     assert!(r["zone_edge_cuts"]["whole_units_lost"].as_u64().unwrap() > 5);
     assert!(
         r["zone_edge_note"]
@@ -706,7 +705,7 @@ fn zones_keep_their_names_and_can_be_given_by_center() {
         json!({"command": {"op": "move_objects", "ids": [l], "delta": [3000, 0]}}),
     );
     let p = ok(&mut s, "hardscape.plan", json!({"id": id}));
-    assert_eq!(p["zones"][0]["name"], "zone 1");
+    assert_eq!(p["zones"][0]["name"], "zone 0");
     let r = ok(
         &mut s,
         "hardscape.split",

@@ -222,7 +222,7 @@ def test_regions_zones_courses_and_the_check(doc, tmp_path):
         hid, name="Kerb", path=[[0, 0], [4000, 0]], side="left", align_field=True)
     assert c["courses"][0]["units"] == 39
     plan = doc.hardscape_plan(hid)
-    assert [g["name"] for g in plan["groups"]] == ["zone 1", "zone 2", "Kerb"]
+    assert [g["name"] for g in plan["groups"]] == ["zone 0", "zone 1", "Kerb"]
     row = doc.report.unit_pattern()["rows"][0]
     assert sum(g["whole_units"] for g in row["groups"]) == row["whole_units"]
     chk = doc.pattern_check([hid])

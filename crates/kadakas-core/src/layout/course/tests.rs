@@ -400,7 +400,7 @@ fn bad_input_is_refused() {
     .unwrap();
     assert_eq!(c.notes.len(), 1, "{:?}", c.notes);
     assert!(
-        c.notes[0].contains("turns by") && c.notes[0].contains("flush"),
+        c.notes[0].contains("turns by"),
         "{:?}",
         c.notes
     );
@@ -760,6 +760,54 @@ fn corner_rules_cover_the_band_at_every_angle() {
                         worst <= 5.0 + 1e-6,
                         "{label}: a point of the band is {worst} mm from a unit"
                     );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_sharp_corner_never_overlaps_inside_and_is_covered_inside() {
+    for turn in [155.0f64, 160.0, 170.0, 175.0] {
+        for sign in [1.0, -1.0] {
+            let a = (sign * turn).to_radians();
+            let end = v(3000.0 + 3000.0 * a.cos(), 3000.0 * a.sin());
+            for side in [Side::Left, Side::Right, Side::Center] {
+                let c = lay(&spec(&[(0.0, 0.0), (3000.0, 0.0), (end.x, end.y)], side, Corner::Miter), 10_000).unwrap();
+                let label = format!("{turn} {sign} {side:?}");
+                assert_eq!(c.notes.len(), 1, "{label}");
+                // Legs far enough apart do not overlap: the legs are 3 m long, the strip 0.2 m.
+                // Outside the legs diverge; inside they are cut at the bisector.
+                let inside = match side {
+                    Side::Left => sign > 0.0,
+                    Side::Right => sign < 0.0,
+                    Side::Center => true,
+                };
+                if inside || turn < 175.0 {
+                    assert!(max_overlap(&c) < 1e-6, "{label}: overlap {}", max_overlap(&c));
+                }
+                if inside && side != Side::Center && turn <= 170.0 {
+                    let (lo, hi) = side.extents(200.0);
+                    let (u1, u2) = (v(1.0, 0.0), DVec2::from_angle(a));
+                    let (l1, l2) = (left(u1), left(u2));
+                    let nn = (u1 + u2).normalize();
+                    let cp = v(3000.0, 0.0);
+                    let mut worst: f64 = 0.0;
+                    let mut y = -600.0;
+                    while y <= 600.0 {
+                        let mut x = 0.0;
+                        while x <= 3200.0 {
+                            let d = v(x, y) - cp;
+                            let in1 = (lo..=hi).contains(&d.dot(l1)) && d.dot(nn) <= 0.0 && d.dot(u1) >= -2500.0;
+                            let in2 = (lo..=hi).contains(&d.dot(l2)) && d.dot(nn) >= 0.0 && d.dot(u2) <= 2500.0;
+                            if in1 || in2 {
+                                worst = worst.max(nearest(&c, v(x, y)));
+                            }
+                            x += 23.0;
+                        }
+                        y += 23.0;
+                    }
+                    assert!(worst <= 5.0 + 1e-6, "{label}: a point of the band is {worst} mm from a unit");
                 }
             }
         }

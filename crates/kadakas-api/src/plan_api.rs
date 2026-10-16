@@ -29,7 +29,7 @@ pub const REGION_FROM_CURVES: (&str, &str) = (
 );
 pub const HARDSCAPE_SPLIT: (&str, &str) = (
     "hardscape.split",
-    "Split a hardscape (it needs a style with a joint pattern) into zones with lines (stall rows, a driveway, a fire lane): the zones share their edges exactly, so there are no slivers and no overlaps, and the areas of the zones add up to the area of the hardscape. Each zone can have a pattern, origin, angle or alignment of its own. The split lines and the zone settings are data of the hardscape (undoable, they move with it). A split line that follows a drawn line, arc or polyline (source) is read again each time: move the line and the zones follow. params: {id, lines? ([object IDs or [vertices]]: replaces the split lines; [] removes them; an ID follows the object unless follow is false), follow? (default true), zones? ([{index? (the index of the zone in the reply, counted from 0; the name is zone N with N = index + 1), seed? ([x, y]: a point inside the zone; the settings belong to the zone that holds it, also after a line moves), name?, pattern? (as the pattern of unit_pattern.layout), origin?, angle?, align_to_edge? (n: start at vertex n of the outline of the zone), align_to_split? (n: start at the first point of split line n and run along its first segment)}]: replaces the zone settings), tolerance? (mm, default 1: an end of a line this close to an edge joins it; the edge of the hardscape never moves)}. A zone without settings continues the pattern of the hardscape (the same lattice, cut at the zone edge). Returns {zones: [{index, number (index + 1), name, area_m2, inside: [x, y], bbox: {lo, hi}, has_settings (a pattern, origin, angle or alignment of its own)}], split_lines, area_m2 (the hardscape), zones_area_m2 (the sum of the zones: the field), courses_area_m2 (what courses take: area less zones), zone_units, zone_edge_cuts ({whole_units_lost, extra_pieces}: the units that only the zone edges cut, when the zones continue the pattern), zone_edge_note, notes: [text]}. Every zone gets a setting with its name and a seed point, so a name stays with its place when a line moves. zone_units? (cut (default): a unit that a zone edge crosses is cut, and the two pieces touch with no joint, which is not buildable; centroid: the unit goes whole to the zone that holds its center, only for zones without a pattern of their own). A split line that stops short of the edge, or cuts nothing, is a note with its position and the gap. Counts per zone and in total are in report.unit_pattern (groups), the check in unit_pattern.check, the DXF has layers per zone.",
+    "Split a hardscape (it needs a style with a joint pattern) into zones with lines (stall rows, a driveway, a fire lane): the zones share their edges exactly, so there are no slivers and no overlaps, and the areas of the zones add up to the area of the hardscape. Each zone can have a pattern, origin, angle or alignment of its own. The split lines and the zone settings are data of the hardscape (undoable, they move with it). A split line that follows a drawn line, arc or polyline (source) is read again each time: move the line and the zones follow. params: {id, lines? ([object IDs or [vertices]]: replaces the split lines; [] removes them; an ID follows the object unless follow is false), follow? (default true), zones? ([{index? (the index of the zone in the reply, counted from 0; the default name is zone N with N = index), seed? ([x, y]: a point inside the zone; the settings belong to the zone that holds it, also after a line moves), name?, pattern? (as the pattern of unit_pattern.layout), origin?, angle?, align_to_edge? (n: start at vertex n of the outline of the zone), align_to_split? (n: start at the first point of split line n and run along its first segment)}]: replaces the zone settings), tolerance? (mm, default 1: an end of a line this close to an edge joins it; the edge of the hardscape never moves)}. A zone without settings continues the pattern of the hardscape (the same lattice, cut at the zone edge). Returns {zones: [{index, name, area_m2, inside: [x, y], bbox: {lo, hi}, has_settings (a pattern, origin, angle or alignment of its own)}], split_lines, area_m2 (the hardscape), zones_area_m2 (the sum of the zones: the field), courses_area_m2 (what courses take: area less zones), zone_units, zone_edge_cuts ({whole_units_lost, extra_pieces}: the units that only the zone edges cut, when the zones continue the pattern), zone_edge_note, notes: [text]}. Every zone gets a setting with its name and a seed point, so a name stays with its place when a line moves. zone_units? (cut (default): a unit that a zone edge crosses is cut, and the two pieces touch with no joint, which is not buildable; centroid: the unit goes whole to the zone that holds its center, only for zones without a pattern of their own). A split line that stops short of the edge, or cuts nothing, is a note with its position and the gap. Counts per zone and in total are in report.unit_pattern (groups), the check in unit_pattern.check, the DXF has layers per zone.",
 );
 pub const HARDSCAPE_COURSE: (&str, &str) = (
     "hardscape.course",
@@ -609,7 +609,6 @@ fn zones_json(p: &plan::Planned, with_outline: Option<&plan::Planned>) -> Vec<Va
         .map(|(i, z)| {
             let mut v = json!({
                 "index": i,
-                "number": i + 1,
                 "name": z.name,
                 "area_m2": z.area / 1e6,
                 "inside": xy(z.inside),
@@ -716,12 +715,12 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                 Value::String(_) => {
                     let id = object_id(item, "lines")?;
                     let src = doc.object(id).ok_or_else(|| {
-                        bad(format!("line {}: object {id} does not exist", i + 1))
+                        bad(format!("line {}: object {id} does not exist", i))
                     })?;
                     let (points, _) = plan::path_of(&src.shape).ok_or_else(|| {
                         bad(format!(
                             "line {}: object {id} is a {}, not a line, arc or polyline",
-                            i + 1,
+                            i,
                             src.shape.kind()
                         ))
                     })?;
@@ -732,9 +731,9 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                 }
                 Value::Array(_) => {
                     let points: Vec<Vertex> = serde_json::from_value(item.clone())
-                        .map_err(|e| bad(format!("line {}: {e}", i + 1)))?;
+                        .map_err(|e| bad(format!("line {}: {e}", i)))?;
                     if points.len() < 2 {
-                        return Err(bad(format!("line {} needs 2 or more points", i + 1)));
+                        return Err(bad(format!("line {} needs 2 or more points", i)));
                     }
                     p.splits.push(SplitLine {
                         source: None,
@@ -744,7 +743,7 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                 _ => {
                     return Err(bad(format!(
                         "line {} must be an object ID or a list of vertices",
-                        i + 1
+                        i
                     )));
                 }
             }
@@ -763,7 +762,7 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         for (i, item) in list.iter().enumerate() {
             let z = item
                 .as_object()
-                .ok_or_else(|| bad(format!("zone {}: must be an object", i + 1)))?;
+                .ok_or_else(|| bad(format!("zone {}: must be an object", i)))?;
             unknown_fields(
                 z,
                 &[
@@ -777,18 +776,18 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                     "align_to_split",
                 ],
             )
-            .map_err(|e| bad(format!("zone {}: {}", i + 1, e.message)))?;
+            .map_err(|e| bad(format!("zone {}: {}", i, e.message)))?;
             let seed = match (z.get("index"), z.get("seed")) {
                 (Some(_), Some(_)) => {
                     return Err(bad(format!(
                         "zone {}: give 'index' or 'seed', not both",
-                        i + 1
+                        i
                     )));
                 }
                 (Some(ix), None) => {
                     let ix = ix
                         .as_u64()
-                        .ok_or_else(|| bad(format!("zone {}: 'index' must be a number", i + 1)))?
+                        .ok_or_else(|| bad(format!("zone {}: 'index' must be a number", i)))?
                         as usize;
                     before
                         .zones
@@ -797,13 +796,13 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                         .ok_or_else(|| {
                             bad(format!(
                                 "zone {}: there is no zone {ix}; the lines make {} zones (numbered from 0)",
-                                i + 1,
+                                i,
                                 before.zones.len()
                             ))
                         })?
                 }
                 (None, Some(sd)) => point(sd, "seed")?,
-                (None, None) => return Err(bad(format!("zone {}: give 'index' or 'seed'", i + 1))),
+                (None, None) => return Err(bad(format!("zone {}: give 'index' or 'seed'", i))),
             };
             let pattern = match z.get("pattern").filter(|v| !v.is_null()) {
                 Some(v) => {

@@ -707,14 +707,39 @@ pub fn lay(spec: &Spec, max_units: usize) -> Result<Course, String> {
             let (u1, u2) = (dir_in(c), dir_out(c));
             let turn_deg = u1.angle_to(u2).abs().to_degrees();
             if turn_deg > MAX_TURN_DEG {
-                // The mitre of such a corner is very long: both legs end flush at the corner.
-                runs[r1i].end = Some(Plane { p: cp, n: -u1 });
-                runs[r2i].start = Some(Plane { p: cp, n: u2 });
-                runs[r2i].anchor = 0.0;
-                notes.push(format!(
-                    "the path turns by {turn_deg:.0} degrees at ({:.0}, {:.0}), more than the {MAX_TURN_DEG} degrees that a corner rule takes: both legs end flush at the corner and the corner itself has no units",
-                    cp.x, cp.y
-                ));
+                // The mitre of such a corner is very long. On the inside of the corner the two
+                // strips lie over each other, so the legs are cut at the bisector; on the outside
+                // both legs end flush at the corner and the wedge between them has no units.
+                let ts = u1.perp_dot(u2).signum();
+                let inside = match spec.side {
+                    Side::Left => ts > 0.0,
+                    Side::Right => ts < 0.0,
+                    Side::Center => true,
+                };
+                if let (true, Some(nn)) = (inside, (u1 + u2).try_normalize()) {
+                    runs[r1i].end = Some(Plane {
+                        p: cp - nn * (g / 2.0),
+                        n: -nn,
+                    });
+                    let pl = Plane {
+                        p: cp + nn * (g / 2.0),
+                        n: nn,
+                    };
+                    runs[r2i].anchor = (pl.p - cp).dot(pl.n) / u2.dot(pl.n);
+                    runs[r2i].start = Some(pl);
+                    notes.push(format!(
+                        "the path turns by {turn_deg:.0} degrees at ({:.0}, {:.0}), more than the {MAX_TURN_DEG} degrees that a corner rule takes: the legs are cut at the bisector of the corner",
+                        cp.x, cp.y
+                    ));
+                } else {
+                    runs[r1i].end = Some(Plane { p: cp, n: -u1 });
+                    runs[r2i].start = Some(Plane { p: cp, n: u2 });
+                    runs[r2i].anchor = 0.0;
+                    notes.push(format!(
+                        "the path turns by {turn_deg:.0} degrees at ({:.0}, {:.0}), more than the {MAX_TURN_DEG} degrees that a corner rule takes: both legs end flush at the corner and the wedge of the corner has no units",
+                        cp.x, cp.y
+                    ));
+                }
                 continue;
             }
             let rule = if turn_deg < MIN_RULE_TURN_DEG {
