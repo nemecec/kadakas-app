@@ -947,10 +947,7 @@ mod tests {
             add(&mut ed, Shape::Massing(Box::new(m)));
         }
         let svg = render(ed.doc(), 400);
-        let roofs: Vec<&str> = svg
-            .lines()
-            .filter(|l| l.contains("massing_roof"))
-            .collect();
+        let roofs: Vec<&str> = svg.lines().filter(|l| l.contains("massing_roof")).collect();
         assert_eq!(roofs.len(), 2);
         for l in roofs {
             assert_eq!(l.matches(" fill=").count(), 1, "{l}");
