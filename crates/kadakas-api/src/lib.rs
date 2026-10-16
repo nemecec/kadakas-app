@@ -19,7 +19,8 @@ pub use errors::{
     REASON_ALREADY_CONNECTED, REASON_BASE_TOO_LARGE, REASON_BASE_TOO_MANY, REASON_BCF_CONFLICT,
     REASON_BCF_UNFIT, REASON_CONFIRM_NEEDED, REASON_EDITS_WAIT, REASON_FILE_CHANGED,
     REASON_HISTORY_READONLY, REASON_PARTS_MISSING, REASON_PERSON_NAVIGATING,
-    REASON_UNSAVED_CHANGES, REASON_VERSION_LIMIT, RpcError, error_response_with,
+    REASON_UNSAVED_CHANGES, REASON_VERSION_LIMIT, REASON_VIEW_LOCKED, RpcError,
+    error_response_with,
 };
 #[cfg(test)]
 mod care_api_tests;
@@ -196,6 +197,8 @@ pub struct Session {
     section_cache: kadakas_x3d::section::SharedSections,
     /// The saved view that `saved_view.restore` applied last, until the host takes it.
     applied_view: Option<SavedView>,
+    /// The view in `applied_view` came from `view.set`: its camera only, not its visibility.
+    applied_camera_only: bool,
     /// Plug-in objects and scripts: the flag for agents, the script host and the limits (see `plugin_api`).
     #[cfg(not(target_arch = "wasm32"))]
     pub scripting: ScriptingState,
@@ -422,7 +425,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ),
     (
         "view.set",
-        "Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list or the name of a saved view (view.list saved_views); top is the 2D plan in the app. A saved view sets the camera only (the plan middle and zoom in the app, or the 3D view, projection and mode): the layers and classes stay as they are, because changing them is an edit of the document (use saved_view.restore for that), and the answer has layers_not_applied: true when the saved view holds visibility. Returns the current view.",
+        "Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list or the name of a saved view (view.list saved_views); top is the 2D plan in the app. A saved view sets the camera only (the plan middle and zoom in the app, or the 3D view, projection and mode): the layers and classes stay as they are, because changing them is an edit of the document (use saved_view.restore for that), and the answer has layers_not_applied: true when the saved view holds visibility, or an active layer or class, that differs from now (classes and the active layer and class count too). Returns the current view.",
     ),
     (
         "report.plants",
@@ -1025,6 +1028,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             section_cache: sections,
             applied_view: None,
+            applied_camera_only: false,
             #[cfg(not(target_arch = "wasm32"))]
             scripting: ScriptingState::default(),
             wasm_plugins: WasmPluginState::default(),
@@ -1273,6 +1277,11 @@ impl Session {
 
     /// True while a view change (`view.set`, `saved_view.restore`) waits for the host. It does
     /// not take the flag. The app asks it to keep the view from before the change (Back).
+    /// True when the pending saved view came from `view.set` (its camera only).
+    pub fn applied_camera_only(&self) -> bool {
+        self.applied_camera_only
+    }
+
     pub fn has_view_change(&self) -> bool {
         self.view_changed || self.applied_view.is_some()
     }
@@ -1812,6 +1821,7 @@ impl Session {
                         ..saved.clone()
                     };
                     self.apply_saved_view(&camera_only);
+                    self.applied_camera_only = true;
                     if projection.is_some() || mode.is_some() {
                         self.view =
                             self.resolve_view(None, projection.as_deref(), mode.as_deref())?;

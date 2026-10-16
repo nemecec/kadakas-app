@@ -8,7 +8,9 @@
 //! Rules that keep the person in control:
 //!
 //! - Nothing here makes a command, an undo step or a revision. Pointers are never saved.
-//! - The person wins. The canvases tell `NavGuard` when the person drags, zooms or presses a
+//! - The person wins. A change of the view that the agent did not make is seen at the start of
+//!   each frame (a drag, a tool, zoom to extents, a standard view, the view history). The input of
+//!   the frame and a tool in progress count too. The canvases tell `NavGuard` when the person drags, zooms or presses a
 //!   navigation key. A view change of the agent in that moment is dropped with a conflict error
 //!   (`person_navigating`) and nothing moves. A running animation stops at once.
 //! - Each view change keeps the view from before it, and Back returns to it (`AgentView::back`).
@@ -16,14 +18,14 @@
 
 use egui::Rect;
 use glam::{DVec2, DVec3, Vec3};
-use kadakas_api::{REASON_PERSON_NAVIGATING, RpcError, Session};
+use kadakas_api::{REASON_PERSON_NAVIGATING, REASON_VIEW_LOCKED, RpcError, Session};
 use kadakas_core::model::ObjectId;
 use kadakas_core::uid::Uid;
 use kadakas_render::{Camera, StandardView, ViewSettings};
 use kadakas_ui_core::agent_view::{
     ANIM_MS, AgentPresence, Aim, Back, CamAnim, CameraReq, FOV_DEG, HColor, Highlight,
-    HighlightReq, HighlightSet, NavGuard, PanReq, PlanAnim, PlanPose, ZoomReq, frame_camera,
-    frame_plan, ground_box,
+    HighlightReq, HighlightSet, MERGE_MS, NavGuard, PanReq, PlanAnim, PlanPose, ZoomReq,
+    frame_camera, frame_plan, ground_box, ground_height,
 };
 use serde_json::{Value, json};
 
@@ -39,12 +41,17 @@ pub struct NavSignal {
     pub dragging: bool,
 }
 
-/// The view before a change of the agent.
+/// The view before a change of the agent. The 3D camera is kept with the scene origin it had
+/// (the camera works in scene coordinates, the origin moves with the drawing), so Back puts it at
+/// the same place in the drawing.
 #[derive(Clone, Copy, Debug)]
 pub struct Memo {
     settings: ViewSettings,
     view: View,
     camera: Camera,
+    origin: DVec3,
+    /// A view change of the session was already waiting for the window when this was taken.
+    pending_before: bool,
 }
 
 /// The state of the agent in the window.
@@ -58,8 +65,18 @@ pub struct AgentView {
     cam_anim: Option<CamAnim>,
     /// The pointer that the key "next pointer" showed last.
     pub cycle: Option<u32>,
-    /// A pointer was added, changed or taken away (the panel opens).
-    pub news: bool,
+    /// The person turned off "Agent may move my view": view calls fail with `view_locked`.
+    pub locked: bool,
+    /// The person closed the small panel (it comes back with the next pointer or view change).
+    pub panel_hidden: bool,
+    /// When the agent last changed the view (ms): changes that follow at once count as one step
+    /// for Back.
+    last_change_ms: Option<f64>,
+    /// The view as the agent left it. If it is different at the start of a frame, the person (or
+    /// a command of the person) changed it: the animation stops and the agent waits.
+    seen: Option<(View, Camera, ViewSettings)>,
+    /// Frames in which a change of the view is expected from a call of the session (`view.set`).
+    expect_change: u8,
 }
 
 impl AgentView {
@@ -73,6 +90,19 @@ impl AgentView {
 
     pub fn animating(&self) -> bool {
         self.plan_anim.is_some() || self.cam_anim.is_some()
+    }
+
+    /// A pointer ends within this time (ms), or the view animates: the window must look again.
+    pub fn needs_repaint_within(&self, now_ms: f64) -> Option<f64> {
+        use kadakas_ui_core::agent_view::Until;
+        self.highlights
+            .items()
+            .iter()
+            .filter_map(|h| match h.until {
+                Until::Ms(ms) => Some((h.made_ms + ms as f64 - now_ms).max(0.0)),
+                _ => None,
+            })
+            .reduce(f64::min)
     }
 
     /// The person navigates: the animation stops, and the agent waits.
@@ -95,6 +125,7 @@ impl AgentView {
         self.cam_anim = None;
         self.presence.forget();
         self.cycle = None;
+        self.seen = None;
     }
 }
 
@@ -105,7 +136,7 @@ pub struct Env<'a> {
     pub view: &'a mut View,
     pub view3d: &'a mut View3d,
     pub needs_fit: &'a mut bool,
-    /// The drawing area (points), once the window has drawn it.
+    /// The drawing area (points, in window coordinates), once the window has drawn it.
     pub canvas: Option<Rect>,
     /// The size of the window in points.
     pub window: [f32; 2],
@@ -113,6 +144,28 @@ pub struct Env<'a> {
     /// Animate the view changes (Preferences).
     pub animate: bool,
     pub now_ms: f64,
+    /// The person's pointer, wheel, pinch or keys act in this frame (see [`input_busy`]).
+    pub input_busy: bool,
+    /// The person is in the middle of a tool or types in the Data bar.
+    pub tool_busy: bool,
+}
+
+/// True when the input of this frame is the person navigating or editing: a pointer button down
+/// over the drawing (a drag of the view, a tool, a rubber band), the wheel or a pinch over it, or
+/// a key. The window reads this before it answers the calls of the agent, so a call that comes
+/// in the same frame as the person's input does not win.
+pub fn input_busy(ctx: &egui::Context, canvas: Option<Rect>) -> bool {
+    ctx.input(|i| {
+        let over = canvas
+            .zip(i.pointer.hover_pos())
+            .is_some_and(|(r, p)| r.contains(p));
+        (over && i.pointer.any_down())
+            || (over && i.smooth_scroll_delta != egui::Vec2::ZERO)
+            || (i.zoom_delta() - 1.0).abs() > 1e-9
+            || i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Key { pressed: true, .. }))
+    })
 }
 
 /// The methods that the app answers.
@@ -137,15 +190,28 @@ fn invalid(e: String) -> RpcError {
     RpcError::invalid_params(e)
 }
 
+/// The box of an aim in drawing coordinates, and the objects of it that are not shown.
+struct AimBox {
+    lo: DVec3,
+    hi: DVec3,
+    hidden: Vec<Uid>,
+}
+
 impl Env<'_> {
     fn plan(&self) -> bool {
         view3d::is_plan(self.session.view)
     }
 
-    fn size(&self) -> Result<DVec2, RpcError> {
+    /// The corner and the size of the drawing area.
+    fn frame(&self) -> Result<(DVec2, DVec2), RpcError> {
         self.canvas
-            .map(|r| DVec2::new(f64::from(r.width()), f64::from(r.height())))
-            .filter(|s| s.x >= 1.0 && s.y >= 1.0)
+            .map(|r| {
+                (
+                    DVec2::new(f64::from(r.min.x), f64::from(r.min.y)),
+                    DVec2::new(f64::from(r.width()), f64::from(r.height())),
+                )
+            })
+            .filter(|(_, s)| s.x >= 1.0 && s.y >= 1.0)
             .ok_or_else(|| {
                 RpcError::conflict(
                     "the window has not drawn the view yet (no drawing area); try again in a moment",
@@ -154,10 +220,10 @@ impl Env<'_> {
     }
 
     /// The plan pose that the view has, or will have when the animation ends.
-    fn plan_pose(&self, size: DVec2) -> PlanPose {
+    fn plan_pose(&self, min: DVec2, size: DVec2) -> PlanPose {
         match self.state.plan_anim {
             Some(a) => a.to,
-            None => PlanPose::of(*self.view, size),
+            None => PlanPose::of(*self.view, min, size),
         }
     }
 
@@ -169,11 +235,17 @@ impl Env<'_> {
         }
     }
 
-    /// The person wins: no change while they navigate.
+    /// The person wins: no change while they navigate or edit, and none when they locked the view.
     fn check_not_busy(&self) -> Result<(), RpcError> {
-        if self.state.nav.busy(self.now_ms) {
+        if self.state.locked {
             return Err(RpcError::conflict(
-                "the person is moving the view right now, so this request was dropped and nothing moved. Try again in a moment",
+                "the person turned off \"Agent may move my view\", so this request was dropped and nothing moved. Do not try again until the person says so; view.get and view.highlight still work",
+            )
+            .with_reason(REASON_VIEW_LOCKED));
+        }
+        if self.state.nav.busy(self.now_ms) || self.input_busy || self.tool_busy {
+            return Err(RpcError::conflict(
+                "the person is moving the view or working in the drawing right now, so this request was dropped and nothing moved. Try again in a moment",
             )
             .with_reason(REASON_PERSON_NAVIGATING));
         }
@@ -182,20 +254,38 @@ impl Env<'_> {
 
     /// The view as it is now (or will be), to go back to.
     fn memo(&self) -> Memo {
-        let view = match (self.state.plan_anim, self.size()) {
-            (Some(a), Ok(size)) => a.to.view(size),
+        let view = match (self.state.plan_anim, self.frame()) {
+            (Some(a), Ok((min, size))) => a.to.view(min, size),
             _ => *self.view,
         };
         Memo {
             settings: self.session.view,
             view,
             camera: self.camera(),
+            origin: self.origin(),
+            pending_before: self.session.has_view_change(),
         }
     }
 
+    /// Keeps the view from before a change of the agent. Changes that follow within a moment
+    /// count as one step.
     fn keep_for_back(&mut self) {
-        let memo = self.memo();
-        self.state.back.push(memo);
+        let merge = !self.state.back.is_empty()
+            && self
+                .state
+                .last_change_ms
+                .is_some_and(|t| self.now_ms - t < MERGE_MS);
+        if !merge {
+            let memo = self.memo();
+            self.state.back.push(memo);
+        }
+        self.state.last_change_ms = Some(self.now_ms);
+        self.state.panel_hidden = false;
+    }
+
+    /// Remembers the view as the agent left it.
+    fn mark_seen(&mut self) {
+        self.state.seen = Some((*self.view, self.view3d.camera, self.session.view));
     }
 
     fn rev(&self) -> u64 {
@@ -231,14 +321,51 @@ impl Env<'_> {
         kadakas_core::mesh::scene_origin(self.session.editor.doc())
     }
 
-    /// The box of an aim in drawing coordinates (mm). A box of the plan gets the height of the
-    /// ground in 3D. For objects it is the union of their boxes.
-    fn aim_box(&mut self, aim: &Aim, in_3d: bool) -> Result<(DVec3, DVec3), RpcError> {
+    /// The height (mm) of the ground, or of what stands there, at a point of the drawing: the
+    /// highest surface of the 3D scene (site models, hardscapes, layer elevations), else the
+    /// elevation of the active layer.
+    fn ground_at(&mut self, xy: DVec2) -> f64 {
+        let scene = self.session.scene();
+        let o = scene.origin;
+        let local = glam::Vec2::new((xy.x - o.x) as f32, (xy.y - o.y) as f32);
+        let doc = self.session.editor.doc();
+        ground_height(&scene, local)
+            .map(|z| f64::from(z) + o.z)
+            .unwrap_or_else(|| doc.layer(doc.active_layer).map_or(0.0, |l| l.elevation))
+    }
+
+    /// The box of an aim in drawing coordinates (mm). A box of the plan and a place without a
+    /// height get the height of the ground there. For objects it is the union of the boxes of
+    /// those that are shown; the ones that are not (their layer or class is off, a phase hides
+    /// them) are listed in `hidden`.
+    fn aim_box(&mut self, aim: &Aim, in_3d: bool) -> Result<AimBox, RpcError> {
         match aim {
-            Aim::At(p) => Ok((*p, *p)),
+            Aim::At(p) => {
+                let mut p = *p;
+                if p.z.is_nan() {
+                    p.z = if in_3d {
+                        self.ground_at(DVec2::new(p.x, p.y))
+                    } else {
+                        0.0
+                    };
+                }
+                Ok(AimBox {
+                    lo: p,
+                    hi: p,
+                    hidden: vec![],
+                })
+            }
             Aim::Box { lo, hi } => {
-                let z = if in_3d { self.ground_z() } else { 0.0 };
-                Ok((DVec3::new(lo.x, lo.y, z), DVec3::new(hi.x, hi.y, z)))
+                let z = if in_3d {
+                    self.ground_at((*lo + *hi) / 2.0)
+                } else {
+                    0.0
+                };
+                Ok(AimBox {
+                    lo: DVec3::new(lo.x, lo.y, z),
+                    hi: DVec3::new(hi.x, hi.y, z),
+                    hidden: vec![],
+                })
             }
             Aim::Objects(ids) => {
                 self.existing(ids)?;
@@ -249,9 +376,14 @@ impl Env<'_> {
                 };
                 let doc = self.session.editor.doc();
                 let mut acc: Option<(DVec3, DVec3)> = None;
+                let mut hidden = vec![];
                 for u in ids {
                     let id = ObjectId(*u);
                     let Some(o) = doc.object(id) else { continue };
+                    if !doc.is_displayed(o) {
+                        hidden.push(*u);
+                        continue;
+                    }
                     let b = scene
                         .as_ref()
                         .and_then(|s| {
@@ -261,8 +393,10 @@ impl Env<'_> {
                         })
                         .or_else(|| {
                             let (lo, hi) = doc.object_bounds(o);
-                            (lo.is_finite() && hi.is_finite())
-                                .then(|| (lo.extend(0.0), hi.extend(0.0)))
+                            (lo.is_finite() && hi.is_finite()).then(|| {
+                                let z = doc.layer(o.layer).map_or(0.0, |l| l.elevation);
+                                (lo.extend(z), hi.extend(z))
+                            })
                         });
                     if let Some((lo, hi)) = b {
                         acc = Some(match acc {
@@ -271,29 +405,32 @@ impl Env<'_> {
                         });
                     }
                 }
-                acc.ok_or_else(|| {
-                    RpcError::validation("these objects have no place in the drawing")
-                })
+                match acc {
+                    Some((lo, hi)) => Ok(AimBox { lo, hi, hidden }),
+                    None if !hidden.is_empty() => Err(RpcError::validation(format!(
+                        "all {} of these objects are hidden (their layer or class is off, or a phase hides them), so there is nothing to show. Hidden: {}",
+                        hidden.len(),
+                        id_list(&hidden)
+                    ))),
+                    None => Err(RpcError::validation(
+                        "these objects have no place in the drawing",
+                    )),
+                }
             }
         }
     }
 
-    /// The height of the ground in the 3D view: the target of the camera.
-    fn ground_z(&self) -> f64 {
-        f64::from(self.camera().target.z)
-    }
-
     /// Where the agent "is": the middle of an aim, in drawing coordinates.
-    fn aim_center(aim_box: (DVec3, DVec3)) -> DVec2 {
-        let c = (aim_box.0 + aim_box.1) / 2.0;
+    fn aim_center(b: &AimBox) -> DVec2 {
+        let c = (b.lo + b.hi) / 2.0;
         DVec2::new(c.x, c.y)
     }
 
     // ---------------------------------------------------------------- the plan
 
-    fn go_plan(&mut self, target: PlanPose, size: DVec2) {
+    fn go_plan(&mut self, target: PlanPose, min: DVec2, size: DVec2) {
         *self.needs_fit = false;
-        let from = PlanPose::of(*self.view, size);
+        let from = PlanPose::of(*self.view, min, size);
         self.state.cam_anim = None;
         if self.animate && (from.center != target.center || from.zoom != target.zoom) {
             self.state.plan_anim = Some(PlanAnim {
@@ -304,8 +441,9 @@ impl Env<'_> {
             });
         } else {
             self.state.plan_anim = None;
-            *self.view = target.view(size);
+            *self.view = target.view(min, size);
         }
+        self.mark_seen();
     }
 
     fn go_camera(&mut self, target: Camera) {
@@ -323,22 +461,26 @@ impl Env<'_> {
             self.state.cam_anim = None;
             self.view3d.camera = target;
         }
+        self.mark_seen();
     }
 
     /// The answer of a view change: the view that will be shown.
-    fn view_answer(&self, clamped: bool) -> Result<Value, RpcError> {
+    fn view_answer(&self, clamped: bool, hidden: &[Uid]) -> Result<Value, RpcError> {
         let mut out = self.state_json(false)?;
         out["clamped"] = json!(clamped);
+        if !hidden.is_empty() {
+            out["hidden_ids"] = json!(hidden.iter().map(Uid::to_string).collect::<Vec<_>>());
+        }
         Ok(out)
     }
 
     /// The view as a JSON value. `full` adds what only `view.get` gives.
     fn state_json(&self, full: bool) -> Result<Value, RpcError> {
-        let size = self.size()?;
+        let (min, size) = self.frame()?;
         let plan_mode = self.plan();
-        let pose = self.plan_pose(size);
+        let pose = self.plan_pose(min, size);
         let cam = self.camera();
-        let (lo, hi) = pose.view(size).visible_box(DVec2::ZERO, size);
+        let (lo, hi) = pose.view(min, size).visible_box(min, min + size);
         let num = |v: f32| f64::from(v);
         let origin = self.origin();
         let triple = |v: Vec3| {
@@ -427,16 +569,17 @@ impl Env<'_> {
                 .collect::<Vec<_>>()
         );
         out["back"] = json!(self.state.back_len());
+        out["view_locked"] = json!(self.state.locked);
         Ok(out)
     }
 
     // ---------------------------------------------------------------- the calls
 
-    /// A zoom. The person's own zoom (a click on a pointer) is not held back by their navigation
-    /// and does not move the agent cursor.
+    /// A zoom. The person's own zoom (a click on a pointer) is not held back by their navigation,
+    /// does not move the agent cursor and does not go on the Back stack of the agent.
     fn zoom(&mut self, params: &Value, by_person: bool) -> Result<Value, RpcError> {
         let req = ZoomReq::parse(params).map_err(invalid)?;
-        let size = self.size()?;
+        let (min, size) = self.frame()?;
         if !by_person {
             self.check_not_busy()?;
         }
@@ -447,7 +590,7 @@ impl Env<'_> {
             let cam = self.camera();
             let o = self.origin();
             // The camera works in scene coordinates.
-            let (lo, hi) = ((bx.0 - o).as_vec3(), (bx.1 - o).as_vec3());
+            let (lo, hi) = ((bx.lo - o).as_vec3(), (bx.hi - o).as_vec3());
             let target = match &req.aim {
                 Aim::At(_) => {
                     let mut c = cam;
@@ -459,11 +602,13 @@ impl Env<'_> {
                 }
                 _ => frame_camera(cam, lo, hi, req.margin, req.scale, size),
             };
-            self.keep_for_back();
+            if !by_person {
+                self.keep_for_back();
+            }
             self.go_camera(target);
         } else {
-            let cur = self.plan_pose(size);
-            let (lo, hi) = (DVec2::new(bx.0.x, bx.0.y), DVec2::new(bx.1.x, bx.1.y));
+            let cur = self.plan_pose(min, size);
+            let (lo, hi) = (DVec2::new(bx.lo.x, bx.lo.y), DVec2::new(bx.hi.x, bx.hi.y));
             let target = match &req.aim {
                 Aim::At(p) => PlanPose {
                     center: DVec2::new(p.x, p.y),
@@ -475,24 +620,26 @@ impl Env<'_> {
                     pose
                 }
             };
-            self.keep_for_back();
-            self.go_plan(target, size);
+            if !by_person {
+                self.keep_for_back();
+            }
+            self.go_plan(target, min, size);
         }
         if !by_person {
             self.state
                 .presence
-                .touch(Some(Self::aim_center(bx)), self.now_ms);
+                .touch(Some(Self::aim_center(&bx)), self.now_ms);
         }
-        self.view_answer(clamped)
+        self.view_answer(clamped, &bx.hidden)
     }
 
     fn pan(&mut self, params: &Value) -> Result<Value, RpcError> {
         let req = PanReq::parse(params).map_err(invalid)?;
-        let size = self.size()?;
+        let (min, size) = self.frame()?;
         self.check_not_busy()?;
         let center;
         if self.plan() {
-            let cur = self.plan_pose(size);
+            let cur = self.plan_pose(min, size);
             let target = PlanPose {
                 center: match req {
                     PanReq::By(d) => cur.center + DVec2::new(d.x, d.y),
@@ -502,7 +649,7 @@ impl Env<'_> {
             };
             center = target.center;
             self.keep_for_back();
-            self.go_plan(target, size);
+            self.go_plan(target, min, size);
         } else {
             let mut cam = self.camera();
             // The camera works in scene coordinates; agents give drawing coordinates.
@@ -520,12 +667,12 @@ impl Env<'_> {
             self.go_camera(cam);
         }
         self.state.presence.touch(Some(center), self.now_ms);
-        self.view_answer(false)
+        self.view_answer(false, &[])
     }
 
     fn set_camera(&mut self, params: &Value) -> Result<Value, RpcError> {
         let req = CameraReq::parse(params).map_err(invalid)?;
-        self.size()?;
+        self.frame()?;
         self.check_not_busy()?;
         let projection = req.projection.unwrap_or(self.session.view.projection);
         let target = req.camera(self.origin(), projection);
@@ -543,20 +690,42 @@ impl Env<'_> {
         self.state
             .presence
             .touch(Some(DVec2::new(req.target.x, req.target.y)), self.now_ms);
-        self.view_answer(false)
+        self.view_answer(false, &[])
     }
 
     fn highlight(&mut self, params: &Value) -> Result<Value, RpcError> {
-        let req = HighlightReq::parse(params).map_err(invalid)?;
+        let mut req = HighlightReq::parse(params).map_err(invalid)?;
         if let Aim::Objects(ids) = &req.aim {
             self.existing(ids)?;
         }
-        let place = match &req.aim {
-            Aim::At(p) => Some(DVec2::new(p.x, p.y)),
-            Aim::Box { lo, hi } => Some((*lo + *hi) / 2.0),
-            Aim::Objects(_) => {
+        // The height of the ground at the pointer, so that a box and a place show at the right
+        // height in 3D.
+        let mut hidden = vec![];
+        let place = match req.aim.clone() {
+            Aim::At(p) => {
+                let b = self.aim_box(&Aim::At(p), true)?;
+                req.aim = Aim::At(b.lo);
+                req.ground = b.lo.z;
+                Some(DVec2::new(b.lo.x, b.lo.y))
+            }
+            Aim::Box { lo, hi } => {
+                req.ground = self.ground_at((lo + hi) / 2.0);
+                Some((lo + hi) / 2.0)
+            }
+            Aim::Objects(ids) => {
+                let doc = self.session.editor.doc();
+                hidden = ids
+                    .iter()
+                    .copied()
+                    .filter(|u| {
+                        doc.object(ObjectId(*u))
+                            .is_some_and(|o| !doc.is_displayed(o))
+                    })
+                    .collect();
                 let plan = self.plan();
-                self.aim_box(&req.aim, !plan).ok().map(Self::aim_center)
+                self.aim_box(&req.aim, !plan)
+                    .ok()
+                    .map(|b| Self::aim_center(&b))
             }
         };
         let (now, rev) = (self.now_ms, self.rev());
@@ -566,8 +735,15 @@ impl Env<'_> {
             .add(req, now, rev)
             .map_err(RpcError::limit)?;
         self.state.presence.touch(place, now);
-        self.state.news = true;
-        Ok(json!({"id": id, "count": self.state.highlights.len()}))
+        self.state.panel_hidden = false;
+        let mut out = json!({"id": id, "count": self.state.highlights.len()});
+        if !hidden.is_empty() {
+            out["hidden_ids"] = json!(hidden.iter().map(Uid::to_string).collect::<Vec<_>>());
+            out["note"] = json!(
+                "some of these objects are hidden (their layer or class is off, or a phase hides them); nothing is drawn around them, but they are listed for the person"
+            );
+        }
+        Ok(out)
     }
 
     fn highlight_clear(&mut self, params: &Value) -> Result<Value, RpcError> {
@@ -588,6 +764,16 @@ impl Env<'_> {
         };
         self.state.presence.touch(None, self.now_ms);
         Ok(json!({"cleared": cleared}))
+    }
+}
+
+fn id_list(ids: &[Uid]) -> String {
+    let shown: Vec<String> = ids.iter().take(5).map(Uid::to_string).collect();
+    let more = ids.len().saturating_sub(5);
+    if more > 0 {
+        format!("{} (and {more} more)", shown.join(", "))
+    } else {
+        shown.join(", ")
     }
 }
 
@@ -629,7 +815,8 @@ pub fn call(env: &mut Env, method: &str, params: Value) -> Result<Value, RpcErro
     }
 }
 
-/// The view from before a change through the session (`view.set`, `saved_view.restore`).
+/// The view from before a change through the session (`view.set`, `saved_view.restore`). It is
+/// refused when the person navigates or locked the view.
 pub fn memo_for_session_change(env: &Env) -> Result<Memo, RpcError> {
     env.check_not_busy()?;
     Ok(env.memo())
@@ -637,10 +824,23 @@ pub fn memo_for_session_change(env: &Env) -> Result<Memo, RpcError> {
 
 /// Keeps the memo when the call changed the view.
 pub fn keep_if_changed(env: &mut Env, memo: Memo) {
-    if env.session.has_view_change() {
-        env.state.back.push(memo);
+    let changed = env.session.has_view_change()
+        && (!memo.pending_before || env.session.view != memo.settings);
+    if changed {
+        let merge = !env.state.back.is_empty()
+            && env
+                .state
+                .last_change_ms
+                .is_some_and(|t| env.now_ms - t < MERGE_MS);
+        if !merge {
+            env.state.back.push(memo);
+        }
+        env.state.last_change_ms = Some(env.now_ms);
+        env.state.panel_hidden = false;
         env.state.plan_anim = None;
         env.state.cam_anim = None;
+        // The window applies the change in this frame and the next: it is not the person's.
+        env.state.expect_change = 3;
     }
 }
 
@@ -649,19 +849,26 @@ pub fn keep_if_changed(env: &mut Env, memo: Memo) {
 pub fn step(env: &mut Env) -> bool {
     let rev = env.rev();
     let now = env.now_ms;
+    // Somebody else changed the view since the agent left it (a drag, a tool, a view command of
+    // the person: zoom to extents, a standard view, the view history, an opened issue). The
+    // person wins: the animation stops and the agent waits.
+    let current = (*env.view, env.view3d.camera, env.session.view);
+    if env.state.expect_change > 0 {
+        env.state.expect_change -= 1;
+    } else if env.state.seen.is_some_and(|s| s != current) {
+        env.state.plan_anim = None;
+        env.state.cam_anim = None;
+        env.state.nav.note(now);
+    }
     let doc = env.session.editor.doc();
-    let changed = env
-        .state
+    env.state
         .highlights
         .tick(now, rev, &|u| doc.object(ObjectId(u)).is_some());
-    if changed {
-        env.state.news = true;
-    }
-    if let Ok(size) = env.size()
+    if let Ok((min, size)) = env.frame()
         && let Some(a) = env.state.plan_anim
     {
         let (pose, done) = a.at(now);
-        *env.view = pose.view(size);
+        *env.view = pose.view(min, size);
         if done {
             env.state.plan_anim = None;
         }
@@ -673,22 +880,30 @@ pub fn step(env: &mut Env) -> bool {
             env.state.cam_anim = None;
         }
     }
+    env.mark_seen();
     env.state.animating()
 }
 
 /// Back: the view from before the last change of the agent. Gives false when there is none.
+/// Back is the person's own view command, so it holds the agent back for a moment as a drag does.
 pub fn go_back(env: &mut Env) -> bool {
     let Some(memo) = env.state.back.pop() else {
         return false;
     };
     env.state.plan_anim = None;
     env.state.cam_anim = None;
+    env.state.nav.note(env.now_ms);
+    env.state.last_change_ms = None;
     env.session.view = memo.settings;
     *env.view = memo.view;
     env.view3d.sync(memo.settings, false);
-    env.view3d.camera = memo.camera;
+    // The camera was kept with the scene origin of that time; the origin may have moved.
+    let mut camera = memo.camera;
+    camera.target += (memo.origin - env.origin()).as_vec3();
+    env.view3d.camera = camera;
     env.view3d.fit_done();
     *env.needs_fit = false;
+    env.mark_seen();
     true
 }
 

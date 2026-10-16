@@ -115,14 +115,21 @@ fn outline(painter: &Painter, r: Rect, stroke: Stroke, line: Line) {
     }
 }
 
-/// The label of a pointer: the mark, the number and the text, on the color.
-fn badge(painter: &Painter, clip: Rect, anchor: Pos2, number: usize, h: &Highlight) {
+/// The label of a pointer: the mark, the number (the ID that the agent got back) and the text,
+/// on the color. Labels do not lie on top of each other: a label that would is moved down.
+fn badge(
+    painter: &Painter,
+    clip: Rect,
+    anchor: Pos2,
+    h: &Highlight,
+    placed: &mut Vec<Rect>,
+) -> Rect {
     let fill = color32(h.color, 235);
     let ink = text_on(fill);
     let text = if h.text.is_empty() {
-        number.to_string()
+        h.id.to_string()
     } else {
-        format!("{number}  {}", h.text)
+        format!("{}  {}", h.id, h.text)
     };
     let galley = painter.layout_no_wrap(text, FontId::proportional(12.0), ink);
     let pad = vec2(5.0, 3.0);
@@ -130,7 +137,7 @@ fn badge(painter: &Painter, clip: Rect, anchor: Pos2, number: usize, h: &Highlig
     let size = vec2(glyph + 4.0 + galley.size().x, galley.size().y.max(glyph)) + pad * 2.0;
     // The badge stays inside the drawing, so a pointer outside the view shows at the edge.
     let inner = clip.shrink(2.0);
-    let min = pos2(
+    let mut min = pos2(
         anchor
             .x
             .clamp(inner.min.x, (inner.max.x - size.x).max(inner.min.x)),
@@ -138,7 +145,19 @@ fn badge(painter: &Painter, clip: Rect, anchor: Pos2, number: usize, h: &Highlig
             .y
             .clamp(inner.min.y, (inner.max.y - size.y).max(inner.min.y)),
     );
+    for _ in 0..40 {
+        let r = Rect::from_min_size(min, size);
+        if !placed.iter().any(|p| p.intersects(r)) {
+            break;
+        }
+        min.y += size.y + 2.0;
+        if min.y + size.y > inner.max.y {
+            min.y = inner.min.y;
+            min.x = (min.x + size.x + 2.0).min((inner.max.x - size.x).max(inner.min.x));
+        }
+    }
     let r = Rect::from_min_size(min, size);
+    placed.push(r);
     painter.rect_filled(r, 3.0, fill);
     painter.rect_stroke(r, 3.0, Stroke::new(1.0, ink), egui::StrokeKind::Inside);
     let c = pos2(r.min.x + pad.x + glyph / 2.0, r.center().y);
@@ -151,29 +170,70 @@ fn badge(painter: &Painter, clip: Rect, anchor: Pos2, number: usize, h: &Highlig
         galley,
         ink,
     );
+    r
 }
 
 /// Where a model point is on the screen, or `None`.
 pub type Project<'a> = dyn Fn(DVec3) -> Option<Pos2> + 'a;
-/// The box of an object in model coordinates.
+/// The box of an object in model coordinates; `None` for an object that is not shown (its layer
+/// or class is off): nothing is drawn around what the person cannot see.
 pub type Bounds<'a> = dyn Fn(Uid) -> Option<(DVec3, DVec3)> + 'a;
 
-fn screen_box(project: &Project, lo: DVec3, hi: DVec3) -> Option<Rect> {
+/// The corners of a box on the screen: the rectangle around them, or `Err(())` when a corner is
+/// behind the camera.
+fn screen_box(project: &Project, lo: DVec3, hi: DVec3) -> Result<Rect, ()> {
     let mut out: Option<Rect> = None;
     for i in 0..8 {
         let p = project(DVec3::new(
             if i & 1 == 0 { lo.x } else { hi.x },
             if i & 2 == 0 { lo.y } else { hi.y },
             if i & 4 == 0 { lo.z } else { hi.z },
-        ))?;
+        ))
+        .ok_or(())?;
         let r = Rect::from_min_max(p, p);
         out = Some(out.map_or(r, |o| o.union(r)));
     }
-    out
+    out.ok_or(())
+}
+
+/// An arrow at the edge of the drawing that points toward something outside it.
+fn edge_arrow(painter: &Painter, rect: Rect, toward: Pos2, color: Color32) -> Pos2 {
+    let c = rect.center();
+    let d = toward - c;
+    let d = if d.length() < 1.0 {
+        vec2(0.0, 1.0)
+    } else {
+        d.normalized()
+    };
+    let inner = rect.shrink(14.0);
+    // The point where the ray from the middle meets the inner rectangle.
+    let tx = if d.x.abs() > 1e-6 {
+        ((if d.x > 0.0 { inner.max.x } else { inner.min.x }) - c.x) / d.x
+    } else {
+        f32::INFINITY
+    };
+    let ty = if d.y.abs() > 1e-6 {
+        ((if d.y > 0.0 { inner.max.y } else { inner.min.y }) - c.y) / d.y
+    } else {
+        f32::INFINITY
+    };
+    let at = c + d * tx.min(ty);
+    let side = vec2(-d.y, d.x);
+    painter.add(Shape::convex_polygon(
+        vec![
+            at + d * 9.0,
+            at - d * 5.0 + side * 8.0,
+            at - d * 5.0 - side * 8.0,
+        ],
+        color,
+        Stroke::new(1.0, Color32::WHITE),
+    ));
+    at
 }
 
 /// Draws all pointers. `project` turns a model point into a screen point; `bounds` gives the box
-/// of an object.
+/// of an object. A pointer outside the drawing (or behind the camera) shows as an arrow at the
+/// edge that points toward it, with its label.
 pub fn paint(
     painter: &Painter,
     rect: Rect,
@@ -182,8 +242,8 @@ pub fn paint(
     bounds: &Bounds,
 ) {
     let painter = painter.with_clip_rect(rect);
-    for (i, h) in set.items().iter().enumerate() {
-        let number = i + 1;
+    let mut placed: Vec<Rect> = Vec::new();
+    for h in set.items() {
         let main = color32(h.color, 255);
         let line = h.color.line();
         let glow = |r: Rect| {
@@ -200,48 +260,77 @@ pub fn paint(
                 egui::StrokeKind::Middle,
             );
         };
-        let mut anchor: Option<Pos2> = None;
+        // The drawn area of the pointer, and whether a part of it is behind the camera.
+        let mut area: Option<Rect> = None;
+        let mut behind = false;
+        let mut union = |r: Rect| area = Some(area.map_or(r, |a| a.union(r)));
         match &h.aim {
             Aim::Objects(ids) => {
                 for u in ids {
                     let Some((lo, hi)) = bounds(*u) else { continue };
-                    let Some(r) = screen_box(project, lo, hi) else {
-                        continue;
-                    };
-                    let r = r.expand(1.5);
-                    glow(r);
-                    outline(&painter, r, Stroke::new(2.0, main), line);
-                    let top = r.min + vec2(0.0, -24.0);
-                    anchor = Some(match anchor {
-                        Some(a) => pos2(a.x.min(top.x), a.y.min(top.y)),
-                        None => top,
-                    });
+                    match screen_box(project, lo, hi) {
+                        Ok(r) => {
+                            let r = r.expand(1.5);
+                            if r.intersects(rect) {
+                                glow(r);
+                                outline(&painter, r, Stroke::new(2.0, main), line);
+                            }
+                            union(r);
+                        }
+                        Err(()) => behind = true,
+                    }
                 }
             }
             Aim::Box { lo, hi } => {
-                let z = 0.0;
-                if let Some(r) = screen_box(
+                let z = h.ground;
+                match screen_box(
                     project,
                     DVec3::new(lo.x, lo.y, z),
                     DVec3::new(hi.x, hi.y, z),
                 ) {
-                    painter.rect_filled(r, 2.0, color32(h.color, 22));
-                    glow(r);
-                    outline(&painter, r, Stroke::new(2.0, main), line);
-                    anchor = Some(r.min + vec2(0.0, -24.0));
+                    Ok(r) => {
+                        if r.intersects(rect) {
+                            painter.rect_filled(r, 2.0, color32(h.color, 22));
+                            glow(r);
+                            outline(&painter, r, Stroke::new(2.0, main), line);
+                        }
+                        union(r);
+                    }
+                    Err(()) => behind = true,
                 }
             }
-            Aim::At(p) => {
-                if let Some(at) = project(*p) {
-                    painter.circle_stroke(at, 21.0, Stroke::new(6.0, color32(h.color, 50)));
-                    painter.circle_stroke(at, 14.0, Stroke::new(2.5, main));
-                    painter.extend(mark_shapes(at, 6.0, h.color.mark(), main, Color32::WHITE));
-                    anchor = Some(at + vec2(16.0, -34.0));
+            Aim::At(p) => match project(*p) {
+                Some(at) => {
+                    if rect.expand(30.0).contains(at) {
+                        painter.circle_stroke(at, 21.0, Stroke::new(6.0, color32(h.color, 50)));
+                        painter.circle_stroke(at, 14.0, Stroke::new(2.5, main));
+                        painter.extend(mark_shapes(at, 6.0, h.color.mark(), main, Color32::WHITE));
+                    }
+                    union(Rect::from_center_size(at, vec2(2.0, 2.0)));
                 }
-            }
+                None => behind = true,
+            },
         }
-        if let Some(a) = anchor {
-            badge(&painter, rect, a, number, h);
+        match area {
+            Some(a) if a.intersects(rect) => {
+                let top = match &h.aim {
+                    Aim::At(_) => a.center() + vec2(16.0, -34.0),
+                    _ => a.min + vec2(0.0, -24.0),
+                };
+                badge(&painter, rect, top, h, &mut placed);
+            }
+            Some(a) => {
+                // Outside the drawing: an arrow at the edge, and the label beside it.
+                let at = edge_arrow(&painter, rect, a.center(), main);
+                badge(&painter, rect, at + vec2(-8.0, -8.0), h, &mut placed);
+            }
+            None if behind => {
+                // Behind the camera: an arrow at the bottom edge.
+                let toward = rect.center() + vec2(0.0, rect.height());
+                let at = edge_arrow(&painter, rect, toward, main);
+                badge(&painter, rect, at + vec2(-8.0, -30.0), h, &mut placed);
+            }
+            None => {}
         }
     }
 }
@@ -255,6 +344,9 @@ pub fn paint_plan(painter: &Painter, rect: Rect, view: &View, doc: &Document, se
     let project = move |p: DVec3| Some(view.to_screen(glam::DVec2::new(p.x, p.y)));
     let bounds = |u: Uid| {
         let o = doc.object(ObjectId(u))?;
+        if !doc.is_displayed(o) {
+            return None;
+        }
         let (lo, hi) = doc.object_bounds(o);
         (lo.is_finite() && hi.is_finite()).then(|| (lo.extend(0.0), hi.extend(0.0)))
     };
@@ -294,6 +386,9 @@ pub fn paint_3d(
     let project = move |p: DVec3| project_3d(vp, rect, (p - origin).as_vec3());
     let bounds = |u: Uid| {
         let id = ObjectId(u);
+        if !doc.object(id).is_some_and(|o| doc.is_displayed(o)) {
+            return None;
+        }
         scene
             .object_bounds(id)
             .filter(|(lo, hi)| lo.is_finite() && hi.is_finite())
@@ -341,17 +436,31 @@ pub fn panel(
     back_key: &str,
     next_key: &str,
 ) -> Option<PanelAction> {
-    if state.highlights.is_empty() && !state.can_go_back() {
+    if state.panel_hidden || (state.highlights.is_empty() && !state.can_go_back()) {
         return None;
     }
     let mut action = None;
+    let mut allow = !state.locked;
+    let mut hide = false;
     egui::Area::new(egui::Id::new("agent-view-panel"))
-        .order(egui::Order::Foreground)
+        // Under the dialogs and the menus of the window, not over them.
+        .order(egui::Order::Middle)
         .fixed_pos(pos2(canvas.right() - 8.0, canvas.top() + 8.0))
         .pivot(Align2::RIGHT_TOP)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_max_width(280.0);
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut allow, tr!("agent-view-allow-move"))
+                        .on_hover_text(tr!("agent-view-allow-move-hint"));
+                    if ui
+                        .small_button(tr!("agent-view-close"))
+                        .on_hover_text(tr!("agent-view-close-hint"))
+                        .clicked()
+                    {
+                        hide = true;
+                    }
+                });
                 ui.horizontal(|ui| {
                     if state.can_go_back() {
                         let b = ui
@@ -380,7 +489,7 @@ pub fn panel(
                 .id_salt("agent-view-list")
                 .default_open(true)
                 .show(ui, |ui| {
-                    for (i, h) in state.highlights.items().iter().enumerate() {
+                    for h in state.highlights.items() {
                         ui.horizontal(|ui| {
                             let (swatch, _) =
                                 ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
@@ -391,7 +500,7 @@ pub fn panel(
                                 color32(h.color, 255),
                                 ui.visuals().text_color(),
                             ));
-                            let row = row_text(i + 1, h);
+                            let row = row_text(h.id as usize, h);
                             let b = ui
                                 .selectable_label(state.cycle == Some(h.id), row)
                                 .on_hover_text(tr!("agent-view-zoom-hint"));
@@ -419,6 +528,8 @@ pub fn panel(
                 });
             });
         });
+    state.locked = !allow;
+    state.panel_hidden |= hide;
     action
 }
 
@@ -458,7 +569,7 @@ pub fn row_text(number: usize, h: &Highlight) -> String {
 }
 
 /// The agent in the People palette: with a mark next to the color, and the count of pointers.
-pub fn people_row(ui: &mut Ui, state: &AgentView, now_ms: f64) {
+pub fn people_row(ui: &mut Ui, state: &mut AgentView, now_ms: f64) {
     let Some(peer) = state.presence.peer(now_ms, tr!("agent-view-name")) else {
         return;
     };
@@ -486,4 +597,9 @@ pub fn people_row(ui: &mut Ui, state: &AgentView, now_ms: f64) {
     })
     .response
     .on_hover_text(tr!("agent-view-people-hint"));
+    // The person decides whether the agent may move the view.
+    let mut allow = !state.locked;
+    ui.checkbox(&mut allow, tr!("agent-view-allow-move"))
+        .on_hover_text(tr!("agent-view-allow-move-hint"));
+    state.locked = !allow;
 }

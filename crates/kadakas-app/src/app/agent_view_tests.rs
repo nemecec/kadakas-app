@@ -29,7 +29,11 @@ impl Rig {
             ctx: egui::Context::default(),
             time: 1.0,
         };
+        // The first frames fit the drawing to the window; that is not the agent's, so the agent
+        // waits a moment (the person "moved" the view). Let it pass.
         rig.frame(vec![]);
+        rig.advance(1.0);
+        rig.advance(1.0);
         rig
     }
 
@@ -434,6 +438,8 @@ fn back_returns_to_the_view_before_each_change() {
     assert!(!r.app.agent_view.can_go_back());
     r.ok("view.zoom", json!({"ids": [a.to_string()]}));
     let first = r.app.view;
+    // Changes that follow at once count as one step; these are apart.
+    r.advance(0.3);
     r.ok("view.pan", json!({"by": [3000, 0]}));
     assert_eq!(r.app.agent_view.back_len(), 2);
     let ctx = r.ctx.clone();
@@ -442,7 +448,13 @@ fn back_returns_to_the_view_before_each_change() {
     assert!(crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
     assert_eq!(r.app.view, start);
     assert!(!crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
-    // Back is a key and a button too.
+    // Back is a key and a button too. It holds the agent back for a moment, like a drag.
+    assert_eq!(
+        r.err("view.zoom", json!({"at": [9, 9], "scale": 1.0}))
+            .reason,
+        Some(REASON_PERSON_NAVIGATING)
+    );
+    r.advance(1.0);
     r.ok("view.zoom", json!({"at": [9, 9], "scale": 1.0}));
     r.app.agent_back(&ctx);
     assert_eq!(r.app.view, start);
@@ -482,6 +494,7 @@ fn back_returns_from_the_3d_camera_to_the_plan() {
     // A zoom to an object in 3D keeps the direction and frames it.
     let a = *r.app.session.editor.doc().objects.keys().next().unwrap();
     let before = r.app.view3d.camera;
+    r.advance(0.3);
     r.ok("view.zoom", json!({"ids": [a.to_string()]}));
     let after = r.app.view3d.camera;
     assert_eq!((after.yaw, after.pitch), (before.yaw, before.pitch));
@@ -725,11 +738,11 @@ fn the_agent_shows_in_the_people_palette_and_has_a_cursor() {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(W, H))),
             ..Default::default()
         };
-        let app = &r.app;
+        let app = &mut r.app;
         let out = ctx.run_ui(input, |ui| {
             egui::CentralPanel::no_frame().show(ui, |ui| {
                 app.collab.people_ui(ui, now_ms as u64);
-                crate::agent_view_ui::people_row(ui, &app.agent_view, now_ms);
+                crate::agent_view_ui::people_row(ui, &mut app.agent_view, now_ms);
             });
         });
         found.extend(texts(&out));
@@ -993,5 +1006,632 @@ fn the_agent_keys_exist_in_the_default_keymap_and_back_works_in_a_read_only_view
         serde_json::from_str::<Prefs>("{}")
             .unwrap()
             .animate_agent_view
+    );
+}
+
+// ---------------------------------------------------------------- the review of AGR-02, AGR-03
+
+impl Rig {
+    /// A layer with an elevation and a rect on it.
+    fn rect_on_new_layer(
+        &mut self,
+        name: &str,
+        elevation: f64,
+        at: (f64, f64, f64, f64),
+    ) -> (String, ObjectId) {
+        self.app
+            .session
+            .handle(
+                "execute",
+                json!({"command": {"op": "add_layer", "name": name, "elevation": elevation}}),
+            )
+            .unwrap();
+        let layer = self
+            .app
+            .session
+            .editor
+            .doc()
+            .layers
+            .iter()
+            .find(|l| l.name == name)
+            .unwrap()
+            .id;
+        let out = self
+            .app
+            .session
+            .handle(
+                "execute",
+                json!({"command": {"op": "add_object", "layer": layer, "shape": {
+                    "kind": "rect", "min": [at.0, at.1], "max": [at.0 + at.2, at.1 + at.3]}}}),
+            )
+            .unwrap();
+        let id: kadakas_core::uid::Uid = out["created"][0].as_str().unwrap().parse_uid();
+        (layer.to_string(), ObjectId(id))
+    }
+
+    fn go_3d(&mut self) {
+        self.app.gpu_ready = true;
+        self.ok(
+            "view.camera",
+            json!({"eye": [9000, -9000, 7000], "target": [2000, 1500, 0]}),
+        );
+        for _ in 0..3 {
+            self.advance(0.1);
+        }
+        self.advance(1.0);
+    }
+}
+
+trait ParseUid {
+    fn parse_uid(&self) -> kadakas_core::uid::Uid;
+}
+
+impl ParseUid for str {
+    fn parse_uid(&self) -> kadakas_core::uid::Uid {
+        kadakas_core::uid::Uid::parse(self).expect("an ID")
+    }
+}
+
+#[test]
+fn a_canvas_that_is_offset_in_the_window_is_framed_right() {
+    let mut r = Rig::new();
+    let a = r.rect(0.0, 0.0, 20000.0, 10000.0);
+    r.frame(vec![]);
+    let canvas = r.canvas();
+    assert!(
+        canvas.min.x > 10.0 && canvas.min.y > 10.0,
+        "the palettes and bars put the drawing away from the corner: {canvas:?}"
+    );
+    r.ok("view.zoom", json!({"ids": [a.to_string()], "margin": 0.05}));
+    // The middle of the canvas, in the window, shows the middle of the object.
+    let at = r.app.view.to_model(canvas.center());
+    assert!(
+        (at.x - 10000.0).abs() < 1e-6 && (at.y - 5000.0).abs() < 1e-6,
+        "{at:?}"
+    );
+    // The whole object is inside the canvas.
+    for p in [
+        DVec2::new(0.0, 0.0),
+        DVec2::new(20000.0, 0.0),
+        DVec2::new(20000.0, 10000.0),
+        DVec2::new(0.0, 10000.0),
+    ] {
+        assert!(canvas.contains(r.app.view.to_screen(p)), "{p:?}");
+    }
+    // view.get tells the same middle and the same visible box as the view.
+    let g = r.ok("view.get", json!({}));
+    let c = pair(&g["plan"]["center"]);
+    assert!(
+        (c.0 - at.x).abs() < 1e-6 && (c.1 - at.y).abs() < 1e-6,
+        "{c:?}"
+    );
+    let (lo, hi) = box_of(&g["plan"]["visible_box"]);
+    let (vlo, vhi) = r.app.view.visible_model(canvas);
+    assert!((lo.0 - vlo.x).abs() < 1e-6 && (hi.1 - vhi.y).abs() < 1e-6);
+    // Back puts the exact view back.
+    let after = r.app.view;
+    r.advance(1.0);
+    r.ok("view.pan", json!({"by": [5000, 5000]}));
+    assert_ne!(r.app.view, after);
+    r.advance(1.0);
+    r.app.agent_back(&r.ctx.clone());
+    assert_eq!(r.app.view, after);
+}
+
+#[test]
+fn a_drag_of_a_tool_a_keyboard_press_and_a_pinch_hold_the_agent_back() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    let busy = |e: &RpcError| e.reason == Some(REASON_PERSON_NAVIGATING);
+    let zoom = json!({"at": [5, 5], "scale": 0.5});
+    // A press with the primary button on the drawing: a tool or a rubber band.
+    let from = r.pointer();
+    r.frame(vec![Event::PointerMoved(from)]);
+    r.frame(vec![Event::PointerButton {
+        pos: from,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    }]);
+    for k in 1..=3 {
+        r.time += 0.016;
+        r.frame(vec![Event::PointerMoved(from + vec2(8.0 * k as f32, 5.0))]);
+    }
+    assert!(busy(&r.err("view.zoom", zoom.clone())));
+    r.time += 0.016;
+    r.frame(vec![Event::PointerButton {
+        pos: from + vec2(24.0, 5.0),
+        button: PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    }]);
+    r.advance(1.0);
+    r.ok("view.zoom", zoom.clone());
+    // A tool that waits for its next point.
+    r.advance(1.0);
+    r.app.entry.active = true;
+    assert!(busy(&r.err("view.pan", json!({"by": [1, 1]}))));
+    r.app.entry.active = false;
+    r.ok("view.pan", json!({"by": [1, 1]}));
+    // A key: in the frame that has it, and not in the next one.
+    r.advance(1.0);
+    r.time += 0.016;
+    r.frame(vec![Event::Key {
+        key: egui::Key::A,
+        physical_key: Some(egui::Key::A),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }]);
+    assert!(busy(&r.err("view.zoom", zoom.clone())));
+    r.advance(1.0);
+    r.ok("view.zoom", zoom.clone());
+    // A pinch over the drawing.
+    r.advance(1.0);
+    let at = r.pointer();
+    r.time += 0.016;
+    r.frame(vec![Event::PointerMoved(at), Event::Zoom(1.2)]);
+    assert!(busy(&r.err("view.zoom", zoom.clone())));
+    // The wheel stays busy for a moment, then the agent may go on.
+    r.advance(1.0);
+    r.advance(1.0);
+    r.ok("view.zoom", zoom);
+}
+
+#[test]
+fn a_view_command_of_the_person_stops_the_agent_animation() {
+    let mut r = Rig::new();
+    r.app.prefs.animate_agent_view = true;
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    r.ok("view.zoom", json!({"at": [90000, 90000], "scale": 0.5}));
+    r.advance(0.05);
+    assert!(r.app.agent_view.animating());
+    // Zoom to extents, or any other view command of the person, changes the view in the window.
+    let ctx = r.ctx.clone();
+    r.app.zoom_fit();
+    // The drawing fits in this frame; the agent sees it at the start of the next one.
+    r.time += 0.016;
+    r.frame(vec![]);
+    r.time += 0.016;
+    r.frame(vec![]);
+    assert!(!r.app.agent_view.animating(), "the animation stopped");
+    let view = r.app.view;
+    r.advance(1.0);
+    r.advance(1.0);
+    assert_eq!(r.app.view, view, "the agent did not take the view back");
+    // The agent waits for a moment after such a command.
+    let _ = ctx;
+}
+
+#[test]
+fn a_3d_orbit_of_the_person_holds_the_agent_back_and_stops_its_animation() {
+    let mut r = Rig::new();
+    r.app.prefs.animate_agent_view = true;
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.app.gpu_ready = true;
+    r.app.prefs.animate_agent_view = false;
+    r.go_3d();
+    r.app.prefs.animate_agent_view = true;
+    r.advance(1.0);
+    r.ok(
+        "view.camera",
+        json!({"eye": [-9000, 9000, 5000], "target": [0, 0, 0]}),
+    );
+    assert!(r.app.agent_view.animating());
+    let from = r.pointer();
+    r.time += 0.016;
+    r.frame(vec![Event::PointerMoved(from)]);
+    r.frame(vec![Event::PointerButton {
+        pos: from,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    }]);
+    for k in 1..=3 {
+        r.time += 0.016;
+        r.frame(vec![Event::PointerMoved(from + vec2(10.0 * k as f32, 0.0))]);
+    }
+    assert!(
+        !r.app.agent_view.animating(),
+        "the orbit ended the animation"
+    );
+    let e = r.err("view.zoom", json!({"at": [1, 1]}));
+    assert_eq!(e.reason, Some(REASON_PERSON_NAVIGATING));
+}
+
+#[test]
+fn back_keeps_the_view_of_the_person_when_the_agent_changes_the_view_many_times() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    let start = r.app.view;
+    for i in 0..45 {
+        r.advance(0.3);
+        r.ok(
+            "view.zoom",
+            json!({"at": [i * 1000, 0], "scale": 0.01 + 0.001 * f64::from(i)}),
+        );
+    }
+    assert_eq!(
+        r.app.agent_view.back_len(),
+        kadakas_ui_core::agent_view::BACK_DEPTH
+    );
+    let ctx = r.ctx.clone();
+    let mut n = 0;
+    while crate::agent_view::go_back(&mut r.app.agent_env(&ctx)) {
+        n += 1;
+    }
+    assert_eq!(n, kadakas_ui_core::agent_view::BACK_DEPTH);
+    assert_eq!(
+        r.app.view, start,
+        "the first Back step is the person's own view"
+    );
+}
+
+#[test]
+fn changes_that_follow_at_once_are_one_step_for_back() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    r.ok("view.zoom", json!({"at": [10, 10], "scale": 0.2}));
+    r.ok("view.pan", json!({"by": [100, 0]}));
+    r.ok("view.pan", json!({"by": [100, 0]}));
+    assert_eq!(r.app.agent_view.back_len(), 1);
+}
+
+#[test]
+fn the_person_can_lock_the_view() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    r.app.agent_view.locked = true;
+    let view = r.app.view;
+    for (m, p) in [
+        ("view.zoom", json!({"at": [5, 5]})),
+        ("view.pan", json!({"by": [5, 5]})),
+        (
+            "view.camera",
+            json!({"eye": [1000, 0, 0], "target": [0, 0, 0]}),
+        ),
+    ] {
+        let e = r.err(m, p);
+        assert_eq!(e.reason, Some(kadakas_api::REASON_VIEW_LOCKED), "{m}");
+    }
+    assert_eq!(r.app.view, view);
+    assert_eq!(
+        crate::agent_view::memo_for_session_change(&r.app.agent_env(&r.ctx.clone()))
+            .err()
+            .and_then(|e| e.reason),
+        Some(kadakas_api::REASON_VIEW_LOCKED)
+    );
+    // Reading and pointing still work, and the state says so.
+    assert_eq!(r.ok("view.get", json!({}))["view_locked"], true);
+    r.ok("view.highlight", json!({"at": [1, 1]}));
+    r.app.agent_view.locked = false;
+    r.ok("view.zoom", json!({"at": [5, 5]}));
+    // The toggle is in the panel and in the People row.
+    r.frame(vec![]);
+    let out = r.frame(vec![]);
+    assert!(texts(&out).iter().any(|t| t == "Agent may move my view"));
+    let et = kadakas_l10n::with_language("et", || {
+        r.frame(vec![]);
+        texts(&r.frame(vec![]))
+    });
+    assert!(et.iter().any(|t| t == "Agent võib minu vaadet liigutada"));
+}
+
+#[test]
+fn the_panel_can_be_hidden_and_comes_back_with_news() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    r.ok("view.highlight", json!({"at": [5, 5], "text": "Here"}));
+    r.frame(vec![]);
+    assert!(
+        texts(&r.frame(vec![]))
+            .iter()
+            .any(|t| t.contains("Agent pointers (1)"))
+    );
+    r.app.agent_view.panel_hidden = true;
+    r.frame(vec![]);
+    assert!(
+        !texts(&r.frame(vec![]))
+            .iter()
+            .any(|t| t.contains("Agent pointers"))
+    );
+    r.ok("view.highlight", json!({"at": [6, 6]}));
+    assert!(
+        !r.app.agent_view.panel_hidden,
+        "a new pointer shows the panel again"
+    );
+}
+
+#[test]
+fn a_box_and_a_place_in_3d_use_the_height_of_the_ground() {
+    let mut r = Rig::new();
+    let (_, up) = r.rect_on_new_layer("Upper", 3000.0, (0.0, 0.0, 4000.0, 3000.0));
+    r.frame(vec![]);
+    r.go_3d();
+    // A place without a height lands on the surface there.
+    r.ok("view.zoom", json!({"at": [2000, 1500]}));
+    let g = r.ok("view.get", json!({}));
+    let z = num(&g["camera"]["target"][2]);
+    assert!(
+        (z - 3000.0).abs() < 5.0,
+        "the target is on the upper layer: {z}"
+    );
+    // A box too, and a pointer remembers the height for the drawing.
+    r.advance(1.0);
+    r.ok("view.highlight", json!({"box": [500, 500, 1500, 1500]}));
+    let h = &r.app.agent_view.highlights.items()[0];
+    assert!((h.ground - 3000.0).abs() < 5.0, "{}", h.ground);
+    r.ok("view.highlight", json!({"at": [2000, 1500]}));
+    match r.app.agent_view.highlights.items()[1].aim {
+        kadakas_ui_core::agent_view::Aim::At(p) => assert!((p.z - 3000.0).abs() < 5.0),
+        _ => panic!("a place"),
+    }
+    // A height in the request is kept.
+    r.ok("view.highlight", json!({"at": [2000, 1500, 123]}));
+    match r.app.agent_view.highlights.items()[2].aim {
+        kadakas_ui_core::agent_view::Aim::At(p) => assert_eq!(p.z, 123.0),
+        _ => panic!("a place"),
+    }
+    let _ = up;
+}
+
+#[test]
+fn hidden_objects_are_named_and_not_framed() {
+    let mut r = Rig::new();
+    let shown = r.rect(0.0, 0.0, 1000.0, 1000.0);
+    let (layer, hidden) = r.rect_on_new_layer("Off", 0.0, (50000.0, 50000.0, 1000.0, 1000.0));
+    r.app
+        .session
+        .handle(
+            "execute",
+            json!({"command": {"op": "modify_layer", "id": layer, "visible": false}}),
+        )
+        .unwrap();
+    r.frame(vec![]);
+    // Only hidden objects: an error that says so.
+    let e = r.err("view.zoom", json!({"ids": [hidden.to_string()]}));
+    assert_eq!(e.code, RpcError::validation("x").code, "{}", e.message);
+    assert!(e.message.contains("hidden"), "{}", e.message);
+    // Some of them: the shown ones are framed, the hidden ones are listed.
+    let z = r.ok(
+        "view.zoom",
+        json!({"ids": [shown.to_string(), hidden.to_string()]}),
+    );
+    assert_eq!(z["hidden_ids"], json!([hidden.to_string()]));
+    let c = pair(&r.ok("view.get", json!({}))["plan"]["center"]);
+    assert!(
+        (c.0 - 500.0).abs() < 1e-6,
+        "the hidden object did not count: {c:?}"
+    );
+    // A pointer on a hidden object says so and draws nothing around it.
+    let base = shapes(&r.frame(vec![]));
+    let h = r.ok(
+        "view.highlight",
+        json!({"ids": [hidden.to_string()], "text": "Not here"}),
+    );
+    assert_eq!(h["hidden_ids"], json!([hidden.to_string()]));
+    assert!(h["note"].as_str().unwrap().contains("hidden"));
+    r.frame(vec![]);
+    let out = r.frame(vec![]);
+    let drawn = |out: &egui::FullOutput| -> usize {
+        fn count(s: &egui::Shape) -> usize {
+            match s {
+                egui::Shape::Vec(v) => v.iter().map(count).sum(),
+                egui::Shape::Rect(r) if r.stroke.width >= 7.0 => 1,
+                _ => 0,
+            }
+        }
+        out.shapes.iter().map(|c| count(&c.shape)).sum()
+    };
+    assert_eq!(
+        drawn(&out),
+        0,
+        "no glow around a hidden object (base {base})"
+    );
+}
+
+#[test]
+fn a_pointer_in_3d_is_drawn_where_the_camera_projects_it() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.frame(vec![]);
+    r.go_3d();
+    let id = r.ok(
+        "view.highlight",
+        json!({"at": [3000, 2000, 0], "text": "P"}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    let _ = id;
+    r.frame(vec![]);
+    let out = r.frame(vec![]);
+    // The ring around the place is the circle stroke of radius 14.
+    fn circles(s: &egui::Shape, into: &mut Vec<Pos2>) {
+        match s {
+            egui::Shape::Circle(c) if (c.radius - 14.0).abs() < 1e-3 && c.fill.a() == 0 => {
+                into.push(c.center)
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| circles(s, into)),
+            _ => {}
+        }
+    }
+    let mut found = vec![];
+    for c in &out.shapes {
+        circles(&c.shape, &mut found);
+    }
+    assert_eq!(found.len(), 1, "{found:?}");
+    // Where the camera of the window puts that point of the drawing.
+    let rect = r.canvas();
+    let scene = r.app.session.scene();
+    let aspect = rect.width() / rect.height();
+    let vp = r.app.view3d.camera.view_proj(aspect, scene.bounds);
+    let local = (glam::DVec3::new(3000.0, 2000.0, 0.0) - scene.origin).as_vec3();
+    let want = crate::agent_view_ui::project_3d(vp, rect, local).unwrap();
+    assert!(
+        found[0].distance(want) < 1.5,
+        "drawn at {:?}, the camera puts it at {want:?}",
+        found[0]
+    );
+    // The point is on the screen, not at the corner of the drawing.
+    assert!(rect.contains(found[0]));
+}
+
+#[test]
+fn a_pointer_outside_the_view_gets_an_arrow_and_labels_do_not_overlap() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    r.ok("view.zoom", json!({"at": [500, 500], "scale": 0.2}));
+    // Three pointers on the same place, one far outside the view.
+    for _ in 0..3 {
+        r.ok(
+            "view.highlight",
+            json!({"at": [500, 500], "text": "Same place"}),
+        );
+    }
+    r.ok(
+        "view.highlight",
+        json!({"at": [900000, 500], "text": "Far east"}),
+    );
+    r.frame(vec![]);
+    let out = r.frame(vec![]);
+    let t = texts(&out);
+    assert!(t.iter().any(|x| x.contains("4  Far east")), "{t:?}");
+    // The number of a pointer is the ID that the agent got back, and it stays when others go.
+    let ids: Vec<u32> = r
+        .app
+        .agent_view
+        .highlights
+        .items()
+        .iter()
+        .map(|h| h.id)
+        .collect();
+    r.ok("view.highlight_clear", json!({"id": ids[0]}));
+    r.frame(vec![]);
+    let t = texts(&r.frame(vec![]));
+    assert!(
+        t.iter().any(|x| x.contains("4  Far east")),
+        "the number is stable: {t:?}"
+    );
+    assert!(t.iter().any(|x| x.contains("4. Far east (")), "{t:?}");
+    // The labels of the three pointers on one place are drawn apart.
+    let labels = {
+        fn rects(s: &egui::Shape, into: &mut Vec<Rect>) {
+            match s {
+                egui::Shape::Rect(r) if r.fill.a() == 235 => into.push(r.rect),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| rects(s, into)),
+                _ => {}
+            }
+        }
+        let mut v = vec![];
+        for c in &r.frame(vec![]).shapes {
+            rects(&c.shape, &mut v);
+        }
+        v
+    };
+    assert!(labels.len() >= 3, "{labels:?}");
+    for (i, a) in labels.iter().enumerate() {
+        for b in &labels[i + 1..] {
+            assert!(!a.intersects(*b), "{a:?} and {b:?} overlap");
+        }
+    }
+}
+
+#[test]
+fn a_camera_only_saved_view_says_so_in_the_status() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 500.0, 500.0);
+    r.frame(vec![]);
+    r.app
+        .session
+        .handle(
+            "saved_view.save",
+            json!({"name": "Far", "zoom": 0.01, "pan": [90, 90]}),
+        )
+        .unwrap();
+    r.app
+        .session
+        .handle("view.set", json!({"view": "Far"}))
+        .unwrap();
+    assert!(r.app.session.applied_camera_only());
+    r.app.sync_saved_views(r.app.canvas_rect);
+    assert_eq!(
+        r.app.status,
+        tr!("agent-view-showed-view", name = "Far".to_string())
+    );
+    assert!(r.app.status.contains("camera only"));
+    // The restore of the saved view is not camera only.
+    r.app
+        .session
+        .handle("saved_view.restore", json!({"name": "Far"}))
+        .unwrap();
+    assert!(!r.app.session.applied_camera_only());
+}
+
+#[test]
+fn back_puts_the_3d_camera_at_the_same_place_in_the_drawing_when_the_origin_moved() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.frame(vec![]);
+    r.go_3d();
+    let g = r.ok("view.get", json!({}));
+    let target = pair(&g["camera"]["target"]);
+    r.advance(1.0);
+    r.ok("view.pan", json!({"by": [500, 500, 0]}));
+    // The drawing grows: the middle of the plan (the scene origin) moves.
+    r.rect(40000.0, 30000.0, 100.0, 100.0);
+    r.advance(1.0);
+    let ctx = r.ctx.clone();
+    assert!(crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
+    let g = r.ok("view.get", json!({}));
+    let t = pair(&g["camera"]["target"]);
+    assert!(
+        (t.0 - target.0).abs() < 1.0 && (t.1 - target.1).abs() < 1.0,
+        "{t:?} {target:?}"
+    );
+}
+
+#[test]
+fn a_3d_viewpoint_keeps_drawing_coordinates() {
+    let mut r = Rig::new();
+    r.rect(650_000.0, 590_000.0, 4000.0, 3000.0);
+    r.frame(vec![]);
+    r.go_3d();
+    let camera = r.app.view3d.camera;
+    let spec = r.app.current_view_spec();
+    let kadakas_core::issue::ViewSpec::Camera {
+        target,
+        yaw,
+        pitch,
+        distance,
+        ..
+    } = spec
+    else {
+        panic!("a camera");
+    };
+    // The camera looks at (2000, 1500) in the drawing; that is what the viewpoint keeps, not a
+    // number relative to the scene (which would be near -650000 here).
+    assert!(
+        (target[0] - 2000.0).abs() < 1.0 && (target[1] - 1500.0).abs() < 1.0,
+        "{target:?}"
+    );
+    // The drawing grows and its middle moves; the viewpoint still opens at the same place.
+    r.rect(900_000.0, 800_000.0, 100.0, 100.0);
+    r.app.pending_camera = Some((target, yaw, pitch, distance));
+    r.app.apply_pending_camera();
+    let world = |c: &kadakas_render::Camera, o: glam::DVec3| o + c.target.as_dvec3();
+    let o_now = kadakas_core::mesh::scene_origin(r.app.session.editor.doc());
+    let o_then = glam::DVec3::new(652_000.0, 591_500.0, 0.0);
+    let _ = o_then;
+    let got = world(&r.app.view3d.camera, o_now);
+    assert!(
+        (got.x - target[0]).abs() < 1.0 && (got.y - target[1]).abs() < 1.0,
+        "{got:?} {target:?} {camera:?}"
     );
 }

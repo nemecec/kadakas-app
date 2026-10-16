@@ -1502,7 +1502,11 @@ impl KadakasApp {
                     c.y as f64 + pan.y * self.view.zoom,
                 );
             }
-            self.status = tr!("app-restored-view", name = v.name);
+            self.status = if self.session.applied_camera_only() {
+                tr!("agent-view-showed-view", name = v.name)
+            } else {
+                tr!("app-restored-view", name = v.name)
+            };
         }
     }
 
@@ -1981,8 +1985,13 @@ impl KadakasApp {
         if panning {
             self.view.pan(resp.drag_delta());
             nav.moved = true;
-            nav.dragging = true;
         }
+        // Any drag on the drawing is the person at work (a tool, a move, a rubber band), and so
+        // is a tool that waits for the next point.
+        nav.dragging = resp.dragged()
+            || resp.is_pointer_button_down_on()
+            || self.machine.anchor().is_some()
+            || self.entry.active;
         if let (true, Some(h)) = (resp.hovered(), hover) {
             let factor = (scroll as f64 * 0.0025).exp() * pinch as f64;
             if (factor - 1.0).abs() > 1e-9 {
@@ -2265,6 +2274,8 @@ impl KadakasApp {
             pixels_per_point: ctx.pixels_per_point(),
             animate: self.prefs.animate_agent_view,
             now_ms: ctx.input(|i| i.time) * 1000.0,
+            input_busy: crate::agent_view::input_busy(ctx, self.canvas_rect),
+            tool_busy: self.machine.anchor().is_some() || self.entry.active,
         }
     }
 
@@ -2274,9 +2285,12 @@ impl KadakasApp {
         if animating {
             ctx.request_repaint();
         }
-        if !self.agent_view.highlights.is_empty() {
-            // A pointer with a time ends by itself: look again soon.
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        // A pointer with a time ends by itself: look again when the first one ends.
+        if let Some(ms) = self
+            .agent_view
+            .needs_repaint_within(ctx.input(|i| i.time) * 1000.0)
+        {
+            ctx.request_repaint_after(std::time::Duration::from_millis(ms as u64 + 20));
         }
     }
 
@@ -2925,7 +2939,7 @@ impl KadakasApp {
                 let now_ms = ui.input(|i| i.time) * 1000.0;
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     self.collab.people_ui(ui, now);
-                    crate::agent_view_ui::people_row(ui, &self.agent_view, now_ms);
+                    crate::agent_view_ui::people_row(ui, &mut self.agent_view, now_ms);
                 });
             }
             Tab::Issues => {
@@ -2991,6 +3005,10 @@ impl eframe::App for KadakasApp {
             let (shots, shot_key) = (&mut self.shots, &mut self.shot_key);
             let window = ctx.content_rect().size();
             let ppp = ctx.pixels_per_point();
+            // The input of this frame is read before the calls of the agent are answered: the
+            // person who drags, zooms or types now wins.
+            let input_busy = crate::agent_view::input_busy(&ctx, self.canvas_rect);
+            let tool_busy = self.machine.anchor().is_some() || self.entry.active;
             agent.poll_ext(&mut |line, reply, conn| {
                 // The agent drives the view and points: the app answers these itself. A change
                 // through the session (`view.set`) keeps the view from before, for Back.
@@ -3008,6 +3026,8 @@ impl eframe::App for KadakasApp {
                             pixels_per_point: ppp,
                             animate: self.prefs.animate_agent_view,
                             now_ms: now * 1000.0,
+                            input_busy,
+                            tool_busy,
                         }
                     };
                 }

@@ -862,6 +862,7 @@ impl Session {
             self.view_changed = true;
         }
         self.applied_view = Some(v.clone());
+        self.applied_camera_only = false;
         self.prune_selection();
     }
 

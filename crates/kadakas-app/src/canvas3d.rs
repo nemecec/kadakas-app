@@ -215,7 +215,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     if compare.is_none()
         && let Some(issues) = issues
     {
-        issues.paint_3d(&ui.painter_at(rect), rect, view_proj, session);
+        issues.paint_3d(&ui.painter_at(rect), rect, view_proj, scene.origin, session);
     }
     // What the agent points at, and where the agent is (never part of the document).
     if compare.is_none()
@@ -279,16 +279,21 @@ mod tests {
         }
 
         fn add_slab(&mut self) -> ObjectId {
+            self.add_slab_at(DVec2::ZERO)
+        }
+
+        /// A slab of 2000 x 2000 mm around `c`.
+        fn add_slab_at(&mut self, c: DVec2) -> ObjectId {
             let out = self
                 .session
                 .editor
                 .execute(&Command::AddObject {
                     shape: Shape::Hardscape {
                         boundary: kadakas_core::curve::corners(&[
-                            DVec2::splat(-1000.0),
-                            DVec2::new(1000.0, -1000.0),
-                            DVec2::splat(1000.0),
-                            DVec2::new(-1000.0, 1000.0),
+                            c + DVec2::splat(-1000.0),
+                            c + DVec2::new(1000.0, -1000.0),
+                            c + DVec2::splat(1000.0),
+                            c + DVec2::new(-1000.0, 1000.0),
                         ]),
                         material: "m".into(),
                         thickness: None,
@@ -482,6 +487,32 @@ mod tests {
         );
         let requests = h.issues.take_requests();
         assert_eq!(requests.len(), 1);
+    }
+
+    #[test]
+    fn pins_are_projected_relative_to_the_scene_origin() {
+        // The scene (and so the camera) is relative to the middle of the drawing. A pin has
+        // drawing coordinates; a drawing far from zero must still put the pin on its object.
+        let mut h = Harness::new();
+        let slab = h.add_slab_at(DVec2::new(650_000.0, 590_000.0));
+        h.session.view.view = StandardView::RightIsometric;
+        let made = h
+            .session
+            .handle(
+                "issue.create",
+                serde_json::json!({"title": "Far", "objects": [slab], "now_ms": 1}),
+            )
+            .unwrap();
+        let id: kadakas_core::issue::IssueId = serde_json::from_value(made["id"].clone()).unwrap();
+        for _ in 0..4 {
+            h.frame(vec![]);
+        }
+        let at = h.issues.pin_screen(id).expect("the pin is on the screen");
+        // The only object is in the middle of the window.
+        assert!(
+            at.distance(egui::pos2(400.0, 300.0)) < 160.0,
+            "the pin is at {at:?}, far from the object in the middle"
+        );
     }
 
     #[test]

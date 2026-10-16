@@ -40,8 +40,11 @@ pub const BUSY_MS: f64 = 500.0;
 pub const CURSOR_MS: u64 = 120_000;
 /// The agent cursor is shown as quiet after this long (ms).
 pub const QUIET_MS: u64 = 30_000;
-/// The color of the agent in the People palette: an index into the presence palette.
-pub const AGENT_COLOR: usize = 4;
+/// The agent shows as a peer with a color index that no person's palette uses (the color itself is
+/// `collab::AGENT_RGB`).
+pub const AGENT_COLOR: usize = 0;
+/// Two view changes of the agent within this time (ms) count as one for Back.
+pub const MERGE_MS: f64 = 120.0;
 /// The smallest box that a zoom to objects shows, in mm. A single point does not zoom to the
 /// limit.
 pub const MIN_FRAME_MM: f64 = 500.0;
@@ -59,7 +62,8 @@ pub enum Aim {
     Objects(Vec<Uid>),
     /// A box in drawing coordinates (mm).
     Box { lo: DVec2, hi: DVec2 },
-    /// A point in drawing coordinates (mm); `z` is 0 unless given.
+    /// A point in drawing coordinates (mm). `z` is NaN when the request gave none: the 3D view
+    /// then uses the height of the ground at the point (`ground_height`).
     At(DVec3),
 }
 
@@ -135,7 +139,7 @@ impl Aim {
         Ok(Aim::At(DVec3::new(
             n[0],
             n[1],
-            n.get(2).copied().unwrap_or(0.0),
+            n.get(2).copied().unwrap_or(f64::NAN),
         )))
     }
 }
@@ -394,10 +398,11 @@ impl HColor {
         }
     }
 
-    /// The colors are those of the presence palette (PLAT-08).
+    /// The colors are those of the presence palette (PLAT-08). The agent has its own, which no
+    /// person gets.
     pub fn rgb(self) -> [u8; 3] {
         let i = match self {
-            HColor::Agent => AGENT_COLOR,
+            HColor::Agent => return crate::collab::AGENT_RGB,
             HColor::Red => 0,
             HColor::Blue => 1,
             HColor::Green => 2,
@@ -437,6 +442,9 @@ pub struct Highlight {
     pub made_ms: f64,
     /// The revision of the document then, for `Until::NextChange`.
     pub made_rev: u64,
+    /// The height (mm) of the ground at the pointer when it was made: a box and a place without a
+    /// height are drawn there in 3D.
+    pub ground: f64,
 }
 
 /// `view.highlight`.
@@ -446,6 +454,8 @@ pub struct HighlightReq {
     pub text: String,
     pub color: HColor,
     pub until: Until,
+    /// The height of the ground at the pointer (the app fills it in; 0 when parsed).
+    pub ground: f64,
 }
 
 /// A text of a pointer: plain, one line, within the bound.
@@ -455,10 +465,26 @@ pub fn check_text(text: &str) -> Result<(), String> {
             "text is longer than {MAX_TEXT_CHARS} characters; shorten it (nothing is cut)"
         ));
     }
-    if text.chars().any(char::is_control) {
-        return Err("text must be one line without control characters".into());
+    if text.chars().any(|c| c.is_control() || is_format_char(c)) {
+        return Err(
+            "text must be one line without control or invisible formatting characters (such as text direction marks)"
+                .into(),
+        );
     }
     Ok(())
+}
+
+/// Invisible characters that change how text reads: zero-width characters, direction marks and
+/// overrides, isolates, the word joiner and the byte order mark (Unicode category Cf, the part
+/// that matters for a label).
+fn is_format_char(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{061C}' | '\u{180E}'
+        | '\u{200B}'..='\u{200F}'
+        | '\u{202A}'..='\u{202E}'
+        | '\u{2060}'..='\u{206F}'
+        | '\u{FEFF}'
+        | '\u{FFF9}'..='\u{FFFB}')
 }
 
 impl HighlightReq {
@@ -478,6 +504,7 @@ impl HighlightReq {
             text,
             color: HColor::parse(p.get("color"))?,
             until: Until::parse(p.get("until"))?,
+            ground: 0.0,
         })
     }
 }
@@ -539,6 +566,7 @@ impl HighlightSet {
             until: req.until,
             made_ms: now_ms,
             made_rev: rev,
+            ground: req.ground,
         });
         Ok(id)
     }
@@ -627,8 +655,8 @@ impl AgentPresence {
             return None;
         }
         Some(Peer {
-            client: "agent".into(),
-            user: "agent".into(),
+            client: crate::collab::AGENT_CLIENT.into(),
+            user: crate::collab::AGENT_CLIENT.into(),
             name,
             cursor: self.at,
             selection: Vec::new(),
@@ -690,10 +718,12 @@ impl<T> Default for Back<T> {
 }
 
 impl<T> Back<T> {
-    /// Keeps the view before a change. The oldest one goes when the stack is full.
+    /// Keeps the view before a change. When the stack is full, the oldest change after the first
+    /// one goes: the first entry is the view that the person had before the agent began, and it
+    /// is never dropped.
     pub fn push(&mut self, view: T) {
         if self.stack.len() >= BACK_DEPTH {
-            self.stack.remove(0);
+            self.stack.remove(1);
         }
         self.stack.push(view);
     }
@@ -731,18 +761,19 @@ pub struct PlanPose {
 }
 
 impl PlanPose {
-    /// The pose of a view that shows a canvas of this size (px).
-    pub fn of(view: View, size: DVec2) -> PlanPose {
+    /// The pose of a view that shows a canvas at `min` (the corner in window coordinates, px) of
+    /// this size. `View::origin` is in window coordinates, so the canvas offset counts.
+    pub fn of(view: View, min: DVec2, size: DVec2) -> PlanPose {
         PlanPose {
-            center: view.model_of(size / 2.0),
+            center: view.model_of(min + size / 2.0),
             zoom: view.zoom,
         }
     }
 
-    /// The view with this pose on a canvas of this size.
-    pub fn view(self, size: DVec2) -> View {
+    /// The view with this pose on a canvas at `min` of this size.
+    pub fn view(self, min: DVec2, size: DVec2) -> View {
         let zoom = self.zoom.clamp(MIN_ZOOM, MAX_ZOOM);
-        let c = size / 2.0;
+        let c = min + size / 2.0;
         View {
             origin: DVec2::new(c.x - self.center.x * zoom, c.y + self.center.y * zoom),
             zoom,
@@ -768,6 +799,38 @@ pub fn frame_plan(
     let zoom = want.clamp(MIN_ZOOM, MAX_ZOOM);
     (PlanPose { center, zoom }, zoom != want)
 }
+
+/// The height of the highest surface of the scene above the scene point `p` (x and y, scene
+/// coordinates): the ground or what stands on it. `None` when no triangle covers the point or the
+/// scene is too big to look through (more than [`GROUND_MAX_TRIANGLES`] triangles).
+pub fn ground_height(scene: &kadakas_core::mesh::Scene, p: glam::Vec2) -> Option<f32> {
+    let mesh = &scene.mesh;
+    if mesh.triangle_count() > GROUND_MAX_TRIANGLES {
+        return None;
+    }
+    let mut best: Option<f32> = None;
+    for t in 0..mesh.triangle_count() {
+        let [a, b, c] = mesh.triangle(t);
+        let d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+        if d.abs() < 1e-9 {
+            continue;
+        }
+        let u = ((b.y - c.y) * (p.x - c.x) + (c.x - b.x) * (p.y - c.y)) / d;
+        let v = ((c.y - a.y) * (p.x - c.x) + (a.x - c.x) * (p.y - c.y)) / d;
+        let w = 1.0 - u - v;
+        let eps = -1e-4;
+        if u >= eps && v >= eps && w >= eps {
+            let z = u * a.z + v * b.z + w * c.z;
+            if z.is_finite() {
+                best = Some(best.map_or(z, |m| m.max(z)));
+            }
+        }
+    }
+    best
+}
+
+/// The most triangles that [`ground_height`] looks through.
+pub const GROUND_MAX_TRIANGLES: usize = 2_000_000;
 
 /// The easing of an animation: slow start, fast middle, slow end.
 pub fn ease(t: f64) -> f64 {
@@ -918,10 +981,11 @@ mod tests {
                 hi: DVec2::new(10.0, 20.0)
             }
         );
-        assert_eq!(
-            Aim::parse(&json!({"at": [1, 2]})).unwrap(),
-            Aim::At(DVec3::new(1.0, 2.0, 0.0))
-        );
+        // No height: the 3D view asks the ground.
+        match Aim::parse(&json!({"at": [1, 2]})).unwrap() {
+            Aim::At(p) => assert!(p.x == 1.0 && p.y == 2.0 && p.z.is_nan()),
+            other => panic!("{other:?}"),
+        }
         assert_eq!(
             Aim::parse(&json!({"at": [1, 2, 3]})).unwrap(),
             Aim::At(DVec3::new(1.0, 2.0, 3.0))
@@ -1038,6 +1102,17 @@ mod tests {
         assert!(check_text(&"x".repeat(MAX_TEXT_CHARS)).is_ok());
         assert!(check_text(&"x".repeat(MAX_TEXT_CHARS + 1)).is_err());
         assert!(check_text("two\nlines").is_err());
+        // Direction marks and zero-width characters change how a label reads.
+        for bad in [
+            "a\u{202E}b",
+            "a\u{200B}b",
+            "a\u{2066}b",
+            "\u{FEFF}a",
+            "a\u{061C}",
+        ] {
+            assert!(check_text(bad).is_err(), "{bad:?}");
+        }
+        assert!(check_text("Käsi \u{2014} ok").is_ok());
         // The bound counts characters, not bytes.
         assert!(check_text(&"ä".repeat(MAX_TEXT_CHARS)).is_ok());
     }
@@ -1048,7 +1123,8 @@ mod tests {
         for (i, m) in marks.iter().enumerate() {
             assert!(!marks[..i].contains(m), "marks differ");
         }
-        assert_eq!(HColor::Agent.rgb(), crate::collab::PALETTE[AGENT_COLOR]);
+        // The agent has a color that no person gets.
+        assert!(!crate::collab::PALETTE.contains(&HColor::Agent.rgb()));
         for c in HColor::ALL {
             assert_eq!(HColor::from_id(c.id()), Some(c));
         }
@@ -1061,6 +1137,7 @@ mod tests {
             text: "here".into(),
             color: HColor::Agent,
             until,
+            ground: 0.0,
         }
     }
 
@@ -1156,7 +1233,9 @@ mod tests {
         p.touch(Some(DVec2::new(5.0, 6.0)), 1000.0);
         let peer = p.peer(2000.0, "Agent".into()).unwrap();
         assert_eq!(peer.cursor, Some([5.0, 6.0]));
-        assert_eq!(peer.color, AGENT_COLOR);
+        assert_eq!(peer.rgb(), crate::collab::AGENT_RGB);
+        assert!(!crate::collab::PALETTE.contains(&peer.rgb()));
+        let _ = AGENT_COLOR;
         assert_eq!(peer.label(), "Agent");
         // A touch with no place keeps the old place.
         p.touch(None, 3000.0);
@@ -1197,6 +1276,18 @@ mod tests {
         assert_eq!(b.len(), BACK_DEPTH - 1);
         b.clear();
         assert!(b.is_empty());
+        // Over the depth, the first entry (the view of the person) stays.
+        let mut b: Back<u32> = Back::default();
+        for i in 0..(BACK_DEPTH as u32 * 3) {
+            b.push(i);
+        }
+        assert_eq!(b.len(), BACK_DEPTH);
+        let mut all = vec![];
+        while let Some(x) = b.pop() {
+            all.push(x);
+        }
+        assert_eq!(all.last(), Some(&0), "the person's view is at the bottom");
+        assert_eq!(all[0], BACK_DEPTH as u32 * 3 - 1);
     }
 
     #[test]
@@ -1205,7 +1296,7 @@ mod tests {
         let (lo, hi) = (DVec2::new(0.0, 0.0), DVec2::new(10_000.0, 5_000.0));
         let (pose, clamped) = frame_plan(lo, hi, 0.1, None, size);
         assert!(!clamped);
-        let v = pose.view(size);
+        let v = pose.view(DVec2::ZERO, size);
         for p in [lo, hi] {
             let s = v.screen_of(p);
             assert!(
@@ -1233,9 +1324,12 @@ mod tests {
             origin: DVec2::new(100.0, 50.0),
             zoom: 0.2,
         };
-        let pose = PlanPose::of(v, size);
-        let back = pose.view(size);
+        let min = DVec2::new(250.0, 80.0);
+        let pose = PlanPose::of(v, min, size);
+        let back = pose.view(min, size);
         assert!((back.origin - v.origin).length() < 1e-9 && back.zoom == v.zoom);
+        // The middle of the canvas, which is offset in the window, is the middle of the pose.
+        assert!(v.screen_of(pose.center).distance(min + size / 2.0) < 1e-9);
     }
 
     #[test]
@@ -1335,6 +1429,32 @@ mod tests {
             "{}",
             s.half_height()
         );
+    }
+
+    #[test]
+    fn the_ground_height_is_the_highest_surface_over_a_point() {
+        let mut scene = kadakas_core::mesh::Scene::default();
+        let m = &mut scene.mesh;
+        // A slab 0..100 at height 5, and a higher plate over part of it at height 40.
+        for (z, x0, x1) in [(5.0, 0.0, 100.0), (40.0, 0.0, 50.0)] {
+            let i = m.positions.len() as u32;
+            m.positions.extend([
+                Vec3::new(x0, 0.0, z),
+                Vec3::new(x1, 0.0, z),
+                Vec3::new(x1, 100.0, z),
+                Vec3::new(x0, 100.0, z),
+            ]);
+            m.indices.extend([i, i + 1, i + 2, i, i + 2, i + 3]);
+        }
+        assert_eq!(
+            ground_height(&scene, glam::Vec2::new(75.0, 50.0)),
+            Some(5.0)
+        );
+        assert_eq!(
+            ground_height(&scene, glam::Vec2::new(25.0, 50.0)),
+            Some(40.0)
+        );
+        assert_eq!(ground_height(&scene, glam::Vec2::new(500.0, 50.0)), None);
     }
 
     #[test]
