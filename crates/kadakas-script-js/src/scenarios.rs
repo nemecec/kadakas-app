@@ -93,15 +93,10 @@ fn an_error_that_is_not_caught_fails_the_run_and_names_the_method() {
     let (r, _) = run_with(small(), r#"kadakas.call("fail", {});"#);
     let f = r.unwrap_err();
     match &f.error {
-        ScriptError::Script {
-            message,
-            method,
-            code,
-            ..
-        } => {
-            assert_eq!(message, "no way");
-            assert_eq!(method.as_deref(), Some("fail"));
-            assert_eq!(*code, Some(3));
+        ScriptError::Script(t) => {
+            assert_eq!(t.message, "no way");
+            assert_eq!(t.method.as_deref(), Some("fail"));
+            assert_eq!(t.code, Some(3));
         }
         other => panic!("{other:?}"),
     }
@@ -112,10 +107,10 @@ fn an_error_that_is_not_caught_fails_the_run_and_names_the_method() {
 fn a_syntax_error_and_a_thrown_value_are_script_errors_with_the_log() {
     let (r, _) = run_with(small(), "console.log('before'); return (;");
     let f = r.unwrap_err();
-    assert!(matches!(&f.error, ScriptError::Script { name, .. } if name == "SyntaxError"), "{f:?}");
+    assert!(matches!(&f.error, ScriptError::Script(t) if t.name == "SyntaxError"), "{f:?}");
     let (r, _) = run_with(small(), "console.log('before'); throw 42;");
     let f = r.unwrap_err();
-    assert!(matches!(&f.error, ScriptError::Script { message, .. } if message.contains("42")));
+    assert!(matches!(&f.error, ScriptError::Script(t) if t.message.contains("42")));
     assert_eq!(f.log, "before\n");
 }
 

@@ -212,10 +212,14 @@ fn classify(limits: &Limits, inst: &mut dyn RawInstance, e: RawError, budget: u6
     }
 }
 
+/// The function that serves the calls of a run, with its lifetime erased. It is used only while
+/// `run` is on the stack.
+type ErasedHost = *mut (dyn FnMut(&[u8]) -> HostReply + 'static);
+
 /// The host side of a hosted run: the function that serves the calls, the reply that waits for
 /// `read`, and why the host stopped the run.
 struct Link {
-    host: Cell<Option<*mut (dyn FnMut(&[u8]) -> HostReply + 'static)>>,
+    host: Cell<Option<ErasedHost>>,
     pending: RefCell<Vec<u8>>,
     aborted: RefCell<Option<PluginError>>,
 }
@@ -260,10 +264,9 @@ impl HostedModule for MeteredHosted {
         let link = Rc::new(Link {
             // SAFETY: only the lifetime changes; see `Link::call`.
             host: Cell::new(Some(unsafe {
-                std::mem::transmute::<
-                    *mut (dyn FnMut(&[u8]) -> HostReply + '_),
-                    *mut (dyn FnMut(&[u8]) -> HostReply + 'static),
-                >(host as *mut _)
+                std::mem::transmute::<*mut (dyn FnMut(&[u8]) -> HostReply + '_), ErasedHost>(
+                    host as *mut _,
+                )
             })),
             pending: RefCell::new(Vec::new()),
             aborted: RefCell::new(None),

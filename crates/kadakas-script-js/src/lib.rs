@@ -147,20 +147,24 @@ pub trait ScriptHost {
     fn call(&mut self, method: &str, params: Value, typed: bool) -> Result<Value, HostError>;
 }
 
+/// What a script threw.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScriptThrow {
+    pub message: String,
+    /// The `name` of the error (`TypeError`, `SyntaxError`, ...).
+    pub name: String,
+    pub stack: String,
+    /// Set when a call to the host failed and the script did not catch it.
+    pub method: Option<String>,
+    pub code: Option<i64>,
+    pub data: Option<Value>,
+}
+
 /// Why a run failed.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ScriptError {
     /// The script threw (or did not compile).
-    Script {
-        message: String,
-        /// The `name` of the error (`TypeError`, `SyntaxError`, ...).
-        name: String,
-        stack: String,
-        /// Set when a call to the host failed and the script did not catch it.
-        method: Option<String>,
-        code: Option<i64>,
-        data: Option<Value>,
-    },
+    Script(Box<ScriptThrow>),
     /// A limit stopped the run: fuel, time, memory, calls, output size or the stack.
     Limit(String),
     /// The module trapped, or the host did something that it should not.
@@ -172,12 +176,13 @@ pub enum ScriptError {
 impl fmt::Display for ScriptError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ScriptError::Script {
-                message,
-                method,
-                stack,
-                ..
-            } => {
+            ScriptError::Script(t) => {
+                let ScriptThrow {
+                    message,
+                    method,
+                    stack,
+                    ..
+                } = &**t;
                 match method {
                     Some(m) => write!(f, "the script failed at {m}: {message}")?,
                     None => write!(f, "the script failed: {message}")?,
@@ -411,14 +416,14 @@ fn parse_answer(answer: &[u8]) -> Result<Output, Failure> {
             if message.contains("more than") && message.contains("calls") {
                 return Err(fail(ScriptError::Limit(message)));
             }
-            Err(fail(ScriptError::Script {
+            Err(fail(ScriptError::Script(Box::new(ScriptThrow {
                 message,
                 name,
                 stack: s("stack"),
                 method: info.get("method").and_then(Value::as_str).map(String::from),
                 code: info.get("code").and_then(Value::as_i64),
                 data: info.get("data").filter(|d| !d.is_null()).cloned(),
-            }))
+            }))))
         }
         _ => Err(fail(ScriptError::Trap(format!(
             "the engine failed: {}",

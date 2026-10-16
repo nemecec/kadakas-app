@@ -92,11 +92,15 @@ struct JsGenerator {
     cache: Arc<Mutex<Cache>>,
 }
 
+/// The generator for one state of the document: the revision it was made for, the limits it has,
+/// and the generator itself.
+type Current = (u64, ScriptLimits, Arc<dyn UnitGenerator>);
+
 /// What the session keeps: the cache of answers and the generator that is installed.
 #[derive(Default)]
 pub(crate) struct GeneratorState {
     cache: Arc<Mutex<Cache>>,
-    current: Mutex<Option<(u64, ScriptLimits, Arc<dyn UnitGenerator>)>>,
+    current: Mutex<Option<Current>>,
 }
 
 impl GeneratorState {
@@ -362,7 +366,7 @@ fn parse(out: &Output, max_units: usize) -> Result<Generated, String> {
                 kind.len()
             ));
         }
-        for (i, d) in data.chunks_exact(5).enumerate() {
+        for (i, d) in data.as_chunks::<5>().0.iter().enumerate() {
             let (c, l, w) = (DVec2::new(d[0], d[1]), d[2], d[3]);
             if !(l > 0.0 && w > 0.0) {
                 return Err(format!("rectangle {i} needs a positive length and width"));

@@ -76,7 +76,10 @@ pub fn knows(method: &str) -> bool {
 
 /// The engine of a session: loaded when first needed, and again when the limits changed.
 #[derive(Default)]
-pub(crate) struct EngineSlot(Mutex<Option<(ScriptLimits, Result<Arc<ScriptEngine>, String>)>>);
+pub(crate) struct EngineSlot(Mutex<Option<Loaded>>);
+
+/// The engine for some limits, or why it could not be made.
+type Loaded = (ScriptLimits, Result<Arc<ScriptEngine>, String>);
 
 impl EngineSlot {
     pub(crate) fn get(&self, limits: ScriptLimits) -> Result<Arc<ScriptEngine>, String> {
@@ -561,24 +564,17 @@ impl ScriptHost for SessionHost<'_> {
 fn script_error(e: ScriptError, log: String, calls: u64) -> RpcError {
     let mut details = json!({"log": log, "calls": calls});
     let err = match &e {
-        ScriptError::Script {
-            message,
-            name,
-            stack,
-            method,
-            code,
-            data,
-        } => {
-            details["message"] = json!(message);
-            details["name"] = json!(name);
-            details["stack"] = json!(stack);
-            if let Some(m) = method {
+        ScriptError::Script(t) => {
+            details["message"] = json!(t.message);
+            details["name"] = json!(t.name);
+            details["stack"] = json!(t.stack);
+            if let Some(m) = &t.method {
                 details["method"] = json!(m);
             }
-            if let Some(c) = code {
+            if let Some(c) = t.code {
                 details["code"] = json!(c);
             }
-            if let Some(d) = data {
+            if let Some(d) = &t.data {
                 details["data"] = d.clone();
             }
             RpcError::app(&e)

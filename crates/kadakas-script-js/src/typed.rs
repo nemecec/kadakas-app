@@ -29,31 +29,33 @@ fn number(v: f64) -> Result<Value, String> {
 }
 
 fn elements(kind: &str, bytes: &[u8]) -> Result<Vec<Value>, String> {
-    fn chunks<const N: usize>(bytes: &[u8]) -> Result<std::slice::ChunksExact<'_, u8>, String> {
-        if bytes.len() % N != 0 {
-            return Err(format!(
+    fn chunks<const N: usize>(bytes: &[u8]) -> Result<&[[u8; N]], String> {
+        let (whole, rest) = bytes.as_chunks::<N>();
+        if rest.is_empty() {
+            Ok(whole)
+        } else {
+            Err(format!(
                 "a typed array of {N}-byte elements has {} bytes",
                 bytes.len()
-            ));
+            ))
         }
-        Ok(bytes.chunks_exact(N))
     }
     match kind {
         "f64" => chunks::<8>(bytes)?
-            .map(|c| number(f64::from_le_bytes(c.try_into().expect("8 bytes"))))
+            .iter()
+            .map(|c| number(f64::from_le_bytes(*c)))
             .collect(),
         "f32" => chunks::<4>(bytes)?
-            .map(|c| {
-                number(f64::from(f32::from_le_bytes(
-                    c.try_into().expect("4 bytes"),
-                )))
-            })
+            .iter()
+            .map(|c| number(f64::from(f32::from_le_bytes(*c))))
             .collect(),
         "i32" => Ok(chunks::<4>(bytes)?
-            .map(|c| Value::from(i32::from_le_bytes(c.try_into().expect("4 bytes"))))
+            .iter()
+            .map(|c| Value::from(i32::from_le_bytes(*c)))
             .collect()),
         "u32" => Ok(chunks::<4>(bytes)?
-            .map(|c| Value::from(u32::from_le_bytes(c.try_into().expect("4 bytes"))))
+            .iter()
+            .map(|c| Value::from(u32::from_le_bytes(*c)))
             .collect()),
         "u8" => Ok(bytes.iter().map(|b| Value::from(*b)).collect()),
         other => Err(format!("unknown typed array kind '{other}'")),
@@ -84,7 +86,7 @@ pub fn resolve<B: AsRef<[u8]>>(value: &mut Value, buffers: &[B]) -> Result<(), S
                 *value = if stride <= 1 {
                     Value::Array(flat)
                 } else {
-                    if flat.len() % stride != 0 {
+                    if !flat.len().is_multiple_of(stride) {
                         return Err(format!(
                             "a typed array of {} numbers cannot be cut in groups of {stride}",
                             flat.len()
