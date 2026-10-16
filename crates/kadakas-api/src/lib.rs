@@ -1626,8 +1626,10 @@ impl Session {
                     .values()
                     .filter_map(|o| {
                         let name = match &o.shape {
-                            Shape::LandscapeArea { name, .. } => name,
-                            Shape::Hardscape { material, .. } => material,
+                            Shape::LandscapeArea { name, .. } => name.clone(),
+                            Shape::Hardscape { material, .. } => {
+                                kadakas_core::props::hardscape_label(doc, o, material)
+                            }
                             _ => return None,
                         };
                         let m2 = o.shape.area().unwrap_or(0.0) / 1e6;

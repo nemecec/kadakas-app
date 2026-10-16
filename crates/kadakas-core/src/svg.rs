@@ -494,9 +494,15 @@ fn draw_object(
                     .iter()
                     .map(|(p, q)| format!("M {} {} L {} {} ", p.x, -p.y, q.x, -q.y))
                     .collect();
+                // The lines are open: no fill. `style` holds a fill already, and a second
+                // `fill` attribute makes the XML invalid.
+                let roof_style = format!(
+                    r#"stroke="{line_stroke}" fill="none" stroke-width="{sw}" data-id="{}"{dash}"#,
+                    o.id
+                );
                 let _ = writeln!(
                     s,
-                    r#"<path d="{}" {style} fill="none" data-kind="massing_roof"/>"#,
+                    r#"<path d="{}" {roof_style} data-kind="massing_roof"/>"#,
                     d.trim_end()
                 );
             }
@@ -881,6 +887,7 @@ fn decor_svg(
 mod tests {
     use super::*;
     use crate::command::{Command, Editor};
+    use crate::massing::{Massing, RoofStyle};
 
     #[test]
     fn renders_visible_objects_only() {
@@ -924,6 +931,27 @@ mod tests {
         })
         .unwrap()
         .created[0]
+    }
+
+    #[test]
+    fn roof_lines_have_one_fill_attribute() {
+        let mut ed = Editor::default();
+        for roof in [RoofStyle::Gable, RoofStyle::Hip] {
+            let mut m = Massing::new(
+                [(0.0, 0.0), (8000.0, 0.0), (8000.0, 5000.0), (0.0, 5000.0)]
+                    .map(|(x, y)| Vertex::corner(DVec2::new(x, y)))
+                    .to_vec(),
+                3000.0,
+            );
+            m.roof = roof;
+            add(&mut ed, Shape::Massing(Box::new(m)));
+        }
+        let svg = render(ed.doc(), 400);
+        let roofs: Vec<&str> = svg.lines().filter(|l| l.contains("massing_roof")).collect();
+        assert_eq!(roofs.len(), 2);
+        for l in roofs {
+            assert_eq!(l.matches(" fill=").count(), 1, "{l}");
+        }
     }
 
     fn one(shape: Shape) -> String {

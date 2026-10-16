@@ -49,7 +49,8 @@ impl Schema {
 }
 
 /// Entities that are rooted (have a GlobalId and an OwnerHistory) and that the writer makes.
-const ROOTED: [&str; 15] = [
+const ROOTED: [&str; 16] = [
+    "IFCWALL",
     "IFCPROJECT",
     "IFCSITE",
     "IFCBUILDING",
@@ -134,6 +135,8 @@ pub fn adapt(
                 *last = Value::e("ELEMENT");
             }
         }
+        // IfcWall has no PredefinedType in IFC2x3.
+        "IFCWALL" => attrs.truncate(8),
         "IFCCOVERING" => {
             if let Some(Value::Enum(p)) = attrs.get_mut(8)
                 && !COVERING_2X3.contains(&p.as_str())

@@ -40,7 +40,7 @@ impl<W: Write> Exporter<'_, W> {
                 Some(e) => (e, e.0 == default),
                 None => {
                     self.note(format!(
-                        "the data map asks for {req} on {kind}, which IFC4 export cannot write: used {default} instead (supported: IfcSlab, IfcCovering, IfcGeographicElement, IfcBuildingElementProxy)"
+                        "the data map asks for {req} on {kind}, which IFC4 export cannot write: used {default} instead (supported: IfcSlab, IfcCovering, IfcWall, IfcGeographicElement, IfcBuildingElementProxy)"
                     ));
                     (default_entry, true)
                 }
@@ -100,6 +100,25 @@ impl<W: Write> Exporter<'_, W> {
         } else {
             (pre, object_type)
         };
+        // A landscape wall is an IfcWall. IFC4 has no retaining wall type: a user-defined wall
+        // says what it is in its object type.
+        let (mut pre, mut object_type) = (pre, object_type);
+        if class.0 == "IfcWall" && matches!(kind, "wall" | "retaining_wall") {
+            object_type = Some(
+                if kind == "retaining_wall" {
+                    "RETAININGWALL"
+                } else {
+                    "LANDSCAPEWALL"
+                }
+                .into(),
+            );
+        }
+        // A predefined type that the schema does not have (a data map can ask for any type of the
+        // class table): a user-defined element that says what it is in its object type.
+        if pre.as_deref() == Some("RETAININGWALL") && self.schema != Schema::Ifc4x3 {
+            pre = Some("USERDEFINED".into());
+            object_type = Some("RETAININGWALL".into());
+        }
         (class.1, pre, object_type)
     }
 

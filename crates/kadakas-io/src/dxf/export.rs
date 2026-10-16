@@ -22,6 +22,7 @@ use super::nearest_aci;
 use crate::options::{ExportOrigin, LayerMode};
 use crate::{ExportOptions, ExportResult, IoError, Report};
 
+mod kinds;
 mod native;
 pub mod patterns;
 
@@ -196,6 +197,14 @@ struct Ctx<'a> {
     mesh_entity: crate::options::MeshEntity,
     /// Shift (mm) that was added to the shapes for real-world coordinates. Derived data (contours) needs it too.
     shift: DVec2,
+    /// The site models, for the base of massing models.
+    /// The site models and the ground that they give, one for the whole export.
+    site_cache: &'a kadakas_site::SiteCache,
+    terrain: kadakas_site::SiteTerrain<'a>,
+    /// The number of plants per style and layer, for plant tags.
+    tag_counts: kadakas_core::plants::tag::TagCounts,
+    /// True once an object has written XDATA of the application `KADAKAS`.
+    xdata: bool,
 }
 
 impl Ctx<'_> {
@@ -260,12 +269,15 @@ const H_LAYER_ZERO: &str = "27";
 const H_STYLE_STANDARD: &str = "29";
 const H_APPID_ACAD: &str = "2A";
 const H_DIMSTYLE_STANDARD: &str = "2B";
+/// The extension dictionary of the model space block record. It holds the GEODATA object.
+const H_GEO_XDICT: &str = "2C";
 /// First handle of entities and of records that depend on the drawing.
 const FIRST_HANDLE: u64 = 0x100;
 
 pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     let doc = &*crate::model_only(doc);
     let mut report = Report::new("dxf");
+    let site_cache = kadakas_site::SiteCache::default();
     let mut cx = Ctx {
         unit: opts.unit.mm_per_unit(),
         tol: opts.tolerance,
@@ -278,6 +290,10 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         site_mesh: opts.site_mesh,
         mesh_entity: opts.mesh_entity,
         shift: DVec2::ZERO,
+        site_cache: &site_cache,
+        terrain: kadakas_site::SiteTerrain::new(&site_cache, 0, doc),
+        tag_counts: kadakas_core::plants::tag::tag_counts(doc),
+        xdata: false,
     };
     // Real-world coordinates: the origin of the georeference goes back into the numbers (a rotation is not applied).
     let mut shift = DVec2::ZERO;
@@ -290,6 +306,12 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         }
     }
     cx.shift = shift;
+    // The georeference becomes a GEODATA object when the CRS is an EPSG code.
+    let geo_epsg = doc
+        .georef
+        .as_ref()
+        .filter(|g| !g.crs.trim().is_empty())
+        .and_then(native::epsg_of);
     let mut ents = W::new(FIRST_HANDLE);
     ents.owner = H_MODEL_RECORD.into();
     // The entities of unit patterns come last and are not scanned for layer names: they are many.
@@ -507,7 +529,11 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     tables.table("UCS", H_UCS_TABLE, 0);
     tables.pair(0, "ENDTAB");
     // APPID
-    tables.table("APPID", H_APPID_TABLE, 1 + usize::from(pattern_xdata));
+    tables.table(
+        "APPID",
+        H_APPID_TABLE,
+        1 + usize::from(pattern_xdata) + usize::from(cx.xdata),
+    );
     tables.record("APPID", H_APPID_ACAD, H_APPID_TABLE);
     tables.pair(100, "AcDbRegAppTableRecord");
     tables.pair(2, "ACAD");
@@ -517,6 +543,13 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         tables.record("APPID", &h, H_APPID_TABLE);
         tables.pair(100, "AcDbRegAppTableRecord");
         tables.pair(2, patterns::XDATA_APP);
+        tables.pair(70, 0);
+    }
+    if cx.xdata {
+        let h = tables.handle();
+        tables.record("APPID", &h, H_APPID_TABLE);
+        tables.pair(100, "AcDbRegAppTableRecord");
+        tables.pair(2, kinds::XDATA_APP);
         tables.pair(70, 0);
     }
     tables.pair(0, "ENDTAB");
@@ -605,7 +638,18 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         H_BLOCK_RECORD_TABLE,
         2 + plant_names.len() + cx.anon_blocks.len(),
     );
-    tables.record("BLOCK_RECORD", H_MODEL_RECORD, H_BLOCK_RECORD_TABLE);
+    if geo_epsg.is_some() {
+        // Readers find the GEODATA object through the extension dictionary of the model space.
+        tables.pair(0, "BLOCK_RECORD");
+        tables.pair(5, H_MODEL_RECORD);
+        tables.pair(102, "{ACAD_XDICTIONARY");
+        tables.pair(360, H_GEO_XDICT);
+        tables.pair(102, "}");
+        tables.pair(330, H_BLOCK_RECORD_TABLE);
+        tables.pair(100, "AcDbSymbolTableRecord");
+    } else {
+        tables.record("BLOCK_RECORD", H_MODEL_RECORD, H_BLOCK_RECORD_TABLE);
+    }
     tables.pair(100, "AcDbBlockTableRecord");
     tables.pair(2, "*Model_Space");
     tables.pair(340, H_MODEL_LAYOUT);
@@ -834,36 +878,47 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         objects.pair(6, "BYLAYER");
     }
 
-    // The georeference as a GEODATA object, when the CRS is an EPSG code.
+    // The georeference as a GEODATA object, owned by the extension dictionary of the model space.
     let mut geodata = false;
-    if let Some(g) = &doc.georef
-        && !g.crs.trim().is_empty()
+    if let (Some(g), Some(epsg)) = (&doc.georef, &geo_epsg) {
+        let unit_mm = opts.unit.mm_per_unit();
+        // The drawing axes are the model axes in both modes (a rotation is not applied to the
+        // coordinates), so grid north is turned by the rotation of the georeference.
+        let north = DVec2::new(g.rotation.sin(), g.rotation.cos());
+        let design = match opts.origin {
+            ExportOrigin::File => g.origin * 1000.0 / unit_mm,
+            ExportOrigin::Document => DVec2::ZERO,
+        };
+        let handle = native::geodata(
+            &mut objects,
+            H_GEO_XDICT,
+            epsg,
+            design,
+            g.origin,
+            north,
+            opts.unit.insunits(),
+            unit_mm / 1000.0,
+        );
+        objects.pair(0, "DICTIONARY");
+        objects.pair(5, H_GEO_XDICT);
+        objects.pair(102, "{ACAD_REACTORS");
+        objects.pair(330, H_MODEL_RECORD);
+        objects.pair(102, "}");
+        objects.pair(330, H_MODEL_RECORD);
+        objects.pair(100, "AcDbDictionary");
+        objects.pair(281, 1);
+        objects.pair(3, "ACAD_GEOGRAPHICDATA");
+        objects.pair(360, handle);
+        geodata = true;
+        report.georeferenced = true;
+    } else if doc
+        .georef
+        .as_ref()
+        .is_some_and(|g| !g.crs.trim().is_empty())
     {
-        match native::epsg_of(g) {
-            Some(epsg) => {
-                let unit_mm = opts.unit.mm_per_unit();
-                // The drawing axes are the model axes in both modes (a rotation is not applied to the
-                // coordinates), so grid north is turned by the rotation of the georeference.
-                let north = DVec2::new(g.rotation.sin(), g.rotation.cos());
-                let design = match opts.origin {
-                    ExportOrigin::File => g.origin * 1000.0 / unit_mm,
-                    ExportOrigin::Document => DVec2::ZERO,
-                };
-                native::geodata(
-                    &mut objects,
-                    &epsg,
-                    design,
-                    g.origin,
-                    north,
-                    opts.unit.insunits(),
-                    unit_mm / 1000.0,
-                );
-                geodata = true;
-            }
-            None => report.note(
-                "the CRS is not an EPSG code, so the file has no GEODATA object. The coordinates are still real-world numbers",
-            ),
-        }
+        report.note(
+            "the CRS is not an EPSG code, so the file has no GEODATA object. The coordinates are still real-world numbers",
+        );
     }
 
     let mut hdr = W::new(0);
@@ -1124,9 +1179,11 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
         Shape::SiteModel { points, .. } => {
             // The contours of the surface (the proposed one if there is one) as 3D polylines at their height,
             // and the source points as POINT entities. The TIN itself is not exported.
-            let Ok(site) = kadakas_site::SiteResult::compute(cx.doc, o.id) else {
+            let Ok(site) = cx.site_cache.get(0, cx.doc, o.id) else {
                 return false;
             };
+            // The layer lifts everything on it, the ground as well as the buildings.
+            let lift = cx.doc.layer(o.layer).map_or(0.0, |l| l.elevation);
             let Ok(contours) = site.contours(kadakas_site::Surface::Proposed) else {
                 return false;
             };
@@ -1140,7 +1197,7 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
                     hidden,
                     c.points
                         .iter()
-                        .map(|p| (p.x + shift.x, p.y + shift.y, c.level)),
+                        .map(|p| (p.x + shift.x, p.y + shift.y, c.level + lift)),
                     c.closed,
                 );
             }
@@ -1148,7 +1205,7 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
                 common(w, "POINT", layer, o, hidden);
                 w.pair(100, "AcDbPoint");
                 // The object was shifted already, so its points are in the final coordinates.
-                cx.pt3(w, 10, p.x, p.y, p.z);
+                cx.pt3(w, 10, p.x, p.y, p.z + lift);
             }
             // The triangles of the surface, on request.
             let which = match cx.site_mesh {
@@ -1161,7 +1218,7 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
                 let vertices: Vec<kadakas_core::DVec3> = tin
                     .vertices
                     .iter()
-                    .map(|v| kadakas_core::DVec3::new(v.x + shift.x, v.y + shift.y, v.z))
+                    .map(|v| kadakas_core::DVec3::new(v.x + shift.x, v.y + shift.y, v.z + lift))
                     .collect();
                 native::mesh(w, cx, o, layer, hidden, &vertices, &tin.triangles);
             }
@@ -1169,8 +1226,9 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
         // An annotation is written as lines and text (exploded), because its look comes from styles
         // and live data. Dimensions, callouts, tags, legends and so on look the same in the CAD program.
         Shape::Annotation(_) => annotation_entities(w, cx, o, layer, hidden),
-        // A plant tag is a label that the drawing makes from a style. There is nothing to write.
-        Shape::PlantTag { .. } => return false,
+        Shape::PlantTag { .. } => kinds::plant_tag(w, cx, o, layer, hidden),
+        Shape::Massing(m) => kinds::massing(w, cx, o, layer, hidden, m),
+        Shape::Irrigation(i) => kinds::irrigation(w, cx, o, layer, hidden, i),
         // Other crates add shape kinds. They are reported as skipped, not guessed.
         #[allow(unreachable_patterns)]
         _ => return false,

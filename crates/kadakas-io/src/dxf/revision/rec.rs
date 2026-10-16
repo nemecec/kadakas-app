@@ -58,6 +58,12 @@ pub struct Rec {
     /// `hash::block_keys`: the BLOCK_RECORD handle, the name, or a content hash for an anonymous
     /// block). Matching never crosses scopes.
     pub scope: String,
+    /// The name of the block definition for an entity in a named block (empty elsewhere, and for an
+    /// anonymous block). A file that was saved again may give the definition a new BLOCK_RECORD
+    /// handle, so `diff` pairs the definitions of two files by this name when the keys differ.
+    /// A stored summary keeps it, so an update pairs the definitions like a comparison does.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub block: String,
     /// The entity type, for example `LINE`.
     pub kind: String,
     pub layer: String,
@@ -263,7 +269,11 @@ pub fn records(dxf: &Dxf, max: usize) -> (Vec<Rec>, bool) {
             None if e.int(67) == Some(1) => PAPER.to_string(),
             None => MODEL.to_string(),
         };
-        out.push(Rec::from_entity(e, &scope));
+        let mut rec = Rec::from_entity(e, &scope);
+        if let Some(n) = block.filter(|n| !anonymous(n)) {
+            rec.block = n.to_string();
+        }
+        out.push(rec);
     }
     (out, false)
 }

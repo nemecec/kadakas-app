@@ -331,6 +331,19 @@ fn viewport_style(doc: &Document, vp: &Viewport) -> Option<RenderStyle> {
     }))
 }
 
+/// The 3D scene of a viewport: the same scene as the 3D view and `render.png` draw (terrain,
+/// walls, grading, the ground under massing and draped objects).
+///
+/// The site models are computed from `d`, the objects that the viewport shows, so each viewport has
+/// a cache of its own. The cache of the page (`Tables::site`) is for the plan viewports, which use the
+/// whole document: sharing it would give a viewport that hides the grading the results of one that
+/// shows it, and the other way round.
+fn viewport_scene(d: &Document) -> kadakas_core::mesh::Scene {
+    let site = kadakas_site::SiteCache::default();
+    let ext = kadakas_site::draw::scene_ext(&site, 1);
+    mesh::build_with(d, mesh::scene_origin(d), Some(&ext))
+}
+
 /// The camera of a 3D viewport: the viewport scale and center, from its standard view.
 fn viewport_camera(vp: &Viewport, scene: &kadakas_core::mesh::Scene) -> Option<Camera> {
     let view = StandardView::from_name(&vp.view)?;
@@ -351,7 +364,7 @@ fn raster_view(doc: &Document, vp: &Viewport, budget: &mut u64) -> Option<ImageP
     let style = viewport_style(doc, vp)?;
     let (w, h) = raster_size(vp, budget)?;
     let d = viewport_document(doc, vp);
-    let scene = mesh::build(&d);
+    let scene = viewport_scene(&d);
     let cam = viewport_camera(vp, &scene)?;
     // Sheets are white. A style with its own background keeps it.
     let style = RenderStyle {
@@ -407,7 +420,7 @@ pub fn hidden_line_prims(
         (size.y * k).round().max(1.0) as u32,
     );
     let d = viewport_document(doc, vp);
-    let scene = mesh::build(&d);
+    let scene = viewport_scene(&d);
     let Some(cam) = viewport_camera(vp, &scene) else {
         return;
     };

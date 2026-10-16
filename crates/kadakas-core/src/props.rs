@@ -270,6 +270,86 @@ fn landscape_area(
     Some((q.gross_area_m2, q.net_area_m2, ratio))
 }
 
+/// The name of a hardscape: its style name, or its material when it has no style.
+pub fn hardscape_label(doc: &Document, obj: &Object, material: &str) -> String {
+    crate::hardscape::data::style_id(obj)
+        .and_then(|id| doc.resources.get(id))
+        .map_or_else(|| material.to_string(), |r| r.name.clone())
+}
+
+/// Notes for a document that was made when `Style` and `Name` of a hardscape gave its material. A
+/// criteria text or a tag field that compares `Style` or `Name` with a material of a styled
+/// hardscape matched before and matches nothing now.
+pub fn hardscape_name_notes(doc: &Document) -> Vec<String> {
+    let mut materials: Vec<&str> = doc
+        .objects
+        .values()
+        .filter_map(|o| match &o.shape {
+            Shape::Hardscape { material, .. }
+                if !material.trim().is_empty()
+                    && crate::hardscape::data::style_id(o).is_some_and(|id| {
+                        doc.resources
+                            .get(id)
+                            .is_some_and(|r| !r.name.eq_ignore_ascii_case(material.trim()))
+                    }) =>
+            {
+                Some(material.trim())
+            }
+            _ => None,
+        })
+        .collect();
+    materials.sort_unstable();
+    materials.dedup();
+    if materials.is_empty() {
+        return Vec::new();
+    }
+    // The text of the places where a criteria or a tag field can be: the resources and the data of
+    // the objects (tags, legends). Spaces and case do not count in the comparison.
+    let mut text = String::new();
+    for r in doc.resources.iter() {
+        if let Ok(t) = serde_json::to_string(&r.body) {
+            text.push_str(&t);
+        }
+    }
+    for o in doc.objects.values() {
+        if let Ok(t) = serde_json::to_string(&o.data) {
+            text.push_str(&t);
+        }
+    }
+    let squeezed: String = text
+        .replace("\\\"", "\"")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect();
+    let found: Vec<&str> = materials
+        .into_iter()
+        .filter(|m| {
+            let m: String = m
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .flat_map(char::to_lowercase)
+                .collect();
+            ["style", "name"].iter().any(|f| {
+                ["=", "<>", "!="]
+                    .iter()
+                    .any(|op| squeezed.contains(&format!("{f}{op}\"{m}\"")))
+            })
+        })
+        .collect();
+    if found.is_empty() {
+        return Vec::new();
+    }
+    vec![format!(
+        "Style and Name of a hardscape are its style name now, not its material. A criteria or a tag in this document compares them with the material {}, which matches nothing now: use Material, or the name of the style",
+        found
+            .iter()
+            .map(|m| format!("\"{m}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )]
+}
+
 /// Properties of irrigation objects: `Model`, `Zone`, `Arc`, `Direction`, `Radius` (outlets),
 /// `LineType`, `Size`, `Material`, `Length` in m (lines), `StaticPressure` in kPa and
 /// `AvailableFlow` in l/min (POCs), `Kv`, `Controller`, `Station` (valves), `Stations`
@@ -395,7 +475,8 @@ fn builtin(
             Shape::Massing(m) => text(m.name.clone()),
             Shape::Extrude(e) => text(e.name.clone()),
             Shape::Sweep(s) => text(s.name.clone()),
-            Shape::Hardscape { material, .. } => text(material.clone()),
+            // The style name, like a plant. Without a style: the material, as the report does.
+            Shape::Hardscape { material, .. } => text(hardscape_label(doc, obj, material)),
             Shape::Text { text: t, .. } => text(t.clone()),
             _ => Prop::NotApplicable,
         },
@@ -788,6 +869,65 @@ mod tests {
     }
 
     #[test]
+    fn criteria_that_compare_a_name_with_a_material_get_a_note() {
+        use crate::hardscape::HardscapePatch;
+        let mut ed = Editor::default();
+        let style = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Paving".into(),
+                body: ResourceBody::HardscapeStyle(Box::new(
+                    crate::hardscape::style::HardscapeStyle {
+                        material: "Granite".into(),
+                        ..Default::default()
+                    },
+                )),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let h = ed
+            .execute(&Command::AddHardscape {
+                boundary: Some(square_ring(2000.0, 0.0)),
+                patch: Box::new(HardscapePatch {
+                    style: Some(style),
+                    ..Default::default()
+                }),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0];
+        assert!(hardscape_name_notes(ed.doc()).is_empty());
+        let tag = add(
+            &mut ed,
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 5.0,
+            },
+        );
+        let mut set = std::collections::BTreeMap::new();
+        set.insert(
+            "legend".to_string(),
+            json!({"criteria": "Kind = \"hardscape\" AND  Style=\"granite\""}),
+        );
+        ed.execute(&Command::SetData {
+            id: tag,
+            set,
+            remove: vec![],
+        })
+        .unwrap();
+        let notes = hardscape_name_notes(ed.doc());
+        assert_eq!(
+            notes.len(),
+            1,
+            "{:?}",
+            ed.doc().object(h.into()).map(|o| o.shape.clone())
+        );
+        assert!(notes[0].contains("Granite"));
+    }
+
+    #[test]
     fn hardscape_and_landscape_values_agree_with_the_reports() {
         use crate::ground::NoTerrain;
         use crate::hardscape::style::{Component, HardscapeStyle};
@@ -836,6 +976,9 @@ mod tests {
         assert_eq!(p(&ed, h, &["PlanArea"]), v(json!(q.plan_area_m2)));
         assert_eq!(p(&ed, h, &["SurfaceArea"]), v(json!(q.surface_area_m2)));
         assert_eq!(p(&ed, h, &["Perimeter"]), v(json!(q.perimeter_m)));
+        // Style and Name are the style name, not the material.
+        assert_eq!(p(&ed, h, &["Style"]), v(json!("Paving")));
+        assert_eq!(p(&ed, h, &["Name"]), v(json!("Paving")));
         assert_eq!(p(&ed, h, &["GrossArea"]), Prop::NotApplicable);
         // A slope makes the surface larger than the plan.
         ed.execute(&Command::SetHardscape {

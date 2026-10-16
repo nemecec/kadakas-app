@@ -387,6 +387,46 @@ fn anonymous_block_names_do_not_make_changes() {
 }
 
 #[test]
+fn a_block_with_a_new_record_handle_keeps_its_content_unchanged() {
+    let load = |t: &str| records(&parse::parse(t.as_bytes()).unwrap(), 1000).0;
+    // The same drawing saved again: the program gave the block definition (and the line in it)
+    // other handles. The names are the same.
+    let a = load(&file_with_block("TREE"));
+    let b = load(
+        &file_with_block("TREE")
+            .replace("\n330\n1F", "\n330\n2F")
+            .replace("LINE\n5\n21\n", "LINE\n5\n31\n"),
+    );
+    assert_ne!(a[1].scope, b[1].scope);
+    assert_eq!((a[1].block.as_str(), b[1].block.as_str()), ("TREE", "TREE"));
+    let d = diff(&a, &b, &Options::default());
+    assert_eq!(counts(&d), (2, 0, 0, 0), "{:?}", d.entries);
+    // The records keep their own scopes, because tags refer to them.
+    assert_ne!(b[1].scope, a[1].scope);
+    // A block of another name is another block: its content is removed and added.
+    let c = load(
+        &file_with_block("OAK")
+            .replace("\n330\n1F", "\n330\n2F")
+            .replace("LINE\n5\n21\n", "LINE\n5\n31\n"),
+    );
+    let d = diff(&a, &c, &Options::default());
+    assert_eq!(counts(&d), (0, 1, 1, 1), "{:?}", d.entries);
+    // Two blocks that lost their keys and have the same name on one side are not guessed.
+    let mut two = a.clone();
+    two.extend(
+        a.iter()
+            .filter(|r| r.scope.starts_with("block:"))
+            .cloned()
+            .map(|mut r| {
+                r.scope = "block:rec:99".into();
+                r
+            }),
+    );
+    let d = diff(&two, &b, &Options::default());
+    assert!(d.entries.iter().any(|e| e.status == Status::Removed));
+}
+
+#[test]
 fn stored_records_round_trip_and_stay_small() {
     let mut r = Rec::from_entity(
         &line_at(Some(0x2F), "Walls", (0.0, 0.0), (10.0, 5.0)),

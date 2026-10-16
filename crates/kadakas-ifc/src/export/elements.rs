@@ -20,6 +20,9 @@ struct SlabGeometry {
 impl<W: Write> Exporter<'_, W> {
     pub(super) fn object(&mut self, obj: &Object) -> Outcome {
         match &obj.shape {
+            Shape::Polyline { .. } if kadakas_site::grading::wall::data(obj).is_some() => {
+                self.wall(obj)
+            }
             Shape::Hardscape { .. } => self.hardscape(obj),
             Shape::LandscapeArea { .. } => self.landscape_area(obj),
             Shape::Plant { .. } | Shape::ExistingTree { .. } => self.plant(obj),
@@ -34,6 +37,9 @@ impl<W: Write> Exporter<'_, W> {
             } => skip("texture bed: IFC has no textures, the terrain keeps its plain color"),
             Shape::SiteModifier { .. } => skip("site modifier: its effect is in the terrain"),
             Shape::Viewport(_) | Shape::TitleBlock(_) => skip("sheet object (paper space)"),
+            Shape::Irrigation(_) => skip(
+                "irrigation object: IFC export does not write irrigation yet (the DXF export does)",
+            ),
             Shape::Locus3d { .. } | Shape::Polyline3d { .. } if !self.opts.include_2d => skip(
                 "survey geometry: the terrain carries it (set include_2d to export it as IfcAnnotation)",
             ),
@@ -321,10 +327,12 @@ impl<W: Write> Exporter<'_, W> {
         }
 
         let q = &g.quantities;
-        let base_name = if class == "IFCCOVERING" {
-            "Qto_CoveringBaseQuantities"
-        } else {
-            "Qto_SlabBaseQuantities"
+        // A standard quantity set only for the classes that have one. Another class (a wall, a
+        // proxy) gets the Kadakas quantities alone.
+        let base_name = match class {
+            "IFCCOVERING" => Some("Qto_CoveringBaseQuantities"),
+            "IFCSLAB" => Some("Qto_SlabBaseQuantities"),
+            _ => None,
         };
         let mut standard = vec![
             (
@@ -343,7 +351,9 @@ impl<W: Write> Exporter<'_, W> {
             standard.push(("volume", "GrossVolume".to_string(), q.volume_m3));
             standard.push(("volume", "NetVolume".to_string(), q.volume_m3));
         }
-        self.quantities(obj, base_name, &standard)?;
+        if let Some(base_name) = base_name {
+            self.quantities(obj, base_name, &standard)?;
+        }
         let mut extra = vec![("area", "SurfaceArea".to_string(), q.surface_area_m2)];
         for (i, l) in q.layers.iter().enumerate() {
             extra.push((

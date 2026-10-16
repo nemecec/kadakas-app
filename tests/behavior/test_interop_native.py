@@ -122,6 +122,27 @@ def test_the_georeference_is_a_geodata_object(cad, tmp_path):
     assert tuple(g.dxf.reference_point) == (385000.0, 6672000.0, 0.0)
 
 
+def test_readers_find_the_geodata_through_the_model_space(cad, tmp_path):
+    cad.result("georef.survey_point", {"model": [0, 0], "map": [385000, 6672000], "crs": "EPSG:3067"})
+    cad.execute({"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [1000, 0]}})
+    doc, r = export(cad, tmp_path, options={"unit": "m"})
+    assert r["report"]["georeferenced"] is True
+    # The way AutoCAD and ezdxf look: extension dictionary of the model space, entry ACAD_GEOGRAPHICDATA.
+    g = doc.modelspace().get_geodata()
+    assert g is not None
+    assert "EPSG:3067" in g.coordinate_system_definition
+    assert tuple(g.dxf.reference_point) == (385000.0, 6672000.0, 0.0)
+    assert tuple(g.dxf.design_point) == (385000.0, 6672000.0, 0.0)
+    xdict = doc.modelspace().block_record.get_extension_dict()
+    assert xdict["ACAD_GEOGRAPHICDATA"] is g
+    assert g.dxf.owner == xdict.dictionary.dxf.handle
+    # A document without a georeference has none.
+    cad2 = cad  # same session: clear the georeference
+    cad2.execute({"op": "set_georeference", "georef": None})
+    doc, r = export(cad2, tmp_path, "none.dxf")
+    assert doc.modelspace().get_geodata() is None and r["report"]["georeferenced"] is False
+
+
 def test_a_crs_without_an_epsg_code_gets_a_note_and_no_geodata(cad, tmp_path):
     cad.execute({"op": "set_georeference", "georef": {"crs": "PROJCS[\"x\"]", "origin": [100, 200]}})
     cad.execute({"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [1000, 0]}})

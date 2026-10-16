@@ -50,6 +50,8 @@ mod tests;
 mod tests_massing;
 #[cfg(test)]
 mod tests_solids;
+#[cfg(test)]
+mod tests_wall;
 
 use std::io::Write;
 use std::path::Path;

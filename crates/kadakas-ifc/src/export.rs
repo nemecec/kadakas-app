@@ -12,6 +12,7 @@ mod finish;
 mod massing;
 mod schema;
 mod solids;
+mod wall;
 
 pub use schema::Schema;
 
@@ -56,7 +57,25 @@ const MESH_GREY: [u8; 4] = [190, 190, 190, 255];
 const MIN_SIZE: f64 = 10.0;
 
 /// The IFC classes that the writer can make, with their entity names and predefined types.
-const CLASSES: [(&str, &str, &[&str]); 4] = [
+const CLASSES: [(&str, &str, &[&str]); 5] = [
+    (
+        "IfcWall",
+        "IFCWALL",
+        &[
+            "MOVABLE",
+            "PARAPET",
+            "PARTITIONING",
+            "PLUMBINGWALL",
+            "SHEAR",
+            "SOLIDWALL",
+            "STANDARD",
+            "POLYGONAL",
+            "ELEMENTEDWALL",
+            "RETAININGWALL",
+            "USERDEFINED",
+            "NOTDEFINED",
+        ],
+    ),
     (
         "IfcSlab",
         "IFCSLAB",
@@ -112,6 +131,8 @@ const CLASSES: [(&str, &str, &[&str]); 4] = [
 fn default_class(kind: &str) -> (&'static str, Option<&'static str>) {
     match kind {
         "hardscape" => ("IfcSlab", Some("BASESLAB")),
+        "wall" => ("IfcWall", Some("SOLIDWALL")),
+        "retaining_wall" => ("IfcWall", Some("RETAININGWALL")),
         "site_model" => ("IfcGeographicElement", Some("TERRAIN")),
         "massing" | "mesh3d" | "extrude" | "sweep" => {
             ("IfcBuildingElementProxy", Some("NOTDEFINED"))
@@ -149,6 +170,8 @@ pub struct Exporter<'a, W: Write> {
     opts: &'a IfcOptions,
     map: DataMap,
     ground: SiteTerrain<'a>,
+    /// The site models, for the walls.
+    cache: &'a SiteCache,
     schema: Schema,
     /// `IfcOwnerHistory` (IFC2x3 needs one on every rooted entity).
     owner_history: Option<u64>,
@@ -214,6 +237,7 @@ impl<'a, W: Write> Exporter<'a, W> {
             opts,
             map,
             ground: SiteTerrain::new(cache, 0, doc),
+            cache,
             schema,
             owner_history: None,
             style_assignments: BTreeMap::new(),
@@ -255,9 +279,15 @@ impl<'a, W: Write> Exporter<'a, W> {
             } else {
                 self.object(obj)?
             };
+            // A wall is a polyline with settings: the report names it by what it is.
+            let kind = if kadakas_site::grading::wall::data(obj).is_some() {
+                "wall"
+            } else {
+                obj.shape.kind()
+            };
             match reason {
-                None => self.report.count(obj.shape.kind()),
-                Some(r) => self.report.skip(obj.shape.kind(), &r),
+                None => self.report.count(kind),
+                Some(r) => self.report.skip(kind, &r),
             }
         }
         self.flush()?;
