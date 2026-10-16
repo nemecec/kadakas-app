@@ -37,6 +37,10 @@ pub const KEY: &str = "pattern_plan";
 pub const MAX_ZONES: usize = 1000;
 /// Most courses of one hardscape.
 pub const MAX_COURSES: usize = 100;
+/// Most zones that the split lines of one hardscape may make. Measured (`measure_zones`): 10,000
+/// zones are cut in 19 ms and laid in 0.34 s, so time is not the reason for the bound; every zone
+/// is a group with its own layers in the DXF and its own row in the report.
+pub const MAX_ZONE_COUNT: usize = 1000;
 
 /// A split line: a drawn object that it follows, and the points as a copy.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -731,6 +735,12 @@ pub fn plan_groups(
         } else {
             out.splits = effective_splits(doc, &plan, tol, &mut out.notes);
             let split = zones::split(&field, &out.splits, tol)?;
+            if split.zones.len() > MAX_ZONE_COUNT {
+                return Err(format!(
+                    "the split lines make {} zones, more than the limit of {MAX_ZONE_COUNT}. Use fewer lines",
+                    split.zones.len()
+                ));
+            }
             for e in &split.loose_ends {
                 out.notes.push(format!(
                     "split line {} stops inside the area at ({:.1}, {:.1}), {:.1} mm from the nearest edge or line: it cuts nothing there",

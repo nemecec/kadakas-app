@@ -979,6 +979,40 @@ class Document:
             params["ids"] = [str(i) for i in ids]
         return self.api.hardscape_from_shapes(**params)
 
+    def region_from_curves(self, ids: list[Id] | None = None, **params: Any) -> JsonDict:
+        """Join loose lines, arcs and polylines into closed regions with holes. Gaps up to
+        ``tolerance`` (mm) are closed and listed; ``dead_ends`` says what does not close, with
+        positions. ``create`` (``"hardscape"``, ``"landscape_area"``, ``"polyline"``) makes objects in one
+        undo step. Returns ``{regions, closed_gaps, dead_ends, complete, created, ...}``."""
+        if ids is not None:
+            params["ids"] = [str(i) for i in ids]
+        return self.api.region_from_curves(**params)
+
+    def hardscape_split(self, id: Id, **params: Any) -> JsonDict:
+        """Split a hardscape into zones with ``lines`` (object IDs or vertex lists). The zones
+        share their edges exactly. ``zones`` gives the settings of each zone (pattern, origin, angle,
+        alignment), tied to a zone by ``index`` or ``seed``. A drawn line that is followed moves
+        the zones when it moves. Returns ``{zones, split_lines, area_m2, zones_area_m2, notes}``."""
+        return self.api.hardscape_split(id=str(id), **params)
+
+    def hardscape_course(self, id: Id, **params: Any) -> JsonDict:
+        """Add or replace courses along a path (``courses=[{name, along="outline", corner, ...}]``
+        or the fields of one course). The field is cut by the course with the gap kept. Returns
+        ``{courses: [{name, units, corners, length_m, joints}], aligned, notes}``."""
+        return self.api.hardscape_course(id=str(id), **params)
+
+    def hardscape_plan(self, id: Id, **params: Any) -> JsonDict:
+        """The zones and courses of a hardscape as they are now, with notes."""
+        return self.api.hardscape_plan(id=str(id), **params)
+
+    def pattern_check(self, ids: list[Id] | None = None, **params: Any) -> JsonDict:
+        """Check the units of hardscapes: overlaps, joints too narrow or too wide, small pieces,
+        wrong sizes, units outside their area, coverage. Every finding has a position ``at``.
+        Returns ``{objects: [{id, ok, counts, findings, ...}], totals}``."""
+        if ids is not None:
+            params["ids"] = [str(i) for i in ids]
+        return self.api.unit_pattern_check(**params)
+
     def pattern_layout(self, **params: Any) -> JsonDict:
         """Lay units in a bond over a closed shape (``id``) or a ``region``: the units, the gaps
         and the counts. See ``pattern.layout`` in ``describe``."""

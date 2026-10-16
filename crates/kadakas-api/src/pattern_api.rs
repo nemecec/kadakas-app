@@ -65,13 +65,16 @@ fn describe_base() -> Value {
         "workflow_parking_lot": [
             {"step": 1, "method": "import.file", "params": {"path": "parking.dxf"}, "why": "Read the survey of the lot."},
             {"step": 2, "method": "document.summary", "params": {}, "why": "The classes list gives the ID of the class of the lot layer."},
-            {"step": 3, "method": "objects.list", "params": {"kind": "polyline", "class": "<class ID>"}, "why": "The closed polylines of the lot outline and the islands."},
+            {"step": 3, "method": "objects.list", "params": {"class": "<class ID>"}, "why": "The lines, arcs and polylines of the lot outline, the islands and the stall lines."},
             {"step": 4, "method": "hardscape_style.create", "params": {"name": "Pavers 200x100", "thickness": 80, "joints": {"kind": "running_bond", "unit_length": 200, "unit_width": 100, "spacing": 5}, "border": {"width": 150, "material": "Kerb"}}},
-            {"step": 5, "method": "hardscape.from_shapes", "params": {"ids": ["<polyline ids>"], "style": "Pavers 200x100", "holes_from_inner": true}, "why": "The lot becomes a hardscape; islands inside it become holes. A shape that overlaps another in part is left out and named in skipped."},
-            {"step": 6, "method": "hardscape.set", "params": {"id": "<hardscape id>", "align_to_edge": 0}, "why": "Rows run along the first edge (the kerb); sets origin and angle."},
-            {"step": 7, "method": "render.png", "params": {"view": "top"}, "why": "Look at the pattern before you count it."},
-            {"step": 8, "method": "report.unit_pattern", "params": {"waste_percent": 5, "gap_length": true}, "why": "Whole, cut and sliver units, area laid, gap length and the order quantity."},
-            {"step": 9, "method": "export.file", "params": {"path": "parking-paving.dxf", "format": "dxf", "options": {"patterns": "units"}}, "why": "The units as closed polylines for the contractor. The counts equal report.unit_pattern."}
+            {"step": 5, "method": "region.from_curves", "params": {"ids": ["<outline and island ids>"], "tolerance": 2, "dry_run": true}, "why": "Joins loose curves into closed regions. Gaps up to the tolerance are closed and listed; dead_ends say what does not close (position, length, nearest end). Repeat with fixed drawing or a larger tolerance until complete is true. Closed polylines can go to hardscape.from_shapes instead."},
+            {"step": 6, "method": "region.from_curves", "params": {"ids": ["<outline and island ids>"], "tolerance": 2, "create": "hardscape", "style": "Pavers 200x100"}, "why": "The lot becomes a hardscape; islands inside it become holes."},
+            {"step": 7, "method": "hardscape.split", "params": {"id": "<hardscape id>", "lines": ["<stall line ids>", "<drive aisle line ids>"], "zones": [{"index": 0, "name": "Stalls", "angle": 90}]}, "why": "Zones for the stall rows and the drive aisle that share their edges exactly. Each zone can have its own pattern, origin and angle. Moving a followed line moves the zones."},
+            {"step": 8, "method": "hardscape.course", "params": {"id": "<hardscape id>", "courses": [{"name": "Kerb", "along": "outline", "corner": "miter", "align_field": true}]}, "why": "A soldier course along the kerb. The field is cut by it with the joint kept, and starts at its edge."},
+            {"step": 9, "method": "render.png", "params": {"view": "top"}, "why": "Look at the pattern before you count it."},
+            {"step": 10, "method": "unit_pattern.check", "params": {"ids": ["<hardscape id>"]}, "why": "Overlaps, joints too narrow or too wide, small pieces, wrong sizes, units outside their area, coverage. Every finding has a position to draw."},
+            {"step": 11, "method": "report.unit_pattern", "params": {"waste_percent": 5, "gap_length": true}, "why": "Whole, cut and sliver units, area laid, gap length and the order quantity, per zone and course (groups) and in total."},
+            {"step": 12, "method": "export.file", "params": {"path": "parking-paving.dxf", "format": "dxf", "options": {"patterns": "blocks"}}, "why": "Whole units as INSERTs of one block per unit type, cut units as closed polylines, each zone and course on its own layers. patterns units writes every unit as a polyline. The counts equal report.unit_pattern."}
         ],
         "examples": [
             {"method": "unit_pattern.layout", "params": {"id": "00000000-0000-0000-0000-000000000010", "pattern": {"bond": "herringbone", "unit_length": 200, "unit_width": 100, "gap": 4}, "angle": 45, "include": ["units"], "limit": 100}},
@@ -518,6 +521,10 @@ fn group_json(g: &Group, sum: &Summary) -> Value {
     v["role"] = json!(g.role);
     v["layer_suffix"] = json!(g.slug);
     if let Body::Course(c) = &g.body {
+        // The area of a course is the strip of its units, not the area of the hardscape.
+        let strip = c.length * c.depth / 1e6;
+        v["region_area_m2"] = json!(strip);
+        v["gap_area_m2"] = json!((strip - sum.area_laid_m2).max(0.0));
         v["course"] = json!({
             "length_m": c.length / 1000.0,
             "corners": c.corners,

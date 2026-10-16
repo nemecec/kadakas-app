@@ -134,8 +134,9 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "hardscape_landscape",
-        summary: "Hardscape objects and styles (holes, pattern origin and angle, hardscape.from_shapes for closed outlines), landscape areas and their styles. Unit patterns (pavers, tiles) over any closed shape: unit_pattern.layout, unit_pattern.to_objects, unit_pattern.module_* (module patterns from presets, shapes or a DXF block); the counts are in report.unit_pattern.",
+        summary: "Hardscape objects and styles (holes, pattern origin and angle, hardscape.from_shapes for closed outlines), landscape areas and their styles. Regions from loose lines and arcs (region.from_curves: closes gaps, reports what does not close). Zones and courses of a hardscape (hardscape.split, hardscape.course, hardscape.plan). Unit patterns (pavers, tiles) over any closed shape: unit_pattern.layout, unit_pattern.to_objects, unit_pattern.check (overlaps, joints, small pieces, sizes, coverage), unit_pattern.module_* (module patterns from presets, shapes or a DXF block); the counts are in report.unit_pattern (per zone and course, and in total); export.file with patterns blocks writes whole units as INSERTs.",
         prefixes: &[
+            "region",
             "hardscape",
             "hardscape_style",
             "unit_pattern",

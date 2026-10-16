@@ -165,6 +165,8 @@ pub struct Found {
     pub closed_gap_count: usize,
     pub dead_ends: Vec<DeadEnd>,
     pub dead_end_count: usize,
+    /// Dead ends that are part of a shape that does not close (the others are stubs).
+    pub open_dead_ends: usize,
     pub ignored_short: usize,
     pub duplicates: usize,
 }
@@ -177,6 +179,7 @@ pub fn from_curves(curves: &[Curve], tolerance: f64) -> Result<Found, arrangemen
         closed_gap_count: a.closed_gap_count,
         dead_ends: a.dead_ends.clone(),
         dead_end_count: a.dead_end_count,
+        open_dead_ends: a.open_dead_ends,
         ignored_short: a.ignored_short,
         duplicates: a.duplicates,
         ..Default::default()

@@ -24,7 +24,7 @@ use crate::{RpcError, Session};
 
 pub const REGION_FROM_CURVES: (&str, &str) = (
     "region.from_curves",
-    "Join loose lines, arcs, circles, rectangles and open or closed polylines into closed regions with holes (for example a parking lot drawn as separate lines and arcs). The curves are split where they cross; ends that lie within the tolerance of each other or of another curve are joined (a gap or a small overshoot is closed); dead ends are cut off; the areas that are left are traced. Nothing is guessed: a gap wider than the tolerance stays open, the area behind it is not made, and the dead ends are reported with their position, their length and the nearest other end, so that you can draw the place. params: {ids? (default: the selection), tolerance? (mm, default 1: the widest gap that is closed), create? (hardscape | landscape_area | polyline: make objects from the regions in one undo step; without it nothing is created), depths? (even | odd | all: which regions become objects; default even for hardscape and landscape_area, all for polyline; an even depth is an area to fill, an odd depth is an island inside a hole of an area), style? (hardscape style, ID or name, for create hardscape), name? (landscape area name), min_area_m2? (leave out smaller regions), layer?, class? (default: those of the first source object), delete_source? (delete the curves that only made created regions), dry_run?}. Returns {regions: [{index, outline: [vertices] (counterclockwise; a point on each arc is a vertex of kind point_on_arc), holes: [[vertices]], area_m2, depth, role (area | island), inside: [x, y], bbox: {lo, hi}, sources: [object IDs]}], closed_gaps: {count, listed: [{at, size_mm}]}, dead_ends: {count, listed: [{at, length_mm, nearest: {at, distance_mm}}]}, complete (no dead ends), skipped: [{id, reason}], ignored_short, duplicates, created: [{region, id, kind}], tolerance_mm, dry_run}. A region inside a hole of another region is an island: its own region has an odd depth, and the outer region lists it as a hole, so create hardscape (even depths) makes the lot with the island as a hole.",
+    "Join loose lines, arcs, circles, rectangles and open or closed polylines into closed regions with holes (for example a parking lot drawn as separate lines and arcs). The curves are split where they cross; ends that lie within the tolerance of each other or of another curve are joined (a gap or a small overshoot is closed); dead ends are cut off; the areas that are left are traced. Nothing is guessed: a gap wider than the tolerance stays open, the area behind it is not made, and the dead ends are reported with their position, their length and the nearest other end, so that you can draw the place. A dead end is open (part of a shape that does not close) or a stub (a line that overshoots a corner or stops at a junction: harmless, but listed). params: {ids? (default: the selection), tolerance? (mm, default 1: the widest gap that is closed), create? (hardscape | landscape_area | polyline: make objects from the regions in one undo step; without it nothing is created), depths? (even | odd | all: which regions become objects; default even for hardscape and landscape_area, all for polyline; an even depth is an area to fill, an odd depth is an island inside a hole of an area), style? (hardscape style, ID or name, for create hardscape), name? (landscape area name), min_area_m2? (leave out smaller regions), layer?, class? (default: those of the first source object), delete_source? (delete the curves that only made created regions), dry_run?}. Returns {regions: [{index, outline: [vertices] (counterclockwise; a point on each arc is a vertex of kind point_on_arc), holes: [[vertices]], area_m2, depth, role (area | island), inside: [x, y], bbox: {lo, hi}, sources: [object IDs]}], closed_gaps: {count, listed: [{at, size_mm}]}, dead_ends: {count, listed: [{at, length_mm, nearest: {at, distance_mm}}]}, complete (no dead ends), skipped: [{id, reason}], ignored_short, duplicates, created: [{region, id, kind}], tolerance_mm, dry_run}. A region inside a hole of another region is an island: its own region has an odd depth, and the outer region lists it as a hole, so create hardscape (even depths) makes the lot with the island as a hole.",
 );
 pub const HARDSCAPE_SPLIT: (&str, &str) = (
     "hardscape.split",
@@ -272,13 +272,16 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         },
         "dead_ends": {
             "count": found.dead_end_count,
+            "open": found.open_dead_ends,
+            "stubs": found.dead_end_count - found.open_dead_ends,
             "listed": found.dead_ends.iter().map(|d| json!({
                 "at": xy(d.at),
+                "kind": if d.open { "open" } else { "stub" },
                 "length_mm": d.length,
                 "nearest": d.nearest.map(|(p, dist)| json!({"at": xy(p), "distance_mm": dist})),
             })).collect::<Vec<_>>(),
         },
-        "complete": found.dead_end_count == 0,
+        "complete": found.open_dead_ends == 0,
         "skipped": skipped,
         "ignored_short": found.ignored_short,
         "duplicates": found.duplicates,
@@ -1023,7 +1026,7 @@ fn plan_clear(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
 
 fn check_options(m: &Map<String, Value>, max_units: usize) -> Result<CheckOptions, RpcError> {
     let mut o = CheckOptions {
-        max_units: max_units.min(kadakas_core::layout::MAX_UNITS),
+        max_units: max_units.min(check::MAX_UNITS),
         ..Default::default()
     };
     let num = |k: &str, lo: f64, hi: f64| -> Result<Option<f64>, RpcError> {

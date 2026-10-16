@@ -34,6 +34,11 @@ use super::plan::{Body, Group};
 use super::units::{LayoutError, Limits, Unit};
 use super::{Region, noise_area};
 
+/// Most units that one check lays and tests. Measured (`measure_check`): 233,000 units take 0.5 s
+/// and 120 MB (1.7 s on a pattern turned by 45 degrees, where the boxes of neighbours overlap), so
+/// 500,000 units are about 260 MB and 4 s at most.
+pub const MAX_UNITS: usize = 500_000;
+
 /// The options of a check.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CheckOptions {
@@ -76,7 +81,7 @@ impl Default for CheckOptions {
             coverage_tol: 0.02,
             trim: super::units::DEFAULT_TRIM,
             max_findings: 200,
-            max_units: super::MAX_UNITS,
+            max_units: MAX_UNITS,
         }
     }
 }

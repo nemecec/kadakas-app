@@ -298,3 +298,30 @@ fn zones_and_courses_are_exported_by_group() {
     }
 }
 
+
+/// Size and time of the export of a lot of 5,000 m2 (about 233,000 units): polylines against
+/// blocks. Run in release mode:
+/// `cargo test -p kadakas-io --release --test pattern_blocks measure_blocks -- --ignored --nocapture`
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn measure_blocks() {
+    for angle in [0.0, 17.0] {
+        let (ed, _) = lot(JointKind::RunningBond, 100_000.0, 50_000.0, angle);
+        let mut sizes = Vec::new();
+        for mode in [PatternExport::Units, PatternExport::Blocks] {
+            let t = std::time::Instant::now();
+            let text = export(ed.doc(), mode);
+            let secs = t.elapsed().as_secs_f64();
+            let (inserts, _, polys) = read(&text);
+            let n = inserts.len() + polys.values().map(Vec::len).sum::<usize>();
+            println!(
+                "angle {angle}: {mode:?}: {:.1} MB, {:.2} s, {} inserts + polylines (with the outline)",
+                text.len() as f64 / 1e6,
+                secs,
+                n
+            );
+            sizes.push(text.len());
+        }
+        println!("angle {angle}: blocks are {:.2} times smaller", sizes[0] as f64 / sizes[1] as f64);
+    }
+}

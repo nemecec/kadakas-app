@@ -878,6 +878,48 @@ class Api:
         JSON-RPC method ``report.unit_pattern``."""
         return self._call("report.unit_pattern", params or None)
 
+    def region_from_curves(self, **params: Any) -> Any:
+        """Join loose lines, arcs, circles, rectangles and open or closed polylines into closed regions with holes (for example a parking lot drawn as separate lines and arcs). The curves are split where they cross; ends that lie within the tolerance of each other or of another curve are joined (a gap or a small overshoot is closed); dead ends are cut off; the areas that are left are traced. Nothing is guessed: a gap wider than the tolerance stays open, the area behind it is not made, and the dead ends are reported with their position, their length and the nearest other end, so that you can draw the place. params: {ids? (default: the selection), tolerance? (mm, default 1: the widest gap that is closed), create? (hardscape | landscape_area | polyline: make objects from the regions in one undo step; without it nothing is created), depths? (even | odd | all: which regions become objects; default even for hardscape and landscape_area, all for polyline; an even depth is an area to fill, an odd depth is an island inside a hole of an area), style? (hardscape style, ID or name, for create hardscape), name? (landscape area name), min_area_m2? (leave out smaller regions), layer?, class? (default: those of the first source object), delete_source? (delete the curves that only made created regions), dry_run?}. Returns {regions: [{index, outline: [vertices] (counterclockwise; a point on each arc is a vertex of kind point_on_arc), holes: [[vertices]], area_m2, depth, role (area | island), inside: [x, y], bbox: {lo, hi}, sources: [object IDs]}], closed_gaps: {count, listed: [{at, size_mm}]}, dead_ends: {count, listed: [{at, length_mm, nearest: {at, distance_mm}}]}, complete (no dead ends), skipped: [{id, reason}], ignored_short, duplicates, created: [{region, id, kind}], tolerance_mm, dry_run}. A region inside a hole of another region is an island: its own region has an odd depth, and the outer region lists it as a hole, so create hardscape (even depths) makes the lot with the island as a hole.
+
+        JSON-RPC method ``region.from_curves``."""
+        return self._call("region.from_curves", params or None)
+
+    def hardscape_split(self, **params: Any) -> Any:
+        """Split a hardscape into zones with lines (stall rows, a driveway, a fire lane): the zones share their edges exactly, so there are no slivers and no overlaps, and the areas of the zones add up to the area of the hardscape. Each zone can have a pattern, origin, angle or alignment of its own. The split lines and the zone settings are data of the hardscape (undoable, they move with it). A split line that follows a drawn line, arc or polyline (source) is read again each time: move the line and the zones follow. params: {id, lines? ([object IDs or [vertices]]: replaces the split lines; [] removes them; an ID follows the object unless follow is false), follow? (default true), zones? ([{index? (the number of the zone in the reply, from 1... see zones in the reply: index counts from 0), seed? ([x, y]: a point inside the zone; the settings belong to the zone that holds it, also after a line moves), name?, pattern? (as the pattern of unit_pattern.layout), origin?, angle?, align_to_edge? (n: start at vertex n of the outline of the zone), align_to_split? (n: start at the first point of split line n and run along its first segment)}]: replaces the zone settings), tolerance? (mm, default 1: an end of a line this close to an edge joins it; the edge of the hardscape never moves)}. A zone without settings continues the pattern of the hardscape (the same lattice, cut at the zone edge). Returns {zones: [{index, name, area_m2, inside: [x, y], bbox: {lo, hi}, has_settings}], split_lines, area_m2, zones_area_m2, notes: [text]} . A split line that stops short of the edge, or cuts nothing, is a note with its position and the gap. Counts per zone and in total are in report.unit_pattern (groups), the check in unit_pattern.check, the DXF has layers per zone.
+
+        JSON-RPC method ``hardscape.split``."""
+        return self._call("hardscape.split", params or None)
+
+    def hardscape_course(self, **params: Any) -> Any:
+        """Add or replace courses along a path: a row of units along a polyline or a curve, on one side of the line or centered (a soldier course along a kerb, a border round an island). The course takes its area from the pattern next to it: the field is cut by the course with a joint of the gap kept, so they never overlap. The units are counted, reported and exported like the others (the unit type has the name of the stone, so a soldier course and the field of the same stone are added up). Corner rules: miter (the units of both legs are cut at the mitre line), butt (the first leg runs on to the end of the corner, the second butts against it), corner_unit (one unit of its own fills the corner). On a curve the units stay straight and are placed along the curve; the joints taper, and the reply and the report give the narrowest and the widest joint. params: {id, courses: [{name, path? ([vertices], curves allowed) | source? (a line, arc or polyline: followed, read again each time) | along? (outline | "hole:N": the edge of the hardscape or of its Nth hole, inside the kerb border), side? (left | right | center | inside | outside; default for outline: inside, for a hole: outside), offset? (mm to the left of the path), closed?, orientation? (soldier: the long side of the stone across the path (default) | stretcher: along it), unit_length? (mm, along the path) and unit_width? (mm, across) (default: from the stone of the style by orientation), gap? (default: the joint of the style), corner? (default miter), unit? (name of the unit type, default the size of the stone of the style), align_field? (true: the pattern of the hardscape starts at the inner edge of the course, so the first row of the field is whole and the joint to the course is the gap; sets the origin and the angle of the hardscape; needs a bond, not a module)}] (or the fields of one course directly in params)}. A course with the same name is replaced. Returns {courses: [{name, units, corners, length_m, joints: {count, narrowest_mm, widest_mm}}], notes}. A corner that turns by more than 150 degrees is refused.
+
+        JSON-RPC method ``hardscape.course``."""
+        return self._call("hardscape.course", params or None)
+
+    def hardscape_course_remove(self, **params: Any) -> Any:
+        """Remove courses from a hardscape. params: {id, names? ([text]), all? (true)}. The field gets its area back.
+
+        JSON-RPC method ``hardscape.course_remove``."""
+        return self._call("hardscape.course_remove", params or None)
+
+    def hardscape_plan(self, **params: Any) -> Any:
+        """Read the zones and courses of a hardscape: the plan (split lines, zone settings, courses), the zones as they are now (areas, a point inside, the outline), the courses (units, corners, length, joints) and the notes (a split line that stops short, a setting that no zone holds). params: {id, outlines? (true: include the outline of each zone)}. Returns {plan, zones: [{index, name, area_m2, inside, bbox, has_settings, outline?}], courses, groups: [{name, role, layer_suffix, area_m2}], notes, area_m2}.
+
+        JSON-RPC method ``hardscape.plan``."""
+        return self._call("hardscape.plan", params or None)
+
+    def hardscape_plan_clear(self, **params: Any) -> Any:
+        """Remove the zones and courses of a hardscape in one undo step. params: {id | ids, what? (all (default) | splits | zones | courses): splits removes the split lines and the zone settings, zones the zone settings only}.
+
+        JSON-RPC method ``hardscape.plan_clear``."""
+        return self._call("hardscape.plan_clear", params or None)
+
+    def unit_pattern_check(self, **params: Any) -> Any:
+        """Check the units of hardscapes (with their zones and courses) for the faults that cost money on site, with positions so that you can draw the places. The units are laid and tested as they are: overlaps between units (also a course against the field and a zone against a zone), joints narrower or wider than a limit, pieces under a minimum size, whole units of the wrong size, units that reach out of their area (for example over a zone edge), and the area covered against the area (a group that is much more open than its joints explain has missing units). params: {ids? (default: every hardscape with a joint pattern), visible_only?, overlap_mm2? (default 1: smaller overlaps do not count), overlap_depth_mm? (default 0.15: thinner overlaps do not count; a unit that crosses an edge by less than the trim is kept whole), min_joint_mm? (default: the gap less 1), max_joint_mm? (default: the widest joint of the pattern plus 1), min_share? (default 0.05: a cut unit with less of a full unit is a small piece), min_width_mm? (default off), size_tol_mm? (default 0.05), coverage_tol? (default 0.02), trim? (default 0.1), max_findings? (per kind, default 200, at most 10000; the counts are exact), pattern?, origin?, angle?, align_to_edge?, tolerance? (as unit_pattern.layout, to check a variant)}. Returns {objects: [{id, name, ok, units, counts: {overlap, joint_too_narrow, joint_too_wide, small_piece, wrong_size, outside_area, coverage}, findings: [{kind, group, other_group?, at: [x, y], size, message}], truncated: [kinds], coverage: [{group, role, region_area_m2, units_area_m2, units, open_share, expected_open_share}], area_m2, units_area_m2, notes}], totals: {units, counts, ok, complete}}. size is the overlap in mm2, the joint in mm, the share of a full unit, the area outside in mm2, the difference in mm2, or the open share. Units of two zones that meet at the zone edge have no joint by design and are not reported. An object that cannot be checked is a row with an error and complete is false.
+
+        JSON-RPC method ``unit_pattern.check``."""
+        return self._call("unit_pattern.check", params or None)
+
     def landscape_area_add(self, **params: Any) -> Any:
         """Add a landscape area in one undo step. params: {boundary: [vertices], name?, style? (ID or name), holes? ([[vertices]], parts that stay empty and lie inside the boundary), exclude? ([object IDs] whose outline becomes a hole: rect, circle, closed polyline, hardscape, landscape area), show_plants?, drape?, layer?, class?}. Returns {id}.
 
@@ -2517,6 +2559,13 @@ METHOD_NAMES: tuple[str, ...] = (
     "unit_pattern.module_from_shapes",
     "unit_pattern.module_from_block",
     "report.unit_pattern",
+    "region.from_curves",
+    "hardscape.split",
+    "hardscape.course",
+    "hardscape.course_remove",
+    "hardscape.plan",
+    "hardscape.plan_clear",
+    "unit_pattern.check",
     "landscape_area.add",
     "landscape_area.set",
     "report.hardscape",

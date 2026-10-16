@@ -95,7 +95,9 @@ fn what_does_not_close_is_reported_not_guessed() {
     assert_eq!(r["created"].as_array().unwrap().len(), 0);
     let d = &r["dead_ends"];
     assert_eq!(d["count"], 2);
+    assert_eq!((d["open"].as_u64(), d["stubs"].as_u64()), (Some(2), Some(0)));
     let first = &d["listed"][0];
+    assert_eq!(first["kind"], "open");
     assert!((first["nearest"]["distance_mm"].as_f64().unwrap() - 30.0).abs() < 1e-9);
     // A bigger tolerance closes it, and says so.
     let r = ok(&mut s, "region.from_curves", json!({"ids": ids, "tolerance": 40, "create": "polyline"}));

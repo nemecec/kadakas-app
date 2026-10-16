@@ -26,7 +26,8 @@
 //! - `corner_unit`: one unit of its own fills the corner (the square of the depth for a right
 //!   angle), and both runs stop a gap short of it.
 //!
-//! A corner sharper than [`MAX_TURN_DEG`] is refused: its mitre would be very long.
+//! A corner that turns by less than [`MIN_RULE_TURN_DEG`] is always a mitre. A corner sharper than
+//! [`MAX_TURN_DEG`] is refused: its mitre would be very long.
 //!
 //! **The area that the course takes.** The patterns next to a course must not overlap it, and must
 //! keep a gap from it. [`Course::band`] is the union of the strip along the path (the depth plus a
@@ -45,6 +46,9 @@ use crate::curve::{self, Seg, Vertex};
 pub const MAX_TURN_DEG: f64 = 150.0;
 /// A turn smaller than this, in degrees, at a vertex where two segments meet is no corner.
 pub const SMOOTH_DEG: f64 = 0.5;
+/// A corner that turns by less than this, in degrees, is always a mitre: the butt and the corner
+/// unit need a real angle (on a gentle bend the second leg would have to start metres later).
+pub const MIN_RULE_TURN_DEG: f64 = 30.0;
 /// Largest step of the points on a curve, in radians (2 degrees).
 const CURVE_STEP: f64 = 0.0349;
 /// Chord error of the points on a curve, in mm.
@@ -689,7 +693,12 @@ pub fn lay(spec: &Spec, max_units: usize) -> Result<Course, String> {
             };
             let cp = pts[c];
             let (u1, u2) = (dir_in(c), dir_out(c));
-            match spec.corner {
+            let rule = if u1.angle_to(u2).abs().to_degrees() < MIN_RULE_TURN_DEG {
+                Corner::Miter
+            } else {
+                spec.corner
+            };
+            match rule {
                 Corner::Miter => {
                     let nn = (u1 + u2).try_normalize().unwrap_or(u1);
                     runs[r1].end = Some(Plane {
@@ -795,6 +804,21 @@ fn lay_run(
     e.push(run.pts[m - 1] + u_end * ext);
     let poly = Poly::new(e);
     let straight = m == 2;
+    // On a gentle curve the straight units stay inside the strip of the course (a unit of length a
+    // on a bend of radius R is off the curve by a^2 / 8R at its middle, and its far corners by about
+    // depth * (a / 2R)^2 / 2): such units need no area of their own.
+    let gentle = straight || {
+        let mut kmax: f64 = 0.0;
+        for i in 1..m - 1 {
+            let (d0, d1) = (run.pts[i] - run.pts[i - 1], run.pts[i + 1] - run.pts[i]);
+            let len = (d0.length() + d1.length()) / 2.0;
+            if len > 0.0 {
+                kmax = kmax.max(d0.angle_to(d1).abs() / len);
+            }
+        }
+        let sag = kmax * a * a / 8.0 + spec.depth * (kmax * a / 2.0).powi(2) / 2.0;
+        sag <= g / 2.0
+    };
     let s_anchor = ext + run.anchor;
     let mut starts: Vec<f64> = Vec::new();
     // Back from the anchor on the straight piece before the run.
@@ -899,7 +923,7 @@ fn lay_run(
             poly: p,
             corner_unit: false,
             full_area: full,
-            inside_strip: whole && straight,
+            inside_strip: whole && gentle,
         });
         if whole {
             if let Some(pr) = &last_whole {

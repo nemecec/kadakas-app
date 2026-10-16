@@ -176,6 +176,19 @@ fn a_butt_corner_and_a_corner_unit() {
 }
 
 #[test]
+fn a_gentle_corner_is_always_a_miter() {
+    // A turn of 10 degrees with the butt rule or a corner unit: the same units as the miter.
+    let path = [(0.0, 0.0), (3000.0, 0.0), (3000.0 + 2954.0, 521.0)];
+    let m = lay(&spec(&path, Side::Left, Corner::Miter), 1000).unwrap();
+    for rule in [Corner::Butt, Corner::CornerUnit] {
+        let c = lay(&spec(&path, Side::Left, rule), 1000).unwrap();
+        assert_eq!(c.pieces.len(), m.pieces.len(), "{rule:?}");
+        assert!(c.pieces.iter().all(|p| !p.corner_unit));
+        assert!(max_overlap(&c) < 1e-6);
+    }
+}
+
+#[test]
 fn a_curve_tapers_the_joints_and_never_overlaps() {
     // A quarter circle of radius 3000, anticlockwise: the left side is the inside of the bend.
     let arc = |side| Spec {

@@ -384,6 +384,10 @@ pub struct ClosedGap {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeadEnd {
     pub at: DVec2,
+    /// True if the chain from this end leads to another dead end: it is a part of a shape that
+    /// does not close (a gap). False if it leads to a node where other curves meet: a stub, such
+    /// as a line that overshoots a corner, which is harmless.
+    pub open: bool,
     /// The length of the dangling curves from this end to the first node that has other curves, mm.
     pub length: f64,
     /// The nearest other dead end, and the distance to it (mm).
@@ -433,6 +437,8 @@ pub struct Arrangement {
     pub closed_gap_count: usize,
     pub dead_ends: Vec<DeadEnd>,
     pub dead_end_count: usize,
+    /// How many of the dead ends are open (see [`DeadEnd::open`]).
+    pub open_dead_ends: usize,
     /// Curves shorter than the tolerance that were dropped (they do not make a piece of an edge).
     pub ignored_short: usize,
     /// Edges that lie on top of each other and were merged.
@@ -486,6 +492,29 @@ struct Hit {
     p: DVec2,
     /// The size of the closed gap this hit stands for (0 for a crossing or an exact join).
     gap: f64,
+    /// The point on a curve that the end of another curve was moved to (a T-junction).
+    proj: bool,
+}
+
+/// Where two lines that end near each other would cross, if both ends move by at most `2 tol`.
+fn line_corner(curves: &[Curve], a: &Hit, b: &Hit, tol: f64) -> Option<DVec2> {
+    if a.curve == b.curve {
+        return None;
+    }
+    let (Curve::Line { a: a0, b: a1 }, Curve::Line { a: b0, b: b1 }) =
+        (curves[a.curve], curves[b.curve])
+    else {
+        return None;
+    };
+    let (d1, d2) = (a1 - a0, b1 - b0);
+    let den = d1.perp_dot(d2);
+    // Lines that are nearly parallel cross far away: use the mean.
+    if den.abs() < 0.05 * d1.length() * d2.length() {
+        return None;
+    }
+    let t = (b0 - a0).perp_dot(d2) / den;
+    let p = a0 + d1 * t;
+    (p.distance(a.p) <= 2.0 * tol && p.distance(b.p) <= 2.0 * tol).then_some(p)
 }
 
 /// Builds the arrangement of `curves` with the node tolerance `tol` (mm).
@@ -533,12 +562,14 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
             t: 0.0,
             p: curves[i].from(),
             gap: 0.0,
+            proj: false,
         });
         hits.push(Hit {
             curve: i,
             t: 1.0,
             p: curves[i].to(),
             gap: 0.0,
+            proj: false,
         });
     }
     let mut tmp: Vec<DVec2> = Vec::new();
@@ -561,12 +592,14 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
                     t: ti,
                     p,
                     gap: 0.0,
+                    proj: false,
                 });
                 hits.push(Hit {
                     curve: j,
                     t: tj,
                     p,
                     gap: 0.0,
+                    proj: false,
                 });
             }
             // An end of one that lies near the middle of the other: a T-junction.
@@ -581,6 +614,7 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
                                 t,
                                 p: q,
                                 gap: d,
+                                proj: true,
                             });
                             // The end of `a` stays where it is: the clustering joins it to `q`.
                             let te = if e == ca.from() { 0.0 } else { 1.0 };
@@ -589,6 +623,7 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
                                 t: te,
                                 p: e,
                                 gap: d,
+                                proj: false,
                             });
                         }
                     }
@@ -633,16 +668,32 @@ pub fn build_ranked(curves: &[Curve], ranks: &[u8], tol: f64) -> Result<Arrangem
         members[id].push(i);
     }
     // An end of a curve outranks a crossing in the middle of a curve of the same rank.
+    // Which point a node takes: first the curves of the highest rank (a fixed boundary); among
+    // those the point of a curve that another end was moved to (a T-junction: the end goes to the
+    // line, the line does not bend), then the ends of curves, then crossings.
     let rank_of = |i: usize| {
         let h = &hits[i];
         let end = h.t == 0.0 || h.t == 1.0;
-        2 * ranks.get(h.curve).copied().unwrap_or(0) + end as u8
+        let kind = if h.proj {
+            2
+        } else if end {
+            1
+        } else {
+            0
+        };
+        4 * ranks.get(h.curve).copied().unwrap_or(0) + kind
     };
     for m in &members {
         let top = m.iter().map(|&i| rank_of(i)).max().unwrap_or(0);
         let first: Vec<usize> = m.iter().copied().filter(|&i| rank_of(i) == top).collect();
         let sum: DVec2 = first.iter().map(|&i| hits[i].p).sum();
-        out.nodes.push(sum / first.len() as f64);
+        let mean = sum / first.len() as f64;
+        // Two straight lines that nearly meet at a corner meet where they would cross: a drawing
+        // that is square stays square, and the corner does not move by half of the gap.
+        let corner = (first.len() == 2 && top % 4 == 1)
+            .then(|| line_corner(curves, &hits[first[0]], &hits[first[1]], tol))
+            .flatten();
+        out.nodes.push(corner.unwrap_or(mean));
     }
     // A node whose members are not all at one point closed a gap.
     for (id, m) in members.iter().enumerate() {
@@ -742,7 +793,7 @@ fn prune_and_trace(out: &mut Arrangement) {
     // The dead ends of the drawing as it is: each free end, with the length of its chain of
     // nodes of degree 2 up to the first node that joins more.
     let free: Vec<usize> = (0..nn).filter(|&v| deg[v] == 1).collect();
-    let mut dead: Vec<(usize, f64)> = Vec::new();
+    let mut dead: Vec<(usize, f64, bool)> = Vec::new();
     for &v0 in &free {
         let (mut v, mut prev_edge, mut length) = (v0, usize::MAX, 0.0);
         loop {
@@ -758,11 +809,12 @@ fn prune_and_trace(out: &mut Arrangement) {
                 break;
             }
         }
-        dead.push((v0, length));
+        dead.push((v0, length, deg[v] == 1));
     }
     out.dead_end_count = dead.len();
+    out.open_dead_ends = dead.iter().filter(|d| d.2).count();
     let ends: Vec<DVec2> = dead.iter().map(|d| out.nodes[d.0]).collect();
-    for (i, (v, length)) in dead.iter().enumerate() {
+    for (i, (v, length, open)) in dead.iter().enumerate() {
         if out.dead_ends.len() >= MAX_LISTED {
             break;
         }
@@ -778,6 +830,7 @@ fn prune_and_trace(out: &mut Arrangement) {
         }
         out.dead_ends.push(DeadEnd {
             at,
+            open: *open,
             length: *length,
             nearest,
         });

@@ -182,4 +182,6 @@ fn the_source_curves_of_a_region_are_listed() {
     assert_eq!(found.regions.len(), 1);
     assert_eq!(found.regions[0].curves, vec![0, 1, 2, 3]);
     assert_eq!(found.dead_end_count, 2);
+    // A lone line is an open piece.
+    assert_eq!(found.open_dead_ends, 2);
 }

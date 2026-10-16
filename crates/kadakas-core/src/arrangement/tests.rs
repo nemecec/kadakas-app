@@ -54,6 +54,8 @@ fn a_gap_over_the_tolerance_stays_open_and_is_reported() {
     let a = build(&c, 2.0).unwrap();
     assert!(a.faces.is_empty());
     assert_eq!(a.dead_end_count, 2);
+    assert_eq!(a.open_dead_ends, 2);
+    assert!(a.dead_ends.iter().all(|d| d.open));
     let near = a.dead_ends[0].nearest.unwrap();
     assert!((near.1 - 10.0).abs() < 1e-9, "{near:?}");
     let ends: Vec<DVec2> = a.dead_ends.iter().map(|d| d.at).collect();
@@ -94,6 +96,8 @@ fn faces_that_share_an_edge_use_the_same_nodes() {
     let total: f64 = a.faces.iter().map(|f| f.area).sum();
     assert!((total - 1_000_000.0).abs() < 1e-6);
     assert_eq!(a.dead_end_count, 2, "the two overshoots are reported");
+    assert_eq!(a.open_dead_ends, 0, "an overshoot is a stub, not an open end");
+    assert!(a.dead_ends.iter().all(|d| !d.open && (d.length - 50.0).abs() < 1e-9));
     // The shared edge appears once in each face, walked in opposite directions.
     let shared: Vec<_> = a.faces[0]
         .outer
