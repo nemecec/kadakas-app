@@ -37,7 +37,7 @@ def counts(cad, site):
 
 def test_the_sources_keep_the_tags_of_the_objects_they_came_from(cad):
     site = make_site(cad)
-    data = cad.result("objects.get", {"id": site})["data"]["import_sources"]
+    data = cad.result("objects.get", {"id": site, "sources": True})["data"]["import_sources"]
     shape = cad.result("objects.get", {"id": site})["shape"]
     assert len(data["points"]) == len(shape["points"])
     assert len(data["lines"]) == len(shape["lines"])
@@ -70,7 +70,7 @@ def test_an_update_changes_the_sources_in_the_model_and_the_cut_and_fill_follow(
     after = cad.result("site.cut_fill", {"id": site})
     assert after["cut_m3"] != before["cut_m3"] or after["fill_m3"] != before["fill_m3"], (before, after)
     # The tags follow: the revision of the changed sources is the new one.
-    data = cad.result("objects.get", {"id": site})["data"]["import_sources"]
+    data = cad.result("objects.get", {"id": site, "sources": True})["data"]["import_sources"]
     revisions = {r["tag"]["revision"] for r in data["points"] + data["lines"]}
     assert len(revisions) == 2, "the sources that changed have the new revision, the others the old one"
     # The same update again finds nothing to do.

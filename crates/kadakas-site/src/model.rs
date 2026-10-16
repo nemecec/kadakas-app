@@ -67,17 +67,19 @@ pub fn modifier_of(shape: &Shape) -> Option<Modifier> {
     }
 }
 
-/// The modifiers that act on a site model: visible modifiers (and hardscapes that act as pads) on the same layer whose box touches
-/// the box of the site model. Returns their IDs in document order.
+/// The modifiers that act on a site model: visible modifiers (and hardscapes that act as pads) whose box touches
+/// the box of the site model and that name it, or are on its layer, or are on a layer without a site model
+/// (`kadakas_core::site::acts_on_site`). Returns their IDs in document order.
 pub fn modifiers_for(doc: &Document, site: ObjectId) -> Vec<(ObjectId, Modifier)> {
     let Some(obj) = doc.object(site) else {
         return Vec::new();
     };
     let (lo, hi) = obj.shape.bounds();
+    let own = kadakas_core::site::site_layers(doc);
     let mut list: Vec<(bool, ObjectId, Modifier)> = doc
         .objects
         .values()
-        .filter(|o| o.layer == obj.layer && doc.is_visible(o))
+        .filter(|o| doc.is_visible(o) && kadakas_core::site::acts_on_site(doc, &own, o, obj))
         .flat_map(|o| {
             let (a, b) = o.shape.bounds();
             let touches = a.x <= hi.x && b.x >= lo.x && a.y <= hi.y && b.y >= lo.y;

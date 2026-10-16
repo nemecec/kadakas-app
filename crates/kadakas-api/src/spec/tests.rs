@@ -399,3 +399,47 @@ fn describe_gives_the_schemas_on_request() {
     assert_eq!(m.len(), METHODS.len());
     assert_eq!(m["plants.place"], one["params"]);
 }
+
+#[test]
+fn a_name_added_earlier_in_the_batch_gets_a_clear_error_and_an_exact_name_wins() {
+    let mut s = doc_with_layers();
+    let e = s
+        .handle(
+            "execute",
+            json!({"command": {"op": "batch", "commands": [
+                {"op": "add_layer", "name": "Paving"},
+                {"op": "add_object", "layer": "paving",
+                 "shape": {"kind": "circle", "center": [0, 0], "radius": 10}},
+            ]}}),
+        )
+        .unwrap_err();
+    assert_eq!(e.code, -32602);
+    assert!(
+        e.message.contains("added earlier in this batch"),
+        "{}",
+        e.message
+    );
+    // The document is as it was.
+    assert!(s.editor.doc().layers.iter().all(|l| l.name != "Paving"));
+    // Two layers that differ in case: the exact name picks one, another case is ambiguous.
+    let lower = layer_id(&s, "trees");
+    let r = s
+        .handle(
+            "execute",
+            json!({"command": {"op": "add_object", "layer": "trees",
+                 "shape": {"kind": "circle", "center": [0, 0], "radius": 10}}}),
+        )
+        .unwrap();
+    let o = s
+        .handle("objects.get", json!({"id": r["created"][0]}))
+        .unwrap();
+    assert_eq!(o["layer"], lower);
+    let e = s
+        .handle(
+            "execute",
+            json!({"command": {"op": "add_object", "layer": "TREES",
+                 "shape": {"kind": "circle", "center": [0, 0], "radius": 10}}}),
+        )
+        .unwrap_err();
+    assert!(e.message.contains("matches 2 layers"), "{}", e.message);
+}

@@ -31,6 +31,39 @@ pub fn named_site(
         .or_else(|| doc.layer(obj.layer)?.extra.get(SITE_KEY).and_then(read))
 }
 
+/// The layers that have a site model (visible or not: visibility is view state).
+pub fn site_layers(
+    doc: &crate::model::Document,
+) -> std::collections::HashSet<crate::model::LayerId> {
+    doc.objects
+        .values()
+        .filter(|o| matches!(o.shape, crate::model::Shape::SiteModel { .. }))
+        .map(|o| o.layer)
+        .collect()
+}
+
+/// True if a site modifier (a pad, grade limits, a texture bed, or an object that acts as a pad)
+/// acts on `site`. `own` is `site_layers(doc)`. The rule is that of the objects on the ground:
+/// a modifier that names a site model (`data.site_model`, or its layer) acts on that model only;
+/// else on the models of its own layer; and if its layer has none, on the models that its box
+/// touches, on any layer (the caller checks the boxes).
+pub fn acts_on_site(
+    doc: &crate::model::Document,
+    own: &std::collections::HashSet<crate::model::LayerId>,
+    modifier: &crate::model::Object,
+    site: &crate::model::Object,
+) -> bool {
+    match named_site(doc, modifier).filter(|id| {
+        matches!(
+            doc.object(*id).map(|o| &o.shape),
+            Some(crate::model::Shape::SiteModel { .. })
+        )
+    }) {
+        Some(id) => id == site.id,
+        None => modifier.layer == site.layer || !own.contains(&modifier.layer),
+    }
+}
+
 /// A 3D polygon or contour that is source data of a site model.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SiteLine {

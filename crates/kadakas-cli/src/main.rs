@@ -51,6 +51,10 @@ enum Cmd {
         /// List one tool per API method (about 280) instead of one tool per domain (about 20).
         #[arg(long = "mcp-flat")]
         mcp_flat: bool,
+        /// In domain mode, list the JSON Schema of the params of every method in the input schema of
+        /// the tool (about 100 KB more). Flat mode always has them; `describe {method}` gives one.
+        #[arg(long = "mcp-schemas")]
+        mcp_schemas: bool,
     },
     /// Bug reports and feature requests (the outbox of `feedback.submit`).
     Feedback {
@@ -634,7 +638,7 @@ fn with_client(method: &str, params: Value, client: &Option<(String, String)>) -
     params
 }
 
-fn mcp(mut backend: Backend, flat: bool) {
+fn mcp(mut backend: Backend, flat: bool, schemas: bool) {
     let mut client: Option<(String, String)> = None;
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
@@ -674,7 +678,7 @@ fn mcp(mut backend: Backend, flat: bool) {
                 }))
             }
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({"tools": mcp_tools::tools(flat)})),
+            "tools/list" => Ok(json!({"tools": mcp_tools::tools(flat, schemas)})),
             "tools/call" => {
                 let name = req["params"]["name"].as_str().unwrap_or("");
                 let args = req["params"]["arguments"].clone();
@@ -907,7 +911,8 @@ fn main() {
             file,
             remote,
             mcp_flat,
-        } => Backend::new(file, remote).map(|b| mcp(b, mcp_flat)),
+            mcp_schemas,
+        } => Backend::new(file, remote).map(|b| mcp(b, mcp_flat, mcp_schemas)),
         Cmd::Feedback { cmd } => feedback_main(cmd),
         Cmd::Import {
             file,

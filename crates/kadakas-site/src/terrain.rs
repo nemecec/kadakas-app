@@ -78,10 +78,23 @@ const GRID: usize = 32;
 
 impl Index {
     fn new(doc: &Document) -> Index {
-        let hosts: Vec<Host> = doc
+        // Visibility is view state: hiding the layer of a site model must not drop the objects
+        // that stand on it. The order is stable: the order of the layers, then the ID (never the
+        // stacking order of the drawing).
+        let layer_rank = |l: LayerId| {
+            doc.layers
+                .iter()
+                .position(|x| x.id == l)
+                .unwrap_or(usize::MAX)
+        };
+        let mut sites: Vec<&Object> = doc
             .objects
             .values()
-            .filter(|o| matches!(o.shape, Shape::SiteModel { .. }) && doc.is_visible(o))
+            .filter(|o| matches!(o.shape, Shape::SiteModel { .. }))
+            .collect();
+        sites.sort_by_key(|o| (layer_rank(o.layer), o.id));
+        let hosts: Vec<Host> = sites
+            .into_iter()
             .map(|o| {
                 let (lo, hi) = o.shape.bounds();
                 Host {
@@ -188,7 +201,20 @@ impl<'a> SiteTerrain<'a> {
         obj.map_or(0.0, |o| h.elevation - self.elevation_of(o.layer))
     }
 
-    /// True if the document has a visible site model.
+    /// The site model that the object or its layer names, if it exists.
+    fn named_host(&self, obj: Option<&Object>) -> Option<&Host> {
+        let id = kadakas_core::site::named_site(self.doc, obj?)?;
+        self.index().hosts.iter().find(|h| h.id == id)
+    }
+
+    /// True if the object (or its layer) names a site model that does not exist. The object then
+    /// uses the model that covers its place, and the callers say so.
+    pub fn name_dangles(&self, obj: &Object) -> bool {
+        kadakas_core::site::named_site(self.doc, obj).is_some()
+            && self.named_host(Some(obj)).is_none()
+    }
+
+    /// True if the document has a site model.
     pub fn has_site_models(&self) -> bool {
         !self.index().hosts.is_empty()
     }
@@ -197,9 +223,8 @@ impl<'a> SiteTerrain<'a> {
     /// named one, else the first that covers the point (the layer of the object first).
     fn pick(&self, obj: Option<&Object>, p: DVec2, which: Surface) -> Option<(&Host, f64)> {
         let idx = self.index();
-        let named = obj.and_then(|o| kadakas_core::site::named_site(self.doc, o));
-        if let Some(id) = named {
-            let h = idx.hosts.iter().find(|h| h.id == id)?;
+        // A name that points at nothing (the model was deleted) counts for nothing.
+        if let Some(h) = self.named_host(obj) {
             let z = self.result(h)?.surface(which).elevation_at(p)?;
             return Some((h, z));
         }
@@ -324,9 +349,9 @@ impl GroundSource for SiteTerrain<'_> {
             return Some(z);
         }
         let idx = self.index();
-        let named = obj.and_then(|o| kadakas_core::site::named_site(self.doc, o));
+        let named = self.named_host(obj);
         let hosts: Vec<&Host> = match named {
-            Some(id) => idx.hosts.iter().filter(|h| h.id == id).collect(),
+            Some(h) => vec![h],
             None => {
                 let own: Vec<&Host> = idx
                     .hosts

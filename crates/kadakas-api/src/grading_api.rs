@@ -514,7 +514,14 @@ impl Session {
         let d = wall::data(obj)?;
         let site = self.site_for(obj, d.site);
         let ground = site.as_ref().map(|s| grading::SiteGround::new(s));
-        let w = wall::evaluate(doc, obj, ground.as_ref().map(|g| g as grading::Ground<'_>))?;
+        // The same layer difference as the 3D scene (`grading::hook::wall_of`).
+        let dz = grading::hook::site_dz(doc, site.as_deref(), obj);
+        let w = wall::evaluate_at(
+            doc,
+            obj,
+            ground.as_ref().map(|g| g as grading::Ground<'_>),
+            dz,
+        )?;
         let q = w.quantities;
         let (first, last) = (w.stations.first()?, w.stations.last()?);
         Some(json!({
@@ -667,7 +674,9 @@ impl Session {
                 path.first().copied().unwrap_or_default(),
             )
         });
-        let ground = site.as_ref().map(|s| grading::SiteGround::new(s));
+        let ground = site
+            .as_ref()
+            .map(|s| grading::SiteGround::with_offset(s, grading::site_elevation(doc, s)));
         grade::solve_path(path, d, ground.as_ref().map(|g| g as grading::Ground<'_>)).map_err(app)
     }
 
@@ -891,7 +900,7 @@ impl Session {
         let Some(site) = self.site_for(obj_layer_of, d.site) else {
             return json!({ "existing": null, "proposed": null, "modified": false, "label": "no site model", "northing_m": n, "easting_m": e, "georeferenced": geo });
         };
-        let rd = spot::read_at(&site, at);
+        let rd = spot::read_at_offset(&site, at, grading::site_elevation(doc, &site));
         json!({ "existing": rd.existing, "proposed": rd.proposed, "modified": rd.modified, "label": spot::label(d, &rd, at, georef), "northing_m": n, "easting_m": e, "georeferenced": geo })
     }
 

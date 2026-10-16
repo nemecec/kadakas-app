@@ -273,19 +273,35 @@ pub fn method_schema(method: &str, compact: bool) -> Value {
     schema
 }
 
+/// Removes the `description` of every schema node. The names of the properties are not schema
+/// keywords (a parameter may be called `description`), and the values of `default`, `enum` and
+/// `const` are data.
 fn strip_descriptions(v: &mut Value) {
     match v {
         Value::Object(m) => {
-            m.remove("description");
-            m.values_mut().for_each(strip_descriptions);
+            if m.get("description").is_some_and(Value::is_string) {
+                m.remove("description");
+            }
+            for (key, child) in m.iter_mut() {
+                match key.as_str() {
+                    "default" | "enum" | "const" => {}
+                    "properties" => {
+                        if let Value::Object(props) = child {
+                            props.values_mut().for_each(strip_descriptions);
+                        }
+                    }
+                    _ => strip_descriptions(child),
+                }
+            }
         }
         Value::Array(a) => a.iter_mut().for_each(strip_descriptions),
         _ => {}
     }
 }
 
-/// One tool per domain.
-pub fn domain_tools() -> Vec<Value> {
+/// One tool per domain. With `schemas` the tool lists the JSON Schema of the params of each of
+/// its methods (about 100 KB more in all); without, `describe {method}` gives one on request.
+pub fn domain_tools(schemas: bool) -> Vec<Value> {
     DOMAINS
         .iter()
         .map(|d| {
@@ -294,6 +310,7 @@ pub fn domain_tools() -> Vec<Value> {
             // The schema of the params depends on the method: one `if` for each.
             let by_method: Vec<Value> = names
                 .iter()
+                .filter(|_| schemas)
                 .map(|m| {
                     json!({
                         "if": {"properties": {"method": {"const": m}}, "required": ["method"]},
@@ -308,18 +325,21 @@ pub fn domain_tools() -> Vec<Value> {
             if d.open_world {
                 annotations["openWorldHint"] = json!(true);
             }
+            let mut input = json!({
+                "type": "object",
+                "properties": {
+                    "method": {"type": "string", "enum": names, "description": "The method to call."},
+                    "params": {"type": "object", "additionalProperties": true, "description": "The params of the method. A name the method does not take is an error that names the nearest known one; describe {method} gives its schema."}
+                },
+                "required": ["method"],
+            });
+            if schemas {
+                input["allOf"] = json!(by_method);
+            }
             json!({
                 "name": d.name,
                 "description": description(d, &methods),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "method": {"type": "string", "enum": names, "description": "The method to call."},
-                        "params": {"type": "object", "additionalProperties": true, "description": "The params of the method. A name the method does not take is an error that names the nearest known one."}
-                    },
-                    "required": ["method"],
-                    "allOf": by_method,
-                },
+                "inputSchema": input,
                 "annotations": annotations,
             })
         })
@@ -367,8 +387,12 @@ pub fn feedback_tool() -> Value {
 }
 
 /// The tool listing for `tools/list`.
-pub fn tools(flat: bool) -> Value {
-    let mut list = if flat { flat_tools() } else { domain_tools() };
+pub fn tools(flat: bool, schemas: bool) -> Value {
+    let mut list = if flat {
+        flat_tools()
+    } else {
+        domain_tools(schemas)
+    };
     list.insert(1.min(list.len()), feedback_tool());
     json!(list)
 }
@@ -479,7 +503,7 @@ mod tests {
 
     #[test]
     fn the_domain_listing_is_short_and_complete() {
-        let tools = domain_tools();
+        let tools = domain_tools(true);
         assert!((15..=25).contains(&tools.len()), "{}", tools.len());
         let total: usize = tools
             .iter()
@@ -504,7 +528,7 @@ mod tests {
 
     #[test]
     fn read_only_domains_hold_only_reads() {
-        let tools = domain_tools();
+        let tools = domain_tools(true);
         let by = |n: &str| tools.iter().find(|t| t["name"] == n).unwrap();
         assert_eq!(by("describe")["annotations"], json!({"readOnlyHint": true}));
         assert_eq!(by("objects")["annotations"]["readOnlyHint"], true);
@@ -528,7 +552,7 @@ mod tests {
     #[test]
     fn the_feedback_tool_is_in_both_modes_and_resolves() {
         for flat in [false, true] {
-            let list = tools(flat);
+            let list = tools(flat, false);
             let t = &list.as_array().unwrap()[1];
             assert_eq!(t["name"], "feedback", "flat={flat}");
             let d = t["description"].as_str().unwrap();
@@ -551,7 +575,7 @@ mod tests {
             assert!(!names.contains(&"feedback_submit"));
         }
         // The domain listing has no domain for the feedback methods.
-        assert!(domain_tools().iter().all(|t| t["name"] != "feedback"));
+        assert!(domain_tools(true).iter().all(|t| t["name"] != "feedback"));
         let args = json!({"kind": "bug", "title": "t"});
         for flat in [false, true] {
             assert_eq!(
@@ -638,7 +662,10 @@ mod tests {
         // Every flat tool has a schema of an object.
         assert!(flat.iter().all(|t| t["inputSchema"]["type"] == "object"));
         // A domain tool: one `if` for each method, without the descriptions.
-        let domains = domain_tools();
+        let plain = domain_tools(false);
+        let plants = plain.iter().find(|t| t["name"] == "plants").unwrap();
+        assert!(plants["inputSchema"].get("allOf").is_none());
+        let domains = domain_tools(true);
         let plants = domains.iter().find(|t| t["name"] == "plants").unwrap();
         let all = plants["inputSchema"]["allOf"].as_array().unwrap();
         let one = all
@@ -659,5 +686,34 @@ mod tests {
             method_schema("no.such", false)["additionalProperties"],
             true
         );
+    }
+
+    #[test]
+    fn stripping_keeps_a_property_that_is_called_description() {
+        let mut v = json!({
+            "type": "object",
+            "description": "gone",
+            "properties": {
+                "description": {"type": "string", "description": "gone too"},
+                "title": {"type": "string", "default": {"description": "data"}}
+            },
+            "required": ["description"]
+        });
+        strip_descriptions(&mut v);
+        assert!(v.get("description").is_none());
+        assert_eq!(v["properties"]["description"], json!({"type": "string"}));
+        assert_eq!(v["properties"]["title"]["default"]["description"], "data");
+        let s = method_schema("issue.create", true);
+        assert!(s["properties"].get("description").is_some(), "{s}");
+    }
+
+    #[test]
+    fn the_method_schemas_are_opt_in_in_domain_mode() {
+        let size = |flat, schemas| tools(flat, schemas).to_string().len();
+        assert!(size(false, false) < size(false, true));
+        assert!(size(false, false) * 3 < size(true, false) * 2);
+        for t in domain_tools(false) {
+            assert!(t["inputSchema"].get("allOf").is_none());
+        }
     }
 }

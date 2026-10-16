@@ -603,6 +603,7 @@ fn drape(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     };
     let terrain = kadakas_site::SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);
     let (mut commands, mut outside, mut skipped) = (Vec::new(), 0usize, 0usize);
+    let mut dangling = 0usize;
     for id in ids {
         let o = doc
             .object(id)
@@ -624,6 +625,7 @@ fn drape(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             });
             continue;
         }
+        dangling += usize::from(terrain.name_dangles(o));
         match terrain.absolute(o, at) {
             Some(z) => {
                 if !terrain.covered(o, at) {
@@ -646,7 +648,12 @@ fn drape(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             .map_err(RpcError::from)?;
     }
     let mut out = json!({"updated": updated, "outside_model": outside, "skipped": skipped});
-    let warnings = ground_warnings(release, updated, outside, skipped);
+    let mut warnings = ground_warnings(release, updated, outside, skipped);
+    if dangling > 0 && !release {
+        warnings.push(format!(
+            "{dangling} objects name a site model that does not exist: they use the site model that covers their place"
+        ));
+    }
     if !warnings.is_empty() {
         out["warnings"] = json!(warnings);
     }
@@ -668,7 +675,7 @@ pub(crate) fn ground_warnings(
     }
     if skipped > 0 {
         w.push(format!(
-            "{skipped} of {} objects have no site model to stand on (the document has none): they stay at the elevation of their layer. Create a site model with site.create, then run plants.drape",
+            "{skipped} of {} objects have no site model to stand on (the document has no site model that can be built): they stay at the elevation of their layer. Create a site model with site.create, then run plants.drape",
             done + skipped
         ));
     }

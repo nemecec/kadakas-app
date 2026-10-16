@@ -135,7 +135,13 @@ impl Session {
         ) else {
             return ("fill", 0.0);
         };
-        let ground = grading::SiteGround::new(&site);
+        // The level of the pad is above the elevation of its layer, the ground above the one of
+        // the layer of the site model: compare them in the frame of the pad.
+        let pad_layer = doc.layer(layer).map_or(0.0, |l| l.elevation);
+        let ground = grading::SiteGround::with_offset(
+            &site,
+            grading::site_elevation(doc, &site) - pad_layer,
+        );
         let (mut above, mut below, mut sum, mut n) = (0, 0, 0.0, 0);
         for p in kadakas_core::curve::flatten(boundary, true, 100.0) {
             if let Some(z) = ground.exact(None, p, Follow::Existing) {
@@ -314,7 +320,11 @@ impl Session {
             })
             .map_err(RpcError::from)?;
         self.prune_selection();
-        Ok(json!({ "id": out.created[0] }))
+        let mut res = json!({ "id": out.created[0] });
+        if let Some(w) = self.modifier_warning(ObjectId(out.created[0])) {
+            res["warnings"] = json!([w]);
+        }
+        Ok(res)
     }
 
     pub(super) fn pad_add(&mut self, p: Value) -> Result<Value, RpcError> {
@@ -374,11 +384,30 @@ impl Session {
             .execute(&Command::Batch { commands: cmds })
             .map_err(RpcError::from)?;
         self.prune_selection();
-        Ok(json!({
+        let mut out = json!({
             "id": pad_id,
             "wall": wall_id,
             "quantities": wall_id.and_then(|w| self.wall_row(w)),
-        }))
+        });
+        if let Some(w) = self.modifier_warning(pad_id) {
+            out["warnings"] = json!([w]);
+        }
+        Ok(out)
+    }
+
+    /// The warning for a modifier that acts on no site model: it changes nothing, and no cut or
+    /// fill shows it.
+    pub(super) fn modifier_warning(&self, id: ObjectId) -> Option<String> {
+        let doc = self.editor.doc();
+        let acts = doc.objects.values().any(|o| {
+            matches!(o.shape, Shape::SiteModel { .. })
+                && kadakas_site::model::modifiers_for(doc, o.id)
+                    .iter()
+                    .any(|(m, _)| *m == id)
+        });
+        (!acts).then(|| {
+            "no site model is affected: the modifier acts on the site models of its layer, or, on a layer without one, on the models its outline touches. Move it over a site model or name one (data.site_model)".to_string()
+        })
     }
 }
 

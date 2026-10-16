@@ -465,18 +465,51 @@ fn resolve_in(doc: &Document, ty: &Ty, v: &mut Value) -> Result<(), RpcError> {
 }
 
 /// The `layer` and `class` of a command of `execute`, and of the commands inside a batch.
+/// The names are looked up in the document as it is before the call. A layer or class that an
+/// earlier command of the same batch adds has no ID yet (the ID is made when the command runs), so
+/// a later command cannot name it: the error says so and asks for a separate call.
 fn resolve_command(doc: &Document, c: &mut Map<String, Value>) -> Result<(), RpcError> {
+    resolve_command_in(doc, c, &mut Vec::new())
+}
+
+fn resolve_command_in(
+    doc: &Document,
+    c: &mut Map<String, Value>,
+    added: &mut Vec<(&'static str, String)>,
+) -> Result<(), RpcError> {
     for (key, ty) in [("layer", Ty::Layer), ("class", Ty::Class)] {
-        if let Some(v) = c.get_mut(key) {
-            resolve_in(doc, &ty, v)?;
+        let Some(v) = c.get_mut(key) else { continue };
+        if let Err(e) = resolve_in(doc, &ty, v) {
+            let name = v.as_str().map(str::trim);
+            let pending = name.is_some_and(|n| {
+                added
+                    .iter()
+                    .any(|(k, a)| *k == key && a.eq_ignore_ascii_case(n))
+            });
+            return Err(if pending {
+                RpcError::invalid_params(format!(
+                    "the {key} \"{}\" is added earlier in this batch and has no ID yet. Run the add command first with execute, then name it (or use its ID) in the next call",
+                    name.unwrap_or_default()
+                ))
+            } else {
+                e
+            });
         }
     }
     if let Some(Value::Array(inner)) = c.get_mut("commands") {
         for cmd in inner {
             if let Value::Object(m) = cmd {
-                resolve_command(doc, m)?;
+                resolve_command_in(doc, m, added)?;
             }
         }
+    }
+    let kind = match c.get("op").and_then(Value::as_str) {
+        Some("add_layer") => Some("layer"),
+        Some("add_class") => Some("class"),
+        _ => None,
+    };
+    if let (Some(kind), Some(name)) = (kind, c.get("name").and_then(Value::as_str)) {
+        added.push((kind, name.trim().to_string()));
     }
     Ok(())
 }

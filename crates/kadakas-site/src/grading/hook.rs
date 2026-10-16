@@ -44,7 +44,10 @@ pub fn extras_at(
         let site = d
             .snap
             .and_then(|_| host_near(doc, cache, revision, obj.layer, d.site, anchor_of(obj)));
-        let ground = site.as_ref().map(|s| SiteGround::new(s));
+        // A grade that snaps reads absolute heights (above the origin), like `plants.drape`.
+        let ground = site
+            .as_ref()
+            .map(|s| SiteGround::with_offset(s, super::site_elevation(doc, s)));
         if let Some((d, g)) = grade::evaluate(obj, ground.as_ref().map(|g| g as super::Ground<'_>))
         {
             return grade::draw(obj.id, &d, &g, scale);
@@ -53,7 +56,7 @@ pub fn extras_at(
         let text = match host_near(doc, cache, revision, obj.layer, d.site, *center) {
             Some(site) => spot::label(
                 &d,
-                &spot::read_at(&site, *center),
+                &spot::read_at_offset(&site, *center, super::site_elevation(doc, &site)),
                 *center,
                 doc.georef.as_ref(),
             ),
@@ -92,7 +95,7 @@ fn anchor_of(obj: &Object) -> DVec2 {
 }
 
 /// The height of the layer of `obj` above the layer of the site model.
-fn site_dz(doc: &Document, site: Option<&crate::SiteResult>, obj: &Object) -> f64 {
+pub fn site_dz(doc: &Document, site: Option<&crate::SiteResult>, obj: &Object) -> f64 {
     let elev = |layer| doc.layer(layer).map_or(0.0, |l| l.elevation);
     site.and_then(|s| doc.object(s.id))
         .map_or(0.0, |so| elev(obj.layer) - elev(so.layer))

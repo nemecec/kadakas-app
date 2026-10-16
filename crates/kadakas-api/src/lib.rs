@@ -280,6 +280,24 @@ fn svg_of(
 }
 
 /// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
+/// The tags of the sources of a site model are long (a tag for every point). Lists and
+/// `objects.get` show how many there are; `objects.get {sources: true}` and `document.get` show
+/// them.
+fn elide_sources(object: &mut Value) {
+    if let Some(v) = object.pointer_mut("/data/import_sources") {
+        let tagged = |k: &str| {
+            v.get(k)
+                .and_then(Value::as_array)
+                .map_or(0, |a| a.iter().filter(|x| !x.is_null()).count())
+        };
+        *v = json!({
+            "hidden": "objects.get {sources: true} shows the tags of the sources",
+            "tagged_points": tagged("points"),
+            "tagged_lines": tagged("lines"),
+        });
+    }
+}
+
 fn elide_image(object: &mut Value) {
     if let Some(png) = object.pointer_mut("/shape/png") {
         let n = png.as_str().map_or(0, str::len);
@@ -330,7 +348,7 @@ pub const METHODS: &[(&str, &str)] = &[
     #[cfg(not(target_arch = "wasm32"))]
     files::FILE_OPEN,
     ("objects.list", "Objects. params: {layer?, class?, kind?}."),
-    ("objects.get", "One object. params: {id}."),
+    ("objects.get", "One object. params: {id, sources? (true shows the import tags of the sources of a site model: data.import_sources, one entry for each point and line; by default the answer only counts them)}."),
     ("selection.get", "Selected object IDs."),
     (
         "selection.set",
@@ -1459,20 +1477,28 @@ impl Session {
                     .filter(|o| f.kind.as_deref().is_none_or(|k| o.shape.kind() == k))
                     .collect();
                 let mut v = serde_json::to_value(list).unwrap();
-                v.as_array_mut().into_iter().flatten().for_each(elide_image);
+                v.as_array_mut().into_iter().flatten().for_each(|o| {
+                    elide_image(o);
+                    elide_sources(o);
+                });
                 v
             }
             "objects.get" => {
                 #[derive(Deserialize)]
                 struct P {
                     id: ObjectId,
+                    #[serde(default)]
+                    sources: bool,
                 }
-                let P { id } = params(p)?;
+                let P { id, sources } = params(p)?;
                 let o = doc
                     .object(id)
                     .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
                 let mut v = serde_json::to_value(o).unwrap();
                 elide_image(&mut v);
+                if !sources {
+                    elide_sources(&mut v);
+                }
                 v
             }
             "selection.get" => json!({ "ids": self.selection }),

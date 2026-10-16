@@ -1493,9 +1493,10 @@ impl Plan {
         add.extend(loose_add);
         let mut loose_add = BTreeSet::new();
         for n in &add {
-            let home = self
-                .site_source(*n)
-                .and_then(|src| homes.get(&src.dxf_layer.to_lowercase()).map(|h| (*h, src)));
+            let home = self.site_source(*n).and_then(|src| {
+                let candidates = homes.get(&src.dxf_layer.to_lowercase())?;
+                site::pick_home(doc, candidates, &src.shape).map(|h| (h, src))
+            });
             match home {
                 Some((site_id, src)) => {
                     work.entry(site_id).or_default().add.push(src);

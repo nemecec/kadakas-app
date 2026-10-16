@@ -673,6 +673,73 @@ impl SiteSources {
         serde_json::to_value(self).expect("tags are plain data")
     }
 
+    /// The tags after the points and lines of the model changed from the old lists to the new
+    /// ones (a simplified model, an edit of the shape). A point that is still there (the same
+    /// numbers) keeps its tag, whatever its place in the list. Lines keep their tags by place when
+    /// their number is the same (a line whose vertices changed then shows as edited, because its
+    /// state no longer matches the tag), else by identical geometry. A source that is gone takes
+    /// its tag with it. Never a tag on the wrong source.
+    pub fn carry(
+        &self,
+        old: (&[glam::DVec3], &[crate::site::SiteLine]),
+        new: (&[glam::DVec3], &[crate::site::SiteLine]),
+    ) -> SiteSources {
+        let key = |p: &glam::DVec3| [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()];
+        let mut by_place: std::collections::HashMap<[u64; 3], Vec<usize>> = Default::default();
+        for (i, p) in old.0.iter().enumerate() {
+            by_place.entry(key(p)).or_default().push(i);
+        }
+        for list in by_place.values_mut() {
+            list.reverse();
+        }
+        let points = new
+            .0
+            .iter()
+            .map(|p| {
+                let i = by_place.get_mut(&key(p)).and_then(Vec::pop)?;
+                self.points.get(i).cloned().flatten()
+            })
+            .collect();
+        let lines = if old.1.len() == new.1.len() {
+            self.lines.clone()
+        } else {
+            let mut taken = vec![false; old.1.len()];
+            new.1
+                .iter()
+                .map(|l| {
+                    let i = (0..old.1.len()).find(|i| !taken[*i] && old.1[*i] == *l)?;
+                    taken[i] = true;
+                    self.lines.get(i).cloned().flatten()
+                })
+                .collect()
+        };
+        SiteSources { points, lines }
+    }
+
+    /// The tags after the whole model moved (the same sources at other places): a source that
+    /// matched its tag before the move matches it after, so a moved model does not show every
+    /// source as edited. A source that was edited stays edited.
+    pub fn moved(
+        &mut self,
+        old: (&[glam::DVec3], &[crate::site::SiteLine]),
+        new: (&[glam::DVec3], &[crate::site::SiteLine]),
+    ) {
+        for (i, r) in self.points.iter_mut().enumerate() {
+            if let (Some(r), Some(o), Some(n)) = (r, old.0.get(i), new.0.get(i))
+                && r.tag.obj == point_state(*o)
+            {
+                r.tag.obj = point_state(*n);
+            }
+        }
+        for (i, r) in self.lines.iter_mut().enumerate() {
+            if let (Some(r), Some(o), Some(n)) = (r, old.1.get(i), new.1.get(i))
+                && r.tag.obj == line_state(o)
+            {
+                r.tag.obj = line_state(n);
+            }
+        }
+    }
+
     /// Entries for a model of `points` points and `lines` lines, none of them tagged.
     pub fn blank(points: usize, lines: usize) -> SiteSources {
         SiteSources {
@@ -790,6 +857,27 @@ mod tests {
 
     fn tag_value() -> Value {
         json!({"drawing": "plan.dxf", "revision": "00ff00ff00ff00ff", "handle": "2F", "kind": "LINE", "hash": "0123456789abcdef", "obj": "fedcba9876543210"})
+    }
+
+    #[test]
+    fn a_tag_of_a_source_point_takes_about_170_bytes_in_the_document() {
+        // Measured for 100 000 points of a survey (drawing name, revision, handle, kind, hashes).
+        let tag = ImportTag::of(&tag_value()).unwrap();
+        let sources = SiteSources {
+            points: (0..100_000)
+                .map(|_| {
+                    Some(SourceRef {
+                        tag: tag.clone(),
+                        dxf_layer: "SURVEY-POINTS".into(),
+                    })
+                })
+                .collect(),
+            lines: vec![],
+        };
+        let bytes = sources.to_value().to_string().len();
+        let per_point = bytes / 100_000;
+        eprintln!("SOURCES 100000 points: {bytes} bytes, {per_point} per point");
+        assert!((150..=190).contains(&per_point), "{per_point}");
     }
 
     #[test]

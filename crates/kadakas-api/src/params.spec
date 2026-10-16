@@ -34,6 +34,7 @@ objects.list
 
 objects.get
   id! object
+  sources bool # show the import tags of the sources of a site model (data.import_sources)
 
 selection.get
 

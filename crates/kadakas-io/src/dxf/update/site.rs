@@ -132,9 +132,9 @@ pub(super) fn count(doc: &Document, drawing: &str) -> usize {
         .count()
 }
 
-/// The site model that a new locus or polyline joins, by the lower case DXF layer: the first site
-/// model (in drawing order) that has a source from this drawing on that layer.
-pub(super) fn homes(doc: &Document, sources: &Sources) -> BTreeMap<String, ObjectId> {
+/// The site models that a new locus or polyline may join, by the lower case DXF layer: those that
+/// have a source from this drawing on that layer, in drawing order. `pick_home` chooses.
+pub(super) fn homes(doc: &Document, sources: &Sources) -> BTreeMap<String, Vec<ObjectId>> {
     let mut layers: BTreeMap<ObjectId, BTreeSet<String>> = BTreeMap::new();
     for s in sources.values() {
         layers
@@ -142,15 +142,38 @@ pub(super) fn homes(doc: &Document, sources: &Sources) -> BTreeMap<String, Objec
             .or_default()
             .insert(s.dxf_layer.to_lowercase());
     }
-    let mut out = BTreeMap::new();
+    let mut out: BTreeMap<String, Vec<ObjectId>> = BTreeMap::new();
     for o in doc.objects.values() {
         if let Some(set) = layers.get(&o.id) {
             for l in set {
-                out.entry(l.clone()).or_insert(o.id);
+                out.entry(l.clone()).or_default().push(o.id);
             }
         }
     }
     out
+}
+
+/// The model among `candidates` whose box holds the new source, else the one whose box is nearest
+/// to it (the first of equals). `None` without candidates.
+pub(super) fn pick_home(
+    doc: &Document,
+    candidates: &[ObjectId],
+    shape: &Shape,
+) -> Option<ObjectId> {
+    let (lo, hi) = shape.bounds();
+    let c = (lo + hi) / 2.0;
+    let distance = |id: &ObjectId| {
+        doc.object(*id).map_or(f64::INFINITY, |o| {
+            let (a, b) = o.shape.bounds();
+            let dx = (a.x - c.x).max(0.0).max(c.x - b.x);
+            let dy = (a.y - c.y).max(0.0).max(c.y - b.y);
+            dx.hypot(dy)
+        })
+    };
+    candidates
+        .iter()
+        .min_by(|x, y| distance(x).total_cmp(&distance(y)))
+        .copied()
 }
 
 /// A new source for a site model.

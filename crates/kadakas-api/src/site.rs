@@ -600,6 +600,25 @@ mod tests {
     }
 
     #[test]
+    fn objects_get_shows_how_many_sources_are_tagged_and_the_tags_on_request() {
+        let mut s = Session::with_sequential_ids();
+        let a = tagged_locus(&mut s, 0, "A");
+        let b = tagged_locus(&mut s, 1000, "B");
+        let id = call(&mut s, "site.create", json!({"source_ids": [a, b]})).unwrap()["id"].clone();
+        let plain = call(&mut s, "objects.get", json!({"id": id})).unwrap();
+        let hidden = &plain["data"]["import_sources"];
+        assert_eq!(hidden["tagged_points"], 2, "{plain}");
+        assert!(hidden.get("points").is_none());
+        let full = call(&mut s, "objects.get", json!({"id": id, "sources": true})).unwrap();
+        assert_eq!(full["data"]["import_sources"]["points"].as_array().unwrap().len(), 2);
+        // The list shows the count as well.
+        let list = call(&mut s, "objects.list", json!({"kind": "site_model", "include_data": true}));
+        if let Ok(l) = list {
+            assert!(!l.to_string().contains("\"handle\""), "{l}");
+        }
+    }
+
+    #[test]
     fn the_sources_keep_their_tags_in_the_model_and_site_update_keeps_them_in_step() {
         let mut s = Session::with_sequential_ids();
         let a = tagged_locus(&mut s, 0, "A");
@@ -612,7 +631,7 @@ mod tests {
         let id =
             call(&mut s, "site.create", json!({"source_ids": [a, b, c, d]})).unwrap()["id"].clone();
         let data = |s: &mut Session| {
-            call(s, "objects.get", json!({"id": id})).unwrap()["data"]["import_sources"].clone()
+            call(s, "objects.get", json!({"id": id, "sources": true})).unwrap()["data"]["import_sources"].clone()
         };
         let handles = |v: &Value| -> Vec<Value> {
             v["points"]

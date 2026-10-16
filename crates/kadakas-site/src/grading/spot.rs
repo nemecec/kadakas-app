@@ -97,6 +97,17 @@ pub struct Reading {
 /// The smallest difference between the two surfaces that counts as a change, in mm.
 const MODIFIED_EPS: f64 = 0.01;
 
+/// Like [`read_at`], with `offset` added to the heights: the elevation of the layer of the model
+/// (`grading::site_elevation`) gives heights above the origin, as `plants.drape` stores them.
+pub fn read_at_offset(site: &SiteResult, p: DVec2, offset: f64) -> Reading {
+    let r = read_at(site, p);
+    Reading {
+        existing: r.existing.map(|z| z + offset),
+        proposed: r.proposed.map(|z| z + offset),
+        ..r
+    }
+}
+
 /// Reads the heights of a site model at a point. `modified` is true where the proposed surface
 /// differs from the existing one, so it is false outside every modifier.
 pub fn read_at(site: &SiteResult, p: DVec2) -> Reading {

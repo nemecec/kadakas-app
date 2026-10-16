@@ -272,3 +272,179 @@ fn issue_pins_stand_on_the_ground() {
     let z = pin[2].as_f64().unwrap();
     assert!((z - 34_200.0).abs() < 1.0, "{pin}");
 }
+
+#[test]
+fn hiding_the_layer_of_the_site_model_does_not_drop_the_ground() {
+    let mut s = Session::with_sequential_ids();
+    let site_layer = layer(&mut s, "Site", 0);
+    let _planting = layer(&mut s, "Planting", 0);
+    site(&mut s, &site_layer, [0, 0], 40_000, 33_000);
+    let oak = style(&mut s);
+    call(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_visibility", "layers": [site_layer], "mode": "invisible"}}),
+    );
+    let r = call(
+        &mut s,
+        "plants.place",
+        json!({"mode": "single", "at": [20_000, 20_000], "style": oak, "layer": "Planting", "on_terrain": true}),
+    );
+    assert!(r.get("warnings").is_none(), "{r}");
+    let z = ground_z(&mut s, &r["created"][0]).unwrap();
+    assert!((z - 35_000.0).abs() < 1e-6, "{z}");
+    let m = call(
+        &mut s,
+        "massing.add",
+        json!({"footprint": [[10_000, 10_000], [14_000, 10_000], [14_000, 14_000], [10_000, 14_000]], "layer": "Planting"}),
+    );
+    assert!(m["warnings"].as_array().unwrap().is_empty(), "{m}");
+}
+
+#[test]
+fn deleting_a_site_model_clears_the_names_and_undo_brings_them_back() {
+    let mut s = Session::with_sequential_ids();
+    let a = layer(&mut s, "Site A", 0);
+    let b = layer(&mut s, "Site B", 0);
+    let planting = layer(&mut s, "Planting", 0);
+    let _low = site(&mut s, &a, [0, 0], 40_000, 10_000);
+    let high = site(&mut s, &b, [0, 0], 40_000, 50_000);
+    let oak = style(&mut s);
+    call(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_layer_site", "id": planting, "site": high}}),
+    );
+    let p = call(
+        &mut s,
+        "plants.place",
+        json!({"mode": "single", "at": [0, 0], "style": oak, "layer": "Planting", "on_terrain": true}),
+    )["created"][0]
+        .clone();
+    call(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_data", "id": p, "set": {"site_model": high}}}),
+    );
+    call(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "delete_objects", "ids": [high]}}),
+    );
+    let layers = call(&mut s, "document.get", json!({}))["layers"].clone();
+    assert!(!layers.to_string().contains("site_model"), "{layers}");
+    let o = call(&mut s, "objects.get", json!({"id": p}));
+    assert!(o["data"].get("site_model").is_none(), "{o}");
+    // The plant now stands on the model that covers it.
+    let d = call(&mut s, "plants.drape", json!({}));
+    assert!(d.get("warnings").is_none(), "{d}");
+    assert!((ground_z(&mut s, &p).unwrap() - 10_000.0).abs() < 1e-6);
+    // One undo for the drape, one for the delete: the names come back with the model.
+    assert!(s.editor.undo() && s.editor.undo());
+    let o = call(&mut s, "objects.get", json!({"id": p}));
+    assert_eq!(o["data"]["site_model"], high);
+    let layers = call(&mut s, "document.get", json!({}))["layers"].clone();
+    assert!(layers.to_string().contains("site_model"));
+}
+
+#[test]
+fn a_name_that_points_at_nothing_falls_back_with_a_warning() {
+    let mut s = Session::with_sequential_ids();
+    let a = layer(&mut s, "Site", 0);
+    let _p = layer(&mut s, "Planting", 0);
+    site(&mut s, &a, [0, 0], 40_000, 10_000);
+    let oak = style(&mut s);
+    let p = call(
+        &mut s,
+        "plants.place",
+        json!({"mode": "single", "at": [0, 0], "style": oak, "layer": "Planting"}),
+    )["created"][0]
+        .clone();
+    call(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_data", "id": p, "set": {"site_model": "00000000-0000-0000-0000-0000000003e7"}}}),
+    );
+    let d = call(&mut s, "plants.drape", json!({}));
+    assert!((ground_z(&mut s, &p).unwrap() - 10_000.0).abs() < 1e-6);
+    assert!(
+        d["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("name a site model that does not exist"),
+        "{d}"
+    );
+}
+
+#[test]
+fn the_choice_between_models_follows_the_layer_order_and_not_the_stacking_order() {
+    let mut s = Session::with_sequential_ids();
+    let first = layer(&mut s, "First", 0);
+    let second = layer(&mut s, "Second", 0);
+    let _third = layer(&mut s, "Third", 0);
+    // The model of the second layer is made first, so it is first in the stacking order.
+    let _b = site(&mut s, &second, [0, 0], 40_000, 20_000);
+    let _a = site(&mut s, &first, [0, 0], 40_000, 10_000);
+    let oak = style(&mut s);
+    let r = call(
+        &mut s,
+        "plants.place",
+        json!({"mode": "single", "at": [0, 0], "style": oak, "layer": "Third", "on_terrain": true}),
+    );
+    assert!((ground_z(&mut s, &r["created"][0]).unwrap() - 10_000.0).abs() < 1e-6);
+}
+
+#[test]
+fn a_wall_report_equals_the_wall_in_3d_when_layer_elevations_differ() {
+    let mut s = Session::with_sequential_ids();
+    let site_layer = layer(&mut s, "Site", 2_000);
+    let walls = layer(&mut s, "Walls", 5_000);
+    site(&mut s, &site_layer, [0, 0], 40_000, 1_000);
+    let w = call(
+        &mut s,
+        "wall.add",
+        json!({"path": [[10_000, 10_000], [14_000, 10_000]], "top": {"mode": "terrain", "offset": 900}, "layer": walls}),
+    );
+    let row = call(&mut s, "wall.report", json!({"ids": [w["id"]]}))["rows"][0].clone();
+    let id = kadakas_core::model::ObjectId(w["id"].as_uid().unwrap());
+    let doc = s.editor.doc();
+    let wall = kadakas_site::grading::hook::wall_of(
+        doc,
+        s.site_cache(),
+        s.editor.revision(),
+        doc.object(id).unwrap(),
+    )
+    .unwrap();
+    let first = wall.stations.first().unwrap();
+    assert_eq!(row["top_start_mm"].as_f64().unwrap(), first.top);
+    assert_eq!(row["bottom_start_mm"].as_f64().unwrap(), first.bottom);
+}
+
+#[test]
+fn a_pad_on_a_layer_without_a_site_model_acts_on_the_model_under_it() {
+    let mut s = Session::with_sequential_ids();
+    let site_layer = layer(&mut s, "Site", 0);
+    let _other = layer(&mut s, "Grading", 0);
+    let model = site(&mut s, &site_layer, [0, 0], 40_000, 1_000);
+    let pad = call(
+        &mut s,
+        "pad.add",
+        json!({"boundary": [[5000, 5000], [15_000, 5000], [15_000, 15_000], [5000, 15_000]], "elevation": 9000, "layer": "Grading"}),
+    );
+    let cf = call(&mut s, "site.cut_fill", json!({"id": model}));
+    assert!(
+        cf["modifiers"].as_array().unwrap().contains(&pad["id"]),
+        "{cf}"
+    );
+    assert!(cf["fill_m3"].as_f64().unwrap() > 0.0, "{cf}");
+    // A layer that has a model of its own keeps its pads to itself.
+    let own = layer(&mut s, "Own site", 0);
+    let _m2 = site(&mut s, &own, [200_000, 0], 40_000, 1_000);
+    let pad2 = call(
+        &mut s,
+        "pad.add",
+        json!({"boundary": [[5000, 5000], [15_000, 5000], [15_000, 15_000], [5000, 15_000]], "elevation": 5000, "layer": "Own site"}),
+    );
+    let cf1 = call(&mut s, "site.cut_fill", json!({"id": model}));
+    assert!(!cf1["modifiers"].as_array().unwrap().contains(&pad2["id"]));
+}

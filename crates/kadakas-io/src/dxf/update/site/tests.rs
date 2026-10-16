@@ -62,7 +62,7 @@ fn doc() -> (Editor, ObjectId) {
 
 #[test]
 fn tagged_sources_become_virtual_objects_with_a_place_and_an_edit_flag() {
-    let (ed, id) = doc();
+    let (mut ed, id) = doc();
     let found = collect(ed.doc(), "d");
     assert_eq!(found.len(), 2);
     let point = found.values().find(|s| s.kind == Kind::Point).unwrap();
@@ -86,15 +86,43 @@ fn tagged_sources_become_virtual_objects_with_a_place_and_an_edit_flag() {
     assert_eq!(count(ed.doc(), "other"), 0);
     // A model joins by the DXF layer of its sources, without regard to the case.
     let h = homes(ed.doc(), &found);
-    assert_eq!(h.get("spot"), Some(&id));
-    assert_eq!(h.get("contour"), Some(&id));
+    assert_eq!(h.get("spot"), Some(&vec![id]));
+    assert_eq!(h.get("contour"), Some(&vec![id]));
+    // The new source joins the model that holds it, else the nearest one.
+    let mut second = ed.doc().object(id).unwrap().shape.clone();
+    if let Shape::SiteModel { points, lines, .. } = &mut second {
+        points.iter_mut().for_each(|p| p.x += 100_000.0);
+        lines
+            .iter_mut()
+            .for_each(|l| l.points.iter_mut().for_each(|p| p.x += 100_000.0));
+    }
+    let other = ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: second,
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let near_other = Shape::Locus3d {
+        p: DVec3::new(99_000.0, 0.0, 0.0),
+    };
+    let near_first = Shape::Locus3d {
+        p: DVec3::new(20.0, 3.0, 0.0),
+    };
+    let both = [id, other];
+    assert_eq!(pick_home(ed.doc(), &both, &near_other), Some(other));
+    assert_eq!(pick_home(ed.doc(), &both, &near_first), Some(id));
+    assert_eq!(pick_home(ed.doc(), &[], &near_first), None);
     assert!(!h.contains_key("trees"));
 }
 
 #[test]
-fn sources_of_a_model_that_does_not_fit_its_tags_are_not_read() {
+fn a_change_of_the_shape_keeps_the_tags_of_the_sources_that_remain() {
     let (mut ed, id) = doc();
-    // A point is removed without its tag: the lists no longer fit.
+    // The point without a tag is removed: the tags of the others stay where they belong.
     let mut shape = ed.doc().object(id).unwrap().shape.clone();
     if let Shape::SiteModel { points, .. } = &mut shape {
         points.pop();
@@ -107,7 +135,44 @@ fn sources_of_a_model_that_does_not_fit_its_tags_are_not_read() {
         attrs: None,
     })
     .unwrap();
-    assert!(collect(ed.doc(), "d").is_empty());
+    assert_eq!(collect(ed.doc(), "d").len(), 2);
+    // The tagged point is removed: its tag goes with it, the line keeps its own.
+    let mut shape = ed.doc().object(id).unwrap().shape.clone();
+    if let Shape::SiteModel { points, .. } = &mut shape {
+        points.clear();
+    }
+    ed.execute(&Command::ModifyObject {
+        id,
+        shape: Some(shape),
+        layer: None,
+        class: None,
+        attrs: None,
+    })
+    .unwrap();
+    let left = collect(ed.doc(), "d");
+    assert_eq!(left.len(), 1);
+    assert_eq!(left.values().next().unwrap().kind, Kind::Line);
+    // A move of the whole model keeps the sources as they were; the edited line stays edited.
+    ed.execute(&Command::MoveObjects {
+        ids: vec![id],
+        delta: kadakas_core::DVec2::new(500.0, 0.0),
+    })
+    .unwrap();
+    assert!(collect(ed.doc(), "d").values().next().unwrap().edited);
+}
+
+#[test]
+fn a_moved_model_does_not_show_its_sources_as_edited() {
+    let (mut ed, id) = doc();
+    ed.execute(&Command::MoveObjects {
+        ids: vec![id],
+        delta: kadakas_core::DVec2::new(500.0, -20.0),
+    })
+    .unwrap();
+    let found = collect(ed.doc(), "d");
+    let point = found.values().find(|s| s.kind == Kind::Point).unwrap();
+    assert!(!point.edited, "a rigid move is no edit");
+    assert_eq!(point.center, [1500.0, 1980.0]);
 }
 
 #[test]
