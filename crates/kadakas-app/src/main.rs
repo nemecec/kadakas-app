@@ -45,6 +45,7 @@ mod open_gate;
 mod panels;
 mod picture_ui;
 mod plan_draw;
+mod plan_worker;
 mod plant_draw;
 mod plant_sheet_ui;
 mod plant_ui;

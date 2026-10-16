@@ -1983,6 +1983,8 @@ impl KadakasApp {
                 .request_repaint_after(std::time::Duration::from_millis(450));
         }
 
+        // The drawing of the patterns lays the courses with the same limit as the reports.
+        kadakas_core::hardscape::draw::set_pattern_units(self.session.limits().pattern_units);
         if let Some(doc) = history.as_deref() {
             self.own_cursor = None;
             self.snap_hit = None;

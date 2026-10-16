@@ -418,3 +418,68 @@ fn measure_blocks() {
         );
     }
 }
+
+/// The units that the drawing shows are the units that the DXF export writes, for a plan with a
+/// zone of its own pattern and a course: INSERTs and cut polylines on the unit layers of all groups.
+#[test]
+fn the_drawing_has_the_units_that_the_dxf_export_writes() {
+    use kadakas_core::curve::Vertex;
+    use kadakas_core::hardscape::draw::{DrawOptions, prepared};
+    use kadakas_core::layout::course::Side;
+    use kadakas_core::layout::plan::{CourseDef, Plan, SplitLine, ZoneSpec};
+    use kadakas_core::layout::{Bond, Pattern};
+    let (mut ed, id) = lot(JointKind::RunningBond, 8000.0, 4000.0, 0.0);
+    let vx = |x: f64, y: f64| Vertex::corner(DVec2::new(x, y));
+    let plan = Plan {
+        splits: vec![SplitLine {
+            source: None,
+            points: vec![vx(5000.0, -50.0), vx(5000.0, 4050.0)],
+        }],
+        zones: vec![ZoneSpec {
+            name: Some("Stalls".into()),
+            seed: DVec2::new(7000.0, 2000.0),
+            pattern: Some(Pattern::new(Bond::Stack, 300.0, 150.0, 4.0)),
+            origin: Some(DVec2::new(5000.0, 0.0)),
+            angle: Some(90.0),
+            ..Default::default()
+        }],
+        courses: vec![CourseDef {
+            name: "Kerb".into(),
+            path: vec![vx(0.0, 100.0), vx(5000.0, 100.0)],
+            side: Side::Left,
+            along: 100.0,
+            depth: 200.0,
+            gap: 5.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    ed.execute(&Command::SetData {
+        id,
+        set: [(plan::KEY.to_string(), serde_json::to_value(&plan).unwrap())]
+            .into_iter()
+            .collect(),
+        remove: vec![],
+    })
+    .unwrap();
+    let doc = ed.doc();
+    let drawn = prepared(doc, doc.object(id).unwrap())
+        .unwrap()
+        .unwrap()
+        .draw(None, &DrawOptions::units(usize::MAX / 8));
+    assert!(!drawn.is_preview() && drawn.groups.len() >= 3);
+    let (whole, cut) = drawn.unit_counts();
+    let text = export(doc, PatternExport::Blocks);
+    let (inserts, _, polys) = read(&text);
+    let exported_whole = inserts
+        .iter()
+        .filter(|i| i.layer.ends_with("-UNITS-WHOLE"))
+        .count();
+    let exported_cut: usize = polys
+        .iter()
+        .filter(|(l, _)| l.ends_with("-UNITS-CUT"))
+        .map(|(_, v)| v.len())
+        .sum();
+    assert!(whole > 500 && cut > 20, "{whole} {cut}");
+    assert_eq!((exported_whole, exported_cut), (whole, cut));
+}

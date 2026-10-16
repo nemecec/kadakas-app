@@ -29,6 +29,7 @@ use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::single::SingleFloatOverlay;
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::plan::{Body, Group, Role};
 use super::units::{LayoutError, Limits, Unit};
@@ -402,18 +403,41 @@ fn ray_hit(p: DVec2, n: DVec2, max: f64, cand: &[u32], skip: usize, us: &[U]) ->
 /// Checks the units of the groups. `area` is the whole area of the hardscape (where the stretch
 /// between two units must lie for a wide joint to count).
 pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Report, LayoutError> {
+    check_cancellable(groups, area, opts, &AtomicBool::new(false))
+}
+
+/// The message of the error that [`check_cancellable`] gives when `cancel` was set.
+pub const CANCELLED: &str = "the check was cancelled";
+
+/// Like [`check`]. The flag `cancel` is read between the steps and in the long loops; when it is
+/// set the check stops and gives `LayoutError::Invalid(CANCELLED)`. A caller that runs the check
+/// in the background sets it when the result is not wanted any more.
+pub fn check_cancellable(
+    groups: &[Group],
+    area: &Region,
+    opts: &CheckOptions,
+    cancel: &AtomicBool,
+) -> Result<Report, LayoutError> {
+    let stopped = || cancel.load(Ordering::Relaxed);
+    let cancelled = || LayoutError::Invalid(CANCELLED.to_string());
     // Lay every group.
     let mut us: Vec<U> = Vec::new();
     let mut per_group: Vec<(usize, f64)> = vec![(0, 0.0); groups.len()];
     let mut budget = opts.max_units;
     let mut kind_full: Vec<Vec<f64>> = Vec::new();
     for (gi, g) in groups.iter().enumerate() {
+        if stopped() {
+            return Err(cancelled());
+        }
         let limits = Limits {
             max_units: budget,
             trim: opts.trim,
         };
         let mut nth = 0usize;
         let stats = g.for_each_unit(&limits, &mut |u: &Unit| {
+            if stopped() {
+                return;
+            }
             let Some(outer) = u.rings.first() else { return };
             let mut ring = outer.points.clone();
             if crate::geom::signed_area(&ring) < 0.0 {
@@ -477,6 +501,9 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
     let mut cand: Vec<u32> = Vec::new();
     // Overlaps.
     for i in 0..us.len() {
+        if i % 512 == 0 && stopped() {
+            return Err(cancelled());
+        }
         let a = &us[i];
         grid.query(a.lo, a.hi, &mut cand);
         for &jj in &cand {
@@ -548,7 +575,10 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
         let bx: Vec<(DVec2, DVec2)> = edges.iter().map(|(a, b)| (a.min(*b), a.max(*b))).collect();
         edge_grids.push(Some((Grid::build(&bx, 0.0), edges)));
     }
-    for u in &us {
+    for (n, u) in us.iter().enumerate() {
+        if n % 512 == 0 && stopped() {
+            return Err(cancelled());
+        }
         let g = &groups[u.group];
         let c = centroid(&u.ring);
         // Small pieces.
@@ -687,6 +717,9 @@ pub fn check(groups: &[Group], area: &Region, opts: &CheckOptions) -> Result<Rep
     };
     let mut told: std::collections::HashSet<(usize, usize)> = Default::default();
     for (i, u) in us.iter().enumerate() {
+        if i % 512 == 0 && stopped() {
+            return Err(cancelled());
+        }
         let n = u.ring.len();
         let (min_j, max_j) = (
             opts.min_joint_mm

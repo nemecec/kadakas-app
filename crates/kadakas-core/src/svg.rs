@@ -150,6 +150,8 @@ pub struct RenderOptions {
     pub region: Option<(DVec2, DVec2)>,
     /// Mark the findings of the pattern check on the paved areas.
     pub show_check: bool,
+    /// The most units of a plan (`SessionLimits::pattern_units`), as in the report.
+    pub max_units: Option<usize>,
 }
 
 /// Like [`render_overlay`], with a region and the findings of the pattern check.
@@ -172,6 +174,8 @@ pub fn render_overlay_with(
         view: given,
         show_check: opts.show_check,
         bound: crate::hardscape::draw::SVG_BOUND,
+        px_per_mm: width_px as f64 / (hi.x - lo.x).max(1e-9),
+        max_units: opts.max_units,
     };
     crate::hardscape::draw::with_context(ctx, || render_box(doc, width_px, ext, overlay, (lo, hi)))
 }

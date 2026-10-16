@@ -46,9 +46,54 @@ fn col(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
 }
 
-/// Points along a path, curves cut into short lines.
-fn flatten(segs: &[PSeg]) -> Vec<DVec2> {
-    kadakas_print::display::sample(segs, 12)
+/// The subpaths of a path, curves cut into short lines. A `Move` starts a subpath: a path with
+/// many (the units of a pattern) is not one line.
+fn flatten(segs: &[PSeg]) -> Vec<Vec<DVec2>> {
+    kadakas_print::display::sample_subpaths(segs, 12)
+}
+
+/// The rings of a filled path, as the PDF fills it: a ring that runs counterclockwise is an outline,
+/// one that runs clockwise is a hole in the outline that holds it. The closing point that repeats
+/// the first one is dropped.
+fn fill_groups(subs: &[Vec<DVec2>]) -> Vec<Vec<Vec<DVec2>>> {
+    let rings: Vec<Vec<DVec2>> = subs
+        .iter()
+        .map(|s| {
+            let mut r = s.clone();
+            if r.len() > 1 && r.first() == r.last() {
+                r.pop();
+            }
+            r
+        })
+        .filter(|r| r.len() >= 3)
+        .collect();
+    let area = |r: &[DVec2]| -> f64 {
+        (0..r.len())
+            .map(|i| r[i].perp_dot(r[(i + 1) % r.len()]))
+            .sum::<f64>()
+    };
+    let (outers, holes): (Vec<_>, Vec<_>) = rings.into_iter().partition(|r| area(r) >= 0.0);
+    if outers.is_empty() {
+        return holes.into_iter().map(|h| vec![h]).collect();
+    }
+    let mut groups: Vec<Vec<Vec<DVec2>>> = outers.into_iter().map(|o| vec![o]).collect();
+    for h in holes {
+        let inside = |poly: &[DVec2], p: DVec2| {
+            let mut c = false;
+            for i in 0..poly.len() {
+                let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+                if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x
+                {
+                    c = !c;
+                }
+            }
+            c
+        };
+        if let Some(g) = groups.iter_mut().find(|g| inside(&g[0], h[0])) {
+            g.push(h);
+        }
+    }
+    groups
 }
 
 impl SheetUi {
@@ -78,43 +123,57 @@ impl SheetUi {
                     stack.pop();
                 }
                 Prim::Path(path) => {
-                    let pts = flatten(&path.segs);
-                    let sp: Vec<Pos2> = pts.iter().map(|q| view.to_screen(*q)).collect();
-                    if let (Some(f), true) = (path.fill, path.closed)
+                    let subs = flatten(&path.segs);
+                    if let Some(f) = path.fill
                         && f[3] > 0
-                        && pts.len() >= 3
                     {
-                        let mut mesh = egui::epaint::Mesh::default();
-                        for q in &sp {
-                            mesh.colored_vertex(*q, col(f));
+                        for group in fill_groups(&subs) {
+                            let (pts, tris) = tess::triangulate_with_holes(&group);
+                            let mut mesh = egui::epaint::Mesh::default();
+                            for q in &pts {
+                                mesh.colored_vertex(view.to_screen(*q), col(f));
+                            }
+                            for t in tris {
+                                mesh.add_triangle(t[0] as u32, t[1] as u32, t[2] as u32);
+                            }
+                            p.add(mesh);
                         }
-                        for t in tess::triangulate(&pts) {
-                            mesh.add_triangle(t[0] as u32, t[1] as u32, t[2] as u32);
-                        }
-                        p.add(mesh);
                     }
                     if let Some(s) = path.stroke {
                         let w = ((path.width * view.zoom) as f32).max(0.8);
-                        match path.dash {
-                            Some([d, g]) => {
-                                let mut pts = sp.clone();
-                                if path.closed {
-                                    pts.push(sp[0]);
-                                }
-                                p.extend(egui::Shape::dashed_line(
-                                    &pts,
-                                    Stroke::new(w, col(s)),
-                                    (d * view.zoom) as f32,
-                                    (g * view.zoom) as f32,
-                                ));
+                        for sub in &subs {
+                            let mut sp: Vec<Pos2> =
+                                sub.iter().map(|q| view.to_screen(*q)).collect();
+                            if sp.len() < 2 {
+                                continue;
                             }
-                            None => {
-                                p.add(egui::epaint::PathShape {
-                                    points: sp,
-                                    closed: path.closed,
-                                    fill: Color32::TRANSPARENT,
-                                    stroke: PathStroke::new(w, col(s)),
-                                });
+                            // A ring that returns to its start is closed.
+                            let mut closed = path.closed;
+                            if sub.len() > 2 && sub.first() == sub.last() {
+                                sp.pop();
+                                closed = true;
+                            }
+                            match path.dash {
+                                Some([d, g]) => {
+                                    let mut pts = sp.clone();
+                                    if closed {
+                                        pts.push(sp[0]);
+                                    }
+                                    p.extend(egui::Shape::dashed_line(
+                                        &pts,
+                                        Stroke::new(w, col(s)),
+                                        (d * view.zoom) as f32,
+                                        (g * view.zoom) as f32,
+                                    ));
+                                }
+                                None => {
+                                    p.add(egui::epaint::PathShape {
+                                        points: sp,
+                                        closed,
+                                        fill: Color32::TRANSPARENT,
+                                        stroke: PathStroke::new(w, col(s)),
+                                    });
+                                }
                             }
                         }
                     }

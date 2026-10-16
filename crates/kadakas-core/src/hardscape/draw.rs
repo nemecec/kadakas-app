@@ -11,19 +11,24 @@
 //! of the whole), so a lot of 250,000 units can be zoomed in to the unit. Cut units are marked with
 //! a light fill; whole units stay plain. Above the bound the drawing is a preview: the gap lines of
 //! the whole plan, with larger units where the pattern is too fine (the old drawing), and a label
-//! that says so ([`PREVIEW_LABEL`]).
+//! that says so ([`PREVIEW_LABEL`]). A group whose units are smaller than `min_unit_mm` (a pixel
+//! limit of the screen, a limit of the paper) is hidden, and the drawing says so; the zone edges and
+//! the outlines of the courses are always drawn.
 //!
 //! The bounds are measured (`measure_bounds` in the tests of this module, and in the app and print
 //! crates); the numbers are in the documentation of each constant.
 //!
 //! The laid plan is kept by a content key (the outline, the holes, the pattern, the plan, the
-//! tolerance and the objects that a zone or a course follows), so an edit of something else does
-//! not lay the plan again. The view is clipped from the kept plan.
+//! tolerance, the unit limit and the objects that a zone or a course follows), so an edit of
+//! something else does not lay the plan again. The view is clipped from the kept plan. A plan can
+//! be laid in the background ([`PrepareJob`]) and its check can be stopped ([`Prepared::findings_cancellable`]),
+//! so a window never waits for them.
 
 use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use glam::DVec2;
@@ -40,6 +45,9 @@ pub type BBox = (DVec2, DVec2);
 
 /// What the canvas and the previews say when they draw a preview.
 pub const PREVIEW_LABEL: &str = "preview: zoom in for the real pattern";
+
+/// What a drawing says when it hides the units of a group that are too small to see.
+pub const HIDDEN_LABEL: &str = "pattern hidden at this zoom (units too small)";
 
 /// Most units in the window of the canvas for a drawing of the real units. The window is the
 /// visible part and a margin round it (see the app). Measured in the app (`measure_canvas_frames`,
@@ -60,13 +68,34 @@ pub const SVG_BOUND: usize = 60_000;
 /// 1.1 s (the page in 48 ms, an SVG of the page 5.3 MB); the 5,000 m2 lot (233,000 units) is a PDF of
 /// 3.5 MB in 4.3 s and an SVG of 21 MB. Above the bound the sheet has the gap lines and a note.
 pub const PRINT_BOUND: usize = 60_000;
-/// Most units of a lattice that zones give to the zone of their center. The lattice is laid whole
-/// (and kept) because a unit goes to the zone of its center; a bigger lattice is drawn as a
-/// preview.
+/// Most units of a lattice that zones give to the zone of their center, for which the lattice is
+/// laid whole and kept (the zones then read their lists from it). A bigger lattice is laid on the
+/// window of the view only: a unit still goes to the zone of its center.
 pub const OWNER_LATTICE_MAX: usize = 300_000;
 
+/// The most memory the shared cache of laid plans keeps, as estimated by [`Prepared::approx_bytes`].
+pub const CACHE_BYTES: usize = 384 * 1024 * 1024;
+/// The most plans the shared cache keeps.
+pub const CACHE_PLANS: usize = 48;
+
+static PATTERN_UNITS: AtomicUsize = AtomicUsize::new(layout::MAX_UNITS);
+
+/// Sets the most units that a plan may have in the drawings of this process (the courses of a plan
+/// are bound by it, as in the report: `SessionLimits::pattern_units`). The app sets it from its
+/// session; a render sets it in its [`SvgContext`].
+pub fn set_pattern_units(n: usize) {
+    PATTERN_UNITS.store(n.max(1), Ordering::Relaxed);
+}
+
+/// The unit limit that a plan is laid with now.
+pub fn pattern_units() -> usize {
+    context()
+        .max_units
+        .unwrap_or_else(|| PATTERN_UNITS.load(Ordering::Relaxed))
+}
+
 /// What to draw.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DrawOptions {
     /// The gap lines of the patterns (and the edges of the course units).
     pub joints: bool,
@@ -78,6 +107,9 @@ pub struct DrawOptions {
     pub bound: usize,
     /// Most gap lines for the real units; above it the drawing is a preview.
     pub max_segments: usize,
+    /// A group whose smallest unit side is less than this (mm) is hidden: it draws no units and no
+    /// lines, and is not counted for the bound. 0: nothing is hidden.
+    pub min_unit_mm: f64,
 }
 
 impl DrawOptions {
@@ -89,6 +121,7 @@ impl DrawOptions {
             cut_units: true,
             bound: CANVAS_BOUND,
             max_segments: CANVAS_MAX_SEGMENTS,
+            min_unit_mm: 0.0,
         }
     }
 
@@ -100,6 +133,15 @@ impl DrawOptions {
             cut_units: true,
             bound,
             max_segments: bound.saturating_mul(6),
+            min_unit_mm: 0.0,
+        }
+    }
+
+    /// The same, hiding the groups with units smaller than `mm`.
+    pub fn hiding_units_under(self, mm: f64) -> Self {
+        DrawOptions {
+            min_unit_mm: mm,
+            ..self
         }
     }
 }
@@ -112,8 +154,16 @@ pub type CutUnit = Vec<Vec<DVec2>>;
 pub struct DrawnGroup {
     pub name: String,
     pub role: Option<Role>,
+    /// The width of the joints of the group, in mm.
+    pub gap: f64,
+    /// The smaller side of the unit of the group (the smallest of its unit shapes), in mm.
+    pub unit_mm: f64,
+    /// The units of the group are smaller than `DrawOptions::min_unit_mm`: no units, no lines.
+    pub hidden: bool,
     /// Gap lines (a preview, or `DrawOptions::joints`), and the edges of course units.
     pub joints: Vec<Segment>,
+    /// The outline of a course (the area it takes), always drawn.
+    pub outline: Vec<Vec<DVec2>>,
     /// The outlines of the whole units in view (when asked).
     pub whole: Vec<Vec<DVec2>>,
     /// The cut units in view (when asked).
@@ -154,6 +204,11 @@ impl Drawn {
         matches!(self.detail, Detail::Preview { .. })
     }
 
+    /// Some group is hidden because its units are too small (see `DrawOptions::min_unit_mm`).
+    pub fn has_hidden(&self) -> bool {
+        self.groups.iter().any(|g| g.hidden)
+    }
+
     /// The whole and the cut units drawn, over all groups.
     pub fn unit_counts(&self) -> (usize, usize) {
         self.groups
@@ -181,8 +236,6 @@ pub struct Prepared {
     pub planned: Planned,
     /// The whole area that the pattern goes in (the outline less the kerb border, less the holes).
     pub region: Region,
-    /// The lattices of centered zones that are too big to lay whole.
-    lattice_too_big: bool,
     preview: OnceLock<Preview>,
     findings: OnceLock<Result<check::Report, String>>,
 }
@@ -191,8 +244,8 @@ pub struct Prepared {
 // The key and the cache
 
 /// The key of what the drawing depends on: the outline, the holes, the pattern, the plan, the
-/// settings and the tolerance, and the objects that a zone or a course follows. Two objects with
-/// the same key are drawn the same.
+/// settings, the tolerance and the unit limit, and the objects that a zone or a course follows. Two
+/// objects with the same key are drawn the same.
 pub fn content_key(doc: &Document, obj: &Object, tolerance: f64) -> u64 {
     let mut h = DefaultHasher::new();
     format!("{:?}", obj.shape).hash(&mut h);
@@ -204,6 +257,7 @@ pub fn content_key(doc: &Document, obj: &Object, tolerance: f64) -> u64 {
         format!("{:?}|{:?}", style.joints, style.border).hash(&mut h);
     }
     tolerance.to_bits().hash(&mut h);
+    pattern_units().hash(&mut h);
     if let Some(p) = &plan {
         let followed = p
             .splits
@@ -220,34 +274,63 @@ pub fn content_key(doc: &Document, obj: &Object, tolerance: f64) -> u64 {
     h.finish()
 }
 
-/// How many laid plans the cache keeps.
-const CACHE_SIZE: usize = 12;
+type CacheEntry = (u64, Result<Arc<Prepared>, String>, usize);
 
-type CacheEntry = (u64, Result<Arc<Prepared>, String>);
-
-/// Laid plans by content key, the last used kept. A plan that cannot be laid is kept too, with its
-/// message.
+/// Laid plans by content key, the last used kept, bound by their number and by their estimated
+/// memory. A plan that cannot be laid is kept too, with its message.
 pub struct PlanCache {
     entries: Mutex<Vec<CacheEntry>>,
     capacity: usize,
+    bytes: usize,
     builds: std::sync::atomic::AtomicU64,
 }
 
 impl PlanCache {
-    pub const fn new(capacity: usize) -> Self {
+    pub const fn new(capacity: usize, bytes: usize) -> Self {
         PlanCache {
             entries: Mutex::new(Vec::new()),
             capacity,
+            bytes,
             builds: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
     /// How often a plan was laid (a hit does not count). Tests use it to check the work done.
     pub fn builds(&self) -> u64 {
-        self.builds.load(std::sync::atomic::Ordering::Relaxed)
+        self.builds.load(Ordering::Relaxed)
     }
 
-    /// The laid plan for a key that [`content_key`] made.
+    /// How many plans the cache holds, and their estimated memory.
+    pub fn size(&self) -> (usize, usize) {
+        let c = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        (c.len(), c.iter().map(|e| e.2).sum())
+    }
+
+    /// The plan for a key, if it is in the cache (it becomes the most recent).
+    pub fn cached(&self, key: u64) -> Option<Result<Arc<Prepared>, String>> {
+        let mut c = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let i = c.iter().position(|(k, ..)| *k == key)?;
+        let hit = c.remove(i);
+        let out = hit.1.clone();
+        c.push(hit);
+        Some(out)
+    }
+
+    /// Puts a plan in the cache. The oldest plans go when there are too many or too big.
+    pub fn insert(&self, key: u64, plan: Result<Arc<Prepared>, String>) {
+        let size = plan.as_ref().map_or(64, |p| p.approx_bytes());
+        let mut c = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        c.retain(|(k, ..)| *k != key);
+        c.push((key, plan, size));
+        while c.len() > 1
+            && (c.len() > self.capacity || c.iter().map(|e| e.2).sum::<usize>() > self.bytes)
+        {
+            drop(c.remove(0));
+        }
+    }
+
+    /// The laid plan for a key that [`content_key`] made. It is laid here when it is not in the
+    /// cache.
     pub fn get(
         &self,
         doc: &Document,
@@ -255,23 +338,12 @@ impl PlanCache {
         key: u64,
     ) -> Option<Result<Arc<Prepared>, String>> {
         layout::object::pattern_of(doc, obj)?;
-        {
-            let mut c = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(i) = c.iter().position(|(k, _)| *k == key) {
-                let hit = c.remove(i);
-                let out = hit.1.clone();
-                c.push(hit);
-                return Some(out);
-            }
+        if let Some(hit) = self.cached(key) {
+            return Some(hit);
         }
-        self.builds
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let built = Prepared::new(doc, obj, layout::TOLERANCE, key).map(Arc::new);
-        let mut c = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        if c.len() >= self.capacity {
-            drop(c.remove(0));
-        }
-        c.push((key, built.clone()));
+        self.builds.fetch_add(1, Ordering::Relaxed);
+        let built = Prepared::new(doc, obj, layout::TOLERANCE, key, pattern_units()).map(Arc::new);
+        self.insert(key, built.clone());
         Some(built)
     }
 
@@ -283,16 +355,27 @@ impl PlanCache {
     }
 }
 
-static CACHE: PlanCache = PlanCache::new(CACHE_SIZE);
+static CACHE: PlanCache = PlanCache::new(CACHE_PLANS, CACHE_BYTES);
 
 /// How many plans the shared cache laid since the start of the process (a hit does not count).
 pub fn builds() -> u64 {
     CACHE.builds()
 }
 
+/// The shared cache of laid plans (tests look at its size).
+pub fn cache() -> &'static PlanCache {
+    &CACHE
+}
+
+/// The plan for a key from the shared cache; nothing is laid.
+pub fn cached(key: u64) -> Option<Result<Arc<Prepared>, String>> {
+    CACHE.cached(key)
+}
+
 /// The laid plan of a hardscape, from the cache when nothing that it depends on changed. `None`
 /// if the object has no joint pattern; `Err` says why the plan cannot be laid (the message of the
-/// report).
+/// report). This lays the plan on the calling thread when it is not in the cache: a window uses
+/// [`prepare_job`] instead.
 pub fn prepared(doc: &Document, obj: &Object) -> Option<Result<Arc<Prepared>, String>> {
     let key = content_key(doc, obj, layout::TOLERANCE);
     CACHE.get(doc, obj, key)
@@ -306,6 +389,67 @@ pub fn prepared_with_key(
     key: u64,
 ) -> Option<Result<Arc<Prepared>, String>> {
     CACHE.get(doc, obj, key)
+}
+
+/// The work of laying one plan, with what it needs from the document, so that it can run on
+/// another thread. The document that it holds has the styles, the object and the objects that a
+/// zone or a course follows, and nothing else.
+pub struct PrepareJob {
+    doc: Document,
+    obj: Object,
+    key: u64,
+    max_units: usize,
+}
+
+impl PrepareJob {
+    /// The content key of the plan that the job lays.
+    pub fn key(&self) -> u64 {
+        self.key
+    }
+
+    /// Lays the plan and puts it in the shared cache.
+    pub fn run(self) -> Result<Arc<Prepared>, String> {
+        if let Some(hit) = CACHE.cached(self.key) {
+            return hit;
+        }
+        CACHE.builds.fetch_add(1, Ordering::Relaxed);
+        let built = Prepared::new(
+            &self.doc,
+            &self.obj,
+            layout::TOLERANCE,
+            self.key,
+            self.max_units,
+        )
+        .map(Arc::new);
+        CACHE.insert(self.key, built.clone());
+        built
+    }
+}
+
+/// A job that lays the plan of an object, for the key that [`content_key`] made. `None` if the
+/// object has no joint pattern.
+pub fn prepare_job(doc: &Document, obj: &Object, key: u64) -> Option<PrepareJob> {
+    layout::object::pattern_of(doc, obj)?;
+    let mut small = Document::default();
+    small.resources = doc.resources.clone();
+    if let Some(p) = plan::data(obj) {
+        let followed = p
+            .splits
+            .iter()
+            .filter_map(|s| s.source)
+            .chain(p.courses.iter().filter_map(|c| c.source));
+        for id in followed {
+            if let Some(o) = doc.object(id) {
+                small.objects.insert(id, o.clone());
+            }
+        }
+    }
+    Some(PrepareJob {
+        doc: small,
+        obj: obj.clone(),
+        key,
+        max_units: pattern_units(),
+    })
 }
 
 fn estimate(pattern: &Pattern, area: f64) -> u64 {
@@ -381,39 +525,106 @@ fn edges_of(poly: &[DVec2], out: &mut Vec<Segment>) {
     }
 }
 
+/// The smaller side of the unit of a group, in mm: the smallest side of the cells of a pattern, the
+/// smaller of the length and the depth of a course.
+fn unit_mm_of(g: &Group) -> f64 {
+    match &g.body {
+        Body::Pattern { pattern, .. } => pattern
+            .compile()
+            .map(|c| {
+                c.kinds
+                    .iter()
+                    .map(|k| (k.hi - k.lo).min_element())
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .ok()
+            .filter(|m| m.is_finite())
+            .unwrap_or(0.0),
+        Body::Course(c) => c.along.min(c.depth),
+    }
+}
+
+fn new_group(g: &Group, min_unit_mm: f64) -> DrawnGroup {
+    let unit_mm = unit_mm_of(g);
+    let outline = match &g.body {
+        Body::Course(c) => c.band.iter().flatten().cloned().collect(),
+        Body::Pattern { .. } => Vec::new(),
+    };
+    DrawnGroup {
+        name: g.name.clone(),
+        role: Some(g.role),
+        gap: g.gap(),
+        unit_mm,
+        hidden: unit_mm < min_unit_mm,
+        outline,
+        ..Default::default()
+    }
+}
+
+fn ring_bytes(r: &Region) -> usize {
+    r.rings().map(|x| x.len() * 16).sum()
+}
+
 impl Prepared {
     /// Lays the plan of an object. `Err`: the message of the report. The object must have a joint
-    /// pattern.
-    pub fn new(doc: &Document, obj: &Object, tolerance: f64, key: u64) -> Result<Prepared, String> {
+    /// pattern. `max_units` bounds the units of the courses, as in the report.
+    pub fn new(
+        doc: &Document,
+        obj: &Object,
+        tolerance: f64,
+        key: u64,
+        max_units: usize,
+    ) -> Result<Prepared, String> {
         let (pattern, place) = layout::object::pattern_of(doc, obj)
             .ok_or_else(|| "the object has no joint pattern".to_string())?;
         let region = layout::object::region_of(doc, obj, tolerance)?;
-        let planned =
-            plan::plan_groups(doc, obj, region.clone(), pattern, place, layout::MAX_UNITS)?;
-        let mut lattice_too_big = false;
-        for g in planned.groups.iter().filter(|g| g.owner.is_some()) {
-            if let Body::Pattern { pattern, .. } = &g.body
-                && estimate(pattern, g.region.area) > OWNER_LATTICE_MAX as u64
-            {
-                lattice_too_big = true;
-            }
-        }
+        let planned = plan::plan_groups(doc, obj, region.clone(), pattern, place, max_units)?;
         Ok(Prepared {
             key,
             planned,
             region,
-            lattice_too_big,
             preview: OnceLock::new(),
             findings: OnceLock::new(),
         })
     }
 
-    /// About how many units the plan has in `view` (the whole plan for `None`). Exact for the
-    /// units of courses; for the patterns it is the area of the region in view over the area of a
-    /// cell, as the engine estimates its work.
-    pub fn units_in(&self, view: Option<BBox>) -> u64 {
+    /// About how much memory the plan holds, in bytes: the rings of the regions and the pieces of
+    /// the courses, and the laid lattice of the zones that give their units by center.
+    pub fn approx_bytes(&self) -> usize {
+        let mut n = ring_bytes(&self.region) + 1024;
+        for g in &self.planned.groups {
+            n += ring_bytes(&g.region);
+            match &g.body {
+                Body::Course(c) => {
+                    n += c
+                        .pieces
+                        .iter()
+                        .map(|p| p.poly.len() * 16 + 64)
+                        .sum::<usize>()
+                }
+                Body::Pattern { pattern, .. } => {
+                    if g.owner.is_some() {
+                        // A laid unit costs about 200 bytes.
+                        n += (estimate(pattern, g.region.area) as usize)
+                            .min(OWNER_LATTICE_MAX)
+                            .saturating_mul(200);
+                    }
+                }
+            }
+        }
+        n
+    }
+
+    /// About how many units the plan has in `view` (the whole plan for `None`), without the groups
+    /// whose units are smaller than `min_unit_mm`. Exact for the units of courses; for the patterns
+    /// it is the area of the region in view over the area of a cell, as the engine estimates its
+    /// work.
+    pub fn units_in(&self, view: Option<BBox>, min_unit_mm: f64) -> u64 {
         let mut total = 0u64;
         for g in &self.planned.groups {
+            if unit_mm_of(g) < min_unit_mm {
+                continue;
+            }
             match &g.body {
                 Body::Pattern { pattern, .. } => {
                     total += estimate(pattern, region_area_in(zone_region(g), view));
@@ -438,21 +649,32 @@ impl Prepared {
     /// Draws the plan for a view: the real units when `view` holds at most `opts.bound` units,
     /// else the preview. `None` is the whole plan.
     pub fn draw(&self, view: Option<BBox>, opts: &DrawOptions) -> Drawn {
-        let est = self.units_in(view);
+        let est = self.units_in(view, opts.min_unit_mm);
         if est <= opts.bound as u64
-            && !self.lattice_too_big
             && let Some(d) = self.draw_full(view, opts)
         {
             return d;
         }
         let p = self.preview();
+        let groups = p
+            .groups
+            .iter()
+            .map(|g| {
+                let mut g = g.clone();
+                if g.unit_mm < opts.min_unit_mm {
+                    g.hidden = true;
+                    g.joints.clear();
+                }
+                g
+            })
+            .collect();
         Drawn {
             detail: Detail::Preview {
                 units_in_view: est,
                 bound: opts.bound,
                 truncated: p.truncated,
             },
-            groups: p.groups.clone(),
+            groups,
             zone_edges: self.zone_edges(),
             view,
         }
@@ -474,11 +696,7 @@ impl Prepared {
             let mut left = MAX_DRAW_SEGMENTS;
             let mut lattices: Vec<*const Vec<Region>> = Vec::new();
             for g in &self.planned.groups {
-                let mut dg = DrawnGroup {
-                    name: g.name.clone(),
-                    role: Some(g.role),
-                    ..Default::default()
-                };
+                let mut dg = new_group(g, 0.0);
                 match (&g.body, resolved(g)) {
                     (Body::Pattern { .. }, Some((pattern, place))) => {
                         // The zones of one lattice draw its lines once.
@@ -527,11 +745,14 @@ impl Prepared {
         let mut groups = Vec::with_capacity(self.planned.groups.len());
         let mut lattices: Vec<*const Vec<Region>> = Vec::new();
         for g in &self.planned.groups {
-            let mut dg = DrawnGroup {
-                name: g.name.clone(),
-                role: Some(g.role),
-                ..Default::default()
-            };
+            let mut dg = new_group(g, opts.min_unit_mm);
+            if let Some(v) = view {
+                dg.outline.retain(|r| boxes_meet(box_of_ring(r), v));
+            }
+            if dg.hidden {
+                groups.push(dg);
+                continue;
+            }
             let in_view = |ring: &[DVec2]| view.is_none_or(|v| boxes_meet(box_of_ring(ring), v));
             let take = |u: &layout::Unit, dg: &mut DrawnGroup, course: bool| {
                 let Some(outer) = u.rings.first() else { return };
@@ -602,6 +823,17 @@ impl Prepared {
                     }
                     if opts.whole_units || opts.cut_units {
                         match &g.owner {
+                            Some(o)
+                                if estimate(pattern, g.region.area) > OWNER_LATTICE_MAX as u64 =>
+                            {
+                                // A lattice too big to keep: lay the window, and give each unit to
+                                // the zone of its center.
+                                view?;
+                                o.units_near(&window, pattern, &place, &limits, &mut |u| {
+                                    take(u, &mut dg, false)
+                                })
+                                .ok()?;
+                            }
                             Some(_) => {
                                 g.for_each_unit(&Limits::default(), &mut |u| {
                                     take(u, &mut dg, false)
@@ -632,12 +864,42 @@ impl Prepared {
         })
     }
 
-    /// The findings of the pattern check (`unit_pattern.check` with its defaults), laid once.
+    /// The findings of the pattern check (`unit_pattern.check` with its default options), laid
+    /// once. This waits for the check; a window uses [`Prepared::findings_cancellable`] on another
+    /// thread and [`Prepared::findings_ready`].
     pub fn findings(&self) -> &Result<check::Report, String> {
         self.findings.get_or_init(|| {
             check::check(&self.planned.groups, &self.region, &CheckOptions::default())
                 .map_err(|e| e.to_string())
         })
+    }
+
+    /// The findings, if they were made already.
+    pub fn findings_ready(&self) -> Option<&Result<check::Report, String>> {
+        self.findings.get()
+    }
+
+    /// Makes the findings, and stops when `cancel` is set (`None` then, nothing is kept).
+    pub fn findings_cancellable(
+        &self,
+        cancel: &AtomicBool,
+    ) -> Option<&Result<check::Report, String>> {
+        if let Some(r) = self.findings.get() {
+            return Some(r);
+        }
+        let made = check::check_cancellable(
+            &self.planned.groups,
+            &self.region,
+            &CheckOptions::default(),
+            cancel,
+        );
+        match made {
+            Err(layout::LayoutError::Invalid(m)) if m == check::CANCELLED => None,
+            other => {
+                let _ = self.findings.set(other.map_err(|e| e.to_string()));
+                self.findings.get()
+            }
+        }
     }
 }
 
@@ -660,6 +922,17 @@ fn unit_extent(pattern: &Pattern) -> f64 {
     })
 }
 
+/// What the findings of the check say about their number: the total of each kind (exact), how many
+/// are listed, and the kinds whose list was cut (at most `CheckOptions::max_findings`, 200, of one
+/// kind are listed).
+pub fn findings_summary(r: &check::Report) -> (usize, usize, Vec<String>) {
+    (
+        r.counts.values().sum(),
+        r.findings.len(),
+        r.truncated.clone(),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // SVG
 
@@ -672,6 +945,12 @@ pub struct SvgContext {
     pub show_check: bool,
     /// Most units in the region for the real units.
     pub bound: usize,
+    /// Pixels of the picture for a mm of the model (0: not known). The notes in the picture are
+    /// 12 px high.
+    pub px_per_mm: f64,
+    /// The limit of units of a plan (`SessionLimits::pattern_units`); `None`: the limit set with
+    /// [`set_pattern_units`].
+    pub max_units: Option<usize>,
 }
 
 impl Default for SvgContext {
@@ -680,6 +959,8 @@ impl Default for SvgContext {
             view: None,
             show_check: false,
             bound: SVG_BOUND,
+            px_per_mm: 0.0,
+            max_units: None,
         }
     }
 }
@@ -746,15 +1027,58 @@ pub fn finding_color(kind: check::Kind) -> &'static str {
     }
 }
 
+/// The height of a note in the picture, in model mm: 12 px when the scale of the picture is known,
+/// else 3.5 mm of paper.
+fn note_height(ctx: &SvgContext, scale: f64) -> f64 {
+    if ctx.px_per_mm > 0.0 {
+        12.0 / ctx.px_per_mm
+    } else {
+        3.5 * scale
+    }
+}
+
+/// A note in the picture, at the top left of the part of the box `bounds` that is in view.
+#[allow(clippy::too_many_arguments)]
+fn note(
+    out: &mut String,
+    ctx: &SvgContext,
+    scale: f64,
+    bounds: BBox,
+    color: &str,
+    part: &str,
+    attrs: &str,
+    line: usize,
+    text: &str,
+) {
+    let h = note_height(ctx, scale);
+    let (lo, hi) = ctx
+        .view
+        .map_or(bounds, |v| (bounds.0.max(v.0), bounds.1.min(v.1)));
+    let (lo, hi) = if lo.x <= hi.x && lo.y <= hi.y {
+        (lo, hi)
+    } else {
+        bounds
+    };
+    let _ = writeln!(
+        out,
+        r#"<text x="{}" y="{}" font-size="{}" font-family="sans-serif" fill="{color}" data-part="{part}"{attrs}>{}</text>"#,
+        num(lo.x + 0.5 * h),
+        num(-hi.y + 1.3 * h * (line as f64 + 1.0)),
+        num(h),
+        escape(text)
+    );
+}
+
 /// The SVG of the pattern plan of a hardscape. `scale` is the drawing scale of the layer (1 mm of
 /// line weight on paper is `scale` mm of the model), `stroke` the pen of the object, `color` the
 /// color of the pattern lines (the pen when none).
 ///
 /// Per group a `<g data-part="group">` holds `data-whole` and `data-cut` (the units drawn), the
 /// whole units as the subpaths of one `<path data-part="units-whole">` and each cut unit as a
-/// `<path data-part="unit-cut">` with a light fill (18% of the pen). A preview has the gap lines
-/// as `<path data-part="joints">`, `data-detail="preview"` on the outer group and a text with
-/// [`PREVIEW_LABEL`].
+/// `<path data-part="unit-cut">` with a light fill (18% of the pen). A course has its outline as
+/// `<path data-part="course-outline">`. A preview has the gap lines as `<path data-part="joints">`,
+/// `data-detail="preview"` on the outer group and a text with [`PREVIEW_LABEL`] that is 12 px high
+/// in the picture. A plan that cannot be laid has a text with the reason.
 pub fn svg(
     doc: &Document,
     obj: &Object,
@@ -768,21 +1092,36 @@ pub fn svg(
         return String::new();
     };
     let mut out = String::new();
+    let color = color.unwrap_or_else(|| stroke.to_string());
     let prepared = match prepared {
         Ok(p) => p,
         Err(e) => {
             // Nothing to draw, and the reason is in the picture for a person who looks.
-            let _ = writeln!(
-                out,
-                r#"<g data-part="pattern" data-of="{}" data-detail="none" data-error="{}"/>"#,
-                obj.id,
-                escape(&e)
-            );
+            let (lo, hi) = doc.object_bounds(obj);
+            if lo.is_finite() && hi.is_finite() {
+                let _ = writeln!(
+                    out,
+                    r#"<g data-part="pattern" data-of="{}" data-detail="none" data-error="{}">"#,
+                    obj.id,
+                    escape(&e)
+                );
+                note(
+                    &mut out,
+                    &ctx,
+                    scale,
+                    (lo, hi),
+                    &color,
+                    "pattern-error",
+                    "",
+                    0,
+                    &format!("Pattern not drawn: {e}"),
+                );
+                out.push_str("</g>\n");
+            }
             return out;
         }
     };
     let drawn = prepared.draw(ctx.view, &DrawOptions::units(ctx.bound));
-    let color = color.unwrap_or_else(|| stroke.to_string());
     let hair = 0.1 * scale;
     let detail = if drawn.is_preview() {
         "preview"
@@ -807,6 +1146,19 @@ pub fn svg(
             g.whole_count,
             g.cut_count
         );
+        // The units show a course; its band is drawn when the units are hidden.
+        if g.hidden && !g.outline.is_empty() {
+            let mut d = String::new();
+            for ring in &g.outline {
+                ring_d(ring, &mut d);
+            }
+            let _ = writeln!(
+                out,
+                r#"<path d="{}" fill="none" stroke="{color}" stroke-width="{hair}" data-part="course-outline" data-of="{}"/>"#,
+                d.trim_end(),
+                obj.id
+            );
+        }
         if !g.joints.is_empty() {
             let mut d = String::new();
             for (a, b) in &g.joints {
@@ -820,7 +1172,7 @@ pub fn svg(
                 );
             }
             // The width of a joint is the width of its line in the preview, as it was.
-            let width = joint_width(&prepared, g).max(hair);
+            let width = g.gap.max(hair);
             let _ = writeln!(
                 out,
                 r#"<path d="{}" fill="none" stroke="{color}" stroke-width="{width}" data-part="joints" data-of="{}" data-pattern="{pattern_id}"/>"#,
@@ -875,22 +1227,18 @@ pub fn svg(
         truncated,
     } = &drawn.detail
     {
-        let (lo, hi) = ctx.view.map_or(prepared.bounds(), |v| {
-            let (a, b) = prepared.bounds();
-            (a.max(v.0), b.min(v.1))
-        });
-        let (lo, hi) = if lo.x <= hi.x && lo.y <= hi.y {
-            (lo, hi)
-        } else {
-            prepared.bounds()
-        };
-        let _ = writeln!(
-            out,
-            r#"<text x="{}" y="{}" font-size="{}" font-family="sans-serif" fill="{color}" data-part="preview-note" data-units-in-view="{units_in_view}" data-bound="{bound}" data-truncated="{truncated}">{}</text>"#,
-            num(lo.x + 2.0 * scale),
-            num(-hi.y + 5.0 * scale),
-            3.5 * scale,
-            PREVIEW_LABEL
+        note(
+            &mut out,
+            &ctx,
+            scale,
+            prepared.bounds(),
+            &color,
+            "preview-note",
+            &format!(
+                r#" data-units-in-view="{units_in_view}" data-bound="{bound}" data-truncated="{truncated}""#
+            ),
+            0,
+            PREVIEW_LABEL,
         );
     }
     if ctx.show_check {
@@ -900,34 +1248,37 @@ pub fn svg(
     out
 }
 
-/// The width of the joint line of a group in a preview: the joint of its pattern.
-fn joint_width(prepared: &Prepared, g: &DrawnGroup) -> f64 {
-    prepared
-        .planned
-        .groups
-        .iter()
-        .find(|p| p.name == g.name)
-        .map_or(0.0, Group::gap)
-}
-
-/// The markers of the findings of the check, in view.
+/// The markers of the findings of the check, in view. The group says how many findings there are
+/// (`data-findings`, exact), how many are listed (`data-listed`, at most 200 of each kind), the kinds
+/// whose list was cut (`data-cut-kinds`) and the options of the check (`data-options="default"`:
+/// the defaults of `unit_pattern.check`, not the options of an earlier call).
 pub fn check_svg(prepared: &Prepared, view: Option<BBox>, scale: f64, obj: &Object) -> String {
     let mut out = String::new();
     match prepared.findings() {
         Err(e) => {
             let _ = writeln!(
                 out,
-                r#"<g data-part="check" data-of="{}" data-error="{}"/>"#,
+                r#"<g data-part="check" data-of="{}" data-options="default" data-error="{}"/>"#,
                 obj.id,
                 escape(e)
             );
         }
         Ok(r) => {
+            let (total, listed, cut) = findings_summary(r);
             let _ = writeln!(
                 out,
-                r#"<g data-part="check" data-of="{}" data-findings="{}">"#,
+                r#"<g data-part="check" data-of="{}" data-options="default" data-findings="{total}" data-listed="{listed}" data-cut-kinds="{}">"#,
                 obj.id,
-                r.findings.len()
+                cut.join(",")
+            );
+            let _ = writeln!(
+                out,
+                "<title>Pattern check with the default options: {total} findings, {listed} marked{}</title>",
+                if cut.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (the list of {} was cut)", cut.join(", "))
+                }
             );
             let radius = 4.0 * scale;
             for f in &r.findings {

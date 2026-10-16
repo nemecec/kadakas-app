@@ -619,10 +619,8 @@ pub fn draw_extras(
             let Some((_, style)) = hardscape::data::style_of(doc, o) else {
                 return;
             };
-            if let Some(j) = &style.joints
-                && (j.kind == hardscape::JointKind::Module
-                    || j.unit_width.min(j.unit_length) * view.zoom >= crate::plan_draw::MIN_UNIT_PX)
-            {
+            if let Some(j) = &style.joints {
+                // Groups with units under 3 px are hidden by the drawing, with a label.
                 let color = j.color.map_or(st.pen.gamma_multiply(0.5), color32);
                 crate::plan_draw::draw_plan(
                     painter,

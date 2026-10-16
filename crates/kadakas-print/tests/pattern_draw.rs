@@ -237,6 +237,52 @@ fn units_too_small_for_the_paper_are_not_drawn_and_the_sheet_says_so() {
     assert!(notes(&all).iter().any(|t| t.contains("pattern not drawn")));
 }
 
+#[test]
+fn small_units_are_hidden_with_a_note_but_the_zone_edges_and_the_course_band_stay() {
+    // 1:2000: a unit of 100 mm is 0.05 mm on paper, the stack of the zone (300 x 150 mm) is 0.075.
+    let (ed, sheet, _) = lot(8000.0, 4000.0, true, 2000.0, v(4000.0, 2000.0));
+    let all = prims(&ed, sheet);
+    assert!(notes(&all).iter().any(|t| t.contains("pattern not drawn")));
+    // No unit is a ring of its own, but the course is one outline, and the zone edges are dashed.
+    let (whole, cut) = drawn_units(&all);
+    assert_eq!(cut, 0);
+    assert_eq!(whole, 1, "the band of the course");
+    assert!(
+        all.iter()
+            .any(|p| matches!(p, Prim::Path(p) if p.dash == Some([2.0, 1.0]) && p.closed))
+    );
+}
+
+#[test]
+fn a_plan_that_cannot_be_laid_says_why_on_the_sheet() {
+    use kadakas_core::hardscape::Border;
+    let (mut ed, sheet, id) = lot(200.0, 200.0, false, 20.0, v(100.0, 100.0));
+    let style = kadakas_core::hardscape::data::style_of(ed.doc(), ed.doc().object(id).unwrap())
+        .unwrap()
+        .0;
+    ed.execute(&Command::ModifyResource {
+        id: style,
+        name: None,
+        body: Some(ResourceBody::HardscapeStyle(Box::new(HardscapeStyle {
+            joints: Some(JointPattern::default()),
+            border: Some(Border {
+                width: 150.0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))),
+    })
+    .unwrap();
+    let all = prims(&ed, sheet);
+    assert!(
+        notes(&all)
+            .iter()
+            .any(|t| t.starts_with("Pattern not drawn: ")),
+        "{:?}",
+        notes(&all)
+    );
+}
+
 /// Measures the size and the time of a sheet with a lot of 1,250 m2 and of 5,000 m2 with every
 /// unit drawn (`cargo test -p kadakas-print --test pattern_draw measure_pdf -- --ignored
 /// --nocapture`).

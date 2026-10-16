@@ -95,3 +95,20 @@ def test_the_findings_of_the_check_can_be_marked_in_the_drawing(cad):
     assert chk["findings"]
     marks = re.findall(r'data-part="finding" data-kind="(\w+)"', svg)
     assert sorted(marks) == sorted(f["kind"] for f in chk["findings"])
+
+
+def test_the_3d_picture_says_that_it_does_not_draw_the_pattern(cad):
+    """A paving texture on a hardscape with a joint pattern has lines that are not its joints: the
+    3D picture leaves the texture out and says so; render.svg draws the pattern."""
+    hid = lot(cad, 4000, 2500)
+    cad.result("material.create", {"name": "Paving", "base_color": [180, 180, 175], "texture": {"procedural": "pavers"}})
+    cad.result("material.assign", {"material": "Paving", "object": hid})
+    png = cad.result("render.png", {"width": 120, "height": 90, "view": "top"})
+    assert any("pattern not drawn in 3D" in n for n in png["notes"]), list(png)
+    # A slab without a pattern keeps the texture, and nothing is said.
+    cad.result("material.assign", {"material": None, "object": hid})
+    cad.result("hardscape.add", {"boundary": [[6000, 0], [9000, 0], [9000, 2000], [6000, 2000]]})
+    other = [o["id"] for o in cad.result("objects.list", {"kind": "hardscape"}) if o["id"] != hid][0]
+    cad.result("material.assign", {"material": "Paving", "object": other})
+    png = cad.result("render.png", {"width": 120, "height": 90, "view": "top"})
+    assert "notes" not in png

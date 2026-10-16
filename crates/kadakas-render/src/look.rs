@@ -157,6 +157,53 @@ pub struct Look {
     pub vertex_material: Vec<u32>,
     /// Texture coordinates in repeats, one per vertex.
     pub uvs: Vec<[f32; 2]>,
+    /// How many hardscapes with a joint pattern had a paving texture (pavers or brick) on their
+    /// surface that was left out: the lines of the texture are not the joints of the pattern, and
+    /// the 3D view does not draw the pattern. The surface keeps the color of the material.
+    pub patterned_untextured: usize,
+}
+
+/// True when the surface of `obj` with material `m` shows a paving texture that is not its pattern:
+/// a hardscape with a joint pattern and a pavers or brick texture. The 3D view does not draw the
+/// joint pattern, so such a surface keeps the color of the material and has no texture lines.
+fn leaves_texture_out(
+    doc: &Document,
+    obj: &kadakas_core::model::Object,
+    m: &present::Material,
+) -> bool {
+    matches!(
+        m.texture,
+        Some(Texture::Procedural {
+            kind: present::Procedural::Pavers | present::Procedural::Brick,
+            ..
+        })
+    ) && matches!(obj.shape, kadakas_core::model::Shape::Hardscape { .. })
+        && kadakas_core::layout::object::pattern_of(doc, obj).is_some()
+}
+
+/// How many hardscapes with a joint pattern have a paving texture on their surface that the 3D view
+/// leaves out (see [`Look::patterned_untextured`]). The renders say so.
+pub fn patterned_untextured(doc: &Document) -> usize {
+    let slots = SlotIndex::new(doc);
+    if slots.is_empty() {
+        return 0;
+    }
+    doc.objects
+        .values()
+        .filter(|o| {
+            slots
+                .resolve(o, present::PART_LAYER)
+                .and_then(|rid| present::material(doc, rid))
+                .is_some_and(|m| leaves_texture_out(doc, o, m))
+        })
+        .count()
+}
+
+/// The note that a render gives when [`patterned_untextured`] is not zero.
+pub fn pattern_not_in_3d_note(n: usize) -> String {
+    format!(
+        "pattern not drawn in 3D: {n} hardscape(s) with a joint pattern keep the color of their material without the paving texture; see render.svg for the pattern"
+    )
 }
 
 impl Look {
@@ -241,7 +288,10 @@ impl Look {
         }
         let mut texture_hashes: Vec<u64> = Vec::new();
         let mesh = &scene.mesh;
-        let mut by_resource: HashMap<ResourceId, u32> = HashMap::new();
+        // A material, and whether its texture is left out (a paving texture on a patterned
+        // hardscape).
+        let mut by_resource: HashMap<(ResourceId, bool), u32> = HashMap::new();
+        let mut untextured: std::collections::HashSet<ObjectId> = Default::default();
         let mut by_part: HashMap<(ObjectId, u8), u32> = HashMap::new();
         // Middle and half size of each object that has a material with cylindrical mapping.
         let mut frames: HashMap<ObjectId, ([f64; 3], f64)> = HashMap::new();
@@ -262,16 +312,22 @@ impl Look {
                 let Some(rid) = slots.resolve(obj, part) else {
                     return NO_MATERIAL;
                 };
-                if let Some(i) = by_resource.get(&rid) {
-                    return *i;
-                }
                 let Some(m) = present::material(doc, rid) else {
                     return NO_MATERIAL;
                 };
+                // The lines of a paving texture are not the joints of the pattern of the
+                // hardscape: the surface keeps the color of the material.
+                let leave_out = part == present::PART_LAYER && leaves_texture_out(doc, obj, m);
+                if leave_out {
+                    untextured.insert(object);
+                }
+                if let Some(i) = by_resource.get(&(rid, leave_out)) {
+                    return *i;
+                }
                 let texture = m
                     .texture
                     .as_ref()
-                    .filter(|_| textures)
+                    .filter(|_| textures && !leave_out)
                     .and_then(|tx| {
                         let base = [m.base_color.0[0], m.base_color.0[1], m.base_color.0[2]];
                         let (img, hash) = cache.get(rid, tx, base);
@@ -292,7 +348,7 @@ impl Look {
                 });
                 mappings.push(m.mapping);
                 let i = (look.materials.len() - 1) as u32;
-                by_resource.insert(rid, i);
+                by_resource.insert((rid, leave_out), i);
                 i
             });
             look.tri_material[t] = index;
@@ -318,6 +374,7 @@ impl Look {
             }
         }
         cache.finish();
+        look.patterned_untextured = untextured.len();
         look.materials_key = look.materials.iter().fold(7, |h, m| {
             let mut h = hash_bytes(h, &m.color);
             for f in [m.roughness, m.metallic, m.opacity] {
@@ -1095,5 +1152,79 @@ mod tests {
         let mut ed = Editor::default();
         add(&mut ed, square(500.0), None);
         ed
+    }
+
+    #[test]
+    fn a_paving_texture_is_left_out_of_a_hardscape_with_a_joint_pattern() {
+        use kadakas_core::curve::corners;
+        use kadakas_core::hardscape::HardscapePatch;
+        use kadakas_core::hardscape::style::{HardscapeStyle, JointKind, JointPattern};
+        use kadakas_core::model::Attributes;
+        let mut ed = Editor::default();
+        let pavers = add_material(
+            &mut ed,
+            Material {
+                texture: Some(Texture::Procedural {
+                    kind: Procedural::Pavers,
+                    seed: 1,
+                }),
+                ..Material::default()
+            },
+        );
+        let style = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Pavers".into(),
+                body: ResourceBody::HardscapeStyle(Box::new(HardscapeStyle {
+                    joints: Some(JointPattern {
+                        kind: JointKind::RunningBond,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let lot = |ed: &mut Editor, x: f64, style: Option<ResourceId>| {
+            ObjectId(
+                ed.execute(&Command::AddHardscape {
+                    boundary: Some(corners(&[
+                        DVec2::new(x, 0.0),
+                        DVec2::new(x + 2000.0, 0.0),
+                        DVec2::new(x + 2000.0, 1500.0),
+                        DVec2::new(x, 1500.0),
+                    ])),
+                    patch: Box::new(HardscapePatch {
+                        style,
+                        ..Default::default()
+                    }),
+                    layer: None,
+                    class: None,
+                    attrs: Attributes::default(),
+                })
+                .unwrap()
+                .created[0],
+            )
+        };
+        let patterned = lot(&mut ed, 0.0, Some(style));
+        let plain = lot(&mut ed, 5000.0, None);
+        assign(&mut ed, patterned, None, pavers);
+        assign(&mut ed, plain, None, pavers);
+        assert_eq!(patterned_untextured(ed.doc()), 1);
+        let scene = scene_of(&ed);
+        let look = Look::build(ed.doc(), &scene, true);
+        assert_eq!(look.patterned_untextured, 1);
+        // The plain slab has the texture; the patterned one has the color of the material only.
+        let texture_of = |id: ObjectId| {
+            (0..scene.mesh.triangle_count())
+                .filter(|t| scene.mesh.tri_object[*t] == id)
+                .filter_map(|t| look.material_of(t))
+                .map(|m| m.texture.is_some())
+                .collect::<Vec<_>>()
+        };
+        assert!(texture_of(plain).iter().any(|t| *t));
+        let on_pattern = texture_of(patterned);
+        assert!(!on_pattern.is_empty() && on_pattern.iter().all(|t| !*t));
+        assert!(pattern_not_in_3d_note(1).contains("pattern not drawn in 3D"));
     }
 }

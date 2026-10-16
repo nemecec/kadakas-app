@@ -813,6 +813,7 @@ fn draw_ghosts(
     };
     // A ghost has the ID of the live object: it must not use the annotation cache of the drawing.
     crate::annot_ui::set_ghost(true);
+    crate::plan_draw::set_ghost(true);
     for (o, k) in c.ghosts.iter().filter(|g| g.1 == kind) {
         set_grey(false);
         let base = object_style(gdoc, o, view.zoom);
@@ -820,6 +821,7 @@ fn draw_ghosts(
         draw_object(painter, view, gdoc, counts, o, st, DVec2::ZERO);
     }
     crate::annot_ui::set_ghost(false);
+    crate::plan_draw::set_ghost(false);
 }
 
 fn draw_preview(painter: &Painter, view: &View, f: &Frame) {

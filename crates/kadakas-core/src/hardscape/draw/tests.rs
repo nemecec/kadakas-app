@@ -394,8 +394,8 @@ fn the_drawing_is_the_same_every_time() {
     let o = ed.doc().object(id).unwrap();
     let key = content_key(ed.doc(), o, layout::TOLERANCE);
     // Two plans laid apart draw the same.
-    let a = Prepared::new(ed.doc(), o, layout::TOLERANCE, key).unwrap();
-    let b = Prepared::new(ed.doc(), o, layout::TOLERANCE, key).unwrap();
+    let a = Prepared::new(ed.doc(), o, layout::TOLERANCE, key, MAX_UNITS).unwrap();
+    let b = Prepared::new(ed.doc(), o, layout::TOLERANCE, key, MAX_UNITS).unwrap();
     let opts = DrawOptions::units(SVG_BOUND);
     assert_eq!(a.draw(None, &opts), b.draw(None, &opts));
     let small = DrawOptions::units(10);
@@ -406,7 +406,7 @@ fn the_drawing_is_the_same_every_time() {
 
 #[test]
 fn the_laid_plan_is_kept_until_the_object_changes() {
-    let cache = PlanCache::new(4);
+    let cache = PlanCache::new(4, usize::MAX);
     let get = |ed: &Editor, id: ObjectId| {
         let o = ed.doc().object(id).unwrap();
         let key = content_key(ed.doc(), o, layout::TOLERANCE);
@@ -493,6 +493,321 @@ fn a_pattern_that_cannot_be_laid_says_why_in_the_drawing() {
     assert!(svg.contains(r#"data-error=""#), "{svg}");
 }
 
+type Sig = Vec<(bool, i64, i64, i64, i64)>;
+
+/// The units of a group that touch `view`, as a sorted list: whole or cut, and the box to 0.01 mm.
+fn signature(g: &DrawnGroup, view: BBox) -> Sig {
+    let key = |whole: bool, r: &[DVec2]| {
+        let (lo, hi) = box_of_ring(r);
+        (
+            whole,
+            (lo.x * 100.0).round() as i64,
+            (lo.y * 100.0).round() as i64,
+            (hi.x * 100.0).round() as i64,
+            (hi.y * 100.0).round() as i64,
+        )
+    };
+    let mut s: Sig = g
+        .whole
+        .iter()
+        .map(|r| key(true, r))
+        .chain(g.cut.iter().map(|u| key(false, &u[0])))
+        .filter(|k| {
+            boxes_meet(
+                (
+                    v(k.1 as f64 / 100.0, k.2 as f64 / 100.0),
+                    v(k.3 as f64 / 100.0, k.4 as f64 / 100.0),
+                ),
+                view,
+            )
+        })
+        .collect();
+    s.sort();
+    s
+}
+
+/// The units of a view drawn from the window are the units of the whole drawing that touch the view.
+fn assert_window_equals_whole(p: &Prepared, view: BBox) {
+    let all = p.draw(None, &DrawOptions::units(usize::MAX / 8));
+    let win = p.draw(Some(view), &DrawOptions::units(usize::MAX / 8));
+    assert_eq!(win.detail, Detail::Full);
+    assert_eq!(all.groups.len(), win.groups.len());
+    let mut seen = 0;
+    for (a, b) in all.groups.iter().zip(&win.groups) {
+        assert_eq!(a.name, b.name);
+        assert_eq!(signature(a, view), signature(b, view), "group {}", a.name);
+        seen += signature(b, view).len();
+    }
+    assert!(seen > 10, "the view holds units: {seen}");
+}
+
+#[test]
+fn a_view_over_a_zone_with_its_own_origin_and_angle_and_over_a_course_draws_what_the_whole_has() {
+    let (ed, id) = lot_with_plan();
+    let o = ed.doc().object(id).unwrap();
+    let p = Prepared::new(ed.doc(), o, layout::TOLERANCE, 1, MAX_UNITS).unwrap();
+    // Across the zone edge at x = 5000: the zone "Stalls" is a stack of 300 x 150 mm turned by 90
+    // degrees from (5000, 0).
+    assert_window_equals_whole(&p, (v(4300.0, 700.0), v(5900.0, 1700.0)));
+    // Along the course at the bottom edge, with its mitre and the cut at the zone line.
+    assert_window_equals_whole(&p, (v(3500.0, 0.0), v(5600.0, 600.0)));
+    // The corner of the lot.
+    assert_window_equals_whole(&p, (v(-100.0, -100.0), v(1500.0, 800.0)));
+}
+
+#[test]
+fn a_view_across_the_edge_that_the_pattern_is_aligned_to_draws_what_the_whole_has() {
+    // A four-sided lot with a slanted edge; the pattern starts at vertex 1 and runs along the edge
+    // to vertex 2.
+    let (mut ed, id) = slab(5000.0, 3000.0, 0.0, false);
+    ed.execute(&Command::ModifyObject {
+        id,
+        shape: Some(crate::model::Shape::Hardscape {
+            boundary: corners(&[
+                v(0.0, 0.0),
+                v(5000.0, 400.0),
+                v(4500.0, 3000.0),
+                v(0.0, 2500.0),
+            ]),
+            material: "m".into(),
+            thickness: None,
+            elevation: None,
+        }),
+        layer: None,
+        class: None,
+        attrs: None,
+    })
+    .unwrap();
+    ed.execute(&Command::SetHardscape {
+        ids: vec![id],
+        patch: HardscapePatch {
+            align_to_edge: Some(1),
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    let o = ed.doc().object(id).unwrap();
+    let p = Prepared::new(ed.doc(), o, layout::TOLERANCE, 1, MAX_UNITS).unwrap();
+    // Over the slanted edge, and over the corner where the pattern starts.
+    assert_window_equals_whole(&p, (v(3900.0, 900.0), v(5000.0, 1700.0)));
+    assert_window_equals_whole(&p, (v(4500.0, 200.0), v(5100.0, 900.0)));
+}
+
+#[test]
+fn centroid_zones_draw_the_report_counts_and_a_lattice_too_big_to_keep_is_drawn_by_window() {
+    use crate::layout::plan::ZoneUnits;
+    // Zones that give whole units to the zone of their center.
+    let (mut ed, id) = slab(8000.0, 4000.0, 20.0, false);
+    let mut p = Plan::default();
+    p.splits = vec![vline(3100.0, 4000.0), vline(6000.0, 4000.0)];
+    p.zone_units = ZoneUnits::Centroid;
+    set_plan(&mut ed, id, &p);
+    assert_eq!(
+        svg_counts(&svg_of(&ed, id, SvgContext::default())),
+        report_counts(ed.doc(), id)
+    );
+    // 130 m x 50 m: 310,000 units, more than the lattice that is kept. Seen at a window, it has
+    // the units that the whole lattice gives each zone.
+    let (mut ed, id) = slab(130_000.0, 50_000.0, 0.0, false);
+    let mut p = Plan::default();
+    p.splits = vec![vline(60_000.0, 50_000.0)];
+    p.zone_units = ZoneUnits::Centroid;
+    set_plan(&mut ed, id, &p);
+    let o = ed.doc().object(id).unwrap();
+    let prep = Prepared::new(ed.doc(), o, layout::TOLERANCE, 1, MAX_UNITS).unwrap();
+    let view = (v(59_000.0, 20_000.0), v(61_000.0, 21_000.0));
+    let win = prep.draw(Some(view), &DrawOptions::units(SVG_BOUND));
+    assert_eq!(win.detail, Detail::Full, "real units at the window");
+    // The whole lattice, laid by the report's engine, filtered to the window.
+    for (dg, g) in win.groups.iter().zip(&prep.planned.groups) {
+        let mut want: Sig = Vec::new();
+        g.for_each_unit(&Limits::default(), &mut |u| {
+            let ring = &u.rings[0].points;
+            let (lo, hi) = box_of_ring(ring);
+            if boxes_meet((lo, hi), view) {
+                want.push((
+                    u.whole,
+                    (lo.x * 100.0).round() as i64,
+                    (lo.y * 100.0).round() as i64,
+                    (hi.x * 100.0).round() as i64,
+                    (hi.y * 100.0).round() as i64,
+                ));
+            }
+        })
+        .unwrap();
+        want.sort();
+        assert_eq!(signature(dg, view), want, "group {}", dg.name);
+    }
+    // The units over the zone edge go whole to the zone of their center: nothing is cut there.
+    let (whole, cut) = win.unit_counts();
+    assert!(whole > 80 && cut == 0, "{whole} {cut}");
+}
+
+#[test]
+fn groups_with_units_under_the_limit_are_hidden_but_edges_and_courses_are_drawn() {
+    let (ed, id) = lot_with_plan();
+    let o = ed.doc().object(id).unwrap();
+    let p = Prepared::new(ed.doc(), o, layout::TOLERANCE, 1, MAX_UNITS).unwrap();
+    // Everything is under 160 mm: no units, no lines, and the bound counts nothing.
+    let none = p.draw(None, &DrawOptions::canvas().hiding_units_under(160.0));
+    assert_eq!(none.detail, Detail::Full);
+    assert!(none.has_hidden());
+    assert!(
+        none.groups
+            .iter()
+            .all(|g| g.hidden && g.joints.is_empty() && g.whole.is_empty())
+    );
+    assert!(!none.zone_edges.is_empty());
+    let course = none
+        .groups
+        .iter()
+        .find(|g| g.role == Some(Role::Course))
+        .unwrap();
+    assert!(!course.outline.is_empty(), "the course is a band");
+    // Under 103 mm only the course (units of 100 mm) is hidden.
+    let some = p.draw(None, &DrawOptions::canvas().hiding_units_under(103.0));
+    for g in &some.groups {
+        assert_eq!(g.hidden, g.role == Some(Role::Course), "{}", g.name);
+    }
+    assert!(
+        some.groups
+            .iter()
+            .any(|g| !g.hidden && !g.joints.is_empty())
+    );
+    // A preview hides the same groups.
+    let tiny = DrawOptions {
+        bound: 10,
+        ..DrawOptions::canvas().hiding_units_under(103.0)
+    };
+    let preview = p.draw(None, &tiny);
+    assert!(preview.is_preview());
+    assert!(
+        preview
+            .groups
+            .iter()
+            .filter(|g| g.hidden)
+            .all(|g| g.joints.is_empty())
+    );
+}
+
+#[test]
+fn the_preview_note_is_readable_at_the_size_of_the_picture() {
+    let (ed, id) = slab(8000.0, 4000.0, 0.0, false);
+    // 900 px for 8,200 mm: a note of 12 px is 109 mm high.
+    let svg = svg_of(
+        &ed,
+        id,
+        SvgContext {
+            bound: 100,
+            px_per_mm: 900.0 / 8200.0,
+            ..Default::default()
+        },
+    );
+    let size: f64 = svg
+        .lines()
+        .find(|l| l.contains("preview-note"))
+        .and_then(|l| l.split(r#"font-size=""#).nth(1))
+        .and_then(|r| r.split('"').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap();
+    assert!((size - 12.0 * 8200.0 / 900.0).abs() < 0.1, "{size}");
+}
+
+#[test]
+fn a_plan_that_cannot_be_laid_has_its_reason_as_text_and_the_unit_limit_is_the_one_of_the_report() {
+    let (ed, id) = slab(200.0, 200.0, 0.0, true);
+    let svg = svg_of(&ed, id, SvgContext::default());
+    assert!(svg.contains(r#"data-part="pattern-error""#), "{svg}");
+    assert!(svg.contains("Pattern not drawn: "), "{svg}");
+    // A course of more units than the limit of the session cannot be laid: the same refusal as in
+    // the report.
+    let (ed, id) = lot_with_plan();
+    let svg = svg_of(
+        &ed,
+        id,
+        SvgContext {
+            max_units: Some(5),
+            ..Default::default()
+        },
+    );
+    assert!(svg.contains("Pattern not drawn: "), "{svg:.300}");
+    assert!(!svg_of(&ed, id, SvgContext::default()).contains("Pattern not drawn"));
+}
+
+#[test]
+fn the_check_overlay_says_how_many_findings_there_are_and_that_the_lists_are_cut() {
+    // 570 rows, half of them leave a strip of 3 mm: about 285 small pieces, and the list holds 200.
+    let (ed, id) = slab(8003.0, 60_000.0, 0.0, false);
+    let svg = svg_of(
+        &ed,
+        id,
+        SvgContext {
+            show_check: true,
+            ..Default::default()
+        },
+    );
+    let attr = |name: &str| -> String {
+        svg.split(&format!(r#"{name}=""#))
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    assert!(attr("data-findings").parse::<usize>().unwrap() > 200);
+    assert_eq!(attr("data-listed").parse::<usize>().unwrap(), 200);
+    assert!(attr("data-cut-kinds").contains("small_piece"));
+    assert_eq!(attr("data-options"), "default");
+    assert_eq!(svg.matches(r#"data-part="finding""#).count(), 200);
+}
+
+#[test]
+fn a_job_lays_the_plan_from_a_small_document_and_a_check_can_be_stopped() {
+    let (ed, id) = lot_with_plan();
+    let o = ed.doc().object(id).unwrap();
+    let key = content_key(ed.doc(), o, layout::TOLERANCE);
+    let job = prepare_job(ed.doc(), o, key).unwrap();
+    assert_eq!(job.key(), key);
+    let made = std::thread::spawn(move || job.run())
+        .join()
+        .unwrap()
+        .unwrap();
+    // It is what the window laid.
+    let direct = Prepared::new(ed.doc(), o, layout::TOLERANCE, key, MAX_UNITS).unwrap();
+    let opts = DrawOptions::units(SVG_BOUND);
+    assert_eq!(made.draw(None, &opts), direct.draw(None, &opts));
+    // A check that is told to stop gives nothing and keeps nothing.
+    let stop = AtomicBool::new(true);
+    assert!(made.findings_cancellable(&stop).is_none());
+    assert!(made.findings_ready().is_none());
+    let go = AtomicBool::new(false);
+    let report = made.findings_cancellable(&go).unwrap();
+    assert!(report.is_ok());
+    assert!(made.findings_ready().is_some());
+}
+
+#[test]
+fn the_cache_is_bound_by_memory_and_keeps_the_newest() {
+    let (ed, id) = lot_with_plan();
+    let o = ed.doc().object(id).unwrap();
+    let one = Arc::new(Prepared::new(ed.doc(), o, layout::TOLERANCE, 1, MAX_UNITS).unwrap());
+    let bytes = one.approx_bytes();
+    assert!(bytes > 1000, "{bytes}");
+    // Room for two plans.
+    let cache = PlanCache::new(100, bytes * 2 + bytes / 2);
+    for k in 1..=5u64 {
+        cache.insert(k, Ok(one.clone()));
+    }
+    let (n, total) = cache.size();
+    assert_eq!(n, 2, "{total}");
+    assert!(cache.cached(5).is_some() && cache.cached(4).is_some() && cache.cached(1).is_none());
+    // A plan that is bigger than the whole budget is still kept (the newest one).
+    let tiny = PlanCache::new(100, 10);
+    tiny.insert(9, Ok(one));
+    assert_eq!(tiny.size().0, 1);
+}
+
 /// Measures the size and the time of the SVG of a lot of 5,000 m2 (`cargo test -p kadakas-core
 /// --lib measure_bounds -- --ignored --nocapture`).
 #[test]
@@ -505,7 +820,7 @@ fn measure_bounds() {
         let (ed, id) = slab(w, h, 15.0, false);
         let o = ed.doc().object(id).unwrap();
         let t = std::time::Instant::now();
-        let p = Prepared::new(ed.doc(), o, layout::TOLERANCE, 0).unwrap();
+        let p = Prepared::new(ed.doc(), o, layout::TOLERANCE, 0, MAX_UNITS).unwrap();
         let lay = t.elapsed();
         let t = std::time::Instant::now();
         let d = p.draw(None, &DrawOptions::units(usize::MAX / 8));

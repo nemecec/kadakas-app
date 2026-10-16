@@ -1054,7 +1054,10 @@ impl Session {
             &self.annot_cache,
             None,
             None,
-            opts,
+            &kadakas_core::svg::RenderOptions {
+                max_units: opts.max_units.or(Some(self.limits.pattern_units)),
+                ..*opts
+            },
         )
     }
 
@@ -1601,6 +1604,7 @@ impl Session {
                         &kadakas_core::svg::RenderOptions {
                             region,
                             show_check: show_check.unwrap_or(false),
+                            max_units: Some(self.limits.pattern_units),
                         },
                     ) }),
                 }
@@ -1709,6 +1713,10 @@ impl Session {
                 // The settings of the style are only given when materials or a style were used.
                 if !plain {
                     out["render_style"] = present_api::style_summary(&used_style);
+                }
+                let n = kadakas_render::look::patterned_untextured(doc);
+                if n > 0 && !plain {
+                    out["notes"] = json!([kadakas_render::look::pattern_not_in_3d_note(n)]);
                 }
                 out
             }

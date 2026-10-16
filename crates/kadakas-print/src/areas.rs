@@ -87,17 +87,38 @@ fn ring_segs(ring: &[DVec2], hole: bool, xf: &Xf) -> Vec<PSeg> {
 /// outlines, cut units with a light fill) when the view holds at most `PRINT_BOUND` units, else
 /// the gap lines of the plan and a note on the sheet. Zones and courses are in it, laid by the same
 /// engine as the report.
-fn pattern_prims(
-    doc: &Document,
-    obj: &Object,
-    j: &hardscape::JointPattern,
-    color: Option<Rgba>,
-    xf: &Xf,
-    out: &mut Vec<Prim>,
-) {
+fn pattern_prims(doc: &Document, obj: &Object, color: Option<Rgba>, xf: &Xf, out: &mut Vec<Prim>) {
     use kadakas_core::hardscape::draw::{self, Detail, DrawOptions};
-    let Some(Ok(prepared)) = draw::prepared(doc, obj) else {
+    let Some(prepared) = draw::prepared(doc, obj) else {
         return;
+    };
+    // Notes stand one above the other at the lower left of the part of the object that is in view.
+    let mut notes = 0usize;
+    let mut note = |bounds: (DVec2, DVec2), text: String, out: &mut Vec<Prim>| {
+        let (lo, hi) = match xf.window {
+            Some((wlo, whi)) => (bounds.0.max(wlo), bounds.1.min(whi)),
+            None => bounds,
+        };
+        let at = xf.p(DVec2::new(lo.x, lo.y.min(hi.y)));
+        out.push(Prim::Text(TextPrim {
+            at: at + DVec2::new(1.0, 1.5 + 2.4 * notes as f64),
+            text,
+            height: 2.0,
+            color: color.unwrap_or([0, 0, 0, 255]),
+            align: Align::Left,
+        }));
+        notes += 1;
+    };
+    let prepared = match prepared {
+        Ok(p) => p,
+        Err(e) => {
+            // The plan cannot be laid: the reason is on the sheet.
+            let (lo, hi) = doc.object_bounds(obj);
+            if lo.is_finite() && hi.is_finite() {
+                note((lo, hi), format!("Pattern not drawn: {e}"), out);
+            }
+            return;
+        }
     };
     let (blo, bhi) = prepared.bounds();
     if let Some((wlo, whi)) = xf.window
@@ -105,37 +126,44 @@ fn pattern_prims(
     {
         return;
     }
-    let note = |text: String, out: &mut Vec<Prim>| {
-        let (lo, hi) = match xf.window {
-            Some((wlo, whi)) => (blo.max(wlo), bhi.min(whi)),
-            None => (blo, bhi),
-        };
-        let at = xf.p(DVec2::new(lo.x, lo.y.min(hi.y)));
-        out.push(Prim::Text(TextPrim {
-            at: at + DVec2::new(1.0, 1.5),
-            text,
-            height: 2.0,
-            color: color.unwrap_or([0, 0, 0, 255]),
-            align: Align::Left,
-        }));
+    // Units smaller than this on paper are not drawn: they would only make a gray area.
+    let min_unit_mm = if xf.k > 0.0 {
+        MIN_UNIT_ON_PAPER / xf.k
+    } else {
+        0.0
     };
-    if xf.len(j.unit_width.min(j.unit_length)) < MIN_UNIT_ON_PAPER
-        && j.kind != hardscape::JointKind::Module
-    {
+    let drawn = prepared.draw(
+        xf.window,
+        &DrawOptions::units(BOUND.with(|b| b.get()).unwrap_or(draw::PRINT_BOUND))
+            .hiding_units_under(min_unit_mm),
+    );
+    if drawn.has_hidden() {
         note(
+            (blo, bhi),
             format!(
-                "pattern not drawn: units are smaller than {MIN_UNIT_ON_PAPER} mm on paper at this scale"
+                "pattern not drawn for units smaller than {MIN_UNIT_ON_PAPER} mm on paper at this scale"
             ),
             out,
         );
-        return;
     }
-    let drawn = prepared.draw(
-        xf.window,
-        &DrawOptions::units(BOUND.with(|b| b.get()).unwrap_or(draw::PRINT_BOUND)),
-    );
     let hair = THIN;
     for g in &drawn.groups {
+        // The units show a course; its band is drawn when the units are hidden.
+        if g.hidden && !g.outline.is_empty() {
+            let segs: Vec<PSeg> = g
+                .outline
+                .iter()
+                .flat_map(|r| ring_segs(r, false, xf))
+                .collect();
+            out.push(Prim::Path(PathPrim {
+                segs,
+                closed: false,
+                stroke: color,
+                fill: None,
+                width: hair,
+                dash: None,
+            }));
+        }
         if !g.joints.is_empty() {
             let mut segs = Vec::with_capacity(g.joints.len() * 2);
             for (a, b) in &g.joints {
@@ -199,6 +227,7 @@ fn pattern_prims(
     } = drawn.detail
     {
         note(
+            (blo, bhi),
             format!(
                 "{} ({units_in_view} units in view, more than {bound}): enlarge the scale or the viewport for the real units",
                 draw::PREVIEW_LABEL
@@ -219,7 +248,7 @@ pub fn extras(doc: &Document, obj: &Object, st: &Style, xf: &Xf, out: &mut Vec<P
             let ring = curve::flatten(boundary, true, (0.1 / xf.k).max(1.0));
             if let Some(j) = &style.joints {
                 let color = j.color.map(|c| c.0).or(st.stroke);
-                pattern_prims(doc, obj, j, color, xf, out);
+                pattern_prims(doc, obj, color, xf, out);
             }
             if let Some(b) = &style.border {
                 let color = b.color.map(|c| c.0).or(st.stroke);
