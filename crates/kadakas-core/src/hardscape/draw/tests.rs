@@ -767,6 +767,8 @@ fn a_job_lays_the_plan_from_a_small_document_and_a_check_can_be_stopped() {
     let (ed, id) = lot_with_plan();
     let o = ed.doc().object(id).unwrap();
     let key = content_key(ed.doc(), o, layout::TOLERANCE);
+    // A key of its own, so that no other test has put this plan in the shared cache.
+    let key = key ^ 0x5eed_5eed_5eed_5eed;
     let job = prepare_job(ed.doc(), o, key).unwrap();
     assert_eq!(job.key(), key);
     let made = std::thread::spawn(move || job.run())

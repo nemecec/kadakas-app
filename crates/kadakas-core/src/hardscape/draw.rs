@@ -423,7 +423,11 @@ impl PrepareJob {
             self.key,
             self.max_units,
         )
-        .map(Arc::new);
+        .map(|p| {
+            // What the first drawing needs is made here, not in the window.
+            p.warm();
+            Arc::new(p)
+        });
         CACHE.insert(self.key, built.clone());
         built
     }
