@@ -439,6 +439,9 @@ struct Shared {
 #[derive(Debug)]
 struct Laid {
     per_zone: Vec<Vec<Unit>>,
+    /// The dust pieces and the trimmed units of each zone.
+    dust: Vec<usize>,
+    trimmed: Vec<usize>,
     stats: Stats,
     total: usize,
 }
@@ -553,8 +556,18 @@ impl Owner {
             per_zone[grid.zone_of(&self.zones, c)].push(u.clone());
             total += 1;
         })?;
+        let count = |at: &[DVec2]| {
+            let mut n = vec![0usize; self.zones.len()];
+            for &p in at {
+                n[grid.zone_of(&self.zones, p)] += 1;
+            }
+            n
+        };
+        let (dust, trimmed) = (count(&stats.dust_at), count(&stats.trimmed_at));
         let laid = Arc::new(Laid {
             per_zone,
+            dust,
+            trimmed,
             stats,
             total,
         });
@@ -671,6 +684,10 @@ impl Group {
                     f(u);
                 }
                 stats.units = mine.len();
+                stats.dust_pieces = laid.dust[owner.index];
+                stats.trimmed = laid.trimmed[owner.index];
+                stats.dust_at.clear();
+                stats.trimmed_at.clear();
                 stats.region_area = owner.zones[owner.index].area;
                 Ok(stats)
             }
@@ -692,6 +709,8 @@ impl Group {
                     units: 0,
                     dust_pieces: 0,
                     trimmed: 0,
+                    dust_at: Vec::new(),
+                    trimmed_at: Vec::new(),
                 };
                 let mut placer = Placer::new(
                     local,
@@ -1193,7 +1212,7 @@ pub fn plan_groups(
                     Some(zi) if spec_of[zi].is_none() => spec_of[zi] = Some(si),
                     Some(zi) => out.notes.push(format!(
                         "zone setting {} and {} are both tied to zone {}: the first one is used",
-                        spec_of[zi].unwrap_or(0) + 1,
+                        spec_of[zi].unwrap_or(0),
                         si,
                         zi
                     )),

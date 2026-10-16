@@ -871,3 +871,41 @@ fn the_band_on_the_inner_side_of_a_sharp_bend_stays_inside_the_legs() {
     // behind the start of the path: nothing of the band lies there.
     assert!(!band_has(&c, v(-150.0, 200.0)));
 }
+
+#[test]
+fn a_corner_without_a_rule_leaves_no_mitre_spike_in_the_band() {
+    for turn in [155.0f64, 160.0, 165.0] {
+        for sign in [1.0, -1.0] {
+            let a = (sign * turn).to_radians();
+            let cp = v(3000.0, 0.0);
+            let end = cp + 3000.0 * DVec2::from_angle(a);
+            for side in [Side::Left, Side::Right] {
+                let c = lay(
+                    &spec(
+                        &[(0.0, 0.0), (3000.0, 0.0), (end.x, end.y)],
+                        side,
+                        Corner::Miter,
+                    ),
+                    10_000,
+                )
+                .unwrap();
+                // A mitre of the outer offset would reach more than a metre from the corner. The
+                // strip is 200 mm deep and a gap of 5 mm is kept: nothing of the band near the
+                // corner is more than that from the path.
+                for s in &c.band {
+                    for q in s.iter().flatten() {
+                        if q.distance(cp) > 1500.0 {
+                            continue;
+                        }
+                        let d = crate::geom::dist_to_segment(*q, v(0.0, 0.0), cp)
+                            .min(crate::geom::dist_to_segment(*q, cp, end));
+                        assert!(
+                            d <= 250.0,
+                            "{turn} {sign} {side:?}: a band point {q:?} is {d} mm from the path"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1101,6 +1101,13 @@ fn band(
         if turn.abs() < 1e-12 {
             continue;
         }
+        // A corner that has no rule ends flush: the field paves the wedge between the legs, with
+        // a gap kept, instead of the band leaving a long mitre spike unpaved.
+        let d_in = unit_dir(pts[(i + n - 1) % n], pts[i]);
+        let d_out = unit_dir(pts[i], pts[(i + 1) % n]);
+        if !smooth[i] && d_in.dot(d_out).clamp(-1.0, 1.0).acos().to_degrees() > MAX_TURN_DEG {
+            continue;
+        }
         // A left turn has its outer side on the right (negative offsets).
         let s = if turn > 0.0 { -1.0 } else { 1.0 };
         let (m1, m2) = if s > 0.0 {
