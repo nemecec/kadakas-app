@@ -196,7 +196,9 @@ struct Ctx<'a> {
     /// Shift (mm) that was added to the shapes for real-world coordinates. Derived data (contours) needs it too.
     shift: DVec2,
     /// The site models, for the base of massing models.
-    site_cache: kadakas_site::SiteCache,
+    /// The site models and the ground that they give, one for the whole export.
+    site_cache: &'a kadakas_site::SiteCache,
+    terrain: kadakas_site::SiteTerrain<'a>,
     /// The number of plants per style and layer, for plant tags.
     tag_counts: kadakas_core::plants::tag::TagCounts,
     /// True once an object has written XDATA of the application `KADAKAS`.
@@ -273,6 +275,7 @@ const FIRST_HANDLE: u64 = 0x100;
 pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     let doc = &*crate::model_only(doc);
     let mut report = Report::new("dxf");
+    let site_cache = kadakas_site::SiteCache::default();
     let mut cx = Ctx {
         unit: opts.unit.mm_per_unit(),
         tol: opts.tolerance,
@@ -284,7 +287,8 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         site_mesh: opts.site_mesh,
         mesh_entity: opts.mesh_entity,
         shift: DVec2::ZERO,
-        site_cache: kadakas_site::SiteCache::default(),
+        site_cache: &site_cache,
+        terrain: kadakas_site::SiteTerrain::new(&site_cache, 0, doc),
         tag_counts: kadakas_core::plants::tag::tag_counts(doc),
         xdata: false,
     };
@@ -1172,9 +1176,11 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
         Shape::SiteModel { points, .. } => {
             // The contours of the surface (the proposed one if there is one) as 3D polylines at their height,
             // and the source points as POINT entities. The TIN itself is not exported.
-            let Ok(site) = kadakas_site::SiteResult::compute(cx.doc, o.id) else {
+            let Ok(site) = cx.site_cache.get(0, cx.doc, o.id) else {
                 return false;
             };
+            // The layer lifts everything on it, the ground as well as the buildings.
+            let lift = cx.doc.layer(o.layer).map_or(0.0, |l| l.elevation);
             let Ok(contours) = site.contours(kadakas_site::Surface::Proposed) else {
                 return false;
             };
@@ -1188,7 +1194,7 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
                     hidden,
                     c.points
                         .iter()
-                        .map(|p| (p.x + shift.x, p.y + shift.y, c.level)),
+                        .map(|p| (p.x + shift.x, p.y + shift.y, c.level + lift)),
                     c.closed,
                 );
             }
@@ -1196,7 +1202,7 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
                 common(w, "POINT", layer, o, hidden);
                 w.pair(100, "AcDbPoint");
                 // The object was shifted already, so its points are in the final coordinates.
-                cx.pt3(w, 10, p.x, p.y, p.z);
+                cx.pt3(w, 10, p.x, p.y, p.z + lift);
             }
             // The triangles of the surface, on request.
             let which = match cx.site_mesh {
@@ -1209,7 +1215,7 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
                 let vertices: Vec<kadakas_core::DVec3> = tin
                     .vertices
                     .iter()
-                    .map(|v| kadakas_core::DVec3::new(v.x + shift.x, v.y + shift.y, v.z))
+                    .map(|v| kadakas_core::DVec3::new(v.x + shift.x, v.y + shift.y, v.z + lift))
                     .collect();
                 native::mesh(w, cx, o, layer, hidden, &vertices, &tin.triangles);
             }
@@ -1219,7 +1225,7 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
         Shape::Annotation(_) => annotation_entities(w, cx, o, layer, hidden),
         Shape::PlantTag { .. } => kinds::plant_tag(w, cx, o, layer, hidden),
         Shape::Massing(m) => kinds::massing(w, cx, o, layer, hidden, m),
-        Shape::Irrigation(i) => kinds::irrigation(w, cx, o, hidden, i),
+        Shape::Irrigation(i) => kinds::irrigation(w, cx, o, layer, hidden, i),
         // Other crates add shape kinds. They are reported as skipped, not guessed.
         #[allow(unreachable_patterns)]
         _ => return false,

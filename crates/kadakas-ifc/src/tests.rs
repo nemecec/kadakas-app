@@ -1014,6 +1014,54 @@ fn the_data_map_of_the_document_decides_classes() {
 }
 
 #[test]
+fn a_data_map_can_make_a_hardscape_a_wall_but_not_a_slab_with_slab_quantities() {
+    let mut map = DataMap::landscape_template();
+    map.entities = vec![EntityMap {
+        kind: "hardscape".into(),
+        ifc_class: "IfcWall".into(),
+        predefined_type: Some("RETAININGWALL".into()),
+    }];
+    for (version, predefined, object_type) in [
+        ("IFC4", "USERDEFINED", Some("RETAININGWALL")),
+        ("IFC4X3", "RETAININGWALL", None),
+    ] {
+        let mut ed = Editor::new(sample());
+        run(
+            &mut ed,
+            Command::AddResource {
+                name: "Wall".into(),
+                body: ResourceBody::DataMap(Box::new(map.clone())),
+            },
+        );
+        let f = parsed(
+            ed.doc(),
+            &IfcOptions {
+                version: version.into(),
+                ..Default::default()
+            },
+        );
+        let walls = named(&f, "IFCWALL");
+        assert_eq!(walls.len(), 5, "{version}");
+        assert!(
+            walls.iter().all(|w| w.attrs[8] == Value::e(predefined)),
+            "{version}"
+        );
+        if let Some(t) = object_type {
+            assert!(walls.iter().all(|w| w.attrs[4] == Value::s(t)));
+        }
+        let qtos: Vec<String> = named(&f, "IFCELEMENTQUANTITY")
+            .iter()
+            .map(|s| str_of(&s.attrs[2]).to_string())
+            .collect();
+        assert!(
+            !qtos.contains(&"Qto_SlabBaseQuantities".to_string()),
+            "{qtos:?}"
+        );
+        assert!(qtos.contains(&"Kadakas_HardscapeQuantities".to_string()));
+    }
+}
+
+#[test]
 fn hidden_objects_and_sheet_layers_are_skipped() {
     let mut ed = Editor::new(sample());
     let class = ed

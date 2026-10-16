@@ -1442,6 +1442,172 @@ fn a_3d_viewport_draws_the_terrain_of_the_site_model() {
     );
 }
 
+/// A page with a plan viewport that shows everything and a 3D viewport that hides the class of
+/// the pad of the site. The page is the same with either order of the viewports.
+fn page_with_hidden_pads(three_d_first: bool, hide_pads: bool) -> Vec<String> {
+    let mut ed = Editor::default();
+    let mut points = Vec::new();
+    for i in 0..9 {
+        for j in 0..9 {
+            // Not a regular grid: equal triangles would make the mesh depend on chance.
+            let (x, y) = (
+                f64::from(i) * 5000.0 + f64::from((i * j) % 3) * 370.0,
+                f64::from(j) * 5000.0 + f64::from((i + 2 * j) % 5) * 210.0,
+            );
+            points.push(DVec3::new(
+                x,
+                y,
+                f64::from(i) * 40.0 + f64::from(j * j) * 15.0,
+            ));
+        }
+    }
+    add(
+        &mut ed,
+        Shape::SiteModel {
+            points,
+            lines: vec![],
+            settings: Default::default(),
+        },
+        None,
+        Attributes::default(),
+    );
+    let pads = kadakas_core::model::ClassId(
+        run(
+            &mut ed,
+            Command::AddClass {
+                name: "Pads".into(),
+                attrs: Attributes::default(),
+            },
+        )[0],
+    );
+    run(
+        &mut ed,
+        Command::AddObject {
+            shape: Shape::SiteModifier {
+                modifier: kadakas_core::site::ModifierKind::Pad {
+                    elevation: 6000.0,
+                    slope: None,
+                },
+                boundary: corners(&[
+                    v(10_000.0, 10_000.0),
+                    v(30_000.0, 10_000.0),
+                    v(30_000.0, 30_000.0),
+                    v(10_000.0, 30_000.0),
+                ]),
+            },
+            layer: None,
+            class: Some(pads),
+            attrs: Attributes::default(),
+        },
+    );
+    // The grade limit is the edge of the modified ground.
+    run(
+        &mut ed,
+        Command::AddObject {
+            shape: Shape::SiteModifier {
+                modifier: kadakas_core::site::ModifierKind::GradeLimit,
+                boundary: corners(&[
+                    v(5000.0, 5000.0),
+                    v(35_000.0, 5000.0),
+                    v(35_000.0, 35_000.0),
+                    v(5000.0, 35_000.0),
+                ]),
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        },
+    );
+    let sheet = LayerId(
+        run(
+            &mut ed,
+            Command::AddSheet {
+                name: "S".into(),
+                paper: Some(PaperSize::A3),
+                orientation: None,
+                number: None,
+                title: None,
+            },
+        )[0],
+    );
+    let plan = {
+        Viewport::new(
+            v(10.0, 10.0),
+            v(200.0, 140.0),
+            v(20_000.0, 20_000.0),
+            200.0,
+            vec![FIRST_LAYER],
+        )
+    };
+    let three_d = {
+        let mut vp = Viewport::new(
+            v(210.0, 10.0),
+            v(400.0, 140.0),
+            v(20_000.0, 20_000.0),
+            200.0,
+            vec![FIRST_LAYER],
+        );
+        if hide_pads {
+            vp.class_overrides.entry(pads).or_default().visible = Some(false);
+        }
+        vp.view = "right_isometric".into();
+        vp.mode = "shaded".into();
+        vp.dpi = 30.0;
+        vp
+    };
+    let mut order = vec![plan, three_d];
+    if three_d_first {
+        order.reverse();
+    }
+    for vp in order {
+        add(
+            &mut ed,
+            Shape::Viewport(Box::new(vp)),
+            Some(sheet),
+            Attributes::default(),
+        );
+    }
+    let page = compose_page(ed.doc(), sheet).unwrap();
+    // Long images are compared by their hash.
+    let mut prims: Vec<String> = page
+        .prims
+        .iter()
+        .map(|p| match p {
+            Prim::Image(i) => format!("image {:?} {:?} {}", i.min, i.max, {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                i.rgb.hash(&mut h);
+                h.finish()
+            }),
+            p => format!("{p:?}"),
+        })
+        .collect();
+    prims.sort();
+    prims
+}
+
+#[test]
+fn viewports_do_not_share_site_results_when_they_show_different_layers() {
+    let (a, b) = (
+        page_with_hidden_pads(false, true),
+        page_with_hidden_pads(true, true),
+    );
+    // The pad changes the picture, so the test can see a mix-up.
+    let shown = page_with_hidden_pads(false, false);
+    assert_ne!(a, shown);
+    assert!(a.len() > 3, "{}", a.len());
+    let only_a: Vec<_> = a.iter().filter(|x| !b.contains(x)).collect();
+    let only_b: Vec<_> = b.iter().filter(|x| !a.contains(x)).collect();
+    assert!(
+        only_a.is_empty() && only_b.is_empty(),
+        "{} {} | {:?} | {:?}",
+        a.len(),
+        b.len(),
+        only_a.iter().take(3).collect::<Vec<_>>(),
+        only_b.iter().take(3).collect::<Vec<_>>()
+    );
+}
+
 // ---------------------------------------------------------------- SVG and PNG
 
 #[test]

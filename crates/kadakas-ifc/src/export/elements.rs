@@ -327,10 +327,12 @@ impl<W: Write> Exporter<'_, W> {
         }
 
         let q = &g.quantities;
-        let base_name = if class == "IFCCOVERING" {
-            "Qto_CoveringBaseQuantities"
-        } else {
-            "Qto_SlabBaseQuantities"
+        // A standard quantity set only for the classes that have one. Another class (a wall, a
+        // proxy) gets the Kadakas quantities alone.
+        let base_name = match class {
+            "IFCCOVERING" => Some("Qto_CoveringBaseQuantities"),
+            "IFCSLAB" => Some("Qto_SlabBaseQuantities"),
+            _ => None,
         };
         let mut standard = vec![
             (
@@ -349,7 +351,9 @@ impl<W: Write> Exporter<'_, W> {
             standard.push(("volume", "GrossVolume".to_string(), q.volume_m3));
             standard.push(("volume", "NetVolume".to_string(), q.volume_m3));
         }
-        self.quantities(obj, base_name, &standard)?;
+        if let Some(base_name) = base_name {
+            self.quantities(obj, base_name, &standard)?;
+        }
         let mut extra = vec![("area", "SurfaceArea".to_string(), q.surface_area_m2)];
         for (i, l) in q.layers.iter().enumerate() {
             extra.push((

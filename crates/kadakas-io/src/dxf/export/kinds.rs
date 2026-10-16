@@ -12,7 +12,6 @@ use kadakas_core::irrigation::{IrrigationShape as I, LineType, sector_points};
 use kadakas_core::massing::Massing;
 use kadakas_core::model::{Object, Shape};
 use kadakas_core::{DVec2, DVec3};
-use kadakas_site::SiteTerrain;
 
 use super::{Ctx, W, bulged_vertices, circle, common, escape_unicode, lwpolyline, native};
 
@@ -26,11 +25,15 @@ fn xdata(w: &mut W, cx: &mut Ctx, items: &[(&str, String)]) {
     cx.xdata = true;
     w.pair(1001, XDATA_APP);
     for (k, v) in items {
-        let s: String = format!("{k}={}", escape_unicode(v))
-            .chars()
-            .filter(|c| !c.is_control())
-            .take(XDATA_LIMIT)
-            .collect();
+        // Cut the text, not the escaped text: a cut must not fall inside a `\U+XXXX` escape.
+        let mut s = format!("{k}=");
+        for c in v.chars().filter(|c| !c.is_control()) {
+            let e = escape_unicode(&c.to_string());
+            if s.len() + e.len() > XDATA_LIMIT {
+                break;
+            }
+            s.push_str(&e);
+        }
         w.pair(1000, s);
     }
 }
@@ -40,7 +43,15 @@ fn opt<T: ToString>(v: &Option<T>) -> String {
 }
 
 /// The entities of an irrigation object. `hidden` hides them (hidden design layer).
-pub(super) fn irrigation(w: &mut W, cx: &mut Ctx, o: &Object, hidden: bool, i: &I) {
+pub(super) fn irrigation(w: &mut W, cx: &mut Ctx, o: &Object, base: &str, hidden: bool, i: &I) {
+    // One layer for each kind, after the layer (or class) of the object when it has a name.
+    let named = |kind: &str| {
+        if base == "0" {
+            kind.to_string()
+        } else {
+            format!("{base}-{kind}")
+        }
+    };
     let scale = cx.doc.layer(o.layer).map_or(100.0, |l| l.scale);
     let kind = i.kind().to_string();
     let square = |at: DVec2, r: f64| {
@@ -61,7 +72,8 @@ pub(super) fn irrigation(w: &mut W, cx: &mut Ctx, o: &Object, hidden: bool, i: &
             radius,
             zone,
         } => {
-            let layer = "IRR-OUTLET";
+            let layer = named("IRR-OUTLET");
+            let layer = layer.as_str();
             circle(w, cx, o, layer, hidden, *at, 1.2 * scale);
             xdata(
                 w,
@@ -92,11 +104,12 @@ pub(super) fn irrigation(w: &mut W, cx: &mut Ctx, o: &Object, hidden: bool, i: &
             emitter_spacing,
             emitter_flow,
         } => {
-            let layer = match line_type {
+            let layer = named(match line_type {
                 LineType::Mainline => "IRR-MAINLINE",
                 LineType::Lateral => "IRR-LATERAL",
                 LineType::Drip => "IRR-DRIP",
-            };
+            });
+            let layer = layer.as_str();
             let verts: Vec<(DVec2, f64)> = points.iter().map(|p| (*p, 0.0)).collect();
             lwpolyline(w, cx, o, layer, hidden, &verts, false);
             xdata(
@@ -120,7 +133,8 @@ pub(super) fn irrigation(w: &mut W, cx: &mut Ctx, o: &Object, hidden: bool, i: &
             supply_loss,
             meter_loss,
         } => {
-            let layer = "IRR-POC";
+            let layer = named("IRR-POC");
+            let layer = layer.as_str();
             let r = 2.0 * scale;
             circle(w, cx, o, layer, hidden, *at, r);
             xdata(
@@ -161,7 +175,7 @@ pub(super) fn irrigation(w: &mut W, cx: &mut Ctx, o: &Object, hidden: bool, i: &
                 (*at + DVec2::new(r, -r), 0.0),
                 (*at + DVec2::new(-r, r), 0.0),
             ];
-            lwpolyline(w, cx, o, "IRR-VALVE", hidden, &bow, true);
+            lwpolyline(w, cx, o, &named("IRR-VALVE"), hidden, &bow, true);
             xdata(
                 w,
                 cx,
@@ -180,7 +194,7 @@ pub(super) fn irrigation(w: &mut W, cx: &mut Ctx, o: &Object, hidden: bool, i: &
                 w,
                 cx,
                 o,
-                "IRR-CONTROLLER",
+                &named("IRR-CONTROLLER"),
                 hidden,
                 &square(*at, 2.0 * scale),
                 true,
@@ -203,9 +217,8 @@ pub(super) fn irrigation(w: &mut W, cx: &mut Ctx, o: &Object, hidden: bool, i: &
 fn base_z(cx: &Ctx, o: &Object, m: &Massing) -> f64 {
     let mut local = o.clone();
     local.shape.translate(-cx.shift);
-    let terrain = SiteTerrain::new(&cx.site_cache, 0, cx.doc);
     let base = match &local.shape {
-        Shape::Massing(lm) => terrain.massing_base(&local, lm),
+        Shape::Massing(lm) => cx.terrain.massing_base(&local, lm),
         _ => m.base.unwrap_or(0.0),
     };
     base + cx.doc.layer(o.layer).map_or(0.0, |l| l.elevation)

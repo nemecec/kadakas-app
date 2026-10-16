@@ -216,8 +216,8 @@ pub fn viewport_prims(
         } else if vp.is_plan() {
             plan_view(doc, vp, counts, tables, out);
         } else if let Some(style) = viewport_style(doc, vp).filter(|s| s.mode.is_hidden_line()) {
-            hidden_line_prims_on(doc, vp, &style, MAX_HL_SEGMENTS, tables.site(), out);
-        } else if let Some(img) = raster_view(doc, vp, tables.site(), budget) {
+            hidden_line_prims(doc, vp, &style, MAX_HL_SEGMENTS, out);
+        } else if let Some(img) = raster_view(doc, vp, budget) {
             out.push(Prim::Image(img));
         }
         out.push(Prim::PopClip);
@@ -331,13 +331,16 @@ fn viewport_style(doc: &Document, vp: &Viewport) -> Option<RenderStyle> {
     }))
 }
 
-/// The revision of the document of a page, for the cache of its site models.
-const SITE_REVISION: u64 = 1;
-
-/// The 3D scene of a viewport: the same scene as the 3D view and `render.png` draw. The site models
-/// (terrain, walls, grading, the ground under massing and draped objects) come from `site`.
-fn viewport_scene(d: &Document, site: &kadakas_site::SiteCache) -> kadakas_core::mesh::Scene {
-    let ext = kadakas_site::draw::scene_ext(site, SITE_REVISION);
+/// The 3D scene of a viewport: the same scene as the 3D view and `render.png` draw (terrain,
+/// walls, grading, the ground under massing and draped objects).
+///
+/// The site models are computed from `d`, the objects that the viewport shows, so each viewport has
+/// a cache of its own. The cache of the page (`Tables::site`) is for the plan viewports, which use the
+/// whole document: sharing it would give a viewport that hides the grading the results of one that
+/// shows it, and the other way round.
+fn viewport_scene(d: &Document) -> kadakas_core::mesh::Scene {
+    let site = kadakas_site::SiteCache::default();
+    let ext = kadakas_site::draw::scene_ext(&site, 1);
     mesh::build_with(d, mesh::scene_origin(d), Some(&ext))
 }
 
@@ -357,16 +360,11 @@ fn viewport_camera(vp: &Viewport, scene: &kadakas_core::mesh::Scene) -> Option<C
 
 /// Renders a 3D viewport to an image, with the viewport scale and center, from its standard view.
 /// Returns `None` for a view name that is not known, or when no pixels are left.
-fn raster_view(
-    doc: &Document,
-    vp: &Viewport,
-    site: &kadakas_site::SiteCache,
-    budget: &mut u64,
-) -> Option<ImagePrim> {
+fn raster_view(doc: &Document, vp: &Viewport, budget: &mut u64) -> Option<ImagePrim> {
     let style = viewport_style(doc, vp)?;
     let (w, h) = raster_size(vp, budget)?;
     let d = viewport_document(doc, vp);
-    let scene = viewport_scene(&d, site);
+    let scene = viewport_scene(&d);
     let cam = viewport_camera(vp, &scene)?;
     // Sheets are white. A style with its own background keeps it.
     let style = RenderStyle {
@@ -412,26 +410,6 @@ pub fn hidden_line_prims(
     max_segments: usize,
     out: &mut Vec<Prim>,
 ) {
-    hidden_line_prims_on(
-        doc,
-        vp,
-        style,
-        max_segments,
-        &kadakas_site::SiteCache::default(),
-        out,
-    );
-}
-
-/// Like `hidden_line_prims`, with the cache of the site models of the page, so the terrain and the
-/// walls are drawn too.
-pub fn hidden_line_prims_on(
-    doc: &Document,
-    vp: &Viewport,
-    style: &RenderStyle,
-    max_segments: usize,
-    site: &kadakas_site::SiteCache,
-    out: &mut Vec<Prim>,
-) {
     let size = vp.max - vp.min;
     // One scale for both sides, so a large viewport keeps its proportions.
     let k = HL_PX_PER_MM
@@ -442,7 +420,7 @@ pub fn hidden_line_prims_on(
         (size.y * k).round().max(1.0) as u32,
     );
     let d = viewport_document(doc, vp);
-    let scene = viewport_scene(&d, site);
+    let scene = viewport_scene(&d);
     let Some(cam) = viewport_camera(vp, &scene) else {
         return;
     };

@@ -61,9 +61,8 @@ pub struct Rec {
     /// The name of the block definition for an entity in a named block (empty elsewhere, and for an
     /// anonymous block). A file that was saved again may give the definition a new BLOCK_RECORD
     /// handle, so `diff` pairs the definitions of two files by this name when the keys differ.
-    /// Not stored: a stored summary (the base of an update) has no block names, so only two files
-    /// that are read whole (a comparison) are paired this way.
-    #[serde(skip)]
+    /// A stored summary keeps it, so an update pairs the definitions like a comparison does.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub block: String,
     /// The entity type, for example `LINE`.
     pub kind: String,
@@ -210,7 +209,6 @@ impl Rec {
     /// Cuts the points to what a stored summary keeps. The center and diagonal stay.
     pub fn compact(&mut self) {
         self.points.truncate(MAX_STORED_POINTS);
-        self.block.clear();
     }
 
     pub fn to_value(&self) -> Value {

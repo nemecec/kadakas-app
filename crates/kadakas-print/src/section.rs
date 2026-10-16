@@ -26,6 +26,13 @@ const POCHE: Rgba = [214, 214, 210, 255];
 const INK: Rgba = [0, 0, 0, 255];
 const BEYOND_INK: Rgba = [60, 60, 60, 255];
 
+/// A cache for the site models of one viewport. The viewport computes them from the objects that it
+/// shows, which are not those of the page, so it must not use the cache of the page (`Tables::site`),
+/// which plan viewports fill from the whole document.
+fn own_site_cache() -> kadakas_site::SiteCache {
+    kadakas_site::SiteCache::default()
+}
+
 /// The drawing of a section viewport, or `None` if its section line is missing or not valid.
 /// `site` holds the site models of the document at `revision`; the terrain is cut with the rest.
 pub fn drawing(
@@ -152,7 +159,7 @@ pub fn section_prims(
             let mut cache = store.lock().unwrap_or_else(|e| e.into_inner());
             let mut missing = false;
             let d = cache.get(revision, key, || {
-                match drawing(doc, vp, sv, tables.site(), SITE_REVISION) {
+                match drawing(doc, vp, sv, &own_site_cache(), SITE_REVISION) {
                     Some(d) => d,
                     None => {
                         missing = true;
@@ -166,7 +173,7 @@ pub fn section_prims(
             d
         }
         None => {
-            let Some(d) = drawing(doc, vp, sv, tables.site(), SITE_REVISION) else {
+            let Some(d) = drawing(doc, vp, sv, &own_site_cache(), SITE_REVISION) else {
                 return;
             };
             Arc::new(d)

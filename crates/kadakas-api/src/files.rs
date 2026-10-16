@@ -388,6 +388,7 @@ fn file_call_inner(
         // waits in the file must not take it for its anchor.
         let mut notes = s.replace_document_as(opened.doc, relinked == 0);
         notes.extend(relink_notes);
+        notes.extend(kadakas_core::props::hardscape_name_notes(s.editor.doc()));
         if relinked > 0 {
             notes.push(format!(
                 "{relinked} gray placeholder(s) were replaced by the real pictures, which this file has"

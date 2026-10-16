@@ -135,7 +135,7 @@ fn walls_are_ifc_walls_with_type_and_materials() {
     assert!(f.dangling().is_empty());
     let walls = named(&f, "IFCWALL");
     assert_eq!(walls.len(), 3);
-    assert_eq!(report.objects["polyline"], 3);
+    assert_eq!(report.objects["wall"], 3);
     assert_eq!(report.skipped.iter().map(|s| s.count).sum::<usize>(), 1);
     let types: Vec<(Option<&str>, Option<&str>)> = walls
         .iter()

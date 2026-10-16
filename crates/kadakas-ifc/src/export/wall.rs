@@ -138,13 +138,23 @@ impl<W: Write> Exporter<'_, W> {
             ),
             ("area", "GrossSideArea".to_string(), q.face_area * mm2),
             ("area", "NetSideArea".to_string(), q.face_area * mm2),
-            ("volume", "GrossVolume".to_string(), q.volume * mm3),
-            ("volume", "NetVolume".to_string(), q.volume * mm3),
+            // The body has the coping, so the volume has it too. The wall alone is in the Kadakas set.
+            (
+                "volume",
+                "GrossVolume".to_string(),
+                (q.volume + q.coping_volume) * mm3,
+            ),
+            (
+                "volume",
+                "NetVolume".to_string(),
+                (q.volume + q.coping_volume) * mm3,
+            ),
         ];
         self.quantities(obj, "Qto_WallBaseQuantities", &standard)?;
         let extra = vec![
             ("length", "AverageHeight".to_string(), q.avg_height),
             ("length", "MinHeight".to_string(), q.min_height),
+            ("volume", "WallVolume".to_string(), q.volume * mm3),
             ("volume", "CopingVolume".to_string(), q.coping_volume * mm3),
         ];
         self.quantities(obj, "Kadakas_WallQuantities", &extra)?;

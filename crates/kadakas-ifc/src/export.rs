@@ -279,9 +279,15 @@ impl<'a, W: Write> Exporter<'a, W> {
             } else {
                 self.object(obj)?
             };
+            // A wall is a polyline with settings: the report names it by what it is.
+            let kind = if kadakas_site::grading::wall::data(obj).is_some() {
+                "wall"
+            } else {
+                obj.shape.kind()
+            };
             match reason {
-                None => self.report.count(obj.shape.kind()),
-                Some(r) => self.report.skip(obj.shape.kind(), &r),
+                None => self.report.count(kind),
+                Some(r) => self.report.skip(kind, &r),
             }
         }
         self.flush()?;

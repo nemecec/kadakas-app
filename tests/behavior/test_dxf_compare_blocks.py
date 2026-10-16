@@ -60,6 +60,17 @@ def test_a_block_that_changed_is_still_reported(cad, tmp_path):
     assert not [c for c in r["changes"] if c["entity"] == "LINE" and c["layer"] == "0"]
 
 
+def test_import_update_agrees_with_compare_on_a_resaved_block(cad, tmp_path):
+    v1, v2 = tmp_path / "rev1.dxf", tmp_path / "rev2.dxf"
+    survey(v1, 1)
+    survey(v2, 2)
+    cad.result("import.file", {"path": str(v1)})
+    r = cad.result("import.update", {"path": str(v2)})
+    assert r["counts"]["added"] == 0 and r["counts"]["removed"] == 0, r["changes"]
+    assert [c["entity"] for c in r["changes"]] == ["LINE"]
+    assert not [c for c in r["changes"] if c["layer"] == "0"]
+
+
 def test_revision_clouds_are_outlines(cad, tmp_path):
     v1, v2 = tmp_path / "rev1.dxf", tmp_path / "rev2.dxf"
     survey(v1, 1)

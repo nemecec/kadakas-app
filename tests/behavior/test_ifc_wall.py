@@ -61,8 +61,8 @@ def z_range(model, wall):
 def test_walls_are_ifc_walls_with_solid_materials_and_quantities(cad, tmp_path, version):
     build(cad)
     model, r = export(cad, tmp_path, version)
-    assert not [s for s in r["report"]["skipped"] if s["entity"] == "polyline"], r["report"]["skipped"]
-    assert r["report"]["objects"]["polyline"] == 3
+    assert not [s for s in r["report"]["skipped"] if s["entity"] == "wall"], r["report"]["skipped"]
+    assert r["report"]["objects"]["wall"] == 3
     statements = validation_statements(tmp_path / f"walls_{version or 'ifc4'}.ifc")
     assert statements == [], statements[:3]
     walls = model.by_type("IfcWall")
@@ -90,7 +90,9 @@ def test_walls_are_ifc_walls_with_solid_materials_and_quantities(cad, tmp_path, 
     assert q["Width"] == approx(220)
     assert q["Height"] == approx(600, abs=1)
     assert q["NetSideArea"] == approx(5.0 * 0.6, rel=1e-3)
-    assert q["NetVolume"] == approx(5.0 * 0.6 * 0.22, rel=1e-3)
+    # The body has the wall and its coping (50 mm high, 20 mm out on each side).
+    assert q["NetVolume"] == approx(5.0 * 0.6 * 0.22 + 5.0 * 0.26 * 0.05, rel=1e-3)
+    assert element.get_psets(styled, qtos_only=True)["Kadakas_WallQuantities"]["WallVolume"] == approx(5.0 * 0.6 * 0.22, rel=1e-3)
     common = element.get_psets(styled)["Pset_WallCommon"]
     assert common["Reference"] == "Block wall" and common["IsExternal"] is True
 

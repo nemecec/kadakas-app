@@ -425,9 +425,10 @@ pub const BASE_PART_BYTES: usize = 4 * 1024 * 1024;
 /// The most that a part may hold, in estimated bytes of JSON.
 pub const MAX_BASE_PART_BYTES: usize = 8 * 1024 * 1024;
 
-const REC_KEYS: [&str; 14] = [
+const REC_KEYS: [&str; 15] = [
     "handle",
     "scope",
+    "block",
     "kind",
     "layer",
     "color",

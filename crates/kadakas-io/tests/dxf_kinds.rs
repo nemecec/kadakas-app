@@ -188,3 +188,122 @@ fn plant_tags_are_a_leader_and_text() {
     assert!(text.contains("\nLA (3)\n"), "{text}");
     assert_eq!(count(&text, "TEXT"), 1);
 }
+
+#[test]
+fn irrigation_layers_follow_the_layer_mode() {
+    let mut ed = Editor::default();
+    irrigation(&mut ed);
+    let (text, _) = export(
+        &ed,
+        &ExportOptions {
+            layer_mode: kadakas_io::LayerMode::Layers,
+            ..Default::default()
+        },
+    );
+    assert!(text.contains("-IRR-OUTLET\n"), "{text}");
+    assert!(!text.contains("\nIRR-OUTLET\n"));
+}
+
+#[test]
+fn xdata_is_cut_before_it_is_escaped() {
+    let mut ed = Editor::default();
+    add(
+        &mut ed,
+        Shape::Irrigation(Box::new(IrrigationShape::Controller {
+            at: DVec2::ZERO,
+            name: "\u{e9}".repeat(300),
+            stations: 1,
+        })),
+    );
+    let (text, _) = export(&ed, &ExportOptions::default());
+    let lines: Vec<&str> = text.lines().collect();
+    let name = lines
+        .iter()
+        .zip(lines.iter().skip(1))
+        .find(|(a, b)| a.trim() == "1000" && b.starts_with("name="))
+        .map(|(_, b)| *b)
+        .unwrap();
+    assert!(name.len() <= 250, "{}", name.len());
+    // Every escape is whole: `\U+00E9`.
+    let body = name.strip_prefix("name=").unwrap();
+    assert!(!body.is_empty() && body.len() % 7 == 0, "{body}");
+    assert!(body.as_bytes().chunks(7).all(|c| c.starts_with(b"\\U+")));
+}
+
+#[test]
+fn a_building_and_the_ground_share_the_layer_elevation() {
+    let mut ed = Editor::default();
+    let layer = ed
+        .execute(&Command::AddLayer {
+            name: "Raised".into(),
+            elevation: 2000.0,
+            scale: None,
+            kind: None,
+        })
+        .unwrap()
+        .created[0];
+    let on = |ed: &mut Editor, shape: Shape| {
+        ed.execute(&Command::AddObject {
+            shape,
+            layer: Some(kadakas_core::model::LayerId(layer)),
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+    };
+    let mut points = Vec::new();
+    for i in 0..5 {
+        for j in 0..5 {
+            points.push(kadakas_core::DVec3::new(
+                f64::from(i) * 4000.0,
+                f64::from(j) * 4000.0,
+                100.0,
+            ));
+        }
+    }
+    on(
+        &mut ed,
+        Shape::SiteModel {
+            points,
+            lines: vec![],
+            settings: Default::default(),
+        },
+    );
+    let ring: Vec<Vertex> = [
+        (4000.0, 4000.0),
+        (8000.0, 4000.0),
+        (8000.0, 8000.0),
+        (4000.0, 8000.0),
+    ]
+    .iter()
+    .map(|(x, y)| Vertex::corner(DVec2::new(*x, *y)))
+    .collect();
+    on(
+        &mut ed,
+        Shape::Massing(Box::new(Massing::new(ring, 3000.0))),
+    );
+    let (text, _) = export(
+        &ed,
+        &ExportOptions {
+            site_mesh: kadakas_io::SiteMesh::Existing,
+            ..Default::default()
+        },
+    );
+    let entities = &text[text.find("\nENTITIES\n").unwrap()..];
+    let lines: Vec<&str> = entities.lines().collect();
+    let zs: Vec<f64> = lines
+        .iter()
+        .zip(lines.iter().skip(1))
+        .filter(|(a, _)| a.trim() == "30")
+        .filter_map(|(_, b)| b.trim().parse().ok())
+        .collect();
+    // The face records of a polyface mesh have no height (0).
+    let min = zs
+        .iter()
+        .copied()
+        .filter(|z| *z != 0.0)
+        .fold(f64::MAX, f64::min);
+    assert!((min - 2100.0).abs() < 1e-6, "lowest z {min}");
+    // The ground is at 2100 and the building starts there, and goes up by its height.
+    assert!(zs.iter().any(|z| (z - 5100.0).abs() < 1e-6));
+}
