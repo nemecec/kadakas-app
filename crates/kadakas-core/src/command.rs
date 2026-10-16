@@ -1189,7 +1189,9 @@ impl<'a> Tx<'a> {
                     validate_shape(s)?;
                     self.check_shape_refs(s)?;
                     self.guard_path(*id, Some(s))?;
-                    if let Shape::LandscapeArea { boundary, .. } = s {
+                    if let Shape::LandscapeArea { boundary, .. }
+                    | Shape::Hardscape { boundary, .. } = s
+                    {
                         self.check_holes(*id, boundary)?;
                     }
                 }

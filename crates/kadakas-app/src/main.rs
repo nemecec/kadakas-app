@@ -34,6 +34,7 @@ mod icons;
 #[cfg(not(target_arch = "wasm32"))]
 mod io_dialog;
 mod irrigation_ui;
+mod joint_ui;
 mod keymap;
 mod layout;
 mod locale;

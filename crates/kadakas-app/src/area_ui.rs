@@ -306,6 +306,7 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     {
         patch.site_modifier = Some(pad);
     }
+    pattern_settings(ui, obj, &d, doc, &mut patch);
     // Quantities.
     let terrain = SiteTerrain::new(session.site_cache(), session.editor.revision(), doc);
     use kadakas_core::ground::GroundSource;
@@ -354,6 +355,67 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     if !patch.is_empty() {
         apply(session, id, patch, status);
     }
+}
+
+/// Holes of a hardscape, and the origin and the angle of its joint pattern. The origin and the
+/// angle replace the ones of the style; the buttons give the style's back.
+fn pattern_settings(
+    ui: &mut Ui,
+    obj: &Object,
+    d: &hardscape::HardscapeData,
+    doc: &kadakas_core::model::Document,
+    patch: &mut HardscapePatch,
+) {
+    if !d.holes.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label(tr!("area-ui-hole-s", count = d.holes.len()));
+            if ui.button(tr!("area-ui-clear-holes")).clicked() {
+                patch.holes = Some(Vec::new());
+            }
+        });
+    }
+    let Some(joints) = hardscape::data::style_of(doc, obj).and_then(|(_, s)| s.joints) else {
+        return;
+    };
+    let units = kadakas_units::current();
+    ui.horizontal(|ui| {
+        match d.origin {
+            Some(o) => {
+                ui.label(tr!(
+                    "area-ui-pattern-origin",
+                    x = units.length_text_d(o.x, 1),
+                    y = units.length_text_d(o.y, 1)
+                ));
+                if ui.button(tr!("area-ui-clear-origin")).clicked() {
+                    patch.clear_origin = true;
+                }
+            }
+            None => {
+                ui.label(tr!("area-ui-pattern-origin-middle"));
+            }
+        };
+    });
+    ui.horizontal(|ui| {
+        ui.label(tr!("area-ui-pattern-angle"));
+        match d.angle {
+            Some(a) => {
+                let mut v = a;
+                let r = ui.add(DragValue::new(&mut v).speed(1.0).degrees());
+                if (r.drag_stopped() || r.lost_focus()) && v != a {
+                    patch.angle = Some(v);
+                }
+                if ui.button(tr!("area-ui-clear-angle")).clicked() {
+                    patch.clear_angle = true;
+                }
+            }
+            None => {
+                ui.label(format!("{}°", joints.angle));
+                if ui.button(tr!("area-ui-set-angle")).clicked() {
+                    patch.angle = Some(joints.angle);
+                }
+            }
+        }
+    });
 }
 
 fn landscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut String) {
@@ -497,10 +559,9 @@ fn extras(doc: &Document, o: &Object) -> Rc<Extras> {
     }
     let mut e = Extras::default();
     match &o.shape {
-        Shape::Hardscape { boundary, .. } => {
+        Shape::Hardscape { .. } => {
             if let Some(j) = hardscape::data::style_of(doc, o).and_then(|(_, s)| s.joints) {
-                e.joints = hardscape::joints::joint_lines(&curve::flatten(boundary, true, 2.0), &j)
-                    .segments;
+                e.joints = hardscape::drawn_joints(doc, o, &j, 2.0).segments;
             }
         }
         Shape::LandscapeArea { .. } if landscape::shows_plants(doc, o) => {
@@ -536,6 +597,20 @@ pub fn draw_extras(
     let s = |p: DVec2| view.to_screen(p + offset);
     match &o.shape {
         Shape::Hardscape { boundary, .. } => {
+            // Holes are open: white over the fill, with an outline.
+            for hole in &hardscape::data(o).unwrap_or_default().holes {
+                let ring: Vec<egui::Pos2> =
+                    curve::flatten(hole, true, (0.25 / view.zoom).max(1e-3))
+                        .iter()
+                        .map(|p| s(*p))
+                        .collect();
+                painter.add(egui::epaint::PathShape {
+                    points: ring,
+                    closed: true,
+                    fill: Color32::from_white_alpha(230),
+                    stroke: egui::epaint::PathStroke::new(1.0, st.pen),
+                });
+            }
             let Some((_, style)) = hardscape::data::style_of(doc, o) else {
                 return;
             };
@@ -612,5 +687,97 @@ pub fn draw_extras(
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod pattern_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn session_with_lot(set: serde_json::Value) -> (Session, ObjectId) {
+        let mut s = Session::with_sequential_ids();
+        s.handle(
+            "hardscape_style.create",
+            json!({"name": "P", "joints": {"kind": "stack", "unit_length": 200, "unit_width": 100, "spacing": 5, "angle": 30}}),
+        )
+        .unwrap();
+        let id = s
+            .handle(
+                "hardscape.add",
+                json!({"boundary": [[0, 0], [4000, 0], [4000, 3000], [0, 3000]], "style": "P"}),
+            )
+            .unwrap()["id"]
+            .clone();
+        let id: ObjectId = serde_json::from_value(id).unwrap();
+        if !set.is_null() {
+            let mut p = set;
+            p["id"] = json!(id);
+            s.handle("hardscape.set", p).unwrap();
+        }
+        (s, id)
+    }
+
+    fn run(s: &mut Session, id: ObjectId) -> HardscapePatch {
+        let ctx = egui::Context::default();
+        let obj = s.editor.doc().object(id).unwrap().clone();
+        let d = hardscape::data(&obj).unwrap_or_default();
+        let mut patch = HardscapePatch::default();
+        let doc = s.editor.doc().clone();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            pattern_settings(ui, &obj, &d, &doc, &mut patch);
+        });
+        patch
+    }
+
+    #[test]
+    fn the_pattern_settings_show_holes_origin_and_angle_without_changing_them() {
+        for set in [
+            json!(null),
+            json!({"holes": [[[1000, 1000], [1500, 1000], [1500, 1500]]]}),
+            json!({"origin": [100, 200], "angle": 45, "holes": [[[1000, 1000], [1500, 1000], [1500, 1500]]]}),
+        ] {
+            let (mut s, id) = session_with_lot(set);
+            assert_eq!(run(&mut s, id), HardscapePatch::default());
+            // The whole panel runs too.
+            let ctx = egui::Context::default();
+            let mut status = String::new();
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                object_info(ui, &mut s, id, &mut status);
+            });
+        }
+        // A hardscape without a style has holes but no pattern settings.
+        let mut s = Session::with_sequential_ids();
+        let id: ObjectId = serde_json::from_value(
+            s.handle(
+                "hardscape.add",
+                json!({"boundary": [[0, 0], [4000, 0], [4000, 3000], [0, 3000]],
+                    "holes": [[[1000, 1000], [1500, 1000], [1500, 1500]]]}),
+            )
+            .unwrap()["id"]
+                .clone(),
+        )
+        .unwrap();
+        assert_eq!(run(&mut s, id), HardscapePatch::default());
+    }
+
+    #[test]
+    fn the_strings_exist_in_both_languages() {
+        for key in [
+            "area-ui-pattern-origin",
+            "area-ui-pattern-origin-middle",
+            "area-ui-clear-origin",
+            "area-ui-pattern-angle",
+            "area-ui-set-angle",
+            "area-ui-clear-angle",
+            "io-dialog-patterns",
+        ] {
+            let en = include_str!("../../kadakas-l10n/locales/en-US/area-ui.ftl").to_string()
+                + include_str!("../../kadakas-l10n/locales/en-US/io-dialog.ftl");
+            let et = include_str!("../../kadakas-l10n/locales/et/area-ui.ftl").to_string()
+                + include_str!("../../kadakas-l10n/locales/et/io-dialog.ftl");
+            assert!(en.contains(&format!("{key} =")), "{key} in en-US");
+            assert!(et.contains(&format!("{key} =")), "{key} in et");
+        }
     }
 }

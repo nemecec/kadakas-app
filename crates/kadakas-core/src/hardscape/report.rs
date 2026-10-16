@@ -32,7 +32,10 @@ pub struct LayerQty {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Quantities {
     pub mode: &'static str,
+    /// The plan area: the outline minus the holes.
     pub plan_area_m2: f64,
+    pub holes: usize,
+    pub holes_area_m2: f64,
     /// Area of the top surface. It is larger than the plan area for a slope or a draped surface.
     pub surface_area_m2: f64,
     pub perimeter_m: f64,
@@ -65,17 +68,25 @@ pub fn quantities(
     let d = data::data(obj);
     let style = data::style_of(doc, obj);
     let ring = curve::flatten(boundary, true, TOLERANCE);
-    let plan = curve::area(boundary) / 1e6;
+    let hole_list = d.as_ref().map(|d| d.holes.as_slice()).unwrap_or_default();
+    let holes_area = crate::landscape::holes_area(boundary, hole_list) / 1e6;
+    let plan = (curve::area(boundary) / 1e6 - holes_area).max(0.0);
     // Ground that does not reach the hardscape does not count.
     let terrain = terrain.filter(|t| ring.iter().any(|p| t(*p).is_some()));
     let surf = surface::surface_of(obj, d.as_ref(), terrain);
     let surface_area = plan * surface::area_ratio(&ring, &surf);
     let ratio = if plan > 0.0 { surface_area / plan } else { 1.0 };
-    let closed_perimeter = offset::length(&ring)
-        + ring
-            .last()
-            .zip(ring.first())
-            .map_or(0.0, |(a, b)| a.distance(*b));
+    let closed_len = |r: &[DVec2]| {
+        offset::length(r) + r.last().zip(r.first()).map_or(0.0, |(a, b)| a.distance(*b))
+    };
+    // The kerb runs round the holes too.
+    let closed_perimeter = if hole_list.is_empty() {
+        closed_len(&ring)
+    } else {
+        // Holes that overlap are merged, and holes that touch the outline are part of it.
+        crate::layout::Region::new(boundary, hole_list, TOLERANCE)
+            .map_or_else(|_| closed_len(&ring), |r| r.perimeter())
+    };
     let m3 = |area: f64, t: f64| area * t / 1000.0;
     let mut layers: Vec<LayerQty> = Vec::new();
     match &style {
@@ -85,7 +96,15 @@ pub fn quantities(
                 .get(*id)
                 .map(|r| r.name.clone())
                 .unwrap_or_default();
-            let border = border_area(s, d.as_ref(), plan, closed_perimeter / 1000.0);
+            // The border is the part of the area that the pattern is not laid in: the exact
+            // difference between the plan and the paved region (corners count once).
+            let border =
+                border_area(s, d.as_ref(), plan, closed_perimeter / 1000.0).map(|(len, approx)| {
+                    let paved = crate::layout::object::region_of(doc, obj, TOLERANCE)
+                        .ok()
+                        .map(|r| r.area / 1e6);
+                    (len, paved.map_or(approx, |p| (plan - p).clamp(0.0, plan)))
+                });
             let net = (surface_area - border.map_or(0.0, |(_, a)| a * ratio)).max(0.0);
             layers.push(LayerQty {
                 kind: "surface",
@@ -140,6 +159,8 @@ pub fn quantities(
     Some(Quantities {
         mode: d.as_ref().map_or("slab", |d| d.mode.id()),
         plan_area_m2: plan,
+        holes: hole_list.len(),
+        holes_area_m2: holes_area,
         surface_area_m2: surface_area,
         perimeter_m: closed_perimeter / 1000.0,
         thickness_mm: total_thickness,
@@ -375,14 +396,14 @@ mod tests {
         .unwrap();
         let q = quantities(ed.doc(), ed.doc().object(id).unwrap(), None).unwrap();
         let by = |k: &str| q.layers.iter().filter(|l| l.kind == k).collect::<Vec<_>>();
-        // Border: 13 m long and 0.2 m wide.
+        // Border: 0.2 m wide round a 4 x 2.5 m slab. The corners count once: 10 - 3.6 x 2.1 m2.
         let border = by("border")[0];
         assert!(
-            (border.area_m2 - 2.6).abs() < 1e-9 && (border.volume_m3 - 2.6 * 0.06).abs() < 1e-9
+            (border.area_m2 - 2.44).abs() < 1e-9 && (border.volume_m3 - 2.44 * 0.06).abs() < 1e-9
         );
         let surface = by("surface")[0];
         assert!(
-            (surface.area_m2 - 7.4).abs() < 1e-9 && (surface.volume_m3 - 7.4 * 0.06).abs() < 1e-9
+            (surface.area_m2 - 7.56).abs() < 1e-9 && (surface.volume_m3 - 7.56 * 0.06).abs() < 1e-9
         );
         let comps = by("component");
         assert_eq!(comps.len(), 2);
@@ -391,7 +412,7 @@ mod tests {
                 && (comps[1].volume_m3 - 10.0 * 0.15).abs() < 1e-9
         );
         assert_eq!(q.thickness_mm, 250.0);
-        assert!((q.volume_m3 - (7.4 * 0.06 + 2.6 * 0.06 + 0.4 + 1.5)).abs() < 1e-9);
+        assert!((q.volume_m3 - (7.56 * 0.06 + 2.44 * 0.06 + 0.4 + 1.5)).abs() < 1e-9);
     }
 
     #[test]

@@ -62,7 +62,7 @@ pub fn extras(doc: &Document, obj: &Object, st: &Style, xf: &Xf, out: &mut Vec<P
                 && xf.len(j.unit_width.min(j.unit_length)) >= MIN_UNIT_ON_PAPER
             {
                 let color = j.color.map(|c| c.0).or(st.stroke);
-                for (a, b) in hardscape::joints::joint_lines(&ring, j).segments {
+                for (a, b) in hardscape::drawn_joints(doc, obj, j, (0.1 / xf.k).max(1.0)).segments {
                     out.push(line(&[xf.p(a), xf.p(b)], false, color, None, THIN, None));
                 }
             }

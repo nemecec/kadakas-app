@@ -86,6 +86,7 @@ pub(crate) fn describe() -> Value {
             "native_annotations": "DXF: true (default). Linear, radial and diameter dimensions become DIMENSION entities (each with its block), callouts become LEADER and MTEXT, text becomes MTEXT. Other annotations are lines and text. false: all annotations are lines and text",
             "site_mesh": "DXF: none (default) | existing | proposed. Also writes the triangles of a site model surface as a 3D mesh",
             "mesh_entity": "DXF: polyface (default: a POLYLINE polyface mesh) | face3d (one 3DFACE per triangle). For mesh3d objects and the site mesh",
+            "patterns": "DXF: what to write of the unit pattern of hardscapes that have a joint pattern. none (default: only the outline; a pattern can have hundreds of thousands of units) | gaps (gap center lines as LINE on <layer>-GAPS) | units (every unit, whole or cut, as a closed polyline with the gap taken off: <layer>-UNITS-WHOLE and <layer>-UNITS-CUT; a hole inside a cut unit is a closed polyline on <layer>-UNITS-VOID). Cut units are cut exactly to the outline minus the holes; curves are cut into lines within the tolerance. The counts equal report.unit_pattern when the tolerances are equal (both default to 1 mm). A pattern with more than 600000 units (gaps: 1000000 lines) is an error that names the hardscape: nothing is dropped silently. The report lists the counts written",
             "tolerance": "mm, curve approximation. Default 1"
         },
         "ifc": crate::ifc_api::describe(),
@@ -130,6 +131,24 @@ impl Session {
         })?;
         self.check_path(&path, write, extensions(format))
             .map_err(RpcError::policy)
+    }
+
+    /// The bytes of a DXF file for a module pattern. The path policy of `import.file` applies, and
+    /// so does the size limit of the session.
+    pub(crate) fn read_dxf_for_module(&self, path: PathBuf) -> Result<Vec<u8>, RpcError> {
+        let path = self.file_path(path, Some(Format::Dxf), false)?;
+        let size = std::fs::metadata(&path)
+            .map_err(|e| RpcError::invalid_params(format!("{}: {e}", path.display())))?
+            .len();
+        if size > self.limits.import_text_bytes {
+            return Err(RpcError::limit(format!(
+                "{} is {size} bytes, more than the limit of {} bytes",
+                path.display(),
+                self.limits.import_text_bytes
+            )));
+        }
+        std::fs::read(&path)
+            .map_err(|e| RpcError::invalid_params(format!("{}: {e}", path.display())))
     }
 
     pub(crate) fn import_file(&mut self, p: Value) -> Result<Value, RpcError> {
@@ -210,7 +229,9 @@ impl Session {
         {
             return self.export_sheet_file(f, path, &options, overwrite, checked);
         }
-        let opts = ExportOptions::from_json(&options).map_err(rpc)?;
+        let mut opts = ExportOptions::from_json(&options).map_err(rpc)?;
+        // A client cannot raise the limit of the session.
+        opts.pattern_budget = Some(self.limits.pattern_units);
         let format = format_of(format.as_deref())?;
         let path = if checked {
             self.file_path(path, format, true)?

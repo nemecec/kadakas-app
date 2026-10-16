@@ -134,10 +134,11 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "hardscape_landscape",
-        summary: "Hardscape objects and styles, landscape areas and their styles.",
+        summary: "Hardscape objects and styles (holes, pattern origin and angle, hardscape.from_shapes for closed outlines), landscape areas and their styles. Unit patterns (pavers, tiles) over any closed shape: unit_pattern.layout, unit_pattern.to_objects, unit_pattern.module_* (module patterns from presets, shapes or a DXF block); the counts are in report.unit_pattern.",
         prefixes: &[
             "hardscape",
             "hardscape_style",
+            "unit_pattern",
             "landscape_area",
             "landscape_area_style",
         ],
@@ -188,7 +189,7 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "resources_symbols",
-        summary: "Resources (the Resource Manager and library files), symbols, groups, and hatch patterns.",
+        summary: "Resources (the Resource Manager and library files), symbols, groups and hatch patterns.",
         prefixes: &["resource", "symbol", "group", "pattern", "library"],
         read_only: false,
         open_world: false,

@@ -74,11 +74,15 @@ pub const LANDSCAPE_AREA_STYLE_DELETE: (&str, &str) = (
 );
 pub const HARDSCAPE_ADD: (&str, &str) = (
     "hardscape.add",
-    "Add a hardscape in one undo step. A slab: {boundary: [vertices]}. A path: {center: [vertices] (curves are allowed), width? (mm, default 1200), join? (miter|round|bevel), closed? (a ring without ends), align? (center|left|right: which edge of the path the line is), offset? (mm, moves the path to the left of the line; negative to the right)}. Also: style? (ID or name), slope? ({type: none} | {type: edges, elevations: [..]} (a slab: one per corner; a path: start and end) | {type: cross, percent, angle_deg?} | {type: angle, degrees, angle_deg?} | {type: rise_run, rise, run, angle_deg?}; angle_deg is the direction of the fall, a path falls to its right), elevation? (top surface above the layer; above the ground when draped), drape? (follow the site model on the layer), site_modifier? (act as a pad on the site model; the formation level is the top minus the build-up), material? and thickness? (when there is no style), layer?, class?. Returns {id}.",
+    "Add a hardscape in one undo step. A slab: {boundary: [vertices]}. A path: {center: [vertices] (curves are allowed), width? (mm, default 1200), join? (miter|round|bevel), closed? (a ring without ends), align? (center|left|right: which edge of the path the line is), offset? (mm, moves the path to the left of the line; negative to the right)}. Also: style? (ID or name), slope? ({type: none} | {type: edges, elevations: [..]} (a slab: one per corner; a path: start and end) | {type: cross, percent, angle_deg?} | {type: angle, degrees, angle_deg?} | {type: rise_run, rise, run, angle_deg?}; angle_deg is the direction of the fall, a path falls to its right), elevation? (top surface above the layer; above the ground when draped), drape? (follow the site model on the layer), site_modifier? (act as a pad on the site model; the formation level is the top minus the build-up), material? and thickness? (when there is no style), holes? ([[vertices]], open parts inside the boundary such as planting islands), exclude? ([object IDs] whose outline becomes a hole), origin? ([x, y]: where the joint pattern starts), angle? (degrees: the angle of the joint pattern, replaces the angle of the style), align_to_edge? (n: start the pattern at vertex n of the outline and run it along the edge to vertex n+1, sets origin and angle), layer?, class?. Returns {id}.",
 );
 pub const HARDSCAPE_SET: (&str, &str) = (
     "hardscape.set",
-    "Change hardscapes. params: {id | ids, ...settings as in hardscape.add (center, width, join, style (null removes it), slope, elevation, drape, site_modifier, material, thickness, mode)}. Giving a center line makes a slab into a path; mode slab keeps the outline and makes a path into a slab.",
+    "Change hardscapes. params: {id | ids, ...settings as in hardscape.add (center, width, join, style (null removes it), slope, elevation, drape, site_modifier, material, thickness, mode, holes (replaces the old holes; [] or null clears them), exclude, origin (null clears it), angle (null clears it), align_to_edge)}. Giving a center line makes a slab into a path; mode slab keeps the outline and makes a path into a slab.",
+);
+pub const HARDSCAPE_FROM_SHAPES: (&str, &str) = (
+    "hardscape.from_shapes",
+    "Create hardscapes from closed shapes (closed polylines, rectangles, circles; for example the outlines of a parking lot from a DXF file) in one undo step. A shape inside another one becomes a hole of it (a shape inside a hole becomes a hardscape again). params: {ids? (default: the selection), style? (ID or name), holes_from_inner? (default true; false makes every shape a hardscape of its own), delete_source? (default false: the outlines stay), dry_run?}. The layer, class, look and data of a shape go to its hardscape. A shape counts as inside another one by area (it may touch the outline or sit 0.01 mm outside it); a shape that overlaps another in part is left out and named in skipped, so the new hardscapes never overlap. Returns {created: [{source, id, holes}], holes: [{source, host}], skipped: [{id, reason}], dry_run}. The new hardscapes become the selection.",
 );
 pub const LANDSCAPE_AREA_ADD: (&str, &str) = (
     "landscape_area.add",
@@ -90,7 +94,7 @@ pub const LANDSCAPE_AREA_SET: (&str, &str) = (
 );
 pub const REPORT_HARDSCAPE: (&str, &str) = (
     "report.hardscape",
-    "Hardscape quantities. params: {format?: csv}. Returns {rows: [{id, name, style, style_name, material, mode, plan_area_m2, surface_area_m2, perimeter_m, thickness_mm, volume_m3, draped, partially_draped (part of it lies outside the site model and follows the nearest edge height), layers: [{kind, name, material, thickness_mm, area_m2, volume_m3}]}], materials: [{kind, material, area_m2, volume_m3}], totals}. The surface area follows a slope or the site model; the volume of a layer is its thickness times the surface area.",
+    "Hardscape quantities. params: {format?: csv, pattern? (false leaves out the unit pattern block), and the count options of report.unit_pattern (sliver_share, waste_percent, trim, ...) for the pattern block}. Returns {rows: [{id, name, style, style_name, material, mode, plan_area_m2, surface_area_m2, perimeter_m (outline and holes), holes, holes_area_m2, thickness_mm, volume_m3, pattern? (the unit counts of report.unit_pattern, when the style has a joint pattern: {whole_units, cut_units, slivers, area_laid_m2, gap_length_m, order_units, ...} or {error}), draped, partially_draped (part of it lies outside the site model and follows the nearest edge height), layers: [{kind, name, material, thickness_mm, area_m2, volume_m3}]}], materials: [{kind, material, area_m2, volume_m3}], totals}. The surface area follows a slope or the site model; the volume of a layer is its thickness times the surface area.",
 );
 pub const REPORT_LANDSCAPE_AREAS: (&str, &str) = (
     "report.landscape_areas",
@@ -112,6 +116,8 @@ pub fn describe() -> Value {
             {"method": "hardscape.set", "params": {"id": "00000000-0000-0000-0000-00000000000c", "slope": {"type": "cross", "percent": 2}}},
             {"method": "landscape_area_style.create", "params": {"name": "Meadow", "mix": [{"plant": "Lavender", "percent": 60, "density": 5}, {"plant": "Sedge", "percent": 40, "spacing": 400, "min_count": 10}], "show_plants": true, "fields": {"hydrozone": "low"}}},
             {"method": "landscape_area.add", "params": {"boundary": [[0, 0], [20000, 0], [20000, 10000], [0, 10000]], "name": "Bed A", "style": "Meadow", "holes": [[[2000, 2000], [4000, 2000], [4000, 4000]]]}},
+            {"method": "hardscape.from_shapes", "params": {"ids": ["00000000-0000-0000-0000-000000000011", "00000000-0000-0000-0000-000000000012"], "style": "Granite setts", "holes_from_inner": true}},
+            {"method": "hardscape.set", "params": {"id": "00000000-0000-0000-0000-00000000000c", "align_to_edge": 0, "holes": [[[1000, 1000], [2000, 1000], [2000, 2000]]]}},
             {"method": "report.hardscape", "params": {}},
             {"method": "report.landscape_areas", "params": {}},
             {"method": "report.plant_list", "params": {"format": "csv"}}
@@ -288,6 +294,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
             | "landscape_area_style.delete"
             | "hardscape.add"
             | "hardscape.set"
+            | "hardscape.from_shapes"
             | "landscape_area.add"
             | "landscape_area.set"
             | "report.hardscape"
@@ -500,6 +507,41 @@ fn hardscape_patch(
                         .ok_or_else(|| bad("'site_modifier' must be true or false"))?,
                 )
             }
+            "holes" if null => patch.holes = Some(Vec::new()),
+            "holes" => {
+                patch.holes =
+                    Some(serde_json::from_value::<Vec<Vec<Vertex>>>(v.clone()).map_err(bad)?)
+            }
+            "exclude" => {
+                let ids: Vec<ObjectId> = serde_json::from_value(v.clone()).map_err(bad)?;
+                let mut list = patch.holes.take().unwrap_or_default();
+                for id in ids {
+                    list.push(outline_of(doc, id)?);
+                }
+                patch.holes = Some(list);
+            }
+            "origin" if null => patch.clear_origin = true,
+            "origin" => {
+                let a = v
+                    .as_array()
+                    .filter(|a| a.len() == 2 && a.iter().all(|x| x.as_f64().is_some()))
+                    .ok_or_else(|| bad("'origin' must be [x, y] or null"))?;
+                patch.origin = Some(DVec2::new(a[0].as_f64().unwrap(), a[1].as_f64().unwrap()))
+            }
+            "angle" if null => patch.clear_angle = true,
+            "angle" => {
+                patch.angle = Some(
+                    v.as_f64()
+                        .ok_or_else(|| bad("'angle' must be a number (degrees) or null"))?,
+                )
+            }
+            "align_to_edge" => {
+                patch.align_to_edge = Some(
+                    v.as_u64()
+                        .ok_or_else(|| bad("'align_to_edge' must be a vertex number"))?
+                        as usize,
+                )
+            }
             "material" => {
                 patch.material = Some(
                     v.as_str()
@@ -663,6 +705,51 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                 .map_err(RpcError::from)?;
             Ok(json!({ "id": out.created[0] }))
         }
+        "hardscape.from_shapes" => {
+            let doc = s.editor.doc();
+            let ids: Vec<ObjectId> = match m.get("ids").filter(|v| !v.is_null()) {
+                Some(v) => serde_json::from_value(v.clone()).map_err(bad)?,
+                None => s.selection.clone(),
+            };
+            if ids.is_empty() {
+                return Err(bad("select closed shapes or give ids"));
+            }
+            let flag = |k: &str, d: bool| m.get(k).and_then(Value::as_bool).unwrap_or(d);
+            for k in m.keys() {
+                if ![
+                    "ids",
+                    "style",
+                    "holes_from_inner",
+                    "delete_source",
+                    "dry_run",
+                ]
+                .contains(&k.as_str())
+                {
+                    return Err(bad(format!("unknown field '{k}'")));
+                }
+            }
+            let opts = hardscape::batch::FromShapesOptions {
+                style: match m.get("style").filter(|v| !v.is_null()) {
+                    Some(v) => Some(style_ref(doc, v, Kind::Hardscape)?),
+                    None => None,
+                },
+                holes_from_inner: flag("holes_from_inner", true),
+                delete_source: flag("delete_source", false),
+            };
+            let dry_run = flag("dry_run", false);
+            let made = hardscape::batch::from_shapes(doc, &ids, &opts);
+            if let (false, Some(cmd)) = (dry_run, &made.command) {
+                s.editor.execute(cmd).map_err(RpcError::from)?;
+                s.prune_selection();
+                s.selection = made.created.iter().map(|c| c.1).collect();
+            }
+            Ok(json!({
+                "created": made.created.iter().map(|c| json!({"source": c.0, "id": c.1, "holes": c.2})).collect::<Vec<_>>(),
+                "holes": made.holes.iter().map(|c| json!({"source": c.0, "host": c.1})).collect::<Vec<_>>(),
+                "skipped": made.skipped.iter().map(|c| json!({"id": c.0, "reason": c.1})).collect::<Vec<_>>(),
+                "dry_run": dry_run,
+            }))
+        }
         "hardscape.set" => {
             let ids = ids_param(m)?;
             let patch = hardscape_patch(s.editor.doc(), m, &["id", "ids"])?;
@@ -717,6 +804,35 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             let r = hardscape::report::report(s.editor.doc(), &terrain);
             let mut v = serde_json::to_value(&r).unwrap();
             v["totals"] = json!({ "plan_area_m2": r.total_plan_area_m2, "surface_area_m2": r.total_surface_area_m2, "volume_m3": r.total_volume_m3 });
+            if m.get("pattern").and_then(Value::as_bool) != Some(false) {
+                // The unit pattern of each hardscape that has one, counted once by the layout
+                // engine. The totals are the sums of the rows.
+                let opts = crate::pattern_api::summary_options(m, s.limits().pattern_units)?;
+                let doc = s.editor.doc();
+                let mut sums = Vec::new();
+                let mut errors = 0;
+                for row in v["rows"].as_array_mut().into_iter().flatten() {
+                    let id: Option<ObjectId> = serde_json::from_value(row["id"].clone()).ok();
+                    let Some(o) = id.and_then(|id| doc.object(id)) else {
+                        continue;
+                    };
+                    match crate::pattern_api::block_for(doc, o, &opts) {
+                        None => {}
+                        Some(Ok(sum)) => {
+                            row["pattern"] = serde_json::to_value(&sum).expect("json");
+                            sums.push(sum);
+                        }
+                        Some(Err(e)) => {
+                            errors += 1;
+                            row["pattern"] = json!({ "error": e });
+                        }
+                    }
+                }
+                if !sums.is_empty() || errors > 0 {
+                    let refs: Vec<_> = sums.iter().collect();
+                    v["totals"]["pattern"] = crate::pattern_api::totals_json(&refs, errors, &opts);
+                }
+            }
             if csv {
                 let mut rows = vec![
                     [

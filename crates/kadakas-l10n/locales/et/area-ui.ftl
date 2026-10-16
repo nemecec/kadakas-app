@@ -38,3 +38,33 @@ area-ui-plants-percent-density =
         [one] { $count } taim
        *[other] { $count } taime
     }  ({ $percent } %, { $density })
+area-ui-pattern-origin = Muster algab punktis { $x }, { $y }
+area-ui-pattern-origin-middle = Muster algab ala keskelt
+area-ui-clear-origin = Kasuta keskpunkti
+area-ui-pattern-angle = Mustri nurk
+area-ui-set-angle = Sea nurk
+area-ui-clear-angle = Kasuta stiili nurka
+joint-ui-title = Vuugimuster: { $name }
+joint-ui-bond-running-bond = Poolkivisidus
+joint-ui-bond-stack = Ridasidus
+joint-ui-bond-herringbone = Kalaluumuster
+joint-ui-bond-basket-weave = Korvmuster
+joint-ui-bond-module = Moodul (oma kujud)
+joint-ui-unit-length = Kivi pikkus
+joint-ui-unit-width = Kivi laius
+joint-ui-gap = Vuugi laius
+joint-ui-angle = Nurk
+joint-ui-preset-hexagon = Kuusnurk
+joint-ui-preset-octagon-square = Kaheksanurk ja ruut
+joint-ui-preset-i-shape = I-kujuline sillutiskivi
+joint-ui-from-selection = Valikust
+joint-ui-side = Külg
+joint-ui-across-flats = Külgede vahe
+joint-ui-notch = Sisselõige
+joint-ui-shapes =
+    { $count ->
+        [one] { $count } kuju joonisest
+       *[other] { $count } kuju joonisest
+    }
+joint-ui-save = Salvesta
+joint-ui-close = Sulge

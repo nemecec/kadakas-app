@@ -1,0 +1,916 @@
+//! Agent API for the unit layout engine: lay units (pavers, tiles, boards, bricks) in a bond or on
+//! a module lattice over any closed shape or a region you give.
+//!
+//! Methods: `unit_pattern.layout`, `unit_pattern.to_objects`, `unit_pattern.module_preset`,
+//! `unit_pattern.module_from_shapes`, `unit_pattern.module_from_block`, `report.unit_pattern`.
+
+use serde_json::{Map, Value, json};
+
+use kadakas_core::DVec2;
+use kadakas_core::command::Command;
+use kadakas_core::curve::Vertex;
+use kadakas_core::layout::object::{outline_of, pattern_of, region_of};
+use kadakas_core::layout::summary::{self, Summary, SummaryOptions, with_waste};
+use kadakas_core::layout::{
+    self, Bond, LayoutError, Limits, MAX_GAP_SEGMENTS, MAX_UNITS, Module, ModuleUnit, Pattern,
+    Placement, Region, TOLERANCE, Unit, gaps,
+};
+use kadakas_core::model::{Attributes, ClassId, Document, LayerId, Object, ObjectId, Shape};
+
+use crate::errors::bad;
+use crate::{RpcError, Session};
+
+pub const UNIT_PATTERN_LAYOUT: (&str, &str) = (
+    "unit_pattern.layout",
+    "Lay units (pavers, tiles, boards) over a closed shape and return the units and the gaps. params: {id | region: {outline: [vertices], holes?: [[vertices]]}, pattern?, origin? ([x, y]: where the pattern starts), angle? (degrees, counterclockwise), align_to_edge? (n: start at vertex n of the outline and run along the edge to vertex n+1; sets origin and angle), include? ([\"units\", \"gaps\"], default both), offset? and limit? (a page of the lists, default 0 and 1000, at most 20000; limit 0 gives the counts only), tolerance? (curve flattening, mm, default 1), and the count options of report.unit_pattern}. pattern is {bond? (running_bond | stack | herringbone | basket_weave), unit_length, unit_width, gap? (the joint width, default 0)} for the four bonds. Every whole unit has exactly unit_length by unit_width. Or a module: {kind: module, units: [{name, outline}], a: [x, y], b: [x, y], gap?}, or {preset: hexagon | octagon_square | i_shape, ...numbers, gap?} (see unit_pattern.module_preset). A closed polyline, rectangle, circle, landscape area or hardscape works as id. A hardscape with a style uses the joint pattern of the style with its own origin and angle unless you give pattern, origin, angle or align_to_edge, and the pattern is laid inside its kerb border and outside its holes. The pattern starts at the middle of the box of the region without an origin. The unit is the pattern cell with half a gap taken off on every side, cut exactly to the outline minus the holes (arcs are cut into lines within the tolerance). Returns {summary: {bond, origin, angle_deg, whole_units, cut_units, slivers, unfillable_pieces, area_laid_m2, gap_area_m2, order_units, order_units_max, order_units_min, by_unit: [{name, whole_units, cut_units, ...}], ...}, units_total, units: [{kind (unit shape name), whole, area_m2, share (part of a full unit), outline: [[x, y]], holes: [[[x, y]]]}], gaps_total, gaps: [[[x, y], [x, y]]] (gap center lines), next_offset (null at the end)}. A cut unit that the edge splits in two pieces counts as two units. A layout of more than 1,000,000 units is an error that says how many units it would make.",
+);
+pub const UNIT_PATTERN_TO_OBJECTS: (&str, &str) = (
+    "unit_pattern.to_objects",
+    "Turn the units (and, with include, the gap center lines) of a layout into ordinary objects in one undo step: a closed polyline for every unit and a line for every gap segment, in one group. params: as unit_pattern.layout (id | region, pattern, origin, angle, align_to_edge, tolerance), plus include? ([\"units\"] by default; add \"gaps\"), layer? (default: the layer of the object, else the active layer), class?, group? (default true), name? (name of the group). A hole inside a cut unit becomes a closed polyline of its own. With a module pattern each unit polyline has the data field unit_type with the name of its shape. At most 100,000 objects in one call. Returns {group, units, gaps, objects}.",
+);
+pub const UNIT_PATTERN_MODULE_PRESET: (&str, &str) = (
+    "unit_pattern.module_preset",
+    "Build a module pattern from a preset. params: {preset: hexagon | octagon_square | i_shape, ...numbers in mm}. hexagon: side or across_flats. octagon_square: side (a regular octagon and the small square between four octagons). i_shape: length? (200), width? (165), notch? (25): a double-T interlocking paver, rows shifted by half a length (generic approximate dimensions). Returns {pattern: {kind: module, units, a, b}, note}. Use the pattern as the pattern of unit_pattern.layout, report.unit_pattern, or as the joints of a hardscape style (add gap as spacing).",
+);
+pub const UNIT_PATTERN_MODULE_FROM_SHAPES: (&str, &str) = (
+    "unit_pattern.module_from_shapes",
+    "Make a module pattern from closed shapes in the drawing (closed polylines, rectangles, circles). params: {ids? (default: the selection), names? ([text] one per shape; default unit 1, unit 2, ...), a? and b? ([x, y] the two repeat vectors)}. Without a and b the lattice is the box of the shapes (a stack): a = [width, 0], b = [0, height], and the reply says so. The shapes keep their place in the box; the corner of the box is the origin. The shapes must not overlap each other or their copies. Returns {pattern: {kind: module, units, a, b}, note?}.",
+);
+#[cfg(not(target_arch = "wasm32"))]
+pub const UNIT_PATTERN_MODULE_FROM_BLOCK: (&str, &str) = (
+    "unit_pattern.module_from_block",
+    "Make a module pattern from the closed polylines of a block of a DXF file. params: {path, block, a? and b? ([x, y] repeat vectors; default the box of the shapes, as in module_from_shapes)}. The block goes through the DXF import (arcs from bulges, units from $INSUNITS, nested blocks exploded). The DXF layer of a polyline is the name of its unit shape. The path policy of import.file applies. Returns {pattern, note?, blocks?} (blocks lists the blocks of the file when the name is wrong, in the error).",
+);
+pub const REPORT_UNIT_PATTERN: (&str, &str) = (
+    "report.unit_pattern",
+    "Counts and quantities of unit patterns. params: {ids? (default: every hardscape with a joint pattern), pattern?, origin?, angle?, align_to_edge? (as unit_pattern.layout; with several ids they apply to each), sliver_share? (cut units under this part of a full unit are slivers, default 0.25), unfillable_share? (cut units under this part are too small to lay, default 0.05), min_width? (mm: cut units narrower than this cannot be laid, default off), exclude_unfillable? (default false: leave the unfillable pieces out of order_units), trim? (mm, default 0.1: a unit that crosses the edge by less than this counts as whole, so drawing noise makes no cut units; 0 turns it off), waste_percent? (no default: without it the order has no waste added), gap_length? (measure the length of the gap lines, default false), visible_only? (skip hardscapes on hidden layers, default false), tolerance? (curve flattening in mm, default 1; the DXF export has its own tolerance, default 1, and gives the same counts when the two are equal), format?: csv}. Returns {rows: [{id, name, whole_units, cut_units, slivers, unfillable_pieces, area_laid_m2, cut_area_m2, region_area_m2, gap_area_m2, gap_length_m?, order_units, order_units_max, order_units_min, order_units_with_waste, by_unit: [{name, whole_units, cut_units, ...}], ...} or {id, error}], totals: {..., complete}}. order_units is an upper bound: the whole units plus the cut units, every cut unit counted as one unit, no offcut used twice. order_units_min is a lower bound: the whole units plus the sum of the shares of the cut units, rounded up. waste_percent adds that percent to the total, rounded up, in whole numbers. Hardscapes are counted inside their kerb border and outside their holes. complete is false when a row is an error. The counts match the polylines on the layers <layer>-UNITS-WHOLE and <layer>-UNITS-CUT of export.file with patterns: \"units\".",
+);
+
+/// Extra text for `describe`.
+pub fn describe() -> Value {
+    json!({
+        "unit_pattern": "The layout engine lays equal units in a bond (running_bond, stack, herringbone, basket_weave) or the unit shapes of a module over a closed shape with holes. The pattern is a set of cells that run at the centers of the joints; a unit is its cell moved inward by half the gap. So every whole unit of a bond is exactly unit_length by unit_width, for any ratio, and the gap is a real gap. Units are cut exactly to the outline minus the holes. Hardscapes use the engine for their joint pattern; their holes, origin, angle and align_to_edge are settings of the object (hardscape.add, hardscape.set).",
+        "modules": "A module pattern is one or more closed shapes (unit types, each with a name; curves and concave outlines are allowed) and two repeat vectors a and b (the lattice). The shapes are the outlines at the centers of the joints; the gap moves each inward by half the gap. The shapes must not overlap each other or their copies on the neighbouring lattice points (a, b, a+b, a-b); spaces between shapes are allowed and show as gaps. Counts, reports and the DXF export are per unit type (report by_unit; DXF extended data KADAKAS_UNIT on every unit polyline; unit_type on the objects of unit_pattern.to_objects). The four bonds are built from the same machinery. Ways to define a module: JSON (pattern: {kind: module, units: [{name, outline}], a, b, gap}), a preset (unit_pattern.module_preset: hexagon, octagon_square, i_shape), closed shapes in the drawing (unit_pattern.module_from_shapes), or a block of a DXF file (unit_pattern.module_from_block). The same JSON is the joints of a hardscape style: hardscape_style.create {joints: {kind: module, units, a, b, spacing}}.",
+        "workflow_parking_lot": [
+            {"step": 1, "method": "import.file", "params": {"path": "parking.dxf"}, "why": "Read the survey of the lot."},
+            {"step": 2, "method": "document.summary", "params": {}, "why": "The classes list gives the ID of the class of the lot layer."},
+            {"step": 3, "method": "objects.list", "params": {"kind": "polyline", "class": "<class ID>"}, "why": "The closed polylines of the lot outline and the islands."},
+            {"step": 4, "method": "hardscape_style.create", "params": {"name": "Pavers 200x100", "thickness": 80, "joints": {"kind": "running_bond", "unit_length": 200, "unit_width": 100, "spacing": 5}, "border": {"width": 150, "material": "Kerb"}}},
+            {"step": 5, "method": "hardscape.from_shapes", "params": {"ids": ["<polyline ids>"], "style": "Pavers 200x100", "holes_from_inner": true}, "why": "The lot becomes a hardscape; islands inside it become holes. A shape that overlaps another in part is left out and named in skipped."},
+            {"step": 6, "method": "hardscape.set", "params": {"id": "<hardscape id>", "align_to_edge": 0}, "why": "Rows run along the first edge (the kerb); sets origin and angle."},
+            {"step": 7, "method": "render.png", "params": {"view": "top"}, "why": "Look at the pattern before you count it."},
+            {"step": 8, "method": "report.unit_pattern", "params": {"waste_percent": 5, "gap_length": true}, "why": "Whole, cut and sliver units, area laid, gap length and the order quantity."},
+            {"step": 9, "method": "export.file", "params": {"path": "parking-paving.dxf", "format": "dxf", "options": {"patterns": "units"}}, "why": "The units as closed polylines for the contractor. The counts equal report.unit_pattern."}
+        ],
+        "examples": [
+            {"method": "unit_pattern.layout", "params": {"id": "00000000-0000-0000-0000-000000000010", "pattern": {"bond": "herringbone", "unit_length": 200, "unit_width": 100, "gap": 4}, "angle": 45, "include": ["units"], "limit": 100}},
+            {"method": "unit_pattern.layout", "params": {"region": {"outline": [[0, 0], [8000, 0], [8000, 5000], [0, 5000]], "holes": [[[3000, 1500], [4500, 1500], [4500, 3000], [3000, 3000]]]}, "pattern": {"unit_length": 600, "unit_width": 300, "gap": 3, "bond": "stack"}, "origin": [0, 0]}},
+            {"method": "unit_pattern.module_preset", "params": {"preset": "hexagon", "across_flats": 200}},
+            {"method": "unit_pattern.layout", "params": {"id": "00000000-0000-0000-0000-000000000010", "pattern": {"preset": "i_shape", "length": 200, "width": 165, "notch": 25, "gap": 4}, "include": ["units"], "limit": 0}},
+            {"method": "unit_pattern.module_from_shapes", "params": {"ids": ["00000000-0000-0000-0000-000000000011", "00000000-0000-0000-0000-000000000012"], "names": ["big", "small"], "a": [400, 0], "b": [0, 400]}},
+            {"method": "unit_pattern.module_from_block", "params": {"path": "/data/tiles.dxf", "block": "MODULE_A"}},
+            {"method": "unit_pattern.to_objects", "params": {"id": "00000000-0000-0000-0000-000000000010", "include": ["units", "gaps"], "name": "Paving units"}},
+            {"method": "report.unit_pattern", "params": {"waste_percent": 5, "sliver_share": 0.25}}
+        ],
+    })
+}
+
+pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, RpcError>> {
+    if !(method.starts_with("unit_pattern.") || method == "report.unit_pattern") {
+        return None;
+    }
+    let p = if p.is_null() { json!({}) } else { p };
+    let Some(m) = p.as_object() else {
+        return Some(Err(bad("params must be an object")));
+    };
+    Some(match method {
+        "unit_pattern.layout" => layout_call(s, m),
+        "unit_pattern.to_objects" => to_objects(s, m),
+        "unit_pattern.module_preset" => module_preset(m),
+        "unit_pattern.module_from_shapes" => module_from_shapes(s, m),
+        #[cfg(not(target_arch = "wasm32"))]
+        "unit_pattern.module_from_block" => module_from_block(s, m),
+        "report.unit_pattern" => report(s, m),
+        other => Err(RpcError::method_not_found(other)),
+    })
+}
+
+/// What a call works on: the region, the pattern and where it starts.
+struct Subject {
+    region: Region,
+    pattern: Pattern,
+    place: Placement,
+    /// The layer and class of the object, when the subject is an object.
+    layer: Option<LayerId>,
+    class: Option<ClassId>,
+}
+
+fn number(v: &Value, what: &str) -> Result<f64, RpcError> {
+    v.as_f64()
+        .filter(|x| x.is_finite())
+        .ok_or_else(|| bad(format!("'{what}' must be a number")))
+}
+
+fn point(v: &Value, what: &str) -> Result<DVec2, RpcError> {
+    let a = v
+        .as_array()
+        .filter(|a| a.len() == 2)
+        .ok_or_else(|| bad(format!("'{what}' must be [x, y]")))?;
+    Ok(DVec2::new(number(&a[0], what)?, number(&a[1], what)?))
+}
+
+fn tolerance(m: &Map<String, Value>) -> Result<f64, RpcError> {
+    match m.get("tolerance") {
+        None | Some(Value::Null) => Ok(TOLERANCE),
+        Some(v) => {
+            let t = number(v, "tolerance")?;
+            if t > 0.0 {
+                Ok(t)
+            } else {
+                Err(bad("'tolerance' must be a positive number"))
+            }
+        }
+    }
+}
+
+fn module_json(m: &Module) -> Value {
+    json!({ "kind": "module", "units": m.units, "a": m.a, "b": m.b })
+}
+
+/// A module from the JSON fields `units`, `a` and `b`.
+fn module_of(g: &Map<String, Value>) -> Result<Module, RpcError> {
+    let units: Vec<ModuleUnit> = serde_json::from_value(
+        g.get("units")
+            .cloned()
+            .ok_or_else(|| bad("a module pattern needs 'units': [{name, outline}]"))?,
+    )
+    .map_err(|e| bad(format!("'units' must be [{{name, outline}}]: {e}")))?;
+    let vec2 = |k: &str| -> Result<[f64; 2], RpcError> {
+        let p = point(
+            g.get(k)
+                .ok_or_else(|| bad(format!("a module pattern needs the repeat vector '{k}'")))?,
+            k,
+        )?;
+        Ok([p.x, p.y])
+    };
+    Ok(Module {
+        units,
+        a: vec2("a")?,
+        b: vec2("b")?,
+    })
+}
+
+/// The pattern from the call, on top of a base (the pattern of the object).
+fn pattern_param(m: &Map<String, Value>, base: Option<Pattern>) -> Result<Pattern, RpcError> {
+    let given = match m.get("pattern") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_object()
+                .ok_or_else(|| bad("'pattern' must be an object"))?,
+        ),
+    };
+    let mut p = base.unwrap_or(Pattern::new(Bond::RunningBond, f64::NAN, f64::NAN, 0.0));
+    if let Some(g) = given {
+        let kind = g
+            .get("bond")
+            .or_else(|| g.get("kind"))
+            .and_then(Value::as_str);
+        let is_module = kind.is_some_and(|k| k.trim().eq_ignore_ascii_case("module"));
+        if let Some(name) = g.get("preset").and_then(Value::as_str) {
+            let num = |k: &str| g.get(k).and_then(Value::as_f64);
+            let module = layout::module::preset(name, &num).map_err(bad)?;
+            p.bond = Bond::Module;
+            p.module = Some(module);
+        } else if is_module || g.contains_key("units") {
+            p.bond = Bond::Module;
+            p.module = Some(module_of(g)?);
+        } else if let Some(k) = kind {
+            p.bond = Bond::from_name(k).ok_or_else(|| {
+                bad("'bond' must be running_bond, stack, herringbone, basket_weave or module")
+            })?;
+            if p.bond == Bond::Module {
+                return Err(bad(
+                    "a module pattern needs 'units', 'a' and 'b' (or a preset)",
+                ));
+            }
+            p.module = None;
+        }
+        for (k, v) in g {
+            match k.as_str() {
+                "bond" | "kind" | "preset" | "units" | "a" | "b" => {}
+                "unit_length" => p.unit_length = number(v, "unit_length")?,
+                "unit_width" => p.unit_width = number(v, "unit_width")?,
+                "gap" | "spacing" => p.gap = number(v, "gap")?,
+                // The numbers of a preset.
+                "side" | "across_flats" | "length" | "width" | "notch"
+                    if g.contains_key("preset") => {}
+                other => return Err(bad(format!("unknown pattern field '{other}'"))),
+            }
+        }
+    }
+    if p.bond != Bond::Module {
+        if p.unit_length.is_nan() || p.unit_width.is_nan() {
+            return Err(bad(
+                "give a pattern with unit_length and unit_width (an object with a joint pattern needs none)",
+            ));
+        }
+        if p.unit_length < Pattern::MIN_UNIT || p.unit_width < Pattern::MIN_UNIT {
+            return Err(bad(format!(
+                "units must be at least {} mm",
+                Pattern::MIN_UNIT
+            )));
+        }
+    }
+    p.validate().map_err(bad)?;
+    Ok(p)
+}
+
+fn region_param(v: &Value, tol: f64) -> Result<(Region, Vec<Vertex>), RpcError> {
+    let o = v
+        .as_object()
+        .ok_or_else(|| bad("'region' must be {outline, holes?}"))?;
+    let outline: Vec<Vertex> = serde_json::from_value(
+        o.get("outline")
+            .cloned()
+            .ok_or_else(|| bad("the region needs an 'outline'"))?,
+    )
+    .map_err(bad)?;
+    let holes: Vec<Vec<Vertex>> = match o.get("holes") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(h) => serde_json::from_value(h.clone()).map_err(bad)?,
+    };
+    let region = Region::new(&outline, &holes, tol).map_err(bad)?;
+    Ok((region, outline))
+}
+
+fn subject_of(doc: &Document, o: &Object, m: &Map<String, Value>) -> Result<Subject, RpcError> {
+    let tol = tolerance(m)?;
+    let region = region_of(doc, o, tol).map_err(bad)?;
+    let own = pattern_of(doc, o);
+    let (own_pattern, own_place) = match own {
+        Some((p, pl)) => (Some(p), Some(pl)),
+        None => (None, None),
+    };
+    let pattern = pattern_param(m, own_pattern)?;
+    let place = placement(m, Some((doc, o)), own_place, &[])?;
+    Ok(Subject {
+        region,
+        pattern,
+        place,
+        layer: Some(o.layer),
+        class: Some(o.class),
+    })
+}
+
+fn placement(
+    m: &Map<String, Value>,
+    object: Option<(&Document, &Object)>,
+    base: Option<Placement>,
+    outline: &[Vertex],
+) -> Result<Placement, RpcError> {
+    let mut place = base.unwrap_or_default();
+    if let Some(v) = m.get("align_to_edge").filter(|v| !v.is_null()) {
+        let i = v
+            .as_u64()
+            .ok_or_else(|| bad("'align_to_edge' must be a vertex number"))?
+            as usize;
+        place = match object {
+            Some((doc, o)) => layout::object::align_placement(doc, o, i).map_err(bad)?,
+            None => Placement::along_edge(outline, i).map_err(bad)?,
+        };
+    }
+    if let Some(v) = m.get("origin").filter(|v| !v.is_null()) {
+        place.origin = Some(point(v, "origin")?);
+    }
+    if let Some(v) = m.get("angle").filter(|v| !v.is_null()) {
+        place.angle = number(v, "angle")?;
+    }
+    Ok(place)
+}
+
+fn subject(s: &Session, m: &Map<String, Value>) -> Result<Subject, RpcError> {
+    let doc = s.editor.doc();
+    match (m.get("id"), m.get("region")) {
+        (Some(_), Some(_)) => Err(bad("give 'id' or 'region', not both")),
+        (Some(id), None) => {
+            let id: ObjectId = serde_json::from_value(id.clone()).map_err(bad)?;
+            let o = doc
+                .object(id)
+                .ok_or_else(|| bad(format!("object {id} does not exist")))?;
+            subject_of(doc, o, m)
+        }
+        (None, Some(r)) => {
+            let (region, outline) = region_param(r, tolerance(m)?)?;
+            let pattern = pattern_param(m, None)?;
+            let place = placement(m, None, None, &outline)?;
+            Ok(Subject {
+                region,
+                pattern,
+                place,
+                layer: None,
+                class: None,
+            })
+        }
+        (None, None) => Err(bad("give 'id' or 'region'")),
+    }
+}
+
+fn include(m: &Map<String, Value>, default: &[&str]) -> Result<(bool, bool), RpcError> {
+    let list: Vec<String> = match m.get("include") {
+        None | Some(Value::Null) => default.iter().map(|s| s.to_string()).collect(),
+        Some(v) => {
+            serde_json::from_value(v.clone()).map_err(|_| bad("'include' must be a list"))?
+        }
+    };
+    for k in &list {
+        if k != "units" && k != "gaps" {
+            return Err(bad(format!("'include' has units and gaps, not '{k}'")));
+        }
+    }
+    Ok((
+        list.iter().any(|k| k == "units"),
+        list.iter().any(|k| k == "gaps"),
+    ))
+}
+
+fn layout_error(e: LayoutError) -> RpcError {
+    match e {
+        LayoutError::TooMany(t) => RpcError::limit(format!(
+            "{t}. Use larger units, a smaller region, or split the region"
+        )),
+        LayoutError::Invalid(why) => bad(why),
+    }
+}
+
+fn xy(p: DVec2) -> Value {
+    json!([p.x, p.y])
+}
+
+fn unit_json(u: &Unit, names: &[String]) -> Value {
+    json!({
+        "kind": names.get(u.kind).cloned().unwrap_or_default(),
+        "whole": u.whole,
+        "area_m2": u.area / 1e6,
+        "share": u.share,
+        "outline": u.rings.first().map(|r| r.points.iter().map(|p| xy(*p)).collect::<Vec<_>>()).unwrap_or_default(),
+        "holes": u.rings.iter().skip(1).map(|r| r.points.iter().map(|p| xy(*p)).collect::<Vec<_>>()).collect::<Vec<_>>(),
+    })
+}
+
+fn flag(m: &Map<String, Value>, k: &str) -> Result<bool, RpcError> {
+    match m.get(k) {
+        None | Some(Value::Null) => Ok(false),
+        Some(v) => v
+            .as_bool()
+            .ok_or_else(|| bad(format!("'{k}' must be true or false"))),
+    }
+}
+
+/// The count options of a call. `max_units` is the bound of the session.
+pub(crate) fn summary_options(
+    m: &Map<String, Value>,
+    max_units: usize,
+) -> Result<SummaryOptions, RpcError> {
+    let mut o = SummaryOptions {
+        max_units: max_units.min(MAX_UNITS),
+        ..SummaryOptions::default()
+    };
+    let share = |k: &str| -> Result<Option<f64>, RpcError> {
+        match m.get(k).filter(|v| !v.is_null()) {
+            None => Ok(None),
+            Some(v) => {
+                let x = number(v, k)?;
+                if (0.0..=1.0).contains(&x) {
+                    Ok(Some(x))
+                } else {
+                    Err(bad(format!("'{k}' must be between 0 and 1")))
+                }
+            }
+        }
+    };
+    if let Some(x) = share("sliver_share")? {
+        o.sliver_share = x;
+    }
+    if let Some(x) = share("unfillable_share")? {
+        o.unfillable_share = x;
+    }
+    if let Some(v) = m.get("min_width").filter(|v| !v.is_null()) {
+        let x = number(v, "min_width")?;
+        if x < 0.0 {
+            return Err(bad("'min_width' must be zero or more"));
+        }
+        o.min_width = x;
+    }
+    if let Some(v) = m.get("trim").filter(|v| !v.is_null()) {
+        let x = number(v, "trim")?;
+        if !(0.0..=100.0).contains(&x) {
+            return Err(bad("'trim' must be between 0 and 100 mm"));
+        }
+        o.trim = x;
+    }
+    o.exclude_unfillable = flag(m, "exclude_unfillable")?;
+    o.gap_length = flag(m, "gap_length")?;
+    if let Some(v) = m.get("waste_percent").filter(|v| !v.is_null()) {
+        let x = number(v, "waste_percent")?;
+        if !(0.0..=100.0).contains(&x) {
+            return Err(bad("'waste_percent' must be between 0 and 100"));
+        }
+        o.waste_percent = Some(x);
+    }
+    Ok(o)
+}
+
+fn layout_call(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    let sub = subject(s, m)?;
+    let (want_units, want_gaps) = include(m, &["units", "gaps"])?;
+    let offset = m.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let limit = (m.get("limit").and_then(Value::as_u64).unwrap_or(1000) as usize).min(20_000);
+    let opts = summary_options(m, s.limits().pattern_units)?;
+    let sum =
+        summary::summarize(&sub.region, &sub.pattern, &sub.place, &opts).map_err(layout_error)?;
+    let names: Vec<String> = sub
+        .pattern
+        .compile()
+        .map(|c| c.kinds.iter().map(|k| k.name.clone()).collect())
+        .unwrap_or_default();
+    let mut out = json!({ "summary": sum });
+    let mut next: Option<usize> = None;
+    if want_units {
+        let mut page = Vec::new();
+        let mut i = 0usize;
+        let limits = Limits {
+            max_units: opts.max_units,
+            trim: opts.trim,
+        };
+        layout::for_each_unit(&sub.region, &sub.pattern, &sub.place, &limits, &mut |u| {
+            if i >= offset && page.len() < limit {
+                page.push(unit_json(u, &names));
+            }
+            i += 1;
+        })
+        .map_err(layout_error)?;
+        if limit > 0 && offset + page.len() < i {
+            next = Some(offset + page.len());
+        }
+        out["units_total"] = json!(i);
+        out["units"] = json!(page);
+    }
+    if want_gaps {
+        let g = gaps::gap_lines(
+            &sub.region,
+            &sub.pattern,
+            &sub.place,
+            MAX_GAP_SEGMENTS,
+            false,
+        );
+        if g.truncated {
+            return Err(RpcError::limit(
+                "the pattern has too many gap lines. Use larger units or a smaller region",
+            ));
+        }
+        let total = g.segments.len();
+        let page: Vec<Value> = g
+            .segments
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .map(|(a, b)| json!([xy(*a), xy(*b)]))
+            .collect();
+        if limit > 0 && offset + page.len() < total {
+            next = Some(next.map_or(offset + page.len(), |n| n.min(offset + page.len())));
+        }
+        out["gaps_total"] = json!(total);
+        out["gaps"] = json!(page);
+    }
+    out["next_offset"] = json!(next);
+    Ok(out)
+}
+
+/// Most objects that `unit_pattern.to_objects` makes in one call.
+const MAX_OBJECTS: usize = 100_000;
+
+fn to_objects(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    let sub = subject(s, m)?;
+    let (want_units, want_gaps) = include(m, &["units"])?;
+    let layer = match m.get("layer").filter(|v| !v.is_null()) {
+        Some(v) => Some(LayerId(
+            v.as_str()
+                .and_then(kadakas_core::uid::Uid::parse)
+                .ok_or_else(|| bad("'layer' must be an ID"))?,
+        )),
+        None => sub.layer,
+    };
+    let class = match m.get("class").filter(|v| !v.is_null()) {
+        Some(v) => Some(ClassId(
+            v.as_str()
+                .and_then(kadakas_core::uid::Uid::parse)
+                .ok_or_else(|| bad("'class' must be an ID"))?,
+        )),
+        None => sub.class,
+    };
+    let group = m.get("group").and_then(Value::as_bool).unwrap_or(true);
+    let name = m.get("name").and_then(Value::as_str).map(str::to_string);
+    // (shape, unit type)
+    let mut shapes: Vec<(Shape, Option<String>)> = Vec::new();
+    let (mut units, mut gap_count) = (0usize, 0usize);
+    let tag = sub.pattern.module.is_some();
+    let names: Vec<String> = sub
+        .pattern
+        .compile()
+        .map(|c| c.kinds.iter().map(|k| k.name.clone()).collect())
+        .unwrap_or_default();
+    if want_units {
+        let limits = Limits::new(MAX_OBJECTS.min(s.limits().pattern_units));
+        layout::for_each_unit(&sub.region, &sub.pattern, &sub.place, &limits, &mut |u| {
+            units += 1;
+            for r in &u.rings {
+                shapes.push((
+                    Shape::Polyline {
+                        points: kadakas_core::curve::corners(&r.points),
+                        closed: true,
+                    },
+                    (tag && !r.hole).then(|| names.get(u.kind).cloned().unwrap_or_default()),
+                ));
+            }
+        })
+        .map_err(|e| match e {
+            LayoutError::TooMany(t) => RpcError::limit(format!(
+                "{t}. One call makes at most {MAX_OBJECTS} objects: split the region"
+            )),
+            other => layout_error(other),
+        })?;
+    }
+    if want_gaps {
+        let g = gaps::gap_lines(&sub.region, &sub.pattern, &sub.place, MAX_OBJECTS, false);
+        if g.truncated {
+            return Err(RpcError::limit(format!(
+                "the gaps are more than {MAX_OBJECTS} lines: split the region or leave the gaps out"
+            )));
+        }
+        gap_count = g.segments.len();
+        shapes.extend(
+            g.segments
+                .iter()
+                .map(|(a, b)| (Shape::Line { a: *a, b: *b }, None)),
+        );
+    }
+    if shapes.len() > MAX_OBJECTS {
+        return Err(RpcError::limit(format!(
+            "the pattern makes {} objects. One call makes at most {MAX_OBJECTS}: split the region",
+            shapes.len()
+        )));
+    }
+    if shapes.is_empty() {
+        return Err(bad("the layout has no units"));
+    }
+    let n = shapes.len();
+    let mut next = s.editor.doc().id_plan();
+    let mut commands: Vec<Command> = Vec::with_capacity(n + 1);
+    let mut ids: Vec<ObjectId> = Vec::with_capacity(n);
+    for (shape, kind) in shapes {
+        commands.push(Command::AddObject {
+            shape,
+            layer,
+            class,
+            attrs: Attributes::default(),
+        });
+        let id = ObjectId(next.take());
+        ids.push(id);
+        if let Some(k) = kind {
+            let mut set = std::collections::BTreeMap::new();
+            set.insert("unit_type".to_string(), json!(k));
+            commands.push(Command::SetData {
+                id,
+                set: set.into_iter().collect(),
+                remove: Vec::new(),
+            });
+        }
+    }
+    let group_id = if group && n > 1 {
+        commands.push(Command::Group {
+            ids: ids.clone(),
+            name,
+        });
+        Some(ObjectId(next.take()))
+    } else {
+        None
+    };
+    s.editor
+        .execute(&Command::Batch { commands })
+        .map_err(RpcError::from)?;
+    s.selection = group_id.map_or(ids, |g| vec![g]);
+    Ok(json!({ "group": group_id, "units": units, "gaps": gap_count, "objects": n }))
+}
+
+fn module_preset(m: &Map<String, Value>) -> Result<Value, RpcError> {
+    let name = m.get("preset").and_then(Value::as_str).ok_or_else(|| {
+        bad(format!(
+            "give 'preset': {}",
+            layout::module::PRESETS.join(" | ")
+        ))
+    })?;
+    for k in m.keys() {
+        if !["preset", "side", "across_flats", "length", "width", "notch"].contains(&k.as_str()) {
+            return Err(bad(format!("unknown field '{k}'")));
+        }
+    }
+    let num = |k: &str| m.get(k).and_then(Value::as_f64);
+    let module = layout::module::preset(name, &num).map_err(bad)?;
+    module.compile(0.0).map_err(bad)?;
+    Ok(json!({
+        "pattern": module_json(&module),
+        "note": "add gap (or spacing in a hardscape style) for the joints",
+    }))
+}
+
+fn module_from_shapes(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    let doc = s.editor.doc();
+    let ids: Vec<ObjectId> = match m.get("ids").filter(|v| !v.is_null()) {
+        Some(v) => serde_json::from_value(v.clone()).map_err(bad)?,
+        None => s.selection.clone(),
+    };
+    if ids.is_empty() {
+        return Err(bad("select closed shapes or give ids"));
+    }
+    let names: Vec<String> = match m.get("names").filter(|v| !v.is_null()) {
+        Some(v) => {
+            serde_json::from_value(v.clone()).map_err(|_| bad("'names' must be a list of text"))?
+        }
+        None => Vec::new(),
+    };
+    if !names.is_empty() && names.len() != ids.len() {
+        return Err(bad("give one name per shape, or no names"));
+    }
+    let mut units = Vec::new();
+    for (i, id) in ids.iter().enumerate() {
+        let o = doc
+            .object(*id)
+            .ok_or_else(|| bad(format!("object {id} does not exist")))?;
+        let (outline, _) = outline_of(o).map_err(|e| bad(format!("object {id}: {e}")))?;
+        units.push(ModuleUnit {
+            name: names
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("unit {}", i + 1)),
+            outline,
+        });
+    }
+    finish_module(units, m)
+}
+
+fn finish_module(units: Vec<ModuleUnit>, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    let vec = |k: &str| -> Result<Option<[f64; 2]>, RpcError> {
+        match m.get(k).filter(|v| !v.is_null()) {
+            None => Ok(None),
+            Some(v) => {
+                let p = point(v, k)?;
+                Ok(Some([p.x, p.y]))
+            }
+        }
+    };
+    let (module, note) = layout::module::from_outlines(units, vec("a")?, vec("b")?).map_err(bad)?;
+    module.compile(0.0).map_err(bad)?;
+    Ok(json!({ "pattern": module_json(&module), "note": note }))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn module_from_block(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    let path = m
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad("give 'path' of a DXF file"))?;
+    let block = m
+        .get("block")
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad("give the name of the 'block'"))?;
+    for k in m.keys() {
+        if !["path", "block", "a", "b"].contains(&k.as_str()) {
+            return Err(bad(format!("unknown field '{k}'")));
+        }
+    }
+    let bytes = s.read_dxf_for_module(path.into())?;
+    let outlines =
+        kadakas_io::dxf::block::block_outlines(&bytes, block).map_err(|e| bad(e.to_string()))?;
+    let units = outlines
+        .into_iter()
+        .map(|b| ModuleUnit {
+            name: b.layer,
+            outline: b.outline,
+        })
+        .collect();
+    finish_module(units, m)
+}
+
+fn label(doc: &Document, o: &Object) -> String {
+    kadakas_core::hardscape::data::style_of(doc, o)
+        .and_then(|(id, _)| doc.resources.get(id).map(|r| r.name.clone()))
+        .unwrap_or_else(|| o.shape.kind().to_string())
+}
+
+/// The sums of several summaries: one `Summary`-like JSON for the total row. The waste is applied
+/// to the total order, not to each row.
+pub fn totals_json(sums: &[&Summary], errors: usize, opts: &SummaryOptions) -> Value {
+    let sum = |f: &dyn Fn(&Summary) -> usize| sums.iter().map(|s| f(s)).sum::<usize>();
+    let order = sum(&|s| s.order_units);
+    let mut by_unit: Vec<summary::UnitCount> = Vec::new();
+    for s in sums {
+        for u in &s.by_unit {
+            match by_unit.iter_mut().find(|x| x.name == u.name) {
+                Some(x) => {
+                    x.whole_units += u.whole_units;
+                    x.cut_units += u.cut_units;
+                    x.slivers += u.slivers;
+                    x.unfillable_pieces += u.unfillable_pieces;
+                    x.area_laid_m2 += u.area_laid_m2;
+                    x.order_units += u.order_units;
+                }
+                None => by_unit.push(u.clone()),
+            }
+        }
+    }
+    let gap = sums.iter().map(|s| s.gap_length_m).collect::<Vec<_>>();
+    json!({
+        "whole_units": sum(&|s| s.whole_units),
+        "cut_units": sum(&|s| s.cut_units),
+        "slivers": sum(&|s| s.slivers),
+        "unfillable_pieces": sum(&|s| s.unfillable_pieces),
+        "area_laid_m2": sums.iter().map(|s| s.area_laid_m2).sum::<f64>(),
+        "cut_area_m2": sums.iter().map(|s| s.cut_area_m2).sum::<f64>(),
+        "gap_length_m": if !gap.is_empty() && gap.iter().all(Option::is_some) { json!(gap.iter().flatten().sum::<f64>()) } else { Value::Null },
+        "order_units": order,
+        "order_units_max": sum(&|s| s.order_units_max),
+        "order_units_min": sum(&|s| s.order_units_min),
+        "waste_percent": opts.waste_percent,
+        "order_units_with_waste": opts.waste_percent.map(|w| with_waste(order, w)),
+        "by_unit": by_unit,
+        "complete": errors == 0,
+        "errors": errors,
+    })
+}
+
+/// The summary of the pattern of one object, or why it has none.
+pub fn object_summary(
+    doc: &Document,
+    o: &Object,
+    m: &Map<String, Value>,
+    opts: &SummaryOptions,
+) -> Result<Summary, String> {
+    let sub = subject_of(doc, o, m).map_err(|e| e.message)?;
+    summary::summarize(&sub.region, &sub.pattern, &sub.place, opts).map_err(|e| e.to_string())
+}
+
+/// The pattern block of one hardscape for `report.hardscape`: the summary as JSON, or an error.
+/// `None` if the hardscape has no joint pattern.
+pub fn block_for(
+    doc: &Document,
+    o: &Object,
+    opts: &SummaryOptions,
+) -> Option<Result<Summary, String>> {
+    pattern_of(doc, o)?;
+    Some(object_summary(doc, o, &Map::new(), opts))
+}
+
+/// The summary of the pattern of every hardscape (or the ids), as report rows and totals. A hardscape
+/// or an id that cannot be counted is a row with an error, and the totals say `complete: false`.
+pub fn report_rows(
+    doc: &Document,
+    ids: Option<Vec<ObjectId>>,
+    m: &Map<String, Value>,
+    opts: &SummaryOptions,
+) -> Result<(Vec<Value>, Value), RpcError> {
+    let visible_only = flag(m, "visible_only")?;
+    let list: Vec<ObjectId> = ids.unwrap_or_else(|| {
+        doc.objects
+            .values()
+            .filter(|o| matches!(o.shape, Shape::Hardscape { .. }) && pattern_of(doc, o).is_some())
+            .filter(|o| !visible_only || doc.is_visible(o))
+            .map(|o| o.id)
+            .collect()
+    });
+    let mut rows = Vec::new();
+    let mut good: Vec<Summary> = Vec::new();
+    let mut errors = 0;
+    for id in list {
+        let Some(o) = doc.object(id) else {
+            errors += 1;
+            rows.push(json!({"id": id, "error": "no such object"}));
+            continue;
+        };
+        match object_summary(doc, o, m, opts) {
+            Ok(sum) => {
+                let mut row = serde_json::to_value(&sum).expect("json");
+                row["id"] = json!(id);
+                row["name"] = json!(label(doc, o));
+                rows.push(row);
+                good.push(sum);
+            }
+            Err(e) => {
+                errors += 1;
+                rows.push(json!({"id": id, "name": label(doc, o), "error": e}));
+            }
+        }
+    }
+    let refs: Vec<&Summary> = good.iter().collect();
+    Ok((rows, totals_json(&refs, errors, opts)))
+}
+
+fn report(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    let ids: Option<Vec<ObjectId>> = match m.get("ids").filter(|v| !v.is_null()) {
+        Some(v) => Some(serde_json::from_value(v.clone()).map_err(bad)?),
+        None => None,
+    };
+    let opts = summary_options(m, s.limits().pattern_units)?;
+    let (rows, totals) = report_rows(s.editor.doc(), ids, m, &opts)?;
+    let mut out = json!({ "rows": rows, "totals": totals });
+    if m.get("format").and_then(Value::as_str) == Some("csv") {
+        out["csv"] = json!(csv(&rows));
+    }
+    Ok(out)
+}
+
+fn csv(rows: &[Value]) -> String {
+    let mut table = vec![
+        [
+            "Id",
+            "Name",
+            "Bond",
+            "Unit type",
+            "Whole units",
+            "Cut units",
+            "Slivers",
+            "Unfillable",
+            "Area laid (m2)",
+            "Gap length (m)",
+            "Order units",
+            "Order with waste",
+        ]
+        .map(String::from)
+        .to_vec(),
+    ];
+    let text = |r: &Value, k: &str| match &r[k] {
+        Value::Null => String::new(),
+        Value::String(x) => x.clone(),
+        Value::Number(n) => n.as_f64().map_or(n.to_string(), |f| {
+            if f.fract() == 0.0 {
+                format!("{f:.0}")
+            } else {
+                format!("{f:.3}")
+            }
+        }),
+        other => other.to_string(),
+    };
+    for r in rows {
+        let units = r["by_unit"].as_array().cloned().unwrap_or_default();
+        if units.len() > 1 {
+            for u in &units {
+                table.push(vec![
+                    text(r, "id"),
+                    text(r, "name"),
+                    text(r, "bond"),
+                    text(u, "name"),
+                    text(u, "whole_units"),
+                    text(u, "cut_units"),
+                    text(u, "slivers"),
+                    text(u, "unfillable_pieces"),
+                    text(u, "area_laid_m2"),
+                    String::new(),
+                    text(u, "order_units"),
+                    String::new(),
+                ]);
+            }
+        }
+        table.push(
+            [
+                "id",
+                "name",
+                "bond",
+                "",
+                "whole_units",
+                "cut_units",
+                "slivers",
+                "unfillable_pieces",
+                "area_laid_m2",
+                "gap_length_m",
+                "order_units",
+                "order_units_with_waste",
+            ]
+            .iter()
+            .map(|k| {
+                if k.is_empty() {
+                    if units.len() > 1 {
+                        "all".to_string()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    text(r, k)
+                }
+            })
+            .collect(),
+        );
+    }
+    kadakas_core::csv::write_rows(&table)
+}
+
+#[cfg(test)]
+mod tests;

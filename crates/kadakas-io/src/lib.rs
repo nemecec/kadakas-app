@@ -28,7 +28,7 @@ use kadakas_core::provenance::FileLink;
 
 pub use options::{
     BaseCaps, BaseMode, ExportOptions, ExportOrigin, FaceMode, ImportOptions, LayerMode, Lineage,
-    MeshEntity, OriginMode, SiteMesh, Unit,
+    MeshEntity, OriginMode, PatternExport, SiteMesh, Unit,
 };
 pub use report::{Report, Skipped};
 

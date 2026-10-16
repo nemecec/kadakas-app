@@ -107,6 +107,10 @@ pub struct SessionLimits {
     pub picture_bytes: u64,
     /// Most pixels of a picture (width times height). Never above 16 million.
     pub picture_pixels: u64,
+    /// Most units that one unit pattern call (`unit_pattern.*`, `report.unit_pattern`,
+    /// `report.hardscape`) counts, and that one DXF export file writes in all objects. Never
+    /// above `kadakas_core::layout::MAX_UNITS`.
+    pub pattern_units: usize,
 }
 
 impl Default for SessionLimits {
@@ -132,6 +136,7 @@ impl Default for SessionLimits {
             gis_cache_bytes: 256 * 1024 * 1024,
             picture_bytes: kadakas_core::picture::MAX_PICTURE_BYTES as u64,
             picture_pixels: kadakas_core::picture::MAX_PICTURE_PIXELS,
+            pattern_units: kadakas_core::layout::MAX_UNITS,
         }
     }
 }
@@ -155,6 +160,7 @@ impl SessionLimits {
             gis_cache_bytes: 32 * 1024 * 1024,
             picture_bytes: 2 * 1024 * 1024,
             picture_pixels: 4_000_000,
+            pattern_units: 100_000,
             ..SessionLimits::default()
         }
     }
