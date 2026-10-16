@@ -1089,22 +1089,49 @@ fn band(
             p + nn * e_hi,
         ])));
     }
-    // Fill the wedge on the outer side of every bend: a mitre at a corner, a bevel on a curve.
+    // Fill the wedge on the outer side of every bend: a mitre at a corner, a bevel on a curve. It
+    // lies between the nearest and the farthest offset of the strip on that side. On the inner
+    // side the strips of the two legs already cover the strip, and a wedge would reach over the
+    // end of a short leg.
     let vertices = if closed { 0..n } else { 1..n - 1 };
     for i in vertices {
         let (n0, n1) = (normals[(i + segs - 1) % segs], normals[i % segs]);
-        for e in [e_lo, e_hi] {
-            if e == 0.0 {
-                continue;
+        let turn = unit_dir(pts[(i + n - 1) % n], pts[i]).perp_dot(unit_dir(pts[i], pts[(i + 1) % n]));
+        if turn.abs() < 1e-12 {
+            continue;
+        }
+        // A left turn has its outer side on the right (negative offsets).
+        let s = if turn > 0.0 { -1.0 } else { 1.0 };
+        let (m1, m2) = if s > 0.0 {
+            (e_lo.max(0.0), e_hi)
+        } else {
+            ((-e_hi).max(0.0), -e_lo)
+        };
+        if m2 <= m1 + 1e-9 {
+            continue;
+        }
+        let dot = n0.dot(n1);
+        let mitre = !smooth[i] && 1.0 + dot > 0.02;
+        let mut poly: Vec<DVec2> = Vec::new();
+        let mut push = |q: DVec2| {
+            if poly.last().is_none_or(|l| l.distance_squared(q) > 1e-18) {
+                poly.push(q);
             }
-            let (a, b) = (pts[i] + n0 * e, pts[i] + n1 * e);
-            let dot = n0.dot(n1);
-            if !smooth[i] && 1.0 + dot > 0.02 {
-                let m = pts[i] + (n0 + n1) / (1.0 + dot) * e;
-                subject.push(ring(&ccw(vec![pts[i], a, m, b])));
-            } else {
-                subject.push(ring(&ccw(vec![pts[i], a, b])));
-            }
+        };
+        let e1 = s * m1;
+        let e2 = s * m2;
+        push(pts[i] + n0 * e1);
+        if mitre {
+            push(pts[i] + (n0 + n1) / (1.0 + dot) * e1);
+        }
+        push(pts[i] + n1 * e1);
+        push(pts[i] + n1 * e2);
+        if mitre {
+            push(pts[i] + (n0 + n1) / (1.0 + dot) * e2);
+        }
+        push(pts[i] + n0 * e2);
+        if poly.len() >= 3 {
+            subject.push(ring(&ccw(poly)));
         }
     }
     for pc in pieces {

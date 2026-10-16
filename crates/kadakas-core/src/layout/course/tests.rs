@@ -813,3 +813,34 @@ fn a_sharp_corner_never_overlaps_inside_and_is_covered_inside() {
         }
     }
 }
+
+fn band_has(c: &Course, p: DVec2) -> bool {
+    c.band.iter().any(|s| {
+        crate::geom::point_in_polygon(p, &s[0]) && !s.iter().skip(1).any(|h| crate::geom::point_in_polygon(p, h))
+    })
+}
+
+#[test]
+fn the_band_of_a_course_away_from_its_path_does_not_reach_the_path_at_a_corner() {
+    // The path turns right; the course lies 500 mm to the left, on the outer side of the corner.
+    let mut s = spec(&[(0.0, 0.0), (3000.0, 0.0), (3000.0, -3000.0)], Side::Left, Corner::Miter);
+    s.offset = 500.0;
+    let c = lay(&s, 100_000).unwrap();
+    // In the wedge near the vertex, between the path and the course, the field is free.
+    assert!(!band_has(&c, v(3150.0, 150.0)));
+    assert!(!band_has(&c, v(3300.0, 300.0)));
+    // The course itself and the corner of its outer edge are in the band.
+    assert!(band_has(&c, v(1500.0, 600.0)));
+    assert!(band_has(&c, v(3600.0, 600.0)));
+    assert!(band_has(&c, v(3600.0, 100.0)));
+}
+
+#[test]
+fn the_band_on_the_inner_side_of_a_sharp_bend_stays_inside_the_legs() {
+    // A 120 degree turn to the left with short legs of 300 mm; the course lies on the left.
+    let s = spec(&[(0.0, 0.0), (300.0, 0.0), (300.0 - 150.0, 259.8)], Side::Left, Corner::Miter);
+    let c = lay(&s, 100_000).unwrap();
+    // The inner offset line of the first leg would cross the second one 346 mm before the vertex,
+    // behind the start of the path: nothing of the band lies there.
+    assert!(!band_has(&c, v(-150.0, 200.0)));
+}
