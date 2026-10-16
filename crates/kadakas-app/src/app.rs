@@ -2825,6 +2825,9 @@ impl eframe::App for KadakasApp {
         }
         self.dark = theme::is_dark(&ctx);
         icon_size::set(&ctx, self.prefs.icon_size);
+        // The layout of a generator pattern runs its script: the thread needs the generator of
+        // this document (cheap when nothing changed).
+        self.session.sync_generators();
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(agent) = &self.agent {
             let mut fx = file_io::AgentEffects::default();
@@ -3082,7 +3085,10 @@ impl eframe::App for KadakasApp {
             .script_ui
             .show(&ctx, &mut self.session, &mut self.status)
         {
-            self.ensure_script_endpoint(&ctx);
+            // A JavaScript file runs inside the session and needs no address.
+            if !crate::script_ui::ScriptUi::is_js(&script) {
+                self.ensure_script_endpoint(&ctx);
+            }
             self.script_ui
                 .start(&mut self.session, script, &mut self.status);
         }
