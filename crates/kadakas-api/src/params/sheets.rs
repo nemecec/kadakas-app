@@ -111,6 +111,9 @@ pub struct RenderPngParams {
     /// 1 to 3 (anti-aliasing)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<Int>,
+    /// [x0, y0, x1, y1] in drawing coordinates (mm): frame the camera on this part of the drawing instead of the whole model
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<Vec<Num>>,
     /// {from, to, mode?, hide_unchanged?, ...}: draw the changes since a version
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compare: Option<Obj>,
