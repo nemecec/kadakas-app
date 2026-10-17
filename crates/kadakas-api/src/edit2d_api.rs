@@ -107,7 +107,7 @@ pub fn describe() -> Value {
             {"method": "edit.array", "params": {"ids": ["00000000-0000-0000-0000-000000000002"], "shape": "rectangular", "columns": 4, "rows": 3, "column_spacing": 2000, "row_spacing": 1500}},
             {"method": "edit.array", "params": {"ids": ["00000000-0000-0000-0000-000000000002"], "shape": "circular", "count": 5, "center": [0, 0]}},
             {"method": "edit.offset", "params": {"id": "00000000-0000-0000-0000-000000000002", "distance": 500, "side": "outside"}},
-            {"method": "edit.fillet", "params": {"a": 2, "b": 3, "pick_a": [8000, 0], "pick_b": [0, 8000], "radius": 500}},
+            {"method": "edit.fillet", "params": {"a": "00000000-0000-0000-0000-000000000002", "b": "00000000-0000-0000-0000-000000000003", "pick_a": [8000, 0], "pick_b": [0, 8000], "radius": 500}},
             {"method": "edit.chamfer", "params": {"id": "00000000-0000-0000-0000-000000000004", "all": true, "distance": 300}},
             {"method": "edit.trim", "params": {"id": "00000000-0000-0000-0000-000000000002", "pick": [5000, 0]}},
             {"method": "edit.split", "params": {"id": "00000000-0000-0000-0000-000000000005", "line": {"a": [4000, -1000], "b": [4000, 9000]}}},

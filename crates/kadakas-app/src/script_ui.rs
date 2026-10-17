@@ -890,16 +890,13 @@ mod tests {
             ),
         )
         .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
         (
             dir,
             kadakas_script::python::Interpreter {
-                program: prog,
-                prefix: vec![],
+                // The shell runs the script: a file that was just written can fail to start
+                // ("text file busy") while another thread forks.
+                program: "/bin/sh".into(),
+                prefix: vec![prog.into_os_string()],
             },
         )
     }
@@ -907,7 +904,7 @@ mod tests {
     /// Runs the UI for some frames, so the worker thread can finish.
     fn pump(ui_state: &mut ScriptUi, s: &mut Session, status: &mut String) {
         let ctx = egui::Context::default();
-        for _ in 0..300 {
+        for _ in 0..3000 {
             ui_state.tick(&ctx, s, status);
             if ui_state.running.is_none() && ui_state.queue.is_empty() {
                 return;

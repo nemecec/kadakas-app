@@ -22,9 +22,9 @@ if TYPE_CHECKING:
     # The parameters of each method, from describe {schemas: true}.
 
     DescribeParams = TypedDict("DescribeParams", {
-        'method': str,
-        'schema': bool,
-        'schemas': bool,
+        'method': str | None,
+        'schema': bool | None,
+        'schemas': bool | None,
     }, total=False)
 
     ExecuteParams = TypedDict("ExecuteParams", {
@@ -45,9 +45,9 @@ if TYPE_CHECKING:
     }, total=False)
 
     FileSaveParams = TypedDict("FileSaveParams", {
-        'allow_missing': str,
-        'allow_overwrite': str,
-        'format': Literal['container', 'json'],
+        'allow_missing': str | None,
+        'allow_overwrite': str | None,
+        'format': Literal['container', 'json'] | None,
         'path': Required[str],
     }, total=False)
 
@@ -56,14 +56,14 @@ if TYPE_CHECKING:
     }, total=False)
 
     ObjectsListParams = TypedDict("ObjectsListParams", {
-        'class': str,
-        'kind': str,
-        'layer': str,
+        'class': str | None,
+        'kind': str | None,
+        'layer': str | None,
     }, total=False)
 
     ObjectsGetParams = TypedDict("ObjectsGetParams", {
         'id': Required[str],
-        'sources': bool,
+        'sources': bool | None,
     }, total=False)
 
     SelectionGetParams = TypedDict("SelectionGetParams", {}, total=False)
@@ -73,29 +73,29 @@ if TYPE_CHECKING:
     }, total=False)
 
     RenderSvgParams = TypedDict("RenderSvgParams", {
-        'compare': dict[str, Any],
-        'region': list[float],
-        'show_check': bool,
-        'width': int,
+        'compare': dict[str, Any] | None,
+        'region': list[float] | None,
+        'show_check': bool | None,
+        'width': int | None,
     }, total=False)
 
     RenderPngParams = TypedDict("RenderPngParams", {
-        'compare': dict[str, Any],
-        'height': int,
-        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'],
-        'projection': Literal['ortho', 'perspective'],
-        'render_style': str,
-        'samples': int,
-        'view': str,
-        'width': int,
+        'compare': dict[str, Any] | None,
+        'height': int | None,
+        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'] | None,
+        'projection': Literal['ortho', 'perspective'] | None,
+        'render_style': str | None,
+        'samples': int | None,
+        'view': str | None,
+        'width': int | None,
     }, total=False)
 
     ViewListParams = TypedDict("ViewListParams", {}, total=False)
 
     ViewSetParams = TypedDict("ViewSetParams", {
-        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'],
-        'projection': Literal['ortho', 'perspective'],
-        'view': str,
+        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'] | None,
+        'projection': Literal['ortho', 'perspective'] | None,
+        'view': str | None,
     }, total=False)
 
     ReportPlantsParams = TypedDict("ReportPlantsParams", {}, total=False)
@@ -103,33 +103,33 @@ if TYPE_CHECKING:
     ReportAreasParams = TypedDict("ReportAreasParams", {}, total=False)
 
     ImportFileParams = TypedDict("ImportFileParams", {
-        'format': Literal['dxf', 'dwg', 'shp', 'geojson', 'ifc'],
-        'options': dict[str, Any],
+        'format': Literal['dxf', 'dwg', 'shp', 'geojson', 'ifc'] | None,
+        'options': dict[str, Any] | None,
         'path': Required[str],
     }, total=False)
 
     ExportFileParams = TypedDict("ExportFileParams", {
-        'format': Literal['dxf', 'geojson', 'dwg', 'ifc', 'gltf', 'glb', 'obj', 'pdf', 'sheet_svg', 'sheet_png'],
-        'options': dict[str, Any],
-        'overwrite': bool,
+        'format': Literal['dxf', 'geojson', 'dwg', 'ifc', 'gltf', 'glb', 'obj', 'pdf', 'sheet_svg', 'sheet_png'] | None,
+        'options': dict[str, Any] | None,
+        'overwrite': bool | None,
         'path': Required[str],
     }, total=False)
 
     ImportUpdateParams = TypedDict("ImportUpdateParams", {
-        'drawing': str,
-        'dry_run': bool,
-        'layers': list[str],
-        'limit': int,
-        'old': str,
-        'options': dict[str, Any],
+        'drawing': str | None,
+        'dry_run': bool | None,
+        'layers': list[str] | None,
+        'limit': int | None,
+        'old': str | None,
+        'options': dict[str, Any] | None,
         'path': Required[str],
-        'tolerance': float,
+        'tolerance': float | None,
     }, total=False)
 
     ImportApplyParams = TypedDict("ImportApplyParams", {
         'accept': Required[str | list[str]],
-        'conflicts': Literal['skip', 'overwrite'],
-        'reject': list[str],
+        'conflicts': Literal['skip', 'overwrite'] | None,
+        'reject': list[str] | None,
         'update_id': Required[str],
     }, total=False)
 
@@ -140,147 +140,147 @@ if TYPE_CHECKING:
     }, total=False)
 
     PlantStyleCreateParams = TypedDict("PlantStyleCreateParams", {
-        'botanical_name': str,
-        'category': Literal['tree', 'shrub', 'perennial', 'grass', 'groundcover'],
-        'common_name': str,
-        'container': str,
-        'custom': dict[str, str],
-        'fill': list[int],
-        'form': Literal['tree', 'columnar', 'conical', 'spreading', 'shrub_mound', 'weeping', 'palm', 'columnar_conifer', 'multi_stem', 'hedge'],
-        'graphic': Literal['circle', 'cloud', 'star', 'spokes', 'rosette', 'clover'],
-        'height': float,
-        'id_code': str,
+        'botanical_name': str | None,
+        'category': Literal['tree', 'shrub', 'perennial', 'grass', 'groundcover'] | None,
+        'common_name': str | None,
+        'container': str | None,
+        'custom': dict[str, str] | None,
+        'fill': list[int] | None,
+        'form': Literal['tree', 'columnar', 'conical', 'spreading', 'shrub_mound', 'weeping', 'palm', 'columnar_conifer', 'multi_stem', 'hedge'] | None,
+        'graphic': Literal['circle', 'cloud', 'star', 'spokes', 'rosette', 'clover'] | None,
+        'height': float | None,
+        'id_code': str | None,
         'image': str | None,
-        'irrigation': dict[str, Any],
-        'locked': list[str],
-        'maintenance': dict[str, Any],
+        'irrigation': dict[str, Any] | None,
+        'locked': list[str] | None,
+        'maintenance': dict[str, Any] | None,
         'name': Required[str],
-        'pen': list[int],
+        'pen': list[int] | None,
         'plan_symbol': str | None,
-        'price': float,
-        'protection_zone': bool,
-        'quantity': str,
-        'root': str,
+        'price': float | None,
+        'protection_zone': bool | None,
+        'quantity': str | None,
+        'root': str | None,
         'rpz_cap': float | None,
         'rpz_factor': float | None,
-        'size': str,
-        'spread': float,
-        'trunk_diameter': float,
+        'size': str | None,
+        'spread': float | None,
+        'trunk_diameter': float | None,
     }, total=False)
 
     PlantStyleUpdateParams = TypedDict("PlantStyleUpdateParams", {
-        'botanical_name': str,
-        'category': Literal['tree', 'shrub', 'perennial', 'grass', 'groundcover'],
-        'common_name': str,
-        'container': str,
-        'custom': dict[str, str],
-        'fill': list[int],
-        'form': Literal['tree', 'columnar', 'conical', 'spreading', 'shrub_mound', 'weeping', 'palm', 'columnar_conifer', 'multi_stem', 'hedge'],
-        'graphic': Literal['circle', 'cloud', 'star', 'spokes', 'rosette', 'clover'],
-        'height': float,
+        'botanical_name': str | None,
+        'category': Literal['tree', 'shrub', 'perennial', 'grass', 'groundcover'] | None,
+        'common_name': str | None,
+        'container': str | None,
+        'custom': dict[str, str] | None,
+        'fill': list[int] | None,
+        'form': Literal['tree', 'columnar', 'conical', 'spreading', 'shrub_mound', 'weeping', 'palm', 'columnar_conifer', 'multi_stem', 'hedge'] | None,
+        'graphic': Literal['circle', 'cloud', 'star', 'spokes', 'rosette', 'clover'] | None,
+        'height': float | None,
         'id': Required[str],
-        'id_code': str,
+        'id_code': str | None,
         'image': str | None,
-        'irrigation': dict[str, Any],
-        'locked': list[str],
-        'maintenance': dict[str, Any],
-        'name': str,
-        'pen': list[int],
+        'irrigation': dict[str, Any] | None,
+        'locked': list[str] | None,
+        'maintenance': dict[str, Any] | None,
+        'name': str | None,
+        'pen': list[int] | None,
         'plan_symbol': str | None,
-        'price': float,
-        'protection_zone': bool,
-        'quantity': str,
-        'root': str,
+        'price': float | None,
+        'protection_zone': bool | None,
+        'quantity': str | None,
+        'root': str | None,
         'rpz_cap': float | None,
         'rpz_factor': float | None,
-        'size': str,
-        'spread': float,
-        'trunk_diameter': float,
+        'size': str | None,
+        'spread': float | None,
+        'trunk_diameter': float | None,
     }, total=False)
 
     PlantStyleDuplicateParams = TypedDict("PlantStyleDuplicateParams", {
         'id': Required[str],
-        'name': str,
+        'name': str | None,
     }, total=False)
 
     PlantStyleDeleteParams = TypedDict("PlantStyleDeleteParams", {
         'id': Required[str],
-        'reassign': str,
+        'reassign': str | None,
     }, total=False)
 
     PlantStyleImportCsvParams = TypedDict("PlantStyleImportCsvParams", {
         'csv': Required[str],
-        'mapping': dict[str, str],
-        'on_duplicate': Literal['skip', 'update'],
-        'pictures_dir': str,
-        'unit': Literal['mm', 'cm', 'm'],
+        'mapping': dict[str, str] | None,
+        'on_duplicate': Literal['skip', 'update'] | None,
+        'pictures_dir': str | None,
+        'unit': Literal['mm', 'cm', 'm'] | None,
     }, total=False)
 
     PlantStyleExportCsvParams = TypedDict("PlantStyleExportCsvParams", {
-        'ids': list[str],
+        'ids': list[str] | None,
     }, total=False)
 
     PlantStyleSampleCsvParams = TypedDict("PlantStyleSampleCsvParams", {}, total=False)
 
     PlantsPlaceParams = TypedDict("PlantsPlaceParams", {
-        'at': list[float],
-        'boundary': list[Any],
-        'class': str,
-        'closed': bool,
-        'count': int,
-        'density': float,
-        'holes': list[list[list[float]]],
-        'layer': str,
-        'margin': float,
-        'max': list[float],
-        'min': list[float],
+        'at': list[float] | None,
+        'boundary': list[Any] | None,
+        'class': str | None,
+        'closed': bool | None,
+        'count': int | None,
+        'density': float | None,
+        'holes': list[list[list[float]]] | None,
+        'layer': str | None,
+        'margin': float | None,
+        'max': list[float] | None,
+        'min': list[float] | None,
         'mode': Required[Literal['single', 'path', 'grid', 'triangular', 'fill', 'poly', 'hedgerow']],
-        'on_terrain': bool,
-        'overrides': dict[str, Any],
-        'path': list[Any],
-        'pattern': Literal['triangular', 'rectangular'],
-        'points': list[list[float]],
-        'row_spacing': float,
-        'rows': int,
-        'source': str,
-        'spacing': float | str,
-        'spacing_x': float | str,
-        'spacing_y': float | str,
-        'stagger': bool,
-        'style': str,
-        'tag': bool,
-        'variation': dict[str, Any],
+        'on_terrain': bool | None,
+        'overrides': dict[str, Any] | None,
+        'path': list[Any] | None,
+        'pattern': Literal['triangular', 'rectangular'] | None,
+        'points': list[list[float]] | None,
+        'row_spacing': float | None,
+        'rows': int | None,
+        'source': str | None,
+        'spacing': float | str | None,
+        'spacing_x': float | str | None,
+        'spacing_y': float | str | None,
+        'stagger': bool | None,
+        'style': str | None,
+        'tag': bool | None,
+        'variation': dict[str, Any] | None,
     }, total=False)
 
     PlantsSetStyleParams = TypedDict("PlantsSetStyleParams", {
         'ids': Required[list[str]],
-        'overrides': dict[str, Any],
-        'style': str,
-        'unlink': bool,
+        'overrides': dict[str, Any] | None,
+        'style': str | None,
+        'unlink': bool | None,
     }, total=False)
 
     ReportPlantScheduleParams = TypedDict("ReportPlantScheduleParams", {
-        'format': Literal['csv'],
+        'format': Literal['csv'] | None,
     }, total=False)
 
     ReportExistingTreesParams = TypedDict("ReportExistingTreesParams", {}, total=False)
 
     PlantsDrapeParams = TypedDict("PlantsDrapeParams", {
-        'ids': list[str],
-        'release': bool,
+        'ids': list[str] | None,
+        'release': bool | None,
     }, total=False)
 
     PlantTagSetParams = TypedDict("PlantTagSetParams", {
-        'bubble': bool,
+        'bubble': bool | None,
         'ids': Required[list[str]],
-        'levels': int,
+        'levels': int | None,
     }, total=False)
 
     PlantStyleSetPictureParams = TypedDict("PlantStyleSetPictureParams", {
-        'base64': str,
+        'base64': str | None,
         'id': Required[str],
-        'name': str,
-        'path': str,
+        'name': str | None,
+        'path': str | None,
     }, total=False)
 
     PlantStyleClearPictureParams = TypedDict("PlantStyleClearPictureParams", {
@@ -288,9 +288,9 @@ if TYPE_CHECKING:
     }, total=False)
 
     PlantStyleGetPictureParams = TypedDict("PlantStyleGetPictureParams", {
-        'bytes': bool,
+        'bytes': bool | None,
         'id': Required[str],
-        'thumbnail': bool,
+        'thumbnail': bool | None,
     }, total=False)
 
     RecordFormatListParams = TypedDict("RecordFormatListParams", {}, total=False)
@@ -305,9 +305,9 @@ if TYPE_CHECKING:
     }, total=False)
 
     RecordFormatUpdateParams = TypedDict("RecordFormatUpdateParams", {
-        'fields': dict[str, Any],
+        'fields': list[dict[str, Any]] | None,
         'id': Required[str],
-        'name': str,
+        'name': str | None,
     }, total=False)
 
     RecordFormatDeleteParams = TypedDict("RecordFormatDeleteParams", {
@@ -317,7 +317,7 @@ if TYPE_CHECKING:
     RecordAttachParams = TypedDict("RecordAttachParams", {
         'ids': Required[list[str]],
         'record': Required[str],
-        'values': dict[str, Any],
+        'values': dict[str, Any] | None,
     }, total=False)
 
     RecordDetachParams = TypedDict("RecordDetachParams", {
@@ -345,13 +345,13 @@ if TYPE_CHECKING:
         'entities': Any,
         'name': Required[str],
         'rules': Any,
-        'template': str,
+        'template': str | None,
     }, total=False)
 
     DataManagerUpdateParams = TypedDict("DataManagerUpdateParams", {
         'entities': Any,
         'id': Required[str],
-        'name': str,
+        'name': str | None,
         'rules': Any,
     }, total=False)
 
@@ -365,8 +365,8 @@ if TYPE_CHECKING:
 
     DataManagerEvaluateParams = TypedDict("DataManagerEvaluateParams", {
         'id': Required[str],
-        'ids': list[str],
-        'limit': int,
+        'ids': list[str] | None,
+        'limit': int | None,
     }, total=False)
 
     DataManagerApplyParams = TypedDict("DataManagerApplyParams", {
@@ -380,10 +380,10 @@ if TYPE_CHECKING:
     WorksheetTemplatesParams = TypedDict("WorksheetTemplatesParams", {}, total=False)
 
     WorksheetCreateParams = TypedDict("WorksheetCreateParams", {
-        'cells': dict[str, Any],
+        'cells': dict[str, Any] | None,
         'databases': Any,
         'name': Required[str],
-        'template': str,
+        'template': str | None,
     }, total=False)
 
     WorksheetGetParams = TypedDict("WorksheetGetParams", {
@@ -401,10 +401,10 @@ if TYPE_CHECKING:
 
     WorksheetSetCellParams = TypedDict("WorksheetSetCellParams", {
         'address': Required[str],
-        'decimals': int,
+        'decimals': int | None,
         'id': Required[str],
-        'input': Required[str],
-        'unit': str,
+        'input': Any,
+        'unit': str | None,
     }, total=False)
 
     WorksheetSetCellsParams = TypedDict("WorksheetSetCellsParams", {
@@ -415,7 +415,7 @@ if TYPE_CHECKING:
     WorksheetSetDatabaseParams = TypedDict("WorksheetSetDatabaseParams", {
         'database': Required[dict[str, Any]],
         'id': Required[str],
-        'index': int,
+        'index': int | None,
     }, total=False)
 
     WorksheetRemoveDatabaseParams = TypedDict("WorksheetRemoveDatabaseParams", {
@@ -430,20 +430,20 @@ if TYPE_CHECKING:
     WorksheetExportParams = TypedDict("WorksheetExportParams", {
         'format': Required[Literal['csv', 'xlsx']],
         'id': Required[str],
-        'overwrite': bool,
-        'path': str,
+        'overwrite': bool | None,
+        'path': str | None,
     }, total=False)
 
     WorksheetPlaceParams = TypedDict("WorksheetPlaceParams", {
         'at': Required[list[float]],
-        'class': str,
+        'class': str | None,
         'id': Required[str],
-        'layer': str,
-        'text_height': float,
+        'layer': str | None,
+        'text_height': float | None,
     }, total=False)
 
     WorksheetFitParams = TypedDict("WorksheetFitParams", {
-        'ids': list[str],
+        'ids': list[str] | None,
     }, total=False)
 
     MaterialListParams = TypedDict("MaterialListParams", {}, total=False)
@@ -453,29 +453,29 @@ if TYPE_CHECKING:
     }, total=False)
 
     MaterialCreateParams = TypedDict("MaterialCreateParams", {
-        'base_color': list[int],
-        'mapping': dict[str, Any],
-        'metallic': float,
+        'base_color': list[int] | None,
+        'mapping': dict[str, Any] | None,
+        'metallic': float | None,
         'name': Required[str],
-        'opacity': float,
-        'roughness': float,
+        'opacity': float | None,
+        'roughness': float | None,
         'texture': str | dict[str, Any] | None,
     }, total=False)
 
     MaterialUpdateParams = TypedDict("MaterialUpdateParams", {
-        'base_color': list[int],
+        'base_color': list[int] | None,
         'id': Required[str],
-        'mapping': dict[str, Any],
-        'metallic': float,
-        'name': str,
-        'opacity': float,
-        'roughness': float,
+        'mapping': dict[str, Any] | None,
+        'metallic': float | None,
+        'name': str | None,
+        'opacity': float | None,
+        'roughness': float | None,
         'texture': str | dict[str, Any] | None,
     }, total=False)
 
     MaterialDuplicateParams = TypedDict("MaterialDuplicateParams", {
         'id': Required[str],
-        'name': str,
+        'name': str | None,
     }, total=False)
 
     MaterialDeleteParams = TypedDict("MaterialDeleteParams", {
@@ -486,19 +486,19 @@ if TYPE_CHECKING:
 
     MaterialImportTextureParams = TypedDict("MaterialImportTextureParams", {
         'id': Required[str],
-        'jpeg_base64': str,
-        'max_side': int,
-        'path': str,
-        'png_base64': str,
+        'jpeg_base64': str | None,
+        'max_side': int | None,
+        'path': str | None,
+        'png_base64': str | None,
     }, total=False)
 
     MaterialAssignParams = TypedDict("MaterialAssignParams", {
-        'class': str,
+        'class': str | None,
         'material': Required[str | None],
-        'object': str,
-        'objects': list[str],
-        'slot': str,
-        'style': str,
+        'object': str | None,
+        'objects': list[str] | None,
+        'slot': str | None,
+        'style': str | None,
     }, total=False)
 
     MaterialSlotsParams = TypedDict("MaterialSlotsParams", {}, total=False)
@@ -510,31 +510,31 @@ if TYPE_CHECKING:
     }, total=False)
 
     RenderStyleCreateParams = TypedDict("RenderStyleCreateParams", {
-        'background': list[int],
-        'edges': bool,
-        'line_weight': float,
-        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'],
+        'background': list[int] | None,
+        'edges': bool | None,
+        'line_weight': float | None,
+        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'] | None,
         'name': Required[str],
-        'shadows': bool,
-        'sun': bool,
-        'textures': bool,
+        'shadows': bool | None,
+        'sun': bool | None,
+        'textures': bool | None,
     }, total=False)
 
     RenderStyleUpdateParams = TypedDict("RenderStyleUpdateParams", {
-        'background': list[int],
-        'edges': bool,
+        'background': list[int] | None,
+        'edges': bool | None,
         'id': Required[str],
-        'line_weight': float,
-        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'],
-        'name': str,
-        'shadows': bool,
-        'sun': bool,
-        'textures': bool,
+        'line_weight': float | None,
+        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'] | None,
+        'name': str | None,
+        'shadows': bool | None,
+        'sun': bool | None,
+        'textures': bool | None,
     }, total=False)
 
     RenderStyleDuplicateParams = TypedDict("RenderStyleDuplicateParams", {
         'id': Required[str],
-        'name': str,
+        'name': str | None,
     }, total=False)
 
     RenderStyleDeleteParams = TypedDict("RenderStyleDeleteParams", {
@@ -542,18 +542,17 @@ if TYPE_CHECKING:
     }, total=False)
 
     RenderStyleSetActiveParams = TypedDict("RenderStyleSetActiveParams", {
-        'id': str,
-        'null': Any,
+        'id': Required[str | None],
     }, total=False)
 
     SunSetParams = TypedDict("SunSetParams", {
         'date': Any,
-        'dst': bool,
-        'from_georef': bool,
-        'latitude': float,
-        'longitude': float,
-        'north_angle': float,
-        'off': bool,
+        'dst': bool | None,
+        'from_georef': bool | None,
+        'latitude': float | None,
+        'longitude': float | None,
+        'north_angle': float | None,
+        'off': bool | None,
         'time': Any,
         'tz_offset': Any,
     }, total=False)
@@ -563,13 +562,13 @@ if TYPE_CHECKING:
     }, total=False)
 
     RenderHiddenLineParams = TypedDict("RenderHiddenLineParams", {
-        'dashed': bool,
-        'height': float,
-        'mesh_edges': bool,
+        'dashed': bool | None,
+        'height': float | None,
+        'mesh_edges': bool | None,
         'projection': Any,
-        'segments': bool,
+        'segments': bool | None,
         'view': Any,
-        'width': float,
+        'width': float | None,
     }, total=False)
 
     GisSourcesParams = TypedDict("GisSourcesParams", {}, total=False)
@@ -578,8 +577,8 @@ if TYPE_CHECKING:
 
     GisGeorefSetParams = TypedDict("GisGeorefSetParams", {
         'crs': Required[str],
-        'origin': list[float],
-        'rotation': float,
+        'origin': list[float] | None,
+        'rotation': float | None,
     }, total=False)
 
     GisCoordsParams = TypedDict("GisCoordsParams", {
@@ -589,123 +588,123 @@ if TYPE_CHECKING:
 
     GisReprojectParams = TypedDict("GisReprojectParams", {
         'crs': Required[str],
-        'dry_run': bool,
-        'origin': list[float],
+        'dry_run': bool | None,
+        'origin': list[float] | None,
     }, total=False)
 
     GisWmsCapabilitiesParams = TypedDict("GisWmsCapabilitiesParams", {
         'url': Required[str],
-        'wait': bool,
+        'wait': bool | None,
     }, total=False)
 
     GisWmsAddParams = TypedDict("GisWmsAddParams", {
-        'bbox': list[float],
-        'class': str,
-        'crs': str,
-        'format': str,
-        'layer': str,
+        'bbox': list[float] | None,
+        'class': str | None,
+        'crs': str | None,
+        'format': str | None,
+        'layer': str | None,
         'layers': Required[list[str]],
-        'max_px': int,
-        'name': str,
-        'opacity': float,
-        'styles': list[str],
-        'transparent': bool,
+        'max_px': int | None,
+        'name': str | None,
+        'opacity': float | None,
+        'styles': list[str] | None,
+        'transparent': bool | None,
         'url': Required[str],
-        'version': str,
-        'wait': bool,
+        'version': str | None,
+        'wait': bool | None,
     }, total=False)
 
     GisWmsRefreshParams = TypedDict("GisWmsRefreshParams", {
-        'bbox': list[float],
+        'bbox': list[float] | None,
         'id': Required[str],
-        'max_px': int,
-        'wait': bool,
+        'max_px': int | None,
+        'wait': bool | None,
     }, total=False)
 
     GisWmtsCapabilitiesParams = TypedDict("GisWmtsCapabilitiesParams", {
         'url': Required[str],
-        'wait': bool,
+        'wait': bool | None,
     }, total=False)
 
     GisWmtsAddParams = TypedDict("GisWmtsAddParams", {
-        'bbox': list[float],
-        'class': str,
-        'design_layer': str,
-        'format': str,
+        'bbox': list[float] | None,
+        'class': str | None,
+        'design_layer': str | None,
+        'format': str | None,
         'layer': Required[str],
-        'layer_name': str,
-        'matrix_set': str,
-        'max_px': int,
-        'name': str,
-        'opacity': float,
-        'style': str,
+        'layer_name': str | None,
+        'matrix_set': str | None,
+        'max_px': int | None,
+        'name': str | None,
+        'opacity': float | None,
+        'style': str | None,
         'url': Required[str],
-        'wait': bool,
+        'wait': bool | None,
     }, total=False)
 
     GisWfsCapabilitiesParams = TypedDict("GisWfsCapabilitiesParams", {
         'url': Required[str],
-        'wait': bool,
+        'wait': bool | None,
     }, total=False)
 
     GisWfsImportParams = TypedDict("GisWfsImportParams", {
-        'bbox': list[float],
-        'caps': bool,
-        'crs': str,
-        'format': Literal['geojson', 'gml'],
-        'max_features': int,
-        'options': dict[str, Any],
+        'bbox': list[float] | None,
+        'caps': bool | None,
+        'crs': str | None,
+        'format': Literal['geojson', 'gml'] | None,
+        'max_features': int | None,
+        'options': dict[str, Any] | None,
         'type_name': Required[str],
         'url': Required[str],
-        'wait': bool,
+        'wait': bool | None,
     }, total=False)
 
     GisGeoimageImportParams = TypedDict("GisGeoimageImportParams", {
-        'class': str,
-        'crs': str,
-        'layer': str,
-        'max_px': int,
-        'name': str,
-        'opacity': float,
+        'class': str | None,
+        'crs': str | None,
+        'layer': str | None,
+        'max_px': int | None,
+        'name': str | None,
+        'opacity': float | None,
         'path': Required[str],
     }, total=False)
 
     GisJobStatusParams = TypedDict("GisJobStatusParams", {
-        'job': Required[str],
-        'wait': float,
+        'job': Required[int],
+        'wait': float | None,
     }, total=False)
 
     GisJobCancelParams = TypedDict("GisJobCancelParams", {
-        'job': Required[str],
+        'job': Required[int],
     }, total=False)
 
     MassingAddParams = TypedDict("MassingAddParams", {
-        'base': float,
-        'class': str,
-        'floor_height': float,
-        'floors': int,
+        'base': float | None,
+        'class': str | None,
+        'floor_height': float | None,
+        'floors': int | None,
         'footprint': Required[list[Any]],
-        'height': float,
-        'layer': str,
-        'name': str,
-        'parent': str,
-        'pitch': float,
-        'ridge_angle': float,
-        'roof': Literal['flat', 'gable', 'hip'],
+        'height': float | None,
+        'layer': str | None,
+        'name': str | None,
+        'parent': str | None,
+        'pitch': float | None,
+        'ridge_angle': float | None,
+        'roof': Literal['flat', 'gable', 'hip'] | None,
     }, total=False)
 
     MassingSetParams = TypedDict("MassingSetParams", {
         'base': float | None,
-        'floor_height': float,
+        'floor_height': float | None,
         'floors': int | None,
-        'footprint': list[Any],
-        'height': float,
-        'id': str,
-        'ids': list[str],
-        'name': str,
-        'pitch': float,
+        'footprint': list[Any] | None,
+        'height': float | None,
+        'id': str | None,
+        'ids': list[str] | None,
+        'name': str | None,
+        'pitch': float | None,
         'ridge_angle': float | None,
-        'roof': Literal['flat', 'gable', 'hip'],
+        'roof': Literal['flat', 'gable', 'hip'] | None,
     }, total=False)
 
     MassingGetParams = TypedDict("MassingGetParams", {
@@ -713,48 +712,48 @@ if TYPE_CHECKING:
     }, total=False)
 
     MassingFromShapesParams = TypedDict("MassingFromShapesParams", {
-        'default_height': float,
-        'delete_source': bool,
-        'dry_run': bool,
-        'floor_height': float,
-        'floors_field': str,
-        'height_field': str,
-        'height_scale': float,
-        'ids': list[str],
-        'name_field': str,
-        'pitch': float,
-        'require_height': bool,
-        'roof': Literal['flat', 'gable', 'hip'],
+        'default_height': float | None,
+        'delete_source': bool | None,
+        'dry_run': bool | None,
+        'floor_height': float | None,
+        'floors_field': str | None,
+        'height_field': str | None,
+        'height_scale': float | None,
+        'ids': list[str] | None,
+        'name_field': str | None,
+        'pitch': float | None,
+        'require_height': bool | None,
+        'roof': Literal['flat', 'gable', 'hip'] | None,
     }, total=False)
 
     MassingFollowSourcesParams = TypedDict("MassingFollowSourcesParams", {
-        'ids': list[str],
+        'ids': list[str] | None,
     }, total=False)
 
     MassingReportParams = TypedDict("MassingReportParams", {
-        'format': str,
-        'ids': list[str],
+        'format': str | None,
+        'ids': list[str] | None,
     }, total=False)
 
     ExtrudeAddParams = TypedDict("ExtrudeAddParams", {
-        'base': float,
-        'class': str,
+        'base': float | None,
+        'class': str | None,
         'height': Required[float],
         'holes': Any,
-        'layer': str,
-        'name': str,
+        'layer': str | None,
+        'name': str | None,
         'parent': Any,
         'profile': Required[list[Any]],
     }, total=False)
 
     ExtrudeSetParams = TypedDict("ExtrudeSetParams", {
         'base': Any,
-        'height': float,
+        'height': float | None,
         'holes': Any,
-        'id': str,
-        'ids': list[str],
-        'name': str,
-        'profile': list[Any],
+        'id': str | None,
+        'ids': list[str] | None,
+        'name': str | None,
+        'profile': list[Any] | None,
     }, total=False)
 
     ExtrudeGetParams = TypedDict("ExtrudeGetParams", {
@@ -762,38 +761,38 @@ if TYPE_CHECKING:
     }, total=False)
 
     ExtrudeFromShapesParams = TypedDict("ExtrudeFromShapesParams", {
-        'base': float,
-        'delete_source': bool,
-        'dry_run': bool,
+        'base': float | None,
+        'delete_source': bool | None,
+        'dry_run': bool | None,
         'height': Required[float],
-        'ids': list[str],
+        'ids': list[str] | None,
     }, total=False)
 
     SweepAddParams = TypedDict("SweepAddParams", {
         'axis': Any,
-        'class': str,
-        'closed': bool,
-        'layer': str,
-        'name': str,
-        'origin': list[float],
+        'class': str | None,
+        'closed': bool | None,
+        'layer': str | None,
+        'name': str | None,
+        'origin': list[float] | None,
         'parent': Any,
-        'pitch': float,
+        'pitch': float | None,
         'profile': Required[list[Any]],
-        'rotation': float,
-        'segment_angle': float,
-        'sweep_angle': float,
+        'rotation': float | None,
+        'segment_angle': float | None,
+        'sweep_angle': float | None,
     }, total=False)
 
     SweepSetParams = TypedDict("SweepSetParams", {
         'axis': Any,
-        'closed': bool,
-        'id': str,
-        'ids': list[str],
-        'name': str,
-        'origin': list[float],
-        'pitch': float,
-        'profile': list[Any],
-        'rotation': float,
+        'closed': bool | None,
+        'id': str | None,
+        'ids': list[str] | None,
+        'name': str | None,
+        'origin': list[float] | None,
+        'pitch': float | None,
+        'profile': list[Any] | None,
+        'rotation': float | None,
         'segment_angle': Any,
         'sweep_angle': Any,
     }, total=False)
@@ -804,31 +803,31 @@ if TYPE_CHECKING:
 
     SweepFromShapesParams = TypedDict("SweepFromShapesParams", {
         'axis_at': Any,
-        'axis_id': str,
-        'delete_source': bool,
-        'dry_run': bool,
-        'ids': list[str],
-        'pitch': float,
+        'axis_id': str | None,
+        'delete_source': bool | None,
+        'dry_run': bool | None,
+        'ids': list[str] | None,
+        'pitch': float | None,
         'segment_angle': Any,
         'sweep_angle': Any,
     }, total=False)
 
     Polygon3dAddParams = TypedDict("Polygon3dAddParams", {
-        'class': str,
-        'closed': bool,
-        'fill': list[int],
-        'layer': str,
-        'name': str,
-        'parent': str,
+        'class': str | None,
+        'closed': bool | None,
+        'fill': list[int] | None,
+        'layer': str | None,
+        'name': str | None,
+        'parent': str | None,
         'points': Required[list[list[float]]],
     }, total=False)
 
     Polygon3dSetParams = TypedDict("Polygon3dSetParams", {
-        'closed': bool,
-        'id': str,
-        'ids': list[str],
+        'closed': bool | None,
+        'id': str | None,
+        'ids': list[str] | None,
         'points': Any,
-        'raise': float,
+        'raise': float | None,
     }, total=False)
 
     Polygon3dGetParams = TypedDict("Polygon3dGetParams", {
@@ -843,32 +842,32 @@ if TYPE_CHECKING:
 
     HardscapeStyleCreateParams = TypedDict("HardscapeStyleCreateParams", {
         'border': dict[str, Any] | None,
-        'components': list[dict[str, Any]],
-        'custom': dict[str, str],
-        'fill': list[int],
+        'components': list[dict[str, Any]] | None,
+        'custom': dict[str, str] | None,
+        'fill': list[int] | None,
         'joints': dict[str, Any] | None,
-        'material': str,
+        'material': str | None,
         'name': Required[str],
-        'pen': list[int],
-        'thickness': float,
+        'pen': list[int] | None,
+        'thickness': float | None,
     }, total=False)
 
     HardscapeStyleUpdateParams = TypedDict("HardscapeStyleUpdateParams", {
         'border': dict[str, Any] | None,
-        'components': list[dict[str, Any]],
-        'custom': dict[str, str],
-        'fill': list[int],
+        'components': list[dict[str, Any]] | None,
+        'custom': dict[str, str] | None,
+        'fill': list[int] | None,
         'id': Required[str],
         'joints': dict[str, Any] | None,
-        'material': str,
-        'name': str,
-        'pen': list[int],
-        'thickness': float,
+        'material': str | None,
+        'name': str | None,
+        'pen': list[int] | None,
+        'thickness': float | None,
     }, total=False)
 
     HardscapeStyleDuplicateParams = TypedDict("HardscapeStyleDuplicateParams", {
         'id': Required[str],
-        'name': str,
+        'name': str | None,
     }, total=False)
 
     HardscapeStyleDeleteParams = TypedDict("HardscapeStyleDeleteParams", {
@@ -883,29 +882,29 @@ if TYPE_CHECKING:
     }, total=False)
 
     LandscapeAreaStyleCreateParams = TypedDict("LandscapeAreaStyleCreateParams", {
-        'fields': dict[str, str],
-        'fill': list[int],
-        'line_weight': float,
-        'mix': list[dict[str, Any]],
+        'fields': dict[str, str] | None,
+        'fill': list[int] | None,
+        'line_weight': float | None,
+        'mix': list[dict[str, Any]] | None,
         'name': Required[str],
-        'pen': list[int],
-        'show_plants': bool,
+        'pen': list[int] | None,
+        'show_plants': bool | None,
     }, total=False)
 
     LandscapeAreaStyleUpdateParams = TypedDict("LandscapeAreaStyleUpdateParams", {
-        'fields': dict[str, str],
-        'fill': list[int],
+        'fields': dict[str, str] | None,
+        'fill': list[int] | None,
         'id': Required[str],
-        'line_weight': float,
-        'mix': list[dict[str, Any]],
-        'name': str,
-        'pen': list[int],
-        'show_plants': bool,
+        'line_weight': float | None,
+        'mix': list[dict[str, Any]] | None,
+        'name': str | None,
+        'pen': list[int] | None,
+        'show_plants': bool | None,
     }, total=False)
 
     LandscapeAreaStyleDuplicateParams = TypedDict("LandscapeAreaStyleDuplicateParams", {
         'id': Required[str],
-        'name': str,
+        'name': str | None,
     }, total=False)
 
     LandscapeAreaStyleDeleteParams = TypedDict("LandscapeAreaStyleDeleteParams", {
@@ -914,545 +913,545 @@ if TYPE_CHECKING:
     }, total=False)
 
     HardscapeAddParams = TypedDict("HardscapeAddParams", {
-        'align': Literal['center', 'left', 'right'],
-        'align_to_edge': int,
-        'angle': float,
-        'boundary': list[Any],
-        'center': list[Any],
-        'class': str,
-        'closed': bool,
-        'drape': bool,
-        'elevation': float,
-        'exclude': list[str],
-        'holes': list[list[Any]],
-        'join': Literal['miter', 'round', 'bevel'],
-        'layer': str,
-        'material': str,
-        'mode': Literal['slab', 'path'],
-        'offset': float,
-        'origin': list[float],
-        'site_modifier': bool,
-        'slope': dict[str, Any],
-        'style': str,
-        'thickness': float,
-        'width': float,
+        'align': Literal['center', 'left', 'right'] | None,
+        'align_to_edge': int | None,
+        'angle': float | None,
+        'boundary': list[Any] | None,
+        'center': list[Any] | None,
+        'class': str | None,
+        'closed': bool | None,
+        'drape': bool | None,
+        'elevation': float | None,
+        'exclude': list[str] | None,
+        'holes': list[list[Any]] | None,
+        'join': Literal['miter', 'round', 'bevel'] | None,
+        'layer': str | None,
+        'material': str | None,
+        'mode': Literal['slab', 'path'] | None,
+        'offset': float | None,
+        'origin': list[float] | None,
+        'site_modifier': bool | None,
+        'slope': dict[str, Any] | None,
+        'style': str | None,
+        'thickness': float | None,
+        'width': float | None,
     }, total=False)
 
     HardscapeSetParams = TypedDict("HardscapeSetParams", {
-        'align': Literal['center', 'left', 'right'],
-        'align_to_edge': int,
+        'align': Literal['center', 'left', 'right'] | None,
+        'align_to_edge': int | None,
         'angle': float | None,
-        'boundary': list[Any],
-        'center': list[Any],
-        'class': str,
-        'closed': bool,
-        'drape': bool,
-        'elevation': float,
-        'exclude': list[str],
+        'boundary': list[Any] | None,
+        'center': list[Any] | None,
+        'class': str | None,
+        'closed': bool | None,
+        'drape': bool | None,
+        'elevation': float | None,
+        'exclude': list[str] | None,
         'holes': list[list[Any]] | None,
-        'id': str,
-        'ids': list[str],
-        'join': Literal['miter', 'round', 'bevel'],
-        'layer': str,
-        'material': str,
-        'mode': str,
-        'offset': float,
+        'id': str | None,
+        'ids': list[str] | None,
+        'join': Literal['miter', 'round', 'bevel'] | None,
+        'layer': str | None,
+        'material': str | None,
+        'mode': str | None,
+        'offset': float | None,
         'origin': list[float] | None,
-        'site_modifier': bool,
+        'site_modifier': bool | None,
         'slope': dict[str, Any] | None,
         'style': str | None,
-        'thickness': float,
-        'width': float,
+        'thickness': float | None,
+        'width': float | None,
     }, total=False)
 
     HardscapeFromShapesParams = TypedDict("HardscapeFromShapesParams", {
-        'delete_source': bool,
-        'dry_run': bool,
-        'holes_from_inner': bool,
-        'ids': list[str],
-        'style': str,
+        'delete_source': bool | None,
+        'dry_run': bool | None,
+        'holes_from_inner': bool | None,
+        'ids': list[str] | None,
+        'style': str | None,
     }, total=False)
 
     UnitPatternLayoutParams = TypedDict("UnitPatternLayoutParams", {
-        'align_to_edge': int,
-        'angle': float,
-        'exclude_unfillable': bool,
-        'gap_length': bool,
-        'id': str,
-        'include': list[Literal['units', 'gaps']],
-        'limit': int,
-        'max_extra_joint_mm': float,
-        'min_width': float,
-        'offset': int,
-        'origin': list[float],
-        'pattern': dict[str, Any],
-        'region': dict[str, Any],
-        'sliver_share': float,
-        'tolerance': float,
-        'trim': float,
-        'unfillable_share': float,
-        'waste_percent': float,
+        'align_to_edge': int | None,
+        'angle': float | None,
+        'exclude_unfillable': bool | None,
+        'gap_length': bool | None,
+        'id': str | None,
+        'include': list[Literal['units', 'gaps']] | None,
+        'limit': int | None,
+        'max_extra_joint_mm': float | None,
+        'min_width': float | None,
+        'offset': int | None,
+        'origin': list[float] | None,
+        'pattern': dict[str, Any] | None,
+        'region': dict[str, Any] | None,
+        'sliver_share': float | None,
+        'tolerance': float | None,
+        'trim': float | None,
+        'unfillable_share': float | None,
+        'waste_percent': float | None,
     }, total=False)
 
     UnitPatternToObjectsParams = TypedDict("UnitPatternToObjectsParams", {
-        'align_to_edge': int,
-        'angle': float,
-        'class': str,
-        'group': bool,
-        'id': str,
-        'include': list[Literal['units', 'gaps']],
-        'layer': str,
-        'name': str,
-        'origin': list[float],
-        'pattern': dict[str, Any],
-        'region': dict[str, Any],
-        'tolerance': float,
+        'align_to_edge': int | None,
+        'angle': float | None,
+        'class': str | None,
+        'group': bool | None,
+        'id': str | None,
+        'include': list[Literal['units', 'gaps']] | None,
+        'layer': str | None,
+        'name': str | None,
+        'origin': list[float] | None,
+        'pattern': dict[str, Any] | None,
+        'region': dict[str, Any] | None,
+        'tolerance': float | None,
     }, total=False)
 
     UnitPatternModulePresetParams = TypedDict("UnitPatternModulePresetParams", {
-        'across_flats': float,
-        'gap': float,
-        'length': float,
-        'notch': float,
+        'across_flats': float | None,
+        'gap': float | None,
+        'length': float | None,
+        'notch': float | None,
         'preset': Required[Literal['hexagon', 'octagon_square', 'i_shape']],
-        'side': float,
-        'width': float,
+        'side': float | None,
+        'width': float | None,
     }, total=False)
 
     UnitPatternModuleFromShapesParams = TypedDict("UnitPatternModuleFromShapesParams", {
-        'a': list[float],
-        'b': list[float],
-        'ids': list[str],
-        'names': list[str],
+        'a': list[float] | None,
+        'b': list[float] | None,
+        'ids': list[str] | None,
+        'names': list[str] | None,
     }, total=False)
 
     UnitPatternModuleFromBlockParams = TypedDict("UnitPatternModuleFromBlockParams", {
-        'a': list[float],
-        'b': list[float],
+        'a': list[float] | None,
+        'b': list[float] | None,
         'block': Required[str],
         'path': Required[str],
     }, total=False)
 
     ReportUnitPatternParams = TypedDict("ReportUnitPatternParams", {
-        'align_to_edge': int,
-        'angle': float,
-        'exclude_unfillable': bool,
-        'format': Literal['csv'],
-        'gap_length': bool,
-        'ids': list[str],
-        'max_extra_joint_mm': float,
-        'min_width': float,
-        'origin': list[float],
-        'pattern': dict[str, Any],
-        'sliver_share': float,
-        'tolerance': float,
-        'trim': float,
-        'unfillable_share': float,
-        'visible_only': bool,
-        'waste_percent': float,
+        'align_to_edge': int | None,
+        'angle': float | None,
+        'exclude_unfillable': bool | None,
+        'format': Literal['csv'] | None,
+        'gap_length': bool | None,
+        'ids': list[str] | None,
+        'max_extra_joint_mm': float | None,
+        'min_width': float | None,
+        'origin': list[float] | None,
+        'pattern': dict[str, Any] | None,
+        'sliver_share': float | None,
+        'tolerance': float | None,
+        'trim': float | None,
+        'unfillable_share': float | None,
+        'visible_only': bool | None,
+        'waste_percent': float | None,
     }, total=False)
 
     RegionFromCurvesParams = TypedDict("RegionFromCurvesParams", {
-        'class': str,
-        'create': Literal['hardscape', 'landscape_area', 'polyline'],
-        'delete_source': bool,
-        'depths': Literal['even', 'odd', 'all'],
-        'dry_run': bool,
-        'ids': list[str],
-        'layer': str,
-        'min_area_m2': float,
-        'name': str,
-        'regions': list[int | list[float]],
-        'style': str,
-        'tolerance': float,
+        'class': str | None,
+        'create': Literal['hardscape', 'landscape_area', 'polyline'] | None,
+        'delete_source': bool | None,
+        'depths': Literal['even', 'odd', 'all'] | None,
+        'dry_run': bool | None,
+        'ids': list[str] | None,
+        'layer': str | None,
+        'min_area_m2': float | None,
+        'name': str | None,
+        'regions': list[int | list[float]] | None,
+        'style': str | None,
+        'tolerance': float | None,
     }, total=False)
 
     HardscapeSplitParams = TypedDict("HardscapeSplitParams", {
-        'follow': bool,
+        'follow': bool | None,
         'id': Required[str],
-        'lines': list[str | list[Any]],
-        'tolerance': float,
-        'zone_units': Literal['cut', 'centroid'],
-        'zones': list[dict[str, Any]],
+        'lines': list[str | list[Any]] | None,
+        'tolerance': float | None,
+        'zone_units': Literal['cut', 'centroid'] | None,
+        'zones': list[dict[str, Any]] | None,
     }, total=False)
 
     HardscapeCourseParams = TypedDict("HardscapeCourseParams", {
-        'align_field': bool,
-        'along': str,
-        'closed': bool,
-        'corner': Literal['miter', 'butt', 'corner_unit'],
-        'courses': list[dict[str, Any]],
-        'gap': float,
+        'align_field': bool | None,
+        'along': str | None,
+        'closed': bool | None,
+        'corner': Literal['miter', 'butt', 'corner_unit'] | None,
+        'courses': list[dict[str, Any]] | None,
+        'gap': float | None,
         'id': Required[str],
-        'name': str,
-        'offset': float,
-        'orientation': Literal['soldier', 'stretcher'],
-        'path': list[Any],
-        'side': Literal['left', 'right', 'center', 'inside', 'outside'],
-        'source': str,
-        'unit': str,
-        'unit_length': float,
-        'unit_width': float,
+        'name': str | None,
+        'offset': float | None,
+        'orientation': Literal['soldier', 'stretcher'] | None,
+        'path': list[Any] | None,
+        'side': Literal['left', 'right', 'center', 'inside', 'outside'] | None,
+        'source': str | None,
+        'unit': str | None,
+        'unit_length': float | None,
+        'unit_width': float | None,
     }, total=False)
 
     HardscapeCourseRemoveParams = TypedDict("HardscapeCourseRemoveParams", {
-        'all': bool,
+        'all': bool | None,
         'id': Required[str],
-        'names': list[str],
+        'names': list[str] | None,
     }, total=False)
 
     HardscapePlanParams = TypedDict("HardscapePlanParams", {
         'id': Required[str],
-        'outlines': bool,
+        'outlines': bool | None,
     }, total=False)
 
     HardscapePlanClearParams = TypedDict("HardscapePlanClearParams", {
-        'id': str,
-        'ids': list[str],
-        'what': Literal['all', 'splits', 'zones', 'courses'],
+        'id': str | None,
+        'ids': list[str] | None,
+        'what': Literal['all', 'splits', 'zones', 'courses'] | None,
     }, total=False)
 
     UnitPatternCheckParams = TypedDict("UnitPatternCheckParams", {
-        'align_to_edge': int,
-        'angle': float,
-        'coverage_tol': float,
-        'ids': list[str],
-        'max_findings': int,
-        'max_joint_mm': float,
-        'min_joint_mm': float,
-        'min_share': float,
-        'min_width_mm': float,
-        'origin': list[float],
-        'overlap_depth_mm': float,
-        'overlap_mm2': float,
-        'pattern': dict[str, Any],
-        'size_tol_mm': float,
-        'tolerance': float,
-        'trim': float,
-        'visible_only': bool,
+        'align_to_edge': int | None,
+        'angle': float | None,
+        'coverage_tol': float | None,
+        'ids': list[str] | None,
+        'max_findings': int | None,
+        'max_joint_mm': float | None,
+        'min_joint_mm': float | None,
+        'min_share': float | None,
+        'min_width_mm': float | None,
+        'origin': list[float] | None,
+        'overlap_depth_mm': float | None,
+        'overlap_mm2': float | None,
+        'pattern': dict[str, Any] | None,
+        'size_tol_mm': float | None,
+        'tolerance': float | None,
+        'trim': float | None,
+        'visible_only': bool | None,
     }, total=False)
 
     LandscapeAreaAddParams = TypedDict("LandscapeAreaAddParams", {
         'boundary': Required[list[Any]],
-        'class': str,
-        'drape': bool,
+        'class': str | None,
+        'drape': bool | None,
         'exclude': Any,
         'holes': Any,
-        'layer': str,
-        'name': str,
-        'show_plants': bool,
-        'style': str,
+        'layer': str | None,
+        'name': str | None,
+        'show_plants': bool | None,
+        'style': str | None,
     }, total=False)
 
     LandscapeAreaSetParams = TypedDict("LandscapeAreaSetParams", {
-        'drape': bool,
+        'drape': bool | None,
         'exclude': Any,
         'holes': Any,
-        'id': str,
-        'ids': list[str],
-        'name': str,
-        'show_plants': bool,
-        'style': str,
+        'id': str | None,
+        'ids': list[str] | None,
+        'name': str | None,
+        'show_plants': bool | None,
+        'style': str | None,
     }, total=False)
 
     ReportHardscapeParams = TypedDict("ReportHardscapeParams", {
-        'exclude_unfillable': bool,
-        'format': Literal['csv'],
-        'gap_length': bool,
-        'ids': list[str],
-        'max_extra_joint_mm': float,
-        'min_width': float,
-        'pattern': bool,
-        'sliver_share': float,
-        'tolerance': float,
-        'trim': float,
-        'unfillable_share': float,
-        'visible_only': bool,
-        'waste_percent': float,
+        'exclude_unfillable': bool | None,
+        'format': Literal['csv'] | None,
+        'gap_length': bool | None,
+        'ids': list[str] | None,
+        'max_extra_joint_mm': float | None,
+        'min_width': float | None,
+        'pattern': bool | None,
+        'sliver_share': float | None,
+        'tolerance': float | None,
+        'trim': float | None,
+        'unfillable_share': float | None,
+        'visible_only': bool | None,
+        'waste_percent': float | None,
     }, total=False)
 
     ReportLandscapeAreasParams = TypedDict("ReportLandscapeAreasParams", {
-        'format': str,
+        'format': str | None,
     }, total=False)
 
     ReportPlantListParams = TypedDict("ReportPlantListParams", {
-        'format': str,
+        'format': str | None,
     }, total=False)
 
     IrrigationOutletAddParams = TypedDict("IrrigationOutletAddParams", {
-        'arc': float,
+        'arc': float | None,
         'at': Required[list[float]],
-        'class': str,
-        'direction': float,
-        'layer': str,
+        'class': str | None,
+        'direction': float | None,
+        'layer': str | None,
         'model': Required[str],
-        'radius': float,
+        'radius': float | None,
     }, total=False)
 
     IrrigationLineAddParams = TypedDict("IrrigationLineAddParams", {
-        'class': str,
-        'emitter_flow': float,
-        'emitter_spacing': float,
-        'layer': str,
-        'line_type': Literal['mainline', 'lateral', 'drip'],
+        'class': str | None,
+        'emitter_flow': float | None,
+        'emitter_spacing': float | None,
+        'layer': str | None,
+        'line_type': Literal['mainline', 'lateral', 'drip'] | None,
         'material': Required[str],
         'points': Required[list[list[float]]],
-        'size': Required[str],
+        'size': Required[str | float],
     }, total=False)
 
     IrrigationPocAddParams = TypedDict("IrrigationPocAddParams", {
         'at': Required[list[float]],
         'available_flow': Required[float],
-        'class': str,
-        'layer': str,
-        'meter_loss': float,
-        'name': str,
+        'class': str | None,
+        'layer': str | None,
+        'meter_loss': float | None,
+        'name': str | None,
         'static_pressure': Required[float],
-        'supply_loss': float,
+        'supply_loss': float | None,
     }, total=False)
 
     IrrigationValveAddParams = TypedDict("IrrigationValveAddParams", {
         'at': Required[list[float]],
-        'class': str,
-        'controller': str,
-        'kv': float,
-        'layer': str,
-        'name': str,
-        'station': int,
+        'class': str | None,
+        'controller': str | None,
+        'kv': float | None,
+        'layer': str | None,
+        'name': str | None,
+        'station': float | None,
         'zone': Required[int],
     }, total=False)
 
     IrrigationControllerAddParams = TypedDict("IrrigationControllerAddParams", {
         'at': Required[list[float]],
-        'class': str,
-        'layer': str,
+        'class': str | None,
+        'layer': str | None,
         'name': Required[str],
-        'stations': int,
+        'stations': float | None,
     }, total=False)
 
     IrrigationSetParams = TypedDict("IrrigationSetParams", {
-        'arc': float,
-        'at': list[float],
-        'available_flow': float,
+        'arc': float | None,
+        'at': list[float] | None,
+        'available_flow': float | None,
         'controller': str | None,
-        'direction': float,
+        'direction': float | None,
         'emitter_flow': float | None,
         'emitter_spacing': float | None,
-        'id': str,
-        'ids': list[str],
-        'kv': float,
-        'line_type': Literal['mainline', 'lateral', 'drip'],
-        'material': str,
+        'id': str | None,
+        'ids': list[str] | None,
+        'kv': float | None,
+        'line_type': Literal['mainline', 'lateral', 'drip'] | None,
+        'material': str | None,
         'meter_loss': float | None,
-        'model': str,
+        'model': str | None,
         'name': str | None,
-        'points': list[list[float]],
+        'points': list[list[float]] | None,
         'radius': float | None,
-        'size': str,
-        'static_pressure': float,
+        'size': str | float | None,
+        'static_pressure': float | None,
         'station': int | None,
-        'stations': int,
+        'stations': int | None,
         'supply_loss': float | None,
         'zone': int | None,
     }, total=False)
 
     IrrigationCatalogGetParams = TypedDict("IrrigationCatalogGetParams", {
-        'document_only': bool,
+        'document_only': bool | None,
     }, total=False)
 
     IrrigationCatalogSetParams = TypedDict("IrrigationCatalogSetParams", {
-        'heads': list[dict[str, Any]],
-        'materials': list[dict[str, Any]],
-        'pipes': list[dict[str, Any]],
-        'replace': bool,
+        'heads': list[dict[str, Any]] | None,
+        'materials': list[dict[str, Any]] | None,
+        'pipes': list[dict[str, Any]] | None,
+        'replace': bool | None,
     }, total=False)
 
     IrrigationCatalogImportCsvParams = TypedDict("IrrigationCatalogImportCsvParams", {
         'kind': Required[Literal['heads', 'pipes', 'materials']],
-        'replace': bool,
+        'replace': bool | None,
         'text': Required[str],
     }, total=False)
 
     IrrigationCatalogExportCsvParams = TypedDict("IrrigationCatalogExportCsvParams", {
-        'document_only': bool,
+        'document_only': bool | None,
         'kind': Required[Literal['heads', 'pipes', 'materials']],
     }, total=False)
 
     IrrigationCalculateParams = TypedDict("IrrigationCalculateParams", {
-        'areas': dict[str, float],
-        'assign_zones': bool,
-        'fittings': float,
-        'target_depth': float,
-        'tolerance': float,
-        'use_site_model': bool,
+        'areas': dict[str, float] | None,
+        'assign_zones': bool | None,
+        'fittings': float | None,
+        'target_depth': float | None,
+        'tolerance': float | None,
+        'use_site_model': bool | None,
     }, total=False)
 
     IrrigationLayoutFillParams = TypedDict("IrrigationLayoutFillParams", {
-        'angle': float,
-        'arc': float,
-        'boundary': list[Any],
-        'class': str,
-        'inset': float,
-        'layer': str,
+        'angle': float | None,
+        'arc': float | None,
+        'boundary': list[Any] | None,
+        'class': str | None,
+        'inset': float | None,
+        'layer': str | None,
         'model': Required[str],
-        'object': str,
-        'pattern': Literal['square', 'triangular'],
-        'place': bool,
-        'spacing': float,
+        'object': str | None,
+        'pattern': Literal['square', 'triangular'] | None,
+        'place': bool | None,
+        'spacing': float | None,
     }, total=False)
 
     IrrigationLayoutEdgeParams = TypedDict("IrrigationLayoutEdgeParams", {
-        'arc': float,
-        'class': str,
-        'closed': bool,
-        'layer': str,
+        'arc': float | None,
+        'class': str | None,
+        'closed': bool | None,
+        'layer': str | None,
         'model': Required[str],
-        'object': str,
-        'path': list[Any],
-        'place': bool,
-        'side': Literal['left', 'right'],
-        'spacing': float,
+        'object': str | None,
+        'path': list[Any] | None,
+        'place': bool | None,
+        'side': Literal['left', 'right'] | None,
+        'spacing': float | None,
     }, total=False)
 
     IrrigationLayoutDripParams = TypedDict("IrrigationLayoutDripParams", {
-        'angle': float,
-        'boundary': list[Any],
-        'class': str,
-        'emitter_flow': float,
-        'emitter_spacing': float,
-        'inset': float,
-        'layer': str,
-        'material': str,
-        'object': str,
-        'place': bool,
-        'size': str,
+        'angle': float | None,
+        'boundary': list[Any] | None,
+        'class': str | None,
+        'emitter_flow': float | None,
+        'emitter_spacing': float | None,
+        'inset': float | None,
+        'layer': str | None,
+        'material': str | None,
+        'object': str | None,
+        'place': bool | None,
+        'size': str | float | None,
         'spacing': Required[float],
     }, total=False)
 
     IrrigationReportZonesParams = TypedDict("IrrigationReportZonesParams", {
-        'areas': dict[str, float],
-        'format': Literal['csv'],
-        'target_depth': float,
-        'tolerance': float,
+        'areas': dict[str, float] | None,
+        'format': Literal['csv'] | None,
+        'target_depth': float | None,
+        'tolerance': float | None,
     }, total=False)
 
     IrrigationReportPipesParams = TypedDict("IrrigationReportPipesParams", {
-        'format': str,
-        'tolerance': float,
+        'format': str | None,
+        'tolerance': float | None,
     }, total=False)
 
     IrrigationReportPressureParams = TypedDict("IrrigationReportPressureParams", {
-        'format': str,
-        'tolerance': float,
+        'format': str | None,
+        'tolerance': float | None,
     }, total=False)
 
     IrrigationReportMaterialsParams = TypedDict("IrrigationReportMaterialsParams", {
-        'format': str,
-        'tolerance': float,
+        'format': str | None,
+        'tolerance': float | None,
     }, total=False)
 
     IrrigationReportHydrozonesParams = TypedDict("IrrigationReportHydrozonesParams", {
-        'eto': float,
-        'format': Literal['csv'],
-        'target_depth': float,
-        'tolerance': float,
+        'eto': float | None,
+        'format': Literal['csv'] | None,
+        'target_depth': float | None,
+        'tolerance': float | None,
     }, total=False)
 
     WallStyleCreateParams = TypedDict("WallStyleCreateParams", {
-        'color': list[int],
-        'components': list[dict[str, Any]],
+        'color': list[int] | None,
+        'components': list[dict[str, Any]] | None,
         'coping': dict[str, Any] | None,
-        'material': str,
+        'material': str | None,
         'name': Required[str],
-        'thickness': float,
+        'thickness': float | None,
     }, total=False)
 
     WallStyleListParams = TypedDict("WallStyleListParams", {}, total=False)
 
     WallStyleUpdateParams = TypedDict("WallStyleUpdateParams", {
-        'color': list[int],
-        'components': list[dict[str, Any]],
+        'color': list[int] | None,
+        'components': list[dict[str, Any]] | None,
         'coping': dict[str, Any] | None,
         'id': Required[str],
-        'material': str,
-        'name': str,
-        'thickness': float,
+        'material': str | None,
+        'name': str | None,
+        'thickness': float | None,
     }, total=False)
 
     WallStyleDeleteParams = TypedDict("WallStyleDeleteParams", {
         'id': Required[str],
-        'reassign': str,
+        'reassign': str | None,
     }, total=False)
 
     WallAddParams = TypedDict("WallAddParams", {
-        'backfill': float,
-        'bottom': Literal['existing', 'proposed'],
-        'class': str,
-        'closed': bool,
-        'embed': float,
-        'layer': str,
+        'backfill': float | None,
+        'bottom': Literal['existing', 'proposed'] | None,
+        'class': str | None,
+        'closed': bool | None,
+        'embed': float | None,
+        'layer': str | None,
         'path': Required[list[Any]],
-        'retains': Literal['left', 'right'],
-        'site': str,
-        'site_modifier': bool,
-        'style': str,
-        'thickness': float,
-        'top': dict[str, Any],
+        'retains': Literal['left', 'right'] | None,
+        'site': str | None,
+        'site_modifier': bool | None,
+        'style': str | None,
+        'thickness': float | None,
+        'top': dict[str, Any] | None,
     }, total=False)
 
     WallSetParams = TypedDict("WallSetParams", {
-        'backfill': float,
-        'bottom': Literal['existing', 'proposed'],
-        'class': str,
-        'closed': bool,
-        'embed': float,
-        'id': str,
-        'ids': list[str],
-        'layer': str,
-        'path': list[Any],
-        'retains': Literal['left', 'right'],
-        'site': str,
-        'site_modifier': bool,
-        'style': str,
-        'thickness': float,
-        'top': dict[str, Any],
+        'backfill': float | None,
+        'bottom': Literal['existing', 'proposed'] | None,
+        'class': str | None,
+        'closed': bool | None,
+        'embed': float | None,
+        'id': str | None,
+        'ids': list[str] | None,
+        'layer': str | None,
+        'path': list[Any] | None,
+        'retains': Literal['left', 'right'] | None,
+        'site': str | None,
+        'site_modifier': bool | None,
+        'style': str | None,
+        'thickness': float | None,
+        'top': dict[str, Any] | None,
     }, total=False)
 
     WallReportParams = TypedDict("WallReportParams", {
-        'ids': list[str],
+        'ids': list[str] | None,
     }, total=False)
 
     GradeAddParams = TypedDict("GradeAddParams", {
-        'a': list[float],
-        'b': list[float],
-        'class': str,
-        'elevation_a': float,
-        'elevation_b': float,
+        'a': list[float] | None,
+        'b': list[float] | None,
+        'class': str | None,
+        'elevation_a': float | None,
+        'elevation_b': float | None,
         'end_tags': Any,
         'label': Any,
-        'layer': str,
-        'path': list[Any],
-        'site': str,
-        'site_modifier': bool,
-        'slope': dict[str, Any],
-        'snap': Literal['existing', 'proposed'],
-        'width': float,
+        'layer': str | None,
+        'path': list[Any] | None,
+        'site': str | None,
+        'site_modifier': bool | None,
+        'slope': dict[str, Any] | None,
+        'snap': Literal['existing', 'proposed'] | None,
+        'width': float | None,
     }, total=False)
 
     GradeSetParams = TypedDict("GradeSetParams", {
-        'a': list[float],
-        'b': list[float],
+        'a': list[float] | None,
+        'b': list[float] | None,
         'elevation_a': float | None,
         'elevation_b': float | None,
         'end_tags': Any,
         'id': Required[str],
         'label': Any,
-        'path': list[Any],
+        'path': list[Any] | None,
         'site': str | None,
-        'site_modifier': bool,
+        'site_modifier': bool | None,
         'slope': dict[str, Any] | None,
         'snap': Literal['existing', 'proposed'] | None,
-        'width': float,
+        'width': float | None,
     }, total=False)
 
     GradeGetParams = TypedDict("GradeGetParams", {
@@ -1460,73 +1459,73 @@ if TYPE_CHECKING:
     }, total=False)
 
     SiteAnalysisParams = TypedDict("SiteAnalysisParams", {
-        'breaks': list[float],
-        'colors': list[list[int]],
+        'breaks': list[float] | None,
+        'colors': list[list[int]] | None,
         'id': Required[str],
-        'legend': dict[str, Any],
-        'mode': Literal['off', 'slope', 'elevation'],
-        'opacity': float,
-        'surface': Literal['existing', 'proposed'],
+        'legend': dict[str, Any] | None,
+        'mode': Literal['off', 'slope', 'elevation'] | None,
+        'opacity': float | None,
+        'surface': Literal['existing', 'proposed'] | None,
     }, total=False)
 
     SpotAddParams = TypedDict("SpotAddParams", {
         'at': Required[list[float]],
-        'class': str,
-        'decimals': int,
-        'kind': Literal['spot', 'stake'],
-        'label_height': float,
-        'layer': str,
-        'name': str,
-        'prefix': str,
-        'show': Literal['existing', 'proposed', 'both'],
-        'site': str,
+        'class': str | None,
+        'decimals': int | None,
+        'kind': Literal['spot', 'stake'] | None,
+        'label_height': float | None,
+        'layer': str | None,
+        'name': str | None,
+        'prefix': str | None,
+        'show': Literal['existing', 'proposed', 'both'] | None,
+        'site': str | None,
     }, total=False)
 
     SpotSetParams = TypedDict("SpotSetParams", {
-        'at': list[float],
-        'decimals': int,
+        'at': list[float] | None,
+        'decimals': int | None,
         'id': Required[str],
-        'kind': Literal['spot', 'stake'],
-        'label_height': float,
-        'name': str,
-        'prefix': str,
-        'show': Literal['existing', 'proposed', 'both'],
+        'kind': Literal['spot', 'stake'] | None,
+        'label_height': float | None,
+        'name': str | None,
+        'prefix': str | None,
+        'show': Literal['existing', 'proposed', 'both'] | None,
         'site': str | None,
     }, total=False)
 
     SpotGetParams = TypedDict("SpotGetParams", {
-        'at': list[float],
-        'id': str,
-        'site': str,
+        'at': list[float] | None,
+        'id': str | None,
+        'site': str | None,
     }, total=False)
 
     SectionAddParams = TypedDict("SectionAddParams", {
         'a': Required[list[float]],
         'b': Required[list[float]],
-        'band': float,
-        'class': str,
-        'exaggeration': float,
-        'hardscapes': bool,
-        'layer': str,
-        'name': str,
-        'plants': bool,
-        'site': str,
-        'step': float,
-        'walls': bool,
+        'band': float | None,
+        'class': str | None,
+        'exaggeration': float | None,
+        'hardscapes': bool | None,
+        'layer': str | None,
+        'name': str | None,
+        'plants': bool | None,
+        'site': str | None,
+        'step': float | None,
+        'walls': bool | None,
     }, total=False)
 
     SectionSetParams = TypedDict("SectionSetParams", {
-        'a': list[float],
-        'b': list[float],
-        'band': float,
-        'exaggeration': float,
-        'hardscapes': bool,
+        'a': list[float] | None,
+        'b': list[float] | None,
+        'band': float | None,
+        'exaggeration': float | None,
+        'hardscapes': bool | None,
         'id': Required[str],
-        'name': str,
-        'plants': bool,
+        'name': str | None,
+        'plants': bool | None,
         'site': str | None,
-        'step': float,
-        'walls': bool,
+        'step': float | None,
+        'walls': bool | None,
     }, total=False)
 
     SectionProfileParams = TypedDict("SectionProfileParams", {
@@ -1536,66 +1535,66 @@ if TYPE_CHECKING:
     SectionPlaceParams = TypedDict("SectionPlaceParams", {
         'at': Required[list[float]],
         'id': Required[str],
-        'layer': str,
-        'scale': float,
+        'layer': str | None,
+        'scale': float | None,
     }, total=False)
 
     PadAddParams = TypedDict("PadAddParams", {
         'boundary': Required[list[Any]],
-        'class': str,
+        'class': str | None,
         'elevation': Required[float],
-        'layer': str,
-        'retaining_edge': bool | dict[str, Any],
-        'slope': dict[str, Any],
+        'layer': str | None,
+        'retaining_edge': bool | dict[str, Any] | None,
+        'slope': dict[str, Any] | None,
     }, total=False)
 
     GradeLimitAddParams = TypedDict("GradeLimitAddParams", {
         'boundary': Required[list[Any]],
-        'class': str,
-        'layer': str,
+        'class': str | None,
+        'layer': str | None,
     }, total=False)
 
     PadRetainingEdgeParams = TypedDict("PadRetainingEdgeParams", {
-        'class': str,
-        'embed': float,
-        'enabled': bool,
+        'class': str | None,
+        'embed': float | None,
+        'enabled': bool | None,
         'id': Required[str],
-        'style': str,
-        'thickness': float,
-        'top_offset': float,
+        'style': str | None,
+        'thickness': float | None,
+        'top_offset': float | None,
     }, total=False)
 
     PluginDefineParams = TypedDict("PluginDefineParams", {
-        'description': str,
+        'description': str | None,
         'name': Required[str],
-        'params': list[dict[str, Any]],
+        'params': list[dict[str, Any]] | None,
         'script': Required[str],
         'shape_type': Required[Literal['point', 'linear', 'rectangle', 'path']],
-        'timeout_ms': int,
+        'timeout_ms': int | None,
     }, total=False)
 
     PluginUpdateParams = TypedDict("PluginUpdateParams", {
-        'description': str,
-        'id': str,
-        'name': str,
-        'new_name': str,
-        'params': list[dict[str, Any]],
-        'reset': bool,
-        'script': str,
-        'shape_type': Literal['point', 'linear', 'rectangle', 'path'],
-        'timeout_ms': int,
+        'description': str | None,
+        'id': str | None,
+        'name': str | None,
+        'new_name': str | None,
+        'params': list[dict[str, Any]] | None,
+        'reset': bool | None,
+        'script': str | None,
+        'shape_type': Literal['point', 'linear', 'rectangle', 'path'] | None,
+        'timeout_ms': int | None,
     }, total=False)
 
     PluginDeleteParams = TypedDict("PluginDeleteParams", {
-        'id': str,
-        'name': str,
+        'id': str | None,
+        'name': str | None,
     }, total=False)
 
     PluginListParams = TypedDict("PluginListParams", {}, total=False)
 
     PluginGetParams = TypedDict("PluginGetParams", {
-        'id': str,
-        'name': str,
+        'id': str | None,
+        'name': str | None,
     }, total=False)
 
     PluginExamplesParams = TypedDict("PluginExamplesParams", {}, total=False)
@@ -1605,19 +1604,19 @@ if TYPE_CHECKING:
     }, total=False)
 
     PluginPlaceParams = TypedDict("PluginPlaceParams", {
-        'a': list[float],
-        'at': list[float],
-        'b': list[float],
-        'class': str,
-        'closed': bool,
+        'a': list[float] | None,
+        'at': list[float] | None,
+        'b': list[float] | None,
+        'class': str | None,
+        'closed': bool | None,
         'definition': Required[str],
-        'layer': str,
-        'max': list[float],
-        'min': list[float],
-        'name': str,
-        'params': dict[str, Any],
-        'points': list[list[float]],
-        'rotation': float,
+        'layer': str | None,
+        'max': list[float] | None,
+        'min': list[float] | None,
+        'name': str | None,
+        'params': dict[str, Any] | None,
+        'points': list[list[float]] | None,
+        'rotation': float | None,
     }, total=False)
 
     PluginSetParamsParams = TypedDict("PluginSetParamsParams", {
@@ -1626,9 +1625,9 @@ if TYPE_CHECKING:
     }, total=False)
 
     PluginResetParams = TypedDict("PluginResetParams", {
-        'definition': str,
-        'id': str,
-        'ids': list[str],
+        'definition': str | None,
+        'id': str | None,
+        'ids': list[str] | None,
     }, total=False)
 
     PluginObjectParams = TypedDict("PluginObjectParams", {
@@ -1636,33 +1635,33 @@ if TYPE_CHECKING:
     }, total=False)
 
     PluginPreviewParams = TypedDict("PluginPreviewParams", {
-        'a': list[float],
-        'at': list[float],
-        'b': list[float],
-        'closed': bool,
+        'a': list[float] | None,
+        'at': list[float] | None,
+        'b': list[float] | None,
+        'closed': bool | None,
         'definition': Required[str],
-        'max': list[float],
-        'min': list[float],
-        'params': dict[str, Any],
-        'points': list[list[float]],
-        'rotation': float,
+        'max': list[float] | None,
+        'min': list[float] | None,
+        'params': dict[str, Any] | None,
+        'points': list[list[float]] | None,
+        'rotation': float | None,
     }, total=False)
 
     ScriptInfoParams = TypedDict("ScriptInfoParams", {}, total=False)
 
     ScriptRunParams = TypedDict("ScriptRunParams", {
-        'args': list[str],
-        'path': str,
-        'source': str,
+        'args': list[str] | None,
+        'path': str | None,
+        'source': str | None,
     }, total=False)
 
     ScriptStatusParams = TypedDict("ScriptStatusParams", {
-        'run': Required[str],
-        'since': int,
+        'run': Required[int],
+        'since': int | None,
     }, total=False)
 
     ScriptStopParams = TypedDict("ScriptStopParams", {
-        'run': Required[str],
+        'run': Required[int],
     }, total=False)
 
     ScriptListParams = TypedDict("ScriptListParams", {}, total=False)
@@ -1680,19 +1679,19 @@ if TYPE_CHECKING:
     }, total=False)
 
     PluginsPlaceParams = TypedDict("PluginsPlaceParams", {
-        'a': list[float],
-        'at': list[float],
-        'b': list[float],
-        'class': str,
-        'closed': bool,
-        'layer': str,
-        'max': list[float],
-        'min': list[float],
-        'name': str,
-        'params': dict[str, Any],
+        'a': list[float] | None,
+        'at': list[float] | None,
+        'b': list[float] | None,
+        'class': str | None,
+        'closed': bool | None,
+        'layer': str | None,
+        'max': list[float] | None,
+        'min': list[float] | None,
+        'name': str | None,
+        'params': dict[str, Any] | None,
         'plugin': Required[str],
-        'points': list[list[float]],
-        'rotation': float,
+        'points': list[list[float]] | None,
+        'rotation': float | None,
     }, total=False)
 
     PluginsSetParamsParams = TypedDict("PluginsSetParamsParams", {
@@ -1701,9 +1700,9 @@ if TYPE_CHECKING:
     }, total=False)
 
     PluginsResetParams = TypedDict("PluginsResetParams", {
-        'id': str,
-        'ids': list[str],
-        'plugin': str,
+        'id': str | None,
+        'ids': list[str] | None,
+        'plugin': str | None,
     }, total=False)
 
     PluginsObjectParams = TypedDict("PluginsObjectParams", {
@@ -1711,26 +1710,26 @@ if TYPE_CHECKING:
     }, total=False)
 
     PluginsPreviewParams = TypedDict("PluginsPreviewParams", {
-        'a': list[float],
-        'at': list[float],
-        'b': list[float],
-        'closed': bool,
-        'max': list[float],
-        'min': list[float],
-        'params': dict[str, Any],
+        'a': list[float] | None,
+        'at': list[float] | None,
+        'b': list[float] | None,
+        'closed': bool | None,
+        'max': list[float] | None,
+        'min': list[float] | None,
+        'params': dict[str, Any] | None,
         'plugin': Required[str],
-        'points': list[list[float]],
-        'rotation': float,
+        'points': list[list[float]] | None,
+        'rotation': float | None,
     }, total=False)
 
     PluginsToolStepParams = TypedDict("PluginsToolStepParams", {
-        'class': str,
-        'commit': bool,
+        'class': str | None,
+        'commit': bool | None,
         'event': Required[dict[str, Any]],
-        'layer': str,
-        'modifiers': dict[str, Any],
-        'name': str,
-        'params': dict[str, Any],
+        'layer': str | None,
+        'modifiers': dict[str, Any] | None,
+        'name': str | None,
+        'params': dict[str, Any] | None,
         'plugin': Required[str],
         'state': Any,
     }, total=False)
@@ -1738,69 +1737,69 @@ if TYPE_CHECKING:
     SectionViewportLineAddParams = TypedDict("SectionViewportLineAddParams", {
         'a': Required[list[float]],
         'b': Required[list[float]],
-        'beyond': bool,
-        'class': str,
-        'depth': float,
-        'layer': str,
-        'look': Literal['left', 'right'],
-        'mode': Literal['cut', 'elevation'],
-        'name': str,
+        'beyond': bool | None,
+        'class': str | None,
+        'depth': float | None,
+        'layer': str | None,
+        'look': Literal['left', 'right'] | None,
+        'mode': Literal['cut', 'elevation'] | None,
+        'name': str | None,
     }, total=False)
 
     SectionViewportLineSetParams = TypedDict("SectionViewportLineSetParams", {
-        'a': list[float],
-        'b': list[float],
-        'beyond': bool,
+        'a': list[float] | None,
+        'b': list[float] | None,
+        'beyond': bool | None,
         'depth': float | None,
         'id': Required[str],
-        'look': Literal['left', 'right'],
-        'mode': Literal['cut', 'elevation'],
-        'name': str,
+        'look': Literal['left', 'right'] | None,
+        'mode': Literal['cut', 'elevation'] | None,
+        'name': str | None,
     }, total=False)
 
     SectionViewportCreateParams = TypedDict("SectionViewportCreateParams", {
-        'at': list[float],
-        'beyond_weight': float,
-        'center': list[float],
-        'cut_weight': float,
-        'layers': list[str],
+        'at': list[float] | None,
+        'beyond_weight': float | None,
+        'center': list[float] | None,
+        'cut_weight': float | None,
+        'layers': list[str] | None,
         'line': Required[str],
-        'max': list[float],
-        'min': list[float],
-        'name': str,
-        'scale': float | Literal['fit'],
+        'max': list[float] | None,
+        'min': list[float] | None,
+        'name': str | None,
+        'scale': float | Literal['fit'] | None,
         'sheet': Required[str],
-        'show_frame': bool,
-        'size': list[float],
+        'show_frame': bool | None,
+        'size': list[float] | None,
     }, total=False)
 
     SectionViewportUpdateParams = TypedDict("SectionViewportUpdateParams", {
-        'beyond_weight': float,
-        'center': list[float],
-        'cut_weight': float,
-        'fit': bool,
+        'beyond_weight': float | None,
+        'center': list[float] | None,
+        'cut_weight': float | None,
+        'fit': bool | None,
         'id': Required[str],
-        'layers': list[str],
-        'line': str,
-        'max': list[float],
-        'min': list[float],
-        'name': str,
-        'scale': float | Literal['fit'],
-        'show_frame': bool,
+        'layers': list[str] | None,
+        'line': str | None,
+        'max': list[float] | None,
+        'min': list[float] | None,
+        'name': str | None,
+        'scale': float | Literal['fit'] | None,
+        'show_frame': bool | None,
     }, total=False)
 
     SectionViewportGetParams = TypedDict("SectionViewportGetParams", {
-        'geometry': bool,
+        'geometry': bool | None,
         'id': Required[str],
     }, total=False)
 
     GroupCreateParams = TypedDict("GroupCreateParams", {
-        'ids': list[str],
-        'name': str,
+        'ids': list[str] | None,
+        'name': str | None,
     }, total=False)
 
     GroupUngroupParams = TypedDict("GroupUngroupParams", {
-        'ids': list[str],
+        'ids': list[str] | None,
     }, total=False)
 
     GroupEnterParams = TypedDict("GroupEnterParams", {
@@ -1812,37 +1811,37 @@ if TYPE_CHECKING:
     GroupContextParams = TypedDict("GroupContextParams", {}, total=False)
 
     GroupMembersParams = TypedDict("GroupMembersParams", {
-        'deep': bool,
+        'deep': bool | None,
         'id': Required[str],
     }, total=False)
 
     GroupMoveIntoParams = TypedDict("GroupMoveIntoParams", {
         'group': Required[str],
-        'ids': list[str],
+        'ids': list[str] | None,
     }, total=False)
 
     GroupMoveOutParams = TypedDict("GroupMoveOutParams", {
-        'ids': list[str],
+        'ids': list[str] | None,
     }, total=False)
 
     GroupMoveParams = TypedDict("GroupMoveParams", {
         'delta': Required[list[float]],
-        'ids': list[str],
+        'ids': list[str] | None,
     }, total=False)
 
     GroupRotateParams = TypedDict("GroupRotateParams", {
         'angle': Required[float],
         'center': Required[list[float]],
-        'ids': list[str],
+        'ids': list[str] | None,
     }, total=False)
 
     GroupCopyParams = TypedDict("GroupCopyParams", {
-        'delta': list[float],
-        'ids': list[str],
+        'delta': list[float] | None,
+        'ids': list[str] | None,
     }, total=False)
 
     SelectionClickParams = TypedDict("SelectionClickParams", {
-        'add': bool,
+        'add': bool | None,
         'id': Required[str],
     }, total=False)
 
@@ -1853,45 +1852,45 @@ if TYPE_CHECKING:
     }, total=False)
 
     SymbolCreateParams = TypedDict("SymbolCreateParams", {
-        'insert_class': str,
-        'insertion': list[float],
-        'items': list[dict[str, Any]],
+        'insert_class': str | None,
+        'insertion': list[float] | None,
+        'items': list[dict[str, Any]] | None,
         'name': Required[str],
-        'rotate_on_insert': bool,
-        'solids': list[dict[str, Any]],
-        'units': Literal['world', 'paper'],
+        'rotate_on_insert': bool | None,
+        'solids': list[dict[str, Any]] | None,
+        'units': Literal['world', 'paper'] | None,
     }, total=False)
 
     SymbolFromObjectsParams = TypedDict("SymbolFromObjectsParams", {
-        'ids': list[str],
-        'insertion': list[float],
+        'ids': list[str] | None,
+        'insertion': list[float] | None,
         'name': Required[str],
-        'replace': bool,
+        'replace': bool | None,
     }, total=False)
 
     SymbolPlaceParams = TypedDict("SymbolPlaceParams", {
         'at': Required[list[float]],
-        'class': str,
-        'layer': str,
-        'rotate_to': list[float],
-        'rotation': float,
-        'scale': float,
-        'scale_y': float,
+        'class': str | None,
+        'layer': str | None,
+        'rotate_to': list[float] | None,
+        'rotation': float | None,
+        'scale': float | None,
+        'scale_y': float | None,
         'symbol': Required[str],
     }, total=False)
 
     SymbolSetParams = TypedDict("SymbolSetParams", {
-        'at': list[float],
-        'id': str,
-        'ids': list[str],
-        'rotation': float,
-        'scale': float,
+        'at': list[float] | None,
+        'id': str | None,
+        'ids': list[str] | None,
+        'rotation': float | None,
+        'scale': float | None,
         'scale_y': float | None,
-        'symbol': str,
+        'symbol': str | None,
     }, total=False)
 
     SymbolConvertToGroupParams = TypedDict("SymbolConvertToGroupParams", {
-        'ids': list[str],
+        'ids': list[str] | None,
     }, total=False)
 
     SymbolEditParams = TypedDict("SymbolEditParams", {
@@ -1899,207 +1898,67 @@ if TYPE_CHECKING:
     }, total=False)
 
     SymbolEditEndParams = TypedDict("SymbolEditEndParams", {
-        'group': str,
+        'group': str | None,
     }, total=False)
 
     ResourceListParams = TypedDict("ResourceListParams", {
-        'search': str,
-        'thumbnails': bool,
-        'type': str,
+        'search': str | None,
+        'thumbnails': bool | None,
+        'type': str | None,
     }, total=False)
 
     ResourceGetParams = TypedDict("ResourceGetParams", {
         'id': Required[str],
-        'type': str,
+        'type': str | None,
     }, total=False)
 
     ResourceCreateParams = TypedDict("ResourceCreateParams", {
-        'angle': float,
-        'angle_precision': int,
-        'background': list[int],
-        'base_color': list[int],
-        'baseline_spacing_mm': float,
-        'bold': bool,
-        'border': dict[str, Any] | None,
-        'botanical_name': str,
-        'category': Literal['tree', 'shrub', 'perennial', 'grass', 'groundcover'],
-        'color': list[int],
-        'common_name': str,
-        'components': list[dict[str, Any]],
-        'container': str,
-        'coping': dict[str, Any] | None,
-        'custom': dict[str, str],
-        'edges': bool,
-        'elements': list[dict[str, Any]],
-        'ext_gap_mm': float,
-        'ext_overshoot_mm': float,
-        'fields': dict[str, str],
-        'fill': list[int],
-        'font': str,
-        'form': Literal['tree', 'columnar', 'conical', 'spreading', 'shrub_mound', 'weeping', 'palm', 'columnar_conifer', 'multi_stem', 'hedge'],
-        'frame': Literal['none', 'box', 'underline', 'circle'],
-        'graphic': Literal['circle', 'cloud', 'star', 'spokes', 'rosette', 'clover'],
-        'height': float,
-        'id_code': str,
-        'image': Any,
-        'insert_class': str,
-        'insertion': list[float],
-        'irrigation': dict[str, Any],
-        'italic': bool,
-        'items': list[dict[str, Any]],
-        'joints': dict[str, Any] | None,
-        'justify': Literal['left', 'center', 'right'],
-        'leader': bool,
-        'line_spacing': float,
-        'line_weight': float,
-        'lines': list[dict[str, Any]],
-        'locked': list[str],
-        'maintenance': dict[str, Any],
-        'mapping': dict[str, Any],
-        'material': str,
-        'metallic': float,
-        'mix': list[dict[str, Any]],
-        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'],
+        'insert_class': str | None,
+        'insertion': list[float] | None,
+        'items': list[dict[str, Any]] | None,
         'name': Required[str],
-        'notes': list[dict[str, Any]] | dict[str, str],
-        'opacity': float,
-        'pad_mm': float,
-        'pen': list[int],
-        'plan_symbol': str | None,
-        'precision': int,
-        'prefix': str,
-        'preset': Literal['area'],
-        'price': float,
-        'protection_zone': bool,
-        'quantity': str,
-        'reflectivity': float,
-        'root': str,
-        'rotate_on_insert': bool,
-        'roughness': float,
-        'round_to': float,
-        'row_shift': float,
-        'rpz_cap': float | None,
-        'rpz_factor': float | None,
-        'scale': float,
-        'shadows': bool,
-        'show_plants': bool,
-        'show_unit': bool,
-        'size': float,
-        'size_mm': float,
-        'solids': list[dict[str, Any]],
-        'spread': float,
-        'suffix': str,
-        'sun': bool,
+        'rotate_on_insert': bool | None,
+        'solids': list[dict[str, Any]] | None,
+        'type': Required[Literal['symbol'] | Literal['hatch'] | Literal['tile'] | Literal['line_type'] | Literal['texture']],
+        'units': Literal['paper', 'world'] | None,
+        'lines': list[dict[str, Any]],
+        'angle': float | None,
+        'height': float,
+        'row_shift': float | None,
+        'scale': float | None,
         'symbol': str,
-        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'],
-        'terminator_size_mm': float,
-        'text_gap_mm': float,
-        'text_size_mm': float,
-        'texture': str | dict[str, Any] | None,
-        'textures': bool,
-        'thickness': float,
-        'tolerance': dict[str, Any],
-        'transparency': float,
-        'trunk_diameter': float,
-        'type': Required[Literal['symbol', 'hatch', 'tile', 'line_type', 'texture', 'plant_style', 'hardscape_style', 'landscape_area_style', 'wall_style', 'record_format', 'material', 'render_style', 'text_style', 'dimension_style', 'tag_style', 'notes_db']],
-        'unit': Literal['mm', 'cm', 'm', 'in', 'ft', 'ft_in'],
-        'units': Literal['paper', 'world'],
         'width': float,
+        'elements': list[dict[str, Any]],
+        'color': list[int],
+        'image': str | None,
+        'reflectivity': float | None,
+        'size': list[float] | None,
+        'transparency': float | None,
     }, total=False)
 
     ResourceUpdateParams = TypedDict("ResourceUpdateParams", {
-        'angle': float,
-        'angle_precision': int,
-        'background': list[int],
-        'base_color': list[int],
-        'baseline_spacing_mm': float,
-        'bold': bool,
-        'border': dict[str, Any] | None,
-        'botanical_name': str,
-        'category': Literal['tree', 'shrub', 'perennial', 'grass', 'groundcover'],
-        'color': list[int],
-        'common_name': str,
-        'components': list[dict[str, Any]],
-        'container': str,
-        'coping': dict[str, Any] | None,
-        'custom': dict[str, str],
-        'edges': bool,
-        'elements': list[dict[str, Any]],
-        'ext_gap_mm': float,
-        'ext_overshoot_mm': float,
-        'fields': dict[str, str],
-        'fill': list[int],
-        'font': str,
-        'form': Literal['tree', 'columnar', 'conical', 'spreading', 'shrub_mound', 'weeping', 'palm', 'columnar_conifer', 'multi_stem', 'hedge'],
-        'frame': Literal['none', 'box', 'underline', 'circle'],
-        'graphic': Literal['circle', 'cloud', 'star', 'spokes', 'rosette', 'clover'],
-        'height': float,
+        'angle': float | None,
+        'color': list[int] | None,
+        'elements': list[dict[str, Any]] | None,
+        'height': float | None,
         'id': Required[str],
-        'id_code': str,
-        'image': Any,
-        'insert_class': str,
-        'insertion': list[float],
-        'irrigation': dict[str, Any],
-        'italic': bool,
-        'items': list[dict[str, Any]],
-        'joints': dict[str, Any] | None,
-        'justify': Literal['left', 'center', 'right'],
-        'leader': bool,
-        'line_spacing': float,
-        'line_weight': float,
-        'lines': list[dict[str, Any]],
-        'locked': list[str],
-        'maintenance': dict[str, Any],
-        'mapping': dict[str, Any],
-        'material': str,
-        'metallic': float,
-        'mix': list[dict[str, Any]],
-        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'],
-        'name': str,
-        'notes': list[dict[str, Any]] | dict[str, str],
-        'opacity': float,
-        'pad_mm': float,
-        'pen': list[int],
-        'plan_symbol': str | None,
-        'precision': int,
-        'prefix': str,
-        'preset': Literal['area'],
-        'price': float,
-        'protection_zone': bool,
-        'quantity': str,
-        'reflectivity': float,
-        'root': str,
-        'rotate_on_insert': bool,
-        'roughness': float,
-        'round_to': float,
-        'row_shift': float,
-        'rpz_cap': float | None,
-        'rpz_factor': float | None,
-        'scale': float,
-        'shadows': bool,
-        'show_plants': bool,
-        'show_unit': bool,
-        'size': float,
-        'size_mm': float,
-        'solids': list[dict[str, Any]],
-        'spread': float,
-        'suffix': str,
-        'sun': bool,
-        'symbol': str,
-        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'],
-        'terminator_size_mm': float,
-        'text_gap_mm': float,
-        'text_size_mm': float,
-        'texture': str | dict[str, Any] | None,
-        'textures': bool,
-        'thickness': float,
-        'tolerance': dict[str, Any],
-        'transparency': float,
-        'trunk_diameter': float,
-        'type': Literal['symbol', 'hatch', 'tile', 'line_type', 'texture', 'plant_style', 'hardscape_style', 'landscape_area_style', 'wall_style', 'record_format', 'material', 'render_style', 'text_style', 'dimension_style', 'tag_style', 'notes_db'],
-        'unit': Literal['mm', 'cm', 'm', 'in', 'ft', 'ft_in'],
-        'units': Literal['paper', 'world'],
-        'width': float,
+        'image': str | None,
+        'insert_class': str | None,
+        'insertion': list[float] | None,
+        'items': list[dict[str, Any]] | None,
+        'lines': list[dict[str, Any]] | None,
+        'name': str | None,
+        'reflectivity': float | None,
+        'rotate_on_insert': bool | None,
+        'row_shift': float | None,
+        'scale': float | None,
+        'size': list[float] | None,
+        'solids': list[dict[str, Any]] | None,
+        'symbol': str | None,
+        'transparency': float | None,
+        'type': Literal['symbol', 'hatch', 'tile', 'line_type', 'texture'] | None,
+        'units': Literal['paper', 'world'] | None,
+        'width': float | None,
     }, total=False)
 
     ResourceRenameParams = TypedDict("ResourceRenameParams", {
@@ -2109,51 +1968,51 @@ if TYPE_CHECKING:
 
     ResourceDuplicateParams = TypedDict("ResourceDuplicateParams", {
         'id': Required[str],
-        'name': str,
+        'name': str | None,
     }, total=False)
 
     ResourceDeleteParams = TypedDict("ResourceDeleteParams", {
         'id': Required[str],
-        'reassign': str,
+        'reassign': str | None,
     }, total=False)
 
     ResourcePurgeUnusedParams = TypedDict("ResourcePurgeUnusedParams", {
-        'dry_run': bool,
-        'types': list[str],
+        'dry_run': bool | None,
+        'types': list[str] | None,
     }, total=False)
 
     ResourceThumbnailParams = TypedDict("ResourceThumbnailParams", {
         'id': Required[str],
-        'size': int,
+        'size': int | None,
     }, total=False)
 
     PatternSegmentsParams = TypedDict("PatternSegmentsParams", {
-        'holes': list[list[list[float]]],
+        'holes': list[list[list[float]]] | None,
         'pattern': Required[str],
         'ring': Required[list[list[float]]],
-        'scale': float,
+        'scale': float | None,
     }, total=False)
 
     ResourceListFileParams = TypedDict("ResourceListFileParams", {
-        'library': str,
-        'path': str,
+        'library': str | None,
+        'path': str | None,
     }, total=False)
 
     ResourceImportFromFileParams = TypedDict("ResourceImportFromFileParams", {
-        'all': bool,
-        'classes': list[str],
-        'items': list[dict[str, Any]] | list[str],
-        'layers': list[str],
-        'library': str,
-        'on_conflict': Literal['rename', 'reuse', 'replace'],
-        'path': str,
+        'all': bool | None,
+        'classes': list[str] | None,
+        'items': list[dict[str, Any]] | list[str] | None,
+        'layers': list[str] | None,
+        'library': str | None,
+        'on_conflict': Literal['rename', 'reuse', 'replace'] | None,
+        'path': str | None,
     }, total=False)
 
     ResourceExportToFileParams = TypedDict("ResourceExportToFileParams", {
-        'ids': list[str],
-        'library': str,
-        'overwrite': bool,
-        'path': str,
+        'ids': list[str] | None,
+        'library': str | None,
+        'overwrite': bool | None,
+        'path': str | None,
     }, total=False)
 
     LibraryListParams = TypedDict("LibraryListParams", {}, total=False)
@@ -2163,7 +2022,7 @@ if TYPE_CHECKING:
     LibraryFavoriteAddParams = TypedDict("LibraryFavoriteAddParams", {
         'library': Required[str],
         'name': Required[str],
-        'path': str,
+        'path': str | None,
         'type': Required[str],
     }, total=False)
 
@@ -2174,54 +2033,54 @@ if TYPE_CHECKING:
     }, total=False)
 
     SiteCreateParams = TypedDict("SiteCreateParams", {
-        'layer': str,
-        'settings': dict[str, Any],
+        'layer': str | None,
+        'settings': dict[str, Any] | None,
         'source_ids': Required[list[str]],
     }, total=False)
 
     SiteUpdateParams = TypedDict("SiteUpdateParams", {
-        'add_source_ids': list[str],
+        'add_source_ids': list[str] | None,
         'id': Required[str],
-        'remove_lines': list[int],
-        'remove_points': list[int],
-        'replace': list[dict[str, Any]],
-        'settings': dict[str, Any],
+        'remove_lines': list[int] | None,
+        'remove_points': list[int] | None,
+        'replace': list[dict[str, Any]] | None,
+        'settings': dict[str, Any] | None,
     }, total=False)
 
     SiteTextureParams = TypedDict("SiteTextureParams", {
-        'bands': int,
-        'bands_at_contours': bool,
+        'bands': int | None,
+        'bands_at_contours': bool | None,
         'id': Required[str],
-        'look': Literal['color', 'texture', 'elevation'],
+        'look': Literal['color', 'texture', 'elevation'] | None,
         'material': str | None,
-        'offset': list[float],
-        'ramp': list[list[int]],
+        'offset': list[float] | None,
+        'ramp': list[list[int]] | None,
         'range': list[float] | None,
-        'rotation': float,
-        'tile_size': float,
+        'rotation': float | None,
+        'tile_size': float | None,
     }, total=False)
 
     BedAddParams = TypedDict("BedAddParams", {
-        'boundary': list[Any],
-        'class': str,
-        'from': str | list[str],
-        'keep_source': bool,
-        'layer': str,
-        'offset': list[float],
-        'own_mapping': bool,
-        'rotation': float,
+        'boundary': list[Any] | None,
+        'class': str | None,
+        'from': str | list[str] | None,
+        'keep_source': bool | None,
+        'layer': str | None,
+        'offset': list[float] | None,
+        'own_mapping': bool | None,
+        'rotation': float | None,
         'texture': str | None,
-        'tile_size': float,
+        'tile_size': float | None,
     }, total=False)
 
     BedSetParams = TypedDict("BedSetParams", {
-        'boundary': list[Any],
+        'boundary': list[Any] | None,
         'id': Required[str],
-        'offset': list[float],
-        'own_mapping': bool,
-        'rotation': float,
+        'offset': list[float] | None,
+        'own_mapping': bool | None,
+        'rotation': float | None,
         'texture': str | None,
-        'tile_size': float,
+        'tile_size': float | None,
     }, total=False)
 
     BedGetParams = TypedDict("BedGetParams", {
@@ -2229,12 +2088,12 @@ if TYPE_CHECKING:
     }, total=False)
 
     BedListParams = TypedDict("BedListParams", {
-        'site': str,
+        'site': str | None,
     }, total=False)
 
     SiteElevationParams = TypedDict("SiteElevationParams", {
         'id': Required[str],
-        'surface': Literal['existing', 'proposed'],
+        'surface': Literal['existing', 'proposed'] | None,
         'x': Required[float],
         'y': Required[float],
     }, total=False)
@@ -2244,7 +2103,7 @@ if TYPE_CHECKING:
     }, total=False)
 
     SiteDrapeParams = TypedDict("SiteDrapeParams", {
-        'closed': bool,
+        'closed': bool | None,
         'id': Required[str],
         'points': Required[list[list[float]]],
     }, total=False)
@@ -2255,68 +2114,68 @@ if TYPE_CHECKING:
 
     SiteContoursParams = TypedDict("SiteContoursParams", {
         'id': Required[str],
-        'points': bool,
-        'surface': Literal['existing', 'proposed'],
+        'points': bool | None,
+        'surface': Literal['existing', 'proposed'] | None,
     }, total=False)
 
     SurveyImportPointsParams = TypedDict("SurveyImportPointsParams", {
-        'class': str,
-        'columns': list[str],
-        'crs': str,
-        'delimiter': Literal['auto', 'comma', 'semicolon', 'tab', 'pipe', 'space'],
-        'layer': str,
-        'path': str,
-        'shift': bool,
-        'skip_lines': int,
-        'text': str,
-        'unit': Literal['m', 'mm', 'cm', 'ft', 'inch'],
-        'z_unit': Literal['m', 'mm', 'cm', 'ft', 'inch'],
+        'class': str | None,
+        'columns': list[str] | str | None,
+        'crs': str | None,
+        'delimiter': Literal['auto', 'comma', 'semicolon', 'tab', 'pipe', 'space'] | None,
+        'layer': str | None,
+        'path': str | None,
+        'shift': bool | None,
+        'skip_lines': int | None,
+        'text': str | None,
+        'unit': float | Literal['m', 'mm', 'cm', 'km', 'ft', 'usft', 'inch', 'yd'] | None,
+        'z_unit': float | Literal['m', 'mm', 'cm', 'km', 'ft', 'usft', 'inch', 'yd'] | None,
     }, total=False)
 
     TreeImportSurveyParams = TypedDict("TreeImportSurveyParams", {
-        'class': str,
-        'crs': str,
-        'dbh_unit': Literal['m', 'mm', 'cm', 'ft', 'inch'],
-        'delimiter': Literal['auto', 'comma', 'semicolon', 'tab', 'pipe', 'space'],
-        'layer': str,
-        'on_terrain': bool,
-        'path': str,
-        'shift': bool,
-        'size_unit': Literal['m', 'mm', 'cm', 'ft', 'inch'],
-        'text': str,
-        'unit': Literal['m', 'mm', 'cm', 'ft', 'inch'],
+        'class': str | None,
+        'crs': str | None,
+        'dbh_unit': float | Literal['m', 'mm', 'cm', 'km', 'ft', 'usft', 'inch', 'yd'] | None,
+        'delimiter': Literal['auto', 'comma', 'semicolon', 'tab', 'pipe', 'space'] | None,
+        'layer': str | None,
+        'on_terrain': bool | None,
+        'path': str | None,
+        'shift': bool | None,
+        'size_unit': float | Literal['m', 'mm', 'cm', 'km', 'ft', 'usft', 'inch', 'yd'] | None,
+        'text': str | None,
+        'unit': float | Literal['m', 'mm', 'cm', 'km', 'ft', 'usft', 'inch', 'yd'] | None,
     }, total=False)
 
     SiteCheckParams = TypedDict("SiteCheckParams", {
         'id': Required[str],
-        'max_issues': int,
-        'spike_threshold': float,
-        'xy_tolerance': float,
-        'z_tolerance': float,
+        'max_issues': float | None,
+        'spike_threshold': float | None,
+        'xy_tolerance': float | None,
+        'z_tolerance': float | None,
     }, total=False)
 
     SiteSimplifyParams = TypedDict("SiteSimplifyParams", {
-        'dry_run': bool,
+        'dry_run': bool | None,
         'id': Required[str],
         'tolerance': Required[float],
     }, total=False)
 
     GeorefSurveyPointParams = TypedDict("GeorefSurveyPointParams", {
-        'crs': str,
+        'crs': str | None,
         'map': Required[list[float]],
-        'model': list[float],
-        'object': str,
-        'rotation': float,
-        'second': dict[str, Any],
+        'model': list[float] | None,
+        'object': str | None,
+        'rotation': float | None,
+        'second': dict[str, Any] | None,
     }, total=False)
 
     ViewRulesGetParams = TypedDict("ViewRulesGetParams", {}, total=False)
 
     GridSetParams = TypedDict("GridSetParams", {
-        'color': list[int],
-        'label_height': float,
-        'labels': bool,
-        'spacing': Required[float],
+        'color': list[int] | None,
+        'label_height': float | None,
+        'labels': bool | None,
+        'spacing': Required[float | None],
     }, total=False)
 
     PhaseSetParams = TypedDict("PhaseSetParams", {
@@ -2325,30 +2184,30 @@ if TYPE_CHECKING:
     }, total=False)
 
     PhaseDisplayParams = TypedDict("PhaseDisplayParams", {
-        'demolished': dict[str, Any],
+        'demolished': dict[str, Any] | None,
         'enabled': bool | None,
-        'existing': dict[str, Any],
-        'new': dict[str, Any],
+        'existing': dict[str, Any] | None,
+        'new': dict[str, Any] | None,
     }, total=False)
 
     PhaseReportParams = TypedDict("PhaseReportParams", {}, total=False)
 
     VisualizationSetParams = TypedDict("VisualizationSetParams", {
-        'enabled': bool,
+        'enabled': bool | None,
         'field': Required[str],
-        'include_missing': bool,
-        'kinds': list[str],
-        'name': str,
+        'include_missing': bool | None,
+        'kinds': list[str] | None,
+        'name': str | None,
         'rules': Required[list[dict[str, Any]]],
-        'target': Literal['fill', 'pen', 'both'],
+        'target': Literal['fill', 'pen', 'both'] | None,
     }, total=False)
 
     VisualizationAutoParams = TypedDict("VisualizationAutoParams", {
-        'bins': int,
+        'bins': int | None,
         'field': Required[str],
-        'kinds': list[str],
-        'name': str,
-        'target': Literal['fill', 'pen', 'both'],
+        'kinds': list[str] | None,
+        'name': str | None,
+        'target': Literal['fill', 'pen', 'both'] | None,
     }, total=False)
 
     VisualizationGetParams = TypedDict("VisualizationGetParams", {}, total=False)
@@ -2356,237 +2215,273 @@ if TYPE_CHECKING:
     VisualizationClearParams = TypedDict("VisualizationClearParams", {}, total=False)
 
     ViewScreenshotParams = TypedDict("ViewScreenshotParams", {
-        'max_width': int,
-        'region': Literal['drawing', 'window'],
+        'max_width': int | None,
+        'region': Literal['drawing', 'window'] | None,
+    }, total=False)
+
+    ViewGetParams = TypedDict("ViewGetParams", {}, total=False)
+
+    ViewZoomParams = TypedDict("ViewZoomParams", {
+        'at': list[float] | None,
+        'box': list[float] | None,
+        'ids': list[str] | None,
+        'margin': float | None,
+        'scale': float | None,
+    }, total=False)
+
+    ViewPanParams = TypedDict("ViewPanParams", {
+        'by': list[float] | None,
+        'to': list[float] | None,
+    }, total=False)
+
+    ViewCameraParams = TypedDict("ViewCameraParams", {
+        'eye': Required[list[float]],
+        'fov': float | None,
+        'projection': Literal['ortho', 'perspective'] | None,
+        'target': Required[list[float]],
+        'up': list[float] | None,
+    }, total=False)
+
+    ViewHighlightParams = TypedDict("ViewHighlightParams", {
+        'at': list[float] | None,
+        'box': list[float] | None,
+        'color': Literal['agent', 'red', 'blue', 'green', 'orange'] | None,
+        'ids': list[str] | None,
+        'text': str | None,
+        'until': str | int | None,
+    }, total=False)
+
+    ViewHighlightClearParams = TypedDict("ViewHighlightClearParams", {
+        'id': int | None,
     }, total=False)
 
     EditRotateParams = TypedDict("EditRotateParams", {
         'angle': Required[float],
         'center': Required[list[float]],
-        'copy': bool,
-        'ids': list[str],
+        'copy': bool | None,
+        'ids': list[str] | None,
     }, total=False)
 
     EditScaleParams = TypedDict("EditScaleParams", {
         'center': Required[list[float]],
-        'copy': bool,
-        'ids': list[str],
+        'copy': bool | None,
+        'ids': list[str] | None,
         'sx': Required[float],
-        'sy': float,
+        'sy': float | None,
     }, total=False)
 
     EditMirrorParams = TypedDict("EditMirrorParams", {
         'a': Required[list[float]],
         'b': Required[list[float]],
-        'copy': bool,
-        'ids': list[str],
+        'copy': bool | None,
+        'ids': list[str] | None,
     }, total=False)
 
     EditArrayParams = TypedDict("EditArrayParams", {
-        'angle': float,
-        'center': list[float],
-        'column_spacing': float,
-        'columns': int,
-        'count': int,
-        'distance': float,
-        'ids': list[str],
-        'offset': list[float],
-        'resize': float,
-        'retain': bool,
-        'rotate': float,
-        'rotate_objects': bool,
-        'row_spacing': float,
-        'rows': int,
+        'angle': float | None,
+        'center': list[float] | None,
+        'column_spacing': float | None,
+        'columns': int | None,
+        'count': int | None,
+        'distance': float | None,
+        'ids': list[str] | None,
+        'offset': list[float] | None,
+        'resize': float | None,
+        'retain': bool | None,
+        'rotate': float | None,
+        'rotate_objects': bool | None,
+        'row_spacing': float | None,
+        'rows': int | None,
         'shape': Required[Literal['linear', 'rectangular', 'circular']],
     }, total=False)
 
     EditOffsetParams = TypedDict("EditOffsetParams", {
-        'copy': bool,
-        'distance': float,
+        'copy': bool | None,
+        'distance': float | None,
         'id': Required[str],
-        'side': Literal['left', 'right', 'outside', 'inside'],
-        'through': list[float],
+        'side': Literal['left', 'right', 'outside', 'inside'] | None,
+        'through': list[float] | None,
     }, total=False)
 
     EditFilletParams = TypedDict("EditFilletParams", {
-        'a': str,
-        'all': bool,
-        'b': str,
-        'corner': int,
-        'corners': list[int],
-        'id': str,
-        'mode': Literal['trim', 'split', 'standard'],
-        'pick_a': list[float],
-        'pick_b': list[float],
+        'a': str | None,
+        'all': bool | None,
+        'b': str | None,
+        'corner': int | None,
+        'corners': list[int] | None,
+        'id': str | None,
+        'mode': Literal['trim', 'split', 'standard'] | None,
+        'pick_a': list[float] | None,
+        'pick_b': list[float] | None,
         'radius': Required[float],
     }, total=False)
 
     EditChamferParams = TypedDict("EditChamferParams", {
-        'a': str,
-        'all': bool,
-        'angle': float,
-        'b': str,
-        'corner': int,
-        'corners': list[int],
-        'distance': float,
-        'distance2': float,
-        'id': str,
-        'length': float,
-        'mode': Literal['trim', 'split', 'standard'],
-        'pick_a': list[float],
-        'pick_b': list[float],
+        'a': str | None,
+        'all': bool | None,
+        'angle': float | None,
+        'b': str | None,
+        'corner': int | None,
+        'corners': list[int] | None,
+        'distance': float | None,
+        'distance2': float | None,
+        'id': str | None,
+        'length': float | None,
+        'mode': Literal['trim', 'split', 'standard'] | None,
+        'pick_a': list[float] | None,
+        'pick_b': list[float] | None,
     }, total=False)
 
     EditTrimParams = TypedDict("EditTrimParams", {
-        'cutters': list[str],
+        'cutters': list[str] | None,
         'id': Required[str],
         'pick': Required[list[float]],
     }, total=False)
 
     EditExtendParams = TypedDict("EditExtendParams", {
-        'boundaries': list[str],
+        'boundaries': list[str] | None,
         'id': Required[str],
         'pick': Required[list[float]],
     }, total=False)
 
     EditSplitParams = TypedDict("EditSplitParams", {
-        'at': list[list[float]],
+        'at': list[list[float]] | None,
         'id': Required[str],
-        'line': dict[str, Any],
+        'line': dict[str, Any] | None,
     }, total=False)
 
     SurfaceAddParams = TypedDict("SurfaceAddParams", {
         'ids': Required[list[str]],
-        'keep': bool,
+        'keep': bool | None,
     }, total=False)
 
     SurfaceSubtractParams = TypedDict("SurfaceSubtractParams", {
         'base': Required[str],
         'cutters': Required[list[str]],
-        'keep_cutters': bool,
+        'keep_cutters': bool | None,
     }, total=False)
 
     SurfaceClipParams = TypedDict("SurfaceClipParams", {
         'ids': Required[list[str]],
-        'keep_cutter': bool,
+        'keep_cutter': bool | None,
     }, total=False)
 
     SurfaceIntersectParams = TypedDict("SurfaceIntersectParams", {
         'ids': Required[list[str]],
-        'keep': bool,
+        'keep': bool | None,
     }, total=False)
 
     SurfaceComposeParams = TypedDict("SurfaceComposeParams", {
         'ids': Required[list[str]],
-        'keep': bool,
+        'keep': bool | None,
     }, total=False)
 
     ObjectsQueryParams = TypedDict("ObjectsQueryParams", {
-        'class': str,
-        'columns': list[str],
-        'criteria': str,
-        'kind': str,
-        'layer': str,
-        'limit': int,
-        'select': bool,
+        'class': str | None,
+        'columns': list[str] | None,
+        'criteria': str | None,
+        'kind': str | None,
+        'layer': str | None,
+        'limit': int | None,
+        'select': bool | None,
     }, total=False)
 
     SnapGetParams = TypedDict("SnapGetParams", {}, total=False)
 
     SnapSetParams = TypedDict("SnapSetParams", {
-        'angle_step_deg': float,
-        'distance_step': float,
-        'grey': bool,
-        'other_layers': bool,
-        'relative_angles': bool,
-        'set': dict[str, bool],
+        'angle_step_deg': float | None,
+        'distance_step': float | None,
+        'grey': bool | None,
+        'other_layers': bool | None,
+        'relative_angles': bool | None,
+        'set': dict[str, bool] | None,
     }, total=False)
 
     SnapQueryParams = TypedDict("SnapQueryParams", {
-        'anchor': list[float],
-        'exclude': list[str],
-        'grid_step': float,
+        'anchor': list[float] | None,
+        'exclude': list[str] | None,
+        'grid_step': float | None,
         'point': Required[list[float]],
-        'prior_direction': float,
-        'set': dict[str, bool],
-        'tolerance': float,
+        'prior_direction': float | None,
+        'set': dict[str, bool] | None,
+        'tolerance': float | None,
     }, total=False)
 
     SnapSmartParams = TypedDict("SnapSmartParams", {
-        'a': list[float],
+        'a': list[float] | None,
         'action': Required[Literal['acquire_point', 'acquire_edge', 'acquire_at', 'clear']],
-        'b': list[float],
-        'edges': bool,
-        'point': list[float],
-        'tolerance': float,
+        'b': list[float] | None,
+        'edges': bool | None,
+        'point': list[float] | None,
+        'tolerance': float | None,
     }, total=False)
 
     VisibilityGetParams = TypedDict("VisibilityGetParams", {}, total=False)
 
     VisibilitySetParams = TypedDict("VisibilitySetParams", {
-        'classes': list[str],
-        'layers': list[str],
+        'classes': list[str] | None,
+        'layers': list[str] | None,
         'mode': Required[Literal['visible', 'grey', 'invisible']],
     }, total=False)
 
     SheetListParams = TypedDict("SheetListParams", {}, total=False)
 
     SheetCreateParams = TypedDict("SheetCreateParams", {
-        'height_mm': float,
+        'height_mm': float | None,
         'name': Required[str],
-        'number': str,
-        'orientation': Literal['landscape', 'portrait'],
-        'paper': str | dict[str, Any],
-        'title': str,
-        'width_mm': float,
+        'number': str | None,
+        'orientation': Literal['landscape', 'portrait'] | None,
+        'paper': str | dict[str, Any] | None,
+        'title': str | None,
+        'width_mm': float | None,
     }, total=False)
 
     SheetSetParams = TypedDict("SheetSetParams", {
-        'height_mm': float,
+        'height_mm': float | None,
         'layer': Required[str],
-        'number': str,
-        'orientation': Literal['landscape', 'portrait'],
-        'paper': str | dict[str, Any],
-        'title': str,
-        'width_mm': float,
+        'number': str | None,
+        'orientation': Literal['landscape', 'portrait'] | None,
+        'paper': str | dict[str, Any] | None,
+        'title': str | None,
+        'width_mm': float | None,
     }, total=False)
 
     SheetRenderParams = TypedDict("SheetRenderParams", {
-        'compare': dict[str, Any],
-        'dpi': float,
-        'format': Literal['svg', 'png'],
+        'compare': dict[str, Any] | None,
+        'dpi': float | None,
+        'format': Literal['svg', 'png'] | None,
         'sheet': Required[str],
     }, total=False)
 
     ProjectGetParams = TypedDict("ProjectGetParams", {}, total=False)
 
     ProjectSetParams = TypedDict("ProjectSetParams", {
-        'address': str,
-        'client': str,
-        'date': str,
-        'drawn_by': str,
-        'name': str,
-        'revision': str,
+        'address': str | None,
+        'client': str | None,
+        'date': str | None,
+        'drawn_by': str | None,
+        'name': str | None,
+        'revision': str | None,
     }, total=False)
 
     ProjectNewGuidParams = TypedDict("ProjectNewGuidParams", {}, total=False)
 
     ViewportCreateParams = TypedDict("ViewportCreateParams", {
-        'at': list[float],
-        'center': list[float],
-        'crop': dict[str, Any],
-        'dpi': float,
-        'layers': list[str],
-        'max': list[float],
-        'min': list[float],
-        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'],
-        'name': str,
-        'render_style': str,
-        'scale': float | Literal['fit'],
+        'at': list[float] | None,
+        'center': list[float] | None,
+        'crop': dict[str, Any] | None,
+        'dpi': float | None,
+        'layers': list[str] | None,
+        'max': list[float] | None,
+        'min': list[float] | None,
+        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'] | None,
+        'name': str | None,
+        'render_style': str | None,
+        'scale': float | Literal['fit'] | None,
         'sheet': Required[str],
-        'show_frame': bool,
-        'size': list[float],
-        'view': str,
+        'show_frame': bool | None,
+        'size': list[float] | None,
+        'view': str | None,
     }, total=False)
 
     ViewportGetParams = TypedDict("ViewportGetParams", {
@@ -2594,56 +2489,56 @@ if TYPE_CHECKING:
     }, total=False)
 
     ViewportListParams = TypedDict("ViewportListParams", {
-        'sheet': str,
+        'sheet': str | None,
     }, total=False)
 
     ViewportUpdateParams = TypedDict("ViewportUpdateParams", {
-        'center': list[float],
+        'center': list[float] | None,
         'crop': dict[str, Any] | None,
-        'dpi': float,
-        'fit': bool,
+        'dpi': float | None,
+        'fit': bool | None,
         'id': Required[str],
-        'layers': list[str],
-        'max': list[float],
-        'min': list[float],
-        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'],
-        'name': str,
+        'layers': list[str] | None,
+        'max': list[float] | None,
+        'min': list[float] | None,
+        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'] | None,
+        'name': str | None,
         'render_style': str | None,
-        'scale': float | Literal['fit'],
-        'show_frame': bool,
-        'view': str,
+        'scale': float | Literal['fit'] | None,
+        'show_frame': bool | None,
+        'view': str | None,
     }, total=False)
 
     ViewportSetOverrideParams = TypedDict("ViewportSetOverrideParams", {
-        'classes': dict[str, dict[str, Any] | None],
+        'classes': dict[str, dict[str, Any] | None] | None,
         'id': Required[str],
-        'layers': dict[str, bool | None],
-        'reset': bool,
+        'layers': dict[str, bool | None] | None,
+        'reset': bool | None,
     }, total=False)
 
     ViewportAnnotateParams = TypedDict("ViewportAnnotateParams", {
-        'add': list[dict[str, Any]],
-        'clear': bool,
+        'add': list[dict[str, Any]] | None,
+        'clear': bool | None,
         'id': Required[str],
-        'remove': list[int],
+        'remove': list[int] | None,
     }, total=False)
 
     TitleBlockCreateParams = TypedDict("TitleBlockCreateParams", {
-        'fields': dict[str, str],
-        'grid_columns': int,
-        'grid_rows': int,
-        'layout': dict[str, Any],
-        'margin': float,
+        'fields': dict[str, str] | None,
+        'grid_columns': int | None,
+        'grid_rows': int | None,
+        'layout': dict[str, Any] | None,
+        'margin': float | None,
         'sheet': Required[str],
     }, total=False)
 
     TitleBlockUpdateParams = TypedDict("TitleBlockUpdateParams", {
-        'fields': dict[str, str],
-        'grid_columns': int,
-        'grid_rows': int,
+        'fields': dict[str, str] | None,
+        'grid_columns': int | None,
+        'grid_rows': int | None,
         'id': Required[str],
         'layout': dict[str, Any] | None,
-        'margin': float,
+        'margin': float | None,
     }, total=False)
 
     TitleBlockResolveParams = TypedDict("TitleBlockResolveParams", {
@@ -2654,8 +2549,8 @@ if TYPE_CHECKING:
 
     SavedViewSaveParams = TypedDict("SavedViewSaveParams", {
         'name': Required[str],
-        'pan': list[float],
-        'zoom': float,
+        'pan': list[float] | None,
+        'zoom': float | None,
     }, total=False)
 
     SavedViewRestoreParams = TypedDict("SavedViewRestoreParams", {
@@ -2673,26 +2568,26 @@ if TYPE_CHECKING:
     }, total=False)
 
     TextStyleCreateParams = TypedDict("TextStyleCreateParams", {
-        'bold': bool,
+        'bold': bool | None,
         'color': list[int] | None,
-        'font': str,
-        'italic': bool,
-        'justify': Literal['left', 'center', 'right'],
-        'line_spacing': float,
+        'font': str | None,
+        'italic': bool | None,
+        'justify': Literal['left', 'center', 'right'] | None,
+        'line_spacing': float | None,
         'name': Required[str],
-        'size_mm': float,
+        'size_mm': float | None,
     }, total=False)
 
     TextStyleUpdateParams = TypedDict("TextStyleUpdateParams", {
-        'bold': bool,
+        'bold': bool | None,
         'color': list[int] | None,
-        'font': str,
+        'font': str | None,
         'id': Required[str],
-        'italic': bool,
-        'justify': Literal['left', 'center', 'right'],
-        'line_spacing': float,
-        'name': str,
-        'size_mm': float,
+        'italic': bool | None,
+        'justify': Literal['left', 'center', 'right'] | None,
+        'line_spacing': float | None,
+        'name': str | None,
+        'size_mm': float | None,
     }, total=False)
 
     TextStyleDeleteParams = TypedDict("TextStyleDeleteParams", {
@@ -2707,46 +2602,46 @@ if TYPE_CHECKING:
     }, total=False)
 
     DimensionStyleCreateParams = TypedDict("DimensionStyleCreateParams", {
-        'angle_precision': int,
-        'baseline_spacing_mm': float,
-        'color': list[int],
-        'ext_gap_mm': float,
-        'ext_overshoot_mm': float,
-        'font': str,
+        'angle_precision': int | None,
+        'baseline_spacing_mm': float | None,
+        'color': list[int] | None,
+        'ext_gap_mm': float | None,
+        'ext_overshoot_mm': float | None,
+        'font': str | None,
         'name': Required[str],
-        'precision': int,
-        'prefix': str,
-        'round_to': float,
-        'show_unit': bool,
-        'suffix': str,
-        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'],
-        'terminator_size_mm': float,
-        'text_gap_mm': float,
-        'text_size_mm': float,
-        'tolerance': dict[str, Any],
-        'unit': Literal['mm', 'cm', 'm', 'in', 'ft', 'ft_in'],
+        'precision': int | None,
+        'prefix': str | None,
+        'round_to': float | None,
+        'show_unit': bool | None,
+        'suffix': str | None,
+        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'] | None,
+        'terminator_size_mm': float | None,
+        'text_gap_mm': float | None,
+        'text_size_mm': float | None,
+        'tolerance': dict[str, Any] | None,
+        'unit': Literal['mm', 'cm', 'm', 'in', 'ft', 'ft_in'] | None,
     }, total=False)
 
     DimensionStyleUpdateParams = TypedDict("DimensionStyleUpdateParams", {
-        'angle_precision': int,
-        'baseline_spacing_mm': float,
-        'color': list[int],
-        'ext_gap_mm': float,
-        'ext_overshoot_mm': float,
-        'font': str,
+        'angle_precision': int | None,
+        'baseline_spacing_mm': float | None,
+        'color': list[int] | None,
+        'ext_gap_mm': float | None,
+        'ext_overshoot_mm': float | None,
+        'font': str | None,
         'id': Required[str],
-        'name': str,
-        'precision': int,
-        'prefix': str,
-        'round_to': float,
-        'show_unit': bool,
-        'suffix': str,
-        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'],
-        'terminator_size_mm': float,
-        'text_gap_mm': float,
-        'text_size_mm': float,
-        'tolerance': dict[str, Any],
-        'unit': Literal['mm', 'cm', 'm', 'in', 'ft', 'ft_in'],
+        'name': str | None,
+        'precision': int | None,
+        'prefix': str | None,
+        'round_to': float | None,
+        'show_unit': bool | None,
+        'suffix': str | None,
+        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'] | None,
+        'terminator_size_mm': float | None,
+        'text_gap_mm': float | None,
+        'text_size_mm': float | None,
+        'tolerance': dict[str, Any] | None,
+        'unit': Literal['mm', 'cm', 'm', 'in', 'ft', 'ft_in'] | None,
     }, total=False)
 
     DimensionStyleDeleteParams = TypedDict("DimensionStyleDeleteParams", {
@@ -2762,29 +2657,29 @@ if TYPE_CHECKING:
 
     TagStyleCreateParams = TypedDict("TagStyleCreateParams", {
         'color': list[int] | None,
-        'font': str,
-        'frame': Literal['none', 'box', 'underline', 'circle'],
-        'leader': bool,
-        'lines': list[str],
+        'font': str | None,
+        'frame': Literal['none', 'box', 'underline', 'circle'] | None,
+        'leader': bool | None,
+        'lines': list[str] | None,
         'name': Required[str],
-        'pad_mm': float,
-        'preset': Literal['area'],
-        'size_mm': float,
-        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'],
+        'pad_mm': float | None,
+        'preset': Literal['area'] | None,
+        'size_mm': float | None,
+        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'] | None,
     }, total=False)
 
     TagStyleUpdateParams = TypedDict("TagStyleUpdateParams", {
         'color': list[int] | None,
-        'font': str,
-        'frame': Literal['none', 'box', 'underline', 'circle'],
+        'font': str | None,
+        'frame': Literal['none', 'box', 'underline', 'circle'] | None,
         'id': Required[str],
-        'leader': bool,
-        'lines': list[str],
-        'name': str,
-        'pad_mm': float,
-        'preset': Literal['area'],
-        'size_mm': float,
-        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'],
+        'leader': bool | None,
+        'lines': list[str] | None,
+        'name': str | None,
+        'pad_mm': float | None,
+        'preset': Literal['area'] | None,
+        'size_mm': float | None,
+        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'] | None,
     }, total=False)
 
     TagStyleDeleteParams = TypedDict("TagStyleDeleteParams", {
@@ -2805,8 +2700,8 @@ if TYPE_CHECKING:
 
     NotesDbUpdateParams = TypedDict("NotesDbUpdateParams", {
         'id': Required[str],
-        'name': str,
-        'notes': list[dict[str, Any]] | dict[str, str],
+        'name': str | None,
+        'notes': list[dict[str, Any]] | dict[str, str] | None,
     }, total=False)
 
     NotesDbDeleteParams = TypedDict("NotesDbDeleteParams", {
@@ -2815,158 +2710,159 @@ if TYPE_CHECKING:
     }, total=False)
 
     DimensionAddParams = TypedDict("DimensionAddParams", {
-        'anchors': list[dict[str, Any]],
-        'angle': float,
-        'class': str,
-        'detached': bool,
-        'layer': str,
+        'anchors': list[dict[str, Any] | None] | None,
+        'angle': float | None,
+        'class': str | None,
+        'detached': bool | None,
+        'layer': str | None,
         'mode': Required[str],
-        'object': str,
-        'offset': float,
-        'points': list[list[float]],
-        'style': str,
-        'text': str,
-        'viewport': str,
+        'object': str | None,
+        'offset': float | None,
+        'points': list[list[float]] | None,
+        'style': str | None,
+        'text': str | None,
+        'viewport': str | None,
     }, total=False)
 
     CalloutAddParams = TypedDict("CalloutAddParams", {
         'at': Required[list[float]],
-        'center': bool,
-        'class': str,
-        'detached': bool,
-        'edge': int,
-        'layer': str,
-        'leaders': list[dict[str, Any]],
-        'note': str,
-        'notes_db': str,
-        'object': str,
-        'shoulder_mm': float,
-        'style': str,
-        't': float,
-        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'],
-        'text': str,
-        'tip': list[float],
-        'vertex': int,
-        'viewport': str,
+        'center': bool | None,
+        'class': str | None,
+        'detached': bool | None,
+        'edge': int | None,
+        'layer': str | None,
+        'leaders': list[dict[str, Any]] | None,
+        'note': str | None,
+        'notes_db': str | None,
+        'object': str | None,
+        'shoulder_mm': float | None,
+        'style': str | None,
+        't': float | None,
+        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'] | None,
+        'text': str | None,
+        'tip': list[float] | None,
+        'vertex': int | None,
+        'viewport': str | None,
     }, total=False)
 
     DataTagAddParams = TypedDict("DataTagAddParams", {
-        'layer': str,
+        'layer': str | None,
         'object': Required[str],
-        'offset': list[float],
+        'offset': list[float] | None,
         'style': Required[str],
-        'viewport': str,
+        'viewport': str | None,
     }, total=False)
 
     DataTagTagAllParams = TypedDict("DataTagTagAllParams", {
-        'criteria': str,
-        'layer': str,
-        'offset': list[float],
+        'criteria': str | None,
+        'layer': str | None,
+        'offset': list[float] | None,
         'style': Required[str],
     }, total=False)
 
     LegendAddParams = TypedDict("LegendAddParams", {
         'at': Required[list[float]],
-        'class': str,
-        'criteria': str,
-        'group_by': str,
-        'layer': str,
-        'show_count': bool,
-        'style': str,
-        'swatch_mm': float,
-        'title': str,
-        'viewport': str,
+        'class': str | None,
+        'criteria': str | None,
+        'group_by': str | None,
+        'layer': str | None,
+        'show_count': bool | None,
+        'style': str | None,
+        'swatch_mm': float | None,
+        'title': str | None,
+        'viewport': str | None,
     }, total=False)
 
     NorthArrowAddParams = TypedDict("NorthArrowAddParams", {
-        'arrow_style': Literal['arrow', 'compass', 'simple'],
+        'arrow_style': Literal['arrow', 'compass', 'simple'] | None,
         'at': Required[list[float]],
-        'class': str,
-        'layer': str,
-        'rotation_deg': float,
-        'size_mm': float,
-        'use_georef': bool,
-        'viewport': str,
+        'class': str | None,
+        'layer': str | None,
+        'rotation_deg': float | None,
+        'size_mm': float | None,
+        'use_georef': bool | None,
+        'viewport': str | None,
     }, total=False)
 
     ScaleBarAddParams = TypedDict("ScaleBarAddParams", {
         'at': Required[list[float]],
-        'class': str,
-        'height_mm': float,
-        'layer': str,
-        'scale': float,
-        'segment': float,
-        'segments': int,
-        'style': str,
-        'unit': Literal['m', 'mm', 'ft'],
-        'viewport': str,
+        'class': str | None,
+        'height_mm': float | None,
+        'layer': str | None,
+        'scale': float | None,
+        'segment': float | None,
+        'segments': int | None,
+        'style': str | None,
+        'unit': Literal['m', 'mm', 'ft'] | None,
+        'viewport': str | None,
     }, total=False)
 
     RevisionCloudAddParams = TypedDict("RevisionCloudAddParams", {
-        'author': str,
-        'bump_mm': float,
-        'class': str,
-        'date': str,
-        'description': str,
-        'layer': str,
-        'mark': bool,
+        'author': str | None,
+        'bump_mm': float | None,
+        'class': str | None,
+        'date': str | None,
+        'description': str | None,
+        'layer': str | None,
+        'mark': bool | None,
         'points': Required[list[list[float]]],
         'revision': Required[str],
-        'viewport': str,
+        'viewport': str | None,
     }, total=False)
 
     AnnotationTextParams = TypedDict("AnnotationTextParams", {
         'at': Required[list[float]],
-        'class': str,
-        'layer': str,
-        'style': str,
+        'class': str | None,
+        'layer': str | None,
+        'style': str | None,
         'text': Required[str],
-        'viewport': str,
+        'viewport': str | None,
     }, total=False)
 
     AnnotationUpdateParams = TypedDict("AnnotationUpdateParams", {
-        'anchors': list[dict[str, Any]],
-        'angle': float,
-        'arrow_style': Literal['arrow', 'compass', 'simple'],
-        'at': list[float],
-        'author': str,
-        'bump_mm': float,
-        'criteria': str,
-        'date': str,
-        'description': str,
-        'detached': bool,
-        'group_by': str,
-        'height_mm': float,
+        'anchor': dict[str, Any] | None,
+        'anchors': list[dict[str, Any]] | None,
+        'angle': float | None,
+        'arrow_style': Literal['arrow', 'compass', 'simple'] | None,
+        'at': list[float] | None,
+        'author': str | None,
+        'bump_mm': float | None,
+        'criteria': str | None,
+        'date': str | None,
+        'description': str | None,
+        'detached': bool | None,
+        'group_by': str | None,
+        'height_mm': float | None,
         'id': Required[str],
-        'leaders': list[dict[str, Any]],
-        'mark': bool,
-        'mode': str,
-        'note': str,
-        'notes_db': str,
-        'object': str,
-        'offset': float | list[float],
-        'points': list[list[float]],
-        'revision': str,
-        'rotation_deg': float,
+        'leaders': list[dict[str, Any]] | None,
+        'mark': bool | None,
+        'mode': str | None,
+        'note': str | None,
+        'notes_db': str | None,
+        'object': str | None,
+        'offset': float | list[float] | None,
+        'points': list[list[float]] | None,
+        'revision': str | None,
+        'rotation_deg': float | None,
         'scale': float | None,
-        'segment': float,
-        'segments': int,
-        'shoulder_mm': float,
-        'show_count': bool,
-        'size_mm': float,
-        'style': str,
-        'swatch_mm': float,
-        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'],
-        'text': str,
-        'tip': list[float],
-        'title': str,
-        'unit': Literal['m', 'mm', 'ft'],
-        'use_georef': bool,
+        'segment': float | None,
+        'segments': int | None,
+        'shoulder_mm': float | None,
+        'show_count': bool | None,
+        'size_mm': float | None,
+        'style': str | None,
+        'swatch_mm': float | None,
+        'terminator': Literal['arrow', 'open_arrow', 'tick', 'dot', 'none'] | None,
+        'text': str | None,
+        'tip': list[float] | None,
+        'title': str | None,
+        'unit': Literal['m', 'mm', 'ft'] | None,
+        'use_georef': bool | None,
     }, total=False)
 
     AnnotationListParams = TypedDict("AnnotationListParams", {
-        'layer': str,
-        'type': Literal['dimension', 'text', 'callout', 'data_tag', 'legend', 'north_arrow', 'scale_bar', 'revision_cloud'],
+        'layer': str | None,
+        'type': Literal['dimension', 'text', 'callout', 'data_tag', 'legend', 'north_arrow', 'scale_bar', 'revision_cloud'] | None,
     }, total=False)
 
     AnnotationEvaluateParams = TypedDict("AnnotationEvaluateParams", {
@@ -2981,36 +2877,36 @@ if TYPE_CHECKING:
     RevisionListParams = TypedDict("RevisionListParams", {}, total=False)
 
     VersionCreateParams = TypedDict("VersionCreateParams", {
-        'author': str,
+        'author': str | None,
         'name': Required[str],
-        'note': str,
-        'now_ms': int,
+        'note': str | None,
+        'now_ms': int | None,
     }, total=False)
 
     VersionListParams = TypedDict("VersionListParams", {
-        'current': bool,
+        'current': bool | None,
     }, total=False)
 
     VersionGetParams = TypedDict("VersionGetParams", {
-        'document': bool,
+        'document': bool | None,
         'id': Required[int | str],
     }, total=False)
 
     VersionRestoreParams = TypedDict("VersionRestoreParams", {
         'id': Required[int | str],
-        'now_ms': int,
+        'now_ms': int | None,
     }, total=False)
 
     VersionDeleteParams = TypedDict("VersionDeleteParams", {
-        'id': int | str,
-        'ids': list[int | str],
+        'id': int | str | None,
+        'ids': list[int | str] | None,
     }, total=False)
 
     VersionDiffParams = TypedDict("VersionDiffParams", {
-        'from': Required[str],
-        'kinds': list[Literal['objects', 'layers', 'classes', 'resources', 'document']],
-        'limit': int,
-        'to': Required[str],
+        'from': Required[int | str],
+        'kinds': list[Literal['objects', 'layers', 'classes', 'resources', 'document']] | None,
+        'limit': int | None,
+        'to': Required[int | str],
     }, total=False)
 
     VersionRepairParams = TypedDict("VersionRepairParams", {
@@ -3018,190 +2914,190 @@ if TYPE_CHECKING:
     }, total=False)
 
     IssueListParams = TypedDict("IssueListParams", {
-        'assignee': str,
-        'label': str,
-        'limit': int,
-        'object': str,
-        'offset': int,
-        'open_only': bool,
-        'origin': Literal['user', 'agent', 'script', 'remote'],
-        'sort': Literal['created', 'oldest', 'modified', 'status'],
-        'status': str | list[str],
-        'text': str,
+        'assignee': str | None,
+        'label': str | None,
+        'limit': int | None,
+        'object': str | None,
+        'offset': int | None,
+        'open_only': bool | None,
+        'origin': Literal['user', 'agent', 'script', 'remote'] | None,
+        'sort': Literal['created', 'oldest', 'modified', 'status'] | None,
+        'status': str | list[str] | None,
+        'text': str | None,
     }, total=False)
 
     IssueGetParams = TypedDict("IssueGetParams", {
         'id': Required[str],
-        'snapshots': bool,
+        'snapshots': bool | None,
     }, total=False)
 
     IssueCreateParams = TypedDict("IssueCreateParams", {
-        'assignee': str,
-        'author': str,
-        'capture': bool,
-        'description': str,
-        'due': str,
-        'labels': list[str],
-        'now_ms': int,
-        'objects': list[str],
-        'point': list[float],
-        'priority': str,
-        'snapshot': bool | dict[str, Any],
-        'status': str,
+        'assignee': str | None,
+        'author': str | None,
+        'capture': bool | None,
+        'description': str | None,
+        'due': str | None,
+        'labels': list[str] | None,
+        'now_ms': int | None,
+        'objects': list[str] | None,
+        'point': list[float] | None,
+        'priority': str | None,
+        'snapshot': bool | dict[str, Any] | None,
+        'status': str | None,
         'title': Required[str],
-        'type': str,
-        'viewpoint': dict[str, Any],
+        'type': str | None,
+        'viewpoint': dict[str, Any] | None,
     }, total=False)
 
     IssueUpdateParams = TypedDict("IssueUpdateParams", {
-        'add_labels': list[str],
-        'add_objects': list[str],
+        'add_labels': list[str] | None,
+        'add_objects': list[str] | None,
         'assignee': str | None,
-        'author': str,
-        'confirm': bool,
-        'description': str,
+        'author': str | None,
+        'confirm': bool | None,
+        'description': str | None,
         'due': str | None,
         'id': Required[str],
-        'labels': list[str],
-        'now_ms': int,
-        'objects': list[str],
+        'labels': list[str] | None,
+        'now_ms': int | None,
+        'objects': list[str] | None,
         'point': list[float] | None,
-        'priority': str,
-        'remove_labels': list[str],
-        'remove_objects': list[str],
-        'remove_viewpoints': list[str],
-        'status': str,
-        'title': str,
-        'type': str,
+        'priority': str | None,
+        'remove_labels': list[str] | None,
+        'remove_objects': list[str] | None,
+        'remove_viewpoints': list[str] | None,
+        'status': str | None,
+        'title': str | None,
+        'type': str | None,
     }, total=False)
 
     IssueAddViewpointParams = TypedDict("IssueAddViewpointParams", {
-        'capture_visibility': bool,
+        'capture_visibility': bool | None,
         'id': Required[str],
-        'name': str,
-        'now_ms': int,
-        'selection': list[str],
-        'snapshot': bool | dict[str, Any],
-        'snapshot_base64': str,
-        'view': dict[str, Any],
+        'name': str | None,
+        'now_ms': int | None,
+        'selection': list[str] | None,
+        'snapshot': bool | dict[str, Any] | None,
+        'snapshot_base64': str | None,
+        'view': dict[str, Any] | None,
     }, total=False)
 
     IssueCommentParams = TypedDict("IssueCommentParams", {
-        'author': str,
+        'author': str | None,
         'id': Required[str],
-        'now_ms': int,
+        'now_ms': int | None,
         'text': Required[str],
-        'viewpoint': str,
+        'viewpoint': str | None,
     }, total=False)
 
     IssueResolveParams = TypedDict("IssueResolveParams", {
-        'author': str,
-        'comment': str,
+        'author': str | None,
+        'comment': str | None,
         'id': Required[str],
-        'now_ms': int,
-        'status': Literal['resolved', 'closed'],
+        'now_ms': int | None,
+        'status': Literal['resolved', 'closed'] | None,
     }, total=False)
 
     IssueDeleteParams = TypedDict("IssueDeleteParams", {
-        'author': str,
-        'confirm': bool,
-        'id': str,
-        'ids': list[str],
-        'purge_snapshots': bool,
+        'author': str | None,
+        'confirm': bool | None,
+        'id': str | None,
+        'ids': list[str] | None,
+        'purge_snapshots': bool | None,
     }, total=False)
 
     IssueImportBcfParams = TypedDict("IssueImportBcfParams", {
-        'author': str,
-        'base64': str,
-        'dry_run': bool,
-        'now_ms': int,
-        'on_conflict': Literal['ask', 'skip', 'replace', 'keep_both'],
-        'path': str,
-        'skip_items': bool,
+        'author': str | None,
+        'base64': str | None,
+        'dry_run': bool | None,
+        'now_ms': int | None,
+        'on_conflict': Literal['ask', 'skip', 'replace', 'keep_both'] | None,
+        'path': str | None,
+        'skip_items': bool | None,
     }, total=False)
 
     IssueExportBcfParams = TypedDict("IssueExportBcfParams", {
-        'assignee': str,
-        'ids': list[str],
-        'label': str,
-        'object': str,
-        'open_only': bool,
-        'overwrite': bool,
-        'path': str,
-        'status': str | list[str],
-        'version': Literal['3.0', '2.1'],
+        'assignee': str | None,
+        'ids': list[str] | None,
+        'label': str | None,
+        'object': str | None,
+        'open_only': bool | None,
+        'overwrite': bool | None,
+        'path': str | None,
+        'status': str | list[str] | None,
+        'version': Literal['3.0', '2.1'] | None,
     }, total=False)
 
     DxfCompareParams = TypedDict("DxfCompareParams", {
         'base': Required[str],
         'new': Required[str],
-        'options': dict[str, Any],
-        'render': dict[str, Any],
+        'options': dict[str, Any] | None,
+        'render': dict[str, Any] | None,
     }, total=False)
 
     CollabStatusParams = TypedDict("CollabStatusParams", {}, total=False)
 
     CollabConnectParams = TypedDict("CollabConnectParams", {
-        'discard': bool,
-        'doc': str,
-        'name': str,
-        'now_ms': int,
-        'replace': bool,
-        'store': str,
-        'token': str,
-        'url': str,
-        'user': str,
+        'discard': bool | None,
+        'doc': str | None,
+        'name': str | None,
+        'now_ms': int | None,
+        'replace': bool | None,
+        'store': str | None,
+        'token': str | None,
+        'url': str | None,
+        'user': str | None,
     }, total=False)
 
     CollabDisconnectParams = TypedDict("CollabDisconnectParams", {}, total=False)
 
     CollabSyncParams = TypedDict("CollabSyncParams", {
-        'now_ms': int,
+        'now_ms': int | None,
     }, total=False)
 
     CollabPresenceParams = TypedDict("CollabPresenceParams", {
-        'clear': bool,
-        'cursor': list[float],
-        'now_ms': int,
-        'selection': list[str],
-        'viewport': dict[str, Any],
+        'clear': bool | None,
+        'cursor': list[float] | None,
+        'now_ms': int | None,
+        'selection': list[str] | None,
+        'viewport': dict[str, Any] | None,
     }, total=False)
 
     CollabUndoParams = TypedDict("CollabUndoParams", {
-        'now_ms': int,
+        'now_ms': int | None,
     }, total=False)
 
     CollabRedoParams = TypedDict("CollabRedoParams", {
-        'now_ms': int,
+        'now_ms': int | None,
     }, total=False)
 
     EventsSubscribeParams = TypedDict("EventsSubscribeParams", {
-        'kinds': list[Literal['objects', 'layers', 'classes', 'resources', 'document', 'issues']],
+        'kinds': list[Literal['objects', 'layers', 'classes', 'resources', 'document', 'issues']] | None,
     }, total=False)
 
     EventsUnsubscribeParams = TypedDict("EventsUnsubscribeParams", {}, total=False)
 
     EventsPollParams = TypedDict("EventsPollParams", {
-        'kinds': list[Literal['objects', 'layers', 'classes', 'resources', 'document', 'issues']],
+        'kinds': list[Literal['objects', 'layers', 'classes', 'resources', 'document', 'issues']] | None,
         'since_revision': Required[int],
     }, total=False)
 
     FeedbackSubmitParams = TypedDict("FeedbackSubmitParams", {
-        'attach': bool | dict[str, Any],
-        'body': str,
-        'client': dict[str, Any],
-        'error': str,
+        'attach': bool | dict[str, Any] | None,
+        'body': str | None,
+        'client': dict[str, Any] | None,
+        'error': str | None,
         'kind': Required[Literal['bug', 'feature_request', 'question']],
-        'method': str,
-        'severity': Literal['low', 'medium', 'high'],
+        'method': str | None,
+        'severity': Literal['low', 'medium', 'high'] | None,
         'title': Required[str],
-        'tried': str,
-        'wanted': str,
+        'tried': str | None,
+        'wanted': str | None,
     }, total=False)
 
     FeedbackListParams = TypedDict("FeedbackListParams", {
-        'limit': int,
-        'status': str,
+        'limit': int | None,
+        'status': str | None,
     }, total=False)
 
     FeedbackGetParams = TypedDict("FeedbackGetParams", {
@@ -3215,8 +3111,8 @@ if TYPE_CHECKING:
     ScriptEvalParams = TypedDict("ScriptEvalParams", {
         'args': Any,
         'code': Required[str],
-        'mode': Literal['edit', 'read'],
-        'seed': int,
+        'mode': Literal['edit', 'read'] | None,
+        'seed': int | None,
     }, total=False)
 
     ScriptJsInfoParams = TypedDict("ScriptJsInfoParams", {}, total=False)
@@ -3320,13 +3216,13 @@ class Api:
         return self._call("render.png", params or None)
 
     def view_list(self, **params: "Unpack[ViewListParams]") -> Any:
-        """Standard 3D views, projections and render modes, and the current view.
+        """Standard 3D views, projections and render modes, the saved views (saved_views: [{name}]; view.set takes their names) and the current view.
 
         JSON-RPC method ``view.list``."""
         return self._call("view.list", params or None)
 
     def view_set(self, **params: "Unpack[ViewSetParams]") -> Any:
-        """Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list; top is the 2D plan in the app. Returns the current view.
+        """Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list or the name of a saved view (view.list saved_views); top is the 2D plan in the app. A saved view sets the camera only (the plan middle and zoom in the app, or the 3D view, projection and mode): the layers and classes stay as they are, because changing them is an edit of the document (use saved_view.restore for that), and the answer has layers_not_applied: true when the saved view holds visibility, or an active layer or class, that differs from now (classes and the active layer and class count too). Returns the current view.
 
         JSON-RPC method ``view.set``."""
         return self._call("view.set", params or None)
@@ -4999,6 +4895,42 @@ class Api:
         JSON-RPC method ``view.screenshot``."""
         return self._call("view.screenshot", params or None)
 
+    def view_get(self, **params: "Unpack[ViewGetParams]") -> Any:
+        """What the person looks at now (only the app answers; the headless server gives an error). No params. Returns {mode (plan | 3d), window {width, height, pixels_per_point} (points), canvas {width, height} (points; the drawing area), plan {center [x, y], zoom (px per mm), mm_per_px, layer_scale (the drawing scale denominator of the active layer), visible_box {min, max} (drawing mm; only when mode is plan)}, camera {view, projection, render_mode, eye, target, up, fov_deg, distance, visible_box {min, max} (the ground the camera sees, drawing mm; only when mode is 3d; null if the camera does not look at the ground)}, selection [id], active_layer {id, name}, active_class {id, name}, visible_layers [{id, name}], visible_classes [{id, name}], animating, highlights [{id, kind, text, color, until}], back (how many views Back can return to), view_locked (the person turned off "Agent may move my view")}. In 3D, camera.visible_box is the ground (at the height of the target) that the four corners of the view reach, or null if a corner looks past the horizon. Read it before you move the view and when you want to know what the person means by "this".
+
+        JSON-RPC method ``view.get``."""
+        return self._call("view.get", params or None)
+
+    def view_zoom(self, **params: "Unpack[ViewZoomParams]") -> Any:
+        """Zoom the view of the person (only the app). params: {ids | box | at (exactly one), scale?, margin?}. ids: objects to frame (in 3D the camera keeps its direction and frames them). box: [x0, y0, x1, y1] in drawing mm. at: [x, y] or [x, y, z]: the new middle of the view. scale: px per mm of the plan (as the zoom of a saved view; from 0.0001 to 100); with it the view keeps this zoom and only moves to the middle of the aim. margin: space around ids or box as a fraction of its size on each side (default 0.1, 0 to 10). The change is animated (about 250 ms; the person can turn animation off in Preferences). It never changes the document or the undo history. The person always wins: while they drag, zoom or type, use a tool, or ran a view command of their own a moment ago, the call fails with a conflict (reason person_navigating) and nothing moves; try again after a moment. If they turned off "Agent may move my view", it fails with reason view_locked: do not try again until they say so. The lock covers every call that moves the view: view.zoom, view.pan, view.camera, view.set and saved_view.restore. The person can step back with Back (changes within 120 ms of each other count as one step). Objects that are hidden (their layer or class is off) are not framed and are listed in hidden_ids; if all are hidden the call fails. In 3D, an at or box without a height uses the height of the ground there (site models, layer elevations). Returns {mode, plan?, camera?, clamped (the zoom limit was reached; the plan only), hidden_ids?}.
+
+        JSON-RPC method ``view.zoom``."""
+        return self._call("view.zoom", params or None)
+
+    def view_pan(self, **params: "Unpack[ViewPanParams]") -> Any:
+        """Move the view of the person (only the app). params: {by | to (exactly one)}. by: [dx, dy] in drawing mm, east and north (3D also dz); to: [x, y] (3D also z): the new middle of the view. Animated, never changes the document, and the person wins over it as for view.zoom. Returns the same as view.zoom.
+
+        JSON-RPC method ``view.pan``."""
+        return self._call("view.pan", params or None)
+
+    def view_camera(self, **params: "Unpack[ViewCameraParams]") -> Any:
+        """Set the 3D camera of the person (only the app) and show the 3D view. params: {eye: [x, y, z], target: [x, y, z], up?, fov?, projection?}. The camera orbits its target and has no roll: up must point upward (z above 0) and fov must be 45 (degrees), which is the field of view of the camera. projection: ortho or perspective. Animated; never changes the document; the person wins as for view.zoom. Returns the same as view.zoom.
+
+        JSON-RPC method ``view.camera``."""
+        return self._call("view.camera", params or None)
+
+    def view_highlight(self, **params: "Unpack[ViewHighlightParams]") -> Any:
+        """Point at objects or a place (only the app). params: {ids | box | at (exactly one), text?, color?, until?}. The person sees an outline glow on the objects or a marker at the place, with a short text (at most 80 characters, one line; a longer text is refused, not cut), in the plan and in 3D. color: agent (default), red, blue, green or orange; each color has its own mark and line style, so color is not the only sign. until: next_change (the pointer goes when the document changes next), dismissed (default; the person dismisses it) or a time in ms (1 to 3600000). At most 32 pointers at a time and 500 objects in one. Pointers are not saved and not part of the document or the undo history. The pointer also shows the agent as a collaborator: the agent cursor at the place, and Agent in the People palette. The person can list the pointers, zoom to one and dismiss them. Returns {id, count, hidden_ids?, note?}: objects that are hidden get no outline and are listed in hidden_ids. In 3D a box or a place without a height is drawn at the height of the ground. The number the person sees on the pointer is its id.
+
+        JSON-RPC method ``view.highlight``."""
+        return self._call("view.highlight", params or None)
+
+    def view_highlight_clear(self, **params: "Unpack[ViewHighlightClearParams]") -> Any:
+        """Remove pointers (only the app). params: {id?}: one pointer, or all when id is left out. Returns {cleared}.
+
+        JSON-RPC method ``view.highlight_clear``."""
+        return self._call("view.highlight_clear", params or None)
+
     def edit_rotate(self, **params: "Unpack[EditRotateParams]") -> Any:
         """Turn objects (a group as one unit). params: {ids? (default: the selection), center: [x, y], angle (radians, counterclockwise), copy? (turn copies, keep the originals)}. Returns {created: [ids of the copies]}. Hardscapes, landscape areas and site models cannot be turned.
 
@@ -5956,6 +5888,12 @@ METHOD_NAMES: tuple[str, ...] = (
     "visualization.get",
     "visualization.clear",
     "view.screenshot",
+    "view.get",
+    "view.zoom",
+    "view.pan",
+    "view.camera",
+    "view.highlight",
+    "view.highlight_clear",
     "edit.rotate",
     "edit.scale",
     "edit.mirror",

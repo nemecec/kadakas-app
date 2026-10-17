@@ -518,7 +518,7 @@ fn massing_methods() {
             "massing.add",
             json!({"footprint": [[0, 0], [1000, 0], [0, 1000]], "roof": "dome"})
         )
-        .contains("flat, gable or hip")
+        .contains("flat, gable, hip")
     );
     assert!(
         err(
@@ -537,7 +537,7 @@ fn massing_methods() {
         .contains("pitch")
     );
     assert!(err(&mut s, "massing.set", json!({"id": id, "floors": 0})).contains("floors"));
-    assert!(err(&mut s, "massing.set", json!({})).contains("id or ids"));
+    assert!(err(&mut s, "massing.set", json!({})).contains("id, ids"));
     assert!(
         err(
             &mut s,

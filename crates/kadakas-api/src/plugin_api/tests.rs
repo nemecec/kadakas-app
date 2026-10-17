@@ -237,7 +237,7 @@ fn parameters_regenerate_the_shapes_and_undo_restores_them() {
             "plugin.place",
             json!({"definition": true, "at": [0, 0]})
         )
-        .contains("ID or a name")
+        .contains("definition")
     );
     assert!(fail(&mut s, "plugin.place", json!({"at": [0, 0]})).contains("definition"));
 }
@@ -386,7 +386,7 @@ fn definitions_can_be_updated_listed_and_deleted() {
             "plugin.define",
             json!({"name": "B", "shape_type": "blob", "script": ""})
         )
-        .contains("variant")
+        .contains("shape_type")
     );
     let g1 = ok(
         &mut s,
@@ -454,7 +454,7 @@ fn definitions_can_be_updated_listed_and_deleted() {
         .contains("does not exist")
     );
     assert!(fail(&mut s, "plugin.reset", json!({"ids": ["x"]})).contains("object IDs"));
-    assert!(fail(&mut s, "plugin.reset", json!({})).contains("id must"));
+    assert!(fail(&mut s, "plugin.reset", json!({})).contains("id"));
     // Delete the objects, then the definition.
     ok(
         &mut s,
@@ -469,7 +469,7 @@ fn definitions_can_be_updated_listed_and_deleted() {
             .is_empty()
     );
     assert!(fail(&mut s, "plugin.delete", json!({"id": def})).contains("no plug-in"));
-    assert!(fail(&mut s, "plugin.get", json!({})).contains("give id or name"));
+    assert!(fail(&mut s, "plugin.get", json!({})).contains("id, name"));
     assert!(fail(&mut s, "plugin.list_nothing", json!({})).contains("unknown method"));
 }
 
@@ -640,9 +640,9 @@ fn script_runs_need_a_live_session_and_report_their_output() {
     );
     s.scripting.endpoint = Some(("127.0.0.1:9".into(), "tok".into()));
     assert_eq!(ok(&mut s, "script.info", json!({}))["live_session"], true);
-    assert!(fail(&mut s, "script.run", json!({})).contains("path or source"));
+    assert!(fail(&mut s, "script.run", json!({})).contains("path, source"));
     assert!(fail(&mut s, "script.run", json!({"source": "x", "args": 5})).contains("args"));
-    assert!(fail(&mut s, "script.run", json!({"source": "x", "args": [1]})).contains("text"));
+    assert!(fail(&mut s, "script.run", json!({"source": "x", "args": [1]})).contains("string"));
     let run = ok(
         &mut s,
         "script.run",
@@ -677,7 +677,7 @@ fn script_runs_need_a_live_session_and_report_their_output() {
         false
     );
     assert!(fail(&mut s, "script.status", json!({"run": 99})).contains("no script run"));
-    assert!(fail(&mut s, "script.status", json!({})).contains("run number"));
+    assert!(fail(&mut s, "script.status", json!({})).contains("missing 'run'"));
     // A script file must be a .py file inside the allowed folders.
     s.paths = crate::PathPolicy::restricted(vec![std::env::temp_dir()]);
     assert!(fail(&mut s, "script.run", json!({"path": "/etc/hosts"})).contains(".py"));
@@ -757,8 +757,9 @@ fn describe_lists_the_scripting_methods() {
 // ---------------------------------------------------------------------------------------------
 // Trust: a script from a document never runs until the user trusted its exact text.
 
-/// A program that records every start. If it is the interpreter and the marker stays missing,
-/// no Python was started.
+/// A script that records every start. If it is the interpreter and the marker stays missing,
+/// no Python was started. The shell runs it, so the file is never executed itself: a file that
+/// was just written can fail to start ("text file busy") while another thread forks.
 struct Spy {
     dir: std::path::PathBuf,
 }
@@ -776,18 +777,13 @@ impl Spy {
             ),
         )
         .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
         Spy { dir }
     }
 
     fn interpreter(&self) -> Interpreter {
         Interpreter {
-            program: self.dir.join("spy.sh"),
-            prefix: vec![],
+            program: "/bin/sh".into(),
+            prefix: vec![self.dir.join("spy.sh").into_os_string()],
         }
     }
 
@@ -811,6 +807,9 @@ fn downloaded(spy: &Spy) -> (Session, kadakas_core::uid::Uid, kadakas_core::uid:
     let doc = ok(&mut maker, "document.get", json!({}));
     let mut s = Session::with_sequential_ids();
     s.scripting.interpreter = Some(spy.interpreter());
+    // The limit only bounds a hang: the spy ends at once, but a loaded machine may take seconds
+    // to start the shell, and a run that is killed first never leaves its marker.
+    s.scripting.limits.timeout = std::time::Duration::from_secs(120);
     ok(&mut s, "document.load", json!({"document": doc}));
     (s, def, g)
 }

@@ -222,6 +222,12 @@
     "ui.quick_search": [
       "F"
     ],
+    "view.agent_back": [
+      "Cmd/Ctrl+Alt+B"
+    ],
+    "view.agent_next": [
+      "Cmd/Ctrl+Alt+N"
+    ],
     "view.back": [
       "Alt+Shift+8"
     ],

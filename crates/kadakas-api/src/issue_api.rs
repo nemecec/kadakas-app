@@ -522,12 +522,10 @@ impl Session {
         let scene = self.scene();
         let mut camera = Camera::standard(settings.view, settings.projection);
         camera.fit(scene.bounds, 1.5);
+        // The camera works relative to the scene origin; a viewpoint keeps drawing coordinates.
+        let target = scene.to_world(camera.target);
         ViewSpec::Camera {
-            target: [
-                f64::from(camera.target.x),
-                f64::from(camera.target.y),
-                f64::from(camera.target.z),
-            ],
+            target: [target.x, target.y, target.z],
             yaw: f64::from(camera.yaw),
             pitch: f64::from(camera.pitch),
             distance: f64::from(camera.distance),

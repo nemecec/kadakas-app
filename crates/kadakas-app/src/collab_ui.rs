@@ -807,24 +807,28 @@ pub fn paint_peers(
         if !rect.expand(40.0).contains(at) {
             continue;
         }
-        // A pointer: a small triangle with its tip at the position.
-        painter.add(egui::Shape::convex_polygon(
-            vec![
-                at,
-                Pos2::new(at.x, at.y + 15.0),
-                Pos2::new(at.x + 10.5, at.y + 10.5),
-            ],
-            color,
-            Stroke::new(1.0, Color32::WHITE),
-        ));
-        // The name on a small label in the color of the user.
-        let galley =
-            painter.layout_no_wrap(p.short_label(), FontId::proportional(12.0), Color32::WHITE);
-        let pos = Pos2::new(at.x + 12.0, at.y + 14.0);
-        let label = Rect::from_min_size(pos, galley.size()).expand2(vec2(4.0, 2.0));
-        painter.rect_filled(label, 3.0, color);
-        painter.galley(pos, galley, Color32::WHITE);
+        paint_pointer(&painter, at, color, &p.short_label());
     }
+}
+
+/// A pointer: a small triangle with its tip at `at`, and the name on a small label in the same
+/// color. The cursors of the other users and of the agent use it.
+pub fn paint_pointer(painter: &egui::Painter, at: Pos2, color: Color32, name: &str) {
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            at,
+            Pos2::new(at.x, at.y + 15.0),
+            Pos2::new(at.x + 10.5, at.y + 10.5),
+        ],
+        color,
+        Stroke::new(1.0, Color32::WHITE),
+    ));
+    let galley =
+        painter.layout_no_wrap(name.to_string(), FontId::proportional(12.0), Color32::WHITE);
+    let pos = Pos2::new(at.x + 12.0, at.y + 14.0);
+    let label = Rect::from_min_size(pos, galley.size()).expand2(vec2(4.0, 2.0));
+    painter.rect_filled(label, 3.0, color);
+    painter.galley(pos, galley, Color32::WHITE);
 }
 
 /// The browser build: the address fragment, the warning before the page closes, and (behind the
@@ -1375,10 +1379,13 @@ mod tests {
         // A session that is free: the call goes through and the field is wiped.
         let mut free = Session::default();
         let hub = Hub::new(Sequencer::new(docsync::replica_of(&Document::default())));
-        free.set_collab_endpoint(Box::new(hub.endpoint()));
         free.set_collab_defaults(Some("ws://127.0.0.1:1".into()), None);
-        free.set_collab_endpoint_factory(Box::new(|url, token| {
-            kadakas_collab_ws::endpoint_for(url, token).map_err(|e| e.to_string())
+        // The address is only a name here: the factory gives an in-memory endpoint. A real
+        // socket to a closed port fails at a time that the machine's load decides, and a
+        // client that saw the failure before `connect` returned is no longer "connected".
+        let factory_hub = hub.clone();
+        free.set_collab_endpoint_factory(Box::new(move |_url, _token| {
+            Ok(Box::new(factory_hub.endpoint()))
         }));
         // The token of a Replace question stays until the question is answered.
         assert!(ui.submit(&mut free, 1_000));

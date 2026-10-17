@@ -218,6 +218,8 @@ actions! {
     CommandLine => "ui.command_line", msg!("action-ui-command-line"), [], true;
     ViewHistoryPrevious => "view.history_previous", msg!("action-view-history-previous"), ["Cmd/Ctrl+Shift+,"], true;
     ViewHistoryNext => "view.history_next", msg!("action-view-history-next"), ["Cmd/Ctrl+Shift+."], true;
+    ViewAgentBack => "view.agent_back", msg!("action-view-agent-back"), ["Cmd/Ctrl+Alt+B"], true;
+    ViewAgentNext => "view.agent_next", msg!("action-view-agent-next"), ["Cmd/Ctrl+Alt+N"], true;
     SnapCues => "snap.cues", msg!("action-snap-cues"), ["Y"], true;
     SnapRelativeAngles => "snap.relative_angles", msg!("action-snap-relative-angles"), ["/"], true;
     SnapAcquire => "snap.acquire", msg!("action-snap-acquire"), ["T"], true;

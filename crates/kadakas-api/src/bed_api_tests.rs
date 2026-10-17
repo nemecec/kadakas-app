@@ -240,7 +240,7 @@ fn bed_requests_with_bad_values_are_refused() {
     )["created"][0]
         .clone();
     for (method, p, word) in [
-        ("bed.add", json!({}), "either"),
+        ("bed.add", json!({}), "boundary"),
         (
             "bed.add",
             json!({"boundary": square(), "from": line}),
@@ -251,7 +251,7 @@ fn bed_requests_with_bad_values_are_refused() {
             json!({"boundary": [[0, 0], [1, 1]]}),
             "3 or more",
         ),
-        ("bed.add", json!({"boundary": "x"}), "bad boundary"),
+        ("bed.add", json!({"boundary": "x"}), "boundary"),
         (
             "bed.add",
             json!({"boundary": square(), "texture": "Nothing"}),
@@ -335,7 +335,7 @@ fn bed_requests_with_bad_values_are_refused() {
             json!({"id": a, "boundary": [[0, 0]]}),
             "3 or more",
         ),
-        ("bed.set", json!({"id": a, "boundary": 5}), "bad boundary"),
+        ("bed.set", json!({"id": a, "boundary": 5}), "boundary"),
         ("bed.set", json!({"id": a, "mood": 5}), "unknown parameter"),
         ("bed.list", json!({"site": line}), "not a site model"),
         ("bed.list", json!({"site": 5}), "'site'"),

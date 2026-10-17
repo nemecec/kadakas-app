@@ -44,11 +44,15 @@ impl KadakasApp {
             logic::plan_spec(&self.view, lo, hi)
         } else {
             let c = &self.view3d.camera;
+            // The camera works in scene coordinates (relative to the middle of the drawing).
+            // A viewpoint keeps drawing coordinates, so it does not drift when the drawing
+            // changes, and a BCF file has the right place.
+            let o = kadakas_core::mesh::scene_origin(self.session.editor.doc());
             ViewSpec::Camera {
                 target: [
-                    f64::from(c.target.x),
-                    f64::from(c.target.y),
-                    f64::from(c.target.z),
+                    o.x + f64::from(c.target.x),
+                    o.y + f64::from(c.target.y),
+                    o.z + f64::from(c.target.z),
                 ],
                 yaw: f64::from(c.yaw),
                 pitch: f64::from(c.pitch),
@@ -186,8 +190,14 @@ impl KadakasApp {
         let Some((target, yaw, pitch, distance)) = self.pending_camera.take() else {
             return;
         };
+        // The viewpoint has drawing coordinates; the camera works relative to the scene origin.
+        let o = kadakas_core::mesh::scene_origin(self.session.editor.doc());
         let c = &mut self.view3d.camera;
-        c.target = glam::Vec3::new(target[0] as f32, target[1] as f32, target[2] as f32);
+        c.target = glam::Vec3::new(
+            (target[0] - o.x) as f32,
+            (target[1] - o.y) as f32,
+            (target[2] - o.z) as f32,
+        );
         c.yaw = yaw as f32;
         c.pitch = pitch as f32;
         c.distance = (distance as f32).clamp(1.0, 1.0e9);

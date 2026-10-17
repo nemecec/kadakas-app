@@ -1041,7 +1041,7 @@ impl Session {
             return Ok(Some(id));
         }
         let name = by_name.or_else(|| by_id.and_then(Value::as_str).map(str::to_string));
-        // The name parameters take the ID of a layer too (the table of parameters turns the name of
+        // The name parameters take the ID of a layer too (the parameter structs turn the name of
         // a layer into its ID).
         if let Some(id) = name
             .as_deref()

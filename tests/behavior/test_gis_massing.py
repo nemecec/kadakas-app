@@ -196,7 +196,7 @@ def test_massing_roofs_and_volumes(cad):
     assert got["roof"] == "hip" and got.get("floors") is None and got["base_elevation_mm"] == 500
     # Wrong values are refused with a message.
     assert "pitch" in cad.error("massing.add", {"footprint": footprint, "pitch": 95})["message"]
-    assert "flat, gable or hip" in cad.error("massing.add", {"footprint": footprint, "roof": "dome"})["message"]
+    assert "flat, gable, hip" in cad.error("massing.add", {"footprint": footprint, "roof": "dome"})["message"]
     assert "footprint" in cad.error("massing.add", {"height": 3000})["message"]
     # It is in the document summary, in the 3D scene and in the render.
     assert cad.result("document.summary")["objects_by_kind"]["massing"] == 4

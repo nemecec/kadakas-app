@@ -124,7 +124,7 @@ def test_path_input_is_checked(cad):
     assert cad.error("hardscape.add", {"center": [[0, 0], [10, 0]], "width": -5})["code"] == 3
     assert cad.error("hardscape.add", {"center": [[0, 0], [10, 0]], "join": "square"})["code"] == -32602
     assert cad.error("hardscape.add", {"mode": "path", "boundary": SQUARE})["code"] == -32602
-    assert cad.error("hardscape.add", {})["code"] == 3
+    assert cad.error("hardscape.add", {})["code"] == -32602
     assert cad.error("hardscape.add", {"boundary": SQUARE, "style": "none"})["code"] == -32602
     assert cad.error("hardscape.add", {"boundary": SQUARE, "slope": {"type": "edges", "elevations": [0, 1]}})["code"] == 3
     assert cad.result("objects.list", {"kind": "hardscape"}) == []
