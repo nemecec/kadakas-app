@@ -19,7 +19,7 @@ use crate::{Session, params, review_api};
 
 pub const AGENT_ACTIVITY: (&str, &str) = (
     "agent.activity",
-    "The steps of the agent: each call or script run that changed the document (read only), also a call that failed after it had made changes, and an undo or redo of the agent. params: {step?, since?, limit?}. Without step: {steps: [{id, session, time_ms, method, kind (call | undo | redo), summary, counts {objects {added, changed, removed}, layers, classes, resources}, seen, reverted, partial (the history limit dropped part of the record), state (active | undone | gone), revertible (null for the older steps of a long list), session_version? (the version saved before the session; render.png {compare: {from: <it>, to: \"current\"}} draws the changes of the session), version_note?}], last_id, total}; since: only steps after this id; limit: at most this many, the newest (default 50, at most 500). With step: the same entry plus {objects {added, changed, removed} (IDs, at most 1000 each), truncated, blocked? (why the person cannot revert it now)}. The summary is written from the change set. The person sees the same list in the Activity panel and can undo or revert a step there; you cannot. While the person has undone steps of their own with Undo to here and can redo them, your calls that change the document fail with a conflict (reason redo_pending) until the person redoes them or releases the hold.",
+    "The steps of the agent: each call or script run that changed the document (read only), also a call that failed after it had made changes, and an undo or redo of the agent. params: {step?, since?, limit?}. Without step: {steps: [{id, session, time_ms, method, kind (call | undo | redo), summary, counts {objects {added, changed, removed}, layers, classes, resources}, seen, reverted, partial (the history limit dropped part of the record), state (active | undone | gone), revertible (null for the older steps of a long list), session_version? (the version saved before the session; render.png {compare: {from: <it>, to: \"current\"}} draws the changes of the session), version_note?}], last_id, total}; since: only steps after this id; limit: at most this many, the newest (default 50, at most 500). With step: the same entry plus {objects {added, changed, removed} (IDs, at most 1000 each), truncated, blocked? (why the person cannot revert it now)}. The summary is written from the change set. A step that changed one object and nothing else names the fields that changed, with the values before and after (for example: Changed hardscape 'Pavers': zone 'Aisle' angle 0° → 45°; at most two fields, then a count); the person sees it in their language. The person sees the same list in the Activity panel and can undo or revert a step there; you cannot. While the person has undone steps of their own with Undo to here and can redo them, your calls that change the document fail with a conflict (reason redo_pending) until the person redoes them or releases the hold.",
 );
 
 const MAX_LIMIT: usize = 500;
@@ -726,5 +726,72 @@ mod tests {
         assert!(caught.is_err());
         assert_eq!(s.activity.len(), 1);
         assert_eq!(s.activity.steps()[0].summary.objects.added, 1);
+    }
+
+    fn lot_with_an_aisle(s: &mut Session) -> Value {
+        let st = s
+            .handle(
+                "hardscape_style.create",
+                json!({"name": "Pavers", "thickness": 80,
+                       "joints": {"kind": "running_bond", "unit_length": 200, "unit_width": 100, "spacing": 5}}),
+            )
+            .unwrap()["id"]
+            .clone();
+        let id = s
+            .handle(
+                "hardscape.add",
+                json!({"boundary": [[0, 0], [8000, 0], [8000, 4000], [0, 4000]], "style": st}),
+            )
+            .unwrap()["id"]
+            .clone();
+        s.handle(
+            "hardscape.split",
+            json!({"id": id, "lines": [[[3000, -50], [3000, 4050]]],
+                   "zones": [{"seed": [6000, 2000], "name": "Aisle", "angle": 0}]}),
+        )
+        .unwrap();
+        id
+    }
+
+    #[test]
+    fn a_step_that_changes_one_object_names_what_changed() {
+        let mut s = Session::with_sequential_ids();
+        let id = lot_with_an_aisle(&mut s);
+        s.editor.set_origin(Origin::Agent);
+        s.agent_call_with(3, "hardscape.zone_set", |s| {
+            s.handle("hardscape.zone_set", json!({"id": id, "zone": 1, "angle": 45}))
+        })
+        .unwrap();
+        let step = s.activity.steps().back().unwrap();
+        let text = step.summary.text();
+        assert!(
+            text.contains("hardscape 'Pavers'")
+                && text.contains("zone 'Aisle' angle 0° → 45°"),
+            "{text}"
+        );
+        // Three changes: the first two and a count.
+        s.agent_call_with(3, "hardscape.set", |s| {
+            s.handle(
+                "hardscape.set",
+                json!({"ids": [id], "elevation": 30, "origin": [10, 20], "thickness": 90}),
+            )
+        })
+        .unwrap();
+        let text = s.activity.steps().back().unwrap().summary.text();
+        assert!(
+            text.contains("origin set to (10, 20)") && text.contains("elevation"),
+            "{text}"
+        );
+        // A step that changes two objects stays a count.
+        let other = s
+            .handle("hardscape.add", json!({"boundary": [[0, 0], [10, 0], [10, 10], [0, 10]], "material": "Gravel", "thickness": 50}))
+            .unwrap()["id"]
+            .clone();
+        s.agent_call_with(3, "hardscape.set", |s| {
+            s.handle("hardscape.set", json!({"ids": [id, other], "elevation": 5}))
+        })
+        .unwrap();
+        let text = s.activity.steps().back().unwrap().summary.text();
+        assert!(text.starts_with("Changed 2 objects"), "{text}");
     }
 }

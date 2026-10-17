@@ -502,3 +502,31 @@ fn the_keys_open_the_panel_and_step_through_the_changes() {
         assert!(!r.app.keys.hint(a).is_empty(), "{a:?} has a key");
     }
 }
+
+#[test]
+fn a_one_object_step_names_what_changed_in_both_languages() {
+    let mut r = Rig::new();
+    let st = r.person(
+        "hardscape_style.create",
+        json!({"name": "Pavers", "thickness": 80,
+               "joints": {"kind": "running_bond", "unit_length": 200, "unit_width": 100, "spacing": 5}}),
+    )["id"]
+        .clone();
+    let id = r.person(
+        "hardscape.add",
+        json!({"boundary": [[0, 0], [8000, 0], [8000, 4000], [0, 4000]], "style": st}),
+    )["id"]
+        .clone();
+    r.person(
+        "hardscape.split",
+        json!({"id": id, "lines": [[[3000, -50], [3000, 4050]]],
+               "zones": [{"seed": [6000, 2000], "name": "Aisle", "angle": 0}]}),
+    );
+    r.agent("hardscape.zone_set", json!({"id": id, "zone": 1, "angle": 45}));
+    let step = r.app.session.activity.steps().back().unwrap().clone();
+    let en = kadakas_l10n::with_language("en-US", || summary_text(&step.summary));
+    assert_eq!(en, step.summary.text());
+    assert_eq!(en, "Changed hardscape 'Pavers': zone 'Aisle' angle 0° → 45°");
+    let et = kadakas_l10n::with_language("et", || summary_text(&step.summary));
+    assert!(et.contains("tsoon 'Aisle' nurk 0° → 45°"), "{et}");
+}
