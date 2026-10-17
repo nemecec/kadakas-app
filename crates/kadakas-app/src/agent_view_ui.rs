@@ -174,7 +174,6 @@ fn badge(
         }
     }
     for _ in 0..40 {
-        let r = Rect::from_min_size(min, size);
         if free(min) {
             break;
         }

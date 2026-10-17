@@ -1270,10 +1270,7 @@ fn align_field_of(c: &Map<String, Value>) -> Result<Option<Option<usize>>, RpcEr
         Some(Value::Bool(true)) => Ok(Some(None)),
         Some(Value::Object(o)) => {
             unknown_fields(o, &["edge"])?;
-            Ok(Some(match whole_number(o, "edge")? {
-                Some(n) => Some(n),
-                None => None,
-            }))
+            Ok(Some(whole_number(o, "edge")?))
         }
         Some(_) => Err(bad("'align_field' must be true, false or {edge: n}")),
     }
