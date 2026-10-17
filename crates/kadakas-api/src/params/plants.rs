@@ -907,6 +907,7 @@ pub struct HardscapeSetParams {
         deserialize_with = "nullable",
         skip_serializing_if = "Option::is_none"
     )]
+    /// degrees; null removes the own angle (the angle of the style is used)
     #[schemars(with = "Nullable<Num>")]
     pub angle: Option<Option<Num>>,
     /// replaces the old holes; [] or null clears them
@@ -1062,6 +1063,7 @@ pub struct UnitPatternToObjectsParams {
     pub pattern: Option<Obj>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Point>,
+    /// degrees, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1151,6 +1153,7 @@ pub struct ReportUnitPatternParams {
     pub pattern: Option<Obj>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Point>,
+    /// degrees, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1408,6 +1411,7 @@ pub struct UnitPatternCheckParams {
     pub pattern: Option<Obj>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Point>,
+    /// degrees, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

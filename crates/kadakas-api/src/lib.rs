@@ -1498,7 +1498,7 @@ impl Session {
                 #[allow(unused_mut)]
                 let mut d = json!({
                 "methods": METHODS.iter().map(|(m, d)| json!({"name": m, "doc": d})).collect::<Vec<_>>(),
-                "units": "millimeters, Y axis up, angles in radians",
+                "units": "millimeters, Y axis up. Angles are NOT one unit: each parameter states its own. Radians (counterclockwise): drafting and placing in the plan (edit.rotate and group.rotate angle, edit.array angle and rotate, edit.chamfer angle, dimension angle, symbol and plugin rotation, the rotation of a georeference and of an import, the camera yaw and pitch of an issue viewpoint, massing ridge_angle, the aspect that the ground query returns). Degrees (counterclockwise unless said): everything about patterns and hardscapes (hardscape.add, hardscape.set, hardscape.zone_set, hardscape_style joints angle, unit_pattern.* angle, slope angle_deg, split zone angle), irrigation, hatch and tile resources, solids (rotation_deg, sweep_angle, segment_angle), site.texture and texture bed rotation, mapping rotation, snap angle_step_deg, north_angle and every name that ends in _deg or degrees. The reply of a method uses the unit of the same name in its parameters.",
                 "vertex_kinds": "Polyline points and landscape/hardscape boundaries are vertices. [x, y] is a corner. Other kinds are {p: [x, y], kind: corner | arc (with radius, a fillet) | point_on_arc | bezier | cubic}.",
                 "command_examples": command_examples(),
                 "plants": plants_api::describe(),

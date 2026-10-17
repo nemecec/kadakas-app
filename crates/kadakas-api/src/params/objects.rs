@@ -692,6 +692,7 @@ pub struct SymbolSetParams {
     pub ids: Option<Vec<ObjectRef>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<Point>,
+    /// radians, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
