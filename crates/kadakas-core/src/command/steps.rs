@@ -1283,6 +1283,173 @@ mod tests {
         assert!(ed.revert_step(&s2, &d2, false, true).is_ok());
     }
 
+    /// The agent makes `p` and a free object `f` in one step; `setup` adds work of the person
+    /// that hangs on `p` and gives its id. The revert must refuse, name `p`, and change nothing;
+    /// "the others" must revert `f` and leave `p` and the work of the person as they are.
+    fn the_work_of_the_person_hangs_on(setup: impl FnOnce(&mut Editor, ObjectId) -> ObjectId) {
+        let mut ed = Editor::with_sequential_ids();
+        let mut ids = None;
+        let (s, d) = step(&mut ed, |e| {
+            ids = Some((add(e, 0.0), add(e, 500.0)));
+        });
+        let (p, f) = ids.unwrap();
+        let dependant = setup(&mut ed, p);
+        let before = ed.doc().clone();
+        match ed.revert_step(&s, &d, false, true) {
+            Err(Refusal::Conflicts(list)) => assert!(
+                list.iter()
+                    .any(|c| c.id == p && c.kind == ConflictKind::UsedLater),
+                "{list:?}"
+            ),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(ed.doc(), &before, "nothing was deleted or changed");
+        let r = ed.revert_step(&s, &d, true, true).unwrap();
+        assert_eq!(r.reverted, vec![f]);
+        assert!(r.skipped.iter().any(|c| c.id == p));
+        assert!(ed.doc().object(p).is_some(), "the object stays");
+        assert!(ed.doc().object(f).is_none(), "the free object went");
+        assert_eq!(
+            ed.doc().object(dependant),
+            before.object(dependant),
+            "the work of the person is untouched"
+        );
+    }
+
+    #[test]
+    fn a_data_tag_of_the_person_on_an_object_of_the_step_blocks_its_removal() {
+        use crate::annot::style::{AnnotResource, TagStyle};
+        use crate::annot::{Annot, DataTag};
+        the_work_of_the_person_hangs_on(|ed, p| {
+            ed.execute(&Command::AddResource {
+                name: "Tags".into(),
+                body: crate::resource::ResourceBody::Annot(Box::new(AnnotResource::TagStyle(
+                    TagStyle::default(),
+                ))),
+            })
+            .unwrap();
+            let style = ed.doc().resources.iter().next().unwrap().id;
+            let tag = DataTag {
+                style,
+                object: p,
+                offset: DVec2::new(1.0, 1.0),
+                at: DVec2::ZERO,
+                anchor: DVec2::ZERO,
+            };
+            let out = ed
+                .execute(&Command::AddObject {
+                    shape: Shape::Annotation(Box::new(Annot::DataTag(tag))),
+                    layer: None,
+                    class: None,
+                    attrs: Default::default(),
+                })
+                .unwrap();
+            ObjectId(out.created[0])
+        });
+    }
+
+    #[test]
+    fn the_wall_of_a_pad_of_the_person_blocks_the_removal_of_the_pad() {
+        the_work_of_the_person_hangs_on(|ed, pad| {
+            let wall = add(ed, 900.0);
+            ed.execute(&Command::SetData {
+                id: wall,
+                set: [(
+                    super::super::retaining_ops::WALL_KEY.to_string(),
+                    serde_json::json!(pad.0.to_string()),
+                )]
+                .into(),
+                remove: vec![],
+            })
+            .unwrap();
+            wall
+        });
+    }
+
+    #[test]
+    fn a_pad_of_the_person_that_names_the_wall_of_the_step_blocks_its_removal() {
+        the_work_of_the_person_hangs_on(|ed, wall| {
+            let pad = add(ed, 900.0);
+            ed.execute(&Command::SetData {
+                id: pad,
+                set: [(
+                    super::super::retaining_ops::PAD_KEY.to_string(),
+                    serde_json::json!({"wall": wall.0.to_string()}),
+                )]
+                .into(),
+                remove: vec![],
+            })
+            .unwrap();
+            pad
+        });
+    }
+
+    fn dimension_on(ed: &mut Editor, p: ObjectId) -> ObjectId {
+        use crate::annot::{Anchor, AnchorTarget, Annot, Axis, DimMode, Dimension};
+        let out = ed
+            .execute(&Command::AddObject {
+                shape: Shape::Annotation(Box::new(Annot::Dimension(Dimension {
+                    mode: DimMode::Linear {
+                        axis: Axis::Horizontal,
+                    },
+                    points: vec![DVec2::new(0.0, 0.0), DVec2::new(1000.0, 0.0)],
+                    anchors: vec![
+                        Some(Anchor::new(p, AnchorTarget::Vertex { index: 0 })),
+                        None,
+                    ],
+                    offset: 5.0,
+                    style: None,
+                    text: None,
+                    detached: false,
+                }))),
+                layer: None,
+                class: None,
+                attrs: Default::default(),
+            })
+            .unwrap();
+        ObjectId(out.created[0])
+    }
+
+    #[test]
+    fn a_dimension_of_the_person_anchored_to_an_object_of_the_step_blocks_its_removal() {
+        the_work_of_the_person_hangs_on(dimension_on);
+    }
+
+    #[test]
+    fn reverting_a_moved_object_makes_a_dimension_of_the_person_follow() {
+        use crate::annot::Annot;
+        let mut ed = Editor::with_sequential_ids();
+        let p = add(&mut ed, 0.0);
+        let (s, d) = step(&mut ed, |e| mv(e, p, 300.0));
+        // The dimension is drawn after the step, on the moved object.
+        let dim = dimension_on(&mut ed, p);
+        add(&mut ed, 9000.0);
+        let first_point = |ed: &Editor| match &ed.doc().object(dim).unwrap().shape {
+            Shape::Annotation(a) => match &**a {
+                Annot::Dimension(x) => x.points[0],
+                _ => panic!("not a dimension"),
+            },
+            _ => panic!("not an annotation"),
+        };
+        let vertex = |ed: &Editor| match &ed.doc().object(p).unwrap().shape {
+            Shape::Line { a, .. } => *a,
+            _ => panic!("not a line"),
+        };
+        assert_eq!(
+            first_point(&ed),
+            vertex(&ed),
+            "anchored to the moved vertex"
+        );
+        let r = ed.revert_step(&s, &d, false, true).unwrap();
+        assert_eq!(r.reverted, vec![p]);
+        assert_eq!(vertex(&ed), DVec2::new(0.0, 0.0));
+        assert_eq!(
+            first_point(&ed),
+            vertex(&ed),
+            "the dimension follows the object that went back"
+        );
+    }
+
     #[test]
     fn the_inverted_change_swaps_before_and_after() {
         let mut ed = Editor::with_sequential_ids();
