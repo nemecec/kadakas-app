@@ -25,7 +25,7 @@ def test_each_call_that_changes_the_document_is_a_step(doc):
     assert first["summary"] == "Added 1 object (1 rect)"
     assert first["counts"]["objects"] == {"added": 1, "changed": 0, "removed": 0}
     one = doc.agent_activity(first["id"])
-    assert one["objects"]["added"] == [str(rect)]
+    assert one["objects"]["added"] == [rect.id]
     assert one["objects"]["changed"] == [] and one["objects"]["removed"] == []
     assert len(doc.agent_activity(since=first["id"])["steps"]) == 1
     assert len(doc.agent_activity(limit=1)["steps"]) == 1

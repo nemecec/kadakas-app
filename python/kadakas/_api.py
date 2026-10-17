@@ -2360,6 +2360,12 @@ if TYPE_CHECKING:
         'region': Literal['drawing', 'window'],
     }, total=False)
 
+    AgentActivityParams = TypedDict("AgentActivityParams", {
+        'limit': int,
+        'since': int,
+        'step': int,
+    }, total=False)
+
     ViewGetParams = TypedDict("ViewGetParams", {}, total=False)
 
     ViewZoomParams = TypedDict("ViewZoomParams", {
@@ -5035,6 +5041,12 @@ class Api:
         JSON-RPC method ``view.screenshot``."""
         return self._call("view.screenshot", params or None)
 
+    def agent_activity(self, **params: "Unpack[AgentActivityParams]") -> Any:
+        """The steps of the agent: each call or script run that changed the document (read only). params: {step?, since?, limit?}. Without step: {steps: [{id, session, time_ms, method, summary, counts {objects {added, changed, removed}, layers, classes, resources}, seen, state (active | undone | gone), revertible, session_version? (the version saved before the session; render.png {compare: {from: <it>, to: "current"}} draws the changes of the session), version_note?}], last_id, total}; since: only steps after this id; limit: at most this many, the newest (default 50, at most 500). With step: the same entry plus {objects {added, changed, removed} (IDs, at most 1000 each), truncated, blocked? (why the person cannot revert it now)}. The summary is written from the change set. The person sees the same list in the Activity panel and can undo or revert a step there; you cannot.
+
+        JSON-RPC method ``agent.activity``."""
+        return self._call("agent.activity", params or None)
+
     def view_get(self, **params: "Unpack[ViewGetParams]") -> Any:
         """What the person looks at now (only the app answers; the headless server gives an error). No params. Returns {mode (plan | 3d), window {width, height, pixels_per_point} (points), canvas {width, height} (points; the drawing area), plan {center [x, y], zoom (px per mm), mm_per_px, layer_scale (the drawing scale denominator of the active layer), visible_box {min, max} (drawing mm; only when mode is plan)}, camera {view, projection, render_mode, eye, target, up, fov_deg, distance, visible_box {min, max} (the ground the camera sees, drawing mm; only when mode is 3d; null if the camera does not look at the ground)}, selection [id], active_layer {id, name}, active_class {id, name}, visible_layers [{id, name}], visible_classes [{id, name}], animating, highlights [{id, kind, text, color, until}], back (how many views Back can return to), view_locked (the person turned off "Agent may move my view")}. In 3D, camera.visible_box is the ground (at the height of the target) that the four corners of the view reach, or null if a corner looks past the horizon. Read it before you move the view and when you want to know what the person means by "this".
 
@@ -6028,6 +6040,7 @@ METHOD_NAMES: tuple[str, ...] = (
     "visualization.get",
     "visualization.clear",
     "view.screenshot",
+    "agent.activity",
     "view.get",
     "view.zoom",
     "view.pan",

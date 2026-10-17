@@ -472,6 +472,24 @@ mod tests {
     }
 
     #[test]
+    fn the_box_of_a_step_covers_new_changed_and_removed_objects() {
+        let mut ed = Editor::with_sequential_ids();
+        let (a, b) = (add(&mut ed, 0.0), add(&mut ed, 1000.0));
+        let mut log = ActivityLog::default();
+        let id = step(&mut log, &mut ed, |e| {
+            mv(e, a, 10.0);
+            e.execute(&Command::DeleteObjects { ids: vec![b] }).unwrap();
+            add(e, 5000.0);
+        });
+        let s = log.get(id).unwrap();
+        let (lo, hi) = step_bounds(s, ed.doc()).unwrap();
+        assert!(lo.x <= 10.0 && hi.x >= 5001.0, "{lo:?} {hi:?}");
+        let mut empty = s.clone();
+        empty.data = None;
+        assert_eq!(step_bounds(&empty, ed.doc()), None);
+    }
+
+    #[test]
     fn the_diff_of_an_object_lists_the_properties_that_differ() {
         let mut ed = Editor::with_sequential_ids();
         let a = add(&mut ed, 0.0);
