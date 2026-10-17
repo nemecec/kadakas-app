@@ -24,6 +24,7 @@ pub mod keymap;
 pub mod keys;
 pub mod massing;
 pub mod open_limit;
+pub mod paving;
 pub mod plugin_form;
 pub mod plugin_tool;
 pub mod polygon3d;
