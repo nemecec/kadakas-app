@@ -237,8 +237,8 @@ pub struct RevertReport {
 
 /// Adds the net change of the patches (oldest first) into one.
 fn compose(patches: &[&Patch]) -> StepData {
-    let mut map: IndexMap<ObjectId, (Option<Object>, Option<Object>, Option<usize>)> =
-        IndexMap::new();
+    type Net = (Option<Object>, Option<Object>, Option<usize>);
+    let mut map: IndexMap<ObjectId, Net> = IndexMap::new();
     let mut data = StepData::default();
     for p in patches {
         for (index, o) in &p.removed {

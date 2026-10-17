@@ -448,6 +448,7 @@ impl ActivityLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::change::Origin;
     use crate::command::{Command, Editor};
     use crate::model::Shape;
     use glam::DVec2;

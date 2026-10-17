@@ -225,6 +225,10 @@ pub struct Session {
     /// The steps of the agents: one for each call or script run that changed the document
     /// (see `agent_activity_api`).
     pub activity: kadakas_core::activity::ActivityLog,
+    /// Save the version "Before agent session" before the first change of an agent session (see
+    /// `set_session_version`). Off by default; the app turns it on. The setting stays when the
+    /// document is replaced.
+    session_version: bool,
 }
 
 /// The caches of the ghosts of a compare (see `svg_of`). They belong to one old document, which
@@ -1048,6 +1052,7 @@ impl Session {
             feedback: feedback_api::FeedbackState::default(),
             tainted: false,
             activity: Default::default(),
+            session_version: false,
         }
     }
 
@@ -1157,6 +1162,7 @@ impl Session {
         let mut hub = std::mem::take(&mut self.events);
         hub.document_replaced();
         let sequential = self.sequential_ids;
+        let session_version = self.session_version;
         let (fresh, exact) = Session::with_vetted_document(doc);
         *self = Session {
             replaced: true,
@@ -1165,6 +1171,7 @@ impl Session {
             ..fresh
         };
         self.events = hub;
+        self.session_version = session_version;
         cache.arm(self.editor.revision(), exact && is_file_drawing);
         self.review = cache;
         self.feedback = feedback;

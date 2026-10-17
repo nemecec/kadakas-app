@@ -30,11 +30,14 @@ def test_the_steps_of_a_session(cad):
     assert detail["objects"]["changed"] == [a]
 
 
-def test_the_version_before_the_session_shows_the_changes(cad):
+def test_the_changes_of_a_session_show_against_a_version(cad):
+    # The app saves "Before agent session" by itself; here the version is saved by hand.
+    version = cad.result("version.create", {"name": "Before"})["version"]["id"]
     cad.result("execute", rect(0))
     cad.result("execute", rect(50))
-    step = cad.result("agent.activity")["steps"][0]
-    version = step["session_version"]
+    steps = cad.result("agent.activity")["steps"]
+    assert [s["summary"] for s in steps][0] == "Changed the versions"
+    assert len(steps) == 3
     diff = cad.result("version.diff", {"from": version, "to": "current", "kinds": ["objects"]})
     assert diff["counts"]["objects"]["added"] == 2
     # The picture of the changes: the same compare overlay that the app draws on the plan.

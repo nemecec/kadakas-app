@@ -58,7 +58,6 @@ agent-activity-banner =
 agent-activity-review = Vaata üle
 agent-activity-review-hint = Ava agendi tegevuste paneel ({ $key })
 agent-activity-dismiss-banner = Peida
-agent-activity-open-hint = Ava agendi tegevuste paneel
 agent-activity-status-line = Agendi samm { $id }: { $summary }
 agent-activity-reverted = Samm { $id } võeti tagasi: { $summary }
 agent-activity-reverted-some = Sammu { $id } objektidest võeti tagasi { $done } / { $total }. { $kept } jäävad nagu on.
@@ -103,7 +102,6 @@ agent-activity-why-locked = Selle sammu objekt on lukustatud kihil.
 agent-activity-why-group = Hiljem tehtud asi hoiab selle sammu objekti.
 agent-activity-why-other = { $why }
 agent-activity-sum-none = nähtavaid muudatusi pole
-agent-activity-sum-join = { $a }; { $b }
 agent-activity-n-objects =
     { $count ->
         [one] 1 objekt

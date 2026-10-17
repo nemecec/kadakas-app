@@ -58,7 +58,6 @@ agent-activity-banner =
 agent-activity-review = Review
 agent-activity-review-hint = Open the Activity panel ({ $key })
 agent-activity-dismiss-banner = Hide
-agent-activity-open-hint = Open the Activity panel of the agent
 agent-activity-status-line = Step { $id } of the agent: { $summary }
 agent-activity-reverted = Reverted step { $id }: { $summary }
 agent-activity-reverted-some = Reverted { $done } of { $total } objects of step { $id }. { $kept } stay as they are.
@@ -103,7 +102,6 @@ agent-activity-why-locked = An object of this step is on a locked layer.
 agent-activity-why-group = Something made later holds an object of this step.
 agent-activity-why-other = { $why }
 agent-activity-sum-none = no visible change
-agent-activity-sum-join = { $a }; { $b }
 agent-activity-n-objects =
     { $count ->
         [one] 1 object

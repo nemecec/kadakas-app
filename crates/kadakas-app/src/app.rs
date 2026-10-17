@@ -3036,6 +3036,8 @@ impl eframe::App for KadakasApp {
                 .as_ref()
                 .and_then(|p| p.parent())
                 .map(std::path::Path::to_path_buf);
+            // A person reviews what the agent does: its session starts with a saved version.
+            self.session.set_session_version(true);
             // Scripts that the user starts connect to this address, with this token.
             self.session
                 .scripting

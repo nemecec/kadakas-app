@@ -222,8 +222,23 @@
     "ui.quick_search": [
       "F"
     ],
+    "view.agent_activity": [
+      "Cmd/Ctrl+Alt+A"
+    ],
     "view.agent_back": [
       "Cmd/Ctrl+Alt+B"
+    ],
+    "view.agent_change_next": [
+      "Cmd/Ctrl+Alt+CloseBracket"
+    ],
+    "view.agent_change_previous": [
+      "Cmd/Ctrl+Alt+OpenBracket"
+    ],
+    "view.agent_changes_seen": [
+      "Cmd/Ctrl+Alt+S"
+    ],
+    "view.agent_changes_toggle": [
+      "Cmd/Ctrl+Alt+H"
     ],
     "view.agent_next": [
       "Cmd/Ctrl+Alt+N"
@@ -334,7 +349,7 @@
         "file.plugins",
         "file.versions",
         "file.compare",
-        "file.agent_activity",
+        "view.agent_activity",
         "file.compare_drawings",
         "-",
         "file.collaboration",

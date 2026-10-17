@@ -47,15 +47,12 @@ def test_undo_by_the_agent_marks_the_step_undone_and_makes_no_step(doc):
     assert log["steps"][0]["revertible"] is False
 
 
-def test_a_version_is_saved_before_the_first_change_of_a_session(doc):
-    assert doc.api.version_list()["count"] == 0
+def test_the_headless_server_saves_no_version_by_itself(doc):
+    """The version "Before agent session" is for a host where a person reviews (the app); a
+    server for scripts and tests leaves the history alone."""
     doc.add.rect([0, 0], [10, 10])
-    versions = doc.api.version_list()
-    assert versions["count"] == 1 and versions["versions"][0]["name"] == "Before agent session"
-    step = doc.agent_activity()["steps"][0]
-    assert step["session_version"] == versions["versions"][0]["id"]
-    doc.add.rect([50, 0], [60, 10])
-    assert doc.api.version_list()["count"] == 1, "one version for each session"
+    assert doc.api.version_list()["count"] == 0
+    assert "session_version" not in doc.agent_activity()["steps"][0]
 
 
 def test_wrong_parameters_are_named(doc):

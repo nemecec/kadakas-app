@@ -34,6 +34,7 @@ use Class::*;
 
 /// The class of each method, sorted by name.
 const TABLE: &[(&str, Class)] = &[
+    ("agent.activity", Read),
     ("annotation.apply_text_style", Edit),
     ("annotation.evaluate", Read),
     ("annotation.list", Read),

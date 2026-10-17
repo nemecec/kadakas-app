@@ -186,7 +186,7 @@ pub const DOMAINS: &[Domain] = &[
     Domain {
         name: "review",
         summary: "What the person sees and what the agent shows: view.get (the camera, zoom, visible box, selection, active layer and visible layers and classes of the person), view.zoom, view.pan and view.camera (move the view of the person with a short animation; the person wins while they navigate and can step back with Back), and view.highlight and view.highlight_clear (point at objects or a place with a short text; the agent shows like a collaborator). They work only in the app (kadakas app --agent-port), never change the document, and describe.review.agent_view has the rules and examples. agent.activity lists the steps of the agent (each call or script run that changed the document, with a summary and the objects it touched; it only reads, and the person reverts a step in the app; describe.review.agent_activity). Review issues and named versions. Issues (BCF terms): issue.create (from objects, a point or the current view, with a viewpoint and a snapshot picture), issue.list (filter by status, assignee, label, object, text), issue.get (viewpoints and the comment thread), issue.update, issue.comment, issue.resolve, issue.delete (the work of somebody else needs the consent of the person: confirm), and BCF files: issue.export_bcf and issue.import_bcf (.bcfzip, BCF 3.0 and 2.1; an issue with the same GUID and other content is a conflict that the person decides). Issues made by an agent have the origin agent; describe.review.issues has the model, the limits and examples. Named versions of the document and the diff between them: save a version, list, read, restore (one undo step, the current state is saved first), delete, and compare two versions or a version and the current document (added, removed and changed things by ID, with the changed property paths and old and new values). The visual compare is the `compare` option of render.png, render.svg and sheet.render (domains render_view and sheets): added objects green, changed orange, removed objects as red ghosts, or both sides next to each other; describe.review.compare has the options. dxf.compare compares two DXF or DWG files without importing them: a JSON diff, and an overlay picture (png, svg or pdf) with optional revision clouds (describe.review.dxf_compare).",
-        prefixes: &["version", "dxf", "issue"],
+        prefixes: &["version", "dxf", "issue", "agent"],
         read_only: false,
         open_world: false,
     },
@@ -222,7 +222,6 @@ fn prefix_of(method: &str) -> &str {
 /// reads and drives what the person sees (AGR-02, AGR-03) are part of the review: a person
 /// reviews what the agent does, and the agent points at it.
 const METHOD_DOMAIN: &[(&str, &str)] = &[
-    ("agent.activity", "review"),
     ("view.get", "review"),
     ("view.zoom", "review"),
     ("view.pan", "review"),

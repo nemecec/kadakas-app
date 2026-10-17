@@ -190,6 +190,7 @@ fn reads_only(method: &str) -> bool {
             | "collab"
             | "feedback"
             | "version"
+            | "issue"
             | "undo"
             | "redo"
             | "selection"
@@ -214,6 +215,19 @@ fn reads_only(method: &str) -> bool {
 }
 
 impl Session {
+    /// Turns on the version "Before agent session": the first call that may change the document
+    /// in an agent session (a new connection, or a call after 30 minutes of silence) saves one
+    /// first. It is a change of the history of the document (an undo step, and a read of the
+    /// history of a file that waits unread), so a host turns it on where a person reviews the
+    /// work of an agent (the app does). Off by default.
+    pub fn set_session_version(&mut self, on: bool) {
+        self.session_version = on;
+    }
+
+    pub fn session_version_enabled(&self) -> bool {
+        self.session_version
+    }
+
     /// Runs a request of an agent and records the step. See [`Session::handle_as`].
     pub(crate) fn handle_agent_call(
         &mut self,
@@ -223,7 +237,7 @@ impl Session {
     ) -> Result<Value, RpcError> {
         let now = review_api::default_now();
         let started = self.activity.touch(conn, now);
-        if started.needs_version && !reads_only(method) {
+        if self.session_version && started.needs_version && !reads_only(method) {
             self.activity.version_attempted(started.session);
             self.save_session_version(started.session, now);
         }
@@ -464,7 +478,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
 /// Extra text for `describe`.
 pub fn describe() -> Value {
     json!({
-        "concept": "Every call or script run that changes the document is one step of the agent. The person reviews the steps in the Activity panel: what each step added, changed and removed (highlighted in the plan and in 3D), the time, the method and a summary, and can undo back to a step or revert one step. agent.activity reads the same list. A named version \"Before agent session\" is saved before the first change of a session (a new connection, or a call after 30 minutes of silence); if the limit of versions refuses it, the step says so in version_note.",
+        "concept": "Every call or script run that changes the document is one step of the agent. The person reviews the steps in the Activity panel: what each step added, changed and removed (highlighted in the plan and in 3D), the time, the method and a summary, and can undo back to a step or revert one step. agent.activity reads the same list. In the app (not in the headless server) a named version \"Before agent session\" is saved before the first change of a session (a new connection, or a call after 30 minutes of silence); if the limit of versions refuses it, the step says so in version_note.",
         "revert": "The person can revert one step although later steps exist. Objects of the step that something changed later (by the person or by you) are never overwritten: the revert is refused, or reverts the rest and leaves exactly those objects. A step that also changed layers, classes, resources, settings, versions or issues can only be undone together with the steps above it. Your next steps may therefore find objects gone or as they were: read before you rely on an ID.",
         "script_runs": "One script run (script.eval) is one step, whatever number of calls it made.",
         "examples": [

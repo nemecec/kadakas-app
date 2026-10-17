@@ -129,6 +129,8 @@ fn a_step_lists_its_objects_by_how_they_changed() {
 #[test]
 fn a_version_is_saved_when_a_session_starts_and_not_for_every_call() {
     let mut s = Session::with_sequential_ids();
+    assert!(!s.session_version_enabled(), "off unless the host asks");
+    s.set_session_version(true);
     // A read does not start a session that needs a version.
     agent(&mut s, AGENT, "document.summary", json!({}));
     assert_eq!(person(&mut s, "version.list", json!({}))["count"], 0);
@@ -172,6 +174,7 @@ fn a_version_is_saved_when_a_session_starts_and_not_for_every_call() {
 #[test]
 fn a_refused_version_does_not_stop_the_agent_and_the_step_says_so() {
     let mut s = Session::with_sequential_ids();
+    s.set_session_version(true);
     person(&mut s, "version.create", json!({"name": "Mine"}));
     s.set_limits(SessionLimits {
         max_versions: 1,
@@ -291,10 +294,12 @@ fn a_step_that_the_history_forgot_says_so() {
 #[test]
 fn a_new_document_empties_the_log() {
     let mut s = Session::with_sequential_ids();
+    s.set_session_version(true);
     agent(&mut s, AGENT, "execute", add_line(0.0));
     assert_eq!(steps(&mut s).len(), 1);
     s.replace_document(kadakas_core::model::Document::default());
     assert!(steps(&mut s).is_empty());
+    assert!(s.session_version_enabled(), "the setting stays");
 }
 
 #[test]
