@@ -2220,9 +2220,9 @@ if TYPE_CHECKING:
     }, total=False)
 
     AgentActivityParams = TypedDict("AgentActivityParams", {
-        'limit': int,
-        'since': int,
-        'step': int,
+        'limit': int | None,
+        'since': int | None,
+        'step': int | None,
     }, total=False)
 
     ViewGetParams = TypedDict("ViewGetParams", {}, total=False)
@@ -4902,7 +4902,7 @@ class Api:
         return self._call("view.screenshot", params or None)
 
     def agent_activity(self, **params: "Unpack[AgentActivityParams]") -> Any:
-        """The steps of the agent: each call or script run that changed the document (read only). params: {step?, since?, limit?}. Without step: {steps: [{id, session, time_ms, method, summary, counts {objects {added, changed, removed}, layers, classes, resources}, seen, state (active | undone | gone), revertible, session_version? (the version saved before the session; render.png {compare: {from: <it>, to: "current"}} draws the changes of the session), version_note?}], last_id, total}; since: only steps after this id; limit: at most this many, the newest (default 50, at most 500). With step: the same entry plus {objects {added, changed, removed} (IDs, at most 1000 each), truncated, blocked? (why the person cannot revert it now)}. The summary is written from the change set. The person sees the same list in the Activity panel and can undo or revert a step there; you cannot.
+        """The steps of the agent: each call or script run that changed the document (read only), also a call that failed after it had made changes, and an undo or redo of the agent. params: {step?, since?, limit?}. Without step: {steps: [{id, session, time_ms, method, kind (call | undo | redo), summary, counts {objects {added, changed, removed}, layers, classes, resources}, seen, reverted, partial (the history limit dropped part of the record), state (active | undone | gone), revertible (null for the older steps of a long list), session_version? (the version saved before the session; render.png {compare: {from: <it>, to: "current"}} draws the changes of the session), version_note?}], last_id, total}; since: only steps after this id; limit: at most this many, the newest (default 50, at most 500). With step: the same entry plus {objects {added, changed, removed} (IDs, at most 1000 each), truncated, blocked? (why the person cannot revert it now)}. The summary is written from the change set. The person sees the same list in the Activity panel and can undo or revert a step there; you cannot. While the person has undone steps of their own with Undo to here and can redo them, your calls that change the document fail with a conflict (reason redo_pending) until the person redoes them or releases the hold.
 
         JSON-RPC method ``agent.activity``."""
         return self._call("agent.activity", params or None)

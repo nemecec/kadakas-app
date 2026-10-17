@@ -295,6 +295,17 @@ impl Session {
         method: &str,
         p: Value,
     ) -> Result<Value, RpcError> {
+        self.agent_call_with(conn, method, |s| s.handle(method, p))
+    }
+
+    /// The call of an agent with the work given as a function (a seam for tests that need a call
+    /// which edits and then fails).
+    pub(crate) fn agent_call_with(
+        &mut self,
+        conn: u64,
+        method: &str,
+        run: impl FnOnce(&mut Session) -> Result<Value, RpcError>,
+    ) -> Result<Value, RpcError> {
         let now = review_api::default_now();
         let started = self.activity.touch(conn, now);
         let changes = may_change_document(method);
@@ -312,8 +323,7 @@ impl Session {
         let revision = self.editor.revision();
         // A call that fails or panics after some changes has made steps: they are logged too, so
         // the person sees what the agent did (the call itself does not roll back).
-        let result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle(method, p)));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self)));
         if self.editor.revision() != revision {
             self.record_call(conn, method, now, mark);
         }
@@ -659,4 +669,62 @@ pub fn describe() -> Value {
             {"method": "agent.activity", "params": {"step": 3}},
         ],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kadakas_core::command::Command;
+    use kadakas_core::model::Shape;
+
+    fn add(s: &mut Session, x: f64) {
+        s.editor
+            .execute(&Command::AddObject {
+                shape: Shape::Line {
+                    a: glam::DVec2::new(x, 0.0),
+                    b: glam::DVec2::new(x + 1.0, 1.0),
+                },
+                layer: None,
+                class: None,
+                attrs: Default::default(),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn a_call_that_edits_and_then_fails_is_still_logged() {
+        let mut s = Session::with_sequential_ids();
+        s.editor.set_origin(Origin::Agent);
+        let r = s.agent_call_with(3, "plants.place", |s| {
+            add(s, 0.0);
+            add(s, 5.0);
+            Err(RpcError::conflict("the second half failed"))
+        });
+        assert!(r.is_err(), "the error reaches the agent");
+        assert_eq!(s.activity.len(), 1);
+        let step = &s.activity.steps()[0];
+        assert_eq!(step.serials.len(), 2);
+        assert_eq!(step.summary.objects.added, 2);
+        assert_eq!(step.method, "plants.place");
+        // The person can revert what the failed call left behind.
+        assert!(s.revert_check(step.id).unwrap().why().is_none());
+        // A failed call that changed nothing is no step.
+        let _ = s.agent_call_with(3, "plants.place", |_| Err(RpcError::conflict("no")));
+        assert_eq!(s.activity.len(), 1);
+    }
+
+    #[test]
+    fn a_call_that_edits_and_then_panics_is_logged_and_the_panic_goes_on() {
+        let mut s = Session::with_sequential_ids();
+        s.editor.set_origin(Origin::Agent);
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = s.agent_call_with(3, "plants.place", |s| {
+                add(s, 0.0);
+                panic!("a bug in a method");
+            });
+        }));
+        assert!(caught.is_err());
+        assert_eq!(s.activity.len(), 1);
+        assert_eq!(s.activity.steps()[0].summary.objects.added, 1);
+    }
 }

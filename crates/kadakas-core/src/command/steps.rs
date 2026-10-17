@@ -1171,6 +1171,119 @@ mod tests {
     }
 
     #[test]
+    fn every_refusal_and_conflict_reads_as_a_sentence() {
+        let id = ObjectId::from_num(7);
+        let kinds = [
+            ConflictKind::ChangedLater,
+            ConflictKind::DeletedLater,
+            ConflictKind::ExistsAgain,
+            ConflictKind::LayerGone,
+            ConflictKind::LayerLocked,
+            ConflictKind::ClassGone,
+            ConflictKind::Grey,
+            ConflictKind::MissingRef,
+            ConflictKind::UsedLater,
+        ];
+        let list: Vec<Conflict> = kinds.iter().map(|k| Conflict { id, kind: *k }).collect();
+        let text = Refusal::Conflicts(list).to_string();
+        for word in [
+            "changed later",
+            "deleted later",
+            "exist again",
+            "layer that is gone",
+            "locked layer",
+            "class that is gone",
+            "grey",
+            "missing what they refer to",
+            "used by work made later",
+        ] {
+            assert!(text.contains(word), "{word}: {text}");
+        }
+        for r in [
+            Refusal::Gone,
+            Refusal::AlreadyUndone,
+            Refusal::NothingToDo,
+            Refusal::Snapshot { later: 2 },
+            Refusal::Shared,
+            Refusal::InUse("used later: object x".into()),
+            Refusal::Rejected("no".into()),
+        ] {
+            assert!(!r.to_string().is_empty());
+        }
+        assert_eq!(
+            kind_of(&CommandError::LayerLocked(LayerId::from_num(1))),
+            ConflictKind::LayerLocked
+        );
+        assert_eq!(
+            kind_of(&CommandError::NoLayer(LayerId::from_num(1))),
+            ConflictKind::LayerGone
+        );
+        assert_eq!(
+            kind_of(&CommandError::NoClass(ClassId::from_num(1))),
+            ConflictKind::ClassGone
+        );
+        assert_eq!(
+            kind_of(&CommandError::Invalid("layer x is grey".into())),
+            ConflictKind::Grey
+        );
+        assert_eq!(
+            kind_of(&CommandError::Invalid("other".into())),
+            ConflictKind::MissingRef
+        );
+    }
+
+    #[test]
+    fn a_restored_object_needs_its_layer_group_and_class() {
+        let mut ed = Editor::with_sequential_ids();
+        let a = add(&mut ed, 0.0);
+        let (s, d) = step(&mut ed, |e| {
+            e.execute(&Command::DeleteObjects { ids: vec![a] }).unwrap();
+        });
+        // The layer of the object is locked since: it cannot come back.
+        let layer = d.objects[0].before.as_ref().unwrap().layer;
+        add(&mut ed, 9.0);
+        ed.execute(&Command::ModifyLayer {
+            id: layer,
+            name: None,
+            visible: None,
+            locked: Some(true),
+            elevation: None,
+            scale: None,
+        })
+        .unwrap();
+        match ed.revert_step(&s, &d, false, true) {
+            Err(Refusal::Conflicts(l)) => assert_eq!(l[0].kind, ConflictKind::LayerLocked),
+            other => panic!("{other:?}"),
+        }
+        ed.execute(&Command::ModifyLayer {
+            id: layer,
+            name: None,
+            visible: None,
+            locked: Some(false),
+            elevation: None,
+            scale: None,
+        })
+        .unwrap();
+        let r = ed.revert_step(&s, &d, false, true).unwrap();
+        assert_eq!(r.reverted, vec![a]);
+        assert!(ed.doc().object(a).is_some());
+        // An object with this ID exists again: no second one is made.
+        let (s2, d2) = step(&mut ed, |e| {
+            e.execute(&Command::DeleteObjects { ids: vec![a] }).unwrap();
+        });
+        let again = d2.objects[0].before.clone().unwrap();
+        ed.execute(&Command::AddObject {
+            shape: again.shape.clone(),
+            layer: None,
+            class: None,
+            attrs: Default::default(),
+        })
+        .unwrap();
+        // (a new ID, so the old one stays free and comes back)
+        assert!(ed.revert_step(&s2, &d2, false, true).is_ok());
+    }
+
+    #[test]
     fn the_inverted_change_swaps_before_and_after() {
         let mut ed = Editor::with_sequential_ids();
         let (_, d) = step(&mut ed, |e| {

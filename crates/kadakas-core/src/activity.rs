@@ -709,6 +709,92 @@ mod tests {
     }
 
     #[test]
+    fn the_text_of_a_summary_names_every_kind_of_change() {
+        let c = |a, ch, r| Counts {
+            added: a,
+            changed: ch,
+            removed: r,
+        };
+        let s = Summary {
+            objects: c(2, 1, 1),
+            kinds: vec![("line".into(), 3), ("rect".into(), 1)],
+            others: 2,
+            layers: c(1, 1, 1),
+            classes: c(2, 1, 1),
+            resources: c(1, 2, 1),
+            layers_added: vec!["Trees".into()],
+            document: true,
+            versions: true,
+            issues: true,
+        };
+        assert_eq!(
+            s.text(),
+            "Added 2 objects; changed 1 object; removed 1 object; added layer Trees; changed 1 layer; \
+             removed 1 layer; added 2 classes; changed 1 class; removed 1 class; added 1 resource; \
+             changed 2 resources; removed 1 resource; changed document settings; changed the versions; \
+             changed issues"
+        );
+        // One kind of change shows the kinds of shape, with the rest counted.
+        let only = Summary {
+            objects: c(0, 0, 4),
+            kinds: vec![("line".into(), 3), ("rect".into(), 1)],
+            others: 2,
+            ..Summary::default()
+        };
+        assert_eq!(only.text(), "Removed 4 objects (3 line, 1 rect, 2 other)");
+        let changed = Summary {
+            objects: c(0, 1, 0),
+            kinds: vec![("circle".into(), 1)],
+            ..Summary::default()
+        };
+        assert_eq!(changed.text(), "Changed 1 object (1 circle)");
+        assert_eq!(Summary::default().text(), "no visible change");
+    }
+
+    #[test]
+    fn a_step_tells_its_objects_reverted_and_the_notes_of_its_session() {
+        let mut ed = Editor::with_sequential_ids();
+        let mut log = ActivityLog::default();
+        let a = record(&mut log, &mut ed, 1, |e| {
+            add(e, 0.0);
+            add(e, 3.0);
+        })
+        .unwrap();
+        let step = log.get(a).unwrap();
+        assert_eq!(step.object_ids().len(), 2);
+        assert_eq!(step.ids(Counted::Changed).len(), 0);
+        assert!(!step.reverted && !step.partial && step.kind == StepKind::Call);
+        let g = log.generation();
+        log.set_reverted(a);
+        log.set_reverted(a);
+        log.set_reverted(999);
+        assert!(log.get(a).unwrap().reverted);
+        assert_eq!(log.generation(), g + 1, "the second mark changes nothing");
+        assert_eq!(log.since(0).count(), 1);
+        assert_eq!(log.since(a).count(), 0);
+        // Notes and versions of a session, bounded.
+        log.note_version_failure(1, "limit".into());
+        assert_eq!(log.version_note(1), Some("limit"));
+        for i in 0..70 {
+            log.note_version_failure(100 + i, "x".into());
+        }
+        assert_eq!(log.version_note(1), None, "the oldest notes go first");
+        assert!(log.version_note(169).is_some());
+        for i in 0..300 {
+            log.set_session_version(i, i + 1000);
+        }
+        assert_eq!(log.session_version(0), None);
+        assert_eq!(log.session_version(299), Some(1299));
+        assert!(!log.set_seen_one(999, true));
+        assert!(log.set_seen_one(a, true));
+        assert!(!log.set_seen_one(a, true));
+        assert_eq!(log.session_of(1), Some(1));
+        log.clear();
+        log.clear();
+        assert!(log.is_empty() && log.session_version(299).is_none());
+    }
+
+    #[test]
     fn seen_marks_and_clear() {
         let mut ed = Editor::with_sequential_ids();
         let mut log = ActivityLog::default();

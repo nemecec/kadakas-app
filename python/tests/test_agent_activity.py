@@ -39,12 +39,15 @@ def test_a_script_run_is_one_step(open_doc):
     assert step["method"] == "script.eval" and step["counts"]["objects"]["added"] == 5
 
 
-def test_undo_by_the_agent_marks_the_step_undone_and_makes_no_step(doc):
+def test_undo_by_the_agent_marks_the_step_undone_and_is_a_step_of_its_own(doc):
     doc.add.rect([0, 0], [10, 10])
     doc.api.undo()
     log = doc.agent_activity()
-    assert len(log["steps"]) == 1 and log["steps"][0]["state"] == "undone"
-    assert log["steps"][0]["revertible"] is False
+    assert len(log["steps"]) == 2
+    first, undo = log["steps"]
+    assert first["state"] == "undone" and first["revertible"] is False
+    assert undo["kind"] == "undo" and undo["revertible"] is False
+    assert undo["counts"]["objects"]["removed"] == 1
 
 
 def test_the_headless_server_saves_no_version_by_itself(doc):
