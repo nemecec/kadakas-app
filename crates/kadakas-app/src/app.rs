@@ -2381,6 +2381,18 @@ impl KadakasApp {
         }
     }
 
+    /// The agent opened or made another document (`file.open`, `file.new`): the window fits the
+    /// view to it in the next frames. That change is made for the agent's own call, so it must
+    /// not count as the person's navigation and hold the agent back.
+    fn agent_view_document_replaced(&mut self) {
+        self.agent_view.reset();
+        self.agent_view.expect_fit();
+        self.machine.cancel();
+        self.needs_fit = true;
+        self.view_history.clear();
+        self.view3d.request_fit();
+    }
+
     /// One frame of the agent's view: pointers that are over go, animations move on.
     fn agent_view_step(&mut self, ctx: &egui::Context) {
         let animating = crate::agent_view::step(&mut self.agent_env(ctx));
@@ -3204,11 +3216,7 @@ impl eframe::App for KadakasApp {
                 }
             }
             if fx.replaced {
-                self.agent_view.reset();
-                self.machine.cancel();
-                self.needs_fit = true;
-                self.view_history.clear();
-                self.view3d.request_fit();
+                self.agent_view_document_replaced();
             }
             self.title_dirty |= fx.path_changed;
         }

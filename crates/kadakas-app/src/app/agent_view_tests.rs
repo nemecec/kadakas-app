@@ -1787,3 +1787,25 @@ fn a_viewpoint_that_the_api_made_opens_on_the_same_place_in_the_app() {
     let at = o + r.app.view3d.camera.target.as_dvec3();
     assert!((at.x - target[0]).abs() < 1.0 && (at.y - target[1]).abs() < 1.0);
 }
+
+#[test]
+fn the_view_change_of_file_open_does_not_hold_the_agent_back() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.frame(vec![]);
+    r.advance(1.0);
+    // The agent opens a file: the window fits the new drawing in the next frames. That change is
+    // made for the agent's own call, so the next view.zoom is not refused.
+    r.app.agent_view_document_replaced();
+    r.time += 0.016;
+    r.frame(vec![]);
+    r.time += 0.016;
+    r.frame(vec![]);
+    r.time += 0.016;
+    r.frame(vec![]);
+    r.ok("view.zoom", json!({"at": [100, 100], "scale": 1.0}));
+    // A real navigation of the person afterwards still holds the agent back.
+    r.drag_frames(3);
+    let e = r.err("view.zoom", json!({"at": [1, 1], "scale": 1.0}));
+    assert_eq!(e.reason, Some(REASON_PERSON_NAVIGATING));
+}
