@@ -1809,3 +1809,65 @@ fn the_view_change_of_file_open_does_not_hold_the_agent_back() {
     let e = r.err("view.zoom", json!({"at": [1, 1], "scale": 1.0}));
     assert_eq!(e.reason, Some(REASON_PERSON_NAVIGATING));
 }
+
+#[test]
+fn a_label_and_the_panel_keep_clear_of_what_the_pointer_marks() {
+    use crate::view::ViewExt;
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    r.ok("view.zoom", json!({"at": [0, 0], "scale": 0.1}));
+    r.advance(1.0);
+    // A rectangle in the top right corner of the drawing, where the panel sits by default, and
+    // right at the top, so a label above it would be pushed back over it.
+    let canvas = r.canvas();
+    let lo = r
+        .app
+        .view
+        .to_model(egui::pos2(canvas.right() - 150.0, canvas.top() + 4.0));
+    let hi = r
+        .app
+        .view
+        .to_model(egui::pos2(canvas.right() - 20.0, canvas.top() + 60.0));
+    let id = r.rect(lo.x.min(hi.x), lo.y.min(hi.y), (hi.x - lo.x).abs(), (hi.y - lo.y).abs());
+    r.ok(
+        "view.highlight",
+        json!({"ids": [id.to_string()], "text": "Check this stall row"}),
+    );
+    r.frame(vec![]);
+    let out = r.frame(vec![]);
+    let _ = out;
+    let targets = crate::agent_view_ui::targets_of(&r.ctx);
+    assert_eq!(targets.len(), 1, "{targets:?}");
+    let target = targets[0];
+    // The panel is somewhere else than over the target.
+    let panel = r
+        .ctx
+        .memory(|m| m.area_rect(egui::Id::new("agent-view-panel")))
+        .expect("the panel is shown");
+    assert!(!panel.intersects(target), "{panel:?} covers {target:?}");
+    // The label does not cover the target: it is a shape whose rectangle is a filled badge.
+    let out = r.frame(vec![]);
+    fn badges(s: &egui::Shape, into: &mut Vec<egui::Rect>) {
+        match s {
+            egui::Shape::Rect(r) if r.fill.a() > 200 && r.rect.height() < 40.0 => {
+                into.push(r.rect)
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| badges(s, into)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    for c in &out.shapes {
+        badges(&c.shape, &mut found);
+    }
+    // The badge of the pointer is the one with the text; none of the small filled rectangles
+    // may lie on the target.
+    assert!(
+        found
+            .iter()
+            .filter(|b| b.width() > 60.0)
+            .all(|b| !b.intersects(target)),
+        "{found:?} cover {target:?}"
+    );
+}
