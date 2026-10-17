@@ -140,6 +140,12 @@ impl AgentView {
         self.panel_hidden = false;
     }
 
+    /// The window is about to fit the view to a new document (the agent opened a file): the
+    /// next few frames change the view, and that is not the person's.
+    pub fn expect_fit(&mut self) {
+        self.expect_change = 6;
+    }
+
     /// A new document: the pointers and the views from before are about the old one.
     pub fn reset(&mut self) {
         self.highlights.clear();

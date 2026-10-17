@@ -486,11 +486,11 @@ pub const METHODS: &[(&str, &str)] = &[
     ),
     (
         "render.svg",
-        "SVG image of visible objects. params: {width?: px, compare?}. With compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) the plan of `to` is drawn with the changes since `from`: added objects green, changed objects orange, removed objects as red dashed ghosts, each with a mark (+, ~, -) and a legend with the counts. Returns {svg, compare?}.",
+        "SVG image of visible objects. params: {width?: px, region? ([x0, y0, x1, y1] in drawing coordinates, mm: draw only this part, and draw the units of the paved areas in it one by one when there are at most 60,000 (limits.pattern_units); above that the paved areas are a preview that the picture marks, so zoom to a smaller region to see every unit), show_check? (true: mark the findings of unit_pattern.check on the paved areas: overlaps, small pieces, joints, holes), compare?}. With compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) the plan of `to` is drawn with the changes since `from`: added objects green, changed objects orange, removed objects as red dashed ghosts, each with a mark (+, ~, -) and a legend with the counts. Returns {svg, compare?}.",
     ),
     (
         "render.png",
-        "PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) draws `to` with the changes since `from`: added objects green, changed orange, removed objects as see-through red ghosts; with mode side_by_side it draws both sides next to each other with the same framing. render_style cannot be used with compare. Returns {png_base64, width, height, view, projection, mode, render_style (not with compare), compare?}.",
+        "PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?, region? ([x0, y0, x1, y1] in drawing coordinates, mm: frame the camera on this part of the drawing instead of the whole model, for a close picture of a part of a big site)}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) draws `to` with the changes since `from`: added objects green, changed orange, removed objects as see-through red ghosts; with mode side_by_side it draws both sides next to each other with the same framing. render_style cannot be used with compare. Returns {png_base64, width, height, view, projection, mode, render_style (not with compare), compare?}.",
     ),
     (
         "view.list",
@@ -1498,7 +1498,7 @@ impl Session {
                 #[allow(unused_mut)]
                 let mut d = json!({
                 "methods": METHODS.iter().map(|(m, d)| json!({"name": m, "doc": d})).collect::<Vec<_>>(),
-                "units": "millimeters, Y axis up, angles in radians",
+                "units": "millimeters, Y axis up. Angles are NOT one unit: each parameter states its own. Radians (counterclockwise): drafting and placing in the plan (edit.rotate and group.rotate angle, edit.array angle and rotate, edit.chamfer angle, dimension angle, symbol and plugin rotation, the rotation of a georeference and of an import, the camera yaw and pitch of an issue viewpoint, massing ridge_angle, the aspect that the ground query returns). Degrees (counterclockwise unless said): everything about patterns and hardscapes (hardscape.add, hardscape.set, hardscape.zone_set, hardscape_style joints angle, unit_pattern.* angle, slope angle_deg, split zone angle), irrigation, hatch and tile resources, solids (rotation_deg, sweep_angle, segment_angle), site.texture and texture bed rotation, mapping rotation, snap angle_step_deg, north_angle and every name that ends in _deg or degrees. The reply of a method uses the unit of the same name in its parameters.",
                 "vertex_kinds": "Polyline points and landscape/hardscape boundaries are vertices. [x, y] is a corner. Other kinds are {p: [x, y], kind: corner | arc (with radius, a fillet) | point_on_arc | bezier | cubic}.",
                 "command_examples": command_examples(),
                 "plants": plants_api::describe(),
@@ -1751,6 +1751,7 @@ impl Session {
                     render_style: Option<Value>,
                     samples: Option<u32>,
                     compare: Option<Value>,
+                    region: Option<[f64; 4]>,
                 }
                 let P {
                     view,
@@ -1761,7 +1762,9 @@ impl Session {
                     render_style,
                     samples,
                     compare,
+                    region,
                 } = params(p)?;
+                let region = region_param(region)?;
                 let settings =
                     self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
                 let (width, height) = self
@@ -1784,7 +1787,20 @@ impl Session {
                 let scene = self.scene();
                 let doc = self.editor.doc();
                 let mut camera = Camera::standard(settings.view, settings.projection);
-                camera.fit(scene.bounds, width as f32 / height as f32);
+                // The camera frames the whole model, or the box of `region` (over the height of
+                // the model).
+                let framed = match (region, scene.bounds) {
+                    (Some((lo, hi)), bounds) => {
+                        let (zlo, zhi) = bounds.map_or((0.0, 0.0), |(l, h)| (l.z, h.z));
+                        let o = scene.origin;
+                        Some((
+                            glam::Vec3::new((lo.x - o.x) as f32, (lo.y - o.y) as f32, zlo),
+                            glam::Vec3::new((hi.x - o.x) as f32, (hi.y - o.y) as f32, zhi),
+                        ))
+                    }
+                    (None, bounds) => bounds,
+                };
+                camera.fit(framed, width as f32 / height as f32);
                 // A named style, else the active style of the document, else none.
                 let style = match render_style.filter(|v| !v.is_null()) {
                     Some(v) => Some(present_api::style_param(doc, &v)?),
@@ -2276,6 +2292,41 @@ mod tests {
 
     fn circle_cmd(x: f64) -> Value {
         json!({"op": "add_object", "shape": {"kind": "circle", "center": [x, 0], "radius": 1}})
+    }
+
+    #[test]
+    fn render_png_frames_a_region_and_the_docs_name_region_and_show_check() {
+        let mut s = Session::with_sequential_ids();
+        for x in [0.0, 50_000.0] {
+            ok(
+                &mut s,
+                "hardscape.add",
+                json!({"boundary": [[x, 0], [x + 4000.0, 0], [x + 4000.0, 4000.0], [x, 4000.0]],
+                       "material": "Granite", "thickness": 60}),
+            );
+        }
+        let whole = ok(
+            &mut s,
+            "render.png",
+            json!({"view": "top", "projection": "ortho", "width": 96, "height": 96}),
+        );
+        let part = ok(
+            &mut s,
+            "render.png",
+            json!({"view": "top", "projection": "ortho", "width": 96, "height": 96,
+                   "region": [-500, -500, 4500, 4500]}),
+        );
+        assert_ne!(whole["png_base64"], part["png_base64"]);
+        let e = s
+            .handle("render.png", json!({"region": [0, 0, 0, 5]}))
+            .unwrap_err();
+        assert!(e.message.contains("region"), "{}", e.message);
+        for m in ["render.svg", "render.png"] {
+            let doc = METHODS.iter().find(|(n, _)| *n == m).unwrap().1;
+            assert!(doc.contains("region?"), "{m}");
+        }
+        let doc = METHODS.iter().find(|(n, _)| *n == "render.svg").unwrap().1;
+        assert!(doc.contains("show_check?"));
     }
 
     #[test]

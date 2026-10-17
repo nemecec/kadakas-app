@@ -49,7 +49,8 @@ def test_every_api_method_is_in_exactly_one_domain_tool(mcp):
     tools = listed(mcp)
     seen = []
     for tool in tools.values():
-        seen += tool["inputSchema"]["properties"]["method"]["enum"]
+        # The describe tool takes any method name, and none: it has no list.
+        seen += tool["inputSchema"]["properties"]["method"].get("enum", ["describe"])
     assert len(seen) == len(set(seen))
     api = {m["name"] for m in mcp.method_json("describe", "describe")["methods"]}
     # The methods that need a message stream are not tools: a tool call returns one result.
@@ -59,7 +60,7 @@ def test_every_api_method_is_in_exactly_one_domain_tool(mcp):
     api = {m for m in api if not m.startswith("feedback.")}
     assert (api - stream) | {"file.save", "file.open"} == set(seen)
     for tool in tools.values():
-        for method in tool["inputSchema"]["properties"]["method"]["enum"]:
+        for method in tool["inputSchema"]["properties"]["method"].get("enum", ["describe"]):
             assert f"- {method}:" in tool["description"], (tool["name"], method)
 
 
@@ -67,7 +68,9 @@ def test_every_tool_takes_method_and_params_and_has_annotations(mcp):
     for name, tool in listed(mcp).items():
         assert tool["description"], name
         schema = tool["inputSchema"]
-        assert schema["type"] == "object" and schema["required"] == ["method"], name
+        assert schema["type"] == "object", name
+        # describe works without a method.
+        assert schema.get("required") == (None if name == "describe" else ["method"]), name
         assert schema["properties"]["params"]["type"] == "object", name
         assert isinstance(tool["annotations"]["readOnlyHint"], bool), name
     tools = listed(mcp)
@@ -125,7 +128,20 @@ def test_a_call_without_a_method_or_with_a_method_of_another_domain_is_a_tool_er
     result = mcp.method("objects", "plants.place", {})
     assert result["isError"] is True
     text = result["content"][0]["text"]
-    assert "has no method 'plants.place'" in text and "objects.list" in text
+    # The error names the tool that has the method.
+    assert "tool 'plants'" in text and "plants.place" in text
+    result = mcp.method("objects", "no.such", {})
+    assert "has no method 'no.such'" in result["content"][0]["text"]
+
+
+def test_describe_needs_no_method_and_names_the_tool_of_each_method(mcp):
+    short = mcp.tool_json("describe", {})
+    assert {m["name"]: m["tool"] for m in short["methods"]}["view.zoom"] == "review"
+    assert short["methods"][0]["doc"].endswith(".")
+    one = mcp.tool_json("describe", {"method": "hardscape.course"})
+    assert one["tool"] == "hardscape_landscape" and one["params"]["type"] == "object"
+    full = mcp.tool_json("describe", {"docs": True})
+    assert len(str(full["methods"])) > 2 * len(str(short["methods"]))
 
 
 def test_unknown_tool_is_a_jsonrpc_error(mcp):

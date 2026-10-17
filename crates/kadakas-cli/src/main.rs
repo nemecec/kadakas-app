@@ -349,6 +349,13 @@ fn resolve_remote(
 ) -> Result<(String, String), String> {
     if connect.is_empty() {
         let info = info.ok_or("no running Kadakas app found: start the app with --agent-port, or give --connect HOST:PORT --token TOKEN")?;
+        if let Some(pid) = info.stale_pid() {
+            let file = sys_agent::agent_info_path()
+                .map_or_else(String::new, |p| format!(" {}", p.display()));
+            return Err(format!(
+                "the runtime file{file} is left over from a Kadakas app (process {pid}) that is no longer running. Start the app again with --agent-port; the file is replaced then (or delete it)"
+            ));
+        }
         return Ok((
             format!("127.0.0.1:{}", info.port),
             token.map_or(info.token, str::to_string),
@@ -536,10 +543,10 @@ fn mcp_version(requested: Option<&str>) -> &'static str {
         .unwrap_or(MCP_VERSIONS[0])
 }
 
-/// The content of a tool result. `render.png` gives an image block that a model can look at,
+/// The content of a tool result. `render.png` and `view.screenshot` give an image block that a model can look at,
 /// plus the other fields as text. Other methods give their result as text.
 fn tool_content(method: &str, response: &Value, text: String) -> Value {
-    if (method == "render.png" || method == "sheet.render")
+    if (method == "render.png" || method == "sheet.render" || method == "view.screenshot")
         && let Some(data) = response["result"]["png_base64"].as_str()
     {
         let mut meta = response["result"].clone();
@@ -698,7 +705,19 @@ fn mcp(mut backend: Backend, flat: bool, schemas: bool) {
                     }
                     mcp_tools::Call::Method(m, params) => {
                         let params = with_client(m, params, &client);
-                        let r = backend.call(json!(1), m, params);
+                        // `docs` is a switch of this server: the API does not take it.
+                        let mut params = params;
+                        let docs = params
+                            .as_object_mut()
+                            .and_then(|o| o.remove("docs"))
+                            .and_then(|v| v.as_bool())
+                            == Some(true);
+                        let mut r = backend.call(json!(1), m, params);
+                        if m == "describe"
+                            && let Some(result) = r.get_mut("result")
+                        {
+                            mcp_tools::name_tools(flat, docs, result);
+                        }
                         let (text, is_error) = match r.get("error") {
                             Some(e) => (error_text(e), true),
                             None => (r["result"].to_string(), false),
@@ -965,10 +984,38 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
 
+    #[cfg(unix)]
+    #[test]
+    fn a_runtime_file_of_a_dead_app_is_called_stale() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        let stale = AgentInfo {
+            port: 4000,
+            token: "t".into(),
+            pid: Some(dead),
+        };
+        let e = resolve_remote("", None, Some(stale)).unwrap_err();
+        assert!(
+            e.contains("no longer running") && e.contains(&dead.to_string()),
+            "{e}"
+        );
+        // A file of a running app (this process) and a file without a pid are used.
+        for pid in [Some(std::process::id()), None] {
+            let live = AgentInfo {
+                port: 4000,
+                token: "t".into(),
+                pid,
+            };
+            assert!(resolve_remote("", None, Some(live)).is_ok());
+        }
+    }
+
     fn info() -> Option<AgentInfo> {
         Some(AgentInfo {
             port: 4000,
             token: "file-token".into(),
+            pid: None,
         })
     }
 
@@ -1040,6 +1087,17 @@ mod tests {
             tool_content("view.list", &ok, "x".into()),
             json!([{"type": "text", "text": "x"}])
         );
+    }
+
+    #[test]
+    fn the_screenshot_is_an_image_like_render_png() {
+        let ok = json!({"result": {"png_base64": "BBBB", "width": 10}});
+        let c = tool_content("view.screenshot", &ok, ok["result"].to_string());
+        assert_eq!(
+            c[0],
+            json!({"type": "image", "data": "BBBB", "mimeType": "image/png"})
+        );
+        assert!(!c[1]["text"].as_str().unwrap().contains("BBBB"));
     }
 
     #[test]

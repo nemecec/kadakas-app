@@ -907,6 +907,7 @@ pub struct HardscapeSetParams {
         deserialize_with = "nullable",
         skip_serializing_if = "Option::is_none"
     )]
+    /// degrees; null removes the own angle (the angle of the style is used)
     #[schemars(with = "Nullable<Num>")]
     pub angle: Option<Option<Num>>,
     /// replaces the old holes; [] or null clears them
@@ -1062,6 +1063,7 @@ pub struct UnitPatternToObjectsParams {
     pub pattern: Option<Obj>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Point>,
+    /// degrees, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1151,6 +1153,7 @@ pub struct ReportUnitPatternParams {
     pub pattern: Option<Obj>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Point>,
+    /// degrees, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1261,7 +1264,7 @@ pub struct HardscapeZoneSetParams {
     pub zone: Int,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// as the pattern of unit_pattern.layout
+    /// as the pattern of unit_pattern.layout; without gap or spacing the zone follows the joint of the style, also when it changes later
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<Obj>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1319,7 +1322,7 @@ pub struct HardscapeCourseParams {
     /// mm across the path; default: from the stone of the style
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit_width: Option<Num>,
-    /// the joint in mm; default: the joint of the style
+    /// the joint in mm; without it the course follows the joint of the style, also when the style changes later; a number is kept
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gap: Option<Num>,
     /// miter (default), butt or corner_unit
@@ -1328,9 +1331,9 @@ pub struct HardscapeCourseParams {
     /// the name of the unit type; default: the size of the stone of the style
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
-    /// true: the pattern of the hardscape starts at the inner edge of the course (sets its origin and angle)
+    /// true: the pattern of the hardscape starts at the inner edge of the first straight edge of the course path, so its first row is whole (sets its origin and angle, and replaces an align_to_edge; the reply names the edge: index, direction, length). {edge: n}: start at the edge n of the course path instead (the numbers are in the reply and in the note)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub align_field: Option<bool>,
+    pub align_field: Option<Either<bool, Obj>>,
 }
 
 // Parameters of `hardscape.course_remove`.
@@ -1408,6 +1411,7 @@ pub struct UnitPatternCheckParams {
     pub pattern: Option<Obj>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Point>,
+    /// degrees, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

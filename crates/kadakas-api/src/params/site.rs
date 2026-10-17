@@ -158,6 +158,7 @@ pub struct MassingSetParams {
         deserialize_with = "nullable",
         skip_serializing_if = "Option::is_none"
     )]
+    /// radians; null: along the long side
     #[schemars(with = "Nullable<Num>")]
     pub ridge_angle: Option<Option<Num>>,
     /// null: on the site model
@@ -370,10 +371,13 @@ pub struct SweepSetParams {
     pub origin: Option<Point3>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub axis: Option<Value>,
+    /// degrees, the angle of the profile plane around the axis at the start
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation: Option<Num>,
+    /// degrees, default 360
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep_angle: Option<Value>,
+    /// degrees, default 10
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub segment_angle: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -402,10 +406,10 @@ pub struct SweepFromShapesParams {
     /// [x, y]: a vertical axis at this point instead
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub axis_at: Option<Value>,
-    /// default 360
+    /// degrees, default 360
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep_angle: Option<Value>,
-    /// default 10
+    /// degrees, default 10
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub segment_angle: Option<Value>,
     /// mm per turn, default 0
@@ -1113,6 +1117,7 @@ pub struct BedSetParams {
     pub tile_size: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<Point>,
+    /// degrees, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation: Option<Num>,
     /// false: use the mapping of the site model
@@ -1308,6 +1313,7 @@ pub struct GeorefSurveyPointParams {
     /// default: the CRS of the document
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crs: Option<String>,
+    /// radians: the counterclockwise angle of the model X axis against the map X axis (default: the current one)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation: Option<Num>,
     /// {model | object, map}: a second known point sets the rotation

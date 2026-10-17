@@ -62,7 +62,7 @@ fn lot(w: f64, h: f64, planned: bool) -> (Editor, ObjectId) {
                 side: Side::Left,
                 along: 100.0,
                 depth: 200.0,
-                gap: 5.0,
+                gap: Some(5.0),
                 ..Default::default()
             }],
             ..Default::default()

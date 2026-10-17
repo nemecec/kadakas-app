@@ -79,9 +79,25 @@ pub fn default_state() -> DockState<Tab> {
             Tab::Issues,
         ],
     );
-    main.split_left(center, 0.82, vec![Tab::Tools, Tab::Snapping]);
+    // The fraction is the share of the new (left) node: 0.82 here gave the tools 82 percent of the
+    // middle and the drawing a strip of about 180 points.
+    main.split_left(center, 0.18, vec![Tab::Tools, Tab::Snapping]);
     state
 }
+
+/// The narrowest drawing area that is used as it is (points). A narrower one is a strip.
+pub const MIN_DRAWING_WIDTH: f32 = 300.0;
+
+/// True if the drawing area of `width` points is too narrow to use, and the default layout would
+/// give a wider one in a dock of `dock_width` points (in a window too small for that nothing
+/// helps, and the layout is kept).
+pub fn too_narrow(width: f32, dock_width: f32) -> bool {
+    width < MIN_DRAWING_WIDTH && dock_width * DEFAULT_DRAWING_SHARE >= MIN_DRAWING_WIDTH
+}
+
+/// About the part of the window width that the drawing has in the default layout (the tools on
+/// the left and the information palettes on the right take the rest).
+const DEFAULT_DRAWING_SHARE: f32 = 0.5;
 
 /// True if the drawing tab is in the layout.
 pub fn has_drawing(state: &DockState<Tab>) -> bool {

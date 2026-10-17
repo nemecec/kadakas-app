@@ -1411,3 +1411,141 @@ fn a_course_with_holes_is_a_warning_of_the_report_and_of_the_export() {
     assert!(rep["rows"][0].get("warnings").is_none(), "{rep}");
     assert_eq!(rep["totals"]["coverage_gaps"].as_u64(), Some(0));
 }
+
+#[test]
+fn a_joint_change_of_the_style_reaches_courses_and_zones_without_their_own_joint() {
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 8000.0, 4000.0);
+    let style_id = ok(&mut s, "hardscape_style.list", json!({}))["styles"][0]["id"].clone();
+    ok(
+        &mut s,
+        "hardscape.split",
+        json!({"id": id, "lines": [[[3000, -50], [3000, 4050]]], "tolerance": 0.5,
+               "zones": [{"seed": [6000, 2000], "name": "Aisle", "origin": [3000, 0],
+                          "pattern": {"bond": "stack", "unit_length": 300, "unit_width": 150}},
+                         {"seed": [1000, 2000], "name": "Own", "origin": [0, 0],
+                          "pattern": {"bond": "stack", "unit_length": 300, "unit_width": 150, "gap": 3}}]}),
+    );
+    ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "along": "outline"}),
+    );
+    let l = line(&mut s, [0.0, 0.0], [8000.0, 0.0]);
+    ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Fixed", "source": l, "gap": 3}),
+    );
+    let gaps = |s: &mut Session| -> std::collections::BTreeMap<String, f64> {
+        let lay = ok(
+            s,
+            "unit_pattern.layout",
+            json!({"id": id, "include": [], "limit": 0}),
+        );
+        lay["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| {
+                (
+                    g["name"].as_str().unwrap().to_string(),
+                    g["gap_mm"].as_f64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    let before = gaps(&mut s);
+    assert_eq!(before["Kerb"], 5.0, "{before:?}");
+    assert_eq!(before["Aisle"], 5.0, "{before:?}");
+    assert_eq!(before["Own"], 3.0, "{before:?}");
+    assert_eq!(before["Fixed"], 3.0, "{before:?}");
+    ok(
+        &mut s,
+        "hardscape_style.update",
+        json!({"id": style_id, "joints": {"kind": "running_bond", "unit_length": 200, "unit_width": 100, "spacing": 8}}),
+    );
+    let after = gaps(&mut s);
+    assert_eq!(
+        after["Kerb"], 8.0,
+        "a course without a joint follows the style: {after:?}"
+    );
+    assert_eq!(
+        after["Aisle"], 8.0,
+        "a zone pattern without a joint follows the style: {after:?}"
+    );
+    assert_eq!(after["Own"], 3.0, "an explicit joint stays: {after:?}");
+    assert_eq!(after["Fixed"], 3.0, "an explicit joint stays: {after:?}");
+    // The stored plan holds no joint for the inheriting course.
+    let plan = ok(&mut s, "hardscape.plan", json!({"id": id}));
+    let kerb = plan["plan"]["courses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "Kerb")
+        .unwrap()
+        .clone();
+    assert!(kerb.get("gap").is_none(), "{kerb}");
+}
+
+#[test]
+fn align_field_names_the_edge_it_used_and_lets_the_agent_choose_one() {
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 6000.0, 3000.0);
+    // The outline of the slab runs east along the long south edge first.
+    let r = ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "along": "outline", "align_field": true}),
+    );
+    let first = &r["aligned"]["edge"];
+    assert_eq!(first["index"], 0, "{r}");
+    assert_eq!(first["chosen"], false);
+    assert!(first["length_mm"].as_f64().unwrap() > 1000.0, "{r}");
+    let notes = r["notes"].to_string();
+    assert!(
+        notes.contains("align_field") && notes.contains("edge 0"),
+        "{notes}"
+    );
+    let edges = r["aligned"]["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), 4, "{r}");
+    let first_angle = r["aligned"]["angle_deg"].as_f64().unwrap();
+    // Another edge: the short one on the east side, running north.
+    let short = edges
+        .iter()
+        .min_by(|a, b| {
+            a["length_mm"]
+                .as_f64()
+                .unwrap()
+                .total_cmp(&b["length_mm"].as_f64().unwrap())
+        })
+        .unwrap()["index"]
+        .as_u64()
+        .unwrap();
+    let r2 = ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "along": "outline", "align_field": {"edge": short}}),
+    );
+    assert_eq!(r2["aligned"]["edge"]["index"], short);
+    assert_eq!(r2["aligned"]["edge"]["chosen"], true);
+    let second_angle = r2["aligned"]["angle_deg"].as_f64().unwrap();
+    assert!(
+        (second_angle - first_angle).abs() > 45.0,
+        "{first_angle} {second_angle}"
+    );
+    assert!(
+        r2["notes"].to_string().contains("replaced the origin"),
+        "{r2}"
+    );
+    // An edge that does not exist is refused with the list of the real ones.
+    let m = fail(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "along": "outline", "align_field": {"edge": 99}}),
+    );
+    assert!(
+        m.contains("not a straight edge") && m.contains("mm at"),
+        "{m}"
+    );
+}

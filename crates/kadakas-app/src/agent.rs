@@ -264,8 +264,11 @@ pub fn start_with(
             &AgentInfo {
                 port: addr.port(),
                 token: token.clone(),
+                pid: Some(std::process::id()),
             },
         )?;
+        // A kill (SIGTERM, Ctrl-C) removes the file too, so a later `--connect` does not find it.
+        sys_agent::remove_file_on_signal(path);
     }
     let (tx, rx) = mpsc::channel::<Request>();
     let stop = Arc::new(AtomicBool::new(false));
@@ -1243,7 +1246,8 @@ mod tests {
             info,
             AgentInfo {
                 port: server.addr.port(),
-                token: server.token.clone()
+                token: server.token.clone(),
+                pid: Some(std::process::id()),
             }
         );
         #[cfg(unix)]
@@ -1265,6 +1269,7 @@ mod tests {
             &AgentInfo {
                 port: 1,
                 token: "other".into(),
+                pid: None,
             },
         )
         .unwrap();

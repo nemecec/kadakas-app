@@ -132,6 +132,12 @@ impl Rig {
     }
 }
 
+/// Two views are the same when they agree to the rounding of the last bits: a canvas of another
+/// size gives the same view with a different rounding.
+fn same_view(a: crate::view::View, b: crate::view::View) -> bool {
+    (a.origin - b.origin).abs().max_element() < 1e-6 && (a.zoom - b.zoom).abs() < 1e-9
+}
+
 fn num(v: &Value) -> f64 {
     v.as_f64().unwrap_or_else(|| panic!("not a number: {v}"))
 }
@@ -444,9 +450,19 @@ fn back_returns_to_the_view_before_each_change() {
     assert_eq!(r.app.agent_view.back_len(), 2);
     let ctx = r.ctx.clone();
     assert!(crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
-    assert_eq!(r.app.view, first);
+    assert!(
+        same_view(r.app.view, first),
+        "{:?} is not {:?}",
+        r.app.view,
+        first
+    );
     assert!(crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
-    assert_eq!(r.app.view, start);
+    assert!(
+        same_view(r.app.view, start),
+        "{:?} is not {:?}",
+        r.app.view,
+        start
+    );
     assert!(!crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
     // Back is a key and a button too. It holds the agent back for a moment, like a drag.
     assert_eq!(
@@ -457,7 +473,12 @@ fn back_returns_to_the_view_before_each_change() {
     r.advance(1.0);
     r.ok("view.zoom", json!({"at": [9, 9], "scale": 1.0}));
     r.app.agent_back(&ctx);
-    assert_eq!(r.app.view, start);
+    assert!(
+        same_view(r.app.view, start),
+        "{:?} is not {:?}",
+        r.app.view,
+        start
+    );
     assert_eq!(r.app.status, tr!("agent-view-restored"));
     r.app.agent_back(&ctx);
     assert_eq!(r.app.status, tr!("agent-view-nothing-back"));
@@ -532,7 +553,12 @@ fn back_returns_from_the_3d_camera_to_the_plan() {
     assert!(crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
     assert!(crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
     assert!(r.app.plan());
-    assert_eq!(r.app.view, plan);
+    assert!(
+        same_view(r.app.view, plan),
+        "{:?} is not {:?}",
+        r.app.view,
+        plan
+    );
 }
 
 #[test]
@@ -564,7 +590,12 @@ fn a_view_set_through_the_session_is_kept_for_back() {
     crate::agent_view::keep_if_changed(&mut r.app.agent_env(&ctx), memo);
     assert_eq!(r.app.agent_view.back_len(), 1);
     r.app.agent_back(&ctx);
-    assert_eq!(r.app.view, start);
+    assert!(
+        same_view(r.app.view, start),
+        "{:?} is not {:?}",
+        r.app.view,
+        start
+    );
     // And the person's drag holds it back as well.
     r.drag_frames(2);
     assert_eq!(
@@ -1115,7 +1146,12 @@ fn a_canvas_that_is_offset_in_the_window_is_framed_right() {
     assert_ne!(r.app.view, after);
     r.advance(1.0);
     r.app.agent_back(&r.ctx.clone());
-    assert_eq!(r.app.view, after);
+    assert!(
+        same_view(r.app.view, after),
+        "{:?} is not {:?}",
+        r.app.view,
+        after
+    );
 }
 
 #[test]
@@ -1264,8 +1300,8 @@ fn back_keeps_the_view_of_the_person_when_the_agent_changes_the_view_many_times(
         n += 1;
     }
     assert_eq!(n, kadakas_ui_core::agent_view::BACK_DEPTH);
-    assert_eq!(
-        r.app.view, start,
+    assert!(
+        same_view(r.app.view, start),
         "the first Back step is the person's own view"
     );
 }
@@ -1423,7 +1459,9 @@ fn hidden_objects_are_named_and_not_framed() {
         fn count(s: &egui::Shape) -> usize {
             match s {
                 egui::Shape::Vec(v) => v.iter().map(count).sum(),
-                egui::Shape::Rect(r) if r.stroke.width >= 7.0 => 1,
+                // The glow of a pointer is wide and faint; the outline of an object is wide when
+                // the view is zoomed in, but dark.
+                egui::Shape::Rect(r) if r.stroke.width >= 7.0 && r.stroke.color.a() < 100 => 1,
                 _ => 0,
             }
         }
@@ -1786,4 +1824,131 @@ fn a_viewpoint_that_the_api_made_opens_on_the_same_place_in_the_app() {
     let o = kadakas_core::mesh::scene_origin(r.app.session.editor.doc());
     let at = o + r.app.view3d.camera.target.as_dvec3();
     assert!((at.x - target[0]).abs() < 1.0 && (at.y - target[1]).abs() < 1.0);
+}
+
+#[test]
+fn the_view_change_of_file_open_does_not_hold_the_agent_back() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.frame(vec![]);
+    r.advance(1.0);
+    // The agent opens a file: the window fits the new drawing in the next frames. That change is
+    // made for the agent's own call, so the next view.zoom is not refused.
+    r.app.agent_view_document_replaced();
+    r.time += 0.016;
+    r.frame(vec![]);
+    r.time += 0.016;
+    r.frame(vec![]);
+    r.time += 0.016;
+    r.frame(vec![]);
+    r.ok("view.zoom", json!({"at": [100, 100], "scale": 1.0}));
+    // A real navigation of the person afterwards still holds the agent back.
+    r.drag_frames(3);
+    let e = r.err("view.zoom", json!({"at": [1, 1], "scale": 1.0}));
+    assert_eq!(e.reason, Some(REASON_PERSON_NAVIGATING));
+}
+
+#[test]
+fn a_label_and_the_panel_keep_clear_of_what_the_pointer_marks() {
+    use crate::view::ViewExt;
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    r.ok("view.zoom", json!({"at": [0, 0], "scale": 0.1}));
+    r.advance(1.0);
+    // A rectangle in the top right corner of the drawing, where the panel sits by default, and
+    // right at the top, so a label above it would be pushed back over it.
+    let canvas = r.canvas();
+    let lo = r
+        .app
+        .view
+        .to_model(egui::pos2(canvas.right() - 150.0, canvas.top() + 4.0));
+    let hi = r
+        .app
+        .view
+        .to_model(egui::pos2(canvas.right() - 20.0, canvas.top() + 60.0));
+    let id = r.rect(
+        lo.x.min(hi.x),
+        lo.y.min(hi.y),
+        (hi.x - lo.x).abs(),
+        (hi.y - lo.y).abs(),
+    );
+    r.ok(
+        "view.highlight",
+        json!({"ids": [id.to_string()], "text": "Check this stall row"}),
+    );
+    r.frame(vec![]);
+    let out = r.frame(vec![]);
+    let _ = out;
+    let targets = crate::agent_view_ui::targets_of(&r.ctx);
+    assert_eq!(targets.len(), 1, "{targets:?}");
+    let target = targets[0];
+    // The panel is somewhere else than over the target.
+    let panel = r
+        .ctx
+        .memory(|m| m.area_rect(egui::Id::new("agent-view-panel")))
+        .expect("the panel is shown");
+    assert!(!panel.intersects(target), "{panel:?} covers {target:?}");
+    // The label does not cover the target: it is a shape whose rectangle is a filled badge.
+    let out = r.frame(vec![]);
+    fn badges(s: &egui::Shape, into: &mut Vec<egui::Rect>) {
+        match s {
+            egui::Shape::Rect(r) if r.fill.a() > 200 && r.rect.height() < 40.0 => into.push(r.rect),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| badges(s, into)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    for c in &out.shapes {
+        badges(&c.shape, &mut found);
+    }
+    // The badge of the pointer is the one with the text; none of the small filled rectangles
+    // may lie on the target.
+    assert!(
+        found
+            .iter()
+            .filter(|b| b.width() > 60.0)
+            .all(|b| !b.intersects(target)),
+        "{found:?} cover {target:?}"
+    );
+}
+
+#[test]
+fn a_drawing_strip_from_a_saved_layout_brings_the_default_layout_back() {
+    let mut r = Rig::new();
+    // The default layout gives a drawing area that is wide enough in this window.
+    assert!(
+        r.canvas().width() >= crate::layout::MIN_DRAWING_WIDTH,
+        "{:?}",
+        r.canvas()
+    );
+    // A saved layout that gave the drawing a strip (the dock keeps 175 points at least).
+    let mut state = egui_dock::DockState::new(vec![crate::layout::Tab::Drawing]);
+    state.main_surface_mut().split_right(
+        egui_dock::NodeIndex::root(),
+        0.05,
+        vec![
+            crate::layout::Tab::ObjectInfo,
+            crate::layout::Tab::Navigation,
+        ],
+    );
+    r.app.layouts.current = Some(state);
+    r.frame(vec![]);
+    r.frame(vec![]);
+    assert!(
+        r.app.status.contains("reset to the default"),
+        "{}",
+        r.app.status
+    );
+    r.advance(0.1);
+    r.advance(0.1);
+    assert!(
+        r.canvas().width() >= crate::layout::MIN_DRAWING_WIDTH,
+        "{:?}",
+        r.canvas()
+    );
+    // In a window too small for any layout nothing is reset.
+    assert!(crate::layout::too_narrow(184.0, 1000.0));
+    assert!(!crate::layout::too_narrow(184.0, 400.0));
+    assert!(!crate::layout::too_narrow(640.0, 1000.0));
 }

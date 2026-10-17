@@ -2381,6 +2381,18 @@ impl KadakasApp {
         }
     }
 
+    /// The agent opened or made another document (`file.open`, `file.new`): the window fits the
+    /// view to it in the next frames. That change is made for the agent's own call, so it must
+    /// not count as the person's navigation and hold the agent back.
+    fn agent_view_document_replaced(&mut self) {
+        self.agent_view.reset();
+        self.agent_view.expect_fit();
+        self.machine.cancel();
+        self.needs_fit = true;
+        self.view_history.clear();
+        self.view3d.request_fit();
+    }
+
     /// One frame of the agent's view: pointers that are over go, animations move on.
     fn agent_view_step(&mut self, ctx: &egui::Context) {
         let animating = crate::agent_view::step(&mut self.agent_env(ctx));
@@ -2939,12 +2951,22 @@ impl KadakasApp {
             .take()
             .unwrap_or_else(layout::default_state);
         let style = egui_dock::Style::from_egui(ui.style());
+        let dock_width = ui.available_width();
         egui_dock::DockArea::new(&mut state)
             .style(style)
             .show_close_buttons(true)
             .show_inside(ui, &mut DockViewer { app: self });
         // A layout needs the drawing: a closed or dragged-out drawing tab brings the default back.
         if !layout::has_drawing(&state) {
+            state = layout::default_state();
+        }
+        // A drawing area that is a strip (palettes squeezed it in a saved layout, or in a window
+        // that was small) cannot be used: the default layout replaces the layout, if that gives a
+        // drawing of a usable width in this window.
+        if let Some(c) = self.canvas_rect
+            && layout::too_narrow(c.width(), dock_width)
+        {
+            self.status = tr!("layout-drawing-too-narrow", width = c.width().round());
             state = layout::default_state();
         }
         self.layouts.current = Some(state);
@@ -3204,11 +3226,7 @@ impl eframe::App for KadakasApp {
                 }
             }
             if fx.replaced {
-                self.agent_view.reset();
-                self.machine.cancel();
-                self.needs_fit = true;
-                self.view_history.clear();
-                self.view3d.request_fit();
+                self.agent_view_document_replaced();
             }
             self.title_dirty |= fx.path_changed;
         }
@@ -3452,46 +3470,52 @@ impl eframe::App for KadakasApp {
         let mut feedback_click = None;
         let mut report_error = false;
         egui::Panel::bottom("status").show(ui, |ui| {
-            ui.horizontal(|ui| {
+            // The counts at the right are laid out first; the rest gets the room that is left and
+            // cuts its texts to it, so that the two never lie on top of each other.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let d = &self.session.editor.doc();
-                if let Some(outcome) = crate::profiles::command_line_ui(ui, &mut self.profiles) {
-                    alias = Some(outcome);
-                }
-                ui.label(&self.status);
-                if crate::feedback_ui::is_error_status(&self.status)
-                    && ui.link(tr!("feedback-ui-report-this")).clicked()
-                {
-                    report_error = true;
-                }
+                feedback_click = self.feedback.status_item(ui);
                 ui.separator();
-                ui.label(self.machine.hint_for(&self.settings));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    feedback_click = self.feedback.status_item(ui);
-                    ui.separator();
-                    collab_click = self.collab.status_item(ui);
-                    ui.separator();
-                    if self.plan() {
-                        let u = kadakas_units::current();
-                        ui.label(tr!(
-                            "app-status-objects-zoom",
-                            objects = d.objects.len(),
-                            selected = self.session.selection.len(),
-                            zoom = u.number_text(self.view.zoom, 3),
-                            scale = u
-                                .number
-                                .plain()
-                                .format_trim(d.layer(d.active_layer).map_or(100.0, |l| l.scale), 3)
-                        ));
-                    } else {
-                        let v = self.session.view;
-                        ui.label(tr!(
-                            "app-objects-selected",
-                            objects = d.objects.len(),
-                            selected = self.session.selection.len(),
-                            view = crate::enum_names::standard_view(v.view),
-                            projection = crate::enum_names::name("projection", v.projection.id())
-                        ));
+                collab_click = self.collab.status_item(ui);
+                ui.separator();
+                if self.plan() {
+                    let u = kadakas_units::current();
+                    ui.label(tr!(
+                        "app-status-objects-zoom",
+                        objects = d.objects.len(),
+                        selected = self.session.selection.len(),
+                        zoom = u.number_text(self.view.zoom, 3),
+                        scale = u
+                            .number
+                            .plain()
+                            .format_trim(d.layer(d.active_layer).map_or(100.0, |l| l.scale), 3)
+                    ));
+                } else {
+                    let v = self.session.view;
+                    ui.label(tr!(
+                        "app-objects-selected",
+                        objects = d.objects.len(),
+                        selected = self.session.selection.len(),
+                        view = crate::enum_names::standard_view(v.view),
+                        projection = crate::enum_names::name("projection", v.projection.id())
+                    ));
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if let Some(outcome) = crate::profiles::command_line_ui(ui, &mut self.profiles)
+                    {
+                        alias = Some(outcome);
                     }
+                    ui.add(egui::Label::new(self.status.as_str()).truncate())
+                        .on_hover_text(self.status.as_str());
+                    if crate::feedback_ui::is_error_status(&self.status)
+                        && ui.link(tr!("feedback-ui-report-this")).clicked()
+                    {
+                        report_error = true;
+                    }
+                    ui.separator();
+                    let hint = self.machine.hint_for(&self.settings);
+                    ui.add(egui::Label::new(hint.as_str()).truncate())
+                        .on_hover_text(hint.as_str());
                 });
             });
         });

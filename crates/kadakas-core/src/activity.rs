@@ -14,6 +14,9 @@ use std::sync::Arc;
 use crate::command::{Counted, Counts, StepData};
 use crate::model::ObjectId;
 
+pub mod detail;
+pub use detail::Detail;
+
 /// The most steps the log keeps.
 pub const MAX_STEPS: usize = 500;
 /// The most object states (before and after of one object count once) that the steps keep. The
@@ -39,6 +42,8 @@ pub struct Summary {
     pub document: bool,
     pub versions: bool,
     pub issues: bool,
+    /// What changed, when the step changed one object and nothing else.
+    pub detail: Option<Detail>,
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -58,7 +63,28 @@ impl Summary {
         list.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         let others = list.iter().skip(4).map(|(_, n)| n).sum();
         list.truncate(4);
+        let objects = data.object_counts();
+        let only_one = objects.changed == 1
+            && objects.added == 0
+            && objects.removed == 0
+            && data.layers.is_empty()
+            && data.classes.is_empty()
+            && data.resources.is_empty()
+            && !data.document
+            && !data.versions
+            && !data.issues;
+        let detail = if only_one {
+            data.objects
+                .iter()
+                .find_map(|c| match (&c.before, &c.after) {
+                    (Some(b), Some(a)) => detail::of(b, a),
+                    _ => None,
+                })
+        } else {
+            None
+        };
         Summary {
+            detail,
             objects: data.object_counts(),
             kinds: list,
             others,
@@ -98,7 +124,18 @@ impl Summary {
                 }
             ));
         }
-        if o.changed > 0 {
+        if let Some(d) = &self.detail {
+            let kind = self.kinds.first().map_or("object", |(k, _)| k.as_str());
+            let label = d
+                .label
+                .as_ref()
+                .map_or(String::new(), |l| format!(" '{l}'"));
+            parts.push(format!(
+                "changed {}{label}: {}",
+                kind.replace('_', " "),
+                d.text()
+            ));
+        } else if o.changed > 0 {
             parts.push(format!(
                 "changed {}{}",
                 plural(o.changed, "object", "objects"),
@@ -726,6 +763,7 @@ mod tests {
             document: true,
             versions: true,
             issues: true,
+            detail: None,
         };
         assert_eq!(
             s.text(),

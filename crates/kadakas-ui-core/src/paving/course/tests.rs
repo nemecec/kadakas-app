@@ -17,7 +17,7 @@ fn def(side: Side, edge: Option<&str>) -> CourseDef {
         offset: 20.0,
         along: 100.0,
         depth: 200.0,
-        gap: 5.0,
+        gap: Some(5.0),
         corner: Corner::Butt,
         unit: "200x100".into(),
     }
@@ -108,9 +108,9 @@ fn the_placing_follows_the_edge_it_is_on() {
 
 #[test]
 fn only_a_course_along_an_edge_has_a_form() {
-    assert!(CourseForm::from_def(&def(Side::Left, None)).is_none());
-    assert!(CourseForm::from_def(&def(Side::Left, Some("nonsense"))).is_none());
-    let f = CourseForm::from_def(&def(Side::Left, Some("outline"))).unwrap();
+    assert!(CourseForm::from_def(&def(Side::Left, None), 5.0).is_none());
+    assert!(CourseForm::from_def(&def(Side::Left, Some("nonsense")), 5.0).is_none());
+    let f = CourseForm::from_def(&def(Side::Left, Some("outline")), 5.0).unwrap();
     assert!(f.existing);
     assert_eq!(f.placing, Placing::OnPaving);
     assert_eq!(f.orientation, Orientation::Soldier);

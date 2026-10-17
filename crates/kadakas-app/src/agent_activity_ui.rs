@@ -117,7 +117,31 @@ pub fn summary_text(s: &Summary) -> String {
         );
         parts.push(tr!("agent-activity-sum-added", what = what));
     }
-    if o.changed > 0 {
+    if let Some(d) = &s.detail {
+        // One object changed, and the step knows what: say it.
+        let kind = s
+            .kinds
+            .first()
+            .map(|(k, _)| crate::enum_names::name("shape", k))
+            .unwrap_or_else(|| tr!("agent-activity-n-objects", count = 1));
+        let label = d
+            .label
+            .as_ref()
+            .map_or(String::new(), |l| format!(" '{l}'"));
+        let mut items: Vec<String> = d.changes.iter().map(change_text).collect();
+        if d.more > 0 {
+            items.push(tr!("agent-activity-change-more", count = d.more));
+        }
+        parts.push(tr!(
+            "agent-activity-sum-changed",
+            what = tr!(
+                "agent-activity-sum-detail",
+                kind = kind,
+                label = label,
+                changes = items.join("; ")
+            )
+        ));
+    } else if o.changed > 0 {
         let what = with_kinds(
             plural_objects(o.changed),
             single(o.changed, o.added + o.removed),
@@ -166,6 +190,75 @@ pub fn summary_text(s: &Summary) -> String {
         return capitalize(tr!("agent-activity-sum-none"));
     }
     capitalize(parts.join("; "))
+}
+
+/// The name of a field of a change, in the language of the person.
+fn field_name(key: &str) -> String {
+    match key {
+        "angle" => tr!("agent-activity-field-angle"),
+        "origin" => tr!("agent-activity-field-origin"),
+        "elevation" => tr!("agent-activity-field-elevation"),
+        "thickness" => tr!("agent-activity-field-thickness"),
+        "material" => tr!("agent-activity-field-material"),
+        "style" => tr!("agent-activity-field-style"),
+        "gap" => tr!("agent-activity-field-gap"),
+        "name" => tr!("agent-activity-field-name"),
+        "pattern" => tr!("agent-activity-field-pattern"),
+        "boundary" => tr!("agent-activity-field-boundary"),
+        "holes" => tr!("agent-activity-field-holes"),
+        "offset" => tr!("agent-activity-field-offset"),
+        "corner" => tr!("agent-activity-field-corner"),
+        "side" => tr!("agent-activity-field-side"),
+        "bond" => tr!("agent-activity-field-bond"),
+        "seed" => tr!("agent-activity-field-seed"),
+        "layer" => tr!("agent-activity-field-layer"),
+        "class" => tr!("agent-activity-field-class"),
+        other => other.replace('_', " "),
+    }
+}
+
+/// One changed field in the language of the person: `zone 'Aisle' angle 0° → 45°`.
+fn change_text(c: &kadakas_core::activity::detail::FieldChange) -> String {
+    let scope = match &c.scope {
+        None => String::new(),
+        Some(sc) => {
+            let kind = match sc.kind {
+                "zone" => tr!("agent-activity-scope-zone"),
+                "course" => tr!("agent-activity-scope-course"),
+                _ => tr!("agent-activity-scope-split"),
+            };
+            match &sc.name {
+                Some(n) => format!("{kind} '{n}' "),
+                None => format!("{kind} "),
+            }
+        }
+    };
+    let field = c
+        .field
+        .split('.')
+        .map(field_name)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let field = format!("{scope}{field}");
+    match (&c.before, &c.after) {
+        (Some(b), Some(a)) => tr!(
+            "agent-activity-change-both",
+            field = field,
+            before = b.as_str(),
+            after = a.as_str()
+        ),
+        (None, Some(a)) => tr!(
+            "agent-activity-change-set",
+            field = field,
+            after = a.as_str()
+        ),
+        (Some(b), None) => tr!(
+            "agent-activity-change-cleared",
+            field = field,
+            before = b.as_str()
+        ),
+        (None, None) => tr!("agent-activity-change-plain", field = field),
+    }
 }
 
 fn capitalize(t: String) -> String {

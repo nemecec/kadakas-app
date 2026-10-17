@@ -397,7 +397,7 @@ pub struct SnapSetParams {
     /// {category: bool}
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set: Option<BTreeMap<String, bool>>,
-    /// above 0, at most 180
+    /// degrees; above 0, at most 180
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle_step_deg: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -949,6 +949,7 @@ pub struct NorthArrowAddParams {
     pub at: Point,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_mm: Option<Num>,
+    /// degrees, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_deg: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1053,6 +1054,7 @@ pub struct AnnotationUpdateParams {
     pub anchors: Option<Vec<Obj>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object: Option<ObjectRef>,
+    /// radians: the direction from the center of the circle or arc in which a radial or diameter dimension is placed (default about 0.78)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1081,6 +1083,7 @@ pub struct AnnotationUpdateParams {
     pub swatch_mm: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_mm: Option<Num>,
+    /// degrees, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_deg: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

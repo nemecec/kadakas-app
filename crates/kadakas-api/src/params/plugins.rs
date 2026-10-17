@@ -179,6 +179,7 @@ pub struct PluginPreviewParams {
     pub params: Option<Obj>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<Point>,
+    /// radians, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -275,6 +276,7 @@ pub struct PluginsPlaceParams {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<Point>,
+    /// radians, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -328,6 +330,7 @@ pub struct PluginsPreviewParams {
     pub params: Option<Obj>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<Point>,
+    /// radians, counterclockwise
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation: Option<Num>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

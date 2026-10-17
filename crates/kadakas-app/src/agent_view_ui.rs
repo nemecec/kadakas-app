@@ -116,13 +116,15 @@ fn outline(painter: &Painter, r: Rect, stroke: Stroke, line: Line) {
 }
 
 /// The label of a pointer: the mark, the number (the ID that the agent got back) and the text,
-/// on the color. Labels do not lie on top of each other: a label that would is moved down.
+/// on the color. Labels do not lie on top of each other, and a label never covers its own target
+/// (`target`) or the target of an earlier pointer: it goes above, below, right or left of it.
 fn badge(
     painter: &Painter,
     clip: Rect,
     anchor: Pos2,
     h: &Highlight,
     placed: &mut Vec<Rect>,
+    target: Option<Rect>,
 ) -> Rect {
     let fill = color32(h.color, 235);
     let ink = text_on(fill);
@@ -145,9 +147,34 @@ fn badge(
             .y
             .clamp(inner.min.y, (inner.max.y - size.y).max(inner.min.y)),
     );
-    for _ in 0..40 {
+    let clamp = |p: Pos2| {
+        pos2(
+            p.x.clamp(inner.min.x, (inner.max.x - size.x).max(inner.min.x)),
+            p.y.clamp(inner.min.y, (inner.max.y - size.y).max(inner.min.y)),
+        )
+    };
+    let free = |min: Pos2| {
         let r = Rect::from_min_size(min, size);
-        if !placed.iter().any(|p| p.intersects(r)) {
+        !placed.iter().any(|p| p.intersects(r)) && !target.is_some_and(|t| t.intersects(r))
+    };
+    // The label of a pointer sits where it was asked to, unless that covers the target: then it
+    // goes to the side of the target where there is room.
+    if let Some(t) = target
+        && !free(min)
+    {
+        let gap = 4.0;
+        let candidates = [
+            pos2(min.x, t.min.y - size.y - gap),
+            pos2(min.x, t.max.y + gap),
+            pos2(t.max.x + gap, min.y),
+            pos2(t.min.x - size.x - gap, min.y),
+        ];
+        if let Some(c) = candidates.iter().map(|c| clamp(*c)).find(|c| free(*c)) {
+            min = c;
+        }
+    }
+    for _ in 0..40 {
+        if free(min) {
             break;
         }
         min.y += size.y + 2.0;
@@ -243,6 +270,8 @@ pub fn paint(
 ) {
     let painter = painter.with_clip_rect(rect);
     let mut placed: Vec<Rect> = Vec::new();
+    // The drawn areas of the pointers, for the panel to keep clear of.
+    let mut targets: Vec<Rect> = Vec::new();
     for h in set.items() {
         let main = color32(h.color, 255);
         let line = h.color.line();
@@ -318,31 +347,52 @@ pub fn paint(
         }
         match area {
             Some(a) if a.intersects(rect) => {
-                let top = match &h.aim {
-                    Aim::At(_) => a.center() + vec2(16.0, -34.0),
-                    _ => a.min + vec2(0.0, -24.0),
+                let (top, covered) = match &h.aim {
+                    Aim::At(_) => (a.center() + vec2(16.0, -34.0), a.expand(24.0)),
+                    _ => (a.min + vec2(0.0, -24.0), a.expand(7.0)),
                 };
-                badge(&painter, rect, top, h, &mut placed);
+                badge(&painter, rect, top, h, &mut placed, Some(covered));
+                // Later labels keep clear of this target too.
+                placed.push(covered);
+                targets.push(covered);
             }
             Some(a) => {
                 // Outside the drawing: an arrow at the edge, and the label beside it.
                 let at = edge_arrow(&painter, rect, a.center(), main);
-                badge(&painter, rect, at + vec2(-8.0, -8.0), h, &mut placed);
+                badge(&painter, rect, at + vec2(-8.0, -8.0), h, &mut placed, None);
             }
             None if behind => {
                 // Behind the camera: an arrow at the bottom edge.
                 let toward = rect.center() + vec2(0.0, rect.height());
                 let at = edge_arrow(&painter, rect, toward, main);
-                badge(&painter, rect, at + vec2(-8.0, -30.0), h, &mut placed);
+                badge(&painter, rect, at + vec2(-8.0, -30.0), h, &mut placed, None);
             }
             None => {}
         }
     }
+    remember_targets(painter.ctx(), targets);
+}
+
+fn targets_id() -> egui::Id {
+    egui::Id::new("agent-view-targets")
+}
+
+/// The areas that the pointers cover on the screen in this frame; the panel reads them in the
+/// next frame (and the tests read them).
+fn remember_targets(ctx: &egui::Context, targets: Vec<Rect>) {
+    ctx.data_mut(|d| d.insert_temp(targets_id(), targets));
+}
+
+/// The targets of the last frame.
+pub fn targets_of(ctx: &egui::Context) -> Vec<Rect> {
+    ctx.data(|d| d.get_temp::<Vec<Rect>>(targets_id()))
+        .unwrap_or_default()
 }
 
 /// The pointers in the plan.
 pub fn paint_plan(painter: &Painter, rect: Rect, view: &View, doc: &Document, set: &HighlightSet) {
     if set.is_empty() {
+        remember_targets(painter.ctx(), Vec::new());
         return;
     }
     let view = *view;
@@ -385,6 +435,7 @@ pub fn paint_3d(
     set: &HighlightSet,
 ) {
     if set.is_empty() {
+        remember_targets(painter.ctx(), Vec::new());
         return;
     }
     let origin = scene.origin;
@@ -447,11 +498,44 @@ pub fn panel(
     let mut action = None;
     let mut allow = !state.locked;
     let mut hide = false;
-    egui::Area::new(egui::Id::new("agent-view-panel"))
+    // The panel keeps clear of what the pointers mark: the first corner of the drawing where it
+    // covers none of them (the top right, then the top left and the bottom corners).
+    let size_id = egui::Id::new("agent-view-panel-size");
+    let size = ctx
+        .data(|d| d.get_temp::<egui::Vec2>(size_id))
+        .unwrap_or(vec2(280.0, 120.0));
+    let targets = targets_of(ctx);
+    let corners = [
+        (
+            Align2::RIGHT_TOP,
+            pos2(canvas.right() - 8.0, canvas.top() + 8.0),
+        ),
+        (
+            Align2::LEFT_TOP,
+            pos2(canvas.left() + 8.0, canvas.top() + 8.0),
+        ),
+        (
+            Align2::RIGHT_BOTTOM,
+            pos2(canvas.right() - 8.0, canvas.bottom() - 8.0),
+        ),
+        (
+            Align2::LEFT_BOTTOM,
+            pos2(canvas.left() + 8.0, canvas.bottom() - 8.0),
+        ),
+    ];
+    let (pivot, pos) = corners
+        .iter()
+        .find(|(pivot, pos)| {
+            let r = pivot.anchor_size(*pos, size);
+            !targets.iter().any(|t| t.intersects(r))
+        })
+        .copied()
+        .unwrap_or(corners[0]);
+    let area = egui::Area::new(egui::Id::new("agent-view-panel"))
         // Under the dialogs and the menus of the window, not over them.
         .order(egui::Order::Middle)
-        .fixed_pos(pos2(canvas.right() - 8.0, canvas.top() + 8.0))
-        .pivot(Align2::RIGHT_TOP)
+        .fixed_pos(pos)
+        .pivot(pivot)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_max_width(280.0);
@@ -533,6 +617,7 @@ pub fn panel(
                 });
             });
         });
+    ctx.data_mut(|d| d.insert_temp(size_id, area.response.rect.size()));
     state.locked = !allow;
     state.panel_hidden |= hide;
     action

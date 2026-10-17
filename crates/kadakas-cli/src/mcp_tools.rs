@@ -350,6 +350,19 @@ pub fn domain_tools(schemas: bool) -> Vec<Value> {
             if schemas {
                 input["allOf"] = json!(by_method);
             }
+            if d.name == "describe" {
+                // `describe {}` is enough: no method is needed.
+                input = json!({
+                    "type": "object",
+                    "properties": {
+                        "method": {"type": "string", "description": "Optional. A method name, for example hardscape.course: gives that method with the JSON Schema of its params. Leave it out for the list of all methods."},
+                        "docs": {"type": "boolean", "description": "true: the full doc of every method in the list (about 140 KB more); by default the list has the first sentence, and the full text is in the description of each tool."},
+                        "schemas": {"type": "boolean", "description": "true: add the JSON Schema of the params of every method (large)."},
+                        "schema": {"type": "boolean", "description": "true: add the JSON Schema of the commands of execute (about 30 KB)."},
+                        "params": {"type": "object", "additionalProperties": true, "description": "Only for the long form {method: \"describe\", params: {...}}."}
+                    },
+                });
+            }
             json!({
                 "name": d.name,
                 "description": description(d, &methods),
@@ -462,6 +475,9 @@ pub fn resolve(flat: bool, name: &str, args: &Value) -> Call {
         return Call::UnknownTool;
     };
     let methods = methods_of(domain);
+    if domain.name == "describe" {
+        return resolve_describe(args);
+    }
     let Some(wanted) = args.get("method").and_then(Value::as_str) else {
         return Call::Invalid(format!(
             "{name} needs params.method. Methods: {}",
@@ -470,11 +486,126 @@ pub fn resolve(flat: bool, name: &str, args: &Value) -> Call {
     };
     match methods.iter().find(|(m, _)| *m == wanted) {
         Some((m, _)) => Call::Method(m, args.get("params").cloned().unwrap_or(Value::Null)),
-        None => Call::Invalid(format!(
-            "{name} has no method '{wanted}'. Methods: {}",
-            list(&methods)
-        )),
+        None => match all_methods().find(|(m, _)| *m == wanted) {
+            // The method exists in another tool: say which.
+            Some((m, _)) => Call::Invalid(format!(
+                "{m} is a method of the tool '{t}', not of '{name}'. Call the tool '{t}' with {{\"method\": \"{m}\", \"params\": {{...}}}}.",
+                t = tool_of(m)
+            )),
+            None => Call::Invalid(format!(
+                "{name} has no method '{wanted}'. Methods: {}",
+                list(&methods)
+            )),
+        },
     }
+}
+
+/// The `describe` tool works with no method: `describe {}` lists the methods, `describe
+/// {schemas: true}` adds the schemas, and `describe {method: "hardscape.course"}` gives one method
+/// with its parameter schema. The long form `describe {method: "describe", params: {...}}` works
+/// too.
+fn resolve_describe(args: &Value) -> Call {
+    match args.get("method").and_then(Value::as_str) {
+        Some("describe") => Call::Method(
+            "describe",
+            args.get("params").cloned().unwrap_or(Value::Null),
+        ),
+        Some(other) => {
+            if all_methods().any(|(m, _)| m == other) {
+                let mut params = args
+                    .get("params")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                params.insert("method".into(), json!(other));
+                Call::Method("describe", Value::Object(params))
+            } else {
+                Call::Invalid(format!(
+                    "'{other}' is no method. Call describe with {{}} for the list of methods, with {{schemas: true}} for the list with the parameter schemas, or with {{method: <a method name>}} for one method."
+                ))
+            }
+        }
+        None => {
+            // No method: the other arguments are the params of describe.
+            let mut params = args.as_object().cloned().unwrap_or_default();
+            if let Some(Value::Object(inner)) = params.remove("params") {
+                params.extend(inner);
+            }
+            Call::Method(
+                "describe",
+                if params.is_empty() {
+                    Value::Null
+                } else {
+                    Value::Object(params)
+                },
+            )
+        }
+    }
+}
+
+/// Names the MCP tool of every method in the result of `describe`: `tool` on each entry of the
+/// method list, and on the one method that `describe {method}` returns. In domain mode it is the
+/// domain tool (the call is `{method, params}` to that tool), in flat mode the tool named like the
+/// method.
+pub fn name_tools(flat: bool, docs: bool, result: &mut Value) {
+    let tool = |m: &str| -> String {
+        if flat {
+            flat_name(m)
+        } else {
+            tool_of(m).to_string()
+        }
+    };
+    if let Some(list) = result.get_mut("methods").and_then(Value::as_array_mut) {
+        for entry in list {
+            if let Some(name) = entry["name"].as_str().map(str::to_string) {
+                entry["tool"] = json!(tool(&name));
+            }
+            // The full text is in the description of the tool and in `describe {method}`, so the
+            // list carries the first sentence only (about 140 KB less).
+            if !docs && let Some(doc) = entry["doc"].as_str().map(summary) {
+                entry["doc"] = json!(doc);
+            }
+        }
+    }
+    if result.get("methods").is_none()
+        && let Some(name) = result["method"].as_str().map(str::to_string)
+    {
+        result["tool"] = json!(tool(&name));
+    }
+    if result.get("methods").is_some() {
+        result["tools"] = json!(if flat {
+            "Each method is a tool of its own: the tool name is the method name with the dots as underscores (objects.list -> objects_list). Every method in `methods` has its `tool`."
+        } else {
+            "Each tool is a domain and takes {method, params}. Every method in `methods` has its `tool`: call that tool, for example the tool hardscape_landscape with {method: \"hardscape.course\", params: {...}}. A call to another tool is an error that names the right one."
+        });
+        if !docs {
+            result["docs"] = json!(
+                "The doc of each method here is its first sentence. The full text with the params is in the description of its tool, in describe {method: <name>} (with the JSON Schema of the params), or here with describe {docs: true}."
+            );
+        }
+    }
+}
+
+/// The first sentence of a method doc (up to its `params:` list), at most 200 characters.
+fn summary(doc: &str) -> String {
+    let cut = [doc.find(". "), doc.find(" params:")]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(doc.len());
+    let first = doc[..cut].trim_end_matches('.');
+    if first.chars().count() > 200 {
+        let mut t: String = first.chars().take(200).collect();
+        t.push_str("...");
+        t
+    } else {
+        format!("{first}.")
+    }
+}
+
+/// The name of the tool that holds a method, in domain mode.
+pub fn tool_of(method: &str) -> &'static str {
+    domain_of(method).map_or("describe", |d| d.name)
 }
 
 fn list(methods: &[(&str, &str)]) -> String {
@@ -524,23 +655,19 @@ mod tests {
     fn the_domain_listing_is_short_and_complete() {
         let tools = domain_tools(true);
         assert!((15..=25).contains(&tools.len()), "{}", tools.len());
-        let total: usize = tools
-            .iter()
-            .map(|t| {
-                t["inputSchema"]["properties"]["method"]["enum"]
-                    .as_array()
-                    .unwrap()
-                    .len()
-            })
-            .sum();
+        // The describe tool takes any method name (it needs none), so it has no list.
+        let listed = |t: &Value| -> Vec<String> {
+            t["inputSchema"]["properties"]["method"]["enum"]
+                .as_array()
+                .map(|a| a.iter().map(|m| m.as_str().unwrap().to_string()).collect())
+                .unwrap_or_else(|| vec!["describe".to_string()])
+        };
+        let total: usize = tools.iter().map(|t| listed(t).len()).sum();
         assert_eq!(total, all_methods().count());
         for t in &tools {
             let text = t["description"].as_str().unwrap();
-            for m in t["inputSchema"]["properties"]["method"]["enum"]
-                .as_array()
-                .unwrap()
-            {
-                assert!(text.contains(&format!("- {}:", m.as_str().unwrap())));
+            for m in listed(t) {
+                assert!(text.contains(&format!("- {m}:")));
             }
         }
     }
@@ -652,7 +779,7 @@ mod tests {
         );
         assert!(matches!(
             resolve(false, "objects", &json!({"method": "plants.place"})),
-            Call::Invalid(t) if t.contains("has no method 'plants.place'")
+            Call::Invalid(t) if t.contains("method of the tool 'plants'")
         ));
         assert_eq!(
             resolve(true, "objects_list", &json!({"kind": "x"})),
@@ -734,5 +861,70 @@ mod tests {
         for t in domain_tools(false) {
             assert!(t["inputSchema"].get("allOf").is_none());
         }
+    }
+
+    #[test]
+    fn a_wrong_tool_names_the_right_one_and_describe_needs_no_method() {
+        let Call::Invalid(t) = resolve(
+            false,
+            "hardscape_landscape",
+            &json!({"method": "view.zoom", "params": {}}),
+        ) else {
+            panic!("a method of another tool is refused");
+        };
+        assert!(
+            t.contains("tool 'review'") && t.contains("view.zoom"),
+            "{t}"
+        );
+        let Call::Invalid(t) = resolve(false, "objects", &json!({"method": "no.such"})) else {
+            panic!();
+        };
+        assert!(t.contains("has no method"), "{t}");
+        // describe without method, with schemas, and with a method name.
+        assert_eq!(
+            resolve(false, "describe", &json!({})),
+            Call::Method("describe", Value::Null)
+        );
+        assert_eq!(
+            resolve(false, "describe", &json!({"schemas": true})),
+            Call::Method("describe", json!({"schemas": true}))
+        );
+        assert_eq!(
+            resolve(false, "describe", &json!({"method": "describe"})),
+            Call::Method("describe", Value::Null)
+        );
+        assert_eq!(
+            resolve(false, "describe", &json!({"method": "hardscape.course"})),
+            Call::Method("describe", json!({"method": "hardscape.course"}))
+        );
+        assert!(matches!(
+            resolve(false, "describe", &json!({"method": "nonsense"})),
+            Call::Invalid(_)
+        ));
+        // The tool does not require a method.
+        let tools = domain_tools(false);
+        let d = tools.iter().find(|t| t["name"] == "describe").unwrap();
+        assert!(d["inputSchema"].get("required").is_none());
+        // The list names the tool of each method.
+        let mut result = json!({"methods": [{"name": "view.zoom", "doc": "x"}, {"name": "objects.list", "doc": "y"}]});
+        name_tools(false, false, &mut result);
+        assert_eq!(result["methods"][0]["tool"], "review");
+        assert_eq!(result["methods"][1]["tool"], "objects");
+        assert!(
+            result["tools"]
+                .as_str()
+                .unwrap()
+                .contains("names the right one")
+        );
+        assert_eq!(result["methods"][0]["doc"], "x.");
+        let long = "Lay units over a shape. params: {id, pattern?}. Returns {x}.";
+        assert_eq!(summary(long), "Lay units over a shape.");
+        let mut full = json!({"methods": [{"name": "view.zoom", "doc": long}]});
+        name_tools(false, true, &mut full);
+        assert_eq!(full["methods"][0]["doc"], long);
+        assert!(full.get("docs").is_none());
+        let mut one = json!({"method": "view.zoom", "doc": "x", "params": {}});
+        name_tools(true, true, &mut one);
+        assert_eq!(one["tool"], "view_zoom");
     }
 }

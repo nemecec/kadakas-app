@@ -12,3 +12,4 @@ layout-snapping = Snapping
 layout-is-ignored = { $path } is ignored: { $e }
 layout-give-the-layout-a-name = give the layout a name
 layout-no-layout = no layout
+layout-drawing-too-narrow = The drawing area was only { $width } points wide, so the layout was reset to the default one.

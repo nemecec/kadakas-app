@@ -950,3 +950,33 @@ fn the_names_of_a_batch_follow_the_layers_that_the_batch_makes_and_renames() {
         .unwrap();
     assert_eq!(ok["created"].as_array().unwrap().len(), 4);
 }
+
+#[test]
+fn every_angle_parameter_names_its_unit_and_describe_says_that_units_are_mixed() {
+    let mut missing = Vec::new();
+    for (method, schema) in all_schemas() {
+        let Some(props) = schema["properties"].as_object() else {
+            continue;
+        };
+        for (name, p) in props {
+            let angle =
+                (name.contains("angle") || name.contains("rotation")) && name != "relative_angles";
+            let named = name.ends_with("_deg") || name.contains("precision");
+            let text = p["description"].as_str().unwrap_or("").to_lowercase();
+            if angle && !named && !text.contains("degree") && !text.contains("radian") {
+                missing.push(format!("{method}.{name}"));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "angles without a unit: {missing:?}");
+    let mut s = Session::with_sequential_ids();
+    let units = s.handle("describe", json!(null)).unwrap()["units"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        units.contains("Radians") && units.contains("Degrees"),
+        "{units}"
+    );
+    assert!(!units.contains("angles in radians"), "{units}");
+}

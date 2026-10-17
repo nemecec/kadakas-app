@@ -119,7 +119,7 @@ fn lot_with_plan() -> (Editor, ObjectId) {
         side: Side::Left,
         along: 100.0,
         depth: 200.0,
-        gap: 5.0,
+        gap: Some(5.0),
         ..Default::default()
     }];
     set_plan(&mut ed, id, &p);
