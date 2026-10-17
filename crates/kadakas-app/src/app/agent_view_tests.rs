@@ -132,6 +132,12 @@ impl Rig {
     }
 }
 
+/// Two views are the same when they agree to the rounding of the last bits: a canvas of another
+/// size gives the same view with a different rounding.
+fn same_view(a: crate::view::View, b: crate::view::View) -> bool {
+    (a.origin - b.origin).abs().max_element() < 1e-6 && (a.zoom - b.zoom).abs() < 1e-9
+}
+
 fn num(v: &Value) -> f64 {
     v.as_f64().unwrap_or_else(|| panic!("not a number: {v}"))
 }
@@ -444,9 +450,19 @@ fn back_returns_to_the_view_before_each_change() {
     assert_eq!(r.app.agent_view.back_len(), 2);
     let ctx = r.ctx.clone();
     assert!(crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
-    assert_eq!(r.app.view, first);
+    assert!(
+        same_view(r.app.view, first),
+        "{:?} is not {:?}",
+        r.app.view,
+        first
+    );
     assert!(crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
-    assert_eq!(r.app.view, start);
+    assert!(
+        same_view(r.app.view, start),
+        "{:?} is not {:?}",
+        r.app.view,
+        start
+    );
     assert!(!crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
     // Back is a key and a button too. It holds the agent back for a moment, like a drag.
     assert_eq!(
@@ -457,7 +473,12 @@ fn back_returns_to_the_view_before_each_change() {
     r.advance(1.0);
     r.ok("view.zoom", json!({"at": [9, 9], "scale": 1.0}));
     r.app.agent_back(&ctx);
-    assert_eq!(r.app.view, start);
+    assert!(
+        same_view(r.app.view, start),
+        "{:?} is not {:?}",
+        r.app.view,
+        start
+    );
     assert_eq!(r.app.status, tr!("agent-view-restored"));
     r.app.agent_back(&ctx);
     assert_eq!(r.app.status, tr!("agent-view-nothing-back"));
@@ -532,7 +553,12 @@ fn back_returns_from_the_3d_camera_to_the_plan() {
     assert!(crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
     assert!(crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
     assert!(r.app.plan());
-    assert_eq!(r.app.view, plan);
+    assert!(
+        same_view(r.app.view, plan),
+        "{:?} is not {:?}",
+        r.app.view,
+        plan
+    );
 }
 
 #[test]
@@ -564,7 +590,12 @@ fn a_view_set_through_the_session_is_kept_for_back() {
     crate::agent_view::keep_if_changed(&mut r.app.agent_env(&ctx), memo);
     assert_eq!(r.app.agent_view.back_len(), 1);
     r.app.agent_back(&ctx);
-    assert_eq!(r.app.view, start);
+    assert!(
+        same_view(r.app.view, start),
+        "{:?} is not {:?}",
+        r.app.view,
+        start
+    );
     // And the person's drag holds it back as well.
     r.drag_frames(2);
     assert_eq!(
@@ -1115,7 +1146,12 @@ fn a_canvas_that_is_offset_in_the_window_is_framed_right() {
     assert_ne!(r.app.view, after);
     r.advance(1.0);
     r.app.agent_back(&r.ctx.clone());
-    assert_eq!(r.app.view, after);
+    assert!(
+        same_view(r.app.view, after),
+        "{:?} is not {:?}",
+        r.app.view,
+        after
+    );
 }
 
 #[test]
@@ -1264,8 +1300,8 @@ fn back_keeps_the_view_of_the_person_when_the_agent_changes_the_view_many_times(
         n += 1;
     }
     assert_eq!(n, kadakas_ui_core::agent_view::BACK_DEPTH);
-    assert_eq!(
-        r.app.view, start,
+    assert!(
+        same_view(r.app.view, start),
         "the first Back step is the person's own view"
     );
 }
@@ -1423,7 +1459,9 @@ fn hidden_objects_are_named_and_not_framed() {
         fn count(s: &egui::Shape) -> usize {
             match s {
                 egui::Shape::Vec(v) => v.iter().map(count).sum(),
-                egui::Shape::Rect(r) if r.stroke.width >= 7.0 => 1,
+                // The glow of a pointer is wide and faint; the outline of an object is wide when
+                // the view is zoomed in, but dark.
+                egui::Shape::Rect(r) if r.stroke.width >= 7.0 && r.stroke.color.a() < 100 => 1,
                 _ => 0,
             }
         }
