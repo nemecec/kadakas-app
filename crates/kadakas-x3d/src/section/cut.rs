@@ -113,17 +113,24 @@ pub fn simplify(points: &[DVec2], closed: bool, tol: f64) -> Vec<DVec2> {
             return pts;
         }
         let range = if closed { 0..n } else { 1..n - 1 };
-        let drop = range.into_iter().find(|&i| {
-            let (a, b, c) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
-            let ac = c - a;
-            let len = ac.length();
-            if len < 1e-12 {
-                return b.distance(a) <= tol;
-            }
-            let off = ac.perp_dot(b - a).abs() / len;
-            let along = (b - a).dot(ac) / len;
-            off <= tol && along >= -tol && along <= len + tol
-        });
+        // The point that lies closest to the line of its neighbours goes first. The first point
+        // within the tolerance is not enough: next to a short edge it can be a real corner (a
+        // 0.07 mm jog beside a 5 m edge), and dropping it tilts the long edge and loses area.
+        let drop = range
+            .into_iter()
+            .filter_map(|i| {
+                let (a, b, c) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
+                let ac = c - a;
+                let len = ac.length();
+                if len < 1e-12 {
+                    return (b.distance(a) <= tol).then_some((i, b.distance(a)));
+                }
+                let off = ac.perp_dot(b - a).abs() / len;
+                let along = (b - a).dot(ac) / len;
+                (off <= tol && along >= -tol && along <= len + tol).then_some((i, off))
+            })
+            .min_by(|x, y| x.1.total_cmp(&y.1))
+            .map(|(i, _)| i);
         match drop {
             Some(i) => {
                 pts.remove(i);
@@ -298,6 +305,22 @@ mod tests {
         assert!(!c[0].closed);
         assert_eq!(c[0].points.len(), 3);
         assert!(chain(&[]).is_empty());
+    }
+
+    #[test]
+    fn simplify_drops_the_straightest_point_first() {
+        // A long bottom edge, a corner and a 0.07 mm jog on a vertical wall: the jog is on the
+        // wall line, the corner is not. Dropping the corner would tilt the 5 m edge.
+        let ring = [
+            v(5000.0, -216.10),
+            v(0.0, -216.10),
+            v(0.0, -216.03),
+            v(0.0, 0.0),
+            v(5000.0, 0.0),
+        ];
+        let r = simplify(&ring, true, 0.1);
+        let area = kadakas_core::geom::signed_area(&r).abs();
+        assert!((area - 5000.0 * 216.10).abs() < 1.0, "{r:?} {area}");
     }
 
     #[test]
