@@ -236,6 +236,9 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Intersect Surface (`cmd.intersect_surface`) | Cmd+Shift+Option+I / Ctrl+Shift+Alt+I | Cmd/Ctrl+Shift+Alt+I | done |
 | Extrude (Model > Extrude) (`cmd.extrude`) | none | none (no VW default) | done |
 | Sweep (Model > Sweep) (`cmd.sweep`) | none | none (no VW default) | done |
+| Create Objects from Shapes (Modify menu, as in Vectorworks, and Landscape menu; loose lines, arcs and polylines become hardscape areas with holes) (`cmd.create_from_shapes`) | none | none (set a key in `keymap.json`) | done |
+| Split Hardscape into Zones (Landscape menu; Kadakas) (`cmd.split_hardscape`) | none | none (no VW default) | done |
+| Check Unit Patterns (Landscape menu; Kadakas) (`cmd.check_unit_patterns`) | none | none (no VW default) | done |
 | Compose (`cmd.compose`) | Cmd+Shift+Option+P / Ctrl+Shift+Alt+P | Cmd/Ctrl+Shift+Alt+P | done |
 | Move (dialog) | Cmd+M / Ctrl+M | Ctrl+M | planned |
 | Group (`edit.group`) | Cmd+G / Ctrl+G | Cmd/Ctrl+G | done |

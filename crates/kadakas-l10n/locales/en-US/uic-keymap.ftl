@@ -112,3 +112,6 @@ action-view-agent-change-next = Zoom to the next change of the agent
 action-view-agent-change-previous = Zoom to the previous change of the agent
 action-view-agent-changes-seen = Mark the changes of the agent as seen
 action-view-agent-changes-toggle = Highlight the changes of the agent on or off
+action-cmd-create-from-shapes = Create Objects from Shapes
+action-cmd-split-hardscape = Split Hardscape into Zones
+action-cmd-check-unit-patterns = Check Unit Patterns

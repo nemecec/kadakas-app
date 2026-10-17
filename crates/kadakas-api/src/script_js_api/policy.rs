@@ -139,6 +139,7 @@ const TABLE: &[(&str, Class)] = &[
     ("hardscape.plan_clear", Edit),
     ("hardscape.set", Edit),
     ("hardscape.split", Edit),
+    ("hardscape.zone_set", Edit),
     ("hardscape_style.create", Edit),
     ("hardscape_style.delete", Edit),
     ("hardscape_style.duplicate", Edit),

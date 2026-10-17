@@ -46,6 +46,7 @@ mod layout;
 mod locale;
 mod open_gate;
 mod panels;
+mod paving_ui;
 mod picture_ui;
 mod plan_draw;
 mod plan_worker;

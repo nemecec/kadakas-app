@@ -7,12 +7,14 @@
     "cmd.add_surface": [
       "Cmd/Ctrl+Alt+Shift+A"
     ],
+    "cmd.check_unit_patterns": [],
     "cmd.clip_surface": [
       "Cmd/Ctrl+Alt+Shift+C"
     ],
     "cmd.compose": [
       "Cmd/Ctrl+Alt+Shift+P"
     ],
+    "cmd.create_from_shapes": [],
     "cmd.dimension_standards": [],
     "cmd.duplicate_array": [
       "Cmd/Ctrl+Alt+Shift+D"
@@ -36,6 +38,7 @@
     "cmd.rotate_right_90": [
       "Cmd/Ctrl+Shift+R"
     ],
+    "cmd.split_hardscape": [],
     "cmd.subtract_surface": [],
     "cmd.sweep": [],
     "databar.focus": [
@@ -374,6 +377,8 @@
     {
       "id": "modify",
       "items": [
+        "cmd.create_from_shapes",
+        "-",
         "cmd.duplicate_array",
         "-",
         "cmd.rotate_left_90",
@@ -395,6 +400,15 @@
         "cmd.sweep",
         "-",
         "tool.polygon3d"
+      ]
+    },
+    {
+      "id": "landscape",
+      "items": [
+        "cmd.create_from_shapes",
+        "cmd.split_hardscape",
+        "-",
+        "cmd.check_unit_patterns"
       ]
     },
     {

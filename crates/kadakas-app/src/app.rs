@@ -35,6 +35,7 @@ mod activity_tests;
 #[cfg(test)]
 mod agent_view_tests;
 mod issues;
+mod paving;
 use kadakas_core::edit2d::Transform;
 use kadakas_core::edit2d::plan::{self, SurfaceOp};
 use kadakas_ui_core::annot_pick::Prims;
@@ -140,6 +141,8 @@ pub struct KadakasApp {
     issues_ui: crate::issues_ui::IssuesUi,
     /// The Compare window and the overlay that it puts on the plan and on the 3D view (REV-03).
     compare_ui: crate::compare_ui::CompareUi,
+    /// Regions from shapes, zones, courses and the pattern check (PAT-06 to PAT-12).
+    paving_ui: crate::paving_ui::PavingUi,
     /// File > Import > Update from DXF/DWG...: the update window and its overlay on the plan (IOP-23).
     #[cfg(not(target_arch = "wasm32"))]
     update_ui: crate::update_ui::UpdateUi,
@@ -503,6 +506,7 @@ impl KadakasApp {
             versions_ui: Default::default(),
             issues_ui: Default::default(),
             compare_ui: Default::default(),
+            paving_ui: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             update_ui: crate::update_ui::UpdateUi::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -686,6 +690,21 @@ impl KadakasApp {
         )
     }
 
+    /// Why the document cannot be changed now, for the paving dialogs (as `exec` says it).
+    fn edit_lock(&self) -> Option<String> {
+        if self.read_only() {
+            Some(if self.update_read_only() {
+                tr!("update-ui-read-only-edit")
+            } else {
+                tr!("compare-ui-read-only")
+            })
+        } else if self.collab.waiting_for_snapshot() {
+            Some(tr!("collab-ui-joining"))
+        } else {
+            None
+        }
+    }
+
     fn exec(&mut self, cmd: &Command) {
         if self.read_only() {
             self.status = if self.update_read_only() {
@@ -782,6 +801,7 @@ impl KadakasApp {
         self.session.take_replaced();
         // A compare of the old document means nothing for the new one.
         self.compare_ui.reset(&mut self.session);
+        self.paving_ui.reset();
         #[cfg(not(target_arch = "wasm32"))]
         self.update_ui.reset(&mut self.session);
         self.view_history.clear();
@@ -1055,6 +1075,9 @@ impl KadakasApp {
             | MenuAction::RotateRight90
             | MenuAction::FlipHorizontal
             | MenuAction::FlipVertical
+            | MenuAction::CreateFromShapes
+            | MenuAction::SplitHardscape
+            | MenuAction::CheckUnitPatterns
             | MenuAction::PreviousView
             | MenuAction::NextView
             | MenuAction::QuickSearch => {
@@ -1713,6 +1736,13 @@ impl KadakasApp {
                     self.solid_dlg.open_sweep();
                 }
             }
+            Action::CmdCreateFromShapes => self
+                .paving_ui
+                .open_curves(&mut self.session, &mut self.status),
+            Action::CmdSplitHardscape => self
+                .paving_ui
+                .open_split(&mut self.session, &mut self.status),
+            Action::CmdCheckUnitPatterns => self.paving_ui.run_check(&mut self.session),
             Action::CmdAddSurface => self.surface_op(SurfaceOp::Add),
             Action::CmdSubtractSurface => self.surface_op(SurfaceOp::Subtract),
             Action::CmdClipSurface => self.surface_op(SurfaceOp::Clip),
@@ -1967,6 +1997,10 @@ impl KadakasApp {
             self.fit_view(rect);
             self.needs_fit = false;
         }
+        // A click on a finding of the pattern check or on a note of a dialog asks to zoom to a place.
+        if let Some((lo, hi)) = self.paving_ui.take_zoom() {
+            self.view.fit(lo, hi, rect);
+        }
         // A click in the Compare window asks to zoom to an object.
         if let Some(z) = self.compare_ui.take_zoom() {
             self.view.fit(z.lo, z.hi, rect);
@@ -2131,6 +2165,22 @@ impl KadakasApp {
         if self.issues_ui.picking() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.issues_ui.set_picking(false);
         }
+        // The paving dialogs: Escape ends a pick or a split line, Enter and a double click end
+        // the line that is being drawn.
+        if self.paving_ui.captures() {
+            if hover.is_some() {
+                self.paving_ui.set_hover(self.cursor);
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.paving_ui.cancel();
+            }
+            if !typing && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                self.paving_ui.finish_line();
+            }
+            if resp.double_clicked() {
+                self.paving_ui.double_click();
+            }
+        }
         if pressed && resp.hovered() && !panning && !space {
             if let Some(p) = latest {
                 if let Some(id) = self.issues_ui.pin_at(p) {
@@ -2140,6 +2190,12 @@ impl KadakasApp {
                     let at = self.view.to_model(p);
                     self.issues_ui.start_at(at, 0.0);
                     issue_press = true;
+                } else if self.paving_ui.captures() && !self.read_only() {
+                    // A point or an edge for the paving (the pattern start, a split line).
+                    let tol = self.tol();
+                    issue_press =
+                        self.paving_ui
+                            .press(&mut self.session, self.cursor, tol, &mut self.status);
                 }
             }
             self.issue_click = issue_press;
@@ -2213,6 +2269,15 @@ impl KadakasApp {
         canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
         self.issues_ui
             .paint_plan(&ui.painter_at(rect), rect, &self.view, &self.session);
+        crate::paving_ui::paint(
+            &ui.painter_at(rect),
+            rect,
+            &self.view,
+            self.session.editor.doc(),
+            &self.session.selection,
+            self.session.editor.revision(),
+            &self.paving_ui,
+        );
         // What the agent points at, and where the agent is (never part of the document).
         crate::agent_view_ui::paint_plan(
             &ui.painter_at(rect),
@@ -2235,7 +2300,7 @@ impl KadakasApp {
                 now_ms as u64,
             );
         }
-        if self.issues_ui.picking() && resp.hovered() {
+        if (self.issues_ui.picking() || self.paving_ui.captures()) && resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
         // The context menu: new issues from the selection or from a point.
@@ -2310,7 +2375,9 @@ impl KadakasApp {
             animate: self.prefs.animate_agent_view,
             now_ms: ctx.input(|i| i.time) * 1000.0,
             input_busy: crate::agent_view::input_busy(ctx, self.canvas_rect),
-            tool_busy: self.machine.anchor().is_some() || self.entry.active,
+            tool_busy: self.machine.anchor().is_some()
+                || self.entry.active
+                || self.paving_ui.captures(),
         }
     }
 
@@ -2937,7 +3004,13 @@ impl KadakasApp {
             }
             Tab::ObjectInfo => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    panels::object_info(ui, &mut self.session, &mut self.info, &mut self.status);
+                    panels::object_info(
+                        ui,
+                        &mut self.session,
+                        &mut self.info,
+                        &mut self.paving_ui,
+                        &mut self.status,
+                    );
                     self.plugin_ui
                         .object_info(ui, &mut self.session, &mut self.status);
                     #[cfg(not(target_arch = "wasm32"))]
@@ -3050,7 +3123,8 @@ impl eframe::App for KadakasApp {
             // The input of this frame is read before the calls of the agent are answered: the
             // person who drags, zooms or types now wins.
             let input_busy = crate::agent_view::input_busy(&ctx, self.canvas_rect);
-            let tool_busy = self.machine.anchor().is_some() || self.entry.active;
+            let tool_busy =
+                self.machine.anchor().is_some() || self.entry.active || self.paving_ui.captures();
             agent.poll_ext(&mut |line, reply, conn| {
                 // The agent drives the view and points: the app answers these itself. A change
                 // through the session (`view.set`) keeps the view from before, for Back.
@@ -3326,6 +3400,12 @@ impl eframe::App for KadakasApp {
         self.issues_ui
             .windows(&ctx, &mut self.session, &mut self.status);
         self.run_issue_requests();
+        let lock = self.edit_lock();
+        self.paving_ui
+            .frame(self.session.editor.revision(), lock, &mut self.status);
+        self.paving_ui
+            .windows(&ctx, &mut self.session, &mut self.status);
+        self.run_paving_requests();
         self.compare_ui.set_dark(self.dark);
         self.compare_ui
             .show(&ctx, &mut self.session, &mut self.status);

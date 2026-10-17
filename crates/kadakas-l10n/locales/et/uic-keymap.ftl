@@ -112,3 +112,6 @@ action-view-agent-change-next = Suumi agendi järgmise muudatuse juurde
 action-view-agent-change-previous = Suumi agendi eelmise muudatuse juurde
 action-view-agent-changes-seen = Märgi agendi muudatused nähtuks
 action-view-agent-changes-toggle = Lülita agendi muudatuste esiletõst sisse või välja
+action-cmd-create-from-shapes = Loo objektid kujudest
+action-cmd-split-hardscape = Jaga kõvakate tsoonideks
+action-cmd-check-unit-patterns = Kontrolli kivimustreid

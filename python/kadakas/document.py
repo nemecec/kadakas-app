@@ -995,6 +995,12 @@ class Document:
         the zones when it moves. Returns ``{zones, split_lines, area_m2, zones_area_m2, notes}``."""
         return self.api.hardscape_split(id=str(id), **params)
 
+    def hardscape_zone_set(self, id: Id, zone: int, **params: Any) -> JsonDict:
+        """Change the settings of one zone (``name``, ``pattern``, ``origin``, ``angle``,
+        ``align_to_edge``, ``align_to_split``; ``clear=[...]`` removes settings) and leave the other
+        zones as they are. ``zone`` is the index in the reply of ``hardscape_split``."""
+        return self.api.hardscape_zone_set(id=str(id), zone=zone, **params)
+
     def hardscape_course(self, id: Id, **params: Any) -> JsonDict:
         """Add or replace courses along a path (``courses=[{name, along="outline", corner, ...}]``
         or the fields of one course). The field is cut by the course with the gap kept. Returns

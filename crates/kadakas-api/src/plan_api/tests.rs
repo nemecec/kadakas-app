@@ -1284,3 +1284,72 @@ fn the_check_takes_its_thresholds_from_the_call_and_lists_what_it_cannot_check()
     assert!(r["objects"][1]["error"].is_string(), "{r}");
     assert_eq!(r["totals"]["complete"], false);
 }
+
+#[test]
+fn zone_set_changes_one_zone_and_says_when_nothing_changed() {
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 8000.0, 4000.0);
+    let l = line(&mut s, [3000.0, -50.0], [3000.0, 4050.0]);
+    ok(&mut s, "hardscape.split", json!({"id": id, "lines": [l]}));
+    // Set a name, an angle and an origin on the second zone; the first stays as it is.
+    let r = ok(
+        &mut s,
+        "hardscape.zone_set",
+        json!({"id": id, "zone": 1, "name": " Yard ", "angle": 45, "origin": [10, 20]}),
+    );
+    assert_eq!(r["changed"], true);
+    assert_eq!(r["name"], "Yard");
+    assert_eq!(r["has_settings"], true);
+    assert_eq!(r["zones"].as_array().unwrap().len(), 2);
+    assert_eq!(r["zones"][0]["has_settings"], false);
+    // The same call again changes nothing.
+    let r = ok(
+        &mut s,
+        "hardscape.zone_set",
+        json!({"id": id, "zone": 1, "name": "Yard", "angle": 45, "origin": [10, 20]}),
+    );
+    assert_eq!(r["changed"], false);
+    // The two alignments replace each other.
+    let r = ok(
+        &mut s,
+        "hardscape.zone_set",
+        json!({"id": id, "zone": 1, "align_to_edge": 0}),
+    );
+    assert_eq!(r["changed"], true);
+    ok(
+        &mut s,
+        "hardscape.zone_set",
+        json!({"id": id, "zone": 1, "align_to_split": 0}),
+    );
+    // Clear every setting; the name stays.
+    let r = ok(
+        &mut s,
+        "hardscape.zone_set",
+        json!({"id": id, "zone": 1,
+            "clear": ["pattern", "origin", "angle", "align_to_edge", "align_to_split"]}),
+    );
+    assert_eq!(r["changed"], true);
+    // Bad input is refused.
+    for (p, word) in [
+        (json!({"id": id}), "zone"),
+        (json!({"id": id, "zone": 7}), "no zone 7"),
+        (
+            json!({"id": id, "zone": 0, "clear": ["color"]}),
+            "cannot clear",
+        ),
+        (json!({"id": id, "zone": 0, "clear": 5}), "array"),
+        (
+            json!({"id": id, "zone": 0, "angle": 5, "clear": ["angle"]}),
+            "set and cleared",
+        ),
+        (
+            json!({"id": id, "zone": 0, "align_to_edge": 0, "align_to_split": 0}),
+            "not both",
+        ),
+        (json!({"id": id, "zone": 0, "name": 5}), "string"),
+        (json!({"id": id, "zone": 0, "bogus": 1}), "unknown"),
+    ] {
+        let m = fail(&mut s, "hardscape.zone_set", p.clone());
+        assert!(m.contains(word), "{p}: {m}");
+    }
+}
