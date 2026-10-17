@@ -698,11 +698,18 @@ fn mcp(mut backend: Backend, flat: bool, schemas: bool) {
                     }
                     mcp_tools::Call::Method(m, params) => {
                         let params = with_client(m, params, &client);
+                        // `docs` is a switch of this server: the API does not take it.
+                        let mut params = params;
+                        let docs = params
+                            .as_object_mut()
+                            .and_then(|o| o.remove("docs"))
+                            .and_then(|v| v.as_bool())
+                            == Some(true);
                         let mut r = backend.call(json!(1), m, params);
                         if m == "describe"
                             && let Some(result) = r.get_mut("result")
                         {
-                            mcp_tools::name_tools(flat, result);
+                            mcp_tools::name_tools(flat, docs, result);
                         }
                         let (text, is_error) = match r.get("error") {
                             Some(e) => (error_text(e), true),

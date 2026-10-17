@@ -356,6 +356,7 @@ pub fn domain_tools(schemas: bool) -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "method": {"type": "string", "description": "Optional. A method name, for example hardscape.course: gives that method with the JSON Schema of its params. Leave it out for the list of all methods."},
+                        "docs": {"type": "boolean", "description": "true: the full doc of every method in the list (about 140 KB more); by default the list has the first sentence, and the full text is in the description of each tool."},
                         "schemas": {"type": "boolean", "description": "true: add the JSON Schema of the params of every method (large)."},
                         "schema": {"type": "boolean", "description": "true: add the JSON Schema of the commands of execute (about 30 KB)."},
                         "params": {"type": "object", "additionalProperties": true, "description": "Only for the long form {method: \"describe\", params: {...}}."}
@@ -546,7 +547,7 @@ fn resolve_describe(args: &Value) -> Call {
 /// method list, and on the one method that `describe {method}` returns. In domain mode it is the
 /// domain tool (the call is `{method, params}` to that tool), in flat mode the tool named like the
 /// method.
-pub fn name_tools(flat: bool, result: &mut Value) {
+pub fn name_tools(flat: bool, docs: bool, result: &mut Value) {
     let tool = |m: &str| -> String {
         if flat {
             flat_name(m)
@@ -558,6 +559,13 @@ pub fn name_tools(flat: bool, result: &mut Value) {
         for entry in list {
             if let Some(name) = entry["name"].as_str().map(str::to_string) {
                 entry["tool"] = json!(tool(&name));
+            }
+            // The full text is in the description of the tool and in `describe {method}`, so the
+            // list carries the first sentence only (about 140 KB less).
+            if !docs
+                && let Some(doc) = entry["doc"].as_str().map(summary)
+            {
+                entry["doc"] = json!(doc);
             }
         }
     }
@@ -572,6 +580,26 @@ pub fn name_tools(flat: bool, result: &mut Value) {
         } else {
             "Each tool is a domain and takes {method, params}. Every method in `methods` has its `tool`: call that tool, for example the tool hardscape_landscape with {method: \"hardscape.course\", params: {...}}. A call to another tool is an error that names the right one."
         });
+        if !docs {
+            result["docs"] = json!("The doc of each method here is its first sentence. The full text with the params is in the description of its tool, in describe {method: <name>} (with the JSON Schema of the params), or here with describe {docs: true}.");
+        }
+    }
+}
+
+/// The first sentence of a method doc (up to its `params:` list), at most 200 characters.
+fn summary(doc: &str) -> String {
+    let cut = [doc.find(". "), doc.find(" params:")]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(doc.len());
+    let first = doc[..cut].trim_end_matches('.');
+    if first.chars().count() > 200 {
+        let mut t: String = first.chars().take(200).collect();
+        t.push_str("...");
+        t
+    } else {
+        format!("{first}.")
     }
 }
 
@@ -876,12 +904,19 @@ mod tests {
         assert!(d["inputSchema"].get("required").is_none());
         // The list names the tool of each method.
         let mut result = json!({"methods": [{"name": "view.zoom", "doc": "x"}, {"name": "objects.list", "doc": "y"}]});
-        name_tools(false, &mut result);
+        name_tools(false, false, &mut result);
         assert_eq!(result["methods"][0]["tool"], "review");
         assert_eq!(result["methods"][1]["tool"], "objects");
         assert!(result["tools"].as_str().unwrap().contains("names the right one"));
+        assert_eq!(result["methods"][0]["doc"], "x.");
+        let long = "Lay units over a shape. params: {id, pattern?}. Returns {x}.";
+        assert_eq!(summary(long), "Lay units over a shape.");
+        let mut full = json!({"methods": [{"name": "view.zoom", "doc": long}]});
+        name_tools(false, true, &mut full);
+        assert_eq!(full["methods"][0]["doc"], long);
+        assert!(full.get("docs").is_none());
         let mut one = json!({"method": "view.zoom", "doc": "x", "params": {}});
-        name_tools(true, &mut one);
+        name_tools(true, true, &mut one);
         assert_eq!(one["tool"], "view_zoom");
     }
 }
