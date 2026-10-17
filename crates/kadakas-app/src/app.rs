@@ -3041,7 +3041,7 @@ impl eframe::App for KadakasApp {
                     .as_deref()
                     .is_some_and(crate::agent_view::is_session_view_change)
                 {
-                    match crate::agent_view::memo_for_session_change(&env!()) {
+                    match crate::agent_view::memo_for_session_change(&mut env!()) {
                         Ok(m) => Some(m),
                         Err(e) => {
                             return crate::agent::Reply::Now(crate::agent_view::error_line(

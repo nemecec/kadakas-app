@@ -311,6 +311,11 @@ pub fn paint(
                 None => behind = true,
             },
         }
+        // A part behind the camera cannot be outlined: an arrow at the bottom edge says so.
+        if behind && area.is_some() {
+            let toward = rect.center() + vec2(0.0, rect.height());
+            edge_arrow(&painter, rect, toward, main);
+        }
         match area {
             Some(a) if a.intersects(rect) => {
                 let top = match &h.aim {

@@ -155,3 +155,55 @@ fn describe_has_the_review_section_with_examples_that_fit_the_parameters() {
     assert!(one.to_string().contains("next_change"));
     assert!(one.to_string().contains("until"));
 }
+
+/// A 3D viewpoint that the API makes keeps drawing coordinates, not numbers relative to the
+/// scene (the middle of the drawing): the app opens it on the same place, and BCF has the place.
+#[test]
+fn an_api_viewpoint_keeps_drawing_coordinates_and_survives_bcf() {
+    let mut s = Session::with_sequential_ids();
+    call(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "rect", "min": [650000, 590000], "max": [654000, 593000]}}}),
+    );
+    call(&mut s, "view.set", json!({"view": "right_isometric"}));
+    let made = call(
+        &mut s,
+        "issue.create",
+        json!({"title": "Far away", "capture": true, "now_ms": 1}),
+    );
+    let id = made["id"].clone();
+    let issue = call(&mut s, "issue.get", json!({"id": id}));
+    let view = &issue["viewpoints"][0]["view"];
+    assert_eq!(view["kind"], "camera", "{issue}");
+    let t: Vec<f64> = view["target"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect();
+    assert!(
+        (t[0] - 652000.0).abs() < 4000.0 && (t[1] - 591500.0).abs() < 4000.0,
+        "the target is in the drawing near the object, not relative to the scene: {t:?}"
+    );
+    // The BCF file has the place, and a session that reads it gets the same place.
+    let bcf = call(&mut s, "issue.export_bcf", json!({}));
+    let mut other = Session::with_sequential_ids();
+    call(
+        &mut other,
+        "issue.import_bcf",
+        json!({"base64": bcf["base64"]}),
+    );
+    let listed = call(&mut other, "issue.list", json!({}));
+    let id2 = listed["issues"][0]["id"].clone();
+    let back = call(&mut other, "issue.get", json!({"id": id2}));
+    let t2: Vec<f64> = back["viewpoints"][0]["view"]["target"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect();
+    for i in 0..3 {
+        assert!((t[i] - t2[i]).abs() < 5.0, "{t:?} {t2:?}");
+    }
+}

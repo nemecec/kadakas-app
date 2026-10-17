@@ -47,7 +47,9 @@ pub struct NavSignal {
 #[derive(Clone, Copy, Debug)]
 pub struct Memo {
     settings: ViewSettings,
-    view: View,
+    /// The plan as the middle (drawing coordinates) and the zoom, so Back is right also when the
+    /// drawing area moved in the window since (a palette was resized).
+    pose: Option<PlanPose>,
     camera: Camera,
     origin: DVec3,
     /// A view change of the session was already waiting for the window when this was taken.
@@ -77,6 +79,9 @@ pub struct AgentView {
     seen: Option<(View, Camera, ViewSettings)>,
     /// Frames in which a change of the view is expected from a call of the session (`view.set`).
     expect_change: u8,
+    /// The view now is the agent's work. False: the person made it (they moved the view, or went
+    /// Back), so the next change of the agent keeps it as the protected entry of Back.
+    agent_touched: bool,
 }
 
 impl AgentView {
@@ -113,8 +118,26 @@ impl AgentView {
         }
         if signal.moved {
             self.nav.note(now_ms);
+            self.agent_touched = false;
         }
         self.nav.set_dragging(signal.dragging, now_ms);
+    }
+
+    /// Keeps the view from before a change of the agent. Changes that follow within a moment
+    /// count as one step. A view that the person made is protected against the limit.
+    fn keep(&mut self, memo: Memo, now_ms: f64) {
+        let merge =
+            !self.back.is_empty() && self.last_change_ms.is_some_and(|t| now_ms - t < MERGE_MS);
+        if !merge {
+            if self.agent_touched {
+                self.back.push(memo);
+            } else {
+                self.back.push_protected(memo);
+            }
+        }
+        self.agent_touched = true;
+        self.last_change_ms = Some(now_ms);
+        self.panel_hidden = false;
     }
 
     /// A new document: the pointers and the views from before are about the old one.
@@ -126,6 +149,7 @@ impl AgentView {
         self.presence.forget();
         self.cycle = None;
         self.seen = None;
+        self.agent_touched = false;
     }
 }
 
@@ -239,7 +263,7 @@ impl Env<'_> {
     fn check_not_busy(&self) -> Result<(), RpcError> {
         if self.state.locked {
             return Err(RpcError::conflict(
-                "the person turned off \"Agent may move my view\", so this request was dropped and nothing moved. Do not try again until the person says so; view.get and view.highlight still work",
+                "the person turned off \"Agent may move my view\", so this request was dropped and nothing moved. Do not try again until the person says so. The lock covers every call that moves the view: view.zoom, view.pan, view.camera, view.set and saved_view.restore. view.get and view.highlight still work",
             )
             .with_reason(REASON_VIEW_LOCKED));
         }
@@ -254,33 +278,24 @@ impl Env<'_> {
 
     /// The view as it is now (or will be), to go back to.
     fn memo(&self) -> Memo {
-        let view = match (self.state.plan_anim, self.frame()) {
-            (Some(a), Ok((min, size))) => a.to.view(min, size),
-            _ => *self.view,
-        };
+        let pose = self
+            .frame()
+            .ok()
+            .map(|(min, size)| self.plan_pose(min, size));
         Memo {
             settings: self.session.view,
-            view,
+            pose,
             camera: self.camera(),
             origin: self.origin(),
             pending_before: self.session.has_view_change(),
         }
     }
 
-    /// Keeps the view from before a change of the agent. Changes that follow within a moment
-    /// count as one step.
+    /// Keeps the view from before a change of the agent (see `AgentView::keep`).
     fn keep_for_back(&mut self) {
-        let merge = !self.state.back.is_empty()
-            && self
-                .state
-                .last_change_ms
-                .is_some_and(|t| self.now_ms - t < MERGE_MS);
-        if !merge {
-            let memo = self.memo();
-            self.state.back.push(memo);
-        }
-        self.state.last_change_ms = Some(self.now_ms);
-        self.state.panel_hidden = false;
+        let memo = self.memo();
+        let now = self.now_ms;
+        self.state.keep(memo, now);
     }
 
     /// Remembers the view as the agent left it.
@@ -701,15 +716,21 @@ impl Env<'_> {
         // The height of the ground at the pointer, so that a box and a place show at the right
         // height in 3D.
         let mut hidden = vec![];
+        let in_3d = !self.plan();
         let place = match req.aim.clone() {
             Aim::At(p) => {
-                let b = self.aim_box(&Aim::At(p), true)?;
-                req.aim = Aim::At(b.lo);
-                req.ground = b.lo.z;
-                Some(DVec2::new(b.lo.x, b.lo.y))
+                // The height of the ground is looked up only when 3D is shown (it needs the 3D
+                // scene); a pointer made in the plan gets it when 3D is shown (see `step`).
+                if in_3d && p.z.is_nan() {
+                    let b = self.aim_box(&Aim::At(p), true)?;
+                    req.aim = Aim::At(b.lo);
+                }
+                Some(DVec2::new(p.x, p.y))
             }
             Aim::Box { lo, hi } => {
-                req.ground = self.ground_at((lo + hi) / 2.0);
+                if in_3d {
+                    req.ground = self.ground_at((lo + hi) / 2.0);
+                }
                 Some((lo + hi) / 2.0)
             }
             Aim::Objects(ids) => {
@@ -802,6 +823,7 @@ pub fn highlight_json(h: &Highlight) -> Value {
 
 /// Runs one call of the app. `Err` is the error response for the agent.
 pub fn call(env: &mut Env, method: &str, params: Value) -> Result<Value, RpcError> {
+    detect_person_change(env);
     let params = if params.is_null() { json!({}) } else { params };
     let params = kadakas_api::spec::prepare(env.session.editor.doc(), method, params)?;
     match method {
@@ -817,7 +839,8 @@ pub fn call(env: &mut Env, method: &str, params: Value) -> Result<Value, RpcErro
 
 /// The view from before a change through the session (`view.set`, `saved_view.restore`). It is
 /// refused when the person navigates or locked the view.
-pub fn memo_for_session_change(env: &Env) -> Result<Memo, RpcError> {
+pub fn memo_for_session_change(env: &mut Env) -> Result<Memo, RpcError> {
+    detect_person_change(env);
     env.check_not_busy()?;
     Ok(env.memo())
 }
@@ -827,20 +850,31 @@ pub fn keep_if_changed(env: &mut Env, memo: Memo) {
     let changed = env.session.has_view_change()
         && (!memo.pending_before || env.session.view != memo.settings);
     if changed {
-        let merge = !env.state.back.is_empty()
-            && env
-                .state
-                .last_change_ms
-                .is_some_and(|t| env.now_ms - t < MERGE_MS);
-        if !merge {
-            env.state.back.push(memo);
-        }
-        env.state.last_change_ms = Some(env.now_ms);
-        env.state.panel_hidden = false;
+        let now = env.now_ms;
+        env.state.keep(memo, now);
         env.state.plan_anim = None;
         env.state.cam_anim = None;
         // The window applies the change in this frame and the next: it is not the person's.
         env.state.expect_change = 3;
+    }
+}
+
+/// Looks whether somebody else changed the view since the agent left it (a drag, a tool, a view
+/// command of the person: zoom to extents, a standard view, the view history, an opened issue,
+/// Back). The person wins: the animation stops and the agent waits. This runs before every call
+/// of the agent is answered, and at the start of each frame, so a command of the person made in
+/// the rest of the last frame is never missed.
+pub fn detect_person_change(env: &mut Env) {
+    let current = (*env.view, env.view3d.camera, env.session.view);
+    if env.state.expect_change > 0 {
+        return;
+    }
+    if env.state.seen.is_some_and(|s| s != current) {
+        env.state.plan_anim = None;
+        env.state.cam_anim = None;
+        env.state.nav.note(env.now_ms);
+        env.state.agent_touched = false;
+        env.mark_seen();
     }
 }
 
@@ -849,17 +883,9 @@ pub fn keep_if_changed(env: &mut Env, memo: Memo) {
 pub fn step(env: &mut Env) -> bool {
     let rev = env.rev();
     let now = env.now_ms;
-    // Somebody else changed the view since the agent left it (a drag, a tool, a view command of
-    // the person: zoom to extents, a standard view, the view history, an opened issue). The
-    // person wins: the animation stops and the agent waits.
-    let current = (*env.view, env.view3d.camera, env.session.view);
-    if env.state.expect_change > 0 {
-        env.state.expect_change -= 1;
-    } else if env.state.seen.is_some_and(|s| s != current) {
-        env.state.plan_anim = None;
-        env.state.cam_anim = None;
-        env.state.nav.note(now);
-    }
+    // The person wins over a running animation.
+    detect_person_change(env);
+    env.state.expect_change = env.state.expect_change.saturating_sub(1);
     let doc = env.session.editor.doc();
     env.state
         .highlights
@@ -880,6 +906,12 @@ pub fn step(env: &mut Env) -> bool {
             env.state.cam_anim = None;
         }
     }
+    // Pointers made in the plan get the height of the ground now that 3D is shown.
+    if !env.plan() && env.state.highlights.needs_ground() {
+        let mut highlights = std::mem::take(&mut env.state.highlights);
+        highlights.resolve_ground(&mut |xy| env.ground_at(xy));
+        env.state.highlights = highlights;
+    }
     env.mark_seen();
     env.state.animating()
 }
@@ -894,8 +926,11 @@ pub fn go_back(env: &mut Env) -> bool {
     env.state.cam_anim = None;
     env.state.nav.note(env.now_ms);
     env.state.last_change_ms = None;
+    env.state.agent_touched = false;
     env.session.view = memo.settings;
-    *env.view = memo.view;
+    if let (Some(pose), Ok((min, size))) = (memo.pose, env.frame()) {
+        *env.view = pose.view(min, size);
+    }
     env.view3d.sync(memo.settings, false);
     // The camera was kept with the scene origin of that time; the origin may have moved.
     let mut camera = memo.camera;

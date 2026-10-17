@@ -550,7 +550,7 @@ fn a_view_set_through_the_session_is_kept_for_back() {
         .unwrap();
     let ctx = r.ctx.clone();
     // What the agent handler of the window does around a call of the session.
-    let memo = crate::agent_view::memo_for_session_change(&r.app.agent_env(&ctx)).unwrap();
+    let memo = crate::agent_view::memo_for_session_change(&mut r.app.agent_env(&ctx)).unwrap();
     r.app
         .session
         .handle("view.set", json!({"view": "Far"}))
@@ -558,7 +558,7 @@ fn a_view_set_through_the_session_is_kept_for_back() {
     crate::agent_view::keep_if_changed(&mut r.app.agent_env(&ctx), memo);
     assert_eq!(r.app.agent_view.back_len(), 1);
     // A call that changes nothing keeps nothing.
-    let memo = crate::agent_view::memo_for_session_change(&r.app.agent_env(&ctx)).unwrap();
+    let memo = crate::agent_view::memo_for_session_change(&mut r.app.agent_env(&ctx)).unwrap();
     r.app.session.take_view_changed();
     r.app.session.take_applied_view();
     crate::agent_view::keep_if_changed(&mut r.app.agent_env(&ctx), memo);
@@ -568,7 +568,7 @@ fn a_view_set_through_the_session_is_kept_for_back() {
     // And the person's drag holds it back as well.
     r.drag_frames(2);
     assert_eq!(
-        crate::agent_view::memo_for_session_change(&r.app.agent_env(&ctx))
+        crate::agent_view::memo_for_session_change(&mut r.app.agent_env(&ctx))
             .err()
             .and_then(|e| e.reason),
         Some(REASON_PERSON_NAVIGATING)
@@ -1301,7 +1301,7 @@ fn the_person_can_lock_the_view() {
     }
     assert_eq!(r.app.view, view);
     assert_eq!(
-        crate::agent_view::memo_for_session_change(&r.app.agent_env(&r.ctx.clone()))
+        crate::agent_view::memo_for_session_change(&mut r.app.agent_env(&r.ctx.clone()))
             .err()
             .and_then(|e| e.reason),
         Some(kadakas_api::REASON_VIEW_LOCKED)
@@ -1634,4 +1634,156 @@ fn a_3d_viewpoint_keeps_drawing_coordinates() {
         (got.x - target[0]).abs() < 1.0 && (got.y - target[1]).abs() < 1.0,
         "{got:?} {target:?} {camera:?}"
     );
+}
+
+#[test]
+fn a_view_command_of_the_person_in_the_same_frame_is_seen_before_the_agent_call() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    // The person uses a menu or view bar command after the step of this frame...
+    r.app.view.pan(vec2(30.0, 10.0));
+    let view = r.app.view;
+    // ...and the agent call comes in the next frame, before its step has run.
+    let e = r.err("view.zoom", json!({"at": [5, 5], "scale": 0.5}));
+    assert_eq!(e.reason, Some(REASON_PERSON_NAVIGATING));
+    assert_eq!(r.app.view, view, "nothing moved");
+    // The same for a call that goes through the session.
+    r.advance(1.0);
+    r.app.view.pan(vec2(5.0, 5.0));
+    let ctx = r.ctx.clone();
+    assert_eq!(
+        crate::agent_view::memo_for_session_change(&mut r.app.agent_env(&ctx))
+            .err()
+            .and_then(|e| e.reason),
+        Some(REASON_PERSON_NAVIGATING)
+    );
+}
+
+#[test]
+fn back_for_the_plan_is_right_after_the_drawing_area_moved() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    r.ok("view.zoom", json!({"at": [4000, 3000], "scale": 0.2}));
+    r.advance(0.5);
+    r.ok("view.pan", json!({"by": [9000, 0]}));
+    // A palette was resized: the same window, another place for the drawing.
+    let old = r.canvas();
+    let moved = Rect::from_min_max(old.min + vec2(120.0, 0.0), old.max);
+    r.app.canvas_rect = Some(moved);
+    let ctx = r.ctx.clone();
+    assert!(crate::agent_view::go_back(&mut r.app.agent_env(&ctx)));
+    let at = r.app.view.to_model(moved.center());
+    assert!(
+        (at.x - 4000.0).abs() < 1e-6 && (at.y - 3000.0).abs() < 1e-6,
+        "Back shows the same place of the drawing: {at:?}"
+    );
+    assert!((r.app.view.zoom - 0.2).abs() < 1e-12);
+}
+
+#[test]
+fn the_newest_view_of_the_person_survives_the_limit_of_back() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    for i in 0..3 {
+        r.advance(0.3);
+        r.ok("view.zoom", json!({"at": [i, 0], "scale": 0.05}));
+    }
+    // The person moves the view themselves.
+    r.app.view.pan(vec2(77.0, 33.0));
+    // The window sees it at the start of the next frame; then the agent waits for a moment.
+    r.advance(1.0);
+    r.advance(1.0);
+    let mine = r.app.view;
+    for i in 0..40 {
+        r.advance(0.3);
+        r.ok(
+            "view.zoom",
+            json!({"at": [i * 100, 5], "scale": 0.01 + 0.001 * f64::from(i)}),
+        );
+    }
+    let ctx = r.ctx.clone();
+    let mut last = r.app.view;
+    while crate::agent_view::go_back(&mut r.app.agent_env(&ctx)) {
+        last = r.app.view;
+    }
+    // Back ends at the view that the person made, not at the one they had at the start.
+    assert_eq!(last, mine);
+}
+
+#[test]
+fn a_pointer_made_in_the_plan_gets_its_ground_height_when_3d_is_shown() {
+    let mut r = Rig::new();
+    let (_, _up) = r.rect_on_new_layer("Upper", 3000.0, (0.0, 0.0, 4000.0, 3000.0));
+    r.frame(vec![]);
+    r.ok("view.highlight", json!({"at": [2000, 1500]}));
+    r.ok("view.highlight", json!({"box": [100, 100, 900, 900]}));
+    assert!(
+        r.app.agent_view.highlights.needs_ground(),
+        "nothing looked at the 3D scene in the plan"
+    );
+    r.go_3d();
+    r.frame(vec![]);
+    assert!(!r.app.agent_view.highlights.needs_ground());
+    let items = r.app.agent_view.highlights.items();
+    match items[0].aim {
+        kadakas_ui_core::agent_view::Aim::At(p) => assert!((p.z - 3000.0).abs() < 5.0, "{}", p.z),
+        _ => panic!("a place"),
+    }
+    assert!((items[1].ground - 3000.0).abs() < 5.0);
+}
+
+#[test]
+fn the_lock_covers_saved_view_restore_and_the_error_says_so() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 1000.0, 1000.0);
+    r.frame(vec![]);
+    r.app.agent_view.locked = true;
+    let e = r.err("view.zoom", json!({"at": [5, 5]}));
+    assert!(e.message.contains("saved_view.restore"), "{}", e.message);
+    let ctx = r.ctx.clone();
+    let e = crate::agent_view::memo_for_session_change(&mut r.app.agent_env(&ctx)).unwrap_err();
+    assert_eq!(e.reason, Some(kadakas_api::REASON_VIEW_LOCKED));
+    assert!(e.message.contains("saved_view.restore"));
+}
+
+#[test]
+fn a_viewpoint_that_the_api_made_opens_on_the_same_place_in_the_app() {
+    let mut r = Rig::new();
+    r.rect(650_000.0, 590_000.0, 4000.0, 3000.0);
+    r.frame(vec![]);
+    r.app.session.view.view = kadakas_render::StandardView::RightIsometric;
+    let made = r
+        .app
+        .session
+        .handle(
+            "issue.create",
+            json!({"title": "Far", "capture": true, "now_ms": 1}),
+        )
+        .unwrap();
+    let issue = r
+        .app
+        .session
+        .handle("issue.get", json!({"id": made["id"]}))
+        .unwrap();
+    let t = &issue["viewpoints"][0]["view"];
+    let target = [
+        num(&t["target"][0]),
+        num(&t["target"][1]),
+        num(&t["target"][2]),
+    ];
+    assert!((target[0] - 652_000.0).abs() < 4000.0, "{target:?}");
+    // The app opens it: the camera looks at that place of the drawing.
+    r.app.pending_camera = Some((
+        target,
+        num(&t["yaw"]),
+        num(&t["pitch"]),
+        num(&t["distance"]),
+    ));
+    r.app.apply_pending_camera();
+    let o = kadakas_core::mesh::scene_origin(r.app.session.editor.doc());
+    let at = o + r.app.view3d.camera.target.as_dvec3();
+    assert!((at.x - target[0]).abs() < 1.0 && (at.y - target[1]).abs() < 1.0);
 }

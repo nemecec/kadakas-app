@@ -454,7 +454,8 @@ pub struct HighlightReq {
     pub text: String,
     pub color: HColor,
     pub until: Until,
-    /// The height of the ground at the pointer (the app fills it in; 0 when parsed).
+    /// The height of the ground at the pointer. NaN: not known yet (the app fills it in when 3D is
+    /// shown).
     pub ground: f64,
 }
 
@@ -504,7 +505,7 @@ impl HighlightReq {
             text,
             color: HColor::parse(p.get("color"))?,
             until: Until::parse(p.get("until"))?,
-            ground: 0.0,
+            ground: f64::NAN,
         })
     }
 }
@@ -614,6 +615,27 @@ impl HighlightSet {
         }
     }
 
+    /// True when a pointer waits for the height of the ground (it was made in the plan).
+    pub fn needs_ground(&self) -> bool {
+        self.items.iter().any(|h| match &h.aim {
+            Aim::At(p) => p.z.is_nan(),
+            Aim::Box { .. } => h.ground.is_nan(),
+            Aim::Objects(_) => false,
+        })
+    }
+
+    /// Gives the pointers that wait for it the height of the ground (`ground_at` takes a point of
+    /// the drawing). The plan does not need the height, so it is asked only when 3D is shown.
+    pub fn resolve_ground(&mut self, ground_at: &mut dyn FnMut(DVec2) -> f64) {
+        for h in &mut self.items {
+            match &mut h.aim {
+                Aim::At(p) if p.z.is_nan() => p.z = ground_at(DVec2::new(p.x, p.y)),
+                Aim::Box { lo, hi } if h.ground.is_nan() => h.ground = ground_at((*lo + *hi) / 2.0),
+                _ => {}
+            }
+        }
+    }
+
     /// The IDs of all objects that are pointed at.
     pub fn object_ids(&self) -> Vec<Uid> {
         let mut out = Vec::new();
@@ -705,10 +727,12 @@ impl NavGuard {
 
 // ---------------------------------------------------------------- back
 
-/// The views from before the changes of the agent, newest last.
+/// The views from before the changes of the agent, newest last. One entry is protected: the
+/// newest view that the person made themselves. When the stack is full, the oldest entry that is
+/// not protected goes, so Back can always return to the person's own view.
 #[derive(Clone, Debug)]
 pub struct Back<T> {
-    stack: Vec<T>,
+    stack: Vec<(T, bool)>,
 }
 
 impl<T> Default for Back<T> {
@@ -718,24 +742,32 @@ impl<T> Default for Back<T> {
 }
 
 impl<T> Back<T> {
-    /// Keeps the view before a change. When the stack is full, the oldest change after the first
-    /// one goes: the first entry is the view that the person had before the agent began, and it
-    /// is never dropped.
-    pub fn push(&mut self, view: T) {
+    fn make_room(&mut self) {
         if self.stack.len() >= BACK_DEPTH {
-            self.stack.remove(1);
+            let at = self.stack.iter().position(|(_, p)| !p).unwrap_or(0);
+            self.stack.remove(at);
         }
-        self.stack.push(view);
+    }
+
+    /// Keeps the view before a change of the agent.
+    pub fn push(&mut self, view: T) {
+        self.make_room();
+        self.stack.push((view, false));
+    }
+
+    /// Keeps the view before a change of the agent, when that view is one that the person made.
+    /// It replaces the protected entry of before.
+    pub fn push_protected(&mut self, view: T) {
+        for (_, p) in &mut self.stack {
+            *p = false;
+        }
+        self.make_room();
+        self.stack.push((view, true));
     }
 
     /// The view to go back to; it leaves the stack.
     pub fn pop(&mut self) -> Option<T> {
-        self.stack.pop()
-    }
-
-    /// Takes back the last push (a change that failed).
-    pub fn undo_push(&mut self) {
-        self.stack.pop();
+        self.stack.pop().map(|(v, _)| v)
     }
 
     pub fn len(&self) -> usize {
@@ -1271,14 +1303,12 @@ mod tests {
         }
         assert_eq!(b.len(), BACK_DEPTH);
         assert_eq!(b.pop(), Some(BACK_DEPTH as u32 + 4));
-        b.push(1);
-        b.undo_push();
-        assert_eq!(b.len(), BACK_DEPTH - 1);
         b.clear();
         assert!(b.is_empty());
-        // Over the depth, the first entry (the view of the person) stays.
+        // Over the depth, the protected entry (the view of the person) stays.
         let mut b: Back<u32> = Back::default();
-        for i in 0..(BACK_DEPTH as u32 * 3) {
+        b.push_protected(0);
+        for i in 1..(BACK_DEPTH as u32 * 3) {
             b.push(i);
         }
         assert_eq!(b.len(), BACK_DEPTH);
@@ -1288,6 +1318,22 @@ mod tests {
         }
         assert_eq!(all.last(), Some(&0), "the person's view is at the bottom");
         assert_eq!(all[0], BACK_DEPTH as u32 * 3 - 1);
+        // The newest view of the person is protected instead of the older one.
+        let mut b: Back<u32> = Back::default();
+        b.push_protected(0);
+        for i in 1..10 {
+            b.push(i);
+        }
+        b.push_protected(100);
+        for i in 11..(BACK_DEPTH as u32 * 3) {
+            b.push(i);
+        }
+        let mut all = vec![];
+        while let Some(x) = b.pop() {
+            all.push(x);
+        }
+        assert!(all.contains(&100), "the newest view of the person stays");
+        assert!(!all.contains(&0), "the older one may go");
     }
 
     #[test]
@@ -1429,6 +1475,28 @@ mod tests {
             "{}",
             s.half_height()
         );
+    }
+
+    #[test]
+    fn pointers_made_in_the_plan_wait_for_the_ground() {
+        let mut set = HighlightSet::default();
+        let mut p = HighlightReq::parse(&json!({"at": [10, 20]})).unwrap();
+        p.ground = f64::NAN;
+        set.add(p, 0.0, 0).unwrap();
+        let b = HighlightReq::parse(&json!({"box": [0, 0, 10, 10]})).unwrap();
+        set.add(b, 0.0, 0).unwrap();
+        let o = HighlightReq::parse(&json!({"ids": [uid(1)]})).unwrap();
+        set.add(o, 0.0, 0).unwrap();
+        assert!(set.needs_ground());
+        let mut asked = vec![];
+        set.resolve_ground(&mut |xy| {
+            asked.push(xy);
+            42.0
+        });
+        assert_eq!(asked, vec![DVec2::new(10.0, 20.0), DVec2::new(5.0, 5.0)]);
+        assert!(!set.needs_ground());
+        // A second pass asks nothing.
+        set.resolve_ground(&mut |_| panic!("already known"));
     }
 
     #[test]
