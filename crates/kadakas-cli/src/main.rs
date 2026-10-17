@@ -349,6 +349,12 @@ fn resolve_remote(
 ) -> Result<(String, String), String> {
     if connect.is_empty() {
         let info = info.ok_or("no running Kadakas app found: start the app with --agent-port, or give --connect HOST:PORT --token TOKEN")?;
+        if let Some(pid) = info.stale_pid() {
+            let file = sys_agent::agent_info_path().map_or_else(String::new, |p| format!(" {}", p.display()));
+            return Err(format!(
+                "the runtime file{file} is left over from a Kadakas app (process {pid}) that is no longer running. Start the app again with --agent-port; the file is replaced then (or delete it)"
+            ));
+        }
         return Ok((
             format!("127.0.0.1:{}", info.port),
             token.map_or(info.token, str::to_string),
@@ -977,10 +983,38 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
 
+    #[cfg(unix)]
+    #[test]
+    fn a_runtime_file_of_a_dead_app_is_called_stale() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        let stale = AgentInfo {
+            port: 4000,
+            token: "t".into(),
+            pid: Some(dead),
+        };
+        let e = resolve_remote("", None, Some(stale)).unwrap_err();
+        assert!(
+            e.contains("no longer running") && e.contains(&dead.to_string()),
+            "{e}"
+        );
+        // A file of a running app (this process) and a file without a pid are used.
+        for pid in [Some(std::process::id()), None] {
+            let live = AgentInfo {
+                port: 4000,
+                token: "t".into(),
+                pid,
+            };
+            assert!(resolve_remote("", None, Some(live)).is_ok());
+        }
+    }
+
     fn info() -> Option<AgentInfo> {
         Some(AgentInfo {
             port: 4000,
             token: "file-token".into(),
+            pid: None,
         })
     }
 

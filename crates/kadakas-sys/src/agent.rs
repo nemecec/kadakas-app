@@ -11,7 +11,60 @@ use crate::fsio;
 pub struct AgentInfo {
     pub port: u16,
     pub token: String,
+    /// The process id of the app. A client can see that the file is left over from an app that
+    /// ended without cleaning up (a crash, a kill). Files of older versions have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
+
+impl AgentInfo {
+    /// The process id of the app if the file names one that no longer runs: the file is stale.
+    pub fn stale_pid(&self) -> Option<u32> {
+        self.pid.filter(|p| !crate::process::pid_alive(*p))
+    }
+}
+
+/// Deletes `path` when the process gets SIGTERM, SIGINT or SIGHUP, then lets the signal do what
+/// it would have done (the process ends). A killed app then leaves no runtime file that points
+/// to a port nobody listens on. Only the unlink runs in the handler, which is safe there.
+/// A kill with SIGKILL, or a crash, still leaves the file: clients check the `pid` in it.
+#[cfg(unix)]
+pub fn remove_file_on_signal(path: &Path) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::sync::OnceLock;
+    static PATH: OnceLock<CString> = OnceLock::new();
+    extern "C" fn handler(sig: libc::c_int) {
+        if let Some(p) = PATH.get() {
+            // SAFETY: unlink, signal and raise may be called in a signal handler; the path was
+            // built before the handler was set.
+            unsafe {
+                libc::unlink(p.as_ptr());
+            }
+        }
+        // SAFETY: as above. The default action of the signal ends the process as before.
+        unsafe {
+            libc::signal(sig, libc::SIG_DFL);
+            libc::raise(sig);
+        }
+    }
+    let Ok(c) = CString::new(path.as_os_str().as_bytes()) else {
+        return;
+    };
+    if PATH.set(c).is_err() {
+        return;
+    }
+    for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+        // SAFETY: the handler only calls functions that are safe in a signal handler.
+        unsafe {
+            libc::signal(sig, handler as *const () as libc::sighandler_t);
+        }
+    }
+}
+
+/// Where there are no Unix signals the file is removed when the app ends normally only.
+#[cfg(not(unix))]
+pub fn remove_file_on_signal(_path: &Path) {}
 
 /// Where the running app publishes its `AgentInfo`: `agent.json` in the runtime folder.
 pub fn agent_info_path() -> Option<PathBuf> {
@@ -45,6 +98,7 @@ mod tests {
         let info = AgentInfo {
             port: 4242,
             token: "ab".repeat(32),
+            pid: None,
         };
         write_agent_info(&f, &info).unwrap();
         assert_eq!(read_agent_info(&f).unwrap(), info);
@@ -63,6 +117,7 @@ mod tests {
         let info2 = AgentInfo {
             port: 1,
             token: "cd".repeat(32),
+            pid: None,
         };
         write_agent_info(&f, &info2).unwrap();
         assert_eq!(read_agent_info(&f).unwrap(), info2);
@@ -74,6 +129,86 @@ mod tests {
         std::fs::write(dir.join("bad"), "{").unwrap();
         assert!(read_agent_info(&dir.join("bad")).is_err());
         let _ = agent_info_path();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_file_of_a_dead_process_is_stale_and_one_without_a_pid_is_not() {
+        let mut info = AgentInfo {
+            port: 1,
+            token: "x".into(),
+            pid: None,
+        };
+        assert_eq!(info.stale_pid(), None);
+        info.pid = Some(std::process::id());
+        assert_eq!(info.stale_pid(), None, "this process runs");
+        // The pid is written and read back.
+        let dir = std::env::temp_dir().join(format!("kadakas-agentpid-{}", std::process::id()));
+        let f = dir.join("agent.json");
+        write_agent_info(&f, &info).unwrap();
+        assert_eq!(read_agent_info(&f).unwrap().pid, Some(std::process::id()));
+        // A process that has ended.
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        info.pid = Some(pid);
+        assert_eq!(info.stale_pid(), Some(pid));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sigterm_deletes_the_file_and_the_process_still_ends_by_the_signal() {
+        use std::io::BufRead;
+        use std::os::unix::process::ExitStatusExt;
+        if let Ok(path) = std::env::var("KADAKAS_TEST_SIGNAL_FILE") {
+            // The child: arm the handler, say so, and wait for the signal.
+            remove_file_on_signal(Path::new(&path));
+            println!("armed");
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("kadakas-agentsig-{}", std::process::id()));
+        let f = dir.join("agent.json");
+        write_agent_info(
+            &f,
+            &AgentInfo {
+                port: 1,
+                token: "x".into(),
+                pid: None,
+            },
+        )
+        .unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "agent::tests::sigterm_deletes_the_file_and_the_process_still_ends_by_the_signal",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("KADAKAS_TEST_SIGNAL_FILE", &f)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let out = child.stdout.take().unwrap();
+        let mut lines = std::io::BufReader::new(out).lines();
+        while let Some(Ok(l)) = lines.next() {
+            if l.trim().ends_with("armed") {
+                break;
+            }
+        }
+        assert!(f.exists());
+        // SAFETY: the pid is our own child.
+        unsafe {
+            libc::kill(child.id() as i32, libc::SIGTERM);
+        }
+        let status = child.wait().unwrap();
+        assert!(!f.exists(), "the file is gone");
+        assert_eq!(status.signal(), Some(libc::SIGTERM));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

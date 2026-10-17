@@ -328,7 +328,7 @@ fn followed_lines_notes_and_courses_that_take_everything() {
             source: Some(line),
             along: 100.0,
             depth: 200.0,
-            gap: 5.0,
+            gap: Some(5.0),
             ..Default::default()
         },
         CourseDef {
@@ -337,7 +337,7 @@ fn followed_lines_notes_and_courses_that_take_everything() {
             path: vec![vx(0.0, 100.0), vx(8000.0, 100.0)],
             along: 100.0,
             depth: 200.0,
-            gap: 5.0,
+            gap: Some(5.0),
             ..Default::default()
         },
     ];
@@ -369,7 +369,7 @@ fn followed_lines_notes_and_courses_that_take_everything() {
         side: Side::Center,
         along: 200.0,
         depth: 5000.0,
-        gap: 5.0,
+        gap: Some(5.0),
         corner: Corner::Butt,
         ..Default::default()
     }];
@@ -411,7 +411,7 @@ fn course_groups_count_units_by_the_stone_and_corner_units_by_shape() {
         path: vec![vx(0.0, 0.0), vx(8000.0, 0.0), vx(8000.0, 4000.0)],
         along: 100.0,
         depth: 200.0,
-        gap: 5.0,
+        gap: Some(5.0),
         corner: Corner::CornerUnit,
         unit: "200x100".into(),
         ..Default::default()
@@ -448,7 +448,7 @@ fn course_groups_count_units_by_the_stone_and_corner_units_by_shape() {
         ],
         along: 100.0,
         depth: 300.0,
-        gap: 5.0,
+        gap: Some(5.0),
         ..Default::default()
     }];
     set_plan(&mut ed, id, &p);
@@ -469,7 +469,7 @@ fn course_def(name: &str, path: &[(f64, f64)], side: Side) -> CourseDef {
         side,
         along: 100.0,
         depth: 200.0,
-        gap: 5.0,
+        gap: Some(5.0),
         ..Default::default()
     }
 }

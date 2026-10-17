@@ -137,7 +137,7 @@ fn build(c: &Case, shift: DVec2) -> (Editor, ObjectId) {
             side: [Side::Left, Side::Right][side],
             along,
             depth,
-            gap,
+            gap: Some(gap),
             corner: [Corner::Miter, Corner::Butt, Corner::CornerUnit][corner],
             ..Default::default()
         });
