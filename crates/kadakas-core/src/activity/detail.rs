@@ -288,3 +288,242 @@ impl FieldChange {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{FIRST_LAYER, NONE_CLASS, ObjectId};
+    use crate::resource::ResourceId;
+    use glam::DVec2;
+    use serde_json::json;
+
+    fn obj(shape: Shape) -> Object {
+        Object::new(ObjectId::from_num(1), FIRST_LAYER, NONE_CLASS, shape)
+    }
+
+    fn circle(r: f64) -> Object {
+        obj(Shape::Circle {
+            center: DVec2::ZERO,
+            radius: r,
+        })
+    }
+
+    fn pavers(material: &str) -> Object {
+        obj(Shape::Hardscape {
+            boundary: Vec::new(),
+            material: material.into(),
+            thickness: None,
+            elevation: None,
+        })
+    }
+
+    #[test]
+    fn numbers_have_up_to_three_decimals_and_no_zeros() {
+        assert_eq!(number_text(100.0), "100");
+        assert_eq!(number_text(1.5), "1.5");
+        assert_eq!(number_text(1.23456), "1.235");
+        assert_eq!(number_text(-0.0004), "0");
+        assert_eq!(number_text(0.0), "0");
+        assert_eq!(number_text(-2.25), "-2.25");
+    }
+
+    #[test]
+    fn a_changed_shape_field_is_named_with_both_values() {
+        let d = of(&circle(100.0), &circle(150.5)).unwrap();
+        assert_eq!(d.changes.len(), 1);
+        assert_eq!(d.more, 0);
+        assert_eq!(d.label, None);
+        assert_eq!(d.text(), "radius 100 → 150.5");
+    }
+
+    #[test]
+    fn nothing_that_can_be_named_gives_none() {
+        assert!(of(&circle(1.0), &circle(1.0)).is_none());
+        let mut other = circle(1.0);
+        other.id = ObjectId::from_num(2);
+        assert!(of(&circle(1.0), &other).is_none());
+    }
+
+    #[test]
+    fn a_hardscape_is_labelled_by_its_material() {
+        assert_eq!(label_of(&pavers("  Granite ")), Some("Granite".into()));
+        assert_eq!(label_of(&pavers("  ")), None);
+        assert_eq!(label_of(&circle(1.0)), None);
+        let d = of(&pavers("Granite"), &{
+            let mut o = pavers("Granite");
+            if let Shape::Hardscape { thickness, .. } = &mut o.shape {
+                *thickness = Some(80.0);
+            }
+            o
+        })
+        .unwrap();
+        assert_eq!(d.label.as_deref(), Some("Granite"));
+        assert_eq!(d.text(), "thickness set to 80");
+    }
+
+    #[test]
+    fn a_rotation_of_a_shape_reads_in_degrees() {
+        let sym = |rotation: f64| {
+            obj(Shape::Symbol {
+                symbol: ResourceId::from_num(1),
+                at: DVec2::ZERO,
+                rotation,
+                scale: 1.0,
+                scale_y: None,
+            })
+        };
+        let d = of(&sym(0.0), &sym(std::f64::consts::FRAC_PI_2)).unwrap();
+        assert_eq!(d.text(), "rotation 0° → 90°");
+    }
+
+    #[test]
+    fn a_short_list_of_numbers_is_one_point_and_a_long_one_is_changed() {
+        let moved = |x: f64| {
+            obj(Shape::Symbol {
+                symbol: ResourceId::from_num(1),
+                at: DVec2::new(x, 2.0),
+                rotation: 0.0,
+                scale: 1.0,
+                scale_y: None,
+            })
+        };
+        let d = of(&moved(1.0), &moved(5.0)).unwrap();
+        assert_eq!(d.text(), "at (1, 2) → (5, 2)");
+        let mut a = pavers("x");
+        let mut b = pavers("x");
+        a.data.insert("list".into(), json!([1, 2, 3, 4, 5]));
+        b.data.insert("list".into(), json!([1, 2, 3, 4, 5, 6]));
+        assert_eq!(of(&a, &b).unwrap().text(), "list changed");
+    }
+
+    #[test]
+    fn plain_data_is_named_by_its_key_and_values_by_type() {
+        let mut a = pavers("x");
+        let mut b = pavers("x");
+        a.data.insert("note".into(), json!("short"));
+        b.data.insert("note".into(), json!("longer"));
+        assert_eq!(of(&a, &b).unwrap().text(), "note short → longer");
+        a.data.insert("flag".into(), json!(false));
+        b.data.insert("flag".into(), json!(true));
+        a.data.remove("note");
+        b.data.remove("note");
+        assert_eq!(of(&a, &b).unwrap().text(), "flag false → true");
+        // The whole `data` is skipped when it is empty, so keep one key that does not change.
+        a.data.insert("keep".into(), json!(1));
+        b.data.insert("keep".into(), json!(1));
+        let long = "x".repeat(60);
+        a.data.insert("flag".into(), json!(long));
+        b.data.remove("flag");
+        assert_eq!(of(&a, &b).unwrap().text(), "flag changed");
+        a.data.insert("flag".into(), json!("was"));
+        assert_eq!(of(&a, &b).unwrap().text(), "flag cleared (was was)");
+    }
+
+    #[test]
+    fn the_own_data_of_a_hardscape_reads_as_its_fields() {
+        let mut a = pavers("x");
+        let mut b = pavers("x");
+        a.data.insert("hardscape".into(), json!({"angle": 0}));
+        b.data.insert("hardscape".into(), json!({"angle": 30}));
+        assert_eq!(of(&a, &b).unwrap().text(), "angle 0° → 30°");
+        let mut c = pavers("x");
+        c.data
+            .insert("hardscape".into(), json!({"spacing_deg": 1.5}));
+        assert_eq!(of(&b, &c).unwrap().changes.len(), 2);
+    }
+
+    #[test]
+    fn plan_parts_are_named_by_their_own_name() {
+        let plan = |angle: f64, name: Option<&str>| {
+            let mut o = pavers("x");
+            let mut zone = json!({ "angle": angle });
+            if let Some(n) = name {
+                zone["name"] = json!(n);
+            }
+            o.data
+                .insert(crate::layout::plan::KEY.into(), json!({ "zones": [zone] }));
+            o
+        };
+        let d = of(&plan(0.0, Some("Aisle")), &plan(45.0, Some("Aisle"))).unwrap();
+        assert_eq!(d.text(), "zone 'Aisle' angle 0° → 45°");
+        let d = of(&plan(0.0, None), &plan(45.0, None)).unwrap();
+        assert_eq!(d.text(), "zone '1' angle 0° → 45°");
+        let nameless = FieldChange {
+            scope: Some(Scope {
+                kind: "split",
+                name: None,
+            }),
+            field: "gap_size".into(),
+            before: None,
+            after: None,
+        };
+        assert_eq!(nameless.text(), "split gap size changed");
+    }
+
+    #[test]
+    fn plan_courses_splits_and_the_whole_plan() {
+        let with = |v: Value| {
+            let mut o = pavers("x");
+            o.data.insert(crate::layout::plan::KEY.into(), v);
+            o
+        };
+        let d = of(
+            &with(json!({"courses": [{"name": "Edge", "width": 100}]})),
+            &with(json!({"courses": [{"name": "Edge", "width": 120}]})),
+        )
+        .unwrap();
+        assert_eq!(d.text(), "course 'Edge' width 100 → 120");
+        let d = of(
+            &with(json!({"splits": [{"at": 1}]})),
+            &with(json!({"splits": [{"at": 2}]})),
+        )
+        .unwrap();
+        assert_eq!(d.text(), "split '1' at 1 → 2");
+        // A zone added: the list changed in length.
+        let d = of(
+            &with(json!({"zones": [{"name": "A"}]})),
+            &with(json!({"zones": [{"name": "A"}, {"name": "B"}]})),
+        )
+        .unwrap();
+        assert_eq!(d.text(), "zones changed");
+        // The plan itself appears.
+        let mut base = pavers("x");
+        base.data.insert("keep".into(), json!(1));
+        let mut planned = with(json!({"zones": []}));
+        planned.data.insert("keep".into(), json!(1));
+        let d = of(&base, &planned).unwrap();
+        assert_eq!(d.text(), "plan changed");
+        let d = of(&with(json!(1)), &with(json!(2))).unwrap();
+        assert_eq!(d.text(), "plan 1 → 2");
+    }
+
+    #[test]
+    fn only_the_first_changes_are_named_and_the_rest_counted() {
+        let mut a = pavers("x");
+        let mut b = pavers("x");
+        for (k, x, y) in [("a", 1, 2), ("b", 1, 2), ("c", 1, 2), ("d", 1, 2)] {
+            a.data.insert(k.into(), json!(x));
+            b.data.insert(k.into(), json!(y));
+        }
+        let d = of(&a, &b).unwrap();
+        assert_eq!(d.changes.len(), MAX_CHANGES);
+        assert_eq!(d.more, 2);
+        assert_eq!(d.text(), "a 1 → 2; b 1 → 2; 2 more");
+    }
+
+    #[test]
+    fn a_field_change_text_covers_all_value_states() {
+        let c = |before: Option<&str>, after: Option<&str>| FieldChange {
+            scope: Some(Scope {
+                kind: "zone",
+                name: Some("A".into()),
+            }),
+            field: "gap".into(),
+            before: before.map(str::to_string),
+            after: after.map(str::to_string),
+        };
+        assert_eq!(c(None, Some("3")).text(), "zone 'A' gap set to 3");
+        assert_eq!(c(Some("3"), None).text(), "zone 'A' gap cleared (was 3)");
+        assert_eq!(c(None, None).text(), "zone 'A' gap changed");
+    }
+}
