@@ -8,7 +8,7 @@
 
 use glam::DVec2;
 use kadakas_core::curve::{self, Vertex};
-use kadakas_core::layout::plan::{self, Planned, Role, ZoneSpec, ZoneUnits};
+use kadakas_core::layout::plan::{self, Planned, Role, ZoneUnits};
 use kadakas_core::layout::{self, Bond, Pattern};
 use kadakas_core::model::{Document, Object, ObjectId, Shape};
 use kadakas_l10n::tr;
@@ -409,26 +409,6 @@ impl ZoneSettings {
         self.align_to_edge = None;
         self.origin = None;
         self.angle = None;
-    }
-
-    fn write(&self, spec: &mut ZoneSpec) {
-        let name = self.name.trim();
-        spec.name = (!name.is_empty()).then(|| name.to_string());
-        match self.pattern {
-            PatternChoice::Field => spec.pattern = None,
-            PatternChoice::Bond(b) => {
-                spec.pattern = Some(Pattern::new(b, self.unit_length, self.unit_width, self.gap))
-            }
-            PatternChoice::Kept => {
-                if let Some(p) = &mut spec.pattern {
-                    p.gap = self.gap;
-                }
-            }
-        }
-        spec.origin = self.origin;
-        spec.angle = self.angle;
-        spec.align_to_edge = self.align_to_edge;
-        spec.align_to_split = self.align_to_split;
     }
 }
 

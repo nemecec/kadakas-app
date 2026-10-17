@@ -121,7 +121,6 @@ paving-ui-click-a-point-in-the-drawing-where-the-pattern-starts = Klõpsa joonis
 paving-ui-align-to-edge = Joonda servale
 paving-ui-click-an-edge-of-the-outline-the-pattern-starts-there-and-runs-along-it = Klõpsa kontuuri servale. Muster algab seal ja kulgeb piki serva.
 paving-ui-count-the-units = Loe kivid kokku
-paving-ui-count-the-units-again = Loe kivid uuesti kokku
 paving-ui-a-big-area-takes-time-to-count-so-it-is-counted-when-you-ask = Suure ala lugemine võtab aega, seega loetakse see sinu käsul.
 paving-ui-the-counts-are-of-an-earlier-state = Arvud on joonise varasema seisu kohta.
 paving-ui-whole-units = Terved kivid

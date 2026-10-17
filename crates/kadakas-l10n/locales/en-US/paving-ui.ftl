@@ -125,7 +125,6 @@ paving-ui-click-a-point-in-the-drawing-where-the-pattern-starts = Click a point 
 paving-ui-align-to-edge = Align to edge
 paving-ui-click-an-edge-of-the-outline-the-pattern-starts-there-and-runs-along-it = Click an edge of the outline. The pattern starts there and runs along it.
 paving-ui-count-the-units = Count the units
-paving-ui-count-the-units-again = Count the units again
 paving-ui-a-big-area-takes-time-to-count-so-it-is-counted-when-you-ask = A big area takes time to count, so it is counted when you ask.
 paving-ui-the-counts-are-of-an-earlier-state = The counts are of an earlier state of the drawing.
 paving-ui-whole-units = Whole units

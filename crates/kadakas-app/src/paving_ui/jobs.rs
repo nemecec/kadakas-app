@@ -118,6 +118,7 @@ impl<T: Send + 'static> Job<T> {
     }
 
     /// True while work runs.
+    #[cfg(test)]
     pub fn busy(&self) -> bool {
         self.running.is_some()
     }
