@@ -219,8 +219,22 @@ fn run(job: Job) -> Option<Done> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static PUSHED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many jobs this thread has handed to a worker. The worker of the process is shared by the
+/// tests that run at the same time, so a test counts its own jobs with this, not with `busy`.
+#[cfg(test)]
+pub fn pushed() -> u64 {
+    PUSHED.with(std::cell::Cell::get)
+}
+
 impl Worker {
     fn push(&self, job: Job) {
+        #[cfg(test)]
+        PUSHED.with(|p| p.set(p.get() + 1));
         {
             let mut st = lock(&self.shared);
             let (slot, kind) = (job.slot(), job.kind());
