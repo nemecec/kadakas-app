@@ -77,6 +77,8 @@ impl<T: Send + 'static> Job<T> {
     /// Stops waiting for the job. The thread ends by itself; its result is dropped.
     pub fn cancel(&mut self) {
         self.cancelled = true;
+        // Nothing is read from the channel any more, so a late result cannot come out of `take`.
+        self.received = true;
     }
 
     /// Time since the job started.
@@ -123,13 +125,14 @@ mod tests {
     #[test]
     fn errors_panics_timeouts_and_cancel() {
         let mut j: Job<u8> = Job::spawn("e", || Err(GisError::Param("bad".into())));
+        // These deadlines only bound a hang: a loaded machine may start a thread late.
         assert_eq!(
-            j.wait(Duration::from_secs(5)).unwrap().unwrap_err(),
+            j.wait(Duration::from_secs(60)).unwrap().unwrap_err(),
             GisError::Param("bad".into())
         );
         let mut p: Job<u8> = Job::spawn("p", || panic!("boom"));
         assert!(
-            p.wait(Duration::from_secs(5))
+            p.wait(Duration::from_secs(60))
                 .unwrap()
                 .unwrap_err()
                 .to_string()
@@ -140,10 +143,12 @@ mod tests {
             let _ = wait.recv();
             Ok(1)
         });
+        // The worker waits for `go`, so this wait ends with `None` however slow the machine is.
         assert!(s.wait(Duration::from_millis(20)).is_none());
         s.cancel();
         assert!(s.is_done());
         assert_eq!(s.take().unwrap().unwrap_err().to_string(), "cancelled");
+        // The worker may answer before or after the next `take`: the result is dropped either way.
         let _ = go.send(());
         assert!(s.take().is_none());
     }

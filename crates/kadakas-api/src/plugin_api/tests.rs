@@ -757,8 +757,9 @@ fn describe_lists_the_scripting_methods() {
 // ---------------------------------------------------------------------------------------------
 // Trust: a script from a document never runs until the user trusted its exact text.
 
-/// A program that records every start. If it is the interpreter and the marker stays missing,
-/// no Python was started.
+/// A script that records every start. If it is the interpreter and the marker stays missing,
+/// no Python was started. The shell runs it, so the file is never executed itself: a file that
+/// was just written can fail to start ("text file busy") while another thread forks.
 struct Spy {
     dir: std::path::PathBuf,
 }
@@ -776,18 +777,13 @@ impl Spy {
             ),
         )
         .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
         Spy { dir }
     }
 
     fn interpreter(&self) -> Interpreter {
         Interpreter {
-            program: self.dir.join("spy.sh"),
-            prefix: vec![],
+            program: "/bin/sh".into(),
+            prefix: vec![self.dir.join("spy.sh").into_os_string()],
         }
     }
 
@@ -811,6 +807,9 @@ fn downloaded(spy: &Spy) -> (Session, kadakas_core::uid::Uid, kadakas_core::uid:
     let doc = ok(&mut maker, "document.get", json!({}));
     let mut s = Session::with_sequential_ids();
     s.scripting.interpreter = Some(spy.interpreter());
+    // The limit only bounds a hang: the spy ends at once, but a loaded machine may take seconds
+    // to start the shell, and a run that is killed first never leaves its marker.
+    s.scripting.limits.timeout = std::time::Duration::from_secs(120);
     ok(&mut s, "document.load", json!({"document": doc}));
     (s, def, g)
 }
