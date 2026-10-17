@@ -412,8 +412,10 @@ fn the_example_ashlar_covers_the_region_in_courses_of_three_lengths() {
     // most two per course.
     assert!(sum["cut_units"].as_u64().unwrap() <= 10, "{sum}");
     let area = sum["area_laid_m2"].as_f64().unwrap();
+    // A unit that sticks out of the region by less than the trim (0.1 mm) counts as whole, and the
+    // random start of a course can leave one so: at most 0.1 mm over 200 mm, twice per course.
     assert!(
-        (area - 3.0).abs() < 1e-9,
+        (area - 3.0).abs() < 2e-4,
         "the courses fill the region: {area}"
     );
     let names: Vec<&str> = sum["by_unit"]
