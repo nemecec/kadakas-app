@@ -52,7 +52,10 @@ fn a_new_course_has_the_stone_of_the_style_standing_on_its_end() {
     assert_eq!(p["unit_width"], 200.0);
     assert_eq!(p["corner"], "miter");
     assert_eq!(p["id"], json!(id));
-    assert!(p.get("unit").is_none(), "the stone of the style keeps its unit type");
+    assert!(
+        p.get("unit").is_none(),
+        "the stone of the style keeps its unit type"
+    );
     // A stretcher swaps the sizes.
     let mut g = f.clone();
     g.set_orientation(Orientation::Stretcher);
@@ -111,7 +114,10 @@ fn only_a_course_along_an_edge_has_a_form() {
     assert!(f.existing);
     assert_eq!(f.placing, Placing::OnPaving);
     assert_eq!(f.orientation, Orientation::Soldier);
-    assert_eq!((f.unit_length, f.unit_width, f.offset), (100.0, 200.0, 20.0));
+    assert_eq!(
+        (f.unit_length, f.unit_width, f.offset),
+        (100.0, 200.0, 20.0)
+    );
     assert_eq!(f.corner, Corner::Butt);
 }
 
@@ -136,7 +142,9 @@ fn the_edges_are_the_outline_and_the_holes() {
         CourseForm::edges(editor.doc(), id),
         vec![Along::Outline, Along::Hole(0)]
     );
-    assert!(CourseForm::edges(editor.doc(), ObjectId(kadakas_core::uid::Uid::default())).is_empty());
+    assert!(
+        CourseForm::edges(editor.doc(), ObjectId(kadakas_core::uid::Uid::default())).is_empty()
+    );
 }
 
 #[test]
@@ -181,7 +189,10 @@ fn courses_are_listed_with_their_counts_and_found_by_name() {
 #[test]
 fn the_editor_refuses_what_has_no_pattern_and_previews_through_the_api() {
     let mut be = Fake::new();
-    assert!(CourseEditor::new_course(be.document(), ObjectId(kadakas_core::uid::Uid::default())).is_err());
+    assert!(
+        CourseEditor::new_course(be.document(), ObjectId(kadakas_core::uid::Uid::default()))
+            .is_err()
+    );
     let (mut editor, id) = lot::new();
     // A split line is also a plan; it does not matter for a course.
     let plan = Plan {
@@ -196,7 +207,9 @@ fn the_editor_refuses_what_has_no_pattern_and_previews_through_the_api() {
     let mut e = CourseEditor::new_course(&be.doc, id).unwrap();
     assert_eq!(e.form.name, "Course 1");
     // The preview asks hardscape.course once for a form, again after a change.
-    be.previews.borrow_mut().push_back(Ok(json!({"courses": [], "notes": ["joint wider"]})));
+    be.previews
+        .borrow_mut()
+        .push_back(Ok(json!({"courses": [], "notes": ["joint wider"]})));
     e.refresh(&be);
     e.refresh(&be);
     assert_eq!(be.previewed.borrow().len(), 1);

@@ -125,11 +125,10 @@ impl PavingUi {
     /// Landscape > Split Hardscape into Zones: on the selected hardscape.
     pub fn open_split(&mut self, session: &mut Session, status: &mut String) {
         let doc = session.editor.doc();
-        let target = session
-            .selection
-            .iter()
-            .copied()
-            .find(|id| doc.object(*id).is_some_and(|o| matches!(o.shape, Shape::Hardscape { .. })));
+        let target = session.selection.iter().copied().find(|id| {
+            doc.object(*id)
+                .is_some_and(|o| matches!(o.shape, Shape::Hardscape { .. }))
+        });
         match target {
             Some(id) => self.open_split_for(session, id, status),
             None => *status = tr!("paving-ui-select-a-hardscape"),
@@ -172,7 +171,13 @@ impl PavingUi {
 
     /// A press on the plan at `p` (snapped). `tol` is the pick distance in mm. Returns true if the
     /// press was used.
-    pub fn press(&mut self, session: &mut Session, p: DVec2, tol: f64, status: &mut String) -> bool {
+    pub fn press(
+        &mut self,
+        session: &mut Session,
+        p: DVec2,
+        tol: f64,
+        status: &mut String,
+    ) -> bool {
         if let Some(pick) = self.pick {
             self.finish_pick(session, pick, p, tol, status);
             return true;
@@ -286,7 +291,8 @@ fn apply_pick(session: &mut Session, pick: Pick, p: DVec2, tol: f64) -> Result<b
             Ok(true)
         }
         PickKind::AlignEdge => {
-            let outline = outline_of(doc, pick.target).ok_or_else(|| tr!("paving-ui-select-a-hardscape"))?;
+            let outline =
+                outline_of(doc, pick.target).ok_or_else(|| tr!("paving-ui-select-a-hardscape"))?;
             let Some(n) = pick::nearest_edge(&outline, p, tol) else {
                 return Ok(false);
             };
@@ -303,7 +309,9 @@ fn apply_pick(session: &mut Session, pick: Pick, p: DVec2, tol: f64) -> Result<b
         PickKind::ZoneOrigin(zi) | PickKind::ZoneAlignEdge(zi) => {
             let zones = split::zone_shapes(doc, pick.target, max_units)?;
             let zone = zones.get(zi).ok_or_else(|| tr!("paving-ui-no-such-zone"))?;
-            let o = doc.object(pick.target).ok_or_else(|| tr!("paving-ui-select-a-hardscape"))?;
+            let o = doc
+                .object(pick.target)
+                .ok_or_else(|| tr!("paving-ui-select-a-hardscape"))?;
             let mut s = ZoneSettings::read(doc, o, zone);
             match pick.kind {
                 PickKind::ZoneOrigin(_) => s.origin = Some(p),

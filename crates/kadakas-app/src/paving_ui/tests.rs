@@ -82,7 +82,10 @@ fn shapes_that_do_not_close_say_so() {
     let f = d.found.as_ref().unwrap();
     assert!(f.regions.is_empty());
     assert!(!f.complete);
-    assert!(f.notes.iter().any(|n| n.at.is_some()), "the open end has a place");
+    assert!(
+        f.notes.iter().any(|n| n.at.is_some()),
+        "the open end has a place"
+    );
     assert!(!f.marks.is_empty());
 }
 
@@ -153,23 +156,86 @@ fn zone_settings_change_the_pattern_and_the_picks_work() {
     d.commit(&mut SessionBackend(&mut s)).unwrap();
     // Pick an origin for the hardscape and an edge to align to.
     let tol = 20.0;
-    assert!(apply_pick(&mut s, Pick { target: id, kind: PickKind::Origin }, DVec2::new(100.0, 100.0), tol).unwrap());
+    assert!(
+        apply_pick(
+            &mut s,
+            Pick {
+                target: id,
+                kind: PickKind::Origin
+            },
+            DVec2::new(100.0, 100.0),
+            tol
+        )
+        .unwrap()
+    );
     let o = s.editor.doc().object(id).unwrap();
-    assert_eq!(kadakas_core::hardscape::data(o).unwrap().origin, Some(DVec2::new(100.0, 100.0)));
+    assert_eq!(
+        kadakas_core::hardscape::data(o).unwrap().origin,
+        Some(DVec2::new(100.0, 100.0))
+    );
     // Far from every edge: nothing is picked.
-    assert!(!apply_pick(&mut s, Pick { target: id, kind: PickKind::AlignEdge }, DVec2::new(2000.0, 1500.0), tol).unwrap());
-    assert!(apply_pick(&mut s, Pick { target: id, kind: PickKind::AlignEdge }, DVec2::new(2000.0, 5.0), tol).unwrap());
+    assert!(
+        !apply_pick(
+            &mut s,
+            Pick {
+                target: id,
+                kind: PickKind::AlignEdge
+            },
+            DVec2::new(2000.0, 1500.0),
+            tol
+        )
+        .unwrap()
+    );
+    assert!(
+        apply_pick(
+            &mut s,
+            Pick {
+                target: id,
+                kind: PickKind::AlignEdge
+            },
+            DVec2::new(2000.0, 5.0),
+            tol
+        )
+        .unwrap()
+    );
     let o = s.editor.doc().object(id).unwrap();
     assert_eq!(kadakas_core::hardscape::data(o).unwrap().angle, Some(0.0));
     // A zone gets its own origin and an edge of its own.
-    assert!(apply_pick(&mut s, Pick { target: id, kind: PickKind::ZoneOrigin(1) }, DVec2::new(2500.0, 100.0), tol).unwrap());
-    assert!(apply_pick(&mut s, Pick { target: id, kind: PickKind::ZoneAlignEdge(1) }, DVec2::new(3000.0, 2.0), tol).unwrap());
+    assert!(
+        apply_pick(
+            &mut s,
+            Pick {
+                target: id,
+                kind: PickKind::ZoneOrigin(1)
+            },
+            DVec2::new(2500.0, 100.0),
+            tol
+        )
+        .unwrap()
+    );
+    assert!(
+        apply_pick(
+            &mut s,
+            Pick {
+                target: id,
+                kind: PickKind::ZoneAlignEdge(1)
+            },
+            DVec2::new(3000.0, 2.0),
+            tol
+        )
+        .unwrap()
+    );
     let zones = split::zone_shapes(s.editor.doc(), id, 100_000).unwrap();
-    let z = zones.iter().find(|z| z.has_setting).expect("a zone has a setting");
+    let z = zones
+        .iter()
+        .find(|z| z.has_setting)
+        .expect("a zone has a setting");
     let st = ZoneSettings::read(s.editor.doc(), s.editor.doc().object(id).unwrap(), z);
     assert!(st.align_to_edge.is_some());
     // The report sees the change: the units of the zone are laid from the new start.
-    let rep = s.handle("report.unit_pattern", json!({"ids": [id]})).unwrap();
+    let rep = s
+        .handle("report.unit_pattern", json!({"ids": [id]}))
+        .unwrap();
     assert!(rep["rows"][0]["whole_units"].as_u64().unwrap() > 0);
 }
 
@@ -184,13 +250,19 @@ fn a_course_previews_on_a_copy_and_is_stored_by_the_api_with_the_counts_of_the_r
     let row = pv.row.clone().unwrap();
     assert_eq!(row.units, pv.units.len());
     // Nothing is stored by the preview.
-    assert!(course::rows(s.editor.doc(), id, 100_000).unwrap().is_empty());
+    assert!(
+        course::rows(s.editor.doc(), id, 100_000)
+            .unwrap()
+            .is_empty()
+    );
     ed.apply(&mut SessionBackend(&mut s)).unwrap();
     let rows = course::rows(s.editor.doc(), id, 100_000).unwrap();
     assert_eq!(rows.len(), 1);
     assert!(rows[0].editable);
     // The units of the preview are the units of the report for that course.
-    let rep = s.handle("report.unit_pattern", json!({"ids": [id]})).unwrap();
+    let rep = s
+        .handle("report.unit_pattern", json!({"ids": [id]}))
+        .unwrap();
     let groups = rep["rows"][0]["groups"].as_array().unwrap();
     let c = groups.iter().find(|g| g["role"] == "course").unwrap();
     assert_eq!(
@@ -203,7 +275,11 @@ fn a_course_previews_on_a_copy_and_is_stored_by_the_api_with_the_counts_of_the_r
     again.apply(&mut SessionBackend(&mut s)).unwrap();
     assert_eq!(course::rows(s.editor.doc(), id, 100_000).unwrap().len(), 1);
     course::remove(&mut SessionBackend(&mut s), id, &rows[0].name).unwrap();
-    assert!(course::rows(s.editor.doc(), id, 100_000).unwrap().is_empty());
+    assert!(
+        course::rows(s.editor.doc(), id, 100_000)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -211,8 +287,13 @@ fn the_counts_are_those_of_the_report_and_the_check_lists_its_findings() {
     let mut s = session();
     let id = lot(&mut s);
     let c = counts::count(&mut SessionBackend(&mut s), id).unwrap();
-    let rep: Value = s.handle("report.unit_pattern", json!({"ids": [id]})).unwrap();
-    assert_eq!(c.whole as u64, rep["totals"]["whole_units"].as_u64().unwrap());
+    let rep: Value = s
+        .handle("report.unit_pattern", json!({"ids": [id]}))
+        .unwrap();
+    assert_eq!(
+        c.whole as u64,
+        rep["totals"]["whole_units"].as_u64().unwrap()
+    );
     assert_eq!(c.cut as u64, rep["totals"]["cut_units"].as_u64().unwrap());
     assert!(c.whole > 0);
     // 4 m x 3 m of 200 x 100 mm units laid in a stack: a clean lot has no findings.
@@ -225,7 +306,8 @@ fn the_counts_are_those_of_the_report_and_the_check_lists_its_findings() {
     // a pattern with a unit that does not fit shows small pieces. The panel reads what comes.
     assert!(r.units > 0);
     assert!(!panel.stale(&SessionBackend(&mut s)));
-    s.handle("hardscape.set", json!({"id": id, "angle": 10})).unwrap();
+    s.handle("hardscape.set", json!({"id": id, "angle": 10}))
+        .unwrap();
     assert!(panel.stale(&SessionBackend(&mut s)));
 }
 
@@ -255,7 +337,11 @@ fn the_windows_and_object_info_draw_in_every_state_without_changing_the_document
     frame(&mut p, &mut s, &mut status);
     let rev = s.editor.revision();
     assert_eq!(p.split.as_ref().unwrap().zones.as_ref().unwrap().len(), 2);
-    p.split.as_mut().unwrap().commit(&mut SessionBackend(&mut s)).unwrap();
+    p.split
+        .as_mut()
+        .unwrap()
+        .commit(&mut SessionBackend(&mut s))
+        .unwrap();
     p.split = None;
     p.drawing = false;
     p.course = Some(CourseEditor::new_course(s.editor.doc(), id).unwrap());
@@ -281,7 +367,15 @@ fn the_windows_and_object_info_draw_in_every_state_without_changing_the_document
     let view = crate::view::View::default();
     let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
         let r = ui.max_rect();
-        paint(&ui.painter().clone(), r, &view, s.editor.doc(), &s.selection, &p, true);
+        paint(
+            &ui.painter().clone(),
+            r,
+            &view,
+            s.editor.doc(),
+            &s.selection,
+            &p,
+            true,
+        );
     });
     p.reset();
     assert!(!p.captures());

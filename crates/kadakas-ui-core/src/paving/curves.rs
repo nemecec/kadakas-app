@@ -368,9 +368,10 @@ impl CurvesForm {
     /// holes of the areas), and neither are the doubtful ones; every region of a polyline is. The
     /// person can switch any of them.
     pub fn is_on(&self, r: &Region) -> bool {
-        self.switched.get(&r.index).copied().unwrap_or_else(|| {
-            self.make == Make::Polyline || r.role == Role::Area
-        })
+        self.switched
+            .get(&r.index)
+            .copied()
+            .unwrap_or_else(|| self.make == Make::Polyline || r.role == Role::Area)
     }
 
     pub fn toggle(&mut self, r: &Region) {
@@ -434,9 +435,8 @@ impl CurvesDialog {
             .iter()
             .copied()
             .filter(|id| {
-                doc.object(*id).is_some_and(|o| {
-                    kadakas_core::regions::curves_of(&o.shape).is_ok()
-                })
+                doc.object(*id)
+                    .is_some_and(|o| kadakas_core::regions::curves_of(&o.shape).is_ok())
             })
             .collect();
         if ids.is_empty() {

@@ -362,7 +362,9 @@ impl CourseEditor {
     }
 
     fn check(doc: &Document, target: ObjectId) -> Result<(), String> {
-        let o = doc.object(target).ok_or_else(|| tr!("uic-paving-no-object"))?;
+        let o = doc
+            .object(target)
+            .ok_or_else(|| tr!("uic-paving-no-object"))?;
         if !matches!(o.shape, Shape::Hardscape { .. }) {
             return Err(tr!("uic-paving-not-a-hardscape"));
         }

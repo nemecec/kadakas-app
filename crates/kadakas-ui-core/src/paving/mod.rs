@@ -115,7 +115,9 @@ pub(crate) mod fake {
             self.replies.pop_front().unwrap_or(Err("no reply".into()))
         }
         fn rehearse(&self, method: &str, params: Value) -> Result<(Value, Document), String> {
-            self.previewed.borrow_mut().push((method.to_string(), params));
+            self.previewed
+                .borrow_mut()
+                .push((method.to_string(), params));
             let reply = self
                 .previews
                 .borrow_mut()

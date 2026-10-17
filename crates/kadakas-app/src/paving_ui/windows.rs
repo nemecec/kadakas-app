@@ -29,7 +29,12 @@ fn error_text(ui: &mut Ui, e: &str) {
 }
 
 /// A length field that applies its value when the person is done, not at every step of a drag.
-fn length_field(ui: &mut Ui, value: &mut f64, speed: f64, range: std::ops::RangeInclusive<f64>) -> bool {
+fn length_field(
+    ui: &mut Ui,
+    value: &mut f64,
+    speed: f64,
+    range: std::ops::RangeInclusive<f64>,
+) -> bool {
     let mut v = *value;
     let r = ui.add(DragValue::new(&mut v).speed(speed).range(range).length());
     let done = r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged());
@@ -87,21 +92,31 @@ pub(super) fn curves(p: &mut PavingUi, ctx: &Context, session: &mut Session, sta
             if form.make == Make::Hardscape {
                 ui.horizontal(|ui| {
                     ui.label(tr!("area-ui-style"));
-                    let text = form.style.clone().unwrap_or_else(|| tr!("area-ui-none-plain-slab"));
+                    let text = form
+                        .style
+                        .clone()
+                        .unwrap_or_else(|| tr!("area-ui-none-plain-slab"));
                     egui::ComboBox::from_id_salt("paving-curves-style")
                         .selected_text(text)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut form.style, None, tr!("area-ui-none-plain-slab"));
+                            ui.selectable_value(
+                                &mut form.style,
+                                None,
+                                tr!("area-ui-none-plain-slab"),
+                            );
                             for s in &styles {
                                 ui.selectable_value(&mut form.style, Some(s.clone()), s);
                             }
                         });
                 });
             }
-            ui.checkbox(&mut form.delete_source, tr!("paving-ui-delete-the-shapes-that-are-used-up"))
-                .on_hover_text(tr!(
-                    "paving-ui-a-shape-goes-only-when-all-its-pieces-are-in-regions-that-are-made"
-                ));
+            ui.checkbox(
+                &mut form.delete_source,
+                tr!("paving-ui-delete-the-shapes-that-are-used-up"),
+            )
+            .on_hover_text(tr!(
+                "paving-ui-a-shape-goes-only-when-all-its-pieces-are-in-regions-that-are-made"
+            ));
             ui.separator();
             match found {
                 Err(e) => error_text(ui, e),
@@ -153,9 +168,9 @@ pub(super) fn curves(p: &mut PavingUi, ctx: &Context, session: &mut Session, sta
                             .show(ui, |ui| {
                                 for n in &f.notes {
                                     let color = match n.kind {
-                                        NoteKind::DeadEnd | NoteKind::Warning | NoteKind::Skipped => {
-                                            ui.visuals().warn_fg_color
-                                        }
+                                        NoteKind::DeadEnd
+                                        | NoteKind::Warning
+                                        | NoteKind::Skipped => ui.visuals().warn_fg_color,
                                         _ => ui.visuals().text_color(),
                                     };
                                     let text = RichText::new(&n.text).color(color);
@@ -163,10 +178,15 @@ pub(super) fn curves(p: &mut PavingUi, ctx: &Context, session: &mut Session, sta
                                         Some(at) => {
                                             if ui
                                                 .selectable_label(false, text)
-                                                .on_hover_text(tr!("paving-ui-click-to-show-the-place"))
+                                                .on_hover_text(tr!(
+                                                    "paving-ui-click-to-show-the-place"
+                                                ))
                                                 .clicked()
                                             {
-                                                zoom = Some(around(at - DVec2::splat(200.0), at + DVec2::splat(200.0)));
+                                                zoom = Some(around(
+                                                    at - DVec2::splat(200.0),
+                                                    at + DVec2::splat(200.0),
+                                                ));
                                             }
                                         }
                                         None => {
@@ -199,7 +219,11 @@ pub(super) fn curves(p: &mut PavingUi, ctx: &Context, session: &mut Session, sta
     if create {
         match d.commit(&mut SessionBackend(session)) {
             Ok(made) => {
-                *status = tr!("paving-ui-made-objects", count = made.created.len(), kept = made.kept);
+                *status = tr!(
+                    "paving-ui-made-objects",
+                    count = made.created.len(),
+                    kept = made.kept
+                );
                 open = false;
             }
             Err(e) => *status = tr!("paving-ui-error", e = e),
@@ -237,13 +261,19 @@ pub(super) fn split(p: &mut PavingUi, ctx: &Context, session: &mut Session, stat
             });
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(d.draft.open.len() >= 2, egui::Button::new(tr!("paving-ui-finish-line")))
+                    .add_enabled(
+                        d.draft.open.len() >= 2,
+                        egui::Button::new(tr!("paving-ui-finish-line")),
+                    )
                     .clicked()
                 {
                     d.draft.finish_line();
                 }
                 if ui
-                    .add_enabled(!d.draft.open.is_empty(), egui::Button::new(tr!("paving-ui-back")))
+                    .add_enabled(
+                        !d.draft.open.is_empty(),
+                        egui::Button::new(tr!("paving-ui-back")),
+                    )
                     .clicked()
                 {
                     d.draft.back();
@@ -251,7 +281,9 @@ pub(super) fn split(p: &mut PavingUi, ctx: &Context, session: &mut Session, stat
             });
             if ui
                 .button(tr!("paving-ui-use-the-selected-lines"))
-                .on_hover_text(tr!("paving-ui-lines-arcs-and-polylines-that-are-selected-become-split-lines"))
+                .on_hover_text(tr!(
+                    "paving-ui-lines-arcs-and-polylines-that-are-selected-become-split-lines"
+                ))
                 .clicked()
             {
                 let n = d.draft.add_objects(doc, &selection);
@@ -276,8 +308,13 @@ pub(super) fn split(p: &mut PavingUi, ctx: &Context, session: &mut Session, stat
             if d.draft.is_empty() {
                 ui.label(tr!("paving-ui-no-split-lines-yet"));
             }
-            ui.checkbox(&mut d.draft.follow, tr!("paving-ui-zones-follow-the-lines-that-were-picked"))
-                .on_hover_text(tr!("paving-ui-when-such-a-line-moves-the-zones-move-with-it"));
+            ui.checkbox(
+                &mut d.draft.follow,
+                tr!("paving-ui-zones-follow-the-lines-that-were-picked"),
+            )
+            .on_hover_text(tr!(
+                "paving-ui-when-such-a-line-moves-the-zones-move-with-it"
+            ));
             ui.horizontal(|ui| {
                 ui.label(tr!("paving-ui-line-ends-join-an-edge-within"));
                 length_field(ui, &mut d.draft.tolerance, 0.1, 0.01..=100.0);
@@ -301,7 +338,8 @@ pub(super) fn split(p: &mut PavingUi, ctx: &Context, session: &mut Session, stat
                     }
                     for z in zones {
                         ui.horizontal(|ui| {
-                            let (r, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                            let (r, _) = ui
+                                .allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
                             ui.painter().rect_filled(r, 2.0, zone_color(z.index, 255));
                             ui.label(tr!(
                                 "paving-ui-zone-row",
@@ -309,7 +347,8 @@ pub(super) fn split(p: &mut PavingUi, ctx: &Context, session: &mut Session, stat
                                 area = kadakas_units::current().area_text(z.area_m2 * 1e6)
                             ));
                             if ui.small_button(tr!("paving-ui-show")).clicked() {
-                                let (mut lo, mut hi) = (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN));
+                                let (mut lo, mut hi) =
+                                    (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN));
                                 for pt in z.shapes.iter().flatten().flatten() {
                                     lo = lo.min(*pt);
                                     hi = hi.max(*pt);
@@ -380,7 +419,12 @@ fn zone_units_label(u: ZoneUnits) -> String {
 
 // ---------------------------------------------------------------- the check
 
-pub(super) fn check_window(p: &mut PavingUi, ctx: &Context, session: &mut Session, status: &mut String) {
+pub(super) fn check_window(
+    p: &mut PavingUi,
+    ctx: &Context,
+    session: &mut Session,
+    status: &mut String,
+) {
     if !p.check_open {
         return;
     }
@@ -400,13 +444,17 @@ pub(super) fn check_window(p: &mut PavingUi, ctx: &Context, session: &mut Sessio
                 let mut on = crate::plan_draw::show_check();
                 if ui
                     .checkbox(&mut on, tr!("area-ui-show-pattern-check"))
-                    .on_hover_text(tr!("area-ui-the-check-marks-overlaps-small-pieces-wrong-joints-and-holes"))
+                    .on_hover_text(tr!(
+                        "area-ui-the-check-marks-overlaps-small-pieces-wrong-joints-and-holes"
+                    ))
                     .changed()
                 {
                     crate::plan_draw::set_show_check(on);
                 }
             });
-            ui.label(tr!("paving-ui-the-check-looks-at-the-selected-hardscapes-or-at-all"));
+            ui.label(tr!(
+                "paving-ui-the-check-looks-at-the-selected-hardscapes-or-at-all"
+            ));
             match &p.check.result {
                 None => {
                     ui.label(tr!("paving-ui-no-result-yet"));
@@ -414,16 +462,31 @@ pub(super) fn check_window(p: &mut PavingUi, ctx: &Context, session: &mut Sessio
                 Some(Err(e)) => error_text(ui, e),
                 Some(Ok(r)) => {
                     if stale {
-                        ui.colored_label(ui.visuals().warn_fg_color, tr!("paving-ui-the-drawing-changed-run-the-check-again"));
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            tr!("paving-ui-the-drawing-changed-run-the-check-again"),
+                        );
                     }
                     let n = r.finding_count();
                     if r.ok {
-                        ui.label(tr!("paving-ui-no-findings", objects = r.objects.len(), units = r.units));
+                        ui.label(tr!(
+                            "paving-ui-no-findings",
+                            objects = r.objects.len(),
+                            units = r.units
+                        ));
                     } else {
-                        ui.strong(tr!("paving-ui-findings", count = n, objects = r.objects.len(), units = r.units));
+                        ui.strong(tr!(
+                            "paving-ui-findings",
+                            count = n,
+                            objects = r.objects.len(),
+                            units = r.units
+                        ));
                     }
                     if r.errors() > 0 {
-                        ui.colored_label(ui.visuals().error_fg_color, tr!("paving-ui-could-not-be-checked", count = r.errors()));
+                        ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            tr!("paving-ui-could-not-be-checked", count = r.errors()),
+                        );
                     }
                     let mut per_kind: BTreeMap<&str, usize> = BTreeMap::new();
                     for o in &r.objects {
@@ -432,7 +495,10 @@ pub(super) fn check_window(p: &mut PavingUi, ctx: &Context, session: &mut Sessio
                         }
                     }
                     ui.horizontal_wrapped(|ui| {
-                        if ui.selectable_label(p.check.only.is_none(), tr!("paving-ui-all-kinds")).clicked() {
+                        if ui
+                            .selectable_label(p.check.only.is_none(), tr!("paving-ui-all-kinds"))
+                            .clicked()
+                        {
                             p.check.only = None;
                         }
                         for k in check::kinds() {
@@ -442,7 +508,14 @@ pub(super) fn check_window(p: &mut PavingUi, ctx: &Context, session: &mut Sessio
                             }
                             let sel = p.check.only.as_deref() == Some(k);
                             if ui
-                                .selectable_label(sel, tr!("paving-ui-kind-count", kind = check::kind_label(k), count = c))
+                                .selectable_label(
+                                    sel,
+                                    tr!(
+                                        "paving-ui-kind-count",
+                                        kind = check::kind_label(k),
+                                        count = c
+                                    ),
+                                )
                                 .clicked()
                             {
                                 p.check.only = Some(k.to_string());
@@ -450,51 +523,66 @@ pub(super) fn check_window(p: &mut PavingUi, ctx: &Context, session: &mut Sessio
                         }
                     });
                     ui.separator();
-                    ScrollArea::vertical().id_salt("paving-check-list").max_height(320.0).show(ui, |ui| {
-                        for (oi, o) in r.objects.iter().enumerate() {
-                            if let Some(e) = &o.error {
-                                ui.colored_label(
-                                    ui.visuals().error_fg_color,
-                                    tr!("paving-ui-object-error", name = o.name.as_str(), e = e.as_str()),
-                                );
-                                continue;
-                            }
-                            if o.total() == 0 {
-                                continue;
-                            }
-                            egui::CollapsingHeader::new(tr!(
-                                "paving-ui-object-findings",
-                                name = o.name.as_str(),
-                                count = o.total()
-                            ))
-                            .id_salt(("paving-check-object", oi))
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                for (fi, f) in o.findings.iter().enumerate() {
-                                    if !p.check.shows(&f.kind) {
-                                        continue;
-                                    }
-                                    let text = tr!(
-                                        "paving-ui-finding-row",
-                                        kind = check::kind_label(&f.kind),
-                                        size = f.size_text(),
-                                        group = f.group.as_str()
+                    ScrollArea::vertical()
+                        .id_salt("paving-check-list")
+                        .max_height(320.0)
+                        .show(ui, |ui| {
+                            for (oi, o) in r.objects.iter().enumerate() {
+                                if let Some(e) = &o.error {
+                                    ui.colored_label(
+                                        ui.visuals().error_fg_color,
+                                        tr!(
+                                            "paving-ui-object-error",
+                                            name = o.name.as_str(),
+                                            e = e.as_str()
+                                        ),
                                     );
-                                    let sel = p.check.selected == Some((oi, fi));
-                                    if ui
-                                        .selectable_label(sel, text)
-                                        .on_hover_text(tr!("uic-paving-note-api", text = f.message.as_str()))
-                                        .clicked()
-                                    {
-                                        clicked = Some((oi, fi));
+                                    continue;
+                                }
+                                if o.total() == 0 {
+                                    continue;
+                                }
+                                egui::CollapsingHeader::new(tr!(
+                                    "paving-ui-object-findings",
+                                    name = o.name.as_str(),
+                                    count = o.total()
+                                ))
+                                .id_salt(("paving-check-object", oi))
+                                .default_open(true)
+                                .show(ui, |ui| {
+                                    for (fi, f) in o.findings.iter().enumerate() {
+                                        if !p.check.shows(&f.kind) {
+                                            continue;
+                                        }
+                                        let text = tr!(
+                                            "paving-ui-finding-row",
+                                            kind = check::kind_label(&f.kind),
+                                            size = f.size_text(),
+                                            group = f.group.as_str()
+                                        );
+                                        let sel = p.check.selected == Some((oi, fi));
+                                        if ui
+                                            .selectable_label(sel, text)
+                                            .on_hover_text(tr!(
+                                                "uic-paving-note-api",
+                                                text = f.message.as_str()
+                                            ))
+                                            .clicked()
+                                        {
+                                            clicked = Some((oi, fi));
+                                        }
                                     }
-                                }
-                                if !o.truncated.is_empty() {
-                                    ui.label(RichText::new(tr!("paving-ui-the-list-is-cut-the-counts-are-exact")).small());
-                                }
-                            });
-                        }
-                    });
+                                    if !o.truncated.is_empty() {
+                                        ui.label(
+                                            RichText::new(tr!(
+                                                "paving-ui-the-list-is-cut-the-counts-are-exact"
+                                            ))
+                                            .small(),
+                                        );
+                                    }
+                                });
+                            }
+                        });
                 }
             }
         });

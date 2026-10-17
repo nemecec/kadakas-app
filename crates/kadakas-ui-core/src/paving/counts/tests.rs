@@ -34,7 +34,10 @@ fn the_row_of_the_report_becomes_the_counts() {
     assert_eq!(c.types.len(), 1);
     assert_eq!(c.types[0].name, "200x100");
     assert_eq!(c.parts.len(), 2);
-    assert_eq!((c.parts[1].name.as_str(), c.parts[1].role.as_str()), ("Kerb", "course"));
+    assert_eq!(
+        (c.parts[1].name.as_str(), c.parts[1].role.as_str()),
+        ("Kerb", "course")
+    );
     assert_eq!(c.notes, vec!["a note".to_string()]);
     // An error row is the error; an empty report is refused.
     let e = UnitCounts::parse(&json!({"rows": [{"error": "no pattern"}]}));
@@ -86,5 +89,8 @@ fn a_small_hardscape_is_counted_by_itself_and_a_big_one_when_asked() {
         .unwrap();
     assert!(!auto(editor.doc(), big));
     // No pattern, no count.
-    assert!(!auto(editor.doc(), kadakas_core::model::ObjectId(kadakas_core::uid::Uid::default())));
+    assert!(!auto(
+        editor.doc(),
+        kadakas_core::model::ObjectId(kadakas_core::uid::Uid::default())
+    ));
 }

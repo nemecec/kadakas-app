@@ -178,7 +178,11 @@ pub struct ZoneShape {
 
 /// The zones of a hardscape as the report lays them. `Ok(vec![])` if there is no split. `Err`:
 /// the reason the plan cannot be laid.
-pub fn zone_shapes(doc: &Document, id: ObjectId, max_units: usize) -> Result<Vec<ZoneShape>, String> {
+pub fn zone_shapes(
+    doc: &Document,
+    id: ObjectId,
+    max_units: usize,
+) -> Result<Vec<ZoneShape>, String> {
     let Some(o) = doc.object(id) else {
         return Err(tr!("uic-paving-no-object"));
     };

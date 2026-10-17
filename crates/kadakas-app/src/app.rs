@@ -2143,12 +2143,9 @@ impl KadakasApp {
                 } else if self.paving_ui.captures() && !self.read_only() {
                     // A point or an edge for the paving (the pattern start, a split line).
                     let tol = self.tol();
-                    issue_press = self.paving_ui.press(
-                        &mut self.session,
-                        self.cursor,
-                        tol,
-                        &mut self.status,
-                    );
+                    issue_press =
+                        self.paving_ui
+                            .press(&mut self.session, self.cursor, tol, &mut self.status);
                 }
             }
             self.issue_click = issue_press;

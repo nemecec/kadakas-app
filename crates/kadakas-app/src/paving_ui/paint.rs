@@ -127,7 +127,10 @@ fn curves(
         let (fill, line) = if on(r) {
             (accent(70), accent(255))
         } else {
-            (Color32::from_rgba_unmultiplied(128, 128, 128, 25), Color32::GRAY)
+            (
+                Color32::from_rgba_unmultiplied(128, 128, 128, 25),
+                Color32::GRAY,
+            )
         };
         let outer = screen(view, &curve::flatten(&r.outline, true, tol));
         polygon(painter, outer, fill, Stroke::new(1.5, line));
@@ -142,8 +145,18 @@ fn curves(
             NoteKind::GapClosed => {
                 painter.circle_stroke(at, 7.0, Stroke::new(2.0, Color32::from_rgb(230, 159, 0)));
             }
-            NoteKind::DeadEnd => cross(painter, at, 6.0, Stroke::new(2.0, Color32::from_rgb(213, 94, 0))),
-            NoteKind::Stub => cross(painter, at, 4.0, Stroke::new(1.5, Color32::from_rgb(150, 150, 150))),
+            NoteKind::DeadEnd => cross(
+                painter,
+                at,
+                6.0,
+                Stroke::new(2.0, Color32::from_rgb(213, 94, 0)),
+            ),
+            NoteKind::Stub => cross(
+                painter,
+                at,
+                4.0,
+                Stroke::new(1.5, Color32::from_rgb(150, 150, 150)),
+            ),
             _ => {
                 painter.circle_filled(at, 3.0, Color32::GRAY);
             }
@@ -191,7 +204,12 @@ fn split(
     if drawing && let Some(last) = d.draft.open.last() {
         let a = view.to_screen(*last);
         let b = view.to_screen(hover);
-        painter.extend(Sh::dashed_line(&[a, b], Stroke::new(1.0, line.color), 4.0, 4.0));
+        painter.extend(Sh::dashed_line(
+            &[a, b],
+            Stroke::new(1.0, line.color),
+            4.0,
+            4.0,
+        ));
     }
     for pt in &d.draft.open {
         painter.circle_filled(view.to_screen(*pt), 3.0, line.color);

@@ -22,12 +22,9 @@ fn split_lot() -> (Editor, ObjectId) {
     editor
         .execute(&Command::SetData {
             id,
-            set: [(
-                plan::KEY.to_string(),
-                serde_json::to_value(&plan).unwrap(),
-            )]
-            .into_iter()
-            .collect(),
+            set: [(plan::KEY.to_string(), serde_json::to_value(&plan).unwrap())]
+                .into_iter()
+                .collect(),
             remove: Vec::new(),
         })
         .unwrap();
@@ -192,9 +189,9 @@ fn the_dialog_refuses_a_plain_object_and_previews_and_stores_through_the_api() {
     d.draft.click(DVec2::new(2000.0, -500.0));
     d.draft.click(DVec2::new(2000.0, 3500.0));
     assert!(d.draft.finish_line());
-    be.previews
-        .borrow_mut()
-        .push_back(Ok(json!({"zones": [{}, {}], "area_m2": 12.0, "zones_area_m2": 12.0, "notes": []})));
+    be.previews.borrow_mut().push_back(Ok(
+        json!({"zones": [{}, {}], "area_m2": 12.0, "zones_area_m2": 12.0, "notes": []}),
+    ));
     d.refresh(&be);
     d.refresh(&be);
     assert_eq!(be.previewed.borrow().len(), 1);
@@ -206,7 +203,9 @@ fn the_dialog_refuses_a_plain_object_and_previews_and_stores_through_the_api() {
     d.refresh(&be);
     assert_eq!(d.zones.as_ref().unwrap_err(), "boom");
     // Store: the same call, and the reply is read.
-    be.replies.push_back(Ok(json!({"zones": [{}, {}], "area_m2": 12.0, "zones_area_m2": 12.0})));
+    be.replies.push_back(Ok(
+        json!({"zones": [{}, {}], "area_m2": 12.0, "zones_area_m2": 12.0}),
+    ));
     let r = d.commit(&mut be).unwrap();
     assert_eq!(r.zones, 2);
     assert_eq!(be.calls[0].0, "hardscape.split");

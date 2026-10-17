@@ -60,7 +60,10 @@ mod tests {
         assert_eq!(nearest_edge(&sq, DVec2::new(500.0, 500.0), 10.0), None);
         // The ring of plain points gives the same answer.
         let ring: Vec<DVec2> = sq.iter().map(|v| v.p).collect();
-        assert_eq!(nearest_ring_edge(&ring, DVec2::new(500.0, 3.0), 10.0), Some(0));
+        assert_eq!(
+            nearest_ring_edge(&ring, DVec2::new(500.0, 3.0), 10.0),
+            Some(0)
+        );
         assert_eq!(edge_points(&sq, 3, 10.0).len(), 2);
         assert!(edge_points(&[], 0, 10.0).is_empty());
     }

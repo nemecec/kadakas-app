@@ -10,7 +10,9 @@ use kadakas_core::model::ObjectId;
 use kadakas_l10n::tr;
 use kadakas_ui_core::paving::Backend as _;
 use kadakas_ui_core::paving::counts::{self, UnitCounts};
-use kadakas_ui_core::paving::course::{self, Along, CourseEditor, CourseForm, Orientation, Placing};
+use kadakas_ui_core::paving::course::{
+    self, Along, CourseEditor, CourseForm, Orientation, Placing,
+};
 use kadakas_ui_core::paving::split::{self, PatternChoice, ZoneSettings, ZoneShape};
 
 use super::{PavingUi, PickKind, Request, SessionBackend};
@@ -65,7 +67,9 @@ pub fn hardscape_section(
         if let Some(s) = style
             && ui
                 .button(tr!("paving-ui-edit-pattern"))
-                .on_hover_text(tr!("paving-ui-the-pattern-belongs-to-the-style-it-changes-every-hardscape-with-it"))
+                .on_hover_text(tr!(
+                    "paving-ui-the-pattern-belongs-to-the-style-it-changes-every-hardscape-with-it"
+                ))
                 .clicked()
         {
             p.request(Request::EditJoints(s));
@@ -74,15 +78,25 @@ pub fn hardscape_section(
     ui.horizontal_wrapped(|ui| {
         let picking = p.pick.map(|k| (k.target, k.kind));
         if ui
-            .selectable_label(picking == Some((id, PickKind::Origin)), tr!("paving-ui-pick-origin"))
-            .on_hover_text(tr!("paving-ui-click-a-point-in-the-drawing-where-the-pattern-starts"))
+            .selectable_label(
+                picking == Some((id, PickKind::Origin)),
+                tr!("paving-ui-pick-origin"),
+            )
+            .on_hover_text(tr!(
+                "paving-ui-click-a-point-in-the-drawing-where-the-pattern-starts"
+            ))
             .clicked()
         {
             p.begin_pick(id, PickKind::Origin, status);
         }
         if ui
-            .selectable_label(picking == Some((id, PickKind::AlignEdge)), tr!("paving-ui-align-to-edge"))
-            .on_hover_text(tr!("paving-ui-click-an-edge-of-the-outline-the-pattern-starts-there-and-runs-along-it"))
+            .selectable_label(
+                picking == Some((id, PickKind::AlignEdge)),
+                tr!("paving-ui-align-to-edge"),
+            )
+            .on_hover_text(tr!(
+                "paving-ui-click-an-edge-of-the-outline-the-pattern-starts-there-and-runs-along-it"
+            ))
             .clicked()
         {
             p.begin_pick(id, PickKind::AlignEdge, status);
@@ -95,7 +109,13 @@ pub fn hardscape_section(
 
 // ---------------------------------------------------------------- counts
 
-fn counts_block(ui: &mut Ui, session: &mut Session, id: ObjectId, p: &mut PavingUi, _status: &mut String) {
+fn counts_block(
+    ui: &mut Ui,
+    session: &mut Session,
+    id: ObjectId,
+    p: &mut PavingUi,
+    _status: &mut String,
+) {
     let rev = session.editor.revision();
     let current = p
         .counts
@@ -116,7 +136,9 @@ fn counts_block(ui: &mut Ui, session: &mut Session, id: ObjectId, p: &mut Paving
             } else {
                 tr!("paving-ui-count-the-units")
             })
-            .on_hover_text(tr!("paving-ui-a-big-area-takes-time-to-count-so-it-is-counted-when-you-ask"))
+            .on_hover_text(tr!(
+                "paving-ui-a-big-area-takes-time-to-count-so-it-is-counted-when-you-ask"
+            ))
             .clicked()
     {
         let r = counts::count(&mut SessionBackend(session), id);
@@ -131,7 +153,10 @@ fn counts_block(ui: &mut Ui, session: &mut Session, id: ObjectId, p: &mut Paving
     }
     match result {
         Err(e) => {
-            ui.colored_label(ui.visuals().error_fg_color, tr!("paving-ui-error", e = e.as_str()));
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                tr!("paving-ui-error", e = e.as_str()),
+            );
         }
         Ok(c) => counts_grid(ui, id, c),
     }
@@ -139,47 +164,60 @@ fn counts_block(ui: &mut Ui, session: &mut Session, id: ObjectId, p: &mut Paving
 
 fn counts_grid(ui: &mut Ui, id: ObjectId, c: &UnitCounts) {
     let units = kadakas_units::current();
-    egui::Grid::new(("paving-counts", id)).num_columns(2).show(ui, |ui| {
-        ui.label(tr!("paving-ui-whole-units"));
-        ui.label(c.whole.to_string());
-        ui.end_row();
-        ui.label(tr!("paving-ui-cut-units"));
-        ui.label(if c.slivers > 0 || c.unfillable > 0 {
-            tr!(
-                "paving-ui-cut-units-detail",
-                count = c.cut,
-                slivers = c.slivers,
-                unfillable = c.unfillable
-            )
-        } else {
-            c.cut.to_string()
-        });
-        ui.end_row();
-        ui.label(tr!("paving-ui-order"));
-        ui.label(if c.order_units_min != c.order_units {
-            tr!("paving-ui-order-range", min = c.order_units_min, max = c.order_units)
-        } else {
-            c.order_units.to_string()
-        });
-        ui.end_row();
-        ui.label(tr!("paving-ui-laid-area"));
-        ui.label(units.area_text(c.area_laid_m2 * 1e6));
-        ui.end_row();
-        if c.types.len() > 1 {
-            for t in &c.types {
-                ui.label(t.name.as_str());
-                ui.label(tr!("paving-ui-whole-and-cut", whole = t.whole, cut = t.cut));
+    egui::Grid::new(("paving-counts", id))
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.label(tr!("paving-ui-whole-units"));
+            ui.label(c.whole.to_string());
+            ui.end_row();
+            ui.label(tr!("paving-ui-cut-units"));
+            ui.label(if c.slivers > 0 || c.unfillable > 0 {
+                tr!(
+                    "paving-ui-cut-units-detail",
+                    count = c.cut,
+                    slivers = c.slivers,
+                    unfillable = c.unfillable
+                )
+            } else {
+                c.cut.to_string()
+            });
+            ui.end_row();
+            ui.label(tr!("paving-ui-order"));
+            ui.label(if c.order_units_min != c.order_units {
+                tr!(
+                    "paving-ui-order-range",
+                    min = c.order_units_min,
+                    max = c.order_units
+                )
+            } else {
+                c.order_units.to_string()
+            });
+            ui.end_row();
+            ui.label(tr!("paving-ui-laid-area"));
+            ui.label(units.area_text(c.area_laid_m2 * 1e6));
+            ui.end_row();
+            if c.types.len() > 1 {
+                for t in &c.types {
+                    ui.label(t.name.as_str());
+                    ui.label(tr!("paving-ui-whole-and-cut", whole = t.whole, cut = t.cut));
+                    ui.end_row();
+                }
+            }
+            for part in &c.parts {
+                ui.label(part.name.as_str());
+                ui.label(tr!(
+                    "paving-ui-whole-and-cut",
+                    whole = part.whole,
+                    cut = part.cut
+                ));
                 ui.end_row();
             }
-        }
-        for part in &c.parts {
-            ui.label(part.name.as_str());
-            ui.label(tr!("paving-ui-whole-and-cut", whole = part.whole, cut = part.cut));
-            ui.end_row();
-        }
-    });
+        });
     if let Some(w) = &c.joint_warning {
-        ui.colored_label(ui.visuals().warn_fg_color, tr!("uic-paving-note-api", text = w.as_str()));
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            tr!("uic-paving-note-api", text = w.as_str()),
+        );
     }
 }
 
@@ -202,7 +240,13 @@ fn zones_of<'a>(
     &p.zones.as_ref().expect("just set").2
 }
 
-fn zones_block(ui: &mut Ui, session: &mut Session, id: ObjectId, p: &mut PavingUi, status: &mut String) {
+fn zones_block(
+    ui: &mut Ui,
+    session: &mut Session,
+    id: ObjectId,
+    p: &mut PavingUi,
+    status: &mut String,
+) {
     let splits = session
         .editor
         .doc()
@@ -212,7 +256,10 @@ fn zones_block(ui: &mut Ui, session: &mut Session, id: ObjectId, p: &mut PavingU
     let zones = match zones_of(p, session, id) {
         Ok(z) => z.clone(),
         Err(e) => {
-            ui.colored_label(ui.visuals().error_fg_color, tr!("paving-ui-error", e = e.as_str()));
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                tr!("paving-ui-error", e = e.as_str()),
+            );
             Vec::new()
         }
     };
@@ -222,11 +269,17 @@ fn zones_block(ui: &mut Ui, session: &mut Session, id: ObjectId, p: &mut PavingU
         } else {
             tr!("paving-ui-no-zones")
         });
-        if ui.button(tr!("paving-ui-split-into-zones-button")).clicked() {
+        if ui
+            .button(tr!("paving-ui-split-into-zones-button"))
+            .clicked()
+        {
             p.open_split_for(session, id, status);
         }
         if ui
-            .add_enabled(splits > 0, egui::Button::new(tr!("paving-ui-remove-the-split-lines")))
+            .add_enabled(
+                splits > 0,
+                egui::Button::new(tr!("paving-ui-remove-the-split-lines")),
+            )
             .clicked()
         {
             match SessionBackend(session).call_plan_clear(id) {
@@ -279,7 +332,10 @@ fn zone_editor(
             .selected_text(text)
             .show_ui(ui, |ui| {
                 let mut pick = |ui: &mut Ui, c: PatternChoice| {
-                    if ui.selectable_label(s.pattern == c, pattern_choice_label(c)).clicked() {
+                    if ui
+                        .selectable_label(s.pattern == c, pattern_choice_label(c))
+                        .clicked()
+                    {
                         s.pattern = c;
                         done = true;
                     }
@@ -322,7 +378,10 @@ fn zone_editor(
                 }
             }
             None => {
-                ui.label(tr!("paving-ui-as-the-field", angle = units.angle_text(field_angle)));
+                ui.label(tr!(
+                    "paving-ui-as-the-field",
+                    angle = units.angle_text(field_angle)
+                ));
                 if ui.button(tr!("area-ui-set-angle")).clicked() {
                     s.angle = Some(field_angle);
                     done = true;
@@ -379,7 +438,10 @@ fn zone_editor(
             egui::ComboBox::from_id_salt(("paving-zone-split", id, z.index))
                 .selected_text(text)
                 .show_ui(ui, |ui| {
-                    if ui.selectable_label(s.align_to_split.is_none(), tr!("paving-ui-none")).clicked() {
+                    if ui
+                        .selectable_label(s.align_to_split.is_none(), tr!("paving-ui-none"))
+                        .clicked()
+                    {
                         s.align_to_split = None;
                         done = true;
                     }
@@ -423,7 +485,13 @@ fn pattern_choice_label(c: PatternChoice) -> String {
 
 // ---------------------------------------------------------------- courses
 
-fn courses_block(ui: &mut Ui, session: &mut Session, id: ObjectId, p: &mut PavingUi, status: &mut String) {
+fn courses_block(
+    ui: &mut Ui,
+    session: &mut Session,
+    id: ObjectId,
+    p: &mut PavingUi,
+    status: &mut String,
+) {
     let rev = session.editor.revision();
     let fresh = p
         .courses
@@ -436,7 +504,10 @@ fn courses_block(ui: &mut Ui, session: &mut Session, id: ObjectId, p: &mut Pavin
     let rows = match &p.courses.as_ref().expect("just set").2 {
         Ok(r) => r.clone(),
         Err(e) => {
-            ui.colored_label(ui.visuals().error_fg_color, tr!("paving-ui-error", e = e.as_str()));
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                tr!("paving-ui-error", e = e.as_str()),
+            );
             Vec::new()
         }
     };
@@ -444,7 +515,9 @@ fn courses_block(ui: &mut Ui, session: &mut Session, id: ObjectId, p: &mut Pavin
         ui.label(tr!("paving-ui-courses-count", count = rows.len()));
         if ui
             .button(tr!("paving-ui-add-a-course"))
-            .on_hover_text(tr!("paving-ui-a-row-of-units-along-an-edge-for-example-a-soldier-course-along-a-kerb"))
+            .on_hover_text(tr!(
+                "paving-ui-a-row-of-units-along-an-edge-for-example-a-soldier-course-along-a-kerb"
+            ))
             .clicked()
         {
             match CourseEditor::new_course(session.editor.doc(), id) {
@@ -574,8 +647,16 @@ fn course_form(ui: &mut Ui, session: &Session, id: ObjectId, ed: &mut CourseEdit
     });
     ui.horizontal_wrapped(|ui| {
         for (label, v, range) in [
-            (tr!("paving-ui-size-along-the-row"), &mut f.unit_length, 10.0..=10_000.0),
-            (tr!("paving-ui-size-across-the-row"), &mut f.unit_width, 10.0..=10_000.0),
+            (
+                tr!("paving-ui-size-along-the-row"),
+                &mut f.unit_length,
+                10.0..=10_000.0,
+            ),
+            (
+                tr!("paving-ui-size-across-the-row"),
+                &mut f.unit_width,
+                10.0..=10_000.0,
+            ),
             (tr!("joint-ui-gap"), &mut f.gap, 0.0..=1000.0),
             (tr!("paving-ui-offset"), &mut f.offset, -10_000.0..=10_000.0),
         ] {
@@ -597,8 +678,13 @@ fn course_form(ui: &mut Ui, session: &Session, id: ObjectId, ed: &mut CourseEdit
                 }
             });
     });
-    ui.checkbox(&mut f.align_field, tr!("paving-ui-start-the-field-at-the-course"))
-        .on_hover_text(tr!("paving-ui-moves-the-origin-and-angle-of-the-pattern-so-that-its-first-row-is-whole"));
+    ui.checkbox(
+        &mut f.align_field,
+        tr!("paving-ui-start-the-field-at-the-course"),
+    )
+    .on_hover_text(tr!(
+        "paving-ui-moves-the-origin-and-angle-of-the-pattern-so-that-its-first-row-is-whole"
+    ));
 }
 
 fn course_readout(ui: &mut Ui, ed: &CourseEditor) {
@@ -606,7 +692,10 @@ fn course_readout(ui: &mut Ui, ed: &CourseEditor) {
     match &ed.preview {
         Err(e) => {
             if !e.is_empty() {
-                ui.colored_label(ui.visuals().error_fg_color, tr!("paving-ui-error", e = e.as_str()));
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    tr!("paving-ui-error", e = e.as_str()),
+                );
             }
         }
         Ok(pv) => {
@@ -626,7 +715,10 @@ fn course_readout(ui: &mut Ui, ed: &CourseEditor) {
                 }
             }
             for n in &pv.notes {
-                ui.colored_label(ui.visuals().warn_fg_color, tr!("uic-paving-note-api", text = n.as_str()));
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    tr!("uic-paving-note-api", text = n.as_str()),
+                );
             }
         }
     }
@@ -635,7 +727,10 @@ fn course_readout(ui: &mut Ui, ed: &CourseEditor) {
 impl SessionBackend<'_> {
     /// Removes the split lines and the settings of the zones of a hardscape (one undo step).
     fn call_plan_clear(&mut self, id: ObjectId) -> Result<(), String> {
-        self.call("hardscape.plan_clear", serde_json::json!({"id": id, "what": "splits"}))
-            .map(|_| ())
+        self.call(
+            "hardscape.plan_clear",
+            serde_json::json!({"id": id, "what": "splits"}),
+        )
+        .map(|_| ())
     }
 }

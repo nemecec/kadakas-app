@@ -37,7 +37,14 @@ fn the_reply_becomes_rows_with_places() {
     assert_eq!(f[0].zoom_box(), [-500.0, -400.0, 700.0, 800.0]);
     assert_eq!(f[1].zoom_box(), [-100.0, 0.0, 700.0, 800.0]);
     assert!(!f[0].size_text().is_empty() && !f[1].size_text().is_empty());
-    assert!(!FindingRow { kind: "small_piece".into(), ..f[0].clone() }.size_text().is_empty());
+    assert!(
+        !FindingRow {
+            kind: "small_piece".into(),
+            ..f[0].clone()
+        }
+        .size_text()
+        .is_empty()
+    );
     assert!(CheckResult::parse(&json!({})).is_err());
 }
 
