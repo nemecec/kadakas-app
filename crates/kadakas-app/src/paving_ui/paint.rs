@@ -2,6 +2,7 @@
 //! gaps and dead ends, the zones and split lines, the preview of a course, the edge under the
 //! pointer while one is picked, and the findings of the check. None of it is part of the document.
 
+use egui::epaint::Mesh;
 use egui::epaint::PathStroke;
 use egui::{Color32, Painter, Pos2, Rect, Shape as Sh, Stroke};
 use glam::DVec2;
@@ -49,6 +50,28 @@ fn polygon(painter: &Painter, pts: Vec<Pos2>, fill: Color32, stroke: Stroke) {
     }
 }
 
+/// A polygon with holes: the fill is a triangulated mesh (any shape, holes open in both themes),
+/// the lines are the outline and the holes.
+fn fill_rings(painter: &Painter, view: &View, rings: &[Vec<DVec2>], fill: Color32, stroke: Stroke) {
+    if rings.is_empty() {
+        return;
+    }
+    if fill.a() > 0 {
+        let (pts, tris) = crate::tess::triangulate_with_holes(rings);
+        let mut mesh = Mesh::default();
+        for p in &pts {
+            mesh.colored_vertex(view.to_screen(*p), fill);
+        }
+        for t in tris {
+            mesh.add_triangle(t[0] as u32, t[1] as u32, t[2] as u32);
+        }
+        painter.add(mesh);
+    }
+    for r in rings {
+        polygon(painter, screen(view, r), Color32::TRANSPARENT, stroke);
+    }
+}
+
 /// A cross of two lines.
 fn cross(painter: &Painter, at: Pos2, r: f32, stroke: Stroke) {
     painter.line_segment([at + egui::vec2(-r, -r), at + egui::vec2(r, r)], stroke);
@@ -62,15 +85,15 @@ pub fn paint(
     view: &View,
     doc: &Document,
     selection: &[kadakas_core::model::ObjectId],
+    revision: u64,
     p: &PavingUi,
-    dark: bool,
 ) {
     let painter = painter.with_clip_rect(rect);
     if let Some(Ok(found)) = p.curves.as_ref().map(|d| &d.found) {
         let on = |r: &kadakas_ui_core::paving::curves::Region| {
             p.curves.as_ref().is_some_and(|d| d.form.is_on(r))
         };
-        curves(&painter, view, found, &on, dark);
+        curves(&painter, view, found, &on);
     }
     if let Some(d) = &p.split {
         split(&painter, view, doc, d, p.drawing, p.hover);
@@ -94,7 +117,9 @@ pub fn paint(
     if let Some(pick) = p.pick {
         pick_hint(&painter, view, doc, p, pick);
     }
+    // The findings of a check are of the drawing as it was: when it changed, they are not drawn.
     if p.check_open
+        && p.check.revision == revision
         && let Some(r) = p.check.result()
     {
         for f in r.findings().filter(|f| p.check.shows(&f.kind)) {
@@ -115,14 +140,8 @@ fn curves(
     view: &View,
     found: &Found,
     on: &dyn Fn(&kadakas_ui_core::paving::curves::Region) -> bool,
-    dark: bool,
 ) {
     let tol = (0.25 / view.zoom).max(1e-3);
-    let hole = if dark {
-        Color32::from_rgba_unmultiplied(30, 30, 30, 235)
-    } else {
-        Color32::from_white_alpha(235)
-    };
     for r in &found.regions {
         let (fill, line) = if on(r) {
             (accent(70), accent(255))
@@ -132,12 +151,9 @@ fn curves(
                 Color32::GRAY,
             )
         };
-        let outer = screen(view, &curve::flatten(&r.outline, true, tol));
-        polygon(painter, outer, fill, Stroke::new(1.5, line));
-        for h in &r.holes {
-            let ring = screen(view, &curve::flatten(h, true, tol));
-            polygon(painter, ring, hole, Stroke::new(1.0, line));
-        }
+        let mut rings = vec![curve::flatten(&r.outline, true, tol)];
+        rings.extend(r.holes.iter().map(|h| curve::flatten(h, true, tol)));
+        fill_rings(painter, view, &rings, fill, Stroke::new(1.5, line));
     }
     for m in &found.marks {
         let at = view.to_screen(m.at);
@@ -175,23 +191,13 @@ fn split(
     if let Ok(zones) = &d.zones {
         for z in zones {
             for shape in &z.shapes {
-                let mut rings = shape.iter();
-                if let Some(outer) = rings.next() {
-                    polygon(
-                        painter,
-                        screen(view, outer),
-                        zone_color(z.index, 55),
-                        Stroke::new(1.0, zone_color(z.index, 255)),
-                    );
-                }
-                for h in rings {
-                    polygon(
-                        painter,
-                        screen(view, h),
-                        Color32::from_white_alpha(120),
-                        Stroke::new(1.0, zone_color(z.index, 255)),
-                    );
-                }
+                fill_rings(
+                    painter,
+                    view,
+                    shape,
+                    zone_color(z.index, 55),
+                    Stroke::new(1.0, zone_color(z.index, 255)),
+                );
             }
         }
     }
@@ -231,9 +237,8 @@ fn pick_hint(painter: &Painter, view: &View, doc: &Document, p: &PavingUi, pick_
         PickKind::ZoneAlignEdge(zi) => {
             let ring = p
                 .zones
-                .as_ref()
-                .filter(|(_, id, _)| *id == pick_req.target)
-                .and_then(|(_, _, z)| z.as_ref().ok())
+                .last(pick_req.target)
+                .and_then(|z| z.as_ref().ok())
                 .and_then(|z| z.get(zi))
                 .and_then(|z| z.shapes.first())
                 .and_then(|s| s.first());

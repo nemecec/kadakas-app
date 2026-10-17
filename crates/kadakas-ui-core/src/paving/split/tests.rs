@@ -1,7 +1,7 @@
 use super::*;
 use crate::paving::fake::Fake;
 use crate::paving::lot;
-use kadakas_core::command::Editor;
+use kadakas_core::command::{Command, Editor};
 use kadakas_core::layout::plan::{Plan, SplitLine};
 use serde_json::json;
 
@@ -108,54 +108,87 @@ fn the_zones_are_the_ones_of_the_report_and_add_up_to_the_area() {
 }
 
 #[test]
-fn zone_settings_are_stored_in_the_plan_and_read_back() {
-    let (mut editor, id) = split_lot();
-    let zones = zone_shapes(editor.doc(), id, 100_000).unwrap();
-    let doc = editor.doc();
-    let o = doc.object(id).unwrap();
-    let mut s = ZoneSettings::read(doc, o, &zones[1]);
-    // The zone continues the pattern of the field: its numbers are those of the style.
-    assert_eq!(s.pattern, PatternChoice::Field);
-    assert_eq!((s.unit_length, s.unit_width, s.gap), (200.0, 100.0, 5.0));
-    s.name = "Drive".into();
-    s.pattern = PatternChoice::Bond(Bond::Herringbone);
-    s.unit_length = 300.0;
-    s.unit_width = 150.0;
-    s.angle = Some(45.0);
-    s.origin = Some(DVec2::new(2000.0, 0.0));
-    let cmd = set_zone_command(doc, id, &zones[1], &s, 100_000).unwrap();
-    editor.execute(&cmd).unwrap();
-    let doc = editor.doc();
-    let zones = zone_shapes(doc, id, 100_000).unwrap();
-    assert_eq!(zones.len(), 2);
-    let z = zones.iter().find(|z| z.name == "Drive").expect("renamed");
-    assert!(z.has_setting);
-    let back = ZoneSettings::read(doc, doc.object(id).unwrap(), z);
-    assert_eq!(back, s);
-    // Clearing the pattern gives the field back, and the alignment helpers drop origin and angle.
-    let mut s2 = back.clone();
-    s2.pattern = PatternChoice::Field;
-    s2.align_edge(1);
-    assert_eq!(
-        (s2.align_to_edge, s2.origin, s2.angle, s2.align_to_split),
-        (Some(1), None, None, None)
-    );
-    s2.align_split(0);
-    assert_eq!((s2.align_to_edge, s2.align_to_split), (None, Some(0)));
-}
-
-#[test]
-fn a_setting_that_cannot_be_laid_is_refused_with_the_reason() {
+fn zone_settings_are_read_from_the_plan_and_the_edit_says_only_what_changed() {
     let (editor, id) = split_lot();
     let zones = zone_shapes(editor.doc(), id, 100_000).unwrap();
     let doc = editor.doc();
-    let mut s = ZoneSettings::read(doc, doc.object(id).unwrap(), &zones[0]);
-    s.align_to_split = Some(5);
-    assert!(set_zone_command(doc, id, &zones[0], &s, 100_000).is_err());
-    s.align_to_split = None;
-    s.pattern = PatternChoice::Bond(Bond::Stack);
-    s.unit_length = 1.0;
-    assert!(set_zone_command(doc, id, &zones[0], &s, 100_000).is_err());
+    let o = doc.object(id).unwrap();
+    let base = ZoneSettings::read(doc, o, &zones[1]);
+    // The zone continues the pattern of the field: its numbers are those of the style.
+    assert_eq!(base.pattern, PatternChoice::Field);
+    assert_eq!(
+        (base.unit_length, base.unit_width, base.gap),
+        (200.0, 100.0, 5.0)
+    );
+    let mut e = ZoneEdit::new(id, 1, base.clone());
+    assert!(!e.changed() && e.params().is_none());
+    assert!(e.follows(id, 1, &base) && !e.follows(id, 0, &base));
+    e.settings.name = " Drive ".into();
+    e.settings.pattern = PatternChoice::Bond(Bond::Herringbone);
+    e.settings.unit_length = 300.0;
+    e.settings.angle = Some(45.0);
+    e.settings.origin = Some(DVec2::new(2000.0, 0.0));
+    assert!(e.changed());
+    let p = e.params().unwrap();
+    assert_eq!(p["id"], json!(id));
+    assert_eq!(p["zone"], 1);
+    assert_eq!(p["name"], "Drive");
+    assert_eq!(p["pattern"]["bond"], "herringbone");
+    assert_eq!(p["pattern"]["unit_length"], 300.0);
+    assert_eq!(p["angle"], 45.0);
+    assert_eq!(p["origin"], json!([2000.0, 0.0]));
+    assert!(p.get("clear").is_none());
+    // The edit does not follow a zone that the document changed.
+    let mut other = base.clone();
+    other.name = "x".into();
+    assert!(!e.follows(id, 1, &other));
+}
+
+#[test]
+fn clearing_a_setting_is_a_clear_and_an_alignment_replaces_the_other() {
+    let (editor, id) = split_lot();
+    let zones = zone_shapes(editor.doc(), id, 100_000).unwrap();
+    let mut base = ZoneSettings::read(editor.doc(), editor.doc().object(id).unwrap(), &zones[0]);
+    base.origin = Some(DVec2::new(1.0, 2.0));
+    base.angle = Some(10.0);
+    base.align_to_split = Some(0);
+    let mut e = ZoneEdit::new(id, 0, base);
+    e.settings.pattern = PatternChoice::Field;
+    e.settings.align_edge(2);
+    let p = e.params().unwrap();
+    assert_eq!(p["align_to_edge"], 2);
+    let clear: Vec<&str> = p["clear"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert!(clear.contains(&"origin") && clear.contains(&"angle"));
+    assert!(!clear.contains(&"align_to_split"), "the call replaces it");
+    // A pattern the API gave stays when nothing about it changed.
+    let mut kept = ZoneSettings::read(editor.doc(), editor.doc().object(id).unwrap(), &zones[0]);
+    kept.pattern = PatternChoice::Kept;
+    let mut e = ZoneEdit::new(id, 0, kept);
+    e.settings.gap = 9.0;
+    assert!(e.params().is_none());
+    e.settings.align_split(1);
+    assert_eq!(e.params().unwrap()["align_to_split"], 1);
+}
+
+#[test]
+fn storing_an_edit_is_one_api_call_and_nothing_without_a_change() {
+    let (editor, id) = split_lot();
+    let zones = zone_shapes(editor.doc(), id, 100_000).unwrap();
+    let base = ZoneSettings::read(editor.doc(), editor.doc().object(id).unwrap(), &zones[0]);
+    let mut be = Fake::new().reply(json!({}));
+    be.doc = editor.doc().clone();
+    let mut e = ZoneEdit::new(id, 0, base);
+    store_zone(&mut be, &e).unwrap();
+    assert!(be.calls.is_empty());
+    e.settings.angle = Some(30.0);
+    store_zone(&mut be, &e).unwrap();
+    assert_eq!(be.calls.len(), 1);
+    assert_eq!(be.calls[0].0, "hardscape.zone_set");
 }
 
 #[test]

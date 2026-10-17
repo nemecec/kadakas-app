@@ -674,6 +674,21 @@ impl KadakasApp {
         )
     }
 
+    /// Why the document cannot be changed now, for the paving dialogs (as `exec` says it).
+    fn edit_lock(&self) -> Option<String> {
+        if self.read_only() {
+            Some(if self.update_read_only() {
+                tr!("update-ui-read-only-edit")
+            } else {
+                tr!("compare-ui-read-only")
+            })
+        } else if self.collab.waiting_for_snapshot() {
+            Some(tr!("collab-ui-joining"))
+        } else {
+            None
+        }
+    }
+
     fn exec(&mut self, cmd: &Command) {
         if self.read_only() {
             self.status = if self.update_read_only() {
@@ -2225,8 +2240,8 @@ impl KadakasApp {
             &self.view,
             self.session.editor.doc(),
             &self.session.selection,
+            self.session.editor.revision(),
             &self.paving_ui,
-            self.dark,
         );
         // What the agent points at, and where the agent is (never part of the document).
         crate::agent_view_ui::paint_plan(
@@ -2325,7 +2340,9 @@ impl KadakasApp {
             animate: self.prefs.animate_agent_view,
             now_ms: ctx.input(|i| i.time) * 1000.0,
             input_busy: crate::agent_view::input_busy(ctx, self.canvas_rect),
-            tool_busy: self.machine.anchor().is_some() || self.entry.active,
+            tool_busy: self.machine.anchor().is_some()
+                || self.entry.active
+                || self.paving_ui.captures(),
         }
     }
 
@@ -3064,7 +3081,8 @@ impl eframe::App for KadakasApp {
             // The input of this frame is read before the calls of the agent are answered: the
             // person who drags, zooms or types now wins.
             let input_busy = crate::agent_view::input_busy(&ctx, self.canvas_rect);
-            let tool_busy = self.machine.anchor().is_some() || self.entry.active;
+            let tool_busy =
+                self.machine.anchor().is_some() || self.entry.active || self.paving_ui.captures();
             agent.poll_ext(&mut |line, reply, conn| {
                 // The agent drives the view and points: the app answers these itself. A change
                 // through the session (`view.set`) keeps the view from before, for Back.
@@ -3339,6 +3357,9 @@ impl eframe::App for KadakasApp {
         self.issues_ui
             .windows(&ctx, &mut self.session, &mut self.status);
         self.run_issue_requests();
+        let lock = self.edit_lock();
+        self.paving_ui
+            .frame(self.session.editor.revision(), lock, &mut self.status);
         self.paving_ui
             .windows(&ctx, &mut self.session, &mut self.status);
         self.run_paving_requests();

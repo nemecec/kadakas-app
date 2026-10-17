@@ -102,7 +102,7 @@ impl CheckResult {
         let rows = reply
             .get("objects")
             .and_then(Value::as_array)
-            .ok_or("the reply has no objects")?;
+            .ok_or_else(|| tr!("uic-paving-bad-reply"))?;
         let objects = rows
             .iter()
             .map(|r| {
@@ -226,22 +226,55 @@ pub struct CheckPanel {
     pub selected: Option<(usize, usize)>,
     /// Only the findings of this kind (an id from [`kinds`]).
     pub only: Option<String>,
+    /// The hardscapes the check looks at. The command takes them from the selection (or all
+    /// hardscapes); a later run keeps them, whatever is selected by then.
+    pub scope: Vec<ObjectId>,
+    /// The check runs in the background.
+    pub running: bool,
 }
 
 impl CheckPanel {
-    /// Runs the check on the selected hardscapes, or on all of them.
-    pub fn run(&mut self, be: &mut dyn Backend) {
-        let ids = targets(be);
+    /// The command Check Unit Patterns: takes the selected hardscapes, or all of them.
+    pub fn set_scope(&mut self, be: &dyn Backend) {
+        self.scope = targets(be);
+    }
+
+    /// Starts a run: the parameters of the call, or `None` when there is nothing to check (the
+    /// result then says so).
+    pub fn begin(&mut self, be: &dyn Backend) -> Option<Value> {
+        let doc = be.document();
+        let ids: Vec<ObjectId> = self
+            .scope
+            .iter()
+            .copied()
+            .filter(|id| doc.object(*id).is_some())
+            .collect();
         self.revision = be.revision();
         self.selected = None;
         if ids.is_empty() {
+            self.running = false;
             self.result = Some(Err(tr!("uic-paving-check-nothing")));
-            return;
+            return None;
         }
-        self.result = Some(
-            be.call("unit_pattern.check", json!({"ids": ids}))
-                .and_then(|r| CheckResult::parse(&r)),
-        );
+        self.running = true;
+        Some(json!({"ids": ids}))
+    }
+
+    /// Takes the reply of the call that [`begin`](Self::begin) asked for.
+    pub fn finish(&mut self, reply: Result<Value, String>) {
+        self.running = false;
+        self.result = Some(reply.and_then(|r| CheckResult::parse(&r)));
+    }
+
+    /// Runs the check now, on the calling thread.
+    pub fn run(&mut self, be: &mut dyn Backend) {
+        if self.scope.is_empty() {
+            self.set_scope(be);
+        }
+        if let Some(p) = self.begin(be) {
+            let reply = be.call("unit_pattern.check", p);
+            self.finish(reply);
+        }
     }
 
     /// True when the drawing changed since the check ran: the findings may be old.

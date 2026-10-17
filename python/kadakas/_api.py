@@ -1111,6 +1111,18 @@ if TYPE_CHECKING:
         'what': Literal['all', 'splits', 'zones', 'courses'] | None,
     }, total=False)
 
+    HardscapeZoneSetParams = TypedDict("HardscapeZoneSetParams", {
+        'align_to_edge': int | None,
+        'align_to_split': int | None,
+        'angle': float | None,
+        'clear': list[str] | None,
+        'id': Required[str],
+        'name': str | None,
+        'origin': list[float] | None,
+        'pattern': dict[str, Any] | None,
+        'zone': Required[int],
+    }, total=False)
+
     UnitPatternCheckParams = TypedDict("UnitPatternCheckParams", {
         'align_to_edge': int | None,
         'angle': float | None,
@@ -4037,6 +4049,12 @@ class Api:
         JSON-RPC method ``hardscape.plan_clear``."""
         return self._call("hardscape.plan_clear", params or None)
 
+    def hardscape_zone_set(self, **params: "Unpack[HardscapeZoneSetParams]") -> Any:
+        """Change the settings of one zone of a hardscape without touching the other zones (hardscape.split replaces them all). params: {id, zone (the index of the zone in the reply of hardscape.split or hardscape.plan, from 0), name?, pattern? (as the pattern of unit_pattern.layout), origin?, angle?, align_to_edge? (n: start at vertex n of the outline of the zone), align_to_split? (n: start at the first point of split line n), clear? ([pattern | origin | angle | align_to_edge | align_to_split]: remove these settings, so the zone takes the field's again)}. Settings that are not named stay as they are. Returns {zone, name, has_settings, zones: [{index, name, area_m2, has_settings}]}. One undo step. The Object Info panel of the app calls this method.
+
+        JSON-RPC method ``hardscape.zone_set``."""
+        return self._call("hardscape.zone_set", params or None)
+
     def unit_pattern_check(self, **params: "Unpack[UnitPatternCheckParams]") -> Any:
         """Check the units of hardscapes (with their zones and courses) for the faults that cost money on site, with positions so that you can draw the places. The units are laid and tested as they are: overlaps between units (also a course against the field and a zone against a zone), joints narrower or wider than a limit, pieces under a minimum size, whole units of the wrong size, units that reach out of their area (for example over a zone edge), and the area covered against the area (a group that is much more open than its joints explain has missing units). params: {ids? (default: every hardscape with a joint pattern), visible_only?, overlap_mm2? (default 1: smaller overlaps do not count), overlap_depth_mm? (default 0.15: thinner overlaps do not count; a unit that crosses an edge by less than the trim is kept whole), min_joint_mm? (default: the gap less 1), max_joint_mm? (default: the widest joint of the pattern plus 1), min_share? (default 0.05: a cut unit with less of a full unit is a small piece), min_width_mm? (default off), size_tol_mm? (default 0.05), coverage_tol? (default 0.02), trim? (default 0.1), max_findings? (per kind, default 200, at most 10000; the counts are exact), pattern?, origin?, angle?, align_to_edge?, tolerance? (as unit_pattern.layout, to check a variant)}. Returns {objects: [{id, name, ok, units, counts: {overlap, joint_too_narrow, joint_too_wide, small_piece, wrong_size, outside_area, coverage}, findings: [{kind, group, other_group?, at: [x, y], size, message}], truncated: [kinds], coverage: [{group, role, region_area_m2, units_area_m2, units, open_share, expected_open_share}], area_m2, units_area_m2, notes}], totals: {units, counts, ok, complete}}. size is the overlap in mm2, the joint in mm, the share of a full unit, the area outside in mm2, the difference in mm2, or the open share. Units of two zones that meet at the zone edge have no joint by design and are not reported. An object that cannot be checked is a row with an error and complete is false.
 
@@ -5745,6 +5763,7 @@ METHOD_NAMES: tuple[str, ...] = (
     "hardscape.course_remove",
     "hardscape.plan",
     "hardscape.plan_clear",
+    "hardscape.zone_set",
     "unit_pattern.check",
     "landscape_area.add",
     "landscape_area.set",

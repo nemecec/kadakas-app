@@ -105,3 +105,41 @@ fn the_panel_runs_the_check_keeps_the_choice_and_knows_when_it_is_old() {
     assert!(panel.result().is_none());
     assert!(panel.selected.is_none());
 }
+
+#[test]
+fn the_scope_of_the_check_is_kept_when_the_selection_changes() {
+    let (editor, id) = lot::new();
+    let mut be = Fake::new().reply(reply(id)).reply(reply(id));
+    be.doc = editor.doc().clone();
+    be.selection = vec![id];
+    let mut panel = CheckPanel::default();
+    panel.set_scope(&be);
+    assert_eq!(panel.scope, vec![id]);
+    // The person selects something else (a finding was clicked): the next run is the same check.
+    be.selection = vec![];
+    panel.run(&mut be);
+    panel.run(&mut be);
+    assert_eq!(be.calls.len(), 2);
+    assert_eq!(be.calls[1].1["ids"], json!([id]));
+    // An object that is gone leaves nothing to check.
+    be.doc = kadakas_core::model::Document::default();
+    panel.run(&mut be);
+    assert!(panel.result().is_none() && !panel.running);
+}
+
+#[test]
+fn a_run_is_begun_and_finished_in_two_steps_for_a_background_job() {
+    let (editor, id) = lot::new();
+    let mut be = Fake::new();
+    be.doc = editor.doc().clone();
+    let mut panel = CheckPanel::default();
+    panel.set_scope(&be);
+    let p = panel.begin(&be).unwrap();
+    assert!(panel.running);
+    assert_eq!(p["ids"], json!([id]));
+    panel.finish(Ok(reply(id)));
+    assert!(!panel.running);
+    assert_eq!(panel.result().unwrap().finding_count(), 3);
+    panel.finish(Err("boom".into()));
+    assert!(panel.result().is_none());
+}

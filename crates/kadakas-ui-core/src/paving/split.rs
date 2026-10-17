@@ -7,7 +7,6 @@
 //! report and the export use (`layout::plan::groups_of`).
 
 use glam::DVec2;
-use kadakas_core::command::Command;
 use kadakas_core::curve::{self, Vertex};
 use kadakas_core::layout::plan::{self, Planned, Role, ZoneSpec, ZoneUnits};
 use kadakas_core::layout::{self, Bond, Pattern};
@@ -299,14 +298,19 @@ impl SplitDialog {
 
     /// Makes the preview again if the draft or the document changed.
     pub fn refresh(&mut self, be: &dyn Backend) {
+        // The points of a line that is not finished change nothing in the zones.
+        let key = SplitDraft {
+            open: Vec::new(),
+            ..self.draft.clone()
+        };
         if self
             .seen
             .as_ref()
-            .is_some_and(|(r, d)| *r == be.revision() && *d == self.draft)
+            .is_some_and(|(r, d)| *r == be.revision() && *d == key)
         {
             return;
         }
-        self.seen = Some((be.revision(), self.draft.clone()));
+        self.seen = Some((be.revision(), key));
         if self.draft.is_empty() {
             self.zones = Ok(Vec::new());
             self.report = None;
@@ -428,49 +432,121 @@ impl ZoneSettings {
     }
 }
 
-/// The command that stores the settings of a zone in the plan of the hardscape: the same data
-/// that `hardscape.split` writes (`SetData` of the plan), one undo step. The result is laid before
-/// the command is given, so a setting that cannot be laid is refused here with the reason.
-pub fn set_zone_command(
-    doc: &Document,
-    id: ObjectId,
-    zone: &ZoneShape,
-    settings: &ZoneSettings,
-    max_units: usize,
-) -> Result<Command, String> {
-    let o = doc.object(id).ok_or_else(|| tr!("uic-paving-no-object"))?;
-    let mut p = plan::data(o).unwrap_or_default();
-    let i = match zone.spec.filter(|i| *i < p.zones.len()) {
-        Some(i) => i,
-        None => {
-            p.zones.push(ZoneSpec {
-                seed: zone.inside,
-                ..Default::default()
-            });
-            p.zones.len() - 1
-        }
-    };
-    settings.write(&mut p.zones[i]);
-    store_command(doc, o, p, max_units)
+/// The edit of one zone in Object Info. The form keeps the typed values between frames; they
+/// are stored when the person is done (`params` gives the call). The edit is for the zone as the
+/// document had it when the edit began (`base`): if the document changed meanwhile, it begins
+/// again from the document.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ZoneEdit {
+    pub target: ObjectId,
+    pub zone: usize,
+    base: ZoneSettings,
+    pub settings: ZoneSettings,
 }
 
-/// The command for a plan after a check: the plan is valid and can be laid.
-pub(crate) fn store_command(
-    doc: &Document,
-    o: &Object,
-    p: plan::Plan,
-    max_units: usize,
-) -> Result<Command, String> {
-    p.validate()?;
-    let value = serde_json::to_value(&p).map_err(|e| e.to_string())?;
-    let mut probe = o.clone();
-    probe.data.insert(plan::KEY.into(), value.clone());
-    plan::groups_of(doc, &probe, layout::TOLERANCE, max_units)?;
-    Ok(Command::SetData {
-        id: o.id,
-        set: [(plan::KEY.to_string(), value)].into_iter().collect(),
-        remove: Vec::new(),
-    })
+impl ZoneEdit {
+    pub fn new(target: ObjectId, zone: usize, base: ZoneSettings) -> ZoneEdit {
+        ZoneEdit {
+            target,
+            zone,
+            settings: base.clone(),
+            base,
+        }
+    }
+
+    /// True if this edit is of this zone and the document still has the zone as the edit began.
+    pub fn follows(&self, target: ObjectId, zone: usize, now: &ZoneSettings) -> bool {
+        self.target == target && self.zone == zone && self.base == *now
+    }
+
+    /// Something was typed that is not stored yet.
+    pub fn changed(&self) -> bool {
+        self.settings != self.base
+    }
+
+    /// The parameters of `hardscape.zone_set`, the call that stores the edit: only what changed.
+    /// `None` if nothing did.
+    pub fn params(&self) -> Option<Value> {
+        let (b, s) = (&self.base, &self.settings);
+        let mut p = serde_json::Map::new();
+        let mut clear: Vec<&str> = Vec::new();
+        if s.name.trim() != b.name.trim() {
+            p.insert("name".into(), json!(s.name.trim()));
+        }
+        let pattern_changed = s.pattern != b.pattern
+            || (matches!(s.pattern, PatternChoice::Bond(_))
+                && (s.unit_length, s.unit_width, s.gap) != (b.unit_length, b.unit_width, b.gap));
+        if pattern_changed {
+            match s.pattern {
+                PatternChoice::Field => clear.push("pattern"),
+                PatternChoice::Bond(bond) => {
+                    p.insert(
+                        "pattern".into(),
+                        json!({
+                            "bond": bond.id(),
+                            "unit_length": s.unit_length,
+                            "unit_width": s.unit_width,
+                            "gap": s.gap,
+                        }),
+                    );
+                }
+                // A module or generator pattern is not edited here.
+                PatternChoice::Kept => {}
+            }
+        }
+        match (s.origin, b.origin) {
+            (Some(o), old) if Some(o) != old => {
+                p.insert("origin".into(), json!([o.x, o.y]));
+            }
+            (None, Some(_)) => clear.push("origin"),
+            _ => {}
+        }
+        match (s.angle, b.angle) {
+            (Some(a), old) if Some(a) != old => {
+                p.insert("angle".into(), json!(a));
+            }
+            (None, Some(_)) => clear.push("angle"),
+            _ => {}
+        }
+        match (s.align_to_edge, b.align_to_edge) {
+            (Some(n), old) if Some(n) != old => {
+                p.insert("align_to_edge".into(), json!(n));
+            }
+            (None, Some(_)) => clear.push("align_to_edge"),
+            _ => {}
+        }
+        match (s.align_to_split, b.align_to_split) {
+            (Some(n), old) if Some(n) != old => {
+                p.insert("align_to_split".into(), json!(n));
+            }
+            (None, Some(_)) => clear.push("align_to_split"),
+            _ => {}
+        }
+        // Setting one alignment replaces the other one in the call.
+        if p.contains_key("align_to_edge") {
+            clear.retain(|c| *c != "align_to_split");
+        }
+        if p.contains_key("align_to_split") {
+            clear.retain(|c| *c != "align_to_edge");
+        }
+        if p.is_empty() && clear.is_empty() {
+            return None;
+        }
+        p.insert("id".into(), json!(self.target));
+        p.insert("zone".into(), json!(self.zone));
+        if !clear.is_empty() {
+            p.insert("clear".into(), json!(clear));
+        }
+        Some(Value::Object(p))
+    }
+}
+
+/// Stores the edit of a zone: `hardscape.zone_set`, one undo step.
+pub fn store_zone(be: &mut dyn Backend, edit: &ZoneEdit) -> Result<(), String> {
+    match edit.params() {
+        Some(p) => be.call("hardscape.zone_set", p).map(|_| ()),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

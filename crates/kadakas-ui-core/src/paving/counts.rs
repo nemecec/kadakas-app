@@ -7,6 +7,8 @@ use kadakas_core::layout::object::pattern_of;
 use kadakas_core::model::{Document, ObjectId, Shape};
 use serde_json::{Value, json};
 
+use kadakas_l10n::tr;
+
 use super::Backend;
 
 /// The most units that Object Info counts without being asked. More than this takes noticeable
@@ -65,7 +67,7 @@ impl UnitCounts {
             .get("rows")
             .and_then(Value::as_array)
             .and_then(|r| r.first())
-            .ok_or("the report has no row")?;
+            .ok_or_else(|| tr!("uic-paving-bad-reply"))?;
         if let Some(e) = row.get("error").and_then(Value::as_str) {
             return Err(e.to_string());
         }

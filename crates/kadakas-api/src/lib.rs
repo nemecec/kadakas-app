@@ -662,6 +662,7 @@ pub const METHODS: &[(&str, &str)] = &[
     plan_api::HARDSCAPE_COURSE_REMOVE,
     plan_api::HARDSCAPE_PLAN,
     plan_api::HARDSCAPE_PLAN_CLEAR,
+    plan_api::HARDSCAPE_ZONE_SET,
     plan_api::UNIT_PATTERN_CHECK,
     hardscape_api::LANDSCAPE_AREA_ADD,
     hardscape_api::LANDSCAPE_AREA_SET,

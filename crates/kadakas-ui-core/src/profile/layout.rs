@@ -346,6 +346,8 @@ pub fn default_menus() -> Vec<Menu> {
         menu(
             "modify",
             &[
+                "cmd.create_from_shapes",
+                "-",
                 "cmd.duplicate_array",
                 "-",
                 "cmd.rotate_left_90",
@@ -541,6 +543,8 @@ mod tests {
             })
             .collect();
         cmds.sort();
+        // Create Objects from Shapes is in Modify (as in Vectorworks) and in Landscape.
+        cmds.dedup();
         // Import... and Update from DXF/DWG... are in the block File > Import.
         let mut want: Vec<Cmd> = Cmd::ALL
             .iter()
@@ -549,7 +553,7 @@ mod tests {
             .collect();
         want.sort();
         assert_eq!(cmds, want);
-        assert_eq!(menus.len(), 8);
+        assert_eq!(menus.len(), 9);
     }
 
     #[test]

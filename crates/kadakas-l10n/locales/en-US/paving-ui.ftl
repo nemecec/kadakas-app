@@ -174,3 +174,7 @@ paving-ui-offset = Offset
 paving-ui-corner = Corner
 paving-ui-start-the-field-at-the-course = Start the field at the course
 paving-ui-moves-the-origin-and-angle-of-the-pattern-so-that-its-first-row-is-whole = Moves the origin and the angle of the pattern so that its first row is whole.
+paving-ui-counting = Counting...
+paving-ui-checking = Checking...
+paving-ui-the-drawing-changed-the-pick-ended = The drawing changed, so the pick ended. Start it again.
+paving-ui-remove-the-split-lines-and-the-zone-settings = Remove the split lines? The settings of the zones (pattern, start, angle) go with them. You can undo this.

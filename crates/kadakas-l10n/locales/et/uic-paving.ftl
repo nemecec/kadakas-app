@@ -73,3 +73,4 @@ uic-paving-kind-wrong-size = Vale suurus
 uic-paving-kind-outside = Väljaspool ala
 uic-paving-kind-coverage = Katvus
 uic-paving-check-nothing = Kontrollimiseks pole ühtegi vuugimustriga kõvakatet.
+uic-paving-bad-reply = Programmi vastust ei saanud lugeda.

@@ -7,12 +7,11 @@
 //! - `windows`: the dialogs (Create Objects from Shapes, Split, Check).
 //! - `info`: the sections of Object Info (pattern, zones, courses, counts).
 //! - `paint`: what the dialogs draw on the plan (previews, marks).
+//! - `jobs`: the slow work (counts, zones, courses, the check) on a thread, by revision.
 
 use glam::DVec2;
 use kadakas_api::Session;
-use kadakas_core::command::Command;
 use kadakas_core::curve::Vertex;
-use kadakas_core::hardscape::HardscapePatch;
 use kadakas_core::model::{Document, ObjectId, Shape};
 use kadakas_core::resource::ResourceId;
 use kadakas_l10n::tr;
@@ -20,15 +19,17 @@ use kadakas_ui_core::paving::check::CheckPanel;
 use kadakas_ui_core::paving::counts::UnitCounts;
 use kadakas_ui_core::paving::course::{CourseEditor, CourseRow};
 use kadakas_ui_core::paving::curves::CurvesDialog;
-use kadakas_ui_core::paving::split::{self, SplitDialog, ZoneSettings, ZoneShape};
+use kadakas_ui_core::paving::split::{self, SplitDialog, ZoneEdit, ZoneSettings, ZoneShape};
 use kadakas_ui_core::paving::{Backend, pick};
+use serde_json::{Value, json};
 
 mod backend;
 mod info;
+mod jobs;
 mod paint;
 mod windows;
 
-pub use backend::SessionBackend;
+pub use backend::{Scratch, SessionBackend};
 pub use info::hardscape_section;
 pub use paint::paint;
 
@@ -52,11 +53,21 @@ pub enum PickKind {
 pub struct Pick {
     pub target: ObjectId,
     pub kind: PickKind,
+    /// The revision of the document when the pick began. A pick of a zone ends when the document
+    /// changes: the zone may be another one then.
+    pub rev: u64,
 }
 
 impl Pick {
     fn wants_edge(self) -> bool {
         matches!(self.kind, PickKind::AlignEdge | PickKind::ZoneAlignEdge(_))
+    }
+
+    fn of_zone(self) -> bool {
+        matches!(
+            self.kind,
+            PickKind::ZoneOrigin(_) | PickKind::ZoneAlignEdge(_)
+        )
     }
 }
 
@@ -67,8 +78,6 @@ pub enum Request {
     EditJoints(ResourceId),
 }
 
-type Cache<T> = Option<(u64, ObjectId, Result<T, String>)>;
-
 #[derive(Default)]
 pub struct PavingUi {
     pub(crate) curves: Option<CurvesDialog>,
@@ -77,15 +86,26 @@ pub struct PavingUi {
     pub(crate) drawing: bool,
     pub(crate) check: CheckPanel,
     pub(crate) check_open: bool,
+    pub(crate) check_job: jobs::Job<Value>,
+    /// The check starts in the next frame of its window.
+    pub(crate) check_start: bool,
     pub(crate) pick: Option<Pick>,
     /// The pointer on the plan, for the rubber band and the edge under it.
     pub(crate) hover: DVec2,
     pub(crate) course: Option<CourseEditor>,
-    pub(crate) zones: Cache<Vec<ZoneShape>>,
-    pub(crate) courses: Cache<Vec<CourseRow>>,
-    pub(crate) counts: Cache<UnitCounts>,
+    pub(crate) zone_edit: Option<ZoneEdit>,
+    pub(crate) zones: jobs::Job<Vec<ZoneShape>>,
+    pub(crate) courses: jobs::Job<Vec<CourseRow>>,
+    pub(crate) counts: jobs::Job<UnitCounts>,
+    /// A hardscape whose units are counted although it is big: the person asked.
+    pub(crate) count_asked: Option<ObjectId>,
+    /// The hardscape whose split lines the person is asked to remove.
+    pub(crate) confirm_clear: Option<ObjectId>,
     /// The zone of Object Info that is open.
     pub(crate) open_zone: Option<usize>,
+    /// Why the document cannot be changed now (read only, or the first snapshot of a shared
+    /// document is on its way). Set in each frame by the app.
+    lock: Option<String>,
     zoom: Option<(DVec2, DVec2)>,
     requests: Vec<Request>,
 }
@@ -94,6 +114,27 @@ impl PavingUi {
     /// Forgets everything (a new document).
     pub fn reset(&mut self) {
         *self = PavingUi::default();
+    }
+
+    /// Called in each frame by the app: the lock, and the picks that the document left behind.
+    pub fn frame(&mut self, revision: u64, lock: Option<String>, status: &mut String) {
+        self.lock = lock;
+        if self.pick.is_some_and(|p| p.of_zone() && p.rev != revision) {
+            self.pick = None;
+            *status = tr!("paving-ui-the-drawing-changed-the-pick-ended");
+        }
+    }
+
+    /// True (with a message in the status line) when the document cannot be changed now. Every
+    /// action that changes it asks first, as the app does for its own commands.
+    pub(crate) fn blocked(&self, status: &mut String) -> bool {
+        match &self.lock {
+            Some(m) => {
+                *status = m.clone();
+                true
+            }
+            None => false,
+        }
     }
 
     /// Asks the plan to show this box.
@@ -146,15 +187,12 @@ impl PavingUi {
         }
     }
 
-    /// Landscape > Check Unit Patterns: opens the panel and runs the check.
+    /// Landscape > Check Unit Patterns: opens the panel and runs the check on the selected
+    /// hardscapes (all of them when none is selected).
     pub fn run_check(&mut self, session: &mut Session) {
         self.check_open = true;
-        self.check.run(&mut SessionBackend(session));
-    }
-
-    /// True while a click on the plan belongs to this module.
-    pub fn captures(&self) -> bool {
-        self.pick.is_some() || (self.split.is_some() && self.drawing)
+        self.check.set_scope(&SessionBackend(session));
+        self.check_start = true;
     }
 
     /// The windows of the dialogs, in each frame.
@@ -162,6 +200,11 @@ impl PavingUi {
         windows::curves(self, ctx, session, status);
         windows::split(self, ctx, session, status);
         windows::check_window(self, ctx, session, status);
+    }
+
+    /// True while a click on the plan belongs to this module.
+    pub fn captures(&self) -> bool {
+        self.pick.is_some() || (self.split.is_some() && self.drawing)
     }
 
     /// The pointer is over the plan at `p`.
@@ -179,6 +222,10 @@ impl PavingUi {
         status: &mut String,
     ) -> bool {
         if let Some(pick) = self.pick {
+            if self.blocked(status) {
+                self.pick = None;
+                return true;
+            }
             self.finish_pick(session, pick, p, tol, status);
             return true;
         }
@@ -231,10 +278,24 @@ impl PavingUi {
     }
 
     /// Starts a pick. Another one, and the drawing of split lines, stop.
-    pub(crate) fn begin_pick(&mut self, target: ObjectId, kind: PickKind, status: &mut String) {
-        self.pick = Some(Pick { target, kind });
+    pub(crate) fn begin_pick(
+        &mut self,
+        session: &Session,
+        target: ObjectId,
+        kind: PickKind,
+        status: &mut String,
+    ) {
+        if self.blocked(status) {
+            return;
+        }
+        let pick = Pick {
+            target,
+            kind,
+            rev: session.editor.revision(),
+        };
+        self.pick = Some(pick);
         self.drawing = false;
-        *status = if (Pick { target, kind }).wants_edge() {
+        *status = if pick.wants_edge() {
             tr!("paving-ui-click-an-edge")
         } else {
             tr!("paving-ui-click-a-point")
@@ -249,11 +310,9 @@ impl PavingUi {
         tol: f64,
         status: &mut String,
     ) {
-        let result = apply_pick(session, pick, p, tol);
-        match result {
+        match apply_pick(session, pick, p, tol) {
             Ok(true) => {
                 self.pick = None;
-                self.zones = None;
                 *status = tr!("paving-ui-done");
             }
             // No edge near the click: stay in the pick and say so.
@@ -274,20 +333,16 @@ pub(crate) fn outline_of(doc: &Document, id: ObjectId) -> Option<Vec<Vertex>> {
     }
 }
 
-/// Does what a click picked. `Ok(false)`: nothing was near enough.
+/// Does what a click picked, through the API. `Ok(false)`: nothing was near enough.
 fn apply_pick(session: &mut Session, pick: Pick, p: DVec2, tol: f64) -> Result<bool, String> {
     let max_units = session.limits().pattern_units;
     let doc = session.editor.doc();
     match pick.kind {
         PickKind::Origin => {
-            let cmd = Command::SetHardscape {
-                ids: vec![pick.target],
-                patch: HardscapePatch {
-                    origin: Some(p),
-                    ..Default::default()
-                },
-            };
-            SessionBackend(session).execute(&cmd)?;
+            SessionBackend(session).call(
+                "hardscape.set",
+                json!({"id": pick.target, "origin": [p.x, p.y]}),
+            )?;
             Ok(true)
         }
         PickKind::AlignEdge => {
@@ -296,14 +351,10 @@ fn apply_pick(session: &mut Session, pick: Pick, p: DVec2, tol: f64) -> Result<b
             let Some(n) = pick::nearest_edge(&outline, p, tol) else {
                 return Ok(false);
             };
-            let cmd = Command::SetHardscape {
-                ids: vec![pick.target],
-                patch: HardscapePatch {
-                    align_to_edge: Some(n),
-                    ..Default::default()
-                },
-            };
-            SessionBackend(session).execute(&cmd)?;
+            SessionBackend(session).call(
+                "hardscape.set",
+                json!({"id": pick.target, "align_to_edge": n}),
+            )?;
             Ok(true)
         }
         PickKind::ZoneOrigin(zi) | PickKind::ZoneAlignEdge(zi) => {
@@ -312,9 +363,10 @@ fn apply_pick(session: &mut Session, pick: Pick, p: DVec2, tol: f64) -> Result<b
             let o = doc
                 .object(pick.target)
                 .ok_or_else(|| tr!("paving-ui-select-a-hardscape"))?;
-            let mut s = ZoneSettings::read(doc, o, zone);
+            let base = ZoneSettings::read(doc, o, zone);
+            let mut edit = ZoneEdit::new(pick.target, zi, base);
             match pick.kind {
-                PickKind::ZoneOrigin(_) => s.origin = Some(p),
+                PickKind::ZoneOrigin(_) => edit.settings.origin = Some(p),
                 _ => {
                     let ring = zone
                         .shapes
@@ -324,11 +376,10 @@ fn apply_pick(session: &mut Session, pick: Pick, p: DVec2, tol: f64) -> Result<b
                     let Some(n) = pick::nearest_ring_edge(ring, p, tol) else {
                         return Ok(false);
                     };
-                    s.align_edge(n);
+                    edit.settings.align_edge(n);
                 }
             }
-            let cmd = split::set_zone_command(doc, pick.target, zone, &s, max_units)?;
-            SessionBackend(session).execute(&cmd)?;
+            split::store_zone(&mut SessionBackend(session), &edit)?;
             Ok(true)
         }
     }

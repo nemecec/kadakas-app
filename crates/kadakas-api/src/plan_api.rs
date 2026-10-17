@@ -31,6 +31,10 @@ pub const HARDSCAPE_SPLIT: (&str, &str) = (
     "hardscape.split",
     "Split a hardscape (it needs a style with a joint pattern) into zones with lines (stall rows, a driveway, a fire lane): the zones share their edges exactly, so there are no slivers and no overlaps, and the areas of the zones add up to the area of the hardscape. Each zone can have a pattern, origin, angle or alignment of its own. The split lines and the zone settings are data of the hardscape (undoable, they move with it). A split line that follows a drawn line, arc or polyline (source) is read again each time: move the line and the zones follow. params: {id, lines? ([object IDs or [vertices]]: replaces the split lines; [] removes them; an ID follows the object unless follow is false), follow? (default true), zones? ([{index? (the index of the zone in the reply, counted from 0; the default name is zone N with N = index), seed? ([x, y]: a point inside the zone; the settings belong to the zone that holds it, also after a line moves), name?, pattern? (as the pattern of unit_pattern.layout), origin?, angle?, align_to_edge? (n: start at vertex n of the outline of the zone), align_to_split? (n: start at the first point of split line n and run along its first segment)}]: replaces the zone settings), tolerance? (mm, default 1: an end of a line this close to an edge joins it; the edge of the hardscape never moves)}. A zone without settings continues the pattern of the hardscape (the same lattice, cut at the zone edge). Returns {zones: [{index, name, area_m2, inside: [x, y], bbox: {lo, hi}, has_settings (a pattern, origin, angle or alignment of its own)}], split_lines, area_m2 (the hardscape), zones_area_m2 (the sum of the zones: the field), courses_area_m2 (what courses take: area less zones), zone_units, zone_edge_cuts ({whole_units_lost, extra_pieces}: the units that only the zone edges cut, when the zones continue the pattern), zone_edge_note, notes: [text]}. Every zone gets a setting with its name and a seed point, so a name stays with its place when a line moves. zone_units? (cut (default): a unit that a zone edge crosses is cut, and the two pieces touch with no joint, which is not buildable; centroid: the unit goes whole to the zone that holds its center, only for zones without a pattern of their own). A split line that stops short of the edge, or cuts nothing, is a note with its position and the gap. Counts per zone and in total are in report.unit_pattern (groups), the check in unit_pattern.check, the DXF has layers per zone.",
 );
+pub const HARDSCAPE_ZONE_SET: (&str, &str) = (
+    "hardscape.zone_set",
+    "Change the settings of one zone of a hardscape without touching the other zones (hardscape.split replaces them all). params: {id, zone (the index of the zone in the reply of hardscape.split or hardscape.plan, from 0), name?, pattern? (as the pattern of unit_pattern.layout), origin?, angle?, align_to_edge? (n: start at vertex n of the outline of the zone), align_to_split? (n: start at the first point of split line n), clear? ([pattern | origin | angle | align_to_edge | align_to_split]: remove these settings, so the zone takes the field's again)}. Settings that are not named stay as they are. Returns {zone, name, has_settings, zones: [{index, name, area_m2, has_settings}]}. One undo step. The Object Info panel of the app calls this method.",
+);
 pub const HARDSCAPE_COURSE: (&str, &str) = (
     "hardscape.course",
     "Add or replace courses along a path: a row of units along a polyline or a curve, on one side of the line or centered (a soldier course along a kerb, a border round an island). The course takes its area from the pattern next to it: the field is cut by the course with a joint of the gap kept, so they never overlap. The units are counted, reported and exported like the others (the unit type has the name of the stone, so a soldier course and the field of the same stone are added up). Corner rules: miter (the units of both legs are cut at the mitre line), butt (the first leg runs on to the end of the corner, the second butts against it), corner_unit (one unit of its own fills the corner). On a curve the units stay straight and are placed along the curve; the joints taper, and the reply and the report give the narrowest and the widest joint. params: {id, courses: [{name, path? ([vertices], curves allowed) | source? (a line, arc or polyline: followed, read again each time) | along? (outline | \"hole:N\": the edge of the hardscape or of its Nth hole, inside the kerb border), side? (left | right | center | inside | outside; default for outline: inside, for a hole: outside), offset? (mm to the left of the path), closed?, orientation? (soldier: the long side of the stone across the path (default) | stretcher: along it), unit_length? (mm, along the path) and unit_width? (mm, across) (default: from the stone of the style by orientation), gap? (default: the joint of the style), corner? (default miter), unit? (name of the unit type, default the size of the stone of the style), align_field? (true: the pattern of the hardscape starts at the inner edge of the course, so the first row of the field is whole and the joint to the course is the gap; sets the origin and the angle of the hardscape; needs a bond, not a module)}] (or the fields of one course directly in params)}. A course with the same name is replaced. Returns {courses: [{name, units, corners, length_m, joints: {count, narrowest_mm, widest_mm}}], notes}. A corner that turns by more than 150 degrees has no rule: on the inside both legs are cut at the bisector, on the outside both end flush and the wedge stays unpaved; a note says so. Corners under 30 degrees are always mitres. When the path is along: outline or hole:N the path is made again from the edge each time, so a change of the outline moves the course; a course that overlaps an earlier course is cut where they meet (a note says so).",
@@ -69,6 +73,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
             | "hardscape.split"
             | "hardscape.course"
             | "hardscape.course_remove"
+            | "hardscape.zone_set"
             | "hardscape.plan"
             | "hardscape.plan_clear"
             | "unit_pattern.check"
@@ -84,6 +89,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
         "hardscape.split" => split(s, m),
         "hardscape.course" => course(s, m),
         "hardscape.course_remove" => course_remove(s, m),
+        "hardscape.zone_set" => zone_set(s, m),
         "hardscape.plan" => plan_get(s, m),
         "hardscape.plan_clear" => plan_clear(s, m),
         "unit_pattern.check" => check_call(s, m),
@@ -861,6 +867,123 @@ fn split(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         "zone_units": p.zone_units,
         "zone_edge_cuts": cuts.map(|c| json!({"whole_units_lost": c.whole_lost, "extra_pieces": c.extra_pieces})),
         "zone_edge_note": "units of two zones meet at the zone edge with no joint: that is not buildable. Put the zone edge in a joint of the pattern, or use zone_units centroid to give each unit whole to the zone of its center",
+        "notes": after.notes,
+    }))
+}
+
+// ------------------------------------------------------------------ hardscape.zone_set
+
+fn zone_set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    unknown_fields(
+        m,
+        &[
+            "id",
+            "zone",
+            "name",
+            "pattern",
+            "origin",
+            "angle",
+            "align_to_edge",
+            "align_to_split",
+            "clear",
+        ],
+    )?;
+    let doc = s.editor.doc();
+    let o = hardscape(doc, m)?;
+    let index = whole_number(m, "zone")?.ok_or_else(|| bad("give 'zone'"))?;
+    let max_units = s.limits().pattern_units;
+    let mut p = current_plan(o);
+    let before = plan_state(doc, o, max_units)?;
+    let info = before.zones.get(index).ok_or_else(|| {
+        bad(format!(
+            "there is no zone {index}; the hardscape has {} zones (numbered from 0)",
+            before.zones.len()
+        ))
+    })?;
+    let i = match info.spec.filter(|i| *i < p.zones.len()) {
+        Some(i) => i,
+        None => {
+            p.zones.push(ZoneSpec {
+                seed: info.inside,
+                ..Default::default()
+            });
+            p.zones.len() - 1
+        }
+    };
+    let clear: Vec<String> = match m.get("clear").filter(|v| !v.is_null()) {
+        None => Vec::new(),
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|_| bad("'clear' must be a list of setting names"))?,
+    };
+    for c in &clear {
+        if ![
+            "pattern",
+            "origin",
+            "angle",
+            "align_to_edge",
+            "align_to_split",
+        ]
+        .contains(&c.as_str())
+        {
+            return Err(bad(format!("cannot clear '{c}'")));
+        }
+        if m.contains_key(c.as_str()) {
+            return Err(bad(format!("'{c}' is set and cleared in one call")));
+        }
+    }
+    let new_pattern = match m.get("pattern").filter(|v| !v.is_null()) {
+        Some(v) => {
+            let mut pm = Map::new();
+            pm.insert("pattern".into(), v.clone());
+            Some(crate::pattern_api::pattern_from_params(&pm, None)?)
+        }
+        None => None,
+    };
+    let new_origin = match m.get("origin").filter(|v| !v.is_null()) {
+        Some(v) => Some(point(v, "origin")?),
+        None => None,
+    };
+    let spec = &mut p.zones[i];
+    if let Some(n) = m.get("name").and_then(Value::as_str) {
+        let n = n.trim();
+        spec.name = (!n.is_empty()).then(|| n.to_string());
+    }
+    if let Some(pt) = new_pattern {
+        spec.pattern = Some(pt);
+    }
+    if let Some(o) = new_origin {
+        spec.origin = Some(o);
+    }
+    if let Some(a) = opt_number(m, "angle")? {
+        spec.angle = Some(a);
+    }
+    if let Some(n) = whole_number(m, "align_to_edge")? {
+        spec.align_to_edge = Some(n);
+        spec.align_to_split = None;
+    }
+    if let Some(n) = whole_number(m, "align_to_split")? {
+        spec.align_to_split = Some(n);
+        spec.align_to_edge = None;
+    }
+    for c in &clear {
+        match c.as_str() {
+            "pattern" => spec.pattern = None,
+            "origin" => spec.origin = None,
+            "angle" => spec.angle = None,
+            "align_to_edge" => spec.align_to_edge = None,
+            _ => spec.align_to_split = None,
+        }
+    }
+    p.validate().map_err(bad)?;
+    let after = plan_state(doc, &with_plan(o, &p), max_units)?;
+    let o = o.clone();
+    store(s, &o, &p)?;
+    let zone = after.zones.get(index);
+    Ok(json!({
+        "zone": index,
+        "name": zone.map(|z| z.name.clone()),
+        "has_settings": zone.is_some_and(|z| z.has_setting),
+        "zones": zones_json(&after, None),
         "notes": after.notes,
     }))
 }

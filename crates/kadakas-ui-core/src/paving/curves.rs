@@ -121,7 +121,7 @@ fn count(v: &Value, key: &str) -> usize {
 }
 
 fn vertices(v: &Value) -> Result<Vec<Vertex>, String> {
-    serde_json::from_value(v.clone()).map_err(|e| e.to_string())
+    serde_json::from_value(v.clone()).map_err(|_| tr!("uic-paving-bad-reply"))
 }
 
 impl Found {
@@ -130,7 +130,7 @@ impl Found {
         let list = reply
             .get("regions")
             .and_then(Value::as_array)
-            .ok_or("the reply has no regions")?;
+            .ok_or_else(|| tr!("uic-paving-bad-reply"))?;
         let mut regions = Vec::with_capacity(list.len());
         for (n, r) in list.iter().enumerate() {
             let doubt = r.get("doubt").and_then(Value::as_str).map(str::to_string);
@@ -143,13 +143,16 @@ impl Found {
                 Some(h) => h.iter().map(vertices).collect::<Result<_, _>>()?,
                 None => Vec::new(),
             };
-            let bbox = r.get("bbox").ok_or("a region has no box")?;
+            let bbox = r.get("bbox").ok_or_else(|| tr!("uic-paving-bad-reply"))?;
             regions.push(Region {
                 index: r
                     .get("index")
                     .and_then(Value::as_u64)
                     .map_or(n, |i| i as usize),
-                outline: vertices(r.get("outline").ok_or("a region has no outline")?)?,
+                outline: vertices(
+                    r.get("outline")
+                        .ok_or_else(|| tr!("uic-paving-bad-reply"))?,
+                )?,
                 holes,
                 area_m2: r.get("area_m2").and_then(Value::as_f64).unwrap_or(0.0),
                 role,

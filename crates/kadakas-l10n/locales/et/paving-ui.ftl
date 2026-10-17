@@ -170,3 +170,7 @@ paving-ui-offset = Nihe
 paving-ui-corner = Nurk
 paving-ui-start-the-field-at-the-course = Alusta väli reast
 paving-ui-moves-the-origin-and-angle-of-the-pattern-so-that-its-first-row-is-whole = Nihutab mustri algust ja nurka nii, et selle esimene rida on terve.
+paving-ui-counting = Loen...
+paving-ui-checking = Kontrollin...
+paving-ui-the-drawing-changed-the-pick-ended = Joonis muutus, seega valik lõppes. Alusta uuesti.
+paving-ui-remove-the-split-lines-and-the-zone-settings = Kas eemaldada jagamisjooned? Tsoonide sätted (muster, algus, nurk) lähevad nendega. Seda saab tagasi võtta.

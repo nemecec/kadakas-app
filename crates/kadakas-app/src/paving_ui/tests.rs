@@ -9,6 +9,25 @@ use kadakas_ui_core::paving::curves::{CurvesDialog, Role};
 use kadakas_ui_core::paving::split::{DraftLine, SplitDialog};
 use serde_json::{Value, json};
 
+fn pick(s: &Session, target: ObjectId, kind: PickKind) -> Pick {
+    Pick {
+        target,
+        kind,
+        rev: s.editor.revision(),
+    }
+}
+
+fn do_pick(
+    s: &mut Session,
+    id: ObjectId,
+    kind: PickKind,
+    at: DVec2,
+    tol: f64,
+) -> Result<bool, String> {
+    let pick = pick(s, id, kind);
+    apply_pick(s, pick, at, tol)
+}
+
 fn session() -> Session {
     let mut s = Session::with_sequential_ids();
     s.handle(
@@ -156,18 +175,7 @@ fn zone_settings_change_the_pattern_and_the_picks_work() {
     d.commit(&mut SessionBackend(&mut s)).unwrap();
     // Pick an origin for the hardscape and an edge to align to.
     let tol = 20.0;
-    assert!(
-        apply_pick(
-            &mut s,
-            Pick {
-                target: id,
-                kind: PickKind::Origin
-            },
-            DVec2::new(100.0, 100.0),
-            tol
-        )
-        .unwrap()
-    );
+    assert!(do_pick(&mut s, id, PickKind::Origin, DVec2::new(100.0, 100.0), tol).unwrap());
     let o = s.editor.doc().object(id).unwrap();
     assert_eq!(
         kadakas_core::hardscape::data(o).unwrap().origin,
@@ -175,24 +183,20 @@ fn zone_settings_change_the_pattern_and_the_picks_work() {
     );
     // Far from every edge: nothing is picked.
     assert!(
-        !apply_pick(
+        !do_pick(
             &mut s,
-            Pick {
-                target: id,
-                kind: PickKind::AlignEdge
-            },
+            id,
+            PickKind::AlignEdge,
             DVec2::new(2000.0, 1500.0),
             tol
         )
         .unwrap()
     );
     assert!(
-        apply_pick(
+        do_pick(
             &mut s,
-            Pick {
-                target: id,
-                kind: PickKind::AlignEdge
-            },
+            id,
+            PickKind::AlignEdge,
             DVec2::new(2000.0, 5.0),
             tol
         )
@@ -202,24 +206,20 @@ fn zone_settings_change_the_pattern_and_the_picks_work() {
     assert_eq!(kadakas_core::hardscape::data(o).unwrap().angle, Some(0.0));
     // A zone gets its own origin and an edge of its own.
     assert!(
-        apply_pick(
+        do_pick(
             &mut s,
-            Pick {
-                target: id,
-                kind: PickKind::ZoneOrigin(1)
-            },
+            id,
+            PickKind::ZoneOrigin(1),
             DVec2::new(2500.0, 100.0),
             tol
         )
         .unwrap()
     );
     assert!(
-        apply_pick(
+        do_pick(
             &mut s,
-            Pick {
-                target: id,
-                kind: PickKind::ZoneAlignEdge(1)
-            },
+            id,
+            PickKind::ZoneAlignEdge(1),
             DVec2::new(3000.0, 2.0),
             tol
         )
@@ -334,8 +334,10 @@ fn the_windows_and_object_info_draw_in_every_state_without_changing_the_document
             crate::panels::object_info(ui, s, &mut e, p, status);
         });
     };
+    let before = s.editor.revision();
     frame(&mut p, &mut s, &mut status);
     let rev = s.editor.revision();
+    assert_eq!(rev, before, "the dialogs and the preview changed nothing");
     assert_eq!(p.split.as_ref().unwrap().zones.as_ref().unwrap().len(), 2);
     p.split
         .as_mut()
@@ -345,7 +347,7 @@ fn the_windows_and_object_info_draw_in_every_state_without_changing_the_document
     p.split = None;
     p.drawing = false;
     p.course = Some(CourseEditor::new_course(s.editor.doc(), id).unwrap());
-    p.begin_pick(id, PickKind::ZoneAlignEdge(0), &mut status);
+    p.begin_pick(&s, id, PickKind::ZoneAlignEdge(0), &mut status);
     p.open_zone = Some(0);
     frame(&mut p, &mut s, &mut status);
     frame(&mut p, &mut s, &mut status);
@@ -361,8 +363,6 @@ fn the_windows_and_object_info_draw_in_every_state_without_changing_the_document
     // A zoom request is handed out once.
     p.zoom_to(DVec2::ZERO, DVec2::ONE);
     assert!(p.take_zoom().is_some() && p.take_zoom().is_none());
-    // Only the split changed the document.
-    assert!(s.editor.revision() >= rev);
     // The painting runs with every preview there is.
     let view = crate::view::View::default();
     let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -373,8 +373,8 @@ fn the_windows_and_object_info_draw_in_every_state_without_changing_the_document
             &view,
             s.editor.doc(),
             &s.selection,
+            s.editor.revision(),
             &p,
-            true,
         );
     });
     p.reset();
@@ -393,4 +393,269 @@ fn a_hardscape_without_a_pattern_or_a_selection_gives_a_message() {
     assert!(p.curves.is_none() && !status.is_empty());
     p.run_check(&mut s);
     assert!(p.check.result().is_none());
+}
+
+/// The plan data of a hardscape, for the comparison of two ways to the same settings.
+fn plan_of(s: &Session, id: ObjectId) -> kadakas_core::layout::plan::Plan {
+    kadakas_core::layout::plan::data(s.editor.doc().object(id).unwrap()).unwrap()
+}
+
+fn split_lot(s: &mut Session) -> ObjectId {
+    let id = lot(s);
+    s.handle(
+        "hardscape.split",
+        json!({"id": id, "lines": [[[2000, -500], [2000, 3500]]]}),
+    )
+    .unwrap();
+    id
+}
+
+#[test]
+fn a_zone_setting_and_a_pick_are_one_undo_step_each() {
+    let mut s = session();
+    let id = split_lot(&mut s);
+    let depth = s.editor.undo_depth();
+    assert!(
+        do_pick(
+            &mut s,
+            id,
+            PickKind::ZoneOrigin(1),
+            DVec2::new(2500.0, 100.0),
+            20.0
+        )
+        .unwrap()
+    );
+    assert_eq!(s.editor.undo_depth(), depth + 1);
+    assert!(do_pick(&mut s, id, PickKind::Origin, DVec2::new(10.0, 10.0), 20.0).unwrap());
+    assert_eq!(s.editor.undo_depth(), depth + 2);
+    assert!(
+        do_pick(
+            &mut s,
+            id,
+            PickKind::ZoneAlignEdge(1),
+            DVec2::new(3000.0, 2.0),
+            20.0
+        )
+        .unwrap()
+    );
+    assert_eq!(s.editor.undo_depth(), depth + 3);
+    assert!(s.editor.undo());
+    assert!(s.editor.undo());
+    assert!(s.editor.undo());
+    assert!(
+        plan_of(&s, id)
+            .zones
+            .iter()
+            .all(|z| z.origin.is_none() && z.align_to_edge.is_none())
+    );
+}
+
+#[test]
+fn the_edit_of_the_form_stores_the_same_plan_as_the_api_call_of_an_agent() {
+    // The person's way: the edit of the form.
+    let mut a = session();
+    let id_a = split_lot(&mut a);
+    let zones = split::zone_shapes(a.editor.doc(), id_a, 100_000).unwrap();
+    let base = ZoneSettings::read(
+        a.editor.doc(),
+        a.editor.doc().object(id_a).unwrap(),
+        &zones[1],
+    );
+    let mut edit = ZoneEdit::new(id_a, 1, base);
+    edit.settings.name = "Drive".into();
+    edit.settings.pattern = split::PatternChoice::Bond(kadakas_core::layout::Bond::Herringbone);
+    edit.settings.unit_length = 300.0;
+    edit.settings.unit_width = 150.0;
+    edit.settings.gap = 4.0;
+    edit.settings.angle = Some(45.0);
+    edit.settings.origin = Some(DVec2::new(2100.0, 50.0));
+    split::store_zone(&mut SessionBackend(&mut a), &edit).unwrap();
+    // The agent's way: hardscape.split with the settings of the zone.
+    let mut b = session();
+    let id_b = lot(&mut b);
+    b.handle(
+        "hardscape.split",
+        json!({"id": id_b, "lines": [[[2000, -500], [2000, 3500]]], "zones": [{
+            "index": 1, "name": "Drive",
+            "pattern": {"bond": "herringbone", "unit_length": 300, "unit_width": 150, "gap": 4},
+            "angle": 45, "origin": [2100, 50]}]}),
+    )
+    .unwrap();
+    let (pa, pb) = (plan_of(&a, id_a), plan_of(&b, id_b));
+    let strip = |p: &kadakas_core::layout::plan::Plan| {
+        let mut z = p.zones.clone();
+        z.sort_by(|x, y| x.name.cmp(&y.name));
+        z
+    };
+    assert_eq!(strip(&pa), strip(&pb));
+    assert_eq!(pa.splits, pb.splits);
+    // And the report counts the same units.
+    let ra = a
+        .handle("report.unit_pattern", json!({"ids": [id_a]}))
+        .unwrap();
+    let rb = b
+        .handle("report.unit_pattern", json!({"ids": [id_b]}))
+        .unwrap();
+    assert_eq!(ra["totals"]["whole_units"], rb["totals"]["whole_units"]);
+    assert_eq!(ra["totals"]["cut_units"], rb["totals"]["cut_units"]);
+}
+
+#[test]
+fn zone_set_leaves_the_other_zones_and_refuses_what_cannot_be_laid() {
+    let mut s = session();
+    let id = split_lot(&mut s);
+    s.handle(
+        "hardscape.zone_set",
+        json!({"id": id, "zone": 0, "angle": 30}),
+    )
+    .unwrap();
+    s.handle(
+        "hardscape.zone_set",
+        json!({"id": id, "zone": 1, "name": "Right", "origin": [2500, 0]}),
+    )
+    .unwrap();
+    let p = plan_of(&s, id);
+    assert_eq!(p.zones.iter().filter(|z| z.angle == Some(30.0)).count(), 1);
+    assert!(
+        p.zones
+            .iter()
+            .any(|z| z.name.as_deref() == Some("Right") && z.origin.is_some())
+    );
+    s.handle(
+        "hardscape.zone_set",
+        json!({"id": id, "zone": 0, "clear": ["angle"]}),
+    )
+    .unwrap();
+    assert!(plan_of(&s, id).zones.iter().all(|z| z.angle.is_none()));
+    // No such zone, a split line that is not there, a setting set and cleared together.
+    assert!(
+        s.handle(
+            "hardscape.zone_set",
+            json!({"id": id, "zone": 9, "angle": 1})
+        )
+        .is_err()
+    );
+    assert!(
+        s.handle(
+            "hardscape.zone_set",
+            json!({"id": id, "zone": 0, "align_to_split": 5})
+        )
+        .is_err()
+    );
+    assert!(
+        s.handle(
+            "hardscape.zone_set",
+            json!({"id": id, "zone": 0, "angle": 1, "clear": ["angle"]})
+        )
+        .is_err()
+    );
+    assert!(
+        s.handle(
+            "hardscape.zone_set",
+            json!({"id": id, "zone": 0, "clear": ["nonsense"]})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn an_edit_of_an_agent_between_the_preview_and_the_commit_is_not_overwritten() {
+    let mut s = session();
+    let ids = [
+        line(&mut s, [0.0, 0.0], [5000.0, 0.0]),
+        line(&mut s, [5000.0, 0.0], [5000.0, 4000.0]),
+        line(&mut s, [5000.0, 4000.0], [0.0, 4000.0]),
+        line(&mut s, [0.0, 4000.0], [0.0, 0.0]),
+    ];
+    s.selection = ids.to_vec();
+    let mut d = CurvesDialog::open(&SessionBackend(&mut s)).unwrap();
+    // An agent deletes one of the lines after the preview.
+    s.handle(
+        "execute",
+        json!({"command": {"op": "delete_objects", "ids": [ids[3]]}}),
+    )
+    .unwrap();
+    assert!(d.stale(&SessionBackend(&mut s)));
+    d.refresh(&SessionBackend(&mut s));
+    // The square is open now: nothing can be created, and the dialog says so.
+    assert!(d.found.as_ref().unwrap().regions.is_empty());
+    assert!(d.commit(&mut SessionBackend(&mut s)).is_err());
+    // Split: the draft is looked at again after the agent's edit.
+    let id = lot(&mut s);
+    let mut sd = SplitDialog::open(&SessionBackend(&mut s), id).unwrap();
+    sd.draft.click(DVec2::new(2000.0, -500.0));
+    sd.draft.click(DVec2::new(2000.0, 3500.0));
+    sd.draft.finish_line();
+    sd.refresh(&SessionBackend(&mut s));
+    assert_eq!(sd.zones.as_ref().unwrap().len(), 2);
+    s.handle("hardscape.set", json!({"id": id, "angle": 20}))
+        .unwrap();
+    sd.refresh(&SessionBackend(&mut s));
+    assert_eq!(sd.zones.as_ref().unwrap().len(), 2);
+    sd.commit(&mut SessionBackend(&mut s)).unwrap();
+    // The agent's angle is still there.
+    let d = kadakas_core::hardscape::data(s.editor.doc().object(id).unwrap()).unwrap();
+    assert_eq!(d.angle, Some(20.0));
+}
+
+#[test]
+fn a_locked_document_stops_every_change_and_a_pick_of_a_zone_ends_when_the_drawing_changes() {
+    let mut s = session();
+    let id = split_lot(&mut s);
+    let mut p = PavingUi::default();
+    let mut status = String::new();
+    p.frame(s.editor.revision(), Some("locked".into()), &mut status);
+    assert!(p.blocked(&mut status) && status == "locked");
+    p.begin_pick(&s, id, PickKind::Origin, &mut status);
+    assert!(!p.captures(), "no pick while locked");
+    p.frame(s.editor.revision(), None, &mut status);
+    p.begin_pick(&s, id, PickKind::ZoneOrigin(0), &mut status);
+    assert!(p.captures());
+    // An agent changes the document: the zone number may be another zone now.
+    s.handle("hardscape.set", json!({"id": id, "angle": 5}))
+        .unwrap();
+    p.frame(s.editor.revision(), None, &mut status);
+    assert!(!p.captures());
+    // A pick of the whole hardscape stays.
+    p.begin_pick(&s, id, PickKind::Origin, &mut status);
+    s.handle("hardscape.set", json!({"id": id, "angle": 6}))
+        .unwrap();
+    p.frame(s.editor.revision(), None, &mut status);
+    assert!(p.captures());
+    // A press while locked ends the pick and changes nothing.
+    let depth = s.editor.undo_depth();
+    p.frame(s.editor.revision(), Some("locked".into()), &mut status);
+    assert!(p.press(&mut s, DVec2::new(5.0, 5.0), 10.0, &mut status));
+    assert!(!p.captures());
+    assert_eq!(s.editor.undo_depth(), depth);
+}
+
+#[test]
+fn the_check_runs_in_the_background_on_a_copy_and_keeps_its_scope() {
+    let mut s = session();
+    let id = lot(&mut s);
+    let other = lot(&mut s);
+    s.selection = vec![id];
+    let mut p = PavingUi::default();
+    let mut status = String::new();
+    p.run_check(&mut s);
+    let ctx = egui::Context::default();
+    let frame = |p: &mut PavingUi, s: &mut Session, status: &mut String| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            p.windows(ui.ctx(), s, status)
+        });
+    };
+    for _ in 0..400 {
+        frame(&mut p, &mut s, &mut status);
+        if !p.check.running {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let r = p.check.result().expect("the check came back");
+    assert_eq!(r.objects.len(), 1);
+    // A click on a finding selects through the API and does not change what is checked.
+    s.selection = vec![other];
+    assert_eq!(p.check.scope, vec![id]);
+    assert!(!p.check.stale(&SessionBackend(&mut s)));
 }

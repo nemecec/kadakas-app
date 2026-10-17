@@ -1,6 +1,7 @@
 //! The unit pattern in Object Info: the pattern with its start, the counts of whole and cut units,
 //! the zones with their settings and the courses along the edges. It follows the hardscape
-//! section of `area_ui`.
+//! section of `area_ui`. The slow parts (counts, zones, courses) are computed on a thread by
+//! revision, so a big lot or a fast agent does not stop the window.
 
 use egui::{DragValue, RichText, TextEdit, Ui};
 use kadakas_api::Session;
@@ -13,9 +14,10 @@ use kadakas_ui_core::paving::counts::{self, UnitCounts};
 use kadakas_ui_core::paving::course::{
     self, Along, CourseEditor, CourseForm, Orientation, Placing,
 };
-use kadakas_ui_core::paving::split::{self, PatternChoice, ZoneSettings, ZoneShape};
+use kadakas_ui_core::paving::split::{self, PatternChoice, ZoneEdit, ZoneSettings, ZoneShape};
 
-use super::{PavingUi, PickKind, Request, SessionBackend};
+use super::jobs::Poll;
+use super::{PavingUi, PickKind, Request, Scratch, SessionBackend};
 use crate::units_ui::DragValueExt as _;
 
 /// The paving section of a hardscape in Object Info. Nothing is drawn for a hardscape without a
@@ -87,7 +89,7 @@ pub fn hardscape_section(
             ))
             .clicked()
         {
-            p.begin_pick(id, PickKind::Origin, status);
+            p.begin_pick(session, id, PickKind::Origin, status);
         }
         if ui
             .selectable_label(
@@ -99,66 +101,61 @@ pub fn hardscape_section(
             ))
             .clicked()
         {
-            p.begin_pick(id, PickKind::AlignEdge, status);
+            p.begin_pick(session, id, PickKind::AlignEdge, status);
         }
     });
-    counts_block(ui, session, id, p, status);
+    counts_block(ui, session, id, p);
     zones_block(ui, session, id, p, status);
     courses_block(ui, session, id, p, status);
 }
 
+fn counting(ui: &mut Ui) {
+    ui.label(RichText::new(tr!("paving-ui-counting")).small());
+}
+
 // ---------------------------------------------------------------- counts
 
-fn counts_block(
-    ui: &mut Ui,
-    session: &mut Session,
-    id: ObjectId,
-    p: &mut PavingUi,
-    _status: &mut String,
-) {
+fn counts_block(ui: &mut Ui, session: &mut Session, id: ObjectId, p: &mut PavingUi) {
     let rev = session.editor.revision();
-    let current = p
-        .counts
-        .as_ref()
-        .is_some_and(|(r, i, _)| *r == rev && *i == id);
-    let auto = counts::auto(session.editor.doc(), id);
-    if !current && auto {
-        let r = counts::count(&mut SessionBackend(session), id);
-        p.counts = Some((rev, id, r));
-    }
-    let shown = p.counts.as_ref().filter(|(_, i, _)| *i == id);
-    let old = shown.is_some_and(|(r, _, _)| *r != rev);
-    if !auto
-        && (!current)
-        && ui
-            .button(if old {
-                tr!("paving-ui-count-the-units-again")
-            } else {
-                tr!("paving-ui-count-the-units")
-            })
+    let auto = counts::auto(session.editor.doc(), id) || p.count_asked == Some(id);
+    if !auto {
+        if ui
+            .button(tr!("paving-ui-count-the-units"))
             .on_hover_text(tr!(
                 "paving-ui-a-big-area-takes-time-to-count-so-it-is-counted-when-you-ask"
             ))
             .clicked()
-    {
-        let r = counts::count(&mut SessionBackend(session), id);
-        p.counts = Some((rev, id, r));
+        {
+            p.count_asked = Some(id);
+        }
         return;
     }
-    let Some((_, _, result)) = p.counts.as_ref().filter(|(_, i, _)| *i == id) else {
-        return;
+    let ctx = ui.ctx().clone();
+    let doc = session.editor.doc();
+    let limits = session.limits().clone();
+    let result = match p.counts.poll(&ctx, rev, id, || {
+        let doc = doc.clone();
+        Box::new(move || counts::count(&mut Scratch::new(doc, limits, Vec::new()), id))
+    }) {
+        Poll::Fresh(r) => Some(r),
+        Poll::Old(r) => {
+            ui.label(RichText::new(tr!("paving-ui-the-counts-are-of-an-earlier-state")).small());
+            Some(r)
+        }
+        Poll::Busy => {
+            counting(ui);
+            None
+        }
     };
-    if old {
-        ui.label(RichText::new(tr!("paving-ui-the-counts-are-of-an-earlier-state")).small());
-    }
     match result {
-        Err(e) => {
+        Some(Err(e)) => {
             ui.colored_label(
                 ui.visuals().error_fg_color,
                 tr!("paving-ui-error", e = e.as_str()),
             );
         }
-        Ok(c) => counts_grid(ui, id, c),
+        Some(Ok(c)) => counts_grid(ui, id, c),
+        None => {}
     }
 }
 
@@ -223,23 +220,6 @@ fn counts_grid(ui: &mut Ui, id: ObjectId, c: &UnitCounts) {
 
 // ---------------------------------------------------------------- zones
 
-fn zones_of<'a>(
-    p: &'a mut PavingUi,
-    session: &Session,
-    id: ObjectId,
-) -> &'a Result<Vec<ZoneShape>, String> {
-    let rev = session.editor.revision();
-    let fresh = p
-        .zones
-        .as_ref()
-        .is_some_and(|(r, i, _)| *r == rev && *i == id);
-    if !fresh {
-        let z = split::zone_shapes(session.editor.doc(), id, session.limits().pattern_units);
-        p.zones = Some((rev, id, z));
-    }
-    &p.zones.as_ref().expect("just set").2
-}
-
 fn zones_block(
     ui: &mut Ui,
     session: &mut Session,
@@ -247,20 +227,30 @@ fn zones_block(
     p: &mut PavingUi,
     status: &mut String,
 ) {
-    let splits = session
-        .editor
-        .doc()
+    let rev = session.editor.revision();
+    let ctx = ui.ctx().clone();
+    let doc = session.editor.doc();
+    let max = session.limits().pattern_units;
+    let splits = doc
         .object(id)
         .and_then(plan::data)
         .map_or(0, |pl| pl.splits.len());
-    let zones = match zones_of(p, session, id) {
-        Ok(z) => z.clone(),
-        Err(e) => {
+    let (zones, fresh) = match p.zones.poll(&ctx, rev, id, || {
+        let doc = doc.clone();
+        Box::new(move || split::zone_shapes(&doc, id, max))
+    }) {
+        Poll::Fresh(Ok(z)) => (z.clone(), true),
+        Poll::Old(Ok(z)) => (z.clone(), false),
+        Poll::Fresh(Err(e)) | Poll::Old(Err(e)) => {
             ui.colored_label(
                 ui.visuals().error_fg_color,
                 tr!("paving-ui-error", e = e.as_str()),
             );
-            Vec::new()
+            (Vec::new(), false)
+        }
+        Poll::Busy => {
+            counting(ui);
+            (Vec::new(), false)
         }
     };
     ui.horizontal_wrapped(|ui| {
@@ -282,12 +272,34 @@ fn zones_block(
             )
             .clicked()
         {
-            match SessionBackend(session).call_plan_clear(id) {
-                Ok(()) => p.zones = None,
-                Err(e) => *status = tr!("paving-ui-error", e = e),
-            }
+            // The zone settings go with the lines: the person is asked first.
+            p.confirm_clear = Some(id);
         }
     });
+    if p.confirm_clear == Some(id) {
+        ui.group(|ui| {
+            ui.label(tr!(
+                "paving-ui-remove-the-split-lines-and-the-zone-settings"
+            ));
+            ui.horizontal(|ui| {
+                if ui.button(tr!("paving-ui-remove")).clicked() {
+                    p.confirm_clear = None;
+                    if !p.blocked(status) {
+                        let r = SessionBackend(session).call(
+                            "hardscape.plan_clear",
+                            serde_json::json!({"id": id, "what": "splits"}),
+                        );
+                        if let Err(e) = r {
+                            *status = tr!("paving-ui-error", e = e);
+                        }
+                    }
+                }
+                if ui.button(tr!("paving-ui-cancel")).clicked() {
+                    p.confirm_clear = None;
+                }
+            });
+        });
+    }
     for z in &zones {
         let open = p.open_zone == Some(z.index);
         let header = egui::CollapsingHeader::new(tr!(
@@ -297,7 +309,12 @@ fn zones_block(
         ))
         .id_salt(("paving-zone", id, z.index))
         .open(Some(open))
-        .show(ui, |ui| zone_editor(ui, session, id, p, z, splits, status));
+        .show(ui, |ui| {
+            // The zones of an earlier state are not edited: their numbers may be other zones now.
+            ui.add_enabled_ui(fresh, |ui| {
+                zone_editor(ui, session, id, p, z, splits, status);
+            });
+        });
         if header.header_response.clicked() {
             p.open_zone = if open { None } else { Some(z.index) };
         }
@@ -315,11 +332,16 @@ fn zone_editor(
 ) {
     let doc = session.editor.doc();
     let Some(obj) = doc.object(id) else { return };
-    let before = ZoneSettings::read(doc, obj, z);
-    let mut s = before.clone();
+    let base = ZoneSettings::read(doc, obj, z);
     let field_angle = pattern_of(doc, obj).map_or(0.0, |(_, pl)| pl.angle);
+    // What is typed stays between frames, until it is stored.
+    let mut edit = match p.zone_edit.take() {
+        Some(e) if e.follows(id, z.index, &base) => e,
+        _ => ZoneEdit::new(id, z.index, base.clone()),
+    };
     let units = kadakas_units::current();
     let mut done = false;
+    let s = &mut edit.settings;
     ui.horizontal(|ui| {
         ui.label(tr!("paving-ui-name"));
         let r = ui.add(TextEdit::singleline(&mut s.name).desired_width(140.0));
@@ -327,9 +349,8 @@ fn zone_editor(
     });
     ui.horizontal(|ui| {
         ui.label(tr!("paving-ui-zone-pattern"));
-        let text = pattern_choice_label(s.pattern);
         egui::ComboBox::from_id_salt(("paving-zone-pattern", id, z.index))
-            .selected_text(text)
+            .selected_text(pattern_choice_label(s.pattern))
             .show_ui(ui, |ui| {
                 let mut pick = |ui: &mut Ui, c: PatternChoice| {
                     if ui
@@ -344,13 +365,13 @@ fn zone_editor(
                 for b in Bond::ALL {
                     pick(ui, PatternChoice::Bond(b));
                 }
-                if before.pattern == PatternChoice::Kept {
+                if base.pattern == PatternChoice::Kept {
                     pick(ui, PatternChoice::Kept);
                 }
             });
     });
     if matches!(s.pattern, PatternChoice::Bond(_)) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (label, v) in [
                 (tr!("joint-ui-unit-length"), &mut s.unit_length),
                 (tr!("joint-ui-unit-width"), &mut s.unit_width),
@@ -408,7 +429,7 @@ fn zone_editor(
             }
         }
         if ui.button(tr!("paving-ui-pick-origin")).clicked() {
-            p.begin_pick(id, PickKind::ZoneOrigin(z.index), status);
+            p.begin_pick(session, id, PickKind::ZoneOrigin(z.index), status);
         }
     });
     ui.horizontal_wrapped(|ui| {
@@ -425,7 +446,7 @@ fn zone_editor(
             }
         }
         if ui.button(tr!("paving-ui-align-to-edge")).clicked() {
-            p.begin_pick(id, PickKind::ZoneAlignEdge(z.index), status);
+            p.begin_pick(session, id, PickKind::ZoneAlignEdge(z.index), status);
         }
     });
     if splits > 0 {
@@ -460,16 +481,17 @@ fn zone_editor(
                 });
         });
     }
-    if done && s != before {
-        let max = session.limits().pattern_units;
-        let doc = session.editor.doc();
-        match split::set_zone_command(doc, id, z, &s, max)
-            .and_then(|cmd| SessionBackend(session).execute(&cmd))
-        {
-            Ok(()) => p.zones = None,
-            Err(e) => *status = tr!("paving-ui-error", e = e),
+    if done && edit.changed() {
+        if p.blocked(status) {
+            return;
         }
+        // The edit is dropped: the document changes, and the next frame starts from it.
+        if let Err(e) = split::store_zone(&mut SessionBackend(session), &edit) {
+            *status = tr!("paving-ui-error", e = e);
+        }
+        return;
     }
+    p.zone_edit = Some(edit);
 }
 
 fn pattern_choice_label(c: PatternChoice) -> String {
@@ -493,21 +515,23 @@ fn courses_block(
     status: &mut String,
 ) {
     let rev = session.editor.revision();
-    let fresh = p
-        .courses
-        .as_ref()
-        .is_some_and(|(r, i, _)| *r == rev && *i == id);
-    if !fresh {
-        let rows = course::rows(session.editor.doc(), id, session.limits().pattern_units);
-        p.courses = Some((rev, id, rows));
-    }
-    let rows = match &p.courses.as_ref().expect("just set").2 {
-        Ok(r) => r.clone(),
-        Err(e) => {
+    let ctx = ui.ctx().clone();
+    let doc = session.editor.doc();
+    let max = session.limits().pattern_units;
+    let rows = match p.courses.poll(&ctx, rev, id, || {
+        let doc = doc.clone();
+        Box::new(move || course::rows(&doc, id, max))
+    }) {
+        Poll::Fresh(Ok(r)) | Poll::Old(Ok(r)) => r.clone(),
+        Poll::Fresh(Err(e)) | Poll::Old(Err(e)) => {
             ui.colored_label(
                 ui.visuals().error_fg_color,
                 tr!("paving-ui-error", e = e.as_str()),
             );
+            Vec::new()
+        }
+        Poll::Busy => {
+            counting(ui);
             Vec::new()
         }
     };
@@ -549,7 +573,7 @@ fn courses_block(
                     Err(e) => *status = e,
                 }
             }
-            if ui.small_button(tr!("paving-ui-remove")).clicked() {
+            if ui.small_button(tr!("paving-ui-remove")).clicked() && !p.blocked(status) {
                 match course::remove(&mut SessionBackend(session), id, &r.name) {
                     Ok(()) => {
                         if p.course.as_ref().is_some_and(|c| c.form.name == r.name) {
@@ -565,7 +589,10 @@ fn courses_block(
         p.course = None;
     }
     if let Some(mut ed) = p.course.take() {
-        ed.refresh(&SessionBackend(session));
+        // The preview is made again when the pointer is up: not at every step of a drag.
+        if !ui.input(|i| i.pointer.any_down()) {
+            ed.refresh(&SessionBackend(session));
+        }
         let mut keep = true;
         let mut apply = false;
         ui.group(|ui| {
@@ -584,7 +611,7 @@ fn courses_block(
                 }
             });
         });
-        if apply {
+        if apply && !p.blocked(status) {
             match ed.apply(&mut SessionBackend(session)) {
                 Ok(()) => {
                     keep = false;
@@ -721,16 +748,5 @@ fn course_readout(ui: &mut Ui, ed: &CourseEditor) {
                 );
             }
         }
-    }
-}
-
-impl SessionBackend<'_> {
-    /// Removes the split lines and the settings of the zones of a hardscape (one undo step).
-    fn call_plan_clear(&mut self, id: ObjectId) -> Result<(), String> {
-        self.call(
-            "hardscape.plan_clear",
-            serde_json::json!({"id": id, "what": "splits"}),
-        )
-        .map(|_| ())
     }
 }

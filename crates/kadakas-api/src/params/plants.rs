@@ -1252,6 +1252,34 @@ pub struct HardscapeSplitParams {
     pub zone_units: Option<HardscapeSplitZoneUnits>,
 }
 
+// Parameters of `hardscape.zone_set`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HardscapeZoneSetParams {
+    pub id: ObjectRef,
+    /// the index of the zone in the reply of hardscape.split or hardscape.plan (from 0)
+    pub zone: Int,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// as the pattern of unit_pattern.layout
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<Obj>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Point>,
+    /// degrees
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<Num>,
+    /// start at vertex n of the outline of the zone
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align_to_edge: Option<Int>,
+    /// start at the first point of split line n
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align_to_split: Option<Int>,
+    /// settings to remove: pattern, origin, angle, align_to_edge, align_to_split
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear: Option<Vec<String>>,
+}
+
 // Parameters of `hardscape.course`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1544,6 +1572,7 @@ entries! {
     "report.unit_pattern" => ReportUnitPatternParams,
     "region.from_curves" => RegionFromCurvesParams,
     "hardscape.split" => HardscapeSplitParams,
+    "hardscape.zone_set" => HardscapeZoneSetParams,
     "hardscape.course" => HardscapeCourseParams,
     "hardscape.course_remove" => HardscapeCourseRemoveParams,
     "hardscape.plan" => HardscapePlanParams,

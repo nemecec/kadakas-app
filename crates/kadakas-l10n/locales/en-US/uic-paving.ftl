@@ -74,3 +74,4 @@ uic-paving-kind-wrong-size = Wrong size
 uic-paving-kind-outside = Outside the area
 uic-paving-kind-coverage = Coverage
 uic-paving-check-nothing = There is no hardscape with a joint pattern to check.
+uic-paving-bad-reply = The answer of the program could not be read.

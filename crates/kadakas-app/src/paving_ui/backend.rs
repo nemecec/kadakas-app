@@ -49,3 +49,48 @@ impl Backend for SessionBackend<'_> {
             .map_err(|e| e.to_string())
     }
 }
+
+/// A backend that owns a copy of the document, for a background job: the call runs on the copy.
+pub struct Scratch(pub Session);
+
+impl Scratch {
+    pub fn new(
+        doc: Document,
+        limits: kadakas_api::SessionLimits,
+        selection: Vec<ObjectId>,
+    ) -> Scratch {
+        let mut s = Session::default();
+        s.set_limits(limits);
+        s.editor = Editor::new(doc);
+        s.selection = selection;
+        Scratch(s)
+    }
+}
+
+impl Backend for Scratch {
+    fn document(&self) -> &Document {
+        self.0.editor.doc()
+    }
+    fn selection(&self) -> &[ObjectId] {
+        &self.0.selection
+    }
+    fn revision(&self) -> u64 {
+        self.0.editor.revision()
+    }
+    fn pattern_units(&self) -> usize {
+        self.0.limits().pattern_units
+    }
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.0.handle(method, params).map_err(|e| e.message)
+    }
+    fn rehearse(&self, _method: &str, _params: Value) -> Result<(Value, Document), String> {
+        Err("a background copy does not rehearse".into())
+    }
+    fn execute(&mut self, cmd: &Command) -> Result<(), String> {
+        self.0
+            .editor
+            .execute(cmd)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}

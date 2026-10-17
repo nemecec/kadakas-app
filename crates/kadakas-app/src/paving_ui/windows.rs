@@ -13,13 +13,38 @@ use kadakas_ui_core::paving::curves::{CurvesDialog, Make, NoteKind};
 use kadakas_ui_core::paving::split::DraftLine;
 
 use super::paint::zone_color;
-use super::{PavingUi, SessionBackend};
+use super::{PavingUi, Scratch, SessionBackend};
 use crate::units_ui::DragValueExt as _;
+use kadakas_core::model::ObjectId;
+use kadakas_ui_core::paving::Backend as _;
+use serde_json::json;
 
 /// A box with room round it, for a zoom to a place or a shape.
 fn around(lo: DVec2, hi: DVec2) -> (DVec2, DVec2) {
     let room = ((hi - lo).max_element() * 0.15).max(300.0);
     (lo - DVec2::splat(room), hi + DVec2::splat(room))
+}
+
+/// Enter is OK and Escape is Cancel for the window that is on top, when no field is being typed
+/// into. `ok_ready` says whether OK works now.
+fn dialog_keys(
+    ctx: &Context,
+    shown: &Option<egui::InnerResponse<Option<()>>>,
+    ok_ready: bool,
+) -> (bool, bool) {
+    let on_top = shown
+        .as_ref()
+        .is_some_and(|r| ctx.top_layer_id() == Some(r.response.layer_id));
+    if !on_top || ctx.egui_wants_keyboard_input() {
+        return (false, false);
+    }
+    let (enter, escape) = ctx.input(|i| {
+        (
+            i.key_pressed(egui::Key::Enter),
+            i.key_pressed(egui::Key::Escape),
+        )
+    });
+    (enter && ok_ready, escape)
 }
 
 fn error_text(ui: &mut Ui, e: &str) {
@@ -63,7 +88,8 @@ pub(super) fn curves(p: &mut PavingUi, ctx: &Context, session: &mut Session, sta
     let mut close = false;
     let mut create = false;
     let mut zoom = None;
-    Window::new(tr!("paving-ui-create-objects-from-shapes"))
+    let mut ready = false;
+    let shown = Window::new(tr!("paving-ui-create-objects-from-shapes"))
         .id(Id::new("win-paving-curves"))
         .open(&mut open)
         .collapsible(false)
@@ -200,7 +226,7 @@ pub(super) fn curves(p: &mut PavingUi, ctx: &Context, session: &mut Session, sta
             }
             ui.separator();
             ui.horizontal(|ui| {
-                let ready = found.as_ref().is_ok_and(|f| !form.chosen(f).is_empty());
+                ready = found.as_ref().is_ok_and(|f| !form.chosen(f).is_empty());
                 if ui
                     .add_enabled(ready, egui::Button::new(tr!("paving-ui-create")))
                     .clicked()
@@ -212,11 +238,14 @@ pub(super) fn curves(p: &mut PavingUi, ctx: &Context, session: &mut Session, sta
                 }
             });
         });
+    let (ok_key, cancel_key) = dialog_keys(ctx, &shown, ready);
+    create |= ok_key;
+    close |= cancel_key;
     open &= !close;
     if let Some((lo, hi)) = zoom {
         p.zoom_to(lo, hi);
     }
-    if create {
+    if create && !p.blocked(status) {
         match d.commit(&mut SessionBackend(session)) {
             Ok(made) => {
                 *status = tr!(
@@ -248,7 +277,8 @@ pub(super) fn split(p: &mut PavingUi, ctx: &Context, session: &mut Session, stat
     let mut commit = false;
     let mut zoom = None;
     let drawing = &mut p.drawing;
-    Window::new(tr!("paving-ui-split-hardscape-into-zones"))
+    let mut ready = false;
+    let shown = Window::new(tr!("paving-ui-split-hardscape-into-zones"))
         .id(Id::new("win-paving-split"))
         .open(&mut open)
         .collapsible(false)
@@ -377,7 +407,7 @@ pub(super) fn split(p: &mut PavingUi, ctx: &Context, session: &mut Session, stat
             }
             ui.separator();
             ui.horizontal(|ui| {
-                let ready = !d.draft.is_empty() && d.zones.as_ref().is_ok_and(|z| z.len() >= 2);
+                ready = !d.draft.is_empty() && d.zones.as_ref().is_ok_and(|z| z.len() >= 2);
                 if ui
                     .add_enabled(ready, egui::Button::new(tr!("paving-ui-split")))
                     .clicked()
@@ -389,16 +419,20 @@ pub(super) fn split(p: &mut PavingUi, ctx: &Context, session: &mut Session, stat
                 }
             });
         });
+    // While lines are drawn, Enter ends a line and Escape stops the drawing (the plan takes them).
+    let (ok_key, cancel_key) = dialog_keys(ctx, &shown, ready && !p.drawing);
+    commit |= ok_key;
+    close |= cancel_key && !p.drawing;
     open &= !close;
     if let Some((lo, hi)) = zoom {
         p.zoom_to(lo, hi);
     }
-    if commit {
+    if commit && !p.blocked(status) {
         match d.commit(&mut SessionBackend(session)) {
             Ok(r) => {
                 *status = tr!("paving-ui-split-into-zones", count = r.zones);
                 open = false;
-                p.zones = None;
+                p.zones.clear();
             }
             Err(e) => *status = tr!("paving-ui-error", e = e),
         }
@@ -432,7 +466,7 @@ pub(super) fn check_window(
     let mut run = false;
     let mut clicked: Option<(usize, usize)> = None;
     let stale = p.check.stale(&SessionBackend(session));
-    Window::new(tr!("paving-ui-check-unit-patterns"))
+    let shown = Window::new(tr!("paving-ui-check-unit-patterns"))
         .id(Id::new("win-paving-check"))
         .open(&mut open)
         .default_width(420.0)
@@ -455,6 +489,9 @@ pub(super) fn check_window(
             ui.label(tr!(
                 "paving-ui-the-check-looks-at-the-selected-hardscapes-or-at-all"
             ));
+            if p.check.running {
+                ui.label(tr!("paving-ui-checking"));
+            }
             match &p.check.result {
                 None => {
                     ui.label(tr!("paving-ui-no-result-yet"));
@@ -591,16 +628,48 @@ pub(super) fn check_window(
         if let Some(f) = p.check.current().cloned() {
             let [x0, y0, x1, y1] = f.zoom_box();
             p.zoom_to(DVec2::new(x0, y0), DVec2::new(x1, y1));
-            if let Some(id) = f.object {
-                session.selection = vec![id];
+            // The finding's hardscape is selected through the API (what the check looks at is
+            // the scope of the panel, not the selection).
+            if let Some(id) = f.object
+                && let Err(e) = SessionBackend(session).call("selection.set", json!({"ids": [id]}))
+            {
+                *status = tr!("paving-ui-error", e = e);
             }
         }
     }
-    if run {
-        p.check.run(&mut SessionBackend(session));
+    let (_, cancel_key) = dialog_keys(ctx, &shown, false);
+    open &= !cancel_key;
+    if run || std::mem::take(&mut p.check_start) {
+        start_check(p, ctx, session);
+    }
+    // The answer of the background check.
+    if p.check.running
+        && let Some(reply) = p.check_job.take()
+    {
+        p.check.finish(reply);
         if let Some(Err(e)) = &p.check.result {
             *status = tr!("paving-ui-error", e = e.as_str());
         }
     }
+    if p.check.running {
+        ctx.request_repaint_after(std::time::Duration::from_millis(80));
+    }
     p.check_open = open;
+}
+
+/// Starts the check on a thread, on a copy of the document.
+fn start_check(p: &mut PavingUi, ctx: &Context, session: &mut Session) {
+    let Some(params) = p.check.begin(&SessionBackend(session)) else {
+        return;
+    };
+    let rev = session.editor.revision();
+    let doc = session.editor.doc().clone();
+    let limits = session.limits().clone();
+    p.check_job.clear();
+    p.check_job.start(
+        ctx,
+        rev,
+        ObjectId::from_num(0),
+        Box::new(move || Scratch::new(doc, limits, Vec::new()).call("unit_pattern.check", params)),
+    );
 }
