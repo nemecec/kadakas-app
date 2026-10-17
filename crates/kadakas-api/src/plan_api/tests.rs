@@ -278,9 +278,7 @@ fn a_line_that_stops_short_is_a_note_and_bad_input_is_refused() {
         )
         .contains("2 or more")
     );
-    assert!(
-        fail(&mut s, "hardscape.split", json!({"id": id, "lines": [7]})).contains("object ID or")
-    );
+    assert!(fail(&mut s, "hardscape.split", json!({"id": id, "lines": [7]})).contains("lines[0]"));
     assert!(
         fail(
             &mut s,
@@ -838,4 +836,90 @@ fn a_circle_and_a_chain_of_arcs_that_stall_lines_run_up_to_are_not_paved_by_defa
     for m in made {
         assert_ne!(regions[m as usize]["role"], "island?");
     }
+}
+
+/// A lot of 30 m by 20 m as four lines that meet, with a round island of 2 m radius.
+fn lot_with_an_island(s: &mut Session) -> Vec<Value> {
+    let mut ids = vec![
+        line(s, [0.0, 0.0], [30_000.0, 0.0]),
+        line(s, [30_000.0, 0.0], [30_000.0, 20_000.0]),
+        line(s, [30_000.0, 20_000.0], [0.0, 20_000.0]),
+        line(s, [0.0, 20_000.0], [0.0, 0.0]),
+    ];
+    ids.push(add(
+        s,
+        json!({"kind": "circle", "center": [15_000, 10_000], "radius": 2000}),
+    ));
+    ids
+}
+
+#[test]
+fn the_depths_and_the_regions_choose_what_becomes_an_object() {
+    // Each case has a drawing of its own: the answer of one call must not depend on the calls
+    // before it.
+    let created = |p: Value| -> Result<usize, String> {
+        let mut s = Session::with_sequential_ids();
+        let ids = lot_with_an_island(&mut s);
+        let mut p = p;
+        p["ids"] = json!(ids);
+        p["create"] = json!("polyline");
+        s.handle("region.from_curves", p)
+            .map(|r| r["created"].as_array().unwrap().len())
+            .map_err(|e| e.message)
+    };
+    // Even: the lot. Odd: the islands that are sure (this one has a doubt: a closed shape says it
+    // is an area, so it is made only when listed). All: both.
+    assert_eq!(created(json!({"depths": "even"})), Ok(1));
+    assert_eq!(created(json!({"depths": "odd"})), Ok(0));
+    assert_eq!(created(json!({})), Ok(2));
+    // By number, by a point (in the lot, in the island), and the same region twice is one.
+    assert_eq!(created(json!({"regions": [0]})), Ok(1));
+    assert_eq!(created(json!({"regions": [[5000, 5000]]})), Ok(1));
+    assert_eq!(
+        created(json!({"regions": [[15000, 10000], [15100, 10000]]})),
+        Ok(1)
+    );
+    assert_eq!(created(json!({"regions": [0, 1, 0]})), Ok(2));
+    // A region that does not exist, or a point that no region holds, is told.
+    let m = created(json!({"regions": [9]})).unwrap_err();
+    assert!(m.contains("there is no region 9"), "{m}");
+    let m = created(json!({"regions": [[900000, 900000]]})).unwrap_err();
+    assert!(m.contains("no region holds"), "{m}");
+    // Small regions are left out.
+    assert_eq!(created(json!({"min_area_m2": 100})), Ok(1));
+    // A tolerance over 10 mm closes gaps, and the reply warns about it.
+    let mut s = Session::with_sequential_ids();
+    let ids = lot_with_an_island(&mut s);
+    let r = ok(
+        &mut s,
+        "region.from_curves",
+        json!({"ids": ids, "tolerance": 20, "dry_run": true}),
+    );
+    let said = r.to_string();
+    assert!(said.contains("more than 10 mm"), "{said}");
+}
+
+#[test]
+fn a_dry_run_and_a_deleted_source_change_what_stays() {
+    let mut s = Session::with_sequential_ids();
+    let ids = lot_with_an_island(&mut s);
+    let before = ok(&mut s, "document.summary", json!({}))["object_count"].clone();
+    let r = ok(
+        &mut s,
+        "region.from_curves",
+        json!({"ids": ids, "create": "polyline", "dry_run": true}),
+    );
+    assert_eq!(r["dry_run"], true);
+    assert_eq!(
+        ok(&mut s, "document.summary", json!({}))["object_count"],
+        before
+    );
+    let r = ok(
+        &mut s,
+        "region.from_curves",
+        json!({"ids": ids, "create": "polyline", "depths": "all", "delete_source": true}),
+    );
+    assert_eq!(r["created"].as_array().unwrap().len(), 2);
+    // The five curves are gone and two polylines are there.
+    assert_eq!(ok(&mut s, "document.summary", json!({}))["object_count"], 2);
 }

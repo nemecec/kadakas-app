@@ -721,7 +721,7 @@ mod tests {
                 json!({"text": "ID,E,N,Species,DBH (cm)\nT3,1,1,Oak,50\n", "on_terrain": "yes"}),
             )
             .unwrap_err();
-        assert!(e.message.contains("true or false"), "{}", e.message);
+        assert!(e.message.contains("boolean"), "{}", e.message);
         let rows = ok(&mut s, "report.existing_trees", json!({}));
         assert_eq!(rows["rows"][0]["rpz_radius"], 6000.0);
         let o = ok(&mut s, "objects.get", json!({"id": r["ids_from"]}));
@@ -934,5 +934,139 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_file_is_read_from_its_path_and_the_limits_apply() {
+        let dir = std::env::temp_dir().join(format!("kadakas-survey-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("points.csv");
+        std::fs::write(&file, "P,N,E,Z\n1,2,3,4\n").unwrap();
+        let path = file.to_str().unwrap().to_string();
+        let mut s = Session::with_sequential_ids();
+        let r = ok(&mut s, "survey.import_points", json!({"path": path}));
+        assert_eq!(r["imported"], 1);
+        // A file that is not there is not found.
+        let missing = dir.join("none.csv");
+        let e = s
+            .handle(
+                "survey.import_points",
+                json!({"path": missing.to_str().unwrap()}),
+            )
+            .unwrap_err();
+        assert_eq!(e.code, crate::errors::CODE_NOT_FOUND);
+        // The limit of the session is for the file and for text.
+        s.limits.import_text_bytes = 8;
+        let e = s
+            .handle("survey.import_points", json!({"path": path}))
+            .unwrap_err();
+        assert_eq!(e.code, crate::errors::CODE_LIMIT, "{}", e.message);
+        let e = s
+            .handle("survey.import_points", json!({"text": "1,2,3,4,5,6,7,8,9"}))
+            .unwrap_err();
+        assert_eq!(e.code, crate::errors::CODE_LIMIT, "{}", e.message);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn every_unit_name_scales_the_coordinates_and_a_number_is_a_factor() {
+        for (unit, meters) in [
+            ("m", 1.0),
+            ("meters", 1.0),
+            ("mm", 0.001),
+            ("cm", 0.01),
+            ("km", 1000.0),
+            ("ft", 0.3048),
+            ("feet", 0.3048),
+            ("usft", 1200.0 / 3937.0),
+            ("in", 0.0254),
+            ("Inches", 0.0254),
+            ("yd", 0.9144),
+        ] {
+            let mut s = Session::with_sequential_ids();
+            let r = ok(
+                &mut s,
+                "survey.import_points",
+                json!({"text": "1 0 0\n", "columns": "E N Z", "delimiter": "space", "unit": unit}),
+            );
+            let o = ok(&mut s, "objects.get", json!({"id": r["ids_from"]}));
+            let x = o["shape"]["p"][0].as_f64().unwrap();
+            assert!((x - meters * 1000.0).abs() < 1e-6, "{unit}: {x}");
+        }
+        let mut s = Session::with_sequential_ids();
+        let r = ok(
+            &mut s,
+            "survey.import_points",
+            json!({"text": "10 0 3\n", "columns": "E N Z", "delimiter": "space", "unit": 2, "z_unit": "mm"}),
+        );
+        let o = ok(&mut s, "objects.get", json!({"id": r["ids_from"]}));
+        assert_eq!(o["shape"]["p"], json!([20000.0, 0.0, 3.0]));
+        for bad_unit in [json!(0), json!(-1)] {
+            let e = s
+                .handle(
+                    "survey.import_points",
+                    json!({"text": "1,2,3\n", "unit": bad_unit}),
+                )
+                .unwrap_err();
+            assert!(e.message.contains("positive"), "{}", e.message);
+        }
+    }
+
+    #[test]
+    fn points_go_to_the_layer_and_class_that_the_call_names_with_their_descriptions() {
+        let mut s = Session::with_sequential_ids();
+        ok(
+            &mut s,
+            "execute",
+            json!({"command": {"op": "add_layer", "name": "Survey"}}),
+        );
+        ok(
+            &mut s,
+            "execute",
+            json!({"command": {"op": "add_class", "name": "Spot"}}),
+        );
+        let r = ok(
+            &mut s,
+            "survey.import_points",
+            json!({"text": "7,2,3,4,oak,a big tree\n", "columns": ["P", "N", "E", "Z", "C", "D"],
+                "layer": "Survey", "class": "spot"}),
+        );
+        assert_eq!(r["imported"], 1);
+        let listed = ok(
+            &mut s,
+            "objects.list",
+            json!({"layer": "Survey", "class": "Spot"}),
+        );
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        let o = ok(&mut s, "objects.get", json!({"id": r["ids_from"]}));
+        assert_eq!(o["data"]["description"], "a big tree");
+        assert_eq!(o["data"]["code"], "oak");
+        assert_eq!(o["data"]["point_id"], "7");
+    }
+
+    #[test]
+    fn points_and_trees_out_of_range_are_skipped_and_say_so() {
+        let mut s = Session::with_sequential_ids();
+        let r = ok(
+            &mut s,
+            "survey.import_points",
+            json!({"text": "0 0 0\n1e15 0 0\n", "columns": "E N Z", "delimiter": "space", "shift": false}),
+        );
+        assert_eq!(r["imported"], 1);
+        assert_eq!(r["skipped_count"], 1);
+        let e = s
+            .handle(
+                "survey.import_points",
+                json!({"text": "1e15 0 0\n", "columns": "E N Z", "delimiter": "space", "shift": false}),
+            )
+            .unwrap_err();
+        assert!(e.message.contains("no survey points"), "{}", e.message);
+        let r = ok(
+            &mut s,
+            "tree.import_survey",
+            json!({"text": "ID,E,N,Species,DBH (cm)\nT1,1,1,Oak,50\nT2,1e15,1,Oak,50\n", "shift": false}),
+        );
+        assert_eq!(r["imported"], 1);
+        assert_eq!(r["skipped_count"], 1);
     }
 }

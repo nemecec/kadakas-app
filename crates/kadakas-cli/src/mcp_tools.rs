@@ -270,15 +270,14 @@ fn description(domain: &Domain, methods: &[(&str, &str)]) -> String {
     text
 }
 
-/// The JSON Schema of the params of a method, from the table of the API (`params.spec`): the same
-/// table that makes the API refuse a parameter it does not take. A method without an entry takes
+/// The JSON Schema of the params of a method, from its parameter struct in the API: the same
+/// struct that makes the API refuse a parameter it does not take. A method without an entry takes
 /// any object. `compact` leaves out the descriptions (the domain tools list the schemas of all
 /// their methods, and the text of the methods is in their description).
 pub fn method_schema(method: &str, compact: bool) -> Value {
-    let Some(spec) = kadakas_api::spec::table().get(method) else {
+    let Some(mut schema) = kadakas_api::params::schema(method) else {
         return json!({"type": "object", "additionalProperties": true});
     };
-    let mut schema = kadakas_api::spec::json_schema(spec);
     if let Some(o) = schema.as_object_mut() {
         o.remove("$schema");
     }
@@ -664,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn the_tool_schemas_come_from_the_table_of_parameters() {
+    fn the_tool_schemas_come_from_the_parameter_structs() {
         // A flat tool: the schema of the method, with required names, values and descriptions.
         let flat = flat_tools();
         let place = flat.iter().find(|t| t["name"] == "plants_place").unwrap();

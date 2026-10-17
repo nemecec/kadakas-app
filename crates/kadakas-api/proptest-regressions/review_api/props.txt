@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7848193217613b05dbf131254580bddf29227890ce939b1c55e4249a83ab3cf0 # shrinks to acts = [Group { i: 194, j: 206 }, Version, AddLayer { n: 2 }, AddRect { x: -274, layer: 168 }]

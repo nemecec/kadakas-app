@@ -66,10 +66,10 @@ fn site_texture_sets_reads_and_checks() {
     );
 
     for (p, word) in [
-        (json!({"look": "shiny"}), "look must be"),
+        (json!({"look": "shiny"}), "look"),
         (json!({"material": "Nothing"}), "no material"),
         (json!({"tile_size": 1}), "tile"),
-        (json!({"tile_size": "big"}), "invalid"),
+        (json!({"tile_size": "big"}), "tile_size"),
         (json!({"bands": 0}), "bands"),
         (json!({"ramp": []}), "ramp"),
         (json!({"ramp": [[1, 2]]}), "ramp"),

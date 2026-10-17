@@ -7,7 +7,7 @@ named for it. This file is made by scripts/notices.sh (cargo-about). Do not edit
 ================================================================================
 SUMMARY
 ================================================================================
-455 crates: MIT License
+456 crates: MIT License
 43 crates: Apache License 2.0
 19 crates: ISC License
 19 crates: Unicode License v3
@@ -7881,6 +7881,7 @@ Used by:
   - serde_derive 1.0.229 (https://github.com/serde-rs/serde)
   - serde_derive_internals 0.30.0 (https://github.com/serde-rs/serde)
   - serde_json 1.0.151 (https://github.com/serde-rs/json)
+  - serde_path_to_error 0.1.20 (https://github.com/dtolnay/path-to-error)
   - serde_repr 0.1.21 (https://github.com/dtolnay/serde-repr)
   - smol_str 0.2.2 (https://github.com/rust-analyzer/smol_str)
   - syn 2.0.119 (https://github.com/dtolnay/syn)

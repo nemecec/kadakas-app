@@ -76,7 +76,7 @@ fn layout_errors_are_clear() {
     let mut s = Session::with_sequential_ids();
     let (c, m) = fail(&mut s, "unit_pattern.layout", json!({}));
     assert_eq!(c, -32602);
-    assert!(m.contains("'id' or 'region'"));
+    assert!(m.contains("id, region"));
     let (_, m) = fail(
         &mut s,
         "unit_pattern.layout",
@@ -422,7 +422,7 @@ fn presets_and_modules_work_as_patterns_and_in_styles() {
     // Presets: errors.
     for (params, word) in [
         (json!({}), "preset"),
-        (json!({"preset": "pentagon"}), "no preset"),
+        (json!({"preset": "pentagon"}), "one of hexagon"),
         (json!({"preset": "hexagon"}), "needs"),
         (
             json!({"preset": "hexagon", "side": 100, "across_flats": 100}),
@@ -791,4 +791,76 @@ fn every_call_sets_the_unit_limit_that_the_drawings_of_patterns_use() {
         kadakas_core::hardscape::draw::pattern_units(),
         crate::SessionLimits::default().pattern_units
     );
+}
+
+#[test]
+fn to_objects_takes_the_layer_the_class_and_the_name_that_the_call_gives() {
+    let mut s = Session::with_sequential_ids();
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Paving"}}),
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_class", "name": "Stone"}}),
+    );
+    // A module (a preset) tags every unit with the name of its type.
+    let r = ok(
+        &mut s,
+        "unit_pattern.to_objects",
+        json!({"region": {"outline": rect(1500, 1500)},
+            "pattern": {"preset": "hexagon", "side": 200, "gap": 4},
+            "include": ["units", "gaps"], "layer": "paving", "class": "STONE", "name": "Hexes"}),
+    );
+    assert!(r["group"].is_string());
+    assert!(r["units"].as_u64().unwrap() > 5 && r["gaps"].as_u64().unwrap() > 5);
+    let listed = ok(
+        &mut s,
+        "objects.list",
+        json!({"layer": "Paving", "class": "Stone"}),
+    );
+    let listed = listed.as_array().unwrap();
+    // The units, the gap lines and the group: all on the layer and the class.
+    assert!(listed.len() as u64 > r["objects"].as_u64().unwrap());
+    let ids: Vec<Value> = listed.iter().map(|o| o["id"].clone()).collect();
+    let tagged = ids
+        .iter()
+        .filter(|id| ok(&mut s, "objects.get", json!({"id": id}))["data"]["unit_type"].is_string())
+        .count();
+    assert!(tagged > 0, "the units of a module carry their type");
+}
+
+#[test]
+fn the_gaps_alone_are_paged_and_the_counts_alone_have_no_next_page() {
+    let mut s = Session::with_sequential_ids();
+    let pattern = json!({"bond": "stack", "unit_length": 200, "unit_width": 100, "gap": 5});
+    let region = json!({"outline": rect(1000, 500)});
+    let all = ok(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"region": region, "pattern": pattern, "origin": [0, 0], "include": ["gaps"]}),
+    );
+    assert!(all.get("units").is_none());
+    let total = all["gaps_total"].as_u64().unwrap();
+    assert!(total > 6 && all["next_offset"].is_null());
+    let page = ok(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"region": region, "pattern": pattern, "origin": [0, 0], "include": ["gaps"],
+            "offset": 2, "limit": 3}),
+    );
+    assert_eq!(page["gaps"].as_array().unwrap().len(), 3);
+    assert_eq!(page["next_offset"], 5);
+    assert_eq!(page["gaps"][0], all["gaps"][2]);
+    // limit 0: the counts only.
+    let counts = ok(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"region": region, "pattern": pattern, "origin": [0, 0], "limit": 0}),
+    );
+    assert_eq!(counts["gaps"].as_array().unwrap().len(), 0);
+    assert_eq!(counts["gaps_total"].as_u64().unwrap(), total);
+    assert!(counts["next_offset"].is_null());
 }

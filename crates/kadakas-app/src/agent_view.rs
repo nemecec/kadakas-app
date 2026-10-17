@@ -825,7 +825,7 @@ pub fn highlight_json(h: &Highlight) -> Value {
 pub fn call(env: &mut Env, method: &str, params: Value) -> Result<Value, RpcError> {
     detect_person_change(env);
     let params = if params.is_null() { json!({}) } else { params };
-    let params = kadakas_api::spec::prepare(env.session.editor.doc(), method, params)?;
+    let params = kadakas_api::params::prepare(env.session.editor.doc(), method, params)?;
     match method {
         "view.get" => env.state_json(true),
         "view.zoom" => env.zoom(&params, false),

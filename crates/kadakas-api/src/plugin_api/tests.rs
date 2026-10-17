@@ -237,7 +237,7 @@ fn parameters_regenerate_the_shapes_and_undo_restores_them() {
             "plugin.place",
             json!({"definition": true, "at": [0, 0]})
         )
-        .contains("ID or a name")
+        .contains("definition")
     );
     assert!(fail(&mut s, "plugin.place", json!({"at": [0, 0]})).contains("definition"));
 }
@@ -386,7 +386,7 @@ fn definitions_can_be_updated_listed_and_deleted() {
             "plugin.define",
             json!({"name": "B", "shape_type": "blob", "script": ""})
         )
-        .contains("variant")
+        .contains("shape_type")
     );
     let g1 = ok(
         &mut s,
@@ -454,7 +454,7 @@ fn definitions_can_be_updated_listed_and_deleted() {
         .contains("does not exist")
     );
     assert!(fail(&mut s, "plugin.reset", json!({"ids": ["x"]})).contains("object IDs"));
-    assert!(fail(&mut s, "plugin.reset", json!({})).contains("id must"));
+    assert!(fail(&mut s, "plugin.reset", json!({})).contains("id"));
     // Delete the objects, then the definition.
     ok(
         &mut s,
@@ -469,7 +469,7 @@ fn definitions_can_be_updated_listed_and_deleted() {
             .is_empty()
     );
     assert!(fail(&mut s, "plugin.delete", json!({"id": def})).contains("no plug-in"));
-    assert!(fail(&mut s, "plugin.get", json!({})).contains("give id or name"));
+    assert!(fail(&mut s, "plugin.get", json!({})).contains("id, name"));
     assert!(fail(&mut s, "plugin.list_nothing", json!({})).contains("unknown method"));
 }
 
@@ -640,9 +640,9 @@ fn script_runs_need_a_live_session_and_report_their_output() {
     );
     s.scripting.endpoint = Some(("127.0.0.1:9".into(), "tok".into()));
     assert_eq!(ok(&mut s, "script.info", json!({}))["live_session"], true);
-    assert!(fail(&mut s, "script.run", json!({})).contains("path or source"));
+    assert!(fail(&mut s, "script.run", json!({})).contains("path, source"));
     assert!(fail(&mut s, "script.run", json!({"source": "x", "args": 5})).contains("args"));
-    assert!(fail(&mut s, "script.run", json!({"source": "x", "args": [1]})).contains("text"));
+    assert!(fail(&mut s, "script.run", json!({"source": "x", "args": [1]})).contains("string"));
     let run = ok(
         &mut s,
         "script.run",
@@ -677,7 +677,7 @@ fn script_runs_need_a_live_session_and_report_their_output() {
         false
     );
     assert!(fail(&mut s, "script.status", json!({"run": 99})).contains("no script run"));
-    assert!(fail(&mut s, "script.status", json!({})).contains("run number"));
+    assert!(fail(&mut s, "script.status", json!({})).contains("missing 'run'"));
     // A script file must be a .py file inside the allowed folders.
     s.paths = crate::PathPolicy::restricted(vec![std::env::temp_dir()]);
     assert!(fail(&mut s, "script.run", json!({"path": "/etc/hosts"})).contains(".py"));
