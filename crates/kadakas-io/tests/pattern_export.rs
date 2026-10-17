@@ -460,17 +460,26 @@ fn module_units_are_counted_and_typed_per_unit_type_in_the_dxf() {
             "{preset}"
         );
     }
-    // A bond writes no extended data.
-    let (ed, _) = lot(
-        JointKind::Stack,
-        2050.0,
-        1050.0,
-        vec![],
-        Some(DVec2::ZERO),
-        None,
-    );
-    let text = String::from_utf8(export(ed.doc(), PatternExport::Units).unwrap().bytes).unwrap();
-    assert!(!text.contains("KADAKAS_UNIT"));
+    // A bond writes its stone as the type, like the report.
+    for kind in [JointKind::Stack, JointKind::Herringbone] {
+        let (ed, _) = lot(kind, 2050.0, 1050.0, vec![], Some(DVec2::ZERO), None);
+        let out = export(ed.doc(), PatternExport::Units).unwrap();
+        let text = String::from_utf8(out.bytes).unwrap();
+        let polys = entities(&text, "LWPOLYLINE");
+        let units = polys.get("0-UNITS-WHOLE").map_or(0, Vec::len)
+            + polys.get("0-UNITS-CUT").map_or(0, Vec::len);
+        assert!(units > 0);
+        assert_eq!(text.matches("1001\nKADAKAS_UNIT\n").count(), units);
+        assert_eq!(text.matches("1000\n200x100\n").count(), units);
+        // The two positions of a herringbone have a note each.
+        if kind == JointKind::Herringbone {
+            let notes = out.report.notes.join("\n");
+            assert!(
+                notes.contains("200x100 lengthwise:") && notes.contains("200x100 crosswise:"),
+                "{notes}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -11,9 +11,11 @@
 //! the layers of the hardscape; a zone or a course has `<layer>-<NAME>` as its base layer, so that
 //! a contractor can switch each part on and off.
 //!
-//! The type of a unit (the name of its shape in a module pattern) is written as extended data of
-//! the polyline: application `KADAKAS_UNIT`, group 1000 with the name. The four bonds have one
-//! type and write none.
+//! The type of a unit (the name of its shape in a module pattern, the size of the stone in a bond
+//! or a course) is written as extended data of every unit polyline: application `KADAKAS_UNIT`,
+//! group 1000 with the name that `report.unit_pattern` has in `by_unit`. The notes of the export
+//! tell the unit types that share a name apart (a herringbone has two: lengthwise and
+//! crosswise).
 //!
 //! **Blocks** (PAT-11): with the option `blocks`, each whole unit is an INSERT of the block of its
 //! unit type, and each cut unit is a polyline as before. The block is the shape of the unit around
@@ -236,6 +238,43 @@ pub(super) fn write(
     Ok(used)
 }
 
+/// The names of the unit types for the notes of the export. Types that share a name (the two
+/// positions of a herringbone, the turned units of a basket weave) get the position added, so
+/// that the note says which count is which. The polylines keep the plain name, as the report has
+/// it: units of one stone are one row in `by_unit`.
+fn distinct_names(group: &Group, names: &[String]) -> Vec<String> {
+    let repeated =
+        |n: &String| names.iter().filter(|m| *m == n).count() > 1;
+    if !names.iter().any(repeated) {
+        return names.to_vec();
+    }
+    let basket = group
+        .pattern()
+        .is_some_and(|p| p.bond == kadakas_core::layout::Bond::BasketWeave);
+    let half = names.len() / 2;
+    let mut seen: std::collections::HashMap<&String, usize> = Default::default();
+    names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            if !repeated(n) {
+                return n.clone();
+            }
+            let k = seen.entry(n).or_insert(0);
+            *k += 1;
+            if basket {
+                // n units side by side, then n turned by 90 degrees.
+                let (turn, nth) = if i < half { ("lengthwise", i + 1) } else { ("crosswise", i - half + 1) };
+                format!("{n} {turn} {nth}")
+            } else if names.iter().filter(|m| *m == n).count() == 2 {
+                format!("{n} {}", if *k == 1 { "lengthwise" } else { "crosswise" })
+            } else {
+                format!("{n} #{k}")
+            }
+        })
+        .collect()
+}
+
 fn role_word(r: Role) -> &'static str {
     match r {
         Role::Field => "field",
@@ -306,7 +345,7 @@ fn write_group(
                         let l = if r.hole { &void_layer } else { target };
                         used.layers.insert(l.clone());
                         lwpolyline(w, cx, o, l, hidden, &ring_verts(&r.points), true);
-                        if is_module && !r.hole {
+                        if !r.hole {
                             w.pair(1001, XDATA_APP);
                             w.pair(1000, escape_unicode(tname));
                         }
@@ -332,7 +371,7 @@ fn write_group(
                     ))
                 })?;
             *budget = budget.saturating_sub(stats.units);
-            used.xdata |= is_module && stats.units > 0;
+            used.xdata |= stats.units > 0;
             counts = (whole, cut);
             let how = if blocks {
                 " (whole units as blocks)"
@@ -342,7 +381,8 @@ fn write_group(
             let mut text = format!("{name}: wrote {whole} whole and {cut} cut units{how}");
             if names.len() > 1 {
                 let mut parts: Vec<String> = Vec::new();
-                for (n, nm) in names.iter().enumerate() {
+                let shown = distinct_names(group, &names);
+                for (n, nm) in shown.iter().enumerate() {
                     let (w_, c_) = per_type.get(n).copied().unwrap_or((0, 0));
                     if is_module || w_ + c_ > 0 {
                         parts.push(format!("{nm}: {w_} whole, {c_} cut"));
