@@ -923,3 +923,364 @@ fn a_dry_run_and_a_deleted_source_change_what_stays() {
     // The five curves are gone and two polylines are there.
     assert_eq!(ok(&mut s, "document.summary", json!({}))["object_count"], 2);
 }
+
+#[test]
+fn a_plan_that_cannot_be_read_is_refused_and_clearing_it_all_repairs_the_hardscape() {
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 4000.0, 2000.0);
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_data", "id": id, "set": {"pattern_plan": {"splits": "garbage"}}}}),
+    );
+    let m = fail(&mut s, "hardscape.plan", json!({"id": id}));
+    assert!(
+        m.contains("cannot be read") && m.contains("plan_clear"),
+        "{m}"
+    );
+    // Only a clear of all of it can be done: a part of a plan that is not read cannot be kept.
+    let m = fail(
+        &mut s,
+        "hardscape.plan_clear",
+        json!({"id": id, "what": "courses"}),
+    );
+    assert!(m.contains("what") && m.contains("all"), "{m}");
+    // The hint of the error works: the plan goes, and the hardscape is a plain field again.
+    ok(&mut s, "hardscape.plan_clear", json!({"id": id}));
+    let p = ok(&mut s, "hardscape.plan", json!({"id": id}));
+    assert_eq!(p["groups"][0]["name"], "field");
+    assert!(
+        ok(&mut s, "objects.get", json!({"id": id}))["data"]
+            .get("pattern_plan")
+            .is_none()
+    );
+}
+
+#[test]
+fn the_parts_of_a_plan_clear_on_their_own_for_many_hardscapes_at_once() {
+    let mut s = Session::with_sequential_ids();
+    let a = slab(&mut s, 8000.0, 4000.0);
+    let b = ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": [[0, 5000], [8000, 5000], [8000, 9000], [0, 9000]], "style": "Pavers", "origin": [0, 5000], "angle": 0}),
+    )["id"]
+        .clone();
+    for (id, y) in [(&a, 0), (&b, 5000)] {
+        ok(
+            &mut s,
+            "hardscape.split",
+            json!({"id": id, "lines": [[[3000, y - 50], [3000, y + 4050]]]}),
+        );
+        ok(
+            &mut s,
+            "hardscape.course",
+            json!({"id": id, "name": "Kerb", "path": [[0, y], [8000, y]]}),
+        );
+    }
+    let count = |s: &mut Session, id: &Value| {
+        let p = ok(s, "hardscape.plan", json!({"id": id}));
+        (
+            p["plan"]["splits"].as_array().map_or(0, Vec::len),
+            p["courses"].as_array().unwrap().len(),
+        )
+    };
+    assert_eq!(count(&mut s, &a), (1, 1));
+    // The split lines go with their zones; the courses stay. One call, one undo step.
+    ok(
+        &mut s,
+        "hardscape.plan_clear",
+        json!({"ids": [a, b], "what": "splits"}),
+    );
+    assert_eq!(count(&mut s, &a), (0, 1));
+    assert_eq!(count(&mut s, &b), (0, 1));
+    ok(&mut s, "undo", json!({}));
+    assert_eq!(count(&mut s, &a), (1, 1));
+    assert_eq!(count(&mut s, &b), (1, 1));
+    ok(
+        &mut s,
+        "hardscape.plan_clear",
+        json!({"ids": [a, b], "what": "courses"}),
+    );
+    assert_eq!(count(&mut s, &a), (1, 0));
+    // All courses of one hardscape at once.
+    ok(&mut s, "undo", json!({}));
+    let r = ok(
+        &mut s,
+        "hardscape.course_remove",
+        json!({"id": b, "all": true}),
+    );
+    assert_eq!(
+        (r["removed"].as_u64(), r["courses"].as_u64()),
+        (Some(1), Some(0))
+    );
+    assert_eq!(count(&mut s, &a), (1, 1));
+}
+
+#[test]
+fn a_zone_with_its_own_pattern_is_laid_reported_and_listed_by_group() {
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 8000.0, 4000.0);
+    let r = ok(
+        &mut s,
+        "hardscape.split",
+        json!({"id": id, "lines": [[[3000, -50], [3000, 4050]]], "tolerance": 0.5,
+               "zones": [{"seed": [6000, 2000], "name": "Aisle", "origin": [3000, 0],
+                          "pattern": {"bond": "stack", "unit_length": 300, "unit_width": 150, "gap": 3}}]}),
+    );
+    let aisle = r["zones"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|z| z["name"] == "Aisle")
+        .expect("the zone of the seed has the name");
+    assert_eq!(aisle["has_settings"], true);
+    assert_eq!(aisle["area_m2"], 20.0);
+    assert_eq!(
+        ok(&mut s, "hardscape.plan", json!({"id": id}))["plan"]["tolerance"],
+        0.5
+    );
+    // The zone lays its own stone: the report has two products, and the layout tags each unit.
+    let rep = ok(&mut s, "report.unit_pattern", json!({"ids": [id]}));
+    let names: Vec<&str> = rep["rows"][0]["by_unit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"200x100") && names.contains(&"300x150"),
+        "{names:?}"
+    );
+    let lay = ok(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"id": id, "include": ["units"], "limit": 20000}),
+    );
+    let groups = lay["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 2);
+    let per_group: u64 = groups
+        .iter()
+        .map(|g| g["whole_units"].as_u64().unwrap() + g["cut_units"].as_u64().unwrap())
+        .sum();
+    assert_eq!(per_group, lay["units_total"].as_u64().unwrap());
+    let units = lay["units"].as_array().unwrap();
+    assert!(units.iter().any(|u| u["group"] == "Aisle"));
+    assert!(units.iter().all(|u| u["group"].is_string()));
+    // The table has a row for each stone of the hardscape and their sum, then one for each zone.
+    let rep = ok(
+        &mut s,
+        "report.unit_pattern",
+        json!({"ids": [id], "format": "csv"}),
+    );
+    let csv = rep["csv"].as_str().unwrap();
+    assert_eq!(csv.lines().count(), 6, "{csv}");
+    assert!(csv.contains(" / Aisle"), "{csv}");
+    // A course whose drawn line is gone keeps its path, and the layout says why.
+    let l = line(&mut s, [0.0, 0.0], [8000.0, 0.0]);
+    ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "source": l}),
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "delete_objects", "ids": [l]}}),
+    );
+    let lay = ok(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"id": id, "include": [], "limit": 0}),
+    );
+    assert!(lay["notes"].to_string().contains("gone"), "{lay}");
+}
+
+#[test]
+fn a_course_takes_its_side_and_its_stone_from_the_call() {
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 6000.0, 3000.0);
+    // Along a drawn line, on its right side, with a stone of its own.
+    let l = line(&mut s, [0.0, 3000.0], [6000.0, 3000.0]);
+    let r = ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Edge", "source": l, "side": "right",
+               "unit_length": 300, "unit_width": 150, "gap": 4, "unit": "Kerb 300"}),
+    );
+    assert_eq!(r["courses"][0]["name"], "Edge");
+    let rep = ok(&mut s, "report.unit_pattern", json!({"ids": [id]}));
+    let names: Vec<&str> = rep["rows"][0]["by_unit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"Kerb 300"), "{names:?}");
+    // The right side of a line that runs east along the top edge is inside the slab.
+    let chk = ok(&mut s, "unit_pattern.check", json!({"ids": [id]}));
+    assert_eq!(chk["totals"]["counts"]["outside_area"], 0, "{chk}");
+    // Inside and outside of the outline: outside puts the course out of the area, where no
+    // unit of it is laid.
+    for (side, inside) in [("inside", true), ("outside", false)] {
+        ok(
+            &mut s,
+            "hardscape.course",
+            json!({"id": id, "name": "Edge", "along": "outline", "side": side}),
+        );
+        let chk = ok(&mut s, "unit_pattern.check", json!({"ids": [id]}));
+        let course = chk["objects"][0]["coverage"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["role"] == "course")
+            .unwrap()
+            .clone();
+        let n = course["units"].as_u64().unwrap();
+        assert_eq!(n > 100, inside, "{side}: {n}");
+    }
+    // A text is not a path.
+    let t = add(
+        &mut s,
+        json!({"kind": "text", "at": [0, 0], "text": "x", "height": 100}),
+    );
+    let m = fail(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "T", "source": t}),
+    );
+    assert!(m.contains("not a line, arc or polyline"), "{m}");
+}
+
+#[test]
+fn a_course_on_a_module_pattern_needs_a_stone_size_of_its_own() {
+    let mut s = Session::with_sequential_ids();
+    let hex = ok(
+        &mut s,
+        "unit_pattern.module_preset",
+        json!({"preset": "hexagon", "across_flats": 200}),
+    )["pattern"]
+        .clone();
+    ok(
+        &mut s,
+        "hardscape_style.create",
+        json!({"name": "Hex", "joints": {"kind": "module", "units": hex["units"], "a": hex["a"], "b": hex["b"], "spacing": 4}}),
+    );
+    let id = ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": [[0, 0], [4000, 0], [4000, 3000], [0, 3000]], "style": "Hex"}),
+    )["id"]
+        .clone();
+    let m = fail(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "along": "outline"}),
+    );
+    assert!(m.contains("no bond to take the stone from"), "{m}");
+    let r = ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "along": "outline", "unit_length": 200, "unit_width": 100}),
+    );
+    assert!(r["courses"][0]["units"].as_u64().unwrap() > 50, "{r}");
+}
+
+#[test]
+fn curves_become_landscape_areas_on_the_layer_and_class_of_the_call() {
+    let mut s = Session::with_sequential_ids();
+    let ids = lot_with_an_island(&mut s);
+    let layer = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Beds"}}),
+    );
+    let class = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_class", "name": "Soft"}}),
+    );
+    let (layer, class) = (layer["created"][0].clone(), class["created"][0].clone());
+    let r = ok(
+        &mut s,
+        "region.from_curves",
+        json!({"ids": ids, "create": "landscape_area", "depths": "even", "name": "Lawn",
+               "layer": layer, "class": class}),
+    );
+    let made = r["created"].as_array().unwrap();
+    assert_eq!(made.len(), 1);
+    let o = ok(&mut s, "objects.get", json!({"id": made[0]["id"]}));
+    assert_eq!(o["shape"]["kind"], "landscape_area", "{o}");
+    assert_eq!(o["shape"]["name"], "Lawn", "{o}");
+    assert_eq!(o["layer"], layer, "{o}");
+    assert_eq!(o["class"], class, "{o}");
+    // The island is a hole of the area.
+    let holes = o["data"]["landscape_area"]["holes"].as_array().unwrap();
+    assert_eq!(holes.len(), 1, "{o}");
+}
+
+#[test]
+fn closed_3d_polylines_are_read_in_plan_and_the_reply_says_so() {
+    let mut s = Session::with_sequential_ids();
+    let lot = add(
+        &mut s,
+        json!({"kind": "polyline3d", "closed": true,
+               "points": [[0, 0, 100], [6000, 0, 150], [6000, 4000, 200], [0, 4000, 120]]}),
+    );
+    let r = ok(
+        &mut s,
+        "region.from_curves",
+        json!({"ids": [lot], "create": "polyline"}),
+    );
+    assert_eq!(r["regions"].as_array().unwrap().len(), 1, "{r}");
+    assert!(
+        r["warnings"].to_string().contains("heights are dropped"),
+        "{r}"
+    );
+    // Flat ones are not worth a note.
+    let flat = add(
+        &mut s,
+        json!({"kind": "polyline3d", "closed": true,
+               "points": [[0, 0, 100], [6000, 0, 100], [6000, 4000, 100], [0, 4000, 100]]}),
+    );
+    let r = ok(
+        &mut s,
+        "region.from_curves",
+        json!({"ids": [flat], "dry_run": true}),
+    );
+    assert!(!r["warnings"].to_string().contains("heights"), "{r}");
+}
+
+#[test]
+fn the_check_takes_its_thresholds_from_the_call_and_lists_what_it_cannot_check() {
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 4010.0, 2503.0);
+    let base = ok(&mut s, "unit_pattern.check", json!({"ids": [id]}));
+    let small = |r: &Value| r["totals"]["counts"]["small_piece"].as_u64().unwrap_or(0);
+    // The cut row along the top is a few mm wide: a piece narrower than 50 mm is small now.
+    let narrow = ok(
+        &mut s,
+        "unit_pattern.check",
+        json!({"ids": [id], "min_width_mm": 50, "min_share": 0}),
+    );
+    assert!(small(&narrow) > small(&base), "{narrow}");
+    // Wide limits find nothing.
+    let lax = ok(
+        &mut s,
+        "unit_pattern.check",
+        json!({"ids": [id], "overlap_mm2": 1e6, "overlap_depth_mm": 100, "min_share": 0,
+               "size_tol_mm": 100, "coverage_tol": 1, "trim": 0.1}),
+    );
+    assert_eq!(lax["totals"]["ok"], true, "{lax}");
+    // An object with no pattern is a row with an error, and the totals say the check is not
+    // complete.
+    let bare = ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": [[0, 0], [1000, 0], [1000, 1000]]}),
+    )["id"]
+        .clone();
+    let r = ok(&mut s, "unit_pattern.check", json!({"ids": [id, bare]}));
+    assert!(r["objects"][1]["error"].is_string(), "{r}");
+    assert_eq!(r["totals"]["complete"], false);
+}

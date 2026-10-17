@@ -754,3 +754,61 @@ fn drape_uses_the_site_model_in_reports_and_in_3d() {
         "the slab follows the 200 mm rise: {lo:?} {hi:?}"
     );
 }
+
+fn add_shape(s: &mut Session, shape: Value) -> Value {
+    ok(
+        s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": shape}}),
+    )["created"][0]
+        .clone()
+}
+
+#[test]
+fn closed_3d_polylines_are_outlines_and_holes_in_plan_with_a_warning() {
+    let mut s = Session::with_sequential_ids();
+    // A pond drawn as a closed 3D polyline with sloping heights, and a rectangle: both are taken
+    // out of the slab.
+    let pond = add_shape(
+        &mut s,
+        json!({"kind": "polyline3d", "closed": true,
+               "points": [[1000, 1000, 50], [3000, 1000, 80], [3000, 3000, 90], [1000, 3000, 60]]}),
+    );
+    let bin = add_shape(
+        &mut s,
+        json!({"kind": "rect", "min": [6000, 6000], "max": [7000, 7000]}),
+    );
+    let id = ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": square(10_000), "exclude": [pond, bin]}),
+    )["id"]
+        .clone();
+    let rep = ok(&mut s, "report.hardscape", json!({"ids": [id]}));
+    assert_eq!(rep["rows"][0]["holes"], 2, "{rep}");
+    let area = rep["rows"][0]["plan_area_m2"].as_f64().unwrap();
+    assert!((area - (100.0 - 4.0 - 1.0)).abs() < 1e-6, "{area}");
+    // As a source of its own the 3D polyline becomes a slab, and the reply says that its
+    // heights are dropped.
+    let r = ok(&mut s, "hardscape.from_shapes", json!({"ids": [pond]}));
+    assert_eq!(r["created"].as_array().unwrap().len(), 1, "{r}");
+    assert!(
+        r["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("heights are dropped"),
+        "{r}"
+    );
+    // A flat one has no warning.
+    let flat = add_shape(
+        &mut s,
+        json!({"kind": "polyline3d", "closed": true,
+               "points": [[20000, 0, 50], [21000, 0, 50], [21000, 1000, 50]]}),
+    );
+    let r = ok(
+        &mut s,
+        "hardscape.from_shapes",
+        json!({"ids": [flat], "dry_run": true}),
+    );
+    assert_eq!(r["warnings"].as_array().unwrap().len(), 0, "{r}");
+}
