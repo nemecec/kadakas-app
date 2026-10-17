@@ -311,7 +311,7 @@ impl Editor {
     /// A mark for [`Editor::steps_since`]: steps made after this call have a serial from the
     /// mark on.
     pub fn serial_mark(&self) -> u64 {
-        self.next_serial
+        SERIALS.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The serials of the steps in the undo history made since the mark, oldest first. A step that

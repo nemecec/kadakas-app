@@ -2177,9 +2177,11 @@ pub struct Editor {
     /// does not drop old steps, so the steps of the run can be merged or taken back by their
     /// number.
     open_run: Option<u64>,
-    /// The serial that the next undo step gets (see [`Patch`]).
-    next_serial: u64,
 }
+
+/// Source of the serials of undo steps. One counter for the process, so a serial from an editor
+/// that was replaced never names a step of another one.
+static SERIALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// The start of a run of many commands that become one undo step (a script). See
 /// [`Editor::begin_run`].
@@ -2238,7 +2240,6 @@ impl Editor {
                 crate::picture::MAX_PICTURE_PIXELS,
             ),
             open_run: None,
-            next_serial: 1,
         }
     }
 
@@ -2329,9 +2330,8 @@ impl Editor {
                     let mut cs = patch.change_set(true, self.revision, &op(), self.origin);
                     cs.detail = detail;
                     self.log.push(cs);
-                    patch.serial = self.next_serial;
+                    patch.serial = SERIALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     patch.origin = self.origin;
-                    self.next_serial += 1;
                     self.undo.push(patch);
                     self.redo.clear();
                     if self.open_run.is_none() {

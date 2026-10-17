@@ -2,6 +2,7 @@
 //! The agent API is in `kadakas-api`, and the 3D camera and CPU renderer are in `kadakas-render`.
 //! This crate has no UI dependencies and compiles to native and WebAssembly.
 
+pub mod activity;
 pub mod annot;
 pub mod arrangement;
 pub mod blob;

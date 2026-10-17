@@ -117,7 +117,11 @@ impl Session {
         let (old_conn, old_origin) = (self.conn, self.editor.origin());
         self.conn = conn;
         self.editor.set_origin(origin);
-        let result = self.handle(method, p);
+        let result = if origin == Origin::Agent {
+            self.handle_agent_call(conn, method, p)
+        } else {
+            self.handle(method, p)
+        };
         self.conn = old_conn;
         self.editor.set_origin(old_origin);
         result

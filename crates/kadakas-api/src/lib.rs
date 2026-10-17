@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod agent_activity_api;
 mod agent_view_api;
 mod annotation_api;
 mod collab_api;
@@ -220,6 +221,9 @@ pub struct Session {
     /// True after a method panicked (see `Session::guarded`). Error replies say so
     /// (`data.tainted`), and a new document clears it.
     tainted: bool,
+    /// The steps of the agents: one for each call or script run that changed the document
+    /// (see `agent_activity_api`).
+    pub activity: kadakas_core::activity::ActivityLog,
 }
 
 /// The caches of the ghosts of a compare (see `svg_of`). They belong to one old document, which
@@ -805,6 +809,8 @@ pub const METHODS: &[(&str, &str)] = &[
         "view.screenshot",
         "A PNG picture of the live drawing area of the app window, as the user sees it (the plan or the 3D view with palettes left out). Only the app (kadakas app with --agent-port) answers; the headless server gives an error. params: {region? (drawing (default) | window: the whole window), max_width? (px, 64 to 4096; larger pictures are scaled down)}. Returns {png_base64, width, height, region, theme (light | dark), view (the current view id)}.",
     ),
+    // What the agent changed (see agent_activity_api.rs).
+    agent_activity_api::AGENT_ACTIVITY,
     // The agent drives the view of the person and points; only the app answers (see agent_view_api.rs).
     agent_view_api::VIEW_GET,
     agent_view_api::VIEW_ZOOM,
@@ -1040,6 +1046,7 @@ impl Session {
             load_notes: Vec::new(),
             feedback: feedback_api::FeedbackState::default(),
             tainted: false,
+            activity: Default::default(),
         }
     }
 
@@ -1352,6 +1359,9 @@ impl Session {
         if let Some(r) = events::handle(self, method, p.clone()) {
             return r;
         }
+        if let Some(r) = agent_activity_api::handle(self, method, p.clone()) {
+            return r;
+        }
         if grading_api::knows(method) {
             return self.handle_grading(method, p);
         }
@@ -1456,6 +1466,7 @@ impl Session {
                 d["plugins"] = wasm_plugin_api::describe();
                 d["review"]["issues"] = issue_api::describe();
                 d["review"]["agent_view"] = agent_view_api::describe();
+                d["review"]["agent_activity"] = agent_activity_api::describe();
                 d["schemas"] = json!({
                     "command": "The JSON Schema (draft 2020-12) of every command that `execute` takes. Call describe with {\"schema\": true} to get it in `command_schema` (about 30 KB). Everything the schema accepts for add_object, add_object_in, modify_object and set_vertex with an exact shape kind is accepted by the server too (a test fuzzes this). Other parts are structural only: they check the shape of the object and the kind, not every field, so the server may still refuse what the schema accepts. Their fields are in command_examples and in the sections of this answer.",
                     "exact_shape_kinds": kadakas_core::schema::EXACT_SHAPE_KINDS,
