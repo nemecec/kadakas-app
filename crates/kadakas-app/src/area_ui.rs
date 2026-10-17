@@ -124,12 +124,18 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
 }
 
 /// The 3D-aware quantity readout and edit modes of a hardscape or landscape area in Object Info.
-pub fn object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mut String) {
+pub fn object_info(
+    ui: &mut Ui,
+    session: &mut Session,
+    id: ObjectId,
+    paving: &mut crate::paving_ui::PavingUi,
+    status: &mut String,
+) {
     let Some(obj) = session.editor.doc().object(id).cloned() else {
         return;
     };
     match obj.shape {
-        Shape::Hardscape { .. } => hardscape_info(ui, session, &obj, status),
+        Shape::Hardscape { .. } => hardscape_info(ui, session, &obj, paving, status),
         Shape::LandscapeArea { .. } => landscape_info(ui, session, &obj, status),
         _ => {}
     }
@@ -146,7 +152,13 @@ fn apply(session: &mut Session, id: ObjectId, patch: HardscapePatch, status: &mu
     );
 }
 
-fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut String) {
+fn hardscape_info(
+    ui: &mut Ui,
+    session: &mut Session,
+    obj: &Object,
+    paving: &mut crate::paving_ui::PavingUi,
+    status: &mut String,
+) {
     let id = obj.id;
     let doc = session.editor.doc();
     let d = hardscape::data(obj).unwrap_or_default();
@@ -355,6 +367,8 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     if !patch.is_empty() {
         apply(session, id, patch, status);
     }
+    // Zones, courses and counts of the unit pattern (PAT-07, PAT-08, PAT-04).
+    crate::paving_ui::hardscape_section(ui, session, id, paving, status);
 }
 
 /// Holes of a hardscape, and the origin and the angle of its joint pattern. The origin and the
@@ -753,7 +767,13 @@ mod pattern_tests {
             let ctx = egui::Context::default();
             let mut status = String::new();
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-                object_info(ui, &mut s, id, &mut status);
+                object_info(
+                    ui,
+                    &mut s,
+                    id,
+                    &mut crate::paving_ui::PavingUi::default(),
+                    &mut status,
+                );
             });
         }
         // A hardscape without a style has holes but no pattern settings.

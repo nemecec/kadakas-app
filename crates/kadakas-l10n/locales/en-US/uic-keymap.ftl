@@ -107,3 +107,6 @@ action-cmd-extrude = Extrude
 action-cmd-sweep = Sweep
 action-view-agent-back = Back to the view before the agent's change
 action-view-agent-next = Show the next agent pointer
+action-cmd-create-from-shapes = Create Objects from Shapes
+action-cmd-split-hardscape = Split Hardscape into Zones
+action-cmd-check-unit-patterns = Check Unit Patterns

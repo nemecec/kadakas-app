@@ -183,6 +183,9 @@ actions! {
     ToolPolygon3d => "tool.polygon3d", msg!("action-tool-polygon3d"), [], true;
     CmdExtrude => "cmd.extrude", msg!("action-cmd-extrude"), [], true;
     CmdSweep => "cmd.sweep", msg!("action-cmd-sweep"), [], true;
+    CmdCreateFromShapes => "cmd.create_from_shapes", msg!("action-cmd-create-from-shapes"), [], true;
+    CmdSplitHardscape => "cmd.split_hardscape", msg!("action-cmd-split-hardscape"), [], true;
+    CmdCheckUnitPatterns => "cmd.check_unit_patterns", msg!("action-cmd-check-unit-patterns"), [], true;
     ToolIrrigation => "tool.irrigation", msg!("action-tool-irrigation"), ["Alt+Shift+I"], true;
     ToolGrading => "tool.grading", msg!("action-tool-grading"), [], true;
     ToolDimension => "tool.dimension", msg!("action-tool-dimension"), ["N"], true;

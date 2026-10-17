@@ -107,3 +107,6 @@ action-cmd-extrude = Väljapressimine
 action-cmd-sweep = Pöördkeha
 action-view-agent-back = Tagasi vaatesse enne agendi muudatust
 action-view-agent-next = Näita agendi järgmist osutit
+action-cmd-create-from-shapes = Loo objektid kujudest
+action-cmd-split-hardscape = Jaga kõvakate tsoonideks
+action-cmd-check-unit-patterns = Kontrolli kivimustreid

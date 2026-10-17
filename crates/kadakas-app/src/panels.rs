@@ -74,6 +74,12 @@ pub enum MenuAction {
     Extrude,
     /// Model > Sweep.
     Sweep,
+    /// Landscape > Create Objects from Shapes (PAT-06).
+    CreateFromShapes,
+    /// Landscape > Split Hardscape into Zones (PAT-07).
+    SplitHardscape,
+    /// Landscape > Check Unit Patterns (PAT-10).
+    CheckUnitPatterns,
     RotateLeft90,
     RotateRight90,
     FlipHorizontal,
@@ -179,6 +185,9 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         Cmd::Compose => M::Compose,
         Cmd::Extrude => M::Extrude,
         Cmd::Sweep => M::Sweep,
+        Cmd::CreateFromShapes => M::CreateFromShapes,
+        Cmd::SplitHardscape => M::SplitHardscape,
+        Cmd::CheckUnitPatterns => M::CheckUnitPatterns,
         Cmd::CreateSiteModel => M::CreateSiteModel,
         Cmd::UpdateSiteModel => M::UpdateSiteModel,
         Cmd::CreateTextureBed => M::CreateTextureBed,
@@ -226,6 +235,8 @@ fn needs_selection(c: Cmd) -> bool {
             | Cmd::Compose
             | Cmd::Extrude
             | Cmd::Sweep
+            | Cmd::CreateFromShapes
+            | Cmd::SplitHardscape
     )
 }
 
@@ -592,6 +603,9 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         MenuAction::Compose => Action::CmdCompose,
         MenuAction::Extrude => Action::CmdExtrude,
         MenuAction::Sweep => Action::CmdSweep,
+        MenuAction::CreateFromShapes => Action::CmdCreateFromShapes,
+        MenuAction::SplitHardscape => Action::CmdSplitHardscape,
+        MenuAction::CheckUnitPatterns => Action::CmdCheckUnitPatterns,
         MenuAction::RotateLeft90 => Action::CmdRotateLeft90,
         MenuAction::RotateRight90 => Action::CmdRotateRight90,
         MenuAction::FlipHorizontal => Action::CmdFlipHorizontal,
@@ -1485,7 +1499,13 @@ fn attr_row(ui: &mut Ui, label: &str, value: &mut Option<Color>, resolved: Optio
     changed
 }
 
-pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, status: &mut String) {
+pub fn object_info(
+    ui: &mut Ui,
+    session: &mut Session,
+    edit: &mut InfoEdit,
+    paving: &mut crate::paving_ui::PavingUi,
+    status: &mut String,
+) {
     ui.heading(tr!("panels-object-info"));
     ui.separator();
     let sel = session.selection.clone();
@@ -1605,7 +1625,7 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
         obj.shape,
         Shape::Hardscape { .. } | Shape::LandscapeArea { .. }
     ) {
-        crate::area_ui::object_info(ui, session, id, status);
+        crate::area_ui::object_info(ui, session, id, paving, status);
     }
     if matches!(obj.shape, Shape::Irrigation(_)) {
         crate::irrigation_ui::object_info(ui, session, id, status);
@@ -2042,7 +2062,13 @@ mod tests {
                 for tool in [Tool::Select, Tool::Polyline, Tool::Rotate, Tool::Dimension] {
                     machine.set_tool(tool);
                     let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-                        object_info(ui, &mut s, &mut edit, &mut status);
+                        object_info(
+                            ui,
+                            &mut s,
+                            &mut edit,
+                            &mut crate::paving_ui::PavingUi::default(),
+                            &mut status,
+                        );
                         tool_panel(
                             ui,
                             &mut machine,

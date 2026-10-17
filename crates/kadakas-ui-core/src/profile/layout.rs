@@ -75,6 +75,12 @@ commands! {
     Compose => "cmd.compose", msg!("panels-compose"), false;
     Extrude => "cmd.extrude", msg!("panels-extrude"), false;
     Sweep => "cmd.sweep", msg!("panels-sweep"), false;
+    // Landscape > Create Objects from Shapes: loose lines become hardscape areas (PAT-06).
+    CreateFromShapes => "cmd.create_from_shapes", msg!("panels-create-objects-from-shapes"), false;
+    // Landscape > Split Hardscape into Zones: split lines make zones with their own pattern (PAT-07).
+    SplitHardscape => "cmd.split_hardscape", msg!("panels-split-hardscape-into-zones"), false;
+    // Landscape > Check Unit Patterns: the findings of the pattern check (PAT-10).
+    CheckUnitPatterns => "cmd.check_unit_patterns", msg!("panels-check-unit-patterns"), false;
     CreateSiteModel => "site.create_model", msg!("panels-create-site-model-from-selection"), false;
     UpdateSiteModel => "site.update_model", msg!("panels-update-site-model"), false;
     CreateTextureBed => "site.create_texture_bed", msg!("panels-create-texture-bed-from-selection"), false;
@@ -132,6 +138,9 @@ impl Cmd {
             Cmd::Compose => Action::CmdCompose,
             Cmd::Extrude => Action::CmdExtrude,
             Cmd::Sweep => Action::CmdSweep,
+            Cmd::CreateFromShapes => Action::CmdCreateFromShapes,
+            Cmd::SplitHardscape => Action::CmdSplitHardscape,
+            Cmd::CheckUnitPatterns => Action::CmdCheckUnitPatterns,
             Cmd::ZoomFit => Action::ZoomFit,
             Cmd::PreviousView => Action::ViewHistoryPrevious,
             Cmd::NextView => Action::ViewHistoryNext,
@@ -354,6 +363,15 @@ pub fn default_menus() -> Vec<Menu> {
         menu(
             "model",
             &["cmd.extrude", "cmd.sweep", "-", "tool.polygon3d"],
+        ),
+        menu(
+            "landscape",
+            &[
+                "cmd.create_from_shapes",
+                "cmd.split_hardscape",
+                "-",
+                "cmd.check_unit_patterns",
+            ],
         ),
         menu(
             "site",
