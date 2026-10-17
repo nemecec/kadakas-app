@@ -723,7 +723,10 @@ pub fn menu_icon(a: MenuAction) -> &'static str {
         MenuAction::ChangeCrs => "world-latitude",
         MenuAction::Scripts => "code",
         MenuAction::PlugIns => "plug",
-        MenuAction::Versions | MenuAction::Compare | MenuAction::CompareDrawings => "versions",
+        MenuAction::Versions
+        | MenuAction::Compare
+        | MenuAction::AgentActivity
+        | MenuAction::CompareDrawings => "versions",
         MenuAction::Bcf => "issues",
         MenuAction::NewIssue => "issue-pin",
         MenuAction::Undo => "arrow-back-up",

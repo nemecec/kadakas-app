@@ -14,6 +14,7 @@ macro_rules! files {
 pub(crate) const FILES_EN_US: &[(&str, &str)] = files!(
     "en-US":
     "about.ftl",
+    "agent-activity.ftl",
     "agent-view.ftl",
     "annot-ui.ftl",
     "app.ftl",
@@ -83,6 +84,7 @@ pub(crate) const FILES_EN_US: &[(&str, &str)] = files!(
 pub(crate) const FILES_ET: &[(&str, &str)] = files!(
     "et":
     "about.ftl",
+    "agent-activity.ftl",
     "agent-view.ftl",
     "annot-ui.ftl",
     "app.ftl",

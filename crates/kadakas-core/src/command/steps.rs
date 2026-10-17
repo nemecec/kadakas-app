@@ -165,6 +165,9 @@ pub enum Refusal {
     /// Taking the objects back would also take away something that was made later (for example
     /// a group that holds the object now).
     InUse(String),
+    /// The document is shared: a plain undo of the editor would not fit the per-user undo of the
+    /// collaboration. Only the revert of the objects works there.
+    Shared,
     /// The document refused the change.
     Rejected(String),
 }
@@ -207,6 +210,10 @@ impl std::fmt::Display for Refusal {
                 f,
                 "the step also changed layers, classes, resources, settings, versions or issues, and {later} later step(s) exist; undo back to the step instead"
             ),
+            Refusal::Shared => write!(
+                f,
+                "the document is shared: only the objects of the step can go back one by one, and a step that also changed layers, classes, resources, settings or versions cannot"
+            ),
             Refusal::InUse(why) => write!(f, "{why}"),
             Refusal::Rejected(why) => write!(f, "the document refused the change: {why}"),
         }
@@ -235,9 +242,11 @@ fn compose(patches: &[&Patch]) -> StepData {
     let mut data = StepData::default();
     for p in patches {
         for (index, o) in &p.removed {
-            map.entry(o.id)
-                .and_modify(|e| e.1 = None)
-                .or_insert((Some(o.clone()), None, Some(*index)));
+            map.entry(o.id).and_modify(|e| e.1 = None).or_insert((
+                Some(o.clone()),
+                None,
+                Some(*index),
+            ));
         }
         for (b, a) in &p.modified {
             map.entry(b.id)
@@ -387,7 +396,9 @@ impl Editor {
                 Some(l) if l.locked => return Some(ConflictKind::LayerLocked),
                 Some(_) => {}
             }
-            doc.class(class).is_none().then_some(ConflictKind::ClassGone)
+            doc.class(class)
+                .is_none()
+                .then_some(ConflictKind::ClassGone)
         };
         for ch in &data.objects {
             let current = doc.object(ch.id);
@@ -401,8 +412,9 @@ impl Editor {
                         gone.push(ch.id);
                         None
                     }
-                    Some(c) if c == after => place_ok(c.layer, c.class)
-                        .filter(|k| *k == ConflictKind::LayerLocked),
+                    Some(c) if c == after => {
+                        place_ok(c.layer, c.class).filter(|k| *k == ConflictKind::LayerLocked)
+                    }
                     Some(_) => Some(ConflictKind::ChangedLater),
                 },
                 (Some(before), Some(after)) => match current {
@@ -432,6 +444,7 @@ impl Editor {
         serials: &[u64],
         data: &StepData,
         skip_conflicts: bool,
+        allow_undo: bool,
     ) -> Result<RevertReport, Refusal> {
         let mut above = usize::MAX;
         for s in serials {
@@ -453,7 +466,7 @@ impl Editor {
                 .take(serials.len())
                 .map(|p| p.serial)
                 .eq(serials.iter().rev().copied());
-        if top {
+        if top && allow_undo {
             let mut report = RevertReport {
                 undone: true,
                 ..Default::default()
@@ -465,7 +478,11 @@ impl Editor {
             return Ok(report);
         }
         if data.has_snapshot_parts() {
-            return Err(Refusal::Snapshot { later: above });
+            return Err(if allow_undo {
+                Refusal::Snapshot { later: above }
+            } else {
+                Refusal::Shared
+            });
         }
         let (conflicts, already_gone) = self.revert_conflicts(data);
         if !conflicts.is_empty() && !skip_conflicts {
@@ -505,9 +522,15 @@ impl Editor {
                             "object {extra} was made later and goes with the objects of the step"
                         )));
                     }
-                    tx.run(&Command::DeleteObjects { ids: remove }, &mut Outcome::default())?;
+                    tx.run(
+                        &Command::DeleteObjects { ids: remove },
+                        &mut Outcome::default(),
+                    )?;
                 }
-                for c in todo.iter().filter(|c| c.before.is_some() && c.after.is_some()) {
+                for c in todo
+                    .iter()
+                    .filter(|c| c.before.is_some() && c.after.is_some())
+                {
                     tx.editable(c.id)?;
                     tx.touch(c.id);
                     if let (Some(slot), Some(before)) = (tx.doc.object_mut(c.id), &c.before) {
@@ -551,7 +574,10 @@ mod tests {
     fn add(ed: &mut Editor, x: f64) -> ObjectId {
         let o = ed
             .execute(&Command::AddObject {
-                shape: Shape::Line { a: DVec2::new(x, 0.0), b: DVec2::new(x + 1.0, 1.0) },
+                shape: Shape::Line {
+                    a: DVec2::new(x, 0.0),
+                    b: DVec2::new(x + 1.0, 1.0),
+                },
                 layer: None,
                 class: None,
                 attrs: Default::default(),
@@ -589,7 +615,11 @@ mod tests {
         assert_eq!(ed.step_place(s[0]), StepPlace::Undo(0));
         ed.undo();
         add(&mut ed, 5.0);
-        assert_eq!(ed.step_place(s[0]), StepPlace::Gone, "a new command clears redo");
+        assert_eq!(
+            ed.step_place(s[0]),
+            StepPlace::Gone,
+            "a new command clears redo"
+        );
     }
 
     #[test]
@@ -606,11 +636,18 @@ mod tests {
         assert_eq!(serials.len(), 5);
         let c = data.object_counts();
         assert_eq!((c.added, c.changed, c.removed), (1, 1, 0));
-        let added = data.objects.iter().find(|o| o.kind() == Counted::Added).unwrap();
+        let added = data
+            .objects
+            .iter()
+            .find(|o| o.kind() == Counted::Added)
+            .unwrap();
         // The state after is the moved one.
         assert_eq!(
             added.after.as_ref().unwrap().shape,
-            Shape::Line { a: DVec2::new(15.0, 0.0), b: DVec2::new(16.0, 1.0) }
+            Shape::Line {
+                a: DVec2::new(15.0, 0.0),
+                b: DVec2::new(16.0, 1.0)
+            }
         );
     }
 
@@ -620,7 +657,7 @@ mod tests {
         let (s, d) = step(&mut ed, |e| {
             add(e, 0.0);
         });
-        let r = ed.revert_step(&s, &d, false).unwrap();
+        let r = ed.revert_step(&s, &d, false, true).unwrap();
         assert!(r.undone);
         assert!(ed.doc().objects.is_empty());
         assert!(ed.redo());
@@ -638,7 +675,7 @@ mod tests {
         let later = add(&mut ed, 50.0);
         let before = ed.doc().object(other).cloned();
         assert!(before.is_some());
-        let r = ed.revert_step(&s, &d, false).unwrap();
+        let r = ed.revert_step(&s, &d, false, true).unwrap();
         assert!(!r.undone);
         assert_eq!(r.reverted.len(), 2);
         // The new object is gone, the moved one is back, and the later object stayed.
@@ -646,7 +683,10 @@ mod tests {
         assert!(ed.doc().object(later).is_some());
         assert_eq!(
             ed.doc().object(other).unwrap().shape,
-            Shape::Line { a: DVec2::new(100.0, 0.0), b: DVec2::new(101.0, 1.0) }
+            Shape::Line {
+                a: DVec2::new(100.0, 0.0),
+                b: DVec2::new(101.0, 1.0)
+            }
         );
         // The revert is a step of its own: undo puts the agent's work back.
         assert!(ed.undo());
@@ -664,7 +704,7 @@ mod tests {
         mv(&mut ed, id, 3.0);
         let doc_before = ed.doc().clone();
         let depth = ed.undo_depth();
-        let err = ed.revert_step(&s, &d, false).unwrap_err();
+        let err = ed.revert_step(&s, &d, false, true).unwrap_err();
         assert_eq!(
             err,
             Refusal::Conflicts(vec![Conflict {
@@ -686,7 +726,7 @@ mod tests {
         });
         let (a, b) = (d.objects[0].id, d.objects[1].id);
         mv(&mut ed, a, 3.0);
-        let r = ed.revert_step(&s, &d, true).unwrap();
+        let r = ed.revert_step(&s, &d, true, true).unwrap();
         assert_eq!(r.reverted, vec![b]);
         assert_eq!(r.skipped.len(), 1);
         assert!(ed.doc().object(a).is_some());
@@ -702,8 +742,11 @@ mod tests {
             add(e, 10.0);
         });
         let new = d.objects.iter().find(|o| o.id != old).unwrap().id;
-        ed.execute(&Command::DeleteObjects { ids: vec![old, new] }).unwrap();
-        let err = ed.revert_step(&s, &d, false).unwrap_err();
+        ed.execute(&Command::DeleteObjects {
+            ids: vec![old, new],
+        })
+        .unwrap();
+        let err = ed.revert_step(&s, &d, false, true).unwrap_err();
         assert_eq!(
             err,
             Refusal::Conflicts(vec![Conflict {
@@ -725,7 +768,7 @@ mod tests {
             e.execute(&Command::DeleteObjects { ids: vec![b] }).unwrap();
         });
         add(&mut ed, 30.0);
-        let r = ed.revert_step(&s, &d, false).unwrap();
+        let r = ed.revert_step(&s, &d, false, true).unwrap();
         assert_eq!(r.reverted, vec![b]);
         let order: Vec<ObjectId> = ed.doc().objects.keys().copied().take(3).collect();
         assert_eq!(order, vec![a, b, c], "back at its place in the z-order");
@@ -748,7 +791,7 @@ mod tests {
             scale: None,
         })
         .unwrap();
-        let err = ed.revert_step(&s, &d, false).unwrap_err();
+        let err = ed.revert_step(&s, &d, false, true).unwrap_err();
         assert!(matches!(
             err,
             Refusal::Conflicts(ref l) if l[0].kind == ConflictKind::LayerLocked
@@ -771,7 +814,7 @@ mod tests {
         assert_eq!(d.layers_added, vec!["Planting".to_string()]);
         add(&mut ed, 0.0);
         assert_eq!(
-            ed.revert_step(&s, &d, false).unwrap_err(),
+            ed.revert_step(&s, &d, false, true).unwrap_err(),
             Refusal::Snapshot { later: 1 }
         );
         // Undo back to the step takes both.
@@ -788,13 +831,41 @@ mod tests {
             add(e, 10.0);
         });
         let ids: Vec<ObjectId> = d.objects.iter().map(|o| o.id).collect();
-        ed.execute(&Command::Group { ids: ids.clone(), name: None }).unwrap();
+        ed.execute(&Command::Group {
+            ids: ids.clone(),
+            name: None,
+        })
+        .unwrap();
         // The members changed (their parent): a conflict, not a deletion of the group.
         assert!(matches!(
-            ed.revert_step(&s, &d, false),
+            ed.revert_step(&s, &d, false, true),
             Err(Refusal::Conflicts(_))
         ));
         assert_eq!(ed.doc().objects.len(), 3);
+    }
+
+    #[test]
+    fn without_a_plain_undo_the_top_step_reverts_as_a_new_edit_and_a_snapshot_step_is_refused() {
+        let mut ed = Editor::with_sequential_ids();
+        let (s, d) = step(&mut ed, |e| {
+            add(e, 0.0);
+        });
+        let r = ed.revert_step(&s, &d, false, false).unwrap();
+        assert!(!r.undone);
+        assert!(ed.doc().objects.is_empty());
+        assert!(!ed.can_redo(), "a new edit, not an undo");
+        assert!(ed.undo(), "which can be undone");
+        assert_eq!(ed.doc().objects.len(), 1);
+        let (s, d) = step(&mut ed, |e| {
+            e.execute(&Command::AddLayer {
+                name: "L".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap();
+        });
+        assert_eq!(ed.revert_step(&s, &d, false, false), Err(Refusal::Shared));
     }
 
     #[test]

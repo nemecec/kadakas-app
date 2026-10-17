@@ -127,7 +127,9 @@ impl Summary {
             } else {
                 (what, &*format!("{what}s"))
             };
-            if what == "layer" && !self.layers_added.is_empty() && c.added == self.layers_added.len()
+            if what == "layer"
+                && !self.layers_added.is_empty()
+                && c.added == self.layers_added.len()
             {
                 parts.push(format!("added layer {}", self.layers_added.join(", ")));
             } else if c.added > 0 {
@@ -224,6 +226,10 @@ pub struct SessionRef {
     pub session: u64,
     /// True if this call starts the session (a new connection, or after a gap of silence).
     pub started: bool,
+    /// True until a version was tried for this session (`ActivityLog::version_attempted`). It is
+    /// not the first call that needs the version but the first call that may change something:
+    /// an agent that starts with `describe` still gets its version before its first edit.
+    pub needs_version: bool,
 }
 
 /// The steps of the agents of one session of the API.
@@ -234,6 +240,8 @@ pub struct ActivityLog {
     next_session: u64,
     /// Per connection: the session and the time of its last call.
     sessions: HashMap<u64, (u64, u64)>,
+    /// Sessions for which a version was tried.
+    versioned: Vec<u64>,
     states: usize,
     /// Changes whenever the log changes, for a view that caches.
     generation: u64,
@@ -287,6 +295,7 @@ impl ActivityLog {
                 SessionRef {
                     session,
                     started: false,
+                    needs_version: !self.versioned.contains(&session),
                 }
             }
             _ => {
@@ -296,7 +305,18 @@ impl ActivityLog {
                 SessionRef {
                     session,
                     started: true,
+                    needs_version: true,
                 }
+            }
+        }
+    }
+
+    /// Says that the version at the start of a session was tried (saved or refused).
+    pub fn version_attempted(&mut self, session: u64) {
+        if !self.versioned.contains(&session) {
+            self.versioned.push(session);
+            if self.versioned.len() > 256 {
+                self.versioned.remove(0);
             }
         }
     }
@@ -398,6 +418,18 @@ impl ActivityLog {
         n
     }
 
+    /// Marks one step as seen (or not). True if it changed.
+    pub fn set_seen_one(&mut self, id: u64, seen: bool) -> bool {
+        match self.steps.iter_mut().find(|s| s.id == id) {
+            Some(s) if s.seen != seen => {
+                s.seen = seen;
+                self.generation += 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Everything goes (the document was replaced: the steps belong to the old one).
     pub fn clear(&mut self) {
         if self.steps.is_empty() && self.sessions.is_empty() {
@@ -408,6 +440,7 @@ impl ActivityLog {
         self.states = 0;
         self.version_notes.clear();
         self.session_versions.clear();
+        self.versioned.clear();
         self.generation += 1;
     }
 }
@@ -434,7 +467,12 @@ mod tests {
         ObjectId(o.created[0])
     }
 
-    fn record(log: &mut ActivityLog, ed: &mut Editor, conn: u64, f: impl FnOnce(&mut Editor)) -> Option<u64> {
+    fn record(
+        log: &mut ActivityLog,
+        ed: &mut Editor,
+        conn: u64,
+        f: impl FnOnce(&mut Editor),
+    ) -> Option<u64> {
         log.touch(conn, 1_000);
         let mark = ed.serial_mark();
         f(ed);
@@ -525,7 +563,7 @@ mod tests {
         ed.set_origin(Origin::User);
         add(&mut ed, 50.0);
         let r = ed
-            .revert_step(&step.serials, step.data.as_ref().unwrap(), false)
+            .revert_step(&step.serials, step.data.as_ref().unwrap(), false, true)
             .unwrap();
         assert_eq!(r.reverted.len(), 3);
         assert_eq!(ed.doc().objects.len(), 1);
@@ -549,8 +587,14 @@ mod tests {
     fn sessions_start_for_a_new_connection_and_after_a_gap() {
         let mut log = ActivityLog::default();
         let a = log.touch(1, 0);
-        assert!(a.started);
+        assert!(a.started && a.needs_version);
         assert!(!log.touch(1, 1000).started);
+        assert!(
+            log.touch(1, 1000).needs_version,
+            "until a version was tried"
+        );
+        log.version_attempted(a.session);
+        assert!(!log.touch(1, 1000).needs_version);
         let b = log.touch(2, 1000);
         assert!(b.started);
         assert_ne!(a.session, b.session);

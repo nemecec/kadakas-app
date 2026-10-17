@@ -98,12 +98,14 @@ impl ReviewSet {
                 (Some(before), None, None) => Some((Status::Removed, Some(before), None)),
                 // Removed by the agent and back again (revert, or a new object with this ID):
                 // a change if it differs.
-                (Some(before), None, Some(now)) => (*now != before)
-                    .then(|| (Status::Changed, Some(before), Some(now.clone()))),
+                (Some(before), None, Some(now)) => {
+                    (*now != before).then(|| (Status::Changed, Some(before), Some(now.clone())))
+                }
                 // Changed by the agent, and deleted by the person since.
                 (Some(_), Some(_), None) => None,
-                (Some(before), Some(_), Some(now)) => (*now != before)
-                    .then(|| (Status::Changed, Some(before), Some(now.clone()))),
+                (Some(before), Some(_), Some(now)) => {
+                    (*now != before).then(|| (Status::Changed, Some(before), Some(now.clone())))
+                }
             };
             if let Some((status, before, after)) = entry {
                 set.entries.push(Entry {
@@ -206,6 +208,28 @@ impl ReviewSet {
         }
         .map(|e| e.id)
     }
+}
+
+/// The box around everything a step touched (drawing mm), as it is now or, for removed objects,
+/// as it was.
+pub fn step_bounds(step: &Step, doc: &Document) -> Option<(DVec2, DVec2)> {
+    let data = step.data.as_ref()?;
+    let mut out: Option<(DVec2, DVec2)> = None;
+    for c in &data.objects {
+        let o = doc
+            .object(c.id)
+            .or(c.after.as_ref())
+            .or(c.before.as_ref())?;
+        let (lo, hi) = doc.object_bounds(o);
+        if !(lo.is_finite() && hi.is_finite()) {
+            continue;
+        }
+        out = Some(match out {
+            Some((a, b)) => (a.min(lo), b.max(hi)),
+            None => (lo, hi),
+        });
+    }
+    out
 }
 
 // ---------------------------------------------------------------- the diff of one object
@@ -320,7 +344,9 @@ mod tests {
     fn review(log: &ActivityLog, ed: &Editor, scope: Scope) -> ReviewSet {
         match scope {
             Scope::Unseen => ReviewSet::build(log.steps().iter().filter(|s| !s.seen), ed.doc()),
-            Scope::Step(id) => ReviewSet::build(log.steps().iter().filter(|s| s.id == id), ed.doc()),
+            Scope::Step(id) => {
+                ReviewSet::build(log.steps().iter().filter(|s| s.id == id), ed.doc())
+            }
         }
     }
 

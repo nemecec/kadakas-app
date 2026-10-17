@@ -1142,6 +1142,21 @@ class Document:
         """Remove one pointer (``id`` from ``view_highlight``), or all."""
         return self.api.view_highlight_clear(**({} if id is None else {"id": id}))
 
+    # -- what the agent changed (AGR-05, AGR-06) --
+
+    def agent_activity(self, step: int | None = None, *, since: int | None = None,
+                       limit: int | None = None) -> JsonDict:
+        """The steps of the agent: every call or script run that changed the document, with the
+        time, the method, a summary written from the change set, the counts and the state
+        (``active``, ``undone`` or ``gone``). ``step`` gives one step with the IDs of its objects
+        (added, changed, removed) and why the person cannot revert it now. Read only: the
+        person reverts a step in the app."""
+        params: JsonDict = {}
+        for key, value in (("step", step), ("since", since), ("limit", limit)):
+            if value is not None:
+                params[key] = value
+        return self.api.agent_activity(**params)
+
     def to_json(self) -> JsonDict:
         """The whole document as JSON."""
         return self.api.document_get()

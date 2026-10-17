@@ -127,6 +127,7 @@ mod x3d_material_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod x3d_tests;
 
+pub use agent_activity_api::{Advice, StepCheck, StepError};
 use kadakas_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
 pub use limits::{DEFAULT_DOCUMENT_FILE_BYTES, STRICT_DOCUMENT_FILE_BYTES, SessionLimits};
 

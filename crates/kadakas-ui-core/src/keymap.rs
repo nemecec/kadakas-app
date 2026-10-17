@@ -220,6 +220,11 @@ actions! {
     ViewHistoryNext => "view.history_next", msg!("action-view-history-next"), ["Cmd/Ctrl+Shift+."], true;
     ViewAgentBack => "view.agent_back", msg!("action-view-agent-back"), ["Cmd/Ctrl+Alt+B"], true;
     ViewAgentNext => "view.agent_next", msg!("action-view-agent-next"), ["Cmd/Ctrl+Alt+N"], true;
+    ViewAgentActivity => "view.agent_activity", msg!("action-view-agent-activity"), ["Cmd/Ctrl+Alt+A"], true;
+    ViewAgentChangeNext => "view.agent_change_next", msg!("action-view-agent-change-next"), ["Cmd/Ctrl+Alt+]"], true;
+    ViewAgentChangePrevious => "view.agent_change_previous", msg!("action-view-agent-change-previous"), ["Cmd/Ctrl+Alt+["], true;
+    ViewAgentChangesSeen => "view.agent_changes_seen", msg!("action-view-agent-changes-seen"), ["Cmd/Ctrl+Alt+S"], true;
+    ViewAgentChangesToggle => "view.agent_changes_toggle", msg!("action-view-agent-changes-toggle"), ["Cmd/Ctrl+Alt+H"], true;
     SnapCues => "snap.cues", msg!("action-snap-cues"), ["Y"], true;
     SnapRelativeAngles => "snap.relative_angles", msg!("action-snap-relative-angles"), ["/"], true;
     SnapAcquire => "snap.acquire", msg!("action-snap-acquire"), ["T"], true;

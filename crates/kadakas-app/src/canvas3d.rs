@@ -34,6 +34,9 @@ pub struct Canvas3d<'a> {
     pub nav: &'a mut crate::agent_view::NavSignal,
     /// What an agent shows: the pointers and the agent cursor (AGR-03).
     pub agent: Option<&'a crate::agent_view::AgentView>,
+    /// The changes of the agent that the person has not seen (AGR-05): boxes with a pattern and a
+    /// mark for each status. `None`: off.
+    pub review: Option<std::sync::Arc<kadakas_ui_core::agent_activity::Review>>,
 }
 
 /// Draws the canvas and handles its input for one frame.
@@ -50,6 +53,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         mut issues,
         nav,
         agent,
+        review,
     } = c;
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     if !gpu_ready {
@@ -217,6 +221,19 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     {
         issues.paint_3d(&ui.painter_at(rect), rect, view_proj, scene.origin, session);
     }
+    // What the agent changed and the person has not seen (AGR-05; never part of the document).
+    if compare.is_none()
+        && let Some(review) = &review
+    {
+        crate::agent_activity_ui::paint_3d(
+            &ui.painter_at(rect),
+            rect,
+            view_proj,
+            &scene,
+            session.editor.doc(),
+            review,
+        );
+    }
     // What the agent points at, and where the agent is (never part of the document).
     if compare.is_none()
         && let Some(agent) = agent
@@ -341,6 +358,7 @@ mod tests {
                             issues: Some(&mut self.issues),
                             nav: &mut Default::default(),
                             agent: None,
+                            review: None,
                         },
                     );
                 });
@@ -563,6 +581,7 @@ mod tests {
                     issues: None,
                     nav: &mut Default::default(),
                     agent: None,
+                    review: None,
                 },
             );
         });

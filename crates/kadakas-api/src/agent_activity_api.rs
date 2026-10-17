@@ -48,6 +48,9 @@ pub struct StepCheck {
     pub snapshot_blocked: bool,
     /// Objects of the step that can go back now.
     pub free: usize,
+    /// The session is connected to a shared document: the editor's own undo is not used (the
+    /// collaboration has a per-user undo), so only the revert of single objects works.
+    pub shared: bool,
 }
 
 impl StepCheck {
@@ -58,6 +61,22 @@ impl StepCheck {
 
     /// Why a revert (of all the objects) is not possible now, in English, or `None`.
     pub fn blocked(&self) -> Option<String> {
+        if self.shared && matches!(self.place, StepPlace::Undo(_)) {
+            if self.snapshot_blocked {
+                return Some(kadakas_core::command::Refusal::Shared.to_string());
+            }
+            if !self.details {
+                return Some(
+                    "the log no longer holds what the step changed (too many steps)".into(),
+                );
+            }
+            if !self.conflicts.is_empty() {
+                return Some(
+                    kadakas_core::command::Refusal::Conflicts(self.conflicts.clone()).to_string(),
+                );
+            }
+            return None;
+        }
         match self.place {
             StepPlace::Redo => return Some("the step is undone already".into()),
             StepPlace::Gone => {
@@ -102,6 +121,18 @@ pub enum Advice {
 
 impl StepCheck {
     pub fn advice(&self) -> Advice {
+        if self.shared {
+            // A new edit of the objects, never an undo of the editor.
+            return match self.place {
+                StepPlace::Undo(_) if self.snapshot_blocked || !self.details => Advice::Nothing,
+                StepPlace::Undo(_) if self.conflicts.is_empty() => Advice::Revert,
+                StepPlace::Undo(_) if self.free > 0 => Advice::Partial {
+                    free: self.free,
+                    blocked: self.conflicts.len(),
+                },
+                _ => Advice::Nothing,
+            };
+        }
         match self.place {
             StepPlace::Undo(0) => Advice::Undo,
             StepPlace::Undo(_) if self.snapshot_blocked => Advice::UndoBackOnly,
@@ -143,10 +174,25 @@ impl std::fmt::Display for StepError {
 /// not one of them may start an agent session: a version is saved first. A wrong guess costs one
 /// extra version (a read call taken for a change) or none (a change taken for a read).
 fn reads_only(method: &str) -> bool {
-    let (domain, last) = method.split_once('.').unwrap_or(("", method));
+    let domain = method.split('.').next().unwrap_or("");
+    let last = method.rsplit('.').next().unwrap_or(method);
     matches!(
         domain,
-        "view" | "render" | "events" | "report" | "describe" | "agent"
+        "view"
+            | "render"
+            | "events"
+            | "report"
+            | "describe"
+            | "agent"
+            | "file"
+            | "document"
+            | "export"
+            | "collab"
+            | "feedback"
+            | "version"
+            | "undo"
+            | "redo"
+            | "selection"
     ) || matches!(
         last,
         "get"
@@ -177,7 +223,8 @@ impl Session {
     ) -> Result<Value, RpcError> {
         let now = review_api::default_now();
         let started = self.activity.touch(conn, now);
-        if started.started && !reads_only(method) {
+        if started.needs_version && !reads_only(method) {
+            self.activity.version_attempted(started.session);
             self.save_session_version(started.session, now);
         }
         let mark = self.editor.serial_mark();
@@ -233,10 +280,17 @@ impl Session {
             .last()
             .map(|s| self.editor.origins_above(*s))
             .unwrap_or_default();
-        let above_other = origins.iter().filter(|o| **o != Origin::Agent).count();
+        // Steps of the person (and of other users of a shared document) are the ones that the
+        // person did not expect to lose; steps of agents and of their scripts are not.
+        let above_other = origins
+            .iter()
+            .filter(|o| matches!(o, Origin::User | Origin::Remote))
+            .count();
         // The steps above the newest step of the call (they are not part of it).
+        let shared = crate::collab_api::is_connected(self);
+        let exact = matches!(place, StepPlace::Undo(0)) && !shared;
         let (conflicts, gone) = match &step.data {
-            Some(d) if matches!(place, StepPlace::Undo(n) if n > 0) => {
+            Some(d) if matches!(place, StepPlace::Undo(_)) && !exact => {
                 self.editor.revert_conflicts(d)
             }
             _ => (Vec::new(), Vec::new()),
@@ -244,7 +298,7 @@ impl Session {
         let snapshot_blocked = step
             .data
             .as_ref()
-            .is_some_and(|d| d.has_snapshot_parts() && !matches!(place, StepPlace::Undo(0)));
+            .is_some_and(|d| d.has_snapshot_parts() && !exact);
         let total = step.data.as_ref().map_or(0, |d| d.objects.len());
         Ok(StepCheck {
             place,
@@ -255,6 +309,7 @@ impl Session {
             already_gone: gone.len(),
             conflicts,
             snapshot_blocked,
+            shared,
         })
     }
 
@@ -286,9 +341,12 @@ impl Session {
         let step = self.activity.get(step_id).ok_or(StepError::Unknown)?;
         let data = step.data.clone().ok_or(StepError::DetailsDropped)?;
         let serials = step.serials.clone();
+        let allow_undo = !crate::collab_api::is_connected(self);
         let origin = self.editor.origin();
         self.editor.set_origin(Origin::User);
-        let r = self.editor.revert_step(&serials, &data, skip_conflicts);
+        let r = self
+            .editor
+            .revert_step(&serials, &data, skip_conflicts, allow_undo);
         self.editor.set_origin(origin);
         self.prune_selection();
         r.map_err(StepError::Refused)
@@ -299,6 +357,9 @@ impl Session {
     pub fn undo_back_to_agent_step(&mut self, step_id: u64) -> Result<usize, StepError> {
         let step = self.activity.get(step_id).ok_or(StepError::Unknown)?;
         let first = *step.serials.first().ok_or(StepError::Unknown)?;
+        if crate::collab_api::is_connected(self) {
+            return Err(StepError::Refused(kadakas_core::command::Refusal::Shared));
+        }
         let origin = self.editor.origin();
         self.editor.set_origin(Origin::User);
         let r = self.editor.undo_through(first);
@@ -343,7 +404,9 @@ fn entry(s: &Session, step: &Step) -> Value {
         v["session_version"] = json!(id);
     }
     if let Some(note) = s.activity.version_note(step.session) {
-        v["version_note"] = json!(format!("no version was saved at the start of the session: {note}"));
+        v["version_note"] = json!(format!(
+            "no version was saved at the start of the session: {note}"
+        ));
     }
     v
 }
@@ -369,7 +432,12 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
                 truncated |= ids.len() > MAX_IDS;
                 lists.insert(
                     name.into(),
-                    json!(ids.iter().take(MAX_IDS).map(|i| i.0.to_string()).collect::<Vec<_>>()),
+                    json!(
+                        ids.iter()
+                            .take(MAX_IDS)
+                            .map(|i| i.0.to_string())
+                            .collect::<Vec<_>>()
+                    ),
                 );
             }
             v["objects"] = Value::Object(lists);

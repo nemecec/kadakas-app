@@ -334,6 +334,7 @@
         "file.plugins",
         "file.versions",
         "file.compare",
+        "file.agent_activity",
         "file.compare_drawings",
         "-",
         "file.collaboration",

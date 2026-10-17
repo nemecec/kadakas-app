@@ -2668,3 +2668,8 @@ script.eval
   seed int # seeds Math.random (0 to 4294967295); the same seed gives the same numbers
 
 script.js_info
+
+agent.activity
+  step int # one step: the IDs of its objects, and why the person cannot revert it now
+  since int # only the steps after this step ID
+  limit int # at most this many steps, the newest (default 50, at most 500)

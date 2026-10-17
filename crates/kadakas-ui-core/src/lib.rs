@@ -8,6 +8,7 @@
 //! - [`hit`] and [`annot_pick`]: picking and box selection.
 //! - [`snap`]: the geometry that the pointer snaps to, and the snap result.
 
+pub mod agent_activity;
 pub mod agent_review;
 pub mod agent_view;
 pub mod annot_pick;

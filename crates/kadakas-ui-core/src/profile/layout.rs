@@ -54,6 +54,8 @@ commands! {
     // The window that compares two versions with a colored overlay in the plan and in 3D (REV-03).
     Compare => "file.compare", msg!("panels-compare"), false;
     // The window that compares two DXF or DWG files without importing them (IOP-24).
+    // The Activity panel of the agent: its steps, what each changed, undo and revert (AGR-06).
+    AgentActivity => "file.agent_activity", msg!("panels-agent-activity"), false;
     CompareDrawings => "file.compare_drawings", msg!("panels-compare-drawings"), true;
     // A block: the submenu File > Collaboration (Connect, Disconnect, People).
     Collaboration => "file.collaboration", msg!("panels-collaboration"), false;
@@ -132,6 +134,7 @@ impl Cmd {
             Cmd::Compose => Action::CmdCompose,
             Cmd::Extrude => Action::CmdExtrude,
             Cmd::Sweep => Action::CmdSweep,
+            Cmd::AgentActivity => Action::ViewAgentActivity,
             Cmd::ZoomFit => Action::ZoomFit,
             Cmd::PreviousView => Action::ViewHistoryPrevious,
             Cmd::NextView => Action::ViewHistoryNext,

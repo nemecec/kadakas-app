@@ -43,6 +43,8 @@ pub enum MenuAction {
     PlugIns,
     /// File > Versions: the window of named versions and the comparison.
     Versions,
+    /// File > Agent Activity: the panel with the steps of the agent (AGR-06).
+    AgentActivity,
     /// File > Compare Versions: the colored overlay of two versions in the plan and in 3D.
     Compare,
     /// File > Import > Update from DXF/DWG...: a new revision of an imported drawing (IOP-23).
@@ -157,6 +159,7 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         Cmd::PlugIns => M::PlugIns,
         Cmd::Versions => M::Versions,
         Cmd::Compare => M::Compare,
+        Cmd::AgentActivity => M::AgentActivity,
         Cmd::UpdateFromDxf => M::UpdateFromDxf,
         Cmd::Bcf => M::Bcf,
         Cmd::NewIssue => M::NewIssue,
@@ -599,6 +602,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         MenuAction::PreviousView => Action::ViewHistoryPrevious,
         MenuAction::NextView => Action::ViewHistoryNext,
         MenuAction::QuickSearch => Action::QuickSearch,
+        MenuAction::AgentActivity => Action::ViewAgentActivity,
         MenuAction::Tool(t) => Action::for_tool(t),
         MenuAction::ExportSvg
         | MenuAction::Import

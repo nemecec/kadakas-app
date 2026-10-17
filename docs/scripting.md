@@ -194,6 +194,23 @@ doc.view_camera([20000, -20000, 12000], [5000, 5000, 0], projection="perspective
 - A pointer shows an outline glow (objects), a box or a marker (a place) with a short text of at most 80 characters, in the plan and in 3D. Each color also has its own mark and line style, so colour is not the only sign. At most 32 pointers at a time and 500 objects in one. A request over a bound is refused with a message; nothing is cut. `until` is `"next_change"` (the document changes), `"dismissed"` (the default; the person dismisses it) or a time in ms.
 - The person sees the agent like a collaborator: a cursor with the name Agent at the last place it pointed at or zoomed to, and Agent in the People palette. A small panel in the drawing lists the pointers; a click zooms to one, and each can be dismissed. `Cmd/Ctrl+Alt+N` shows the next pointer.
 
+### Review in the live app: what the agent changed
+
+Every call or script run of an agent that changes the document is one **step** of the activity log of the session. This works in the app and in `kadakas serve`; the window (highlight, panel, revert) is in the app only.
+
+```python
+log = doc.agent_activity()                  # the steps, oldest first
+for step in log["steps"]:
+    print(step["id"], step["method"], step["summary"], step["state"], step["revertible"])
+one = doc.agent_activity(log["steps"][-1]["id"])   # the IDs of its added, changed and removed objects
+print(one["objects"]["added"], one.get("blocked"))
+```
+
+- `agent.activity {step?, since?, limit?}` only reads. A step has `id`, `session`, `time_ms`, `method`, a `summary` written from the change set (for example `Added 3 objects (2 polyline, 1 area); added layer Planting`), `counts` (objects, layers, classes, resources), `seen`, `state` (`active`, `undone`, `gone`) and `revertible`. With `step`, the answer lists the IDs of the objects by how they changed and, if the person cannot revert the step now, `blocked` says why.
+- One call is one step, and one script run (`script.eval`) is one step, whatever number of calls it made. A call that fails, a call the limits take back and the `undo` of the agent make no step.
+- Before the first change of an agent session (a new connection, or a call after 30 minutes of silence) the session saves the version **Before agent session**. The steps of the session carry its number as `session_version`, so `render.png {compare: {from: <version>, to: "current"}}` shows what the person sees highlighted. If the limit of versions refuses it, the agent works on and the steps say so in `version_note`. Never delete versions to make room.
+- The person marks changes as seen, undoes back to a step and reverts a step in the Activity panel (File > Agent Activity..., `Cmd/Ctrl+Alt+A`). An agent cannot revert. A revert never overwrites an object that something changed after the step, so read an object again before you rely on it.
+
 ## Scripts palette
 
 Choose **File > Scripts...** to open the palette.

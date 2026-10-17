@@ -29,6 +29,9 @@ use crate::theme::{self, ThemeChoice};
 use crate::view::{View, ViewExt as _, grid_step};
 use crate::view3d::{self, View3d};
 
+mod activity;
+#[cfg(test)]
+mod activity_tests;
 #[cfg(test)]
 mod agent_view_tests;
 mod issues;
@@ -161,6 +164,10 @@ pub struct KadakasApp {
     pending_camera: Option<([f64; 3], f64, f64, f64)>,
     /// What an agent shows in the view: pointers, the cursor, the views to go Back to (AGR-02, AGR-03).
     agent_view: crate::agent_view::AgentView,
+    /// The Activity panel and the review of what the agent changed (AGR-05, AGR-06).
+    activity_ui: crate::agent_activity_ui::ActivityUi,
+    /// The review of this frame: what the plan and the 3D view highlight.
+    activity_review: Option<std::sync::Arc<kadakas_ui_core::agent_activity::Review>>,
     /// A press on a pin or a click that placed an issue: its release is not a tool event.
     issue_click: bool,
     /// The model point where the context menu of the plan was opened.
@@ -510,6 +517,8 @@ impl KadakasApp {
             own_cursor: None,
             pending_camera: None,
             agent_view: Default::default(),
+            activity_ui: Default::default(),
+            activity_review: None,
             issue_click: false,
             context_point: None,
             #[cfg(target_arch = "wasm32")]
@@ -608,7 +617,8 @@ impl KadakasApp {
         let c = self.compare_ui.draw();
         #[cfg(not(target_arch = "wasm32"))]
         let c = c.or_else(|| self.update_ui.draw());
-        c
+        // The changes of the agent, while nothing else compares (AGR-05).
+        c.or_else(|| self.activity_draw())
     }
 
     /// Clears the selection while the drawing is read only.
@@ -632,6 +642,11 @@ impl KadakasApp {
                     | Action::ViewHistoryNext
                     | Action::ViewAgentBack
                     | Action::ViewAgentNext
+                    | Action::ViewAgentActivity
+                    | Action::ViewAgentChangeNext
+                    | Action::ViewAgentChangePrevious
+                    | Action::ViewAgentChangesSeen
+                    | Action::ViewAgentChangesToggle
                     | Action::QuickSearch
                     | Action::Cancel
                     | Action::FileNew
@@ -663,6 +678,7 @@ impl KadakasApp {
                 | MenuAction::QuickSearch
                 | MenuAction::Versions
                 | MenuAction::Compare
+                | MenuAction::AgentActivity
                 | MenuAction::UpdateFromDxf
                 | MenuAction::CompareDrawings
                 | MenuAction::Preferences
@@ -1057,6 +1073,7 @@ impl KadakasApp {
             }
             MenuAction::Versions => self.versions_ui.open(&mut self.session),
             MenuAction::Compare => self.compare_ui.open(&mut self.session),
+            MenuAction::AgentActivity => self.activity_ui.model.open = true,
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::UpdateFromDxf => self.update_ui.start(&mut self.session),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1710,6 +1727,24 @@ impl KadakasApp {
             Action::ViewHistoryNext => self.step_view_history(false),
             Action::ViewAgentBack => self.agent_back(ctx),
             Action::ViewAgentNext => self.agent_next(ctx),
+            Action::ViewAgentActivity => {
+                self.activity_ui.model.open = !self.activity_ui.model.open;
+            }
+            Action::ViewAgentChangeNext => {
+                self.activity_act(ctx, crate::agent_activity_ui::Act::Next)
+            }
+            Action::ViewAgentChangePrevious => {
+                self.activity_act(ctx, crate::agent_activity_ui::Act::Previous);
+            }
+            Action::ViewAgentChangesSeen => self.activity_act(
+                ctx,
+                crate::agent_activity_ui::Act::Seen(
+                    kadakas_ui_core::agent_activity::SeenTarget::All,
+                ),
+            ),
+            Action::ViewAgentChangesToggle => {
+                self.activity_ui.model.show = !self.activity_ui.model.show;
+            }
             Action::SnapCues => {
                 self.prefs.cues = !self.prefs.cues;
                 self.status = if self.prefs.cues {
@@ -2569,6 +2604,7 @@ impl KadakasApp {
             (tr!("panels-plug-ins"), MenuAction::PlugIns),
             (tr!("panels-versions"), MenuAction::Versions),
             (tr!("panels-compare"), MenuAction::Compare),
+            (tr!("panels-agent-activity"), MenuAction::AgentActivity),
             (tr!("app-preferences"), MenuAction::Preferences),
             (tr!("app-export-svg"), MenuAction::ExportSvg),
             (tr!("app-select-all"), MenuAction::SelectAll),
@@ -2873,6 +2909,10 @@ impl KadakasApp {
                             issues: Some(&mut self.issues_ui),
                             nav: &mut nav,
                             agent: Some(&self.agent_view),
+                            review: self
+                                .activity_review
+                                .clone()
+                                .filter(|_| self.activity_ui.model.show),
                         },
                     );
                     let now_ms = ui.input(|i| i.time) * 1000.0;
@@ -3209,6 +3249,7 @@ impl eframe::App for KadakasApp {
         self.view3d.sync(self.session.view, forced);
         self.apply_pending_camera();
         self.agent_view_step(&ctx);
+        self.activity_step(&ctx);
 
         // With a shared document, Undo and Redo work on your own edits (the per-user undo).
         let (can_undo, can_redo) = if self.collab.is_linked() {

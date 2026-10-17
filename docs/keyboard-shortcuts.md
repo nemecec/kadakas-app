@@ -193,6 +193,11 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Previous view in history (`view.history_previous`) | Cmd+Shift+, / Ctrl+Shift+, | Cmd/Ctrl+Shift+, | done |
 | Back to the view before the agent's change (`view.agent_back`, AGR-02) | none (Kadakas own) | Cmd/Ctrl+Alt+B | done |
 | Show the next agent pointer (`view.agent_next`, AGR-03) | none (Kadakas own) | Cmd/Ctrl+Alt+N | done |
+| Show the Activity panel of the agent (`view.agent_activity`, AGR-06) | none (Kadakas own) | Cmd/Ctrl+Alt+A | done |
+| Zoom to the next change of the agent (`view.agent_change_next`, AGR-05) | none (Kadakas own) | Cmd/Ctrl+Alt+] | done |
+| Zoom to the previous change of the agent (`view.agent_change_previous`, AGR-05) | none (Kadakas own) | Cmd/Ctrl+Alt+[ | done |
+| Mark the changes of the agent as seen (`view.agent_changes_seen`, AGR-05) | none (Kadakas own) | Cmd/Ctrl+Alt+S | done |
+| Highlight the changes of the agent on or off (`view.agent_changes_toggle`, AGR-05) | none (Kadakas own) | Cmd/Ctrl+Alt+H | done |
 | Zoom in, factor 2 (double tap) | CC (both) | CC | planned |
 | Switch saved view | Option+Arrow / Alt+Arrow | Alt+Arrow | planned |
 | Switch active layer or class | Cmd+Arrow / Ctrl+Arrow | Ctrl+Arrow | planned |

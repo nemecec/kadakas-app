@@ -957,6 +957,14 @@ pub fn show_next(env: &mut Env, id: Option<u32>) -> Option<u32> {
     env.zoom(&aim, true).is_ok().then_some(h.id)
 }
 
+/// The person's own zoom to a box in drawing mm, for the Activity panel: animated like a click on
+/// a pointer, no Back entry of the agent, and the lock "Agent may move my view" does not apply
+/// (the person moves their own view). False if the view cannot be framed yet.
+pub fn zoom_to_box(env: &mut Env, lo: DVec2, hi: DVec2) -> bool {
+    env.zoom(&json!({"box": [lo.x, lo.y, hi.x, hi.y]}), true)
+        .is_ok()
+}
+
 /// The method of a request line, for the lines that may be about the view. A quick look at the
 /// text first, so most lines (and big ones) are not parsed twice.
 pub fn method_of(line: &str) -> Option<String> {

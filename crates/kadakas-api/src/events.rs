@@ -140,6 +140,7 @@ impl Session {
     /// Forgets the subscription of a connection that closed.
     pub fn drop_connection(&mut self, conn: u64) {
         self.events.subs.remove(&conn);
+        self.activity.forget_connection(conn);
     }
 
     /// The notifications that this connection has not received yet, oldest first, as JSON-RPC
