@@ -536,10 +536,10 @@ fn mcp_version(requested: Option<&str>) -> &'static str {
         .unwrap_or(MCP_VERSIONS[0])
 }
 
-/// The content of a tool result. `render.png` gives an image block that a model can look at,
+/// The content of a tool result. `render.png` and `view.screenshot` give an image block that a model can look at,
 /// plus the other fields as text. Other methods give their result as text.
 fn tool_content(method: &str, response: &Value, text: String) -> Value {
-    if (method == "render.png" || method == "sheet.render")
+    if (method == "render.png" || method == "sheet.render" || method == "view.screenshot")
         && let Some(data) = response["result"]["png_base64"].as_str()
     {
         let mut meta = response["result"].clone();
@@ -698,7 +698,12 @@ fn mcp(mut backend: Backend, flat: bool, schemas: bool) {
                     }
                     mcp_tools::Call::Method(m, params) => {
                         let params = with_client(m, params, &client);
-                        let r = backend.call(json!(1), m, params);
+                        let mut r = backend.call(json!(1), m, params);
+                        if m == "describe"
+                            && let Some(result) = r.get_mut("result")
+                        {
+                            mcp_tools::name_tools(flat, result);
+                        }
                         let (text, is_error) = match r.get("error") {
                             Some(e) => (error_text(e), true),
                             None => (r["result"].to_string(), false),
@@ -1040,6 +1045,17 @@ mod tests {
             tool_content("view.list", &ok, "x".into()),
             json!([{"type": "text", "text": "x"}])
         );
+    }
+
+    #[test]
+    fn the_screenshot_is_an_image_like_render_png() {
+        let ok = json!({"result": {"png_base64": "BBBB", "width": 10}});
+        let c = tool_content("view.screenshot", &ok, ok["result"].to_string());
+        assert_eq!(
+            c[0],
+            json!({"type": "image", "data": "BBBB", "mimeType": "image/png"})
+        );
+        assert!(!c[1]["text"].as_str().unwrap().contains("BBBB"));
     }
 
     #[test]
