@@ -519,6 +519,14 @@ pub(super) fn interior_point(poly: &[DVec2]) -> Option<DVec2> {
     best.and_then(|(_, p)| checked(p))
 }
 
+/// The distance from `p` to the outline of `poly`.
+fn clearance(p: DVec2, poly: &[DVec2]) -> f64 {
+    let n = poly.len();
+    (0..n)
+        .map(|i| crate::geom::dist_to_segment(p, poly[i], poly[(i + 1) % n]))
+        .fold(f64::INFINITY, f64::min)
+}
+
 /// Sutherland-Hodgman: a ring cut to a box.
 fn clip_ring(ring: &[DVec2], lo: DVec2, hi: DVec2) -> Vec<DVec2> {
     let mut pts = ring.to_vec();
@@ -673,6 +681,18 @@ pub fn for_each_unit(
         .iter()
         .map(|k| k.pieces.iter().map(|p| min_width(p)).collect())
         .collect();
+    // A point inside each piece, found once and moved with the piece. It must be far from the
+    // sides compared to the rounding of the move (`eps`); else each copy finds its own.
+    let inner: Vec<Vec<Option<DVec2>>> = comp
+        .kinds
+        .iter()
+        .map(|k| {
+            k.pieces
+                .iter()
+                .map(|p| interior_point(p).filter(|q| clearance(*q, p) > 16.0 * local.eps))
+                .collect()
+        })
+        .collect();
     let mut placer = Placer::new(
         local,
         origin,
@@ -698,7 +718,8 @@ pub fn for_each_unit(
                 for (pi, piece) in kind.pieces.iter().enumerate() {
                     buf.clear();
                     buf.extend(piece.iter().map(|p| *p + t));
-                    placer.place(&buf, ki, ring_area(piece), kind.area, widths[ki][pi], f)?;
+                    let at = inner[ki][pi].map(|q| q + t);
+                    placer.place(&buf, at, ki, ring_area(piece), kind.area, widths[ki][pi], f)?;
                 }
             }
         }
@@ -752,10 +773,13 @@ impl Placer {
 
     /// One piece `buf` (a polygon in the frame of the pattern) of unit shape `ki`, whose full area
     /// is `piece_area` (the whole piece) and `kind_area` (all pieces of the shape). Calls `f` for
-    /// each unit that results.
+    /// each unit that results. `inner` is a point inside `buf`, away from its sides (see
+    /// `interior_point`), if the caller knows one; else `place` finds one when it needs it.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn place(
         &mut self,
         buf: &[DVec2],
+        inner: Option<DVec2>,
         ki: usize,
         piece_area: f64,
         kind_area: f64,
@@ -786,7 +810,11 @@ impl Placer {
         // Not a corner: a corner may lie on an edge that is one bit off the side of the unit, and
         // the ray test then gives either answer. The outline of the region is outside the unit (no
         // edge touches it), so the point is as far from the outline as from the sides of the unit.
-        let p0 = if touching { None } else { interior_point(buf) };
+        let p0 = if touching {
+            None
+        } else {
+            inner.or_else(|| interior_point(buf))
+        };
         if let Some(p0) = p0 {
             let inside = if self.near.is_empty() {
                 // No edge in the cells of the unit: the whole cell is on one side.
@@ -936,10 +964,7 @@ impl Placer {
         let Some(p) = interior_point(buf) else {
             return false;
         };
-        let n = buf.len();
-        let to_unit = (0..n)
-            .map(|i| crate::geom::dist_to_segment(p, buf[i], buf[(i + 1) % n]))
-            .fold(f64::INFINITY, f64::min);
+        let to_unit = clearance(p, buf);
         let to_region = self
             .near
             .iter()

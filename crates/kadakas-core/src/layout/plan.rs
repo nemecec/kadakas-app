@@ -786,6 +786,7 @@ impl Group {
                     let cut_by_rule = area < pc.full_area * (1.0 - 1e-9);
                     placer.place(
                         &pc.poly,
+                        None,
                         ki,
                         area,
                         c.kinds[ki].1,
