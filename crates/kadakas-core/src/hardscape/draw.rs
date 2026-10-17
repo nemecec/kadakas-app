@@ -1060,7 +1060,9 @@ fn escape(s: &str) -> String {
 pub fn finding_color(kind: check::Kind) -> &'static str {
     match kind {
         check::Kind::Overlap | check::Kind::OutsideArea => "rgb(220,30,30)",
-        check::Kind::JointTooNarrow | check::Kind::JointTooWide => "rgb(235,130,20)",
+        check::Kind::JointTooNarrow | check::Kind::JointTooWide | check::Kind::ZoneEdgeJoint => {
+            "rgb(235,130,20)"
+        }
         check::Kind::SmallPiece | check::Kind::WrongSize => "rgb(160,40,200)",
         check::Kind::Coverage => "rgb(20,110,220)",
     }

@@ -909,3 +909,83 @@ fn a_corner_without_a_rule_leaves_no_mitre_spike_in_the_band() {
         }
     }
 }
+
+/// The share of points of the strip, a little inside the path all along it, that no unit covers.
+fn uncovered_share(c: &Course, samples: &[DVec2]) -> (f64, Vec<DVec2>) {
+    let missed: Vec<DVec2> = samples
+        .iter()
+        .copied()
+        .filter(|p| {
+            !c.pieces
+                .iter()
+                .any(|pc| crate::geom::point_in_polygon_closed(*p, &pc.poly))
+        })
+        .collect();
+    (missed.len() as f64 / samples.len() as f64, missed)
+}
+
+#[test]
+fn a_mitre_course_round_a_lot_with_a_rounded_corner_covers_every_edge() {
+    // The lot of the messy corpus (fixture 12): 30 m by 20 m, the top right corner rounded with a
+    // radius of 3 m, units of 100 by 200 with joints of 3 mm. A mitre at the corner after the long
+    // run (east edge, the bend and the north edge) left 8 m of the north edge without units.
+    let r = 3000.0;
+    let (w, h) = (30_000.0, 20_000.0);
+    let c45 = std::f64::consts::FRAC_1_SQRT_2;
+    let on_arc = |a: f64| {
+        Vertex::new(
+            v(w - r + r * a.cos(), h - r + r * a.sin()),
+            VertexKind::PointOnArc,
+        )
+    };
+    let path = vec![
+        Vertex::corner(v(0.0, 0.0)),
+        Vertex::corner(v(w, 0.0)),
+        Vertex::corner(v(w, h - r)),
+        on_arc(22.5_f64.to_radians()),
+        Vertex::corner(v(w - r + r * c45, h - r + r * c45)),
+        on_arc(67.5_f64.to_radians()),
+        Vertex::corner(v(w - r, h)),
+        Vertex::corner(v(0.0, h)),
+    ];
+    // Points 100 mm inside each straight edge, every 37 mm, away from the corners.
+    let mut samples = Vec::new();
+    let mut x = 400.0;
+    while x < w - r - 400.0 {
+        samples.push(v(x, h - 100.0));
+        samples.push(v(x, 100.0));
+        x += 37.0;
+    }
+    let mut y = 400.0;
+    while y < h - 400.0 {
+        samples.push(v(100.0, y));
+        if y < h - r - 400.0 {
+            samples.push(v(w - 100.0, y));
+        }
+        y += 37.0;
+    }
+    for corner in [Corner::Miter, Corner::Butt, Corner::CornerUnit] {
+        let c = lay(
+            &Spec {
+                path: path.clone(),
+                closed: true,
+                side: Side::Left,
+                offset: 0.0,
+                along: 100.0,
+                depth: 200.0,
+                gap: 3.0,
+                corner,
+            },
+            100_000,
+        )
+        .unwrap();
+        // A sample falls into a joint of 3 mm in 3 of 103 mm: about 3 %.
+        let (share, missed) = uncovered_share(&c, &samples);
+        assert!(
+            share < 0.06,
+            "{corner:?}: {:.1} % of the strip has no unit, first at {:?}",
+            share * 100.0,
+            missed.first()
+        );
+    }
+}

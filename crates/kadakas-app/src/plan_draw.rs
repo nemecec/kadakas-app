@@ -248,7 +248,9 @@ fn prune(doc: &Document, revision: Option<u64>, frame: u64) {
 fn finding_color(kind: Kind) -> Color32 {
     match kind {
         Kind::Overlap | Kind::OutsideArea => Color32::from_rgb(220, 30, 30),
-        Kind::JointTooNarrow | Kind::JointTooWide => Color32::from_rgb(235, 130, 20),
+        Kind::JointTooNarrow | Kind::JointTooWide | Kind::ZoneEdgeJoint => {
+            Color32::from_rgb(235, 130, 20)
+        }
         Kind::SmallPiece | Kind::WrongSize => Color32::from_rgb(160, 40, 200),
         Kind::Coverage => Color32::from_rgb(20, 110, 220),
     }

@@ -22,6 +22,7 @@ pub fn kind_label(id: &str) -> String {
         "wrong_size" => tr!("uic-paving-kind-wrong-size"),
         "outside_area" => tr!("uic-paving-kind-outside"),
         "coverage" => tr!("uic-paving-kind-coverage"),
+        "zone_edge_joint" => tr!("uic-paving-kind-zone-edge-joint"),
         other => other.to_string(),
     }
 }
@@ -49,7 +50,7 @@ impl FindingRow {
     /// the finding when that is a length, else 600 mm, so that the units round it show.
     pub fn zoom_box(&self) -> [f64; 4] {
         let r = match self.kind.as_str() {
-            "joint_too_narrow" | "joint_too_wide" => 400.0,
+            "joint_too_narrow" | "joint_too_wide" | "zone_edge_joint" => 400.0,
             _ => 600.0,
         };
         [self.at.x - r, self.at.y - r, self.at.x + r, self.at.y + r]
@@ -59,7 +60,9 @@ impl FindingRow {
     pub fn size_text(&self) -> String {
         let u = kadakas_units::current();
         match self.kind.as_str() {
-            "joint_too_narrow" | "joint_too_wide" => u.length_text_d(self.size, 1),
+            "joint_too_narrow" | "joint_too_wide" | "zone_edge_joint" => {
+                u.length_text_d(self.size, 1)
+            }
             "overlap" | "outside_area" | "wrong_size" => u.area_text(self.size),
             _ => kadakas_units::current().number_text(self.size, 2),
         }

@@ -54,7 +54,7 @@ fn every_kind_has_a_label_in_the_language() {
         assert_ne!(kind_label(k), k, "{k}");
     }
     assert_eq!(kind_label("unknown"), "unknown");
-    assert_eq!(kinds().len(), 7);
+    assert_eq!(kinds().len(), 8);
 }
 
 #[test]

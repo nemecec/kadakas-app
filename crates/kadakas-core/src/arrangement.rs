@@ -381,14 +381,31 @@ pub struct ClosedGap {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeadEnd {
     pub at: DVec2,
-    /// True if the chain from this end leads to another dead end: it is a part of a shape that
-    /// does not close (a gap). False if it leads to a node where other curves meet: a stub, such
-    /// as a line that overshoots a corner, which is harmless.
+    /// True if the chain from this end is part of a shape that does not close: the node where it
+    /// meets other curves is cut off as well when the dead ends are removed (a gap in an outline
+    /// makes all of the outline a dead branch, also its corners). False if the chain leads to a
+    /// node that stays, on a closed shape: a stub, such as a line that overshoots a corner of a
+    /// closed outline, which is harmless.
     pub open: bool,
     /// The length of the dangling curves from this end to the first node that has other curves, mm.
     pub length: f64,
     /// The nearest other dead end, and the distance to it (mm).
     pub nearest: Option<(DVec2, f64)>,
+}
+
+/// A gap that stays open: two dead ends that are each other's nearest end, or a dead end and the
+/// middle of a curve, much nearer than the curves behind the ends are long (the place where an
+/// outline is broken), so that a tolerance of `size` would close it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenGap {
+    /// The two ends.
+    pub a: DVec2,
+    pub b: DVec2,
+    /// The distance between the ends, in mm.
+    pub size: f64,
+    /// True if `b` is a point on the middle of a curve that the end at `a` stops short of; false
+    /// if `b` is another dead end.
+    pub to_curve: bool,
 }
 
 /// One node-to-node piece of the drawing.
@@ -457,6 +474,10 @@ pub struct Arrangement {
     pub dead_end_count: usize,
     /// How many of the dead ends are open (see [`DeadEnd::open`]).
     pub open_dead_ends: usize,
+    /// The gaps that stay open (see [`OpenGap`]), the narrowest first, cut at [`MAX_LISTED`].
+    pub open_gaps: Vec<OpenGap>,
+    /// The number of open gaps.
+    pub open_gap_count: usize,
     /// Curves shorter than the tolerance that were dropped (they do not make a piece of an edge).
     pub ignored_short: usize,
     /// Edges that lie on top of each other and were merged.
@@ -883,6 +904,182 @@ fn build_inner(
     Ok(out)
 }
 
+/// A gap whose sides are nearer than this share of the chain behind either side is a gap that
+/// keeps a shape open. The two ends of the overshoots at a corner are as far apart as the
+/// overshoots are long (or farther), so they never are one.
+const GAP_SHARE: f64 = 0.5;
+
+/// The widest gap between an end and the middle of a curve that is looked for, in mm, for a
+/// tolerance: such a gap needs a search near every dead end, so it is bounded. (Gaps between two
+/// ends are found at any width.)
+fn end_to_curve_reach(tol: f64) -> f64 {
+    (25.0 * tol).max(50.0)
+}
+
+/// The nearest other end of `ends[i]`, by a sweep over x: its index and the distance.
+fn nearest_end(ends: &[DVec2], i: usize) -> Option<(usize, f64)> {
+    let p = ends[i];
+    let mut best: Option<(usize, f64)> = None;
+    for (j, q) in ends.iter().enumerate() {
+        if j != i {
+            let d = p.distance(*q);
+            if best.is_none_or(|(_, bd)| d < bd) {
+                best = Some((j, d));
+            }
+        }
+    }
+    best
+}
+
+/// The gaps that keep a shape open (see [`OpenGap`]), the narrowest first, and for each dead end
+/// whether it is a side of one. `dead` holds for each dead end its node, the length of its chain
+/// whether the chain runs into another free end and the node where it ends; `chain_of_edge` the dead end whose chain
+/// holds an edge (or `usize::MAX`).
+fn find_open_gaps(
+    out: &Arrangement,
+    dead: &[(usize, f64, bool, usize)],
+    ends: &[DVec2],
+    chain_of_edge: &[usize],
+    tol: f64,
+) -> (Vec<OpenGap>, Vec<bool>) {
+    let n = dead.len();
+    let mut in_gap = vec![false; n];
+    let mut gaps: Vec<OpenGap> = Vec::new();
+    if n == 0 {
+        return (gaps, in_gap);
+    }
+    // The nearest other end of each, by a sweep over x.
+    let mut by_x: Vec<usize> = (0..n).collect();
+    by_x.sort_by(|&a, &b| ends[a].x.total_cmp(&ends[b].x));
+    let mut rank = vec![0usize; n];
+    for (r, &i) in by_x.iter().enumerate() {
+        rank[i] = r;
+    }
+    let nearest: Vec<Option<(usize, f64)>> = (0..n)
+        .map(|i| {
+            let p = ends[i];
+            let mut best: Option<(usize, f64)> = None;
+            let mut scan = |r: usize| -> bool {
+                let j = by_x[r];
+                if best.is_some_and(|(_, bd)| (ends[j].x - p.x).abs() > bd) {
+                    return false;
+                }
+                let d = p.distance(ends[j]);
+                if best.is_none_or(|(_, bd)| d < bd) {
+                    best = Some((j, d));
+                }
+                true
+            };
+            for r in rank[i] + 1..n {
+                if !scan(r) {
+                    break;
+                }
+            }
+            for r in (0..rank[i]).rev() {
+                if !scan(r) {
+                    break;
+                }
+            }
+            best
+        })
+        .collect();
+    // Two ends that are each other's nearest end, and near compared with their chains. Two
+    // chains that end at the same junction (the overshoots of an acute corner) would only close
+    // a sliver at that junction: no gap.
+    for i in 0..n {
+        let Some((j, d)) = nearest[i] else { continue };
+        let mutual = nearest[j].is_some_and(|(k, _)| k == i);
+        let same_junction = !dead[i].2 && dead[i].3 == dead[j].3;
+        if mutual && !same_junction && d < GAP_SHARE * dead[i].1.min(dead[j].1) {
+            in_gap[i] = true;
+            if i < j {
+                gaps.push(OpenGap {
+                    a: ends[i],
+                    b: ends[j],
+                    size: d,
+                    to_curve: false,
+                });
+            }
+        }
+    }
+    // An end that stops short of the middle of a curve (not of its own chain): a grid of the
+    // boxes of the edges finds the curves near each end that is in no gap yet.
+    let reach = end_to_curve_reach(tol);
+    let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+    let boxes: Vec<(DVec2, DVec2)> = out.edges.iter().map(|e| e.curve.bounds()).collect();
+    for b in &boxes {
+        lo = lo.min(b.0);
+        hi = hi.max(b.1);
+    }
+    let cell = reach.max((hi - lo).max_element() / 2048.0).max(1e-9);
+    let nx = (((hi.x - lo.x) / cell).floor() as usize + 1).min(4096);
+    let ny = (((hi.y - lo.y) / cell).floor() as usize + 1).min(4096);
+    let cell_of = |p: DVec2| -> (usize, usize) {
+        (
+            (((p.x - lo.x) / cell).floor().max(0.0) as usize).min(nx - 1),
+            (((p.y - lo.y) / cell).floor().max(0.0) as usize).min(ny - 1),
+        )
+    };
+    let mut grid: std::collections::HashMap<(usize, usize), Vec<usize>> =
+        std::collections::HashMap::new();
+    // Edges that cover very many cells are tested with every end.
+    let mut big: Vec<usize> = Vec::new();
+    let wanted: Vec<usize> = (0..n).filter(|&i| !in_gap[i] && !dead[i].2).collect();
+    if !wanted.is_empty() {
+        for (ei, b) in boxes.iter().enumerate() {
+            let (c0, c1) = (cell_of(b.0), cell_of(b.1));
+            if (c1.0 - c0.0 + 1) * (c1.1 - c0.1 + 1) > 1024 {
+                big.push(ei);
+                continue;
+            }
+            for cx in c0.0..=c1.0 {
+                for cy in c0.1..=c1.1 {
+                    grid.entry((cx, cy)).or_default().push(ei);
+                }
+            }
+        }
+    }
+    let mut cand: Vec<usize> = Vec::new();
+    for i in wanted {
+        let p = ends[i];
+        let r = reach.min(GAP_SHARE * dead[i].1);
+        let (c0, c1) = (cell_of(p - DVec2::splat(r)), cell_of(p + DVec2::splat(r)));
+        cand.clear();
+        for cx in c0.0..=c1.0 {
+            for cy in c0.1..=c1.1 {
+                if let Some(list) = grid.get(&(cx, cy)) {
+                    cand.extend_from_slice(list);
+                }
+            }
+        }
+        cand.extend_from_slice(&big);
+        let mut best: Option<(DVec2, f64)> = None;
+        for &ei in &cand {
+            let e = &out.edges[ei];
+            // The own chain is no gap, and neither is a curve that meets the chain at its
+            // junction (the overshoot of the other line at an acute corner lies near the tip).
+            if chain_of_edge[ei] == i || e.a == dead[i].3 || e.b == dead[i].3 {
+                continue;
+            }
+            let (q, _, d) = e.curve.closest(p);
+            if d < r && d > 1e-9 && best.is_none_or(|(_, bd)| d < bd) {
+                best = Some((q, d));
+            }
+        }
+        if let Some((q, d)) = best {
+            in_gap[i] = true;
+            gaps.push(OpenGap {
+                a: p,
+                b: q,
+                size: d,
+                to_curve: true,
+            });
+        }
+    }
+    gaps.sort_by(|x, y| x.size.total_cmp(&y.size));
+    (gaps, in_gap)
+}
+
 /// Removes dead ends, then traces the faces.
 fn prune_and_trace(
     out: &mut Arrangement,
@@ -901,13 +1098,18 @@ fn prune_and_trace(
         adj[e.b].push(i);
     }
     // The dead ends of the drawing as it is: each free end, with the length of its chain of
-    // nodes of degree 2 up to the first node that joins more.
+    // nodes of degree 2 up to the first node that joins more (or another free end), and the
+    // edges of that chain.
     let free: Vec<usize> = (0..nn).filter(|&v| deg[v] == 1).collect();
-    let mut dead: Vec<(usize, f64, bool)> = Vec::new();
-    for &v0 in &free {
+    let mut dead: Vec<(usize, f64, bool, usize)> = Vec::new();
+    let mut chain_of_edge: Vec<usize> = vec![usize::MAX; out.edges.len()];
+    for (di, &v0) in free.iter().enumerate() {
         let (mut v, mut prev_edge, mut length) = (v0, usize::MAX, 0.0);
         while let Some(&ei) = adj[v].iter().find(|&&e| e != prev_edge) {
             length += out.edges[ei].curve.length();
+            if chain_of_edge[ei] == usize::MAX {
+                chain_of_edge[ei] = di;
+            }
             let e = &out.edges[ei];
             let w = if e.a == v { e.b } else { e.a };
             prev_edge = ei;
@@ -916,32 +1118,33 @@ fn prune_and_trace(
                 break;
             }
         }
-        dead.push((v0, length, deg[v] == 1));
+        dead.push((v0, length, deg[v] == 1, v));
     }
-    out.dead_end_count = dead.len();
-    out.open_dead_ends = dead.iter().filter(|d| d.2).count();
     let ends: Vec<DVec2> = dead.iter().map(|d| out.nodes[d.0]).collect();
-    for (i, (v, length, open)) in dead.iter().enumerate() {
+    let (gaps, in_gap) = find_open_gaps(out, &dead, &ends, &chain_of_edge, tol);
+    // A dead end is open when its chain runs into another free end (a shape that does not close)
+    // or when it is a side of a gap that stays open (two ends, or an end and a curve, much nearer
+    // to each other than the chain behind the end is long: the place where an outline is
+    // broken). Otherwise it is a stub, such as a line that overshoots a corner. Following each
+    // chain to its first junction only is not enough: the pieces of a broken outline whose lines
+    // overshoot the corners all end at a corner, where an overshoot meets them.
+    let open: Vec<bool> = dead.iter().zip(&in_gap).map(|(d, g)| d.2 || *g).collect();
+    out.dead_end_count = dead.len();
+    out.open_dead_ends = open.iter().filter(|&&o| o).count();
+    for (i, (v, length, _, _)) in dead.iter().enumerate() {
         if out.dead_ends.len() >= MAX_LISTED {
             break;
         }
-        let at = out.nodes[*v];
-        let mut nearest: Option<(DVec2, f64)> = None;
-        for (j, q) in ends.iter().enumerate() {
-            if i != j {
-                let d = at.distance(*q);
-                if nearest.is_none_or(|(_, bd)| d < bd) {
-                    nearest = Some((*q, d));
-                }
-            }
-        }
         out.dead_ends.push(DeadEnd {
-            at,
-            open: *open,
+            at: out.nodes[*v],
+            open: open[i],
             length: *length,
-            nearest,
+            nearest: nearest_end(&ends, i).map(|(j, d)| (ends[j], d)),
         });
     }
+    out.open_gap_count = gaps.len();
+    out.open_gaps = gaps;
+    out.open_gaps.truncate(MAX_LISTED);
     // Remove the dead branches: a node of degree 1 loses its edge, and so on.
     let mut removed = vec![false; out.edges.len()];
     let mut queue: Vec<usize> = free;

@@ -187,7 +187,7 @@ def test_the_small_case_has_exact_counts(cad, tmp_path):
     assert f["at"] == pytest.approx([6021.25, 5990.0]) and f["size"] == pytest.approx(0.0425)
     assert chk["totals"]["counts"] == {
         "coverage": 0, "joint_too_narrow": 0, "joint_too_wide": 0, "outside_area": 0,
-        "overlap": 0, "small_piece": 1, "wrong_size": 0,
+        "overlap": 0, "small_piece": 1, "wrong_size": 0, "zone_edge_joint": 0,
     }
     assert obj["units"] == 2680 + 244
     # With a smaller minimum share there is nothing at all.

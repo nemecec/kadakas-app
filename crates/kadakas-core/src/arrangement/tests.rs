@@ -463,3 +463,77 @@ fn the_sliver_width_is_capped_and_dropped_faces_are_listed() {
         "{s:?}"
     );
 }
+
+#[test]
+fn a_broken_outline_with_overshooting_corners_is_open_and_its_gap_is_listed() {
+    // A survey outline (file 07a of the messy corpus): each edge overshoots its corners by 400 mm,
+    // and the bottom edge is two lines with a gap of 3 mm, at survey coordinates. The pieces of
+    // the bottom edge end at the corners, where the overshoots meet them, so a check that only
+    // followed each chain to its first junction called the two sides of the gap harmless stubs
+    // and the drawing complete.
+    let o = v(650_000.0, 6_588_000.0);
+    let (w, h, over) = (30_000.0, 20_000.0, 400.0);
+    let c = vec![
+        Curve::line(o + v(-over, 0.0), o + v(12_000.0, 0.0)),
+        Curve::line(o + v(12_003.0, 0.0), o + v(w + over, 0.0)),
+        Curve::line(o + v(w, -over), o + v(w, h + over)),
+        Curve::line(o + v(w + over, h), o + v(-over, h)),
+        Curve::line(o + v(0.0, h + over), o + v(0.0, -over)),
+    ];
+    let a = build(&c, 2.0).unwrap();
+    assert!(a.faces.is_empty(), "{:?}", a.faces);
+    assert!(a.open_dead_ends > 0, "{:?}", a.dead_ends);
+    let gap_ends = a
+        .dead_ends
+        .iter()
+        .filter(|d| d.at.distance(o + v(12_001.5, 0.0)) < 2.0)
+        .collect::<Vec<_>>();
+    assert_eq!(gap_ends.len(), 2);
+    assert!(gap_ends.iter().all(|d| d.open), "{gap_ends:?}");
+    assert_eq!(a.open_gap_count, 1, "{:?}", a.open_gaps);
+    let g = &a.open_gaps[0];
+    assert!((g.size - 3.0).abs() < 1e-6, "{g:?}");
+    // The overshoots at the corners are no gap: their ends are as far apart as they are long.
+    // With a tolerance of the gap the outline closes, and the overshoots are stubs again.
+    let a = build(&c, 3.0).unwrap();
+    assert_eq!(a.faces.len(), 1);
+    assert_eq!(a.open_dead_ends, 0, "{:?}", a.dead_ends);
+    assert_eq!(a.dead_end_count, 8);
+    assert_eq!(a.open_gap_count, 0);
+}
+
+#[test]
+fn a_line_that_stops_short_of_a_curve_is_an_open_gap_and_an_acute_overshoot_is_not() {
+    // A divider that stops 4 mm above the bottom edge would cut the square in two.
+    let mut c = rect_lines(0.0, 0.0, 1000.0, 1000.0);
+    c.push(Curve::line(v(500.0, 1000.0), v(500.0, 4.0)));
+    let a = build(&c, 2.0).unwrap();
+    assert_eq!(a.faces.len(), 1);
+    assert_eq!(a.open_dead_ends, 1, "{:?}", a.dead_ends);
+    assert_eq!(a.open_gap_count, 1);
+    let g = &a.open_gaps[0];
+    assert!(g.to_curve && (g.size - 4.0).abs() < 1e-9, "{g:?}");
+    assert!(g.b.distance(v(500.0, 0.0)) < 1e-9, "{g:?}");
+    let a = build(&c, 4.0).unwrap();
+    assert_eq!(a.faces.len(), 2);
+    assert_eq!((a.dead_end_count, a.open_gap_count), (0, 0));
+    // A corner of 20 degrees where both lines overshoot by 300 mm: the tip of one overshoot is
+    // near the overshoot of the other line, but both are stubs at a closed shape.
+    let t = 20_f64.to_radians();
+    let tip = v(2000.0 * t.cos(), 2000.0 * t.sin());
+    let u = tip.normalize();
+    let c = vec![
+        Curve::line(v(-300.0, 0.0), v(2000.0, 0.0)),
+        Curve::line(v(2000.0, 0.0), tip),
+        Curve::line(tip, -u * 300.0),
+    ];
+    let a = build(&c, 1.0).unwrap();
+    assert_eq!(a.faces.len(), 1);
+    assert_eq!(a.dead_end_count, 2);
+    assert_eq!(
+        (a.open_dead_ends, a.open_gap_count),
+        (0, 0),
+        "{:?}",
+        a.open_gaps
+    );
+}

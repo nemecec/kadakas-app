@@ -25,7 +25,7 @@ use crate::{RpcError, Session};
 
 pub const REGION_FROM_CURVES: (&str, &str) = (
     "region.from_curves",
-    "Join loose lines, arcs, circles, rectangles and open or closed polylines (also 3D polylines, read in plan) into closed regions with holes (for example a parking lot drawn as separate lines and arcs). The curves are split where they cross; ends that lie within the tolerance of each other or of another curve are joined (a gap or a small overshoot is closed); dead ends are cut off; the areas that are left are traced. Nothing is guessed: a gap wider than the tolerance stays open, the area behind it is not made, and the dead ends are reported with their position, their length and the nearest other end, so that you can draw the place. A dead end is open (part of a shape that does not close) or a stub (a line that overshoots a corner or stops at a junction: harmless, but listed). params: {ids? (default: the selection), tolerance? (mm, default 1: the widest gap that is closed; use up to 10, above that closing a gap moves corners and warnings say so), create? (hardscape | landscape_area | polyline: make objects from the regions in one undo step; without it nothing is created), depths? (even | odd | all: which regions become objects; even means the regions with role area (the default for hardscape and landscape_area), odd the regions with role island, all every region including the doubtful ones (the default for polyline)), regions? ([region index or [x, y] point]: make exactly these regions, whatever their role), style? (hardscape style, ID or name, for create hardscape), name? (landscape area name), min_area_m2? (leave out smaller regions), layer?, class? (default: those of the first source object), delete_source? (delete a source only when every piece of it, also a piece that was cut off, lies in regions that are made and in no region that is left out; kept_sources lists the others with the reason), dry_run?}. Returns {regions: [{index, outline: [vertices] (counterclockwise; a point on each arc is a vertex of kind point_on_arc), holes: [[vertices]], area_m2, depth, role (area | island), inside: [x, y], bbox: {lo, hi}, sources: [object IDs]}], closed_gaps: {count, listed: [{at, size_mm}]}, dead_ends: {count, listed: [{at, length_mm, nearest: {at, distance_mm}}]}, complete (no dead ends), skipped: [{id, reason}], ignored_short, duplicates, created: [{region, id, kind}], tolerance_mm, dry_run}. A region inside a hole of another region is an island: its own region has an odd depth, and the outer region lists it as a hole, so create hardscape (the regions with role area) makes the lot with the island as a hole. An island that lines join to the outline (a stall line that ends on its kerb) is a face next to the lot, not a hole: its role is island? (also when the closed shapes of the drawing say a region is an island or an area against its lines), it has a doubt text, and create does not make it unless you list it in regions. The same holds for a circle, a closed shape or a closed chain of arcs inside the outline that lines end on (stall lines that run up to a round island). Look at the regions and warnings before you create.",
+    "Join loose lines, arcs, circles, rectangles and open or closed polylines (also 3D polylines, read in plan) into closed regions with holes (for example a parking lot drawn as separate lines and arcs). The curves are split where they cross; ends that lie within the tolerance of each other or of another curve are joined (a gap or a small overshoot is closed); dead ends are cut off; the areas that are left are traced. Nothing is guessed: a gap wider than the tolerance stays open, the area behind it is not made, and the dead ends are reported with their position, their length and the nearest other end, so that you can draw the place. A dead end is open or a stub. It is open when it is part of a shape that does not close: its chain runs into another free end, or it is a side of a gap that stays open (two ends that are each other's nearest end, or an end that stops short of the middle of a curve, nearer than half the length of the curves behind the end: a broken outline, also one whose lines overshoot the corners). Each such gap is listed in open_gaps with its place, its size and the tolerance that closes it, and a warning names them. A stub is a line that overshoots a corner or stops at a junction of a closed shape: harmless, but listed. params: {ids? (default: the selection), tolerance? (mm, default 1: the widest gap that is closed; use up to 10, above that closing a gap moves corners and warnings say so), create? (hardscape | landscape_area | polyline: make objects from the regions in one undo step; without it nothing is created), depths? (even | odd | all: which regions become objects; even means the regions with role area (the default for hardscape and landscape_area), odd the regions with role island, all every region including the doubtful ones (the default for polyline)), regions? ([region index or [x, y] point]: make exactly these regions, whatever their role), style? (hardscape style, ID or name, for create hardscape), name? (landscape area name), min_area_m2? (leave out smaller regions), layer?, class? (default: those of the first source object), delete_source? (delete a source only when every piece of it, also a piece that was cut off, lies in regions that are made and in no region that is left out; kept_sources lists the others with the reason), dry_run?}. Returns {regions: [{index, outline: [vertices] (counterclockwise; a point on each arc is a vertex of kind point_on_arc), holes: [[vertices]], area_m2, depth, role (area | island | island?), doubt (why a role is island?: the text names the reason), inside: [x, y], bbox: {lo, hi}, sources: [object IDs]}], closed_gaps: {count, listed: [{at, size_mm}]}, dead_ends: {count, open, stubs, listed: [{at, kind (open | stub), length_mm, nearest: {at, distance_mm}}]}, open_gaps: {count, listed: [{at (the middle), kind (end_to_end | end_to_curve), ends: [[x, y], [x, y]], size_mm, closes_with_tolerance_mm}]} (the narrowest first; an end is looked for near the middle of a curve up to 25 times the tolerance, at least 50 mm), complete (no open dead end: true only when no gap keeps a shape open), skipped: [{id, reason}], ignored_short, duplicates, created: [{region, id, kind}], tolerance_mm, dry_run}. A region inside a hole of another region is an island: its own region has an odd depth, and the outer region lists it as a hole, so create hardscape (the regions with role area) makes the lot with the island as a hole. An island that lines join to the outline (a stall line that ends on its kerb) is a face next to the lot, not a hole: its role is island? (also when the closed shapes of the drawing say a region is an island or an area against its lines), it has a doubt text, and create does not make it unless you list it in regions. The same holds for a circle, a closed shape or a closed chain of arcs inside the outline that lines end on (stall lines that run up to a round island). Look at the regions and warnings before you create.",
 );
 pub const HARDSCAPE_SPLIT: (&str, &str) = (
     "hardscape.split",
@@ -53,7 +53,7 @@ pub const HARDSCAPE_PLAN_CLEAR: (&str, &str) = (
 );
 pub const UNIT_PATTERN_CHECK: (&str, &str) = (
     "unit_pattern.check",
-    "Check the units of hardscapes (with their zones and courses) for the faults that cost money on site, with positions so that you can draw the places. The units are laid and tested as they are: overlaps between units (also a course against the field and a zone against a zone), joints narrower or wider than a limit, pieces under a minimum size, whole units of the wrong size, units that reach out of their area (for example over a zone edge), and the area covered against the area (a group that is much more open than its joints explain has missing units). params: {ids? (default: every hardscape with a joint pattern), visible_only?, overlap_mm2? (default 1: smaller overlaps do not count), overlap_depth_mm? (default 0.15: thinner overlaps do not count; a unit that crosses an edge by less than the trim is kept whole), min_joint_mm? (default: the gap less 1), max_joint_mm? (default: the widest joint of the pattern plus 1), min_share? (default 0.05: a cut unit with less of a full unit is a small piece), min_width_mm? (default off), size_tol_mm? (default 0.05), coverage_tol? (default 0.02), trim? (default 0.1), max_findings? (per kind, default 200, at most 10000; the counts are exact), pattern?, origin?, angle?, align_to_edge?, tolerance? (as unit_pattern.layout, to check a variant)}. Returns {objects: [{id, name, ok, units, counts: {overlap, joint_too_narrow, joint_too_wide, small_piece, wrong_size, outside_area, coverage}, findings: [{kind, group, other_group?, at: [x, y], size, message}], truncated: [kinds], coverage: [{group, role, region_area_m2, units_area_m2, units, open_share, expected_open_share}], area_m2, units_area_m2, notes}], totals: {units, counts, ok, complete}}. size is the overlap in mm2, the joint in mm, the share of a full unit, the area outside in mm2, the difference in mm2, or the open share. Units of two zones that meet at the zone edge have no joint by design and are not reported. An object that cannot be checked is a row with an error and complete is false.",
+    "Check the units of hardscapes (with their zones and courses) for the faults that cost money on site, with positions so that you can draw the places. The units are laid and tested as they are: overlaps between units (also a course against the field and a zone against a zone), joints narrower or wider than a limit, pieces under a minimum size, whole units of the wrong size, units that reach out of their area (for example over a zone edge), and the area covered against the area (a group that is much more open than its joints explain has missing units). params: {ids? (default: every hardscape with a joint pattern), visible_only?, overlap_mm2? (default 1: smaller overlaps do not count), overlap_depth_mm? (default 0.15: thinner overlaps do not count; a unit that crosses an edge by less than the trim is kept whole), min_joint_mm? (default: the gap less 1), max_joint_mm? (default: the widest joint of the pattern plus 1), min_share? (default 0.05: a cut unit with less of a full unit is a small piece), min_width_mm? (default off), size_tol_mm? (default 0.05), coverage_tol? (default 0.02), trim? (default 0.1), max_findings? (per kind, default 200, at most 10000; the counts are exact), pattern?, origin?, angle?, align_to_edge?, tolerance? (as unit_pattern.layout, to check a variant)}. Returns {objects: [{id, name, ok, units, counts: {overlap, joint_too_narrow, joint_too_wide, small_piece, wrong_size, outside_area, coverage, zone_edge_joint}, findings: [{kind, group, other_group?, at: [x, y], size, message}], truncated: [kinds], coverage: [{group, role, region_area_m2, units_area_m2, units, open_share, expected_open_share}], area_m2, units_area_m2, notes}], totals: {units, counts, ok, complete}}. size is the overlap in mm2, the joint in mm, the share of a full unit, the area outside in mm2, the difference in mm2, or the open share. Units of two zones (or a zone and the field) that touch at the zone edge have no joint by design and are not reported; where the pattern of one zone leaves a joint at the edge that is narrower than the limit but the units do not touch, it is a zone_edge_joint (its own kind, apart from joint_too_narrow inside a pattern). Limits are compared at 0.01 mm, the precision of the messages. The coverage findings are also warnings of report.unit_pattern and export.file. An object that cannot be checked is a row with an error and complete is false.",
 );
 
 /// Extra text for `describe`.
@@ -140,6 +140,12 @@ fn point(v: &Value, what: &str) -> Result<DVec2, RpcError> {
 
 fn xy(p: DVec2) -> Value {
     json!([p.x, p.y])
+}
+
+/// A length in mm for a message: two decimals at most, without trailing zeros (3, 5.52, 0.1).
+fn fmt_mm(v: f64) -> String {
+    let s = format!("{v:.2}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 fn object_id(v: &Value, what: &str) -> Result<ObjectId, RpcError> {
@@ -313,25 +319,29 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
                 .iter()
                 .filter(|l| kadakas_core::geom::point_in_polygon(r.inside, l))
                 .count();
-            let by_shapes = (inside_loops >= 1).then(|| (inside_loops - 1) % 2);
+            // The closed shapes (closed polylines, rectangles, circles) nest as deep as the lines
+            // or less: an outline of loose lines is no closed shape, so a circle inside it is held
+            // by one shape only (itself). Only shapes that nest deeper than the lines say something
+            // else; fewer shapes are no evidence.
+            let shape_depth = inside_loops.checked_sub(1);
+            let contradicts = shape_depth.is_some_and(|d| d > r.depth && d % 2 != r.depth % 2);
             let why = if r.depth % 2 == 1 {
-                match by_shapes {
-                    Some(0) => Some(format!(
-                        "region {i} is inside a hole of another region, but the closed shapes say it is an area"
-                    )),
-                    _ => None,
-                }
+                contradicts.then(|| {
+                    format!(
+                        "region {i} is a hole in another region, so it is an island, but it lies inside {inside_loops} closed shapes (closed polylines, rectangles or circles), which makes it an area inside an island"
+                    )
+                })
             } else if r.enclosed {
                 Some(format!(
-                    "region {i} is enclosed on all sides by one other region and joined to it by lines: it may be an island that touches the outline"
+                    "region {i} may be an island: lines on all sides join it to one other region (for example stall lines that end on its kerb), so it is not a hole of that region but a separate area next to it"
                 ))
             } else if r.closed_loop {
                 Some(format!(
-                    "region {i} is a closed shape (or a closed chain of curves) inside the outline of the drawing, and lines end on it: it may be an island that the stall lines run up to"
+                    "region {i} may be an island: it is a closed shape (a circle, a closed polyline or a closed chain of lines or arcs) inside the outline of the drawing, and lines end on it (for example stall lines that run up to a round island), so it is not a hole of the region around it"
                 ))
-            } else if by_shapes == Some(1) {
+            } else if contradicts {
                 Some(format!(
-                    "region {i} lies inside {inside_loops} closed shapes, which says it is an island, but its lines make it an area"
+                    "region {i} is an area by its lines, but it lies inside {inside_loops} closed shapes (closed polylines, rectangles or circles), which makes it an island"
                 ))
             } else {
                 None
@@ -380,6 +390,50 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
             found.chained_nodes
         ));
     }
+    // The gaps that keep a shape open: where they are, how wide, and the tolerance that closes
+    // them, so that a broken outline is never taken for a complete drawing.
+    let round_up = |d: f64| (d * 10.0 - 1e-6).ceil() / 10.0;
+    if found.open_gap_count > 0 {
+        let shown: Vec<String> = found
+            .open_gaps
+            .iter()
+            .take(5)
+            .map(|g| {
+                let m = (g.a + g.b) / 2.0;
+                format!("{} mm at [{:.0}, {:.0}]", fmt_mm(g.size), m.x, m.y)
+            })
+            .collect();
+        let more = found.open_gap_count.saturating_sub(shown.len());
+        let widest = found
+            .open_gaps
+            .iter()
+            .map(|g| g.size)
+            .fold(0.0_f64, f64::max);
+        notes.push(format!(
+            "the drawing does not close: {} gap{} wider than the tolerance of {} mm keep{} a shape open ({}{}), so the area behind {} is not made. A tolerance of {} mm closes {}; or draw the places",
+            found.open_gap_count,
+            if found.open_gap_count == 1 { "" } else { "s" },
+            fmt_mm(tol),
+            if found.open_gap_count == 1 { "s" } else { "" },
+            shown.join(", "),
+            if more > 0 { format!(" and {more} more") } else { String::new() },
+            if found.open_gap_count == 1 { "it" } else { "them" },
+            fmt_mm(round_up(widest)),
+            if found.open_gap_count == 1 { "it" } else { "the listed gaps" },
+        ));
+    }
+    let paired = 2 * found.open_gap_count;
+    if found.open_dead_ends > paired {
+        let n = found.open_dead_ends - paired;
+        notes.push(format!(
+            "{n} {}open dead end{} with no near end to pair with: line{} that overshoot{} a corner of a shape that does not close, or the loose end{} of a shape that is broken wider; see dead_ends with kind open",
+            if paired > 0 { "other " } else { "" },
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "s" } else { "" },
+            if n == 1 { "" } else { "s" },
+        ));
+    }
     let mut out = json!({
         "regions": region_json,
         "closed_gaps": {
@@ -397,6 +451,16 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
                 "kind": if d.open { "open" } else { "stub" },
                 "length_mm": d.length,
                 "nearest": d.nearest.map(|(p, dist)| json!({"at": xy(p), "distance_mm": dist})),
+            })).collect::<Vec<_>>(),
+        },
+        "open_gaps": {
+            "count": found.open_gap_count,
+            "listed": found.open_gaps.iter().map(|g| json!({
+                "at": xy((g.a + g.b) / 2.0),
+                "kind": if g.to_curve { "end_to_curve" } else { "end_to_end" },
+                "ends": [xy(g.a), xy(g.b)],
+                "size_mm": g.size,
+                "closes_with_tolerance_mm": round_up(g.size),
             })).collect::<Vec<_>>(),
         },
         "complete": found.open_dead_ends == 0,

@@ -22,6 +22,10 @@ pub struct Report {
     pub classes_created: Vec<String>,
     /// Remarks for the user, for example about an unknown CRS or a cut-off file.
     pub notes: Vec<String>,
+    /// Problems in what was written that the person must look at, for example a unit pattern
+    /// with a hole (units missing). Left out when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     /// True if the import set or used a georeference.
     pub georeferenced: bool,
     /// DXF and DWG: the drawing and revision that the objects carry in `data.import` (IOP-22).
@@ -70,6 +74,12 @@ impl Report {
 
     pub fn skipped_total(&self) -> usize {
         self.skipped.iter().map(|s| s.count).sum()
+    }
+
+    pub fn warn(&mut self, text: &str) {
+        if !self.warnings.iter().any(|n| n == text) {
+            self.warnings.push(text.into());
+        }
     }
 
     pub fn note(&mut self, text: &str) {

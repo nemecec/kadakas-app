@@ -14,7 +14,7 @@ use std::f64::consts::{PI, TAU};
 
 use glam::DVec2;
 
-use crate::arrangement::{self, ClosedGap, Curve, DeadEnd};
+use crate::arrangement::{self, ClosedGap, Curve, DeadEnd, OpenGap};
 use crate::curve::{self, Seg, Vertex};
 use crate::model::Shape;
 
@@ -189,6 +189,9 @@ pub struct Found {
     pub dead_end_count: usize,
     /// Dead ends that are part of a shape that does not close (the others are stubs).
     pub open_dead_ends: usize,
+    /// The gaps that keep a shape open, the narrowest first (cut at 1,000).
+    pub open_gaps: Vec<OpenGap>,
+    pub open_gap_count: usize,
     pub ignored_short: usize,
     pub duplicates: usize,
     /// Faces thinner than the tolerance that were left out.
@@ -214,6 +217,8 @@ pub fn from_curves(curves: &[Curve], tolerance: f64) -> Result<Found, arrangemen
         dead_ends: a.dead_ends.clone(),
         dead_end_count: a.dead_end_count,
         open_dead_ends: a.open_dead_ends,
+        open_gaps: a.open_gaps.clone(),
+        open_gap_count: a.open_gap_count,
         ignored_short: a.ignored_short,
         duplicates: a.duplicates,
         dropped_slivers: a.dropped_slivers,

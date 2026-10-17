@@ -9,8 +9,10 @@
 //!   (mm, default a little above the trim) does not count. Units of different groups are tested
 //!   against each other: a course against the field, a zone against a zone.
 //! - **joint too narrow / too wide**: the distance between two units that face each other, found
-//!   with a ray from the middle of every edge of a unit, straight out. Units of two zones that meet
-//!   at the zone edge have no joint by design and are not reported. A wide joint is only a joint
+//!   with a ray from the middle of every edge of a unit, straight out. Units of two zones that touch
+//!   at the zone edge have no joint by design and are not reported; a joint across a zone edge
+//!   that is narrower than the joints but where the units do not touch is a **zone edge joint**,
+//!   a kind of its own. The limits are compared at 0.01 mm, the precision of the messages. A wide joint is only a joint
 //!   where the stretch between the units lies inside the area (a hole of the area is no joint).
 //! - **small piece**: a cut unit under a share of a full unit, or narrower than a width.
 //! - **wrong size**: a whole unit whose area (and, for a rectangle, whose sides) differ from its
@@ -98,10 +100,13 @@ pub enum Kind {
     WrongSize,
     OutsideArea,
     Coverage,
+    /// A joint across the edge between two zones (or a zone and the field) that is narrower than
+    /// the joints of the pattern, but where the units do not touch either.
+    ZoneEdgeJoint,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 8] = [
         Kind::Overlap,
         Kind::JointTooNarrow,
         Kind::JointTooWide,
@@ -109,6 +114,7 @@ impl Kind {
         Kind::WrongSize,
         Kind::OutsideArea,
         Kind::Coverage,
+        Kind::ZoneEdgeJoint,
     ];
 
     pub fn id(self) -> &'static str {
@@ -120,6 +126,7 @@ impl Kind {
             Kind::WrongSize => "wrong_size",
             Kind::OutsideArea => "outside_area",
             Kind::Coverage => "coverage",
+            Kind::ZoneEdgeJoint => "zone_edge_joint",
         }
     }
 }
@@ -170,6 +177,220 @@ pub struct Report {
     pub area_m2: f64,
     pub units_area_m2: f64,
     pub ok: bool,
+}
+
+/// A place where units are missing (or too many): a hole in a course, or a group that is much
+/// more open than its joints explain, or units that cover more than their area.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CoverageGap {
+    pub finding: Finding,
+    /// The area without units (or the area covered too much), in mm2.
+    pub area: f64,
+}
+
+/// The coverage of the groups only: lays the units and compares their area with the area of each
+/// group, and finds the holes of courses, as [`check`] does, without the other tests. Reports and
+/// exports call it so that a hole in a pattern is never silent.
+pub fn coverage(
+    groups: &[Group],
+    limits: &Limits,
+    coverage_tol: f64,
+) -> Result<Vec<CoverageGap>, LayoutError> {
+    let mut per_group: Vec<(usize, f64)> = vec![(0, 0.0); groups.len()];
+    let mut budget = limits.max_units;
+    for (gi, g) in groups.iter().enumerate() {
+        let lim = Limits {
+            max_units: budget,
+            trim: limits.trim,
+        };
+        let (mut n, mut laid) = (0usize, 0.0);
+        let stats = g.for_each_unit(&lim, &mut |u: &Unit| {
+            n += 1;
+            laid += u.area;
+        })?;
+        budget = budget.saturating_sub(stats.units);
+        per_group[gi] = (n, laid);
+    }
+    Ok(coverage_of(groups, &per_group, coverage_tol).1)
+}
+
+/// The warning that a report or an export gives for the places where the coverage fails: how
+/// many, the area in all and where the first ones are. `None` when there are none.
+pub fn coverage_warning(gaps: &[CoverageGap]) -> Option<String> {
+    if gaps.is_empty() {
+        return None;
+    }
+    let total: f64 = gaps.iter().map(|g| g.area).sum();
+    let shown: Vec<String> = gaps
+        .iter()
+        .take(3)
+        .map(|g| {
+            format!(
+                "{} at [{:.0}, {:.0}]",
+                g.finding.message, g.finding.at[0], g.finding.at[1]
+            )
+        })
+        .collect();
+    let more = gaps.len() - shown.len();
+    Some(format!(
+        "the units do not cover the area as they should in {} place{} ({:.3} m2 in all): {}{}. unit_pattern.check lists them",
+        gaps.len(),
+        if gaps.len() == 1 { "" } else { "s" },
+        total / 1e6,
+        shown.join("; "),
+        if more > 0 {
+            format!("; and {more} more")
+        } else {
+            String::new()
+        }
+    ))
+}
+
+/// The coverage of each group and the places where it fails, from the number of units and their
+/// area in each group.
+fn coverage_of(
+    groups: &[Group],
+    per_group: &[(usize, f64)],
+    coverage_tol: f64,
+) -> (Vec<Coverage>, Vec<CoverageGap>) {
+    let mut coverage: Vec<Coverage> = Vec::new();
+    let mut out: Vec<CoverageGap> = Vec::new();
+    // Coverage per group.
+    for (gi, g) in groups.iter().enumerate() {
+        let (n, laid) = per_group[gi];
+        let region = g.area();
+        let open = if region > 0.0 {
+            (1.0 - laid / region).max(0.0)
+        } else {
+            0.0
+        };
+        let expected = match &g.body {
+            Body::Pattern { pattern, .. } => pattern.compile().ok().map(|c| {
+                let covered: f64 =
+                    c.kinds.iter().map(|k| k.area).sum::<f64>() / c.det.abs().max(1e-9);
+                (1.0 - covered).max(0.0)
+            }),
+            Body::Course(cb) => Some(cb.gap / (cb.along + cb.gap)),
+        };
+        // A course lies inside the area of the hardscape and covers a part of it: its share is
+        // not meaningful against the whole area.
+        let meaningful = !matches!(g.body, Body::Course(_));
+        coverage.push(Coverage {
+            group: g.name.clone(),
+            role: g.role,
+            region_area_m2: region / 1e6,
+            units_area_m2: laid / 1e6,
+            units: n,
+            open_share: if meaningful { open } else { 0.0 },
+            expected_open_share: expected,
+        });
+        // A zone that owns its units by their centers may hold units that reach over its edge.
+        let ring = match &g.owner {
+            Some(o) => &o.zones[o.index].shapes[0][0],
+            None => &g.region.shapes[0][0],
+        };
+        let c = centroid(ring);
+        if laid > region * (1.0 + 1e-6) + noise_area(ring) && meaningful && g.owner.is_none() {
+            out.push(CoverageGap {
+                area: laid - region,
+                finding: Finding {
+                    kind: Kind::Coverage,
+                    group: g.name.clone(),
+                    other_group: None,
+                    at: [c.x, c.y],
+                    size: (laid - region) / 1e6,
+                    message: format!(
+                        "the units of '{}' cover {:.3} m2, more than its area of {:.3} m2",
+                        g.name,
+                        laid / 1e6,
+                        region / 1e6
+                    ),
+                },
+            });
+        } else if let Some(exp) = expected.filter(|_| meaningful)
+            && n > 0
+            && open - exp > coverage_tol
+        {
+            out.push(CoverageGap {
+                area: (open - exp) * region,
+                finding: Finding {
+                    kind: Kind::Coverage,
+                    group: g.name.clone(),
+                    other_group: None,
+                    at: [c.x, c.y],
+                    size: open,
+                    message: format!(
+                        "'{}' is {:.1} percent open, but its joints explain {:.1} percent: units may be missing",
+                        g.name,
+                        open * 100.0,
+                        exp * 100.0
+                    ),
+                },
+            });
+        }
+    }
+    // A course must fill its band: a hole in it is area that the field gave up and no unit has.
+    for g in groups {
+        let Body::Course(cb) = &g.body else { continue };
+        if cb.band.is_empty() {
+            continue;
+        }
+        let ring = |r: &Vec<DVec2>| r.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>();
+        let band: Vec<Vec<[f64; 2]>> = cb.band.iter().flatten().map(ring).collect();
+        let reg: Vec<Vec<[f64; 2]>> = g.region.rings().map(ring).collect();
+        let inside = band.overlay(&reg, OverlayRule::Intersect, FillRule::EvenOdd);
+        let margin = cb.gap * 1.02 + 0.05;
+        let dilated: Vec<Vec<[f64; 2]>> = cb
+            .pieces
+            .iter()
+            .map(|p| {
+                let mut d = super::course::dilate(&p.poly, margin);
+                if crate::geom::signed_area(&d) < 0.0 {
+                    d.reverse();
+                }
+                d.iter().map(|q| [q.x, q.y]).collect()
+            })
+            .collect();
+        let empty: Vec<Vec<[f64; 2]>> = Vec::new();
+        let covered = dilated.overlay(&empty, OverlayRule::Union, FillRule::NonZero);
+        let covered: Vec<Vec<[f64; 2]>> = covered.into_iter().flatten().collect();
+        let subject: Vec<Vec<[f64; 2]>> = inside.into_iter().flatten().collect();
+        let left = subject.overlay(&covered, OverlayRule::Difference, FillRule::EvenOdd);
+        // A hole is a piece of the band that no unit or joint covers and that is more than a
+        // twentieth of a unit. The limit does not depend on the length of the course.
+        let limit = 0.05 * cb.along * cb.depth;
+        for s in &left {
+            let mut a = 0.0;
+            let mut c = DVec2::ZERO;
+            for (i, r) in s.iter().enumerate() {
+                let pts: Vec<DVec2> = r.iter().map(|q| DVec2::new(q[0], q[1])).collect();
+                let ar = crate::geom::polygon_area(&pts);
+                if i == 0 {
+                    a += ar;
+                    c = centroid(&pts);
+                } else {
+                    a -= ar;
+                }
+            }
+            if a > limit {
+                out.push(CoverageGap {
+                    area: a,
+                    finding: Finding {
+                        kind: Kind::Coverage,
+                        group: g.name.clone(),
+                        other_group: None,
+                        at: [c.x, c.y],
+                        size: a,
+                        message: format!(
+                            "the course '{}' has a hole of {:.0} mm2 without a unit or a joint",
+                            g.name, a
+                        ),
+                    },
+                });
+            }
+        }
+    }
+    (coverage, out)
 }
 
 /// The edges of the area of a group, in a grid.
@@ -475,11 +696,11 @@ pub fn check_cancellable(
         units_area_m2: us.iter().map(|u| u.area).sum::<f64>() / 1e6,
         ..Default::default()
     };
-    let mut counts = [0usize; 7];
+    let mut counts = [0usize; Kind::ALL.len()];
     let idx = |k: Kind| Kind::ALL.iter().position(|x| *x == k).unwrap_or(0);
     let mut findings: Vec<Finding> = Vec::new();
     // Every kind keeps its own count of listed findings.
-    let mut add = |k: Kind, f: Finding, counts: &mut [usize; 7]| {
+    let mut add = |k: Kind, f: Finding, counts: &mut [usize; Kind::ALL.len()]| {
         counts[idx(k)] += 1;
         if counts[idx(k)] <= opts.max_findings {
             findings.push(f);
@@ -719,6 +940,41 @@ pub fn check_cancellable(
             })
         })
     };
+    // Where the edges of the area of the group cross the stretch from p to q: the distances from
+    // p (an edge within 0.2 mm of an end counts at that end).
+    let group_edges_across = |gi: usize, p: DVec2, q: DVec2| -> Vec<f64> {
+        let mut at: Vec<f64> = Vec::new();
+        let Some((eg, edges)) = edge_grids[gi].as_ref() else {
+            return at;
+        };
+        let mut near: Vec<u32> = Vec::new();
+        eg.query(
+            p.min(q) - DVec2::splat(0.3),
+            p.max(q) + DVec2::splat(0.3),
+            &mut near,
+        );
+        let len = p.distance(q);
+        for &e in &near {
+            let (a, b) = edges[e as usize];
+            let (r, sdir) = (q - p, b - a);
+            let den = r.perp_dot(sdir);
+            if den.abs() > 1e-12 {
+                let t = (a - p).perp_dot(sdir) / den;
+                let u = (a - p).perp_dot(r) / den;
+                if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+                    at.push(t * len);
+                    continue;
+                }
+            }
+            if crate::geom::dist_to_segment(p, a, b) < 0.2 {
+                at.push(0.0);
+            }
+            if crate::geom::dist_to_segment(q, a, b) < 0.2 {
+                at.push(len);
+            }
+        }
+        at
+    };
     let mut told: std::collections::HashSet<(usize, usize)> = Default::default();
     for (i, u) in us.iter().enumerate() {
         if i % 512 == 0 && stopped() {
@@ -782,38 +1038,69 @@ pub fn check_cancellable(
                 )
             };
             let at = mid + out * (d / 2.0);
-            if d < min_j {
-                // Units of two groups that meet at the edge of a zone have no joint by design.
+            // The limits are compared at the precision of the message (0.01 mm): a joint of
+            // 1.9999 mm is no joint "narrower than 2.00 mm".
+            if d < min_j - 0.005 {
+                // Units of two zones (or a zone and the field) that touch at the zone edge have
+                // no joint by design. A joint across the zone edge that is narrower than the
+                // pattern's, but where they do not touch, is a kind of its own: a sliver of a
+                // joint that the pattern of one zone leaves at the edge of the other.
                 let meets_by_design = |r: Role| matches!(r, Role::Zone | Role::Field);
-                let abut = u.group != other.group
+                let zones_meet = u.group != other.group
                     && meets_by_design(groups[u.group].role)
-                    && meets_by_design(groups[other.group].role)
-                    && d < 0.2
-                    && group_edges_near(u.group, mid);
+                    && meets_by_design(groups[other.group].role);
+                // The edge that the two zones share lies in the joint: an edge of each crosses the
+                // joint at the same place (two areas that are apart are no zones that meet).
+                let edge_in_joint = zones_meet && {
+                    let q = mid + out * d;
+                    let mine = group_edges_across(u.group, mid, q);
+                    let theirs = group_edges_across(other.group, mid, q);
+                    mine.iter()
+                        .any(|x| theirs.iter().any(|y| (x - y).abs() < 0.2))
+                };
+                let abut = edge_in_joint && d < 0.2 && group_edges_near(u.group, mid);
+                let kind = if edge_in_joint {
+                    Kind::ZoneEdgeJoint
+                } else {
+                    Kind::JointTooNarrow
+                };
                 if !abut {
+                    let message = if kind == Kind::ZoneEdgeJoint {
+                        format!(
+                            "unit {} of '{}' and unit {} of '{}' meet at the zone edge with a joint of {:.2} mm: narrower than {:.2} mm, but they do not touch",
+                            u.nth + 1,
+                            names[u.group],
+                            other.nth + 1,
+                            names[other.group],
+                            d,
+                            min_j
+                        )
+                    } else {
+                        format!(
+                            "the joint between unit {} of '{}' and unit {} of '{}' is {:.2} mm, narrower than {:.2} mm",
+                            u.nth + 1,
+                            names[u.group],
+                            other.nth + 1,
+                            names[other.group],
+                            d,
+                            min_j
+                        )
+                    };
                     add(
-                        Kind::JointTooNarrow,
+                        kind,
                         Finding {
-                            kind: Kind::JointTooNarrow,
+                            kind,
                             group: names[u.group].clone(),
                             other_group: (u.group != other.group)
                                 .then(|| names[other.group].clone()),
                             at: [at.x, at.y],
                             size: d,
-                            message: format!(
-                                "the joint between unit {} of '{}' and unit {} of '{}' is {:.2} mm, narrower than {:.2} mm",
-                                u.nth + 1,
-                                names[u.group],
-                                other.nth + 1,
-                                names[other.group],
-                                d,
-                                min_j
-                            ),
+                            message,
                         },
                         &mut counts,
                     );
                 }
-            } else if d > max_j {
+            } else if d > max_j + 0.005 {
                 // A stretch that lies outside the area (across a hole) is no joint.
                 let inside = area.shapes.iter().any(|s| {
                     s.first()
@@ -849,143 +1136,10 @@ pub fn check_cancellable(
             }
         }
     }
-    // Coverage per group.
-    for (gi, g) in groups.iter().enumerate() {
-        let (n, laid) = per_group[gi];
-        let region = g.area();
-        let open = if region > 0.0 {
-            (1.0 - laid / region).max(0.0)
-        } else {
-            0.0
-        };
-        let expected = match &g.body {
-            Body::Pattern { pattern, .. } => pattern.compile().ok().map(|c| {
-                let covered: f64 =
-                    c.kinds.iter().map(|k| k.area).sum::<f64>() / c.det.abs().max(1e-9);
-                (1.0 - covered).max(0.0)
-            }),
-            Body::Course(cb) => Some(cb.gap / (cb.along + cb.gap)),
-        };
-        // A course lies inside the area of the hardscape and covers a part of it: its share is
-        // not meaningful against the whole area.
-        let meaningful = !matches!(g.body, Body::Course(_));
-        report.coverage.push(Coverage {
-            group: g.name.clone(),
-            role: g.role,
-            region_area_m2: region / 1e6,
-            units_area_m2: laid / 1e6,
-            units: n,
-            open_share: if meaningful { open } else { 0.0 },
-            expected_open_share: expected,
-        });
-        // A zone that owns its units by their centers may hold units that reach over its edge.
-        let ring = match &g.owner {
-            Some(o) => &o.zones[o.index].shapes[0][0],
-            None => &g.region.shapes[0][0],
-        };
-        let c = centroid(ring);
-        if laid > region * (1.0 + 1e-6) + noise_area(ring) && meaningful && g.owner.is_none() {
-            add(
-                Kind::Coverage,
-                Finding {
-                    kind: Kind::Coverage,
-                    group: g.name.clone(),
-                    other_group: None,
-                    at: [c.x, c.y],
-                    size: (laid - region) / 1e6,
-                    message: format!(
-                        "the units of '{}' cover {:.3} m2, more than its area of {:.3} m2",
-                        g.name,
-                        laid / 1e6,
-                        region / 1e6
-                    ),
-                },
-                &mut counts,
-            );
-        } else if let Some(exp) = expected.filter(|_| meaningful)
-            && n > 0
-            && open - exp > opts.coverage_tol
-        {
-            add(
-                Kind::Coverage,
-                Finding {
-                    kind: Kind::Coverage,
-                    group: g.name.clone(),
-                    other_group: None,
-                    at: [c.x, c.y],
-                    size: open,
-                    message: format!(
-                        "'{}' is {:.1} percent open, but its joints explain {:.1} percent: units may be missing",
-                        g.name,
-                        open * 100.0,
-                        exp * 100.0
-                    ),
-                },
-                &mut counts,
-            );
-        }
-    }
-    // A course must fill its band: a hole in it is area that the field gave up and no unit has.
-    for g in groups {
-        let Body::Course(cb) = &g.body else { continue };
-        if cb.band.is_empty() {
-            continue;
-        }
-        let ring = |r: &Vec<DVec2>| r.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>();
-        let band: Vec<Vec<[f64; 2]>> = cb.band.iter().flatten().map(ring).collect();
-        let reg: Vec<Vec<[f64; 2]>> = g.region.rings().map(ring).collect();
-        let inside = band.overlay(&reg, OverlayRule::Intersect, FillRule::EvenOdd);
-        let margin = cb.gap * 1.02 + 0.05;
-        let dilated: Vec<Vec<[f64; 2]>> = cb
-            .pieces
-            .iter()
-            .map(|p| {
-                let mut d = super::course::dilate(&p.poly, margin);
-                if crate::geom::signed_area(&d) < 0.0 {
-                    d.reverse();
-                }
-                d.iter().map(|q| [q.x, q.y]).collect()
-            })
-            .collect();
-        let empty: Vec<Vec<[f64; 2]>> = Vec::new();
-        let covered = dilated.overlay(&empty, OverlayRule::Union, FillRule::NonZero);
-        let covered: Vec<Vec<[f64; 2]>> = covered.into_iter().flatten().collect();
-        let subject: Vec<Vec<[f64; 2]>> = inside.into_iter().flatten().collect();
-        let left = subject.overlay(&covered, OverlayRule::Difference, FillRule::EvenOdd);
-        // A hole is a piece of the band that no unit or joint covers and that is more than a
-        // twentieth of a unit. The limit does not depend on the length of the course.
-        let limit = 0.05 * cb.along * cb.depth;
-        for s in &left {
-            let mut a = 0.0;
-            let mut c = DVec2::ZERO;
-            for (i, r) in s.iter().enumerate() {
-                let pts: Vec<DVec2> = r.iter().map(|q| DVec2::new(q[0], q[1])).collect();
-                let ar = crate::geom::polygon_area(&pts);
-                if i == 0 {
-                    a += ar;
-                    c = centroid(&pts);
-                } else {
-                    a -= ar;
-                }
-            }
-            if a > limit {
-                add(
-                    Kind::Coverage,
-                    Finding {
-                        kind: Kind::Coverage,
-                        group: g.name.clone(),
-                        other_group: None,
-                        at: [c.x, c.y],
-                        size: a,
-                        message: format!(
-                            "the course '{}' has a hole of {:.0} mm2 without a unit or a joint",
-                            g.name, a
-                        ),
-                    },
-                    &mut counts,
-                );
-            }
-        }
+    let (coverage, gaps) = coverage_of(groups, &per_group, opts.coverage_tol);
+    report.coverage = coverage;
+    for gap in gaps {
+        add(Kind::Coverage, gap.finding, &mut counts);
     }
     for k in Kind::ALL {
         let c = counts[idx(k)];

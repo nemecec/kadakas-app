@@ -44,7 +44,7 @@ pub const UNIT_PATTERN_MODULE_FROM_BLOCK: (&str, &str) = (
 );
 pub const REPORT_UNIT_PATTERN: (&str, &str) = (
     "report.unit_pattern",
-    "Counts and quantities of unit patterns. params: {ids? (default: every hardscape with a joint pattern), pattern?, origin?, angle?, align_to_edge? (as unit_pattern.layout; with several ids they apply to each), sliver_share? (cut units under this part of a full unit are slivers, default 0.25), unfillable_share? (cut units under this part are too small to lay, default 0.05), min_width? (mm: cut units narrower than this cannot be laid, default off), exclude_unfillable? (default false: leave the unfillable pieces out of order_units), trim? (mm, default 0.1: a unit that crosses the edge by less than this counts as whole, so drawing noise makes no cut units; 0 turns it off), waste_percent? (no default: without it the order has no waste added), gap_length? (measure the length of the gap lines, default false), max_extra_joint_mm? (default 2: a basket weave whose joints get wider than the gap by more than this has a joint_warning in its summary; a much larger difference is refused), visible_only? (skip hardscapes on hidden layers, default false), tolerance? (curve flattening in mm, default 1; the DXF export has its own tolerance, default 1, and gives the same counts when the two are equal), format?: csv}. Returns {rows: [{id, name, whole_units, cut_units, slivers, unfillable_pieces, area_laid_m2, cut_area_m2, region_area_m2, gap_area_m2, gap_length_m?, order_units, order_units_max, order_units_min, order_units_with_waste, by_unit: [{name, whole_units, cut_units, ...}], ...} or {id, error}], totals: {..., complete}}. order_units is an upper bound: the whole units plus the cut units, every cut unit counted as one unit, no offcut used twice. order_units_min is a lower bound: the whole units plus the sum of the shares of the cut units, rounded up. waste_percent adds that percent to the total, rounded up, in whole numbers. Hardscapes are counted inside their kerb border and outside their holes. A hardscape with zones or courses has groups: [...] in its row (the counts of the field or each zone, and of each course, with its unit type; courses also have course: {length_m, corners, joints: {count, narrowest_mm, widest_mm}}) and notes; the row itself and the totals are the sums, and a stone that the course and the field share is one row in by_unit. CSV has a row per group. complete is false when a row is an error. The counts match the polylines on the layers <layer>-UNITS-WHOLE and <layer>-UNITS-CUT of export.file with patterns: \"units\".",
+    "Counts and quantities of unit patterns. params: {ids? (default: every hardscape with a joint pattern), pattern?, origin?, angle?, align_to_edge? (as unit_pattern.layout; with several ids they apply to each), sliver_share? (cut units under this part of a full unit are slivers, default 0.25), unfillable_share? (cut units under this part are too small to lay, default 0.05), min_width? (mm: cut units narrower than this cannot be laid, default off), exclude_unfillable? (default false: leave the unfillable pieces out of order_units), trim? (mm, default 0.1: a unit that crosses the edge by less than this counts as whole, so drawing noise makes no cut units; 0 turns it off), waste_percent? (no default: without it the order has no waste added), gap_length? (measure the length of the gap lines, default false), max_extra_joint_mm? (default 2: a basket weave whose joints get wider than the gap by more than this has a joint_warning in its summary; a much larger difference is refused), visible_only? (skip hardscapes on hidden layers, default false), tolerance? (curve flattening in mm, default 1; the DXF export has its own tolerance, default 1, and gives the same counts when the two are equal), format?: csv}. Returns {rows: [{id, name, whole_units, cut_units, slivers, unfillable_pieces, area_laid_m2, cut_area_m2, region_area_m2, gap_area_m2, gap_length_m?, order_units, order_units_max, order_units_min, order_units_with_waste, by_unit: [{name, whole_units, cut_units, ...}], ...} coverage_gaps?: {count, area_m2, listed: [{group, at, area_m2, message}]}, warnings?: [text]} or {id, error}], totals: {..., complete, coverage_gaps}}. coverage_gaps and warnings are there when the units do not cover the area as they should (a hole in a course, a field or a zone that is much more open than its joints explain, units over their area): the same places as the coverage findings of unit_pattern.check, so that a hole is never silent. order_units is an upper bound: the whole units plus the cut units, every cut unit counted as one unit, no offcut used twice. order_units_min is a lower bound: the whole units plus the sum of the shares of the cut units, rounded up. waste_percent adds that percent to the total, rounded up, in whole numbers. Hardscapes are counted inside their kerb border and outside their holes. A hardscape with zones or courses has groups: [...] in its row (the counts of the field or each zone, and of each course, with its unit type; courses also have course: {length_m, corners, joints: {count, narrowest_mm, widest_mm}}) and notes; the row itself and the totals are the sums, and a stone that the course and the field share is one row in by_unit. CSV has a row per group. complete is false when a row is an error. The counts match the polylines on the layers <layer>-UNITS-WHOLE and <layer>-UNITS-CUT of export.file with patterns: \"units\".",
 );
 
 /// Extra text for `describe`.
@@ -69,7 +69,7 @@ fn describe_base() -> Value {
             {"case": "Far from the origin (survey coordinates, 6,588,000 m north)", "how": "The import centers the drawing and saves the shift as the georeference (a note says so). The export puts the real-world coordinates back (export option origin: file), so the units in the DXF are where the survey has them."},
             {"case": "Find the lot by layer", "how": "document.summary lists the classes (the DXF layers, with Unicode, spaces and long names kept exactly). objects.list {class: <name or ID>} gives the objects. A frozen or off layer becomes a class with visible false: it holds old versions of the lot, so leave it out unless you want it."},
             {"case": "The lot is a closed polyline (LWPOLYLINE or old POLYLINE, with bulges), with the islands as more closed polylines, circles or rectangles", "how": "hardscape.from_shapes {ids, style}: the shape inside another one is a hole. A polyline with the closed flag off whose last point equals its first is imported as closed (a note says so). A 3D polyline (heights) is read in plan."},
-            {"case": "The lot is loose LINEs, ARCs and polylines (a survey or a flattened export), with gaps, overshoots and duplicates", "how": "region.from_curves {ids, tolerance, dry_run: true}. Set the tolerance to the largest gap you see in closed_gaps (up to 5 or 10 mm). Read the regions: the lot is the region with role area and the largest area_m2; islands are its holes. Then region.from_curves with create: hardscape and regions: [index of the lot]. Every gap that was closed and every dead end is listed; complete must be true."},
+            {"case": "The lot is loose LINEs, ARCs and polylines (a survey or a flattened export), with gaps, overshoots and duplicates", "how": "region.from_curves {ids, tolerance, dry_run: true}. Set the tolerance to the largest gap you see in closed_gaps (up to 5 or 10 mm). Read the regions: the lot is the region with role area and the largest area_m2; islands are its holes. Then region.from_curves with create: hardscape and regions: [index of the lot]. Every gap that was closed and every dead end is listed; complete must be true. When it is false, open_gaps and the warnings say where the outline is broken, how wide each gap is and the tolerance that closes it (closes_with_tolerance_mm)."},
             {"case": "The lot is only a HATCH boundary", "how": "The import (hatches: true, the default) turns every boundary path of the HATCH into a closed polyline on the layer of the hatch, with arcs kept exact; a path with an ellipse or spline edge is cut into lines within options.tolerance. Use hardscape.from_shapes on those polylines: the outer path is the lot and the paths inside it are the islands."},
             {"case": "Everything is on layer 0, or you do not know the layers", "how": "Take the ids of all curves (objects.list), call region.from_curves with dry_run, and pick the region with the largest area. Look at role and the warnings before you create."},
             {"case": "SPLINE and ELLIPSE kerbs", "how": "They are cut into lines within options.tolerance (default 2 mm). For an exact area import with options {tolerance: 0.2}. Circles and arcs stay exact."},
@@ -1018,16 +1018,35 @@ pub fn object_summary(
     object_summary_groups(doc, o, m, opts).map(|r| r.0)
 }
 
+/// The summary of a hardscape, the counts of each part, the notes of the plan and the places
+/// where the units do not cover the area.
+pub type SummaryGroups = (
+    Summary,
+    Vec<Value>,
+    Vec<String>,
+    Vec<kadakas_core::layout::check::CoverageGap>,
+);
+
 /// Like [`object_summary`], with the counts of each part (for a hardscape with zones or courses;
-/// the list is empty for a plain one) and the notes of the plan.
+/// the list is empty for a plain one), the notes of the plan and the coverage gaps.
 pub fn object_summary_groups(
     doc: &Document,
     o: &Object,
     m: &Map<String, Value>,
     opts: &SummaryOptions,
-) -> Result<(Summary, Vec<Value>, Vec<String>), String> {
+) -> Result<SummaryGroups, String> {
     let sub = subject_of(doc, o, m, opts.max_units).map_err(|e| e.message)?;
     let (total, parts) = summarize_all(&sub, opts).map_err(|e| e.to_string())?;
+    // A hole in a course or a field is never silent: the report says where units are missing.
+    let gaps = kadakas_core::layout::check::coverage(
+        &sub.groups,
+        &kadakas_core::layout::units::Limits {
+            max_units: opts.max_units,
+            trim: opts.trim,
+        },
+        kadakas_core::layout::check::CheckOptions::default().coverage_tol,
+    )
+    .map_err(|e| e.to_string())?;
     let groups = if sub.planned() {
         sub.groups
             .iter()
@@ -1037,7 +1056,21 @@ pub fn object_summary_groups(
     } else {
         Vec::new()
     };
-    Ok((total, groups, sub.notes))
+    Ok((total, groups, sub.notes, gaps))
+}
+
+/// The places where the units do not cover a hardscape as they should, for a report row.
+pub(crate) fn coverage_gaps_json(gaps: &[kadakas_core::layout::check::CoverageGap]) -> Value {
+    json!({
+        "count": gaps.len(),
+        "area_m2": gaps.iter().map(|g| g.area).sum::<f64>() / 1e6,
+        "listed": gaps.iter().map(|g| json!({
+            "group": g.finding.group,
+            "at": g.finding.at,
+            "area_m2": g.area / 1e6,
+            "message": g.finding.message,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// The pattern block of one hardscape for `report.hardscape`: the summary as JSON, or an error.
@@ -1071,6 +1104,7 @@ pub fn report_rows(
     let mut rows = Vec::new();
     let mut good: Vec<(Product, Summary)> = Vec::new();
     let mut errors = 0;
+    let mut coverage_gaps = 0usize;
     for id in list {
         let Some(o) = doc.object(id) else {
             errors += 1;
@@ -1078,7 +1112,7 @@ pub fn report_rows(
             continue;
         };
         match object_summary_groups(doc, o, m, opts) {
-            Ok((sum, groups, notes)) => {
+            Ok((sum, groups, notes, gaps)) => {
                 let mut row = serde_json::to_value(&sum).expect("json");
                 row["id"] = json!(id);
                 row["name"] = json!(label(doc, o));
@@ -1087,6 +1121,11 @@ pub fn report_rows(
                 }
                 if !notes.is_empty() {
                     row["notes"] = json!(notes);
+                }
+                coverage_gaps += gaps.len();
+                if let Some(w) = kadakas_core::layout::check::coverage_warning(&gaps) {
+                    row["coverage_gaps"] = coverage_gaps_json(&gaps);
+                    row["warnings"] = json!([w]);
                 }
                 rows.push(row);
                 good.push((product_of(doc, o, m.contains_key("pattern")), sum));
@@ -1098,7 +1137,9 @@ pub fn report_rows(
         }
     }
     let refs: Vec<(Product, &Summary)> = good.iter().map(|(p, s)| (p.clone(), s)).collect();
-    Ok((rows, totals_json(&refs, errors, opts)))
+    let mut totals = totals_json(&refs, errors, opts);
+    totals["coverage_gaps"] = json!(coverage_gaps);
+    Ok((rows, totals))
 }
 
 fn report(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {

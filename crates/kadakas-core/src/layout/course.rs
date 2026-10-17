@@ -899,6 +899,11 @@ fn lay_run(
             // A loop ends where it started: the units stop one gap before the seam.
             return r.s0 > ext + run_len - g;
         }
+        // Only a unit that starts after the end of the run ends it: a run that bends a long way
+        // can have units on the far side of the line of its end plane long before its end.
+        if r.s0 < ext + run_len {
+            return false;
+        }
         run.end.as_ref().is_some_and(|pl| {
             // Every corner of the rectangle is beyond the end plane.
             rect_poly(r, lo, hi).iter().all(|p| pl.side(*p) < -1e-9)
@@ -964,9 +969,26 @@ fn lay_run(
         }
         s = next_s;
     }
+    // The planes that end a run are half-planes through its corners. A run that bends a long way
+    // (along an edge, round a rounded corner and back along the next edge) crosses the line of
+    // the plane at its other end far from that corner. So the start plane cuts the units from the
+    // start up to the first unit that lies wholly on its side, and the end plane the units from
+    // the end back to the last such unit: only the units at the corner of each plane. (A mitre
+    // at the start of such a run once cut away every unit of the far edge behind its line.)
+    let inside_of = |r: &Rect, pl: Option<&Plane>| -> bool {
+        pl.is_none_or(|pl| rect_poly(r, lo, hi).iter().all(|v| pl.side(*v) >= -1e-9))
+    };
+    let start_until = rects
+        .iter()
+        .position(|r| inside_of(r, run.start.as_ref()))
+        .unwrap_or(rects.len());
+    let end_after = rects
+        .iter()
+        .rposition(|r| inside_of(r, run.end.as_ref()))
+        .map_or(0, |i| i + 1);
     // Clip and keep.
     let mut last_whole: Option<Rect> = None;
-    for r in &rects {
+    for (ri, r) in rects.iter().enumerate() {
         let mut p = rect_poly(r, lo, hi);
         let mut clipped = false;
         // The planes of a loop are both at the seam: the first half of the loop has the start
@@ -978,7 +1000,10 @@ fn lay_run(
                 [None, run.end.as_ref()]
             }
         } else {
-            [run.start.as_ref(), run.end.as_ref()]
+            [
+                run.start.as_ref().filter(|_| ri < start_until),
+                run.end.as_ref().filter(|_| ri >= end_after),
+            ]
         };
         for pl in planes.into_iter().flatten() {
             if p.is_empty() {

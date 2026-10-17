@@ -72,5 +72,6 @@ uic-paving-kind-small-piece = Väike tükk
 uic-paving-kind-wrong-size = Vale suurus
 uic-paving-kind-outside = Väljaspool ala
 uic-paving-kind-coverage = Katvus
+uic-paving-kind-zone-edge-joint = Kitsas vuuk tsooni piiril
 uic-paving-check-nothing = Kontrollimiseks pole ühtegi vuugimustriga kõvakatet.
 uic-paving-bad-reply = Programmi vastust ei saanud lugeda.

@@ -867,10 +867,11 @@ fn the_depths_and_the_regions_choose_what_becomes_an_object() {
             .map(|r| r["created"].as_array().unwrap().len())
             .map_err(|e| e.message)
     };
-    // Even: the lot. Odd: the islands that are sure (this one has a doubt: a closed shape says it
-    // is an area, so it is made only when listed). All: both.
+    // Even: the lot. Odd: the islands that are sure. The circle is one: the lot is loose lines, no
+    // closed shape, so that the circle is held by one shape only (itself) is no evidence against
+    // the lines (it once was, and the circle was a doubtful "island?"). All: both.
     assert_eq!(created(json!({"depths": "even"})), Ok(1));
-    assert_eq!(created(json!({"depths": "odd"})), Ok(0));
+    assert_eq!(created(json!({"depths": "odd"})), Ok(1));
     assert_eq!(created(json!({})), Ok(2));
     // By number, by a point (in the lot, in the island), and the same region twice is one.
     assert_eq!(created(json!({"regions": [0]})), Ok(1));
@@ -1352,4 +1353,61 @@ fn zone_set_changes_one_zone_and_says_when_nothing_changed() {
         let m = fail(&mut s, "hardscape.zone_set", p.clone());
         assert!(m.contains(word), "{p}: {m}");
     }
+}
+
+#[test]
+fn a_course_with_holes_is_a_warning_of_the_report_and_of_the_export() {
+    // Long stones on the outside of a tight bend leave wedges without a unit that are wider than
+    // a joint: the check finds them, and the report and the DXF export must say so too (with the
+    // count, the area and where), not only the check.
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 6000.0, 3000.0);
+    let arc = add(
+        &mut s,
+        json!({"kind": "arc", "center": [3000, 1200], "radius": 900, "start": 0.2, "end": 2.9}),
+    );
+    ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Ring", "source": arc, "side": "right",
+               "unit_length": 400, "unit_width": 200, "gap": 3}),
+    );
+    let chk = ok(&mut s, "unit_pattern.check", json!({"ids": [id]}));
+    let n = chk["totals"]["counts"]["coverage"].as_u64().unwrap();
+    assert!(n > 0, "{chk}");
+    let rep = ok(&mut s, "report.unit_pattern", json!({"ids": [id]}));
+    let row = &rep["rows"][0];
+    assert_eq!(row["coverage_gaps"]["count"].as_u64(), Some(n), "{row}");
+    assert!(row["coverage_gaps"]["area_m2"].as_f64().unwrap() > 0.0);
+    let first = &row["coverage_gaps"]["listed"][0];
+    assert_eq!(first["group"], "Ring");
+    assert!(first["at"][0].as_f64().is_some(), "{first}");
+    let w = row["warnings"][0].as_str().unwrap();
+    let places = format!("in {n} place");
+    assert!(
+        w.contains(&places) && w.contains("m2 in all") && w.contains(" at ["),
+        "{w}"
+    );
+    assert_eq!(rep["totals"]["coverage_gaps"].as_u64(), Some(n));
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("ring.dxf");
+    let ex = ok(
+        &mut s,
+        "export.file",
+        json!({"path": out, "format": "dxf", "options": {"patterns": "units"}}),
+    );
+    let warnings = ex["warnings"].as_array().expect("export warnings");
+    assert!(
+        warnings
+            .iter()
+            .any(|x| x.as_str().unwrap().contains(&places)),
+        "{ex}"
+    );
+    assert_eq!(ex["report"]["warnings"], ex["warnings"]);
+    // A hardscape without holes has no warning.
+    let mut s2 = Session::with_sequential_ids();
+    let clean = slab(&mut s2, 2000.0, 1000.0);
+    let rep = ok(&mut s2, "report.unit_pattern", json!({"ids": [clean]}));
+    assert!(rep["rows"][0].get("warnings").is_none(), "{rep}");
+    assert_eq!(rep["totals"]["coverage_gaps"].as_u64(), Some(0));
 }

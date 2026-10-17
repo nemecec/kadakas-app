@@ -227,6 +227,22 @@ pub(super) fn write(
         all_whole += w_;
         all_cut += c_;
     }
+    // A hole in a course or a field must not go into the file silently. The units were written
+    // within the budget of the file; the check lays them again outside it.
+    {
+        let gaps = kadakas_core::layout::check::coverage(
+            &planned.groups,
+            &kadakas_core::layout::units::Limits {
+                max_units: MAX_EXPORT_UNITS,
+                trim: kadakas_core::layout::units::DEFAULT_TRIM,
+            },
+            kadakas_core::layout::check::CheckOptions::default().coverage_tol,
+        )
+        .map_err(|e| IoError::Option(format!("{name}: {e}")))?;
+        if let Some(w) = kadakas_core::layout::check::coverage_warning(&gaps) {
+            report.warn(&format!("{name}: {w}"));
+        }
+    }
     if planned_object && mode != PatternExport::Gaps {
         report.note(&format!(
             "{name}: wrote {all_whole} whole and {all_cut} cut units in {} parts",

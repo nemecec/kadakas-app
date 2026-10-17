@@ -374,7 +374,8 @@ fn narrow_pieces_and_the_unit_limit() {
             "small_piece",
             "wrong_size",
             "outside_area",
-            "coverage"
+            "coverage",
+            "zone_edge_joint"
         ]
     );
     assert_eq!(MAX_UNITS, 500_000);
@@ -529,4 +530,57 @@ fn zones_that_own_their_units_by_center_are_clean_where_units_reach_over_the_edg
     assert_eq!(r.counts["coverage"], 0, "{:?}", r.findings);
     assert_eq!(r.counts["overlap"], 0, "{:?}", r.findings);
     assert_eq!(r.units, 400);
+}
+
+#[test]
+fn a_narrow_joint_at_a_zone_edge_is_a_kind_of_its_own_and_the_limit_is_compared_as_printed() {
+    // Two zones of a stack bond (200 by 100, joints of 5 mm) meet at x = 1022. The units of the
+    // left zone are cut at the edge; the right zone has its own pattern, whose first unit starts
+    // half a joint after its origin `start`. So the units across the edge are start + 2.5 - 1022
+    // apart.
+    let zones_at = |start: f64| -> Report {
+        let mk = |name: &str, x0: f64, x1: f64, origin: f64| {
+            let mut g = group(name, rect(x0, 0.0, x1, 1000.0), Bond::Stack, 0.0);
+            g.role = Role::Zone;
+            if let Body::Pattern { place, .. } = &mut g.body {
+                place.origin = Some(v(origin, 0.0));
+            }
+            g
+        };
+        let groups = vec![
+            mk("left", 0.0, 1022.0, 0.0),
+            mk("right", 1022.0, 2044.0, start),
+        ];
+        check(
+            &groups,
+            &rect(0.0, 0.0, 2044.0, 1000.0),
+            &CheckOptions::default(),
+        )
+        .unwrap()
+    };
+    // 2 mm across the edge: not a joint of a pattern (4 mm at least) and not touching.
+    let r = zones_at(1021.5);
+    assert_eq!(r.counts["joint_too_narrow"], 0, "{:?}", r.findings);
+    assert!(r.counts["zone_edge_joint"] >= 5, "{:?}", r.counts);
+    let f = r
+        .findings
+        .iter()
+        .find(|f| f.kind == Kind::ZoneEdgeJoint)
+        .unwrap();
+    assert!(
+        (f.size - 2.0).abs() < 1e-6 && (f.at[0] - 1023.0).abs() < 1e-6,
+        "{f:?}"
+    );
+    assert!(
+        f.message.contains("zone edge") && f.message.contains("2.00 mm"),
+        "{f:?}"
+    );
+    // A joint a hair under the limit of 4 mm prints as 4.00 mm: it is no finding.
+    let r = zones_at(1022.0 + 4.0 - 2.5 - 1e-4);
+    assert_eq!(
+        r.counts["zone_edge_joint"] + r.counts["joint_too_narrow"],
+        0,
+        "{:?}",
+        r.findings
+    );
 }
