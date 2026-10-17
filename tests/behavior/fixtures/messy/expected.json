@@ -578,6 +578,27 @@
   "via": "from_shapes",
   "zones": 24
  },
+ "10e_hatch_clockwise_edges_only.dxf": {
+  "area_tol": 0.03,
+  "desc": "HATCH with clockwise ARC and ELLIPSE edges (complement angles)",
+  "find": {
+   "how": "hatch"
+  },
+  "gross_m2": 598.0705516412722,
+  "import": {},
+  "islands_m2": 14.617596982862711,
+  "net_m2": 583.452955,
+  "notes": [],
+  "origin": [
+   0.0,
+   0.0
+  ],
+  "stalls": "STALLS",
+  "tol": 1.0,
+  "unit_mm": 1.0,
+  "via": "from_shapes",
+  "zones": 24
+ },
  "11a_r12_cp1257.dxf": {
   "area_tol": 0.02,
   "desc": "R12 file with old POLYLINE and the Estonian code page",

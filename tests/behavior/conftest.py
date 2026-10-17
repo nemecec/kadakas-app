@@ -15,6 +15,21 @@ from helpers import BIN, REPO, TEST_HOME, JsonRpc, McpClient
 ALLOW = ["--allow-dir", str(Path(tempfile.gettempdir()).resolve()), "--allow-dir", str(REPO)]
 
 
+def pytest_configure(config):
+    # Also in pytest.ini; here it holds when pytest runs from the repository root over several folders.
+    config.addinivalue_line("markers", "slow: runs for minutes; skipped unless KADAKAS_SLOW=1 or -m slow")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Slow tests (the long corpus files) run with KADAKAS_SLOW=1 or when `-m` names `slow`."""
+    if os.environ.get("KADAKAS_SLOW") or "slow" in (config.getoption("-m") or ""):
+        return
+    skip = pytest.mark.skip(reason="slow: set KADAKAS_SLOW=1 or run with -m slow")
+    for item in items:
+        if "slow" in item.keywords:
+            item.add_marker(skip)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def built_cli():
     """Builds the CLI once per session. Set KADAKAS_SKIP_BUILD=1 to use an existing binary."""

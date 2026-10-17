@@ -575,6 +575,60 @@ def f10_hatch_ellipse_spline():
          find={"how": "hatch"}, via="from_shapes", area_tol=0.03)
 
 
+def f10_hatch_clockwise_edges():
+    """HATCH edge paths with clockwise ARC and ELLIPSE edges at angles that are not symmetric.
+
+    A clockwise edge stores the complements (360 less the angle) of its angles in the file. The
+    areas are worked out by ezdxf (`path.from_hatch`), which reads these edges its own way, so the
+    importer is checked against an independent reader."""
+    from ezdxf import path as ezpath
+
+    r = 3_000.0
+    doc = new("R2010", 4, ["HATCH", "STALLS"])
+    msp = doc.modelspace()
+    h = msp.add_hatch(color=252, dxfattribs={"layer": "HATCH"})
+    # The outer path runs clockwise; its rounded corner is a clockwise arc (90 to 0 degrees).
+    e = h.paths.add_edge_path(flags=const.BOUNDARY_PATH_EXTERNAL)
+    e.add_line((0, 0), (0, H))
+    e.add_line((0, H), (W - r, H))
+    e.add_arc((W - r, H - r), r, 0, 90, ccw=False)
+    e.add_line((W, H - r), (W, 0))
+    e.add_line((W, 0), (0, 0))
+    # A circular segment: the arc from 250 back to 40 degrees (clockwise) and its chord.
+    c0, r0 = (6_000.0, 10_000.0), 1_500.0
+    e = h.paths.add_edge_path()
+    e.add_arc(c0, r0, 40, 250, ccw=False)
+    p40 = (c0[0] + r0 * math.cos(math.radians(40)), c0[1] + r0 * math.sin(math.radians(40)))
+    p250 = (c0[0] + r0 * math.cos(math.radians(250)), c0[1] + r0 * math.sin(math.radians(250)))
+    e.add_line(p40, p250)
+    # An elliptical segment: the edge from angle 160 back to 20 degrees (clockwise), major axis
+    # turned by 30 degrees, and its chord. The angles are real angles, not parameters.
+    c1, tilt = (21_000.0, 10_000.0), math.radians(30)
+    major = (2000 * math.cos(tilt), 2000 * math.sin(tilt))
+    e = h.paths.add_edge_path()
+    e.add_ellipse(c1, major_axis=major, ratio=0.5, start_angle=20, end_angle=160, ccw=False)
+    ends = []
+    for deg in (20, 160):
+        a = math.radians(deg)
+        t = math.atan2(math.sin(a) / 0.5, math.cos(a))
+        x, y = 2000 * math.cos(t), 1000 * math.sin(t)
+        ends.append((c1[0] + x * math.cos(tilt) - y * math.sin(tilt), c1[1] + x * math.sin(tilt) + y * math.cos(tilt)))
+    e.add_line(*ends)
+    e = h.paths.add_edge_path()
+    pts = rect_pts(*SQUARE)
+    for i in range(4):
+        e.add_line(pts[i], pts[(i + 1) % 4])
+    stall_lines(msp, MM, "STALLS")
+    areas = []
+    for pth in ezpath.from_hatch(h):
+        areas.append(shoelace([(v.x, v.y) for v in pth.flattening(0.01)]))
+    # from_hatch gives the paths in the order of the hatch: outer, three islands.
+    assert len(areas) == 4, areas
+    save(doc, "10e_hatch_clockwise_edges_only.dxf", desc="HATCH with clockwise ARC and ELLIPSE edges (complement angles)",
+         gross_m2=areas[0], islands_m2=sum(areas[1:]), stalls="STALLS",
+         find={"how": "hatch"}, via="from_shapes", area_tol=0.03)
+
+
 def f11_r12_and_r2018():
     # R12: no LWPOLYLINE, old POLYLINE only, no $INSUNITS, code page ANSI_1257 (Estonian).
     doc = ezdxf.new("R12", setup=False)
@@ -637,7 +691,7 @@ def f14_soup_with_heights():
 
 def main():
     for f in (f01_soup, f02_lwpoly_bulge_open, f03_polyline_2d, f03_polyline_3d, f04_splines, f04_ellipse, f05_blocks,
-              f06_units, f07_far, f08_layers, f09_noise, f10_hatch_only, f10_hatch_ellipse_spline, f11_r12_and_r2018, f12_full_lot, f13_largest_region, f14_soup_with_heights):
+              f06_units, f07_far, f08_layers, f09_noise, f10_hatch_only, f10_hatch_ellipse_spline, f10_hatch_clockwise_edges, f11_r12_and_r2018, f12_full_lot, f13_largest_region, f14_soup_with_heights):
         f()
     for e in EXPECTED.values():
         e["zones"] = ZONES if e["stalls"] else None

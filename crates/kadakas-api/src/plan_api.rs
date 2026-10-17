@@ -265,17 +265,9 @@ fn from_curves(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
                 1e-9,
             ));
         }
-        if let Shape::Polyline3d { points, closed } = &o.shape {
-            flat3d = true;
-            if *closed && points.len() >= 3 {
-                loops.push(kadakas_core::geom::open_ring(
-                    &points
-                        .iter()
-                        .map(|p| DVec2::new(p.x, p.y))
-                        .collect::<Vec<_>>(),
-                    1e-9,
-                ));
-            }
+        if let Shape::Polyline3d { points, .. } = &o.shape {
+            flat3d |= points.iter().any(|p| p.z != points[0].z);
+            // (A closed 3D polyline is a closed shape of `outline_of` above: its loop is there.)
         }
         match regions::curves_of(&o.shape) {
             Ok(cs) => {

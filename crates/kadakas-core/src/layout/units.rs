@@ -456,15 +456,70 @@ fn segments_touch(p: DVec2, q: DVec2, r: DVec2, s: DVec2) -> bool {
     on(p, q, r, d1) || on(p, q, s, d2) || on(r, s, p, d3) || on(r, s, q, d4)
 }
 
-/// True if the segment touches the polygon: it crosses an edge, or an end lies inside.
-fn seg_hits_poly(a: DVec2, b: DVec2, poly: &[DVec2], lo: DVec2, hi: DVec2) -> bool {
-    if a.x.max(b.x) < lo.x || a.x.min(b.x) > hi.x || a.y.max(b.y) < lo.y || a.y.min(b.y) > hi.y {
+/// The distance between two segments (0 if they cross or touch).
+fn segment_distance(p: DVec2, q: DVec2, r: DVec2, s: DVec2) -> f64 {
+    if segments_touch(p, q, r, s) {
+        return 0.0;
+    }
+    let d = |a: DVec2, b: DVec2, c: DVec2| crate::geom::dist_to_segment(c, a, b);
+    d(r, s, p).min(d(r, s, q)).min(d(p, q, r)).min(d(p, q, s))
+}
+
+/// True if the segment lies within `eps` of the polygon outline, or touches the polygon: it crosses
+/// an edge, or an end lies inside. An edge that is one bit off the side of a unit counts as
+/// touching: exact tests would say "apart" and the unit would be judged by a corner on the boundary.
+fn seg_near_poly(a: DVec2, b: DVec2, poly: &[DVec2], lo: DVec2, hi: DVec2, eps: f64) -> bool {
+    if a.x.max(b.x) < lo.x - eps
+        || a.x.min(b.x) > hi.x + eps
+        || a.y.max(b.y) < lo.y - eps
+        || a.y.min(b.y) > hi.y + eps
+    {
         return false;
     }
     let n = poly.len();
-    (0..n).any(|i| segments_touch(a, b, poly[i], poly[(i + 1) % n]))
+    (0..n).any(|i| segment_distance(a, b, poly[i], poly[(i + 1) % n]) <= eps)
         || crate::geom::point_in_polygon(a, poly)
         || crate::geom::point_in_polygon(b, poly)
+}
+
+/// A point that lies inside the polygon, away from its outline: the average of the corners of a
+/// convex polygon, else the center of an ear (a corner triangle with no other corner in it).
+pub(super) fn interior_point(poly: &[DVec2]) -> DVec2 {
+    let n = poly.len();
+    let cross = |i: usize| {
+        let (a, b, c) = (poly[(i + n - 1) % n], poly[i], poly[(i + 1) % n]);
+        (b - a).perp_dot(c - b)
+    };
+    let area2: f64 = (0..n).map(|i| poly[i].perp_dot(poly[(i + 1) % n])).sum();
+    let sign = if area2 >= 0.0 { 1.0 } else { -1.0 };
+    let avg = poly.iter().copied().sum::<DVec2>() / n as f64;
+    if (0..n).all(|i| cross(i) * sign >= 0.0) {
+        return avg;
+    }
+    let mut best = (f64::NEG_INFINITY, avg);
+    for i in 0..n {
+        if cross(i) * sign <= 0.0 {
+            continue;
+        }
+        let (a, b, c) = (poly[(i + n - 1) % n], poly[i], poly[(i + 1) % n]);
+        let in_tri = |p: DVec2| {
+            let s = [
+                (b - a).perp_dot(p - a),
+                (c - b).perp_dot(p - b),
+                (a - c).perp_dot(p - c),
+            ];
+            s.iter().all(|v| v * sign >= 0.0)
+        };
+        if (0..n).any(|j| j != i && j != (i + 1) % n && j != (i + n - 1) % n && in_tri(poly[j])) {
+            continue;
+        }
+        // The widest ear gives the point farthest from the outline.
+        let size = cross(i) * sign;
+        if size > best.0 {
+            best = (size, (a + b + c) / 3.0);
+        }
+    }
+    best.1
 }
 
 /// Sutherland-Hodgman: a ring cut to a box.
@@ -722,12 +777,20 @@ impl Placer {
         self.local
             .index
             .near(plo, phi, &mut self.local.stamp, &mut self.near);
+        // Edges one bit off the side of the unit count as touching (see `seg_near_poly`).
+        let eps = 1e-9 * (hi - lo).max_element().max(1.0);
         let touching = self.near.iter().any(|&e| {
             let (a, b) = self.local.index.edges[e as usize];
-            seg_hits_poly(a, b, buf, plo, phi)
+            seg_near_poly(a, b, buf, plo, phi, eps)
         });
         if !touching {
-            let p0 = buf[0];
+            // No edge is near the unit, or the edges near it do not touch it. A point surely
+            // inside the unit decides when edges are near: a corner may lie on a boundary.
+            let p0 = if self.near.is_empty() {
+                buf[0]
+            } else {
+                interior_point(buf)
+            };
             let inside = if self.near.is_empty() {
                 let key = self.local.index.cell_xy(p0);
                 match self.inside_cache.get(&key) {

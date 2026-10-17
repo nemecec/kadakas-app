@@ -1180,3 +1180,248 @@ fn the_waste_is_worked_out_for_each_unit_type() {
     let s = summarize(&r, &p, &Placement::default(), &SummaryOptions::default()).unwrap();
     assert!(s.by_unit.iter().all(|u| u.order_units_with_waste.is_none()));
 }
+
+/// A rectangle of `w` by `h` turned by `deg` about the point `at`, and the placement that starts
+/// the pattern at its corner and runs along its edge.
+fn turned_lot(w: f64, h: f64, deg: f64, at: DVec2) -> (Region, Placement) {
+    let rot = DVec2::from_angle(deg.to_radians());
+    let ring: Vec<DVec2> = rect(w, h).iter().map(|p| at + rot.rotate(*p)).collect();
+    (
+        region(&ring, &[]),
+        Placement {
+            origin: Some(at),
+            angle: deg,
+        },
+    )
+}
+
+fn count_and_area(r: &Region, p: &Pattern, place: &Placement) -> (usize, f64) {
+    let (units, _) = run(r, p, place);
+    (units.len(), units.iter().map(|u| u.area).sum())
+}
+
+#[test]
+fn a_lot_turned_to_any_angle_loses_no_unit() {
+    // The layout does not depend on the turn: edges of the lot lie on the sides of the units, and
+    // rounding must not make a unit disappear (a corner on the boundary must not decide).
+    let p = pat(Bond::RunningBond, 4.0);
+    let (r0, pl0) = turned_lot(6000.0, 4000.0, 0.0, DVec2::new(0.0, 0.0));
+    let (n0, a0) = count_and_area(&r0, &p, &pl0);
+    assert!(n0 > 1000);
+    for deg in [
+        0.1, 1.0, 7.3, 15.0, 30.0, 33.3, 45.0, 60.0, 89.9, 90.0, 123.456, 180.0, 200.7, 270.0,
+        359.0,
+    ] {
+        for at in [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(404.0, -77.7),
+            DVec2::new(65_000.0, 120_000.0),
+        ] {
+            let (r, pl) = turned_lot(6000.0, 4000.0, deg, at);
+            let (n, a) = count_and_area(&r, &p, &pl);
+            assert_eq!(n, n0, "{deg} degrees at {at:?}");
+            assert!((a - a0).abs() < 1e-3, "{deg} degrees: {a} against {a0}");
+        }
+    }
+}
+
+#[test]
+fn a_turned_lot_with_an_island_on_the_cell_lines_loses_no_unit() {
+    // An island whose sides lie on the cell lines of the pattern (cells of 204 by 104 from the
+    // corner), and a lot cut at cell lines.
+    let p = pat(Bond::Stack, 4.0);
+    let hole = vec![
+        DVec2::new(1020.0, 520.0),
+        DVec2::new(2040.0, 520.0),
+        DVec2::new(2040.0, 1040.0),
+        DVec2::new(1020.0, 1040.0),
+    ];
+    let lay = |deg: f64| {
+        let rot = DVec2::from_angle(deg.to_radians());
+        let at = DVec2::new(333.3, -999.9);
+        let t =
+            |ring: &[DVec2]| -> Vec<DVec2> { ring.iter().map(|q| at + rot.rotate(*q)).collect() };
+        let r = region(&t(&rect(4080.0, 2080.0)), &[t(&hole)]);
+        count_and_area(
+            &r,
+            &p,
+            &Placement {
+                origin: Some(at),
+                angle: deg,
+            },
+        )
+    };
+    let (n0, a0) = lay(0.0);
+    for deg in [3.0, 17.0, 29.9, 44.99, 91.0, 217.3] {
+        let (n, a) = lay(deg);
+        assert_eq!(n, n0, "{deg}");
+        assert!((a - a0).abs() < 1e-3, "{deg}");
+    }
+}
+
+#[test]
+fn an_interior_point_lies_inside_convex_and_concave_pieces() {
+    let inside = |poly: &[DVec2]| {
+        let p = units::interior_point(poly);
+        crate::geom::point_in_polygon(p, poly)
+    };
+    assert!(inside(&rect(10.0, 2.0)));
+    let mut cw = rect(10.0, 2.0);
+    cw.reverse();
+    assert!(inside(&cw));
+    // An L whose average of the corners is outside the piece.
+    let l = vec![
+        DVec2::new(0.0, 0.0),
+        DVec2::new(30.0, 0.0),
+        DVec2::new(30.0, 1.0),
+        DVec2::new(1.0, 1.0),
+        DVec2::new(1.0, 30.0),
+        DVec2::new(0.0, 30.0),
+    ];
+    assert!(inside(&l));
+    let mut l_cw = l.clone();
+    l_cw.reverse();
+    assert!(inside(&l_cw));
+    // A thin U.
+    let u = vec![
+        DVec2::new(0.0, 0.0),
+        DVec2::new(10.0, 0.0),
+        DVec2::new(10.0, 10.0),
+        DVec2::new(9.0, 10.0),
+        DVec2::new(9.0, 1.0),
+        DVec2::new(1.0, 1.0),
+        DVec2::new(1.0, 10.0),
+        DVec2::new(0.0, 10.0),
+    ];
+    assert!(inside(&u));
+}
+
+proptest! {
+    #[test]
+    fn a_lot_turned_by_a_random_angle_loses_no_unit(
+        deg in 0.0f64..360.0,
+        x in -1.0e5f64..1.0e5,
+        y in -1.0e5f64..1.0e5,
+        bond in prop::sample::select(vec![Bond::RunningBond, Bond::Stack, Bond::Herringbone]),
+    ) {
+        let p = pat(bond, 4.0);
+        let (r0, pl0) = turned_lot(3000.0, 2000.0, 0.0, DVec2::ZERO);
+        let (n0, a0) = count_and_area(&r0, &p, &pl0);
+        let (r, pl) = turned_lot(3000.0, 2000.0, deg, DVec2::new(x, y));
+        let (n, a) = count_and_area(&r, &p, &pl);
+        prop_assert_eq!(n, n0);
+        prop_assert!((a - a0).abs() < 1e-2, "{} against {}", a, a0);
+    }
+}
+
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn perf_large_turned_lot_with_islands() {
+    // 150 m by 100 m turned by 17 degrees, with 40 islands: about 450,000 units.
+    let at = DVec2::new(1000.0, 2000.0);
+    let rot = DVec2::from_angle(17f64.to_radians());
+    let t = |ring: &[DVec2]| -> Vec<DVec2> { ring.iter().map(|q| at + rot.rotate(*q)).collect() };
+    let holes: Vec<Vec<DVec2>> = (0..40)
+        .map(|k| {
+            let (x, y) = (
+                5000.0 + 3500.0 * (k % 8) as f64,
+                5000.0 + 9000.0 * (k / 8) as f64,
+            );
+            t(&[
+                DVec2::new(x, y),
+                DVec2::new(x + 2000.0, y),
+                DVec2::new(x + 2000.0, y + 1500.0),
+                DVec2::new(x, y + 1500.0),
+            ])
+        })
+        .collect();
+    let r = region(&t(&rect(150_000.0, 100_000.0)), &holes);
+    let p = pat(Bond::RunningBond, 4.0);
+    let place = Placement {
+        origin: Some(at),
+        angle: 17.0,
+    };
+    let start = std::time::Instant::now();
+    let (units, _) = lay_units(&r, &p, &place, &Limits::new(2_000_000)).unwrap();
+    eprintln!("perf: {} units in {:?}", units.len(), start.elapsed());
+}
+
+#[test]
+fn an_edge_one_bit_off_the_side_of_the_units_loses_no_unit() {
+    // The zone of a stall row (found by the paving workflow on a drawing in feet): its left edge
+    // lies on the sides of the first column of units (x = 404), and the crossing of a split line
+    // with it was computed with a rounding error, so its top end is at 403.99999999999994. Units
+    // whose side lies on that nearly vertical edge must not be judged by their corner: the corner
+    // is on the boundary and the answer was a matter of rounding. Ten units were lost.
+    let p = pat(Bond::RunningBond, 4.0);
+    let place = Placement {
+        // The origin of the paving workflow on a drawing in feet: cells start at x = -2.
+        origin: Some(DVec2::new(-2.0, 402.0)),
+        angle: 0.0,
+    };
+    let lot = |top_x: f64, bottom_x: f64| {
+        region(
+            &[
+                DVec2::new(bottom_x, 404.0),
+                DVec2::new(2500.0, 404.0),
+                DVec2::new(2500.0, 5000.0),
+                DVec2::new(top_x, 5000.0),
+            ],
+            &[],
+        )
+    };
+    let (n0, a0) = count_and_area(&lot(404.0, 404.0), &p, &place);
+    assert!(n0 > 100);
+    // 403.99999999999994 is one bit below 404.
+    assert_eq!(nudge(404.0, -1), 403.99999999999994);
+    for ulps in [-1, -2, -3, -6, 1, 2] {
+        let (n, a) = count_and_area(&lot(nudge(404.0, ulps), 404.0), &p, &place);
+        assert_eq!(n, n0, "{ulps} bits");
+        assert!((a - a0).abs() < 1e-3);
+    }
+}
+
+fn nudge(v: f64, ulps: i32) -> f64 {
+    let mut x = v;
+    for _ in 0..ulps.abs() {
+        x = if ulps > 0 { x.next_up() } else { x.next_down() };
+    }
+    x
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(300))]
+    #[test]
+    fn corners_a_few_bits_off_the_cell_lines_lose_no_unit(
+        d in prop::collection::vec(-6i32..6, 8),
+        deg in prop::sample::select(vec![0.0f64, 90.0, 180.0, 37.0]),
+        bond in prop::sample::select(vec![Bond::RunningBond, Bond::Stack, Bond::Herringbone]),
+    ) {
+        // Cells of 204 by 104 (herringbone: 204 by 104 as well) from the origin: a lot of whole
+        // cells has every side on the sides of the units. Its corners are moved by a few bits.
+        let p = pat(bond, 4.0);
+        let at = DVec2::new(402.0, 402.0);
+        let rot = DVec2::from_angle(deg.to_radians());
+        let corners = [(0.0, 0.0), (4080.0, 0.0), (4080.0, 2080.0), (0.0, 2080.0)];
+        let make = |nudged: bool| {
+            let ring: Vec<DVec2> = corners
+                .iter()
+                .enumerate()
+                .map(|(i, &(x, y))| {
+                    let q = at + rot.rotate(DVec2::new(x, y));
+                    if nudged {
+                        DVec2::new(nudge(q.x, d[2 * i]), nudge(q.y, d[2 * i + 1]))
+                    } else {
+                        q
+                    }
+                })
+                .collect();
+            region(&ring, &[])
+        };
+        let place = Placement { origin: Some(at), angle: deg };
+        let (n0, a0) = count_and_area(&make(false), &p, &place);
+        let (n, a) = count_and_area(&make(true), &p, &place);
+        prop_assert_eq!(n, n0);
+        prop_assert!((a - a0).abs() < 1e-2, "{} against {}", a, a0);
+    }
+}

@@ -212,7 +212,24 @@ def test_the_corpus_is_complete():
     assert len(names) >= 25
 
 
-@pytest.mark.parametrize("name", sorted(CORPUS))
+# The files that run by default: one of each kind of trouble. The others are marked `slow`
+# (about 20 to 55 seconds each in a debug build); run them with KADAKAS_SLOW=1 or `-m slow`.
+FAST = {
+    "01_line_soup_mm.dxf",
+    "02_lwpolyline_bulge_unclosed.dxf",
+    "06e_units_foot.dxf",
+    "07a_survey_m_6588000_north_soup.dxf",
+    "10b_hatch_edge_paths_only.dxf",
+    "10e_hatch_clockwise_edges_only.dxf",
+    "12_full_lot_3_islands_2_aisles.dxf",
+}
+assert FAST <= set(CORPUS), FAST - set(CORPUS)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [pytest.param(n, marks=[] if n in FAST else pytest.mark.slow) for n in sorted(CORPUS)],
+)
 def test_the_whole_workflow_on_a_messy_file(cad, make_serve, tmp_path, name):
     e = CORPUS[name]
     if "import_fix" in e:
@@ -291,3 +308,51 @@ def test_the_whole_workflow_on_a_messy_file(cad, make_serve, tmp_path, name):
         assert (x0, y0) == pytest.approx((ox, oy), abs=max(5.0, abs(ox) * 1e-12)), (x0, y0, ox, oy)
 
 
+
+
+def lay_the_stalls(cad, noisy):
+    """The 30 m by 20 m lot with stall zones and a kerb course; `noisy`: every number went through
+    feet (x / 304.8 * 304.8) and carries noise in the last bits."""
+    W, H = 30_000.0, 20_000.0
+    f = (lambda v: v / 304.8 * 304.8) if noisy else (lambda v: v)
+    st = make_style(cad, "R", "running_bond")
+    ring = [[f(0), f(0)], [f(W), f(0)], [f(W), f(H)], [f(0), f(H)]]
+    pid = cad.execute({"op": "add_object", "shape": {"kind": "polyline", "closed": True, "points": ring}})[0]
+    hid = cad.result("hardscape.from_shapes", {"ids": [pid], "style": st})["created"][0]["id"]
+    lines = [[[f(0), f(5000)], [f(W), f(5000)]], [[f(0), f(15000)], [f(W), f(15000)]], [[f(25000), f(0)], [f(25000), f(H)]]]
+    for k in range(1, 10):
+        x = 2500.0 * k
+        lines.append([[f(x), f(0)], [f(x), f(5000)]])
+        lines.append([[f(x), f(15000)], [f(x), f(H)]])
+    cad.result("hardscape.split", {"id": hid, "lines": lines, "tolerance": 3})
+    cad.result("hardscape.course", {"id": hid, "courses": [{"name": "Kerb", "along": "outline", "corner": "corner_unit", "align_field": True}]})
+    r = cad.result("report.unit_pattern", {"ids": [hid]})["rows"][0]
+    chk = cad.result("unit_pattern.check", {"ids": [hid]})["objects"][0]
+    return r["whole_units"], r["cut_units"], chk["counts"]["coverage"]
+
+
+def test_a_lot_in_feet_keeps_every_unit_with_zones_and_a_course(cad, make_serve):
+    """Coordinates that went through a conversion (feet to mm) carry noise in the last bits. The
+    zones, the course and the units must not lose a unit because of it: ten whole units next to
+    the kerb were lost once (the same lot in exact numbers is the reference)."""
+    exact = lay_the_stalls(cad, False)
+    noisy = lay_the_stalls(make_serve(), True)
+    assert exact[2] == 0
+    assert noisy == exact
+
+
+def test_hardscape_from_shapes_reads_a_3d_polyline_in_plan_and_says_so(cad):
+    """The lot of file 03b is a POLYLINE 3D with four heights, its square island is another."""
+    name = "03b_polyline_3d_heights.dxf"
+    import_file(cad, name, CORPUS[name])
+    ids = [o["id"] for o in objects_of(cad, ["LOT", "ISLANDS"]) if o["shape"]["kind"] == "polyline3d"]
+    assert len(ids) == 2
+    made = cad.result("hardscape.from_shapes", {"ids": ids, "style": make_style(cad, "R", "stack")})
+    assert len(made["created"]) == 1 and made["created"][0]["holes"] == 1
+    assert any("heights" in w for w in made["warnings"]), made
+    row = cad.result("report.hardscape")["rows"][0]
+    assert row["plan_area_m2"] == pytest.approx(600.0 - 9.0, abs=1e-6)
+    # Flat 3D polylines need no warning.
+    flat = cad.execute({"op": "add_object", "shape": {"kind": "polyline3d", "closed": True, "points": [[0, 0, 5], [1000, 0, 5], [1000, 1000, 5]]}})[0]
+    made = cad.result("hardscape.from_shapes", {"ids": [flat], "dry_run": True})
+    assert made["warnings"] == []
