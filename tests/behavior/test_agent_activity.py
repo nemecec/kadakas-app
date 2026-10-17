@@ -24,7 +24,7 @@ def test_the_steps_of_a_session(cad):
     cad.result("execute", {"command": {"op": "move_objects", "ids": [a], "delta": [5, 0]}})
     cad.result("document.summary")
     log = cad.result("agent.activity")
-    assert [s["summary"] for s in log["steps"]] == ["Added 1 object (1 rect)", "Changed 1 object (1 rect)"]
+    assert [s["summary"] for s in log["steps"]] == ["Added 1 object (1 rect)", "Changed rect: max (10, 10) → (15, 10); min (0, 0) → (5, 0)"]
     assert all(s["state"] == "active" for s in log["steps"])
     # The move touched the object that the first step made: the first step cannot be reverted alone.
     assert [s["revertible"] for s in log["steps"]] == [False, True]
