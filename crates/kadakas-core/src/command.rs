@@ -25,8 +25,13 @@ mod plant_ops;
 mod present_ops;
 mod record_ops;
 mod retaining_ops;
+mod steps;
 mod table_ops;
 mod transform_ops;
+
+pub use steps::{
+    Conflict, ConflictKind, Counted, Counts, ObjChange, Refusal, RevertReport, StepData, StepPlace,
+};
 
 /// How `Command::Arrange` moves objects in the stacking order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -760,6 +765,11 @@ pub struct Patch {
     issues: Option<(crate::issue::Issues, crate::issue::Issues)>,
     /// A rough size in bytes, for the history limit (see [`Editor::set_history_limit`]).
     bytes: u64,
+    /// The identity of the step, which stays through undo and redo (revisions do not). Counts
+    /// from 1 in one editor; 0 only while the patch is being made.
+    serial: u64,
+    /// Who made the step.
+    origin: Origin,
 }
 
 /// Costs in the estimate of the size of a patch, in bytes.
@@ -2021,6 +2031,8 @@ impl<'a> Tx<'a> {
             history,
             issues,
             bytes,
+            serial: 0,
+            origin: Origin::User,
         }
     }
 }
@@ -2165,6 +2177,8 @@ pub struct Editor {
     /// does not drop old steps, so the steps of the run can be merged or taken back by their
     /// number.
     open_run: Option<u64>,
+    /// The serial that the next undo step gets (see [`Patch`]).
+    next_serial: u64,
 }
 
 /// The start of a run of many commands that become one undo step (a script). See
@@ -2224,6 +2238,7 @@ impl Editor {
                 crate::picture::MAX_PICTURE_PIXELS,
             ),
             open_run: None,
+            next_serial: 1,
         }
     }
 
@@ -2302,7 +2317,7 @@ impl Editor {
                 std::panic::resume_unwind(payload);
             }
         };
-        let patch = tx.finish(meta_before, history_before, issues_before);
+        let mut patch = tx.finish(meta_before, history_before, issues_before);
         let result = result.and_then(|()| match &patch.meta {
             Some((_, after)) if !after.is_finite() => Err(CommandError::Invalid(NOT_FINITE.into())),
             _ => Ok(()),
@@ -2314,6 +2329,9 @@ impl Editor {
                     let mut cs = patch.change_set(true, self.revision, &op(), self.origin);
                     cs.detail = detail;
                     self.log.push(cs);
+                    patch.serial = self.next_serial;
+                    patch.origin = self.origin;
+                    self.next_serial += 1;
                     self.undo.push(patch);
                     self.redo.clear();
                     if self.open_run.is_none() {
