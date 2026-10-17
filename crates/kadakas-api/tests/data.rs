@@ -78,7 +78,7 @@ fn record_formats_attach_set_get_and_detach() {
         )
         .contains("no record format")
     );
-    assert!(err(&mut s, "record_format.get", json!({"id":true})).contains("no record format"));
+    assert!(err(&mut s, "record_format.get", json!({"id":true})).contains("string"));
 
     let a = rect(&mut s, 0.0);
     let b = rect(&mut s, 5000.0);
@@ -379,9 +379,7 @@ fn worksheets_hold_cells_databases_and_export() {
     assert!(csv["csv"].as_str().unwrap().contains("Oak"));
     let xlsx = ok(&mut s, "worksheet.export", json!({"id":w,"format":"xlsx"}));
     assert!(xlsx["xlsx_base64"].as_str().unwrap().len() > 100);
-    assert!(
-        err(&mut s, "worksheet.export", json!({"id":w,"format":"pdf"})).contains("unknown format")
-    );
+    assert!(err(&mut s, "worksheet.export", json!({"id":w,"format":"pdf"})).contains("one of csv"));
 
     let placed = ok(
         &mut s,

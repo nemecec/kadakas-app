@@ -30,7 +30,7 @@ agent-activity-undo-to = Undo to here
 agent-activity-undo-to-hint = Undo this step and every step after it
 agent-activity-step = Step { $id }
 agent-activity-session = Agent session { $session }
-agent-activity-session-version = Version saved before it: #{ $version }
+agent-activity-session-version = Version saved before it: #{ $version } (an undo step of its own)
 agent-activity-session-no-version = No version was saved before it: { $why }
 agent-activity-state-undone = undone
 agent-activity-state-gone = not in the undo history
@@ -98,8 +98,7 @@ agent-activity-why-conflicts =
        *[other] { $count } objects were changed or deleted after this step.
     }
 agent-activity-why-shared = This document is shared. Only the objects of a step can be reverted one by one. Use Undo for your own edits.
-agent-activity-why-locked = An object of this step is on a locked layer.
-agent-activity-why-group = Something made later holds an object of this step.
+agent-activity-why-locked = An object of this step is on a locked or grey layer, or in a grey class.
 agent-activity-why-other = { $why }
 agent-activity-sum-none = no visible change
 agent-activity-n-objects =
@@ -134,3 +133,30 @@ agent-activity-sum-issues = changed issues
 agent-activity-3d-added = Added { $count }
 agent-activity-3d-changed = Changed { $count }
 agent-activity-3d-removed = Removed { $count }
+agent-activity-state-reverted = reverted
+agent-activity-state-partial = only partly recorded
+agent-activity-kind-undo = Undo by the agent
+agent-activity-kind-redo = Redo by the agent
+agent-activity-why-partial = The undo history limit dropped part of the record of this step, so it cannot be reverted.
+agent-activity-why-reverted = This step was reverted already.
+agent-activity-why-not-call = This step is an undo or redo of the agent, not a change.
+agent-activity-why-nothing = Nothing to revert: the objects of this step are back as they were, or gone.
+agent-activity-why-used = Work that was made later hangs on objects of this step (for example a data tag, a dimension or a group). Nothing was removed.
+agent-activity-why-missing = Something that an object of this step refers to is gone (a resource, its group or an anchor).
+agent-activity-missing =
+    { $count ->
+        [one] The details of 1 step were dropped (too many steps). Its changes are not highlighted.
+       *[other] The details of { $count } steps were dropped (too many steps). Their changes are not highlighted.
+    }
+agent-activity-edited-later =
+    { $count ->
+        [one] 1 object was changed again after the agent.
+       *[other] { $count } objects were changed again after the agent.
+    }
+agent-activity-object-edited = edited since
+agent-activity-3d-cap = Showing { $shown } of { $total } changes
+agent-activity-hold = The agent waits: you undid steps of your own, and an edit of the agent now would delete them.
+agent-activity-hold-redo = Redo everything
+agent-activity-hold-release = Let the agent go on
+agent-activity-hold-release-hint = The steps you undid can no longer be redone after the next edit of the agent.
+agent-activity-changed-meanwhile = The undo history changed since you asked. Ask again.

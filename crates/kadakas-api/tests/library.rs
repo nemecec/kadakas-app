@@ -124,7 +124,7 @@ fn the_library_folder_lists_files_exports_and_keeps_favorites() {
             json!({"library": "Twins", "items": [5]})
         )
         .unwrap_err()
-        .contains("an item is")
+        .contains("array")
     );
     assert!(
         call(

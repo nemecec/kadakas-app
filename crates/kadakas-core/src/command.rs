@@ -632,6 +632,54 @@ pub enum Command {
     },
 }
 
+/// The run of [`Editor::execute_stepwise`]: the document as it is now, and a way to run the next
+/// command on it.
+pub struct StepRun<'a, 'b> {
+    tx: &'b mut Tx<'a>,
+    out: &'b mut Outcome,
+    limits: (usize, u64),
+}
+
+impl StepRun<'_, '_> {
+    /// The document, with the changes of the commands that ran before.
+    pub fn doc(&self) -> &Document {
+        self.tx.doc
+    }
+
+    /// Runs one command. An error ends the step and the editor takes back the commands that ran.
+    pub fn run(&mut self, cmd: &Command) -> Result<(), CommandError> {
+        check_picture_limits(self.limits, cmd)?;
+        self.tx.run(cmd, self.out)
+    }
+}
+
+/// Refuses a command with a picture that is over the limits `(bytes, pixels)`.
+fn check_picture_limits((bytes, pixels): (usize, u64), cmd: &Command) -> Result<(), CommandError> {
+    let mut found = Vec::new();
+    cmd.pictures(&mut found);
+    for p in found {
+        // A picture that stays in the file has a size up to 2 bytes too big (the padding is
+        // not known without reading it): give it that much room, so a file of exactly the
+        // limit is never refused for it.
+        let len = if p.data.is_lazy() {
+            p.byte_len().saturating_sub(2)
+        } else {
+            p.byte_len()
+        };
+        if len > bytes {
+            return Err(CommandError::Invalid(format!(
+                "the picture file is larger than {bytes} bytes"
+            )));
+        }
+        if u64::from(p.width) * u64::from(p.height) > pixels {
+            return Err(CommandError::Invalid(format!(
+                "the picture has more than {pixels} pixels"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum CommandError {
     #[error("object {0} does not exist")]
@@ -2274,6 +2322,22 @@ impl Editor {
         )
     }
 
+    /// Runs several commands as one undo step, like `Command::Batch`, but the caller makes each
+    /// command only when its turn comes, from the document as the commands before it left it. The
+    /// API uses it to turn the names of layers and classes into IDs one command at a time, so that
+    /// a command can name a layer that an earlier command of the same batch added.
+    pub fn execute_stepwise(
+        &mut self,
+        f: impl FnOnce(&mut StepRun<'_, '_>) -> Result<(), CommandError>,
+    ) -> Result<Outcome, CommandError> {
+        let limits = self.picture_limits;
+        self.transact(
+            || "batch".into(),
+            None,
+            |tx, out| f(&mut StepRun { tx, out, limits }),
+        )
+    }
+
     /// Runs a command and sets the history of the document (the named versions) in the same undo
     /// step, so that undo takes back both. `op` names the step in the change set, with an optional
     /// `detail` (see [`Editor::set_history_with`]). An update from DXF (IOP-23) saves its versions
@@ -2653,30 +2717,7 @@ impl Editor {
     }
 
     fn check_pictures(&self, cmd: &Command) -> Result<(), CommandError> {
-        let (bytes, pixels) = self.picture_limits;
-        let mut found = Vec::new();
-        cmd.pictures(&mut found);
-        for p in found {
-            // A picture that stays in the file has a size up to 2 bytes too big (the padding is
-            // not known without reading it): give it that much room, so a file of exactly the
-            // limit is never refused for it.
-            let len = if p.data.is_lazy() {
-                p.byte_len().saturating_sub(2)
-            } else {
-                p.byte_len()
-            };
-            if len > bytes {
-                return Err(CommandError::Invalid(format!(
-                    "the picture file is larger than {bytes} bytes"
-                )));
-            }
-            if u64::from(p.width) * u64::from(p.height) > pixels {
-                return Err(CommandError::Invalid(format!(
-                    "the picture has more than {pixels} pixels"
-                )));
-            }
-        }
-        Ok(())
+        check_picture_limits(self.picture_limits, cmd)
     }
 
     pub fn set_history_limit(&mut self, bytes: u64) {

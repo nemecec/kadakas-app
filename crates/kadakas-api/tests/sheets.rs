@@ -217,8 +217,8 @@ fn sheets_are_created_listed_and_changed() {
         .contains("not a sheet")
     );
     assert!(fail(&mut s, "sheet.set", json!({"layer": "nowhere"})).contains("no sheet layer"));
-    assert!(fail(&mut s, "sheet.set", json!({"layer": true})).contains("no layer"));
-    assert!(fail(&mut s, "sheet.set", json!({})).contains("no layer"));
+    assert!(fail(&mut s, "sheet.set", json!({"layer": true})).contains("layer"));
+    assert!(fail(&mut s, "sheet.set", json!({})).contains("layer"));
 }
 
 #[test]
@@ -416,7 +416,7 @@ fn viewports_fit_the_model_and_update_live() {
             "viewport.create",
             json!({"sheet": "S", "layers": "all"})
         )
-        .contains("list")
+        .contains("array")
     );
     assert!(
         fail(
@@ -581,7 +581,7 @@ fn overrides_and_annotations() {
             "viewport.set_override",
             json!({"id": id, "layers": {"00000000-0000-0000-0000-000000000001": "yes"}})
         )
-        .contains("true, false or null")
+        .contains("boolean")
     );
     assert!(
         fail(
@@ -702,7 +702,7 @@ fn overrides_and_annotations() {
             "viewport.annotate",
             json!({"id": id, "remove": "all"})
         )
-        .contains("invalid type")
+        .contains("'remove'")
     );
 }
 
@@ -960,7 +960,7 @@ fn saved_views_store_and_restore_the_visibility_and_the_view() {
             "saved_view.save",
             json!({"name": "x", "pan": "left"})
         )
-        .contains("invalid type")
+        .contains("parameter 'pan'")
     );
 }
 
@@ -1074,7 +1074,7 @@ fn export_file_writes_pdf_svg_and_png_files() {
             "sheet.render",
             json!({"sheet": "One", "format": "gif"})
         )
-        .contains("svg or png")
+        .contains("svg, png")
     );
     assert!(
         fail(

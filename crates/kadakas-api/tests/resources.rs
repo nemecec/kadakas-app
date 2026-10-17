@@ -383,7 +383,7 @@ fn hatches_tiles_and_line_types_are_clipped_to_the_shape() {
             "resource.create",
             json!({"type": "wave", "name": "Bad"})
         )
-        .contains("unknown type")
+        .contains("one of symbol")
     );
 }
 
@@ -676,7 +676,7 @@ fn bad_parameters_are_refused_with_a_clear_message() {
         )
         .contains("does not exist")
     );
-    assert!(err(&mut s, "group.create", json!({"ids": [a], "name": 5})).contains("text"));
+    assert!(err(&mut s, "group.create", json!({"ids": [a], "name": 5})).contains("string"));
     // Ctrl-click toggles a member in and out of the selection.
     ok(&mut s, "selection.click", json!({"id": a}));
     assert_eq!(
@@ -735,14 +735,14 @@ fn bad_parameters_are_refused_with_a_clear_message() {
     let eg = ok(&mut s, "symbol.edit", json!({"id": inst}))["group"].clone();
     ok(&mut s, "symbol.edit_end", json!({"group": eg}));
     // Updates and renames with bad types.
-    assert!(err(&mut s, "resource.update", json!({"id": other, "name": 5})).contains("text"));
+    assert!(err(&mut s, "resource.update", json!({"id": other, "name": 5})).contains("string"));
     assert!(
         err(
             &mut s,
             "resource.duplicate",
             json!({"id": other, "name": 5})
         )
-        .contains("text")
+        .contains("string")
     );
     assert!(
         err(
@@ -798,7 +798,7 @@ fn bad_parameters_are_refused_with_a_clear_message() {
         ok(&mut s, "resource.get", json!({"id": "Fence"}))["elements"][1]["symbol"],
         other
     );
-    assert!(err(&mut s, "resource.get", json!({"id": true})).contains("no resource"));
+    assert!(err(&mut s, "resource.get", json!({"id": true})).contains("string"));
 }
 
 #[test]

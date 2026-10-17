@@ -99,7 +99,7 @@ fn dimensions_follow_objects_and_cover_every_mode() {
     assert_eq!(chain["texts"], json!(["1000", "2000"]));
     // Errors.
     assert!(
-        err(&mut s, "dimension.add", json!({"points":[[0,0],[1,1]]})).contains("mode is required")
+        err(&mut s, "dimension.add", json!({"points":[[0,0],[1,1]]})).contains("missing 'mode'")
     );
     assert!(
         err(
@@ -116,7 +116,7 @@ fn dimensions_follow_objects_and_cover_every_mode() {
             "dimension.add",
             json!({"mode":"horizontal","anchors":"x"})
         )
-        .contains("anchors is a list")
+        .contains("anchors")
     );
     assert!(
         err(
@@ -233,7 +233,7 @@ fn dimensions_follow_objects_and_cover_every_mode() {
         )
         .contains("does not exist")
     );
-    assert!(err(&mut s, "annotation.update", json!({})).contains("params.id"));
+    assert!(err(&mut s, "annotation.update", json!({})).contains("missing 'id'"));
 }
 
 #[test]
@@ -276,9 +276,7 @@ fn styles_resources_and_text_annotations() {
         json!({"id":st,"reassign":other}),
     );
     assert!(err(&mut s, "dimension_style.get", json!({"id":st})).contains("no dimension style"));
-    assert!(
-        err(&mut s, "dimension_style.create", json!({"unit":"m"})).contains("name is required")
-    );
+    assert!(err(&mut s, "dimension_style.create", json!({"unit":"m"})).contains("missing 'name'"));
     assert!(
         err(
             &mut s,
@@ -288,7 +286,7 @@ fn styles_resources_and_text_annotations() {
         .len()
             > 5
     );
-    assert!(err(&mut s, "dimension_style.get", json!({"id":false})).contains("no dimension style"));
+    assert!(err(&mut s, "dimension_style.get", json!({"id":false})).contains("string"));
 
     let t = ok(
         &mut s,
@@ -350,7 +348,7 @@ fn styles_resources_and_text_annotations() {
             "annotation.apply_text_style",
             json!({"ids":"x","style":"Big"})
         )
-        .contains("list of object IDs")
+        .contains("'ids'")
     );
     assert!(
         err(
@@ -456,7 +454,7 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
     let tags = ok(&mut s, "annotation.list", json!({"type":"data_tag"}));
     assert_eq!(tags["items"].as_array().unwrap().len(), 2);
     assert_eq!(tags["items"][0]["computed"]["lines"][0], "QR plant");
-    assert!(err(&mut s, "annotation.list", json!({"type":"bogus"})).contains("unknown type"));
+    assert!(err(&mut s, "annotation.list", json!({"type":"bogus"})).contains("one of dimension"));
     assert!(err(&mut s, "annotation.list", json!({"layer":"Nope"})).contains("no layer"));
 
     let plant = ok(&mut s, "objects.list", json!({"kind":"plant"}));
@@ -472,8 +470,8 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
     );
     assert!(one["lines"].is_array());
     assert_eq!(one["object_exists"], true);
-    assert!(err(&mut s, "data_tag.add", json!({"object":pid})).contains("style is required"));
-    assert!(err(&mut s, "data_tag.add", json!({"style":"Plant tag"})).contains("params.object"));
+    assert!(err(&mut s, "data_tag.add", json!({"object":pid})).contains("missing 'style'"));
+    assert!(err(&mut s, "data_tag.add", json!({"style":"Plant tag"})).contains("missing 'object'"));
     assert!(
         err(
             &mut s,
@@ -594,10 +592,8 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
         json!({"at":[3000,3000],"text":"Mid","leaders":[{"object":ln,"points":[[1,1],[2,2]]},{"points":[[5,5]]}]}),
     );
     assert!(err(&mut s, "callout.add", json!({"at":[0,0],"text":"x"})).contains("give leaders"));
-    assert!(
-        err(&mut s, "callout.add", json!({"at":[0,0],"leaders":"x"})).contains("leaders is a list")
-    );
-    assert!(err(&mut s, "callout.add", json!({"at":[0,0],"leaders":[3]})).contains("a leader is"));
+    assert!(err(&mut s, "callout.add", json!({"at":[0,0],"leaders":"x"})).contains("leaders"));
+    assert!(err(&mut s, "callout.add", json!({"at":[0,0],"leaders":[3]})).contains("leaders[0]"));
 
     assert_eq!(
         ok(
@@ -620,7 +616,7 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
     );
     let revs = ok(&mut s, "revision.list", json!({}));
     assert_eq!(revs["revisions"][0]["clouds"].as_array().unwrap().len(), 2);
-    assert!(err(&mut s, "revision_cloud.add", json!({"points":"x"})).contains("revision_cloud"));
+    assert!(err(&mut s, "revision_cloud.add", json!({"points":"x"})).contains("points"));
 
     // The tagged plant leaves: its tags go. Style deletion needs a reassignment.
     exec(&mut s, json!({"op":"delete_objects","ids":[pid]}));

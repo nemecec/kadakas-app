@@ -460,6 +460,42 @@ mod tests {
     }
 
     #[test]
+    fn what_the_person_did_afterwards_is_told_apart_from_what_the_agent_did() {
+        let mut ed = Editor::with_sequential_ids();
+        let (b, c) = (add(&mut ed, 100.0), add(&mut ed, 200.0));
+        let mut log = ActivityLog::default();
+        let mut made = None;
+        step(&mut log, &mut ed, |e| {
+            made = Some(add(e, 0.0));
+            mv(e, b, 5.0);
+        });
+        let made = made.unwrap();
+        // The person moves the new object and the changed one, and an object of their own.
+        mv(&mut ed, made, 1.0);
+        mv(&mut ed, b, 1.0);
+        mv(&mut ed, c, 1.0);
+        let r = review(&log, &ed, Scope::Unseen);
+        assert_eq!(r.get(made).unwrap().status, Status::Added);
+        assert!(r.get(made).unwrap().edited_later);
+        assert_eq!(r.get(b).unwrap().status, Status::Changed);
+        assert!(r.get(b).unwrap().edited_later);
+        assert!(
+            r.get(c).is_none(),
+            "a change of the person alone is not listed"
+        );
+        assert_eq!(r.edited_later(), 2);
+        // Without a later edit the flag is off.
+        let r2 = {
+            let mut ed2 = Editor::with_sequential_ids();
+            let mut log2 = ActivityLog::default();
+            let id = add(&mut ed2, 0.0);
+            step(&mut log2, &mut ed2, |e| mv(e, id, 2.0));
+            review(&log2, &ed2, Scope::Unseen)
+        };
+        assert_eq!(r2.edited_later(), 0);
+    }
+
+    #[test]
     fn stepping_through_the_changes_wraps_around() {
         let mut ed = Editor::with_sequential_ids();
         let mut log = ActivityLog::default();

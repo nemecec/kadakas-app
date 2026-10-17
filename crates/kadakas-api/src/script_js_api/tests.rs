@@ -942,3 +942,29 @@ fn a_hostile_stored_result_is_refused_with_a_reason() {
     );
     assert!(ok_one.is_ok(), "{ok_one:?}");
 }
+
+#[test]
+fn the_entry_of_the_window_checks_the_parameters_like_the_api_does() {
+    let mut s = Session::default();
+    for (params, word) in [
+        (json!({"code": "1", "bogus": 1}), "bogus"),
+        (json!({"code": "1", "mode": "write"}), "mode"),
+        (json!({"code": "1", "seed": -1}), "seed"),
+        (json!({"code": "1", "seed": 4294967296u64}), "seed"),
+        (json!({"code": 5}), "code"),
+        (json!({}), "code"),
+        (json!("code"), "code"),
+        (
+            json!({"code": "x".repeat(super::MAX_CODE_BYTES + 1)}),
+            "at most",
+        ),
+    ] {
+        let e = s.script_start(&params).err().expect("refused");
+        assert_eq!(e.code, -32602, "{params}: {}", e.message);
+        assert!(e.message.contains(word), "{params}: {}", e.message);
+    }
+    // The call of the API takes null and refuses what is no object.
+    assert!(s.handle("script.js_info", Value::Null).is_ok());
+    let e = s.handle("script.eval", json!([1])).unwrap_err();
+    assert!(e.message.contains("object"), "{}", e.message);
+}

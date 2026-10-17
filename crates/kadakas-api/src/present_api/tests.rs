@@ -170,7 +170,7 @@ fn material_crud_and_validation() {
         ),
         (json!({"name": "x", "mapping": 4}), "object"),
         (json!({}), "name"),
-        (json!({"name": 5}), "text"),
+        (json!({"name": 5}), "string"),
     ] {
         let e = fail(&mut s, "material.create", params.clone());
         assert!(e.contains(text), "{params}: {e}");
@@ -308,7 +308,7 @@ fn textures_come_from_png_and_jpeg_images() {
     );
 
     // Bad images.
-    assert!(fail(&mut s, "material.import_texture", json!({"id": id})).contains("give path"));
+    assert!(fail(&mut s, "material.import_texture", json!({"id": id})).contains("path"));
     let e = fail(
         &mut s,
         "material.import_texture",
@@ -506,7 +506,7 @@ fn assigning_materials_and_resolution_order_in_the_api() {
             "material.assign",
             json!({"material": "Grass", "objects": 5})
         )
-        .contains("list")
+        .contains("array")
     );
     assert!(
         fail(
@@ -530,7 +530,7 @@ fn assigning_materials_and_resolution_order_in_the_api() {
             "material.assign",
             json!({"material": "Grass", "object": a, "slot": 4})
         )
-        .contains("text")
+        .contains("string")
     );
     assert!(
         fail(
@@ -594,8 +594,8 @@ fn render_styles_crud_and_names() {
     ok(&mut s, "render_style.set_active", json!({"id": null}));
 
     for (params, text) in [
-        (json!({"name": "x", "mode": "sketch"}), "unknown mode"),
-        (json!({"name": "x", "edges": "yes"}), "true or false"),
+        (json!({"name": "x", "mode": "sketch"}), "one of shaded"),
+        (json!({"name": "x", "edges": "yes"}), "boolean"),
         (json!({"name": "x", "line_weight": 99}), "line weight"),
         (json!({"name": "x", "background": "white"}), "background"),
         (json!({"name": "x", "fog": true}), "unknown parameter"),
@@ -691,7 +691,7 @@ fn sun_set_and_get_give_published_positions() {
         (json!({"north_angle": "up"}), "number"),
         (json!({"colour": 1}), "unknown parameter"),
         (json!({"from_georef": true}), "georeference"),
-        (json!({"off": 1}), "true or false"),
+        (json!({"off": 1}), "boolean"),
     ] {
         assert!(
             fail(&mut s, "sun.set", params.clone()).contains(text),
@@ -953,7 +953,7 @@ fn summer_time_and_true_north_in_sun_set() {
         summer["position"]["azimuth"].as_f64().unwrap(),
     );
     assert!((a - b).abs() < 1e-6, "{a} {b}");
-    assert!(fail(&mut s, "sun.set", json!({"dst": "yes"})).contains("true or false"));
+    assert!(fail(&mut s, "sun.set", json!({"dst": "yes"})).contains("boolean"));
     // From the georeference the north angle includes the convergence of the CRS (about 1.8 degrees).
     ok(
         &mut s,

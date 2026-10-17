@@ -203,7 +203,7 @@ fn set_changes_fields_in_one_step() {
     assert!(
         fail(&mut s, "irrigation.set", json!({"arc": 5}))
             .1
-            .contains("'id'")
+            .contains("id, ids")
     );
     let layer = ok(&mut s, "document.summary", json!({}))["layers"][0]["id"].clone();
     assert!(fail(&mut s, "irrigation.set", json!({"id": layer, "arc": 5})).0 != 0);
@@ -287,7 +287,7 @@ fn add_errors() {
         (
             "irrigation.line.add",
             json!({"points": "x", "size": "32", "material": "PE"}),
-            "list",
+            "array",
         ),
         (
             "irrigation.line.add",
@@ -312,7 +312,7 @@ fn add_errors() {
         (
             "irrigation.line.add",
             json!({"points": [[0, 0], [1, 1]], "size": {}, "material": "PE"}),
-            "text",
+            "size",
         ),
         (
             "irrigation.poc.add",
@@ -523,7 +523,7 @@ fn catalog_get_set_and_csv() {
             json!({"kind": "x", "text": "a"})
         )
         .1
-        .contains("unknown kind")
+        .contains("one of heads")
     );
     assert!(
         fail(
@@ -559,12 +559,12 @@ fn catalog_get_set_and_csv() {
             json!({"kind": "x"})
         )
         .1
-        .contains("heads, pipes or materials")
+        .contains("one of heads")
     );
     assert!(
         fail(&mut s, "irrigation.catalog.export_csv", json!({}))
             .1
-            .contains("heads, pipes or materials")
+            .contains("one of heads")
     );
 }
 

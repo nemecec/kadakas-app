@@ -198,6 +198,12 @@ struct RemoteArgs {
     /// Default: off. The converter is a separate program that the user installed.
     #[arg(long = "allow-converters")]
     allow_converters: bool,
+    /// Save a version "Before agent session" before the first change of each agent session (a
+    /// connection, or a call after 30 minutes of silence), as the app does, so a person can
+    /// compare the work of the session with what was there before. Default: off, because it
+    /// adds a change of the history of the document that a script or a test does not expect.
+    #[arg(long = "session-version")]
+    session_version: bool,
     /// Give new objects, layers and classes the IDs 2, 3, 4 and so on, as small numbers, so a test
     /// can predict them. Never use it for documents that are merged with others: these IDs are
     /// not unique in the world. Default: off (new IDs are UUIDs).
@@ -282,6 +288,7 @@ impl Backend {
         session.set_collab_defaults(remote.collab_url, remote.collab_token);
         session.gis.urls = kadakas_api::UrlPolicy::allow_list(remote.allow_url);
         session.scripting.allow_agent_scripts = remote.allow_agent_scripts;
+        session.set_session_version(remote.session_version);
         session.scripting.trust = kadakas_api::TrustStore::load_default();
         session.wasm_plugins.registry.trust = kadakas_api::ModuleTrust::load_default();
         if let Some(f) = file {

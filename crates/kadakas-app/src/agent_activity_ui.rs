@@ -8,7 +8,7 @@
 
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, Ui, pos2, vec2};
 use glam::{DVec3, Mat4};
-use kadakas_api::{Advice, Session, StepCheck};
+use kadakas_api::{Advice, Session, StepCheck, Why};
 use kadakas_core::activity::{Step, Summary};
 use kadakas_core::command::{Counted, Counts, StepPlace};
 use kadakas_core::model::{Document, ObjectId};
@@ -41,8 +41,16 @@ pub enum Act {
         step: u64,
         skip: bool,
     },
-    /// Undo this step and every step after it.
-    UndoBack(u64),
+    /// Undo this step and every step after it. `expect` is how many undo steps the person was
+    /// told: if the history is another one now, nothing happens and the question is asked again.
+    UndoBack {
+        step: u64,
+        expect: usize,
+    },
+    /// Redo every undone step (the hold on the agent ends with the last one).
+    RedoAll,
+    /// Let the agent go on although the person could still redo.
+    ReleaseHold,
     /// Open the panel (from the notice).
     Open,
 }
@@ -63,7 +71,14 @@ pub struct ActivityUi {
     /// (the check looks at every object of a step).
     checks: std::collections::HashMap<u64, StepCheck>,
     checks_key: Option<(u64, u64)>,
+    /// When the key of the checks changed (ms): the checks wait until the document is quiet.
+    checks_changed_ms: f64,
 }
+
+/// The checks start this long (ms) after the last change of the document or the log.
+const CHECKS_QUIET_MS: f64 = 300.0;
+/// The most checks that one frame makes (each looks at every object of a step).
+const CHECKS_PER_FRAME: usize = 6;
 
 // ---------------------------------------------------------------- texts
 
@@ -161,46 +176,55 @@ fn capitalize(t: String) -> String {
         .unwrap_or_default()
 }
 
+/// What the conflicts of a step are, in the language of the person.
+pub fn conflicts_text(list: &[kadakas_core::command::Conflict]) -> String {
+    use kadakas_core::command::ConflictKind as K;
+    let any = |k: K| list.iter().any(|c| c.kind == k);
+    if any(K::UsedLater) {
+        tr!("agent-activity-why-used")
+    } else if any(K::MissingRef) {
+        tr!("agent-activity-why-missing")
+    } else if list
+        .iter()
+        .all(|c| matches!(c.kind, K::LayerLocked | K::Grey))
+    {
+        tr!("agent-activity-why-locked")
+    } else {
+        tr!("agent-activity-why-conflicts", count = list.len())
+    }
+}
+
 /// Why a revert is not possible, in the language of the person.
 pub fn why_text(check: &StepCheck) -> Option<String> {
-    Some(match check.place {
-        StepPlace::Redo => tr!("agent-activity-why-undone"),
-        StepPlace::Gone => tr!("agent-activity-why-gone"),
-        StepPlace::Undo(0) if !check.shared => return None,
-        StepPlace::Undo(_) if check.shared && check.snapshot_blocked => {
-            tr!("agent-activity-why-shared")
-        }
-        StepPlace::Undo(_) if !check.details => tr!("agent-activity-why-dropped"),
-        StepPlace::Undo(_) if check.snapshot_blocked => tr!("agent-activity-why-snapshot"),
-        StepPlace::Undo(_) if !check.conflicts.is_empty() => {
-            tr!(
-                "agent-activity-why-conflicts",
-                count = check.conflicts.len()
-            )
-        }
-        StepPlace::Undo(_) => return None,
+    Some(match check.why()? {
+        Why::NotACall => tr!("agent-activity-why-not-call"),
+        Why::Partial => tr!("agent-activity-why-partial"),
+        Why::Reverted => tr!("agent-activity-why-reverted"),
+        Why::Undone => tr!("agent-activity-why-undone"),
+        Why::Dropped => tr!("agent-activity-why-dropped"),
+        Why::Snapshot => tr!("agent-activity-why-snapshot"),
+        Why::Shared => tr!("agent-activity-why-shared"),
+        Why::Conflicts(_) => conflicts_text(&check.conflicts),
+        Why::NothingToDo => tr!("agent-activity-why-nothing"),
     })
 }
 
 /// The refusal of the session in the language of the person.
 pub fn refusal_text(e: &kadakas_api::StepError) -> String {
-    use kadakas_core::command::{ConflictKind, Refusal};
+    use kadakas_core::command::Refusal;
     match e {
         kadakas_api::StepError::Unknown => tr!("agent-activity-why-gone"),
         kadakas_api::StepError::DetailsDropped => tr!("agent-activity-why-dropped"),
+        kadakas_api::StepError::NotRevertible(Why::Partial) => tr!("agent-activity-why-partial"),
+        kadakas_api::StepError::NotRevertible(_) => tr!("agent-activity-why-not-call"),
         kadakas_api::StepError::Refused(r) => match r {
             Refusal::Gone => tr!("agent-activity-why-gone"),
             Refusal::AlreadyUndone => tr!("agent-activity-why-undone"),
+            Refusal::NothingToDo => tr!("agent-activity-why-nothing"),
             Refusal::Snapshot { .. } => tr!("agent-activity-why-snapshot"),
-            Refusal::Conflicts(list) => {
-                if list.iter().all(|c| c.kind == ConflictKind::LayerLocked) {
-                    tr!("agent-activity-why-locked")
-                } else {
-                    tr!("agent-activity-why-conflicts", count = list.len())
-                }
-            }
+            Refusal::Conflicts(list) => conflicts_text(list),
             Refusal::Shared => tr!("agent-activity-why-shared"),
-            Refusal::InUse(_) => tr!("agent-activity-why-group"),
+            Refusal::InUse(_) => tr!("agent-activity-why-used"),
             Refusal::Rejected(why) => tr!("agent-activity-why-other", why = why.clone()),
         },
     }
@@ -250,22 +274,13 @@ impl ActivityUi {
     pub fn windows(
         &mut self,
         ctx: &egui::Context,
-        session: &Session,
+        session: &mut Session,
         review: &Review,
         hints: &Hints,
     ) -> Vec<Act> {
         let mut acts = Vec::new();
         if self.model.open {
-            let key = (session.activity.generation(), session.editor.revision());
-            if self.checks_key != Some(key) {
-                self.checks = session
-                    .activity
-                    .steps()
-                    .iter()
-                    .filter_map(|s| Some((s.id, session.revert_check(s.id).ok()?)))
-                    .collect();
-                self.checks_key = Some(key);
-            }
+            self.make_checks(ctx, session);
             let mut open = true;
             egui::Window::new(tr!("agent-activity-title"))
                 .id(egui::Id::new("win-agent-activity"))
@@ -277,6 +292,42 @@ impl ActivityUi {
         }
         self.dialog(ctx, &mut acts);
         acts
+    }
+
+    /// Makes the checks of the steps that have none, newest first, a few in a frame and only when
+    /// the document has been quiet for a moment (a check looks at every object of a step).
+    fn make_checks(&mut self, ctx: &egui::Context, session: &mut Session) {
+        let now = ctx.input(|i| i.time) * 1000.0;
+        let key = (session.activity.generation(), session.editor.revision());
+        if self.checks_key != Some(key) {
+            self.checks.clear();
+            self.checks_key = Some(key);
+            self.checks_changed_ms = now;
+        }
+        let todo: Vec<u64> = session
+            .activity
+            .steps()
+            .iter()
+            .rev()
+            .map(|s| s.id)
+            .filter(|id| !self.checks.contains_key(id))
+            .collect();
+        if todo.is_empty() {
+            return;
+        }
+        let wait = CHECKS_QUIET_MS - (now - self.checks_changed_ms);
+        if wait > 0.0 {
+            ctx.request_repaint_after(std::time::Duration::from_millis(wait as u64 + 10));
+            return;
+        }
+        for id in todo.iter().take(CHECKS_PER_FRAME) {
+            if let Ok(c) = session.revert_check(*id) {
+                self.checks.insert(*id, c);
+            }
+        }
+        if todo.len() > CHECKS_PER_FRAME {
+            ctx.request_repaint();
+        }
     }
 
     fn body(
@@ -304,6 +355,18 @@ impl ActivityUi {
             ui.weak(tr!("agent-activity-none"));
         } else {
             counts_row(ui, review, counts);
+        }
+        if review.set.edited_later() > 0 {
+            ui.weak(tr!(
+                "agent-activity-edited-later",
+                count = review.set.edited_later()
+            ));
+        }
+        if review.set.missing > 0 {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                tr!("agent-activity-missing", count = review.set.missing),
+            );
         }
         ui.horizontal_wrapped(|ui| {
             match self.model.selected {
@@ -443,10 +506,27 @@ impl ActivityUi {
                     if step.data.is_none() {
                         ui.weak(tr!("agent-activity-state-dropped"));
                     }
+                    if step.reverted {
+                        ui.weak(tr!("agent-activity-state-reverted"));
+                    }
+                    if step.partial {
+                        ui.weak(tr!("agent-activity-state-partial"));
+                    }
+                    match step.kind {
+                        kadakas_core::activity::StepKind::Call => {}
+                        kadakas_core::activity::StepKind::Undo => {
+                            ui.weak(tr!("agent-activity-kind-undo"));
+                        }
+                        kadakas_core::activity::StepKind::Redo => {
+                            ui.weak(tr!("agent-activity-kind-redo"));
+                        }
+                    }
                 });
                 ui.label(summary_text(&step.summary));
                 ui.horizontal_wrapped(|ui| {
-                    let live = matches!(place, StepPlace::Undo(_));
+                    // A step that the history forgot goes back object by object; only an undone
+                    // one waits for redo.
+                    let live = place != StepPlace::Redo && !step.serials.is_empty();
                     if ui
                         .add_enabled(
                             step.data.is_some(),
@@ -499,7 +579,7 @@ impl ActivityUi {
                         }
                         let mut b = ui
                             .add_enabled(
-                                live && !check.shared,
+                                matches!(place, StepPlace::Undo(_)) && !check.shared && live,
                                 egui::Button::new(tr!("agent-activity-undo-to")),
                             )
                             .on_hover_text(tr!("agent-activity-undo-to-hint"));
@@ -510,7 +590,10 @@ impl ActivityUi {
                             if check.above_other > 0 {
                                 self.pending = Some(Pending::UndoBack(step.id, check.clone()));
                             } else {
-                                acts.push(Act::UndoBack(step.id));
+                                acts.push(Act::UndoBack {
+                                    step: step.id,
+                                    expect: check.above + 1,
+                                });
                             }
                         }
                     }
@@ -565,6 +648,9 @@ impl ActivityUi {
                 }
                 if !here {
                     ui.weak(tr!("agent-activity-object-gone"));
+                }
+                if review.set.get(c.id).is_some_and(|e| e.edited_later) {
+                    ui.weak(tr!("agent-activity-object-edited"));
                 }
             });
             if self.model.detail == Some(c.id) {
@@ -679,7 +765,10 @@ impl ActivityUi {
                         }
                         ui.horizontal(|ui| {
                             if ui.button(tr!("agent-activity-undo-go")).clicked() {
-                                acts.push(Act::UndoBack(*step));
+                                acts.push(Act::UndoBack {
+                                    step: *step,
+                                    expect: check.above + 1,
+                                });
                                 done = true;
                             }
                             if ui.button(tr!("agent-activity-cancel")).clicked() {
@@ -760,6 +849,44 @@ impl ActivityUi {
     }
 }
 
+impl ActivityUi {
+    /// The notice that the agent waits: the person undid steps of their own and can redo them.
+    pub fn hold_notice(
+        &mut self,
+        ctx: &egui::Context,
+        canvas: Rect,
+        session: &Session,
+    ) -> Vec<Act> {
+        let mut acts = Vec::new();
+        if !session.agent_hold() {
+            return acts;
+        }
+        egui::Area::new(egui::Id::new("agent-activity-hold"))
+            .order(egui::Order::Middle)
+            .fixed_pos(pos2(canvas.left() + 8.0, canvas.bottom() - 8.0))
+            .pivot(Align2::LEFT_BOTTOM)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_max_width(340.0);
+                    ui.label(tr!("agent-activity-hold"));
+                    ui.horizontal(|ui| {
+                        if ui.button(tr!("agent-activity-hold-redo")).clicked() {
+                            acts.push(Act::RedoAll);
+                        }
+                        if ui
+                            .button(tr!("agent-activity-hold-release"))
+                            .on_hover_text(tr!("agent-activity-hold-release-hint"))
+                            .clicked()
+                        {
+                            acts.push(Act::ReleaseHold);
+                        }
+                    });
+                });
+            });
+        acts
+    }
+}
+
 /// The keys that the texts name.
 #[derive(Clone, Debug, Default)]
 pub struct Hints {
@@ -805,6 +932,7 @@ pub fn paint_3d(
     let origin = scene.origin;
     let project = move |p: DVec3| project_3d(vp, rect, (p - origin).as_vec3());
     let mut drawn = 0;
+    let total = review.set.entries().len();
     for e in review.set.entries() {
         if drawn >= MAX_3D_BOXES {
             break;
@@ -816,7 +944,9 @@ pub fn paint_3d(
             .or_else(|| {
                 let o = e.after.as_ref().or(e.before.as_ref())?;
                 let (lo, hi) = doc.object_bounds(o);
-                (lo.is_finite() && hi.is_finite()).then(|| (lo.extend(0.0), hi.extend(0.0)))
+                // A removed object stood on its layer: at the height of the layer.
+                let z = doc.layer(o.layer).map_or(0.0, |l| l.elevation);
+                (lo.is_finite() && hi.is_finite()).then(|| (lo.extend(z), hi.extend(z)))
             });
         let Some((lo, hi)) = bounds else { continue };
         let Some(r) = screen_box(&project, lo, hi) else {
@@ -862,6 +992,15 @@ pub fn paint_3d(
     }
     let c = review.set.counts();
     let mut lines = Vec::new();
+    if total > drawn && drawn >= MAX_3D_BOXES {
+        painter.text(
+            pos2(rect.right() - 10.0, rect.bottom() - 10.0),
+            Align2::RIGHT_BOTTOM,
+            tr!("agent-activity-3d-cap", shown = drawn, total = total),
+            FontId::proportional(12.0),
+            Color32::GRAY,
+        );
+    }
     if c.added > 0 {
         lines.push((
             Status::Added,

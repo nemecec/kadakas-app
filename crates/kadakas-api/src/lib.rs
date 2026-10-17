@@ -52,10 +52,10 @@ mod review_api;
 mod script_js_api;
 pub use compare_api::{CompareCache, CompareMode, CompareSpec, ShownDoc};
 pub use review_api::{Side as CompareSide, VERSION_BYTES_MAX, VERSIONS_MAX, VERSIONS_WARN};
+pub mod params;
 mod rules_api;
 mod sheets_api;
 mod solid_api;
-pub mod spec;
 mod survey_api;
 mod symbols_api;
 mod wasm_plugin_api;
@@ -349,6 +349,67 @@ fn elide_image(object: &mut Value) {
             "<PNG picture, {n} characters of base64, not shown>"
         ));
     }
+}
+
+/// True when a command (or a command inside a batch) names a layer or a class by a name.
+fn json_command_has_names(c: &serde_json::Map<String, Value>) -> bool {
+    params::refs::has_names(c)
+        || c.get("commands")
+            .and_then(Value::as_array)
+            .is_some_and(|list| {
+                list.iter()
+                    .any(|x| x.as_object().is_some_and(json_command_has_names))
+            })
+}
+
+/// The names of the layers and classes for the commands of one batch. They are made when a
+/// command needs them and again after a command that can change them (an op with `layer` or
+/// `class` in its name), so a long batch does not list the layers for every command.
+#[derive(Default)]
+struct BatchNames(Option<params::Names>);
+
+impl BatchNames {
+    fn get(&mut self, doc: &Document) -> &params::Names {
+        self.0.get_or_insert_with(|| params::Names::of(doc))
+    }
+
+    fn after(&mut self, op: Option<&str>) {
+        if op.is_some_and(|o| o.contains("layer") || o.contains("class")) {
+            self.0 = None;
+        }
+    }
+}
+
+/// Runs one command of JSON, and the commands inside a batch one by one.
+fn run_json_command(
+    step: &mut kadakas_core::command::StepRun<'_, '_>,
+    mut c: serde_json::Map<String, Value>,
+    names: &mut BatchNames,
+) -> Result<(), RpcError> {
+    let is_batch = c.get("op").and_then(Value::as_str) == Some("batch");
+    if is_batch && matches!(c.get("commands"), Some(Value::Array(_))) {
+        let Some(Value::Array(list)) = c.remove("commands") else {
+            unreachable!("checked above")
+        };
+        for item in list {
+            let Value::Object(inner) = item else {
+                // Not a command: let the parser say what is wrong with it.
+                let command: Command = params(json!({"op": "batch", "commands": [item]}))?;
+                return step.run(&command).map_err(RpcError::from);
+            };
+            run_json_command(step, inner, names)?;
+        }
+        return Ok(());
+    }
+    // A batch whose `commands` is not a list goes to the parser, which says "wrong type".
+    if params::refs::has_names(&c) {
+        params::refs::resolve_command(names.get(step.doc()), &mut c)?;
+    }
+    let op = c.get("op").and_then(Value::as_str).map(str::to_string);
+    let command: Command = params(Value::Object(c))?;
+    step.run(&command).map_err(RpcError::from)?;
+    names.after(op.as_deref());
+    Ok(())
 }
 
 /// The region of `render.svg`: `[x0, y0, x1, y1]` in drawing coordinates, two opposite corners.
@@ -1335,9 +1396,9 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         let start = std::time::Instant::now();
         let note = feedback_api::begin(method, &p);
-        // The table of parameters (spec.rs): unknown parameters are refused, names of layers and
-        // classes become IDs.
-        let mut result = match spec::prepare(self.editor.doc(), method, p) {
+        // The parameter struct of the method (params): unknown parameters are refused, types and
+        // required parameters are checked, names of layers and classes become IDs.
+        let mut result = match params::prepare(self.editor.doc(), method, p) {
             Ok(p) => self.dispatch(method, p),
             Err(e) => Err(e),
         };
@@ -1427,9 +1488,9 @@ impl Session {
         let doc = self.editor.doc();
         Ok(match method {
             "describe" => {
-                // One method with the JSON Schema of its parameters (spec.rs).
+                // One method with the JSON Schema of its parameters (params).
                 if let Some(name) = p.get("method").and_then(Value::as_str) {
-                    return spec::describe_method(name);
+                    return params::describe_method(name);
                 }
                 let want_schemas = p.get("schemas").and_then(Value::as_bool) == Some(true);
                 let want_schema = p.get("schema").and_then(Value::as_bool) == Some(true);
@@ -1489,21 +1550,20 @@ impl Session {
                     d["command_schema"] = kadakas_core::schema::command_schema();
                 }
                 d["parameters"] = json!(
-                    "Every method refuses a parameter that it does not take, and says which one and what the nearest known name is. The JSON Schema of the parameters of a method (names, types, required, allowed values, defaults) comes from describe {method: \"plants.place\"}; describe {schemas: true} returns them all in method_schemas (about 300 KB). A parameter of the type layer or class takes an ID or the unique name of the layer or class; a name that matches none or several is an error that lists the candidates."
+                    "Every method refuses a parameter that it does not take, and says which one and what the nearest known name is. A wrong type, a missing required parameter or a value that is not allowed is an error that names the parameter and what it expects. The JSON Schema of the parameters of a method (names, types, required, allowed values, defaults) comes from describe {method: \"plants.place\"}; describe {schemas: true} returns them all in method_schemas (about 460 KB). A parameter that is a layer, class or sheet takes an ID or the unique name of the layer or class (also in the commands of execute, one command at a time, so a command of a batch can name a layer that an earlier command added); a name that matches none or several is an error that lists the candidates."
                 );
                 if want_schemas {
-                    d["method_schemas"] = Value::Object(spec::all_schemas());
+                    d["method_schemas"] = Value::Object(params::all_schemas());
                 }
                 d
             }
             "execute" => {
                 #[derive(Deserialize)]
                 struct P {
-                    command: Command,
+                    command: serde_json::Map<String, Value>,
                 }
                 let P { command } = params(p)?;
-                let command = self.in_context(command);
-                let out = self.editor.execute(&command).map_err(RpcError::from)?;
+                let out = self.execute_json(command)?;
                 self.prune_selection();
                 serde_json::to_value(out).unwrap()
             }
@@ -1975,6 +2035,43 @@ impl Session {
     /// The command to run for `cmd` while you are in a group: a new object becomes a member of the group
     /// (also in the edit group of a symbol, so it is part of the symbol after you exit). Other commands,
     /// and objects for another layer, are unchanged.
+    /// Runs a command given as JSON. The names of layers and classes in `layer` and `class` become
+    /// IDs, for each command when its turn comes: a command of a batch can name a layer or a
+    /// class that an earlier command of the same batch added.
+    fn execute_json(
+        &mut self,
+        command: serde_json::Map<String, Value>,
+    ) -> Result<kadakas_core::command::Outcome, RpcError> {
+        use params::refs;
+        if !json_command_has_names(&command) {
+            let command: Command = params(Value::Object(command))?;
+            let command = self.in_context(command);
+            return self.editor.execute(&command).map_err(RpcError::from);
+        }
+        if command.get("op").and_then(Value::as_str) != Some("batch") {
+            let mut command = command;
+            refs::resolve_command(&refs::Names::of(self.editor.doc()), &mut command)?;
+            let command: Command = params(Value::Object(command))?;
+            let command = self.in_context(command);
+            return self.editor.execute(&command).map_err(RpcError::from);
+        }
+        // A batch with names: one command at a time, each against the document as the commands
+        // before it left it.
+        let mut failure: Option<RpcError> = None;
+        let result = self.editor.execute_stepwise(|step| {
+            run_json_command(step, command, &mut BatchNames::default()).map_err(|e| {
+                let message = e.message.clone();
+                failure = Some(e);
+                kadakas_core::command::CommandError::Invalid(message)
+            })
+        });
+        match (result, failure) {
+            (Ok(out), _) => Ok(out),
+            (Err(_), Some(e)) => Err(e),
+            (Err(e), None) => Err(RpcError::from(e)),
+        }
+    }
+
     pub fn in_context(&self, cmd: Command) -> Command {
         let doc = self.editor.doc();
         match (

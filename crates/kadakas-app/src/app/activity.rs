@@ -42,22 +42,31 @@ impl KadakasApp {
     /// One frame: makes the review (only when something changed), draws the panel and the
     /// notice, and does what the person asked.
     pub(super) fn activity_step(&mut self, ctx: &egui::Context) {
+        let now_ms = ctx.input(|i| i.time) * 1000.0;
         let review = self.activity_ui.model.review(
             &self.session.activity,
             self.session.editor.doc(),
             self.session.editor.revision(),
             self.dark,
+            now_ms,
         );
+        if self.activity_ui.model.is_stale() {
+            // The document is changing fast (a drag): the review is made again in a moment.
+            ctx.request_repaint_after(std::time::Duration::from_millis(
+                kadakas_ui_core::agent_activity::REBUILD_MS as u64 + 20,
+            ));
+        }
         self.activity_review = Some(review.clone());
         let hints = self.activity_hints();
         let mut acts = self
             .activity_ui
-            .windows(ctx, &self.session, &review, &hints);
+            .windows(ctx, &mut self.session, &review, &hints);
         if let Some(canvas) = self.canvas_rect {
             acts.extend(
                 self.activity_ui
                     .notice(ctx, canvas, &self.session, &review, &hints),
             );
+            acts.extend(self.activity_ui.hold_notice(ctx, canvas, &self.session));
         }
         for a in acts {
             self.activity_act(ctx, a);
@@ -139,7 +148,16 @@ impl KadakasApp {
                     .mark_seen(&mut self.session.activity, target);
             }
             Act::Revert { step, skip } => self.activity_revert(step, skip),
-            Act::UndoBack(step) => self.activity_undo_back(step),
+            Act::UndoBack { step, expect } => self.activity_undo_back(step, expect),
+            Act::RedoAll => {
+                if self.read_only() {
+                    self.status = tr!("compare-ui-read-only");
+                } else {
+                    while self.session.editor.redo() {}
+                    self.session.prune_selection();
+                }
+            }
+            Act::ReleaseHold => self.session.release_agent_hold(),
         }
     }
 
@@ -178,9 +196,15 @@ impl KadakasApp {
         }
     }
 
-    fn activity_undo_back(&mut self, step: u64) {
+    fn activity_undo_back(&mut self, step: u64, expect: usize) {
         if self.read_only() {
             self.status = tr!("compare-ui-read-only");
+            return;
+        }
+        // The question named a number of steps: if the history is another one now, ask again.
+        let now = self.session.revert_check(step).map(|c| c.above + 1).ok();
+        if now.is_some_and(|n| n != expect) {
+            self.status = tr!("agent-activity-changed-meanwhile");
             return;
         }
         match self.session.undo_back_to_agent_step(step) {

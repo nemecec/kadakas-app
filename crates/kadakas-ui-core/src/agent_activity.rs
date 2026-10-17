@@ -357,6 +357,42 @@ mod tests {
     }
 
     #[test]
+    fn a_fast_changing_document_makes_the_review_at_most_every_300_ms() {
+        let mut ed = Editor::with_sequential_ids();
+        let mut log = ActivityLog::default();
+        let mut m = ActivityModel::default();
+        step(&mut log, &mut ed, 0.0);
+        let a = m.review(&log, ed.doc(), ed.revision(), false, 10_000.0);
+        assert!(!m.is_stale());
+        // The document changes again at once (a drag): the old review is drawn.
+        add(&mut ed, 50.0);
+        let b = m.review(&log, ed.doc(), ed.revision(), false, 10_050.0);
+        assert!(Arc::ptr_eq(&a, &b) && m.is_stale());
+        // Later it is made again.
+        let c = m.review(&log, ed.doc(), ed.revision(), false, 10_400.0);
+        assert!(!Arc::ptr_eq(&a, &c) && !m.is_stale());
+        // A change of the log or of the choice is never held back.
+        step(&mut log, &mut ed, 90.0);
+        let d = m.review(&log, ed.doc(), ed.revision(), false, 10_410.0);
+        assert_eq!(d.set.counts().added, 2);
+    }
+
+    #[test]
+    fn mark_all_seen_marks_what_the_review_shows() {
+        let mut ed = Editor::with_sequential_ids();
+        let mut log = ActivityLog::default();
+        let mut m = ActivityModel::default();
+        let s1 = step(&mut log, &mut ed, 0.0);
+        let s2 = step(&mut log, &mut ed, 5.0);
+        m.toggle_step(s1);
+        assert_eq!(m.mark_seen(&mut log, SeenTarget::All), 1);
+        assert!(log.get(s1).unwrap().seen && !log.get(s2).unwrap().seen);
+        assert_eq!(m.selected, None);
+        assert_eq!(m.mark_seen(&mut log, SeenTarget::All), 1);
+        assert!(log.get(s2).unwrap().seen);
+    }
+
+    #[test]
     fn the_time_of_day_is_utc() {
         assert_eq!(time_hms(0), None);
         assert_eq!(time_hms(1_700_000_000_000), Some((22, 13, 20)));

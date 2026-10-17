@@ -150,6 +150,7 @@ fn the_highlight_follows_the_document_when_the_person_edits_afterwards() {
         "execute",
         json!({"command": {"op": "delete_objects", "ids": [a.to_string()]}}),
     );
+    r.time += 1.0;
     r.frame();
     assert!(
         r.review().set.is_empty(),
@@ -278,9 +279,13 @@ fn undo_back_to_a_step_asks_nothing_when_only_agent_steps_are_above() {
     r.add_rect(Origin::Agent, 5000.0);
     r.frame();
     let id = r.step_ids()[0];
-    r.act(Act::UndoBack(id));
+    r.act(Act::UndoBack {
+        step: id,
+        expect: 2,
+    });
     assert!(r.app.session.editor.doc().objects.is_empty());
     assert!(r.app.status.contains(&id.to_string()), "{}", r.app.status);
+    r.time += 1.0;
     r.frame();
     assert!(r.review().set.is_empty() || r.review().set.counts().added == 0);
 }
@@ -377,6 +382,7 @@ fn the_changes_are_drawn_in_3d_with_a_box_a_pattern_and_a_mark() {
         r.app.session.editor.doc(),
         1,
         false,
+        0.0,
     );
     let out = ctx.run_ui(
         RawInput {
@@ -395,6 +401,75 @@ fn the_changes_are_drawn_in_3d_with_a_box_a_pattern_and_a_mark() {
         },
     );
     assert!(texts(&out).is_empty());
+}
+
+#[test]
+fn a_reverted_step_says_so_and_the_hold_notice_offers_redo_and_release() {
+    let mut r = Rig::new();
+    r.add_rect(Origin::Agent, 0.0);
+    r.add_rect(Origin::Agent, 5000.0);
+    r.frame();
+    let first = r.step_ids()[0];
+    r.act(Act::Revert {
+        step: first,
+        skip: false,
+    });
+    r.app.activity_ui.model.open = true;
+    r.frame();
+    kadakas_l10n::with_language("en-US", || r.frame());
+    // The checks wait for a quiet moment, then the panel shows the state.
+    r.time += 1.0;
+    kadakas_l10n::with_language("en-US", || r.frame());
+    r.time += 1.0;
+    let out = kadakas_l10n::with_language("en-US", || r.frame());
+    assert!(
+        texts(&out).iter().any(|t| t == "reverted"),
+        "{:?}",
+        texts(&out)
+    );
+    // The person undoes back to the second step; a step of their own is above it.
+    let second = r.step_ids()[1];
+    r.person(
+        "execute",
+        json!({"command": {"op": "add_object", "shape":
+            {"kind": "rect", "min": [0.0, 9000.0], "max": [10.0, 9010.0]}}}),
+    );
+    r.time += 1.0;
+    r.frame();
+    let expect = r.app.session.revert_check(second).unwrap().above + 1;
+    r.act(Act::UndoBack {
+        step: second,
+        expect,
+    });
+    assert!(r.app.session.agent_hold());
+    kadakas_l10n::with_language("en-US", || r.frame());
+    let out = kadakas_l10n::with_language("en-US", || r.frame());
+    assert!(
+        texts(&out).iter().any(|t| t.contains("The agent waits")),
+        "{:?}",
+        texts(&out)
+    );
+    let out = kadakas_l10n::with_language("et", || r.frame());
+    assert!(texts(&out).iter().any(|t| t.contains("Agent ootab")));
+    // Asking with a number that is not the history any more does nothing.
+    r.act(Act::ReleaseHold);
+    assert!(!r.app.session.agent_hold());
+    let depth = r.app.session.editor.undo_depth();
+    r.act(Act::UndoBack {
+        step: second,
+        expect: 99,
+    });
+    assert!(
+        r.app.status.contains("undo history changed"),
+        "{}",
+        r.app.status
+    );
+    assert_eq!(r.app.session.editor.undo_depth(), depth);
+    // Redo everything ends a hold at once.
+    let before = r.app.session.editor.doc().objects.len();
+    r.act(Act::RedoAll);
+    assert!(r.app.session.editor.doc().objects.len() >= before);
+    assert!(!r.app.session.editor.can_redo());
 }
 
 #[test]

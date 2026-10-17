@@ -30,7 +30,7 @@ agent-activity-undo-to = Samm tagasi siia
 agent-activity-undo-to-hint = Võta see samm ja kõik sellele järgnevad sammud tagasi
 agent-activity-step = Samm { $id }
 agent-activity-session = Agendi seanss { $session }
-agent-activity-session-version = Enne seda salvestatud versioon: #{ $version }
+agent-activity-session-version = Enne seda salvestatud versioon: #{ $version } (eraldi tagasivõtmise samm)
 agent-activity-session-no-version = Enne seda ei salvestatud versiooni: { $why }
 agent-activity-state-undone = tagasi võetud
 agent-activity-state-gone = pole tagasivõtmise ajaloos
@@ -98,8 +98,7 @@ agent-activity-why-conflicts =
        *[other] { $count } objekti muudeti või kustutati pärast seda sammu.
     }
 agent-activity-why-shared = See joonis on jagatud. Sammu objekte saab tagasi võtta ainult ükshaaval. Oma muudatusi võta tagasi käsuga Võta tagasi.
-agent-activity-why-locked = Selle sammu objekt on lukustatud kihil.
-agent-activity-why-group = Hiljem tehtud asi hoiab selle sammu objekti.
+agent-activity-why-locked = Selle sammu objekt on lukustatud või halli kihil või halli klassis.
 agent-activity-why-other = { $why }
 agent-activity-sum-none = nähtavaid muudatusi pole
 agent-activity-n-objects =
@@ -134,3 +133,30 @@ agent-activity-sum-issues = muudetud märkusi
 agent-activity-3d-added = Lisatud { $count }
 agent-activity-3d-changed = Muudetud { $count }
 agent-activity-3d-removed = Eemaldatud { $count }
+agent-activity-state-reverted = tagasi võetud
+agent-activity-state-partial = salvestatud ainult osaliselt
+agent-activity-kind-undo = Agendi tagasivõtmine
+agent-activity-kind-redo = Agendi uuestitegemine
+agent-activity-why-partial = Tagasivõtmise ajaloo piir kustutas osa selle sammu andmetest, seega seda ei saa tagasi võtta.
+agent-activity-why-reverted = See samm on juba tagasi võetud.
+agent-activity-why-not-call = See samm on agendi tagasivõtmine või uuestitegemine, mitte muudatus.
+agent-activity-why-nothing = Pole midagi tagasi võtta: selle sammu objektid on tagasi endises seisus või puuduvad.
+agent-activity-why-used = Hiljem tehtud töö toetub selle sammu objektidele (näiteks andmesilt, mõõde või rühm). Midagi ei eemaldatud.
+agent-activity-why-missing = Midagi, millele selle sammu objekt viitab, enam pole (ressurss, rühm või ankur).
+agent-activity-missing =
+    { $count ->
+        [one] 1 sammu üksikasjad kustutati (liiga palju samme). Selle muudatusi ei tõsteta esile.
+       *[other] { $count } sammu üksikasjad kustutati (liiga palju samme). Nende muudatusi ei tõsteta esile.
+    }
+agent-activity-edited-later =
+    { $count ->
+        [one] 1 objekti muudeti pärast agenti uuesti.
+       *[other] { $count } objekti muudeti pärast agenti uuesti.
+    }
+agent-activity-object-edited = hiljem muudetud
+agent-activity-3d-cap = Näitan { $shown } muudatust { $total }-st
+agent-activity-hold = Agent ootab: sa võtsid tagasi oma samme ja agendi muudatus kustutaks need nüüd.
+agent-activity-hold-redo = Tee kõik uuesti
+agent-activity-hold-release = Lase agendil edasi minna
+agent-activity-hold-release-hint = Tagasi võetud samme ei saa pärast agendi järgmist muudatust enam uuesti teha.
+agent-activity-changed-meanwhile = Tagasivõtmise ajalugu muutus pärast sinu küsimust. Küsi uuesti.
