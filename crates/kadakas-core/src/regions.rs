@@ -73,8 +73,19 @@ pub fn curves_of(shape: &Shape) -> Result<Vec<Curve>, String> {
             }
             Ok(curves_of_vertices(points, *closed))
         }
+        // A 3D polyline is read in plan: its heights are dropped (the API says so in a warning).
+        Shape::Polyline3d { points, closed } => {
+            if points.len() < 2 || points.iter().any(|v| !v.is_finite()) {
+                return Err("the 3D polyline needs 2 or more finite points".into());
+            }
+            let xy: Vec<Vertex> = points
+                .iter()
+                .map(|p| Vertex::corner(DVec2::new(p.x, p.y)))
+                .collect();
+            Ok(curves_of_vertices(&xy, *closed))
+        }
         other => Err(format!(
-            "a {} has no curves to join (lines, arcs, circles, rectangles and polylines work)",
+            "a {} has no curves to join (lines, arcs, circles, rectangles, polylines and 3D polylines work)",
             other.kind()
         )),
     }

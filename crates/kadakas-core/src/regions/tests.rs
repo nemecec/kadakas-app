@@ -98,6 +98,24 @@ fn what_does_not_close_is_reported_with_the_gap() {
 
 #[test]
 fn curves_of_the_shapes() {
+    // A 3D polyline is read in plan: the heights do not matter.
+    let p3 = |closed: bool, n: usize| Shape::Polyline3d {
+        points: [(0.0, 0.0, 5.0), (4.0, 0.0, 9.0), (4.0, 3.0, 1.0)][..n]
+            .iter()
+            .map(|&(x, y, z)| glam::DVec3::new(x, y, z))
+            .collect(),
+        closed,
+    };
+    assert_eq!(curves_of(&p3(true, 3)).unwrap().len(), 3);
+    assert_eq!(curves_of(&p3(false, 3)).unwrap().len(), 2);
+    assert!(curves_of(&p3(false, 1)).is_err());
+    assert!(
+        curves_of(&Shape::Polyline3d {
+            points: vec![glam::DVec3::NAN, glam::DVec3::ZERO],
+            closed: false
+        })
+        .is_err()
+    );
     assert_eq!(
         curves_of(&Shape::Rect {
             min: v(0.0, 0.0),

@@ -102,6 +102,10 @@ pub struct Block {
     /// Handle of the BLOCK_RECORD (the owner pointer, group code 330), in normal form.
     pub record: Option<String>,
     pub base: [f64; 3],
+    /// Block type flags (group code 70): 4 and 8 are external references, 16 is dependent on one.
+    pub flags: i64,
+    /// The path of an external reference (group code 1).
+    pub path: String,
     pub entities: Vec<Entity>,
 }
 
@@ -342,6 +346,8 @@ fn read_blocks(dxf: &mut Dxf, body: &[(i32, String)]) {
                         handle: r.handle(),
                         record: r.get(330).and_then(super::hash::normal_handle),
                         base,
+                        flags: r.int(70).unwrap_or(0),
+                        path: r.get(1).unwrap_or("").to_string(),
                         entities: vec![],
                     },
                 ));
