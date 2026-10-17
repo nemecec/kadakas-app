@@ -77,6 +77,10 @@ pub struct ZoneSpec {
     /// Start at the first point of split line n and run along its first segment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub align_to_split: Option<usize>,
+    /// The pattern of the zone takes the joint width of the pattern of the hardscape (so a change
+    /// of the style joint reaches the zone) instead of its own `gap`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub inherit_gap: bool,
 }
 
 impl ZoneSpec {
@@ -110,7 +114,12 @@ pub struct CourseDef {
     pub along: f64,
     /// The unit size across the path (mm).
     pub depth: f64,
-    pub gap: f64,
+    /// The joint width (mm). `None` inherits the joint of the pattern of the hardscape, so that a
+    /// change of the style reaches the course. A number is the course's own joint. Plans stored
+    /// before this field existed hold the number that was copied from the style when the course
+    /// was made: that is ambiguous (it may be a choice or a copy), so it stays explicit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gap: Option<f64>,
     pub corner: Corner,
     /// The name of the unit type in counts. Units of the same stone as the field use its name, so
     /// that they are added up with it.
@@ -129,7 +138,7 @@ impl Default for CourseDef {
             offset: 0.0,
             along: 100.0,
             depth: 200.0,
-            gap: 5.0,
+            gap: None,
             corner: Corner::Miter,
             unit: String::new(),
         }
@@ -210,7 +219,7 @@ impl Plan {
                 offset: c.offset,
                 along: c.along,
                 depth: c.depth,
-                gap: c.gap,
+                gap: c.gap.unwrap_or(5.0),
                 corner: c.corner,
             }
             .validate()
@@ -1032,6 +1041,7 @@ pub fn course_spec(
     doc: &Document,
     obj: &Object,
     c: &CourseDef,
+    field_gap: f64,
     notes: &mut Vec<String>,
 ) -> course::Spec {
     let (path, closed, extra) = effective_path(doc, obj, c, notes);
@@ -1042,7 +1052,7 @@ pub fn course_spec(
         offset: c.offset + extra,
         along: c.along,
         depth: c.depth,
-        gap: c.gap,
+        gap: c.gap.unwrap_or(field_gap),
         corner: c.corner,
     }
 }
@@ -1134,7 +1144,7 @@ pub fn plan_groups(
     let mut course_groups: Vec<Group> = Vec::new();
     let mut budget = max_units;
     for c in &plan.courses {
-        let spec = course_spec(doc, obj, c, &mut out.notes);
+        let spec = course_spec(doc, obj, c, pattern.gap, &mut out.notes);
         let laid = course::lay(&spec, budget).map_err(|e| format!("course '{}': {e}", c.name))?;
         for n in &laid.notes {
             out.notes.push(format!("course '{}': {n}", c.name));
@@ -1216,7 +1226,7 @@ pub fn plan_groups(
                 length: laid.length,
                 along: c.along,
                 depth: c.depth,
-                gap: c.gap,
+                gap: spec.gap,
                 band: laid.band,
             })),
         });
@@ -1329,6 +1339,9 @@ pub fn plan_groups(
                 if let Some(s) = spec {
                     if let Some(p) = &s.pattern {
                         zpattern = p.clone();
+                        if s.inherit_gap {
+                            zpattern.gap = pattern.gap;
+                        }
                     }
                     if let Some(n) = s.align_to_edge {
                         let outline = curve::corners(&zone.shape[0]);

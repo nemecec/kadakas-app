@@ -1261,7 +1261,7 @@ pub struct HardscapeZoneSetParams {
     pub zone: Int,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// as the pattern of unit_pattern.layout
+    /// as the pattern of unit_pattern.layout; without gap or spacing the zone follows the joint of the style, also when it changes later
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<Obj>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1319,7 +1319,7 @@ pub struct HardscapeCourseParams {
     /// mm across the path; default: from the stone of the style
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit_width: Option<Num>,
-    /// the joint in mm; default: the joint of the style
+    /// the joint in mm; without it the course follows the joint of the style, also when the style changes later; a number is kept
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gap: Option<Num>,
     /// miter (default), butt or corner_unit

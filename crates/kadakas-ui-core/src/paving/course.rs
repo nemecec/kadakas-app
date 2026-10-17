@@ -184,7 +184,8 @@ impl CourseForm {
 
     /// The form of a course that follows an edge. `None` for a course along a drawn line or a
     /// path of its own: those are made and removed with the API.
-    pub fn from_def(def: &CourseDef) -> Option<CourseForm> {
+    /// `style_gap` is the joint of the style, for a course that has none of its own.
+    pub fn from_def(def: &CourseDef, style_gap: f64) -> Option<CourseForm> {
         let along = Along::parse(def.edge.as_deref()?)?;
         Some(CourseForm {
             existing: true,
@@ -199,7 +200,7 @@ impl CourseForm {
             },
             unit_length: def.along,
             unit_width: def.depth,
-            gap: def.gap,
+            gap: def.gap.unwrap_or(style_gap),
             corner: def.corner,
             align_field: false,
         })
@@ -226,10 +227,13 @@ impl CourseForm {
             "orientation": self.orientation.id(),
             "unit_length": self.unit_length,
             "unit_width": self.unit_width,
-            "gap": self.gap,
             "corner": self.corner.id(),
             "align_field": self.align_field,
         });
+        // The joint of the style is not stored: the course follows it when the style changes.
+        if stone(doc, id).is_none_or(|s| s.2 != self.gap) {
+            p["gap"] = json!(self.gap);
+        }
         let long = self.unit_length.max(self.unit_width);
         let short = self.unit_length.min(self.unit_width);
         let same = stone(doc, id).is_some_and(|(l, s, _)| l == long && s == short);
@@ -351,7 +355,7 @@ impl CourseEditor {
     pub fn edit(doc: &Document, target: ObjectId, name: &str) -> Result<CourseEditor, String> {
         Self::check(doc, target)?;
         let form = def_of(doc, target, name)
-            .and_then(|d| CourseForm::from_def(&d))
+            .and_then(|d| CourseForm::from_def(&d, stone(doc, target).map_or(5.0, |s| s.2)))
             .ok_or_else(|| tr!("uic-paving-course-not-editable"))?;
         Ok(CourseEditor {
             target,

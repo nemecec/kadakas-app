@@ -449,7 +449,7 @@ fn the_drawing_has_the_units_that_the_dxf_export_writes() {
             side: Side::Left,
             along: 100.0,
             depth: 200.0,
-            gap: 5.0,
+            gap: Some(5.0),
             ..Default::default()
         }],
         ..Default::default()
