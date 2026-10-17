@@ -125,6 +125,7 @@ impl Session {
     }
 
     /// True if a call that comes now must wait for the run (see `Session::handle`).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn script_js_busy(&mut self) -> bool {
         self.recover_script_run();
         self.script_js.busy()
