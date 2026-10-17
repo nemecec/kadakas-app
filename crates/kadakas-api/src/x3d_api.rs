@@ -123,7 +123,7 @@ pub(crate) fn describe() -> Value {
             "examples": [
                 {"method": "section_viewport.line_add", "params": {"a": [0, 5000], "b": [20000, 5000], "name": "A", "look": "left"}},
                 {"method": "section_viewport.line_add", "params": {"a": [0, 0], "b": [20000, 0], "name": "North elevation", "mode": "elevation", "depth": 30000}},
-                {"method": "section_viewport.create", "params": {"sheet": "Sections", "line": 12, "scale": "fit"}},
+                {"method": "section_viewport.create", "params": {"sheet": "Sections", "line": "00000000-0000-0000-0000-00000000000c", "scale": "fit"}},
                 {"method": "section_viewport.get", "params": {"id": "00000000-0000-0000-0000-00000000000c"}}
             ]
         }

@@ -263,7 +263,14 @@ fn model_extrude_and_model_sweep_convert_the_selection() {
         700.0
     );
     assert_eq!(s.selection.len(), 1);
-    assert!(err(&mut s, "extrude.from_shapes", json!({"ids": []})).contains("select"));
+    assert!(
+        err(
+            &mut s,
+            "extrude.from_shapes",
+            json!({"ids": [], "height": 100})
+        )
+        .contains("select")
+    );
     assert!(
         err(
             &mut s,

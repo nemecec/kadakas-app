@@ -640,7 +640,7 @@ fn sheets_compare_side_by_side() {
         "sheet.render",
         json!({"sheet": "S", "format": "pdf", "compare": c}),
     );
-    assert!(e.message.contains("svg or png"));
+    assert!(e.message.contains("svg, png"));
 }
 
 #[test]
@@ -792,7 +792,7 @@ fn a_sheet_compare_checks_the_format_and_dpi_first_and_finds_the_sheet_on_either
         "sheet.render",
         json!({"sheet": "Nope", "format": "pdf", "compare": c}),
     );
-    assert!(e.message.contains("svg or png"), "{}", e.message);
+    assert!(e.message.contains("svg, png"), "{}", e.message);
     let e = fail(
         &mut s,
         "sheet.render",

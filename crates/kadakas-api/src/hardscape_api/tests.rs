@@ -350,7 +350,7 @@ fn hardscape_add_and_set() {
     let f = |s: &mut Session, m: &str, p: Value| fail(s, m, p).0;
     assert_eq!(
         f(&mut s, "hardscape.add", json!({})),
-        3,
+        -32602,
         "needs a boundary or a center line"
     );
     assert_eq!(

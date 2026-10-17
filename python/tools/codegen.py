@@ -3,8 +3,8 @@
 The generated file has one method per JSON-RPC method, with the text of ``describe`` as its
 docstring, and one ``TypedDict`` per method with its parameters (names, types, required ones,
 allowed values). The ``TypedDict`` classes are made from the JSON Schemas that
-``describe {schemas: true}`` returns: the same table of parameters that the program uses to refuse
-an unknown parameter. The methods take ``**params``. A type checker that has ``typing_extensions``
+``describe {schemas: true}`` returns: the same parameter structs (Rust, ``kadakas-api/src/params``)
+that the program uses to parse a call and to refuse an unknown parameter. The methods take ``**params``. A type checker that has ``typing_extensions``
 checks the names and the types of a call, and the program still checks them at run time. Run the
 script again after the API changes::
 
@@ -70,16 +70,25 @@ def class_name(rpc: str) -> str:
 
 def py_type(schema: dict) -> str:
     """The Python type (as text) of the JSON Schema of a parameter."""
+    if not isinstance(schema, dict):
+        return "Any"
+    if "const" in schema:
+        return "Literal[" + repr(schema["const"]) + "]"
     if "enum" in schema:
-        return "Literal[" + ", ".join(repr(v) for v in schema["enum"]) + "]"
-    if "anyOf" in schema:
+        values = [v for v in schema["enum"] if v is not None]
+        text = "Literal[" + ", ".join(repr(v) for v in values) + "]"
+        return text + " | None" if len(values) < len(schema["enum"]) else text
+    if "anyOf" in schema or "oneOf" in schema:
         options: list[str] = []
-        for option in schema["anyOf"]:
+        for option in schema.get("anyOf") or schema["oneOf"]:
             t = py_type(option)
             if t not in options:
                 options.append(t)
         return " | ".join(options)
     t = schema.get("type")
+    if isinstance(t, list):
+        # ["string", "null"]: an optional parameter that may be null.
+        return " | ".join(dict.fromkeys(py_type({**schema, "type": one}) for one in t))
     if t == "string":
         return "str"
     if t == "number":
@@ -98,13 +107,29 @@ def py_type(schema: dict) -> str:
     return "Any"
 
 
+def merged_properties(schema: dict) -> dict[str, list[str]]:
+    """The properties of a schema as Python types. A union of parameter sets (a tagged union) has
+    the properties of all its branches; a name in several branches gets all their types."""
+    found: dict[str, list[str]] = {}
+    for key, prop in schema.get("properties", {}).items():
+        found.setdefault(key, []).append(py_type(prop))
+    for branch in schema.get("oneOf", []) + schema.get("anyOf", []):
+        for key, types in merged_properties(branch).items():
+            found.setdefault(key, []).extend(types)
+    return found
+
+
 def params_class(rpc: str, schema: dict) -> str:
     """The ``TypedDict`` of the parameters of a method, in the form that allows any key text."""
     required = set(schema.get("required", []))
+    branches = schema.get("oneOf", []) + schema.get("anyOf", [])
+    if branches:
+        # A name that every branch of a union of parameter sets requires is required.
+        required |= set.intersection(*(set(b.get("required", [])) for b in branches))
     name = class_name(rpc)
     fields = []
-    for key, prop in schema.get("properties", {}).items():
-        t = py_type(prop)
+    for key, types in merged_properties(schema).items():
+        t = " | ".join(dict.fromkeys(types))
         fields.append(f"    {key!r}: {'Required[' + t + ']' if key in required else t},")
     body = "\n" + "\n".join(fields) + "\n" if fields else ""
     return f'{name} = TypedDict("{name}", {{{body}}}, total=False)'
