@@ -1423,3 +1423,56 @@ fn a_joint_change_of_the_style_reaches_courses_and_zones_without_their_own_joint
         .clone();
     assert!(kerb.get("gap").is_none(), "{kerb}");
 }
+
+#[test]
+fn align_field_names_the_edge_it_used_and_lets_the_agent_choose_one() {
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 6000.0, 3000.0);
+    // The outline of the slab runs east along the long south edge first.
+    let r = ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "along": "outline", "align_field": true}),
+    );
+    let first = &r["aligned"]["edge"];
+    assert_eq!(first["index"], 0, "{r}");
+    assert_eq!(first["chosen"], false);
+    assert!(first["length_mm"].as_f64().unwrap() > 1000.0, "{r}");
+    let notes = r["notes"].to_string();
+    assert!(notes.contains("align_field") && notes.contains("edge 0"), "{notes}");
+    let edges = r["aligned"]["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), 4, "{r}");
+    let first_angle = r["aligned"]["angle_deg"].as_f64().unwrap();
+    // Another edge: the short one on the east side, running north.
+    let short = edges
+        .iter()
+        .min_by(|a, b| {
+            a["length_mm"]
+                .as_f64()
+                .unwrap()
+                .total_cmp(&b["length_mm"].as_f64().unwrap())
+        })
+        .unwrap()["index"]
+        .as_u64()
+        .unwrap();
+    let r2 = ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "along": "outline", "align_field": {"edge": short}}),
+    );
+    assert_eq!(r2["aligned"]["edge"]["index"], short);
+    assert_eq!(r2["aligned"]["edge"]["chosen"], true);
+    let second_angle = r2["aligned"]["angle_deg"].as_f64().unwrap();
+    assert!(
+        (second_angle - first_angle).abs() > 45.0,
+        "{first_angle} {second_angle}"
+    );
+    assert!(r2["notes"].to_string().contains("replaced the origin"), "{r2}");
+    // An edge that does not exist is refused with the list of the real ones.
+    let m = fail(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "along": "outline", "align_field": {"edge": 99}}),
+    );
+    assert!(m.contains("not a straight edge") && m.contains("mm at"), "{m}");
+}

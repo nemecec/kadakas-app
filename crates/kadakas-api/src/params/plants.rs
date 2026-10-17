@@ -1331,9 +1331,9 @@ pub struct HardscapeCourseParams {
     /// the name of the unit type; default: the size of the stone of the style
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
-    /// true: the pattern of the hardscape starts at the inner edge of the course (sets its origin and angle)
+    /// true: the pattern of the hardscape starts at the inner edge of the first straight edge of the course path, so its first row is whole (sets its origin and angle, and replaces an align_to_edge; the reply names the edge: index, direction, length). {edge: n}: start at the edge n of the course path instead (the numbers are in the reply and in the note)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub align_field: Option<bool>,
+    pub align_field: Option<Either<bool, Obj>>,
 }
 
 // Parameters of `hardscape.course_remove`.

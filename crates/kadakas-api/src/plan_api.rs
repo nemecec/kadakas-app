@@ -37,7 +37,7 @@ pub const HARDSCAPE_ZONE_SET: (&str, &str) = (
 );
 pub const HARDSCAPE_COURSE: (&str, &str) = (
     "hardscape.course",
-    "Add or replace courses along a path: a row of units along a polyline or a curve, on one side of the line or centered (a soldier course along a kerb, a border round an island). The course takes its area from the pattern next to it: the field is cut by the course with a joint of the gap kept, so they never overlap. The units are counted, reported and exported like the others (the unit type has the name of the stone, so a soldier course and the field of the same stone are added up). Corner rules: miter (the units of both legs are cut at the mitre line), butt (the first leg runs on to the end of the corner, the second butts against it), corner_unit (one unit of its own fills the corner). On a curve the units stay straight and are placed along the curve; the joints taper, and the reply and the report give the narrowest and the widest joint. params: {id, courses: [{name, path? ([vertices], curves allowed) | source? (a line, arc or polyline: followed, read again each time) | along? (outline | \"hole:N\": the edge of the hardscape or of its Nth hole, inside the kerb border), side? (left | right | center | inside | outside; default for outline: inside, for a hole: outside), offset? (mm to the left of the path), closed?, orientation? (soldier: the long side of the stone across the path (default) | stretcher: along it), unit_length? (mm, along the path) and unit_width? (mm, across) (default: from the stone of the style by orientation), gap? (mm; without it the course follows the joint of the style, also when hardscape_style.update changes it later; a number is the course's own joint and stays; plans stored by older versions keep the number they hold), corner? (default miter), unit? (name of the unit type, default the size of the stone of the style), align_field? (true: the pattern of the hardscape starts at the inner edge of the course, so the first row of the field is whole and the joint to the course is the gap; sets the origin and the angle of the hardscape; needs a bond, not a module)}] (or the fields of one course directly in params)}. A course with the same name is replaced. Returns {courses: [{name, units, corners, length_m, joints: {count, narrowest_mm, widest_mm}}], notes}. A corner that turns by more than 150 degrees has no rule: on the inside both legs are cut at the bisector, on the outside both end flush and the wedge stays unpaved; a note says so. Corners under 30 degrees are always mitres. When the path is along: outline or hole:N the path is made again from the edge each time, so a change of the outline moves the course; a course that overlaps an earlier course is cut where they meet (a note says so).",
+    "Add or replace courses along a path: a row of units along a polyline or a curve, on one side of the line or centered (a soldier course along a kerb, a border round an island). The course takes its area from the pattern next to it: the field is cut by the course with a joint of the gap kept, so they never overlap. The units are counted, reported and exported like the others (the unit type has the name of the stone, so a soldier course and the field of the same stone are added up). Corner rules: miter (the units of both legs are cut at the mitre line), butt (the first leg runs on to the end of the corner, the second butts against it), corner_unit (one unit of its own fills the corner). On a curve the units stay straight and are placed along the curve; the joints taper, and the reply and the report give the narrowest and the widest joint. params: {id, courses: [{name, path? ([vertices], curves allowed) | source? (a line, arc or polyline: followed, read again each time) | along? (outline | \"hole:N\": the edge of the hardscape or of its Nth hole, inside the kerb border), side? (left | right | center | inside | outside; default for outline: inside, for a hole: outside), offset? (mm to the left of the path), closed?, orientation? (soldier: the long side of the stone across the path (default) | stretcher: along it), unit_length? (mm, along the path) and unit_width? (mm, across) (default: from the stone of the style by orientation), gap? (mm; without it the course follows the joint of the style, also when hardscape_style.update changes it later; a number is the course's own joint and stays; plans stored by older versions keep the number they hold), corner? (default miter), unit? (name of the unit type, default the size of the stone of the style), align_field? (true: the pattern of the hardscape starts at the inner edge of the first straight edge of the course path, so the first row of the field is whole and the joint to the course is the gap; {edge: n}: start at the straight edge n of the course path instead, for example the long kerb; it sets the origin and the angle of the hardscape and replaces an align_to_edge of the hardscape, and a note names the edge it used (index, from, to, direction, length) and lists the others; needs a bond, not a module)}] (or the fields of one course directly in params)}. A course with the same name is replaced. Returns {courses: [{name, units, corners, length_m, joints: {count, narrowest_mm, widest_mm}}], aligned? ({origin, angle_deg, course, edge: {index, from, to, direction_deg, length_mm, chosen}, edges: [{index, direction_deg, length_mm}]} when align_field was given), notes}. A corner that turns by more than 150 degrees has no rule: on the inside both legs are cut at the bisector, on the outside both end flush and the wedge stays unpaved; a note says so. Corners under 30 degrees are always mitres. When the path is along: outline or hole:N the path is made again from the edge each time, so a change of the outline moves the course; a course that overlaps an earlier course is cut where they meet (a note says so).",
 );
 pub const HARDSCAPE_COURSE_REMOVE: (&str, &str) = (
     "hardscape.course_remove",
@@ -1201,6 +1201,81 @@ fn course_from(
     })
 }
 
+/// A straight edge of a course path.
+#[derive(Clone)]
+struct Leg {
+    index: usize,
+    from: DVec2,
+    to: DVec2,
+    direction_deg: f64,
+    length: f64,
+}
+
+/// The straight edges of the path of a course, numbered by the segment of the path (a curve
+/// keeps its number but is no edge to start from).
+fn course_legs(spec: &kadakas_core::layout::course::Spec) -> Vec<Leg> {
+    let path = kadakas_core::curve::path(&spec.path, spec.closed);
+    path.segs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, seg)| match *seg {
+            kadakas_core::curve::Seg::Line { from, to } if from.distance(to) > 1e-9 => {
+                let d = to - from;
+                Some(Leg {
+                    index,
+                    from,
+                    to,
+                    direction_deg: d.y.atan2(d.x).to_degrees(),
+                    length: d.length(),
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn legs_text(legs: &[Leg]) -> String {
+    let mut sorted: Vec<&Leg> = legs.iter().collect();
+    sorted.sort_by(|a, b| b.length.total_cmp(&a.length));
+    let shown: Vec<String> = sorted
+        .iter()
+        .take(8)
+        .map(|l| {
+            format!(
+                "{}: {:.0} mm at {:.1} degrees",
+                l.index, l.length, l.direction_deg
+            )
+        })
+        .collect();
+    let more = legs.len().saturating_sub(8);
+    format!(
+        "{}{}",
+        shown.join("; "),
+        if more > 0 {
+            format!(" (and {more} shorter)")
+        } else {
+            String::new()
+        }
+    )
+}
+
+/// `align_field` of a course: not asked (`None`), asked for the first edge (`Some(None)`), or
+/// asked for the edge n of the course path (`Some(Some(n))`).
+fn align_field_of(c: &Map<String, Value>) -> Result<Option<Option<usize>>, RpcError> {
+    match c.get("align_field").filter(|v| !v.is_null()) {
+        None | Some(Value::Bool(false)) => Ok(None),
+        Some(Value::Bool(true)) => Ok(Some(None)),
+        Some(Value::Object(o)) => {
+            unknown_fields(o, &["edge"])?;
+            Ok(Some(match whole_number(o, "edge")? {
+                Some(n) => Some(n),
+                None => None,
+            }))
+        }
+        Some(_) => Err(bad("'align_field' must be true, false or {edge: n}")),
+    }
+}
+
 fn course(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let doc = s.editor.doc();
     let o = hardscape(doc, m)?;
@@ -1239,10 +1314,12 @@ fn course(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     p.validate().map_err(bad)?;
     // The field starts from the edge of the course, so that its first row is whole.
     let mut aligned: Option<(DVec2, f64)> = None;
-    if let Some(c) = list
-        .iter()
-        .find(|c| c.get("align_field").and_then(Value::as_bool) == Some(true))
-    {
+    let mut align_info: Option<Value> = None;
+    let mut align_notes: Vec<String> = Vec::new();
+    for c in &list {
+        let Some(choice) = align_field_of(c)? else {
+            continue;
+        };
         let name = c.get("name").and_then(Value::as_str).unwrap_or("");
         let def = p
             .courses
@@ -1253,9 +1330,54 @@ fn course(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             .filter(|(pt, _)| pt.module.is_none())
             .map(|(pt, _)| pt.unit_width)
             .ok_or_else(|| bad("align_field needs a joint pattern of a bond (not a module)"))?;
-        let field_gap = kadakas_core::layout::object::pattern_of(doc, o).map_or(5.0, |(pt, _)| pt.gap);
+        let field_gap =
+            kadakas_core::layout::object::pattern_of(doc, o).map_or(5.0, |(pt, _)| pt.gap);
         let spec = plan::course_spec(doc, o, def, field_gap, &mut Vec::new());
-        aligned = kadakas_core::layout::course::field_origin(&spec, width);
+        let legs = course_legs(&spec);
+        let index = choice.unwrap_or(0);
+        let found = legs.iter().find(|l| l.index == index).cloned();
+        if choice.is_some() && found.is_none() {
+            return Err(bad(format!(
+                "course '{name}': align_field edge {index} is not a straight edge of the course path: the straight edges are {}",
+                legs_text(&legs)
+            )));
+        }
+        let mut start = spec.clone();
+        if let (Some(_), Some(leg)) = (choice, &found) {
+            start.path = kadakas_core::curve::corners(&[leg.from, leg.to]);
+            start.closed = false;
+        }
+        aligned = kadakas_core::layout::course::field_origin(&start, width);
+        let how = if choice.is_some() {
+            "chosen with align_field.edge"
+        } else {
+            "the first edge of the course path; give align_field: {edge: n} to start at another one"
+        };
+        let place = match &found {
+            Some(l) => format!(
+                "edge {index} ({how}): from [{:.0}, {:.0}] to [{:.0}, {:.0}], direction {:.1} degrees, length {:.0} mm",
+                l.from.x, l.from.y, l.to.x, l.to.y, l.direction_deg, l.length
+            ),
+            None => format!("the start of the path, which is a curve ({how})"),
+        };
+        align_notes.push(format!(
+            "align_field: the field of the hardscape starts at the inner side of course '{name}' at {place}. The straight edges of the course path are {}",
+            legs_text(&legs)
+        ));
+        let before = kadakas_core::hardscape::data(o).unwrap_or_default();
+        if before.origin.is_some() || before.angle.is_some() {
+            align_notes.push(format!(
+                "align_field replaced the origin and the angle of the hardscape (were {:?} and {:?} degrees; an align_to_edge of the hardscape is replaced too)",
+                before.origin.map(|p| [p.x, p.y]),
+                before.angle
+            ));
+        }
+        align_info = Some(json!({
+            "course": name,
+            "edge": found.as_ref().map(|leg| json!({"index": index, "from": xy(leg.from), "to": xy(leg.to), "direction_deg": leg.direction_deg, "length_mm": leg.length, "chosen": choice.is_some()})),
+            "edges": legs.iter().map(|l| json!({"index": l.index, "direction_deg": l.direction_deg, "length_mm": l.length})).collect::<Vec<_>>(),
+        }));
+        break;
     }
     let planned = plan_state(doc, &with_plan(o, &p), s.limits().pattern_units)?;
     let o = o.clone();
@@ -1288,8 +1410,16 @@ fn course(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     }
     Ok(json!({
         "courses": course_json(&planned),
-        "aligned": aligned.map(|(origin, angle)| json!({"origin": xy(origin), "angle_deg": angle})),
-        "notes": planned.notes,
+        "aligned": aligned.map(|(origin, angle)| {
+            let mut v = json!({"origin": xy(origin), "angle_deg": angle});
+            if let Some(info) = &align_info {
+                v["course"] = info["course"].clone();
+                v["edge"] = info["edge"].clone();
+                v["edges"] = info["edges"].clone();
+            }
+            v
+        }),
+        "notes": align_notes.into_iter().chain(planned.notes).collect::<Vec<_>>(),
     }))
 }
 
