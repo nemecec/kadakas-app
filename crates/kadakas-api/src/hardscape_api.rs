@@ -82,7 +82,7 @@ pub const HARDSCAPE_SET: (&str, &str) = (
 );
 pub const HARDSCAPE_FROM_SHAPES: (&str, &str) = (
     "hardscape.from_shapes",
-    "Create hardscapes from closed shapes (closed polylines, rectangles, circles; for example the outlines of a parking lot from a DXF file) in one undo step. A shape inside another one becomes a hole of it (a shape inside a hole becomes a hardscape again). params: {ids? (default: the selection), style? (ID or name), holes_from_inner? (default true; false makes every shape a hardscape of its own), delete_source? (default false: the outlines stay), dry_run?}. The layer, class, look and data of a shape go to its hardscape. A shape counts as inside another one by area (it may touch the outline or sit 0.01 mm outside it); a shape that overlaps another in part is left out and named in skipped, so the new hardscapes never overlap. Returns {created: [{source, id, holes}], holes: [{source, host}], skipped: [{id, reason}], dry_run}. The new hardscapes become the selection.",
+    "Create hardscapes from closed shapes (closed polylines, closed 3D polylines (read in plan), rectangles, circles; for example the outlines of a parking lot from a DXF file) in one undo step. A shape inside another one becomes a hole of it (a shape inside a hole becomes a hardscape again). params: {ids? (default: the selection), style? (ID or name), holes_from_inner? (default true; false makes every shape a hardscape of its own), delete_source? (default false: the outlines stay), dry_run?}. The layer, class, look and data of a shape go to its hardscape. A shape counts as inside another one by area (it may touch the outline or sit 0.01 mm outside it); a shape that overlaps another in part is left out and named in skipped, so the new hardscapes never overlap. Returns {created: [{source, id, holes}], holes: [{source, host}], skipped: [{id, reason}], warnings (3D polylines are read in plan), dry_run}. The new hardscapes become the selection.",
 );
 pub const LANDSCAPE_AREA_ADD: (&str, &str) = (
     "landscape_area.add",
@@ -591,6 +591,22 @@ pub(crate) fn hardscape_style_ref(doc: &Document, v: &Value) -> Result<ResourceI
     style_ref(doc, v, Kind::Hardscape)
 }
 
+/// A warning for 3D polylines among `ids` whose heights differ: they are read in plan.
+pub(crate) fn flat_heights_warning(doc: &Document, ids: &[ObjectId]) -> Vec<String> {
+    let uneven = ids.iter().any(|id| {
+        matches!(
+            doc.object(*id).map(|o| &o.shape),
+            Some(Shape::Polyline3d { points, .. })
+                if points.iter().any(|p| p.z != points[0].z)
+        )
+    });
+    if uneven {
+        vec!["3D polylines are read in plan: their heights are dropped".into()]
+    } else {
+        Vec::new()
+    }
+}
+
 /// The outline of an object as a hole.
 fn outline_of(doc: &Document, id: ObjectId) -> Result<Vec<Vertex>, RpcError> {
     let o = doc
@@ -601,6 +617,14 @@ fn outline_of(doc: &Document, id: ObjectId) -> Result<Vec<Vertex>, RpcError> {
             points,
             closed: true,
         } => points.clone(),
+        // A closed 3D polyline is read in plan: its heights are dropped.
+        Shape::Polyline3d {
+            points,
+            closed: true,
+        } => points
+            .iter()
+            .map(|p| Vertex::corner(DVec2::new(p.x, p.y)))
+            .collect(),
         Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
             boundary.clone()
         }
@@ -743,6 +767,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             };
             let dry_run = flag("dry_run", false);
             let made = hardscape::batch::from_shapes(doc, &ids, &opts);
+            let warnings = flat_heights_warning(doc, &ids);
             if let (false, Some(cmd)) = (dry_run, &made.command) {
                 s.editor.execute(cmd).map_err(RpcError::from)?;
                 s.prune_selection();
@@ -752,6 +777,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                 "created": made.created.iter().map(|c| json!({"source": c.0, "id": c.1, "holes": c.2})).collect::<Vec<_>>(),
                 "holes": made.holes.iter().map(|c| json!({"source": c.0, "host": c.1})).collect::<Vec<_>>(),
                 "skipped": made.skipped.iter().map(|c| json!({"id": c.0, "reason": c.1})).collect::<Vec<_>>(),
+                "warnings": warnings,
                 "dry_run": dry_run,
             }))
         }

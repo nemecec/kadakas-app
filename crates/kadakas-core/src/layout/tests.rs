@@ -1180,3 +1180,402 @@ fn the_waste_is_worked_out_for_each_unit_type() {
     let s = summarize(&r, &p, &Placement::default(), &SummaryOptions::default()).unwrap();
     assert!(s.by_unit.iter().all(|u| u.order_units_with_waste.is_none()));
 }
+
+/// A rectangle of `w` by `h` turned by `deg` about the point `at`, and the placement that starts
+/// the pattern at its corner and runs along its edge.
+fn turned_lot(w: f64, h: f64, deg: f64, at: DVec2) -> (Region, Placement) {
+    let rot = DVec2::from_angle(deg.to_radians());
+    let ring: Vec<DVec2> = rect(w, h).iter().map(|p| at + rot.rotate(*p)).collect();
+    (
+        region(&ring, &[]),
+        Placement {
+            origin: Some(at),
+            angle: deg,
+        },
+    )
+}
+
+fn count_and_area(r: &Region, p: &Pattern, place: &Placement) -> (usize, f64) {
+    let (units, _) = run(r, p, place);
+    (units.len(), units.iter().map(|u| u.area).sum())
+}
+
+#[test]
+fn a_lot_turned_to_any_angle_loses_no_unit() {
+    // The layout does not depend on the turn: edges of the lot lie on the sides of the units, and
+    // rounding must not make a unit disappear (a corner on the boundary must not decide).
+    let p = pat(Bond::RunningBond, 4.0);
+    let (r0, pl0) = turned_lot(6000.0, 4000.0, 0.0, DVec2::new(0.0, 0.0));
+    let (n0, a0) = count_and_area(&r0, &p, &pl0);
+    assert!(n0 > 1000);
+    for deg in [
+        0.1, 1.0, 7.3, 15.0, 30.0, 33.3, 45.0, 60.0, 89.9, 90.0, 123.456, 180.0, 200.7, 270.0,
+        359.0,
+    ] {
+        for at in [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(404.0, -77.7),
+            DVec2::new(65_000.0, 120_000.0),
+        ] {
+            let (r, pl) = turned_lot(6000.0, 4000.0, deg, at);
+            let (n, a) = count_and_area(&r, &p, &pl);
+            assert_eq!(n, n0, "{deg} degrees at {at:?}");
+            assert!((a - a0).abs() < 1e-3, "{deg} degrees: {a} against {a0}");
+        }
+    }
+}
+
+#[test]
+fn a_turned_lot_with_an_island_on_the_cell_lines_loses_no_unit() {
+    // An island whose sides lie on the cell lines of the pattern (cells of 204 by 104 from the
+    // corner), and a lot cut at cell lines.
+    let p = pat(Bond::Stack, 4.0);
+    let hole = vec![
+        DVec2::new(1020.0, 520.0),
+        DVec2::new(2040.0, 520.0),
+        DVec2::new(2040.0, 1040.0),
+        DVec2::new(1020.0, 1040.0),
+    ];
+    let lay = |deg: f64| {
+        let rot = DVec2::from_angle(deg.to_radians());
+        let at = DVec2::new(333.3, -999.9);
+        let t =
+            |ring: &[DVec2]| -> Vec<DVec2> { ring.iter().map(|q| at + rot.rotate(*q)).collect() };
+        let r = region(&t(&rect(4080.0, 2080.0)), &[t(&hole)]);
+        count_and_area(
+            &r,
+            &p,
+            &Placement {
+                origin: Some(at),
+                angle: deg,
+            },
+        )
+    };
+    let (n0, a0) = lay(0.0);
+    for deg in [3.0, 17.0, 29.9, 44.99, 91.0, 217.3] {
+        let (n, a) = lay(deg);
+        assert_eq!(n, n0, "{deg}");
+        assert!((a - a0).abs() < 1e-3, "{deg}");
+    }
+}
+
+#[test]
+fn an_interior_point_lies_inside_convex_and_concave_pieces() {
+    let inside = |poly: &[DVec2]| {
+        units::interior_point(poly).is_some_and(|p| crate::geom::point_in_polygon(p, poly))
+    };
+    assert!(inside(&rect(10.0, 2.0)));
+    let mut cw = rect(10.0, 2.0);
+    cw.reverse();
+    assert!(inside(&cw));
+    // An L whose average of the corners is outside the piece.
+    let l = vec![
+        DVec2::new(0.0, 0.0),
+        DVec2::new(30.0, 0.0),
+        DVec2::new(30.0, 1.0),
+        DVec2::new(1.0, 1.0),
+        DVec2::new(1.0, 30.0),
+        DVec2::new(0.0, 30.0),
+    ];
+    assert!(inside(&l));
+    let mut l_cw = l.clone();
+    l_cw.reverse();
+    assert!(inside(&l_cw));
+    // A thin U.
+    let u = vec![
+        DVec2::new(0.0, 0.0),
+        DVec2::new(10.0, 0.0),
+        DVec2::new(10.0, 10.0),
+        DVec2::new(9.0, 10.0),
+        DVec2::new(9.0, 1.0),
+        DVec2::new(1.0, 1.0),
+        DVec2::new(1.0, 10.0),
+        DVec2::new(0.0, 10.0),
+    ];
+    assert!(inside(&u));
+    // No inside at all: the clipper then cuts the piece in place of guessing.
+    let flat = [
+        DVec2::new(0.0, 0.0),
+        DVec2::new(5.0, 0.0),
+        DVec2::new(10.0, 0.0),
+    ];
+    assert_eq!(units::interior_point(&flat), None);
+}
+
+proptest! {
+    #[test]
+    fn a_lot_turned_by_a_random_angle_loses_no_unit(
+        deg in 0.0f64..360.0,
+        x in -1.0e5f64..1.0e5,
+        y in -1.0e5f64..1.0e5,
+        bond in prop::sample::select(vec![Bond::RunningBond, Bond::Stack, Bond::Herringbone]),
+    ) {
+        let p = pat(bond, 4.0);
+        let (r0, pl0) = turned_lot(3000.0, 2000.0, 0.0, DVec2::ZERO);
+        let (n0, a0) = count_and_area(&r0, &p, &pl0);
+        let (r, pl) = turned_lot(3000.0, 2000.0, deg, DVec2::new(x, y));
+        let (n, a) = count_and_area(&r, &p, &pl);
+        prop_assert_eq!(n, n0);
+        prop_assert!((a - a0).abs() < 1e-2, "{} against {}", a, a0);
+    }
+}
+
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn perf_large_turned_lot_with_islands() {
+    // 150 m by 100 m turned by 17 degrees, with 40 islands: about 450,000 units.
+    let at = DVec2::new(1000.0, 2000.0);
+    let rot = DVec2::from_angle(17f64.to_radians());
+    let t = |ring: &[DVec2]| -> Vec<DVec2> { ring.iter().map(|q| at + rot.rotate(*q)).collect() };
+    let holes: Vec<Vec<DVec2>> = (0..40)
+        .map(|k| {
+            let (x, y) = (
+                5000.0 + 3500.0 * (k % 8) as f64,
+                5000.0 + 9000.0 * (k / 8) as f64,
+            );
+            t(&[
+                DVec2::new(x, y),
+                DVec2::new(x + 2000.0, y),
+                DVec2::new(x + 2000.0, y + 1500.0),
+                DVec2::new(x, y + 1500.0),
+            ])
+        })
+        .collect();
+    let r = region(&t(&rect(150_000.0, 100_000.0)), &holes);
+    let p = pat(Bond::RunningBond, 4.0);
+    let place = Placement {
+        origin: Some(at),
+        angle: 17.0,
+    };
+    let start = std::time::Instant::now();
+    let (units, _) = lay_units(&r, &p, &place, &Limits::new(2_000_000)).unwrap();
+    eprintln!("perf: {} units in {:?}", units.len(), start.elapsed());
+}
+
+#[test]
+fn an_edge_one_bit_off_the_side_of_the_units_loses_no_unit() {
+    // The zone of a stall row (found by the paving workflow on a drawing in feet): its left edge
+    // lies on the sides of the first column of units (x = 404), and the crossing of a split line
+    // with it was computed with a rounding error, so its top end is at 403.99999999999994. Units
+    // whose side lies on that nearly vertical edge must not be judged by their corner: the corner
+    // is on the boundary and the answer was a matter of rounding. Ten units were lost.
+    let p = pat(Bond::RunningBond, 4.0);
+    let place = Placement {
+        // The origin of the paving workflow on a drawing in feet: cells start at x = -2.
+        origin: Some(DVec2::new(-2.0, 402.0)),
+        angle: 0.0,
+    };
+    let lot = |top_x: f64, bottom_x: f64| {
+        region(
+            &[
+                DVec2::new(bottom_x, 404.0),
+                DVec2::new(2500.0, 404.0),
+                DVec2::new(2500.0, 5000.0),
+                DVec2::new(top_x, 5000.0),
+            ],
+            &[],
+        )
+    };
+    let (n0, a0) = count_and_area(&lot(404.0, 404.0), &p, &place);
+    assert!(n0 > 100);
+    // 403.99999999999994 is one bit below 404.
+    assert_eq!(nudge(404.0, -1), 403.99999999999994);
+    for ulps in [-1, -2, -3, -6, 1, 2] {
+        let (n, a) = count_and_area(&lot(nudge(404.0, ulps), 404.0), &p, &place);
+        assert_eq!(n, n0, "{ulps} bits");
+        assert!((a - a0).abs() < 1e-3);
+    }
+}
+
+fn nudge(v: f64, ulps: i32) -> f64 {
+    let mut x = v;
+    for _ in 0..ulps.abs() {
+        x = if ulps > 0 { x.next_up() } else { x.next_down() };
+    }
+    x
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(300))]
+    #[test]
+    fn corners_a_few_bits_off_the_cell_lines_lose_no_unit(
+        d in prop::collection::vec(-6i32..6, 8),
+        deg in prop::sample::select(vec![0.0f64, 90.0, 180.0, 37.0]),
+        bond in prop::sample::select(vec![Bond::RunningBond, Bond::Stack, Bond::Herringbone]),
+    ) {
+        // Cells of 204 by 104 (herringbone: 204 by 104 as well) from the origin: a lot of whole
+        // cells has every side on the sides of the units. Its corners are moved by a few bits.
+        let p = pat(bond, 4.0);
+        let at = DVec2::new(402.0, 402.0);
+        let rot = DVec2::from_angle(deg.to_radians());
+        let corners = [(0.0, 0.0), (4080.0, 0.0), (4080.0, 2080.0), (0.0, 2080.0)];
+        let make = |nudged: bool| {
+            let ring: Vec<DVec2> = corners
+                .iter()
+                .enumerate()
+                .map(|(i, &(x, y))| {
+                    let q = at + rot.rotate(DVec2::new(x, y));
+                    if nudged {
+                        DVec2::new(nudge(q.x, d[2 * i]), nudge(q.y, d[2 * i + 1]))
+                    } else {
+                        q
+                    }
+                })
+                .collect();
+            region(&ring, &[])
+        };
+        let place = Placement { origin: Some(at), angle: deg };
+        let (n0, a0) = count_and_area(&make(false), &p, &place);
+        let (n, a) = count_and_area(&make(true), &p, &place);
+        prop_assert_eq!(n, n0);
+        prop_assert!((a - a0).abs() < 1e-2, "{} against {}", a, a0);
+    }
+}
+
+/// The two stall zones of the lot in feet (`test_a_lot_in_feet_keeps_every_unit_with_zones_and_a_course`
+/// in tests/behavior/test_messy_dxf.py) as they reach the clipper with the snap of the zones off:
+/// the bits of every coordinate as the workflow made them. Their left edges run from x = 404 to one
+/// bit below it, on the sides of the first column of units. The old clipper lost five whole units in
+/// each (133 and 139 units in place of 138 and 144).
+#[test]
+fn the_stall_zones_of_the_lot_in_feet_lose_no_unit() {
+    let b = |x: u64, y: u64| DVec2::new(f64::from_bits(x), f64::from_bits(y));
+    let lower = [
+        b(4645814859353554943, 4662219572839972864), // (403.99999999999994, 5000)
+        b(4645814859353554944, 4645814859353554944), // (404, 404)
+        b(4657715973212602368, 4645814859353554944), // (2500, 404)
+        b(4657715973212602368, 4662219572839972864), // (2500, 5000)
+    ];
+    let upper = [
+        b(4645814859353554944, 4671115721420308480), // (404, 19596)
+        b(4645814859353554943, 4669471951536783361), // (403.99999999999994, 15000.000000000002)
+        b(4657715973212602368, 4669471951536783361), // (2500, 15000.000000000002)
+        b(4657715973212602368, 4671115721420308480), // (2500, 19596)
+    ];
+    assert_eq!(lower[0].x, 404f64.next_down());
+    let p = Pattern::new(Bond::RunningBond, 400.0, 200.0, 4.0);
+    let place = Placement {
+        origin: Some(DVec2::new(-2.0, 402.0)),
+        angle: 0.0,
+    };
+    for (ring, n_all, n_whole) in [(&lower, 138, 99), (&upper, 144, 99)] {
+        let (units, stats) = run(&region(ring, &[]), &p, &place);
+        let whole = units.iter().filter(|u| u.whole).count();
+        assert_eq!((units.len(), whole), (n_all, n_whole), "{ring:?}");
+        assert_eq!(stats.dust_pieces, 0);
+        // The same zone in exact numbers gives the same units.
+        let exact: Vec<DVec2> = ring
+            .iter()
+            .map(|q| DVec2::new(q.x.round(), q.y.round()))
+            .collect();
+        let (e, _) = run(&region(&exact, &[]), &p, &place);
+        assert_eq!(e.len(), units.len());
+        assert_eq!(e.iter().filter(|u| u.whole).count(), whole);
+    }
+}
+
+#[test]
+fn a_lot_at_survey_coordinates_a_few_bits_off_the_unit_sides_keeps_every_unit_whole() {
+    // L-EST97 in mm: 6.5e9 north, where one bit is about 1e-6 mm. Every side of the lot lies on the
+    // sides of units, moved out of the lot or into it by a few bits. The noise must not make cut
+    // units: an edge that does not touch a unit leaves it whole, and a unit that an edge cuts by a
+    // bit is trimmed (whole).
+    let p = Pattern::new(Bond::Stack, 400.0, 200.0, 4.0);
+    let at = DVec2::new(6.5e8, 6.5e9);
+    let place = Placement {
+        origin: Some(at - DVec2::splat(2.0)),
+        angle: 0.0,
+    };
+    let lot: Vec<DVec2> = rect(4036.0, 2036.0).iter().map(|q| at + *q).collect();
+    let (u0, _) = run(&region(&lot, &[]), &p, &place);
+    assert_eq!(u0.len(), 100);
+    assert!(u0.iter().all(|u| u.whole));
+    for ulps in [1, 2, 3, -1, -2, -3] {
+        // Positive: out of the lot on every side; negative: into it.
+        let (lo, hi) = (lot[0], lot[2]);
+        let ring: Vec<DVec2> = lot
+            .iter()
+            .map(|q| {
+                let mv = |v: f64, low: bool| nudge(v, if low { -ulps } else { ulps });
+                DVec2::new(mv(q.x, q.x == lo.x), mv(q.y, q.y == lo.y))
+            })
+            .collect();
+        assert!(ring.iter().all(|q| q.x != lo.x && q.x != hi.x));
+        let (units, stats) = run(&region(&ring, &[]), &p, &place);
+        let whole = units.iter().filter(|u| u.whole).count();
+        assert_eq!((units.len(), whole), (100, 100), "{ulps} bits");
+        assert_eq!(stats.dust_pieces, 0);
+        if ulps > 0 {
+            assert_eq!(stats.trimmed, 0, "nothing to trim");
+        }
+    }
+}
+
+/// A base strip in one row of 1 m units, with ten thin teeth that reach up into the next row.
+fn comb() -> Vec<DVec2> {
+    let mut ring = vec![
+        DVec2::new(0.0, -500.0),
+        DVec2::new(1000.0, -500.0),
+        DVec2::new(1000.0, -400.0),
+    ];
+    for k in (0..10).rev() {
+        let x0 = 50.0 + 90.0 * k as f64;
+        let x1 = x0 + 10.0;
+        ring.extend([
+            DVec2::new(x1, -400.0),
+            DVec2::new(x1, 900.0),
+            DVec2::new(x0, 900.0),
+            DVec2::new(x0, -400.0),
+        ]);
+    }
+    ring.push(DVec2::new(0.0, -400.0));
+    ring
+}
+
+#[test]
+fn a_region_that_cuts_units_into_many_pieces_stops_at_the_unit_limit() {
+    // The area holds less than one unit, so the estimate is 1, but the teeth cut the unit of
+    // the upper row into ten pieces: the limit is kept while the units are made.
+    let r = region(&comb(), &[]);
+    let p = Pattern::new(Bond::Stack, 1000.0, 1000.0, 5.0);
+    let place = Placement {
+        origin: Some(DVec2::ZERO),
+        angle: 0.0,
+    };
+    let (units, _) = lay_units(&r, &p, &place, &Limits::new(100)).unwrap();
+    assert_eq!(units.len(), 11, "{units:?}");
+    assert!(units.iter().all(|u| !u.whole));
+    let e = lay_units(&r, &p, &place, &Limits::new(5)).unwrap_err();
+    assert!(e.to_string().contains("more than the limit of 5"), "{e}");
+    let LayoutError::TooMany(t) = e else {
+        panic!("{e:?}")
+    };
+    assert!(t.estimated > 5, "{t:?}");
+    // Streamed units stop at the limit too: never more than it.
+    let mut n = 0;
+    let got = for_each_unit(&r, &p, &place, &Limits::new(5), &mut |_| n += 1);
+    assert!(got.is_err() && n <= 5, "{n}");
+}
+
+#[test]
+fn small_units_far_from_the_origin_of_the_pattern_lay_as_near_it() {
+    // 1000 km from the origin of the pattern the rounding of a coordinate is near a tenth of a
+    // micrometre, and the noise margin of the engine (1e-9 of the coordinate) is 1 mm: a 20 by
+    // 10 mm unit has its inside point too close to its sides to move it from the first copy, so
+    // each copy finds its own. The result must not change.
+    let p = Pattern::new(Bond::Stack, 20.0, 10.0, 2.0);
+    let lay = |at: DVec2| {
+        let ring: Vec<DVec2> = rect(1000.0, 500.0).iter().map(|q| *q + at).collect();
+        let place = Placement {
+            origin: Some(DVec2::ZERO),
+            angle: 0.0,
+        };
+        let (units, _) = lay_units(&region(&ring, &[]), &p, &place, &limits()).unwrap();
+        let whole = units.iter().filter(|u| u.whole).count();
+        (units.len(), whole)
+    };
+    let near = lay(DVec2::new(1100.0, 600.0));
+    assert!(near.1 > 1000, "{near:?}");
+    // A whole number of lattice cells (22 by 12 mm) away: the units are the same.
+    assert_eq!(lay(DVec2::new(132.0 * 7_575_758.0 + 1100.0, 600.0)), near);
+}

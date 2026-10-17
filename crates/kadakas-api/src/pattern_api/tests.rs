@@ -864,3 +864,100 @@ fn the_gaps_alone_are_paged_and_the_counts_alone_have_no_next_page() {
     assert_eq!(counts["gaps_total"].as_u64().unwrap(), total);
     assert!(counts["next_offset"].is_null());
 }
+
+#[test]
+fn a_region_in_a_joint_has_no_units_and_the_call_options_are_used() {
+    let mut s = Session::with_sequential_ids();
+    let stack = json!({"bond": "stack", "unit_length": 200, "unit_width": 100, "gap": 5});
+    // A strip that lies in the joint between two columns of units: nothing to make.
+    let joint = json!({"outline": [[203, 10], [207, 10], [207, 80], [203, 80]]});
+    let r = ok(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"region": joint, "pattern": stack, "origin": [0, 0], "angle": 0}),
+    );
+    assert_eq!(r["units_total"], 0, "{r}");
+    let (_, m) = fail(
+        &mut s,
+        "unit_pattern.to_objects",
+        json!({"region": joint, "pattern": stack, "origin": [0, 0], "angle": 0}),
+    );
+    assert!(m.contains("no units"), "{m}");
+    // The angle turns the pattern: a turned stack bond cuts more units in a rectangle.
+    let room = json!({"outline": rect(2050, 1050)});
+    let cut = |s: &mut Session, angle: f64| {
+        ok(
+            s,
+            "unit_pattern.layout",
+            json!({"region": room, "pattern": stack, "origin": [0, 0], "angle": angle, "include": []}),
+        )["summary"]["cut_units"]
+            .as_u64()
+            .unwrap()
+    };
+    assert!(cut(&mut s, 30.0) > cut(&mut s, 0.0));
+    // The tolerance of the region: corners closer than it are one corner.
+    let r = ok(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"region": {"outline": [[0, 0], [2050, 0], [2050, 1050], [2050.2, 1050], [0, 1050]]},
+               "pattern": stack, "origin": [0, 0], "tolerance": 0.5, "include": []}),
+    );
+    assert_eq!(r["summary"]["whole_units"], 100, "{r}");
+    let (_, m) = fail(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"region": room, "pattern": stack, "tolerance": 0}),
+    );
+    assert!(m.contains("tolerance"), "{m}");
+    // One subject: an object or a region.
+    let h = ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": rect(1000, 1000)}),
+    )["id"]
+        .clone();
+    let (_, m) = fail(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"id": h, "region": room, "pattern": stack}),
+    );
+    assert!(m.contains("not both"), "{m}");
+    let (_, m) = fail(&mut s, "unit_pattern.layout", json!({"pattern": stack}));
+    assert!(m.contains("id") && m.contains("region"), "{m}");
+}
+
+#[test]
+fn a_report_of_an_object_that_is_gone_has_an_error_row() {
+    let mut s = Session::with_sequential_ids();
+    let st = style(&mut s, "running_bond");
+    let h = ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": rect(2000, 1000), "style": st}),
+    )["id"]
+        .clone();
+    let gone = "00000000-0000-0000-0000-0000000003e7";
+    let r = ok(&mut s, "report.unit_pattern", json!({"ids": [h, gone]}));
+    assert_eq!(r["rows"][1]["error"], "no such object", "{r}");
+    assert_eq!(r["totals"]["errors"], 1, "{r}");
+    // The good row is still counted.
+    assert!(r["totals"]["order_units"].as_u64().unwrap_or(0) > 50, "{r}");
+}
+
+#[test]
+fn a_pattern_with_an_unknown_field_or_tiny_units_is_refused() {
+    let mut s = Session::with_sequential_ids();
+    let room = json!({"outline": rect(2000, 1000)});
+    let (_, m) = fail(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"region": room, "pattern": {"bond": "stack", "unit_length": 200, "unit_width": 100, "colour": "red"}}),
+    );
+    assert!(m.contains("colour"), "{m}");
+    let (_, m) = fail(
+        &mut s,
+        "unit_pattern.layout",
+        json!({"region": room, "pattern": {"bond": "stack", "unit_length": 0.001, "unit_width": 100}}),
+    );
+    assert!(m.contains("at least"), "{m}");
+}

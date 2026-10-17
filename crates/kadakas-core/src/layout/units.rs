@@ -394,6 +394,9 @@ pub(super) struct Local {
     pub lo: DVec2,
     pub hi: DVec2,
     pub stamp: Stamp,
+    /// The rounding noise of a coordinate in this frame, with a wide margin: 1e-9 of the largest
+    /// coordinate (some 4500 bits of the last place), and at least 1e-6 mm.
+    pub eps: f64,
 }
 
 impl Local {
@@ -434,6 +437,7 @@ impl Local {
             lo,
             hi,
             stamp: Stamp::new(n),
+            eps: (1e-9 * lo.abs().max(hi.abs()).max_element()).max(1e-6),
         }
     }
 }
@@ -465,6 +469,62 @@ fn seg_hits_poly(a: DVec2, b: DVec2, poly: &[DVec2], lo: DVec2, hi: DVec2) -> bo
     (0..n).any(|i| segments_touch(a, b, poly[i], poly[(i + 1) % n]))
         || crate::geom::point_in_polygon(a, poly)
         || crate::geom::point_in_polygon(b, poly)
+}
+
+/// A point inside the polygon, away from its outline: the average of the corners of a convex
+/// polygon, else the center of the ear (a corner triangle with no other corner in it) with the
+/// largest inscribed circle. `None` if the polygon has no such point (it is degenerate or
+/// crosses itself).
+pub(super) fn interior_point(poly: &[DVec2]) -> Option<DVec2> {
+    let n = poly.len();
+    if n < 3 {
+        return None;
+    }
+    let cross = |i: usize| {
+        let (a, b, c) = (poly[(i + n - 1) % n], poly[i], poly[(i + 1) % n]);
+        (b - a).perp_dot(c - b)
+    };
+    let area2: f64 = (0..n).map(|i| poly[i].perp_dot(poly[(i + 1) % n])).sum();
+    let sign = if area2 >= 0.0 { 1.0 } else { -1.0 };
+    let avg = poly.iter().copied().sum::<DVec2>() / n as f64;
+    let checked = |p: DVec2| crate::geom::point_in_polygon(p, poly).then_some(p);
+    if area2 != 0.0 && (0..n).all(|i| cross(i) * sign >= 0.0) {
+        return checked(avg);
+    }
+    let mut best: Option<(f64, DVec2)> = None;
+    for i in 0..n {
+        let size = cross(i) * sign;
+        if size <= 0.0 {
+            continue;
+        }
+        let (a, b, c) = (poly[(i + n - 1) % n], poly[i], poly[(i + 1) % n]);
+        let in_tri = |p: DVec2| {
+            let s = [
+                (b - a).perp_dot(p - a),
+                (c - b).perp_dot(p - b),
+                (a - c).perp_dot(p - c),
+            ];
+            s.iter().all(|v| v * sign >= 0.0)
+        };
+        if (0..n).any(|j| j != i && j != (i + 1) % n && j != (i + n - 1) % n && in_tri(poly[j])) {
+            continue;
+        }
+        // The radius of the inscribed circle: twice the area over the perimeter. A long thin ear
+        // has a large area but its center is close to the outline.
+        let r = size / (a.distance(b) + b.distance(c) + c.distance(a));
+        if best.is_none_or(|(br, _)| r > br) {
+            best = Some((r, (a + b + c) / 3.0));
+        }
+    }
+    best.and_then(|(_, p)| checked(p))
+}
+
+/// The distance from `p` to the outline of `poly`.
+fn clearance(p: DVec2, poly: &[DVec2]) -> f64 {
+    let n = poly.len();
+    (0..n)
+        .map(|i| crate::geom::dist_to_segment(p, poly[i], poly[(i + 1) % n]))
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// Sutherland-Hodgman: a ring cut to a box.
@@ -621,6 +681,18 @@ pub fn for_each_unit(
         .iter()
         .map(|k| k.pieces.iter().map(|p| min_width(p)).collect())
         .collect();
+    // A point inside each piece, found once and moved with the piece. It must be far from the
+    // sides compared to the rounding of the move (`eps`); else each copy finds its own.
+    let inner: Vec<Vec<Option<DVec2>>> = comp
+        .kinds
+        .iter()
+        .map(|k| {
+            k.pieces
+                .iter()
+                .map(|p| interior_point(p).filter(|q| clearance(*q, p) > 16.0 * local.eps))
+                .collect()
+        })
+        .collect();
     let mut placer = Placer::new(
         local,
         origin,
@@ -646,7 +718,8 @@ pub fn for_each_unit(
                 for (pi, piece) in kind.pieces.iter().enumerate() {
                     buf.clear();
                     buf.extend(piece.iter().map(|p| *p + t));
-                    placer.place(&buf, ki, ring_area(piece), kind.area, widths[ki][pi], f)?;
+                    let at = inner[ki][pi].map(|q| q + t);
+                    placer.place(&buf, at, ki, ring_area(piece), kind.area, widths[ki][pi], f)?;
                 }
             }
         }
@@ -700,10 +773,13 @@ impl Placer {
 
     /// One piece `buf` (a polygon in the frame of the pattern) of unit shape `ki`, whose full area
     /// is `piece_area` (the whole piece) and `kind_area` (all pieces of the shape). Calls `f` for
-    /// each unit that results.
+    /// each unit that results. `inner` is a point inside `buf`, away from its sides (see
+    /// `interior_point`), if the caller knows one; else `place` finds one when it needs it.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn place(
         &mut self,
         buf: &[DVec2],
+        inner: Option<DVec2>,
         ki: usize,
         piece_area: f64,
         kind_area: f64,
@@ -719,16 +795,29 @@ impl Placer {
         if phi.x < lo.x || plo.x > hi.x || phi.y < lo.y || plo.y > hi.y {
             return Ok(());
         }
+        // Edges within `eps` of the box of the unit are near it, also when they lie in the next
+        // cell of the index: then the point that decides below is never close to an edge.
+        let eps = self.local.eps;
+        let pad = DVec2::splat(eps);
         self.local
             .index
-            .near(plo, phi, &mut self.local.stamp, &mut self.near);
+            .near(plo - pad, phi + pad, &mut self.local.stamp, &mut self.near);
         let touching = self.near.iter().any(|&e| {
             let (a, b) = self.local.index.edges[e as usize];
             seg_hits_poly(a, b, buf, plo, phi)
         });
-        if !touching {
-            let p0 = buf[0];
+        // A point inside the unit decides whether a unit that no edge touches is in the region.
+        // Not a corner: a corner may lie on an edge that is one bit off the side of the unit, and
+        // the ray test then gives either answer. The outline of the region is outside the unit (no
+        // edge touches it), so the point is as far from the outline as from the sides of the unit.
+        let p0 = if touching {
+            None
+        } else {
+            inner.or_else(|| interior_point(buf))
+        };
+        if let Some(p0) = p0 {
             let inside = if self.near.is_empty() {
+                // No edge in the cells of the unit: the whole cell is on one side.
                 let key = self.local.index.cell_xy(p0);
                 match self.inside_cache.get(&key) {
                     Some(v) => *v,
@@ -759,7 +848,8 @@ impl Placer {
             }
             return Ok(());
         }
-        // The unit meets an edge: cut it. Rings far from the unit cannot matter.
+        // The unit meets an edge (or has no inside point): cut it. Rings far from the unit cannot
+        // matter.
         let mut clip: Vec<Vec<[f64; 2]>> = Vec::new();
         for (ri, ring) in self.local.rings.iter().enumerate() {
             let (blo, bhi) = self.local.ring_box[ri];
@@ -775,7 +865,14 @@ impl Placer {
         let shapes = subject.overlay(&clip, OverlayRule::Intersect, FillRule::EvenOdd);
         // Noise: the unit crosses the edge by less than the trim. It counts as whole.
         if self.trim > 0.0
-            && is_trimmed(buf, &shapes, piece_area, &self.local, &self.near, self.trim)
+            && is_trimmed(
+                buf,
+                &shapes,
+                piece_area,
+                &mut self.local,
+                &self.near,
+                self.trim,
+            )
         {
             if self.stats.units >= self.max_units {
                 return Err(self.too_many());
@@ -840,6 +937,10 @@ impl Placer {
                 width: min_width(&pts[0]),
             });
         }
+        debug_assert!(
+            !made.is_empty() || !self.surely_holds_a_piece(buf),
+            "the cut of a unit lost a piece that the region holds: {buf:?}"
+        );
         // Counted after the dust is gone: one piece, no hole, and all of the unit.
         let single = made.len() == 1;
         for mut u in made {
@@ -853,6 +954,28 @@ impl Placer {
             f(&u);
         }
         Ok(())
+    }
+}
+
+impl Placer {
+    /// True if a disc around a point of the unit lies in the unit and in the region, and is larger
+    /// than the dust: the cut of the unit must give a piece. A check of the overlay.
+    fn surely_holds_a_piece(&mut self, buf: &[DVec2]) -> bool {
+        let Some(p) = interior_point(buf) else {
+            return false;
+        };
+        let to_unit = clearance(p, buf);
+        let to_region = self
+            .near
+            .iter()
+            .map(|&e| {
+                let (a, b) = self.local.index.edges[e as usize];
+                crate::geom::dist_to_segment(p, a, b)
+            })
+            .fold(f64::INFINITY, f64::min);
+        let r = to_unit.min(to_region);
+        r * r * std::f64::consts::PI > 2.0 * DUST_AREA
+            && self.local.index.inside(p, &mut self.local.stamp)
     }
 }
 
@@ -934,7 +1057,7 @@ fn is_trimmed(
     buf: &[DVec2],
     shapes: &[Vec<Vec<[f64; 2]>>],
     piece_area: f64,
-    local: &Local,
+    local: &mut Local,
     near: &[u32],
     trim: f64,
 ) -> bool {
@@ -964,14 +1087,12 @@ fn is_trimmed(
             })
             .fold(f64::INFINITY, f64::min)
     };
-    // A corner of the unit outside the region must be within the trim of an edge.
-    let outside_far = buf.iter().any(|p| {
-        let inside = shapes.iter().any(|s| {
-            let outer: Vec<DVec2> = s[0].iter().map(|q| DVec2::new(q[0], q[1])).collect();
-            crate::geom::point_in_polygon(*p, &outer)
-        });
-        !inside && dist_edges(*p) > trim
-    });
+    // A corner of the unit outside the region must be within the trim of an edge. The region
+    // decides, not the cut piece: a corner on the outline of the piece (where a side of the unit
+    // lies on it) may test as outside it.
+    let outside_far = buf
+        .iter()
+        .any(|p| dist_edges(*p) > trim && !local.index.inside(*p, &mut local.stamp));
     if outside_far {
         return false;
     }

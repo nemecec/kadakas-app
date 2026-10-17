@@ -22,6 +22,17 @@ pub fn outline_of(obj: &Object) -> Result<(Vec<Vertex>, Vec<Vec<Vertex>>), Strin
             }
             (p, Vec::new())
         }
+        // A closed 3D polyline is read in plan: its heights are dropped.
+        Shape::Polyline3d {
+            points,
+            closed: true,
+        } => {
+            let mut p: Vec<DVec2> = points.iter().map(|v| DVec2::new(v.x, v.y)).collect();
+            if p.len() > 3 && p[0].distance(p[p.len() - 1]) < 1e-9 {
+                p.pop();
+            }
+            (curve::corners(&p), Vec::new())
+        }
         Shape::Polyline { closed: false, .. } => {
             return Err("an open polyline has no inside. Close it first".into());
         }
