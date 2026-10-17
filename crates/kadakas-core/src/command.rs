@@ -779,7 +779,7 @@ const META_PART_BYTES: u64 = 200;
 /// document.
 const IMAGE_PART_BYTES: u64 = 1024;
 
-fn object_bytes(o: &Object) -> u64 {
+pub(crate) fn object_bytes(o: &Object) -> u64 {
     OBJECT_BYTES
         + match &o.shape {
             Shape::Underlay(u) => u.png.resident_len() as u64,
@@ -2177,6 +2177,10 @@ pub struct Editor {
     /// does not drop old steps, so the steps of the run can be merged or taken back by their
     /// number.
     open_run: Option<u64>,
+    /// The step that the last undo or redo moved, and whether it went forward (redo).
+    last_moved: Option<(u64, bool)>,
+    /// The highest serial of a step that the history limit dropped (0: none).
+    max_trimmed_serial: u64,
 }
 
 /// Source of the serials of undo steps. One counter for the process, so a serial from an editor
@@ -2240,6 +2244,8 @@ impl Editor {
                 crate::picture::MAX_PICTURE_PIXELS,
             ),
             open_run: None,
+            last_moved: None,
+            max_trimmed_serial: 0,
         }
     }
 
@@ -2472,6 +2478,7 @@ impl Editor {
         self.revision = next_revision();
         self.log
             .push(p.change_set(false, self.revision, "undo", self.origin));
+        self.last_moved = Some((p.serial, false));
         self.redo.push(p);
         true
     }
@@ -2484,6 +2491,7 @@ impl Editor {
         self.revision = next_revision();
         self.log
             .push(p.change_set(true, self.revision, "redo", self.origin));
+        self.last_moved = Some((p.serial, true));
         self.undo.push(p);
         true
     }
@@ -2686,7 +2694,11 @@ impl Editor {
             total -= self.undo[drop].bytes;
             drop += 1;
         }
-        self.undo.drain(..drop);
+        self.max_trimmed_serial = self
+            .undo
+            .drain(..drop)
+            .map(|p| p.serial)
+            .fold(self.max_trimmed_serial, u64::max);
         // Redo steps count too: they go first when the size is over the cap.
         while total > self.history_limit && !self.redo.is_empty() {
             total -= self.redo.remove(0).bytes;

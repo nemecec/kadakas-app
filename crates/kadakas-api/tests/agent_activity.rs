@@ -286,8 +286,9 @@ fn a_step_that_the_history_forgot_says_so() {
     // Undo, then a new command: the redo steps are gone.
     s.editor.undo();
     person(&mut s, "execute", add_line(5.0));
+    // The object is gone with the undo: the step has nothing to do any more.
     let check = s.revert_check(id).unwrap();
-    assert!(check.blocked().unwrap().contains("not in the undo history"));
+    assert!(check.blocked().unwrap().contains("nothing to revert"));
     assert_eq!(steps(&mut s)[0]["state"], "gone");
 }
 
@@ -316,6 +317,9 @@ fn the_advice_follows_the_state_of_the_step_and_of_the_session() {
         snapshot_blocked: false,
         free: 3,
         shared: false,
+        is_call: true,
+        partial: false,
+        reverted: false,
     };
     assert_eq!(base.advice(), Advice::Revert);
     assert!(base.blocked().is_none());
@@ -366,13 +370,58 @@ fn the_advice_follows_the_state_of_the_step_and_of_the_session() {
     };
     assert_eq!(shared_snap.advice(), Advice::Nothing);
     assert!(shared_snap.blocked().unwrap().contains("shared"));
-    for place in [StepPlace::Redo, StepPlace::Gone] {
-        let c = StepCheck {
-            place,
-            ..base.clone()
-        };
-        assert_eq!(c.advice(), Advice::Nothing);
-        assert!(c.blocked().is_some());
+    let undone = StepCheck {
+        place: StepPlace::Redo,
+        ..base.clone()
+    };
+    assert_eq!(undone.advice(), Advice::Nothing);
+    assert!(undone.blocked().unwrap().contains("undone"));
+    // A step that the history forgot still goes back object by object.
+    let gone = StepCheck {
+        place: StepPlace::Gone,
+        ..base.clone()
+    };
+    assert_eq!(gone.advice(), Advice::Revert);
+    assert!(gone.blocked().is_none());
+    for (c, word) in [
+        (
+            StepCheck {
+                reverted: true,
+                ..base.clone()
+            },
+            "reverted",
+        ),
+        (
+            StepCheck {
+                partial: true,
+                ..base.clone()
+            },
+            "dropped part",
+        ),
+        (
+            StepCheck {
+                is_call: false,
+                ..base.clone()
+            },
+            "undo or redo",
+        ),
+        (
+            StepCheck {
+                free: 0,
+                ..base.clone()
+            },
+            "nothing to revert",
+        ),
+        (
+            StepCheck {
+                details: false,
+                ..base.clone()
+            },
+            "no longer holds",
+        ),
+    ] {
+        assert!(c.blocked().unwrap().contains(word), "{word}");
+        assert!(matches!(c.advice(), Advice::Nothing | Advice::UndoBackOnly));
     }
 }
 
@@ -382,6 +431,82 @@ fn undo_by_the_agent_through_the_api_is_no_step() {
     agent(&mut s, AGENT, "execute", add_line(0.0));
     agent(&mut s, AGENT, "undo", json!({}));
     let list = steps(&mut s);
-    assert_eq!(list.len(), 1, "an undo is no step");
+    assert_eq!(list.len(), 2, "an undo of the agent is a step of its own");
     assert_eq!(list[0]["state"], "undone");
+    assert_eq!(list[1]["kind"], "undo");
+    assert_eq!(list[1]["summary"], "Removed 1 object (1 line)");
+    assert_eq!(list[1]["revertible"], false);
+    let err = s.revert_agent_step(list[1]["id"].as_u64().unwrap(), false);
+    assert!(matches!(err, Err(StepError::NotRevertible(_))), "{err:?}");
+    // It can take back a step of the person, and the log says so.
+    person(&mut s, "execute", add_line(40.0));
+    agent(&mut s, AGENT, "undo", json!({}));
+    let list = steps(&mut s);
+    assert_eq!(list.last().unwrap()["kind"], "undo");
+    assert_eq!(list.last().unwrap()["counts"]["objects"]["removed"], 1);
+    agent(&mut s, AGENT, "redo", json!({}));
+    assert_eq!(steps(&mut s).last().unwrap()["kind"], "redo");
+}
+
+#[test]
+fn a_step_that_the_history_forgot_goes_back_object_by_object() {
+    let mut s = Session::with_sequential_ids();
+    s.set_limits(SessionLimits {
+        max_history_bytes: 1,
+        ..SessionLimits::default()
+    });
+    agent(&mut s, AGENT, "execute", add_line(0.0));
+    let id = steps(&mut s)[0]["id"].as_u64().unwrap();
+    person(&mut s, "execute", add_line(40.0));
+    person(&mut s, "execute", add_line(50.0));
+    let list = steps(&mut s);
+    assert_eq!(list[0]["state"], "gone");
+    assert_eq!(list[0]["revertible"], true);
+    let r = s.revert_agent_step(id, false).unwrap();
+    assert_eq!(r.reverted.len(), 1);
+    assert_eq!(s.editor.doc().objects.len(), 2);
+    let list = steps(&mut s);
+    assert_eq!(list[0]["reverted"], true);
+    assert_eq!(list[0]["revertible"], false);
+    assert_eq!(
+        s.revert_agent_step(id, false),
+        Err(StepError::Refused(Refusal::NothingToDo))
+    );
+}
+
+#[test]
+fn agent_edits_wait_while_redo_holds_steps_of_the_person() {
+    let mut s = Session::with_sequential_ids();
+    agent(&mut s, AGENT, "execute", add_line(0.0));
+    person(&mut s, "execute", add_line(40.0));
+    let first = steps(&mut s)[0]["id"].as_u64().unwrap();
+    assert!(!s.agent_hold());
+    s.undo_back_to_agent_step(first).unwrap();
+    assert!(s.agent_hold());
+    // Reads, the view and the agent's own undo and redo still work; an edit waits.
+    agent(&mut s, AGENT, "objects.list", json!({}));
+    let err = s
+        .handle_as(AGENT, Origin::Agent, "execute", add_line(70.0))
+        .unwrap_err();
+    assert_eq!(err.kind, "conflict");
+    assert_eq!(err.reason, Some("redo_pending"));
+    assert!(err.message.contains("redo"));
+    assert!(
+        s.editor.can_redo(),
+        "the steps of the person can still be redone"
+    );
+    // The person redoes everything: the hold ends by itself.
+    while s.editor.redo() {}
+    assert!(!s.agent_hold());
+    agent(&mut s, AGENT, "execute", add_line(70.0));
+    // Release: the agent goes on, and the person gives up the redo.
+    s.undo_back_to_agent_step(first).unwrap();
+    assert!(s.agent_hold());
+    s.release_agent_hold();
+    agent(&mut s, AGENT, "execute", add_line(80.0));
+    assert!(!s.editor.can_redo());
+    // Undo back to a step with no step of the person above it holds nothing.
+    let last = steps(&mut s).last().unwrap()["id"].as_u64().unwrap();
+    s.undo_back_to_agent_step(last).unwrap();
+    assert!(!s.agent_hold());
 }

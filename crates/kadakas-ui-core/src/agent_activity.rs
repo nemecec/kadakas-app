@@ -46,7 +46,14 @@ pub struct ActivityModel {
     /// The object whose before and after the panel shows.
     pub detail: Option<ObjectId>,
     made: Option<(Key, Arc<Review>)>,
+    /// When the review was made (ms).
+    built_ms: f64,
+    /// The last call to `review` gave an old review: ask again after `REBUILD_MS`.
+    stale: bool,
 }
+
+/// The shortest time between two builds of the review while the document keeps changing (ms).
+pub const REBUILD_MS: f64 = 300.0;
 
 impl Default for ActivityModel {
     fn default() -> Self {
@@ -57,6 +64,8 @@ impl Default for ActivityModel {
             cursor: None,
             detail: None,
             made: None,
+            built_ms: f64::NEG_INFINITY,
+            stale: false,
         }
     }
 }
@@ -103,6 +112,7 @@ impl ActivityModel {
         doc: &Document,
         revision: u64,
         dark: bool,
+        now_ms: f64,
     ) -> Arc<Review> {
         // A chosen step that left the log is no choice any more.
         if self.selected.is_some_and(|id| log.get(id).is_none()) {
@@ -114,11 +124,25 @@ impl ActivityModel {
             scope: self.scope(),
             dark,
         };
+        self.stale = false;
         if let Some((k, r)) = &self.made
             && *k == key
         {
             return r.clone();
         }
+        // The document changes at every step of a drag or of a long edit: the review is made
+        // again at most every REBUILD_MS then, and the old one is drawn meanwhile (an object that
+        // is gone from it is not drawn; one that is new shows at the next rebuild).
+        if let Some((k, r)) = &self.made
+            && k.generation == key.generation
+            && k.scope == key.scope
+            && k.dark == key.dark
+            && now_ms - self.built_ms < REBUILD_MS
+        {
+            self.stale = true;
+            return r.clone();
+        }
+        self.built_ms = now_ms;
         let set = match key.scope {
             Scope::Unseen => ReviewSet::build(log.steps().iter().filter(|s| !s.seen), doc),
             Scope::Step(id) => ReviewSet::build(log.steps().iter().filter(|s| s.id == id), doc),
@@ -142,11 +166,20 @@ impl ActivityModel {
         made
     }
 
+    /// The review of the last call is old: look again after `REBUILD_MS`.
+    pub fn is_stale(&self) -> bool {
+        self.stale
+    }
+
     /// Marks steps as seen: their changes are no longer highlighted. Returns how many steps
-    /// changed.
+    /// changed. `All` marks what the review shows: with a chosen step, that step only.
     pub fn mark_seen(&mut self, log: &mut ActivityLog, target: SeenTarget) -> usize {
         self.cursor = None;
         self.detail = None;
+        let target = match (target, self.selected) {
+            (SeenTarget::All, Some(id)) => SeenTarget::Step(id),
+            (t, _) => t,
+        };
         match target {
             SeenTarget::All => {
                 let last = log.last_id();
@@ -192,7 +225,7 @@ pub fn time_hms(time_ms: u64) -> Option<(u32, u32, u32)> {
 mod tests {
     use super::*;
     use glam::DVec2;
-    use kadakas_core::activity::Recorded;
+    use kadakas_core::activity::{Recorded, StepKind};
     use kadakas_core::command::{Command, Editor};
     use kadakas_core::model::Shape;
 
@@ -222,6 +255,8 @@ mod tests {
             revision: ed.revision(),
             serials,
             data,
+            partial: false,
+            kind: StepKind::Call,
         })
         .unwrap()
     }
@@ -232,14 +267,14 @@ mod tests {
         let mut log = ActivityLog::default();
         let mut m = ActivityModel::default();
         step(&mut log, &mut ed, 0.0);
-        let a = m.review(&log, ed.doc(), ed.revision(), false);
-        let b = m.review(&log, ed.doc(), ed.revision(), false);
+        let a = m.review(&log, ed.doc(), ed.revision(), false, 1000.0);
+        let b = m.review(&log, ed.doc(), ed.revision(), false, 2000.0);
         assert!(Arc::ptr_eq(&a, &b));
         assert_eq!(a.set.counts().added, 1);
-        let c = m.review(&log, ed.doc(), ed.revision(), true);
+        let c = m.review(&log, ed.doc(), ed.revision(), true, 3000.0);
         assert!(!Arc::ptr_eq(&a, &c), "the theme changes the colors");
         step(&mut log, &mut ed, 5.0);
-        let d = m.review(&log, ed.doc(), ed.revision(), true);
+        let d = m.review(&log, ed.doc(), ed.revision(), true, 4000.0);
         assert_eq!(d.set.counts().added, 2);
         // The highlight does not dim the rest of the drawing.
         assert_eq!(d.style.unchanged, UnchangedMode::Show);
@@ -255,7 +290,7 @@ mod tests {
         m.toggle_step(s1);
         assert_eq!(m.scope(), Scope::Step(s1));
         assert_eq!(
-            m.review(&log, ed.doc(), ed.revision(), false)
+            m.review(&log, ed.doc(), ed.revision(), false, 5000.0)
                 .set
                 .counts()
                 .added,
@@ -264,7 +299,7 @@ mod tests {
         m.toggle_step(s1);
         assert_eq!(m.scope(), Scope::Unseen);
         assert_eq!(
-            m.review(&log, ed.doc(), ed.revision(), false)
+            m.review(&log, ed.doc(), ed.revision(), false, 6000.0)
                 .set
                 .counts()
                 .added,
@@ -272,7 +307,7 @@ mod tests {
         );
         // A step that left the log is not a choice any more.
         m.selected = Some(999);
-        m.review(&log, ed.doc(), ed.revision(), false);
+        m.review(&log, ed.doc(), ed.revision(), false, 7000.0);
         assert_eq!(m.selected, None);
     }
 
@@ -290,7 +325,7 @@ mod tests {
         assert!(!log.get(s1).unwrap().seen && !log.get(s2).unwrap().seen);
         assert!(log.get(s3).unwrap().seen);
         assert_eq!(
-            m.review(&log, ed.doc(), ed.revision(), false)
+            m.review(&log, ed.doc(), ed.revision(), false, 8000.0)
                 .set
                 .counts()
                 .added,
@@ -298,7 +333,7 @@ mod tests {
         );
         assert_eq!(m.mark_seen(&mut log, SeenTarget::All), 2);
         assert!(
-            m.review(&log, ed.doc(), ed.revision(), false)
+            m.review(&log, ed.doc(), ed.revision(), false, 9000.0)
                 .set
                 .is_empty()
         );
@@ -313,7 +348,7 @@ mod tests {
         let mut m = ActivityModel::default();
         step(&mut log, &mut ed, 0.0);
         step(&mut log, &mut ed, 5.0);
-        let r = m.review(&log, ed.doc(), ed.revision(), false);
+        let r = m.review(&log, ed.doc(), ed.revision(), false, 10000.0);
         let first = m.step_cursor(&r, true).unwrap();
         let second = m.step_cursor(&r, true).unwrap();
         assert_ne!(first, second);

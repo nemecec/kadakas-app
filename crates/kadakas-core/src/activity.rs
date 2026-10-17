@@ -19,6 +19,9 @@ pub const MAX_STEPS: usize = 500;
 /// The most object states (before and after of one object count once) that the steps keep. The
 /// oldest steps lose their states first.
 pub const MAX_OBJECT_STATES: usize = 100_000;
+/// The most bytes (an estimate) that the object states of all steps keep together. The oldest
+/// steps lose their states first, and a single step above the budget loses its own.
+pub const MAX_STATE_BYTES: u64 = 256 * 1024 * 1024;
 /// An agent that is silent this long (ms) starts a new session at its next call.
 pub const SESSION_GAP_MS: u64 = 30 * 60 * 1000;
 
@@ -184,6 +187,25 @@ pub struct Step {
     pub data: Option<Arc<StepData>>,
     /// The person marked the step as seen (AGR-05).
     pub seen: bool,
+    /// The step was reverted (all its objects went back).
+    pub reverted: bool,
+    /// The record is not complete: the history limit dropped part of what the call did while it
+    /// ran, so the objects of the step are only the ones that were kept. Such a step cannot be
+    /// reverted.
+    pub partial: bool,
+    /// What the step was.
+    pub kind: StepKind,
+}
+
+/// What a step of the log was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepKind {
+    /// A call or script run that changed the document.
+    Call,
+    /// The agent took back the last undo step (which may be a step of the person).
+    Undo,
+    /// The agent redid a step.
+    Redo,
 }
 
 impl Step {
@@ -218,6 +240,8 @@ pub struct Recorded {
     pub revision: u64,
     pub serials: Vec<u64>,
     pub data: StepData,
+    pub partial: bool,
+    pub kind: StepKind,
 }
 
 /// The session that a call belongs to.
@@ -243,6 +267,7 @@ pub struct ActivityLog {
     /// Sessions for which a version was tried.
     versioned: Vec<u64>,
     states: usize,
+    state_bytes: u64,
     /// Changes whenever the log changes, for a view that caches.
     generation: u64,
     /// Sessions whose version could not be saved: (session, why).
@@ -334,13 +359,18 @@ impl ActivityLog {
     /// Says that the version at the start of a session could not be saved.
     pub fn note_version_failure(&mut self, session: u64, why: String) {
         self.version_notes.push((session, why));
-        self.version_notes.truncate(64);
+        if self.version_notes.len() > 64 {
+            self.version_notes.remove(0);
+        }
         self.generation += 1;
     }
 
     /// Says which version was saved at the start of a session.
     pub fn set_session_version(&mut self, session: u64, version: u64) {
         self.session_versions.push((session, version));
+        if self.session_versions.len() > 256 {
+            self.session_versions.remove(0);
+        }
         self.generation += 1;
     }
 
@@ -367,6 +397,7 @@ impl ActivityLog {
         self.next_id += 1;
         let id = self.next_id;
         self.states += states(&r.data);
+        self.state_bytes += r.data.approx_bytes();
         let session = self.session_of(r.conn).unwrap_or(0);
         self.steps.push_back(Step {
             id,
@@ -379,6 +410,9 @@ impl ActivityLog {
             summary: Summary::of(&r.data),
             data: Some(Arc::new(r.data)),
             seen: false,
+            reverted: false,
+            partial: r.partial,
+            kind: r.kind,
         });
         self.bound();
         self.generation += 1;
@@ -391,15 +425,31 @@ impl ActivityLog {
                 && let Some(d) = old.data
             {
                 self.states = self.states.saturating_sub(states(&d));
+                self.state_bytes = self.state_bytes.saturating_sub(d.approx_bytes());
             }
         }
-        // The oldest steps lose their states first; the newest step always keeps its own.
+        // The oldest steps lose their states first. The newest step is bound too: a single step
+        // above the budget keeps its counts and its summary and loses its states (the panel says
+        // so, and the step cannot be reverted).
         let mut i = 0;
-        while self.states > MAX_OBJECT_STATES && i + 1 < self.steps.len() {
+        while (self.states > MAX_OBJECT_STATES || self.state_bytes > MAX_STATE_BYTES)
+            && i < self.steps.len()
+        {
             if let Some(d) = self.steps[i].data.take() {
                 self.states = self.states.saturating_sub(states(&d));
+                self.state_bytes = self.state_bytes.saturating_sub(d.approx_bytes());
             }
             i += 1;
+        }
+    }
+
+    /// Marks a step as reverted.
+    pub fn set_reverted(&mut self, id: u64) {
+        if let Some(s) = self.steps.iter_mut().find(|s| s.id == id)
+            && !s.reverted
+        {
+            s.reverted = true;
+            self.generation += 1;
         }
     }
 
@@ -438,6 +488,7 @@ impl ActivityLog {
         self.steps.clear();
         self.sessions.clear();
         self.states = 0;
+        self.state_bytes = 0;
         self.version_notes.clear();
         self.session_versions.clear();
         self.versioned.clear();
@@ -486,6 +537,8 @@ mod tests {
             revision: ed.revision(),
             serials,
             data,
+            partial: false,
+            kind: StepKind::Call,
         })
     }
 
@@ -641,9 +694,18 @@ mod tests {
             revision: 0,
             serials: vec![],
             data: big,
+            partial: false,
+            kind: StepKind::Call,
         });
         assert!(log.steps().front().unwrap().data.is_none());
-        assert!(log.steps().back().unwrap().data.is_some());
+        assert!(
+            log.steps().back().unwrap().data.is_none(),
+            "a single step above the budget loses its own states"
+        );
+        assert_eq!(
+            log.steps().back().unwrap().summary.objects.added,
+            MAX_OBJECT_STATES + 1
+        );
     }
 
     #[test]

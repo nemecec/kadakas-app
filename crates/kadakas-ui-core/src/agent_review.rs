@@ -43,6 +43,9 @@ pub struct Entry {
     pub before: Option<Object>,
     /// How it is now (`None` for a removed object).
     pub after: Option<Object>,
+    /// The person (or another user) changed the object after the agent: what is drawn is not
+    /// what the agent left.
+    pub edited_later: bool,
 }
 
 /// The changes of a scope, read against a document.
@@ -89,31 +92,39 @@ impl ReviewSet {
                 continue;
             };
             let now = doc.object(id);
+            // What the agent did is read from the agent's own states (before the first step,
+            // after the last). What the person did to the object afterwards is told apart: it
+            // never turns an unchanged object of the agent into a change of the agent.
             let entry = match (first_before, last_after, now) {
                 // Made by the agent, and still there.
-                (None, _, Some(now)) => Some((Status::Added, None, Some(now.clone()))),
-                // Made by the agent and deleted since.
-                (None, _, None) => None,
-                // Removed by the agent, and still gone.
-                (Some(before), None, None) => Some((Status::Removed, Some(before), None)),
-                // Removed by the agent and back again (revert, or a new object with this ID):
-                // a change if it differs.
-                (Some(before), None, Some(now)) => {
-                    (*now != before).then(|| (Status::Changed, Some(before), Some(now.clone())))
+                (None, Some(agent), Some(now)) => {
+                    Some((Status::Added, None, Some(now.clone()), *now != agent))
                 }
+                // Made and removed by the agent, or deleted by the person since.
+                (None, _, _) => None,
+                // Removed by the agent, and still gone.
+                (Some(before), None, None) => Some((Status::Removed, Some(before), None, false)),
+                // Removed by the agent and back again (a revert, or the person made it again).
+                (Some(_), None, Some(_)) => None,
                 // Changed by the agent, and deleted by the person since.
                 (Some(_), Some(_), None) => None,
-                (Some(before), Some(_), Some(now)) => {
-                    (*now != before).then(|| (Status::Changed, Some(before), Some(now.clone())))
-                }
+                (Some(before), Some(agent), Some(now)) => (before != agent).then(|| {
+                    (
+                        Status::Changed,
+                        Some(before),
+                        Some(now.clone()),
+                        *now != agent,
+                    )
+                }),
             };
-            if let Some((status, before, after)) = entry {
+            if let Some((status, before, after, edited_later)) = entry {
                 set.entries.push(Entry {
                     id,
                     status,
                     step,
                     before,
                     after,
+                    edited_later,
                 });
             }
         }
@@ -134,6 +145,11 @@ impl ReviewSet {
 
     pub fn get(&self, id: ObjectId) -> Option<&Entry> {
         self.entries.iter().find(|e| e.id == id)
+    }
+
+    /// How many objects were changed again after the agent.
+    pub fn edited_later(&self) -> usize {
+        self.entries.iter().filter(|e| e.edited_later).count()
     }
 
     pub fn counts(&self) -> Counts {
@@ -297,7 +313,7 @@ pub fn object_diff(before: &Object, after: &Object) -> Vec<PropChange> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kadakas_core::activity::{ActivityLog, Recorded};
+    use kadakas_core::activity::{ActivityLog, Recorded, StepKind};
     use kadakas_core::command::{Command, Editor};
     use kadakas_core::model::Shape;
 
@@ -337,6 +353,8 @@ mod tests {
             revision: ed.revision(),
             serials,
             data,
+            partial: false,
+            kind: StepKind::Call,
         })
         .unwrap()
     }

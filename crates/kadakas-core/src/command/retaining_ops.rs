@@ -52,7 +52,7 @@ impl Tx<'_> {
     }
 
     /// Makes the wall of a pad follow the pad.
-    fn retaining_sync(&mut self, pad: ObjectId) {
+    pub(super) fn retaining_sync(&mut self, pad: ObjectId) {
         let Some(o) = self.doc.object(pad) else {
             return;
         };

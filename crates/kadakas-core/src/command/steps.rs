@@ -108,6 +108,45 @@ impl StepData {
             || self.issues
     }
 
+    /// The change the other way round: what an undo of the step did.
+    pub fn inverted(&self) -> StepData {
+        let flip = |c: Counts| Counts {
+            added: c.removed,
+            changed: c.changed,
+            removed: c.added,
+        };
+        StepData {
+            objects: self
+                .objects
+                .iter()
+                .map(|c| ObjChange {
+                    id: c.id,
+                    before: c.after.clone(),
+                    after: c.before.clone(),
+                    index: None,
+                })
+                .collect(),
+            layers: flip(self.layers),
+            classes: flip(self.classes),
+            resources: flip(self.resources),
+            layers_added: Vec::new(),
+            document: self.document,
+            versions: self.versions,
+            issues: self.issues,
+        }
+    }
+
+    /// A rough size in bytes, for the budget of the activity log.
+    pub fn approx_bytes(&self) -> u64 {
+        self.objects
+            .iter()
+            .map(|c| {
+                c.before.as_ref().map_or(0, object_bytes) + c.after.as_ref().map_or(0, object_bytes)
+            })
+            .sum::<u64>()
+            + 256
+    }
+
     /// True if the step changed nothing that a person sees.
     pub fn is_empty(&self) -> bool {
         self.objects.is_empty() && !self.has_snapshot_parts()
@@ -141,6 +180,13 @@ pub enum ConflictKind {
     LayerLocked,
     /// Its class is gone.
     ClassGone,
+    /// Its layer or class is grey (the editor refuses to edit it).
+    Grey,
+    /// Something it refers to is gone: a resource, its group, or an object it is anchored to.
+    MissingRef,
+    /// Something made after the step hangs on it (a data tag, the wall of a pad, a dimension, a
+    /// member of a group, a site model); removing it would delete or change that work.
+    UsedLater,
 }
 
 /// An object that the revert would have to overwrite or cannot put back.
@@ -157,6 +203,8 @@ pub enum Refusal {
     Gone,
     /// The step is undone already.
     AlreadyUndone,
+    /// Every object of the step is as it was before the step, or gone: there is nothing to do.
+    NothingToDo,
     /// Objects of the step were touched later; none was changed.
     Conflicts(Vec<Conflict>),
     /// The step changed layers, classes, resources, settings, versions or issues, and later steps
@@ -180,8 +228,12 @@ impl std::fmt::Display for Refusal {
                 "the step is not in the undo history any more (the history limit dropped it, or a newer change cleared it)"
             ),
             Refusal::AlreadyUndone => write!(f, "the step is undone already"),
+            Refusal::NothingToDo => write!(
+                f,
+                "nothing to revert: the objects of the step are back as they were, or gone"
+            ),
             Refusal::Conflicts(list) => {
-                let mut counts = [0usize; 6];
+                let mut counts = [0usize; 9];
                 for c in list {
                     counts[c.kind as usize] += 1;
                 }
@@ -192,6 +244,9 @@ impl std::fmt::Display for Refusal {
                     "on a layer that is gone",
                     "on a locked layer",
                     "in a class that is gone",
+                    "on a grey layer or class",
+                    "missing what they refer to",
+                    "used by work made later",
                 ];
                 let parts: Vec<String> = counts
                     .iter()
@@ -384,44 +439,119 @@ impl Editor {
         }
     }
 
-    /// The objects of the step that cannot go back now, and the objects of it that were deleted
-    /// since and need nothing.
-    pub fn revert_conflicts(&self, data: &StepData) -> (Vec<Conflict>, Vec<ObjectId>) {
+    /// The step that the last undo or redo moved, and whether it was a redo.
+    pub fn last_moved(&self) -> Option<(u64, bool)> {
+        self.last_moved
+    }
+
+    /// True if the history limit dropped a step made since the mark (the record of a call is then
+    /// not complete).
+    pub fn trimmed_since(&self, mark: u64) -> bool {
+        self.max_trimmed_serial >= mark
+    }
+
+    /// The objects of the step that cannot go back now, and the objects that need nothing (the
+    /// step made them and they are deleted since, or they are as they were before the step).
+    ///
+    /// Every object must be exactly as the step left it. Besides that, the ones that go back must
+    /// be allowed to: the layer is there and not locked or grey, the class is not grey, what the
+    /// object refers to exists, and nothing that was made later depends on an object that the
+    /// revert removes (a data tag, a wall of a pad, a dimension, a member of a group, a site
+    /// model that names it).
+    pub fn revert_conflicts(&mut self, data: &StepData) -> (Vec<Conflict>, Vec<ObjectId>) {
+        let step_ids: HashSet<ObjectId> = data.objects.iter().map(|c| c.id).collect();
+        let removal: HashSet<ObjectId> = data
+            .objects
+            .iter()
+            .filter(|c| {
+                c.before.is_none()
+                    && self
+                        .doc
+                        .object(c.id)
+                        .is_some_and(|cur| Some(cur) == c.after.as_ref())
+            })
+            .map(|c| c.id)
+            .collect();
+        let used = dependants(&self.doc, &removal, &step_ids);
+        // Objects that exist after the revert and were not there before it.
+        let back: HashSet<ObjectId> = data
+            .objects
+            .iter()
+            .filter(|c| c.before.is_some() && self.doc.object(c.id).is_none())
+            .map(|c| c.id)
+            .collect();
         let mut conflicts = Vec::new();
-        let mut gone = Vec::new();
-        let doc = &self.doc;
-        let place_ok = |layer: LayerId, class: ClassId| -> Option<ConflictKind> {
-            match doc.layer(layer) {
-                None => return Some(ConflictKind::LayerGone),
-                Some(l) if l.locked => return Some(ConflictKind::LayerLocked),
-                Some(_) => {}
-            }
-            doc.class(class)
-                .is_none()
-                .then_some(ConflictKind::ClassGone)
+        let mut nothing = Vec::new();
+        let tx = Tx::new(&mut self.doc);
+        let refs = |o: &Object| -> Option<ConflictKind> {
+            None::<ConflictKind>
+                .or_else(|| tx.check_layer(o.layer).err().map(|e| kind_of(&e)))
+                .or_else(|| tx.check_class(o.class).err().map(|e| kind_of(&e)))
+                .or_else(|| {
+                    tx.doc
+                        .drawing
+                        .grey
+                        .classes
+                        .contains(&o.class)
+                        .then_some(ConflictKind::Grey)
+                })
+                .or_else(|| {
+                    tx.check_shape_refs(&o.shape)
+                        .err()
+                        .map(|_| ConflictKind::MissingRef)
+                })
+                .or_else(|| {
+                    tx.check_attr_refs(&o.attrs)
+                        .err()
+                        .map(|_| ConflictKind::MissingRef)
+                })
+                .or_else(|| {
+                    let gone = |id: ObjectId| {
+                        removal.contains(&id)
+                            || (!back.contains(&id) && tx.doc.object(id).is_none())
+                    };
+                    let parent_gone = o.parent.is_some_and(gone);
+                    let anchor_gone = match &o.shape {
+                        Shape::Annotation(a) => a.depends_on().into_iter().any(gone),
+                        _ => false,
+                    };
+                    (parent_gone || anchor_gone).then_some(ConflictKind::MissingRef)
+                })
         };
         for ch in &data.objects {
-            let current = doc.object(ch.id);
+            let current = tx.doc.object(ch.id);
             let kind = match (&ch.before, &ch.after) {
                 (Some(before), None) => match current {
+                    Some(c) if c == before => {
+                        nothing.push(ch.id);
+                        None
+                    }
                     Some(_) => Some(ConflictKind::ExistsAgain),
-                    None => place_ok(before.layer, before.class),
+                    None => refs(before),
                 },
                 (None, Some(after)) => match current {
                     None => {
-                        gone.push(ch.id);
+                        nothing.push(ch.id);
                         None
                     }
-                    Some(c) if c == after => {
-                        place_ok(c.layer, c.class).filter(|k| *k == ConflictKind::LayerLocked)
-                    }
+                    Some(c) if c == after => tx
+                        .editable(ch.id)
+                        .err()
+                        .map(|e| kind_of(&e))
+                        .or_else(|| used.contains(&ch.id).then_some(ConflictKind::UsedLater)),
                     Some(_) => Some(ConflictKind::ChangedLater),
                 },
                 (Some(before), Some(after)) => match current {
                     None => Some(ConflictKind::DeletedLater),
-                    Some(c) if c == after => place_ok(c.layer, c.class)
-                        .filter(|k| *k == ConflictKind::LayerLocked)
-                        .or_else(|| place_ok(before.layer, before.class)),
+                    Some(c) if c == before && c != after => {
+                        nothing.push(ch.id);
+                        None
+                    }
+                    Some(c) if c == after => tx
+                        .editable(ch.id)
+                        .err()
+                        .map(|e| kind_of(&e))
+                        .or_else(|| refs(before)),
                     Some(_) => Some(ConflictKind::ChangedLater),
                 },
                 (None, None) => None,
@@ -430,12 +560,13 @@ impl Editor {
                 conflicts.push(Conflict { id: ch.id, kind });
             }
         }
-        (conflicts, gone)
+        (conflicts, nothing)
     }
 
     /// Takes one step (or the steps of one call) back although later steps exist. See the module
     /// text for the rules. `serials` are the steps, oldest first, and `data` is what they did
-    /// (kept by the activity log, so it does not depend on the history).
+    /// (kept by the activity log, so it does not depend on the history: a step that the history
+    /// forgot can still go back object by object).
     ///
     /// On success the revert is one undo step of its own, made by the current origin, so it can
     /// be undone. On an error nothing changed.
@@ -446,19 +577,21 @@ impl Editor {
         skip_conflicts: bool,
         allow_undo: bool,
     ) -> Result<RevertReport, Refusal> {
-        let mut above = usize::MAX;
-        for s in serials {
-            match self.step_place(*s) {
-                StepPlace::Undo(n) => above = above.min(n),
-                StepPlace::Redo => return Err(Refusal::AlreadyUndone),
-                StepPlace::Gone => return Err(Refusal::Gone),
-            }
+        let places: Vec<StepPlace> = serials.iter().map(|s| self.step_place(*s)).collect();
+        if places.contains(&StepPlace::Redo) {
+            return Err(Refusal::AlreadyUndone);
         }
-        if serials.is_empty() {
-            return Err(Refusal::Gone);
-        }
+        let above = places
+            .iter()
+            .filter_map(|p| match p {
+                StepPlace::Undo(n) => Some(*n),
+                _ => None,
+            })
+            .min()
+            .unwrap_or(0);
         // On top of the history: a plain undo is exact and can be redone.
-        let top = serials.len() <= self.undo.len()
+        let top = !serials.is_empty()
+            && serials.len() <= self.undo.len()
             && self
                 .undo
                 .iter()
@@ -496,15 +629,13 @@ impl Editor {
             .filter(|c| !skip.contains(&c.id) && !gone.contains(&c.id))
             .collect();
         if todo.is_empty() {
-            return if conflicts.is_empty() {
-                Ok(RevertReport {
-                    already_gone,
-                    ..Default::default()
-                })
+            return Err(if conflicts.is_empty() {
+                Refusal::NothingToDo
             } else {
-                Err(Refusal::Conflicts(conflicts))
-            };
+                Refusal::Conflicts(conflicts)
+            });
         }
+        let step_ids: HashSet<ObjectId> = data.objects.iter().map(|c| c.id).collect();
         let outcome = self.transact(
             || "revert".to_string(),
             None,
@@ -519,14 +650,32 @@ impl Editor {
                     let all = tx.with_group_members(&remove);
                     if let Some(extra) = all.iter().find(|i| !remove.contains(i)) {
                         return Err(CommandError::Invalid(format!(
-                            "object {extra} was made later and goes with the objects of the step"
+                            "{USED_MARK}: object {extra} was made later and goes with the objects of the step"
                         )));
                     }
                     tx.run(
-                        &Command::DeleteObjects { ids: remove },
+                        &Command::DeleteObjects { ids: remove.clone() },
                         &mut Outcome::default(),
                     )?;
+                    // The delete takes along what hangs on the objects (data tags, walls of a
+                    // pad) and changes what is anchored to them. Nothing outside the step may be
+                    // touched this way.
+                    let touched: Vec<ObjectId> = tx
+                        .before
+                        .keys()
+                        .copied()
+                        .chain(tx.removed.iter().map(|(_, id)| *id))
+                        .collect();
+                    if let Some(extra) = touched
+                        .iter()
+                        .find(|i| !step_ids.contains(i) && !remove.contains(i))
+                    {
+                        return Err(CommandError::Invalid(format!(
+                            "{USED_MARK}: object {extra} was made later and depends on the objects of the step"
+                        )));
+                    }
                 }
+                let mut restored: HashSet<ObjectId> = HashSet::new();
                 for c in todo
                     .iter()
                     .filter(|c| c.before.is_some() && c.after.is_some())
@@ -536,6 +685,7 @@ impl Editor {
                     if let (Some(slot), Some(before)) = (tx.doc.object_mut(c.id), &c.before) {
                         *slot = before.clone();
                     }
+                    restored.insert(c.id);
                 }
                 let mut back: Vec<&&ObjChange> =
                     todo.iter().filter(|c| c.after.is_none()).collect();
@@ -548,6 +698,15 @@ impl Editor {
                     tx.added.push(o.id);
                     tx.added_set.insert(o.id);
                     tx.doc.objects.shift_insert(at, o.id, o.clone());
+                    restored.insert(o.id);
+                }
+                // What follows the objects (dimensions, callouts, tags, the wall of a pad) is
+                // made again from the objects as they are now, as after any other command.
+                if !restored.is_empty() {
+                    tx.annot_sync(&restored, false, false);
+                    for id in &restored {
+                        tx.retaining_sync(*id);
+                    }
                 }
                 Ok(())
             },
@@ -559,12 +718,74 @@ impl Editor {
                 already_gone,
                 undone: false,
             }),
-            Err(CommandError::Invalid(why)) if why.contains("goes with the objects") => {
+            Err(CommandError::Invalid(why)) if why.starts_with(USED_MARK) => {
                 Err(Refusal::InUse(why))
             }
             Err(e) => Err(Refusal::Rejected(e.to_string())),
         }
     }
+}
+
+/// The start of the text of an error that means "something made later hangs on these objects".
+const USED_MARK: &str = "used later";
+
+fn kind_of(e: &CommandError) -> ConflictKind {
+    match e {
+        CommandError::LayerLocked(_) => ConflictKind::LayerLocked,
+        CommandError::NoLayer(_) => ConflictKind::LayerGone,
+        CommandError::NoClass(_) => ConflictKind::ClassGone,
+        CommandError::Invalid(m) if m.contains("grey") => ConflictKind::Grey,
+        _ => ConflictKind::MissingRef,
+    }
+}
+
+/// The objects among `removal` that something outside the step hangs on: a member of a group, a
+/// data tag, a dimension or callout anchored to it, the wall of a pad, a site model that names
+/// it. A revert that removed them would delete or change that work.
+fn dependants(
+    doc: &Document,
+    removal: &HashSet<ObjectId>,
+    step_ids: &HashSet<ObjectId>,
+) -> HashSet<ObjectId> {
+    let mut used = HashSet::new();
+    if removal.is_empty() {
+        return used;
+    }
+    for o in doc.objects.values() {
+        if removal.contains(&o.id) || step_ids.contains(&o.id) {
+            continue;
+        }
+        let mut hit = |id: ObjectId| {
+            if removal.contains(&id) {
+                used.insert(id);
+            }
+        };
+        if let Some(p) = o.parent {
+            hit(p);
+        }
+        if let Shape::Annotation(a) = &o.shape {
+            for d in a.depends_on() {
+                hit(d);
+            }
+        }
+        for key in [
+            super::retaining_ops::WALL_KEY,
+            crate::site::SITE_KEY,
+            super::retaining_ops::PAD_KEY,
+        ] {
+            if let Some(v) = o.data.get(key) {
+                let uid = v.as_str().and_then(crate::uid::Uid::parse).or_else(|| {
+                    v.get("wall")
+                        .and_then(|w| w.as_str())
+                        .and_then(crate::uid::Uid::parse)
+                });
+                if let Some(u) = uid {
+                    hit(ObjectId(u));
+                }
+            }
+        }
+    }
+    used
 }
 
 #[cfg(test)]
@@ -866,6 +1087,117 @@ mod tests {
             .unwrap();
         });
         assert_eq!(ed.revert_step(&s, &d, false, false), Err(Refusal::Shared));
+    }
+
+    #[test]
+    fn work_that_hangs_on_an_object_of_the_step_blocks_its_removal() {
+        let mut ed = Editor::with_sequential_ids();
+        let (s, d) = step(&mut ed, |e| {
+            let a = add(e, 0.0);
+            let b = add(e, 10.0);
+            e.execute(&Command::Group {
+                ids: vec![a, b],
+                name: None,
+            })
+            .unwrap();
+        });
+        let group = d
+            .objects
+            .iter()
+            .find(|o| o.after.as_ref().is_some_and(|a| a.shape.kind() == "group"))
+            .unwrap()
+            .id;
+        // The person draws inside the group of the agent: the group itself is unchanged.
+        ed.execute(&Command::AddObjectIn {
+            parent: group,
+            shape: Shape::Line {
+                a: DVec2::new(50.0, 0.0),
+                b: DVec2::new(51.0, 1.0),
+            },
+            class: None,
+            attrs: Default::default(),
+            id: None,
+        })
+        .unwrap();
+        let before = ed.doc().clone();
+        let err = ed.revert_step(&s, &d, false, true).unwrap_err();
+        match err {
+            Refusal::Conflicts(list) => {
+                assert!(
+                    list.iter()
+                        .any(|c| c.id == group && c.kind == ConflictKind::UsedLater),
+                    "{list:?}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(ed.doc(), &before, "nothing changed, nothing deleted");
+    }
+
+    #[test]
+    fn a_step_that_the_history_forgot_goes_back_object_by_object() {
+        let mut ed = Editor::with_sequential_ids();
+        ed.set_history_limit(1);
+        let (s, d) = step(&mut ed, |e| {
+            add(e, 0.0);
+        });
+        add(&mut ed, 50.0);
+        add(&mut ed, 60.0);
+        assert_eq!(ed.step_place(s[0]), StepPlace::Gone);
+        let r = ed.revert_step(&s, &d, false, true).unwrap();
+        assert_eq!(r.reverted.len(), 1);
+        assert_eq!(ed.doc().objects.len(), 2);
+        // Again: every object is back as it was.
+        assert_eq!(
+            ed.revert_step(&s, &d, false, true),
+            Err(Refusal::NothingToDo)
+        );
+    }
+
+    #[test]
+    fn what_a_step_would_not_need_to_do_is_not_a_success() {
+        let mut ed = Editor::with_sequential_ids();
+        let (s, d) = step(&mut ed, |e| {
+            add(e, 0.0);
+        });
+        let id = d.objects[0].id;
+        add(&mut ed, 5.0);
+        ed.execute(&Command::DeleteObjects { ids: vec![id] })
+            .unwrap();
+        assert_eq!(
+            ed.revert_step(&s, &d, false, true),
+            Err(Refusal::NothingToDo)
+        );
+    }
+
+    #[test]
+    fn the_inverted_change_swaps_before_and_after() {
+        let mut ed = Editor::with_sequential_ids();
+        let (_, d) = step(&mut ed, |e| {
+            add(e, 0.0);
+        });
+        let inv = d.inverted();
+        assert_eq!(inv.object_counts().removed, 1);
+        assert_eq!(inv.object_counts().added, 0);
+        assert!(d.approx_bytes() > 0);
+    }
+
+    #[test]
+    fn the_editor_tells_which_step_the_last_undo_moved_and_what_the_limit_dropped() {
+        let mut ed = Editor::with_sequential_ids();
+        let (s, _) = step(&mut ed, |e| {
+            add(e, 0.0);
+        });
+        assert!(ed.undo());
+        assert_eq!(ed.last_moved(), Some((s[0], false)));
+        assert!(ed.redo());
+        assert_eq!(ed.last_moved(), Some((s[0], true)));
+        let mark = ed.serial_mark();
+        assert!(!ed.trimmed_since(mark));
+        ed.set_history_limit(1);
+        add(&mut ed, 5.0);
+        add(&mut ed, 6.0);
+        assert!(ed.trimmed_since(mark));
     }
 
     #[test]

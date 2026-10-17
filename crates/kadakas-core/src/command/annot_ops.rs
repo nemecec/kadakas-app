@@ -125,7 +125,7 @@ impl Tx<'_> {
     /// Updates annotations that follow one of the `changed` objects, or that are in `changed`
     /// themselves (`moved`: they were moved by hand). With `all`, every object that the
     /// transaction changed so far (`before` and `added_set`) counts as changed too.
-    fn annot_sync(&mut self, changed: &HashSet<ObjectId>, all: bool, moved: bool) {
+    pub(super) fn annot_sync(&mut self, changed: &HashSet<ObjectId>, all: bool, moved: bool) {
         // The objects the command touched count too: a group move changes its members, not only
         // the ids it names.
         let with_touched = all || !changed.is_empty();

@@ -127,7 +127,7 @@ mod x3d_material_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod x3d_tests;
 
-pub use agent_activity_api::{Advice, StepCheck, StepError};
+pub use agent_activity_api::{Advice, StepCheck, StepError, Why, may_change_document};
 use kadakas_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
 pub use limits::{DEFAULT_DOCUMENT_FILE_BYTES, STRICT_DOCUMENT_FILE_BYTES, SessionLimits};
 
@@ -229,6 +229,9 @@ pub struct Session {
     /// `set_session_version`). Off by default; the app turns it on. The setting stays when the
     /// document is replaced.
     session_version: bool,
+    /// The person undid steps of their own with Undo to here: calls of the agent that change the
+    /// document wait while redo can bring those steps back (see `agent_hold`).
+    agent_hold: bool,
 }
 
 /// The caches of the ghosts of a compare (see `svg_of`). They belong to one old document, which
@@ -1053,6 +1056,7 @@ impl Session {
             tainted: false,
             activity: Default::default(),
             session_version: false,
+            agent_hold: false,
         }
     }
 

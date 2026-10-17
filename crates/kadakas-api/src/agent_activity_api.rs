@@ -2,22 +2,24 @@
 //!
 //! Each call or script run of an agent that changed the document is one step of the log
 //! (`kadakas_core::activity`). The session records it in [`Session::handle_as`] (origin `Agent`),
-//! and saves a named version before the first change of an agent session. The method
-//! `agent.activity` lists the steps and the objects of one step. It only reads: the revert of a
-//! step is a decision of the person, made in the app ([`Session::revert_agent_step`]).
+//! also when the call failed after it had made changes, and the host may ask for a named version
+//! before the first change of an agent session. The method `agent.activity` lists the steps and
+//! the objects of one step. It only reads: the revert of a step is a decision of the person, made
+//! in the app ([`Session::revert_agent_step`]).
 
-use kadakas_core::activity::{Recorded, Step};
+use kadakas_core::activity::{Recorded, Step, StepKind};
 use kadakas_core::change::Origin;
-use kadakas_core::command::{Conflict, Counted, RevertReport, StepPlace};
+use kadakas_core::command::{Conflict, Counted, Refusal, RevertReport, StepPlace};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::errors::RpcError;
+use crate::script_js_api::policy::{Class, class_of};
 use crate::{Session, params, review_api};
 
 pub const AGENT_ACTIVITY: (&str, &str) = (
     "agent.activity",
-    "The steps of the agent: each call or script run that changed the document (read only). params: {step?, since?, limit?}. Without step: {steps: [{id, session, time_ms, method, summary, counts {objects {added, changed, removed}, layers, classes, resources}, seen, state (active | undone | gone), revertible, session_version? (the version saved before the session; render.png {compare: {from: <it>, to: \"current\"}} draws the changes of the session), version_note?}], last_id, total}; since: only steps after this id; limit: at most this many, the newest (default 50, at most 500). With step: the same entry plus {objects {added, changed, removed} (IDs, at most 1000 each), truncated, blocked? (why the person cannot revert it now)}. The summary is written from the change set. The person sees the same list in the Activity panel and can undo or revert a step there; you cannot.",
+    "The steps of the agent: each call or script run that changed the document (read only), also a call that failed after it had made changes, and an undo or redo of the agent. params: {step?, since?, limit?}. Without step: {steps: [{id, session, time_ms, method, kind (call | undo | redo), summary, counts {objects {added, changed, removed}, layers, classes, resources}, seen, reverted, partial (the history limit dropped part of the record), state (active | undone | gone), revertible (null for the older steps of a long list), session_version? (the version saved before the session; render.png {compare: {from: <it>, to: \"current\"}} draws the changes of the session), version_note?}], last_id, total}; since: only steps after this id; limit: at most this many, the newest (default 50, at most 500). With step: the same entry plus {objects {added, changed, removed} (IDs, at most 1000 each), truncated, blocked? (why the person cannot revert it now)}. The summary is written from the change set. The person sees the same list in the Activity panel and can undo or revert a step there; you cannot. While the person has undone steps of their own with Undo to here and can redo them, your calls that change the document fail with a conflict (reason redo_pending) until the person redoes them or releases the hold.",
 );
 
 #[derive(Deserialize, Default)]
@@ -30,6 +32,33 @@ struct ActivityParams {
 
 const MAX_LIMIT: usize = 500;
 const MAX_IDS: usize = 1000;
+/// The list gives `revertible` for this many of the newest steps (each check looks at every
+/// object of the step).
+const CHECKED: usize = 50;
+
+/// Why a revert of the whole step is not possible now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Why {
+    /// The step is an undo or redo of the agent, not a change.
+    NotACall,
+    /// The history limit dropped part of the record.
+    Partial,
+    /// Reverted already.
+    Reverted,
+    /// Undone (redo brings it back).
+    Undone,
+    /// The log holds no states of the step any more.
+    Dropped,
+    /// The step also changed layers, classes, resources, settings, versions or issues, and later
+    /// steps exist.
+    Snapshot,
+    /// As `Snapshot`, in a shared document.
+    Shared,
+    /// This many objects cannot go back.
+    Conflicts(usize),
+    /// Every object is back already, or gone.
+    NothingToDo,
+}
 
 /// What the app needs to know before it offers a revert.
 #[derive(Clone, Debug, PartialEq)]
@@ -42,7 +71,7 @@ pub struct StepCheck {
     pub above_other: usize,
     /// Objects of the step that something changed later, deleted later, and so on.
     pub conflicts: Vec<Conflict>,
-    /// Objects that the step made and that are deleted since.
+    /// Objects that need nothing: made by the step and deleted since, or back as they were.
     pub already_gone: usize,
     /// More than objects changed and later steps exist: only an undo back to the step works.
     pub snapshot_blocked: bool,
@@ -51,56 +80,69 @@ pub struct StepCheck {
     /// The session is connected to a shared document: the editor's own undo is not used (the
     /// collaboration has a per-user undo), so only the revert of single objects works.
     pub shared: bool,
+    /// The step is a call (not an undo or redo of the agent).
+    pub is_call: bool,
+    /// The record of the step is not complete.
+    pub partial: bool,
+    /// The step was reverted.
+    pub reverted: bool,
 }
 
 impl StepCheck {
-    /// True if the step is on top of the history: a revert is a plain undo.
+    /// True if the step is on top of the history and the editor's own undo may take it back.
     pub fn on_top(&self) -> bool {
-        self.place == StepPlace::Undo(0)
+        self.place == StepPlace::Undo(0) && !self.shared
+    }
+
+    /// Why the whole step cannot go back now, or `None`.
+    pub fn why(&self) -> Option<Why> {
+        if !self.is_call {
+            return Some(Why::NotACall);
+        }
+        if self.partial {
+            return Some(Why::Partial);
+        }
+        if self.reverted {
+            return Some(Why::Reverted);
+        }
+        if self.place == StepPlace::Redo {
+            return Some(Why::Undone);
+        }
+        if self.on_top() {
+            return None;
+        }
+        if !self.details {
+            return Some(Why::Dropped);
+        }
+        if self.snapshot_blocked {
+            return Some(if self.shared {
+                Why::Shared
+            } else {
+                Why::Snapshot
+            });
+        }
+        if !self.conflicts.is_empty() {
+            return Some(Why::Conflicts(self.conflicts.len()));
+        }
+        if self.free == 0 {
+            return Some(Why::NothingToDo);
+        }
+        None
     }
 
     /// Why a revert (of all the objects) is not possible now, in English, or `None`.
     pub fn blocked(&self) -> Option<String> {
-        if self.shared && matches!(self.place, StepPlace::Undo(_)) {
-            if self.snapshot_blocked {
-                return Some(kadakas_core::command::Refusal::Shared.to_string());
-            }
-            if !self.details {
-                return Some(
-                    "the log no longer holds what the step changed (too many steps)".into(),
-                );
-            }
-            if !self.conflicts.is_empty() {
-                return Some(
-                    kadakas_core::command::Refusal::Conflicts(self.conflicts.clone()).to_string(),
-                );
-            }
-            return None;
-        }
-        match self.place {
-            StepPlace::Redo => return Some("the step is undone already".into()),
-            StepPlace::Gone => {
-                return Some(
-                    "the step is not in the undo history any more (the history limit dropped it, or a newer change cleared it)".into(),
-                );
-            }
-            StepPlace::Undo(0) => return None,
-            StepPlace::Undo(_) => {}
-        }
-        if !self.details {
-            return Some("the log no longer holds what the step changed (too many steps)".into());
-        }
-        if self.snapshot_blocked {
-            return Some(
-                "the step also changed layers, classes, resources, settings, versions or issues, and later steps exist: use undo back to the step".into(),
-            );
-        }
-        if !self.conflicts.is_empty() {
-            return Some(
-                kadakas_core::command::Refusal::Conflicts(self.conflicts.clone()).to_string(),
-            );
-        }
-        None
+        Some(match self.why()? {
+            Why::NotACall => "the step is an undo or redo of the agent, not a change".into(),
+            Why::Partial => "the history limit dropped part of the record of this step, so it cannot be reverted".into(),
+            Why::Reverted => "the step was reverted already".into(),
+            Why::Undone => "the step is undone already".into(),
+            Why::Dropped => "the log no longer holds what the step changed (too many steps)".into(),
+            Why::Snapshot => Refusal::Snapshot { later: self.above }.to_string(),
+            Why::Shared => Refusal::Shared.to_string(),
+            Why::Conflicts(_) => Refusal::Conflicts(self.conflicts.clone()).to_string(),
+            Why::NothingToDo => Refusal::NothingToDo.to_string(),
+        })
     }
 }
 
@@ -121,28 +163,34 @@ pub enum Advice {
 
 impl StepCheck {
     pub fn advice(&self) -> Advice {
-        if self.shared {
-            // A new edit of the objects, never an undo of the editor.
-            return match self.place {
-                StepPlace::Undo(_) if self.snapshot_blocked || !self.details => Advice::Nothing,
-                StepPlace::Undo(_) if self.conflicts.is_empty() => Advice::Revert,
-                StepPlace::Undo(_) if self.free > 0 => Advice::Partial {
-                    free: self.free,
-                    blocked: self.conflicts.len(),
-                },
-                _ => Advice::Nothing,
+        if !self.is_call || self.partial || self.reverted || self.place == StepPlace::Redo {
+            return Advice::Nothing;
+        }
+        if self.on_top() {
+            return Advice::Undo;
+        }
+        let undo_back = matches!(self.place, StepPlace::Undo(_)) && !self.shared;
+        if !self.details || self.snapshot_blocked {
+            return if undo_back && !self.partial && self.is_call {
+                Advice::UndoBackOnly
+            } else {
+                Advice::Nothing
             };
         }
-        match self.place {
-            StepPlace::Undo(0) => Advice::Undo,
-            StepPlace::Undo(_) if self.snapshot_blocked => Advice::UndoBackOnly,
-            StepPlace::Undo(_) if !self.details => Advice::UndoBackOnly,
-            StepPlace::Undo(_) if self.conflicts.is_empty() => Advice::Revert,
-            StepPlace::Undo(_) if self.free > 0 => Advice::Partial {
+        if self.conflicts.is_empty() {
+            return if self.free > 0 {
+                Advice::Revert
+            } else {
+                Advice::Nothing
+            };
+        }
+        if self.free > 0 {
+            Advice::Partial {
                 free: self.free,
                 blocked: self.conflicts.len(),
-            },
-            _ => Advice::Nothing,
+            }
+        } else {
+            Advice::Nothing
         }
     }
 }
@@ -154,7 +202,9 @@ pub enum StepError {
     Unknown,
     /// The log no longer holds the object states of the step.
     DetailsDropped,
-    Refused(kadakas_core::command::Refusal),
+    /// The step is not a change (an undo or redo of the agent), or its record is partial.
+    NotRevertible(Why),
+    Refused(Refusal),
 }
 
 impl std::fmt::Display for StepError {
@@ -165,67 +215,85 @@ impl std::fmt::Display for StepError {
                 f,
                 "the log no longer holds what the step changed (too many steps)"
             ),
+            StepError::NotRevertible(Why::Partial) => write!(
+                f,
+                "the history limit dropped part of the record of this step, so it cannot be reverted"
+            ),
+            StepError::NotRevertible(_) => {
+                write!(f, "the step is an undo or redo of the agent, not a change")
+            }
             StepError::Refused(r) => write!(f, "{r}"),
         }
     }
 }
 
-/// Methods that cannot change the document, by the end or the start of their name. A call that is
-/// not one of them may start an agent session: a version is saved first. A wrong guess costs one
-/// extra version (a read call taken for a change) or none (a change taken for a read).
-fn reads_only(method: &str) -> bool {
-    let domain = method.split('.').next().unwrap_or("");
-    let last = method.rsplit('.').next().unwrap_or(method);
-    matches!(
-        domain,
-        "view"
-            | "render"
-            | "events"
-            | "report"
-            | "describe"
-            | "agent"
-            | "file"
-            | "document"
-            | "export"
-            | "collab"
-            | "feedback"
-            | "version"
-            | "issue"
-            | "undo"
-            | "redo"
-            | "selection"
-    ) || matches!(
-        last,
-        "get"
-            | "list"
-            | "summary"
-            | "describe"
-            | "query"
-            | "diff"
-            | "poll"
-            | "check"
-            | "find"
-            | "status"
-            | "schema"
-            | "measure"
-            | "pointed"
-            | "subscribe"
-            | "unsubscribe"
-    )
+/// True if the method may change the document, by the classes of the script policy
+/// (`script_js_api/policy.rs`): `Read` and `Ui` methods cannot. A method that nobody classified
+/// counts as one that may.
+pub fn may_change_document(method: &str) -> bool {
+    match class_of(method) {
+        Some(Class::Read | Class::Ui) => false,
+        // A script never calls these; most of them end a run or change the session. Those that
+        // only talk are no change.
+        Some(Class::Never) => {
+            !(method.starts_with("events.")
+                || method.starts_with("feedback.")
+                || method == "collab.status"
+                || method == "collab.presence")
+        }
+        // Files: a save or an export reads the document and writes a file.
+        Some(Class::Files) => !(method.starts_with("export") || method.starts_with("file.save")),
+        _ => true,
+    }
 }
+
+/// True if a call starts the version "Before agent session" first: a call that may change the
+/// drawing. The calls that make a version, answer a review issue, move through the history or
+/// replace the document themselves do not.
+fn starts_session_version(method: &str) -> bool {
+    let domain = method.split('.').next().unwrap_or("");
+    may_change_document(method)
+        && !matches!(
+            domain,
+            "version"
+                | "issue"
+                | "undo"
+                | "redo"
+                | "document"
+                | "file"
+                | "collab"
+                | "agent"
+                | "selection"
+        )
+}
+
+/// The length of a hold on the agent when the person has undone steps of their own.
+const HOLD_REASON: &str = "the person undid steps of their own with Undo to here and can still redo them; an edit now would delete those steps. Wait until they redo them or release the hold (the call changes nothing), then try again";
 
 impl Session {
     /// Turns on the version "Before agent session": the first call that may change the document
     /// in an agent session (a new connection, or a call after 30 minutes of silence) saves one
-    /// first. It is a change of the history of the document (an undo step, and a read of the
-    /// history of a file that waits unread), so a host turns it on where a person reviews the
-    /// work of an agent (the app does). Off by default.
+    /// first. It is a change of the history of the document (an undo step of its own, below the
+    /// first step of the agent, and a read of the history of a file that waits unread), so a host
+    /// turns it on where a person reviews the work of an agent (the app does). Off by default.
     pub fn set_session_version(&mut self, on: bool) {
         self.session_version = on;
     }
 
     pub fn session_version_enabled(&self) -> bool {
         self.session_version
+    }
+
+    /// True while agent calls that change the document are held: the person undid steps of their
+    /// own with Undo to here, and redo can still bring them back (a new edit would delete them).
+    pub fn agent_hold(&self) -> bool {
+        self.agent_hold && self.editor.can_redo()
+    }
+
+    /// The person lets the agent go on: the undone steps stay undone and can no longer be redone
+    /// after the next edit of the agent.
+    pub fn release_agent_hold(&mut self) {
+        self.agent_hold = false;
     }
 
     /// Runs a request of an agent and records the step. See [`Session::handle_as`].
@@ -237,29 +305,74 @@ impl Session {
     ) -> Result<Value, RpcError> {
         let now = review_api::default_now();
         let started = self.activity.touch(conn, now);
-        if self.session_version && started.needs_version && !reads_only(method) {
+        let changes = may_change_document(method);
+        if !self.editor.can_redo() {
+            self.agent_hold = false;
+        }
+        if changes && self.agent_hold && !matches!(method, "undo" | "redo") {
+            return Err(RpcError::conflict(HOLD_REASON).with_reason("redo_pending"));
+        }
+        if self.session_version && started.needs_version && starts_session_version(method) {
             self.activity.version_attempted(started.session);
             self.save_session_version(started.session, now);
         }
         let mark = self.editor.serial_mark();
         let revision = self.editor.revision();
-        let result = self.handle(method, p);
-        if result.is_ok() && self.editor.revision() != revision {
-            let serials = self.editor.steps_since(mark);
-            if !serials.is_empty()
-                && let Some(data) = self.editor.step_data(&serials)
-            {
-                self.activity.record(Recorded {
+        // A call that fails or panics after some changes has made steps: they are logged too, so
+        // the person sees what the agent did (the call itself does not roll back).
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle(method, p)));
+        if self.editor.revision() != revision {
+            self.record_call(conn, method, now, mark);
+        }
+        match result {
+            Ok(r) => r,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    /// Records what a call changed. An undo or redo of the agent is a step too (it can take back
+    /// a step of the person), but not one that can be reverted.
+    fn record_call(&mut self, conn: u64, method: &str, now: u64, mark: u64) {
+        let serials = self.editor.steps_since(mark);
+        let revision = self.editor.revision();
+        let recorded = if !serials.is_empty() {
+            self.editor.step_data(&serials).map(|data| Recorded {
+                conn,
+                method: method.to_string(),
+                time_ms: now,
+                revision,
+                serials,
+                data,
+                partial: self.editor.trimmed_since(mark),
+                kind: StepKind::Call,
+            })
+        } else if matches!(method, "undo" | "redo") {
+            self.editor.last_moved().and_then(|(serial, forward)| {
+                let data = self.editor.step_data(&[serial])?;
+                // An undo shows what it took away: the change of the step the other way round.
+                let data = if forward { data } else { data.inverted() };
+                Some(Recorded {
                     conn,
                     method: method.to_string(),
                     time_ms: now,
-                    revision: self.editor.revision(),
-                    serials,
+                    revision,
+                    serials: Vec::new(),
                     data,
-                });
-            }
+                    partial: false,
+                    kind: if forward {
+                        StepKind::Redo
+                    } else {
+                        StepKind::Undo
+                    },
+                })
+            })
+        } else {
+            None
+        };
+        if let Some(r) = recorded {
+            self.activity.record(r);
         }
-        result
     }
 
     /// The named version at the start of an agent session. A refusal (the limit of versions, a
@@ -284,10 +397,15 @@ impl Session {
         }
     }
 
-    /// Can the step be reverted now, and what stands in the way?
-    pub fn revert_check(&self, step_id: u64) -> Result<StepCheck, StepError> {
-        let step = self.activity.get(step_id).ok_or(StepError::Unknown)?;
-        let place = self.step_place(step);
+    /// Can the step be reverted now, and what stands in the way? Looks at every object of the
+    /// step, so a host asks when it needs the answer, not for every frame.
+    pub fn revert_check(&mut self, step_id: u64) -> Result<StepCheck, StepError> {
+        let step = self
+            .activity
+            .get(step_id)
+            .ok_or(StepError::Unknown)?
+            .clone();
+        let place = self.step_place(&step);
         let origins = step
             .serials
             .iter()
@@ -300,13 +418,13 @@ impl Session {
             .iter()
             .filter(|o| matches!(o, Origin::User | Origin::Remote))
             .count();
-        // The steps above the newest step of the call (they are not part of it).
         let shared = crate::collab_api::is_connected(self);
+        let is_call = step.kind == StepKind::Call && !step.serials.is_empty();
         let exact = matches!(place, StepPlace::Undo(0)) && !shared;
+        let analyse =
+            is_call && !step.partial && !step.reverted && place != StepPlace::Redo && !exact;
         let (conflicts, gone) = match &step.data {
-            Some(d) if matches!(place, StepPlace::Undo(_)) && !exact => {
-                self.editor.revert_conflicts(d)
-            }
+            Some(d) if analyse && !d.has_snapshot_parts() => self.editor.revert_conflicts(d),
             _ => (Vec::new(), Vec::new()),
         };
         let snapshot_blocked = step
@@ -324,6 +442,9 @@ impl Session {
             conflicts,
             snapshot_blocked,
             shared,
+            is_call,
+            partial: step.partial,
+            reverted: step.reverted,
         })
     }
 
@@ -347,12 +468,19 @@ impl Session {
     /// Takes one step of the agent back, although later steps exist (`Editor::revert_step`). The
     /// objects that something changed later stay as they are: with `skip_conflicts` the rest goes
     /// back, else nothing changes. One undo step of the person. The caller prunes the selection.
+    /// A step that the history forgot goes back object by object too.
     pub fn revert_agent_step(
         &mut self,
         step_id: u64,
         skip_conflicts: bool,
     ) -> Result<RevertReport, StepError> {
         let step = self.activity.get(step_id).ok_or(StepError::Unknown)?;
+        if step.kind != StepKind::Call || step.serials.is_empty() {
+            return Err(StepError::NotRevertible(Why::NotACall));
+        }
+        if step.partial {
+            return Err(StepError::NotRevertible(Why::Partial));
+        }
         let data = step.data.clone().ok_or(StepError::DetailsDropped)?;
         let serials = step.serials.clone();
         let allow_undo = !crate::collab_api::is_connected(self);
@@ -363,22 +491,39 @@ impl Session {
             .revert_step(&serials, &data, skip_conflicts, allow_undo);
         self.editor.set_origin(origin);
         self.prune_selection();
-        r.map_err(StepError::Refused)
+        match r {
+            Ok(report) => {
+                if report.skipped.is_empty() {
+                    self.activity.set_reverted(step_id);
+                }
+                Ok(report)
+            }
+            Err(e) => Err(StepError::Refused(e)),
+        }
     }
 
     /// Takes back every step down to this one of the agent (the steps of the person above it
-    /// too: redo brings them back). Returns how many undo steps went.
+    /// too: redo brings them back). Returns how many undo steps went. While redo holds steps of
+    /// the person, calls of the agent that change the document wait (`agent_hold`).
     pub fn undo_back_to_agent_step(&mut self, step_id: u64) -> Result<usize, StepError> {
         let step = self.activity.get(step_id).ok_or(StepError::Unknown)?;
         let first = *step.serials.first().ok_or(StepError::Unknown)?;
         if crate::collab_api::is_connected(self) {
-            return Err(StepError::Refused(kadakas_core::command::Refusal::Shared));
+            return Err(StepError::Refused(Refusal::Shared));
         }
+        let person_steps = self
+            .editor
+            .origins_above(first)
+            .iter()
+            .any(|o| matches!(o, Origin::User | Origin::Remote));
         let origin = self.editor.origin();
         self.editor.set_origin(Origin::User);
         let r = self.editor.undo_through(first);
         self.editor.set_origin(origin);
         self.prune_selection();
+        if r.is_ok() && person_steps {
+            self.agent_hold = true;
+        }
         r.map_err(StepError::Refused)
     }
 }
@@ -395,14 +540,21 @@ fn state(p: StepPlace) -> &'static str {
     }
 }
 
-fn entry(s: &Session, step: &Step) -> Value {
-    let check = s.revert_check(step.id).ok();
-    let revertible = check.as_ref().is_some_and(|c| c.blocked().is_none());
+fn kind_name(k: StepKind) -> &'static str {
+    match k {
+        StepKind::Call => "call",
+        StepKind::Undo => "undo",
+        StepKind::Redo => "redo",
+    }
+}
+
+fn entry(s: &Session, step: &Step, check: Option<&StepCheck>) -> Value {
     let mut v = json!({
         "id": step.id,
         "session": step.session,
         "time_ms": step.time_ms,
         "method": step.method,
+        "kind": kind_name(step.kind),
         "summary": step.summary.text(),
         "counts": {
             "objects": counts(step.summary.objects),
@@ -411,8 +563,10 @@ fn entry(s: &Session, step: &Step) -> Value {
             "resources": counts(step.summary.resources),
         },
         "seen": step.seen,
-        "state": check.as_ref().map_or("gone", |c| state(c.place)),
-        "revertible": revertible,
+        "reverted": step.reverted,
+        "partial": step.partial,
+        "state": check.map_or("gone", |c| state(c.place)),
+        "revertible": check.map(|c| c.why().is_none()),
     });
     if let Some(id) = s.activity.session_version(step.session) {
         v["session_version"] = json!(id);
@@ -431,10 +585,15 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
     }
     Some(params::<ActivityParams>(p).and_then(|q| {
         if let Some(id) = q.step {
-            let step = s.activity.get(id).ok_or_else(|| {
-                RpcError::not_found(format!("there is no step {id} in the activity log"))
-            })?;
-            let mut v = entry(s, step);
+            let step = s
+                .activity
+                .get(id)
+                .ok_or_else(|| {
+                    RpcError::not_found(format!("there is no step {id} in the activity log"))
+                })?
+                .clone();
+            let check = s.revert_check(id).ok();
+            let mut v = entry(s, &step, check.as_ref());
             let mut truncated = false;
             let mut lists = serde_json::Map::new();
             for (name, kind) in [
@@ -456,19 +615,34 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
             }
             v["objects"] = Value::Object(lists);
             v["truncated"] = json!(truncated);
-            if !step.data.is_some() {
+            if step.data.is_none() {
                 v["objects"] = Value::Null;
             }
-            if let Some(why) = s.revert_check(id).ok().and_then(|c| c.blocked()) {
+            if let Some(why) = check.and_then(|c| c.blocked()) {
                 v["blocked"] = json!(why);
             }
             return Ok(v);
         }
         let limit = q.limit.unwrap_or(50).min(MAX_LIMIT);
-        let all: Vec<&Step> = s.activity.since(q.since.unwrap_or(0)).collect();
+        let all: Vec<Step> = s.activity.since(q.since.unwrap_or(0)).cloned().collect();
         let skip = all.len().saturating_sub(limit);
+        let shown: Vec<&Step> = all.iter().skip(skip).collect();
+        let first_checked = shown.len().saturating_sub(CHECKED);
+        let mut steps = Vec::with_capacity(shown.len());
+        for (i, st) in shown.iter().enumerate() {
+            let check = if i >= first_checked {
+                s.revert_check(st.id).ok()
+            } else {
+                None
+            };
+            let mut e = entry(s, st, check.as_ref());
+            if check.is_none() {
+                e["state"] = json!(null);
+            }
+            steps.push(e);
+        }
         Ok(json!({
-            "steps": all.iter().skip(skip).map(|st| entry(s, st)).collect::<Vec<_>>(),
+            "steps": steps,
             "last_id": s.activity.last_id(),
             "total": s.activity.len(),
         }))
@@ -478,9 +652,11 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
 /// Extra text for `describe`.
 pub fn describe() -> Value {
     json!({
-        "concept": "Every call or script run that changes the document is one step of the agent. The person reviews the steps in the Activity panel: what each step added, changed and removed (highlighted in the plan and in 3D), the time, the method and a summary, and can undo back to a step or revert one step. agent.activity reads the same list. In the app (not in the headless server) a named version \"Before agent session\" is saved before the first change of a session (a new connection, or a call after 30 minutes of silence); if the limit of versions refuses it, the step says so in version_note.",
-        "revert": "The person can revert one step although later steps exist. Objects of the step that something changed later (by the person or by you) are never overwritten: the revert is refused, or reverts the rest and leaves exactly those objects. A step that also changed layers, classes, resources, settings, versions or issues can only be undone together with the steps above it. Your next steps may therefore find objects gone or as they were: read before you rely on an ID.",
+        "concept": "Every call or script run that changes the document is one step of the agent, also a call that failed after it had made changes, and an undo or redo of the agent (kind undo or redo). The person reviews the steps in the Activity panel: what each step added, changed and removed (highlighted in the plan and in 3D), the time, the method and a summary, and can undo back to a step or revert one step. agent.activity reads the same list. In the app (not in the headless server unless it is started with --session-version) a named version \"Before agent session\" is saved before the first change of a session (a new connection, or a call after 30 minutes of silence); if the limit of versions refuses it, the step says so in version_note. The version is an undo step of its own below your first step.",
+        "revert": "The person can revert one step although later steps exist. Objects of the step that something changed later (by the person or by you) are never overwritten: the revert is refused, or reverts the rest and leaves exactly those objects. An object that something made later hangs on (a data tag, a dimension, a member of a group, the wall of a pad) is not removed either. A step that also changed layers, classes, resources, settings, versions or issues can only be undone together with the steps above it. A step that the undo history forgot can still go back object by object. Your next steps may therefore find objects gone or as they were: read before you rely on an ID.",
+        "hold": "When the person uses Undo to here and steps of their own are among the undone ones, your calls that change the document fail with a conflict (reason redo_pending) until the person redoes them or releases the hold. Reads and view calls still work.",
         "script_runs": "One script run (script.eval) is one step, whatever number of calls it made.",
+        "limits": "The log keeps 500 steps and the states of at most 100000 objects and about 256 MiB; older steps lose their states first and cannot be reverted then. A step is partial when the undo history limit dropped part of what a call did while it ran.",
         "examples": [
             {"method": "agent.activity", "params": {"limit": 10}},
             {"method": "agent.activity", "params": {"step": 3}},
