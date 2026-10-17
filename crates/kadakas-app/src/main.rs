@@ -4,6 +4,8 @@
 mod about;
 #[cfg(not(target_arch = "wasm32"))]
 mod agent;
+mod agent_view;
+mod agent_view_ui;
 mod annot_ui;
 mod app;
 mod area_ui;

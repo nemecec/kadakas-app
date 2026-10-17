@@ -22,6 +22,12 @@ pub const PALETTE: [[u8; 3]; 8] = [
     [150, 100, 40],
 ];
 
+/// The client ID of the agent in the People palette. A real client has a UID, so it never equals
+/// this.
+pub const AGENT_CLIENT: &str = "agent";
+/// The color of the agent: slate, which is not in [`PALETTE`].
+pub const AGENT_RGB: [u8; 3] = [71, 85, 105];
+
 /// A user who changed nothing for this long is shown as quiet (dimmed). The client forgets the
 /// user after 15 s without any news, so this applies to a user whose program still sends its
 /// heartbeat but who does not move.
@@ -54,8 +60,11 @@ pub struct Peer {
 }
 
 impl Peer {
-    /// The color as RGB.
+    /// The color as RGB. The agent (AGR-03) has a color of its own, which no person gets.
     pub fn rgb(&self) -> [u8; 3] {
+        if self.client == AGENT_CLIENT {
+            return AGENT_RGB;
+        }
         PALETTE[self.color % PALETTE.len()]
     }
 

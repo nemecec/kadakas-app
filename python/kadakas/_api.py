@@ -2360,6 +2360,42 @@ if TYPE_CHECKING:
         'region': Literal['drawing', 'window'],
     }, total=False)
 
+    ViewGetParams = TypedDict("ViewGetParams", {}, total=False)
+
+    ViewZoomParams = TypedDict("ViewZoomParams", {
+        'at': list[float],
+        'box': list[float],
+        'ids': list[str],
+        'margin': float,
+        'scale': float,
+    }, total=False)
+
+    ViewPanParams = TypedDict("ViewPanParams", {
+        'by': list[float],
+        'to': list[float],
+    }, total=False)
+
+    ViewCameraParams = TypedDict("ViewCameraParams", {
+        'eye': Required[list[float]],
+        'fov': float,
+        'projection': Literal['ortho', 'perspective'],
+        'target': Required[list[float]],
+        'up': list[float],
+    }, total=False)
+
+    ViewHighlightParams = TypedDict("ViewHighlightParams", {
+        'at': list[float],
+        'box': list[float],
+        'color': Literal['agent', 'red', 'blue', 'green', 'orange'],
+        'ids': list[str],
+        'text': str,
+        'until': str | int,
+    }, total=False)
+
+    ViewHighlightClearParams = TypedDict("ViewHighlightClearParams", {
+        'id': int,
+    }, total=False)
+
     EditRotateParams = TypedDict("EditRotateParams", {
         'angle': Required[float],
         'center': Required[list[float]],
@@ -3320,13 +3356,13 @@ class Api:
         return self._call("render.png", params or None)
 
     def view_list(self, **params: "Unpack[ViewListParams]") -> Any:
-        """Standard 3D views, projections and render modes, and the current view.
+        """Standard 3D views, projections and render modes, the saved views (saved_views: [{name}]; view.set takes their names) and the current view.
 
         JSON-RPC method ``view.list``."""
         return self._call("view.list", params or None)
 
     def view_set(self, **params: "Unpack[ViewSetParams]") -> Any:
-        """Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list; top is the 2D plan in the app. Returns the current view.
+        """Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list or the name of a saved view (view.list saved_views); top is the 2D plan in the app. A saved view sets the camera only (the plan middle and zoom in the app, or the 3D view, projection and mode): the layers and classes stay as they are, because changing them is an edit of the document (use saved_view.restore for that), and the answer has layers_not_applied: true when the saved view holds visibility, or an active layer or class, that differs from now (classes and the active layer and class count too). Returns the current view.
 
         JSON-RPC method ``view.set``."""
         return self._call("view.set", params or None)
@@ -4999,6 +5035,42 @@ class Api:
         JSON-RPC method ``view.screenshot``."""
         return self._call("view.screenshot", params or None)
 
+    def view_get(self, **params: "Unpack[ViewGetParams]") -> Any:
+        """What the person looks at now (only the app answers; the headless server gives an error). No params. Returns {mode (plan | 3d), window {width, height, pixels_per_point} (points), canvas {width, height} (points; the drawing area), plan {center [x, y], zoom (px per mm), mm_per_px, layer_scale (the drawing scale denominator of the active layer), visible_box {min, max} (drawing mm; only when mode is plan)}, camera {view, projection, render_mode, eye, target, up, fov_deg, distance, visible_box {min, max} (the ground the camera sees, drawing mm; only when mode is 3d; null if the camera does not look at the ground)}, selection [id], active_layer {id, name}, active_class {id, name}, visible_layers [{id, name}], visible_classes [{id, name}], animating, highlights [{id, kind, text, color, until}], back (how many views Back can return to), view_locked (the person turned off "Agent may move my view")}. In 3D, camera.visible_box is the ground (at the height of the target) that the four corners of the view reach, or null if a corner looks past the horizon. Read it before you move the view and when you want to know what the person means by "this".
+
+        JSON-RPC method ``view.get``."""
+        return self._call("view.get", params or None)
+
+    def view_zoom(self, **params: "Unpack[ViewZoomParams]") -> Any:
+        """Zoom the view of the person (only the app). params: {ids | box | at (exactly one), scale?, margin?}. ids: objects to frame (in 3D the camera keeps its direction and frames them). box: [x0, y0, x1, y1] in drawing mm. at: [x, y] or [x, y, z]: the new middle of the view. scale: px per mm of the plan (as the zoom of a saved view; from 0.0001 to 100); with it the view keeps this zoom and only moves to the middle of the aim. margin: space around ids or box as a fraction of its size on each side (default 0.1, 0 to 10). The change is animated (about 250 ms; the person can turn animation off in Preferences). It never changes the document or the undo history. The person always wins: while they drag, zoom or type, use a tool, or ran a view command of their own a moment ago, the call fails with a conflict (reason person_navigating) and nothing moves; try again after a moment. If they turned off "Agent may move my view", it fails with reason view_locked: do not try again until they say so. The lock covers every call that moves the view: view.zoom, view.pan, view.camera, view.set and saved_view.restore. The person can step back with Back (changes within 120 ms of each other count as one step). Objects that are hidden (their layer or class is off) are not framed and are listed in hidden_ids; if all are hidden the call fails. In 3D, an at or box without a height uses the height of the ground there (site models, layer elevations). Returns {mode, plan?, camera?, clamped (the zoom limit was reached; the plan only), hidden_ids?}.
+
+        JSON-RPC method ``view.zoom``."""
+        return self._call("view.zoom", params or None)
+
+    def view_pan(self, **params: "Unpack[ViewPanParams]") -> Any:
+        """Move the view of the person (only the app). params: {by | to (exactly one)}. by: [dx, dy] in drawing mm, east and north (3D also dz); to: [x, y] (3D also z): the new middle of the view. Animated, never changes the document, and the person wins over it as for view.zoom. Returns the same as view.zoom.
+
+        JSON-RPC method ``view.pan``."""
+        return self._call("view.pan", params or None)
+
+    def view_camera(self, **params: "Unpack[ViewCameraParams]") -> Any:
+        """Set the 3D camera of the person (only the app) and show the 3D view. params: {eye: [x, y, z], target: [x, y, z], up?, fov?, projection?}. The camera orbits its target and has no roll: up must point upward (z above 0) and fov must be 45 (degrees), which is the field of view of the camera. projection: ortho or perspective. Animated; never changes the document; the person wins as for view.zoom. Returns the same as view.zoom.
+
+        JSON-RPC method ``view.camera``."""
+        return self._call("view.camera", params or None)
+
+    def view_highlight(self, **params: "Unpack[ViewHighlightParams]") -> Any:
+        """Point at objects or a place (only the app). params: {ids | box | at (exactly one), text?, color?, until?}. The person sees an outline glow on the objects or a marker at the place, with a short text (at most 80 characters, one line; a longer text is refused, not cut), in the plan and in 3D. color: agent (default), red, blue, green or orange; each color has its own mark and line style, so color is not the only sign. until: next_change (the pointer goes when the document changes next), dismissed (default; the person dismisses it) or a time in ms (1 to 3600000). At most 32 pointers at a time and 500 objects in one. Pointers are not saved and not part of the document or the undo history. The pointer also shows the agent as a collaborator: the agent cursor at the place, and Agent in the People palette. The person can list the pointers, zoom to one and dismiss them. Returns {id, count, hidden_ids?, note?}: objects that are hidden get no outline and are listed in hidden_ids. In 3D a box or a place without a height is drawn at the height of the ground. The number the person sees on the pointer is its id.
+
+        JSON-RPC method ``view.highlight``."""
+        return self._call("view.highlight", params or None)
+
+    def view_highlight_clear(self, **params: "Unpack[ViewHighlightClearParams]") -> Any:
+        """Remove pointers (only the app). params: {id?}: one pointer, or all when id is left out. Returns {cleared}.
+
+        JSON-RPC method ``view.highlight_clear``."""
+        return self._call("view.highlight_clear", params or None)
+
     def edit_rotate(self, **params: "Unpack[EditRotateParams]") -> Any:
         """Turn objects (a group as one unit). params: {ids? (default: the selection), center: [x, y], angle (radians, counterclockwise), copy? (turn copies, keep the originals)}. Returns {created: [ids of the copies]}. Hardscapes, landscape areas and site models cannot be turned.
 
@@ -5956,6 +6028,12 @@ METHOD_NAMES: tuple[str, ...] = (
     "visualization.get",
     "visualization.clear",
     "view.screenshot",
+    "view.get",
+    "view.zoom",
+    "view.pan",
+    "view.camera",
+    "view.highlight",
+    "view.highlight_clear",
     "edit.rotate",
     "edit.scale",
     "edit.mirror",

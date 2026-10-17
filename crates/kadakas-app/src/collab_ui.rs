@@ -807,24 +807,28 @@ pub fn paint_peers(
         if !rect.expand(40.0).contains(at) {
             continue;
         }
-        // A pointer: a small triangle with its tip at the position.
-        painter.add(egui::Shape::convex_polygon(
-            vec![
-                at,
-                Pos2::new(at.x, at.y + 15.0),
-                Pos2::new(at.x + 10.5, at.y + 10.5),
-            ],
-            color,
-            Stroke::new(1.0, Color32::WHITE),
-        ));
-        // The name on a small label in the color of the user.
-        let galley =
-            painter.layout_no_wrap(p.short_label(), FontId::proportional(12.0), Color32::WHITE);
-        let pos = Pos2::new(at.x + 12.0, at.y + 14.0);
-        let label = Rect::from_min_size(pos, galley.size()).expand2(vec2(4.0, 2.0));
-        painter.rect_filled(label, 3.0, color);
-        painter.galley(pos, galley, Color32::WHITE);
+        paint_pointer(&painter, at, color, &p.short_label());
     }
+}
+
+/// A pointer: a small triangle with its tip at `at`, and the name on a small label in the same
+/// color. The cursors of the other users and of the agent use it.
+pub fn paint_pointer(painter: &egui::Painter, at: Pos2, color: Color32, name: &str) {
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            at,
+            Pos2::new(at.x, at.y + 15.0),
+            Pos2::new(at.x + 10.5, at.y + 10.5),
+        ],
+        color,
+        Stroke::new(1.0, Color32::WHITE),
+    ));
+    let galley =
+        painter.layout_no_wrap(name.to_string(), FontId::proportional(12.0), Color32::WHITE);
+    let pos = Pos2::new(at.x + 12.0, at.y + 14.0);
+    let label = Rect::from_min_size(pos, galley.size()).expand2(vec2(4.0, 2.0));
+    painter.rect_filled(label, 3.0, color);
+    painter.galley(pos, galley, Color32::WHITE);
 }
 
 /// The browser build: the address fragment, the warning before the page closes, and (behind the

@@ -105,3 +105,5 @@ action-view-realistic = Realistic rendering (textures, sun and shadows)
 action-tool-polygon3d = 3D Polygon tool
 action-cmd-extrude = Extrude
 action-cmd-sweep = Sweep
+action-view-agent-back = Back to the view before the agent's change
+action-view-agent-next = Show the next agent pointer

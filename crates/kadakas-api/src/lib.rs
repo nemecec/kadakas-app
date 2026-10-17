@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod agent_view_api;
 mod annotation_api;
 mod collab_api;
 #[cfg(not(target_arch = "wasm32"))]
@@ -17,8 +18,9 @@ pub mod files;
 pub use errors::{
     REASON_ALREADY_CONNECTED, REASON_BASE_TOO_LARGE, REASON_BASE_TOO_MANY, REASON_BCF_CONFLICT,
     REASON_BCF_UNFIT, REASON_CONFIRM_NEEDED, REASON_EDITS_WAIT, REASON_FILE_CHANGED,
-    REASON_HISTORY_READONLY, REASON_PARTS_MISSING, REASON_UNSAVED_CHANGES, REASON_VERSION_LIMIT,
-    RpcError,
+    REASON_HISTORY_READONLY, REASON_PARTS_MISSING, REASON_PERSON_NAVIGATING,
+    REASON_UNSAVED_CHANGES, REASON_VERSION_LIMIT, REASON_VIEW_LOCKED, RpcError,
+    error_response_with,
 };
 #[cfg(test)]
 mod care_api_tests;
@@ -195,6 +197,8 @@ pub struct Session {
     section_cache: kadakas_x3d::section::SharedSections,
     /// The saved view that `saved_view.restore` applied last, until the host takes it.
     applied_view: Option<SavedView>,
+    /// The view in `applied_view` came from `view.set`: its camera only, not its visibility.
+    applied_camera_only: bool,
     /// Plug-in objects and scripts: the flag for agents, the script host and the limits (see `plugin_api`).
     #[cfg(not(target_arch = "wasm32"))]
     pub scripting: ScriptingState,
@@ -417,11 +421,11 @@ pub const METHODS: &[(&str, &str)] = &[
     ),
     (
         "view.list",
-        "Standard 3D views, projections and render modes, and the current view.",
+        "Standard 3D views, projections and render modes, the saved views (saved_views: [{name}]; view.set takes their names) and the current view.",
     ),
     (
         "view.set",
-        "Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list; top is the 2D plan in the app. Returns the current view.",
+        "Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list or the name of a saved view (view.list saved_views); top is the 2D plan in the app. A saved view sets the camera only (the plan middle and zoom in the app, or the 3D view, projection and mode): the layers and classes stay as they are, because changing them is an edit of the document (use saved_view.restore for that), and the answer has layers_not_applied: true when the saved view holds visibility, or an active layer or class, that differs from now (classes and the active layer and class count too). Returns the current view.",
     ),
     (
         "report.plants",
@@ -801,6 +805,13 @@ pub const METHODS: &[(&str, &str)] = &[
         "view.screenshot",
         "A PNG picture of the live drawing area of the app window, as the user sees it (the plan or the 3D view with palettes left out). Only the app (kadakas app with --agent-port) answers; the headless server gives an error. params: {region? (drawing (default) | window: the whole window), max_width? (px, 64 to 4096; larger pictures are scaled down)}. Returns {png_base64, width, height, region, theme (light | dark), view (the current view id)}.",
     ),
+    // The agent drives the view of the person and points; only the app answers (see agent_view_api.rs).
+    agent_view_api::VIEW_GET,
+    agent_view_api::VIEW_ZOOM,
+    agent_view_api::VIEW_PAN,
+    agent_view_api::VIEW_CAMERA,
+    agent_view_api::VIEW_HIGHLIGHT,
+    agent_view_api::VIEW_HIGHLIGHT_CLEAR,
     // Editing 2D geometry (see edit2d_api.rs).
     edit2d_api::EDIT_ROTATE,
     edit2d_api::EDIT_SCALE,
@@ -1017,6 +1028,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             section_cache: sections,
             applied_view: None,
+            applied_camera_only: false,
             #[cfg(not(target_arch = "wasm32"))]
             scripting: ScriptingState::default(),
             wasm_plugins: WasmPluginState::default(),
@@ -1263,6 +1275,17 @@ impl Session {
         &self.site_cache
     }
 
+    /// True while a view change (`view.set`, `saved_view.restore`) waits for the host. It does
+    /// not take the flag. The app asks it to keep the view from before the change (Back).
+    /// True when the pending saved view came from `view.set` (its camera only).
+    pub fn applied_camera_only(&self) -> bool {
+        self.applied_camera_only
+    }
+
+    pub fn has_view_change(&self) -> bool {
+        self.view_changed || self.applied_view.is_some()
+    }
+
     /// True once after `view.set` changed the view. A host with a window should
     /// poll this after `handle` and show `self.view`.
     pub fn take_view_changed(&mut self) -> bool {
@@ -1432,6 +1455,7 @@ impl Session {
                 }
                 d["plugins"] = wasm_plugin_api::describe();
                 d["review"]["issues"] = issue_api::describe();
+                d["review"]["agent_view"] = agent_view_api::describe();
                 d["schemas"] = json!({
                     "command": "The JSON Schema (draft 2020-12) of every command that `execute` takes. Call describe with {\"schema\": true} to get it in `command_schema` (about 30 KB). Everything the schema accepts for add_object, add_object_in, modify_object and set_vertex with an exact shape kind is accepted by the server too (a test fuzzes this). Other parts are structural only: they check the shape of the object and the kind, not every field, so the server may still refuse what the schema accepts. Their fields are in command_examples and in the sections of this answer.",
                     "exact_shape_kinds": kadakas_core::schema::EXACT_SHAPE_KINDS,
@@ -1743,6 +1767,9 @@ impl Session {
                 }
                 out
             }
+            m if agent_view_api::APP_ONLY.contains(&m) => {
+                return agent_view_api::handle(m).expect("an app method");
+            }
             "view.screenshot" => {
                 return Err(RpcError::app(
                     "view.screenshot needs the live window of the app. Start the app with --agent-port; the headless server has no window. Use render.png for a picture of the 3D model, or render.svg for the plan",
@@ -1750,6 +1777,7 @@ impl Session {
             }
             "view.list" => json!({
                 "views": StandardView::ALL.iter().map(|v| json!({"id": v.id(), "label": v.label()})).collect::<Vec<_>>(),
+                "saved_views": doc.drawing.saved_views.iter().map(|v| json!({"name": v.name})).collect::<Vec<_>>(),
                 "projections": [Projection::Orthographic.id(), Projection::Perspective.id()],
                 "modes": RenderMode::ALL.map(|m| m.id()),
                 "current": view_json(self.view),
@@ -1768,6 +1796,41 @@ impl Session {
                 } = params(p)?;
                 if view.is_none() && projection.is_none() && mode.is_none() {
                     return Err(RpcError::invalid_params("give view, projection or mode"));
+                }
+                // The name of a saved view: its camera, not its visibility (that edits the document).
+                if let Some(name) = view.as_deref()
+                    && StandardView::from_name(name).is_none()
+                    && let Some(saved) = doc.drawing.saved_view(name).cloned()
+                {
+                    // Visibility is an edit of the document: only say when it would differ.
+                    let layers_not_applied = saved
+                        .layers
+                        .iter()
+                        .any(|(id, on)| doc.layer(*id).is_some_and(|l| l.visible != *on))
+                        || saved
+                            .classes
+                            .iter()
+                            .any(|(id, on)| doc.class(*id).is_some_and(|c| c.visible != *on))
+                        || saved.active_layer.is_some_and(|l| l != doc.active_layer)
+                        || saved.active_class.is_some_and(|c| c != doc.active_class);
+                    let camera_only = SavedView {
+                        layers: Default::default(),
+                        classes: Default::default(),
+                        active_layer: None,
+                        active_class: None,
+                        ..saved.clone()
+                    };
+                    self.apply_saved_view(&camera_only);
+                    self.applied_camera_only = true;
+                    if projection.is_some() || mode.is_some() {
+                        self.view =
+                            self.resolve_view(None, projection.as_deref(), mode.as_deref())?;
+                        self.view_changed = true;
+                    }
+                    let mut out = view_json(self.view);
+                    out["saved_view"] = json!(saved.name);
+                    out["layers_not_applied"] = json!(layers_not_applied);
+                    return Ok(out);
                 }
                 self.view =
                     self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;

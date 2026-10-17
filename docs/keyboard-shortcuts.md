@@ -191,6 +191,8 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Toggle parallel and perspective projection (`view.projection`) | none | Alt+Shift+J | done |
 | Next view in history (`view.history_next`) | Cmd+Shift+. / Ctrl+Shift+. | Cmd/Ctrl+Shift+. | done |
 | Previous view in history (`view.history_previous`) | Cmd+Shift+, / Ctrl+Shift+, | Cmd/Ctrl+Shift+, | done |
+| Back to the view before the agent's change (`view.agent_back`, AGR-02) | none (Kadakas own) | Cmd/Ctrl+Alt+B | done |
+| Show the next agent pointer (`view.agent_next`, AGR-03) | none (Kadakas own) | Cmd/Ctrl+Alt+N | done |
 | Zoom in, factor 2 (double tap) | CC (both) | CC | planned |
 | Switch saved view | Option+Arrow / Alt+Arrow | Alt+Arrow | planned |
 | Switch active layer or class | Cmd+Arrow / Ctrl+Arrow | Ctrl+Arrow | planned |

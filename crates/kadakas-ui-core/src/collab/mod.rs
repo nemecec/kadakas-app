@@ -27,5 +27,5 @@ pub use form::{
     ConnectForm, ConnectIssue, ConnectRequest, Defaults, FormError, Fragment,
     classify_connect_error, token_expired, token_user,
 };
-pub use peers::{OwnPresence, PALETTE, Peer, PeerBook};
+pub use peers::{AGENT_CLIENT, AGENT_RGB, OwnPresence, PALETTE, Peer, PeerBook};
 pub use status::{ErrorKind, Link, Notice, Severity, StatusView, Tracker, UndoRoute, undo_route};

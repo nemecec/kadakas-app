@@ -382,6 +382,7 @@ impl IssuesUi {
         painter: &Painter,
         rect: Rect,
         view_proj: glam::Mat4,
+        origin: glam::DVec3,
         session: &Session,
     ) {
         self.screens.clear();
@@ -392,8 +393,11 @@ impl IssuesUi {
         let pins: Vec<Pin> = self.pins(session).to_vec();
         let painter = painter.with_clip_rect(rect);
         for p in &pins {
+            // The pin has drawing coordinates (mm); the matrix works relative to the scene origin.
+            // Subtract in f64 first, so a far drawing keeps its precision.
+            let local = glam::DVec3::new(p.at[0], p.at[1], p.at[2]) - origin;
             let clip =
-                view_proj * glam::Vec4::new(p.at[0] as f32, p.at[1] as f32, p.at[2] as f32, 1.0);
+                view_proj * glam::Vec4::new(local.x as f32, local.y as f32, local.z as f32, 1.0);
             if clip.w.partial_cmp(&1e-6) != Some(std::cmp::Ordering::Greater) {
                 continue;
             }
