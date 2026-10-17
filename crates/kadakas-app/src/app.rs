@@ -3501,8 +3501,7 @@ impl eframe::App for KadakasApp {
                     ));
                 }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    if let Some(outcome) =
-                        crate::profiles::command_line_ui(ui, &mut self.profiles)
+                    if let Some(outcome) = crate::profiles::command_line_ui(ui, &mut self.profiles)
                     {
                         alias = Some(outcome);
                     }

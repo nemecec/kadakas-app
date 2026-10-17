@@ -522,11 +522,17 @@ fn a_one_object_step_names_what_changed_in_both_languages() {
         json!({"id": id, "lines": [[[3000, -50], [3000, 4050]]],
                "zones": [{"seed": [6000, 2000], "name": "Aisle", "angle": 0}]}),
     );
-    r.agent("hardscape.zone_set", json!({"id": id, "zone": 1, "angle": 45}));
+    r.agent(
+        "hardscape.zone_set",
+        json!({"id": id, "zone": 1, "angle": 45}),
+    );
     let step = r.app.session.activity.steps().back().unwrap().clone();
     let en = kadakas_l10n::with_language("en-US", || summary_text(&step.summary));
     assert_eq!(en, step.summary.text());
-    assert_eq!(en, "Changed hardscape 'Pavers': zone 'Aisle' angle 0° → 45°");
+    assert_eq!(
+        en,
+        "Changed hardscape 'Pavers': zone 'Aisle' angle 0° → 45°"
+    );
     let et = kadakas_l10n::with_language("et", || summary_text(&step.summary));
     assert!(et.contains("tsoon 'Aisle' nurk 0° → 45°"), "{et}");
 }

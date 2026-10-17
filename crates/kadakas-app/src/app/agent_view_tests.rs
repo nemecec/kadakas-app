@@ -1829,7 +1829,12 @@ fn a_label_and_the_panel_keep_clear_of_what_the_pointer_marks() {
         .app
         .view
         .to_model(egui::pos2(canvas.right() - 20.0, canvas.top() + 60.0));
-    let id = r.rect(lo.x.min(hi.x), lo.y.min(hi.y), (hi.x - lo.x).abs(), (hi.y - lo.y).abs());
+    let id = r.rect(
+        lo.x.min(hi.x),
+        lo.y.min(hi.y),
+        (hi.x - lo.x).abs(),
+        (hi.y - lo.y).abs(),
+    );
     r.ok(
         "view.highlight",
         json!({"ids": [id.to_string()], "text": "Check this stall row"}),
@@ -1850,9 +1855,7 @@ fn a_label_and_the_panel_keep_clear_of_what_the_pointer_marks() {
     let out = r.frame(vec![]);
     fn badges(s: &egui::Shape, into: &mut Vec<egui::Rect>) {
         match s {
-            egui::Shape::Rect(r) if r.fill.a() > 200 && r.rect.height() < 40.0 => {
-                into.push(r.rect)
-            }
+            egui::Shape::Rect(r) if r.fill.a() > 200 && r.rect.height() < 40.0 => into.push(r.rect),
             egui::Shape::Vec(v) => v.iter().for_each(|s| badges(s, into)),
             _ => {}
         }
@@ -1876,13 +1879,20 @@ fn a_label_and_the_panel_keep_clear_of_what_the_pointer_marks() {
 fn a_drawing_strip_from_a_saved_layout_brings_the_default_layout_back() {
     let mut r = Rig::new();
     // The default layout gives a drawing area that is wide enough in this window.
-    assert!(r.canvas().width() >= crate::layout::MIN_DRAWING_WIDTH, "{:?}", r.canvas());
+    assert!(
+        r.canvas().width() >= crate::layout::MIN_DRAWING_WIDTH,
+        "{:?}",
+        r.canvas()
+    );
     // A saved layout that gave the drawing a strip (the dock keeps 175 points at least).
     let mut state = egui_dock::DockState::new(vec![crate::layout::Tab::Drawing]);
     state.main_surface_mut().split_right(
         egui_dock::NodeIndex::root(),
         0.05,
-        vec![crate::layout::Tab::ObjectInfo, crate::layout::Tab::Navigation],
+        vec![
+            crate::layout::Tab::ObjectInfo,
+            crate::layout::Tab::Navigation,
+        ],
     );
     r.app.layouts.current = Some(state);
     r.frame(vec![]);
@@ -1894,7 +1904,11 @@ fn a_drawing_strip_from_a_saved_layout_brings_the_default_layout_back() {
     );
     r.advance(0.1);
     r.advance(0.1);
-    assert!(r.canvas().width() >= crate::layout::MIN_DRAWING_WIDTH, "{:?}", r.canvas());
+    assert!(
+        r.canvas().width() >= crate::layout::MIN_DRAWING_WIDTH,
+        "{:?}",
+        r.canvas()
+    );
     // In a window too small for any layout nothing is reset.
     assert!(crate::layout::too_narrow(184.0, 1000.0));
     assert!(!crate::layout::too_narrow(184.0, 400.0));

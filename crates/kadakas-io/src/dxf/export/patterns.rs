@@ -243,8 +243,7 @@ pub(super) fn write(
 /// that the note says which count is which. The polylines keep the plain name, as the report has
 /// it: units of one stone are one row in `by_unit`.
 fn distinct_names(group: &Group, names: &[String]) -> Vec<String> {
-    let repeated =
-        |n: &String| names.iter().filter(|m| *m == n).count() > 1;
+    let repeated = |n: &String| names.iter().filter(|m| *m == n).count() > 1;
     if !names.iter().any(repeated) {
         return names.to_vec();
     }
@@ -264,7 +263,11 @@ fn distinct_names(group: &Group, names: &[String]) -> Vec<String> {
             *k += 1;
             if basket {
                 // n units side by side, then n turned by 90 degrees.
-                let (turn, nth) = if i < half { ("lengthwise", i + 1) } else { ("crosswise", i - half + 1) };
+                let (turn, nth) = if i < half {
+                    ("lengthwise", i + 1)
+                } else {
+                    ("crosswise", i - half + 1)
+                };
                 format!("{n} {turn} {nth}")
             } else if names.iter().filter(|m| *m == n).count() == 2 {
                 format!("{n} {}", if *k == 1 { "lengthwise" } else { "crosswise" })

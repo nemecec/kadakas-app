@@ -350,7 +350,8 @@ fn resolve_remote(
     if connect.is_empty() {
         let info = info.ok_or("no running Kadakas app found: start the app with --agent-port, or give --connect HOST:PORT --token TOKEN")?;
         if let Some(pid) = info.stale_pid() {
-            let file = sys_agent::agent_info_path().map_or_else(String::new, |p| format!(" {}", p.display()));
+            let file = sys_agent::agent_info_path()
+                .map_or_else(String::new, |p| format!(" {}", p.display()));
             return Err(format!(
                 "the runtime file{file} is left over from a Kadakas app (process {pid}) that is no longer running. Start the app again with --agent-port; the file is replaced then (or delete it)"
             ));

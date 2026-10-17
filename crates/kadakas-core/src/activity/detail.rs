@@ -274,7 +274,10 @@ impl FieldChange {
         let field = self.field.replace('_', " ");
         let scope = match &self.scope {
             None => String::new(),
-            Some(Scope { kind, name: Some(n) }) => format!("{kind} '{n}' "),
+            Some(Scope {
+                kind,
+                name: Some(n),
+            }) => format!("{kind} '{n}' "),
             Some(Scope { kind, name: None }) => format!("{kind} "),
         };
         match (&self.before, &self.after) {

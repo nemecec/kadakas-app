@@ -1030,8 +1030,11 @@ fn zone_set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> 
 /// True if a pattern in the parameters gives its own joint width (`gap` or `spacing`). Without
 /// one the zone inherits the joint of the hardscape, so a change of the style reaches it.
 fn pattern_names_gap(v: Option<&Value>) -> bool {
-    v.and_then(Value::as_object)
-        .is_some_and(|o| ["gap", "spacing"].iter().any(|k| o.get(*k).is_some_and(|g| !g.is_null())))
+    v.and_then(Value::as_object).is_some_and(|o| {
+        ["gap", "spacing"]
+            .iter()
+            .any(|k| o.get(*k).is_some_and(|g| !g.is_null()))
+    })
 }
 
 // ------------------------------------------------------------------ courses

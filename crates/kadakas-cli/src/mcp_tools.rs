@@ -562,9 +562,7 @@ pub fn name_tools(flat: bool, docs: bool, result: &mut Value) {
             }
             // The full text is in the description of the tool and in `describe {method}`, so the
             // list carries the first sentence only (about 140 KB less).
-            if !docs
-                && let Some(doc) = entry["doc"].as_str().map(summary)
-            {
+            if !docs && let Some(doc) = entry["doc"].as_str().map(summary) {
                 entry["doc"] = json!(doc);
             }
         }
@@ -581,7 +579,9 @@ pub fn name_tools(flat: bool, docs: bool, result: &mut Value) {
             "Each tool is a domain and takes {method, params}. Every method in `methods` has its `tool`: call that tool, for example the tool hardscape_landscape with {method: \"hardscape.course\", params: {...}}. A call to another tool is an error that names the right one."
         });
         if !docs {
-            result["docs"] = json!("The doc of each method here is its first sentence. The full text with the params is in the description of its tool, in describe {method: <name>} (with the JSON Schema of the params), or here with describe {docs: true}.");
+            result["docs"] = json!(
+                "The doc of each method here is its first sentence. The full text with the params is in the description of its tool, in describe {method: <name>} (with the JSON Schema of the params), or here with describe {docs: true}."
+            );
         }
     }
 }
@@ -872,7 +872,10 @@ mod tests {
         ) else {
             panic!("a method of another tool is refused");
         };
-        assert!(t.contains("tool 'review'") && t.contains("view.zoom"), "{t}");
+        assert!(
+            t.contains("tool 'review'") && t.contains("view.zoom"),
+            "{t}"
+        );
         let Call::Invalid(t) = resolve(false, "objects", &json!({"method": "no.such"})) else {
             panic!();
         };
@@ -907,7 +910,12 @@ mod tests {
         name_tools(false, false, &mut result);
         assert_eq!(result["methods"][0]["tool"], "review");
         assert_eq!(result["methods"][1]["tool"], "objects");
-        assert!(result["tools"].as_str().unwrap().contains("names the right one"));
+        assert!(
+            result["tools"]
+                .as_str()
+                .unwrap()
+                .contains("names the right one")
+        );
         assert_eq!(result["methods"][0]["doc"], "x.");
         let long = "Lay units over a shape. params: {id, pattern?}. Returns {x}.";
         assert_eq!(summary(long), "Lay units over a shape.");

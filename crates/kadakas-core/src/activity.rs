@@ -126,7 +126,10 @@ impl Summary {
         }
         if let Some(d) = &self.detail {
             let kind = self.kinds.first().map_or("object", |(k, _)| k.as_str());
-            let label = d.label.as_ref().map_or(String::new(), |l| format!(" '{l}'"));
+            let label = d
+                .label
+                .as_ref()
+                .map_or(String::new(), |l| format!(" '{l}'"));
             parts.push(format!(
                 "changed {}{label}: {}",
                 kind.replace('_', " "),

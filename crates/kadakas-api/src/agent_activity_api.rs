@@ -759,14 +759,16 @@ mod tests {
         let id = lot_with_an_aisle(&mut s);
         s.editor.set_origin(Origin::Agent);
         s.agent_call_with(3, "hardscape.zone_set", |s| {
-            s.handle("hardscape.zone_set", json!({"id": id, "zone": 1, "angle": 45}))
+            s.handle(
+                "hardscape.zone_set",
+                json!({"id": id, "zone": 1, "angle": 45}),
+            )
         })
         .unwrap();
         let step = s.activity.steps().back().unwrap();
         let text = step.summary.text();
         assert!(
-            text.contains("hardscape 'Pavers'")
-                && text.contains("zone 'Aisle' angle 0° → 45°"),
+            text.contains("hardscape 'Pavers'") && text.contains("zone 'Aisle' angle 0° → 45°"),
             "{text}"
         );
         // Three changes: the first two and a count.

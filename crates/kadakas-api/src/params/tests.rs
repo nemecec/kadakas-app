@@ -959,7 +959,8 @@ fn every_angle_parameter_names_its_unit_and_describe_says_that_units_are_mixed()
             continue;
         };
         for (name, p) in props {
-            let angle = (name.contains("angle") || name.contains("rotation")) && name != "relative_angles";
+            let angle =
+                (name.contains("angle") || name.contains("rotation")) && name != "relative_angles";
             let named = name.ends_with("_deg") || name.contains("precision");
             let text = p["description"].as_str().unwrap_or("").to_lowercase();
             if angle && !named && !text.contains("degree") && !text.contains("radian") {

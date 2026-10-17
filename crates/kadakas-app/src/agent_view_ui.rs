@@ -169,11 +169,7 @@ fn badge(
             pos2(t.max.x + gap, min.y),
             pos2(t.min.x - size.x - gap, min.y),
         ];
-        if let Some(c) = candidates
-            .iter()
-            .map(|c| clamp(*c))
-            .find(|c| free(*c))
-        {
+        if let Some(c) = candidates.iter().map(|c| clamp(*c)).find(|c| free(*c)) {
             min = c;
         }
     }
@@ -511,10 +507,22 @@ pub fn panel(
         .unwrap_or(vec2(280.0, 120.0));
     let targets = targets_of(ctx);
     let corners = [
-        (Align2::RIGHT_TOP, pos2(canvas.right() - 8.0, canvas.top() + 8.0)),
-        (Align2::LEFT_TOP, pos2(canvas.left() + 8.0, canvas.top() + 8.0)),
-        (Align2::RIGHT_BOTTOM, pos2(canvas.right() - 8.0, canvas.bottom() - 8.0)),
-        (Align2::LEFT_BOTTOM, pos2(canvas.left() + 8.0, canvas.bottom() - 8.0)),
+        (
+            Align2::RIGHT_TOP,
+            pos2(canvas.right() - 8.0, canvas.top() + 8.0),
+        ),
+        (
+            Align2::LEFT_TOP,
+            pos2(canvas.left() + 8.0, canvas.top() + 8.0),
+        ),
+        (
+            Align2::RIGHT_BOTTOM,
+            pos2(canvas.right() - 8.0, canvas.bottom() - 8.0),
+        ),
+        (
+            Align2::LEFT_BOTTOM,
+            pos2(canvas.left() + 8.0, canvas.bottom() - 8.0),
+        ),
     ];
     let (pivot, pos) = corners
         .iter()

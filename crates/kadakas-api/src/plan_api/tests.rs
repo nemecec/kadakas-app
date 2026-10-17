@@ -1408,8 +1408,14 @@ fn a_joint_change_of_the_style_reaches_courses_and_zones_without_their_own_joint
         json!({"id": style_id, "joints": {"kind": "running_bond", "unit_length": 200, "unit_width": 100, "spacing": 8}}),
     );
     let after = gaps(&mut s);
-    assert_eq!(after["Kerb"], 8.0, "a course without a joint follows the style: {after:?}");
-    assert_eq!(after["Aisle"], 8.0, "a zone pattern without a joint follows the style: {after:?}");
+    assert_eq!(
+        after["Kerb"], 8.0,
+        "a course without a joint follows the style: {after:?}"
+    );
+    assert_eq!(
+        after["Aisle"], 8.0,
+        "a zone pattern without a joint follows the style: {after:?}"
+    );
     assert_eq!(after["Own"], 3.0, "an explicit joint stays: {after:?}");
     assert_eq!(after["Fixed"], 3.0, "an explicit joint stays: {after:?}");
     // The stored plan holds no joint for the inheriting course.
@@ -1439,7 +1445,10 @@ fn align_field_names_the_edge_it_used_and_lets_the_agent_choose_one() {
     assert_eq!(first["chosen"], false);
     assert!(first["length_mm"].as_f64().unwrap() > 1000.0, "{r}");
     let notes = r["notes"].to_string();
-    assert!(notes.contains("align_field") && notes.contains("edge 0"), "{notes}");
+    assert!(
+        notes.contains("align_field") && notes.contains("edge 0"),
+        "{notes}"
+    );
     let edges = r["aligned"]["edges"].as_array().unwrap();
     assert_eq!(edges.len(), 4, "{r}");
     let first_angle = r["aligned"]["angle_deg"].as_f64().unwrap();
@@ -1467,12 +1476,18 @@ fn align_field_names_the_edge_it_used_and_lets_the_agent_choose_one() {
         (second_angle - first_angle).abs() > 45.0,
         "{first_angle} {second_angle}"
     );
-    assert!(r2["notes"].to_string().contains("replaced the origin"), "{r2}");
+    assert!(
+        r2["notes"].to_string().contains("replaced the origin"),
+        "{r2}"
+    );
     // An edge that does not exist is refused with the list of the real ones.
     let m = fail(
         &mut s,
         "hardscape.course",
         json!({"id": id, "name": "Kerb", "along": "outline", "align_field": {"edge": 99}}),
     );
-    assert!(m.contains("not a straight edge") && m.contains("mm at"), "{m}");
+    assert!(
+        m.contains("not a straight edge") && m.contains("mm at"),
+        "{m}"
+    );
 }
