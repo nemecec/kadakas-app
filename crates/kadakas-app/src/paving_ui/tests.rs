@@ -659,3 +659,100 @@ fn the_check_runs_in_the_background_on_a_copy_and_keeps_its_scope() {
     assert_eq!(p.check.scope, vec![id]);
     assert!(!p.check.stale(&SessionBackend(&mut s)));
 }
+
+#[test]
+fn zone_set_refuses_two_alignments_and_a_name_that_is_not_text_and_a_no_op_is_no_undo_step() {
+    let mut s = session();
+    let id = split_lot(&mut s);
+    assert!(
+        s.handle(
+            "hardscape.zone_set",
+            json!({"id": id, "zone": 0, "align_to_edge": 1, "align_to_split": 0})
+        )
+        .is_err()
+    );
+    assert!(
+        s.handle(
+            "hardscape.zone_set",
+            json!({"id": id, "zone": 0, "name": 5})
+        )
+        .is_err()
+    );
+    let depth = s.editor.undo_depth();
+    let plan = plan_of(&s, id);
+    let r = s
+        .handle("hardscape.zone_set", json!({"id": id, "zone": 0}))
+        .unwrap();
+    assert_eq!(r["changed"], false);
+    // The same value again, and a clear of what is not set: still nothing.
+    s.handle(
+        "hardscape.zone_set",
+        json!({"id": id, "zone": 0, "angle": 15}),
+    )
+    .unwrap();
+    assert_eq!(s.editor.undo_depth(), depth + 1);
+    let r = s
+        .handle(
+            "hardscape.zone_set",
+            json!({"id": id, "zone": 0, "angle": 15}),
+        )
+        .unwrap();
+    assert_eq!(r["changed"], false);
+    let r = s
+        .handle(
+            "hardscape.zone_set",
+            json!({"id": id, "zone": 0, "clear": ["origin"]}),
+        )
+        .unwrap();
+    assert_eq!(r["changed"], false);
+    assert_eq!(s.editor.undo_depth(), depth + 1);
+    assert_ne!(plan_of(&s, id), plan);
+}
+
+#[test]
+fn the_jobs_share_one_copy_of_the_document_per_revision() {
+    let mut s = session();
+    let id = split_lot(&mut s);
+    let shared = SharedDoc::default();
+    let rev = s.editor.revision();
+    let a = shared.get(s.editor.doc(), rev);
+    let b = shared.get(s.editor.doc(), rev);
+    assert!(std::sync::Arc::ptr_eq(&a, &b));
+    s.handle("hardscape.set", json!({"id": id, "angle": 3}))
+        .unwrap();
+    let c = shared.get(s.editor.doc(), s.editor.revision());
+    assert!(!std::sync::Arc::ptr_eq(&a, &c));
+    assert_eq!(shared.held(), Some(s.editor.revision()));
+    // Counts, zones and courses in one frame make one copy (the held one has the revision).
+    let mut p = PavingUi::default();
+    let ctx = egui::Context::default();
+    let mut status = String::new();
+    s.selection = vec![id];
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut e = crate::panels::InfoEdit::default();
+        crate::panels::object_info(ui, &mut s, &mut e, &mut p, &mut status);
+    });
+    assert_eq!(p.shared.held(), Some(s.editor.revision()));
+}
+
+#[test]
+fn the_check_cannot_be_started_while_it_runs() {
+    let mut s = session();
+    let id = lot(&mut s);
+    s.selection = vec![id];
+    let mut p = PavingUi::default();
+    p.run_check(&mut s);
+    let ctx = egui::Context::default();
+    let mut status = String::new();
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        p.windows(ui.ctx(), &mut s, &mut status)
+    });
+    // Started, or already done (a thread is quick): either way no second job is queued now.
+    if p.check.running {
+        let before = p.check_start;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            p.windows(ui.ctx(), &mut s, &mut status)
+        });
+        assert_eq!(p.check_start, before);
+    }
+}

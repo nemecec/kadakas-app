@@ -33,7 +33,7 @@ pub const HARDSCAPE_SPLIT: (&str, &str) = (
 );
 pub const HARDSCAPE_ZONE_SET: (&str, &str) = (
     "hardscape.zone_set",
-    "Change the settings of one zone of a hardscape without touching the other zones (hardscape.split replaces them all). params: {id, zone (the index of the zone in the reply of hardscape.split or hardscape.plan, from 0), name?, pattern? (as the pattern of unit_pattern.layout), origin?, angle?, align_to_edge? (n: start at vertex n of the outline of the zone), align_to_split? (n: start at the first point of split line n), clear? ([pattern | origin | angle | align_to_edge | align_to_split]: remove these settings, so the zone takes the field's again)}. Settings that are not named stay as they are. Returns {zone, name, has_settings, zones: [{index, name, area_m2, has_settings}]}. One undo step. The Object Info panel of the app calls this method.",
+    "Change the settings of one zone of a hardscape without touching the other zones (hardscape.split replaces them all). params: {id, zone (the index of the zone in the reply of hardscape.split or hardscape.plan, from 0), name?, pattern? (as the pattern of unit_pattern.layout), origin?, angle?, align_to_edge? (n: start at vertex n of the outline of the zone), align_to_split? (n: start at the first point of split line n), clear? ([pattern | origin | angle | align_to_edge | align_to_split]: remove these settings, so the zone takes the field's again)}. Settings that are not named stay as they are; align_to_edge and align_to_split cannot be given together. Returns {zone, name, has_settings, changed (false when nothing differed: no undo step), zones: [{index, name, area_m2, has_settings}]}. One undo step. The Object Info panel of the app calls this method.",
 );
 pub const HARDSCAPE_COURSE: (&str, &str) = (
     "hardscape.course",
@@ -951,9 +951,18 @@ fn zone_set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> 
         Some(v) => Some(point(v, "origin")?),
         None => None,
     };
+    if m.get("align_to_edge").is_some_and(|v| !v.is_null())
+        && m.get("align_to_split").is_some_and(|v| !v.is_null())
+    {
+        return Err(bad("give align_to_edge or align_to_split, not both"));
+    }
+    let new_name = match m.get("name").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(v.as_str().ok_or_else(|| bad("'name' must be text"))?.trim()),
+    };
     let spec = &mut p.zones[i];
-    if let Some(n) = m.get("name").and_then(Value::as_str) {
-        let n = n.trim();
+    let spec_before = spec.clone();
+    if let Some(n) = new_name {
         spec.name = (!n.is_empty()).then(|| n.to_string());
     }
     if let Some(pt) = new_pattern {
@@ -982,6 +991,18 @@ fn zone_set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> 
             _ => spec.align_to_split = None,
         }
     }
+    // Nothing changed: no undo step.
+    let changed = p.zones[i] != spec_before;
+    if !changed {
+        return Ok(json!({
+            "zone": index,
+            "name": info.name,
+            "has_settings": info.has_setting,
+            "changed": false,
+            "zones": zones_json(&before, None),
+            "notes": before.notes,
+        }));
+    }
     p.validate().map_err(bad)?;
     let after = plan_state(doc, &with_plan(o, &p), max_units)?;
     let o = o.clone();
@@ -989,6 +1010,7 @@ fn zone_set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> 
     let zone = after.zones.get(index);
     Ok(json!({
         "zone": index,
+        "changed": true,
         "name": zone.map(|z| z.name.clone()),
         "has_settings": zone.is_some_and(|z| z.has_setting),
         "zones": zones_json(&after, None),

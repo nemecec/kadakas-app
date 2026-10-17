@@ -244,3 +244,21 @@ fn the_dialog_refuses_a_plain_object_and_previews_and_stores_through_the_api() {
     assert_eq!(be.calls[0].0, "hardscape.split");
     assert_eq!(be.calls[0].1["tolerance"], 2.0);
 }
+
+#[test]
+fn an_edit_is_stored_only_when_done_fresh_unlocked_and_changed() {
+    let (editor, id) = split_lot();
+    let zones = zone_shapes(editor.doc(), id, 100_000).unwrap();
+    let base = ZoneSettings::read(editor.doc(), editor.doc().object(id).unwrap(), &zones[0]);
+    let mut e = ZoneEdit::new(id, 0, base);
+    assert_eq!(e.step(true, true, false), EditStep::Keep, "nothing changed");
+    e.settings.angle = Some(12.0);
+    assert_eq!(e.step(false, true, false), EditStep::Keep, "still typing");
+    assert_eq!(e.step(true, false, false), EditStep::Keep, "old zones");
+    assert_eq!(
+        e.step(true, true, true),
+        EditStep::Keep,
+        "locked: the values stay"
+    );
+    assert_eq!(e.step(true, true, false), EditStep::Store);
+}

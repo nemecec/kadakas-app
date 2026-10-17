@@ -472,7 +472,13 @@ pub(super) fn check_window(
         .default_width(420.0)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui.button(tr!("paving-ui-run-the-check")).clicked() {
+                if ui
+                    .add_enabled(
+                        !p.check.running,
+                        egui::Button::new(tr!("paving-ui-run-the-check")),
+                    )
+                    .clicked()
+                {
                     run = true;
                 }
                 let mut on = crate::plan_draw::show_check();
@@ -663,13 +669,15 @@ fn start_check(p: &mut PavingUi, ctx: &Context, session: &mut Session) {
         return;
     };
     let rev = session.editor.revision();
-    let doc = session.editor.doc().clone();
+    let doc = p.shared.get(session.editor.doc(), rev);
     let limits = session.limits().clone();
     p.check_job.clear();
     p.check_job.start(
         ctx,
         rev,
         ObjectId::from_num(0),
-        Box::new(move || Scratch::new(doc, limits, Vec::new()).call("unit_pattern.check", params)),
+        Box::new(move || {
+            Scratch::new((*doc).clone(), limits, Vec::new()).call("unit_pattern.check", params)
+        }),
     );
 }

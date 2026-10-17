@@ -78,8 +78,34 @@ pub enum Request {
     EditJoints(ResourceId),
 }
 
+/// One copy of the document per revision, for the jobs of one frame (counts, zones, courses and
+/// the check read it on their threads; each would otherwise copy the whole document).
+#[derive(Default)]
+pub struct SharedDoc(std::cell::RefCell<Option<(u64, std::sync::Arc<Document>)>>);
+
+impl SharedDoc {
+    pub fn get(&self, doc: &Document, revision: u64) -> std::sync::Arc<Document> {
+        let mut c = self.0.borrow_mut();
+        match &*c {
+            Some((r, d)) if *r == revision => d.clone(),
+            _ => {
+                let d = std::sync::Arc::new(doc.clone());
+                *c = Some((revision, d.clone()));
+                d
+            }
+        }
+    }
+
+    /// How many copies were made (for the tests): the revision of the one held.
+    #[cfg(test)]
+    pub fn held(&self) -> Option<u64> {
+        self.0.borrow().as_ref().map(|(r, _)| *r)
+    }
+}
+
 #[derive(Default)]
 pub struct PavingUi {
+    pub(crate) shared: SharedDoc,
     pub(crate) curves: Option<CurvesDialog>,
     pub(crate) split: Option<SplitDialog>,
     /// Clicks of the plan add points to the split line.

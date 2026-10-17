@@ -412,6 +412,13 @@ impl ZoneSettings {
     }
 }
 
+/// What [`ZoneEdit::step`] says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditStep {
+    Keep,
+    Store,
+}
+
 /// The edit of one zone in Object Info. The form keeps the typed values between frames; they
 /// are stored when the person is done (`params` gives the call). The edit is for the zone as the
 /// document had it when the edit began (`base`): if the document changed meanwhile, it begins
@@ -442,6 +449,17 @@ impl ZoneEdit {
     /// Something was typed that is not stored yet.
     pub fn changed(&self) -> bool {
         self.settings != self.base
+    }
+
+    /// What to do with the edit now. `done`: the person finished a field. `fresh`: the zones are
+    /// those of the document as it is now. `locked`: the document cannot be changed. Typed values
+    /// are kept while locked or while the zones are old, and stored otherwise.
+    pub fn step(&self, done: bool, fresh: bool, locked: bool) -> EditStep {
+        if done && fresh && !locked && self.changed() {
+            EditStep::Store
+        } else {
+            EditStep::Keep
+        }
     }
 
     /// The parameters of `hardscape.zone_set`, the call that stores the edit: only what changed.

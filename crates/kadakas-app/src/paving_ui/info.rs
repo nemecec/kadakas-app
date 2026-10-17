@@ -133,9 +133,10 @@ fn counts_block(ui: &mut Ui, session: &mut Session, id: ObjectId, p: &mut Paving
     let ctx = ui.ctx().clone();
     let doc = session.editor.doc();
     let limits = session.limits().clone();
+    let shared = &p.shared;
     let result = match p.counts.poll(&ctx, rev, id, || {
-        let doc = doc.clone();
-        Box::new(move || counts::count(&mut Scratch::new(doc, limits, Vec::new()), id))
+        let doc = shared.get(doc, rev);
+        Box::new(move || counts::count(&mut Scratch::new((*doc).clone(), limits, Vec::new()), id))
     }) {
         Poll::Fresh(r) => Some(r),
         Poll::Old(r) => {
@@ -235,8 +236,9 @@ fn zones_block(
         .object(id)
         .and_then(plan::data)
         .map_or(0, |pl| pl.splits.len());
+    let shared = &p.shared;
     let (zones, fresh) = match p.zones.poll(&ctx, rev, id, || {
-        let doc = doc.clone();
+        let doc = shared.get(doc, rev);
         Box::new(move || split::zone_shapes(&doc, id, max))
     }) {
         Poll::Fresh(Ok(z)) => (z.clone(), true),
@@ -312,7 +314,7 @@ fn zones_block(
         .show(ui, |ui| {
             // The zones of an earlier state are not edited: their numbers may be other zones now.
             ui.add_enabled_ui(fresh, |ui| {
-                zone_editor(ui, session, id, p, z, splits, status);
+                zone_editor(ui, session, id, p, z, (splits, fresh), status);
             });
         });
         if header.header_response.clicked() {
@@ -327,7 +329,7 @@ fn zone_editor(
     id: ObjectId,
     p: &mut PavingUi,
     z: &ZoneShape,
-    splits: usize,
+    (splits, fresh): (usize, bool),
     status: &mut String,
 ) {
     let doc = session.editor.doc();
@@ -481,16 +483,15 @@ fn zone_editor(
                 });
         });
     }
-    if done && edit.changed() {
-        if p.blocked(status) {
-            return;
-        }
+    let locked = done && p.blocked(status);
+    if edit.step(done, fresh, locked) == split::EditStep::Store {
         // The edit is dropped: the document changes, and the next frame starts from it.
         if let Err(e) = split::store_zone(&mut SessionBackend(session), &edit) {
             *status = tr!("paving-ui-error", e = e);
         }
         return;
     }
+    // The typed values stay (locked, or the zones are old), so they can be stored later.
     p.zone_edit = Some(edit);
 }
 
@@ -518,8 +519,9 @@ fn courses_block(
     let ctx = ui.ctx().clone();
     let doc = session.editor.doc();
     let max = session.limits().pattern_units;
+    let shared = &p.shared;
     let rows = match p.courses.poll(&ctx, rev, id, || {
-        let doc = doc.clone();
+        let doc = shared.get(doc, rev);
         Box::new(move || course::rows(&doc, id, max))
     }) {
         Poll::Fresh(Ok(r)) | Poll::Old(Ok(r)) => r.clone(),

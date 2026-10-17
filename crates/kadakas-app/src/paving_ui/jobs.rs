@@ -52,8 +52,13 @@ impl<T: Send + 'static> Job<T> {
                 self.done = Some((key, res));
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            // The thread ended without an answer (it panicked): ask again.
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.running = None,
+            // The thread ended without an answer (it panicked): that is the result for its
+            // key, so the work is not started again at every frame.
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                let key = r.key;
+                self.running = None;
+                self.done = Some((key, Err(kadakas_l10n::tr!("paving-ui-the-work-stopped"))));
+            }
         }
     }
 
@@ -189,26 +194,41 @@ mod tests {
     }
 
     #[test]
-    fn a_job_that_panics_is_asked_for_again() {
+    fn a_job_that_panics_is_an_error_for_its_key_and_is_not_started_again() {
         let ctx = egui::Context::default();
         let mut job: Job<u32> = Job::default();
-        job.start(&ctx, 1, id(), Box::new(|| panic!("boom")));
-        for _ in 0..200 {
-            if !job.busy() {
+        let starts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut seen_error = false;
+        for _ in 0..400 {
+            let n = starts.clone();
+            let p = job.poll(&ctx, 1, id(), || {
+                Box::new(move || {
+                    n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    panic!("boom")
+                })
+            });
+            if matches!(p, Poll::Fresh(Err(_))) {
+                seen_error = true;
                 break;
             }
-            let _ = job.take();
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert!(!job.busy());
-        job.start(&ctx, 1, id(), Box::new(|| Ok(7)));
-        for _ in 0..200 {
-            if let Some(r) = job.take() {
-                assert_eq!(r, Ok(7));
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(seen_error);
+        // Asked again for the same key: the error stays, nothing starts.
+        for _ in 0..5 {
+            let n = starts.clone();
+            let p = job.poll(&ctx, 1, id(), || {
+                Box::new(move || {
+                    n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(1)
+                })
+            });
+            assert!(matches!(p, Poll::Fresh(Err(_))));
         }
-        panic!("no result");
+        assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // A new revision is a new try.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let p = job.poll(&ctx, 2, id(), || Box::new(|| Ok(5)));
+        assert!(matches!(p, Poll::Old(Err(_)) | Poll::Fresh(Ok(5))));
     }
 }
