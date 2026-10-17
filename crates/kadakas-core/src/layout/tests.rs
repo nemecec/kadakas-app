@@ -1262,8 +1262,7 @@ fn a_turned_lot_with_an_island_on_the_cell_lines_loses_no_unit() {
 #[test]
 fn an_interior_point_lies_inside_convex_and_concave_pieces() {
     let inside = |poly: &[DVec2]| {
-        let p = units::interior_point(poly);
-        crate::geom::point_in_polygon(p, poly)
+        units::interior_point(poly).is_some_and(|p| crate::geom::point_in_polygon(p, poly))
     };
     assert!(inside(&rect(10.0, 2.0)));
     let mut cw = rect(10.0, 2.0);
@@ -1294,6 +1293,13 @@ fn an_interior_point_lies_inside_convex_and_concave_pieces() {
         DVec2::new(0.0, 10.0),
     ];
     assert!(inside(&u));
+    // No inside at all: the clipper then cuts the piece in place of guessing.
+    let flat = [
+        DVec2::new(0.0, 0.0),
+        DVec2::new(5.0, 0.0),
+        DVec2::new(10.0, 0.0),
+    ];
+    assert_eq!(units::interior_point(&flat), None);
 }
 
 proptest! {
@@ -1423,5 +1429,84 @@ proptest! {
         let (n, a) = count_and_area(&make(true), &p, &place);
         prop_assert_eq!(n, n0);
         prop_assert!((a - a0).abs() < 1e-2, "{} against {}", a, a0);
+    }
+}
+
+/// The two stall zones of the lot in feet (`test_a_lot_in_feet_keeps_every_unit_with_zones_and_a_course`
+/// in tests/behavior/test_messy_dxf.py) as they reach the clipper with the snap of the zones off:
+/// the bits of every coordinate as the workflow made them. Their left edges run from x = 404 to one
+/// bit below it, on the sides of the first column of units. The old clipper lost five whole units in
+/// each (133 and 139 units in place of 138 and 144).
+#[test]
+fn the_stall_zones_of_the_lot_in_feet_lose_no_unit() {
+    let b = |x: u64, y: u64| DVec2::new(f64::from_bits(x), f64::from_bits(y));
+    let lower = [
+        b(4645814859353554943, 4662219572839972864), // (403.99999999999994, 5000)
+        b(4645814859353554944, 4645814859353554944), // (404, 404)
+        b(4657715973212602368, 4645814859353554944), // (2500, 404)
+        b(4657715973212602368, 4662219572839972864), // (2500, 5000)
+    ];
+    let upper = [
+        b(4645814859353554944, 4671115721420308480), // (404, 19596)
+        b(4645814859353554943, 4669471951536783361), // (403.99999999999994, 15000.000000000002)
+        b(4657715973212602368, 4669471951536783361), // (2500, 15000.000000000002)
+        b(4657715973212602368, 4671115721420308480), // (2500, 19596)
+    ];
+    assert_eq!(lower[0].x, 404f64.next_down());
+    let p = Pattern::new(Bond::RunningBond, 400.0, 200.0, 4.0);
+    let place = Placement {
+        origin: Some(DVec2::new(-2.0, 402.0)),
+        angle: 0.0,
+    };
+    for (ring, n_all, n_whole) in [(&lower, 138, 99), (&upper, 144, 99)] {
+        let (units, stats) = run(&region(ring, &[]), &p, &place);
+        let whole = units.iter().filter(|u| u.whole).count();
+        assert_eq!((units.len(), whole), (n_all, n_whole), "{ring:?}");
+        assert_eq!(stats.dust_pieces, 0);
+        // The same zone in exact numbers gives the same units.
+        let exact: Vec<DVec2> = ring
+            .iter()
+            .map(|q| DVec2::new(q.x.round(), q.y.round()))
+            .collect();
+        let (e, _) = run(&region(&exact, &[]), &p, &place);
+        assert_eq!(e.len(), units.len());
+        assert_eq!(e.iter().filter(|u| u.whole).count(), whole);
+    }
+}
+
+#[test]
+fn a_lot_at_survey_coordinates_a_few_bits_off_the_unit_sides_keeps_every_unit_whole() {
+    // L-EST97 in mm: 6.5e9 north, where one bit is about 1e-6 mm. Every side of the lot lies on the
+    // sides of units, moved out of the lot or into it by a few bits. The noise must not make cut
+    // units: an edge that does not touch a unit leaves it whole, and a unit that an edge cuts by a
+    // bit is trimmed (whole).
+    let p = Pattern::new(Bond::Stack, 400.0, 200.0, 4.0);
+    let at = DVec2::new(6.5e8, 6.5e9);
+    let place = Placement {
+        origin: Some(at - DVec2::splat(2.0)),
+        angle: 0.0,
+    };
+    let lot: Vec<DVec2> = rect(4036.0, 2036.0).iter().map(|q| at + *q).collect();
+    let (u0, _) = run(&region(&lot, &[]), &p, &place);
+    assert_eq!(u0.len(), 100);
+    assert!(u0.iter().all(|u| u.whole));
+    for ulps in [1, 2, 3, -1, -2, -3] {
+        // Positive: out of the lot on every side; negative: into it.
+        let (lo, hi) = (lot[0], lot[2]);
+        let ring: Vec<DVec2> = lot
+            .iter()
+            .map(|q| {
+                let mv = |v: f64, low: bool| nudge(v, if low { -ulps } else { ulps });
+                DVec2::new(mv(q.x, q.x == lo.x), mv(q.y, q.y == lo.y))
+            })
+            .collect();
+        assert!(ring.iter().all(|q| q.x != lo.x && q.x != hi.x));
+        let (units, stats) = run(&region(&ring, &[]), &p, &place);
+        let whole = units.iter().filter(|u| u.whole).count();
+        assert_eq!((units.len(), whole), (100, 100), "{ulps} bits");
+        assert_eq!(stats.dust_pieces, 0);
+        if ulps > 0 {
+            assert_eq!(stats.trimmed, 0, "nothing to trim");
+        }
     }
 }
