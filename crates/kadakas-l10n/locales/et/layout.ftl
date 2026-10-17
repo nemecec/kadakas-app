@@ -12,3 +12,4 @@ layout-snapping = Haaramine
 layout-is-ignored = { $path } jäetakse kõrvale: { $e }
 layout-give-the-layout-a-name = anna paigutusele nimi
 layout-no-layout = paigutust pole
+layout-drawing-too-narrow = Joonistusala oli ainult { $width } punkti lai, seepärast lähtestati paigutus vaikepaigutuseks.
