@@ -529,7 +529,7 @@ pub(super) fn lay(
     );
     for (kind, ring) in &pieces {
         let area = ring_area(ring);
-        placer.place(ring, *kind, area, full[*kind], min_width(ring), f)?;
+        placer.place(ring, None, *kind, area, full[*kind], min_width(ring), f)?;
     }
     Ok(placer.stats)
 }

@@ -1510,3 +1510,72 @@ fn a_lot_at_survey_coordinates_a_few_bits_off_the_unit_sides_keeps_every_unit_wh
         }
     }
 }
+
+/// A base strip in one row of 1 m units, with ten thin teeth that reach up into the next row.
+fn comb() -> Vec<DVec2> {
+    let mut ring = vec![
+        DVec2::new(0.0, -500.0),
+        DVec2::new(1000.0, -500.0),
+        DVec2::new(1000.0, -400.0),
+    ];
+    for k in (0..10).rev() {
+        let x0 = 50.0 + 90.0 * k as f64;
+        let x1 = x0 + 10.0;
+        ring.extend([
+            DVec2::new(x1, -400.0),
+            DVec2::new(x1, 900.0),
+            DVec2::new(x0, 900.0),
+            DVec2::new(x0, -400.0),
+        ]);
+    }
+    ring.push(DVec2::new(0.0, -400.0));
+    ring
+}
+
+#[test]
+fn a_region_that_cuts_units_into_many_pieces_stops_at_the_unit_limit() {
+    // The area holds less than one unit, so the estimate is 1, but the teeth cut the unit of
+    // the upper row into ten pieces: the limit is kept while the units are made.
+    let r = region(&comb(), &[]);
+    let p = Pattern::new(Bond::Stack, 1000.0, 1000.0, 5.0);
+    let place = Placement {
+        origin: Some(DVec2::ZERO),
+        angle: 0.0,
+    };
+    let (units, _) = lay_units(&r, &p, &place, &Limits::new(100)).unwrap();
+    assert_eq!(units.len(), 11, "{units:?}");
+    assert!(units.iter().all(|u| !u.whole));
+    let e = lay_units(&r, &p, &place, &Limits::new(5)).unwrap_err();
+    assert!(e.to_string().contains("more than the limit of 5"), "{e}");
+    let LayoutError::TooMany(t) = e else {
+        panic!("{e:?}")
+    };
+    assert!(t.estimated > 5, "{t:?}");
+    // Streamed units stop at the limit too: never more than it.
+    let mut n = 0;
+    let got = for_each_unit(&r, &p, &place, &Limits::new(5), &mut |_| n += 1);
+    assert!(got.is_err() && n <= 5, "{n}");
+}
+
+#[test]
+fn small_units_far_from_the_origin_of_the_pattern_lay_as_near_it() {
+    // 1000 km from the origin of the pattern the rounding of a coordinate is near a tenth of a
+    // micrometre, and the noise margin of the engine (1e-9 of the coordinate) is 1 mm: a 20 by
+    // 10 mm unit has its inside point too close to its sides to move it from the first copy, so
+    // each copy finds its own. The result must not change.
+    let p = Pattern::new(Bond::Stack, 20.0, 10.0, 2.0);
+    let lay = |at: DVec2| {
+        let ring: Vec<DVec2> = rect(1000.0, 500.0).iter().map(|q| *q + at).collect();
+        let place = Placement {
+            origin: Some(DVec2::ZERO),
+            angle: 0.0,
+        };
+        let (units, _) = lay_units(&region(&ring, &[]), &p, &place, &limits()).unwrap();
+        let whole = units.iter().filter(|u| u.whole).count();
+        (units.len(), whole)
+    };
+    let near = lay(DVec2::new(1100.0, 600.0));
+    assert!(near.1 > 1000, "{near:?}");
+    // A whole number of lattice cells (22 by 12 mm) away: the units are the same.
+    assert_eq!(lay(DVec2::new(132.0 * 7_575_758.0 + 1100.0, 600.0)), near);
+}

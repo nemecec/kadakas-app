@@ -152,6 +152,17 @@ fn hardscape<'a>(doc: &'a Document, m: &Map<String, Value>) -> Result<&'a Object
             .ok_or_else(|| bad("give the 'id' of a hardscape"))?,
         "id",
     )?;
+    let o = hardscape_object(doc, id)?;
+    if plan::has_unreadable_data(o) {
+        return Err(bad(format!(
+            "object {id} has a zone and course plan that cannot be read. Clear it with hardscape.plan_clear"
+        )));
+    }
+    Ok(o)
+}
+
+/// The hardscape `id`, also when its plan cannot be read.
+fn hardscape_object(doc: &Document, id: ObjectId) -> Result<&Object, RpcError> {
     let o = doc
         .object(id)
         .ok_or_else(|| bad(format!("object {id} does not exist")))?;
@@ -159,11 +170,6 @@ fn hardscape<'a>(doc: &'a Document, m: &Map<String, Value>) -> Result<&'a Object
         return Err(bad(format!(
             "object {id} is a {}, not a hardscape",
             o.shape.kind()
-        )));
-    }
-    if plan::has_unreadable_data(o) {
-        return Err(bad(format!(
-            "object {id} has a zone and course plan that cannot be read. Clear it with hardscape.plan_clear"
         )));
     }
     Ok(o)
@@ -1343,9 +1349,14 @@ fn plan_clear(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
     let doc = s.editor.doc();
     let mut commands = Vec::new();
     for id in &ids {
-        let mut one = Map::new();
-        one.insert("id".into(), json!(id));
-        let o = hardscape(doc, &one)?;
+        let o = hardscape_object(doc, *id)?;
+        // A plan that cannot be read can only go as a whole: the error of the other calls tells
+        // the user to clear it, so this call must take it.
+        if plan::has_unreadable_data(o) && what != "all" {
+            return Err(bad(format!(
+                "object {id} has a zone and course plan that cannot be read: clear all of it (what: all)"
+            )));
+        }
         let mut p = current_plan(o);
         match what {
             "all" => p = Plan::default(),
