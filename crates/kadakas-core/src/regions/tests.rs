@@ -200,3 +200,63 @@ fn the_source_curves_of_a_region_are_listed() {
     // A lone line is an open piece.
     assert_eq!(found.open_dead_ends, 2);
 }
+
+#[test]
+fn collinear_loose_lines_become_one_edge_of_the_outline() {
+    // A 10 m by 4 m lot. The bottom kerb is 5 loose lines (one is 270 mm long), and one of the
+    // joints is 0.2 mm off the line.
+    let xs = [0.0, 270.0, 3_000.0, 3_500.0, 7_000.0, 10_000.0];
+    let mut shapes: Vec<Shape> = xs
+        .windows(2)
+        .map(|w| {
+            line(
+                v(w[0], if w[0] == 3_000.0 { 0.2 } else { 0.0 }),
+                v(w[1], 0.0),
+            )
+        })
+        .collect();
+    shapes.push(line(v(10_000.0, 0.0), v(10_000.0, 4_000.0)));
+    shapes.push(line(v(10_000.0, 4_000.0), v(0.0, 4_000.0)));
+    shapes.push(line(v(0.0, 4_000.0), v(0.0, 0.0)));
+    let found = from_curves(&curves(&shapes), 1.0).unwrap();
+    assert_eq!(found.regions.len(), 1);
+    let lot = &found.regions[0];
+    assert_eq!(lot.outer.len(), 4, "{:?}", lot.outer);
+    assert!((lot.area - 40_000_000.0).abs() < 1000.0, "{}", lot.area);
+    // The edges that form the outline are still all listed.
+    assert!(lot.edges.len() >= 8);
+}
+
+#[test]
+fn merging_keeps_corners_arcs_and_spikes() {
+    let c = |x, y| Vertex::corner(v(x, y));
+    // A real corner stays; a bend of 5 mm over 1 m stays; a spike that turns back stays.
+    let ring = vec![
+        c(0.0, 0.0),
+        c(1000.0, 5.0),
+        c(2000.0, 0.0),
+        c(1000.0, 2000.0),
+    ];
+    assert_eq!(merge_collinear(ring.clone(), 1.0), ring);
+    let spike = vec![c(0.0, 0.0), c(1000.0, 0.0), c(500.0, 0.0), c(500.0, 800.0)];
+    assert_eq!(merge_collinear(spike.clone(), 1.0).len(), 4);
+    // Never across an arc: the corners next to the arc point stay even if on a line.
+    let arc = vec![
+        c(0.0, 0.0),
+        c(500.0, 0.0),
+        Vertex::new(v(1000.0, 100.0), VertexKind::PointOnArc),
+        c(1500.0, 0.0),
+        c(1500.0, 1000.0),
+    ];
+    assert_eq!(merge_collinear(arc.clone(), 1.0), arc);
+    // Collinear points at the start of the ring are merged too (the ring is cyclic).
+    let wrap = vec![
+        c(500.0, 0.0),
+        c(1000.0, 0.0),
+        c(1000.0, 1000.0),
+        c(0.0, 1000.0),
+        c(0.0, 0.0),
+    ];
+    let m = merge_collinear(wrap, 1.0);
+    assert_eq!(m.len(), 4, "{m:?}");
+}
