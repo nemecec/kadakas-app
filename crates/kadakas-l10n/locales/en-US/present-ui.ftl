@@ -24,3 +24,5 @@ present-ui-remove-sun = Remove sun
 present-ui-no-sun-yet-change-a-value-to = No sun yet. Change a value to set one.
 present-ui-azimuth-elevation = Azimuth { $azimuth }, elevation { $elevation }
 present-ui-sun-below-the-horizon = Sun below the horizon (elevation { $elevation })
+present-ui-no-builtin-style = There is no built-in style "{ $name }".
+present-ui-no-active-style = There is no active style.

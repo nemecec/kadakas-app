@@ -15,7 +15,7 @@ pub fn use_builtin_style(session: &mut Session, name: &str) -> Result<(), String
     let (preset_name, preset) = RenderStyle::presets()
         .into_iter()
         .find(|(n, _)| n.eq_ignore_ascii_case(name))
-        .ok_or_else(|| format!("no built-in style '{name}'"))?;
+        .ok_or_else(|| tr!("present-ui-no-builtin-style", name = name))?;
     let doc = session.editor.doc();
     let id = doc
         .resources
@@ -72,7 +72,7 @@ fn ensure_active(session: &mut Session) -> Result<ResourceId, String> {
         .drawing
         .presentation
         .active_style
-        .ok_or_else(|| "no active style".into())
+        .ok_or_else(|| tr!("present-ui-no-active-style"))
 }
 
 /// Changes one field of the active style (creating the Shaded style first if needed).
@@ -226,13 +226,16 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, gpu_ready: bool) -> Option
             let label = active
                 .and_then(|id| session.editor.doc().resources.get(id))
                 .map_or("Shaded".to_string(), |r| r.name.clone());
+            let label = crate::enum_names::render_style(&label);
             ui.label(tr!("present-ui-style"));
             let (builtin, own) = style_names(session);
             egui::ComboBox::from_id_salt("render_style")
                 .selected_text(label)
                 .show_ui(ui, |ui| {
                     for name in &builtin {
-                        if ui.selectable_label(false, *name).clicked()
+                        if ui
+                            .selectable_label(false, crate::enum_names::render_style(name))
+                            .clicked()
                             && let Err(e) = use_builtin_style(session, name)
                         {
                             error = Some(e);
@@ -573,6 +576,34 @@ mod tests {
             ..Default::default()
         });
         assert!(night.contains("below the horizon"), "{night}");
+    }
+
+    #[test]
+    fn the_style_row_shows_no_english_in_estonian() {
+        let ctx = egui::Context::default();
+        let mut s = Session::default();
+        s.view.view = kadakas_render::StandardView::RightIsometric;
+        let mut texts = Vec::new();
+        kadakas_l10n::with_language("et", || {
+            for _ in 0..2 {
+                let out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1000.0, 200.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        show(ui, &mut s, true);
+                    },
+                );
+                texts.extend(crate::text_probe::shown_text(&out));
+            }
+            assert!(texts.iter().any(|t| t == "Varjutatud"), "{texts:?}");
+            let leaks = crate::text_probe::english_leaks(&texts);
+            assert!(leaks.is_empty(), "{leaks:?}");
+        });
     }
 
     #[test]

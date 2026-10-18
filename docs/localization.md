@@ -65,9 +65,14 @@ The command `cargo test -p kadakas-l10n` runs `tests/l10n_check.rs`. The test fa
 3. A message does not format without an error, for example because a variable is missing. The test also fails for an id that two files define.
 4. The code uses a message id that en-US does not have. The ids are in `tr!("..")`, `msg!("..")` and `translate("..")`.
 5. An en-US message is not used by any code. Delete it or use it.
-6. A user-visible string literal is left in an egui call of `kadakas-app` or `kadakas-ui-core`. The calls are `.label("..")`, `.button("..")`, `.heading`, `.checkbox`, `.selectable_value`, `.on_hover_text`, `Window::new`, `.hint_text` and similar.
+6. A user-visible string literal is left in an egui call of `kadakas-app` or `kadakas-ui-core`. The calls are `.label("..")`, `.button("..")`, `.heading`, `.checkbox`, `.selectable_value`, `.on_hover_text`, `Window::new`, `.hint_text`, `painter.text(.., "..", ..)`, `Checkbox::new`, `ComboBox::new`, `.link`, `.with_title` and similar.
+7. An Estonian message is the same text as the English one. Translate it. If both languages spell it alike (a name, a symbol, a loan word), add the id to `SAME_OK` in `tests/l10n_check.rs`.
 
 The scan for check 6 is a heuristic. It reads the source text line by line. A literal that is not a word needs an entry in `LITERAL_OK` in `tests/l10n_check.rs`. Examples are a symbol, an example value and the operator of a query language. Write the file, the text and a comment.
+
+The scan cannot see a text that does not come from a literal in the call. The usual case is a core crate that returns an English text, for example `StandardView::label()`, `RoofStyle::name()` or a resource type name. Do not show such a text. Show `enum_names::name(domain, id)` (or `standard_view`, `render_style`, `resource_type`), and add the values to `KNOWN` in `enum_names.rs`. The test `every_value_has_a_message` compares `KNOWN` with the values of the core crates.
+
+The second guard is a probe in `kadakas-app` (`text_probe.rs`). A test draws a part of the UI with egui in Estonian, reads the texts that egui painted (`shown_text`) and calls `english_leaks`. That fails for every painted text that is the English text of a message that Estonian translates. It finds the texts from the core crates. See `the_view_bar_shows_no_english_in_estonian` in `panels.rs`. When you add a window or a bar, add the same test for it. The probe sees only what is painted in the frame: a closed menu or combo box shows its selected text only.
 
 Run `cargo test -p kadakas-l10n` before each commit that touches UI text.
 

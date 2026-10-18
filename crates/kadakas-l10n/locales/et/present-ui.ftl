@@ -24,3 +24,5 @@ present-ui-remove-sun = Eemalda päike
 present-ui-no-sun-yet-change-a-value-to = Päikest pole veel. Muuda mõnda väärtust, et see seada.
 present-ui-azimuth-elevation = Asimuut { $azimuth }, kõrgusnurk { $elevation }
 present-ui-sun-below-the-horizon = Päike on silmapiiri all (kõrgusnurk { $elevation })
+present-ui-no-builtin-style = Sisseehitatud stiili „{ $name }“ pole.
+present-ui-no-active-style = Aktiivset stiili pole.

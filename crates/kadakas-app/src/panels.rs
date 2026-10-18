@@ -510,7 +510,7 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
                 ui,
                 IconRole::Bar,
                 crate::icons::view_icon(s),
-                s.label(),
+                &crate::enum_names::standard_view(s),
                 v.view == s,
             )
             .on_hover_text(view_hint(keys, s))
@@ -1970,6 +1970,40 @@ mod tests {
         let _ = ctx.run_ui(Default::default(), |ui| {
             let out = menu_bar(ui, &Keymap::defaults(), &p, &state, &mut extras, &mut grid);
             assert!(out.is_empty());
+        });
+    }
+
+    #[test]
+    fn the_view_bar_shows_no_english_in_estonian() {
+        let ctx = egui::Context::default();
+        let keys = Keymap::defaults();
+        let mut texts = Vec::new();
+        kadakas_l10n::with_language("et", || {
+            for view in [StandardView::Plan, StandardView::RightIsometric] {
+                let mut v = ViewSettings {
+                    view,
+                    ..ViewSettings::default()
+                };
+                for _ in 0..2 {
+                    let out = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(1400.0, 200.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| view_bar(ui, &mut v, &keys, true),
+                    );
+                    texts.extend(crate::text_probe::shown_text(&out));
+                }
+            }
+            assert!(
+                texts.iter().any(|t| t == "Plaan (ülalt)"),
+                "the probe sees the texts: {texts:?}"
+            );
+            let leaks = crate::text_probe::english_leaks(&texts);
+            assert!(leaks.is_empty(), "{leaks:?}");
         });
     }
 

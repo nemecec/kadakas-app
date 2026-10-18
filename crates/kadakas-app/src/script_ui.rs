@@ -379,7 +379,7 @@ impl ScriptUi {
                 self.lines.clear();
             }
             if let Some(st) = &self.status {
-                ui.label(st.name());
+                ui.label(crate::enum_names::name("script-status", st.name()));
             }
         });
         ui.separator();

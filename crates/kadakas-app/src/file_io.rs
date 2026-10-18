@@ -44,10 +44,7 @@ fn parse_document_bytes_capped(bytes: &[u8], max: u64) -> Result<Document, Strin
 /// limited by the sum of the sizes of its entries as well (`max`).
 pub fn parse_opened_bytes(bytes: &[u8], max: u64, mode: ReadMode) -> Result<Opened, String> {
     if bytes.len() as u64 > max {
-        return Err(format!(
-            "the file is {} bytes; the limit is {max} bytes",
-            bytes.len()
-        ));
+        return Err(tr!("file-io-too-big", bytes = bytes.len(), max = max));
     }
     kadakas_file::read_bytes(bytes, kadakas_file::Limits::default().with_total(max), mode)
         .map_err(|e| e.to_string())
