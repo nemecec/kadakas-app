@@ -18,6 +18,28 @@ pub fn name(domain: &str, id: &str) -> String {
     }
 }
 
+/// The name of a built-in render style (`RenderStyle::presets()`), for example "Hidden Line". A
+/// name that is not a built-in one (a style of the document) stays as it is.
+pub fn render_style(name_of_style: &str) -> String {
+    let slug = name_of_style.to_ascii_lowercase().replace(' ', "-");
+    let key = format!("enum-render-style-{slug}");
+    let text = kadakas_l10n::translate(&key, &[]);
+    if text == key {
+        name_of_style.to_string()
+    } else {
+        text
+    }
+}
+
+/// The name of a resource type (`plant_style`) for the lists. The annotation styles have their own
+/// names (`StyleKind::label`).
+pub fn resource_type(ty: &str) -> String {
+    match kadakas_ui_core::style_edit::StyleKind::from_type_name(ty) {
+        Some(kind) => kind.label(),
+        None => name("resource-type", ty),
+    }
+}
+
 /// The name of a standard view, for example "Left Isometric".
 pub fn standard_view(view: StandardView) -> String {
     name("view", view.id())
@@ -106,6 +128,43 @@ pub const KNOWN: &[&str] = &[
     msg!("enum-frame-box"),
     msg!("enum-frame-underline"),
     msg!("enum-frame-circle"),
+    msg!("enum-roof-flat"),
+    msg!("enum-roof-gable"),
+    msg!("enum-roof-hip"),
+    msg!("enum-script-status-running"),
+    msg!("enum-script-status-finished"),
+    msg!("enum-script-status-failed"),
+    msg!("enum-script-status-stopped"),
+    msg!("enum-render-style-wireframe"),
+    msg!("enum-render-style-shaded"),
+    msg!("enum-render-style-realistic"),
+    msg!("enum-render-style-hidden-line"),
+    msg!("enum-render-style-dashed-hidden-line"),
+    msg!("enum-length-unit-mm"),
+    msg!("enum-length-unit-cm"),
+    msg!("enum-length-unit-m"),
+    msg!("enum-length-unit-km"),
+    msg!("enum-length-unit-inch"),
+    msg!("enum-length-unit-foot"),
+    msg!("enum-length-unit-yard"),
+    msg!("enum-length-unit-mile"),
+    msg!("enum-resource-type-plant-style"),
+    msg!("enum-resource-type-hardscape-style"),
+    msg!("enum-resource-type-landscape-area-style"),
+    msg!("enum-resource-type-record-format"),
+    msg!("enum-resource-type-data-map"),
+    msg!("enum-resource-type-worksheet"),
+    msg!("enum-resource-type-symbol"),
+    msg!("enum-resource-type-hatch"),
+    msg!("enum-resource-type-tile"),
+    msg!("enum-resource-type-line-type"),
+    msg!("enum-resource-type-texture"),
+    msg!("enum-resource-type-material"),
+    msg!("enum-resource-type-render-style"),
+    msg!("enum-resource-type-image"),
+    msg!("enum-resource-type-irrigation-catalog"),
+    msg!("enum-resource-type-import-base"),
+    msg!("enum-resource-type-unknown"),
 ];
 
 #[cfg(test)]
@@ -141,6 +200,36 @@ mod tests {
         want.extend(LineType::ALL.iter().map(|v| key("line-type", v.id())));
         want.extend(Phase::ALL.iter().map(|v| key("phase", v.id())));
         want.extend(StandardView::ALL.iter().map(|v| key("view", v.id())));
+        for id in ["flat", "gable", "hip"] {
+            want.push(key("roof", id));
+        }
+        for id in ["running", "finished", "failed", "stopped"] {
+            want.push(key("script-status", id));
+        }
+        want.extend(
+            kadakas_core::present::RenderStyle::presets()
+                .iter()
+                .map(|(n, _)| key("render-style", &n.to_ascii_lowercase().replace(' ', "-"))),
+        );
+        for id in crate::io_dialog::UNITS {
+            want.push(key("length-unit", id));
+        }
+        for id in crate::resource_ui::TYPES.iter().filter(|t| !t.is_empty()) {
+            if kadakas_ui_core::style_edit::StyleKind::from_type_name(id).is_none() {
+                want.push(key("resource-type", id));
+            }
+        }
+        for id in [
+            "texture",
+            "material",
+            "render_style",
+            "image",
+            "irrigation_catalog",
+            "import_base",
+            "unknown",
+        ] {
+            want.push(key("resource-type", id));
+        }
         for id in ["ortho", "perspective"] {
             want.push(key("projection", id));
         }

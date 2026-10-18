@@ -71,6 +71,8 @@ mod snap_ui;
 mod solid_ui;
 mod style_ui;
 mod tess;
+#[cfg(test)]
+mod text_probe;
 mod theme;
 mod units_ui;
 #[cfg(not(target_arch = "wasm32"))]

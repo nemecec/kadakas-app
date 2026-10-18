@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use kadakas_api::Session;
 use serde_json::{Map, Value, json};
 
-const UNITS: &[&str] = &["mm", "cm", "m", "km", "inch", "foot", "yard", "mile"];
+pub(crate) const UNITS: &[&str] = &["mm", "cm", "m", "km", "inch", "foot", "yard", "mile"];
 
 /// Which kind of file an import has, by its extension.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,6 +222,11 @@ pub struct ExportForm {
     pub ifc_storeys: bool,
 }
 
+/// The name of a length unit of `UNITS` in the language of the UI.
+fn unit_name(id: &str) -> String {
+    crate::enum_names::name("length-unit", id)
+}
+
 fn pattern_name(i: usize) -> String {
     match i {
         1 => tr!("io-dialog-patterns-gaps"),
@@ -414,7 +419,7 @@ impl IoUi {
                                 ui.label(tr!("io-dialog-unit"));
                                 let label = form
                                     .unit
-                                    .map_or(tr!("io-dialog-from-file"), |u| UNITS[u].to_string());
+                                    .map_or(tr!("io-dialog-from-file"), |u| unit_name(UNITS[u]));
                                 egui::ComboBox::from_id_salt("import_unit")
                                     .selected_text(label)
                                     .show_ui(ui, |ui| {
@@ -424,7 +429,11 @@ impl IoUi {
                                             tr!("io-dialog-from-file"),
                                         );
                                         for (i, u) in UNITS.iter().enumerate() {
-                                            ui.selectable_value(&mut form.unit, Some(i), *u);
+                                            ui.selectable_value(
+                                                &mut form.unit,
+                                                Some(i),
+                                                unit_name(u),
+                                            );
                                         }
                                     });
                             });
@@ -550,10 +559,10 @@ impl IoUi {
                         ui.horizontal(|ui| {
                             ui.label(tr!("io-dialog-unit"));
                             egui::ComboBox::from_id_salt("export_unit")
-                                .selected_text(UNITS[form.unit])
+                                .selected_text(unit_name(UNITS[form.unit]))
                                 .show_ui(ui, |ui| {
                                     for (i, u) in UNITS.iter().enumerate() {
-                                        ui.selectable_value(&mut form.unit, i, *u);
+                                        ui.selectable_value(&mut form.unit, i, unit_name(u));
                                     }
                                 });
                         });

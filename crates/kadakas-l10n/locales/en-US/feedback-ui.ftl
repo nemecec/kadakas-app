@@ -79,3 +79,7 @@ feedback-ui-scrub-note-screenshot = Paths, tokens and e-mail addresses are remov
 feedback-ui-review-options-note = The move and georeference options also hide coordinates and CRS values in the recent calls and log lines.
 feedback-ui-web-not-sent = In the browser, reports are saved here but not sent yet.
 feedback-ui-outbox-newer = The outbox file is from a newer Kadakas. It was left as it is, and reports are kept in memory until the program ends.
+feedback-ui-store-bad-name = Not a feedback file name: { $name }
+feedback-ui-store-unavailable = The browser storage is not available.
+feedback-ui-store-full = The feedback store is full.
+feedback-ui-store-browser-full = The browser storage is full.

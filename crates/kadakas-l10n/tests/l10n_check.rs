@@ -5,8 +5,13 @@
 //! 3. a message id that the code uses is missing from en-US (the code uses `tr!("id")`,
 //!    `msg!("id")` and `translate("id", ...)`);
 //! 4. an en-US message is not used by any code (a leftover);
-//! 5. a hard-coded user-visible string is left in an egui call (`.label("..")`, `.button("..")`
-//!    and the like) in the UI crates.
+//! 5. a hard-coded user-visible string is left in an egui call (`.label("..")`, `.button("..")`,
+//!    `painter.text(.., "..", ..)` and the like) in the UI crates;
+//! 6. an Estonian message is the same text as the English one (a copy that nobody translated),
+//!    unless it is in `SAME_OK`: a name, a symbol or a word that both languages spell alike.
+//!
+//! The probe `text_probe` in `kadakas-app` (tests there) covers the rest: it draws parts of the UI
+//! in Estonian and fails when egui paints an English message text that did not come from `tr!`.
 //!
 //! The rules and the way to add a language are in `docs/localization.md`.
 
@@ -26,6 +31,50 @@ const UNUSED_OK: &[&str] = &[
     "common-ok",
     "common-cancel",
     "common-delete-n",
+];
+
+/// Messages whose Estonian text is the English text on purpose: names, symbols, loan words that
+/// Estonian spells alike, and units. A new message must not be here only because it is not
+/// translated yet.
+const SAME_OK: &[&str] = &[
+    "about-kadakas",
+    "agent-view-name",
+    "app-kadakas",
+    "app-import",
+    "enum-form-palm",
+    "feedback-ui-consent-server",
+    "gis-dialogs-server",
+    "gis-dialogs-filter",
+    "io-dialog-dxf-dwg-ifc-shapefile-geojson",
+    "io-dialog-import",
+    "io-dialog-ifc4-ifc4-add2-tc1",
+    "issues-ui-bcf",
+    "issues-ui-bcf-import-heading",
+    "issues-ui-bcf-error",
+    "panels-import-menu",
+    "panels-bezier",
+    "plant-sheet-ui-filter",
+    "plugin-ui-hash",
+    "profiles-ui-filter",
+    "profiles-ui-alias-runs",
+    "script-ui-python",
+    "sheets-ui-number",
+    "uic-tools-lasso",
+    "uic-tools-bezier",
+    "versions-ui-size-kib",
+    "versions-ui-size-mib",
+    // Only variables, units and symbols: nothing to translate.
+    "gis-ui-x-px",
+    "panels-cursor-position",
+    "picture-ui-facts",
+    "array-ui-ok",
+    "common-ok",
+    "solid-ui-ok",
+    "data-ui-a-b-c",
+    "enum-length-unit-mm",
+    "enum-length-unit-cm",
+    "enum-length-unit-m",
+    "enum-length-unit-km",
 ];
 
 /// String literals that may stay in an egui call, as (source file, literal). These are not
@@ -68,6 +117,8 @@ const LITERAL_OK: &[(&str, &str)] = &[
     ("io_dialog.rs", "IFC4"),
     ("io_dialog.rs", "Shapefile"),
     ("plant_ui.rs", "CSV"),
+    // The title of the window is the name of the program.
+    ("main.rs", "Kadakas"),
     // An empty text, a bare placeholder.
     ("app.rs", "{}"),
 ];
@@ -203,6 +254,50 @@ fn every_language_has_the_same_messages() {
 }
 
 #[test]
+fn no_estonian_message_is_a_copy_of_the_english_one() {
+    let ids = kadakas_l10n::message_ids(kadakas_l10n::FALLBACK).unwrap();
+    let mut problems = Vec::new();
+    // One switch of the language for all messages: a switch is slow.
+    let all = |tag: &str| -> Vec<String> {
+        kadakas_l10n::with_language(tag, || {
+            ids.iter()
+                .map(|id| kadakas_l10n::translate(id, &[]))
+                .collect()
+        })
+    };
+    let (english, estonian) = (all("en-US"), all("et"));
+    for ((id, en), et) in ids.iter().zip(english).zip(estonian) {
+        // Only the words count, not the `{$variable}` parts.
+        let mut words = String::new();
+        let mut depth = 0;
+        for c in en.chars() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                c if depth == 0 => words.push(c),
+                _ => {}
+            }
+        }
+        if en == et
+            && words.chars().filter(|c| c.is_alphabetic()).count() >= 2
+            && !SAME_OK.contains(&id.as_str())
+        {
+            problems.push(format!(
+                "{id}: the Estonian text is the English text {en:?}"
+            ));
+        }
+    }
+    for id in SAME_OK {
+        assert!(ids.contains(*id), "{id} in SAME_OK is no message");
+    }
+    assert!(
+        problems.is_empty(),
+        "translate these, or add them to SAME_OK with a reason:\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
 fn every_message_formats_without_an_error() {
     let mut problems = Vec::new();
     for lang in kadakas_l10n::languages() {
@@ -334,6 +429,14 @@ const FIRST_ARG: &[&str] = &[
     // Text that goes to the status line or to a message field.
     "status = ",
     "message = ",
+    "error = Some(",
+    // Other ways to put text on the screen.
+    ".layout_no_wrap(",
+    ".link(",
+    ".hyperlink(",
+    ".with_title(",
+    ".on_hover_text_at_pointer(",
+    "SelectableLabel::new(",
 ];
 
 /// Calls with the text as a later argument, with the place of that argument (the first
@@ -346,6 +449,12 @@ const LATER_ARG: &[(&str, usize)] = &[
     (".radio(", 1),
     (".colored_label(", 1),
     (".toggle_value(", 1),
+    ("Checkbox::new(", 1),
+    ("RadioButton::new(", 1),
+    ("ComboBox::new(", 1),
+    // `painter.text(position, anchor, "text", font, color)` draws text on the canvas.
+    ("painter.text(", 2),
+    (".text(", 2),
 ];
 
 /// Splits the text of a call at the commas that are not inside brackets or quotes. The text

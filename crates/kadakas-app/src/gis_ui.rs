@@ -136,10 +136,10 @@ pub fn massing_fields(ui: &mut Ui, m: &mut Massing) -> bool {
     ui.label(tr!("gis-ui-roof"));
     let before = m.roof;
     egui::ComboBox::from_id_salt("massing_roof")
-        .selected_text(m.roof.name())
+        .selected_text(roof_name(m.roof))
         .show_ui(ui, |ui| {
             for r in [RoofStyle::Flat, RoofStyle::Gable, RoofStyle::Hip] {
-                ui.selectable_value(&mut m.roof, r, r.name());
+                ui.selectable_value(&mut m.roof, r, roof_name(r));
             }
         });
     commit |= m.roof != before;
@@ -206,6 +206,11 @@ pub fn underlay_fields(ui: &mut Ui, u: &mut Underlay) -> bool {
     commit
 }
 
+/// The name of a roof style in the language of the UI.
+fn roof_name(r: RoofStyle) -> String {
+    crate::enum_names::name("roof", r.name())
+}
+
 /// The options in the Data bar.
 pub fn massing_bar(s: &mut MassingToolSettings, ui: &mut Ui) {
     ui.radio_value(&mut s.by_floors, false, tr!("gis-ui-height"));
@@ -230,10 +235,10 @@ pub fn massing_bar(s: &mut MassingToolSettings, ui: &mut Ui) {
         );
     }
     egui::ComboBox::from_id_salt("massing_tool_roof")
-        .selected_text(tr!("gis-ui-roof-2", roof = s.roof.name()))
+        .selected_text(tr!("gis-ui-roof-2", roof = roof_name(s.roof)))
         .show_ui(ui, |ui| {
             for r in [RoofStyle::Flat, RoofStyle::Gable, RoofStyle::Hip] {
-                ui.selectable_value(&mut s.roof, r, r.name());
+                ui.selectable_value(&mut s.roof, r, roof_name(r));
             }
         });
     if s.roof != RoofStyle::Flat {
@@ -294,6 +299,30 @@ impl ReadoutState {
 mod tests {
     use super::*;
     use kadakas_core::georef::Georeference;
+
+    #[test]
+    fn the_massing_bar_shows_no_english_in_estonian() {
+        let ctx = egui::Context::default();
+        let mut s = MassingToolSettings::default();
+        let out = kadakas_l10n::with_language("et", || {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        Pos2::ZERO,
+                        egui::vec2(1200.0, 100.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| ui.horizontal(|ui| massing_bar(&mut s, ui)).inner,
+            )
+        });
+        let texts = crate::text_probe::shown_text(&out);
+        assert!(texts.iter().any(|t| t.ends_with("lamekatus")), "{texts:?}");
+        kadakas_l10n::with_language("et", || {
+            let leaks = crate::text_probe::english_leaks(&texts);
+            assert!(leaks.is_empty(), "{leaks:?}");
+        });
+    }
 
     #[test]
     fn the_readout_follows_the_georeference() {

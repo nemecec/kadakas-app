@@ -11,7 +11,7 @@ use kadakas_core::resource::ResourceId;
 use kadakas_render::thumbnail::{SIZE, Thumbnail, thumbnail_with};
 use serde_json::{Value, json};
 
-const TYPES: [&str; 15] = [
+pub(crate) const TYPES: [&str; 15] = [
     "",
     "plant_style",
     "hardscape_style",
@@ -93,11 +93,9 @@ pub fn paint_thumbnail(ui: &mut Ui, t: &Thumbnail, side: f32) {
     }
 }
 
-/// The name of a resource type for the list: the annotation styles have readable names, the other
-/// types show their API name.
+/// The name of a resource type for the list, in the language of the UI.
 fn type_label(ty: &str) -> String {
-    kadakas_ui_core::style_edit::StyleKind::from_type_name(ty)
-        .map_or_else(|| ty.to_string(), |k| k.label())
+    crate::enum_names::resource_type(ty)
 }
 
 fn call(s: &mut Session, method: &str, params: Value, status: &mut String) -> Option<Value> {

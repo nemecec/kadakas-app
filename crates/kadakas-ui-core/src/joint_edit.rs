@@ -12,6 +12,7 @@ use kadakas_core::layout::object::outline_of;
 use kadakas_core::layout::{Limits, ModuleUnit, Placement, Region};
 use kadakas_core::model::{Document, ObjectId};
 use kadakas_core::resource::{ResourceBody, ResourceId};
+use kadakas_l10n::tr;
 
 /// Where the module of the draft comes from.
 #[derive(Clone, Debug, PartialEq)]
@@ -137,7 +138,7 @@ impl JointEditor {
         for (i, id) in ids.iter().enumerate() {
             let o = doc
                 .object(*id)
-                .ok_or_else(|| Problem(format!("object {id} does not exist")))?;
+                .ok_or_else(|| Problem(tr!("uic-joint-edit-object-gone", id = id)))?;
             let (outline, _) = outline_of(o).map_err(Problem)?;
             units.push(ModuleUnit {
                 name: format!("unit {}", i + 1),
@@ -155,16 +156,14 @@ impl JointEditor {
     pub fn joints(&self) -> Result<JointPattern, Problem> {
         let mut j = self.draft.clone();
         if j.kind == JointKind::Module && j.units.is_empty() {
-            return Err(Problem(
-                "pick a preset or take the shapes of the selection".into(),
-            ));
+            return Err(Problem(tr!("uic-joint-edit-pick-preset")));
         }
         j.layout().validate().map_err(Problem)?;
         if j.kind != JointKind::Module && (j.unit_length < 10.0 || j.unit_width < 10.0) {
-            return Err(Problem("units must be at least 10 mm".into()));
+            return Err(Problem(tr!("uic-joint-edit-unit-size")));
         }
         if !j.angle.is_finite() {
-            return Err(Problem("the angle must be a number".into()));
+            return Err(Problem(tr!("uic-joint-edit-angle")));
         }
         j.spacing = j.spacing.max(0.0);
         Ok(j)
@@ -180,7 +179,7 @@ impl JointEditor {
             .resources
             .hardscape_style(self.id)
             .cloned()
-            .ok_or_else(|| Problem("the style does not exist any more".into()))?;
+            .ok_or_else(|| Problem(tr!("uic-joint-edit-style-gone")))?;
         style.joints = Some(joints);
         Ok(Some(Command::ModifyResource {
             id: self.id,

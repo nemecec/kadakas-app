@@ -314,7 +314,7 @@ fn plan_for(
                         held.asked = Some(key);
                         worker().prepare(slot, job, ctx);
                     }
-                    None => return Plan::Failed("the object has no joint pattern".into()),
+                    None => return Plan::Failed(tr!("plan-draw-no-joint-pattern")),
                 }
             }
             Plan::Laying

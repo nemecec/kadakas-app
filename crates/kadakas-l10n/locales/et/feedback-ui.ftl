@@ -79,3 +79,7 @@ feedback-ui-scrub-note-screenshot = Tekstist eemaldatakse failiteed, pääsuvõt
 feedback-ui-review-options-note = Nihutamise ja georeferentsi valikud peidavad koordinaadid ja koordinaatsüsteemi väärtused ka viimastes kutsetes ja logiridades.
 feedback-ui-web-not-sent = Brauseris salvestatakse teated siia, kuid neid ei saadeta veel.
 feedback-ui-outbox-newer = Saatmisjärjekorra fail on uuemast Kadakasest. Seda ei muudetud ja teated jäävad mällu, kuni programm suletakse.
+feedback-ui-store-bad-name = Pole tagasisidefaili nimi: { $name }
+feedback-ui-store-unavailable = Brauseri salvestusruum pole saadaval.
+feedback-ui-store-full = Tagasiside salvestusruum on täis.
+feedback-ui-store-browser-full = Brauseri salvestusruum on täis.

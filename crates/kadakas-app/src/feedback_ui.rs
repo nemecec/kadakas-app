@@ -916,6 +916,7 @@ pub fn error_form(status: &str, last_command: &str) -> Form {
 pub mod web_store {
     use base64::Engine;
     use kadakas_feedback::Storage;
+    use kadakas_l10n::tr;
 
     const PREFIX: &str = "kadakas.feedback/";
     /// The most that the outbox takes of the roughly 5 MB of a site.
@@ -947,17 +948,17 @@ pub mod web_store {
 
         fn write(&mut self, name: &str, data: &[u8]) -> Result<(), String> {
             if !kadakas_feedback::store::safe_name(name) {
-                return Err(format!("not a feedback file name: {name}"));
+                return Err(tr!("feedback-ui-store-bad-name", name = name));
             }
-            let s = storage().ok_or("the browser storage is not available")?;
+            let s = storage().ok_or_else(|| tr!("feedback-ui-store-unavailable"))?;
             let key = format!("{PREFIX}{name}");
             let text = base64::engine::general_purpose::STANDARD.encode(data);
             let old = s.get_item(&key).ok().flatten().map_or(0, |v| v.len());
             if total(&s) - old + text.len() > CAP {
-                return Err("the feedback store is full".into());
+                return Err(tr!("feedback-ui-store-full"));
             }
             s.set_item(&key, &text)
-                .map_err(|_| "the browser storage is full".to_string())
+                .map_err(|_| tr!("feedback-ui-store-browser-full"))
         }
 
         fn remove(&mut self, name: &str) {
