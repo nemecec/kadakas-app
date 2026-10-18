@@ -1413,6 +1413,58 @@ fn a_course_with_holes_is_a_warning_of_the_report_and_of_the_export() {
 }
 
 #[test]
+fn wide_joints_are_a_warning_of_the_report_and_of_the_export() {
+    // A miter course that does not continue the field leaves a wide gap between the kerb and the
+    // field: the check finds it, and the report and the export must say so too.
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 6000.0, 3000.0);
+    ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "courses": [{"name": "Kerb", "along": "outline", "corner": "miter"}]}),
+    );
+    let chk = ok(&mut s, "unit_pattern.check", json!({"ids": [id]}));
+    let n = chk["totals"]["counts"]["joint_too_wide"].as_u64().unwrap();
+    assert!(n > 0, "{chk}");
+    let rep = ok(&mut s, "report.unit_pattern", json!({"ids": [id]}));
+    let row = &rep["rows"][0];
+    assert_eq!(row["wide_joints"]["count"].as_u64(), Some(n), "{row}");
+    assert!(row["wide_joints"]["widest_mm"].as_f64().unwrap() > 5.0);
+    let places = format!("{n} joint");
+    let w = row["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap())
+        .find(|x| x.contains("wider"))
+        .unwrap_or_else(|| panic!("{row}"));
+    assert!(
+        w.contains(&places) && w.contains("widest") && w.contains(" at ["),
+        "{w}"
+    );
+    assert_eq!(rep["totals"]["wide_joints"].as_u64(), Some(n));
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("kerb.dxf");
+    let ex = ok(
+        &mut s,
+        "export.file",
+        json!({"path": out, "format": "dxf", "options": {"patterns": "units"}}),
+    );
+    assert!(
+        ex["warnings"]
+            .as_array()
+            .expect("export warnings")
+            .iter()
+            .any(|x| x.as_str().unwrap().contains(&places)),
+        "{ex}"
+    );
+    let mut s2 = Session::with_sequential_ids();
+    let clean = slab(&mut s2, 2000.0, 1000.0);
+    let rep = ok(&mut s2, "report.unit_pattern", json!({"ids": [clean]}));
+    assert!(rep["rows"][0].get("warnings").is_none(), "{rep}");
+}
+
+#[test]
 fn a_joint_change_of_the_style_reaches_courses_and_zones_without_their_own_joint() {
     let mut s = Session::with_sequential_ids();
     let id = slab(&mut s, 8000.0, 4000.0);

@@ -246,6 +246,60 @@ pub fn coverage_warning(gaps: &[CoverageGap]) -> Option<String> {
     ))
 }
 
+/// The joints wider than the limit (`max_joint_mm`, or the widest joint of the group plus 1 mm):
+/// the `joint_too_wide` findings of [`check`], for reports and exports that must not leave a wide
+/// gap silent. `max_units` and `trim` of `opts` limit the layout as in [`check`].
+pub fn wide_joints(
+    groups: &[Group],
+    area: &Region,
+    opts: &CheckOptions,
+) -> Result<Vec<Finding>, LayoutError> {
+    let report = check(
+        groups,
+        area,
+        &CheckOptions {
+            max_findings: usize::MAX,
+            ..opts.clone()
+        },
+    )?;
+    Ok(report
+        .findings
+        .into_iter()
+        .filter(|f| f.kind == Kind::JointTooWide)
+        .collect())
+}
+
+/// The widest of some joints, in mm. 0 for none.
+pub fn widest_joint_mm(joints: &[Finding]) -> f64 {
+    joints.iter().map(|f| f.size).fold(0.0, f64::max)
+}
+
+/// The warning that a report or an export gives for joints wider than the limit: how many, the
+/// widest and where the first ones are. `None` when there are none.
+pub fn wide_joint_warning(joints: &[Finding]) -> Option<String> {
+    if joints.is_empty() {
+        return None;
+    }
+    let shown: Vec<String> = joints
+        .iter()
+        .take(3)
+        .map(|f| format!("{:.1} mm at [{:.0}, {:.0}]", f.size, f.at[0], f.at[1]))
+        .collect();
+    let more = joints.len() - shown.len();
+    Some(format!(
+        "{} joint{} wider than the pattern allows (the widest {:.1} mm): {}{}. unit_pattern.check lists them",
+        joints.len(),
+        if joints.len() == 1 { " is" } else { "s are" },
+        widest_joint_mm(joints),
+        shown.join("; "),
+        if more > 0 {
+            format!("; and {more} more")
+        } else {
+            String::new()
+        }
+    ))
+}
+
 /// The coverage of each group and the places where it fails, from the number of units and their
 /// area in each group.
 fn coverage_of(

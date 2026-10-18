@@ -785,12 +785,13 @@ fn a_plan_whose_job_went_is_asked_for_again() {
     let first = frame(&ed, id, &view, 1);
     assert!(first.waiting());
     wait_for_worker();
-    // The result is lost (dropped from the list of results), and the shared cache no longer has
-    // the plan.
+    // The result is lost (dropped from the list of results of this thread), and the shared cache
+    // is emptied. (Neither is asserted: the worker and the cache are shared by the whole process,
+    // and parallel tests lay the same lot, take its result or refill the cache. What counts is
+    // that this thread's window asks again and settles.)
     let slot = crate::plan_worker::slot(id, false);
-    let lost = worker().take(slot, key);
+    let _lost = worker().take(slot, key);
     draw::cache().clear();
-    assert!(lost.is_some() || draw::cached(key).is_none());
     let settled = settle(&ed, id, &view, 1);
     assert!(settled.joints > 100, "{settled:?}");
 }

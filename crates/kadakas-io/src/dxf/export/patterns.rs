@@ -244,6 +244,21 @@ pub(super) fn write(
         if let Some(w) = kadakas_core::layout::check::coverage_warning(&gaps) {
             report.warn(&format!("{name}: {w}"));
         }
+        // A gap wider than the joints allow is as silent as a hole.
+        let region = kadakas_core::layout::object::region_of(cx.doc, o, cx.tol)
+            .map_err(|e| IoError::Option(format!("{name}: {e}")))?;
+        let wide = kadakas_core::layout::check::wide_joints(
+            &planned.groups,
+            &region,
+            &kadakas_core::layout::check::CheckOptions {
+                max_units: MAX_EXPORT_UNITS,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| IoError::Option(format!("{name}: {e}")))?;
+        if let Some(w) = kadakas_core::layout::check::wide_joint_warning(&wide) {
+            report.warn(&format!("{name}: {w}"));
+        }
     }
     if planned_object && mode != PatternExport::Gaps {
         report.note(&format!(

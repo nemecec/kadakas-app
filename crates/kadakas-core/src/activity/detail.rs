@@ -311,6 +311,21 @@ fn field_change(
         "shape" => keys.extend(path[1..].iter().filter_map(key_of)),
         "data" => {
             let rest = &path[1..];
+            if rest.is_empty() {
+                // The whole data map was emptied (or filled): the keys say what went.
+                let names = |v: Option<&Value>| match v {
+                    Some(Value::Object(m)) if !m.is_empty() => {
+                        Some(m.keys().cloned().collect::<Vec<_>>().join(", "))
+                    }
+                    _ => None,
+                };
+                return Some(FieldChange {
+                    scope: None,
+                    field: "data".to_string(),
+                    before: names(b),
+                    after: names(a),
+                });
+            }
             let key = key_of(rest.first()?)?;
             if key == crate::layout::plan::KEY {
                 // The plan of a hardscape: zones, courses and split lines by their own names.
@@ -558,6 +573,16 @@ mod tests {
         a.data.insert("list".into(), json!([1, 2, 3, 4, 5]));
         b.data.insert("list".into(), json!([1, 2, 3, 4, 5, 6]));
         assert_eq!(of(&a, &b).unwrap().text(), "list changed");
+    }
+
+    #[test]
+    fn an_emptied_data_map_is_a_change_that_names_the_removed_keys() {
+        let mut a = pavers("x");
+        let b = pavers("x");
+        a.data.insert("note".into(), json!("short"));
+        a.data.insert("flag".into(), json!(true));
+        assert_eq!(of(&a, &b).unwrap().text(), "data cleared (was flag, note)");
+        assert_eq!(of(&b, &a).unwrap().text(), "data set to flag, note");
     }
 
     #[test]
