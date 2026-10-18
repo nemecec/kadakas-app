@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Draws the Kadakas icon and writes icon.svg, the PNG sizes, icon.ico and icon.icns.
 
-The icon is our own: a plan symbol of a tree (a ring with a trunk dot) on a green tile, with
+The icon is our own: a juniper ("kadakas") as a landscape plan draws it, a canopy with a soft,
+scalloped outline around a trunk dot, on a green tile. Four short ticks outside the canopy are
 the crosshair of a CAD cursor. One list of shapes drives both the SVG and the pixel renderer, so
 they always match. Only the Python standard library is used.
 
@@ -16,17 +17,42 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SIZE = 1024  # the design grid
 
 TILE = (0x2F, 0x6B, 0x4F)
-CANOPY = (0xFF, 0xFF, 0xFF)
+CANOPY = (0x7F, 0xB5, 0x8F)
+INNER = (0x5D, 0x91, 0x70)
+TICK = (0xFF, 0xFF, 0xFF)
 ACCENT = (0xF2, 0xC1, 0x4E)
 
-# Shapes in drawing order: (kind, parameters, color).
+# Shapes in drawing order: (kind, parameters, color). A "blob" is a scalloped outline:
+# (cx, cy, radius, lobes, lobe height, seed). The seed fixes the uneven lobe heights.
 SHAPES = [
     ("rrect", (0, 0, 1024, 1024, 224), TILE),
-    ("ring", (512, 512, 300, 56), CANOPY),
-    ("line", (120, 512, 904, 512, 26), CANOPY),
-    ("line", (512, 120, 512, 904, 26), CANOPY),
-    ("disc", (512, 512, 92), ACCENT),
+    ("blob", (512, 512, 310, 26, 23, 7), CANOPY),
+    ("blob", (512, 512, 200, 18, 17, 11), INNER),
+    ("disc", (512, 512, 56), ACCENT),
+    ("line", (512, 70, 512, 150, 30), TICK),
+    ("line", (512, 874, 512, 954, 30), TICK),
+    ("line", (70, 512, 150, 512, 30), TICK),
+    ("line", (874, 512, 954, 512, 30), TICK),
 ]
+
+
+def lobe_heights(lobes, height, seed):
+    """Uneven heights, so the canopy looks grown and not like a gear. Fixed by the seed."""
+    state = seed
+    out = []
+    for _ in range(lobes):
+        state = (state * 1103515245 + 12345) % 2**31
+        out.append(height * (0.6 + 0.8 * state / 2**31))
+    return out
+
+
+def blob_radius(p, angle):
+    """The radius of a scalloped outline at an angle: one arch per lobe on top of the circle."""
+    _, _, r, lobes, height, seed = p
+    heights = lobe_heights(lobes, height, seed)
+    t = (angle % (2 * math.pi)) / (2 * math.pi) * lobes
+    i = int(t) % lobes
+    return r + heights[i] * math.sin(math.pi * (t - int(t)))
 
 
 def hexcolor(c):
@@ -49,6 +75,14 @@ def svg():
         elif kind == "disc":
             cx, cy, r = p
             out.append(f'  <circle cx="{cx}" cy="{cy}" r="{r}" fill="{col}"/>')
+        elif kind == "blob":
+            cx, cy = p[0], p[1]
+            pts = []
+            for k in range(720):
+                a = 2 * math.pi * k / 720
+                rr = blob_radius(p, a)
+                pts.append(f"{cx + rr * math.cos(a):.1f},{cy + rr * math.sin(a):.1f}")
+            out.append(f'  <polygon points="{" ".join(pts)}" fill="{col}"/>')
     out.append("</svg>")
     return "\n".join(out) + "\n"
 
@@ -65,6 +99,12 @@ def inside(kind, p, x, y):
     if kind == "disc":
         cx, cy, r = p
         return math.hypot(x - cx, y - cy) <= r
+    if kind == "blob":
+        cx, cy = p[0], p[1]
+        d = math.hypot(x - cx, y - cy)
+        if d <= p[2]:
+            return True
+        return d <= blob_radius(p, math.atan2(y - cy, x - cx))
     if kind == "line":
         x1, y1, x2, y2, sw = p
         dx, dy = x2 - x1, y2 - y1
