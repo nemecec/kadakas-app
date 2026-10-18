@@ -375,10 +375,11 @@ fn only_the_groups_with_small_units_are_hidden() {
 #[test]
 fn the_canvas_keeps_the_laid_plan_and_the_window_until_the_view_or_the_object_changes() {
     let (mut ed, id) = lot(8000.0, 4000.0, true);
-    let o = ed.doc().object(id).unwrap();
     let view = view_of(v(1000.0, 500.0), v(3000.0, 1500.0));
     settle(&ed, id, &view, 1);
-    let first = draw::prepared(ed.doc(), o).unwrap().unwrap();
+    // The plan that the canvas of this thread keeps. (Not the shared cache: tests that run beside
+    // this one empty it or push plans out of it, and then it lays the same plan again.)
+    let first = held_prepared(id, false).unwrap();
     let before = redraws();
     frame(&ed, id, &view, 1);
     frame(&ed, id, &view, 1);
@@ -401,9 +402,7 @@ fn the_canvas_keeps_the_laid_plan_and_the_window_until_the_view_or_the_object_ch
     .unwrap();
     frame(&ed, id, &view, 2);
     assert_eq!(redraws(), before, "an edit of something else costs nothing");
-    let again = draw::prepared(ed.doc(), ed.doc().object(id).unwrap())
-        .unwrap()
-        .unwrap();
+    let again = held_prepared(id, false).unwrap();
     assert!(Arc::ptr_eq(&first, &again));
     // A far pan leaves the window.
     let mut far = view;
