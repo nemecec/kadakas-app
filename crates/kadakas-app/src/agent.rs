@@ -110,7 +110,43 @@ impl Read for DeadlineStream {
     }
 }
 
+/// What the window shows of the server: the clients, whether a call runs, and the last call.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Status {
+    /// Connected (and authenticated or still in the login) clients.
+    pub clients: usize,
+    /// Calls that were sent and are not answered yet (queued, running, or waiting for a picture).
+    pub calls: usize,
+    /// When the app last took a call (ms since 1970).
+    pub last_call_ms: Option<u64>,
+}
+
+/// The counters that the client threads and the window share.
+#[derive(Default)]
+struct Stats {
+    active: AtomicUsize,
+    calls: AtomicUsize,
+    /// 0: no call yet.
+    last_call_ms: AtomicU64,
+}
+
+/// Counts a call until its answer is sent (or the client is gone).
+struct CallGuard(Arc<Stats>);
+
+impl Drop for CallGuard {
+    fn drop(&mut self) {
+        self.0.calls.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
 pub struct AgentServer {
+    stats: Arc<Stats>,
     pub addr: SocketAddr,
     /// The secret that clients send in `auth`.
     pub token: String,
@@ -135,6 +171,16 @@ pub enum Push {
 }
 
 impl AgentServer {
+    /// A read-only view of the clients and the calls, for the status bar.
+    pub fn status(&self) -> Status {
+        let last = self.stats.last_call_ms.load(Ordering::SeqCst);
+        Status {
+            clients: self.stats.active.load(Ordering::SeqCst),
+            calls: self.stats.calls.load(Ordering::SeqCst),
+            last_call_ms: (last > 0).then_some(last),
+        }
+    }
+
     /// Sends a line (a notification) to a connection, from any thread, without waiting. Anything
     /// but `Push::Sent` means that the caller must forget the connection.
     pub fn push(&self, conn: u64, line: String) -> Push {
@@ -196,6 +242,7 @@ impl AgentServer {
             {
                 continue; // the client was told that this request was cancelled
             }
+            self.stats.last_call_ms.store(now_ms(), Ordering::SeqCst);
             match handle(&req.line, &req.reply, req.conn) {
                 Reply::Now(answer) => {
                     let _ = req.reply.send(answer);
@@ -272,9 +319,10 @@ pub fn start_with(
     }
     let (tx, rx) = mpsc::channel::<Request>();
     let stop = Arc::new(AtomicBool::new(false));
-    let active = Arc::new(AtomicUsize::new(0));
+    let stats = Arc::new(Stats::default());
     let outboxes: Outboxes = Arc::default();
     {
+        let active = stats.clone();
         let (token, wake, stop) = (token.clone(), wake.clone(), stop.clone());
         let outboxes = outboxes.clone();
         let next_conn = AtomicU64::new(1);
@@ -283,17 +331,27 @@ pub fn start_with(
                 if stop.load(Ordering::SeqCst) {
                     return;
                 }
-                if active.fetch_add(1, Ordering::SeqCst) >= limits.max_clients {
-                    active.fetch_sub(1, Ordering::SeqCst);
+                if active.active.fetch_add(1, Ordering::SeqCst) >= limits.max_clients {
+                    active.active.fetch_sub(1, Ordering::SeqCst);
                     continue; // dropping the stream refuses the client
                 }
                 let guard = ClientGuard(active.clone());
                 let (tx, wake, token) = (tx.clone(), wake.clone(), token.clone());
                 let conn = next_conn.fetch_add(1, Ordering::SeqCst);
                 let outboxes = outboxes.clone();
+                let guard_stats = active.clone();
                 thread::spawn(move || {
                     let _guard = guard;
-                    serve_client(stream, &token, limits, conn, &outboxes, tx, wake);
+                    serve_client(
+                        stream,
+                        &token,
+                        limits,
+                        conn,
+                        &outboxes,
+                        tx,
+                        wake,
+                        &guard_stats,
+                    );
                     outboxes
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
@@ -303,6 +361,7 @@ pub fn start_with(
         });
     }
     Ok(AgentServer {
+        stats,
         addr,
         token,
         rx,
@@ -315,11 +374,11 @@ pub fn start_with(
 }
 
 /// Counts a connected client until its thread ends.
-struct ClientGuard(Arc<AtomicUsize>);
+struct ClientGuard(Arc<Stats>);
 
 impl Drop for ClientGuard {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        self.0.active.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -402,6 +461,7 @@ fn authenticate<R: BufRead>(reader: &mut R, out: &mut TcpStream, token: &str) ->
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn serve_client(
     stream: TcpStream,
     token: &str,
@@ -410,6 +470,7 @@ fn serve_client(
     outboxes: &Outboxes,
     tx: Sender<Request>,
     wake: Arc<dyn Fn() + Send + Sync>,
+    stats: &Arc<Stats>,
 ) {
     let Ok(mut out) = stream.try_clone() else {
         return;
@@ -456,6 +517,8 @@ fn serve_client(
             .and_then(|v| v.get("id").cloned());
         let (reply, answer) = mpsc::channel();
         let state = Arc::new(AtomicU8::new(PENDING));
+        stats.calls.fetch_add(1, Ordering::SeqCst);
+        let _call = CallGuard(stats.clone());
         if tx
             .send(Request {
                 conn,
@@ -1342,5 +1405,45 @@ mod tests {
             read(&[0xff, b'\n'], 5).unwrap_err().kind(),
             std::io::ErrorKind::InvalidData
         );
+    }
+
+    /// Waits (at most 5 s) until `f` holds.
+    fn until(mut f: impl FnMut() -> bool) -> bool {
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end {
+            if f() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    #[test]
+    fn the_status_counts_clients_calls_and_the_last_call() {
+        let server = start(0, Arc::new(|| {}), None).unwrap();
+        let (addr, token) = (server.addr, server.token.clone());
+        assert_eq!(server.status(), Status::default());
+        let mut a = Client::connect(addr);
+        assert!(a.auth(&token).is_some());
+        assert!(until(|| server.status().clients == 1));
+        let mut b = Client::connect(addr);
+        assert!(b.auth(&token).is_some());
+        assert!(until(|| server.status().clients == 2));
+        // A call that the window has not taken yet counts as running.
+        assert!(a.send(&json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string()));
+        assert!(until(|| server.status().calls == 1));
+        assert_eq!(server.status().last_call_ms, None);
+        let n =
+            server.poll(&mut |_| Some(json!({"jsonrpc": "2.0", "id": 1, "result": 1}).to_string()));
+        assert_eq!(n, 1);
+        assert!(a.read().is_some());
+        assert!(until(|| server.status().calls == 0));
+        assert!(server.status().last_call_ms.is_some());
+        // The clients go away.
+        drop(a);
+        assert!(until(|| server.status().clients == 1));
+        drop(b);
+        assert!(until(|| server.status().clients == 0));
     }
 }

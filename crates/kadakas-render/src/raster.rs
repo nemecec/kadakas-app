@@ -87,6 +87,10 @@ impl Default for RenderOptions {
 
 /// Depth that an edge line may be behind a surface and still show.
 const LINE_DEPTH_BIAS: f32 = 3e-4;
+/// Two surfaces that lie in one plane (a flat face under a slab, two slabs at one level) differ in
+/// depth only by rounding. Within this much (of the depth range) the triangle drawn later wins, so
+/// the picture is steady instead of speckled (zoomed out it looked like moire).
+pub(crate) const DEPTH_TIE: f32 = 5e-6;
 
 /// Flat Lambert factor for a unit normal that faces the viewer.
 pub fn lambert(normal: Vec3) -> f32 {
@@ -159,7 +163,7 @@ impl Target {
                 }
                 let z = w0 * p[0].z + w1 * p[1].z + w2 * p[2].z;
                 let i = y as usize * w as usize + x as usize;
-                if (0.0..=1.0).contains(&z) && z <= self.depth[i] {
+                if (0.0..=1.0).contains(&z) && z <= self.depth[i] + DEPTH_TIE {
                     self.depth[i] = z;
                     self.img.put(x as usize, y as usize, color);
                 }
@@ -420,6 +424,34 @@ mod tests {
         let img = render(&scene_of(&ed), &cam, &opts);
         let center = img.pixel(50, 50);
         assert!(center[0] > center[1], "{center:?}");
+    }
+
+    #[test]
+    fn faces_in_one_plane_give_a_steady_picture_not_speckles() {
+        // Two big faces at one level, seen zoomed out: every pixel of the overlap is one color.
+        let mut ed = Editor::default();
+        let big = |h: f64| Shape::Rect {
+            min: DVec2::new(-h, -h * 0.6),
+            max: DVec2::new(h, h * 0.6),
+        };
+        add(&mut ed, big(25_000.0), Some([200, 30, 30, 255]));
+        add(&mut ed, big(24_000.0), Some([30, 30, 200, 255]));
+        let img = render(
+            &scene_of(&ed),
+            &top_ortho(16_000.0),
+            &RenderOptions {
+                width: 400,
+                height: 300,
+                ..Default::default()
+            },
+        );
+        let mut seen = std::collections::BTreeSet::new();
+        for y in 100..200 {
+            for x in 100..300 {
+                seen.insert(img.pixel(x, y));
+            }
+        }
+        assert_eq!(seen.len(), 1, "{seen:?}");
     }
 
     #[test]

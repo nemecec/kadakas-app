@@ -187,3 +187,26 @@ agent-activity-field-bond = bond
 agent-activity-field-seed = seed point
 agent-activity-field-layer = layer
 agent-activity-field-class = class
+agent-activity-resource-hardscape-style = hardscape style
+agent-activity-resource-landscape-style = landscape area style
+agent-activity-resource-plant-style = plant style
+agent-activity-sum-resource = { $kind } '{ $name }': { $changes }
+agent-status-listening = Agent: listening
+agent-status-connected =
+    { $count ->
+        [one] Agent connected
+       *[other] Agent connected ({ $count })
+    }
+agent-status-working = Agent working…
+agent-status-tip =
+    Agent server on { $addr }
+    Clients: { $clients }
+    Last call: { $last }
+    Agent may move my view: { $lock }
+    Click to open the Agent Activity panel.
+agent-status-last-ago = { $secs } s ago
+agent-status-last-none = no call yet
+agent-status-yes = yes
+agent-status-no = no
+agent-status-notice-connected = An agent connected ({ $count } connected).
+agent-status-notice-disconnected = An agent disconnected ({ $count } still connected).

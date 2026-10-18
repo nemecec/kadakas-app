@@ -173,11 +173,33 @@ pub fn answer(id: &Value, img: &Image, req: &Request, dark: bool, view: &str) ->
     .to_string()
 }
 
+/// What the agent does instead when the window cannot draw.
+const HIDDEN_HINT: &str = "Use render.svg or render.png with a region (a box in drawing mm): they draw the document without the window";
+
+/// True when the window cannot draw a picture now: minimised or covered by other windows
+/// (egui reports both as not visible). An unknown state counts as visible.
+pub fn window_hidden(info: &egui::ViewportInfo) -> bool {
+    info.visible() == Some(false)
+}
+
+/// The error line when the window is hidden: no waiting.
+pub fn hidden_line(id: &Value) -> String {
+    error_line(
+        id,
+        1,
+        &format!(
+            "the window is hidden or minimised, or the display is asleep, so it draws no picture. {HIDDEN_HINT}"
+        ),
+    )
+}
+
 pub fn timeout_line(id: &Value) -> String {
     error_line(
         id,
         1,
-        "the window did not give a picture in time. Is it hidden or minimized?",
+        &format!(
+            "the window did not give a picture in time: it is probably hidden or minimised, or the display is asleep. {HIDDEN_HINT}"
+        ),
     )
 }
 
@@ -230,6 +252,29 @@ mod tests {
             };
             let v: Value = serde_json::from_str(&line).unwrap();
             assert_eq!(v["error"]["code"], -32602, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_hidden_window_is_told_at_once() {
+        let mut info = egui::ViewportInfo::default();
+        assert!(!window_hidden(&info), "unknown is visible");
+        info.minimized = Some(true);
+        assert!(window_hidden(&info));
+        info.minimized = Some(false);
+        info.occluded = Some(true);
+        assert!(window_hidden(&info));
+        info.occluded = Some(false);
+        assert!(!window_hidden(&info));
+        for l in [timeout_line(&json!(1)), hidden_line(&json!(1))] {
+            let e: Value = serde_json::from_str(&l).unwrap();
+            let m = e["error"]["message"].as_str().unwrap();
+            assert!(
+                m.contains("hidden") && m.contains("display is asleep"),
+                "{m}"
+            );
+            assert!(m.contains("render.svg") && m.contains("render.png"), "{m}");
+            assert!(m.contains("region"), "{m}");
         }
     }
 
@@ -295,7 +340,11 @@ mod tests {
             .decode(v["result"]["png_base64"].as_str().unwrap())
             .unwrap();
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
-        for l in [timeout_line(&json!(1)), failure_line(&json!(1), "x")] {
+        for l in [
+            timeout_line(&json!(1)),
+            hidden_line(&json!(1)),
+            failure_line(&json!(1), "x"),
+        ] {
             let e: Value = serde_json::from_str(&l).unwrap();
             assert_eq!(e["error"]["code"], 1);
         }

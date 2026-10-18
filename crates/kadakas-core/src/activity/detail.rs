@@ -10,6 +10,7 @@
 use serde_json::Value;
 
 use crate::model::{Object, Shape};
+use crate::resource::Resource;
 
 /// Most changes that a summary names; the rest is counted.
 pub const MAX_CHANGES: usize = 2;
@@ -45,6 +46,116 @@ pub struct Detail {
     pub changes: Vec<FieldChange>,
     /// How many more fields changed.
     pub more: usize,
+}
+
+/// What changed in one resource (a style, a material): its kind and name, and the first fields.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResourceDetail {
+    /// The `type` of the resource (`hardscape_style`, `plant_style`, ...).
+    pub kind: String,
+    pub name: String,
+    /// The first changes (at most [`MAX_CHANGES`]); a length has its unit in the value.
+    pub changes: Vec<FieldChange>,
+    pub more: usize,
+}
+
+/// A length in mm, by the name of the field.
+fn is_length(key: &str) -> bool {
+    matches!(
+        key,
+        "spacing"
+            | "unit_length"
+            | "unit_width"
+            | "thickness"
+            | "width"
+            | "gap"
+            | "offset"
+            | "elevation"
+            | "radius"
+            | "height"
+            | "depth"
+            | "spread"
+    )
+}
+
+/// The fields that differ between two states of one resource. `None` if nothing differs that can
+/// be named.
+pub fn of_resource(before: &Resource, after: &Resource) -> Option<ResourceDetail> {
+    let (b, a) = (
+        serde_json::to_value(before).ok()?,
+        serde_json::to_value(after).ok()?,
+    );
+    let mut found: Vec<(Vec<Seg>, Option<&Value>, Option<&Value>)> = Vec::new();
+    walk(&mut Vec::new(), Some(&b), Some(&a), &mut found);
+    let mut changes: Vec<FieldChange> = Vec::new();
+    for (path, vb, va) in found {
+        let mut keys: Vec<&str> = path.iter().filter_map(key_of).collect();
+        match keys.first().copied() {
+            Some("id") => continue,
+            Some("body") => {
+                keys.remove(0);
+                if keys.first() == Some(&"type") {
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        // The joint pattern of a style: its fields read as the fields of the style, and the
+        // width of the joint is "joint".
+        if keys.first() == Some(&"joints") && keys.len() == 2 {
+            keys.remove(0);
+            if keys[0] == "spacing" {
+                keys[0] = "joint";
+            }
+        }
+        if keys.is_empty() {
+            keys.push("resource");
+        }
+        let deg = degrees(&keys);
+        let unit = keys.last().is_some_and(|k| is_length(k) || *k == "joint");
+        let (sb, sa) = (show(vb, deg, false), show(va, deg, false));
+        let sa = sa.map(|t| if unit { format!("{t} mm") } else { t });
+        changes.push(FieldChange {
+            scope: None,
+            field: keys.join("."),
+            before: sb,
+            after: sa,
+        });
+    }
+    changes.dedup();
+    if changes.is_empty() {
+        return None;
+    }
+    let more = changes.len().saturating_sub(MAX_CHANGES);
+    changes.truncate(MAX_CHANGES);
+    let kind = a
+        .get("body")
+        .and_then(|b| b.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("resource")
+        .to_string();
+    Some(ResourceDetail {
+        kind,
+        name: after.name.clone(),
+        changes,
+        more,
+    })
+}
+
+impl ResourceDetail {
+    /// The English text: `hardscape style 'Pavers': joint 3 → 5 mm`.
+    pub fn text(&self) -> String {
+        let mut parts: Vec<String> = self.changes.iter().map(FieldChange::text).collect();
+        if self.more > 0 {
+            parts.push(format!("{} more", self.more));
+        }
+        format!(
+            "{} '{}': {}",
+            self.kind.replace('_', " "),
+            self.name,
+            parts.join("; ")
+        )
+    }
 }
 
 /// The name of an object, as far as the object holds one.
@@ -315,6 +426,59 @@ mod tests {
             thickness: None,
             elevation: None,
         })
+    }
+
+    fn style(name: &str, spacing: f64, thickness: f64) -> Resource {
+        use crate::hardscape::style::{HardscapeStyle, JointKind, JointPattern};
+        use crate::resource::ResourceBody;
+        Resource {
+            id: ResourceId::from_num(1),
+            name: name.into(),
+            body: ResourceBody::HardscapeStyle(Box::new(HardscapeStyle {
+                thickness,
+                joints: Some(JointPattern {
+                    kind: JointKind::RunningBond,
+                    unit_length: 200.0,
+                    unit_width: 100.0,
+                    spacing,
+                    angle: 0.0,
+                    color: None,
+                    units: Vec::new(),
+                    a: None,
+                    b: None,
+                    generator: None,
+                }),
+                ..Default::default()
+            })),
+        }
+    }
+
+    #[test]
+    fn a_changed_style_names_the_field_and_has_the_unit() {
+        let d = of_resource(&style("Pavers", 3.0, 80.0), &style("Pavers", 5.0, 80.0)).unwrap();
+        assert_eq!(d.kind, "hardscape_style");
+        assert_eq!(d.name, "Pavers");
+        assert_eq!(d.text(), "hardscape style 'Pavers': joint 3 → 5 mm");
+        // Two fields, then the rest is counted (MAX_CHANGES is 2).
+        let mut after = style("Pavers", 5.0, 100.0);
+        if let crate::resource::ResourceBody::HardscapeStyle(s) = &mut after.body {
+            s.joints.as_mut().unwrap().unit_length = 300.0;
+        }
+        let d = of_resource(&style("Pavers", 3.0, 80.0), &after).unwrap();
+        assert_eq!(d.changes.len(), MAX_CHANGES);
+        assert_eq!(d.more, 1);
+        assert!(d.text().ends_with("; 1 more"), "{}", d.text());
+        // A rename is a change of the name; nothing changed gives none.
+        let d = of_resource(&style("A", 3.0, 80.0), &style("B", 3.0, 80.0)).unwrap();
+        assert_eq!(d.changes[0].field, "name");
+        assert!(of_resource(&style("A", 3.0, 80.0), &style("A", 3.0, 80.0)).is_none());
+        // A fillet or a color that was not there before is "set", a removed one "cleared".
+        let mut with_border = style("A", 3.0, 80.0);
+        if let crate::resource::ResourceBody::HardscapeStyle(s) = &mut with_border.body {
+            s.joints.as_mut().unwrap().angle = 45.0;
+        }
+        let d = of_resource(&style("A", 3.0, 80.0), &with_border).unwrap();
+        assert_eq!(d.changes[0].text(), "angle 0° → 45°");
     }
 
     #[test]

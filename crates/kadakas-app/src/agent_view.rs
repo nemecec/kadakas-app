@@ -82,9 +82,29 @@ pub struct AgentView {
     /// The view now is the agent's work. False: the person made it (they moved the view, or went
     /// Back), so the next change of the agent keeps it as the protected entry of Back.
     agent_touched: bool,
+    /// The next fit of the view to the window is the app's own work (the first fit after the
+    /// launch, or after the agent opened a file), so it does not count as the person navigating.
+    app_fit_pending: bool,
 }
 
 impl AgentView {
+    /// The state at the launch of the app: the startup fit is the app's own work.
+    pub fn starting() -> Self {
+        AgentView {
+            app_fit_pending: true,
+            ..Default::default()
+        }
+    }
+
+    /// The window has just fitted the view to the drawing. If the app asked for that fit (the
+    /// launch, a file that the agent opened), the change is not the person's. A fit that the
+    /// person asked for (zoom to extents) still holds the agent back.
+    pub fn fit_applied(&mut self) {
+        if std::mem::take(&mut self.app_fit_pending) {
+            self.expect_change = self.expect_change.max(3);
+        }
+    }
+
     pub fn can_go_back(&self) -> bool {
         !self.back.is_empty()
     }
@@ -144,6 +164,7 @@ impl AgentView {
     /// next few frames change the view, and that is not the person's.
     pub fn expect_fit(&mut self) {
         self.expect_change = 6;
+        self.app_fit_pending = true;
     }
 
     /// A new document: the pointers and the views from before are about the old one.

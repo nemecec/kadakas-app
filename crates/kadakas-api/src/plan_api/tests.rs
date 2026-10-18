@@ -1549,3 +1549,95 @@ fn align_field_names_the_edge_it_used_and_lets_the_agent_choose_one() {
         "{m}"
     );
 }
+
+#[test]
+fn align_field_defaults_to_the_longest_straight_edge() {
+    let mut s = Session::with_sequential_ids();
+    let st = style(&mut s, "running_bond");
+    // The outline starts with a short edge (270 mm), then a long one of 6000 mm.
+    let id = ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": [[0, 0], [270, 0], [6000, 0], [6000, 3000], [0, 3000]], "style": st, "origin": [0, 0], "angle": 0}),
+    )["id"]
+        .clone();
+    let r = ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "along": "outline", "align_field": true}),
+    );
+    let edge = &r["aligned"]["edge"];
+    assert_eq!(edge["chosen"], false, "{r}");
+    assert!(edge["length_mm"].as_f64().unwrap() > 3000.0, "{r}");
+    assert_ne!(edge["index"], 0, "the 270 mm piece is not used: {r}");
+    let notes = r["notes"].to_string();
+    assert!(notes.contains("longest"), "{notes}");
+}
+
+#[test]
+fn hardscape_plan_shows_an_inherited_joint_as_null_with_the_effective_one() {
+    let mut s = Session::with_sequential_ids();
+    let id = slab(&mut s, 8000.0, 4000.0);
+    let style_id = ok(&mut s, "hardscape_style.list", json!({}))["styles"][0]["id"].clone();
+    ok(
+        &mut s,
+        "hardscape.split",
+        json!({"id": id, "lines": [[[3000, -50], [3000, 4050]]], "tolerance": 0.5,
+               "zones": [{"seed": [6000, 2000], "name": "Aisle", "origin": [3000, 0],
+                          "pattern": {"bond": "stack", "unit_length": 300, "unit_width": 150}},
+                         {"seed": [1000, 2000], "name": "Own", "origin": [0, 0],
+                          "pattern": {"bond": "stack", "unit_length": 300, "unit_width": 150, "gap": 3}}]}),
+    );
+    ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Kerb", "along": "outline"}),
+    );
+    let l = line(&mut s, [0.0, 0.0], [8000.0, 0.0]);
+    ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": id, "name": "Fixed", "source": l, "gap": 3}),
+    );
+    let check = |s: &mut Session, field: f64| {
+        let p = ok(s, "hardscape.plan", json!({"id": id}));
+        let zone = |n: &str| {
+            p["plan"]["zones"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|z| z["name"] == n)
+                .unwrap()
+                .clone()
+        };
+        let course = |n: &str| {
+            p["plan"]["courses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["name"] == n)
+                .unwrap()
+                .clone()
+        };
+        let aisle = zone("Aisle");
+        assert!(aisle["pattern"]["gap"].is_null(), "{aisle}");
+        assert_eq!(aisle["inherit_gap"], true);
+        assert_eq!(aisle["effective_gap"], field, "{aisle}");
+        let own = zone("Own");
+        assert_eq!(own["pattern"]["gap"], 3.0, "{own}");
+        assert_eq!(own["effective_gap"], 3.0);
+        let kerb = course("Kerb");
+        assert!(kerb["gap"].is_null(), "{kerb}");
+        assert_eq!(kerb["effective_gap"], field, "{kerb}");
+        let fixed = course("Fixed");
+        assert_eq!(fixed["gap"], 3.0);
+        assert_eq!(fixed["effective_gap"], 3.0);
+    };
+    check(&mut s, 5.0);
+    ok(
+        &mut s,
+        "hardscape_style.update",
+        json!({"id": style_id, "joints": {"kind": "running_bond", "unit_length": 200, "unit_width": 100, "spacing": 8}}),
+    );
+    check(&mut s, 8.0);
+}

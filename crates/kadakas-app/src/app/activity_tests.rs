@@ -536,3 +536,27 @@ fn a_one_object_step_names_what_changed_in_both_languages() {
     let et = kadakas_l10n::with_language("et", || summary_text(&step.summary));
     assert!(et.contains("tsoon 'Aisle' nurk 0° → 45°"), "{et}");
 }
+
+#[test]
+fn a_style_step_names_the_style_and_the_field_in_both_languages() {
+    let mut r = Rig::new();
+    let st = r.person(
+        "hardscape_style.create",
+        json!({"name": "Pavers", "thickness": 80,
+               "joints": {"kind": "running_bond", "unit_length": 200, "unit_width": 100, "spacing": 3}}),
+    )["id"]
+        .clone();
+    r.agent(
+        "hardscape_style.update",
+        json!({"id": st, "joints": {"kind": "running_bond", "unit_length": 200, "unit_width": 100, "spacing": 5}}),
+    );
+    let step = r.app.session.activity.steps().back().unwrap().clone();
+    let en = kadakas_l10n::with_language("en-US", || summary_text(&step.summary));
+    assert_eq!(en, step.summary.text());
+    assert_eq!(en, "Changed hardscape style 'Pavers': joint 3 → 5 mm");
+    let et = kadakas_l10n::with_language("et", || summary_text(&step.summary));
+    assert!(
+        et.contains("kõvakatte stiil 'Pavers'") && et.contains("vuuk 3 → 5 mm"),
+        "{et}"
+    );
+}

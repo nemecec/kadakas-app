@@ -15,7 +15,7 @@ use std::f64::consts::{PI, TAU};
 use glam::DVec2;
 
 use crate::arrangement::{self, ClosedGap, Curve, DeadEnd, OpenGap};
-use crate::curve::{self, Seg, Vertex};
+use crate::curve::{self, Seg, Vertex, VertexKind};
 use crate::model::Shape;
 
 /// Chord error when a Bezier piece of a polyline is cut into lines, in mm.
@@ -208,6 +208,44 @@ pub struct Found {
     pub lost_curves: Vec<bool>,
 }
 
+/// The most that a point may lie off the line of its neighbours and still be dropped (mm).
+const COLLINEAR_MAX: f64 = 1.0;
+
+/// Drops the corners of a closed outline that lie on the straight line between their neighbours
+/// (within `tolerance`, at most [`COLLINEAR_MAX`]). A lot made of loose lines has many short
+/// edges along one kerb; the outline should have one edge there. A corner next to an arc stays
+/// (the arc ends there), and so does a corner where the outline turns or doubles back. The
+/// rest of the shape is exactly as it was.
+pub fn merge_collinear(mut ring: Vec<Vertex>, tolerance: f64) -> Vec<Vertex> {
+    let tol = tolerance.clamp(1e-9, COLLINEAR_MAX);
+    let mut i = 0;
+    let mut since_removed = 0;
+    // Walk the ring until a whole round removes nothing.
+    while ring.len() > 3 && since_removed < ring.len() {
+        let n = ring.len();
+        i %= n;
+        let (a, b, c) = (ring[(i + n - 1) % n], ring[i], ring[(i + 1) % n]);
+        let plain = |v: &Vertex| v.kind == VertexKind::Corner;
+        let straight = plain(&a) && plain(&b) && plain(&c) && {
+            let (ab, ac) = (b.p - a.p, c.p - a.p);
+            let len = ac.length();
+            // On the line, and between the neighbours (not a spike that turns back).
+            len > 0.0
+                && ac.perp_dot(ab).abs() / len <= tol
+                && ab.dot(ac) > 0.0
+                && ab.dot(ac) < len * len
+        };
+        if straight {
+            ring.remove(i);
+            since_removed = 0;
+        } else {
+            i += 1;
+            since_removed += 1;
+        }
+    }
+    ring
+}
+
 /// Joins `curves` into regions. The tolerance (mm) is the biggest gap that is closed.
 pub fn from_curves(curves: &[Curve], tolerance: f64) -> Result<Found, arrangement::BuildError> {
     let a = arrangement::build(curves, tolerance)?;
@@ -245,11 +283,11 @@ pub fn from_curves(curves: &[Curve], tolerance: f64) -> Result<Found, arrangemen
             }
         }
         found.regions.push(FoundRegion {
-            outer: arrangement::cycle_vertices(&a, &f.outer),
+            outer: merge_collinear(arrangement::cycle_vertices(&a, &f.outer), tolerance),
             holes: f
                 .holes
                 .iter()
-                .map(|h| arrangement::cycle_vertices(&a, h))
+                .map(|h| merge_collinear(arrangement::cycle_vertices(&a, h), tolerance))
                 .collect(),
             area: f.area,
             depth: f.depth,
