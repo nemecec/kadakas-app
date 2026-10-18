@@ -95,6 +95,9 @@ pub struct KadakasApp {
     view_history: ViewHistory,
     /// Screenshot requests of agents that wait for a picture.
     shots: Vec<screenshot::Pending>,
+    /// The clients of the agent server at the last frame, to tell a connect from a disconnect.
+    #[cfg(not(target_arch = "wasm32"))]
+    agent_watch: crate::agent_status::Watch,
     shot_key: u64,
     status: String,
     /// The workspace profiles (PLAT-04): the keymap, menus, tool sets, terms and command
@@ -477,6 +480,8 @@ impl KadakasApp {
             solid_dlg: SolidDialog::default(),
             view_history: ViewHistory::default(),
             shots: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            agent_watch: Default::default(),
             shot_key: 0,
             status: tr!("app-ready"),
             path: None,
@@ -520,7 +525,7 @@ impl KadakasApp {
             collab: crate::collab_ui::CollabUi::new(Default::default()),
             own_cursor: None,
             pending_camera: None,
-            agent_view: Default::default(),
+            agent_view: crate::agent_view::AgentView::starting(),
             activity_ui: Default::default(),
             activity_review: None,
             issue_click: false,
@@ -1996,6 +2001,7 @@ impl KadakasApp {
         if self.needs_fit {
             self.fit_view(rect);
             self.needs_fit = false;
+            self.agent_view.fit_applied();
         }
         // A click on a finding of the pattern check or on a note of a dialog asks to zoom to a place.
         if let Some((lo, hi)) = self.paving_ui.take_zoom() {
@@ -2885,6 +2891,17 @@ impl KadakasApp {
         }
     }
 
+    /// A short notice in the status line when an agent connects or disconnects (not on every
+    /// call). The server runs on other threads, so the window looks again once a second.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn agent_connection_notice(&mut self, ctx: &egui::Context) {
+        let Some(agent) = &self.agent else { return };
+        if let Some(n) = self.agent_watch.update(agent.status().clients) {
+            self.status = n.text();
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+    }
+
     /// Answers the agents that wait for a screenshot, when the window has sent the picture.
     #[cfg(not(target_arch = "wasm32"))]
     fn finish_screenshots(&mut self, ctx: &egui::Context) {
@@ -3140,6 +3157,7 @@ impl eframe::App for KadakasApp {
                 .get_or_insert_with(|| (agent.addr.to_string(), agent.token.clone()));
             let now = ctx.input(|i| i.time);
             let (shots, shot_key) = (&mut self.shots, &mut self.shot_key);
+            let window_hidden = ctx.input(|i| screenshot::window_hidden(i.viewport()));
             let window = ctx.content_rect().size();
             let ppp = ctx.pixels_per_point();
             // The input of this frame is read before the calls of the agent are answered: the
@@ -3192,6 +3210,9 @@ impl eframe::App for KadakasApp {
                 };
                 // A screenshot is answered in a later frame, when the window has sent the picture.
                 match screenshot::parse(line) {
+                    Some(Ok((id, _))) if window_hidden => {
+                        return crate::agent::Reply::Now(Some(screenshot::hidden_line(&id)));
+                    }
                     Some(Ok((id, request))) => {
                         *shot_key += 1;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
@@ -3232,6 +3253,8 @@ impl eframe::App for KadakasApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.finish_screenshots(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.agent_connection_notice(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         if std::mem::take(&mut self.title_dirty) {
             self.set_title(&ctx);
@@ -3467,7 +3490,17 @@ impl eframe::App for KadakasApp {
         }
         let mut alias = None;
         let mut collab_click = None;
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let mut agent_click = false;
         let mut feedback_click = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        let agent_status = self.agent.as_ref().map(|a| (a.addr, a.status()));
+        #[cfg(not(target_arch = "wasm32"))]
+        let agent_locked = self.agent_view.locked;
+        #[cfg(not(target_arch = "wasm32"))]
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
         let mut report_error = false;
         egui::Panel::bottom("status").show(ui, |ui| {
             // The counts at the right are laid out first; the rest gets the room that is left and
@@ -3478,6 +3511,11 @@ impl eframe::App for KadakasApp {
                 ui.separator();
                 collab_click = self.collab.status_item(ui);
                 ui.separator();
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some((addr, st)) = &agent_status {
+                    agent_click = crate::agent_status::item(ui, *addr, st, agent_locked, now_ms);
+                    ui.separator();
+                }
                 if self.plan() {
                     let u = kadakas_units::current();
                     ui.label(tr!(
@@ -3521,6 +3559,9 @@ impl eframe::App for KadakasApp {
         });
         if let Some(c) = feedback_click {
             self.feedback.on_click(c);
+        }
+        if agent_click {
+            self.activity_ui.model.open = true;
         }
         if report_error {
             let form = crate::feedback_ui::error_form(&self.status, &self.last_command);

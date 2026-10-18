@@ -162,6 +162,15 @@ pub fn summary_text(s: &Summary) -> String {
             1 => tr!("agent-activity-n-classes", count = k),
             _ => tr!("agent-activity-n-resources", count = k),
         };
+        if noun == 2
+            && let Some(d) = &s.resource_detail
+        {
+            parts.push(tr!(
+                "agent-activity-sum-changed",
+                what = resource_detail_text(d)
+            ));
+            continue;
+        }
         if noun == 0 && named {
             parts.push(tr!(
                 "agent-activity-sum-layer-named",
@@ -192,6 +201,26 @@ pub fn summary_text(s: &Summary) -> String {
     capitalize(parts.join("; "))
 }
 
+/// One changed resource in the language of the person: `hardscape style 'Pavers': joint 3 → 5 mm`.
+fn resource_detail_text(d: &kadakas_core::activity::detail::ResourceDetail) -> String {
+    let kind = match d.kind.as_str() {
+        "hardscape_style" => tr!("agent-activity-resource-hardscape-style"),
+        "landscape_area_style" => tr!("agent-activity-resource-landscape-style"),
+        "plant_style" => tr!("agent-activity-resource-plant-style"),
+        other => other.replace('_', " "),
+    };
+    let mut items: Vec<String> = d.changes.iter().map(change_text).collect();
+    if d.more > 0 {
+        items.push(tr!("agent-activity-change-more", count = d.more));
+    }
+    tr!(
+        "agent-activity-sum-resource",
+        kind = kind,
+        name = d.name.as_str(),
+        changes = items.join("; ")
+    )
+}
+
 /// The name of a field of a change, in the language of the person.
 fn field_name(key: &str) -> String {
     match key {
@@ -201,7 +230,7 @@ fn field_name(key: &str) -> String {
         "thickness" => tr!("agent-activity-field-thickness"),
         "material" => tr!("agent-activity-field-material"),
         "style" => tr!("agent-activity-field-style"),
-        "gap" => tr!("agent-activity-field-gap"),
+        "gap" | "joint" => tr!("agent-activity-field-gap"),
         "name" => tr!("agent-activity-field-name"),
         "pattern" => tr!("agent-activity-field-pattern"),
         "boundary" => tr!("agent-activity-field-boundary"),

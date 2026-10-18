@@ -187,3 +187,26 @@ agent-activity-field-bond = sidumisviis
 agent-activity-field-seed = tugipunkt
 agent-activity-field-layer = kiht
 agent-activity-field-class = klass
+agent-activity-resource-hardscape-style = kõvakatte stiil
+agent-activity-resource-landscape-style = haljasala stiil
+agent-activity-resource-plant-style = taimestiil
+agent-activity-sum-resource = { $kind } '{ $name }': { $changes }
+agent-status-listening = Agent: ootab
+agent-status-connected =
+    { $count ->
+        [one] Agent ühendatud
+       *[other] Agente ühendatud ({ $count })
+    }
+agent-status-working = Agent töötab…
+agent-status-tip =
+    Agendi server aadressil { $addr }
+    Kliente: { $clients }
+    Viimane päring: { $last }
+    Agent võib minu vaadet liigutada: { $lock }
+    Klõps avab agendi tegevuse paneeli.
+agent-status-last-ago = { $secs } s tagasi
+agent-status-last-none = päringuid pole veel olnud
+agent-status-yes = jah
+agent-status-no = ei
+agent-status-notice-connected = Agent ühendus ({ $count } ühendatud).
+agent-status-notice-disconnected = Agent katkestas ühenduse ({ $count } on veel ühendatud).

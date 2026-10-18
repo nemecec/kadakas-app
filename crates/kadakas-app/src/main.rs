@@ -5,6 +5,8 @@ mod about;
 #[cfg(not(target_arch = "wasm32"))]
 mod agent;
 mod agent_activity_ui;
+#[cfg(not(target_arch = "wasm32"))]
+mod agent_status;
 mod agent_view;
 mod agent_view_ui;
 mod annot_ui;
@@ -94,7 +96,8 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 900.0])
-            .with_title("Kadakas"),
+            .with_title("Kadakas")
+            .with_icon(window_icon()),
         ..Default::default()
     };
     eframe::run_native(
@@ -109,6 +112,28 @@ fn main() -> eframe::Result {
             )))
         }),
     )
+}
+
+/// The window icon: our own 256 px icon (`packaging/icons`, made by `make_icons.py`), so the
+/// window does not show the egui default. An icon that cannot be decoded gives an empty icon
+/// (the system default), never a crash.
+#[cfg(not(target_arch = "wasm32"))]
+fn window_icon() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(include_bytes!("../../../packaging/icons/256x256.png"))
+        .unwrap_or_default()
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod icon_tests {
+    #[test]
+    fn window_icon_is_ours() {
+        let icon = super::window_icon();
+        assert_eq!((icon.width, icon.height), (256, 256));
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
+        // Not blank: the picture has opaque and see-through pixels.
+        assert!(icon.rgba.chunks(4).any(|p| p[3] == 255));
+        assert!(icon.rgba.chunks(4).any(|p| p[3] < 255));
+    }
 }
 
 /// The web entry point. `index.html` has a canvas with the id `kadakas_canvas`.

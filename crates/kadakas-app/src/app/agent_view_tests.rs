@@ -1952,3 +1952,35 @@ fn a_drawing_strip_from_a_saved_layout_brings_the_default_layout_back() {
     assert!(!crate::layout::too_narrow(184.0, 400.0));
     assert!(!crate::layout::too_narrow(640.0, 1000.0));
 }
+
+/// The startup fit of the app is not the person navigating: the first `view.zoom` right after
+/// the first frames works, with no waiting.
+#[test]
+fn startup_fit_does_not_hold_the_agent_back() {
+    let mut app = KadakasApp::blank();
+    app.prefs.animate_agent_view = false;
+    let mut r = Rig {
+        app,
+        ctx: egui::Context::default(),
+        time: 1.0,
+    };
+    r.frame(vec![]);
+    r.time += 0.016;
+    r.frame(vec![]);
+    r.time += 0.016;
+    r.frame(vec![]);
+    r.ok("view.zoom", json!({"box": [0, 0, 1000, 1000]}));
+}
+
+/// The person's own zoom to extents still holds the agent back.
+#[test]
+fn person_fit_after_startup_still_holds_the_agent_back() {
+    let mut r = Rig::new();
+    r.app.needs_fit = true;
+    r.time += 0.016;
+    r.frame(vec![]);
+    r.time += 0.016;
+    r.frame(vec![]);
+    let e = r.err("view.zoom", json!({"box": [0, 0, 1000, 1000]}));
+    assert_eq!(e.reason, Some(REASON_PERSON_NAVIGATING));
+}

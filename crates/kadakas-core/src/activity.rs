@@ -44,6 +44,8 @@ pub struct Summary {
     pub issues: bool,
     /// What changed, when the step changed one object and nothing else.
     pub detail: Option<Detail>,
+    /// What changed, when the step changed one resource and nothing else.
+    pub resource_detail: Option<detail::ResourceDetail>,
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -83,8 +85,15 @@ impl Summary {
         } else {
             None
         };
+        let only_resource = data.objects.is_empty()
+            && data.layers.is_empty()
+            && data.classes.is_empty()
+            && !data.document
+            && !data.versions
+            && !data.issues;
         Summary {
             detail,
+            resource_detail: data.resource_detail.clone().filter(|_| only_resource),
             objects: data.object_counts(),
             kinds: list,
             others,
@@ -162,6 +171,12 @@ impl Summary {
             ("class", self.classes),
             ("resource", self.resources),
         ] {
+            if what == "resource"
+                && let Some(d) = &self.resource_detail
+            {
+                parts.push(format!("changed {}", d.text()));
+                continue;
+            }
             let (one, many) = if what == "class" {
                 ("class", "classes")
             } else {
@@ -764,6 +779,7 @@ mod tests {
             versions: true,
             issues: true,
             detail: None,
+            resource_detail: None,
         };
         assert_eq!(
             s.text(),
@@ -787,6 +803,93 @@ mod tests {
         };
         assert_eq!(changed.text(), "Changed 1 object (1 circle)");
         assert_eq!(Summary::default().text(), "no visible change");
+    }
+
+    #[test]
+    fn a_step_that_changes_one_object_names_the_field() {
+        let mut ed = Editor::with_sequential_ids();
+        let mut log = ActivityLog::default();
+        let a = ed
+            .execute(&Command::AddObject {
+                shape: Shape::Circle {
+                    center: DVec2::ZERO,
+                    radius: 100.0,
+                },
+                layer: None,
+                class: None,
+                attrs: Default::default(),
+            })
+            .unwrap()
+            .created[0];
+        let id = record(&mut log, &mut ed, 1, |e| {
+            e.execute(&Command::ModifyObject {
+                id: ObjectId(a),
+                shape: Some(Shape::Circle {
+                    center: DVec2::ZERO,
+                    radius: 150.0,
+                }),
+                layer: None,
+                class: None,
+                attrs: None,
+            })
+            .unwrap();
+        })
+        .unwrap();
+        let s = &log.get(id).unwrap().summary;
+        assert_eq!(s.text(), "Changed circle: radius 100 → 150");
+        assert_eq!(log.last_id(), id);
+    }
+
+    #[test]
+    fn a_step_that_changes_one_style_names_it() {
+        use crate::hardscape::style::HardscapeStyle;
+        use crate::resource::{ResourceBody, ResourceId};
+        let mut ed = Editor::with_sequential_ids();
+        let mut log = ActivityLog::default();
+        let body = |t: f64| {
+            ResourceBody::HardscapeStyle(Box::new(HardscapeStyle {
+                thickness: t,
+                ..Default::default()
+            }))
+        };
+        let id = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Pavers".into(),
+                body: body(60.0),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let a = record(&mut log, &mut ed, 1, |e| {
+            e.execute(&Command::ModifyResource {
+                id,
+                name: None,
+                body: Some(body(80.0)),
+            })
+            .unwrap();
+        })
+        .unwrap();
+        let s = &log.get(a).unwrap().summary;
+        assert_eq!(
+            s.text(),
+            "Changed hardscape style 'Pavers': thickness 60 → 80 mm"
+        );
+        // Two changes of the same style in one call are still one named change.
+        let b = record(&mut log, &mut ed, 1, |e| {
+            for t in [90.0, 100.0] {
+                e.execute(&Command::ModifyResource {
+                    id,
+                    name: None,
+                    body: Some(body(t)),
+                })
+                .unwrap();
+            }
+        })
+        .unwrap();
+        assert_eq!(
+            log.get(b).unwrap().summary.text(),
+            "Changed hardscape style 'Pavers': thickness 80 → 100 mm"
+        );
     }
 
     #[test]

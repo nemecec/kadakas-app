@@ -83,6 +83,9 @@ pub struct StepData {
     pub versions: bool,
     /// Review issues or their comments changed.
     pub issues: bool,
+    /// What changed in the resource, when the step changed exactly one resource and added or
+    /// removed none.
+    pub resource_detail: Option<crate::activity::detail::ResourceDetail>,
 }
 
 impl StepData {
@@ -133,6 +136,7 @@ impl StepData {
             document: self.document,
             versions: self.versions,
             issues: self.issues,
+            resource_detail: None,
         }
     }
 
@@ -295,6 +299,8 @@ fn compose(patches: &[&Patch]) -> StepData {
     type Net = (Option<Object>, Option<Object>, Option<usize>);
     let mut map: IndexMap<ObjectId, Net> = IndexMap::new();
     let mut data = StepData::default();
+    // The resources that changed: the state before the first change and after the last.
+    let mut res_net: IndexMap<ResourceId, (Resource, Resource)> = IndexMap::new();
     for p in patches {
         for (index, o) in &p.removed {
             map.entry(o.id).and_modify(|e| e.1 = None).or_insert((
@@ -337,6 +343,21 @@ fn compose(patches: &[&Patch]) -> StepData {
             cs.changed.resources.len(),
             cs.removed.resources.len(),
         );
+        if let Some((old, new)) = &p.meta {
+            for id in &cs.changed.resources {
+                let (Some(b), Some(a)) = (old.resources.get(*id), new.resources.get(*id)) else {
+                    continue;
+                };
+                // A picture or an imported drawing is large and has nothing to name.
+                if matches!(a.body, ResourceBody::Image(_) | ResourceBody::ImportBase(_)) {
+                    continue;
+                }
+                res_net
+                    .entry(*id)
+                    .and_modify(|e| e.1 = a.clone())
+                    .or_insert_with(|| (b.clone(), a.clone()));
+            }
+        }
         if let Some((_, after)) = &p.meta {
             data.layers_added.extend(
                 after
@@ -357,6 +378,12 @@ fn compose(patches: &[&Patch]) -> StepData {
             && cs.added.comments.is_empty()
             && cs.changed.comments.is_empty()
             && cs.removed.comments.is_empty());
+    }
+    if res_net.len() == 1 && data.resources.added == 0 && data.resources.removed == 0 {
+        data.resource_detail = res_net
+            .values()
+            .next()
+            .and_then(|(b, a)| crate::activity::detail::of_resource(b, a));
     }
     data.objects = map
         .into_iter()
