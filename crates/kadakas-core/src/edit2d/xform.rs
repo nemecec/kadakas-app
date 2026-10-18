@@ -495,4 +495,113 @@ mod tests {
         );
         assert!(map_shape(&sym, &Xf::scale(v(0.0, 0.0), f64::NAN, 1.0)).is_err());
     }
+
+    #[test]
+    fn texts_plants_trees_tags_and_3d_points_move_and_scale() {
+        use crate::plants::tree::{TreeAction, TreeCondition};
+        use crate::resource::ResourceId;
+        let up = Xf::scale(v(0.0, 0.0), 2.0, 2.0);
+        // A stretch has no one scale: sizes use the square root of the area factor.
+        let stretch = Xf::scale(v(0.0, 0.0), 4.0, 1.0);
+        let text = Shape::Text {
+            at: v(1.0, 1.0),
+            text: "x".into(),
+            height: 10.0,
+        };
+        assert!(matches!(
+            map_shape(&text, &up).unwrap(),
+            Shape::Text { at, height, .. } if at == v(2.0, 2.0) && height == 20.0
+        ));
+        assert!(matches!(
+            map_shape(&text, &stretch).unwrap(),
+            Shape::Text { height, .. } if (height - 20.0).abs() < 1e-9
+        ));
+        let plant = Shape::Plant {
+            at: v(1.0, 0.0),
+            species: "a".into(),
+            spread: 100.0,
+            height: 500.0,
+        };
+        assert!(matches!(
+            map_shape(&plant, &up).unwrap(),
+            Shape::Plant { at, spread, height, .. }
+                if at == v(2.0, 0.0) && spread == 200.0 && height == 500.0
+        ));
+        assert!(matches!(
+            map_shape(&plant, &stretch).unwrap(),
+            Shape::Plant { spread, .. } if (spread - 200.0).abs() < 1e-9
+        ));
+        let tree = Shape::ExistingTree {
+            at: v(0.0, 3.0),
+            species: "oak".into(),
+            dbh: 400.0,
+            spread: 6000.0,
+            height: 9000.0,
+            condition: TreeCondition::default(),
+            action: TreeAction::default(),
+            rpz_factor: Some(10.0),
+            rpz_cap: Some(8000.0),
+        };
+        assert!(matches!(
+            map_shape(&tree, &up).unwrap(),
+            Shape::ExistingTree { at, dbh, spread, rpz_factor, rpz_cap, .. }
+                if at == v(0.0, 6.0) && dbh == 400.0 && spread == 12000.0
+                    && rpz_factor == Some(10.0) && rpz_cap == Some(8000.0)
+        ));
+        let tag = Shape::PlantTag {
+            at: v(1.0, 1.0),
+            anchor: v(0.0, 1.0),
+            style: ResourceId::from_num(3),
+            height: 250.0,
+        };
+        assert!(matches!(
+            map_shape(&tag, &up).unwrap(),
+            Shape::PlantTag { at, anchor, height, .. }
+                if at == v(2.0, 2.0) && anchor == v(0.0, 2.0) && height == 250.0
+        ));
+        // The height above the plan stays.
+        let locus = Shape::Locus3d {
+            p: glam::DVec3::new(1.0, 2.0, 7.0),
+        };
+        assert_eq!(
+            map_shape(&locus, &up).unwrap(),
+            Shape::Locus3d {
+                p: glam::DVec3::new(2.0, 4.0, 7.0)
+            }
+        );
+        let line3 = Shape::Polyline3d {
+            points: vec![
+                glam::DVec3::new(1.0, 0.0, 5.0),
+                glam::DVec3::new(0.0, 1.0, 6.0),
+            ],
+            closed: false,
+        };
+        assert_eq!(
+            map_shape(&line3, &up).unwrap(),
+            Shape::Polyline3d {
+                points: vec![
+                    glam::DVec3::new(2.0, 0.0, 5.0),
+                    glam::DVec3::new(0.0, 2.0, 6.0)
+                ],
+                closed: false,
+            }
+        );
+        // A symbol turned (not mirrored) keeps its own y scale rule.
+        let sym = Shape::Symbol {
+            symbol: ResourceId::from_num(1),
+            at: v(1.0, 0.0),
+            rotation: 0.5,
+            scale: 2.0,
+            scale_y: Some(3.0),
+        };
+        let turned = map_shape(&sym, &Xf::rotate(v(0.0, 0.0), 0.25)).unwrap();
+        assert!(matches!(
+            turned,
+            Shape::Symbol { rotation, scale, scale_y, .. }
+                if (rotation - 0.75).abs() < 1e-9 && (scale - 2.0).abs() < 1e-9
+                    && scale_y.is_some_and(|y| (y - 3.0).abs() < 1e-9)
+        ));
+        assert!(map_shape(&sym, &stretch).is_err());
+        assert!(map_shape(&tree, &stretch).is_ok());
+    }
 }

@@ -218,3 +218,216 @@ pub fn tag_info_with(doc: &Document, tag: ObjectId, counts: &TagCounts) -> Optio
         format: TagFormat::of(obj),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{FIRST_LAYER, NONE_CLASS};
+    use crate::plants::style::PlantStyle;
+    use crate::resource::{Resource, ResourceBody};
+    use serde_json::json;
+
+    fn v(x: f64, y: f64) -> DVec2 {
+        DVec2::new(x, y)
+    }
+
+    fn info(bubble: bool, levels: u8) -> TagInfo {
+        TagInfo {
+            code: "AC".into(),
+            count: 12,
+            name: "Field maple".into(),
+            details: "14-16 cm, C10".into(),
+            format: TagFormat { levels, bubble },
+        }
+    }
+
+    #[test]
+    fn a_group_tag_sits_above_the_middle_of_the_group() {
+        let Shape::PlantTag {
+            at, anchor, height, ..
+        } = group_tag(
+            ResourceId::from_num(7),
+            &[v(0.0, 0.0), v(4000.0, 0.0), v(2000.0, 1000.0)],
+            3000.0,
+        )
+        else {
+            panic!("not a tag");
+        };
+        assert_eq!(anchor, v(2000.0, 1000.0 / 3.0));
+        assert_eq!(at, v(2000.0, 1000.0 + 1500.0 + DEFAULT_TAG_HEIGHT));
+        assert_eq!(height, DEFAULT_TAG_HEIGHT);
+        // No plants: the tag stays at the origin and does not become NaN.
+        let Shape::PlantTag { at, anchor, .. } = group_tag(ResourceId::from_num(7), &[], 0.0)
+        else {
+            panic!("not a tag");
+        };
+        assert_eq!(anchor, DVec2::ZERO);
+        assert_eq!(at, v(0.0, DEFAULT_TAG_HEIGHT));
+    }
+
+    #[test]
+    fn the_format_of_a_tag_is_read_and_kept_in_range() {
+        let tag = |data: Option<serde_json::Value>| {
+            let mut o = Object::new(
+                ObjectId::from_num(1),
+                FIRST_LAYER,
+                NONE_CLASS,
+                group_tag(ResourceId::from_num(7), &[], 0.0),
+            );
+            if let Some(d) = data {
+                o.data.insert(TAG_FORMAT_KEY.into(), d);
+            }
+            o
+        };
+        assert_eq!(TagFormat::of(&tag(None)), TagFormat::default());
+        assert_eq!(TagFormat::default().levels, 1);
+        assert!(!TagFormat::default().bubble);
+        let f = TagFormat::of(&tag(Some(json!({"levels": 9, "bubble": true}))));
+        assert_eq!(
+            f,
+            TagFormat {
+                levels: 3,
+                bubble: true
+            }
+        );
+        assert_eq!(TagFormat::of(&tag(Some(json!({"levels": 0})))).levels, 1);
+        // Bad types give the defaults.
+        assert_eq!(
+            TagFormat::of(&tag(Some(json!({"levels": "two", "bubble": 1})))),
+            TagFormat::default()
+        );
+    }
+
+    #[test]
+    fn the_lines_of_a_tag_follow_its_levels_and_bubble() {
+        assert_eq!(info(false, 1).text(), "AC (12)");
+        assert_eq!(info(false, 1).lines(), ["AC (12)"]);
+        assert_eq!(info(false, 2).lines(), ["AC (12)", "Field maple"]);
+        assert_eq!(
+            info(false, 3).lines(),
+            ["AC (12)", "Field maple", "14-16 cm, C10"]
+        );
+        // The code is in the bubble, so the first line has only the count.
+        assert_eq!(info(true, 2).lines(), ["(12)", "Field maple"]);
+        // An empty name or detail leaves its line out.
+        let mut bare = info(false, 3);
+        bare.name.clear();
+        bare.details.clear();
+        assert_eq!(bare.lines(), ["AC (12)"]);
+    }
+
+    #[test]
+    fn the_layout_stacks_lines_and_puts_the_code_in_a_bubble() {
+        let plain = info(false, 3).layout(100.0);
+        assert!(plain.bubble.is_none());
+        let ys: Vec<f64> = plain.texts.iter().map(|t| t.at.y).collect();
+        // From the top: each line 1.25 text heights under the one above, the last at 0.
+        assert_eq!(ys, [250.0, 125.0, 0.0]);
+        assert!(plain.texts.iter().all(|t| !t.centered && t.at.x == 0.0));
+
+        let bubble = info(true, 2).layout(100.0);
+        // A two letter code: radius = h * (0.3 * 2 + 0.5).
+        let (centre, r) = bubble.bubble.unwrap();
+        assert!((r - 110.0).abs() < 1e-9, "{r}");
+        assert_eq!(centre, v(r, 0.0));
+        assert_eq!(bubble.texts[0].text, "AC");
+        assert!(bubble.texts[0].centered);
+        // The lines sit right of the bubble, centred round the bubble.
+        let x0 = 2.0 * r + 40.0;
+        assert_eq!(bubble.texts.len(), 3);
+        assert!(bubble.texts[1..].iter().all(|t| t.at.x == x0));
+        assert!((bubble.texts[1].at.y - (62.5 - 50.0)).abs() < 1e-9);
+        assert!((bubble.texts[2].at.y - (-62.5 - 50.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_info_of_a_tag_comes_from_its_style_and_the_plants_of_its_layer() {
+        let mut doc = Document::default();
+        let style_id = ResourceId::from_num(7);
+        doc.resources.push(Resource {
+            id: style_id,
+            name: "Field maple".into(),
+            body: ResourceBody::plant_style(PlantStyle {
+                botanical_name: "Acer campestre".into(),
+                size: " 14-16 cm ".into(),
+                container: "C10".into(),
+                ..PlantStyle::default()
+            }),
+        });
+        let mut add = |n: u64, shape: Shape, linked: bool| {
+            let id = ObjectId::from_num(n);
+            let mut o = Object::new(id, FIRST_LAYER, NONE_CLASS, shape);
+            if linked {
+                link::set_link(
+                    &mut o,
+                    Some(&link::PlantLink {
+                        style: style_id,
+                        overrides: Default::default(),
+                    }),
+                );
+            }
+            doc.objects.insert(id, o);
+            id
+        };
+        let tag = add(1, group_tag(style_id, &[v(0.0, 0.0)], 1000.0), false);
+        let line = add(
+            2,
+            Shape::Line {
+                a: v(0.0, 0.0),
+                b: v(1.0, 0.0),
+            },
+            false,
+        );
+        for n in 3..6 {
+            let at = v(n as f64 * 1000.0, 0.0);
+            add(
+                n,
+                Shape::Plant {
+                    at,
+                    species: String::new(),
+                    spread: 1000.0,
+                    height: 1000.0,
+                },
+                true,
+            );
+        }
+        assert!(tag_info(&doc, line).is_none());
+        assert!(tag_info(&doc, ObjectId::from_num(99)).is_none());
+        let counts = tag_counts(&doc);
+        assert_eq!(counts.get(&(FIRST_LAYER, style_id)), Some(&3));
+        let i = tag_info(&doc, tag).unwrap();
+        assert_eq!(i.count, 3);
+        // No code and no common name: the style name and the botanical name stand in.
+        assert_eq!(i.code, "Field maple");
+        assert_eq!(i.name, "Acer campestre");
+        assert_eq!(i.details, "14-16 cm, C10");
+        assert_eq!(i, tag_info_with(&doc, tag, &counts).unwrap());
+        // A code and a common name win; a tag whose layer has no plants counts none.
+        doc.resources.push(Resource {
+            id: ResourceId::from_num(8),
+            name: "Other".into(),
+            body: ResourceBody::plant_style(PlantStyle {
+                id_code: "AC".into(),
+                common_name: "Maple".into(),
+                botanical_name: "Acer".into(),
+                ..PlantStyle::default()
+            }),
+        });
+        let other = ObjectId::from_num(9);
+        doc.objects.insert(
+            other,
+            Object::new(
+                other,
+                FIRST_LAYER,
+                NONE_CLASS,
+                group_tag(ResourceId::from_num(8), &[v(0.0, 0.0)], 1000.0),
+            ),
+        );
+        let o = tag_info(&doc, other).unwrap();
+        assert_eq!(
+            (o.code.as_str(), o.name.as_str(), o.count),
+            ("AC", "Maple", 0)
+        );
+        assert_eq!(o.details, "");
+    }
+}

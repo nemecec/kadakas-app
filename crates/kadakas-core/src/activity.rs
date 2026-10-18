@@ -893,6 +893,152 @@ mod tests {
     }
 
     #[test]
+    fn a_style_change_among_other_changes_is_counted_not_named() {
+        use crate::hardscape::style::HardscapeStyle;
+        use crate::resource::{ResourceBody, ResourceId};
+        let mut ed = Editor::with_sequential_ids();
+        let mut log = ActivityLog::default();
+        let body = |t: f64| {
+            ResourceBody::HardscapeStyle(Box::new(HardscapeStyle {
+                thickness: t,
+                ..Default::default()
+            }))
+        };
+        let style = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Pavers".into(),
+                body: body(60.0),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let gone = add(&mut ed, 40.0);
+        let id = record(&mut log, &mut ed, 1, |e| {
+            e.execute(&Command::ModifyResource {
+                id: style,
+                name: None,
+                body: Some(body(80.0)),
+            })
+            .unwrap();
+            // The object that is deleted is read from its state before the step.
+            e.execute(&Command::DeleteObjects { ids: vec![gone] })
+                .unwrap();
+            add(e, 0.0);
+        })
+        .unwrap();
+        let s = &log.get(id).unwrap().summary;
+        assert!(s.resource_detail.is_none());
+        assert_eq!(
+            s.text(),
+            "Added 1 object; removed 1 object; changed 1 resource"
+        );
+        // A rename alone is a named change of the style.
+        let rename = record(&mut log, &mut ed, 1, |e| {
+            e.execute(&Command::ModifyResource {
+                id: style,
+                name: Some("Setts".into()),
+                body: None,
+            })
+            .unwrap();
+        })
+        .unwrap();
+        let s = &log.get(rename).unwrap().summary;
+        assert!(s.resource_detail.is_some(), "{s:?}");
+        assert!(
+            s.text().starts_with("Changed hardscape style"),
+            "{}",
+            s.text()
+        );
+    }
+
+    #[test]
+    fn the_kinds_of_a_step_are_the_four_most_common_and_the_rest_is_counted() {
+        let mut ed = Editor::with_sequential_ids();
+        let mut log = ActivityLog::default();
+        let p = DVec2::new;
+        let id = record(&mut log, &mut ed, 1, |e| {
+            add(e, 0.0);
+            add(e, 3.0);
+            for shape in [
+                Shape::Circle {
+                    center: p(0.0, 0.0),
+                    radius: 5.0,
+                },
+                Shape::Rect {
+                    min: p(0.0, 0.0),
+                    max: p(2.0, 2.0),
+                },
+                Shape::Polyline {
+                    points: vec![
+                        crate::curve::Vertex::corner(p(0.0, 0.0)),
+                        crate::curve::Vertex::corner(p(1.0, 0.0)),
+                    ],
+                    closed: false,
+                },
+                Shape::Plant {
+                    at: p(1.0, 1.0),
+                    species: String::new(),
+                    spread: 1000.0,
+                    height: 1000.0,
+                },
+                Shape::Text {
+                    at: p(0.0, 0.0),
+                    text: "x".into(),
+                    height: 10.0,
+                },
+            ] {
+                e.execute(&Command::AddObject {
+                    shape,
+                    layer: None,
+                    class: None,
+                    attrs: Default::default(),
+                })
+                .unwrap();
+            }
+        })
+        .unwrap();
+        let s = &log.get(id).unwrap().summary;
+        assert_eq!(s.objects.added, 7);
+        assert_eq!(s.kinds.len(), 4);
+        assert_eq!(s.kinds[0], ("line".to_string(), 2));
+        assert_eq!(s.others, 2);
+        assert_eq!(
+            s.text(),
+            "Added 7 objects (2 line, 1 circle, 1 plant, 1 polyline, 2 other)"
+        );
+    }
+
+    #[test]
+    fn a_named_change_of_one_object_shows_its_label() {
+        use super::detail::{Detail, FieldChange};
+        let s = Summary {
+            objects: Counts {
+                added: 0,
+                changed: 1,
+                removed: 0,
+            },
+            kinds: vec![("hardscape".into(), 1)],
+            detail: Some(Detail {
+                label: Some("Pavers".into()),
+                changes: vec![FieldChange {
+                    scope: None,
+                    field: "thickness".into(),
+                    before: Some("60".into()),
+                    after: Some("80".into()),
+                }],
+                more: 0,
+            }),
+            ..Summary::default()
+        };
+        assert!(
+            s.text()
+                .starts_with("Changed hardscape 'Pavers': thickness"),
+            "{}",
+            s.text()
+        );
+    }
+
+    #[test]
     fn a_step_tells_its_objects_reverted_and_the_notes_of_its_session() {
         let mut ed = Editor::with_sequential_ids();
         let mut log = ActivityLog::default();

@@ -260,3 +260,28 @@ fn merging_keeps_corners_arcs_and_spikes() {
     let m = merge_collinear(wrap, 1.0);
     assert_eq!(m.len(), 4, "{m:?}");
 }
+
+#[test]
+fn polylines_with_repeated_points_arcs_and_beziers_become_curves() {
+    let c = |x, y| Vertex::corner(v(x, y));
+    // A repeated point makes no zero-length line.
+    let dup = curves_of_vertices(&[c(0.0, 0.0), c(0.0, 0.0), c(1000.0, 0.0)], false);
+    assert_eq!(dup.len(), 1, "{dup:?}");
+    // Three points on a circle, closed: three arcs.
+    let r = 500.0;
+    let on = |a: f64| Vertex::new(v(r * a.cos(), r * a.sin()), VertexKind::PointOnArc);
+    let circle = curves_of_vertices(&[on(0.0), on(2.1), on(4.2)], true);
+    assert_eq!(circle.len(), 3, "{circle:?}");
+    assert!(circle.iter().all(|k| matches!(k, Curve::Arc { .. })));
+    // A bezier vertex is cut into short lines that join end to end.
+    let bez = curves_of_vertices(
+        &[
+            c(0.0, 0.0),
+            Vertex::new(v(500.0, 800.0), VertexKind::Bezier),
+            c(1000.0, 0.0),
+        ],
+        false,
+    );
+    assert!(bez.len() > 2, "{}", bez.len());
+    assert!(bez.iter().all(|k| matches!(k, Curve::Line { .. })));
+}
