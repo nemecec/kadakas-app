@@ -21,6 +21,7 @@ kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
 kadakas-crs = { version = "0.1.0", path = "../kadakas-crs" }
 kadakas-feedback = { version = "0.1.0", path = "../kadakas-feedback" }
+kadakas-crash = { version = "0.1.0", path = "../kadakas-crash" }
 kadakas-file = { version = "0.1.0", path = "../kadakas-file" }
 kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
 kadakas-plugin = { version = "0.1.0", path = "../kadakas-plugin" }

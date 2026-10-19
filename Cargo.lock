@@ -1122,6 +1122,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc173168f291ff3b95b5d0769d6a05b1eaef5e6d74c2600affab8396b4e7b420"
 
 [[package]]
+name = "crash-context"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3748e166981fa3ba9dc54ff950ad0ed5ca4aab4b73eae21d9f539659fe806e28"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "mach2",
+]
+
+[[package]]
+name = "crash-handler"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9897480a6a7009a9ca940c1813daf2755d8a3e6857e5ac4fd0ae526ff5682d1"
+dependencies = [
+ "cfg-if",
+ "crash-context",
+ "libc",
+ "mach2",
+ "parking_lot",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2672,6 +2696,7 @@ dependencies = [
  "kadakas-collab-ws",
  "kadakas-container",
  "kadakas-core",
+ "kadakas-crash",
  "kadakas-crs",
  "kadakas-feedback",
  "kadakas-file",
@@ -2721,6 +2746,7 @@ dependencies = [
  "kadakas-collab",
  "kadakas-collab-ws",
  "kadakas-core",
+ "kadakas-crash",
  "kadakas-feedback",
  "kadakas-file",
  "kadakas-gis",
@@ -2826,6 +2852,21 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kadakas-crash"
+version = "0.1.0"
+dependencies = [
+ "crash-handler",
+ "kadakas-crash",
+ "kadakas-feedback",
+ "kadakas-sys",
+ "libc",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -3150,6 +3191,7 @@ version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
  "flate2",
+ "kadakas-crash",
  "kadakas-sys",
  "proptest",
  "serde",

@@ -63,6 +63,38 @@ pub struct Settings {
     /// A random id of this installation, made at the first need. It is not the id of a person.
     #[serde(default)]
     pub installation: Option<String>,
+    /// The person does not want the installation id in reports (PLAT-20). Stored as a "no" so
+    /// that the default (a file without the key) is "include".
+    #[serde(default)]
+    pub omit_installation: bool,
+    /// What happens to a crash report (PLAT-20).
+    #[serde(default)]
+    pub crash_policy: CrashPolicy,
+}
+
+/// Preferences > Privacy > Crash reports (PLAT-20).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CrashPolicy {
+    /// Show the report and ask (the default).
+    #[default]
+    Ask,
+    /// Send it at once, without a question.
+    Always,
+    /// Delete it, send nothing.
+    Never,
+}
+
+impl CrashPolicy {
+    pub const ALL: [CrashPolicy; 3] = [CrashPolicy::Ask, CrashPolicy::Always, CrashPolicy::Never];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            CrashPolicy::Ask => "ask",
+            CrashPolicy::Always => "always",
+            CrashPolicy::Never => "never",
+        }
+    }
 }
 
 /// A report that is ready to go out.
@@ -146,6 +178,49 @@ impl Hub {
         s.installation = Some(id.clone());
         let _ = self.save_settings(&s);
         id
+    }
+
+    /// True if reports carry the installation id (the default).
+    pub fn include_installation(&self) -> bool {
+        !self.settings().omit_installation
+    }
+
+    /// The installation id for a report: `None` when the person turned the id off.
+    pub fn report_installation_id(&mut self) -> Option<String> {
+        if self.include_installation() {
+            Some(self.installation_id())
+        } else {
+            None
+        }
+    }
+
+    /// The switch "Include the installation ID in reports".
+    pub fn set_include_installation(&mut self, on: bool) -> Result<(), FeedbackError> {
+        let _guard = self.lock()?;
+        let mut s = self.settings();
+        s.omit_installation = !on;
+        self.save_settings(&s)
+    }
+
+    /// A new random id. Old reports can no longer be linked to the new ones.
+    pub fn reset_installation_id(&mut self) -> Result<String, FeedbackError> {
+        let _guard = self.lock()?;
+        let mut s = self.settings();
+        let id = new_installation_id();
+        s.installation = Some(id.clone());
+        self.save_settings(&s)?;
+        Ok(id)
+    }
+
+    pub fn crash_policy(&self) -> CrashPolicy {
+        self.settings().crash_policy
+    }
+
+    pub fn set_crash_policy(&mut self, p: CrashPolicy) -> Result<(), FeedbackError> {
+        let _guard = self.lock()?;
+        let mut s = self.settings();
+        s.crash_policy = p;
+        self.save_settings(&s)
     }
 
     pub fn set_max_submits(&mut self, n: u32) {
@@ -582,7 +657,7 @@ impl Hub {
             return Vec::new();
         }
         // The id is made before the lock: the lock is not re-entrant.
-        let installation = self.installation_id();
+        let installation = self.report_installation_id();
         let Ok(_guard) = self.lock() else {
             return Vec::new();
         };
@@ -617,7 +692,7 @@ impl Hub {
                 Status::Pending if text_ok && r.attachments.is_empty() => payload::build(
                     r,
                     &PayloadParts {
-                        installation: Some(&installation),
+                        installation: installation.as_deref(),
                         ..Default::default()
                     },
                 )
@@ -1515,6 +1590,45 @@ mod tests {
         // A memory store makes its own, and two of them differ.
         let (mut m1, mut m2) = (Hub::in_memory(), Hub::in_memory());
         assert_ne!(m1.installation_id(), m2.installation_id());
+    }
+
+    #[test]
+    fn the_installation_id_can_be_reset_and_left_out() {
+        let (_tmp, mut a, mut b) = two_hubs();
+        assert!(a.include_installation());
+        let first = a.installation_id();
+        let second = a.reset_installation_id().unwrap();
+        assert_ne!(first, second);
+        assert_eq!(second.len(), 36);
+        assert_eq!(second.as_bytes()[14], b'4');
+        // The other program sees the new id.
+        assert_eq!(b.installation_id(), second);
+        // The switch is stored, and the id is kept when it is off.
+        a.set_include_installation(false).unwrap();
+        assert!(!b.include_installation());
+        assert_eq!(b.report_installation_id(), None);
+        assert_eq!(b.installation_id(), second);
+        a.set_send(Some(true)).unwrap();
+        a.submit(draft("x"), vec![], 0).unwrap();
+        let out = a.outgoing(true, 5, T0);
+        let v: serde_json::Value = serde_json::from_str(&out[0].payload).unwrap();
+        assert!(v.get("installation").is_none(), "{v}");
+        a.set_include_installation(true).unwrap();
+        assert_eq!(a.report_installation_id().as_deref(), Some(second.as_str()));
+    }
+
+    #[test]
+    fn the_crash_policy_defaults_to_ask_and_is_stored() {
+        let (_tmp, mut a, b) = two_hubs();
+        assert_eq!(a.crash_policy(), CrashPolicy::Ask);
+        for p in CrashPolicy::ALL {
+            a.set_crash_policy(p).unwrap();
+            assert_eq!(b.crash_policy(), p);
+        }
+        // An old settings file without the keys reads as the defaults.
+        let s: Settings = serde_json::from_str(r#"{"send":true}"#).unwrap();
+        assert_eq!(s.crash_policy, CrashPolicy::Ask);
+        assert!(!s.omit_installation);
     }
 
     #[test]

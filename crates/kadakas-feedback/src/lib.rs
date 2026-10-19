@@ -28,7 +28,7 @@ pub mod dispatch;
 pub mod http;
 
 pub use error::FeedbackError;
-pub use hub::{Hub, Outgoing, Settings, Submitted};
+pub use hub::{CrashPolicy, Hub, Outgoing, Settings, Submitted};
 pub use model::*;
 pub use payload::PayloadParts;
 pub use send::{

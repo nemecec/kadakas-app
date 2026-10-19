@@ -33,6 +33,12 @@ use std::time::{Duration, Instant};
 pub trait Process: Send {
     /// `Ok(Some(success))` when the program has ended, `Ok(None)` while it runs.
     fn try_wait(&mut self) -> std::io::Result<Option<bool>>;
+
+    /// After the end: the name of the crash signal or exception that ended the program, if the
+    /// system said so (`SIGSEGV`, `EXCEPTION_ACCESS_VIOLATION`). Not for a normal exit code.
+    fn crash_signal(&self) -> Option<String> {
+        None
+    }
 }
 
 /// What to start.
@@ -52,11 +58,58 @@ pub trait Spawner: Send + Sync {
     fn spawn(&self, spec: &SpawnSpec) -> Result<Box<dyn Process>>;
 }
 
-struct SystemProcess(std::process::Child);
+struct SystemProcess(std::process::Child, Option<std::process::ExitStatus>);
 
 impl Process for SystemProcess {
     fn try_wait(&mut self) -> std::io::Result<Option<bool>> {
-        Ok(self.0.try_wait()?.map(|s| s.success()))
+        let status = self.0.try_wait()?;
+        if status.is_some() {
+            self.1 = status;
+        }
+        Ok(status.map(|s| s.success()))
+    }
+
+    fn crash_signal(&self) -> Option<String> {
+        self.1.and_then(crash_signal_of)
+    }
+}
+
+/// The crash signal in an exit status (Unix), or the exception code (Windows).
+fn crash_signal_of(status: std::process::ExitStatus) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        let bus = if cfg!(target_os = "macos") { 10 } else { 7 };
+        let n = status.signal()?;
+        let name = match n {
+            4 => "SIGILL",
+            5 => "SIGTRAP",
+            6 => "SIGABRT",
+            8 => "SIGFPE",
+            11 => "SIGSEGV",
+            n if n == bus => "SIGBUS",
+            _ => return None,
+        };
+        Some(name.to_string())
+    }
+    #[cfg(windows)]
+    {
+        let code = status.code()? as u32;
+        let name = match code {
+            0xC000_0005 => "EXCEPTION_ACCESS_VIOLATION",
+            0xC000_0094 => "EXCEPTION_INT_DIVIDE_BY_ZERO",
+            0xC000_001D => "EXCEPTION_ILLEGAL_INSTRUCTION",
+            0xC000_00FD => "EXCEPTION_STACK_OVERFLOW",
+            0xC000_0374 => "STATUS_HEAP_CORRUPTION",
+            0xC000_0409 => "STATUS_STACK_BUFFER_OVERRUN",
+            _ => return None,
+        };
+        Some(name.to_string())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = status;
+        None
     }
 }
 
@@ -72,7 +125,7 @@ impl Spawner for SystemSpawner {
             &spec.files,
             &spec.env,
         )?;
-        Ok(Box::new(SystemProcess(cmd.spawn()?)))
+        Ok(Box::new(SystemProcess(cmd.spawn()?, None)))
     }
 }
 
@@ -231,7 +284,11 @@ impl Supervisor {
                     self.watch(child.as_mut(), &guard, &running, base);
                     let id = guard.id().to_string();
                     let request = handshake::take_restart(&self.root, &id);
-                    (request, guard.finish(updater.store()).clean)
+                    let signal = child.crash_signal();
+                    (
+                        request,
+                        guard.finish_with(updater.store(), signal.as_deref()).clean,
+                    )
                 }
                 // No record could be written: the app runs without the update features, and
                 // nothing is known about how it ends. No restart.
@@ -436,6 +493,10 @@ mod tests {
         download: bool,
         /// Looks at the status file and keeps what it saw.
         watch_status: bool,
+        /// Leaves a crash file when it ends (the app's panic hook did that).
+        crash_file: bool,
+        /// The system says that this signal ended it.
+        signal: Option<&'static str>,
     }
 
     struct ScriptedProcess {
@@ -474,6 +535,15 @@ mod tests {
                 return Ok(None);
             }
             if let Some(l) = &self.link {
+                if self.script.crash_file {
+                    let mut f = kadakas_crash::CrashFile::new(kadakas_crash::CrashKind::Panic);
+                    f.message = "scripted panic".into();
+                    f.created = 77;
+                    f.version = "1.0.0".into();
+                    let path = kadakas_crash::queue::live_path(l.root(), l.run_id());
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(path, f.to_json()).unwrap();
+                }
                 if let Some(docs) = &self.script.restart {
                     l.request_restart(docs).unwrap();
                 }
@@ -482,6 +552,10 @@ mod tests {
                 }
             }
             Ok(Some(true))
+        }
+
+        fn crash_signal(&self) -> Option<String> {
+            self.script.signal.map(str::to_string)
         }
     }
 
@@ -692,6 +766,106 @@ mod tests {
             .map(|rd| rd.count())
             .unwrap_or(0);
         assert_eq!(left, 0);
+        std::fs::remove_dir_all(&w.root).unwrap();
+    }
+
+    #[test]
+    fn a_crash_file_of_an_unclean_run_is_kept_for_the_next_start() {
+        let (w, sup) = world("sup-crash-kept", "1.0.0");
+        w.script(Script {
+            clean: false,
+            crash_file: true,
+            ..Script::default()
+        });
+        let reports = sup.run(vec![]).unwrap();
+        assert!(!reports[0].clean);
+        let root = w.root.join("r");
+        let kept = kadakas_crash::queue::list(&root);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].file.message, "scripted panic");
+        assert_eq!(kept[0].file.run_id, kept[0].id);
+        // The live file is gone, and the run left no other file.
+        assert_eq!(
+            std::fs::read_dir(crate::runs::runs_dir(&root))
+                .unwrap()
+                .count(),
+            0
+        );
+        std::fs::remove_dir_all(&w.root).unwrap();
+    }
+
+    #[test]
+    fn a_clean_run_keeps_no_crash_file() {
+        let (w, sup) = world("sup-crash-clean", "1.0.0");
+        w.script(Script {
+            clean: true,
+            crash_file: true,
+            ..Script::default()
+        });
+        let reports = sup.run(vec![]).unwrap();
+        assert!(reports[0].clean);
+        let root = w.root.join("r");
+        assert!(kadakas_crash::queue::list(&root).is_empty());
+        assert_eq!(
+            std::fs::read_dir(crate::runs::runs_dir(&root))
+                .unwrap()
+                .count(),
+            0
+        );
+        std::fs::remove_dir_all(&w.root).unwrap();
+    }
+
+    #[test]
+    fn a_crash_signal_without_a_file_becomes_a_small_report() {
+        let (w, sup) = world("sup-crash-signal", "1.0.0");
+        w.script(Script {
+            clean: false,
+            signal: Some("SIGSEGV"),
+            ..Script::default()
+        });
+        sup.run(vec![]).unwrap();
+        let kept = kadakas_crash::queue::list(&w.root.join("r"));
+        assert_eq!(kept.len(), 1);
+        let f = &kept[0].file;
+        assert_eq!(f.kind, kadakas_crash::CrashKind::Native);
+        assert!(f.message.starts_with("SIGSEGV"), "{}", f.message);
+        assert_eq!(f.version, "1.0.0");
+        assert_eq!(f.channel, "bundled");
+        // No signal and no file (a force quit, a shutdown): no report.
+        w.script(Script {
+            clean: false,
+            ..Script::default()
+        });
+        sup.run(vec![]).unwrap();
+        assert_eq!(kadakas_crash::queue::list(&w.root.join("r")).len(), 1);
+        std::fs::remove_dir_all(&w.root).unwrap();
+    }
+
+    #[test]
+    fn a_crash_file_of_a_lost_launcher_is_kept_when_the_next_one_settles_the_run() {
+        let (w, _sup) = world("sup-crash-settle", "1.0.0");
+        let root = w.root.join("r");
+        let st = w.store();
+        // A run whose supervisor and app are both gone, with a crash file and no clean mark.
+        let rec = crate::runs::RunRecord {
+            id: "ab-cd".into(),
+            slot: Slot::Bundled,
+            pid: 1,
+            started: 0,
+        };
+        std::fs::create_dir_all(crate::runs::runs_dir(&root)).unwrap();
+        std::fs::write(
+            crate::runs::run_file(&root, "ab-cd", "json"),
+            serde_json::to_vec(&rec).unwrap(),
+        )
+        .unwrap();
+        let mut f = kadakas_crash::CrashFile::new(kadakas_crash::CrashKind::Panic);
+        f.message = "left behind".into();
+        std::fs::write(kadakas_crash::queue::live_path(&root, "ab-cd"), f.to_json()).unwrap();
+        st.settle_runs();
+        let kept = kadakas_crash::queue::list(&root);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].file.message, "left behind");
         std::fs::remove_dir_all(&w.root).unwrap();
     }
 

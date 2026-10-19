@@ -41,7 +41,7 @@ pub struct Review {
     calls: Option<String>,
     log: Option<String>,
     /// The random id of this installation, for the message.
-    installation: String,
+    installation: Option<String>,
 }
 
 impl Review {
@@ -67,7 +67,7 @@ impl Review {
             render: hub.attachment(id, AttachmentKind::Render),
             calls: text(AttachmentKind::Calls),
             log: text(AttachmentKind::Log),
-            installation: hub.installation_id(),
+            installation: hub.report_installation_id(),
             report,
         })
     }
@@ -157,7 +157,7 @@ impl Review {
                     .filter(|_| on(AttachmentKind::Render)),
                 calls: calls.as_deref(),
                 log: log.as_deref(),
-                installation: Some(&self.installation),
+                installation: self.installation.as_deref(),
             },
         )
     }

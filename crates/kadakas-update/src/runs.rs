@@ -31,6 +31,14 @@
 //! | `<id>.status.json` | supervisor | what the app shows (`handshake::RunStatus`) |
 //! | `<id>.restart.json` | the app | "restart to update", with the open documents |
 //! | `<id>.download` | the app | "download the new version now" (Notify only) |
+//! | `<id>.crash.json` | the app | what the app knew when it died (PLAT-20, `kadakas-crash`) |
+//!
+//! **Crash reports (PLAT-20).** A run that ends without the mark and has a crash file keeps it:
+//! the file moves to `crash-reports/<id>.json` (at most 10 files, the oldest go first). The app
+//! shows the report at its next start. A run that ends with the mark deletes the crash file (a
+//! panic that the app survived is no crash). When the run ended by a signal or an exception that
+//! the app could not report (it has no file), the launcher writes a small report of its own with
+//! the name of the signal.
 
 use crate::error::Result;
 use crate::store::{Slot, Store};
@@ -154,13 +162,20 @@ impl RunGuard {
 
     /// The run ended. Reads the clean-exit mark, records the result in `health.json`, and
     /// deletes the files of the run.
-    pub fn finish(mut self, store: &Store) -> RunEnd {
+    pub fn finish(self, store: &Store) -> RunEnd {
+        self.finish_with(store, None)
+    }
+
+    /// Like [`RunGuard::finish`]. `signal` names the signal or exception that ended the app, if
+    /// the system said so (`SIGSEGV`): without a crash file of the app, it becomes a small
+    /// report.
+    pub fn finish_with(mut self, store: &Store, signal: Option<&str>) -> RunEnd {
         let clean = run_file(&self.root, &self.id, "clean").is_file();
-        let _ = store.note_run_end_after(
-            &self.slot,
-            clean,
-            now_seconds().saturating_sub(self.started),
-        );
+        let seconds = now_seconds().saturating_sub(self.started);
+        let _ = store.note_run_end_after(&self.slot, clean, seconds);
+        if !clean {
+            keep_crash(store, &self.id, &self.slot, signal, seconds);
+        }
         self.remove_files();
         RunEnd { clean }
     }
@@ -185,8 +200,34 @@ impl Drop for RunGuard {
     }
 }
 
+/// Keeps the crash file of an unclean run for the next start of the app. When the app left none
+/// but the system says a crash signal ended it, writes a small report from that.
+fn keep_crash(store: &Store, id: &str, slot: &Slot, signal: Option<&str>, seconds: u64) {
+    let root = store.root();
+    if kadakas_crash::queue::keep(root, id).unwrap_or(false) {
+        return;
+    }
+    let Some(signal) = signal else { return };
+    let mut f = kadakas_crash::CrashFile::new(kadakas_crash::CrashKind::Native);
+    f.run_id = id.to_string();
+    f.created = now_seconds();
+    f.version = match slot {
+        Slot::Version(v) => v.to_string(),
+        Slot::Bundled => store
+            .bundled()
+            .map(|b| b.version.to_string())
+            .unwrap_or_default(),
+    };
+    f.channel = store.meta(slot).label;
+    f.os = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+    f.message = format!("{signal} (reported by the launcher; the app left no crash file)");
+    f.uptime_secs = seconds;
+    let _ = kadakas_crash::queue::store(root, id, &f);
+}
+
 fn remove_run_files(root: &Path, id: &str) {
     for suffix in [
+        "crash.json",
         "json",
         "clean",
         "status.json",
@@ -376,6 +417,12 @@ impl Store {
         }
     }
 
+    /// How many crash reports wait for the person (PLAT-20): kept after an unclean end, not yet
+    /// shown or decided in the app.
+    pub fn kept_crash_reports(&self) -> usize {
+        kadakas_crash::queue::count(self.root())
+    }
+
     /// The versions that run now (the supervisor or the app holds the lock of the run).
     pub fn running_slots(&self) -> Vec<Slot> {
         read_records(self.root())
@@ -405,6 +452,9 @@ impl Store {
                 let clean = run_file(self.root(), &id, "clean").is_file();
                 let seconds = now_seconds().saturating_sub(r.started);
                 let _ = self.note_run_end_locked(&r.slot, clean, seconds);
+                if !clean {
+                    keep_crash(self, &id, &r.slot, None, seconds);
+                }
             }
             remove_run_files(self.root(), &id);
             let _ = std::fs::remove_file(run_file(self.root(), &id, "lock"));

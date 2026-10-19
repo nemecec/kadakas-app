@@ -122,3 +122,7 @@ These tools build, test or check Kadakas. They are not part of the installers.
 ## Keep this page current
 
 Every new dependency, asset, dataset or cited formula changes this page. For a crate, run `scripts/notices.sh`. For anything else, edit `docs/notices-extra.txt` too.
+
+## Crash reports (PLAT-20, `kadakas-crash`)
+
+New with crash reports: `crash-handler` (Embark Studios, MIT OR Apache-2.0, https://github.com/EmbarkStudios/crash-handling) catches native crashes (a signal on Linux, a Mach exception on macOS, an exception on Windows) in the app. Its helpers `crash-context` (same authors and license) and `mach2` (macOS, BSD-2-Clause OR MIT OR Apache-2.0), with `cfg-if`, `libc` and `parking_lot` (MIT OR Apache-2.0), come with it. All are in `THIRD_PARTY_NOTICES.txt`. `sha2` (RustCrypto, MIT OR Apache-2.0) makes the signature of a crash; `kadakas-update` used it already. The scrubbing rules, the signature, the queue and the dialog are our own code. We did not add `minidumper` (same authors and license): see `docs/crash-reports.md`, "Limits".

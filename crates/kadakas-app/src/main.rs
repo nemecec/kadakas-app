@@ -28,6 +28,8 @@ mod canvas3d;
 mod collab_ui;
 mod compare_draw;
 mod compare_ui;
+#[cfg(not(target_arch = "wasm32"))]
+mod crash_ui;
 mod data_ui;
 mod databar;
 #[cfg(not(target_arch = "wasm32"))]
@@ -63,6 +65,7 @@ mod plugin_ui;
 mod prefs;
 mod prefs_ui;
 mod present_ui;
+mod privacy_ui;
 mod profile_store;
 mod profiles;
 mod quick_search;
@@ -100,6 +103,8 @@ fn main() -> eframe::Result {
     let collab = kadakas_ui_core::collab::CollabArgs::parse(&args, &|k| std::env::var(k).ok());
     // The run id of the launcher goes the same way: read once, then out of the environment.
     app_updates::capture_env();
+    // The panic hook and the native crash handler (PLAT-20), as early as the run id is known.
+    crash_ui::install(&app_updates::launch_env);
     kadakas_sys::process::remove_secrets_from_env();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
