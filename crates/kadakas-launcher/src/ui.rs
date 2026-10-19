@@ -114,31 +114,33 @@ impl eframe::App for LauncherApp {
             ui.add_space(8.0);
 
             ui.strong(tr!("launcher-installed-versions"));
-            egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-                egui::Grid::new("versions").striped(true).show(ui, |ui| {
-                    if self.model.installed.is_empty() {
-                        ui.label(tr!("launcher-nothing-installed"));
-                        ui.end_row();
-                    }
-                    let mut picked = None;
-                    for i in &self.model.installed {
-                        let selected = self.model.selected.as_ref() == Some(&i.slot);
-                        if ui
-                            .selectable_label(selected, i.version.to_string())
-                            .clicked()
-                        {
-                            picked = Some(i.slot.clone());
+            egui::ScrollArea::vertical()
+                .max_height(150.0)
+                .show(ui, |ui| {
+                    egui::Grid::new("versions").striped(true).show(ui, |ui| {
+                        if self.model.installed.is_empty() {
+                            ui.label(tr!("launcher-nothing-installed"));
+                            ui.end_row();
                         }
-                        ui.label(label_text(&i.meta.label));
-                        ui.label(i.meta.commit.as_deref().unwrap_or_default());
-                        ui.label(tags(i, self.model.skipped.get(&i.slot).copied()));
-                        ui.end_row();
-                    }
-                    if let Some(slot) = picked {
-                        self.model.select(slot);
-                    }
+                        let mut picked = None;
+                        for i in &self.model.installed {
+                            let selected = self.model.selected.as_ref() == Some(&i.slot);
+                            if ui
+                                .selectable_label(selected, i.version.to_string())
+                                .clicked()
+                            {
+                                picked = Some(i.slot.clone());
+                            }
+                            ui.label(label_text(&i.meta.label));
+                            ui.label(i.meta.commit.as_deref().unwrap_or_default());
+                            ui.label(tags(i, self.model.skipped.get(&i.slot).copied()));
+                            ui.end_row();
+                        }
+                        if let Some(slot) = picked {
+                            self.model.select(slot);
+                        }
+                    });
                 });
-            });
             ui.horizontal(|ui| {
                 if let Some(sel) = &self.model.selected {
                     ui.label(slot_text(sel));
@@ -251,10 +253,7 @@ impl eframe::App for LauncherApp {
                     self.model.launch();
                 }
                 if ui
-                    .add_enabled(
-                        !self.model.busy(),
-                        egui::Button::new(tr!("launcher-check")),
-                    )
+                    .add_enabled(!self.model.busy(), egui::Button::new(tr!("launcher-check")))
                     .clicked()
                 {
                     self.model.start(Task::Check, wake.clone());
@@ -340,7 +339,11 @@ mod tests {
                 ] {
                     assert!(!skip_text(r).is_empty());
                 }
-                let mut prev = row(Slot::Version(Version::parse("1.0.0").unwrap()), false, false);
+                let mut prev = row(
+                    Slot::Version(Version::parse("1.0.0").unwrap()),
+                    false,
+                    false,
+                );
                 prev.previous = true;
                 assert!(!tags(&prev, None).is_empty());
             });

@@ -508,12 +508,7 @@ impl Store {
 
     /// Unpacks a version into the store and does not switch to it. The pointer stays as it was
     /// (Auto-download and Notify only: the person decides when to switch, see [`Store::activate`]).
-    pub fn stage(
-        &self,
-        version: &Version,
-        archive_file: &ArchiveFile,
-        label: &str,
-    ) -> Result<()> {
+    pub fn stage(&self, version: &Version, archive_file: &ArchiveFile, label: &str) -> Result<()> {
         self.install_with(version, archive_file, false, label, false)
     }
 
@@ -553,8 +548,8 @@ impl Store {
             let staging = self.versions_dir().join(format!("{TMP_PREFIX}{version}"));
             let _ = std::fs::remove_dir_all(&staging);
             std::fs::create_dir(&staging)?;
-            let unpacked =
-                archive::extract_tar_gz(&file, &staging, Limits::default()).and_then(|_| {
+            let unpacked = archive::extract_tar_gz(&file, &staging, Limits::default())
+                .and_then(|_| {
                     std::fs::write(staging.join(MARKER), &archive_file.sha256).map_err(Into::into)
                 })
                 .and_then(|()| {
@@ -896,7 +891,11 @@ pub(crate) mod tests {
         s.set_kept(&v("1.4.0"), true).unwrap();
         install_all(&s, &root, &["1.5.0"]);
         assert_eq!(folders(&s), ["1.2.0", "1.4.0", "1.5.0"]);
-        assert!(s.list().iter().any(|i| i.version == v("1.4.0") && i.meta.kept));
+        assert!(
+            s.list()
+                .iter()
+                .any(|i| i.version == v("1.4.0") && i.meta.kept)
+        );
         // The app ends. The running version is no longer protected; the kept one still is.
         guard.finish(&s);
         s.prune().unwrap();
@@ -925,7 +924,11 @@ pub(crate) mod tests {
         s.stage(&v("1.1.0"), &a, "nightly").unwrap();
         assert_eq!(s.active().unwrap().slot, Slot::Bundled);
         assert_eq!(s.pointer(), Pointer::default());
-        let item = s.list().into_iter().find(|i| i.version == v("1.1.0")).unwrap();
+        let item = s
+            .list()
+            .into_iter()
+            .find(|i| i.version == v("1.1.0"))
+            .unwrap();
         assert_eq!(item.meta.label, "nightly");
         // Staging the same archive again reuses the folder.
         s.stage(&v("1.1.0"), &a, "nightly").unwrap();
@@ -1016,7 +1019,11 @@ pub(crate) mod tests {
         broken.files.push(PathBuf::from("missing"));
         let other = v("1.0.0-local.gdef");
         assert!(s.add_local(&other, &broken, None).is_err());
-        assert!(!s.versions_dir().join(format!("{TMP_PREFIX}{other}")).exists());
+        assert!(
+            !s.versions_dir()
+                .join(format!("{TMP_PREFIX}{other}"))
+                .exists()
+        );
         assert!(!s.versions_dir().join(other.to_string()).exists());
         std::fs::remove_dir_all(&root).unwrap();
     }

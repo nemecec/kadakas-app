@@ -49,6 +49,7 @@ resvg = { version = "0.48.1", default-features = false }
 getrandom = "0.4.3"
 kadakas-gis = { version = "0.1.0", path = "../kadakas-gis" }
 kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
+kadakas-update = { version = "0.1.0", path = "../kadakas-update" }
 sys-locale = "0.3.2"
 
 # The web build: WebGPU first, WebGL2 as the fallback (eframe picks at start).

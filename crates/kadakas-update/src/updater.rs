@@ -899,17 +899,28 @@ pub(crate) mod tests {
         let root = tmp("up-local-signed");
         let dir = root.join("site");
         // Signed with the right key: the label is the channel, the usual rules apply (expiry).
-        site(&dir, "1.1.0", Channel::Stable, Some(&key(1)), "kadakas.tar.gz");
+        site(
+            &dir,
+            "1.1.0",
+            Channel::Stable,
+            Some(&key(1)),
+            "kadakas.tar.gz",
+        );
         let u = local_updater(&root, &dir, "1.0.0");
         assert_eq!(u.fetch_trusted(Channel::Stable).unwrap().1, Trust::Signed);
-        let late =
-            local_updater(&root, &dir, "1.0.0").with_clock(Arc::new(|| 1_000 + 31 * 86_400));
+        let late = local_updater(&root, &dir, "1.0.0").with_clock(Arc::new(|| 1_000 + 31 * 86_400));
         assert!(matches!(
             late.check(Channel::Stable),
             Err(UpdateError::Expired { .. })
         ));
         // A wrong key is refused on a local site too: only an empty signature means unsigned.
-        site(&dir, "1.1.0", Channel::Stable, Some(&key(9)), "kadakas.tar.gz");
+        site(
+            &dir,
+            "1.1.0",
+            Channel::Stable,
+            Some(&key(9)),
+            "kadakas.tar.gz",
+        );
         assert!(matches!(
             u.check(Channel::Stable),
             Err(UpdateError::BadSignature)

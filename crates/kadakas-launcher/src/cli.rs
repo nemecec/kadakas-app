@@ -181,7 +181,10 @@ mod tests {
         );
         assert!(matches!(
             p(&["add", "--version=1.0.0", "b"]).unwrap(),
-            Command::Add { version: Some(_), .. }
+            Command::Add {
+                version: Some(_),
+                ..
+            }
         ));
         for bad in [
             &["add"][..],

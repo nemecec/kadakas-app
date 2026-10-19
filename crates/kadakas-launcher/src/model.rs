@@ -142,7 +142,10 @@ impl Model {
 
     /// The selected version can be kept or removed (not the bundled one).
     pub fn can_keep(&self) -> bool {
-        !self.busy() && self.selected_item().is_some_and(|i| i.slot != Slot::Bundled)
+        !self.busy()
+            && self
+                .selected_item()
+                .is_some_and(|i| i.slot != Slot::Bundled)
     }
 
     pub fn can_remove(&self) -> bool {
@@ -395,7 +398,10 @@ mod tests {
                 files: vec![PathBuf::from(exe)],
             };
             let v = Version::parse(&format!("1.0.0-local.{}", ver.replace('.', "x"))).unwrap();
-            m.updater.store().add_local(&v, &build, Some("abc")).unwrap();
+            m.updater
+                .store()
+                .add_local(&v, &build, Some("abc"))
+                .unwrap();
         }
         m.refresh();
     }
@@ -587,7 +593,9 @@ mod tests {
         use kadakas_update::Offer;
         let v = |s: &str| Version::parse(s).unwrap();
         let checked = |s| Ok(Outcome::Checked(s));
-        assert!(describe(&checked(UpdateStatus::UpToDate { current: None })).contains("up to date"));
+        assert!(
+            describe(&checked(UpdateStatus::UpToDate { current: None })).contains("up to date")
+        );
         let offer = Offer {
             version: v("1.1.0"),
             channel: Channel::Stable,

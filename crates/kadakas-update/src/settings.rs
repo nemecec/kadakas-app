@@ -117,10 +117,16 @@ impl Settings {
     }
 
     fn apply_lenient(&mut self, o: &serde_json::Map<String, serde_json::Value>) {
-        if let Some(c) = o.get("channel").and_then(|v| serde_json::from_value(v.clone()).ok()) {
+        if let Some(c) = o
+            .get("channel")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
             self.channel = c;
         }
-        if let Some(m) = o.get("mode").and_then(|v| serde_json::from_value(v.clone()).ok()) {
+        if let Some(m) = o
+            .get("mode")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
             self.mode = m;
         }
         if let Some(k) = o.get("keep_older").and_then(serde_json::Value::as_u64) {
@@ -242,7 +248,11 @@ mod tests {
         assert!(!UpdateMode::NotifyOnly.downloads_by_itself());
         let root = tmp("settings-new");
         // Old files without the new fields give the defaults for them.
-        std::fs::write(Settings::path(&root), br#"{"channel":"beta","profile":"p"}"#).unwrap();
+        std::fs::write(
+            Settings::path(&root),
+            br#"{"channel":"beta","profile":"p"}"#,
+        )
+        .unwrap();
         let s = Settings::load(&root);
         assert_eq!((s.mode, s.keep_older), (UpdateMode::AutoUpdate, 1));
         // `nightly` is read as the beta channel.
@@ -267,7 +277,10 @@ mod tests {
         let s = Settings::load(&root);
         assert_eq!(s.channel, Channel::Stable);
         assert_eq!(s.mode, UpdateMode::NotifyOnly);
-        assert_eq!((s.keep_older, s.site.as_str(), s.profile.as_str()), (0, "file:///x", "p1"));
+        assert_eq!(
+            (s.keep_older, s.site.as_str(), s.profile.as_str()),
+            (0, "file:///x", "p1")
+        );
         assert_eq!(s.flavor, MAIN_FLAVOR);
         assert!(valid_site("") && valid_site("file:///a/b"));
         assert!(!valid_site("file:///a b") && !valid_site("http://x") && !valid_site("/a"));

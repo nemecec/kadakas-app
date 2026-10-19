@@ -149,6 +149,13 @@ pub struct KadakasApp {
     /// File > Import > Update from DXF/DWG...: the update window and its overlay on the plan (IOP-23).
     #[cfg(not(target_arch = "wasm32"))]
     update_ui: crate::update_ui::UpdateUi,
+    /// Updates through the launcher: the notice, the restart, Preferences > Updates (PLAT-16).
+    #[cfg(not(target_arch = "wasm32"))]
+    updates: crate::app_updates::Updates,
+    /// The editor revision at the last open, new or save. Another revision means that the
+    /// drawing has changes that are not saved (the restart to update asks about them).
+    #[cfg(not(target_arch = "wasm32"))]
+    saved_revision: u64,
     /// File > Compare Drawings...: two DXF or DWG files without an import (IOP-24).
     #[cfg(not(target_arch = "wasm32"))]
     drawings_ui: crate::drawings_ui::DrawingsUi,
@@ -327,6 +334,19 @@ impl KadakasApp {
         };
         app.status = key_note.clone();
         app.autosave.begin();
+        // The documents that were named on the command line. The launcher passes the files of a
+        // double click and the documents of a restart to update.
+        let named = crate::agent::parse_open_files(&args);
+        if let Some(first) = named.first() {
+            app.open_path(&cc.egui_ctx, first.clone());
+            if named.len() > 1 && app.path.as_ref() == Some(first) {
+                app.status = tr!(
+                    "app-opened-first-of-several",
+                    name = first.display(),
+                    count = named.len() - 1
+                );
+            }
+        }
         // Reports of people and agents wait in the data folder; the sending thread is on.
         if let Some(dir) = kadakas_feedback::store::default_dir() {
             app.session
@@ -450,6 +470,8 @@ impl KadakasApp {
         session.set_collab_endpoint_factory(Box::new(|url, token| {
             kadakas_collab_ws::endpoint_for(url, token).map_err(|e| e.to_string())
         }));
+        #[cfg(not(target_arch = "wasm32"))]
+        let saved_revision = session.editor.revision();
         KadakasApp {
             profiles: Default::default(),
             session,
@@ -514,6 +536,10 @@ impl KadakasApp {
             paving_ui: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             update_ui: crate::update_ui::UpdateUi::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            updates: crate::app_updates::Updates::from_env(&|k| std::env::var(k).ok()),
+            #[cfg(not(target_arch = "wasm32"))]
+            saved_revision,
             #[cfg(not(target_arch = "wasm32"))]
             drawings_ui: Default::default(),
             readout: Default::default(),
@@ -594,6 +620,10 @@ impl KadakasApp {
         {
             if ctx.input(|i| i.viewport().close_requested()) && !self.collab.ask_close() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                // The question about unsent edits stops a restart too.
+                if self.updates.restart() == crate::app_updates::Restart::Pending {
+                    self.updates.cancel_restart();
+                }
             }
             if self.collab.take_close_now() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -819,6 +849,10 @@ impl KadakasApp {
         // is told to the person: the file opened, but not as it was written.
         if !notes.is_empty() {
             self.status = tr!("app-load-notes", notes = notes.join("; "));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.saved_revision = self.session.editor.revision();
         }
         true
     }
@@ -1283,6 +1317,87 @@ impl KadakasApp {
         }
     }
 
+    /// True when the drawing has changes that are not saved.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn is_dirty(&self) -> bool {
+        self.session.editor.revision() != self.saved_revision
+    }
+
+    /// "Restart to update": with unsaved changes the person is asked first. Then the window
+    /// closes, and the launcher starts the new version with the open document (PLAT-16).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn begin_restart(&mut self, ctx: &egui::Context) {
+        if self.session.script_running() {
+            self.status = tr!("script-ui-js-blocked");
+        } else if self.is_dirty() {
+            self.updates
+                .set_restart(crate::app_updates::Restart::Asking);
+        } else {
+            self.commit_restart(ctx);
+        }
+    }
+
+    /// Closes the window for the restart. The request goes to the launcher when the program
+    /// exits (`on_exit`), after the close has passed the question about unsent edits.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn commit_restart(&mut self, ctx: &egui::Context) {
+        self.updates
+            .set_restart(crate::app_updates::Restart::Pending);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// Each frame: reads what the launcher found, shows its errors and the question about
+    /// unsaved changes, and writes the update settings when Preferences changed them.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn updates_frame(&mut self, ctx: &egui::Context) {
+        use crate::app_updates::Restart;
+        if self.updates.poll(ctx.input(|i| i.time)) {
+            ctx.request_repaint();
+        }
+        if self.updates.has_launcher() {
+            ctx.request_repaint_after(std::time::Duration::from_secs(2));
+        }
+        if let Some(note) = self.updates.skipped_note() {
+            self.status = note;
+        }
+        self.updates.save_if_changed();
+        if let Some(e) = self.updates.take_error() {
+            self.status = e;
+        }
+        if self.updates.restart() == Restart::Asking
+            && let Some(choice) = crate::app_updates::save_dialog(ctx)
+        {
+            self.on_save_choice(ctx, choice);
+        }
+    }
+
+    /// The person answered the question about unsaved changes before the restart.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn on_save_choice(&mut self, ctx: &egui::Context, choice: crate::app_updates::SaveChoice) {
+        use crate::app_updates::{Restart, SaveChoice};
+        match choice {
+            SaveChoice::SaveAndRestart => {
+                self.save(false, ctx);
+                if self.is_dirty() {
+                    // Not saved (cancelled or failed): no restart.
+                    self.updates.set_restart(Restart::None);
+                } else {
+                    self.commit_restart(ctx);
+                }
+            }
+            SaveChoice::RestartWithoutSaving => self.commit_restart(ctx),
+            SaveChoice::Cancel => self.updates.set_restart(Restart::None),
+        }
+    }
+
+    /// The end of a normal exit, for the launcher: a pending restart with the open documents,
+    /// then the clean-exit mark.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_updates(&mut self) {
+        let documents: Vec<std::path::PathBuf> = self.path.iter().cloned().collect();
+        self.updates.finish(&documents);
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn open_file(&mut self, ctx: &egui::Context) {
         // Check before the file picker: a person should not pick a file and then be refused.
@@ -1424,6 +1539,7 @@ impl KadakasApp {
                     )
                 };
                 self.session.collab_mark_saved();
+                self.saved_revision = self.session.editor.revision();
                 self.path = Some(path);
                 self.set_title(ctx);
             }
@@ -3124,6 +3240,9 @@ impl eframe::App for KadakasApp {
         self.feedback.finish(&mut self.session.feedback.hub);
         self.persist(f64::INFINITY);
         self.save_layouts();
+        // Last of all: a restart to update (with the open documents), and the clean-exit mark
+        // that tells the launcher that this run did not crash.
+        self.finish_updates();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -3327,9 +3446,13 @@ impl eframe::App for KadakasApp {
                 max_versions: &mut self.prefs.max_versions,
                 max_version_mib: &mut self.prefs.max_version_mib,
                 animate_agent_view: &mut self.prefs.animate_agent_view,
+                #[cfg(not(target_arch = "wasm32"))]
+                updates: &mut self.updates,
             },
             &mut self.autosave,
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        self.updates_frame(&ctx);
         crate::profiles::customize_window(&ctx, &mut self.profiles);
         self.sync_profile();
         self.open_gate_frame(&ctx);
@@ -3346,6 +3469,11 @@ impl eframe::App for KadakasApp {
             && self.replace_document(r.doc, None)
         {
             self.status = r.status;
+            // A recovered copy was never saved.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.saved_revision = u64::MAX;
+            }
         }
         if let Some(versions) = self.autosave.take_report_request() {
             self.feedback
@@ -3557,6 +3685,23 @@ impl eframe::App for KadakasApp {
                 });
             });
         });
+        // The quiet notice that a new version is ready (or available), above the status line.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use crate::app_updates::NoticeAction;
+            if let Some(n) = self.updates.notice() {
+                let mut action = None;
+                egui::Panel::bottom("update-notice").show(ui, |ui| {
+                    action = crate::app_updates::notice_bar(ui, &n);
+                });
+                match action {
+                    Some(NoticeAction::Restart) => self.begin_restart(&ctx),
+                    Some(NoticeAction::Later) => self.updates.put_off(),
+                    Some(NoticeAction::Download) => self.updates.request_download(),
+                    None => {}
+                }
+            }
+        }
         if let Some(c) = feedback_click {
             self.feedback.on_click(c);
         }
@@ -5802,5 +5947,184 @@ mod tests {
         app.save(false, &ctx);
         assert!(app.status.contains("Saved"), "{}", app.status);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- Updates through the launcher: the notice and the restart (PLAT-16) ----
+
+    /// An app that the launcher started: the run `1a-2b` in a temporary install folder.
+    fn launched_app(name: &str) -> (KadakasApp, std::path::PathBuf) {
+        use kadakas_update::handshake::{AppLink, ENV_ROOT, ENV_RUN};
+        let root =
+            std::env::temp_dir().join(format!("kadakas-app-restart-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let r = root.to_string_lossy().into_owned();
+        let link = AppLink::from_env(&|k| match k {
+            ENV_ROOT => Some(r.clone()),
+            ENV_RUN => Some("1a-2b".into()),
+            _ => None,
+        })
+        .unwrap();
+        let mut app = KadakasApp::blank();
+        app.updates = crate::app_updates::Updates::new(Some(link), Some(root.clone()));
+        (app, root)
+    }
+
+    /// True when the frame carries a command to close the window.
+    fn closes(ctx: &egui::Context) -> bool {
+        let out = ctx.run_ui(Default::default(), |_ui| {});
+        out.viewport_output
+            .values()
+            .any(|v| v.commands.contains(&egui::ViewportCommand::Close))
+    }
+
+    #[test]
+    fn a_clean_drawing_restarts_at_once_and_the_launcher_gets_the_document() {
+        use crate::app_updates::Restart;
+        let (mut app, root) = launched_app("clean");
+        let ctx = egui::Context::default();
+        let file = root.join("plan.json");
+        file_io::write_document_raw(&file, &Document::default()).unwrap();
+        app.open_path(&ctx, file.clone());
+        assert!(!app.is_dirty());
+        app.begin_restart(&ctx);
+        assert_eq!(app.updates.restart(), Restart::Pending);
+        assert!(closes(&ctx), "the window closes");
+        // The program exits: the request has the open document, and the clean-exit mark is there.
+        app.finish_updates();
+        let req = kadakas_update::handshake::take_restart(&root, "1a-2b").unwrap();
+        assert_eq!(req.documents, [file]);
+        assert!(kadakas_update::runs::run_file(&root, "1a-2b", "clean").is_file());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_normal_exit_marks_clean_and_asks_for_no_restart() {
+        let (mut app, root) = launched_app("exit");
+        app.finish_updates();
+        assert!(kadakas_update::runs::run_file(&root, "1a-2b", "clean").is_file());
+        assert!(kadakas_update::handshake::take_restart(&root, "1a-2b").is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unsaved_changes_are_asked_about_before_the_restart() {
+        use crate::app_updates::{Restart, SaveChoice};
+        let ctx = egui::Context::default();
+
+        // Save and restart: the file is written, then the window closes.
+        let (mut app, root) = launched_app("dirty-save");
+        let file = root.join("plan.json");
+        file_io::write_document_raw(&file, &Document::default()).unwrap();
+        app.open_path(&ctx, file.clone());
+        app.exec(&add_rect_command(0.0));
+        assert!(app.is_dirty());
+        app.begin_restart(&ctx);
+        assert_eq!(app.updates.restart(), Restart::Asking);
+        assert!(!closes(&ctx), "nothing closes before the answer");
+        app.on_save_choice(&ctx, SaveChoice::SaveAndRestart);
+        assert!(!app.is_dirty());
+        assert_eq!(app.updates.restart(), Restart::Pending);
+        assert!(closes(&ctx));
+        app.finish_updates();
+        let req = kadakas_update::handshake::take_restart(&root, "1a-2b").unwrap();
+        assert_eq!(req.documents, std::slice::from_ref(&file));
+        let saved = file_io::open_file(&file).unwrap();
+        assert_eq!(saved.doc.objects.len(), 1, "the change is in the file");
+        let _ = std::fs::remove_dir_all(root);
+
+        // Cancel: nothing happens, the drawing stays open.
+        let (mut app, root) = launched_app("dirty-cancel");
+        app.exec(&add_rect_command(0.0));
+        app.begin_restart(&ctx);
+        app.on_save_choice(&ctx, SaveChoice::Cancel);
+        assert_eq!(app.updates.restart(), Restart::None);
+        assert!(!closes(&ctx));
+        let _ = std::fs::remove_dir_all(root);
+
+        // Restart without saving: the person said so.
+        let (mut app, root) = launched_app("dirty-discard");
+        app.exec(&add_rect_command(0.0));
+        app.begin_restart(&ctx);
+        app.on_save_choice(&ctx, SaveChoice::RestartWithoutSaving);
+        assert_eq!(app.updates.restart(), Restart::Pending);
+        assert!(closes(&ctx));
+        let _ = std::fs::remove_dir_all(root);
+
+        // Save fails (the folder is gone): no restart, the changes stay.
+        let (mut app, root) = launched_app("dirty-fail");
+        let gone = root.join("gone");
+        std::fs::create_dir_all(&gone).unwrap();
+        let file = gone.join("plan.json");
+        file_io::write_document_raw(&file, &Document::default()).unwrap();
+        app.open_path(&ctx, file);
+        app.exec(&add_rect_command(0.0));
+        std::fs::remove_dir_all(&gone).unwrap();
+        app.begin_restart(&ctx);
+        app.on_save_choice(&ctx, SaveChoice::SaveAndRestart);
+        assert!(app.is_dirty());
+        assert_eq!(app.updates.restart(), Restart::None);
+        assert!(!closes(&ctx));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_new_or_recovered_drawing_is_clean_or_dirty_as_it_should() {
+        let mut app = KadakasApp::blank();
+        assert!(!app.is_dirty());
+        app.exec(&add_rect_command(0.0));
+        assert!(app.is_dirty());
+        // File > New replaces the drawing: clean again.
+        app.replace_document(Document::default(), None);
+        assert!(!app.is_dirty());
+        // Undo to the saved state is a different revision: asking too often is the safe side.
+        app.exec(&add_rect_command(1.0));
+        app.undo();
+        assert!(app.is_dirty());
+    }
+
+    #[test]
+    fn the_notice_comes_from_the_status_file_and_a_skipped_version_is_told() {
+        use kadakas_update::handshake::{
+            RunStatus, SkipReason, Skipped, UpdateState, write_status,
+        };
+        let (mut app, root) = launched_app("notice");
+        let ctx = egui::Context::default();
+        write_status(
+            &root,
+            "1a-2b",
+            &RunStatus {
+                running: "1.0.0".into(),
+                label: "stable".into(),
+                update: UpdateState::Ready {
+                    version: "1.1.0".into(),
+                },
+                skipped: vec![Skipped {
+                    version: "1.2.0".into(),
+                    reason: SkipReason::Crashed,
+                }],
+            },
+        )
+        .unwrap();
+        let _ = ctx.run_ui(Default::default(), |ui| app.updates_frame(ui.ctx()));
+        assert!(app.status.contains("1.2.0"), "{}", app.status);
+        assert!(app.updates.notice().is_some());
+        // "Later" puts the notice off; Restart is the other button.
+        app.updates.put_off();
+        assert!(app.updates.notice().is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_update_settings_are_written_where_the_launcher_reads_them() {
+        let (mut app, root) = launched_app("settings");
+        let ctx = egui::Context::default();
+        app.updates.settings.mode = kadakas_update::UpdateMode::AutoDownload;
+        app.updates.settings.keep_older = 2;
+        let _ = ctx.run_ui(Default::default(), |ui| app.updates_frame(ui.ctx()));
+        let on_disk = kadakas_update::Settings::load(&root);
+        assert_eq!(on_disk.mode, kadakas_update::UpdateMode::AutoDownload);
+        assert_eq!(on_disk.keep_older, 2);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

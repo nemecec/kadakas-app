@@ -65,8 +65,13 @@ pub struct SystemSpawner;
 
 impl Spawner for SystemSpawner {
     fn spawn(&self, spec: &SpawnSpec) -> Result<Box<dyn Process>> {
-        let mut cmd =
-            launch::command_with(&spec.dir, &spec.flavor, &spec.profile, &spec.files, &spec.env)?;
+        let mut cmd = launch::command_with(
+            &spec.dir,
+            &spec.flavor,
+            &spec.profile,
+            &spec.files,
+            &spec.env,
+        )?;
         Ok(Box::new(SystemProcess(cmd.spawn()?)))
     }
 }
@@ -514,7 +519,14 @@ mod tests {
             recheck: Duration::from_millis(40),
             retry: Duration::from_millis(40),
         });
-        (World { root, http, spawner }, sup)
+        (
+            World {
+                root,
+                http,
+                spawner,
+            },
+            sup,
+        )
     }
 
     impl World {
@@ -594,7 +606,9 @@ mod tests {
         assert_eq!(reports[0].version, v("1.0.0"));
         let seen = w.spawner.seen.lock().unwrap().clone();
         assert!(
-            seen.contains(&UpdateState::Ready { version: "1.1.0".into() }),
+            seen.contains(&UpdateState::Ready {
+                version: "1.1.0".into()
+            }),
             "{seen:?}"
         );
         // The new version is in the store and is not running.
@@ -681,7 +695,11 @@ mod tests {
             }]
         );
         // A clean run of the bundled app leaves the skip in place (1.1.0 did not run again).
-        assert!(w.store().crashed_slots().contains(&Slot::Version(v("1.1.0"))));
+        assert!(
+            w.store()
+                .crashed_slots()
+                .contains(&Slot::Version(v("1.1.0")))
+        );
         std::fs::remove_dir_all(&w.root).unwrap();
     }
 
@@ -724,7 +742,9 @@ mod tests {
             "{seen:?}"
         );
         assert!(
-            seen.contains(&UpdateState::Ready { version: "1.1.0".into() }),
+            seen.contains(&UpdateState::Ready {
+                version: "1.1.0".into()
+            }),
             "{seen:?}"
         );
         // The download did not switch: the person chose the bundled app.
@@ -781,7 +801,12 @@ mod tests {
 
     #[test]
     fn skips_are_described() {
-        let s = |reason| describe_skip(&Skipped { version: "1.2.0".into(), reason });
+        let s = |reason| {
+            describe_skip(&Skipped {
+                version: "1.2.0".into(),
+                reason,
+            })
+        };
         assert!(s(SkipReason::Crashed).contains("clean exit"));
         assert!(s(SkipReason::RolledBack).contains("rolled back"));
         assert!(s(SkipReason::NotStarted).contains("could not be started"));
@@ -790,14 +815,24 @@ mod tests {
     #[test]
     fn ready_means_newer_installed_not_skipped_and_allowed_by_the_channel() {
         let root = tmp("sup-ready");
-        let st = Store::new(root.join("r"), Some(crate::store::tests::bundled(&root, "1.0.0")));
+        let st = Store::new(
+            root.join("r"),
+            Some(crate::store::tests::bundled(&root, "1.0.0")),
+        );
         st.stage(&v("1.1.0"), &archive_file(&root, "1.1.0"), "stable")
             .unwrap();
-        st.stage(&v("1.2.0-beta.1"), &archive_file(&root, "1.2.0-beta.1"), "nightly")
-            .unwrap();
+        st.stage(
+            &v("1.2.0-beta.1"),
+            &archive_file(&root, "1.2.0-beta.1"),
+            "nightly",
+        )
+        .unwrap();
         let now = v("1.0.0");
         assert_eq!(ready_version(&st, Channel::Stable, &now), Some(v("1.1.0")));
-        assert_eq!(ready_version(&st, Channel::Beta, &now), Some(v("1.2.0-beta.1")));
+        assert_eq!(
+            ready_version(&st, Channel::Beta, &now),
+            Some(v("1.2.0-beta.1"))
+        );
         assert_eq!(ready_version(&st, Channel::Stable, &v("1.1.0")), None);
         st.note_run_end(&Slot::Version(v("1.1.0")), false).unwrap();
         assert_eq!(ready_version(&st, Channel::Stable, &now), None);

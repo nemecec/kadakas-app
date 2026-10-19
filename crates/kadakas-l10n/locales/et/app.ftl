@@ -107,3 +107,9 @@ app-save-overwrite-text =
 
     Kas asendada?
 app-save-overwrite-cancelled = Ei salvestatud: teine programm muutis faili pärast seda, kui sa selle avasid. Ava fail uuesti, et näha, mis muutus, või salvesta teise nimega.
+
+app-opened-first-of-several =
+    { $count ->
+        [one] Avasin faili { $name }. { $count } fail jäi avamata: Kadakas näitab korraga ühte joonist.
+       *[other] Avasin faili { $name }. { $count } faili jäi avamata: Kadakas näitab korraga ühte joonist.
+    }

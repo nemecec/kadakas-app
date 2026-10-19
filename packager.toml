@@ -26,15 +26,16 @@ category = "Graphics and Design"
 out-dir = "dist"
 binaries-dir = "target/release"
 
-# The app is the main binary. The `kadakas` command line tool (the MCP server and the renderer)
-# is installed next to it, so agents can find it at a fixed place on every system.
-# The launcher (PLAT-06) is installed next to them too. It finds the app in its own folder, then
-# keeps newer versions in the user's state folder. It is not the main binary: shortcuts and
-# the .kad file type still start the app. Making the launcher the entry point is a later choice.
+# The launcher is the main binary (PLAT-16): shortcuts, the Dock or taskbar icon and `.kad` files
+# start it. It starts the chosen version of the app at once (no wait for the network), passes the
+# file arguments on, and checks for updates in the background. The app that the installer brings
+# (`kadakas-app`, next to the launcher) is the base version: it is never copied and never
+# deleted, and the launcher can always fall back to it. The `kadakas` command line tool (the MCP
+# server and the renderer) is installed next to them, so agents find it at a fixed place.
 binaries = [
-  { path = "kadakas-app", main = true },
+  { path = "kadakas-launcher", main = true },
+  { path = "kadakas-app" },
   { path = "kadakas" },
-  { path = "kadakas-launcher" },
 ]
 
 # The license texts of Kadakas and of all libraries in it. Every installer ships these files

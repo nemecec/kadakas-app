@@ -44,7 +44,10 @@ pub fn file_url_to_path(url: &str) -> Option<PathBuf> {
     let text = String::from_utf8(out).ok()?;
     // `/C:/dir` is a Windows drive path.
     let drive = text.as_bytes();
-    let text = if drive.len() >= 3 && drive[0] == b'/' && drive[1].is_ascii_alphabetic() && drive[2] == b':'
+    let text = if drive.len() >= 3
+        && drive[0] == b'/'
+        && drive[1].is_ascii_alphabetic()
+        && drive[2] == b':'
     {
         text[1..].to_string()
     } else {
@@ -505,7 +508,10 @@ mod tests {
         assert_eq!(b.version.to_string(), "0.1.0-local.g0123456789.d7");
         assert_eq!(b.commit.as_deref(), Some("0123456789abcdef+dirty"));
         let c = add(&store, &build, &v("0.1.0"), 7, &|_| None).unwrap();
-        assert_eq!((c.version.to_string().as_str(), c.commit), ("0.1.0-local.t7", None));
+        assert_eq!(
+            (c.version.to_string().as_str(), c.commit),
+            ("0.1.0-local.t7", None)
+        );
         // Not a build.
         assert!(add(&store, &root, &v("0.1.0"), 7, &clean).is_err());
         // A release folder with the same name is never overwritten by an unsigned build.
@@ -513,7 +519,10 @@ mod tests {
         let archive = crate::store::tests::archive_file(&root, "0.1.0-local.g0123456789.d9");
         store.stage(&rel, &archive, "nightly").unwrap();
         assert!(add(&store, &build, &v("0.1.0"), 9, &dirty).is_err());
-        assert_eq!(store.meta(&crate::store::Slot::Version(rel)).label, "nightly");
+        assert_eq!(
+            store.meta(&crate::store::Slot::Version(rel)).label,
+            "nightly"
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 

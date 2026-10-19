@@ -31,11 +31,20 @@ pub enum UpdateState {
     Checking,
     UpToDate,
     /// A newer version exists and is not downloaded.
-    Available { version: String, size: u64 },
-    Downloading { version: String },
+    Available {
+        version: String,
+        size: u64,
+    },
+    Downloading {
+        version: String,
+    },
     /// A newer version is downloaded and unpacked. A restart starts it.
-    Ready { version: String },
-    Failed { message: String },
+    Ready {
+        version: String,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 /// A version that the launcher did not start, and why.
@@ -262,7 +271,10 @@ mod tests {
         // Missing fields take defaults.
         std::fs::write(run_file(&d, "1a", "status.json"), br#"{"running":"2.0.0"}"#).unwrap();
         let s = l.status().unwrap();
-        assert_eq!((s.running.as_str(), s.update), ("2.0.0", UpdateState::Checking));
+        assert_eq!(
+            (s.running.as_str(), s.update),
+            ("2.0.0", UpdateState::Checking)
+        );
         std::fs::remove_dir_all(&d).unwrap();
     }
 
@@ -296,16 +308,22 @@ mod tests {
     #[test]
     fn notices_follow_the_mode() {
         let v = |s: &str| s.to_string();
-        let ready = UpdateState::Ready { version: v("1.1.0") };
+        let ready = UpdateState::Ready {
+            version: v("1.1.0"),
+        };
         let avail = UpdateState::Available {
             version: v("1.1.0"),
             size: 5,
         };
-        let loading = UpdateState::Downloading { version: v("1.1.0") };
+        let loading = UpdateState::Downloading {
+            version: v("1.1.0"),
+        };
         for mode in UpdateMode::ALL {
             assert_eq!(
                 notice(mode, &ready, None),
-                Some(Notice::Ready { version: v("1.1.0") })
+                Some(Notice::Ready {
+                    version: v("1.1.0")
+                })
             );
             // "Later" hides the notice of that version.
             assert_eq!(notice(mode, &ready, Some("1.1.0")), None);
@@ -327,12 +345,16 @@ mod tests {
         // Notify only says that a version exists, and then that it downloads.
         assert_eq!(
             notice(UpdateMode::NotifyOnly, &avail, None),
-            Some(Notice::Available { version: v("1.1.0") })
+            Some(Notice::Available {
+                version: v("1.1.0")
+            })
         );
         assert_eq!(notice(UpdateMode::NotifyOnly, &avail, Some("1.1.0")), None);
         assert_eq!(
             notice(UpdateMode::NotifyOnly, &loading, None),
-            Some(Notice::Downloading { version: v("1.1.0") })
+            Some(Notice::Downloading {
+                version: v("1.1.0")
+            })
         );
     }
 }

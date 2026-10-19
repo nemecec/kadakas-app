@@ -128,11 +128,7 @@ fn run_add(
     .map_err(|e| e.to_string())
 }
 
-fn window(
-    root: PathBuf,
-    factory: &UpdaterFactory,
-    status: Option<String>,
-) -> eframe::Result {
+fn window(root: PathBuf, factory: &UpdaterFactory, status: Option<String>) -> eframe::Result {
     let updater = factory(&Settings::load(&root));
     let starter: model::Starter = Arc::new(|| {
         let exe = std::env::current_exe()?;
@@ -236,7 +232,10 @@ mod tests {
     use kadakas_update::Channel;
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("kadakas-launcher-main-{}-{name}", std::process::id()));
+        let d = std::env::temp_dir().join(format!(
+            "kadakas-launcher-main-{}-{name}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -313,7 +312,10 @@ mod tests {
         let mut out = Vec::new();
         run_add(&store, &build, None, &mut out, &git).unwrap();
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("label local, commit 0123456789abcdef"), "{text}");
+        assert!(
+            text.contains("label local, commit 0123456789abcdef"),
+            "{text}"
+        );
         assert!(text.contains(&format!("{}-local.g0123456789", env!("CARGO_PKG_VERSION"))));
         // Another base version, and no git.
         let mut out = Vec::new();

@@ -47,11 +47,7 @@ pub fn run_file(root: &Path, id: &str, suffix: &str) -> PathBuf {
 /// A run id is made by the supervisor. Anything else (from an environment variable) is refused,
 /// so an id can never name a path outside `runs/`.
 pub fn valid_run_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() || b == b'-')
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
 }
 
 fn new_run_id() -> String {
@@ -359,7 +355,10 @@ mod tests {
         let s = store(&root);
         let g = RunGuard::begin(&s, &slot("1.1.0")).unwrap();
         assert_eq!(g.finish(&s), RunEnd { clean: false });
-        assert_eq!(s.crashed_slots().into_iter().collect::<Vec<_>>(), [slot("1.1.0")]);
+        assert_eq!(
+            s.crashed_slots().into_iter().collect::<Vec<_>>(),
+            [slot("1.1.0")]
+        );
         let g = RunGuard::begin(&s, &slot("1.1.0")).unwrap();
         std::fs::write(run_file(s.root(), g.id(), "clean"), b"").unwrap();
         g.finish(&s);
@@ -392,7 +391,10 @@ mod tests {
         drop(g1);
         drop(g2);
         s.settle_runs();
-        assert_eq!(s.crashed_slots().into_iter().collect::<Vec<_>>(), [slot("1.2.0")]);
+        assert_eq!(
+            s.crashed_slots().into_iter().collect::<Vec<_>>(),
+            [slot("1.2.0")]
+        );
         assert_eq!(s.running_slots(), [slot("1.3.0")]);
         assert!(!run_file(s.root(), &id1, "json").exists());
         assert!(!run_file(s.root(), &id2, "json").exists());

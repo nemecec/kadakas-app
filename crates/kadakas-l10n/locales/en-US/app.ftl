@@ -111,3 +111,9 @@ app-save-overwrite-text =
 
     Replace it?
 app-save-overwrite-cancelled = Not saved: the file was changed by another program since you opened it. Open it again to see what changed, or save under another name.
+
+app-opened-first-of-several =
+    { $count ->
+        [one] Opened { $name }. { $count } more file was not opened: Kadakas shows one drawing at a time.
+       *[other] Opened { $name }. { $count } more files were not opened: Kadakas shows one drawing at a time.
+    }

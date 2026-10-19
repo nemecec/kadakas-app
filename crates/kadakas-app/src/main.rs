@@ -11,6 +11,8 @@ mod agent_view;
 mod agent_view_ui;
 mod annot_ui;
 mod app;
+#[cfg(not(target_arch = "wasm32"))]
+mod app_updates;
 mod area_ui;
 mod array_ui;
 mod autosave;

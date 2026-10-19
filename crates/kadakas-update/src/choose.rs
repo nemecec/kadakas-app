@@ -99,7 +99,10 @@ fn ranked<'a>(inp: &Inputs<'a>) -> Vec<&'a Installed> {
     }
     // The person's choice comes first, whatever its channel.
     let mut out: Vec<&Installed> = Vec::with_capacity(rest.len() + 1);
-    if let Some(p) = inp.pointer.and_then(|s| inp.installed.iter().find(|i| &i.slot == s)) {
+    if let Some(p) = inp
+        .pointer
+        .and_then(|s| inp.installed.iter().find(|i| &i.slot == s))
+    {
         out.push(p);
     }
     for i in rest {
@@ -256,11 +259,16 @@ mod tests {
     #[test]
     fn auto_update_starts_the_newest() {
         let c = basic();
-        assert_eq!(picked(c.run(&settings(UpdateMode::AutoUpdate, Channel::Stable))), "1.2.0");
+        assert_eq!(
+            picked(c.run(&settings(UpdateMode::AutoUpdate, Channel::Stable))),
+            "1.2.0"
+        );
         // The pointer does not matter in this mode.
         let mut c = basic();
         c.pointer = Some(Slot::Bundled);
-        let got = c.run(&settings(UpdateMode::AutoUpdate, Channel::Stable)).unwrap();
+        let got = c
+            .run(&settings(UpdateMode::AutoUpdate, Channel::Stable))
+            .unwrap();
         assert_eq!(got.active.version, v("1.2.0"));
         assert!(got.skipped.is_empty() && !got.forced);
     }
@@ -285,7 +293,9 @@ mod tests {
     fn a_crashed_version_is_skipped_and_the_reason_is_told() {
         let mut c = basic();
         c.crashed.insert(Slot::Version(v("1.2.0")));
-        let got = c.run(&settings(UpdateMode::AutoUpdate, Channel::Stable)).unwrap();
+        let got = c
+            .run(&settings(UpdateMode::AutoUpdate, Channel::Stable))
+            .unwrap();
         assert_eq!(got.active.version, v("1.1.0"));
         assert_eq!(
             got.skipped,
@@ -296,14 +306,18 @@ mod tests {
         );
         // Two in a row.
         c.crashed.insert(Slot::Version(v("1.1.0")));
-        let got = c.run(&settings(UpdateMode::AutoUpdate, Channel::Stable)).unwrap();
+        let got = c
+            .run(&settings(UpdateMode::AutoUpdate, Channel::Stable))
+            .unwrap();
         assert_eq!(got.active.slot, Slot::Bundled);
         assert_eq!(got.skipped.len(), 2);
         // The person's choice crashed, in a manual mode.
         let mut m = basic();
         m.pointer = Some(Slot::Version(v("1.1.0")));
         m.crashed.insert(Slot::Version(v("1.1.0")));
-        let got = m.run(&settings(UpdateMode::NotifyOnly, Channel::Stable)).unwrap();
+        let got = m
+            .run(&settings(UpdateMode::NotifyOnly, Channel::Stable))
+            .unwrap();
         assert_eq!(got.active.version, v("1.2.0"));
         assert_eq!(got.skipped[0].version, "1.1.0");
     }
@@ -313,7 +327,9 @@ mod tests {
         let mut c = basic();
         c.rolled.insert(Slot::Version(v("1.2.0")));
         c.failed.push(Slot::Version(v("1.1.0")));
-        let got = c.run(&settings(UpdateMode::AutoUpdate, Channel::Stable)).unwrap();
+        let got = c
+            .run(&settings(UpdateMode::AutoUpdate, Channel::Stable))
+            .unwrap();
         assert_eq!(got.active.slot, Slot::Bundled);
         let reasons: Vec<SkipReason> = got.skipped.iter().map(|s| s.reason).collect();
         assert_eq!(reasons, [SkipReason::RolledBack, SkipReason::NotStarted]);
@@ -325,28 +341,41 @@ mod tests {
         for i in &c.installed {
             c.crashed.insert(i.slot.clone());
         }
-        let got = c.run(&settings(UpdateMode::AutoUpdate, Channel::Stable)).unwrap();
+        let got = c
+            .run(&settings(UpdateMode::AutoUpdate, Channel::Stable))
+            .unwrap();
         assert!(got.forced);
         assert_eq!(got.active.slot, Slot::Bundled);
         assert_eq!(got.skipped.len(), 2, "the bundled app is not 'skipped'");
         // The bundled app cannot be started either: the best of the others.
         c.failed.push(Slot::Bundled);
-        let got = c.run(&settings(UpdateMode::AutoUpdate, Channel::Stable)).unwrap();
+        let got = c
+            .run(&settings(UpdateMode::AutoUpdate, Channel::Stable))
+            .unwrap();
         assert!(got.forced);
         assert_eq!(got.active.version, v("1.2.0"));
         // Nothing can be started.
         for i in &c.installed {
             c.failed.push(i.slot.clone());
         }
-        assert!(c.run(&settings(UpdateMode::AutoUpdate, Channel::Stable)).is_none());
+        assert!(
+            c.run(&settings(UpdateMode::AutoUpdate, Channel::Stable))
+                .is_none()
+        );
         // Without a bundled app, the others are the fallback.
         let mut d = Case::new(vec![inst("1.1.0", "stable", 1), inst("1.2.0", "stable", 2)]);
         d.crashed.insert(Slot::Version(v("1.1.0")));
         d.crashed.insert(Slot::Version(v("1.2.0")));
-        let got = d.run(&settings(UpdateMode::AutoUpdate, Channel::Stable)).unwrap();
+        let got = d
+            .run(&settings(UpdateMode::AutoUpdate, Channel::Stable))
+            .unwrap();
         assert!(got.forced);
         assert_eq!(got.active.version, v("1.2.0"));
-        assert!(Case::new(vec![]).run(&settings(UpdateMode::AutoUpdate, Channel::Stable)).is_none());
+        assert!(
+            Case::new(vec![])
+                .run(&settings(UpdateMode::AutoUpdate, Channel::Stable))
+                .is_none()
+        );
     }
 
     #[test]
@@ -390,7 +419,10 @@ mod tests {
         c.crashed.insert(Slot::Version(v("1.0.0-local.gb")));
         assert_eq!(picked(c.run(&s)), "1.0.0-local.gc");
         // With no local build at all, the channel local starts the newest release.
-        let r = Case::new(vec![inst("1.0.0", BUNDLED_LABEL, 0), inst("1.1.0", "stable", 5)]);
+        let r = Case::new(vec![
+            inst("1.0.0", BUNDLED_LABEL, 0),
+            inst("1.1.0", "stable", 5),
+        ]);
         assert_eq!(picked(r.run(&s)), "1.1.0");
     }
 
@@ -398,8 +430,12 @@ mod tests {
     fn the_choice_reads_the_store_on_disk() {
         let root = tmp("choose-disk");
         let s = Store::new(root.join("r"), Some(bundled(&root, "1.0.0")));
-        s.install(&v("1.1.0"), &crate::store::tests::archive_file(&root, "1.1.0"), false)
-            .unwrap();
+        s.install(
+            &v("1.1.0"),
+            &crate::store::tests::archive_file(&root, "1.1.0"),
+            false,
+        )
+        .unwrap();
         let st = settings(UpdateMode::AutoUpdate, Channel::Stable);
         assert_eq!(picked(choose(&s, &st, &[])), "1.1.0");
         s.note_run_end(&Slot::Version(v("1.1.0")), false).unwrap();
