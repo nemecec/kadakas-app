@@ -2,6 +2,7 @@
 #
 #   cargo install cargo-packager --locked
 #   cargo build --release -p kadakas-app -p kadakas-cli -p kadakas-launcher
+#   scripts/macos-app.sh target/release dist-app                                # macOS: the inner app
 #   cargo packager --release --config packager-macos.toml --formats app,dmg   # macOS (this file)
 #   cargo packager --release --formats nsis,wix         # Windows
 #   cargo packager --release --formats appimage,deb     # Linux
@@ -26,17 +27,23 @@ category = "Graphics and Design"
 out-dir = "dist"
 binaries-dir = "target/release"
 
-# macOS (PLAT-16): the app is the main binary, not the launcher. A downloaded update would be a bare
-# executable without a `.app` bundle: no Dock icon, no name, no document types, and a double click
-# on a `.kad` file arrives as an Apple event that the launcher does not handle yet. So on macOS the
-# `.app` of the app is what starts, there is no update archive for macOS and the launcher does not
-# install updates there (`Updater::with_install_support(false)`). The launcher is still installed
-# next to the app (`manage`, `add`). Updates on macOS need the whole signed `Kadakas.app` as the update
-# archive, and a launcher that handles the Apple event (docs/release.md).
+# macOS (PLAT-16): two bundles, one inside the other.
+#
+# - The outer `Kadakas.app` is what is installed. Its main executable is the launcher: the Dock,
+#   Finder and Launchpad start it, and Finder sends it the open-documents Apple event of a double
+#   click on a `.kad` file (the launcher passes the file on to the app that runs). It has no
+#   window and no Dock icon (`background-app`, `LSUIElement`), so the person sees only the app.
+# - The inner `Kadakas.app` (`Contents/MacOS/Kadakas.app`) is the app: its main executable is
+#   `kadakas-app`, and its own `Info.plist` gives the name, the icon and the Dock tile. It is the
+#   base version: the launcher starts it when no update is installed, and it is never deleted.
+#   `scripts/macos-app.sh` makes it, and the update archive is the same bundle, so an update is a
+#   whole `.app` too. The packager signs it as a bundle of its own when a signing identity is set.
+#
+# Run `scripts/macos-app.sh target/release dist-app` before `cargo packager`. The `kadakas`
+# command line tool is next to the launcher, so agents find it at a fixed place.
 binaries = [
-  { path = "kadakas-app", main = true },
+  { path = "kadakas-launcher", main = true },
   { path = "kadakas" },
-  { path = "kadakas-launcher" },
 ]
 
 # The license texts of Kadakas and of all libraries in it. Every installer ships these files
@@ -64,6 +71,8 @@ role = "editor"
 [macos]
 minimum-system-version = "11.0"
 info-plist-path = "packaging/macos/Info.plist"
+background-app = true
+embedded-apps = ["dist-app/Kadakas.app"]
 
 [dmg]
 window-size = { width = 540, height = 380 }

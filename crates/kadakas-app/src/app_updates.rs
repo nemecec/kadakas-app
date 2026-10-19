@@ -45,6 +45,9 @@ pub fn launch_env(name: &str) -> Option<String> {
 /// How often the status file is looked at, in seconds.
 const POLL_SECONDS: f64 = 2.0;
 
+/// How often the requests to open documents are looked at, in seconds.
+const OPEN_POLL_SECONDS: f64 = 0.5;
+
 /// Where the restart stands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Restart {
@@ -82,6 +85,7 @@ pub struct Updates {
     status: Option<RunStatus>,
     stamp: Option<SystemTime>,
     next_poll: f64,
+    next_open_poll: f64,
     /// The version whose notice the person put off with "Later" in this run.
     later: Option<String>,
     restart: Restart,
@@ -115,6 +119,7 @@ impl Updates {
             status: None,
             stamp: None,
             next_poll: 0.0,
+            next_open_poll: 0.0,
             later: None,
             restart: Restart::None,
             skipped_told: false,
@@ -148,6 +153,19 @@ impl Updates {
         let changed = status != self.status;
         self.status = status;
         changed
+    }
+
+    /// Takes the documents that the launcher sent (a double click on a `.kad` file while this app
+    /// runs). Looks at most twice a second.
+    pub fn take_open(&mut self, now: f64) -> Vec<PathBuf> {
+        let Some(link) = &self.link else {
+            return Vec::new();
+        };
+        if now < self.next_open_poll {
+            return Vec::new();
+        }
+        self.next_open_poll = now + OPEN_POLL_SECONDS;
+        link.take_open()
     }
 
     /// The notice to show, if any.

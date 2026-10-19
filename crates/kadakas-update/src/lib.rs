@@ -14,6 +14,8 @@
 //! - [`choose`]: which version starts (mode, channel, crashed versions, fallback to the bundled app).
 //! - [`runs`], [`handshake`]: the run of the app, the clean-exit mark, and the files that the
 //!   launcher and the app use to talk (PLAT-16).
+//! - [`inbox`]: documents that arrive while the app runs (a double click on a `.kad` file): sent to
+//!   the running app, or kept for the next start.
 //! - [`supervisor`]: the headless launcher: starts the app at once, checks in the background.
 //! - [`local`]: local update sites and local builds (PLAT-17).
 //! - [`tasks`]: the launcher actions as values.
@@ -28,6 +30,7 @@ pub mod flavors;
 pub mod handshake;
 mod hex;
 pub mod http;
+pub mod inbox;
 pub mod keys;
 pub mod launch;
 pub mod local;

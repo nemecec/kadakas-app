@@ -1355,7 +1355,12 @@ impl KadakasApp {
             ctx.request_repaint();
         }
         if self.updates.has_launcher() {
-            ctx.request_repaint_after(std::time::Duration::from_secs(2));
+            // Also the wait for a document that the launcher sends (a double click on a file).
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        let sent = self.updates.take_open(ctx.input(|i| i.time));
+        if let Some(first) = sent.first() {
+            self.open_sent(ctx, first.clone(), sent.len());
         }
         if let Some(note) = self.updates.skipped_note() {
             self.status = note;
@@ -1388,6 +1393,22 @@ impl KadakasApp {
             SaveChoice::RestartWithoutSaving => self.commit_restart(ctx),
             SaveChoice::Cancel => self.updates.set_restart(Restart::None),
         }
+    }
+
+    /// A document that the launcher sent: a double click on a `.kad` file while this app runs.
+    /// It opens like File > Open (the big-file question, the collaboration and script guards).
+    /// The window comes to the front.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_sent(&mut self, ctx: &egui::Context, first: std::path::PathBuf, count: usize) {
+        self.open_path(ctx, first.clone());
+        if count > 1 && self.path.as_ref() == Some(&first) {
+            self.status = tr!(
+                "app-opened-first-of-several",
+                name = first.display(),
+                count = count - 1
+            );
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 
     /// The end of a normal exit, for the launcher: a pending restart with the open documents,
@@ -5995,6 +6016,25 @@ mod tests {
         let req = kadakas_update::handshake::take_restart(&root, "1a-2b").unwrap();
         assert_eq!(req.documents, [file]);
         assert!(kadakas_update::runs::run_file(&root, "1a-2b", "clean").is_file());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_document_sent_by_the_launcher_opens_in_the_running_app() {
+        let (mut app, root) = launched_app("sent");
+        let ctx = egui::Context::default();
+        let first = root.join("one.json");
+        let second = root.join("two.json");
+        file_io::write_document_raw(&first, &Document::default()).unwrap();
+        file_io::write_document_raw(&second, &Document::default()).unwrap();
+        assert!(app.path.is_none());
+        // A double click on two files: the launcher writes the request, the app opens the first.
+        kadakas_update::handshake::send_open(&root, "1a-2b", &[first.clone(), second]).unwrap();
+        app.updates_frame(&ctx);
+        assert_eq!(app.path.as_ref(), Some(&first));
+        assert!(app.status.contains("one.json"), "{}", app.status);
+        // The request is used up.
+        assert!(!kadakas_update::handshake::open_pending(&root, "1a-2b"));
         let _ = std::fs::remove_dir_all(root);
     }
 

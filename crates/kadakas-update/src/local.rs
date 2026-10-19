@@ -189,17 +189,49 @@ fn exe(name: &str) -> String {
     format!("{name}{}", std::env::consts::EXE_SUFFIX)
 }
 
+/// Adds every file below `rel` (a folder in `dir`) to `out`. Links are followed one level by the
+/// copy, so a link to a file becomes a file; a link to a folder is skipped.
+fn collect_files(dir: &Path, rel: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for e in std::fs::read_dir(dir.join(rel))? {
+        let e = e?;
+        let sub = rel.join(e.file_name());
+        let full = dir.join(&sub);
+        if full.is_dir() {
+            if !e.file_type()?.is_symlink() {
+                collect_files(dir, &sub, out)?;
+            }
+        } else if full.is_file() {
+            out.push(sub);
+        }
+    }
+    Ok(())
+}
+
 /// Finds the files of a build. `path` is the folder of the build (for example `target/release`)
 /// or the app program in it. The app must be there; `kadakas` and the other flavors are copied
 /// when they are.
 pub fn find_build(path: &Path) -> Result<LocalBuild> {
-    let dir = if path.is_file() {
+    let is_bundle = path.is_dir() && path.extension().is_some_and(|e| e == "app");
+    let dir = if path.is_file() || is_bundle {
         path.parent()
             .map(Path::to_path_buf)
             .ok_or_else(|| UpdateError::BadBuild(path.display().to_string()))?
     } else {
         path.to_path_buf()
     };
+    // A build can be a folder with the bundle `Kadakas.app` (macOS): the whole bundle is copied.
+    if !dir.join(exe(crate::settings::MAIN_FLAVOR)).is_file()
+        && crate::flavors::has_app(&dir)
+        && dir.join(crate::flavors::APP_BUNDLE).is_dir()
+    {
+        let mut files = Vec::new();
+        collect_files(&dir, Path::new(crate::flavors::APP_BUNDLE), &mut files)?;
+        files.sort();
+        if dir.join("flavors.json").is_file() {
+            files.push(PathBuf::from("flavors.json"));
+        }
+        return Ok(LocalBuild { dir, files });
+    }
     let app = PathBuf::from(exe(crate::settings::MAIN_FLAVOR));
     if !dir.join(&app).is_file() {
         return Err(UpdateError::BadBuild(format!(
@@ -411,6 +443,39 @@ mod tests {
         );
         // A local build is a pre-release of its base, so it sorts below the release.
         assert!(local_version(&base, None, 5).unwrap() < base);
+    }
+
+    #[test]
+    fn an_app_bundle_is_a_build_and_is_copied_whole() {
+        let d = tmp("findbundle");
+        let mac = d.join("Kadakas.app/Contents/MacOS");
+        std::fs::create_dir_all(&mac).unwrap();
+        std::fs::create_dir_all(d.join("Kadakas.app/Contents/Resources")).unwrap();
+        for f in [
+            "Contents/MacOS/kadakas-app",
+            "Contents/MacOS/kadakas",
+            "Contents/Info.plist",
+            "Contents/Resources/icon.icns",
+        ] {
+            std::fs::write(d.join("Kadakas.app").join(f), b"x").unwrap();
+        }
+        let expected = [
+            "Kadakas.app/Contents/Info.plist",
+            "Kadakas.app/Contents/MacOS/kadakas",
+            "Kadakas.app/Contents/MacOS/kadakas-app",
+            "Kadakas.app/Contents/Resources/icon.icns",
+        ]
+        .map(PathBuf::from);
+        // The folder with the bundle, and the bundle itself.
+        for p in [d.clone(), d.join("Kadakas.app")] {
+            let b = find_build(&p).unwrap();
+            assert_eq!(b.dir, d);
+            assert_eq!(b.files, expected);
+        }
+        // A bundle without the program is no build.
+        std::fs::remove_file(mac.join("kadakas-app")).unwrap();
+        assert!(matches!(find_build(&d), Err(UpdateError::BadBuild(_))));
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

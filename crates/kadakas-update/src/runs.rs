@@ -31,6 +31,7 @@
 //! | `<id>.status.json` | supervisor | what the app shows (`handshake::RunStatus`) |
 //! | `<id>.restart.json` | the app | "restart to update", with the open documents |
 //! | `<id>.download` | the app | "download the new version now" (Notify only) |
+//! | `<id>.open-<n>.json` | supervisor | documents to open in the running app (`inbox`) |
 
 use crate::error::Result;
 use crate::store::{Slot, Store};
@@ -186,6 +187,7 @@ impl Drop for RunGuard {
 }
 
 fn remove_run_files(root: &Path, id: &str) {
+    crate::handshake::remove_open(root, id);
     for suffix in [
         "json",
         "clean",

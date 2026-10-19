@@ -15,7 +15,8 @@ We use `cargo-packager` (settings in `packager.toml`). We chose it over `cargo-b
 ```sh
 cargo install cargo-packager --locked
 cargo build --release -p kadakas-app -p kadakas-cli -p kadakas-launcher
-cargo packager --release --formats app,dmg        # macOS
+scripts/macos-app.sh target/release dist-app      # macOS: the inner app
+cargo packager --release --config packager-macos.toml --formats app,dmg   # macOS
 cargo packager --release --formats nsis,wix       # Windows
 cargo packager --release --formats appimage,deb   # Linux
 ```
@@ -80,7 +81,16 @@ The launcher (`kadakas-launcher`, PLAT-06) keeps the app up to date without a ne
 
 ### The launcher is the entry point (PLAT-16)
 
-On Windows and Linux, shortcuts, the taskbar icon and `.kad` files start `kadakas-launcher` (it is the main binary in `packager.toml`). **On macOS the app is the main binary** (`packager-macos.toml`) and the launcher does not install updates there: an update archive would hold bare executables, not a `.app` (generic Dock icon, wrong name, no document types), and Finder sends a double click on a `.kad` file as an Apple event that the launcher does not handle. Updates on macOS need a whole signed `Kadakas.app` as the update archive, a store that keeps `.app` bundles, and a launcher (or a bundle stub) that forwards the open-documents Apple event. Until then there is no macOS update archive (`release.yml`, `update-manifest.yml`), and `Updater::with_install_support(false)` makes the launcher ask nobody and install nothing on macOS. With no window, the launcher:
+Shortcuts, the Dock or taskbar icon and `.kad` files start `kadakas-launcher` on every system. It is the main binary in `packager.toml` (Windows, Linux) and the main executable of the outer bundle in `packager-macos.toml`.
+
+**macOS has two bundles.** The outer `Kadakas.app` is what is installed. Its executable is the launcher, and it has no window and no Dock icon (`LSUIElement`); its `Info.plist` owns the `.kad` type. The inner `Kadakas.app` (in `Contents/MacOS/`, put there by the packager as an embedded app) is the app: its main executable is `kadakas-app`, and its own `Info.plist` (`packaging/macos/App-Info.plist`) gives the name, the icon and the Dock tile. The inner bundle is the base version. An update archive is the same bundle, `Kadakas.app/...` in a `.tar.gz` (`scripts/macos-app.sh`), and the version store keeps one `Kadakas.app` per version folder. The archive unpacker keeps the executable bits and accepts symbolic links only when they stay inside the folder (a relative target, no `..` that climbs out, nothing written through a link); anything else is refused, as before. The launcher is not in the update archive: it is the outer executable, and only the installer changes it.
+
+- **How the app starts.** The launcher runs the inner executable by its path (`Kadakas.app/Contents/MacOS/kadakas-app`), not with `open`. `open` cannot pass the run variables on older systems, and a second `open` of the same bundle would not start a second app. Because the executable is inside a `.app`, the system finds the bundle (name, icon, Dock tile) from the path. The inner bundle has its own identifier (`net.kadakas.Kadakas.app`) and declares no document type, so Finder never sends a file straight to the app.
+- **The Apple event.** A double click on a `.kad` file starts the outer bundle (or, when it runs, goes to it) with the open-documents event. The launcher runs the AppKit event loop on the main thread (`objc2`, `appkit.rs`) and the supervisor on a worker thread, and starts the app as soon as the loop is up, with the files of the event. The logic is in `events.rs` and `kadakas_update::inbox` and is tested with a scripted system; `appkit.rs` is only glue.
+- **A double click while the app runs.** The launcher writes a request file for the run (`runs/<id>.open-<n>.json`) and brings the app to the front. The app reads it within a second and opens the first file as File > Open does (the question about big files, the guards for collaboration and scripts). It does not start a second app. If the app does not read the request within 5 seconds (an old version), the launcher takes it back and starts another app with the file. Note that File > Open replaces the open drawing without a question about unsaved changes today; so does this.
+- **Plain builds.** `scripts/install-local-build.sh` makes the bundle on macOS, so a local build is a whole `Kadakas.app` too (`kadakas-launcher add` accepts a folder with `Kadakas.app`, or the bundle).
+
+With no window, the launcher:
 
 1. settles the runs that ended while no launcher watched (the crash marks, see below),
 2. chooses the version (see "Which version starts") and **starts it at once**, with the files that were given as arguments (after `--`, so a name that starts with a dash is safe),
@@ -156,7 +166,7 @@ A version folder may also hold `flavors.json` to list more programs (other UI fl
 
 ### Not tried for real
 
-The installers were not built here, and no restart ran on a real desktop. Open points: updates on macOS (see above); a release build on Windows uses the GUI subsystem for the app and the launcher, so `kadakas-launcher add` and `--help` show no text there (use `manage`, or the `kadakas` tool for the console).
+The installers were not built here, and no restart ran on a real desktop. Open points: signing and notarizing the two macOS bundles; a release build on Windows uses the GUI subsystem for the app and the launcher, so `kadakas-launcher add` and `--help` show no text there (use `manage`, or the `kadakas` tool for the console).
 
 ### How CI signs the manifest
 
@@ -212,7 +222,7 @@ Launchers that are older than step 1 cannot follow a rotation. They need a new i
 
 Nothing is signed. Users will see warnings on first start. Do this before a public release.
 
-- macOS: join the Apple Developer Program. Sign the `.app` with a Developer ID Application certificate (`[macos] signing-identity` in `packager.toml`), then notarize it (`notarytool`) and staple the ticket. Keep the certificate and the API key in GitHub secrets.
+- macOS: join the Apple Developer Program. Sign the `.app` with a Developer ID Application certificate (`[macos] signing-identity` in `packager-macos.toml`; the packager signs the embedded inner app as a bundle of its own). The update archive then holds the signed inner bundle, so sign it before `tar`, and notarize it too, then notarize it (`notarytool`) and staple the ticket. Keep the certificate and the API key in GitHub secrets.
 - Windows: buy a code signing certificate (or use Azure Trusted Signing). Set the signing command for NSIS and WiX in `packager.toml`. Without it, SmartScreen warns.
 - Linux: sign the `.deb` repository or publish a checksum file. AppImage signing is optional.
 - Updates: the launcher has its own signed manifests (see "Launcher and updates"). The `cargo-packager` updater is not used.

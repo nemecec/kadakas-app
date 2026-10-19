@@ -3,7 +3,11 @@
 //! The release workflow makes one `.tar.gz` per system. An archive is not trusted, even after the
 //! hash check, so every entry is checked:
 //!
-//! - Only plain files and folders are written. Links, devices and pipes are refused.
+//! - Only plain files and folders are written, and on Unix symbolic links that stay inside the
+//!   unpacked folder (a macOS `.app` bundle has some). Hard links, devices and pipes are
+//!   refused. A link target must be relative and look like `../..` followed by names, and the
+//!   `..` parts must not climb out of the folder. Nothing is ever written through a link: an
+//!   entry whose path passes a link is refused. So a link can never lead out of the folder.
 //! - A path must be relative, with normal names only: no `..`, no root, no drive letter, no
 //!   backslash and no `:` (Windows streams). This stops "zip slip" archives.
 //! - Names that Windows cannot store are refused on every system, so an archive means the same
@@ -86,6 +90,8 @@ pub fn extract_tar_gz(reader: impl Read, dest: &Path, limits: Limits) -> Result<
     let mut entries_seen = 0usize;
     let mut total = 0u64;
     let mut files = 0usize;
+    // The paths of the links written so far.
+    let mut links: Vec<PathBuf> = Vec::new();
     // Lower-case path -> the path as written. Finds names that differ only in case.
     let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let entries = archive
@@ -124,6 +130,27 @@ pub fn extract_tar_gz(reader: impl Read, dest: &Path, limits: Limits) -> Result<
                 seen.insert(folded, written);
             }
         }
+        // Nothing is written through a link, and a link is not written twice.
+        if links.iter().any(|l| rel.starts_with(l)) {
+            return Err(UpdateError::UnsafePath(format!(
+                "{} passes a link",
+                raw.display()
+            )));
+        }
+        if kind.is_symlink() {
+            let to = entry
+                .link_name()
+                .map_err(|e| UpdateError::Archive(e.to_string()))?
+                .map(std::borrow::Cow::into_owned)
+                .unwrap_or_default();
+            check_link_target(&rel, &to)?;
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            make_symlink(&to, &target)?;
+            links.push(rel);
+            continue;
+        }
         if kind.is_dir() {
             std::fs::create_dir_all(&target)?;
             continue;
@@ -152,6 +179,46 @@ pub fn extract_tar_gz(reader: impl Read, dest: &Path, limits: Limits) -> Result<
         files += 1;
     }
     Ok(files)
+}
+
+/// Checks the target of a link at `rel` (relative to the unpacked folder). The target must be
+/// relative: some `..`, then normal names only. The `..` must not climb above the folder.
+fn check_link_target(rel: &Path, to: &Path) -> Result<()> {
+    let bad = || UpdateError::UnsafePath(format!("link {} to {}", rel.display(), to.display()));
+    let text = to.to_string_lossy();
+    if text.contains('\\') || text.contains(':') || text.contains('\0') {
+        return Err(bad());
+    }
+    let mut up = 0usize;
+    let mut names = 0usize;
+    for c in to.components() {
+        match c {
+            Component::ParentDir if names == 0 => up += 1,
+            Component::Normal(n) if portable_name(&n.to_string_lossy()) => names += 1,
+            Component::CurDir => {}
+            _ => return Err(bad()),
+        }
+    }
+    // The folder of the link is `depth` names below the root.
+    let depth = rel.components().count().saturating_sub(1);
+    if names == 0 || up > depth {
+        return Err(bad());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_symlink(to: &Path, at: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(to, at)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_symlink(to: &Path, _at: &Path) -> Result<()> {
+    Err(UpdateError::UnsafePath(format!(
+        "links are not supported here: {}",
+        to.display()
+    )))
 }
 
 #[cfg(unix)]
@@ -312,6 +379,97 @@ pub(crate) mod tests {
             assert!(matches!(e, UpdateError::UnsafePath(_)), "{kind:?}");
             std::fs::remove_dir_all(&d).unwrap();
         }
+    }
+
+    fn link<'a>(name: &'a str, to: &'a str) -> Item<'a> {
+        Item {
+            name,
+            kind: tar::EntryType::Symlink,
+            data: b"",
+            link: Some(to),
+            mode: 0o755,
+        }
+    }
+
+    /// A macOS bundle: programs keep their bit, a link inside the bundle is made.
+    #[cfg(unix)]
+    #[test]
+    fn a_bundle_keeps_bits_and_links_inside() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tmp("bundle");
+        let a = build(&[
+            Item {
+                mode: 0o755,
+                ..file("Kadakas.app/Contents/MacOS/kadakas-app", b"app")
+            },
+            file("Kadakas.app/Contents/Info.plist", b"plist"),
+            link("Kadakas.app/Contents/Helpers", "MacOS"),
+            link("Kadakas.app/Contents/MacOS/alias", "kadakas-app"),
+            link("Kadakas.app/Current", "Contents/MacOS"),
+            link("Kadakas.app/Contents/Frameworks/F", "../../Contents/MacOS"),
+        ]);
+        assert_eq!(extract_tar_gz(&a[..], &d, Limits::default()).unwrap(), 2);
+        let app = d.join("Kadakas.app/Contents");
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode(&app.join("MacOS/kadakas-app")), 0o755);
+        assert_eq!(mode(&app.join("Info.plist")), 0o644);
+        assert_eq!(
+            std::fs::read(app.join("Helpers/kadakas-app")).unwrap(),
+            b"app"
+        );
+        assert_eq!(std::fs::read(app.join("MacOS/alias")).unwrap(), b"app");
+        assert_eq!(
+            std::fs::read_link(d.join("Kadakas.app/Current")).unwrap(),
+            Path::new("Contents/MacOS")
+        );
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_that_leaves_the_folder_is_refused() {
+        for (name, to) in [
+            ("x", "../outside"),
+            ("a/x", "../../outside"),
+            ("a/x", "/etc"),
+            ("x", ".."),
+            ("x", "."),
+            ("a/x", "b/../../.."),
+            ("x", "a:b"),
+            ("x", "C:/w"),
+            ("x", ""),
+        ] {
+            let d = tmp("linkout");
+            let a = build(&[file("fine", b"1"), link(name, to)]);
+            let e = extract_tar_gz(&a[..], &d, Limits::default()).unwrap_err();
+            assert!(
+                matches!(e, UpdateError::UnsafePath(_)),
+                "{name} -> {to}: {e}"
+            );
+            assert!(
+                std::fs::symlink_metadata(d.join(name)).is_err(),
+                "{name} -> {to}"
+            );
+            std::fs::remove_dir_all(&d).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_is_written_through_a_link() {
+        // A folder link to the inside, then a file through it: refused. The folder stays as it was.
+        let d = tmp("through");
+        std::fs::create_dir_all(d.join("real")).unwrap();
+        let a = build(&[link("l", "real"), file("l/evil", b"x")]);
+        let e = extract_tar_gz(&a[..], &d, Limits::default()).unwrap_err();
+        assert!(matches!(e, UpdateError::UnsafePath(_)), "{e}");
+        assert!(!d.join("real/evil").exists());
+        // The same link twice is refused too.
+        let d2 = tmp("twice");
+        let a = build(&[link("l", "a"), link("l", "b")]);
+        assert!(extract_tar_gz(&a[..], &d2, Limits::default()).is_err());
+        std::fs::remove_dir_all(&d).unwrap();
+        std::fs::remove_dir_all(&d2).unwrap();
     }
 
     #[test]

@@ -9,7 +9,10 @@
 //! - the app writes `<id>.download` to ask for the download (Notify only);
 //! - the app writes `<id>.restart.json` with the open documents and then exits. The launcher
 //!   starts the newest version again with the documents as arguments;
-//! - the app writes `<id>.clean` when it closes in the normal way (the crash marker).
+//! - the app writes `<id>.clean` when it closes in the normal way (the crash marker);
+//! - the launcher writes `<id>.open-<n>.json` with documents to open (a double click on a `.kad`
+//!   file while the app runs, see `inbox`). The app reads and deletes it, and opens the first
+//!   document as File > Open does. A file that stays means the app does not read requests.
 
 use crate::runs::{run_file, valid_run_id};
 use crate::settings::UpdateMode;
@@ -83,6 +86,92 @@ pub struct RunStatus {
 #[serde(default)]
 pub struct RestartRequest {
     pub documents: Vec<PathBuf>,
+}
+
+/// The most documents one open request may name. More are cut off.
+pub const MAX_OPEN_PATHS: usize = 256;
+
+/// The documents to open, as the launcher writes them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenRequest {
+    pub paths: Vec<PathBuf>,
+}
+
+fn open_prefix(id: &str) -> String {
+    format!("{id}.open-")
+}
+
+/// The open request files of a run, oldest first (the names carry the time).
+fn open_files(root: &Path, id: &str) -> Vec<PathBuf> {
+    let prefix = open_prefix(id);
+    let mut out: Vec<PathBuf> = std::fs::read_dir(crate::runs::runs_dir(root))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with(&prefix) && n.ends_with(".json")
+        })
+        .map(|e| e.path())
+        .collect();
+    out.sort();
+    out
+}
+
+/// Asks the running app of run `id` to open documents (the launcher does this).
+pub fn send_open(root: &Path, id: &str, paths: &[PathBuf]) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    if !valid_run_id(id) {
+        return Err(std::io::Error::other("bad run id"));
+    }
+    let req = OpenRequest {
+        paths: paths.iter().take(MAX_OPEN_PATHS).cloned().collect(),
+    };
+    let text = serde_json::to_vec(&req).map_err(std::io::Error::other)?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let name = format!(
+        "open-{nanos:040}-{:06}.json",
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    write_atomic(&run_file(root, id, &name), &text)
+}
+
+/// True while a request of run `id` has not been read.
+pub fn open_pending(root: &Path, id: &str) -> bool {
+    !open_files(root, id).is_empty()
+}
+
+/// Reads and deletes the open requests of a run. A damaged file is deleted and gives nothing.
+/// The app calls this through [`AppLink::take_open`]; the launcher calls it to get back requests
+/// that the app did not read.
+pub fn take_open(root: &Path, id: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for f in open_files(root, id) {
+        let bytes = std::fs::read(&f);
+        // Delete first, so two readers never open the same request twice.
+        if std::fs::remove_file(&f).is_err() {
+            continue;
+        }
+        if let Some(req) = bytes
+            .ok()
+            .and_then(|b| serde_json::from_slice::<OpenRequest>(&b).ok())
+        {
+            out.extend(req.paths);
+        }
+    }
+    out.truncate(MAX_OPEN_PATHS);
+    out
+}
+
+/// Deletes the open requests of a run (its files are cleaned up).
+pub(crate) fn remove_open(root: &Path, id: &str) {
+    for f in open_files(root, id) {
+        let _ = std::fs::remove_file(f);
+    }
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -174,6 +263,12 @@ impl AppLink {
             .ok()?;
         f.try_lock().ok()?;
         Some(f)
+    }
+
+    /// Takes the documents that the launcher asked to open (a double click on a `.kad` file while
+    /// the app runs). The app opens the first one, as File > Open does.
+    pub fn take_open(&self) -> Vec<PathBuf> {
+        take_open(&self.root, &self.id)
     }
 
     /// Asks the launcher to download the new version (Notify only).

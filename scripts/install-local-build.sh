@@ -12,4 +12,12 @@ cd "$(dirname "$0")/.."
 
 cargo build --release -p kadakas-app -p kadakas-cli -p kadakas-launcher
 target="${CARGO_TARGET_DIR:-target}"
-"$target/release/kadakas-launcher" add "$target/release"
+if [ "$(uname -s)" = "Darwin" ]; then
+  # macOS: a version is a whole app bundle, so the launcher can start it with its name and icon.
+  # (In the target folder, so that `add` finds the commit of the build.)
+  out="$target/macos-app"
+  scripts/macos-app.sh "$target/release" "$out" >/dev/null
+  "$target/release/kadakas-launcher" add "$out"
+else
+  "$target/release/kadakas-launcher" add "$target/release"
+fi
