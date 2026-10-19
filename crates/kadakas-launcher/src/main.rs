@@ -9,6 +9,10 @@
 //! keys and the addresses. It holds no secret: the keys are public keys, and the downloads need
 //! no login.
 
+// A release build on Windows has no console window, so the headless launcher leaves none open.
+// (The output of `add` and `--help` is not shown there; `manage` shows everything in the window.)
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod cli;
 mod model;
 mod ui;
@@ -78,6 +82,9 @@ fn updater_factory(root: PathBuf, exe_dir: Option<PathBuf>, sites: Sites) -> Upd
             base,
             current_platform(),
         )
+        // On macOS an update archive would be a bare executable, not a `.app` (see
+        // `packager-macos.toml`): nothing is downloaded there.
+        .with_install_support(!cfg!(target_os = "macos"))
     })
 }
 
@@ -262,7 +269,8 @@ mod tests {
         let factory = updater_factory(d.join("data"), Some(d.clone()), Sites::default());
         let stable = factory(&Settings::default());
         assert!(stable.store().active().is_some());
-        assert!(stable.can_check() && !stable.is_local_site());
+        assert_eq!(stable.can_check(), !cfg!(target_os = "macos"));
+        assert!(!stable.is_local_site());
         // The channel local has no default site: nothing to ask. With a site: a local folder.
         let local = Settings {
             channel: Channel::Local,

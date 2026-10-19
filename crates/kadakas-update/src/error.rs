@@ -72,6 +72,9 @@ pub enum UpdateError {
     /// The path given to `add` is not a build of Kadakas.
     #[error("not a build of Kadakas: {0}")]
     BadBuild(String),
+    /// This system does not install updates through the launcher (yet).
+    #[error("updates through the launcher are not available on this system yet")]
+    Unsupported,
     /// A file problem.
     #[error("file error: {0}")]
     Io(#[from] std::io::Error),

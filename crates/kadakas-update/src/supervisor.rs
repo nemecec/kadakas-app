@@ -226,26 +226,42 @@ impl Supervisor {
             let _ = updater.store().prune();
             let (mut child, guard, choice, base) = self.start(&updater, &settings, &files)?;
             let running = choice.active.version.clone();
-            self.watch(child.as_mut(), &guard, &running, base);
-            let id = guard.id().to_string();
-            let request = handshake::take_restart(&self.root, &id);
-            let end = guard.finish(updater.store());
+            let (request, clean) = match guard {
+                Some(guard) => {
+                    self.watch(child.as_mut(), &guard, &running, base);
+                    let id = guard.id().to_string();
+                    let request = handshake::take_restart(&self.root, &id);
+                    (request, guard.finish(updater.store()).clean)
+                }
+                // No record could be written: the app runs without the update features, and
+                // nothing is known about how it ends. No restart.
+                None => {
+                    while matches!(child.try_wait(), Ok(None)) {
+                        std::thread::sleep(self.timing.poll);
+                    }
+                    (None, false)
+                }
+            };
             reports.push(RunReport {
                 slot: choice.active.slot.clone(),
                 version: running.clone(),
                 files: std::mem::take(&mut files),
-                clean: end.clean,
+                clean,
                 skipped: choice.skipped,
             });
-            let Some(request) = request.filter(|_| end.clean) else {
+            let Some(request) = request.filter(|_| clean) else {
                 return Ok(reports);
             };
             // Restart to update: in the manual modes the person's accept is the switch.
             let now = Settings::load(&self.root);
             if now.mode != UpdateMode::AutoUpdate {
                 let up = (self.make_updater)(&now);
-                if let Some(v) = ready_version(up.store(), now.channel, &running) {
-                    up.store().activate(&Slot::Version(v))?;
+                if let Some(v) = ready_version(up.store(), now.channel, &running)
+                    && let Err(e) = up.store().switch_to(&Slot::Version(v.clone()))
+                {
+                    // Busy or unwritable: the app still restarts, with its documents. The
+                    // newest version still starts in Auto-update; here the old one does.
+                    eprintln!("kadakas-launcher: could not switch to {v}: {e}");
                 }
             }
             files = request.documents.into_iter().map(Into::into).collect();
@@ -259,10 +275,14 @@ impl Supervisor {
         updater: &Updater,
         settings: &Settings,
         files: &[OsString],
-    ) -> Result<(Box<dyn Process>, RunGuard, Choice, RunStatus)> {
+    ) -> Result<(Box<dyn Process>, Option<RunGuard>, Choice, RunStatus)> {
         let store = updater.store();
         let mut failed: Vec<Slot> = Vec::new();
         loop {
+            // The choice and the run record happen under the install lock, so a prune of
+            // another launcher cannot delete the folder between the two. A lock that stays busy
+            // does not stop the start: the app starts, as it would without a launcher.
+            let held = store.lock(true).ok().flatten();
             let choice = choose::choose(store, settings, &failed)
                 .ok_or_else(|| UpdateError::NotInstalled("any version".into()))?;
             let found = flavors::discover(&choice.active.dir);
@@ -270,30 +290,41 @@ impl Supervisor {
                 failed.push(choice.active.slot.clone());
                 continue;
             };
-            let guard = RunGuard::begin(store, &choice.active.slot)?;
+            let guard = match RunGuard::begin(store, &choice.active.slot) {
+                Ok(g) => Some(g),
+                Err(e) => {
+                    eprintln!("kadakas-launcher: no record of this run, starting anyway: {e}");
+                    None
+                }
+            };
+            drop(held);
             let base = RunStatus {
                 running: choice.active.version.to_string(),
                 label: store.meta(&choice.active.slot).label,
                 update: UpdateState::Checking,
                 skipped: choice.skipped.clone(),
             };
-            let _ = handshake::write_status(store.root(), guard.id(), &base);
+            let mut env = Vec::new();
+            if let Some(g) = &guard {
+                let _ = handshake::write_status(store.root(), g.id(), &base);
+                env.push((ENV_ROOT.into(), store.root().to_string_lossy().into_owned()));
+                env.push((ENV_RUN.into(), g.id().to_string()));
+            }
             let spec = SpawnSpec {
                 dir: choice.active.dir.clone(),
                 flavor,
                 profile: settings.profile.clone(),
                 files: files.to_vec(),
-                env: vec![
-                    (ENV_ROOT.into(), store.root().to_string_lossy().into_owned()),
-                    (ENV_RUN.into(), guard.id().to_string()),
-                ],
+                env,
             };
             match self.spawner.spawn(&spec) {
                 Ok(child) => return Ok((child, guard, choice, base)),
                 Err(_) => {
                     // Not a crash of the version: it never ran. Skip it for this start.
                     failed.push(choice.active.slot.clone());
-                    guard.abandon();
+                    if let Some(g) = guard {
+                        g.abandon();
+                    }
                 }
             }
         }
@@ -504,7 +535,8 @@ mod tests {
         let installed = installed.to_string();
         let factory: UpdaterFactory = Arc::new(move |s: &Settings| {
             let bundled = crate::store::tests::bundled(&r, &installed);
-            let store = Store::new(r.join("r"), Some(bundled));
+            let store =
+                Store::new(r.join("r"), Some(bundled)).with_lock_wait(Duration::from_millis(100));
             // The channel local without a local site has no address to ask.
             let base = if s.channel == Channel::Local && s.site.is_empty() {
                 ""
@@ -538,6 +570,7 @@ mod tests {
                 self.root.join("r"),
                 Some(crate::store::tests::bundled(&self.root, "1.0.0")),
             )
+            .with_lock_wait(Duration::from_millis(100))
         }
         fn script(&self, s: Script) {
             self.spawner.scripts.lock().unwrap().push_back(s);
@@ -796,6 +829,55 @@ mod tests {
         assert!(w.http.requests().is_empty(), "nobody was asked");
         let seen = w.spawner.seen.lock().unwrap().clone();
         assert_eq!(seen.last(), Some(&UpdateState::UpToDate), "{seen:?}");
+        std::fs::remove_dir_all(&w.root).unwrap();
+    }
+
+    #[test]
+    fn the_app_starts_even_when_no_record_of_the_run_can_be_written() {
+        let (w, sup) = world("sup-norecord", "1.0.0");
+        // `runs` is a file, not a folder: the record cannot be made.
+        std::fs::create_dir_all(w.root.join("r")).unwrap();
+        std::fs::write(w.root.join("r").join("runs"), b"in the way").unwrap();
+        let reports = sup.run(vec![OsString::from("/a/one.kad")]).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(!reports[0].clean, "nothing is known about how it ended");
+        let spec = &w.started()[0];
+        assert_eq!(spec.files, [OsString::from("/a/one.kad")]);
+        assert!(
+            spec.env.is_empty(),
+            "the app gets no run id it could not use"
+        );
+        std::fs::remove_dir_all(&w.root).unwrap();
+    }
+
+    #[test]
+    fn a_busy_install_lock_does_not_stop_the_start_or_the_restart() {
+        let (w, sup) = world("sup-busy", "1.0.0");
+        w.settings(|s| s.mode = UpdateMode::AutoDownload);
+        // 1.1.0 is downloaded and waits for the restart.
+        w.store()
+            .stage(&v("1.1.0"), &archive_file(&w.root, "1.1.0"), "stable")
+            .unwrap();
+        // Another launcher holds the install lock all the time.
+        let held = w.store().lock(false).unwrap().expect("the lock is free");
+        let docs = vec![PathBuf::from("/d/a.kad")];
+        w.script(Script {
+            polls: 10,
+            clean: true,
+            restart: Some(docs.clone()),
+            ..Script::default()
+        });
+        w.script(Script {
+            clean: true,
+            ..Script::default()
+        });
+        let reports = sup.run(vec![]).unwrap();
+        drop(held);
+        assert_eq!(reports.len(), 2, "{reports:?}");
+        // The switch could not be written: the old version restarts, with the documents.
+        assert_eq!(reports[1].version, v("1.0.0"));
+        let want: Vec<OsString> = docs.into_iter().map(Into::into).collect();
+        assert_eq!(reports[1].files, want);
         std::fs::remove_dir_all(&w.root).unwrap();
     }
 

@@ -77,6 +77,7 @@ pub struct ArchiveFile {
 
 const BUNDLED: &str = "bundled";
 const TMP_PREFIX: &str = ".tmp-";
+const OLD_PREFIX: &str = ".old-";
 
 /// A place where a program version lives.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -136,6 +137,9 @@ pub struct Pointer {
     /// newer than this one (the person installed a new Kadakas) wins over the pointer; one that
     /// is the same does not, so the person can choose an older version or a local build.
     pub bundled: Option<Version>,
+    /// Set when the person chose this version by hand (`Store::activate`): the time of the
+    /// choice. In Auto-update the choice stands until a newer version is added, see `choose`.
+    pub explicit_at: Option<u64>,
 }
 
 /// A step of the install. Tests stop the install after a step, as if the computer had crashed.
@@ -477,8 +481,18 @@ impl Store {
         };
         if let Ok(rd) = std::fs::read_dir(self.versions_dir()) {
             for e in rd.flatten() {
-                if e.file_name().to_string_lossy().starts_with(TMP_PREFIX) {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with(TMP_PREFIX) {
                     let _ = std::fs::remove_dir_all(e.path());
+                } else if let Some(ver) = name.strip_prefix(OLD_PREFIX) {
+                    // A swap of `add_local` that stopped between its two renames: the old
+                    // folder comes back if the new one never arrived, else it is deleted.
+                    let dest = self.versions_dir().join(ver);
+                    if dest.exists() {
+                        let _ = std::fs::remove_dir_all(e.path());
+                    } else {
+                        let _ = std::fs::rename(e.path(), dest);
+                    }
                 }
             }
         }
@@ -581,6 +595,7 @@ impl Store {
                 current: Some(Slot::Version(version.clone())),
                 previous: old.map(|a| a.slot),
                 bundled: None,
+                explicit_at: None,
             };
             self.write_pointer(&pointer)?;
             self.hit(Step::PointerWritten)?;
@@ -592,24 +607,48 @@ impl Store {
     /// Makes an installed version the one that starts when the launcher does not choose by
     /// itself (the pointer, see the modes in `choose`). The version that was active becomes the
     /// rollback target.
+    ///
+    /// This is the person's choice: in Auto-update too it stands until a newer version is added
+    /// (`Pointer::explicit_at`).
     pub fn activate(&self, slot: &Slot) -> Result<()> {
         let _guard = self.lock(true)?;
-        self.activate_locked(slot)
+        self.activate_locked(slot, true)
     }
 
-    fn activate_locked(&self, slot: &Slot) -> Result<()> {
+    /// Like [`Store::activate`], for a switch that the launcher makes itself (the restart to
+    /// update in the manual modes): it is not a choice that holds back newer versions.
+    pub fn switch_to(&self, slot: &Slot) -> Result<()> {
+        let _guard = self.lock(true)?;
+        self.activate_locked(slot, false)
+    }
+
+    /// The version that the person chose by hand, and when. `None` when there is no such
+    /// choice, or its folder is gone.
+    pub fn explicit_choice(&self) -> Option<(Slot, u64)> {
+        let p = self.pointer();
+        let slot = p.current?;
+        let at = p.explicit_at?;
+        self.resolve(&slot).map(|_| (slot, at))
+    }
+
+    fn activate_locked(&self, slot: &Slot, explicit: bool) -> Result<()> {
         if self.resolve(slot).is_none() {
             return Err(UpdateError::NotInstalled(slot.to_string()));
         }
         self.forget_crash(slot);
         let old = self.active().map(|a| a.slot);
-        if old.as_ref() == Some(slot) && self.pointer().current.as_ref() == Some(slot) {
+        let p = self.pointer();
+        if old.as_ref() == Some(slot)
+            && p.current.as_ref() == Some(slot)
+            && (!explicit || p.explicit_at.is_some())
+        {
             return Ok(());
         }
         let pointer = Pointer {
             current: Some(slot.clone()),
             previous: old.filter(|o| o != slot).or(self.pointer().previous),
             bundled: None,
+            explicit_at: explicit.then(|| (self.clock)()),
         };
         self.write_pointer(&pointer)
     }
@@ -626,9 +665,13 @@ impl Store {
     ) -> Result<Slot> {
         let _guard = self.lock(true)?;
         let slot = Slot::Version(version.clone());
-        // Only a local build may be replaced by a local build.
+        // Only a local build may be replaced by a local build, and never the version that the
+        // pointer names (it is not replaced in place; add another build and switch to it).
         let exists = self.resolve(&slot).is_some();
-        if self.running_slots().contains(&slot) || (exists && self.meta(&slot).label != "local") {
+        if self.running_slots().contains(&slot)
+            || self.pointer().current.as_ref() == Some(&slot)
+            || (exists && self.meta(&slot).label != "local")
+        {
             return Err(UpdateError::NotRemovable(version.to_string()));
         }
         std::fs::create_dir_all(self.versions_dir())?;
@@ -659,8 +702,23 @@ impl Store {
             return Err(e);
         }
         let dest = self.versions_dir().join(version.to_string());
-        let _ = std::fs::remove_dir_all(&dest);
-        std::fs::rename(&staging, &dest)?;
+        // Swap, then delete: the old folder is renamed away, the new one renamed in, and only
+        // then the old one is deleted. If the second rename fails, the old one comes back.
+        let old = self.versions_dir().join(format!("{OLD_PREFIX}{version}"));
+        let _ = std::fs::remove_dir_all(&old);
+        let had_old = dest.exists();
+        if had_old && let Err(e) = std::fs::rename(&dest, &old) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e.into());
+        }
+        if let Err(e) = std::fs::rename(&staging, &dest) {
+            if had_old {
+                let _ = std::fs::rename(&old, &dest);
+            }
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e.into());
+        }
+        let _ = std::fs::remove_dir_all(&old);
         fsio::sync_dir(&self.versions_dir());
         self.forget_crash(&slot);
         self.prune_locked();
@@ -702,6 +760,7 @@ impl Store {
             current: Some(target.slot.clone()),
             previous: p.current,
             bundled: None,
+            explicit_at: None,
         };
         self.write_pointer(&new)?;
         // The version we left is not started again by Auto-update, until the person asks for it.
@@ -758,6 +817,21 @@ impl Store {
             .take(1 + self.keep_older() as usize)
             .map(|(_, v)| Slot::Version(v.clone()))
             .collect();
+        // The version that the launcher falls back to when the newest ones are skipped (a crash,
+        // a rollback) is never pruned, also with 0 older versions to keep.
+        let skipped: std::collections::BTreeSet<Slot> = self
+            .crashed_slots()
+            .union(&self.rolled_back_slots())
+            .cloned()
+            .collect();
+        for (_, v) in &folders {
+            let slot = Slot::Version(v.clone());
+            let stop = !skipped.contains(&slot);
+            keep.insert(slot);
+            if stop {
+                break;
+            }
+        }
         keep.extend(self.running_slots());
         keep.extend(self.pointer().current);
         for (_, v) in &folders {
@@ -1068,6 +1142,109 @@ pub(crate) mod tests {
         s.rollback().unwrap();
         assert!(!s.rolled_back_slots().contains(&Slot::Version(v("1.1.0"))));
         assert!(s.rolled_back_slots().contains(&Slot::Bundled));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_choice_by_hand_is_remembered_and_a_switch_of_the_launcher_is_not() {
+        let root = tmp("explicit");
+        let s = counting(&root, Some("1.0.0"));
+        install_all(&s, &root, &["1.1.0", "1.2.0"]);
+        assert!(s.explicit_choice().is_none(), "an install is no choice");
+        s.activate(&Slot::Version(v("1.1.0"))).unwrap();
+        let (slot, at) = s.explicit_choice().unwrap();
+        assert_eq!(slot, Slot::Version(v("1.1.0")));
+        assert!(at >= 100);
+        // The same choice again changes nothing.
+        let p = s.pointer();
+        s.activate(&Slot::Version(v("1.1.0"))).unwrap();
+        assert_eq!(s.pointer(), p);
+        // A switch by the launcher, a rollback and an install are no choice.
+        s.switch_to(&Slot::Version(v("1.2.0"))).unwrap();
+        assert!(s.explicit_choice().is_none());
+        s.activate(&Slot::Bundled).unwrap();
+        assert!(s.explicit_choice().is_some());
+        s.rollback().unwrap();
+        assert!(s.explicit_choice().is_none());
+        // A choice whose folder is gone does not count.
+        s.activate(&Slot::Version(v("1.1.0"))).unwrap();
+        s.activate(&Slot::Version(v("1.2.0"))).unwrap();
+        assert!(s.explicit_choice().is_some());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn zero_to_keep_still_keeps_the_version_that_the_launcher_falls_back_to() {
+        let root = tmp("keep-fallback");
+        let s = counting(&root, Some("1.0.0")).with_keep_older(0);
+        install_all(&s, &root, &["1.1.0", "1.2.0"]);
+        assert_eq!(folders(&s), ["1.2.0"]);
+        // 1.2.0 crashes twice in a row; 1.3.0 arrives and crashes too (a short run).
+        s.note_run_end(&Slot::Version(v("1.2.0")), false).unwrap();
+        install_all(&s, &root, &["1.3.0"]);
+        s.note_run_end(&Slot::Version(v("1.3.0")), false).unwrap();
+        // 1.2.0 is skipped too, so it stays: the pointer names 1.3.0, and 1.2.0 is skipped...
+        s.prune().unwrap();
+        assert!(folders(&s).contains(&"1.3.0".to_string()));
+        install_all(&s, &root, &["1.4.0"]);
+        s.note_run_end(&Slot::Version(v("1.4.0")), false).unwrap();
+        s.prune().unwrap();
+        // Newest 1.4.0 and 1.3.0 are skipped; 1.2.0 is skipped; no older good version exists
+        // in the store: the bundled app is the fallback and nothing else is needed. Every
+        // skipped folder down to the first good one stays.
+        let f = folders(&s);
+        assert!(f.contains(&"1.4.0".to_string()), "{f:?}");
+        std::fs::remove_dir_all(&root).unwrap();
+
+        // The case with a good version below the skipped newest ones.
+        let root = tmp("keep-fallback-2");
+        let s = counting(&root, Some("1.0.0")).with_keep_older(5);
+        install_all(&s, &root, &["1.1.0", "1.2.0", "1.3.0"]);
+        s.set_keep_older(0);
+        s.note_run_end(&Slot::Version(v("1.3.0")), false).unwrap();
+        s.note_run_end(&Slot::Version(v("1.2.0")), false).unwrap();
+        s.prune().unwrap();
+        // 1.3.0 (newest), 1.2.0 (skipped) and 1.1.0 (the first good one) stay.
+        assert_eq!(folders(&s), ["1.1.0", "1.2.0", "1.3.0"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_local_build_is_swapped_in_and_never_replaces_the_current_version_in_place() {
+        let root = tmp("add-swap");
+        let s = counting(&root, Some("1.0.0"));
+        let ver = v("1.0.0-local.gabc");
+        s.add_local(&ver, &fake_build(&root, "b1", false), None)
+            .unwrap();
+        // No leftovers of the swap.
+        let names: Vec<String> = std::fs::read_dir(s.versions_dir())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, [ver.to_string()]);
+        // The current version is not replaced in place.
+        s.activate(&Slot::Version(ver.clone())).unwrap();
+        let e = s
+            .add_local(&ver, &fake_build(&root, "b2", false), None)
+            .unwrap_err();
+        assert!(matches!(e, UpdateError::NotRemovable(_)), "{e}");
+        assert_eq!(
+            std::fs::read_to_string(s.versions_dir().join(ver.to_string()).join("kadakas-app"))
+                .unwrap(),
+            "app b1"
+        );
+        // A swap that stopped after the first rename: recover puts the old folder back.
+        let dir = s.versions_dir();
+        std::fs::rename(dir.join(ver.to_string()), dir.join(format!(".old-{ver}"))).unwrap();
+        assert!(s.list().iter().all(|i| i.version != ver));
+        s.recover();
+        assert!(s.list().iter().any(|i| i.version == ver));
+        // And when the new folder did arrive, the old one is deleted.
+        std::fs::create_dir_all(dir.join(format!(".old-{ver}"))).unwrap();
+        s.recover();
+        assert!(!dir.join(format!(".old-{ver}")).exists());
+        assert!(s.list().iter().any(|i| i.version == ver));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

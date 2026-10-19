@@ -18,6 +18,30 @@ use kadakas_update::{Channel, Settings, UpdateMode};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+/// The variables of the launcher, taken out of the environment at the start (`capture_env`), so
+/// that no child process of the app (a script, a converter) inherits the run id and writes the
+/// clean-exit mark for it.
+static CAPTURED: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+
+/// Reads `KADAKAS_RUN_ID` and `KADAKAS_LAUNCHER_ROOT` and removes them from the environment.
+/// Call it at the top of `main`, with the secrets (one thread only).
+pub fn capture_env() {
+    let taken = kadakas_sys::process::take_env(&[
+        kadakas_update::handshake::ENV_RUN,
+        kadakas_update::handshake::ENV_ROOT,
+    ]);
+    let _ = CAPTURED.set(taken);
+}
+
+/// A variable of the launcher: from the captured ones if `capture_env` ran, else from the
+/// environment.
+pub fn launch_env(name: &str) -> Option<String> {
+    match CAPTURED.get() {
+        Some(v) => v.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()),
+        None => std::env::var(name).ok(),
+    }
+}
+
 /// How often the status file is looked at, in seconds.
 const POLL_SECONDS: f64 = 2.0;
 
@@ -50,6 +74,9 @@ pub enum SaveChoice {
 
 pub struct Updates {
     link: Option<AppLink>,
+    /// The lock of this app on its run: the launcher sees that the app lives, also when the
+    /// launcher itself is gone. Held until the program ends.
+    _run_lock: Option<std::fs::File>,
     /// The install folder of the launcher, where `launcher.json` is.
     root: Option<PathBuf>,
     status: Option<RunStatus>,
@@ -82,6 +109,7 @@ impl Updates {
     pub fn new(link: Option<AppLink>, root: Option<PathBuf>) -> Updates {
         let settings = root.as_deref().map(Settings::load).unwrap_or_default();
         Updates {
+            _run_lock: link.as_ref().and_then(AppLink::hold_run_lock),
             link,
             root,
             status: None,
@@ -409,6 +437,27 @@ mod tests {
         UpdateState::Ready {
             version: "1.1.0".into(),
         }
+    }
+
+    #[test]
+    fn the_app_holds_a_lock_on_its_run_and_takes_no_variable_from_a_child() {
+        let d = tmp("runlock");
+        let u = Updates::from_env(&env_of(&d));
+        // The lock is held: a second try on the same run fails.
+        assert!(u.link.as_ref().unwrap().hold_run_lock().is_none());
+        assert!(run_file(&d, "1a-2b", "app.lock").is_file());
+        drop(u);
+        assert!(
+            AppLink::from_env(&env_of(&d))
+                .unwrap()
+                .hold_run_lock()
+                .is_some(),
+            "the lock goes with the app"
+        );
+        // Without `capture_env` the variables are read from the environment; one that is not
+        // set is not there.
+        assert_eq!(launch_env("KADAKAS_TEST_NOT_SET_ANYWHERE"), None);
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

@@ -83,6 +83,9 @@ pub struct Updater {
     /// The site is a local folder (`file://`): unsigned manifests and the channel `local` are
     /// allowed here, and nowhere else.
     local_site: bool,
+    /// False on a system where an update archive cannot be installed as it is (macOS needs a
+    /// whole `.app`): the updater then asks nobody and installs nothing.
+    install_supported: bool,
 }
 
 impl Updater {
@@ -102,9 +105,16 @@ impl Updater {
             http,
             keys,
             local_site: manifest_base.starts_with("file://"),
+            install_supported: true,
             manifest_base,
             platform: platform.into(),
         }
+    }
+
+    /// Says whether this system can install update archives (default: yes).
+    pub fn with_install_support(mut self, supported: bool) -> Updater {
+        self.install_supported = supported;
+        self
     }
 
     /// True when the update site is a local folder.
@@ -114,7 +124,7 @@ impl Updater {
 
     /// False when there is no site to ask (the channel `local` without a local site).
     pub fn can_check(&self) -> bool {
-        !self.manifest_base.is_empty()
+        self.install_supported && !self.manifest_base.is_empty()
     }
 
     /// An address from a manifest. A name without a scheme is relative to the site folder.
@@ -149,6 +159,9 @@ impl Updater {
     /// manifest is possible on a local site only. It has no expiry and no replay check: a
     /// developer builds the same version again and again.
     pub fn fetch_trusted(&self, channel: Channel) -> Result<(Manifest, Trust)> {
+        if !self.install_supported {
+            return Err(UpdateError::Unsupported);
+        }
         if channel == Channel::Local && !self.local_site {
             return Err(UpdateError::LocalOnly(
                 "the channel local needs a local update site".into(),
@@ -1002,6 +1015,44 @@ pub(crate) mod tests {
             u.check(Channel::Stable).unwrap(),
             UpdateStatus::Available(_)
         ));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_unsigned_manifest_must_be_for_the_channel_local() {
+        let root = tmp("up-unsigned-stable");
+        let dir = root.join("site");
+        site(&dir, "1.1.0", Channel::Stable, None, "kadakas.tar.gz");
+        let u = local_updater(&root, &dir, "1.0.0");
+        let e = u.check(Channel::Stable).unwrap_err();
+        assert!(matches!(e, UpdateError::LocalOnly(_)), "{e}");
+        site(&dir, "1.1.0", Channel::Beta, None, "kadakas.tar.gz");
+        assert!(matches!(
+            u.check(Channel::Beta),
+            Err(UpdateError::LocalOnly(_))
+        ));
+        // The channel local is fine.
+        site(&dir, "1.1.0", Channel::Local, None, "kadakas.tar.gz");
+        assert!(u.check(Channel::Local).is_ok());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_system_without_install_support_asks_nobody_and_installs_nothing() {
+        let root = tmp("up-unsupported");
+        let http = Arc::new(MockHttp::new());
+        publish(&http, "1.1.0", Channel::Stable, &key(1));
+        let u = updater(&root, http.clone(), &[1], Some("1.0.0")).with_install_support(false);
+        assert!(!u.can_check());
+        for r in [
+            u.check(Channel::Stable).map(|_| ()),
+            u.update(Channel::Stable).map(|_| ()),
+            u.stage(Channel::Stable).map(|_| ()),
+        ] {
+            assert!(matches!(r, Err(UpdateError::Unsupported)));
+        }
+        assert!(http.requests().is_empty());
+        assert_eq!(active_text(&u), "app 1.0.0");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

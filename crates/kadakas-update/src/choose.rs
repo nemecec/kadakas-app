@@ -8,6 +8,9 @@
 //! - **Mode.** *Auto-update* starts the newest eligible version. *Auto-download* and *Notify
 //!   only* start the version that the person chose (the pointer of the store): a download does
 //!   not change what starts, a switch does.
+//! - **The person's own choice wins.** A version that the person chose by hand ("Use this
+//!   version", `Store::activate`) is started first in every mode, also in Auto-update, until a
+//!   newer version that the channel allows is added to the store. Then the newest one wins again.
 //! - **Skipped versions.** A version whose last start ended without the clean-exit mark, a
 //!   version the person rolled back from, and a version that could not be started are skipped.
 //!   The launcher takes the next one and tells the person which version it skipped and why.
@@ -52,6 +55,8 @@ pub struct Inputs<'a> {
     pub installed: &'a [Installed],
     /// The version that the pointer of the store names (the choice of the person).
     pub pointer: Option<&'a Slot>,
+    /// The version that the person chose by hand and the time of the choice.
+    pub explicit: Option<&'a (Slot, u64)>,
     pub settings: &'a Settings,
     pub crashed: &'a BTreeSet<Slot>,
     pub rolled_back: &'a BTreeSet<Slot>,
@@ -95,6 +100,18 @@ fn ranked<'a>(inp: &Inputs<'a>) -> Vec<&'a Installed> {
             .then_with(|| b.meta.added.cmp(&a.meta.added))
     });
     if inp.settings.mode == UpdateMode::AutoUpdate {
+        // A choice by hand stands until a newer eligible version is added after it.
+        if let Some((slot, at)) = inp.explicit
+            && let Some(p) = inp.installed.iter().find(|i| &i.slot == slot)
+            && !inp
+                .installed
+                .iter()
+                .any(|i| &i.slot != slot && eligible(&i.meta.label, channel) && i.meta.added > *at)
+        {
+            let mut out = vec![p];
+            out.extend(rest.into_iter().filter(|i| &i.slot != slot));
+            return out;
+        }
         return rest;
     }
     // The person's choice comes first, whatever its channel.
@@ -153,9 +170,11 @@ pub fn choose_from(inp: &Inputs<'_>) -> Option<Choice> {
 pub fn choose(store: &Store, settings: &Settings, failed: &[Slot]) -> Option<Choice> {
     let installed = store.list();
     let pointer = store.active().map(|a| a.slot);
+    let explicit = store.explicit_choice();
     choose_from(&Inputs {
         installed: &installed,
         pointer: pointer.as_ref(),
+        explicit: explicit.as_ref(),
         settings,
         crashed: &store.crashed_slots(),
         rolled_back: &store.rolled_back_slots(),
@@ -202,6 +221,7 @@ mod tests {
     struct Case {
         installed: Vec<Installed>,
         pointer: Option<Slot>,
+        explicit: Option<(Slot, u64)>,
         crashed: BTreeSet<Slot>,
         rolled: BTreeSet<Slot>,
         failed: Vec<Slot>,
@@ -212,6 +232,7 @@ mod tests {
             Case {
                 installed,
                 pointer: None,
+                explicit: None,
                 crashed: BTreeSet::new(),
                 rolled: BTreeSet::new(),
                 failed: Vec::new(),
@@ -221,6 +242,7 @@ mod tests {
             choose_from(&Inputs {
                 installed: &self.installed,
                 pointer: self.pointer.as_ref(),
+                explicit: self.explicit.as_ref(),
                 settings: s,
                 crashed: &self.crashed,
                 rolled_back: &self.rolled,
@@ -424,6 +446,62 @@ mod tests {
             inst("1.1.0", "stable", 5),
         ]);
         assert_eq!(picked(r.run(&s)), "1.1.0");
+    }
+
+    #[test]
+    fn a_choice_by_hand_wins_in_auto_update_until_a_newer_version_is_added() {
+        let st = settings(UpdateMode::AutoUpdate, Channel::Stable);
+        let mut c = basic();
+        // The person chose the bundled app at time 15: 1.2.0 (added at 20) is newer, so it wins.
+        c.explicit = Some((Slot::Bundled, 15));
+        assert_eq!(picked(c.run(&st)), "1.2.0");
+        // The person chose 1.1.0 at time 25: nothing newer was added after it.
+        c.explicit = Some((Slot::Version(v("1.1.0")), 25));
+        assert_eq!(picked(c.run(&st)), "1.1.0");
+        // A newer version is added at 30: the newest wins again.
+        c.installed.push(inst("1.3.0", "stable", 30));
+        assert_eq!(picked(c.run(&st)), "1.3.0");
+        // A version that the channel does not allow does not count as newer.
+        let mut d = basic();
+        d.installed.push(inst("1.3.0-beta.1", "nightly", 40));
+        d.explicit = Some((Slot::Version(v("1.1.0")), 25));
+        assert_eq!(picked(d.run(&st)), "1.1.0");
+        // A chosen local build starts although the channel is stable and it is no candidate.
+        let mut e = Case::new(vec![
+            inst("1.0.0", BUNDLED_LABEL, 0),
+            inst("1.0.0-local.ga", "local", 50),
+        ]);
+        e.explicit = Some((Slot::Version(v("1.0.0-local.ga")), 60));
+        assert_eq!(picked(e.run(&st)), "1.0.0-local.ga");
+        // The choice crashed: the next one starts.
+        e.crashed.insert(Slot::Version(v("1.0.0-local.ga")));
+        assert_eq!(picked(e.run(&st)), "1.0.0");
+        // A choice that is gone is ignored.
+        let mut f = basic();
+        f.explicit = Some((Slot::Version(v("9.9.9")), 25));
+        assert_eq!(picked(f.run(&st)), "1.2.0");
+    }
+
+    #[test]
+    fn use_this_version_starts_a_local_build_in_auto_update() {
+        let root = tmp("choose-explicit");
+        let s = Store::new(root.join("r"), Some(bundled(&root, "1.0.0")));
+        let build_dir = root.join("b");
+        std::fs::create_dir_all(&build_dir).unwrap();
+        let exe = format!("kadakas-app{}", std::env::consts::EXE_SUFFIX);
+        std::fs::write(build_dir.join(&exe), b"x").unwrap();
+        let build = crate::local::LocalBuild {
+            dir: build_dir,
+            files: vec![PathBuf::from(exe)],
+        };
+        let local = v("1.0.0-local.ga");
+        s.add_local(&local, &build, None).unwrap();
+        let st = settings(UpdateMode::AutoUpdate, Channel::Stable);
+        // Before the choice, the local build is no candidate on the channel stable.
+        assert_eq!(picked(choose(&s, &st, &[])), "1.0.0");
+        s.activate(&Slot::Version(local.clone())).unwrap();
+        assert_eq!(picked(choose(&s, &st, &[])), "1.0.0-local.ga");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -2,7 +2,7 @@
 #
 #   cargo install cargo-packager --locked
 #   cargo build --release -p kadakas-app -p kadakas-cli -p kadakas-launcher
-#   cargo packager --release --formats app,dmg          # macOS
+#   cargo packager --release --config packager-macos.toml --formats app,dmg   # macOS: see that file
 #   cargo packager --release --formats nsis,wix         # Windows
 #   cargo packager --release --formats appimage,deb     # Linux
 #

@@ -537,7 +537,7 @@ impl KadakasApp {
             #[cfg(not(target_arch = "wasm32"))]
             update_ui: crate::update_ui::UpdateUi::new(),
             #[cfg(not(target_arch = "wasm32"))]
-            updates: crate::app_updates::Updates::from_env(&|k| std::env::var(k).ok()),
+            updates: crate::app_updates::Updates::from_env(&crate::app_updates::launch_env),
             #[cfg(not(target_arch = "wasm32"))]
             saved_revision,
             #[cfg(not(target_arch = "wasm32"))]

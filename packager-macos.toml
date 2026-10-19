@@ -1,0 +1,79 @@
+# Installer settings for cargo-packager. See docs/release.md.
+#
+#   cargo install cargo-packager --locked
+#   cargo build --release -p kadakas-app -p kadakas-cli -p kadakas-launcher
+#   cargo packager --release --config packager-macos.toml --formats app,dmg   # macOS (this file)
+#   cargo packager --release --formats nsis,wix         # Windows
+#   cargo packager --release --formats appimage,deb     # Linux
+#
+# The installers are not signed. Signing is a TODO (docs/release.md). The launcher's update
+# archives are different: the launcher checks them with an ed25519-signed manifest
+# (.github/workflows/update-manifest.yml, docs/release.md).
+
+# The package name. Set here so cargo-packager need not look for a Cargo.toml.
+name = "kadakas"
+product-name = "Kadakas"
+identifier = "net.kadakas.Kadakas"
+version = "0.1.0"
+description = "CAD for landscape architects"
+authors = ["The Kadakas authors"]
+homepage = "https://github.com/kadakas/kadakas"
+license-file = "LICENSE-APACHE"
+category = "Graphics and Design"
+
+# The installers go to dist/. The release binaries come from target/release.
+# With another CARGO_TARGET_DIR, pass --binaries-dir <that folder>/release.
+out-dir = "dist"
+binaries-dir = "target/release"
+
+# macOS (PLAT-16): the app is the main binary, not the launcher. A downloaded update would be a bare
+# executable without a `.app` bundle: no Dock icon, no name, no document types, and a double click
+# on a `.kad` file arrives as an Apple event that the launcher does not handle yet. So on macOS the
+# `.app` of the app is what starts, there is no update archive for macOS and the launcher does not
+# install updates there (`Updater::with_install_support(false)`). The launcher is still installed
+# next to the app (`manage`, `add`). Updates on macOS need the whole signed `Kadakas.app` as the update
+# archive, and a launcher that handles the Apple event (docs/release.md).
+binaries = [
+  { path = "kadakas-app", main = true },
+  { path = "kadakas" },
+  { path = "kadakas-launcher" },
+]
+
+# The license texts of Kadakas and of all libraries in it. Every installer ships these files
+# (THIRD_PARTY_NOTICES.txt comes from scripts/notices.sh).
+resources = ["THIRD_PARTY_NOTICES.txt", "docs/attribution.md", "LICENSE-APACHE", "LICENSE-MIT"]
+
+icons = [
+  "packaging/icons/32x32.png",
+  "packaging/icons/64x64.png",
+  "packaging/icons/128x128.png",
+  "packaging/icons/256x256.png",
+  "packaging/icons/512x512.png",
+  "packaging/icons/icon.icns",
+  "packaging/icons/icon.ico",
+]
+
+# Kadakas documents end in .kad.
+[[file-associations]]
+extensions = ["kad"]
+name = "Kadakas drawing"
+description = "Kadakas drawing"
+mime-type = "application/vnd.kadakas.drawing+zip"
+role = "editor"
+
+[macos]
+minimum-system-version = "11.0"
+info-plist-path = "packaging/macos/Info.plist"
+
+[dmg]
+window-size = { width = 540, height = 380 }
+app-position = { x = 140, y = 190 }
+application-folder-position = { x = 400, y = 190 }
+
+[nsis]
+installer-icon = "packaging/icons/icon.ico"
+installer-mode = "both"
+
+[deb]
+depends = ["libxkbcommon0", "libgtk-3-0"]
+section = "graphics"

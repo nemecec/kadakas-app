@@ -80,7 +80,7 @@ The launcher (`kadakas-launcher`, PLAT-06) keeps the app up to date without a ne
 
 ### The launcher is the entry point (PLAT-16)
 
-Shortcuts, the Dock or taskbar icon and `.kad` files start `kadakas-launcher` (it is the main binary in `packager.toml`). With no window, it:
+On Windows and Linux, shortcuts, the taskbar icon and `.kad` files start `kadakas-launcher` (it is the main binary in `packager.toml`). **On macOS the app is the main binary** (`packager-macos.toml`) and the launcher does not install updates there: an update archive would hold bare executables, not a `.app` (generic Dock icon, wrong name, no document types), and Finder sends a double click on a `.kad` file as an Apple event that the launcher does not handle. Updates on macOS need a whole signed `Kadakas.app` as the update archive, a store that keeps `.app` bundles, and a launcher (or a bundle stub) that forwards the open-documents Apple event. Until then there is no macOS update archive (`release.yml`, `update-manifest.yml`), and `Updater::with_install_support(false)` makes the launcher ask nobody and install nothing on macOS. With no window, the launcher:
 
 1. settles the runs that ended while no launcher watched (the crash marks, see below),
 2. chooses the version (see "Which version starts") and **starts it at once**, with the files that were given as arguments (after `--`, so a name that starts with a dash is safe),
@@ -114,12 +114,14 @@ One schema (`kadakas_update::Settings`), one file (`launcher.json`). The app wri
 
 - **Channel.** `stable` starts stable and bundled versions. `nightly` also starts nightly ones. `local` starts all, and prefers the newest local build. A local build never starts by itself on another channel.
 - **Mode.** Auto-update: the newest eligible version. The other two modes: the version the person chose (`current`), so a download does not change what starts.
-- **Crash marker.** The app writes `<id>.clean` when it closes in the normal way. A run without it is a crash. The version goes on the skip list, and the launcher starts the next one at the next start. It tells the app which version it skipped and why (a line in the status bar). A clean run clears the mark. In the launcher window, "Try again" clears it by hand. A rollback also skips the version that was left. If every version is skipped, the bundled app starts anyway.
-- A supervisor that dies leaves its run record. Each record has a lock that the supervisor holds while it lives. The next launcher settles the records whose lock is free, and never takes a running app for a crash.
+- **Your own choice.** A version that the person chose by hand ("Use this version") starts first in every mode, also in Auto-update, until a newer version that the channel allows is added. Then the newest wins again. A rollback is a choice too, and skips the version it left.
+- **Crash marker.** The app writes `<id>.clean` when it closes in the normal way. A run without it can also be a shutdown, a logout, a force quit or a power loss, so one long run without the mark is not enough: a version is skipped when the run was short (under 60 seconds) or when two runs in a row ended without the mark. A clean run clears the count. The marks are kept by version, also for the bundled app, so a new installer starts clean. The launcher starts the next version at the next start. It tells the app which version it skipped and why (a line in the status bar). A clean run clears the mark. In the launcher window, "Try again" clears it by hand. A rollback also skips the version that was left. If every version is skipped, the bundled app starts anyway.
+- A supervisor that dies leaves its run record. The supervisor holds a lock on its record, and the app holds a lock of its own (`<id>.app.lock`). The next launcher settles the records whose two locks are free (under the install lock, reading the record again there), and never takes a running app for a crash or prunes its folder.
+- The choice of the version and the run record are made under the install lock, so a prune cannot delete the chosen folder. If the lock stays busy, or the record cannot be written, the app starts all the same (without the update features) and the launcher logs why. The restart also goes on when the switch to the new version cannot be written.
 
 ### Pruning
 
-After an install, a download or `add`, the launcher keeps the newest version and N older ones (N is "Older versions to keep"; "newest" is by the time of adding). It never deletes the running version (its lock is held), the version in `current`, a version that the person marked "Keep", or the bundled app (it is not a folder in the store and is not counted). N = 0 keeps the newest one only.
+After an install, a download or `add`, the launcher keeps the newest version and N older ones (N is "Older versions to keep"; "newest" is by the time of adding). It never deletes the running version (its lock is held), the version in `current`, a version that the person marked "Keep", the first version below the newest ones that is not skipped (the fallback, also with N = 0), or the bundled app (it is not a folder in the store and is not counted). N = 0 keeps the newest one only.
 
 ### Restart to update
 
@@ -127,9 +129,9 @@ When a newer version is ready, the app shows "Kadakas X is ready." with **Restar
 
 ### Local versions for developers (PLAT-17)
 
-- `kadakas-launcher add PATH [--version X.Y.Z]` copies `kadakas-app`, `kadakas` and the flavors of a build folder (or of the folder of a program) into `versions/<X.Y.Z>-local.g<commit>/` with the label `local` and the git commit (`+dirty` for a changed tree). A changed tree or a tree without git also puts the time in the version. A local version is always a pre-release of its base number, so it cannot be taken for a release, and a release folder is never overwritten. `scripts/install-local-build.sh` builds in release mode and runs `add`.
+- `kadakas-launcher add PATH [--version X.Y.Z]` copies `kadakas-app`, `kadakas` and the flavors of a build folder (or of the folder of a program) into `versions/<X.Y.Z>-local.g<commit>/` with the label `local` and the git commit (`+dirty` for a changed tree). A changed tree or a tree without git also puts the time in the version. A local version is always a pre-release of its base number, so it cannot be taken for a release, and a release folder is never overwritten. A local build is swapped in (the old folder is renamed away, the new one renamed in, then the old one deleted), and the version in `current` is never replaced in place. `scripts/install-local-build.sh` builds in release mode and runs `add`.
 - A local folder can be an update site: a `file://` address in Preferences > Updates (channel Local), or `kadakas-launcher --site file:///folder`. The folder holds `manifest-<channel>.json` and the archives (the same format as the release site). Addresses in the manifest may be relative to the folder.
-- **Unsigned builds** are allowed only from these two places: an unsigned manifest (an empty `signature`) in a `file://` site, and `add`. An unsigned manifest may name local files only. It has no expiry and no replay check. A network site with an unsigned manifest, a local file address or the channel `local` is refused (in the manifest code, and again at the download). A signature that is there must be good, also in a local folder.
+- **Unsigned builds** are allowed only from these two places: an unsigned manifest (an empty `signature`) in a `file://` site, and `add`. An unsigned manifest must be for the channel `local` and may name local files only. A `file://` address with a host or a network path (`file:////server/share`) is refused. It has no expiry and no replay check. A network site with an unsigned manifest, a local file address or the channel `local` is refused (in the manifest code, and again at the download). A signature that is there must be good, also in a local folder.
 - Auto-update picks a local version only on the channel Local. The window lists the label and the commit, and a local version can be started ("Use this version"), kept or removed like any other.
 
 ### What an update does
@@ -154,7 +156,7 @@ A version folder may also hold `flavors.json` to list more programs (other UI fl
 
 ### Not tried for real
 
-The installers with the launcher as the main binary were not built here, and no restart ran on a real desktop. Open points for a real run: the Dock icon of the app on macOS when it is a child of the launcher (the bundle icon belongs to the launcher); a double click on a `.kad` file on macOS (Finder sends an Apple event to the launcher instead of an argument, and the launcher does not handle it yet); a console window on Windows for the headless launcher.
+The installers were not built here, and no restart ran on a real desktop. Open points: updates on macOS (see above); a release build on Windows uses the GUI subsystem for the app and the launcher, so `kadakas-launcher add` and `--help` show no text there (use `manage`, or the `kadakas` tool for the console).
 
 ### How CI signs the manifest
 

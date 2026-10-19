@@ -11,7 +11,7 @@
 use crate::error::{Result, UpdateError};
 use crate::http::Http;
 use crate::version::Version;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -42,6 +42,10 @@ pub fn file_url_to_path(url: &str) -> Option<PathBuf> {
         }
     }
     let text = String::from_utf8(out).ok()?;
+    // `file:////server/share` and `file:///\\server\share` are network paths on Windows.
+    if text.starts_with("//") || text.starts_with('\\') || text.starts_with("/\\") {
+        return None;
+    }
     // `/C:/dir` is a Windows drive path.
     let drive = text.as_bytes();
     let text = if drive.len() >= 3
@@ -82,13 +86,15 @@ impl Http for FileHttp {
     fn get(&self, url: &str, limit: u64, out: &mut dyn Write) -> Result<u64> {
         let path = file_url_to_path(url)
             .ok_or_else(|| UpdateError::Http(format!("address not allowed: {url}")))?;
-        let mut file = std::fs::File::open(&path)
+        let file = std::fs::File::open(&path)
             .map_err(|e| UpdateError::Http(format!("{}: {e}", path.display())))?;
-        let len = file.metadata()?.len();
-        if len > limit {
+        // The length of the file is not trusted (a FIFO or a device has none): read at most one
+        // byte more than the limit.
+        let n = std::io::copy(&mut file.take(limit.saturating_add(1)), out)?;
+        if n > limit {
             return Err(UpdateError::Http(format!("more than {limit} bytes")));
         }
-        Ok(std::io::copy(&mut file, out)?)
+        Ok(n)
     }
 }
 
@@ -309,6 +315,9 @@ mod tests {
             "file:///a%zz",
             "file:///a%4",
             "file:///a%ff",
+            "file:////server/share",
+            "file:///%5C%5Cserver%5Cshare",
+            "file://///server/share",
             "/plain/path",
         ] {
             assert_eq!(file_url_to_path(bad), None, "{bad}");
@@ -334,6 +343,13 @@ mod tests {
                 .is_err()
         );
         assert!(FileHttp.get("https://x/y", 10, &mut Vec::new()).is_err());
+        // A device has no length: the limit still holds, and not more than limit + 1 bytes are read.
+        #[cfg(unix)]
+        {
+            let mut out = Vec::new();
+            assert!(FileHttp.get("file:///dev/zero", 100, &mut out).is_err());
+            assert_eq!(out.len(), 101);
+        }
         std::fs::remove_dir_all(&d).unwrap();
     }
 

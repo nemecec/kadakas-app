@@ -160,6 +160,22 @@ impl AppLink {
         write_atomic(&run_file(&self.root, &self.id, "clean"), b"clean\n")
     }
 
+    /// Takes a lock of the app on its own run (`<id>.app.lock`) and returns the file. Keep it
+    /// for as long as the program lives: the launcher then knows that this app runs, also when
+    /// the launcher itself has died (it must not mark a crash, nor prune the folder).
+    pub fn hold_run_lock(&self) -> Option<std::fs::File> {
+        let path = run_file(&self.root, &self.id, "app.lock");
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .ok()?;
+        f.try_lock().ok()?;
+        Some(f)
+    }
+
     /// Asks the launcher to download the new version (Notify only).
     pub fn request_download(&self) -> std::io::Result<()> {
         write_atomic(&run_file(&self.root, &self.id, "download"), b"download\n")

@@ -256,6 +256,13 @@ impl SignedManifest {
             }
             let manifest: Manifest = serde_json::from_str(&self.payload)
                 .map_err(|e| UpdateError::Manifest(e.to_string()))?;
+            // An unsigned manifest is a developer build: it can only be for the channel local,
+            // so it can never stand in for a stable or nightly release.
+            if manifest.channel != Channel::Local {
+                return Err(UpdateError::LocalOnly(
+                    "an unsigned manifest must be for the channel local".into(),
+                ));
+            }
             manifest.validate_with(Sites::LocalUnsigned)?;
             return Ok((manifest, Trust::Unsigned));
         }

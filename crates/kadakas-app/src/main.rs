@@ -1,5 +1,7 @@
 // The web build leaves out the native features (agent server, files, GIS, scripts); their code is then unused.
 #![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
+// A release build on Windows has no console window. (`kadakas`, the command line tool, keeps it.)
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod about;
 #[cfg(not(target_arch = "wasm32"))]
@@ -96,6 +98,8 @@ fn main() -> eframe::Result {
     // variables). Then the token variables leave the environment, so no child process (a Python
     // script, a converter) can read them.
     let collab = kadakas_ui_core::collab::CollabArgs::parse(&args, &|k| std::env::var(k).ok());
+    // The run id of the launcher goes the same way: read once, then out of the environment.
+    app_updates::capture_env();
     kadakas_sys::process::remove_secrets_from_env();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
