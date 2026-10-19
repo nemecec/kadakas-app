@@ -374,6 +374,19 @@ mod tests {
     }
 
     #[test]
+    fn a_log_of_wide_characters_is_cut_to_the_limit_on_a_character() {
+        let mut f = fake_file();
+        f.log = (0..50).map(|_| "\u{e4}".repeat(290)).collect();
+        let a = assemble(&f, &ctx());
+        assert!(a.log.len() <= kadakas_feedback::model::MAX_LOG_BYTES);
+        assert!(a.log.chars().all(|c| c == '\u{e4}' || c == '\n'));
+        assert_eq!(a.attachments().len(), 2);
+        // No log lines: only the command names are attached.
+        f.log.clear();
+        assert_eq!(assemble(&f, &ctx()).attachments().len(), 1);
+    }
+
+    #[test]
     fn the_signature_does_not_depend_on_who_crashed() {
         let a = assemble(&fake_file(), &ctx());
         let mut other = fake_file();

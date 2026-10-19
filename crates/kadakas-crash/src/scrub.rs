@@ -488,6 +488,15 @@ mod tests {
     }
 
     #[test]
+    fn the_context_can_be_read_from_the_environment() {
+        let c = Context::from_env();
+        // The values depend on the computer; they are never empty strings.
+        assert!(c.user.as_deref().is_none_or(|u| !u.is_empty()));
+        assert!(c.home.as_deref().is_none_or(|h| !h.is_empty()));
+        assert_eq!(Context::new("", ""), Context::default());
+    }
+
+    #[test]
     fn unix_home_folders_and_documents_go() {
         assert_eq!(
             t("cannot open /Users/annika/Documents/Garden Plan.kad"),
@@ -698,7 +707,7 @@ mod tests {
             source_path(
                 "/rustc/0123456789abcdef0123456789abcdef01234567/library/core/src/option.rs"
             ),
-            "rustc/library/core/src/option.rs".replace("rustc/", "rustc/")
+            "rustc/library/core/src/option.rs"
         );
         assert_eq!(
             source_path("/home/bob/.cargo/git/checkouts/foo-1a2b3c4d5e6f7a8b/abc1234/src/lib.rs"),

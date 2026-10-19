@@ -237,6 +237,40 @@ mod tests {
     }
 
     #[test]
+    fn the_place_of_a_frame_has_several_forms() {
+        let f = parse_backtrace(
+            "0: a\n   at src/a.rs:3\n1: b\n   at C:\\x\\b.rs:9\n2: c\n   at weird place\n",
+        );
+        assert_eq!(
+            (f[0].file.as_deref(), f[0].line),
+            (Some("src/a.rs"), Some(3))
+        );
+        assert_eq!(
+            (f[1].file.as_deref(), f[1].line),
+            (Some("C:\\x\\b.rs"), Some(9))
+        );
+        assert_eq!(
+            (f[2].file.as_deref(), f[2].line),
+            (Some("weird place"), None)
+        );
+    }
+
+    #[test]
+    fn the_adapter_fields_are_cut_too() {
+        let mut f = CrashFile::new(CrashKind::Native);
+        f.gpu = Some(Gpu {
+            adapter: "a".repeat(5000),
+            driver: "d".repeat(5000),
+            backend: "b".repeat(5000),
+        });
+        let g = f.bounded().gpu.unwrap();
+        assert_eq!(
+            (g.adapter.len(), g.driver.len(), g.backend.len()),
+            (MAX_FIELD, MAX_FIELD, MAX_FIELD)
+        );
+    }
+
+    #[test]
     fn garbage_and_long_backtraces_are_safe() {
         assert!(parse_backtrace("").is_empty());
         assert!(parse_backtrace("hello\nat x:1:2\n::: 3").is_empty());
