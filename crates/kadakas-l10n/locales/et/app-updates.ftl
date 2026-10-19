@@ -39,3 +39,10 @@ app-updates-reason-not-started = seda ei õnnestunud käivitada
 
 app-updates-request-failed = Käivitajale ei saanud teada anda: { $error }
 app-updates-save-failed = Uuenduste seadeid ei saanud salvestada: { $error }
+
+app-open-title = Ava joonis
+app-open-unsaved-question = Sul on salvestamata muudatusi. Kas salvestada need enne faili { $name } avamist?
+app-open-save-and-open = Salvesta ja ava
+app-open-dont-save = Ära salvesta
+app-open-cancelled = Faili { $name } avamisest loobuti. Sinu joonis jäi muutmata.
+app-open-not-saved = Muudatusi ei saanud salvestada, seega faili { $name } ei avatud.

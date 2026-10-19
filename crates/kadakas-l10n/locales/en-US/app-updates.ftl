@@ -39,3 +39,10 @@ app-updates-reason-not-started = it could not be started
 
 app-updates-request-failed = Could not tell the launcher: { $error }
 app-updates-save-failed = Could not save the update settings: { $error }
+
+app-open-title = Open drawing
+app-open-unsaved-question = You have changes that are not saved. Save them before opening { $name }?
+app-open-save-and-open = Save and open
+app-open-dont-save = Don't save
+app-open-cancelled = Opening { $name } was cancelled. Your drawing is unchanged.
+app-open-not-saved = The changes could not be saved, so { $name } was not opened.

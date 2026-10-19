@@ -390,6 +390,40 @@ pub fn notice_bar(ui: &mut egui::Ui, n: &Notice) -> Option<NoticeAction> {
     action
 }
 
+/// What the person chose in the question about unsaved changes before a file replaces the drawing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenChoice {
+    SaveAndOpen,
+    DiscardAndOpen,
+    Cancel,
+}
+
+/// The question about unsaved changes before another file replaces the drawing. `name` is the
+/// file that waits.
+pub fn open_dialog(ctx: &egui::Context, name: &str) -> Option<OpenChoice> {
+    let mut choice = None;
+    egui::Window::new(tr!("app-open-title"))
+        .id(egui::Id::new("win-open-unsaved"))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label(tr!("app-open-unsaved-question", name = name));
+            ui.horizontal(|ui| {
+                if ui.button(tr!("app-open-save-and-open")).clicked() {
+                    choice = Some(OpenChoice::SaveAndOpen);
+                }
+                if ui.button(tr!("app-open-dont-save")).clicked() {
+                    choice = Some(OpenChoice::DiscardAndOpen);
+                }
+                if ui.button(tr!("app-updates-cancel")).clicked() {
+                    choice = Some(OpenChoice::Cancel);
+                }
+            });
+        });
+    choice
+}
+
 /// The question about unsaved changes before the restart.
 pub fn save_dialog(ctx: &egui::Context) -> Option<SaveChoice> {
     let mut choice = None;
