@@ -38,8 +38,21 @@ fn style_body(unit_length: f64, unit_width: f64) -> ResourceBody {
     }))
 }
 
+thread_local! {
+    /// A part of the plan cache that only this test thread sees (until the thread ends), so that
+    /// tests that run in parallel and lay the same lot do not find, push out or empty each
+    /// other's plans.
+    static SCOPE: draw::CacheScope = draw::cache_scope();
+}
+
+/// Takes the private part of the plan cache for this test.
+fn isolate() {
+    SCOPE.with(|_| {});
+}
+
 /// A lot of `w` x `h` mm with running-bond units of 200 x 100 mm and a 5 mm joint.
 fn lot(w: f64, h: f64, planned: bool) -> (Editor, ObjectId) {
+    isolate();
     let mut ed = Editor::new(Document::with_sequential_ids());
     let style = ResourceId(
         ed.execute(&Command::AddResource {
@@ -195,6 +208,7 @@ fn frame_with(
     revision: u64,
     rect: egui::Rect,
 ) -> Painted {
+    isolate();
     let ctx = egui::Context::default();
     let st = Style {
         pen: PEN,
@@ -774,11 +788,11 @@ fn a_new_plan_goes_ahead_of_the_checks_and_drops_the_checks_of_its_place() {
 
 #[test]
 fn a_plan_whose_job_went_is_asked_for_again() {
-    // A lot of a size that no other test uses, so that the plan, its key and its job are this
-    // test's own: the worker and the plan cache are shared by the whole process, and tests that
-    // run beside this one lay the common lots, empty the cache and fill the list of results.
-    let (ed, id) = lot(4007.0, 2003.0, true);
-    let view = view_of(v(-200.0, -200.0), v(4300.0, 2200.0));
+    // The plan cache of this test is its own (`isolate`): other tests lay the same lot, and neither
+    // find this plan nor empty the cache under it. The results of the worker are kept by place and
+    // thread.
+    let (ed, id) = lot(4000.0, 2000.0, true);
+    let view = view_of(v(-200.0, -200.0), v(4200.0, 2200.0));
     let doc = ed.doc();
     let key = draw::content_key(
         doc,

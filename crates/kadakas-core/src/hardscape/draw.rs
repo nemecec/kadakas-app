@@ -277,7 +277,43 @@ pub fn content_key(doc: &Document, obj: &Object, tolerance: f64) -> u64 {
     h.finish()
 }
 
-type CacheEntry = (u64, Result<Arc<Prepared>, String>, usize);
+/// The namespace of an entry, the key, the plan and its size.
+type CacheEntry = (u64, u64, Result<Arc<Prepared>, String>, usize);
+
+thread_local! {
+    static NAMESPACE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+static NEXT_NAMESPACE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// The namespace of the plan cache for this thread: 0, the one namespace of the program, unless a
+/// [`CacheScope`] is held.
+fn namespace() -> u64 {
+    NAMESPACE.with(std::cell::Cell::get)
+}
+
+/// A private part of the shared plan cache for the thread that holds it, until it is dropped:
+/// plans, lookups and `clear` of this thread see only its own part, so tests that run in
+/// parallel do not find, push out or empty each other's plans. The program never takes one (its
+/// namespace is always 0). A job made while the scope is held keeps its namespace, also on the
+/// worker thread.
+pub struct CacheScope {
+    previous: u64,
+}
+
+/// Takes a fresh namespace of the plan cache for this thread. See [`CacheScope`].
+pub fn cache_scope() -> CacheScope {
+    let fresh = NEXT_NAMESPACE.fetch_add(1, Ordering::Relaxed);
+    CacheScope {
+        previous: NAMESPACE.with(|n| n.replace(fresh)),
+    }
+}
+
+impl Drop for CacheScope {
+    fn drop(&mut self) {
+        NAMESPACE.with(|n| n.set(self.previous));
+    }
+}
 
 /// Laid plans by content key, the last used kept, bound by their number and by their estimated
 /// memory. A plan that cannot be laid is kept too, with its message.
@@ -303,30 +339,40 @@ impl PlanCache {
         self.builds.load(Ordering::Relaxed)
     }
 
-    /// How many plans the cache holds, and their estimated memory.
+    /// How many plans the cache holds in this thread's namespace, and their estimated memory.
     pub fn size(&self) -> (usize, usize) {
+        let ns = namespace();
         let c = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        (c.len(), c.iter().map(|e| e.2).sum())
+        let mine = c.iter().filter(|e| e.0 == ns);
+        (mine.clone().count(), mine.map(|e| e.3).sum())
     }
 
     /// The plan for a key, if it is in the cache (it becomes the most recent).
     pub fn cached(&self, key: u64) -> Option<Result<Arc<Prepared>, String>> {
+        self.cached_in(namespace(), key)
+    }
+
+    fn cached_in(&self, ns: u64, key: u64) -> Option<Result<Arc<Prepared>, String>> {
         let mut c = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        let i = c.iter().position(|(k, ..)| *k == key)?;
+        let i = c.iter().position(|e| e.0 == ns && e.1 == key)?;
         let hit = c.remove(i);
-        let out = hit.1.clone();
+        let out = hit.2.clone();
         c.push(hit);
         Some(out)
     }
 
     /// Puts a plan in the cache. The oldest plans go when there are too many or too big.
     pub fn insert(&self, key: u64, plan: Result<Arc<Prepared>, String>) {
+        self.insert_in(namespace(), key, plan);
+    }
+
+    fn insert_in(&self, ns: u64, key: u64, plan: Result<Arc<Prepared>, String>) {
         let size = plan.as_ref().map_or(64, |p| p.approx_bytes());
         let mut c = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        c.retain(|(k, ..)| *k != key);
-        c.push((key, plan, size));
+        c.retain(|e| !(e.0 == ns && e.1 == key));
+        c.push((ns, key, plan, size));
         while c.len() > 1
-            && (c.len() > self.capacity || c.iter().map(|e| e.2).sum::<usize>() > self.bytes)
+            && (c.len() > self.capacity || c.iter().map(|e| e.3).sum::<usize>() > self.bytes)
         {
             drop(c.remove(0));
         }
@@ -350,11 +396,13 @@ impl PlanCache {
         Some(built)
     }
 
+    /// Empties this thread's namespace (the whole cache in the program, which has one).
     pub fn clear(&self) {
+        let ns = namespace();
         self.entries
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .clear();
+            .retain(|e| e.0 != ns);
     }
 }
 
@@ -402,6 +450,8 @@ pub struct PrepareJob {
     obj: Object,
     key: u64,
     max_units: usize,
+    /// The namespace of the cache of the thread that made the job.
+    ns: u64,
 }
 
 impl PrepareJob {
@@ -412,7 +462,7 @@ impl PrepareJob {
 
     /// Lays the plan and puts it in the shared cache.
     pub fn run(self) -> Result<Arc<Prepared>, String> {
-        if let Some(hit) = CACHE.cached(self.key) {
+        if let Some(hit) = CACHE.cached_in(self.ns, self.key) {
             return hit;
         }
         CACHE.builds.fetch_add(1, Ordering::Relaxed);
@@ -428,7 +478,7 @@ impl PrepareJob {
             p.warm();
             Arc::new(p)
         });
-        CACHE.insert(self.key, built.clone());
+        CACHE.insert_in(self.ns, self.key, built.clone());
         built
     }
 }
@@ -460,6 +510,7 @@ pub fn prepare_job(doc: &Document, obj: &Object, key: u64) -> Option<PrepareJob>
         obj: obj.clone(),
         key,
         max_units: pattern_units(),
+        ns: namespace(),
     })
 }
 

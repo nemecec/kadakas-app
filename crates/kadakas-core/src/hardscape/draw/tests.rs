@@ -861,3 +861,25 @@ fn measure_bounds() {
         );
     }
 }
+
+#[test]
+fn a_cache_scope_is_a_part_of_the_cache_that_only_its_thread_sees() {
+    let cache = PlanCache::new(8, usize::MAX);
+    cache.insert(7, Err("outside".into()));
+    let first = cache_scope();
+    assert!(cache.cached(7).is_none(), "the scope starts empty");
+    cache.insert(7, Err("inside".into()));
+    assert_eq!(cache.size().0, 1);
+    {
+        let _inner = cache_scope();
+        assert!(cache.cached(7).is_none());
+    }
+    assert!(matches!(cache.cached(7), Some(Err(m)) if m == "inside"));
+    // Another thread has the namespace 0; a clear of the scope leaves its plans alone.
+    let outside = std::thread::scope(|s| s.spawn(|| cache.cached(7)).join().unwrap());
+    assert!(matches!(outside, Some(Err(m)) if m == "outside"));
+    cache.clear();
+    assert_eq!(cache.size().0, 0);
+    drop(first);
+    assert!(matches!(cache.cached(7), Some(Err(m)) if m == "outside"));
+}
