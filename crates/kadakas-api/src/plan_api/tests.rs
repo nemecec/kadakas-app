@@ -1465,6 +1465,122 @@ fn wide_joints_are_a_warning_of_the_report_and_of_the_export() {
 }
 
 #[test]
+fn the_warnings_of_the_report_add_up_over_objects_and_cap_the_lists() {
+    // One object with wide joints in several places, one with holes (and wide joints) in a course, one clean: each
+    // row has only its own warnings, the totals are the sums, and a long list is cut but counted.
+    let mut s = Session::with_sequential_ids();
+    let st = style(&mut s, "running_bond");
+    let at = |s: &mut Session, w: f64, h: f64, x: f64| -> Value {
+        ok(
+            s,
+            "hardscape.add",
+            json!({"boundary": [[x, 0], [x + w, 0], [x + w, h], [x, h]], "style": st, "origin": [x, 0], "angle": 0}),
+        )["id"]
+            .clone()
+    };
+    let wide = at(&mut s, 12000.0, 6000.0, 0.0);
+    ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": wide, "courses": [{"name": "Kerb", "along": "outline", "corner": "miter"}]}),
+    );
+    let holes = at(&mut s, 6000.0, 3000.0, 20000.0);
+    let arc = add(
+        &mut s,
+        json!({"kind": "arc", "center": [23000, 1200], "radius": 900, "start": 0.2, "end": 2.9}),
+    );
+    ok(
+        &mut s,
+        "hardscape.course",
+        json!({"id": holes, "name": "Ring", "source": arc, "side": "right",
+               "unit_length": 400, "unit_width": 200, "gap": 3}),
+    );
+    let clean = at(&mut s, 2000.0, 1000.0, 40000.0);
+    let chk = ok(
+        &mut s,
+        "unit_pattern.check",
+        json!({"ids": [wide, holes, clean]}),
+    );
+    let counts = |o: &Value, k: &str| o["counts"][k].as_u64().unwrap();
+    let objects = chk["objects"].as_array().unwrap();
+    let n_wide = counts(&objects[0], "joint_too_wide");
+    let n_holes = counts(&objects[1], "coverage");
+    assert!(n_wide > 3 && n_holes > 0, "{chk}");
+    let rep = ok(
+        &mut s,
+        "report.unit_pattern",
+        json!({"ids": [wide, holes, clean]}),
+    );
+    let rows = rep["rows"].as_array().unwrap();
+    let warnings = |r: &Value| -> Vec<String> {
+        r.get("warnings")
+            .map(|w| {
+                w.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_str().unwrap().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    // The wide joints: counted in full, listed up to a cap, the warning names three and the rest.
+    let w = &rows[0]["wide_joints"];
+    assert_eq!(w["count"].as_u64(), Some(n_wide), "{w}");
+    assert_eq!(
+        w["listed"].as_array().unwrap().len() as u64,
+        n_wide.min(20),
+        "{w}"
+    );
+    assert!(w["listed"][0]["width_mm"].as_f64().unwrap() > 5.0);
+    assert!(w["listed"][0]["group"].as_str().is_some());
+    let text = warnings(&rows[0]);
+    assert_eq!(text.len(), 1, "{text:?}");
+    assert!(
+        text[0].contains(&format!("{n_wide} joints are wider"))
+            && text[0].contains(&format!("and {} more", n_wide - 3)),
+        "{}",
+        text[0]
+    );
+    assert!(rows[0].get("coverage_gaps").is_none(), "{}", rows[0]);
+    // The ring has holes and wide joints: both warnings, each counted as the check counts it.
+    let n_ring = counts(&objects[1], "joint_too_wide");
+    assert!(n_ring > 0, "{chk}");
+    assert_eq!(rows[1]["wide_joints"]["count"].as_u64(), Some(n_ring));
+    assert_eq!(warnings(&rows[1]).len(), 2);
+    assert!(warnings(&rows[1])[0].contains("do not cover"));
+    assert_eq!(rows[1]["coverage_gaps"]["count"].as_u64(), Some(n_holes));
+    // The clean one: nothing.
+    assert!(warnings(&rows[2]).is_empty(), "{}", rows[2]);
+    assert!(rows[2].get("wide_joints").is_none());
+    assert_eq!(rep["totals"]["wide_joints"].as_u64(), Some(n_wide + n_ring));
+    assert_eq!(rep["totals"]["coverage_gaps"].as_u64(), Some(n_holes));
+    // The export warns for the same two objects, once each, and not for the clean one.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("all.dxf");
+    let ex = ok(
+        &mut s,
+        "export.file",
+        json!({"path": out, "format": "dxf", "options": {"patterns": "units"}}),
+    );
+    let all: Vec<&str> = ex["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        all.iter().filter(|x| x.contains("wider than")).count(),
+        2,
+        "{all:?}"
+    );
+    assert_eq!(
+        all.iter().filter(|x| x.contains("do not cover")).count(),
+        1,
+        "{all:?}"
+    );
+}
+
+#[test]
 fn a_joint_change_of_the_style_reaches_courses_and_zones_without_their_own_joint() {
     let mut s = Session::with_sequential_ids();
     let id = slab(&mut s, 8000.0, 4000.0);

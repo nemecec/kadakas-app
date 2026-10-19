@@ -774,26 +774,42 @@ fn a_new_plan_goes_ahead_of_the_checks_and_drops_the_checks_of_its_place() {
 
 #[test]
 fn a_plan_whose_job_went_is_asked_for_again() {
-    let (ed, id) = lot(4000.0, 2000.0, true);
-    let view = view_of(v(-200.0, -200.0), v(4200.0, 2200.0));
+    // A lot of a size that no other test uses, so that the plan, its key and its job are this
+    // test's own: the worker and the plan cache are shared by the whole process, and tests that
+    // run beside this one lay the common lots, empty the cache and fill the list of results.
+    let (ed, id) = lot(4007.0, 2003.0, true);
+    let view = view_of(v(-200.0, -200.0), v(4300.0, 2200.0));
     let doc = ed.doc();
     let key = draw::content_key(
         doc,
         doc.object(id).unwrap(),
         kadakas_core::layout::TOLERANCE,
     );
+    let jobs = pushed();
     let first = frame(&ed, id, &view, 1);
     assert!(first.waiting());
-    wait_for_worker();
-    // The result is lost (dropped from the list of results of this thread), and the shared cache
-    // is emptied. (Neither is asserted: the worker and the cache are shared by the whole process,
-    // and parallel tests lay the same lot, take its result or refill the cache. What counts is
-    // that this thread's window asks again and settles.)
+    assert_eq!(pushed(), jobs + 1, "the first frame asked for the plan");
+    // The plan arrives for the place of this thread.
     let slot = crate::plan_worker::slot(id, false);
-    let _lost = worker().take(slot, key);
+    let t = std::time::Instant::now();
+    let lost = loop {
+        if let Some(l) = worker().take(slot, key) {
+            break l;
+        }
+        assert!(t.elapsed().as_secs() < 60, "the plan never arrived");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    assert_eq!(lost.key, key);
+    assert!(lost.plan.is_ok());
+    // The result is lost (taken and thrown away), and the shared cache is emptied.
     draw::cache().clear();
+    assert!(draw::cached(key).is_none());
+    assert!(!worker().pending_plan(slot, key), "nothing is on its way");
+    let jobs = pushed();
     let settled = settle(&ed, id, &view, 1);
+    assert!(pushed() > jobs, "the window asked for the plan again");
     assert!(settled.joints > 100, "{settled:?}");
+    assert!(held_prepared(id, false).is_some(), "its own plan arrived");
 }
 
 #[test]
