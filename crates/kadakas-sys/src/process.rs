@@ -145,6 +145,37 @@ pub fn remove_secrets_from_env() {
     }
 }
 
+/// Reads the variables `names` and removes them from the environment of this process. Returns
+/// the ones that were set. Like [`remove_secrets_from_env`], call it at the top of `main`, while
+/// the process has only one thread.
+pub fn take_env(names: &[&str]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for name in names {
+        if let Ok(value) = std::env::var(name) {
+            out.push(((*name).to_string(), value));
+        }
+        // SAFETY: the caller promises that no other thread runs (see the doc comment).
+        unsafe { std::env::remove_var(name) };
+    }
+    out
+}
+
+#[cfg(test)]
+mod take_env_tests {
+    #[test]
+    fn variables_are_read_and_removed() {
+        // A name that no other test uses.
+        // SAFETY: only this test touches these two variables.
+        unsafe { std::env::set_var("KADAKAS_TEST_TAKE_ENV_A", "x") };
+        let got = super::take_env(&["KADAKAS_TEST_TAKE_ENV_A", "KADAKAS_TEST_TAKE_ENV_B"]);
+        assert_eq!(
+            got,
+            [("KADAKAS_TEST_TAKE_ENV_A".to_string(), "x".to_string())]
+        );
+        assert!(std::env::var("KADAKAS_TEST_TAKE_ENV_A").is_err());
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

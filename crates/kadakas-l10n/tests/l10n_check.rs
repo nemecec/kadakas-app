@@ -19,10 +19,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// The crates with user interface text. A crate with egui calls must be here.
-const UI_CRATES: &[&str] = &["kadakas-app", "kadakas-ui-core"];
+const UI_CRATES: &[&str] = &["kadakas-app", "kadakas-ui-core", "kadakas-launcher"];
 
 /// Crates that use messages (all the crates with `tr!`, `msg!` or `translate` calls).
-const CODE_CRATES: &[&str] = &["kadakas-app", "kadakas-ui-core"];
+const CODE_CRATES: &[&str] = &["kadakas-app", "kadakas-ui-core", "kadakas-launcher"];
 
 /// Message ids that no code uses on purpose: examples and tests of the l10n crate itself.
 const UNUSED_OK: &[&str] = &[
@@ -38,6 +38,7 @@ const UNUSED_OK: &[&str] = &[
 /// translated yet.
 const SAME_OK: &[&str] = &[
     "about-kadakas",
+    "launcher-heading",
     "agent-view-name",
     "app-kadakas",
     "app-import",

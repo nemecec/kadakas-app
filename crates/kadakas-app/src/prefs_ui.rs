@@ -29,6 +29,9 @@ pub struct PrefsEdit<'a> {
     pub max_version_mib: &'a mut u32,
     /// Animate the view when an agent moves it.
     pub animate_agent_view: &'a mut bool,
+    /// Preferences > Updates (PLAT-16).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub updates: &'a mut crate::app_updates::Updates,
 }
 
 impl PrefsDialog {
@@ -82,6 +85,11 @@ impl PrefsDialog {
                 });
                 ui.small(tr!("prefs-ui-versions-hint"));
                 ui.add_space(6.0);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    crate::app_updates::prefs_section(ui, edit.updates);
+                    ui.add_space(6.0);
+                }
                 autosave.settings_section(ui);
             });
         self.open = open;
@@ -296,6 +304,7 @@ mod tests {
             max_versions: Box::leak(Box::new(crate::prefs::DEFAULT_MAX_VERSIONS)),
             max_version_mib: Box::leak(Box::new(crate::prefs::DEFAULT_MAX_VERSION_MIB)),
             animate_agent_view: Box::leak(Box::new(true)),
+            updates: Box::leak(Box::new(crate::app_updates::Updates::new(None, None))),
         }
     }
 

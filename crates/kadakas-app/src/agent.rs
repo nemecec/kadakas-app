@@ -638,6 +638,34 @@ pub fn parse_profile(args: &[String], env: Option<&str>) -> String {
     if ok { name.to_string() } else { String::new() }
 }
 
+/// The documents named on the command line: the arguments that are no options and no option
+/// values, and everything after `--`. The launcher passes the files of a double click and the
+/// documents of a restart to update this way.
+pub fn parse_open_files(args: &[String]) -> Vec<PathBuf> {
+    // Options that take the next argument as their value.
+    const WITH_VALUE: [&str; 7] = [
+        "--agent-port",
+        "--allow-dir",
+        "--allow-url",
+        "--allow-collab-url",
+        "--collab-url",
+        "--collab-token",
+        "--profile",
+    ];
+    let mut files = Vec::new();
+    let mut it = args.iter().skip(1);
+    while let Some(a) = it.next() {
+        if a == "--" {
+            files.extend(it.by_ref().map(PathBuf::from));
+        } else if WITH_VALUE.contains(&a.as_str()) {
+            it.next();
+        } else if !a.starts_with('-') && !a.is_empty() {
+            files.push(PathBuf::from(a));
+        }
+    }
+    files
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -818,6 +846,30 @@ mod tests {
                 "--allow-dir"
             ])),
             vec![PathBuf::from("/a"), PathBuf::from("/b")]
+        );
+    }
+
+    #[test]
+    fn open_files_are_the_arguments_that_are_no_options() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(parse_open_files(&a(&["kadakas-app"])).is_empty());
+        assert_eq!(
+            parse_open_files(&a(&[
+                "kadakas-app",
+                "--profile",
+                "acad",
+                "--allow-converters",
+                "--allow-dir",
+                "/x",
+                "--",
+                "/a/one.kad",
+                "-odd.kad"
+            ])),
+            [PathBuf::from("/a/one.kad"), PathBuf::from("-odd.kad")]
+        );
+        assert_eq!(
+            parse_open_files(&a(&["kadakas-app", "plan.kad", "--agent-port=1", ""])),
+            [PathBuf::from("plan.kad")]
         );
     }
 

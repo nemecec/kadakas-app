@@ -78,12 +78,61 @@ Steps for a release: change `version` in `packager.toml` and in the crates, comm
 
 The launcher (`kadakas-launcher`, PLAT-06) keeps the app up to date without a new installer. The installer puts the launcher next to the app. The launcher starts the app, and it can fetch newer versions of the app and the `kadakas` tool.
 
+### The launcher is the entry point (PLAT-16)
+
+On Windows and Linux, shortcuts, the taskbar icon and `.kad` files start `kadakas-launcher` (it is the main binary in `packager.toml`). **On macOS the app is the main binary** (`packager-macos.toml`) and the launcher does not install updates there: an update archive would hold bare executables, not a `.app` (generic Dock icon, wrong name, no document types), and Finder sends a double click on a `.kad` file as an Apple event that the launcher does not handle. Updates on macOS need a whole signed `Kadakas.app` as the update archive, a store that keeps `.app` bundles, and a launcher (or a bundle stub) that forwards the open-documents Apple event. Until then there is no macOS update archive (`release.yml`, `update-manifest.yml`), and `Updater::with_install_support(false)` makes the launcher ask nobody and install nothing on macOS. With no window, the launcher:
+
+1. settles the runs that ended while no launcher watched (the crash marks, see below),
+2. chooses the version (see "Which version starts") and **starts it at once**, with the files that were given as arguments (after `--`, so a name that starts with a dash is safe),
+3. checks the manifest in a background thread, and downloads by the mode,
+4. waits for the app. When the app asks for a restart and ended cleanly, it chooses again and starts the new version with the same documents.
+
+`kadakas-launcher manage` opens the window (versions, channel, flavor, profile). `kadakas-launcher add PATH` puts a local build into the store (below). The app that the installer brought (the bundled app, next to the launcher) is the base version. It is never copied, never deleted, and always the last fallback.
+
 ### Where things are
 
-- The installer ships the first version of the app. The launcher lists it as "came with the installer".
 - Updates go to the user's state folder, in `launcher/` (macOS `~/Library/Application Support/kadakas/launcher`, Windows `%LOCALAPPDATA%\kadakas\launcher`, Linux `~/.local/state/kadakas/launcher`). Set `KADAKAS_LAUNCHER_ROOT` to use another folder.
-- Inside: `versions/<version>/` (one folder per version), `current` (a small JSON file that names the active and the previous version), `launcher.json` (channel, UI flavor, profile) and `downloads/`.
-- The launcher keeps the active version and the previous one. It deletes older folders after an install.
+- Inside: `versions/<version>/` (one folder per version, with `.kadakas-meta.json`: label, git commit, time added, kept), `current` (the version that the person chose, and the one before it), `launcher.json` (the settings, below), `health.json` (versions that crashed or were rolled back), `runs/` (small files of each running app), `seen.json`, `lock` and `downloads/`.
+
+### Settings (Preferences > Updates)
+
+One schema (`kadakas_update::Settings`), one file (`launcher.json`). The app writes the update part (the write keeps flavor and profile). The launcher reads it at every start and before every check.
+
+| Setting | Values | Default |
+|---|---|---|
+| Mode | Auto-update, Auto-download, Notify only | Auto-update |
+| Channel | Stable, Nightly (the `beta` manifest channel), Local | Stable |
+| Older versions to keep | 0 to 50 | 1 |
+| Local update site (channel Local) | a `file://` address | empty |
+
+- **Auto-update** downloads new versions and starts the newest one that did not crash at its last start. **Auto-download** downloads, and the person chooses when to switch (the "Restart to update" button). **Notify only** shows "Kadakas X is available" with a Download button.
+- The launcher and the app talk with files only (`handshake.rs`). The app has no network code. It reads `runs/<id>.status.json`, and writes `<id>.download` (Notify only), `<id>.restart.json` (the open documents) and `<id>.clean` (the clean-exit mark).
+
+### Which version starts
+
+`choose.rs` is a pure function, tested without a window.
+
+- **Channel.** `stable` starts stable and bundled versions. `nightly` also starts nightly ones. `local` starts all, and prefers the newest local build. A local build never starts by itself on another channel.
+- **Mode.** Auto-update: the newest eligible version. The other two modes: the version the person chose (`current`), so a download does not change what starts.
+- **Your own choice.** A version that the person chose by hand ("Use this version") starts first in every mode, also in Auto-update, until a newer version that the channel allows is added. Then the newest wins again. A rollback is a choice too, and skips the version it left.
+- **Crash marker.** The app writes `<id>.clean` when it closes in the normal way. A run without it can also be a shutdown, a logout, a force quit or a power loss, so one long run without the mark is not enough: a version is skipped when the run was short (under 60 seconds) or when two runs in a row ended without the mark. A clean run clears the count. The marks are kept by version, also for the bundled app, so a new installer starts clean. The launcher starts the next version at the next start. It tells the app which version it skipped and why (a line in the status bar). A clean run clears the mark. In the launcher window, "Try again" clears it by hand. A rollback also skips the version that was left. If every version is skipped, the bundled app starts anyway.
+- A supervisor that dies leaves its run record. The supervisor holds a lock on its record, and the app holds a lock of its own (`<id>.app.lock`). The next launcher settles the records whose two locks are free (under the install lock, reading the record again there), and never takes a running app for a crash or prunes its folder.
+- The choice of the version and the run record are made under the install lock, so a prune cannot delete the chosen folder. If the lock stays busy, or the record cannot be written, the app starts all the same (without the update features) and the launcher logs why. The restart also goes on when the switch to the new version cannot be written.
+
+### Pruning
+
+After an install, a download or `add`, the launcher keeps the newest version and N older ones (N is "Older versions to keep"; "newest" is by the time of adding). It never deletes the running version (its lock is held), the version in `current`, a version that the person marked "Keep", the first version below the newest ones that is not skipped (the fallback, also with N = 0), or the bundled app (it is not a folder in the store and is not counted). N = 0 keeps the newest one only.
+
+### Restart to update
+
+When a newer version is ready, the app shows "Kadakas X is ready." with **Restart to update** and **Later** (Auto-update and Auto-download). If the drawing has unsaved changes, a question comes first (Save and restart, Restart without saving, Cancel). A failed or cancelled save stops the restart. The window then closes through the normal close path, so the question about unsent collaboration edits still applies. On exit the app writes the restart request with the open document and the clean-exit mark. The launcher sees the clean end, switches to the new version (in Auto-download and Notify only, the accept is the switch), and starts it with the document as an argument.
+
+### Local versions for developers (PLAT-17)
+
+- `kadakas-launcher add PATH [--version X.Y.Z]` copies `kadakas-app`, `kadakas` and the flavors of a build folder (or of the folder of a program) into `versions/<X.Y.Z>-local.g<commit>/` with the label `local` and the git commit (`+dirty` for a changed tree). A changed tree or a tree without git also puts the time in the version. A local version is always a pre-release of its base number, so it cannot be taken for a release, and a release folder is never overwritten. A local build is swapped in (the old folder is renamed away, the new one renamed in, then the old one deleted), and the version in `current` is never replaced in place. `scripts/install-local-build.sh` builds in release mode and runs `add`.
+- A local folder can be an update site: a `file://` address in Preferences > Updates (channel Local), or `kadakas-launcher --site file:///folder`. The folder holds `manifest-<channel>.json` and the archives (the same format as the release site). Addresses in the manifest may be relative to the folder.
+- **Unsigned builds** are allowed only from these two places: an unsigned manifest (an empty `signature`) in a `file://` site, and `add`. An unsigned manifest must be for the channel `local` and may name local files only. A `file://` address with a host or a network path (`file:////server/share`) is refused. It has no expiry and no replay check. A network site with an unsigned manifest, a local file address or the channel `local` is refused (in the manifest code, and again at the download). A signature that is there must be good, also in a local folder.
+- Auto-update picks a local version only on the channel Local. The window lists the label and the commit, and a local version can be started ("Use this version"), kept or removed like any other.
 
 ### What an update does
 
@@ -92,18 +141,22 @@ The launcher (`kadakas-launcher`, PLAT-06) keeps the app up to date without a ne
 3. Refuse an expired manifest (`expires` is signed). This stops a server, or an attacker on the network, from keeping a launcher on old news by serving an old file for ever.
 4. Refuse a manifest for another channel.
 5. Refuse a replay: the launcher remembers the highest manifest version it has seen on each channel (`seen.json`). A signed manifest with a lower version is refused, even when the user has rolled back and the old version looks new. To publish an older build, release it with a higher version number.
-6. Refuse a version that is older than the active one. Only the Roll back button goes to an older version.
+6. Refuse a version that is older than the newest installed one for the channel. Only the Roll back button goes to an older version.
 7. Download the archive for this system. The size must be exactly the announced size. The download has a timeout for each chunk (30 seconds) and a time budget for the whole body (60 seconds plus the size at 100 kB/s), so a stalled server ends as an error and the window never hangs. Redirects are followed, but never from https to http.
 8. Open the archive once. Compute its SHA-256 from that open file, then unpack the same file. The two steps cannot see different files.
-9. Unpack it into `versions/.tmp-<version>`, write the marker file `.kadakas-complete` (the archive SHA-256), rename the folder to `versions/<version>`, and then write `current`. The write of `current` is the switch. If the computer stops before it, the old version still runs, and the next start of the launcher removes the half-made folder. An existing folder is reused only when its marker has the same SHA-256; otherwise it is unpacked again.
+9. Unpack it into `versions/.tmp-<version>`, write the marker file `.kadakas-complete` (the archive SHA-256) and the meta file, rename the folder to `versions/<version>`, and then (Auto-update and the Update button) write `current`. The write of `current` is the switch. If the computer stops before it, the old version still runs, and the next start of the launcher removes the half-made folder. An existing folder is reused only when its marker has the same SHA-256; otherwise it is unpacked again.
 
-One install lock (`lock` in the install folder, an advisory file lock) lets only one launcher change the folder at a time. Install and rollback wait for it (up to 10 seconds, then they report "busy"). The clean-up at start-up skips when another launcher holds it.
+One install lock (`lock` in the install folder, an advisory file lock) lets only one launcher change the folder at a time. Install and rollback wait for it (up to 10 seconds, then they report "busy"). The clean-up at start-up waits a moment, then skips when another launcher holds the lock.
 
-When the launcher starts and the version next to it (from the installer) is newer than the one in `current`, the newer one runs. This is the case after the user installs a newer Kadakas over an old update.
+When the launcher starts and the version next to it (from the installer) is newer than the one in `current`, the newer one runs, if `current` was written while an older installer was there. This is the case after the user installs a newer Kadakas over an old update. A pointer that was written with the same bundled version stands, so the person can choose an older version or a local build.
 
 The archive is a `.tar.gz` with `kadakas-app` and `kadakas` (with `.exe` on Windows) at the top level. The unpacker accepts plain files and folders only. It refuses links, absolute paths, `..`, backslashes and `:` in names.
 
 A version folder may also hold `flavors.json` to list more programs (other UI flavors). Today only `kadakas-app` exists.
+
+### Not tried for real
+
+The installers were not built here, and no restart ran on a real desktop. Open points: updates on macOS (see above); a release build on Windows uses the GUI subsystem for the app and the launcher, so `kadakas-launcher add` and `--help` show no text there (use `manage`, or the `kadakas` tool for the console).
 
 ### How CI signs the manifest
 

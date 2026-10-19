@@ -2738,6 +2738,7 @@ dependencies = [
  "kadakas-sys",
  "kadakas-ui-core",
  "kadakas-units",
+ "kadakas-update",
  "pollster 1.0.1",
  "resvg",
  "rfd",
@@ -2938,8 +2939,10 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "kadakas-l10n",
  "kadakas-sys",
  "kadakas-update",
+ "sys-locale",
 ]
 
 [[package]]

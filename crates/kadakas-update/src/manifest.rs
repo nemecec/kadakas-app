@@ -35,23 +35,46 @@ pub const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub enum Channel {
     #[default]
     Stable,
+    /// The channel of pre-releases. People know it as "nightly" (PLAT-16); the wire name stays
+    /// `beta`, so manifests, CI and old settings files do not change. `nightly` is read as an
+    /// alias.
+    #[serde(alias = "nightly")]
     Beta,
+    /// Developer builds on this machine (PLAT-17). Never signed, never from a network site.
+    Local,
 }
 
 impl Channel {
+    /// The wire name (the manifest file is `manifest-<name>.json`).
     pub fn as_str(self) -> &'static str {
         match self {
             Channel::Stable => "stable",
             Channel::Beta => "beta",
+            Channel::Local => "local",
+        }
+    }
+
+    /// The label that a version installed from this channel gets in the store.
+    pub fn label(self) -> &'static str {
+        match self {
+            Channel::Stable => "stable",
+            Channel::Beta => "nightly",
+            Channel::Local => "local",
         }
     }
 
     pub fn parse(text: &str) -> Option<Channel> {
         match text.trim() {
             "stable" => Some(Channel::Stable),
-            "beta" => Some(Channel::Beta),
+            "beta" | "nightly" => Some(Channel::Beta),
+            "local" => Some(Channel::Local),
             _ => None,
         }
+    }
+
+    /// Like [`Channel::parse`], for the channels that CI may sign: `local` is not one of them.
+    pub fn parse_release(text: &str) -> Option<Channel> {
+        Channel::parse(text).filter(|c| *c != Channel::Local)
     }
 }
 
@@ -81,6 +104,17 @@ pub struct Manifest {
 impl Manifest {
     /// Checks every field. A manifest from [`SignedManifest::verify`] has passed this already.
     pub fn validate(&self) -> Result<()> {
+        self.validate_with(Sites::Network)
+    }
+
+    /// Like [`Manifest::validate`]. What addresses and channels are allowed depends on where the
+    /// manifest came from: see [`Sites`].
+    pub fn validate_with(&self, site: Sites) -> Result<()> {
+        if self.channel == Channel::Local && site == Sites::Network {
+            return Err(UpdateError::LocalOnly(
+                "the local channel is not allowed on a network site".into(),
+            ));
+        }
         if self.platforms.is_empty() {
             return Err(UpdateError::Manifest("no platforms".into()));
         }
@@ -110,7 +144,23 @@ impl Manifest {
             if h.len() != 64 || !h.iter().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
                 return Err(bad("sha256 must be 64 lower-case hex characters"));
             }
-            crate::http::check_url(&f.url).map_err(|_| bad("url must be https"))?;
+            let local_url = is_local_url(&f.url);
+            match site {
+                Sites::Network => {
+                    crate::http::check_url(&f.url).map_err(|_| bad("url must be https"))?;
+                }
+                Sites::LocalSigned => {
+                    if !local_url {
+                        crate::http::check_url(&f.url)
+                            .map_err(|_| bad("url must be https or a local file"))?;
+                    }
+                }
+                Sites::LocalUnsigned => {
+                    if !local_url {
+                        return Err(bad("an unsigned manifest may name local files only"));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -138,6 +188,29 @@ impl Manifest {
         // A struct of strings and numbers always serializes.
         serde_json::to_string(self).expect("manifest serializes")
     }
+}
+
+/// Where a manifest came from. This decides which addresses it may name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sites {
+    /// An https site: https addresses only, no `local` channel.
+    Network,
+    /// A local folder (`file://`) with a signed manifest: https addresses and local files.
+    LocalSigned,
+    /// A local folder with an unsigned manifest (PLAT-17): local files only.
+    LocalUnsigned,
+}
+
+/// A `file://` address, or a name or path without a scheme (relative to the site folder).
+pub fn is_local_url(url: &str) -> bool {
+    url.starts_with("file://") || !url.contains("://")
+}
+
+/// Whether a manifest was signed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trust {
+    Signed,
+    Unsigned,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +242,43 @@ impl SignedManifest {
             .map_err(|e| UpdateError::Manifest(e.to_string()))?;
         manifest.validate()?;
         Ok(manifest)
+    }
+
+    /// Like [`SignedManifest::verify`], for a manifest from a local folder: an empty signature
+    /// means "unsigned" (a developer build, PLAT-17) and is accepted only when `local` is true.
+    /// A signature that is there must be good, also in a local folder.
+    pub fn open(&self, keys: &TrustedKeys, local: bool) -> Result<(Manifest, Trust)> {
+        if self.signature.is_empty() {
+            if !local {
+                return Err(UpdateError::LocalOnly(
+                    "an unsigned manifest is allowed from a local folder only".into(),
+                ));
+            }
+            let manifest: Manifest = serde_json::from_str(&self.payload)
+                .map_err(|e| UpdateError::Manifest(e.to_string()))?;
+            // An unsigned manifest is a developer build: it can only be for the channel local,
+            // so it can never stand in for a stable or nightly release.
+            if manifest.channel != Channel::Local {
+                return Err(UpdateError::LocalOnly(
+                    "an unsigned manifest must be for the channel local".into(),
+                ));
+            }
+            manifest.validate_with(Sites::LocalUnsigned)?;
+            return Ok((manifest, Trust::Unsigned));
+        }
+        let sig: [u8; 64] = hex::decode(&self.signature)?;
+        let mut message = Vec::with_capacity(SIGN_PREFIX.len() + self.payload.len());
+        message.extend_from_slice(SIGN_PREFIX);
+        message.extend_from_slice(self.payload.as_bytes());
+        keys.verify(&message, &sig)?;
+        let manifest: Manifest = serde_json::from_str(&self.payload)
+            .map_err(|e| UpdateError::Manifest(e.to_string()))?;
+        manifest.validate_with(if local {
+            Sites::LocalSigned
+        } else {
+            Sites::Network
+        })?;
+        Ok((manifest, Trust::Signed))
     }
 
     pub fn to_json(&self) -> String {
@@ -206,7 +316,15 @@ pub(crate) mod tests {
         assert_eq!(Channel::Stable.as_str(), "stable");
         assert_eq!(Channel::parse(" beta "), Some(Channel::Beta));
         assert_eq!(Channel::parse("stable"), Some(Channel::Stable));
-        assert_eq!(Channel::parse("nightly"), None);
+        assert_eq!(Channel::parse("nightly"), Some(Channel::Beta));
+        assert_eq!(Channel::parse("local"), Some(Channel::Local));
+        assert_eq!(Channel::parse_release("local"), None);
+        assert_eq!(Channel::parse_release("nightly"), Some(Channel::Beta));
+        assert_eq!(Channel::Beta.label(), "nightly");
+        assert_eq!(Channel::Local.label(), "local");
+        assert_eq!(Channel::Stable.label(), "stable");
+        assert_eq!(Channel::Local.as_str(), "local");
+        assert_eq!(Channel::parse("other"), None);
         assert_eq!(Channel::default(), Channel::Stable);
     }
 
