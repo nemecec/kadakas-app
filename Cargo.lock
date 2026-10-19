@@ -2938,8 +2938,10 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "kadakas-l10n",
  "kadakas-sys",
  "kadakas-update",
+ "sys-locale",
 ]
 
 [[package]]

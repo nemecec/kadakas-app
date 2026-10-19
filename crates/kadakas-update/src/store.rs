@@ -128,9 +128,14 @@ pub struct Bundled {
 
 /// The content of the `current` file.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Pointer {
     pub current: Option<Slot>,
     pub previous: Option<Slot>,
+    /// The version of the bundled app when the pointer was written. A bundled app that is
+    /// newer than this one (the person installed a new Kadakas) wins over the pointer; one that
+    /// is the same does not, so the person can choose an older version or a local build.
+    pub bundled: Option<Version>,
 }
 
 /// A step of the install. Tests stop the install after a step, as if the computer had crashed.
@@ -259,13 +264,24 @@ impl Store {
     /// [`UpdateError::Busy`]. Without `wait`, it returns `None` when another launcher holds it.
     /// The lock goes when the returned file is dropped (or when the process ends).
     pub(crate) fn lock(&self, wait: bool) -> Result<Option<std::fs::File>> {
+        if wait {
+            self.lock_for(self.lock_wait_ms)?
+                .map(Some)
+                .ok_or(UpdateError::Busy)
+        } else {
+            self.lock_for(0)
+        }
+    }
+
+    /// Tries to take the install lock for at most `ms` milliseconds (0: one try).
+    fn lock_for(&self, ms: u64) -> Result<Option<std::fs::File>> {
         std::fs::create_dir_all(&self.root)?;
         let file = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
             .open(self.root.join("lock"))?;
-        let tries = if wait { self.lock_wait_ms / 50 + 1 } else { 1 };
+        let tries = ms / 50 + 1;
         for i in 0..tries {
             match file.try_lock() {
                 Ok(()) => return Ok(Some(file)),
@@ -277,11 +293,7 @@ impl Store {
                 Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
             }
         }
-        if wait {
-            Err(UpdateError::Busy)
-        } else {
-            Ok(None)
-        }
+        Ok(None)
     }
 
     fn seen_path(&self) -> PathBuf {
@@ -331,7 +343,9 @@ impl Store {
 
     fn write_pointer(&self, p: &Pointer) -> Result<()> {
         std::fs::create_dir_all(&self.root)?;
-        let text = serde_json::to_vec_pretty(p).expect("pointer serializes");
+        let mut p = p.clone();
+        p.bundled = self.bundled.as_ref().map(|b| b.version.clone());
+        let text = serde_json::to_vec_pretty(&p).expect("pointer serializes");
         fsio::write_durable(&self.pointer_path(), &text, Access::KeepExisting, ".tmp")?;
         Ok(())
     }
@@ -359,12 +373,14 @@ impl Store {
     /// user installs a new Kadakas installer over an older update.
     pub fn active(&self) -> Option<Active> {
         let p = self.pointer();
-        let chosen = [p.current, p.previous, Some(Slot::Bundled)]
+        let chosen = [p.current.clone(), p.previous.clone(), Some(Slot::Bundled)]
             .into_iter()
             .flatten()
             .find_map(|s| self.resolve(&s))?;
         match self.resolve(&Slot::Bundled) {
-            Some(b) if b.version > chosen.version => Some(b),
+            Some(b) if b.version > chosen.version && p.bundled.as_ref() != Some(&b.version) => {
+                Some(b)
+            }
             _ => Some(chosen),
         }
     }
@@ -455,7 +471,8 @@ impl Store {
     /// Removes half-made folders from an install that did not finish.
     /// It does nothing when another launcher holds the install lock.
     pub fn recover(&self) {
-        let Ok(Some(_guard)) = self.lock(false) else {
+        // A short wait: a lock can stay a moment in a process that was just forked.
+        let Ok(Some(_guard)) = self.lock_for(self.lock_wait_ms.min(300)) else {
             return;
         };
         if let Ok(rd) = std::fs::read_dir(self.versions_dir()) {
@@ -568,6 +585,7 @@ impl Store {
             let pointer = Pointer {
                 current: Some(Slot::Version(version.clone())),
                 previous: old.map(|a| a.slot),
+                bundled: None,
             };
             self.write_pointer(&pointer)?;
             self.hit(Step::PointerWritten)?;
@@ -596,6 +614,7 @@ impl Store {
         let pointer = Pointer {
             current: Some(slot.clone()),
             previous: old.filter(|o| o != slot).or(self.pointer().previous),
+            bundled: None,
         };
         self.write_pointer(&pointer)
     }
@@ -687,6 +706,7 @@ impl Store {
         let new = Pointer {
             current: Some(target.slot.clone()),
             previous: p.current,
+            bundled: None,
         };
         self.write_pointer(&new)?;
         // The version we left is not started again by Auto-update, until the person asks for it.

@@ -215,6 +215,32 @@ pub fn find_build(path: &Path) -> Result<LocalBuild> {
     Ok(LocalBuild { dir, files })
 }
 
+/// The address of the update site (the folder with `manifest-<channel>.json`).
+///
+/// The order: the command line option `--site`, then for the channel `local` the site of the
+/// settings, then the variable `KADAKAS_UPDATE_URL`, then (not for the channel `local`) the
+/// default address. `None`: there is no site to ask. The channel `local` has no default: a local
+/// version comes from a local folder or from `add`, never from the network.
+pub fn resolve_base(
+    cli_site: Option<&str>,
+    env_url: Option<&str>,
+    settings: &crate::settings::Settings,
+    default: &str,
+) -> Option<String> {
+    let not_empty = |s: &&str| !s.trim().is_empty();
+    let local = settings.channel == crate::manifest::Channel::Local;
+    cli_site
+        .filter(not_empty)
+        .or(if local {
+            Some(settings.site.as_str()).filter(not_empty)
+        } else {
+            None
+        })
+        .or(env_url.filter(not_empty))
+        .or(if local { None } else { Some(default) })
+        .map(|s| s.trim().to_string())
+}
+
 /// What `add` did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Added {
@@ -399,6 +425,54 @@ mod tests {
             ]
         );
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_site_is_chosen_by_option_settings_variable_and_default() {
+        use crate::manifest::Channel;
+        use crate::settings::Settings;
+        let stable = Settings::default();
+        let local = Settings {
+            channel: Channel::Local,
+            site: "file:///s".into(),
+            ..Settings::default()
+        };
+        let no_site = Settings {
+            channel: Channel::Local,
+            ..Settings::default()
+        };
+        let d = "https://d.example/m";
+        assert_eq!(resolve_base(None, None, &stable, d).as_deref(), Some(d));
+        assert_eq!(
+            resolve_base(None, Some("https://e.example"), &stable, d).as_deref(),
+            Some("https://e.example")
+        );
+        // The settings' site is for the channel local only.
+        assert_eq!(
+            resolve_base(None, None, &local, d).as_deref(),
+            Some("file:///s")
+        );
+        let other = Settings {
+            site: "file:///s".into(),
+            ..Settings::default()
+        };
+        assert_eq!(resolve_base(None, None, &other, d).as_deref(), Some(d));
+        // The option wins over everything.
+        assert_eq!(
+            resolve_base(Some("file:///o"), Some("https://e"), &local, d).as_deref(),
+            Some("file:///o")
+        );
+        // The channel local has no default address.
+        assert_eq!(resolve_base(None, None, &no_site, d), None);
+        assert_eq!(
+            resolve_base(None, Some("file:///v"), &no_site, d).as_deref(),
+            Some("file:///v")
+        );
+        // Empty values do not count.
+        assert_eq!(
+            resolve_base(Some(" "), Some(""), &stable, d).as_deref(),
+            Some(d)
+        );
     }
 
     #[test]

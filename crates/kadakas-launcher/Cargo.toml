@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The Kadakas launcher: shows the installed versions, checks for signed updates, rolls back, and starts the app with a chosen UI flavor and profile. Native only. It holds public keys only."
+description = "The Kadakas launcher: the entry point of Kadakas. Starts the chosen version at once, checks for signed updates in the background, keeps the version store (window: versions, channel, flavor, profile; command: add a local build). Native only. It holds public keys only."
 
 [[bin]]
 name = "kadakas-launcher"
@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+kadakas-l10n = { version = "0.1.0", path = "../kadakas-l10n" }
 kadakas-update = { version = "0.1.0", path = "../kadakas-update" }
 eframe = { version = "0.35.0", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
 egui = "0.35.0"
+sys-locale = "0.3.2"
