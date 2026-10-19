@@ -1,0 +1,430 @@
+//! Runs and the crash marker (PLAT-16).
+//!
+//! Every start of the app by the launcher is a run. The launcher process that watches the app
+//! (the supervisor, see `supervisor`) makes a record in `runs/` and holds an advisory lock on a
+//! lock file for as long as it lives. The app writes a clean-exit mark when it closes in the
+//! normal way. When the app ends, the supervisor looks for the mark. A start without the mark
+//! is a crash: the version goes into `health.json` and is skipped at the next start
+//! (see `choose`). A clean end takes the version out of that file again.
+//!
+//! If a supervisor itself dies, the system frees its lock. The next launcher sees a record
+//! whose lock is free (`Store::settle_runs`), reads the mark and does the same. A record with a
+//! lock that is held belongs to an app that runs now. So a second launcher never takes a running
+//! app for a crash, and pruning never deletes the folder of a running version.
+//!
+//! Files in `runs/`, all named by the run id:
+//!
+//! | file | written by | content |
+//! |---|---|---|
+//! | `<id>.json` | supervisor | the record: version, slot, process id, start time |
+//! | `<id>.lock` | supervisor | locked while the supervisor lives |
+//! | `<id>.clean` | the app | the clean-exit mark |
+//! | `<id>.status.json` | supervisor | what the app shows (`handshake::RunStatus`) |
+//! | `<id>.restart.json` | the app | "restart to update", with the open documents |
+//! | `<id>.download` | the app | "download the new version now" (Notify only) |
+
+use crate::error::Result;
+use crate::store::{Slot, Store};
+use kadakas_sys::fsio::{self, Access};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+const RUNS: &str = "runs";
+const HEALTH: &str = "health.json";
+
+/// The folder with the files of the runs.
+pub fn runs_dir(root: &Path) -> PathBuf {
+    root.join(RUNS)
+}
+
+/// The path of one file of a run.
+pub fn run_file(root: &Path, id: &str, suffix: &str) -> PathBuf {
+    runs_dir(root).join(format!("{id}.{suffix}"))
+}
+
+/// A run id is made by the supervisor. Anything else (from an environment variable) is refused,
+/// so an id can never name a path outside `runs/`.
+pub fn valid_run_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() || b == b'-')
+}
+
+fn new_run_id() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!(
+        "{:x}-{:x}-{:x}",
+        std::process::id(),
+        nanos,
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// The record of a run.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunRecord {
+    pub id: String,
+    pub slot: Slot,
+    pub pid: u32,
+    pub started: u64,
+}
+
+/// A run that this launcher process watches. Drop it or call [`RunGuard::finish`].
+pub struct RunGuard {
+    root: PathBuf,
+    id: String,
+    slot: Slot,
+    lock: Option<std::fs::File>,
+}
+
+/// How a run ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RunEnd {
+    /// The app wrote the clean-exit mark.
+    pub clean: bool,
+}
+
+impl RunGuard {
+    /// Starts a run of `slot`: makes the record and takes the lock.
+    pub fn begin(store: &Store, slot: &Slot) -> Result<RunGuard> {
+        let root = store.root().to_path_buf();
+        std::fs::create_dir_all(runs_dir(&root))?;
+        let id = new_run_id();
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(run_file(&root, &id, "lock"))?;
+        // A new file is free. If this fails, no other process holds it for this new id.
+        lock.try_lock().map_err(|e| match e {
+            std::fs::TryLockError::Error(e) => e,
+            std::fs::TryLockError::WouldBlock => std::io::Error::other("run lock is taken"),
+        })?;
+        let record = RunRecord {
+            id: id.clone(),
+            slot: slot.clone(),
+            pid: std::process::id(),
+            started: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+        };
+        let text = serde_json::to_vec_pretty(&record).expect("record serializes");
+        fsio::write_durable(
+            &run_file(&root, &id, "json"),
+            &text,
+            Access::KeepExisting,
+            ".tmp",
+        )?;
+        Ok(RunGuard {
+            root,
+            id,
+            slot: slot.clone(),
+            lock: Some(lock),
+        })
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn slot(&self) -> &Slot {
+        &self.slot
+    }
+
+    /// The run ended. Reads the clean-exit mark, records the result in `health.json`, and
+    /// deletes the files of the run.
+    pub fn finish(mut self, store: &Store) -> RunEnd {
+        let clean = run_file(&self.root, &self.id, "clean").is_file();
+        let _ = store.note_run_end(&self.slot, clean);
+        self.remove_files();
+        RunEnd { clean }
+    }
+
+    /// The program never started (it could not be launched): delete the files of the run and
+    /// record nothing. That is not a crash of the version.
+    pub fn abandon(mut self) {
+        self.remove_files();
+    }
+
+    fn remove_files(&mut self) {
+        remove_run_files(&self.root, &self.id);
+        self.lock = None;
+        let _ = std::fs::remove_file(run_file(&self.root, &self.id, "lock"));
+    }
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        // Not finished: the lock goes, the files stay, and the next launcher settles the run.
+        self.lock = None;
+    }
+}
+
+fn remove_run_files(root: &Path, id: &str) {
+    for suffix in ["json", "clean", "status.json", "restart.json", "download"] {
+        let _ = std::fs::remove_file(run_file(root, id, suffix));
+    }
+}
+
+/// True while a supervisor holds the lock of the run.
+fn is_alive(root: &Path, id: &str) -> bool {
+    let Ok(f) = std::fs::OpenOptions::new()
+        .write(true)
+        .open(run_file(root, id, "lock"))
+    else {
+        return false;
+    };
+    matches!(f.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
+fn read_records(root: &Path) -> Vec<(String, Option<RunRecord>)> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(runs_dir(root)) else {
+        return out;
+    };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(id) = name.strip_suffix(".json") else {
+            continue;
+        };
+        if id.ends_with(".status") || id.ends_with(".restart") || !valid_run_id(id) {
+            continue;
+        }
+        let record = std::fs::read(e.path())
+            .ok()
+            .and_then(|b| serde_json::from_slice::<RunRecord>(&b).ok())
+            .filter(|r| r.id == id);
+        out.push((id.to_string(), record));
+    }
+    out
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct Health {
+    /// Versions whose last start ended without the clean-exit mark.
+    crashed: BTreeSet<Slot>,
+    /// Versions that the person rolled back from. Auto-update does not start them again.
+    rolled_back: BTreeSet<Slot>,
+}
+
+impl Store {
+    fn health_path(&self) -> PathBuf {
+        self.root().join(HEALTH)
+    }
+
+    fn read_health(&self) -> Health {
+        std::fs::read(self.health_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_health(&self, h: &Health) -> Result<()> {
+        std::fs::create_dir_all(self.root())?;
+        let text = serde_json::to_vec_pretty(h).expect("health serializes");
+        fsio::write_durable(&self.health_path(), &text, Access::KeepExisting, ".tmp")?;
+        Ok(())
+    }
+
+    /// The versions whose last start ended without the clean-exit mark.
+    pub fn crashed_slots(&self) -> BTreeSet<Slot> {
+        self.read_health().crashed
+    }
+
+    /// The versions that the person rolled back from.
+    pub fn rolled_back_slots(&self) -> BTreeSet<Slot> {
+        self.read_health().rolled_back
+    }
+
+    /// Records how a run of `slot` ended. A clean end clears an earlier crash of the version.
+    pub fn note_run_end(&self, slot: &Slot, clean: bool) -> Result<()> {
+        let _guard = self.lock(true)?;
+        let mut h = self.read_health();
+        let changed = if clean {
+            h.crashed.remove(slot)
+        } else {
+            h.crashed.insert(slot.clone())
+        };
+        if changed {
+            self.write_health(&h)?;
+        }
+        Ok(())
+    }
+
+    /// The person wants to try a version again: takes it off the lists of crashed and
+    /// rolled back versions.
+    pub fn clear_crash(&self, slot: &Slot) -> Result<()> {
+        let _guard = self.lock(true)?;
+        self.forget_crash(slot);
+        Ok(())
+    }
+
+    /// Like `clear_crash`, for code that holds the install lock already.
+    pub(crate) fn forget_crash(&self, slot: &Slot) {
+        let mut h = self.read_health();
+        let changed = h.crashed.remove(slot) | h.rolled_back.remove(slot);
+        if changed {
+            let _ = self.write_health(&h);
+        }
+    }
+
+    /// A rollback leaves `slot`: Auto-update must not start it again at once.
+    pub(crate) fn note_rolled_back(&self, slot: &Slot) {
+        let mut h = self.read_health();
+        if h.rolled_back.insert(slot.clone()) {
+            let _ = self.write_health(&h);
+        }
+    }
+
+    /// The versions that run now (a supervisor holds the lock of the run).
+    pub fn running_slots(&self) -> Vec<Slot> {
+        read_records(self.root())
+            .into_iter()
+            .filter_map(|(id, r)| r.filter(|_| is_alive(self.root(), &id)))
+            .map(|r| r.slot)
+            .collect()
+    }
+
+    /// Settles the runs whose supervisor is gone: reads the clean-exit mark, records the result
+    /// and deletes the files. Call it when the launcher starts.
+    pub fn settle_runs(&self) {
+        for (id, record) in read_records(self.root()) {
+            if is_alive(self.root(), &id) {
+                continue;
+            }
+            if let Some(r) = record {
+                let clean = run_file(self.root(), &id, "clean").is_file();
+                let _ = self.note_run_end(&r.slot, clean);
+            }
+            remove_run_files(self.root(), &id);
+            let _ = std::fs::remove_file(run_file(self.root(), &id, "lock"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::tests::{bundled, tmp, v};
+
+    fn store(root: &Path) -> Store {
+        Store::new(root.join("r"), Some(bundled(root, "1.0.0")))
+    }
+
+    fn slot(s: &str) -> Slot {
+        Slot::Version(v(s))
+    }
+
+    #[test]
+    fn run_ids_are_safe_names() {
+        for ok in ["1a-2b-3c", "ABC-def", "0"] {
+            assert!(valid_run_id(ok), "{ok}");
+        }
+        for bad in ["", "../x", "a/b", "a.b", "g", &"1".repeat(65)] {
+            assert!(!valid_run_id(bad), "{bad}");
+        }
+        assert!(valid_run_id(&new_run_id()));
+        assert_ne!(new_run_id(), new_run_id());
+    }
+
+    #[test]
+    fn a_clean_run_leaves_no_crash() {
+        let root = tmp("run-clean");
+        let s = store(&root);
+        let g = RunGuard::begin(&s, &slot("1.1.0")).unwrap();
+        assert_eq!(s.running_slots(), [slot("1.1.0")]);
+        assert_eq!(g.slot(), &slot("1.1.0"));
+        std::fs::write(run_file(s.root(), g.id(), "clean"), b"").unwrap();
+        let id = g.id().to_string();
+        assert_eq!(g.finish(&s), RunEnd { clean: true });
+        assert!(s.crashed_slots().is_empty());
+        assert!(s.running_slots().is_empty());
+        // Everything of the run is gone.
+        assert!(!run_file(s.root(), &id, "json").exists());
+        assert!(!run_file(s.root(), &id, "lock").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_run_without_the_mark_is_a_crash_and_a_later_clean_run_clears_it() {
+        let root = tmp("run-crash");
+        let s = store(&root);
+        let g = RunGuard::begin(&s, &slot("1.1.0")).unwrap();
+        assert_eq!(g.finish(&s), RunEnd { clean: false });
+        assert_eq!(s.crashed_slots().into_iter().collect::<Vec<_>>(), [slot("1.1.0")]);
+        let g = RunGuard::begin(&s, &slot("1.1.0")).unwrap();
+        std::fs::write(run_file(s.root(), g.id(), "clean"), b"").unwrap();
+        g.finish(&s);
+        assert!(s.crashed_slots().is_empty());
+        // The explicit way: the person tries a version again.
+        s.note_run_end(&Slot::Bundled, false).unwrap();
+        assert_eq!(s.crashed_slots().len(), 1);
+        s.clear_crash(&Slot::Bundled).unwrap();
+        assert!(s.crashed_slots().is_empty());
+        // A rollback is remembered the same way.
+        s.note_rolled_back(&slot("1.1.0"));
+        assert_eq!(s.rolled_back_slots().len(), 1);
+        s.clear_crash(&slot("1.1.0")).unwrap();
+        assert!(s.rolled_back_slots().is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_run_whose_supervisor_died_is_settled_by_the_next_launcher() {
+        let root = tmp("run-settle");
+        let s = store(&root);
+        // Run 1: the supervisor died, the app had written the mark.
+        let g1 = RunGuard::begin(&s, &slot("1.1.0")).unwrap();
+        std::fs::write(run_file(s.root(), g1.id(), "clean"), b"").unwrap();
+        // Run 2: the supervisor died, no mark.
+        let g2 = RunGuard::begin(&s, &slot("1.2.0")).unwrap();
+        // Run 3: still alive, no mark yet: it must not count as a crash.
+        let g3 = RunGuard::begin(&s, &slot("1.3.0")).unwrap();
+        let (id1, id2) = (g1.id().to_string(), g2.id().to_string());
+        drop(g1);
+        drop(g2);
+        s.settle_runs();
+        assert_eq!(s.crashed_slots().into_iter().collect::<Vec<_>>(), [slot("1.2.0")]);
+        assert_eq!(s.running_slots(), [slot("1.3.0")]);
+        assert!(!run_file(s.root(), &id1, "json").exists());
+        assert!(!run_file(s.root(), &id2, "json").exists());
+        assert!(run_file(s.root(), g3.id(), "json").exists());
+        // A damaged record and a stranger's file are cleaned up or left alone.
+        std::fs::write(runs_dir(s.root()).join("1f.json"), b"{ nope").unwrap();
+        std::fs::write(runs_dir(s.root()).join("notes.txt"), b"x").unwrap();
+        std::fs::write(runs_dir(s.root()).join("zz.json"), b"{}").unwrap();
+        s.settle_runs();
+        assert!(!runs_dir(s.root()).join("1f.json").exists());
+        assert!(runs_dir(s.root()).join("notes.txt").exists());
+        assert!(runs_dir(s.root()).join("zz.json").exists());
+        assert_eq!(s.running_slots(), [slot("1.3.0")]);
+        drop(g3);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_new_copy_of_a_version_forgets_its_crash() {
+        let root = tmp("run-forget");
+        let s = store(&root);
+        s.note_run_end(&slot("1.1.0"), false).unwrap();
+        s.install(
+            &v("1.1.0"),
+            &crate::store::tests::archive_file(&root, "1.1.0"),
+            false,
+        )
+        .unwrap();
+        assert!(s.crashed_slots().is_empty());
+        // A damaged health file reads as "no crash".
+        std::fs::write(s.root().join(HEALTH), b"{ nope").unwrap();
+        assert!(s.crashed_slots().is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}

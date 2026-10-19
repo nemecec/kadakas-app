@@ -16,7 +16,9 @@ use crate::error::{Result, UpdateError};
 use crate::hex;
 use crate::http::Http;
 use crate::keys::TrustedKeys;
-use crate::manifest::{Channel, MAX_ENVELOPE_BYTES, Manifest, PlatformFile, SignedManifest};
+use crate::manifest::{
+    Channel, MAX_ENVELOPE_BYTES, Manifest, PlatformFile, SignedManifest, Trust, is_local_url,
+};
 use crate::store::{ArchiveFile, Slot, Store};
 use crate::version::Version;
 use sha2::{Digest, Sha256};
@@ -78,6 +80,9 @@ pub struct Updater {
     keys: TrustedKeys,
     manifest_base: String,
     platform: String,
+    /// The site is a local folder (`file://`): unsigned manifests and the channel `local` are
+    /// allowed here, and nowhere else.
+    local_site: bool,
 }
 
 impl Updater {
@@ -90,13 +95,34 @@ impl Updater {
         manifest_base: impl Into<String>,
         platform: impl Into<String>,
     ) -> Updater {
+        let manifest_base = manifest_base.into().trim_end_matches('/').to_string();
         Updater {
             clock: Arc::new(system_clock),
             store,
             http,
             keys,
-            manifest_base: manifest_base.into().trim_end_matches('/').to_string(),
+            local_site: manifest_base.starts_with("file://"),
+            manifest_base,
             platform: platform.into(),
+        }
+    }
+
+    /// True when the update site is a local folder.
+    pub fn is_local_site(&self) -> bool {
+        self.local_site
+    }
+
+    /// False when there is no site to ask (the channel `local` without a local site).
+    pub fn can_check(&self) -> bool {
+        !self.manifest_base.is_empty()
+    }
+
+    /// An address from a manifest. A name without a scheme is relative to the site folder.
+    fn resolve_url(&self, url: &str) -> String {
+        if is_local_url(url) && !url.starts_with("file://") {
+            format!("{}/{}", self.manifest_base, url.trim_start_matches('/'))
+        } else {
+            url.to_string()
         }
     }
 
@@ -116,17 +142,32 @@ impl Updater {
 
     /// Downloads the manifest of a channel and checks it (steps 1 and 2).
     pub fn fetch_manifest(&self, channel: Channel) -> Result<Manifest> {
+        self.fetch_trusted(channel).map(|(m, _)| m)
+    }
+
+    /// Like [`Updater::fetch_manifest`], and says whether the manifest was signed. An unsigned
+    /// manifest is possible on a local site only. It has no expiry and no replay check: a
+    /// developer builds the same version again and again.
+    pub fn fetch_trusted(&self, channel: Channel) -> Result<(Manifest, Trust)> {
+        if channel == Channel::Local && !self.local_site {
+            return Err(UpdateError::LocalOnly(
+                "the channel local needs a local update site".into(),
+            ));
+        }
         let mut body = Vec::new();
         self.http
             .get(&self.manifest_url(channel), MAX_ENVELOPE_BYTES, &mut body)?;
-        let manifest = SignedManifest::parse(&body)?.verify(&self.keys)?;
-        manifest.check_fresh((self.clock)())?;
+        let (manifest, trust) = SignedManifest::parse(&body)?.open(&self.keys, self.local_site)?;
         if manifest.channel != channel {
             return Err(UpdateError::ChannelMismatch {
                 expected: channel.as_str().into(),
                 got: manifest.channel.as_str().into(),
             });
         }
+        if trust == Trust::Unsigned {
+            return Ok((manifest, trust));
+        }
+        manifest.check_fresh((self.clock)())?;
         if let Some(seen) = self.store.seen(channel)
             && manifest.version < seen
         {
@@ -136,12 +177,22 @@ impl Updater {
             });
         }
         self.store.note_seen(channel, &manifest.version)?;
-        Ok(manifest)
+        Ok((manifest, trust))
+    }
+
+    /// The newest installed version that the channel may start (see `choose::eligible`).
+    pub fn newest_installed(&self, channel: Channel) -> Option<Version> {
+        self.store
+            .list()
+            .into_iter()
+            .filter(|i| crate::choose::eligible(&i.meta.label, channel))
+            .map(|i| i.version)
+            .max()
     }
 
     fn judge(&self, manifest: &Manifest) -> Result<UpdateStatus> {
         let file = manifest.file_for(&self.platform)?;
-        let current = self.store.active().map(|a| a.version);
+        let current = self.newest_installed(manifest.channel);
         Ok(match current {
             Some(c) if c == manifest.version => UpdateStatus::UpToDate { current: Some(c) },
             Some(c) if c > manifest.version => UpdateStatus::Older {
@@ -161,13 +212,22 @@ impl Updater {
         self.judge(&self.fetch_manifest(channel)?)
     }
 
-    /// Checks, downloads, verifies and installs the newer version. Returns the new version.
+    /// Checks, downloads, verifies and installs the newer version, and switches to it. Returns
+    /// the new version. A newer version that is installed but not active (Auto-download) is
+    /// only switched to.
     pub fn update(&self, channel: Channel) -> Result<Version> {
-        let manifest = self.fetch_manifest(channel)?;
+        let (manifest, trust) = self.fetch_trusted(channel)?;
         match self.judge(&manifest)? {
             UpdateStatus::Available(_) => {}
             UpdateStatus::UpToDate { .. } => {
-                return Err(UpdateError::AlreadyCurrent(manifest.version.to_string()));
+                let slot = Slot::Version(manifest.version.clone());
+                if self.store.active().is_some_and(|a| a.slot == slot)
+                    || !self.store.list().iter().any(|i| i.slot == slot)
+                {
+                    return Err(UpdateError::AlreadyCurrent(manifest.version.to_string()));
+                }
+                self.store.activate(&slot)?;
+                return Ok(manifest.version);
             }
             UpdateStatus::Older { current, offered } => {
                 return Err(UpdateError::Downgrade {
@@ -176,15 +236,46 @@ impl Updater {
                 });
             }
         }
-        let file = manifest.file_for(&self.platform)?;
-        let part = self.download(&manifest.version, file)?;
-        let archive = ArchiveFile {
-            path: part,
-            sha256: file.sha256.clone(),
-        };
-        let result = self.store.install(&manifest.version, &archive, false);
+        let archive = self.fetch_archive(&manifest)?;
+        let label = Self::label_for(&manifest, trust);
+        let result = self
+            .store
+            .install_with(&manifest.version, &archive, false, label, true);
         let _ = std::fs::remove_file(&archive.path);
         result.map(|()| manifest.version)
+    }
+
+    /// Checks and downloads a newer version into the store, and does not switch to it.
+    /// Returns the version when a download happened, `None` when there is nothing newer.
+    pub fn stage(&self, channel: Channel) -> Result<Option<Version>> {
+        let (manifest, trust) = self.fetch_trusted(channel)?;
+        match self.judge(&manifest)? {
+            UpdateStatus::Available(_) => {}
+            UpdateStatus::UpToDate { .. } | UpdateStatus::Older { .. } => return Ok(None),
+        }
+        let archive = self.fetch_archive(&manifest)?;
+        let label = Self::label_for(&manifest, trust);
+        let result = self.store.stage(&manifest.version, &archive, label);
+        let _ = std::fs::remove_file(&archive.path);
+        result.map(|()| Some(manifest.version))
+    }
+
+    /// The label of a version that came from a manifest: its channel, or `local` when the
+    /// manifest was unsigned.
+    fn label_for(manifest: &Manifest, trust: Trust) -> &'static str {
+        match trust {
+            Trust::Signed => manifest.channel.label(),
+            Trust::Unsigned => Channel::Local.label(),
+        }
+    }
+
+    fn fetch_archive(&self, manifest: &Manifest) -> Result<ArchiveFile> {
+        let file = manifest.file_for(&self.platform)?;
+        let part = self.download(&manifest.version, file)?;
+        Ok(ArchiveFile {
+            path: part,
+            sha256: file.sha256.clone(),
+        })
     }
 
     /// Switches back to the previous version.
@@ -200,16 +291,23 @@ impl Updater {
             .store
             .downloads_dir()
             .join(format!("{version}.tar.gz.part"));
-        let result = self.download_to(file, &part);
+        let url = self.resolve_url(&file.url);
+        let result = if url.starts_with("file://") && !self.local_site {
+            // The manifest check refuses this already. A second wall: a network manifest never
+            // makes the launcher read a file of this machine.
+            Err(UpdateError::LocalOnly(format!("file address {url}")))
+        } else {
+            self.download_to(&url, file, &part)
+        };
         if result.is_err() {
             let _ = std::fs::remove_file(&part);
         }
         result.map(|()| part)
     }
 
-    fn download_to(&self, file: &PlatformFile, part: &Path) -> Result<()> {
+    fn download_to(&self, url: &str, file: &PlatformFile, part: &Path) -> Result<()> {
         let mut out = std::fs::File::create(part)?;
-        let got = self.http.get(&file.url, file.size, &mut out)?;
+        let got = self.http.get(url, file.size, &mut out)?;
         out.sync_all()?;
         drop(out);
         if got != file.size {
@@ -631,13 +729,268 @@ pub(crate) mod tests {
         assert!(again.check(Channel::Stable).is_err());
         // The same version again is not a replay (CI signs it again before it expires).
         publish(&http, "1.1.0", Channel::Stable, &key(1));
+        // 1.1.0 is still installed (the rollback only switched away from it), so it is not
+        // "available" again; Auto-update does not start it either (it was rolled back from).
         assert!(matches!(
             again.check(Channel::Stable).unwrap(),
-            UpdateStatus::Available(_)
+            UpdateStatus::UpToDate { .. }
         ));
         // Another channel has its own memory.
         publish(&http, "1.0.2-beta.1", Channel::Beta, &key(1));
         assert!(again.check(Channel::Beta).is_ok());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // ---- Local update sites and unsigned manifests (PLAT-17) ----
+
+    use crate::http::Http;
+    use crate::local::RoutingHttp;
+    use crate::local::path_to_file_url;
+    use crate::manifest::SignedManifest;
+
+    /// A folder with `manifest-<channel>.json` (unsigned when `signer` is `None`) and an archive.
+    fn site(dir: &Path, ver: &str, channel: Channel, signer: Option<&SigningKey>, url: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        let bytes = archive_bytes(ver);
+        std::fs::write(dir.join("kadakas.tar.gz"), &bytes).unwrap();
+        let mut platforms = BTreeMap::new();
+        platforms.insert(
+            PLATFORM.to_string(),
+            PlatformFile {
+                url: url.to_string(),
+                size: bytes.len() as u64,
+                sha256: sha256_hex(&bytes[..]).unwrap(),
+            },
+        );
+        let m = Manifest {
+            version: v(ver),
+            channel,
+            published: 1_000,
+            expires: 1_000 + 30 * 86_400,
+            platforms,
+        };
+        let envelope = match signer {
+            Some(k) => sign::sign_manifest(&m, k),
+            None => SignedManifest {
+                payload: m.to_payload(),
+                signature: String::new(),
+            },
+        };
+        std::fs::write(
+            dir.join(format!("manifest-{}.json", channel.as_str())),
+            envelope.to_json(),
+        )
+        .unwrap();
+    }
+
+    fn local_updater(root: &Path, site_dir: &Path, installed: &str) -> Updater {
+        let store = Store::new(root.join("r"), Some(bundled(root, installed)));
+        let http: Arc<dyn Http> = Arc::new(RoutingHttp::new(Arc::new(MockHttp::new())));
+        Updater::new(
+            store,
+            http,
+            trusted(&[1]),
+            path_to_file_url(site_dir),
+            PLATFORM,
+        )
+        .with_clock(Arc::new(|| NOW))
+    }
+
+    #[test]
+    fn an_unsigned_manifest_works_from_a_local_folder_and_installs_as_local() {
+        let root = tmp("up-local");
+        let dir = root.join("site");
+        // The addresses are relative to the folder. An unsigned local manifest has no expiry:
+        // it works with a clock far past `expires`.
+        site(&dir, "1.1.0", Channel::Local, None, "kadakas.tar.gz");
+        let u = local_updater(&root, &dir, "1.0.0").with_clock(Arc::new(|| 9_999_999_999));
+        assert!(u.is_local_site() && u.can_check());
+        let (m, trust) = u.fetch_trusted(Channel::Local).unwrap();
+        assert_eq!((m.version, trust), (v("1.1.0"), Trust::Unsigned));
+        assert!(matches!(
+            u.check(Channel::Local).unwrap(),
+            UpdateStatus::Available(_)
+        ));
+        assert_eq!(u.update(Channel::Local).unwrap(), v("1.1.0"));
+        let item = u
+            .store()
+            .list()
+            .into_iter()
+            .find(|i| i.version == v("1.1.0"))
+            .unwrap();
+        assert_eq!(item.meta.label, "local");
+        // The same build again is up to date, and there is no replay memory for unsigned local
+        // manifests (a developer builds the same version again and again).
+        assert!(matches!(
+            u.check(Channel::Local).unwrap(),
+            UpdateStatus::UpToDate { .. }
+        ));
+        assert_eq!(u.store().seen(Channel::Local), None);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_unsigned_manifest_is_refused_everywhere_else() {
+        let root = tmp("up-unsigned-net");
+        let http = Arc::new(MockHttp::new());
+        // On a network site: an unsigned manifest, with a good-looking envelope.
+        let unsigned = SignedManifest {
+            payload: Manifest {
+                version: v("1.1.0"),
+                channel: Channel::Stable,
+                published: 1_000,
+                expires: 9_000,
+                platforms: BTreeMap::new(),
+            }
+            .to_payload(),
+            signature: String::new(),
+        };
+        http.put(
+            &format!("{BASE}/manifest-stable.json"),
+            unsigned.to_json().into_bytes(),
+        );
+        let u = updater(&root, http.clone(), &[1], Some("1.0.0"));
+        assert!(matches!(
+            u.check(Channel::Stable),
+            Err(UpdateError::LocalOnly(_))
+        ));
+        // The channel local needs a local site, and is never asked of the network.
+        assert!(!u.is_local_site());
+        let e = u.check(Channel::Local).unwrap_err();
+        assert!(matches!(e, UpdateError::LocalOnly(_)), "{e}");
+        assert!(!http.requests().iter().any(|r| r.contains("local")));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_signed_manifest_of_the_local_channel_is_refused_on_a_network_site() {
+        let m = crate::manifest::tests::sample("1.1.0", Channel::Local);
+        let signed = sign::sign_manifest(&m, &key(1));
+        let e = signed.verify(&trusted(&[1])).unwrap_err();
+        assert!(matches!(e, UpdateError::LocalOnly(_)), "{e}");
+        // On a local site it is fine.
+        let (got, trust) = signed.open(&trusted(&[1]), true).unwrap();
+        assert_eq!((got.channel, trust), (Channel::Local, Trust::Signed));
+    }
+
+    #[test]
+    fn a_local_unsigned_manifest_may_name_local_files_only() {
+        let root = tmp("up-unsigned-https");
+        let dir = root.join("site");
+        site(
+            &dir,
+            "1.1.0",
+            Channel::Local,
+            None,
+            "https://evil.example/kadakas.tar.gz",
+        );
+        let u = local_updater(&root, &dir, "1.0.0");
+        let e = u.check(Channel::Local).unwrap_err();
+        assert!(matches!(e, UpdateError::Manifest(_)), "{e}");
+        // The same file with a file:// address is fine.
+        let url = path_to_file_url(&dir.join("kadakas.tar.gz"));
+        site(&dir, "1.1.0", Channel::Local, None, &url);
+        assert_eq!(u.update(Channel::Local).unwrap(), v("1.1.0"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_signed_manifest_on_a_local_site_is_checked_like_any_other() {
+        let root = tmp("up-local-signed");
+        let dir = root.join("site");
+        // Signed with the right key: the label is the channel, the usual rules apply (expiry).
+        site(&dir, "1.1.0", Channel::Stable, Some(&key(1)), "kadakas.tar.gz");
+        let u = local_updater(&root, &dir, "1.0.0");
+        assert_eq!(u.fetch_trusted(Channel::Stable).unwrap().1, Trust::Signed);
+        let late =
+            local_updater(&root, &dir, "1.0.0").with_clock(Arc::new(|| 1_000 + 31 * 86_400));
+        assert!(matches!(
+            late.check(Channel::Stable),
+            Err(UpdateError::Expired { .. })
+        ));
+        // A wrong key is refused on a local site too: only an empty signature means unsigned.
+        site(&dir, "1.1.0", Channel::Stable, Some(&key(9)), "kadakas.tar.gz");
+        assert!(matches!(
+            u.check(Channel::Stable),
+            Err(UpdateError::BadSignature)
+        ));
+        // A broken signature is not "unsigned".
+        let mut env: SignedManifest =
+            serde_json::from_slice(&std::fs::read(dir.join("manifest-stable.json")).unwrap())
+                .unwrap();
+        env.signature = "zz".into();
+        std::fs::write(dir.join("manifest-stable.json"), env.to_json()).unwrap();
+        assert!(matches!(
+            u.check(Channel::Stable),
+            Err(UpdateError::BadKey(_))
+        ));
+        // A missing folder is an error, not a panic.
+        let gone = local_updater(&root, &root.join("nothing"), "1.0.0");
+        assert!(gone.check(Channel::Local).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_network_updater_never_reads_a_local_file() {
+        let root = tmp("up-wall");
+        let http = Arc::new(MockHttp::new());
+        let u = updater(&root, http, &[1], Some("1.0.0"));
+        let file = PlatformFile {
+            url: "file:///etc/hosts".into(),
+            size: 10,
+            sha256: "ab".repeat(32),
+        };
+        let e = u.download(&v("1.1.0"), &file).unwrap_err();
+        assert!(matches!(e, UpdateError::LocalOnly(_)), "{e}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn stage_downloads_without_switching_and_update_then_switches() {
+        let root = tmp("up-stage");
+        let http = Arc::new(MockHttp::new());
+        publish(&http, "1.1.0", Channel::Stable, &key(1));
+        let u = updater(&root, http.clone(), &[1], Some("1.0.0"));
+        assert_eq!(u.stage(Channel::Stable).unwrap(), Some(v("1.1.0")));
+        assert_eq!(active_text(&u), "app 1.0.0", "the pointer did not move");
+        let item = u
+            .store()
+            .list()
+            .into_iter()
+            .find(|i| i.version == v("1.1.0"))
+            .unwrap();
+        assert_eq!(item.meta.label, "stable");
+        // Nothing new to download now.
+        assert_eq!(u.stage(Channel::Stable).unwrap(), None);
+        assert_eq!(u.newest_installed(Channel::Stable), Some(v("1.1.0")));
+        // The window's Update only switches (no second download).
+        let before = http.requests().len();
+        assert_eq!(u.update(Channel::Stable).unwrap(), v("1.1.0"));
+        assert_eq!(active_text(&u), "app 1.1.0");
+        assert_eq!(http.requests().len(), before + 1, "only the manifest");
+        // Active already: refused as before.
+        assert!(matches!(
+            u.update(Channel::Stable),
+            Err(UpdateError::AlreadyCurrent(_))
+        ));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn nightly_versions_do_not_count_for_the_stable_channel() {
+        let root = tmp("up-chan");
+        let http = Arc::new(MockHttp::new());
+        publish(&http, "1.2.0-beta.1", Channel::Beta, &key(1));
+        publish(&http, "1.1.0", Channel::Stable, &key(1));
+        let u = updater(&root, http, &[1], Some("1.0.0"));
+        assert_eq!(u.stage(Channel::Beta).unwrap(), Some(v("1.2.0-beta.1")));
+        assert_eq!(u.newest_installed(Channel::Stable), Some(v("1.0.0")));
+        assert_eq!(u.newest_installed(Channel::Beta), Some(v("1.2.0-beta.1")));
+        // Stable 1.1.0 is still available for a stable user, although a nightly 1.2.0 is there.
+        assert!(matches!(
+            u.check(Channel::Stable).unwrap(),
+            UpdateStatus::Available(_)
+        ));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

@@ -137,7 +137,7 @@ fn now(flags: &Flags) -> Result<u64, String> {
 fn build(flags: &Flags) -> Result<(), String> {
     let version = Version::parse(flags.need("version")?).map_err(|e| e.to_string())?;
     let channel_text = flags.need("channel")?;
-    let channel = Channel::parse(channel_text)
+    let channel = Channel::parse_release(channel_text)
         .ok_or_else(|| format!("channel must be stable or beta, not {channel_text:?}"))?;
     let mut platforms = BTreeMap::new();
     for spec in flags.all("platform") {

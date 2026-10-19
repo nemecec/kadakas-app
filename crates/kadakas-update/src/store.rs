@@ -8,8 +8,15 @@
 //!   downloads/              archives that are downloading
 //!   seen.json               the highest manifest version seen per channel (refuses replays)
 //!   lock                    advisory lock file: one launcher changes the install at a time
-//!   launcher.json           launcher settings
+//!   launcher.json           launcher settings (channel, mode, versions to keep, flavor, profile)
+//!   health.json             versions whose last start ended without a clean-exit mark
+//!   runs/                   one record per running app (see `runs`)
 //! ```
+//!
+//! Every version folder has a small file `.kadakas-meta.json`: the label (`stable`, `nightly`
+//! or `local`), the git commit of a local build, the time it was added, and whether the person
+//! keeps it. Pruning keeps the newest version and `keep_older` more, the running versions, the
+//! current one and the kept ones; the bundled app is never a folder here and is never deleted.
 //!
 //! An install has three steps. Only the last one changes what runs:
 //!
@@ -35,9 +42,31 @@ use kadakas_sys::fsio::{self, Access};
 use serde::{Deserialize, Serialize};
 use std::io::Seek;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// The name of the marker file in a finished version folder.
 const MARKER: &str = ".kadakas-complete";
+
+/// The name of the file with the label and the origin of a version.
+const META: &str = ".kadakas-meta.json";
+
+/// The label of the app that came with the installer.
+pub const BUNDLED_LABEL: &str = "bundled";
+
+/// What the store knows about where a version came from.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VersionMeta {
+    /// `stable`, `nightly` or `local` (see `Channel::label`), or `bundled`.
+    pub label: String,
+    /// The git commit of a local build.
+    pub commit: Option<String>,
+    /// When the version was added, in seconds since 1970.
+    pub added: u64,
+    /// The person keeps this version: pruning never deletes it.
+    pub kept: bool,
+}
 
 /// An archive file and the SHA-256 that it must have.
 #[derive(Clone, Debug)]
@@ -50,7 +79,7 @@ const BUNDLED: &str = "bundled";
 const TMP_PREFIX: &str = ".tmp-";
 
 /// A place where a program version lives.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Slot {
     /// The version that the installer put next to the launcher.
     Bundled,
@@ -131,6 +160,8 @@ pub struct Installed {
     pub active: bool,
     /// The version that a rollback would go to.
     pub previous: bool,
+    /// Where the version came from.
+    pub meta: VersionMeta,
 }
 
 /// The program that runs now.
@@ -147,6 +178,15 @@ pub struct Store {
     fault: Option<Step>,
     /// How long a waiting lock tries, in milliseconds.
     lock_wait_ms: u64,
+    /// How many older versions pruning keeps besides the newest one.
+    keep_older: AtomicU32,
+    clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+}
+
+fn system_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 impl Store {
@@ -156,7 +196,34 @@ impl Store {
             bundled,
             fault: None,
             lock_wait_ms: 10_000,
+            keep_older: AtomicU32::new(crate::settings::DEFAULT_KEEP_OLDER),
+            clock: Arc::new(system_seconds),
         }
+    }
+
+    /// Sets how many older versions pruning keeps (0 or more).
+    pub fn with_keep_older(self, n: u32) -> Store {
+        self.set_keep_older(n);
+        self
+    }
+
+    pub fn set_keep_older(&self, n: u32) {
+        self.keep_older
+            .store(n.min(crate::settings::MAX_KEEP_OLDER), Ordering::Relaxed);
+    }
+
+    pub fn keep_older(&self) -> u32 {
+        self.keep_older.load(Ordering::Relaxed)
+    }
+
+    /// Replaces the clock (seconds since 1970). For tests.
+    pub fn with_clock(mut self, clock: Arc<dyn Fn() -> u64 + Send + Sync>) -> Store {
+        self.clock = clock;
+        self
+    }
+
+    pub fn bundled(&self) -> Option<&Bundled> {
+        self.bundled.as_ref()
     }
 
     /// For tests: stop an install after this step with [`UpdateError::Interrupted`], and clean
@@ -191,7 +258,7 @@ impl Store {
     /// Takes the install lock. With `wait`, it tries for `lock_wait_ms` (10 s), then gives up with
     /// [`UpdateError::Busy`]. Without `wait`, it returns `None` when another launcher holds it.
     /// The lock goes when the returned file is dropped (or when the process ends).
-    fn lock(&self, wait: bool) -> Result<Option<std::fs::File>> {
+    pub(crate) fn lock(&self, wait: bool) -> Result<Option<std::fs::File>> {
         std::fs::create_dir_all(&self.root)?;
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -338,6 +405,7 @@ impl Store {
             .map(|a| Installed {
                 active: active.as_ref() == Some(&a.slot),
                 previous: previous.as_ref() == Some(&a.slot),
+                meta: self.meta(&a.slot),
                 slot: a.slot,
                 version: a.version,
                 dir: a.dir,
@@ -345,6 +413,43 @@ impl Store {
             .collect();
         out.sort_by(|a, b| a.version.cmp(&b.version));
         out
+    }
+
+    /// The origin of a version. The bundled app is labelled `bundled`. A folder without the
+    /// file (from an older launcher) is a release of unknown origin: label `stable`.
+    pub fn meta(&self, slot: &Slot) -> VersionMeta {
+        match slot {
+            Slot::Bundled => VersionMeta {
+                label: BUNDLED_LABEL.into(),
+                ..VersionMeta::default()
+            },
+            Slot::Version(v) => std::fs::read(self.versions_dir().join(v.to_string()).join(META))
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or_else(|| VersionMeta {
+                    label: "stable".into(),
+                    ..VersionMeta::default()
+                }),
+        }
+    }
+
+    fn write_meta(&self, dir: &Path, meta: &VersionMeta) -> Result<()> {
+        let text = serde_json::to_vec_pretty(meta).expect("meta serializes");
+        fsio::write_durable(&dir.join(META), &text, Access::KeepExisting, ".tmp")?;
+        Ok(())
+    }
+
+    /// Says that the person keeps a version (or not). Pruning never deletes a kept version.
+    pub fn set_kept(&self, version: &Version, kept: bool) -> Result<()> {
+        let _guard = self.lock(true)?;
+        let slot = Slot::Version(version.clone());
+        let dir = self
+            .resolve(&slot)
+            .ok_or_else(|| UpdateError::NotInstalled(version.to_string()))?
+            .dir;
+        let mut meta = self.meta(&slot);
+        meta.kept = kept;
+        self.write_meta(&dir, &meta)
     }
 
     /// Removes half-made folders from an install that did not finish.
@@ -381,6 +486,29 @@ impl Store {
         archive_file: &ArchiveFile,
         allow_downgrade: bool,
     ) -> Result<()> {
+        self.install_with(version, archive_file, allow_downgrade, "stable", true)
+    }
+
+    /// Unpacks a version into the store and does not switch to it. The pointer stays as it was
+    /// (Auto-download and Notify only: the person decides when to switch, see [`Store::activate`]).
+    pub fn stage(
+        &self,
+        version: &Version,
+        archive_file: &ArchiveFile,
+        label: &str,
+    ) -> Result<()> {
+        self.install_with(version, archive_file, false, label, false)
+    }
+
+    /// [`Store::install`] with a label for the version, and the choice to switch or not.
+    pub fn install_with(
+        &self,
+        version: &Version,
+        archive_file: &ArchiveFile,
+        allow_downgrade: bool,
+        label: &str,
+        switch: bool,
+    ) -> Result<()> {
         let _guard = self.lock(true)?;
         let old = self.active();
         if let Some(a) = &old {
@@ -396,7 +524,8 @@ impl Store {
         }
         let dest = self.versions_dir().join(version.to_string());
         let reusable = std::fs::read_to_string(dest.join(MARKER))
-            .is_ok_and(|m| m.trim() == archive_file.sha256);
+            .is_ok_and(|m| m.trim() == archive_file.sha256)
+            && dest.join(META).is_file();
         if !reusable {
             std::fs::create_dir_all(self.versions_dir())?;
             let mut file = std::fs::File::open(&archive_file.path)?;
@@ -410,6 +539,17 @@ impl Store {
             let unpacked =
                 archive::extract_tar_gz(&file, &staging, Limits::default()).and_then(|_| {
                     std::fs::write(staging.join(MARKER), &archive_file.sha256).map_err(Into::into)
+                })
+                .and_then(|()| {
+                    self.write_meta(
+                        &staging,
+                        &VersionMeta {
+                            label: label.to_string(),
+                            commit: None,
+                            added: (self.clock)(),
+                            kept: false,
+                        },
+                    )
                 });
             if let Err(e) = unpacked {
                 let _ = std::fs::remove_dir_all(&staging);
@@ -422,13 +562,116 @@ impl Store {
             fsio::sync_dir(&self.versions_dir());
             self.hit(Step::Moved)?;
         }
+        // A new copy of a version that crashed before is a new start.
+        self.forget_crash(&Slot::Version(version.clone()));
+        if switch {
+            let pointer = Pointer {
+                current: Some(Slot::Version(version.clone())),
+                previous: old.map(|a| a.slot),
+            };
+            self.write_pointer(&pointer)?;
+            self.hit(Step::PointerWritten)?;
+        }
+        self.prune_locked();
+        Ok(())
+    }
+
+    /// Makes an installed version the one that starts when the launcher does not choose by
+    /// itself (the pointer, see the modes in `choose`). The version that was active becomes the
+    /// rollback target.
+    pub fn activate(&self, slot: &Slot) -> Result<()> {
+        let _guard = self.lock(true)?;
+        self.activate_locked(slot)
+    }
+
+    fn activate_locked(&self, slot: &Slot) -> Result<()> {
+        if self.resolve(slot).is_none() {
+            return Err(UpdateError::NotInstalled(slot.to_string()));
+        }
+        self.forget_crash(slot);
+        let old = self.active().map(|a| a.slot);
+        if old.as_ref() == Some(slot) && self.pointer().current.as_ref() == Some(slot) {
+            return Ok(());
+        }
         let pointer = Pointer {
-            current: Some(Slot::Version(version.clone())),
-            previous: old.map(|a| a.slot),
+            current: Some(slot.clone()),
+            previous: old.filter(|o| o != slot).or(self.pointer().previous),
         };
-        self.write_pointer(&pointer)?;
-        self.hit(Step::PointerWritten)?;
-        self.prune(&pointer);
+        self.write_pointer(&pointer)
+    }
+
+    /// Puts a build from this machine into the store with the label `local` and its git commit
+    /// (PLAT-17). This is one of the two places where an unsigned build may come in (the other
+    /// is a manifest in a local folder). The pointer does not change: Auto-update picks a local
+    /// version only on the channel `local`, and the person can switch to it by hand.
+    pub fn add_local(
+        &self,
+        version: &Version,
+        build: &crate::local::LocalBuild,
+        commit: Option<&str>,
+    ) -> Result<Slot> {
+        let _guard = self.lock(true)?;
+        let slot = Slot::Version(version.clone());
+        // Only a local build may be replaced by a local build.
+        let exists = self.resolve(&slot).is_some();
+        if self.running_slots().contains(&slot) || (exists && self.meta(&slot).label != "local") {
+            return Err(UpdateError::NotRemovable(version.to_string()));
+        }
+        std::fs::create_dir_all(self.versions_dir())?;
+        let staging = self.versions_dir().join(format!("{TMP_PREFIX}{version}"));
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir(&staging)?;
+        let copied = (|| -> Result<()> {
+            for rel in &build.files {
+                let to = staging.join(rel);
+                if let Some(parent) = to.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::copy(build.dir.join(rel), &to)?;
+            }
+            std::fs::write(staging.join(MARKER), "local")?;
+            self.write_meta(
+                &staging,
+                &VersionMeta {
+                    label: "local".into(),
+                    commit: commit.map(str::to_string),
+                    added: (self.clock)(),
+                    kept: false,
+                },
+            )
+        })();
+        if let Err(e) = copied {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e);
+        }
+        let dest = self.versions_dir().join(version.to_string());
+        let _ = std::fs::remove_dir_all(&dest);
+        std::fs::rename(&staging, &dest)?;
+        fsio::sync_dir(&self.versions_dir());
+        self.forget_crash(&slot);
+        self.prune_locked();
+        Ok(slot)
+    }
+
+    /// Removes an installed version. The bundled app, a running version and the current one stay.
+    pub fn remove(&self, version: &Version) -> Result<()> {
+        let _guard = self.lock(true)?;
+        let slot = Slot::Version(version.clone());
+        let a = self
+            .resolve(&slot)
+            .ok_or_else(|| UpdateError::NotInstalled(version.to_string()))?;
+        let p = self.pointer();
+        if self.running_slots().contains(&slot) || p.current.as_ref() == Some(&slot) {
+            return Err(UpdateError::NotRemovable(version.to_string()));
+        }
+        std::fs::remove_dir_all(&a.dir)?;
+        if p.previous.as_ref() == Some(&slot) {
+            self.write_pointer(&Pointer {
+                previous: None,
+                ..p
+            })?;
+        }
+        self.forget_crash(&slot);
         Ok(())
     }
 
@@ -440,29 +683,75 @@ impl Store {
             .rollback_target()
             .ok_or(UpdateError::NothingToRollBack)?;
         let p = self.pointer();
+        let left = p.current.clone();
         let new = Pointer {
             current: Some(target.slot.clone()),
             previous: p.current,
         };
         self.write_pointer(&new)?;
+        // The version we left is not started again by Auto-update, until the person asks for it.
+        if let Some(left) = left {
+            self.note_rolled_back(&left);
+        }
+        self.forget_crash(&target.slot);
         Ok(target.slot)
     }
 
-    /// Deletes version folders that are neither active nor the rollback target.
-    fn prune(&self, keep: &Pointer) {
+    /// Deletes old version folders (see [`Store::keep_set`]). The bundled app is never touched.
+    pub fn prune(&self) -> Result<()> {
+        let _guard = self.lock(true)?;
+        self.prune_locked();
+        Ok(())
+    }
+
+    fn prune_locked(&self) {
+        let keep = self.keep_set();
         let Ok(rd) = std::fs::read_dir(self.versions_dir()) else {
             return;
         };
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            let kept = [&keep.current, &keep.previous]
-                .into_iter()
-                .flatten()
-                .any(|s| matches!(s, Slot::Version(v) if v.to_string() == name));
-            if !kept {
+            // Half-made folders belong to `recover`; a folder that is not a version is not ours.
+            let Ok(v) = Version::parse(&name) else {
+                continue;
+            };
+            if !keep.contains(&Slot::Version(v)) {
                 let _ = std::fs::remove_dir_all(e.path());
             }
         }
+    }
+
+    /// The versions that pruning keeps: the newest one and `keep_older` more (newest first, by
+    /// the time they were added), the version that the pointer names, the versions that run now,
+    /// and the versions that the person keeps. The bundled app is not a folder here and is
+    /// always there, as the fallback.
+    pub fn keep_set(&self) -> std::collections::HashSet<Slot> {
+        let mut folders: Vec<(u64, Version)> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(self.versions_dir()) {
+            for e in rd.flatten() {
+                if let Ok(v) = Version::parse(&e.file_name().to_string_lossy())
+                    && e.path().is_dir()
+                {
+                    let added = self.meta(&Slot::Version(v.clone())).added;
+                    folders.push((added, v));
+                }
+            }
+        }
+        folders.sort_by(|a, b| b.cmp(a));
+        let mut keep: std::collections::HashSet<Slot> = folders
+            .iter()
+            .take(1 + self.keep_older() as usize)
+            .map(|(_, v)| Slot::Version(v.clone()))
+            .collect();
+        keep.extend(self.running_slots());
+        keep.extend(self.pointer().current);
+        for (_, v) in &folders {
+            let slot = Slot::Version(v.clone());
+            if self.meta(&slot).kept {
+                keep.insert(slot);
+            }
+        }
+        keep
     }
 }
 
@@ -506,6 +795,253 @@ pub(crate) mod tests {
             version: v(ver),
             dir,
         }
+    }
+
+    // ---- Versions to keep, stage, activate, local builds (PLAT-16, PLAT-17) ----
+
+    /// A store whose clock counts up, so versions have a clear order of adding.
+    fn counting(root: &Path, bundled_version: Option<&str>) -> Store {
+        let tick = Arc::new(std::sync::atomic::AtomicU64::new(100));
+        Store::new(root.join("r"), bundled_version.map(|b| bundled(root, b))).with_clock(Arc::new(
+            move || tick.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ))
+    }
+
+    fn folders(s: &Store) -> Vec<String> {
+        let mut out: Vec<String> = s
+            .list()
+            .into_iter()
+            .filter(|i| i.slot != Slot::Bundled)
+            .map(|i| i.version.to_string())
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn install_all(s: &Store, root: &Path, versions: &[&str]) {
+        for ver in versions {
+            s.install(&v(ver), &archive_file(root, ver), false).unwrap();
+        }
+    }
+
+    #[test]
+    fn pruning_keeps_the_newest_and_n_older() {
+        let root = tmp("keep-n");
+        for (n, want) in [
+            (0, vec!["1.5.0"]),
+            (1, vec!["1.4.0", "1.5.0"]),
+            (2, vec!["1.3.0", "1.4.0", "1.5.0"]),
+            (9, vec!["1.1.0", "1.2.0", "1.3.0", "1.4.0", "1.5.0"]),
+        ] {
+            let sub = root.join(format!("n{n}"));
+            std::fs::create_dir_all(&sub).unwrap();
+            let s = counting(&sub, Some("1.0.0")).with_keep_older(n);
+            install_all(&s, &sub, &["1.1.0", "1.2.0", "1.3.0", "1.4.0", "1.5.0"]);
+            assert_eq!(folders(&s), want, "keep {n}");
+            // The bundled app is never counted and never deleted.
+            assert!(s.list().iter().any(|i| i.slot == Slot::Bundled));
+            assert!(sub.join("bundled-dir").join("kadakas-app").is_file());
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_keep_setting_is_limited_and_changes_live() {
+        let root = tmp("keep-live");
+        let s = counting(&root, Some("1.0.0"));
+        assert_eq!(s.keep_older(), 1);
+        s.set_keep_older(1000);
+        assert_eq!(s.keep_older(), crate::settings::MAX_KEEP_OLDER);
+        s.set_keep_older(3);
+        install_all(&s, &root, &["1.1.0", "1.2.0", "1.3.0", "1.4.0"]);
+        assert_eq!(folders(&s).len(), 4);
+        // A lower number takes effect at the next prune.
+        s.set_keep_older(0);
+        s.prune().unwrap();
+        assert_eq!(folders(&s), ["1.4.0"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn pruning_never_deletes_the_running_version_the_current_one_or_a_kept_one() {
+        let root = tmp("keep-protected");
+        let s = counting(&root, Some("1.0.0")).with_keep_older(0);
+        install_all(&s, &root, &["1.1.0", "1.2.0"]);
+        assert_eq!(folders(&s), ["1.2.0"]);
+        // 1.2.0 runs. Newer versions arrive and the keep number is 0: 1.2.0 stays.
+        let guard = crate::runs::RunGuard::begin(&s, &Slot::Version(v("1.2.0"))).unwrap();
+        install_all(&s, &root, &["1.3.0", "1.4.0"]);
+        assert_eq!(folders(&s), ["1.2.0", "1.4.0"]);
+        // The person keeps 1.4.0, then newer ones come.
+        s.set_kept(&v("1.4.0"), true).unwrap();
+        install_all(&s, &root, &["1.5.0"]);
+        assert_eq!(folders(&s), ["1.2.0", "1.4.0", "1.5.0"]);
+        assert!(s.list().iter().any(|i| i.version == v("1.4.0") && i.meta.kept));
+        // The app ends. The running version is no longer protected; the kept one still is.
+        guard.finish(&s);
+        s.prune().unwrap();
+        assert_eq!(folders(&s), ["1.4.0", "1.5.0"]);
+        s.set_kept(&v("1.4.0"), false).unwrap();
+        s.prune().unwrap();
+        assert_eq!(folders(&s), ["1.5.0"]);
+        assert!(matches!(
+            s.set_kept(&v("9.9.9"), true),
+            Err(UpdateError::NotInstalled(_))
+        ));
+        // The version that the pointer names stays, also when it is not the newest.
+        s.stage(&v("1.6.0"), &archive_file(&root, "1.6.0"), "stable")
+            .unwrap();
+        s.stage(&v("1.7.0"), &archive_file(&root, "1.7.0"), "stable")
+            .unwrap();
+        assert_eq!(folders(&s), ["1.5.0", "1.7.0"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn stage_does_not_switch_and_activate_does() {
+        let root = tmp("stage-activate");
+        let s = counting(&root, Some("1.0.0"));
+        let a = archive_file(&root, "1.1.0");
+        s.stage(&v("1.1.0"), &a, "nightly").unwrap();
+        assert_eq!(s.active().unwrap().slot, Slot::Bundled);
+        assert_eq!(s.pointer(), Pointer::default());
+        let item = s.list().into_iter().find(|i| i.version == v("1.1.0")).unwrap();
+        assert_eq!(item.meta.label, "nightly");
+        // Staging the same archive again reuses the folder.
+        s.stage(&v("1.1.0"), &a, "nightly").unwrap();
+        s.activate(&Slot::Version(v("1.1.0"))).unwrap();
+        assert_eq!(s.active().unwrap().version, v("1.1.0"));
+        assert_eq!(s.rollback_target().unwrap().slot, Slot::Bundled);
+        // Again: nothing changes.
+        let p = s.pointer();
+        s.activate(&Slot::Version(v("1.1.0"))).unwrap();
+        assert_eq!(s.pointer(), p);
+        // Back to the bundled app by choice.
+        s.activate(&Slot::Bundled).unwrap();
+        assert_eq!(s.active().unwrap().slot, Slot::Bundled);
+        assert_eq!(s.pointer().previous, Some(Slot::Version(v("1.1.0"))));
+        assert!(matches!(
+            s.activate(&Slot::Version(v("9.0.0"))),
+            Err(UpdateError::NotInstalled(_))
+        ));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_folder_without_the_meta_file_is_a_stable_release_and_is_not_reused() {
+        let root = tmp("meta-missing");
+        let s = counting(&root, Some("1.0.0"));
+        let a = archive_file(&root, "1.1.0");
+        s.stage(&v("1.1.0"), &a, "nightly").unwrap();
+        let dir = s.versions_dir().join("1.1.0");
+        std::fs::remove_file(dir.join(META)).unwrap();
+        assert_eq!(s.meta(&Slot::Version(v("1.1.0"))).label, "stable");
+        assert_eq!(s.meta(&Slot::Bundled).label, BUNDLED_LABEL);
+        // The folder is not trusted without its meta file: it is unpacked again.
+        s.stage(&v("1.1.0"), &a, "nightly").unwrap();
+        assert_eq!(s.meta(&Slot::Version(v("1.1.0"))).label, "nightly");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn fake_build(root: &Path, name: &str, with_cli: bool) -> crate::local::LocalBuild {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = |n: &str| format!("{n}{}", std::env::consts::EXE_SUFFIX);
+        std::fs::write(dir.join(exe("kadakas-app")), format!("app {name}")).unwrap();
+        let mut files = vec![PathBuf::from(exe("kadakas-app"))];
+        if with_cli {
+            std::fs::write(dir.join(exe("kadakas")), b"cli").unwrap();
+            files.push(PathBuf::from(exe("kadakas")));
+        }
+        crate::local::LocalBuild { dir, files }
+    }
+
+    #[test]
+    fn a_local_build_goes_into_the_store_with_its_commit() {
+        let root = tmp("add-local");
+        let s = counting(&root, Some("1.0.0"));
+        let build = fake_build(&root, "build1", true);
+        let ver = v("1.0.0-local.gabc");
+        let slot = s.add_local(&ver, &build, Some("abc123")).unwrap();
+        assert_eq!(slot, Slot::Version(ver.clone()));
+        let item = s.list().into_iter().find(|i| i.version == ver).unwrap();
+        assert_eq!(item.meta.label, "local");
+        assert_eq!(item.meta.commit.as_deref(), Some("abc123"));
+        assert_eq!(
+            std::fs::read_to_string(item.dir.join("kadakas-app")).unwrap(),
+            "app build1"
+        );
+        assert!(item.dir.join("kadakas").is_file());
+        // The pointer did not move: Auto-update decides by channel.
+        assert_eq!(s.active().unwrap().slot, Slot::Bundled);
+        // A new build with the same number replaces the folder.
+        let again = fake_build(&root, "build2", false);
+        s.add_local(&ver, &again, None).unwrap();
+        let item = s.list().into_iter().find(|i| i.version == ver).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(item.dir.join("kadakas-app")).unwrap(),
+            "app build2"
+        );
+        assert!(!item.dir.join("kadakas").exists());
+        assert_eq!(item.meta.commit, None);
+        // A running local version is not replaced.
+        let g = crate::runs::RunGuard::begin(&s, &slot).unwrap();
+        assert!(matches!(
+            s.add_local(&ver, &again, None),
+            Err(UpdateError::NotRemovable(_))
+        ));
+        drop(g);
+        // A build with a missing file leaves nothing half-made.
+        let mut broken = fake_build(&root, "build3", false);
+        broken.files.push(PathBuf::from("missing"));
+        let other = v("1.0.0-local.gdef");
+        assert!(s.add_local(&other, &broken, None).is_err());
+        assert!(!s.versions_dir().join(format!("{TMP_PREFIX}{other}")).exists());
+        assert!(!s.versions_dir().join(other.to_string()).exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn remove_refuses_the_bundled_the_running_and_the_current_version() {
+        let root = tmp("remove");
+        let s = counting(&root, Some("1.0.0")).with_keep_older(5);
+        install_all(&s, &root, &["1.1.0", "1.2.0", "1.3.0"]);
+        // Current: 1.3.0. Previous: 1.2.0.
+        assert!(matches!(
+            s.remove(&v("1.3.0")),
+            Err(UpdateError::NotRemovable(_))
+        ));
+        let g = crate::runs::RunGuard::begin(&s, &Slot::Version(v("1.1.0"))).unwrap();
+        assert!(matches!(
+            s.remove(&v("1.1.0")),
+            Err(UpdateError::NotRemovable(_))
+        ));
+        assert!(matches!(
+            s.remove(&v("8.0.0")),
+            Err(UpdateError::NotInstalled(_))
+        ));
+        drop(g);
+        s.remove(&v("1.1.0")).unwrap();
+        assert_eq!(folders(&s), ["1.2.0", "1.3.0"]);
+        // Removing the rollback target clears it.
+        s.remove(&v("1.2.0")).unwrap();
+        assert!(s.rollback_target().is_none());
+        assert_eq!(s.pointer().previous, None);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_rollback_remembers_the_version_it_left() {
+        let root = tmp("rollback-skip");
+        let s = counting(&root, Some("1.0.0"));
+        install_all(&s, &root, &["1.1.0"]);
+        s.rollback().unwrap();
+        assert!(s.rolled_back_slots().contains(&Slot::Version(v("1.1.0"))));
+        // Going forward again takes the mark away.
+        s.rollback().unwrap();
+        assert!(!s.rolled_back_slots().contains(&Slot::Version(v("1.1.0"))));
+        assert!(s.rolled_back_slots().contains(&Slot::Bundled));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -62,6 +62,16 @@ pub enum UpdateError {
     /// A test stopped the install on purpose after this step.
     #[error("install interrupted after step {0}")]
     Interrupted(&'static str),
+    /// Something that is allowed only from a local folder (an unsigned manifest, the `local`
+    /// channel, a local file address) came from a network site.
+    #[error("not allowed here: {0}")]
+    LocalOnly(String),
+    /// A version cannot be removed (the bundled one, the running one, the current one).
+    #[error("version {0} cannot be removed now")]
+    NotRemovable(String),
+    /// The path given to `add` is not a build of Kadakas.
+    #[error("not a build of Kadakas: {0}")]
+    BadBuild(String),
     /// A file problem.
     #[error("file error: {0}")]
     Io(#[from] std::io::Error),

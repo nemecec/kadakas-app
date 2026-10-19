@@ -4,12 +4,25 @@
 use crate::error::{Result, UpdateError};
 use crate::flavors::Flavor;
 use crate::settings::valid_name;
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
 /// The command that starts `flavor` from the version folder `dir`.
 /// An empty profile means no profile. A bad profile name is an error.
 pub fn command(dir: &Path, flavor: &Flavor, profile: &str) -> Result<Command> {
+    command_with(dir, flavor, profile, &[], &[])
+}
+
+/// Like [`command`], with more arguments (for example the files to open) and more variables
+/// (the run id and the install folder, see `handshake`).
+pub fn command_with(
+    dir: &Path,
+    flavor: &Flavor,
+    profile: &str,
+    args: &[OsString],
+    env: &[(String, String)],
+) -> Result<Command> {
     let mut cmd = Command::new(dir.join(&flavor.exe));
     cmd.current_dir(dir)
         .stdin(Stdio::null())
@@ -24,6 +37,14 @@ pub fn command(dir: &Path, flavor: &Flavor, profile: &str) -> Result<Command> {
         return Err(UpdateError::Manifest(format!(
             "bad profile name {profile:?}"
         )));
+    }
+    // The files come after the options, and after `--`, so a file name that starts with `-`
+    // is not read as an option.
+    if !args.is_empty() {
+        cmd.arg("--").args(args);
+    }
+    for (k, v) in env {
+        cmd.env(k, v);
     }
     Ok(cmd)
 }
@@ -61,6 +82,17 @@ mod tests {
             env,
             [(OsStr::new("KADAKAS_PROFILE"), Some(OsStr::new("acad")))]
         );
+    }
+
+    #[test]
+    fn files_and_variables_are_passed_on() {
+        let files = [OsString::from("/a/b.kad"), OsString::from("-odd.kad")];
+        let env = [("KADAKAS_RUN_ID".to_string(), "1a".to_string())];
+        let c = command_with(Path::new("/v"), &flavor(), "p", &files, &env).unwrap();
+        let args: Vec<&OsStr> = c.get_args().collect();
+        assert_eq!(args, ["--profile", "p", "--", "/a/b.kad", "-odd.kad"]);
+        let envs: Vec<_> = c.get_envs().collect();
+        assert!(envs.contains(&(OsStr::new("KADAKAS_RUN_ID"), Some(OsStr::new("1a")))));
     }
 
     #[test]
