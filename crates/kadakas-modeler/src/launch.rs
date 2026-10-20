@@ -93,6 +93,7 @@ impl Launch {
     }
 
     /// True when the launcher started this run.
+    #[cfg(test)]
     pub fn is_launched(&self) -> bool {
         self.link.is_some()
     }

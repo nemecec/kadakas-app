@@ -30,6 +30,7 @@ impl About {
         self.licenses = false;
     }
 
+    #[cfg(test)]
     pub fn is_open(&self) -> bool {
         self.open
     }

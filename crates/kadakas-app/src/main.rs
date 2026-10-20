@@ -88,7 +88,7 @@ mod update_ui;
 mod versions_ui;
 mod view;
 // The 3D view moved to a crate that the modeler shares (PLAT-11). The paths stay the same.
-use kadakas_view3d::{gpu3d, vertex, view3d};
+use kadakas_view3d::{gpu3d, view3d};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {

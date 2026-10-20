@@ -57,6 +57,7 @@ pub struct WindowDrag {
 }
 
 /// The ndc of a point in the canvas (points from the top left), Y up.
+#[cfg(test)]
 pub fn ndc_of(at: Vec2, size: Vec2) -> Vec2 {
     Vec2::new(
         at.x / size.x.max(1.0) * 2.0 - 1.0,
@@ -187,13 +188,14 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
                 shown.navigated = true;
             }
         }
-        if resp.drag_stopped_by(egui_button) && drag == Drag::ZoomWindow {
-            if let Some(w) = ui.memory_mut(|m| m.data.remove_temp::<WindowDrag>(window_key)) {
-                if nav.zoom_window(w.from, w.to, size) {
-                    shown.navigated = true;
-                }
-                tools.disarm_window();
+        if resp.drag_stopped_by(egui_button)
+            && drag == Drag::ZoomWindow
+            && let Some(w) = ui.memory_mut(|m| m.data.remove_temp::<WindowDrag>(window_key))
+        {
+            if nav.zoom_window(w.from, w.to, size) {
+                shown.navigated = true;
             }
+            tools.disarm_window();
         }
     }
 

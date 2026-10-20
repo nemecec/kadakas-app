@@ -3,8 +3,7 @@
 //! the user file.
 
 use kadakas_l10n::tr;
-pub use kadakas_ui_core::keymap::{Action, Chord, Keymap, allowed_in_text_field};
-use kadakas_ui_core::keys::{Key, Modifiers};
+pub use kadakas_ui_core::keymap::{Action, Keymap, allowed_in_text_field};
 
 #[cfg(test)]
 use kadakas_view3d::input::egui_key;

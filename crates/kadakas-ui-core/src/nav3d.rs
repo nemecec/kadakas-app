@@ -310,7 +310,7 @@ impl Nav3d {
     }
 
     /// Does what a key does. Previous and Next restore a view of the history; see
-    /// [`Nav3d::previous`].
+    /// [`Nav3d::previous_view`].
     pub fn apply(&mut self, action: NavAction, frame: &Frame) {
         match action {
             NavAction::ZoomExtents => self.zoom_extents(frame),
@@ -320,10 +320,10 @@ impl Nav3d {
             NavAction::ZoomOut => self.zoom_center(1.0 / KEY_ZOOM),
             NavAction::PanStep(d) => self.pan(d, frame.size.y),
             NavAction::Previous => {
-                self.previous();
+                self.previous_view();
             }
             NavAction::Next => {
-                self.next();
+                self.next_view();
             }
         }
     }
@@ -336,7 +336,7 @@ impl Nav3d {
     }
 
     /// Goes back to the view before this one. False when there is none.
-    pub fn previous(&mut self) -> bool {
+    pub fn previous_view(&mut self) -> bool {
         // The view that you leave can be reached again with Next.
         self.history.flush(self.camera);
         match self.history.previous() {
@@ -349,7 +349,7 @@ impl Nav3d {
     }
 
     /// Goes forward to the view after this one. False when there is none.
-    pub fn next(&mut self) -> bool {
+    pub fn next_view(&mut self) -> bool {
         match self.history.next() {
             Some(c) => {
                 self.camera = c;
@@ -824,22 +824,22 @@ mod tests {
         rest(&mut n, &mut t);
         let third = n.camera;
         assert!(n.can_go_back() && !n.can_go_forward());
-        assert!(n.previous());
+        assert!(n.previous_view());
         assert_eq!(n.camera, second);
-        assert!(n.previous());
+        assert!(n.previous_view());
         assert_eq!(n.camera, first);
-        assert!(!n.previous(), "no view before the first");
-        assert!(n.next());
+        assert!(!n.previous_view(), "no view before the first");
+        assert!(n.next_view());
         assert_eq!(n.camera, second);
-        assert!(n.next());
+        assert!(n.next_view());
         assert_eq!(n.camera, third);
-        assert!(!n.next());
+        assert!(!n.next_view());
         // A change that has not rested is not lost when you go back: Next returns to it.
         n.orbit(Vec2::new(40.0, 0.0));
         let fresh = n.camera;
-        assert!(n.previous());
+        assert!(n.previous_view());
         assert_eq!(n.camera, third);
-        assert!(n.next());
+        assert!(n.next_view());
         assert_eq!(n.camera, fresh);
         // The history can be cleared (a new document).
         n.clear_history();
@@ -855,10 +855,10 @@ mod tests {
         n.observe(t);
         n.toggle_projection();
         n.set_fov_deg(70.0);
-        assert!(n.previous());
+        assert!(n.previous_view());
         assert!(n.is_perspective());
         assert!((n.fov_deg() - DEFAULT_FOV_DEG).abs() < 1e-3);
-        assert!(n.next());
+        assert!(n.next_view());
         assert!(!n.is_perspective() && (n.fov_deg() - 70.0).abs() < 1e-3);
     }
 }
