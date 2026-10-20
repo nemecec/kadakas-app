@@ -48,6 +48,10 @@ pub const MAX_DESCRIPTION: usize = 500;
 pub const VECTORWORKS_ID: &str = "vectorworks";
 /// The id of the built-in AutoCAD-like profile.
 pub const AUTOCAD_ID: &str = "autocad";
+/// The id of the SketchUp-like profile of the 3D modeler (`kadakas-modeler`, MOD-01). It is not
+/// one of [`Profile::builtins`]: the Vectorworks-like app does not offer it. The modeler uses it
+/// as its default.
+pub const SKETCHUP_ID: &str = "sketchup";
 
 /// One workspace profile.
 #[derive(Clone, Debug, PartialEq)]
@@ -80,6 +84,7 @@ pub struct Parsed {
 
 const VECTORWORKS_JSON: &str = include_str!("../../profiles/vectorworks.json");
 const AUTOCAD_JSON: &str = include_str!("../../profiles/autocad.json");
+const SKETCHUP_JSON: &str = include_str!("../../profiles/sketchup.json");
 const AUTOCAD_TERMS: [(&str, &str); 2] = [
     ("en-US", include_str!("../../profiles/autocad.en-US.ftl")),
     ("et", include_str!("../../profiles/autocad.et.ftl")),
@@ -113,6 +118,17 @@ impl Profile {
         Profile::builtins().remove(0)
     }
 
+    /// The SketchUp-like profile of the 3D modeler: a letter for each tool, Space for Select. Its
+    /// keymap names the modeler actions (`tool.push_pull`, `nav.orbit`, ...). The menus and tool
+    /// sets of the file are the defaults: the modeler has its own tool bar (`modeler::ModelerTool`).
+    pub fn sketchup() -> Profile {
+        let mut p = Profile::parse(SKETCHUP_JSON, SKETCHUP_ID)
+            .unwrap_or_else(|e| panic!("built-in profile {SKETCHUP_ID}: {e:?}"))
+            .profile;
+        p.builtin = true;
+        p
+    }
+
     /// The name that a person sees. The built-in profiles have a name in each language.
     pub fn display_name(&self) -> String {
         if !self.builtin {
@@ -121,6 +137,7 @@ impl Profile {
         match self.id.as_str() {
             VECTORWORKS_ID => kadakas_l10n::tr!("uic-profile-name-vectorworks"),
             AUTOCAD_ID => kadakas_l10n::tr!("uic-profile-name-autocad"),
+            SKETCHUP_ID => kadakas_l10n::tr!("uic-profile-name-sketchup"),
             _ => self.name.clone(),
         }
     }
@@ -133,6 +150,7 @@ impl Profile {
         match self.id.as_str() {
             VECTORWORKS_ID => kadakas_l10n::tr!("uic-profile-about-vectorworks"),
             AUTOCAD_ID => kadakas_l10n::tr!("uic-profile-about-autocad"),
+            SKETCHUP_ID => kadakas_l10n::tr!("uic-profile-about-sketchup"),
             _ => self.description.clone(),
         }
     }

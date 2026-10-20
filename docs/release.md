@@ -14,7 +14,7 @@ We use `cargo-packager` (settings in `packager.toml`). We chose it over `cargo-b
 
 ```sh
 cargo install cargo-packager --locked
-cargo build --release -p kadakas-app -p kadakas-cli -p kadakas-launcher
+cargo build --release -p kadakas-app -p kadakas-modeler -p kadakas-cli -p kadakas-launcher
 scripts/macos-app.sh target/release dist-app      # macOS: the inner app
 cargo packager --release --config packager-macos.toml --formats app,dmg   # macOS
 cargo packager --release --formats nsis,wix       # Windows
@@ -144,7 +144,7 @@ When a newer version is ready, the app shows "Kadakas X is ready." with **Restar
 
 ### Local versions for developers (PLAT-17)
 
-- `kadakas-launcher add PATH [--version X.Y.Z]` copies `kadakas-app`, `kadakas` and the flavors of a build folder (or of the folder of a program) into `versions/<X.Y.Z>-local.g<commit>/` with the label `local` and the git commit (`+dirty` for a changed tree). A changed tree or a tree without git also puts the time in the version. A local version is always a pre-release of its base number, so it cannot be taken for a release, and a release folder is never overwritten. A local build is swapped in (the old folder is renamed away, the new one renamed in, then the old one deleted), and the version in `current` is never replaced in place. `scripts/install-local-build.sh` builds in release mode and runs `add`.
+- `kadakas-launcher add PATH [--version X.Y.Z]` copies `kadakas-app`, `kadakas` and the flavors of a build folder (`kadakas-modeler` among them) (or of the folder of a program) into `versions/<X.Y.Z>-local.g<commit>/` with the label `local` and the git commit (`+dirty` for a changed tree). A changed tree or a tree without git also puts the time in the version. A local version is always a pre-release of its base number, so it cannot be taken for a release, and a release folder is never overwritten. A local build is swapped in (the old folder is renamed away, the new one renamed in, then the old one deleted), and the version in `current` is never replaced in place. `scripts/install-local-build.sh` builds in release mode and runs `add`.
 - A local folder can be an update site: a `file://` address in Preferences > Updates (channel Local), or `kadakas-launcher --site file:///folder`. The folder holds `manifest-<channel>.json` and the archives (the same format as the release site). Addresses in the manifest may be relative to the folder.
 - **Unsigned builds** are allowed only from these two places: an unsigned manifest (an empty `signature`) in a `file://` site, and `add`. An unsigned manifest must be for the channel `local` and may name local files only. A `file://` address with a host or a network path (`file:////server/share`) is refused. It has no expiry and no replay check. A network site with an unsigned manifest, a local file address or the channel `local` is refused (in the manifest code, and again at the download). A signature that is there must be good, also in a local folder.
 - Auto-update picks a local version only on the channel Local. The window lists the label and the commit, and a local version can be started ("Use this version"), kept or removed like any other.
@@ -165,9 +165,9 @@ One install lock (`lock` in the install folder, an advisory file lock) lets only
 
 When the launcher starts and the version next to it (from the installer) is newer than the one in `current`, the newer one runs, if `current` was written while an older installer was there. This is the case after the user installs a newer Kadakas over an old update. A pointer that was written with the same bundled version stands, so the person can choose an older version or a local build.
 
-The archive is a `.tar.gz` with `kadakas-app` and `kadakas` (with `.exe` on Windows) at the top level. The unpacker accepts plain files and folders only. It refuses links, absolute paths, `..`, backslashes and `:` in names.
+The archive is a `.tar.gz` with `kadakas-app`, `kadakas-modeler` and `kadakas` (with `.exe` on Windows) at the top level. The unpacker accepts plain files and folders only. It refuses links, absolute paths, `..`, backslashes and `:` in names.
 
-A version folder may also hold `flavors.json` to list more programs (other UI flavors). Today only `kadakas-app` exists.
+The launcher lists `kadakas-app` as a flavor, and `kadakas-modeler` ("Kadakas Modeler (SketchUp-like)", PLAT-11) when that program is in the version folder. No file is needed for these two. On macOS both programs are in `Kadakas Engine.app` (`scripts/macos-app.sh` puts `kadakas-modeler` there, so it is in the update archive too), and the launcher finds them inside the bundle. A version folder may also hold `flavors.json` to list more programs (other UI flavors).
 
 ### Not tried for real
 

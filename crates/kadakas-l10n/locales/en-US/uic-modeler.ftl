@@ -1,0 +1,29 @@
+## uic-modeler: modeler.rs
+
+uic-modeler-tool-select = Select
+uic-modeler-tool-eraser = Eraser
+uic-modeler-tool-line = Line
+uic-modeler-tool-rectangle = Rectangle
+uic-modeler-tool-circle = Circle
+uic-modeler-tool-arc = Arc
+uic-modeler-tool-push-pull = Push/Pull
+uic-modeler-tool-move = Move
+uic-modeler-tool-rotate = Rotate
+uic-modeler-tool-scale = Scale
+uic-modeler-tool-tape-measure = Tape Measure
+uic-modeler-tool-paint-bucket = Paint Bucket
+uic-modeler-tool-orbit = Orbit
+uic-modeler-tool-pan = Pan
+uic-modeler-tool-zoom = Zoom
+uic-modeler-tool-zoom-extents = Zoom Extents
+uic-modeler-tool-with-key = { $name } ({ $key })
+uic-modeler-tool-later = { $name }: { $note }
+uic-modeler-coming-later = coming in a later version
+uic-modeler-hint-select = Click an object to select it. Shift adds or removes an object. Hold the middle mouse button to orbit.
+uic-modeler-hint-orbit = Drag to orbit. Shift pans.
+uic-modeler-hint-pan = Drag to pan the view.
+uic-modeler-hint-zoom = Drag up or down to zoom. Shift changes the field of view. Ctrl or Cmd draws a zoom window.
+uic-modeler-hint-zoom-extents = Shows the whole model.
+uic-modeler-measure-dimensions = Dimensions
+uic-modeler-measure-fov = Field of view
+uic-modeler-dimensions-value = { $x } × { $y } × { $z }

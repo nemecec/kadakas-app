@@ -3,49 +3,11 @@
 //! the user file.
 
 use kadakas_l10n::tr;
-pub use kadakas_ui_core::keymap::{Action, Chord, Keymap, allowed_in_text_field};
-use kadakas_ui_core::keys::{Key, Modifiers};
+pub use kadakas_ui_core::keymap::{Action, Keymap, allowed_in_text_field};
 
-/// The ui-core key of an egui key. The names are the same in both.
-pub fn key(k: egui::Key) -> Option<Key> {
-    Key::from_name(k.name())
-}
-
-/// The egui key of a ui-core key.
-pub fn egui_key(k: Key) -> Option<egui::Key> {
-    egui::Key::from_name(k.name())
-}
-
-pub fn modifiers(m: egui::Modifiers) -> Modifiers {
-    Modifiers {
-        alt: m.alt,
-        ctrl: m.ctrl,
-        shift: m.shift,
-        command: m.command,
-    }
-}
-
-/// The action of an egui key event and the chord that matched.
-pub fn action_for_event(
-    keys: &Keymap,
-    k: egui::Key,
-    physical: Option<egui::Key>,
-    m: egui::Modifiers,
-) -> Option<(Action, Chord)> {
-    keys.action_for_event(key(k)?, physical.and_then(key), modifiers(m))
-}
-
-/// True while the chord of `action` is held down.
-pub fn held(keys: &Keymap, action: Action, input: &egui::InputState) -> bool {
-    let m = modifiers(input.modifiers);
-    keys.chords(action).iter().any(|c| {
-        c.matches(
-            |k| egui_key(k).is_some_and(|k| input.key_down(k)),
-            m,
-            cfg!(target_os = "macos"),
-        )
-    })
-}
+#[cfg(test)]
+use kadakas_view3d::input::egui_key;
+pub use kadakas_view3d::input::{action_for_event, held, key, modifiers};
 
 /// Loads the user file if it exists.
 pub fn load() -> (Keymap, Vec<String>) {

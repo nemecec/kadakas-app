@@ -45,6 +45,8 @@ pub struct Config {
     /// The folder of the launcher (`runs/` is inside).
     pub root: PathBuf,
     pub run_id: String,
+    /// The name of the program: `kadakas-app`, `kadakas-modeler`.
+    pub program: String,
     pub version: String,
     pub channel: String,
     /// For example `macos aarch64`.
@@ -188,6 +190,7 @@ fn base(kind: CrashKind) -> Option<CrashFile> {
     let mut f = CrashFile::new(kind);
     f.run_id = s.cfg.run_id.clone();
     f.created = now_secs();
+    f.program = s.cfg.program.clone();
     f.version = s.cfg.version.clone();
     f.channel = s.cfg.channel.clone();
     f.os = s.cfg.os.clone();

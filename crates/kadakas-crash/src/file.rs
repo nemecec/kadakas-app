@@ -67,6 +67,9 @@ pub struct CrashFile {
     pub run_id: String,
     /// Seconds since 1970.
     pub created: u64,
+    /// The program that wrote it: `kadakas-app` or `kadakas-modeler`. Empty in a file of an older
+    /// version, which only the app wrote.
+    pub program: String,
     pub version: String,
     pub channel: String,
     /// For example `macos aarch64`; the version of the system when the app knew it.
@@ -116,6 +119,7 @@ impl CrashFile {
         cut(&mut self.thread);
         cut(&mut self.version);
         cut(&mut self.channel);
+        cut(&mut self.program);
         cut(&mut self.os);
         cut(&mut self.run_id);
         self.frames.truncate(MAX_FRAMES);

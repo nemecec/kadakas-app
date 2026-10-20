@@ -1,0 +1,318 @@
+//! The menu bar: File, Edit, Camera, Tools, View, Help. The Camera menu has the navigation of
+//! MOD-02: Previous and Next view, Standard Views, Perspective and Parallel Projection, Field of
+//! View, Zoom Extents and Zoom Window. Items give a `Cmd`; the program runs them after the frame.
+
+use kadakas_l10n::tr;
+use kadakas_render::StandardView;
+use kadakas_ui_core::keymap::Action;
+use kadakas_ui_core::modeler::ModelerTool;
+use kadakas_ui_core::nav3d::{MAX_FOV_DEG, MIN_FOV_DEG, NavAction};
+
+use crate::app::{Cmd, MENU_VIEWS, ModelerApp};
+use crate::prefs::ThemeChoice;
+
+/// The name of a standard view in the Camera menu.
+pub fn view_name(view: StandardView) -> String {
+    match view {
+        StandardView::Top | StandardView::Plan => tr!("modeler-view-top"),
+        StandardView::Bottom => tr!("modeler-view-bottom"),
+        StandardView::Front => tr!("modeler-view-front"),
+        StandardView::Back => tr!("modeler-view-back"),
+        StandardView::Left => tr!("modeler-view-left"),
+        StandardView::Right => tr!("modeler-view-right"),
+        _ => tr!("modeler-view-iso"),
+    }
+}
+
+/// The action whose key the menu shows for a standard view.
+fn view_action(view: StandardView) -> Action {
+    match view {
+        StandardView::Top | StandardView::Plan => Action::ViewTop,
+        StandardView::Bottom => Action::ViewBottom,
+        StandardView::Front => Action::ViewFront,
+        StandardView::Back => Action::ViewBack,
+        StandardView::Left => Action::ViewLeft,
+        StandardView::Right => Action::ViewRight,
+        _ => Action::ViewRightIso,
+    }
+}
+
+/// One menu item. A click closes the menu and queues the command.
+fn entry(
+    ui: &mut egui::Ui,
+    cmds: &mut Vec<Cmd>,
+    label: String,
+    hint: String,
+    enabled: bool,
+    cmd: Cmd,
+) {
+    let mut button = egui::Button::new(label);
+    if !hint.is_empty() {
+        button = button.shortcut_text(hint);
+    }
+    if ui.add_enabled(enabled, button).clicked() {
+        cmds.push(cmd);
+        ui.close();
+    }
+}
+
+/// An item that shows whether it is on.
+fn choice(ui: &mut egui::Ui, cmds: &mut Vec<Cmd>, label: String, selected: bool, cmd: Cmd) {
+    if ui.selectable_label(selected, label).clicked() {
+        cmds.push(cmd);
+        ui.close();
+    }
+}
+
+/// Draws the menu bar.
+pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
+    let keys = &app.keys;
+    let hint = |a: Action| keys.hint(a);
+    egui::MenuBar::new().ui(ui, |ui| {
+        ui.menu_button(tr!("modeler-menu-file"), |ui| {
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-file-new"),
+                hint(Action::FileNew),
+                true,
+                Cmd::New,
+            );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-file-open"),
+                hint(Action::FileOpen),
+                true,
+                Cmd::Open,
+            );
+            ui.separator();
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-file-save"),
+                hint(Action::FileSave),
+                true,
+                Cmd::Save,
+            );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-file-save-as"),
+                hint(Action::FileSaveAs),
+                true,
+                Cmd::SaveAs,
+            );
+            ui.separator();
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-file-quit"),
+                String::new(),
+                true,
+                Cmd::Quit,
+            );
+        });
+        ui.menu_button(tr!("modeler-menu-edit"), |ui| {
+            let ed = &app.session.editor;
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-undo"),
+                hint(Action::Undo),
+                ed.can_undo(),
+                Cmd::Undo,
+            );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-redo"),
+                hint(Action::Redo),
+                ed.can_redo(),
+                Cmd::Redo,
+            );
+            ui.separator();
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-select-all"),
+                hint(Action::SelectAll),
+                true,
+                Cmd::SelectAll,
+            );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-select-none"),
+                hint(Action::SelectNone),
+                !app.session.selection.is_empty(),
+                Cmd::SelectNone,
+            );
+        });
+        ui.menu_button(tr!("modeler-menu-camera"), |ui| camera_menu(ui, app, cmds));
+        ui.menu_button(tr!("modeler-menu-tools"), |ui| {
+            for tool in ModelerTool::ALL {
+                let label = if tool.works() {
+                    tool.name()
+                } else {
+                    tr!(
+                        "uic-modeler-tool-later",
+                        name = tool.name(),
+                        note = tr!("uic-modeler-coming-later")
+                    )
+                };
+                entry(
+                    ui,
+                    cmds,
+                    label,
+                    hint(tool.action()),
+                    tool.works(),
+                    Cmd::Tool(tool),
+                );
+            }
+        });
+        ui.menu_button(tr!("modeler-menu-view"), |ui| {
+            choice(
+                ui,
+                cmds,
+                tr!("modeler-view-tray"),
+                app.prefs.tray,
+                Cmd::ToggleTray,
+            );
+            ui.separator();
+            ui.menu_button(tr!("modeler-view-theme"), |ui| {
+                for t in ThemeChoice::ALL {
+                    choice(ui, cmds, t.label(), app.prefs.theme == t, Cmd::Theme(t));
+                }
+            });
+            ui.menu_button(tr!("modeler-view-language"), |ui| {
+                choice(
+                    ui,
+                    cmds,
+                    tr!("modeler-language-system"),
+                    app.prefs.language.is_none(),
+                    Cmd::Language(None),
+                );
+                for lang in kadakas_l10n::languages() {
+                    let on = app
+                        .prefs
+                        .language
+                        .as_deref()
+                        .is_some_and(|t| t.eq_ignore_ascii_case(lang.tag));
+                    choice(
+                        ui,
+                        cmds,
+                        lang.native_name.to_string(),
+                        on,
+                        Cmd::Language(Some(lang.tag.to_string())),
+                    );
+                }
+            });
+        });
+        ui.menu_button(tr!("modeler-menu-help"), |ui| {
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-help-about"),
+                String::new(),
+                true,
+                Cmd::About,
+            );
+        });
+    });
+}
+
+fn camera_menu(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
+    let hint = |a: Action| app.keys.hint(a);
+    entry(
+        ui,
+        cmds,
+        tr!("modeler-camera-previous"),
+        hint(Action::ViewHistoryPrevious),
+        app.nav.can_go_back(),
+        Cmd::Nav(NavAction::Previous),
+    );
+    entry(
+        ui,
+        cmds,
+        tr!("modeler-camera-next"),
+        hint(Action::ViewHistoryNext),
+        app.nav.can_go_forward(),
+        Cmd::Nav(NavAction::Next),
+    );
+    ui.separator();
+    ui.menu_button(tr!("modeler-camera-standard-views"), |ui| {
+        for view in MENU_VIEWS {
+            entry(
+                ui,
+                cmds,
+                view_name(view),
+                hint(view_action(view)),
+                true,
+                Cmd::Nav(NavAction::View(view)),
+            );
+        }
+    });
+    ui.separator();
+    let perspective = app.nav.is_perspective();
+    choice(
+        ui,
+        cmds,
+        tr!("modeler-camera-perspective"),
+        perspective,
+        Cmd::Projection(true),
+    );
+    choice(
+        ui,
+        cmds,
+        tr!("modeler-camera-parallel"),
+        !perspective,
+        Cmd::Projection(false),
+    );
+    ui.menu_button(tr!("modeler-camera-fov"), |ui| {
+        let mut deg = app.nav.fov_deg();
+        let slider = egui::Slider::new(&mut deg, MIN_FOV_DEG..=MAX_FOV_DEG)
+            .suffix("°")
+            .fixed_decimals(1);
+        if ui.add_enabled(perspective, slider).changed() {
+            cmds.push(Cmd::SetFov(deg));
+        }
+        if !perspective {
+            ui.label(egui::RichText::new(tr!("modeler-camera-fov-parallel")).weak());
+        }
+    });
+    ui.separator();
+    entry(
+        ui,
+        cmds,
+        tr!("modeler-camera-zoom-extents"),
+        hint(Action::ZoomFit),
+        true,
+        Cmd::Tool(ModelerTool::ZoomExtents),
+    );
+    entry(
+        ui,
+        cmds,
+        tr!("modeler-camera-zoom-window"),
+        hint(Action::NavZoomWindow),
+        true,
+        Cmd::ZoomWindow,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_camera_menu_lists_the_seven_standard_views() {
+        let names: Vec<String> = MENU_VIEWS.iter().map(|v| view_name(*v)).collect();
+        assert_eq!(names.len(), 7);
+        let mut sorted = names.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 7, "each view has its own name: {names:?}");
+        assert_eq!(names[0], tr!("modeler-view-top"));
+        assert_eq!(names[6], tr!("modeler-view-iso"));
+    }
+}

@@ -1,7 +1,7 @@
 # Installer settings for cargo-packager. See docs/release.md.
 #
 #   cargo install cargo-packager --locked
-#   cargo build --release -p kadakas-app -p kadakas-cli -p kadakas-launcher
+#   cargo build --release -p kadakas-app -p kadakas-modeler -p kadakas-cli -p kadakas-launcher
 #   scripts/macos-app.sh target/release dist-app                                # macOS: the inner app
 #   cargo packager --release --config packager-macos.toml --formats app,dmg   # macOS (this file)
 #   cargo packager --release --formats nsis,wix         # Windows

@@ -47,6 +47,7 @@ pub fn install(get: &dyn Fn(&str) -> Option<String>) {
     kadakas_crash::capture::install(kadakas_crash::capture::Config {
         root,
         run_id,
+        program: "kadakas-app".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         channel,
         os: kadakas_crash::capture::default_os(),

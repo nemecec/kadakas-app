@@ -26,6 +26,19 @@ pub const PICK_TOLERANCE: f32 = 5.0;
 /// Color of the selection box.
 const SELECTION: [u8; 4] = [255, 140, 0, 255];
 
+/// The look of the 3D compare scene (REV-03): the ghosts of removed objects in the color of
+/// removed objects, see-through with the opacity of the style (the GPU draws them in its blend
+/// pass, far to near). The compare window of `kadakas-app` and the tests of the GPU use this one.
+pub fn ghost_look(
+    t: &kadakas_review::overlay::Tinted,
+    style: &kadakas_review::overlay::CompareStyle,
+) -> Look {
+    use kadakas_review::overlay::Status;
+    let ghosts: std::collections::HashSet<ObjectId> = t.ghosts.iter().copied().collect();
+    let [r, g, b] = style.color(Status::Removed);
+    Look::ghosted(&t.scene, &|id| ghosts.contains(&id), [r, g, b], style.ghost)
+}
+
 /// True when the 2D plan canvas shows, not the 3D view.
 pub fn is_plan(settings: ViewSettings) -> bool {
     settings.view.is_plan()

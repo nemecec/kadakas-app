@@ -2969,6 +2969,8 @@ impl KadakasApp {
                     | Action::NudgeDown
             ) || a.id().starts_with("mode.")
                 || !a.implemented()
+                // The actions of the 3D modeler do nothing here.
+                || a.modeler_only()
                 || (a == Action::CommandLine && !self.profiles.has_aliases())
         };
         for a in Action::ALL.iter().copied().filter(|a| !skip(*a)) {
@@ -4614,6 +4616,21 @@ mod tests {
                 .iter()
                 .all(|i| i.label != Action::CommandLine.label())
         );
+    }
+
+    #[test]
+    fn quick_search_leaves_out_the_actions_of_the_3d_modeler() {
+        let app = KadakasApp::blank();
+        let items = app.quick_items();
+        let mut seen = 0;
+        for a in Action::ALL.iter().filter(|a| a.modeler_only()) {
+            seen += 1;
+            assert!(
+                items.iter().all(|i| i.label != a.label()),
+                "{a:?} is in the quick search of the app"
+            );
+        }
+        assert_eq!(seen, 12);
     }
 
     #[test]

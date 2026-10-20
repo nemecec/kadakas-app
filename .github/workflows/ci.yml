@@ -53,7 +53,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: ./.github/actions/wasi-sdk
-      - run: cargo check -p kadakas-units -p kadakas-l10n -p kadakas-core -p kadakas-container -p kadakas-file -p kadakas-props -p kadakas-review -p kadakas-collab -p kadakas-collab-ws -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-script-js -p kadakas-feedback -p kadakas-crash -p kadakas-app --target wasm32-unknown-unknown
+      - run: cargo check -p kadakas-units -p kadakas-l10n -p kadakas-core -p kadakas-container -p kadakas-file -p kadakas-props -p kadakas-review -p kadakas-collab -p kadakas-collab-ws -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-view3d -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-script-js -p kadakas-feedback -p kadakas-crash -p kadakas-app --target wasm32-unknown-unknown
   # Test-only features (fault-injection) must not be in a program that we ship.
   test-hooks:
     runs-on: ubuntu-latest

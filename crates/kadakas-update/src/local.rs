@@ -266,12 +266,12 @@ pub fn find_build(path: &Path) -> Result<LocalBuild> {
     if dir.join(&cli).is_file() {
         files.push(cli);
     }
-    if dir.join("flavors.json").is_file() {
-        for f in crate::flavors::discover(&dir) {
-            if !files.contains(&f.exe) {
-                files.push(f.exe);
-            }
+    for f in crate::flavors::discover(&dir) {
+        if !files.contains(&f.exe) {
+            files.push(f.exe);
         }
+    }
+    if dir.join("flavors.json").is_file() {
         files.push(PathBuf::from("flavors.json"));
     }
     Ok(LocalBuild {
@@ -560,6 +560,20 @@ mod tests {
                 PathBuf::from(exe("kadakas")),
                 PathBuf::from(exe("kadakas-sketch")),
                 PathBuf::from("flavors.json"),
+            ]
+        );
+        // The modeler needs no flavors.json: it is copied when it is there.
+        std::fs::write(d.join(exe("kadakas-modeler")), b"x").unwrap();
+        let b3 = find_build(&d).unwrap();
+        assert!(b3.files.contains(&PathBuf::from(exe("kadakas-modeler"))));
+        std::fs::remove_file(d.join("flavors.json")).unwrap();
+        let b4 = find_build(&d).unwrap();
+        assert_eq!(
+            b4.files,
+            [
+                PathBuf::from(exe("kadakas-app")),
+                PathBuf::from(exe("kadakas")),
+                PathBuf::from(exe("kadakas-modeler")),
             ]
         );
         std::fs::remove_dir_all(&d).unwrap();

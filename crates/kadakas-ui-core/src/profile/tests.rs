@@ -717,3 +717,140 @@ fn the_autocad_profile_has_the_3d_aliases_and_the_model_menu() {
         });
     });
 }
+
+// ---- the SketchUp-like profile of the 3D modeler (MOD-01) ----
+
+#[test]
+fn the_sketchup_like_profile_parses_without_problems_and_is_not_one_of_the_builtins() {
+    let parsed = Profile::parse(SKETCHUP_JSON, SKETCHUP_ID).unwrap();
+    assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+    let p = Profile::sketchup();
+    assert_eq!((p.id.as_str(), p.builtin), ("sketchup", true));
+    assert_eq!(p.name, "SketchUp-like");
+    assert_eq!(p.based_on.as_deref(), Some(VECTORWORKS_ID));
+    // The app lists the Vectorworks-like and the AutoCAD-like profiles only.
+    assert!(Profile::builtins().iter().all(|b| b.id != SKETCHUP_ID));
+    for tag in ["en-US", "et"] {
+        kadakas_l10n::with_language(tag, || {
+            assert!(!p.display_name().is_empty() && !p.display_description().is_empty());
+            assert_ne!(p.display_name(), "uic-profile-name-sketchup");
+        });
+    }
+}
+
+#[test]
+fn the_sketchup_like_profile_has_the_public_default_keys_of_that_kind_of_program() {
+    let km = Profile::sketchup().keymap;
+    for (key, action) in [
+        ("Space", Action::ToolSelect),
+        ("E", Action::ToolEraser),
+        ("L", Action::ToolLine),
+        ("R", Action::ToolRect),
+        ("C", Action::ToolCircle),
+        ("A", Action::ToolArc),
+        ("P", Action::ToolPushPull),
+        ("M", Action::ToolMove),
+        ("Q", Action::ToolRotate),
+        ("S", Action::ToolScale),
+        ("F", Action::ToolOffset),
+        ("T", Action::ToolTapeMeasure),
+        ("B", Action::ToolPaintBucket),
+        ("O", Action::NavOrbit),
+        ("H", Action::NavPan),
+        ("Z", Action::NavZoom),
+        ("Shift+Z", Action::ZoomFit),
+        ("Cmd/Ctrl+Shift+W", Action::NavZoomWindow),
+        ("Shift+S", Action::QuickSearch),
+        ("Cmd/Ctrl+Z", Action::Undo),
+        ("Alt+Backspace", Action::Undo),
+        ("Cmd/Ctrl+Y", Action::Redo),
+        ("Cmd/Ctrl+A", Action::SelectAll),
+        ("Cmd/Ctrl+T", Action::SelectNone),
+        ("Cmd/Ctrl+N", Action::FileNew),
+        ("Cmd/Ctrl+O", Action::FileOpen),
+        ("Cmd/Ctrl+S", Action::FileSave),
+        ("Delete", Action::Delete),
+        ("Escape", Action::Cancel),
+    ] {
+        assert_eq!(km.action_for(chord(key)), Some(action), "{key}");
+    }
+}
+
+#[test]
+fn the_vectorworks_keys_that_the_sketchup_like_profile_does_not_use_are_free() {
+    let km = Profile::sketchup().keymap;
+    // The Vectorworks tool keys would clash with the letters: they are unbound here.
+    for key in [
+        "X",
+        "1",
+        "2",
+        "4",
+        "5",
+        "6",
+        "7",
+        "N",
+        "U",
+        "I",
+        "Y",
+        "Alt+Shift+1",
+        "Alt+Shift+P",
+    ] {
+        assert_eq!(km.action_for(chord(key)), None, "{key}");
+    }
+    // Space selects: it does not pan.
+    assert!(km.chords(Action::PanHold).is_empty());
+    // The standard views have no key (they are in the Camera menu).
+    for a in [
+        Action::ViewTop,
+        Action::ViewFront,
+        Action::ViewBack,
+        Action::ViewLeft,
+        Action::ViewRight,
+        Action::ViewRightIso,
+        Action::ViewBottom,
+    ] {
+        assert!(km.chords(a).is_empty(), "{a:?}");
+    }
+}
+
+#[test]
+fn no_chord_of_the_sketchup_like_profile_belongs_to_two_actions() {
+    let km = Profile::sketchup().keymap;
+    let mut seen = std::collections::HashMap::new();
+    for a in Action::ALL {
+        for c in km.chords(*a) {
+            if let Some(other) = seen.insert(*c, *a) {
+                panic!("{} is bound to {other:?} and {a:?}", c.to_text());
+            }
+            assert_eq!(km.action_for(*c), Some(*a), "{}", c.to_text());
+        }
+    }
+}
+
+#[test]
+fn every_tool_of_the_tool_bar_has_a_key_in_the_sketchup_like_profile() {
+    let km = Profile::sketchup().keymap;
+    for t in crate::modeler::ModelerTool::ALL {
+        assert!(!km.chords(t.action()).is_empty(), "{t:?} has no key");
+    }
+}
+
+#[test]
+fn the_vectorworks_like_defaults_do_not_bind_the_modeler_actions() {
+    let km = Keymap::defaults();
+    for a in Action::ALL.iter().filter(|a| a.modeler_only()) {
+        assert!(
+            km.chords(*a).is_empty(),
+            "{a:?} has a default key in the Vectorworks-like profile"
+        );
+    }
+    // Twelve actions are for the modeler only.
+    assert_eq!(Action::ALL.iter().filter(|a| a.modeler_only()).count(), 12);
+}
+
+#[test]
+fn the_sketchup_like_profile_survives_a_round_trip_through_its_file_form() {
+    let p = Profile::sketchup();
+    let back = parse(&p.to_json()).profile;
+    assert_eq!(back.keymap, p.keymap);
+}

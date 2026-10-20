@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-cargo build --release -p kadakas-app -p kadakas-cli -p kadakas-launcher
+cargo build --release -p kadakas-app -p kadakas-modeler -p kadakas-cli -p kadakas-launcher
 target="${CARGO_TARGET_DIR:-target}"
 if [ "$(uname -s)" = "Darwin" ]; then
   # macOS: a version is a whole app bundle, so the launcher can start it with its name and icon.

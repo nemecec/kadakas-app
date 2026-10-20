@@ -1,0 +1,200 @@
+//! The handshake with the launcher (PLAT-16, PLAT-20), the part that every UI flavor owes it.
+//!
+//! The launcher starts the program with two variables: the id of the run and the folder of the
+//! launcher. A program that was started that way must
+//!
+//! - keep the lock of its run for as long as it lives, so the launcher knows it runs;
+//! - write the clean-exit mark when it closes in the normal way, as the very last thing. Without
+//!   the mark the launcher counts the run as a crash of this version;
+//! - leave a crash file when it panics or crashes (`kadakas-crash`), so the next start of
+//!   `kadakas-app` can offer the report.
+//!
+//! Started by hand, without the launcher, the program does none of the first two and keeps crash
+//! files under an id of its own, like the app.
+
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+use kadakas_update::handshake::{AppLink, ENV_ROOT, ENV_RUN};
+
+/// The variables of the launcher, taken out of the environment at the start, so that no child
+/// process inherits the run id and writes the clean-exit mark for it.
+static CAPTURED: OnceLock<Vec<(String, String)>> = OnceLock::new();
+
+/// Reads the two variables of the launcher and removes them from the environment. Call it at the
+/// top of `main`, before any thread starts.
+pub fn capture_env() {
+    let taken = kadakas_sys::process::take_env(&[ENV_RUN, ENV_ROOT]);
+    let _ = CAPTURED.set(taken);
+}
+
+/// A variable of the launcher: from the captured ones, else from the environment.
+pub fn launch_env(name: &str) -> Option<String> {
+    match CAPTURED.get() {
+        Some(v) => v.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()),
+        None => std::env::var(name).ok(),
+    }
+}
+
+/// Puts the crash capture in place (PLAT-20). Without a launcher the program makes a run id of its
+/// own, so a crash is still kept.
+pub fn install_crash_capture() {
+    let get = &launch_env;
+    let Some(root) = kadakas_update::settings::launcher_root(get(ENV_ROOT)) else {
+        return;
+    };
+    let link = AppLink::from_env(&launch_env);
+    let run_id = match &link {
+        Some(l) => l.run_id().to_string(),
+        None => kadakas_crash::queue::standalone_id(std::process::id()),
+    };
+    let channel = link
+        .as_ref()
+        .and_then(AppLink::status)
+        .map(|s| s.label)
+        .filter(|l| !l.is_empty())
+        .unwrap_or_else(|| "standalone".into());
+    kadakas_crash::capture::install(kadakas_crash::capture::Config {
+        root,
+        run_id,
+        program: "kadakas-modeler".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        channel,
+        os: kadakas_crash::capture::default_os(),
+    });
+}
+
+/// Tells the crash capture which graphics adapter runs.
+pub fn set_gpu(adapter: &str, driver: &str, backend: &str) {
+    kadakas_crash::capture::set_gpu(kadakas_crash::Gpu {
+        adapter: adapter.into(),
+        driver: driver.into(),
+        backend: backend.into(),
+    });
+}
+
+/// How often the requests to open documents are looked at, in seconds.
+const OPEN_POLL_SECONDS: f64 = 0.5;
+
+/// The link to the launcher, if the launcher started this run.
+pub struct Launch {
+    link: Option<AppLink>,
+    /// The lock of the run. It is held until the program ends.
+    _lock: Option<std::fs::File>,
+    /// The alive stamp: a timer thread tells the launcher that this program lives, also while the
+    /// window loop waits (a file dialog is open, a big file loads). Dropped with the program.
+    _heartbeat: Option<kadakas_update::handshake::Heartbeat>,
+    next_open_poll: f64,
+}
+
+impl Launch {
+    /// The link from the captured variables.
+    pub fn from_env() -> Launch {
+        Launch::new(AppLink::from_env(&launch_env))
+    }
+
+    pub fn new(link: Option<AppLink>) -> Launch {
+        Launch {
+            _lock: link.as_ref().and_then(AppLink::hold_run_lock),
+            _heartbeat: link.as_ref().map(AppLink::start_heartbeat),
+            link,
+            next_open_poll: 0.0,
+        }
+    }
+
+    /// The documents that the launcher sent (a double click on a `.kad` file while this program
+    /// runs). Looks at most twice a second. The request files are deleted when they are read, so
+    /// the launcher sees at once that this program has the request.
+    pub fn take_open(&mut self, now: f64) -> Vec<PathBuf> {
+        let Some(link) = &self.link else {
+            return Vec::new();
+        };
+        if now < self.next_open_poll {
+            return Vec::new();
+        }
+        self.next_open_poll = now + OPEN_POLL_SECONDS;
+        link.take_open()
+    }
+
+    /// True when the launcher started this run.
+    pub fn is_launched(&self) -> bool {
+        self.link.is_some()
+    }
+
+    /// The program ends in the normal way: the crash file of this run goes, and the launcher gets
+    /// the clean-exit mark. Call it as the very last thing.
+    pub fn finish(&self) {
+        kadakas_crash::capture::clean_exit();
+        if let Some(link) = &self.link {
+            let _ = link.mark_clean_exit();
+        }
+    }
+}
+
+/// The files named on the command line: the paths that are not options. The launcher passes the
+/// files of the person this way.
+pub fn files_from_args(args: &[String]) -> Vec<PathBuf> {
+    args.iter()
+        .skip(1)
+        .filter(|a| !a.starts_with('-'))
+        .map(PathBuf::from)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env_of(dir: &std::path::Path, id: &str) -> impl Fn(&str) -> Option<String> {
+        let (dir, id) = (dir.display().to_string(), id.to_string());
+        move |k| match k {
+            ENV_ROOT => Some(dir.clone()),
+            ENV_RUN => Some(id.clone()),
+            _ => None,
+        }
+    }
+
+    fn run_file(root: &std::path::Path, id: &str, name: &str) -> PathBuf {
+        kadakas_update::runs::run_file(root, id, name)
+    }
+
+    #[test]
+    fn a_run_that_the_launcher_started_ends_with_the_clean_exit_mark() {
+        let d = std::env::temp_dir().join(format!("kadakas-modeler-launch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let link = AppLink::from_env(&env_of(&d, "1a-2b")).expect("a run id and a folder");
+        let launch = Launch::new(Some(link));
+        assert!(launch.is_launched());
+        assert!(
+            !run_file(&d, "1a-2b", "clean").exists(),
+            "not before the end"
+        );
+        // The lock of the run is held: a second holder is refused.
+        let second = AppLink::from_env(&env_of(&d, "1a-2b")).unwrap();
+        assert!(second.hold_run_lock().is_none());
+        launch.finish();
+        assert!(run_file(&d, "1a-2b", "clean").is_file());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_program_started_by_hand_has_no_link_and_finishes_quietly() {
+        let launch = Launch::new(None);
+        assert!(!launch.is_launched());
+        launch.finish();
+    }
+
+    #[test]
+    fn the_files_are_the_arguments_that_are_not_options() {
+        let args: Vec<String> = ["kadakas-modeler", "a.kad", "--flag", "dir/b.kad"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            files_from_args(&args),
+            vec![PathBuf::from("a.kad"), PathBuf::from("dir/b.kad")]
+        );
+        assert!(files_from_args(&args[..1]).is_empty());
+    }
+}

@@ -29,6 +29,7 @@ kadakas-script-js = { version = "0.1.0", path = "../kadakas-script-js" }
 kadakas-l10n = { version = "0.1.0", path = "../kadakas-l10n" }
 kadakas-units = { version = "0.1.0", path = "../kadakas-units" }
 kadakas-ui-core = { version = "0.1.0", path = "../kadakas-ui-core" }
+kadakas-view3d = { version = "0.1.0", path = "../kadakas-view3d" }
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
 kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
 kadakas-review = { version = "0.1.0", path = "../kadakas-review" }

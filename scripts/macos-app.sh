@@ -4,11 +4,12 @@
 #
 #   scripts/macos-app.sh RELEASE_DIR OUT_DIR [VERSION]
 #
-# RELEASE_DIR has the programs (`kadakas-app`, `kadakas`), for example target/release.
+# RELEASE_DIR has the programs (`kadakas-app`, `kadakas-modeler`, `kadakas`), for example target/release.
 # OUT_DIR/Kadakas Engine.app is made there. VERSION defaults to the version of the workspace.
 #
 #   Kadakas Engine.app/Contents/Info.plist            packaging/macos/App-Info.plist
 #   Kadakas Engine.app/Contents/MacOS/kadakas-app     the main executable
+#   Kadakas Engine.app/Contents/MacOS/kadakas-modeler the 3D modeler (a UI flavor of the launcher)
 #   Kadakas Engine.app/Contents/MacOS/kadakas         the command line tool (MCP server, renderer)
 #   Kadakas Engine.app/Contents/Resources/            icon and license texts
 #
@@ -29,6 +30,8 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 install -m 755 "$src/kadakas-app" "$app/Contents/MacOS/kadakas-app"
 install -m 755 "$src/kadakas" "$app/Contents/MacOS/kadakas"
+# The 3D modeler (PLAT-11) is a UI flavor next to the app: the launcher finds it in the bundle.
+install -m 755 "$src/kadakas-modeler" "$app/Contents/MacOS/kadakas-modeler"
 cp packaging/icons/icon.icns "$app/Contents/Resources/icon.icns"
 # The license texts go with every program that is handed out, an update too.
 for f in THIRD_PARTY_NOTICES.txt docs/attribution.md LICENSE-APACHE LICENSE-MIT; do

@@ -7,6 +7,7 @@
 //!
 //! - [`hit`] and [`annot_pick`]: picking and box selection.
 //! - [`snap`]: the geometry that the pointer snaps to, and the snap result.
+//! - [`nav3d`] and [`modeler`]: the 3D navigation and the tool bar of the 3D modeler (MOD-01, MOD-02).
 
 pub mod agent_activity;
 pub mod agent_review;
@@ -25,6 +26,8 @@ pub mod joint_edit;
 pub mod keymap;
 pub mod keys;
 pub mod massing;
+pub mod modeler;
+pub mod nav3d;
 pub mod open_limit;
 pub mod paving;
 pub mod plugin_form;

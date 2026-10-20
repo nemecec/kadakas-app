@@ -85,6 +85,7 @@
     "edit.select_all": [
       "Cmd/Ctrl+A"
     ],
+    "edit.select_none": [],
     "edit.undo": [
       "Cmd/Ctrl+Z"
     ],
@@ -124,6 +125,10 @@
     "mode.group6": [
       "CloseBracket"
     ],
+    "nav.orbit": [],
+    "nav.pan": [],
+    "nav.zoom": [],
+    "nav.zoom_window": [],
     "snap.acquire": [
       "T"
     ],
@@ -139,6 +144,7 @@
     "tool.angular_dimension": [
       "Period"
     ],
+    "tool.arc": [],
     "tool.callout": [
       "Alt+1"
     ],
@@ -154,6 +160,7 @@
     "tool.dimension": [
       "N"
     ],
+    "tool.eraser": [],
     "tool.extend": [],
     "tool.fillet": [
       "7"
@@ -177,12 +184,14 @@
     "tool.mirror": [
       "Equals"
     ],
+    "tool.move": [],
     "tool.north_arrow": [
       "Alt+Shift+N"
     ],
     "tool.offset": [
       "Shift+Minus"
     ],
+    "tool.paint_bucket": [],
     "tool.plant": [
       "Alt+Shift+P"
     ],
@@ -190,6 +199,7 @@
     "tool.polyline": [
       "5"
     ],
+    "tool.push_pull": [],
     "tool.radial_dimension": [
       "Comma"
     ],
@@ -215,6 +225,7 @@
     "tool.split": [
       "L"
     ],
+    "tool.tape_measure": [],
     "tool.text": [
       "1"
     ],
@@ -249,6 +260,7 @@
     "view.back": [
       "Alt+Shift+8"
     ],
+    "view.bottom": [],
     "view.dashed_hidden_line": [
       "Cmd/Ctrl+Shift+D"
     ],

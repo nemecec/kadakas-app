@@ -793,7 +793,7 @@ fn compare_scene_and_look() -> (kadakas_review::overlay::Tinted, Look, CompareSt
             &style,
         )
         .unwrap();
-    let look = crate::compare_ui::ghost_look(&t, &style);
+    let look = crate::view3d::ghost_look(&t, &style);
     (t, look, style)
 }
 
