@@ -123,13 +123,11 @@ impl Tx<'_> {
 
     fn make_group(
         &mut self,
-        (model, faces, edges, objects, name): (
-            Option<ObjectId>,
-            &[crate::surface::FaceId],
-            &[crate::surface::EdgeId],
-            &[ObjectId],
-            &Option<String>,
-        ),
+        model: Option<ObjectId>,
+        faces: &[crate::surface::FaceId],
+        edges: &[crate::surface::EdgeId],
+        objects: &[ObjectId],
+        name: &Option<String>,
         out: &mut Outcome,
     ) -> Result<(), CommandError> {
         let ch = self.choose(model, faces, edges, objects)?;
@@ -679,7 +677,7 @@ impl Tx<'_> {
                 edges,
                 objects,
                 name,
-            } => self.make_group((*model, faces, edges, objects, name), out),
+            } => self.make_group(*model, faces, edges, objects, name, out),
             Command::MakeComponent {
                 name,
                 model,

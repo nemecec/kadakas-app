@@ -210,7 +210,7 @@ impl EditContext {
             let id = match existing {
                 Some(id) => id,
                 None => {
-                    let shape = Shape::SurfaceModel(Box::new(SurfaceModel::new()));
+                    let shape = Shape::SurfaceModel(Box::default());
                     match container {
                         Some(parent) => run.run(&Command::AddObjectIn {
                             parent,
