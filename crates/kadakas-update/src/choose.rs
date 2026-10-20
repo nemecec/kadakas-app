@@ -493,6 +493,7 @@ mod tests {
         let build = crate::local::LocalBuild {
             dir: build_dir,
             files: vec![PathBuf::from(exe)],
+            links: Vec::new(),
         };
         let local = v("1.0.0-local.ga");
         s.add_local(&local, &build, None).unwrap();

@@ -44,6 +44,9 @@ pub enum Delivery {
 struct State {
     running: Option<Running>,
     pending: Vec<OsString>,
+    /// An app runs that has no run record (the record could not be written): requests cannot
+    /// reach it, and files wait until it ends.
+    unlinked: bool,
 }
 
 pub struct Inbox {
@@ -89,6 +92,18 @@ impl Inbox {
         Delivery::Queued
     }
 
+    /// The app was started without a run record, so files cannot be sent to it (the supervisor
+    /// calls this; `set_running` or `end_run` clears it).
+    pub fn set_unlinked(&self) {
+        self.state().unlinked = true;
+    }
+
+    /// True while an app runs that files cannot be sent to: a file that arrives now waits until
+    /// that app ends. The launcher says so.
+    pub fn unlinked(&self) -> bool {
+        self.state().unlinked
+    }
+
     /// The files that wait. The supervisor takes them when it starts the app.
     pub fn take_pending(&self) -> Vec<OsString> {
         std::mem::take(&mut self.state().pending)
@@ -104,6 +119,7 @@ impl Inbox {
                 st.pending.clear();
             }
         }
+        st.unlinked = false;
         st.running = Some(run);
     }
 
@@ -112,6 +128,7 @@ impl Inbox {
     /// supervisor starts the app again with them.
     pub fn end_run(&self) -> Vec<OsString> {
         let mut st = self.state();
+        st.unlinked = false;
         let Some(run) = st.running.take() else {
             return std::mem::take(&mut st.pending);
         };
@@ -130,6 +147,12 @@ impl Inbox {
     /// The app that runs now, if any.
     pub fn running(&self) -> Option<Running> {
         self.state().running.clone()
+    }
+
+    /// True when the app of run `id` writes an alive stamp: it reads requests, and it is alive
+    /// even if it does not answer at once.
+    pub fn alive_stamp(&self, id: &str) -> bool {
+        handshake::heartbeat_exists(&self.root, id)
     }
 
     /// True while a request of the run `id` is not read yet.
@@ -247,6 +270,50 @@ mod tests {
         // After the end, files wait.
         assert_eq!(inbox.deliver(files(&["/c.kad"])), Delivery::Queued);
         assert_eq!(inbox.end_run(), files(&["/c.kad"]));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_alive_stamp_comes_and_goes_with_the_app() {
+        let d = tmp("inbox-alive");
+        let inbox = Inbox::new(&d);
+        assert!(!inbox.alive_stamp("1a-2b"));
+        let link = crate::handshake::AppLink::from_env(&|k| match k {
+            crate::handshake::ENV_ROOT => Some(d.to_string_lossy().into_owned()),
+            crate::handshake::ENV_RUN => Some("1a-2b".into()),
+            _ => None,
+        })
+        .unwrap();
+        let beat = link.start_heartbeat();
+        assert!(inbox.alive_stamp("1a-2b"), "there when start returns");
+        // The stamp is renewed by the thread, not by the caller.
+        let first = std::fs::read_to_string(crate::runs::run_file(&d, "1a-2b", "alive")).unwrap();
+        let t = std::time::Instant::now();
+        loop {
+            let now = std::fs::read_to_string(crate::runs::run_file(&d, "1a-2b", "alive"))
+                .unwrap_or_default();
+            if (!now.is_empty() && now != first) || t.elapsed() > std::time::Duration::from_secs(5)
+            {
+                assert_ne!(now, first, "the stamp is renewed");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        drop(beat);
+        assert!(!inbox.alive_stamp("1a-2b"));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn an_app_without_a_run_record_cannot_get_files_and_they_wait() {
+        let d = tmp("inbox-unlinked");
+        let inbox = Inbox::new(&d);
+        assert!(!inbox.unlinked());
+        inbox.set_unlinked();
+        assert!(inbox.unlinked());
+        assert_eq!(inbox.deliver(files(&["/a.kad"])), Delivery::Queued);
+        assert_eq!(inbox.end_run(), files(&["/a.kad"]));
+        assert!(!inbox.unlinked());
         std::fs::remove_dir_all(&d).unwrap();
     }
 

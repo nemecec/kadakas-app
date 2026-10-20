@@ -195,6 +195,7 @@ fn remove_run_files(root: &Path, id: &str) {
         "restart.json",
         "download",
         "app.lock",
+        "alive",
     ] {
         let _ = std::fs::remove_file(run_file(root, id, suffix));
     }

@@ -8,6 +8,8 @@ mod agent_activity_api;
 mod agent_view_api;
 mod annotation_api;
 mod collab_api;
+mod unsaved;
+pub use unsaved::Blocked;
 #[cfg(not(target_arch = "wasm32"))]
 mod consent;
 pub use collab_api::EndpointFactory;
@@ -158,6 +160,10 @@ pub struct Session {
     /// New IDs count 2, 3, 4 and so on (see `Session::with_sequential_ids`). The mode stays when
     /// the document is replaced.
     sequential_ids: bool,
+    /// Refuse calls that would replace a drawing with unsaved changes (see `unsaved`).
+    guard_unsaved: bool,
+    /// What the last refused call wanted (see `unsaved`).
+    blocked: Option<Blocked>,
     mesh_cache: MeshCache,
     /// The scene at a coarser detail than the count rule gives, for a view far from the plants.
     lod_scene: Option<(u64, kadakas_core::plants::form3d::Detail, Arc<Scene>)>,
@@ -1082,6 +1088,8 @@ impl Session {
             conn: events::LOCAL,
             limits: SessionLimits::default(),
             sequential_ids: false,
+            guard_unsaved: false,
+            blocked: None,
             mesh_cache: MeshCache::default(),
             lod_scene: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1229,8 +1237,10 @@ impl Session {
         hub.document_replaced();
         let sequential = self.sequential_ids;
         let session_version = self.session_version;
+        let guard_unsaved = self.guard_unsaved;
         let (fresh, exact) = Session::with_vetted_document(doc);
         *self = Session {
+            guard_unsaved,
             replaced: true,
             view: self.view,
             snap: self.snap,
@@ -1460,6 +1470,9 @@ impl Session {
         }
         if let Some(r) = collab_api::handle(self, method, p.clone()) {
             return r;
+        }
+        if method == "document.load" {
+            self.refuse_replace(Blocked::Load, method)?;
         }
         if method == "document.load" && collab_api::is_connected(self) {
             return Err(RpcError::conflict(

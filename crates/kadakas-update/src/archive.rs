@@ -137,6 +137,10 @@ pub fn extract_tar_gz(reader: impl Read, dest: &Path, limits: Limits) -> Result<
                 raw.display()
             )));
         }
+        // The text check above can be fooled by a file system that treats two spellings as one
+        // name (composed and decomposed Unicode, upper and lower case on APFS). So the folders on
+        // disk are looked at too: no existing part of the path may be a link.
+        refuse_links_on_disk(dest, &rel, kind.is_dir())?;
         if kind.is_symlink() {
             let to = entry
                 .link_name()
@@ -181,9 +185,36 @@ pub fn extract_tar_gz(reader: impl Read, dest: &Path, limits: Limits) -> Result<
     Ok(files)
 }
 
+/// Refuses a path when a folder that exists on disk below `dest` on the way to `rel` is a link
+/// (`rel` itself too, for a folder). The file system decides what is the same name.
+fn refuse_links_on_disk(dest: &Path, rel: &Path, include_last: bool) -> Result<()> {
+    let count = rel.components().count();
+    let upto = if include_last {
+        count
+    } else {
+        count.saturating_sub(1)
+    };
+    let mut at = dest.to_path_buf();
+    for c in rel.components().take(upto) {
+        at.push(c);
+        match std::fs::symlink_metadata(&at) {
+            Ok(m) if m.file_type().is_symlink() => {
+                return Err(UpdateError::UnsafePath(format!(
+                    "{} passes a link on disk",
+                    rel.display()
+                )));
+            }
+            // Not there yet: the rest of the path is new.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Checks the target of a link at `rel` (relative to the unpacked folder). The target must be
 /// relative: some `..`, then normal names only. The `..` must not climb above the folder.
-fn check_link_target(rel: &Path, to: &Path) -> Result<()> {
+pub(crate) fn check_link_target(rel: &Path, to: &Path) -> Result<()> {
     let bad = || UpdateError::UnsafePath(format!("link {} to {}", rel.display(), to.display()));
     let text = to.to_string_lossy();
     if text.contains('\\') || text.contains(':') || text.contains('\0') {
@@ -470,6 +501,63 @@ pub(crate) mod tests {
         assert!(extract_tar_gz(&a[..], &d2, Limits::default()).is_err());
         std::fs::remove_dir_all(&d).unwrap();
         std::fs::remove_dir_all(&d2).unwrap();
+    }
+
+    /// APFS and HFS+ see composed and decomposed Unicode (and upper and lower case) as one name.
+    /// The text checks do not, so the folders on disk are looked at before each write.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_that_is_the_same_on_disk_cannot_write_through_a_link() {
+        let nfc = "p/q/\u{e9}"; // e with acute, one character
+        let nfd = "p/q/e\u{301}"; // e and a combining acute
+        for (link_name, through) in [
+            (nfc, format!("{nfd}/a/b")),
+            (nfd, format!("{nfc}/a/b")),
+            ("p/q/Link", "p/q/link/a/b".to_string()),
+        ] {
+            let d = tmp("sameondisk");
+            let a = build(&[
+                Item {
+                    kind: tar::EntryType::Directory,
+                    mode: 0o755,
+                    ..file("top/", b"")
+                },
+                link(link_name, "../../top"),
+                file(&through, b"pwned"),
+            ]);
+            let r = extract_tar_gz(&a[..], &d, Limits::default());
+            // On a file system that sees the names as one, the second path passes the link and is
+            // refused. On one that does not, it is a different folder and nothing leaves.
+            let escaped = d.join("top/a").exists() || d.join("top/a/b").exists();
+            assert!(!escaped, "{link_name} then {through}: {r:?}");
+            if std::fs::symlink_metadata(d.join(link_name)).is_ok()
+                && std::fs::symlink_metadata(d.join(&through).parent().unwrap().parent().unwrap())
+                    .is_ok_and(|m| m.file_type().is_symlink())
+            {
+                assert!(matches!(r, Err(UpdateError::UnsafePath(_))), "{r:?}");
+            }
+            std::fs::remove_dir_all(&d).unwrap();
+        }
+    }
+
+    /// The disk check itself, with a link made by hand (the same on every file system).
+    #[cfg(unix)]
+    #[test]
+    fn a_link_on_disk_in_the_path_is_refused() {
+        let d = tmp("diskcheck");
+        std::fs::create_dir_all(d.join("real")).unwrap();
+        std::os::unix::fs::symlink("real", d.join("l")).unwrap();
+        for (rel, last) in [("l/x", false), ("l", true), ("l/y/z", false)] {
+            assert!(
+                refuse_links_on_disk(&d, Path::new(rel), last).is_err(),
+                "{rel}"
+            );
+        }
+        // Plain folders, new folders and a file that is a link itself (not a folder) are fine.
+        assert!(refuse_links_on_disk(&d, Path::new("real/x"), false).is_ok());
+        assert!(refuse_links_on_disk(&d, Path::new("new/deeper/x"), false).is_ok());
+        assert!(refuse_links_on_disk(&d, Path::new("l"), false).is_ok());
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

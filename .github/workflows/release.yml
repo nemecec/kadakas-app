@@ -69,11 +69,15 @@ jobs:
         run: scripts/macos-app.sh target/release dist-app
       - name: Package
         run: cargo packager --release --config ${{ matrix.config }} --formats ${{ matrix.formats }}
+      # TODO (PLAT-19): this archive is the bundle before signing. A release must sign it inside-out
+      # (the programs, then the bundle) with the hardened runtime, notarize it and staple the
+      # ticket, then pack it. The launcher does not set com.apple.quarantine on a download: the
+      # ed25519 manifest carries the trust (docs/release.md).
       - name: Make the update archive of the app bundle (macOS)
         if: runner.os == 'macOS'
         run: |
           mkdir -p dist
-          COPYFILE_DISABLE=1 tar -czf "dist/kadakas-update-${{ matrix.platform }}.tar.gz" -C dist-app Kadakas.app
+          COPYFILE_DISABLE=1 tar -czf "dist/kadakas-update-${{ matrix.platform }}.tar.gz" -C dist-app "Kadakas Engine.app"
       - name: Make the update archive (the launcher downloads this, not the installer)
         if: runner.os != 'macOS'
         shell: bash

@@ -43,7 +43,7 @@ const DEFAULT_MANIFEST_BASE: &str =
 /// The version that the installer put next to the launcher, if the app is there. On Windows and
 /// Linux the program `kadakas-app` is next to the launcher. On macOS the launcher is the main
 /// executable of the outer bundle, and the packager puts the app bundle next to it
-/// (`Kadakas.app/Contents/MacOS/Kadakas.app`, `embedded-apps` in `packager.toml`).
+/// (`Kadakas.app/Contents/MacOS/Kadakas Engine.app`, `embedded-apps` in `packager-macos.toml`).
 fn bundled_in(exe_dir: &Path) -> Option<Bundled> {
     kadakas_update::flavors::has_app(exe_dir).then(|| Bundled {
         version: Version::parse(env!("CARGO_PKG_VERSION")).expect("crate version is valid"),
@@ -368,7 +368,7 @@ mod tests {
         let macos = d.join("Kadakas.app/Contents/MacOS");
         std::fs::create_dir_all(&macos).unwrap();
         assert!(bundled_in(&macos).is_none());
-        let inner = macos.join("Kadakas.app/Contents/MacOS");
+        let inner = macos.join("Kadakas Engine.app/Contents/MacOS");
         std::fs::create_dir_all(&inner).unwrap();
         std::fs::write(inner.join("kadakas-app"), b"x").unwrap();
         let b = bundled_in(&macos).unwrap();

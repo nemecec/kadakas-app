@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Makes the app bundle `Kadakas.app` of the macOS release (PLAT-16): the app itself, the inner
+# Makes the app bundle `Kadakas Engine.app` of the macOS release (PLAT-16): the app itself, the inner
 # bundle of the installed outer bundle (which has the launcher), and the update archive.
 #
 #   scripts/macos-app.sh RELEASE_DIR OUT_DIR [VERSION]
 #
 # RELEASE_DIR has the programs (`kadakas-app`, `kadakas`), for example target/release.
-# OUT_DIR/Kadakas.app is made there. VERSION defaults to the version of the workspace.
+# OUT_DIR/Kadakas Engine.app is made there. VERSION defaults to the version of the workspace.
 #
-#   Kadakas.app/Contents/Info.plist            packaging/macos/App-Info.plist
-#   Kadakas.app/Contents/MacOS/kadakas-app     the main executable
-#   Kadakas.app/Contents/MacOS/kadakas         the command line tool (MCP server, renderer)
-#   Kadakas.app/Contents/Resources/            icon and license texts
+#   Kadakas Engine.app/Contents/Info.plist            packaging/macos/App-Info.plist
+#   Kadakas Engine.app/Contents/MacOS/kadakas-app     the main executable
+#   Kadakas Engine.app/Contents/MacOS/kadakas         the command line tool (MCP server, renderer)
+#   Kadakas Engine.app/Contents/Resources/            icon and license texts
 #
 # The launcher is not in it: it is the main executable of the outer bundle, which only the
 # installer changes. The update archive is this bundle as a `.tar.gz`:
 #
-#   COPYFILE_DISABLE=1 tar -czf kadakas-update-macos-aarch64.tar.gz -C OUT_DIR Kadakas.app
+#   COPYFILE_DISABLE=1 tar -czf kadakas-update-macos-aarch64.tar.gz -C OUT_DIR "Kadakas Engine.app"
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,7 +24,7 @@ out="${2:?usage: macos-app.sh RELEASE_DIR OUT_DIR [VERSION]}"
 version="${3:-$(awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); sub(/^version=/,"",$0); print; exit}' Cargo.toml)}"
 [ -n "$version" ] || { echo "no version" >&2; exit 1; }
 
-app="$out/Kadakas.app"
+app="$out/Kadakas Engine.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 install -m 755 "$src/kadakas-app" "$app/Contents/MacOS/kadakas-app"

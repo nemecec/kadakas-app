@@ -40,6 +40,9 @@ mod gis_dialogs;
 mod gis_ui;
 mod gpu3d;
 mod grading_ui;
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod handover;
 mod icon_size;
 mod icons;
 #[cfg(not(target_arch = "wasm32"))]
@@ -101,6 +104,21 @@ fn main() -> eframe::Result {
     // The run id of the launcher goes the same way: read once, then out of the environment.
     app_updates::capture_env();
     kadakas_sys::process::remove_secrets_from_env();
+    // macOS: the inner bundle was started by something other than the launcher (Keep in Dock on
+    // its icon, `open` on the bundle). Hand over to the launcher, which owns updates and `.kad`
+    // files. If that fails, run alone as before.
+    #[cfg(target_os = "macos")]
+    if let Some(open_args) = handover::launcher_open_args(
+        std::env::current_exe().ok().as_deref(),
+        app_updates::launch_env(kadakas_update::handshake::ENV_VIA).is_some(),
+        &agent::parse_open_files(&args),
+    ) && std::process::Command::new("/usr/bin/open")
+        .args(open_args)
+        .status()
+        .is_ok_and(|s| s.success())
+    {
+        return Ok(());
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 900.0])

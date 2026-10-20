@@ -10,6 +10,9 @@
 //! - the app writes `<id>.restart.json` with the open documents and then exits. The launcher
 //!   starts the newest version again with the documents as arguments;
 //! - the app writes `<id>.clean` when it closes in the normal way (the crash marker);
+//! - the app keeps `<id>.alive` fresh from a timer thread (not the window loop), so the launcher
+//!   knows that a version that does not answer a request at once (a file dialog is open, a big
+//!   file loads) is alive, and that a version without the file never reads requests;
 //! - the launcher writes `<id>.open-<n>.json` with documents to open (a double click on a `.kad`
 //!   file while the app runs, see `inbox`). The app reads and deletes it, and opens the first
 //!   document as File > Open does. A file that stays means the app does not read requests.
@@ -24,6 +27,10 @@ use std::path::{Path, PathBuf};
 pub const ENV_ROOT: &str = "KADAKAS_LAUNCHER_ROOT";
 /// The variable with the run id.
 pub const ENV_RUN: &str = "KADAKAS_RUN_ID";
+/// Set to `1` by the launcher for every app it starts, with or without a run record. An app on
+/// macOS that is started without it (Keep in Dock on the app, `open` on the inner bundle) hands
+/// over to the launcher instead of running alone.
+pub const ENV_VIA: &str = "KADAKAS_VIA_LAUNCHER";
 
 /// What the update check found.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +150,64 @@ pub fn send_open(root: &Path, id: &str, paths: &[PathBuf]) -> std::io::Result<()
 /// True while a request of run `id` has not been read.
 pub fn open_pending(root: &Path, id: &str) -> bool {
     !open_files(root, id).is_empty()
+}
+
+/// How often the app refreshes its alive stamp.
+const HEARTBEAT_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// True when the app of run `id` writes an alive stamp (a version that reads open requests does).
+pub fn heartbeat_exists(root: &Path, id: &str) -> bool {
+    run_file(root, id, "alive").is_file()
+}
+
+/// The alive stamp of the app: a small file that a timer thread writes every second. It stops and
+/// the file goes when this value is dropped.
+pub struct Heartbeat {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    path: PathBuf,
+}
+
+impl Heartbeat {
+    fn start(root: &Path, id: &str) -> Heartbeat {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let path = run_file(root, id, "alive");
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let stamp = |path: &Path| {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            let _ = write_atomic(path, nanos.to_string().as_bytes());
+        };
+        // The first stamp is there when this returns.
+        stamp(&path);
+        let (flag, p) = (stop.clone(), path.clone());
+        let thread = std::thread::Builder::new()
+            .name("kadakas-alive".into())
+            .spawn(move || {
+                let mut waited = std::time::Duration::ZERO;
+                while !flag.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    waited += std::time::Duration::from_millis(50);
+                    if waited >= HEARTBEAT_EVERY {
+                        waited = std::time::Duration::ZERO;
+                        stamp(&p);
+                    }
+                }
+            })
+            .ok();
+        Heartbeat { stop, thread, path }
+    }
+}
+
+impl Drop for Heartbeat {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// Reads and deletes the open requests of a run. A damaged file is deleted and gives nothing.
@@ -265,8 +330,17 @@ impl AppLink {
         Some(f)
     }
 
+    /// Starts the alive stamp (see the module text). Keep the value as long as the app lives.
+    pub fn start_heartbeat(&self) -> Heartbeat {
+        Heartbeat::start(&self.root, &self.id)
+    }
+
     /// Takes the documents that the launcher asked to open (a double click on a `.kad` file while
-    /// the app runs). The app opens the first one, as File > Open does.
+    /// the app runs). The app opens the first one, as File > Open does. The request files are
+    /// **deleted before the app opens anything**: the launcher must see at once that the app has
+    /// the request (it starts no second app), and the app then keeps the file in its own
+    /// state while it asks the person about unsaved changes. A crash between the delete and the
+    /// open loses the request, never the person's drawing.
     pub fn take_open(&self) -> Vec<PathBuf> {
         take_open(&self.root, &self.id)
     }

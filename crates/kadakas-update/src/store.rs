@@ -686,6 +686,15 @@ impl Store {
                 }
                 std::fs::copy(build.dir.join(rel), &to)?;
             }
+            for (at, to) in &build.links {
+                if let Some(parent) = staging.join(at).parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(to, staging.join(at))?;
+                #[cfg(not(unix))]
+                let _ = to;
+            }
             std::fs::write(staging.join(MARKER), "local")?;
             self.write_meta(
                 &staging,
@@ -1050,7 +1059,11 @@ pub(crate) mod tests {
             std::fs::write(dir.join(exe("kadakas")), b"cli").unwrap();
             files.push(PathBuf::from(exe("kadakas")));
         }
-        crate::local::LocalBuild { dir, files }
+        crate::local::LocalBuild {
+            dir,
+            files,
+            links: Vec::new(),
+        }
     }
 
     #[test]

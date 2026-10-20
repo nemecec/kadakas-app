@@ -353,7 +353,7 @@ impl Supervisor {
                 update: UpdateState::Checking,
                 skipped: choice.skipped.clone(),
             };
-            let mut env = Vec::new();
+            let mut env = vec![(handshake::ENV_VIA.to_string(), "1".to_string())];
             if let Some(g) = &guard {
                 let _ = handshake::write_status(store.root(), g.id(), &base);
                 env.push((ENV_ROOT.into(), store.root().to_string_lossy().into_owned()));
@@ -374,6 +374,9 @@ impl Supervisor {
                             pid: child.id(),
                             spec,
                         });
+                    }
+                    if guard.is_none() {
+                        self.inbox.set_unlinked();
                     }
                     return Ok((child, guard, choice, base));
                 }
@@ -973,9 +976,10 @@ mod tests {
         assert!(!reports[0].clean, "nothing is known about how it ended");
         let spec = &w.started()[0];
         assert_eq!(spec.files, [OsString::from("/a/one.kad")]);
-        assert!(
-            spec.env.is_empty(),
-            "the app gets no run id it could not use"
+        // No run id it could not use; only the mark that the launcher started it.
+        assert_eq!(
+            spec.env,
+            [(handshake::ENV_VIA.to_string(), "1".to_string())]
         );
         std::fs::remove_dir_all(&w.root).unwrap();
     }

@@ -10,8 +10,8 @@
 //! `exe` is a path inside the version folder, without the `.exe` ending on Windows. The launcher
 //! adds it. A flavor whose program is missing is not listed.
 //!
-//! **macOS.** A version folder holds one app bundle, `Kadakas.app`, and the program of the app is
-//! the main executable of that bundle: `Kadakas.app/Contents/MacOS/kadakas-app`. The launcher
+//! **macOS.** A version folder holds one app bundle, `Kadakas Engine.app`, and the program of the app is
+//! the main executable of that bundle: `Kadakas Engine.app/Contents/MacOS/kadakas-app`. The launcher
 //! starts that path itself (not `open`), so it can pass arguments and the run variables. Because
 //! the path is inside a `.app`, the system finds the bundle (its name, its icon in the Dock) from
 //! the path. A folder with the program directly in it (a plain build) works as well, on every
@@ -44,7 +44,7 @@ struct RawFlavor {
 }
 
 /// The name of the app bundle in a version folder on macOS.
-pub const APP_BUNDLE: &str = "Kadakas.app";
+pub const APP_BUNDLE: &str = "Kadakas Engine.app";
 
 fn exe_path(base: &str) -> PathBuf {
     PathBuf::from(format!("{base}{}", std::env::consts::EXE_SUFFIX))
@@ -137,12 +137,12 @@ mod tests {
     fn the_program_inside_an_app_bundle_is_found() {
         let d = tmp("flv-bundle");
         assert!(!has_app(&d));
-        touch(&d, "Kadakas.app/Contents/MacOS/kadakas-app");
-        touch(&d, "Kadakas.app/Contents/MacOS/kadakas-sketch");
+        touch(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-app");
+        touch(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-sketch");
         assert!(has_app(&d));
         std::fs::write(
             d.join("flavors.json"),
-            r#"{"flavors":[{"id":"sketch","name":"3D","exe":"Kadakas.app/Contents/MacOS/kadakas-sketch"}]}"#,
+            r#"{"flavors":[{"id":"sketch","name":"3D","exe":"Kadakas Engine.app/Contents/MacOS/kadakas-sketch"}]}"#,
         )
         .unwrap();
         let f = discover(&d);
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(f[0].exe, bundle_exe("kadakas-app"));
         assert_eq!(
             f[0].exe,
-            Path::new("Kadakas.app/Contents/MacOS/kadakas-app")
+            Path::new("Kadakas Engine.app/Contents/MacOS/kadakas-app")
         );
         assert_eq!(f[1].id, "sketch");
         // A plain program next to the bundle wins (a plain build is the same as before).

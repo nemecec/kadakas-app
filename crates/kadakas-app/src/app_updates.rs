@@ -29,6 +29,7 @@ pub fn capture_env() {
     let taken = kadakas_sys::process::take_env(&[
         kadakas_update::handshake::ENV_RUN,
         kadakas_update::handshake::ENV_ROOT,
+        kadakas_update::handshake::ENV_VIA,
     ]);
     let _ = CAPTURED.set(taken);
 }
@@ -77,6 +78,9 @@ pub enum SaveChoice {
 
 pub struct Updates {
     link: Option<AppLink>,
+    /// The alive stamp: a timer thread tells the launcher that this app lives, also while the
+    /// window loop waits (a file dialog is open, a big file loads). Dropped with the app.
+    _heartbeat: Option<kadakas_update::handshake::Heartbeat>,
     /// The lock of this app on its run: the launcher sees that the app lives, also when the
     /// launcher itself is gone. Held until the program ends.
     _run_lock: Option<std::fs::File>,
@@ -113,6 +117,7 @@ impl Updates {
     pub fn new(link: Option<AppLink>, root: Option<PathBuf>) -> Updates {
         let settings = root.as_deref().map(Settings::load).unwrap_or_default();
         Updates {
+            _heartbeat: link.as_ref().map(AppLink::start_heartbeat),
             _run_lock: link.as_ref().and_then(AppLink::hold_run_lock),
             link,
             root,
@@ -398,9 +403,20 @@ pub enum OpenChoice {
     Cancel,
 }
 
-/// The question about unsaved changes before another file replaces the drawing. `name` is the
-/// file that waits.
-pub fn open_dialog(ctx: &egui::Context, name: &str) -> Option<OpenChoice> {
+/// What waits behind the question.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AskKind {
+    /// A file of the person (File > Open, the launcher).
+    Open,
+    /// File > New.
+    New,
+    /// A file that an agent wanted to open (the call was refused).
+    Agent,
+}
+
+/// The question about unsaved changes before something replaces the drawing. `name` is the file
+/// (or the new drawing) that waits.
+pub fn open_dialog(ctx: &egui::Context, kind: AskKind, name: &str) -> Option<OpenChoice> {
     let mut choice = None;
     egui::Window::new(tr!("app-open-title"))
         .id(egui::Id::new("win-open-unsaved"))
@@ -408,7 +424,11 @@ pub fn open_dialog(ctx: &egui::Context, name: &str) -> Option<OpenChoice> {
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.label(tr!("app-open-unsaved-question", name = name));
+            ui.label(match kind {
+                AskKind::Open => tr!("app-open-unsaved-question", name = name),
+                AskKind::New => tr!("app-open-unsaved-new"),
+                AskKind::Agent => tr!("app-open-unsaved-agent", name = name),
+            });
             ui.horizontal(|ui| {
                 if ui.button(tr!("app-open-save-and-open")).clicked() {
                     choice = Some(OpenChoice::SaveAndOpen);
@@ -416,7 +436,12 @@ pub fn open_dialog(ctx: &egui::Context, name: &str) -> Option<OpenChoice> {
                 if ui.button(tr!("app-open-dont-save")).clicked() {
                     choice = Some(OpenChoice::DiscardAndOpen);
                 }
-                if ui.button(tr!("app-updates-cancel")).clicked() {
+                let cancel = if kind == AskKind::Agent {
+                    tr!("app-open-refuse")
+                } else {
+                    tr!("app-updates-cancel")
+                };
+                if ui.button(cancel).clicked() {
                     choice = Some(OpenChoice::Cancel);
                 }
             });

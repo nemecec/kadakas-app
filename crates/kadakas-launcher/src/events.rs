@@ -15,7 +15,8 @@
 // The code is used on macOS only (`appkit.rs`); on other systems only the tests call it.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
-use kadakas_update::inbox::{Delivery, Inbox};
+use kadakas_update::handshake::ENV_VIA;
+use kadakas_update::inbox::{Delivery, Inbox, Running};
 use kadakas_update::supervisor::{SpawnSpec, Spawner};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -44,7 +45,7 @@ pub trait SystemEvents: Send + Sync {
     fn activate(&self, pid: u32);
 }
 
-/// True when the program runs from inside a macOS app bundle (`Kadakas.app/Contents/MacOS/...`).
+/// True when the program runs from inside a macOS app bundle (`Kadakas Engine.app/Contents/MacOS/...`).
 pub fn in_app_bundle(exe: &Path) -> bool {
     let parent = exe.parent();
     let contents = parent.and_then(Path::parent);
@@ -56,8 +57,9 @@ pub fn in_app_bundle(exe: &Path) -> bool {
             .is_some_and(|e| e == "app")
 }
 
-/// How long the launcher waits for the app to read a request, before it starts another app.
-pub const READ_WAIT: Duration = Duration::from_secs(5);
+/// How long the launcher waits for the app to read a request, before it starts another app (only
+/// an app without the alive stamp, see `Forwarder::open`).
+pub const READ_WAIT: Duration = Duration::from_secs(10);
 
 /// Hands files to the running app.
 pub struct Forwarder {
@@ -95,34 +97,60 @@ impl Forwarder {
     /// for the next start.
     pub fn open(self: &Arc<Self>, files: Vec<OsString>) {
         let Delivery::Forwarded(run) = self.inbox.deliver(files) else {
+            if self.inbox.unlinked() {
+                // The app runs without a run record, so it cannot be told. There is no window
+                // here to show it; the line is in the log of the launcher.
+                eprintln!(
+                    "kadakas-launcher: the running app has no run record; the file opens when it is closed"
+                );
+            }
             return;
         };
         if let Some(pid) = run.pid {
             self.system.activate(pid);
         }
-        // An app that does not read requests would leave the person with a click that did
-        // nothing: after a wait, the request is taken back and another app starts with the files.
+        // An app that never reads requests (an old version, without the alive stamp) would leave
+        // the person with a click that did nothing: after the wait, the request is taken back and
+        // another app starts with the files. An app with the alive stamp is slow, not gone: a
+        // file dialog blocks its window loop, a big file loads, the window is minimised. Then the
+        // launcher waits as long as it lives. If the app ends, the supervisor takes the request
+        // back and starts the app again with the file (`Inbox::end_run`).
         let me = self.clone();
         std::thread::spawn(move || {
             let deadline = Instant::now() + me.wait;
             while me.inbox.unread(&run.id) {
-                if Instant::now() >= deadline {
-                    let files = me.inbox.reclaim(&run.id);
-                    if !files.is_empty() {
-                        let spec = SpawnSpec {
-                            files,
-                            env: Vec::new(),
-                            ..run.spec.clone()
-                        };
-                        if let Err(e) = me.spawner.spawn(&spec) {
-                            eprintln!("kadakas-launcher: could not open the documents: {e}");
-                        }
-                    }
+                if me.inbox.running().map(|r| r.id) != Some(run.id.clone()) {
+                    return;
+                }
+                if Instant::now() >= deadline && !me.inbox.alive_stamp(&run.id) {
+                    me.start_another(&run);
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
         });
+    }
+
+    /// Starts another app with the files that run `run` did not read. It is not supervised (no run
+    /// variables, no crash mark), but it is waited for, so that it never stays a zombie.
+    fn start_another(&self, run: &Running) {
+        let files = self.inbox.reclaim(&run.id);
+        if files.is_empty() {
+            return;
+        }
+        let spec = SpawnSpec {
+            files,
+            env: vec![(ENV_VIA.to_string(), "1".to_string())],
+            ..run.spec.clone()
+        };
+        match self.spawner.spawn(&spec) {
+            Ok(mut child) => {
+                while matches!(child.try_wait(), Ok(None)) {
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+            }
+            Err(e) => eprintln!("kadakas-launcher: could not open the documents: {e}"),
+        }
     }
 
     /// A click on the icon: brings the running app to the front.
@@ -222,7 +250,7 @@ mod tests {
                 flavor: Flavor {
                     id: "kadakas-app".into(),
                     name: "Kadakas".into(),
-                    exe: "Kadakas.app/Contents/MacOS/kadakas-app".into(),
+                    exe: "Kadakas Engine.app/Contents/MacOS/kadakas-app".into(),
                 },
                 profile: "p".into(),
                 files: files(&["/old.kad"]),
@@ -243,6 +271,8 @@ mod tests {
         stopped: Mutex<Option<bool>>,
         done: AtomicBool,
         spawned: Mutex<Vec<SpawnSpec>>,
+        /// How often the supervisor-less launcher looked at the second app.
+        looks: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl FakeSystem {
@@ -255,6 +285,7 @@ mod tests {
                 stopped: Mutex::new(None),
                 done: AtomicBool::new(false),
                 spawned: Mutex::new(Vec::new()),
+                looks: Arc::default(),
             })
         }
     }
@@ -291,17 +322,19 @@ mod tests {
         }
     }
 
-    struct FakeProcess;
+    /// A program that runs for three looks.
+    struct FakeProcess(Arc<std::sync::atomic::AtomicUsize>);
     impl Process for FakeProcess {
         fn try_wait(&mut self) -> std::io::Result<Option<bool>> {
-            Ok(Some(true))
+            let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok((n >= 3).then_some(true))
         }
     }
 
     impl Spawner for FakeSystem {
         fn spawn(&self, spec: &SpawnSpec) -> kadakas_update::Result<Box<dyn Process>> {
             self.spawned.lock().unwrap().push(spec.clone());
-            Ok(Box::new(FakeProcess))
+            Ok(Box::new(FakeProcess(self.looks.clone())))
         }
     }
 
@@ -312,14 +345,14 @@ mod tests {
     #[test]
     fn the_bundle_path_is_recognised() {
         assert!(in_app_bundle(Path::new(
-            "/Applications/Kadakas.app/Contents/MacOS/kadakas-launcher"
+            "/Applications/Kadakas Engine.app/Contents/MacOS/kadakas-launcher"
         )));
         assert!(in_app_bundle(Path::new(
             "/x/Other Name.app/Contents/MacOS/k"
         )));
         for no in [
             "/target/debug/kadakas-launcher",
-            "/Applications/Kadakas.app/Contents/Resources/k",
+            "/Applications/Kadakas Engine.app/Contents/Resources/k",
             "/Applications/Kadakas/Contents/MacOS/k",
             "/Contents/MacOS/k",
             "k",
@@ -433,13 +466,60 @@ mod tests {
         assert_eq!(spawned.len(), 1);
         // Same version and flavor, the new files only, and no run variables: it is not supervised.
         assert_eq!(spawned[0].files, files(&["/third.kad"]));
-        assert!(spawned[0].env.is_empty());
+        // Not supervised (no run variables), but marked as started by the launcher.
+        assert_eq!(spawned[0].env, [(ENV_VIA.to_string(), "1".to_string())]);
         assert_eq!(spawned[0].dir, PathBuf::from("/v/1.0.0"));
         assert_eq!(spawned[0].profile, "p");
         // The request was taken back: nothing is left.
         assert!(!fwd.inbox.unread("1a"));
+        // The second app is waited for until it ends (no zombie): the launcher looks again and
+        // again, 250 ms apart, until the program says it is done.
+        let t = Instant::now();
+        while sys.looks.load(Ordering::SeqCst) < 3 && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(sys.looks.load(Ordering::SeqCst), 3);
         // No pid: nothing to bring to the front.
         assert!(sys.activated.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// The app has the alive stamp: it is slow (a file dialog), not gone. The launcher waits.
+    #[test]
+    fn a_slow_app_with_the_alive_stamp_gets_no_second_app() {
+        let d = tmp("slow");
+        let sys = FakeSystem::new(&[], true);
+        let fwd = forwarder(&d, &sys, Duration::from_millis(60));
+        fwd.inbox.set_running(running("1a-2b", Some(5)));
+        let link = kadakas_update::handshake::AppLink::from_env(&|k| match k {
+            kadakas_update::handshake::ENV_ROOT => Some(d.to_string_lossy().into_owned()),
+            kadakas_update::handshake::ENV_RUN => Some("1a-2b".into()),
+            _ => None,
+        })
+        .unwrap();
+        let _beat = link.start_heartbeat();
+        fwd.open(files(&["/slow.kad"]));
+        // Well past the wait: still no second app, and the request waits for the app.
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(sys.spawned.lock().unwrap().is_empty());
+        assert!(fwd.inbox.unread("1a-2b"));
+        // The app comes back to its loop and reads it.
+        assert_eq!(link.take_open(), [PathBuf::from("/slow.kad")]);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// The app ends before it reads: the supervisor takes the request back, not this thread.
+    #[test]
+    fn when_the_app_ends_the_waiting_thread_leaves_the_request_to_the_supervisor() {
+        let d = tmp("ended");
+        let sys = FakeSystem::new(&[], true);
+        let fwd = forwarder(&d, &sys, Duration::from_millis(30));
+        fwd.inbox.set_running(running("1a", None));
+        fwd.open(files(&["/x.kad"]));
+        let left = fwd.inbox.end_run();
+        assert_eq!(left, files(&["/x.kad"]));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(sys.spawned.lock().unwrap().is_empty());
         std::fs::remove_dir_all(&d).unwrap();
     }
 

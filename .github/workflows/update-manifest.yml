@@ -131,10 +131,14 @@ jobs:
           keys=()
           while read -r k; do keys+=(--pubkey "$k"); done < <(sed 's/#.*//' crates/kadakas-launcher/trusted-keys.txt | tr -d ' \r' | grep -E '^[0-9a-fA-F]{64}$')
           platforms=()
-          # The macOS archive is the whole app bundle `Kadakas.app` (scripts/macos-app.sh). A release
-          # from before the launcher handled macOS has none: the platform is left out for it.
+          # Every platform needs its archive. The macOS archive is the whole app bundle
+          # `Kadakas Engine.app` (scripts/macos-app.sh). A manifest without a platform would leave
+          # its users without updates and nobody would see it, so a missing archive stops the job.
           for p in macos-aarch64 macos-x86_64 windows-x86_64 linux-x86_64; do
-            if [ ! -f "archives/kadakas-update-$p.tar.gz" ]; then echo "no archive for $p in $TAG, left out"; continue; fi
+            if [ ! -f "archives/kadakas-update-$p.tar.gz" ]; then
+              echo "::error::The release $TAG has no update archive for $p (kadakas-update-$p.tar.gz). Build it again with release.yml."
+              exit 1
+            fi
             platforms+=(--platform "$p=archives/kadakas-update-$p.tar.gz=https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/kadakas-update-$p.tar.gz")
           done
           # A version with a dash (1.2.0-beta.1) is a beta. A stable release also goes to the beta

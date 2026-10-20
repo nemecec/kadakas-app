@@ -396,6 +396,7 @@ mod tests {
             let build = kadakas_update::local::LocalBuild {
                 dir,
                 files: vec![PathBuf::from(exe)],
+                links: Vec::new(),
             };
             let v = Version::parse(&format!("1.0.0-local.{}", ver.replace('.', "x"))).unwrap();
             m.updater

@@ -78,6 +78,15 @@ impl Delegate {
     }
 }
 
+unsafe extern "C" {
+    static _dispatch_main_q: std::ffi::c_void;
+    fn dispatch_async_f(
+        queue: *const std::ffi::c_void,
+        context: *mut std::ffi::c_void,
+        work: extern "C" fn(*mut std::ffi::c_void),
+    );
+}
+
 /// The real system events.
 pub struct AppKitEvents;
 
@@ -98,8 +107,33 @@ impl SystemEvents for AppKitEvents {
     }
 
     fn stop(&self, success: bool) {
-        // The launcher has nothing to clean up: the app and the run files are settled already.
-        std::process::exit(if success { 0 } else { 1 });
+        // Called from the worker thread. AppKit wants its calls on the main thread, so the
+        // termination goes there (a block on the main queue, run by the event loop).
+        extern "C" fn terminate(context: *mut std::ffi::c_void) {
+            let success = !context.is_null();
+            if !success {
+                // `terminate:` ends the process with status 0. A failed start must say 1.
+                std::process::exit(1);
+            }
+            if let Some(mtm) = MainThreadMarker::new() {
+                NSApplication::sharedApplication(mtm).terminate(None);
+            }
+            std::process::exit(0);
+        }
+        // SAFETY: `_dispatch_main_q` is the main queue of libdispatch, `dispatch_async_f` takes a
+        // plain function and a context pointer that it passes on unchanged (here a flag, not a
+        // pointer to memory).
+        unsafe {
+            dispatch_async_f(
+                std::ptr::addr_of!(_dispatch_main_q),
+                if success {
+                    std::ptr::dangling_mut()
+                } else {
+                    std::ptr::null_mut()
+                },
+                terminate,
+            );
+        }
     }
 
     fn activate(&self, pid: u32) {
