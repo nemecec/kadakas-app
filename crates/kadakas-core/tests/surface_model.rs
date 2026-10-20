@@ -129,7 +129,7 @@ fn the_command_checks_its_object() {
         "v": 1, "next_id": 5, "vertices": [[1, 0, 0, 0]]
     }))
     .unwrap();
-    let err = ed
+    let err = Editor::with_sequential_ids()
         .execute(&Command::AddObject {
             shape: Shape::SurfaceModel(Box::new(bad)),
             layer: None,
