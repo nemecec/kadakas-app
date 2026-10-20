@@ -80,6 +80,7 @@ struct SurfaceIn {
     @location(3) uv: vec2<f32>,
     @location(4) material: u32,
     @location(5) order: f32,
+    @location(6) flags: u32,
 };
 struct SurfaceOut {
     @builtin(position) clip: vec4<f32>,
@@ -88,6 +89,7 @@ struct SurfaceOut {
     @location(2) world: vec3<f32>,
     @location(3) uv: vec2<f32>,
     @location(4) @interpolate(flat) material: u32,
+    @location(5) @interpolate(flat) flags: u32,
 };
 
 @vertex
@@ -102,6 +104,7 @@ fn vs_surface(v: SurfaceIn) -> SurfaceOut {
     o.world = v.pos;
     o.uv = v.uv;
     o.material = v.material;
+    o.flags = v.flags;
     return o;
 }
 
@@ -136,9 +139,10 @@ fn shade(i: SurfaceOut) -> vec4<f32> {
     // Both sides are lit: turn the normal toward the viewer.
     if (dot(n, to_eye) < 0.0) {
         n = -n;
-        // A face of a surface model (vertex alpha 254/255) shows its back in the back color.
-        if (i.color.a > 0.99 && i.color.a < 0.9985 && !has_material) {
-            albedo = vec3<f32>(0.58, 0.66, 0.78);
+        // A face of a surface model (flag 1) shows its back in the back color, unless it has a
+        // material: then the material shows on both sides.
+        if ((i.flags & 1u) != 0u && !has_material) {
+            albedo = vec3<f32>(0.5804, 0.6588, 0.7804);
         }
     }
 
@@ -742,7 +746,7 @@ impl Gpu3d {
             })
         };
         let surface_attrs = wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Float32x2, 4 => Uint32, 5 => Float32
+            0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Float32x2, 4 => Uint32, 5 => Float32, 6 => Uint32
         ];
         let line_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4, 2 => Float32x3];
         let surface_stride = std::mem::size_of::<SurfaceVertex>() as u64;

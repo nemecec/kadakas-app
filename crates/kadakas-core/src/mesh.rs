@@ -55,9 +55,20 @@ pub struct Mesh {
     pub tri_part: Vec<u8>,
     /// The part that new triangles get.
     pub part: u8,
+    /// Vertices of two-sided surfaces (faces of a surface model): the back of a face is drawn in
+    /// the back color ([`SURFACE_BACK`]). It may be shorter than `positions`; a vertex past the
+    /// end is one-sided. Use [`Mesh::is_two_sided`].
+    pub two_sided: Vec<bool>,
+    /// New vertices are two-sided while this is true.
+    pub two_sided_mode: bool,
 }
 
 impl Mesh {
+    /// True if vertex `i` belongs to a two-sided surface.
+    pub fn is_two_sided(&self, i: usize) -> bool {
+        self.two_sided.get(i).copied().unwrap_or(false)
+    }
+
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
     }
@@ -73,6 +84,10 @@ impl Mesh {
     }
 
     fn vertex(&mut self, p: Vec3, n: Vec3, c: [u8; 4]) -> u32 {
+        if self.two_sided_mode {
+            self.two_sided.resize(self.positions.len(), false);
+            self.two_sided.push(true);
+        }
         self.positions.push(p);
         self.normals.push(n);
         self.colors.push(c);
@@ -711,8 +726,8 @@ impl UnitSphere {
     }
 }
 
-/// The alpha of a vertex color that marks a two-sided surface (a face of a surface model).
-pub const SURFACE_TWO_SIDED: u8 = 254;
+/// The color of the back of a face of a surface model. The GPU shader has the same color.
+pub const SURFACE_BACK: [u8; 4] = [148, 168, 199, 255];
 /// The front color of a face of a surface model that has no fill.
 pub const SURFACE_FRONT: [u8; 4] = [236, 236, 230, 255];
 
@@ -884,12 +899,8 @@ impl Builder<'_> {
             Shape::SurfaceModel(m) => {
                 // Local coordinates through the transform; `z` is measured from the layer.
                 if let Ok(sm) = m.mesh() {
-                    // The alpha 254 marks a two-sided surface: the GPU shows the back of a face
-                    // in the back color (see `SURFACE_TWO_SIDED`).
-                    let mut color = fill.unwrap_or(SURFACE_FRONT);
-                    if color[3] == 255 {
-                        color[3] = SURFACE_TWO_SIDED;
-                    }
+                    // A two-sided surface: the back of a face is drawn in the back color.
+                    let color = fill.unwrap_or(SURFACE_FRONT);
                     let pts: Vec<Vec3> = sm
                         .positions
                         .iter()
@@ -909,15 +920,19 @@ impl Builder<'_> {
                         sm.triangles
                     };
                     self.scene.mesh.part = PART_MAIN;
+                    self.scene.mesh.two_sided_mode = true;
                     add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
+                    self.scene.mesh.two_sided_mode = false;
                 }
-                // The edges (not the hidden ones) as lines.
+                // The edges as lines, but not the hidden ones and not the smooth ones (the
+                // edges that shade a curved surface round, like the sides of a cylinder).
                 for (eid, e) in m.edges() {
-                    let hidden = m
-                        .edge_attrs(eid)
-                        .and_then(|a| a.get("hidden"))
-                        .is_some_and(|v| v == &serde_json::Value::Bool(true));
-                    if hidden {
+                    let flagged = |k: &str| {
+                        m.edge_attrs(eid)
+                            .and_then(|a| a.get(k))
+                            .is_some_and(|v| v == &serde_json::Value::Bool(true))
+                    };
+                    if flagged("hidden") || flagged("smooth") {
                         continue;
                     }
                     if let (Some(a), Some(b)) = (m.vertex(e.v[0]), m.vertex(e.v[1])) {

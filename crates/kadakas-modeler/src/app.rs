@@ -431,13 +431,13 @@ impl ModelerApp {
                 }
             }
             Cmd::Undo => {
-                self.edit.modeling.cancel();
+                self.edit.modeling.abort();
                 if !self.session.editor.undo() {
                     self.status = tr!("modeler-nothing-to-undo");
                 }
             }
             Cmd::Redo => {
-                self.edit.modeling.cancel();
+                self.edit.modeling.abort();
                 if !self.session.editor.redo() {
                     self.status = tr!("modeler-nothing-to-redo");
                 }

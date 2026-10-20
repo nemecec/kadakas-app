@@ -109,6 +109,8 @@ impl SubSelection {
 /// The face or edge under the pointer. `engine` is an inferencer of its own, so that the locks
 /// of a tool do not change what a click selects.
 pub fn pick(world: &World, engine: &mut Inferencer, cam: &Camera, cursor: DVec2) -> Option<Item> {
+    // A pick is its own question: nothing of an earlier pick (a hovered edge) may change it.
+    engine.reset();
     let inf = world.infer(engine, cam, cursor, None, &super::Excluded::default());
     let model = world.scenes.object(inf.source)?;
     match inf.source.kind() {
@@ -133,6 +135,73 @@ pub fn face_edges(doc: &Document, model: ObjectId, face: FaceId) -> Vec<EdgeId> 
         }
     }
     out.into_iter().collect()
+}
+
+/// The faces that use an edge.
+pub fn edge_faces(doc: &Document, model: ObjectId, edge: EdgeId) -> Vec<FaceId> {
+    model_of(doc, model).map_or_else(Vec::new, |m| m.faces_of_edge(edge))
+}
+
+/// A face with its edges, or an edge with its faces (a double click).
+pub fn with_neighbors(doc: &Document, item: Item) -> Vec<Item> {
+    match item {
+        Item::Face(m, f) => std::iter::once(item)
+            .chain(face_edges(doc, m, f).into_iter().map(|e| Item::Edge(m, e)))
+            .collect(),
+        Item::Edge(m, e) => std::iter::once(item)
+            .chain(edge_faces(doc, m, e).into_iter().map(|f| Item::Face(m, f)))
+            .collect(),
+    }
+}
+
+/// All faces and edges that are connected to the item through shared vertices (a triple click).
+/// Geometry in the same model that touches nothing of it is not included.
+pub fn connected(doc: &Document, item: Item) -> Vec<Item> {
+    let model = item.model();
+    let Some(m) = model_of(doc, model) else {
+        return Vec::new();
+    };
+    let mut verts: BTreeSet<kadakas_core::surface::VertexId> = BTreeSet::new();
+    match item {
+        Item::Edge(_, e) => {
+            if let Some(x) = m.edge(e) {
+                verts.extend(x.v);
+            }
+        }
+        Item::Face(_, f) => {
+            if let Some(f) = m.face(f) {
+                verts.extend(f.loops().flatten().copied());
+            }
+        }
+    }
+    // Grow until no edge or face adds a vertex.
+    loop {
+        let before = verts.len();
+        for (_, e) in m.edges() {
+            if e.v.iter().any(|v| verts.contains(v)) {
+                verts.extend(e.v);
+            }
+        }
+        for (_, f) in m.faces() {
+            if f.loops().flatten().any(|v| verts.contains(v)) {
+                verts.extend(f.loops().flatten().copied());
+            }
+        }
+        if verts.len() == before {
+            break;
+        }
+    }
+    let mut out: Vec<Item> = m
+        .edges()
+        .filter(|(_, e)| e.v.iter().any(|v| verts.contains(v)))
+        .map(|(id, _)| Item::Edge(model, id))
+        .collect();
+    out.extend(
+        m.faces()
+            .filter(|(_, f)| f.outer.iter().any(|v| verts.contains(v)))
+            .map(|(id, _)| Item::Face(model, id)),
+    );
+    out
 }
 
 /// Does the segment touch the rectangle? Both in pixels.

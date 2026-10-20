@@ -47,3 +47,29 @@ pub fn top_ortho(half_height: f32) -> Camera {
 pub fn close(a: Vec3, b: Vec3) -> bool {
     (a - b).length() < 1e-4
 }
+
+/// A surface model with one square face (2 * `half` mm wide, facing up) in the document.
+pub fn add_surface_square(ed: &mut Editor, half: f64) -> ObjectId {
+    let id = add(ed, Shape::SurfaceModel(Box::default()), None);
+    let p = [
+        [-half, -half, 0.0],
+        [half, -half, 0.0],
+        [half, half, 0.0],
+        [-half, half, 0.0],
+    ];
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: kadakas_core::surface::Edit::AddEdges {
+            edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+        },
+    })
+    .unwrap();
+    id
+}
+
+/// The camera of `top_ortho` seen from below.
+pub fn bottom_ortho(half_height: f32) -> Camera {
+    let mut c = top_ortho(half_height);
+    c.set_view(StandardView::Bottom);
+    c
+}

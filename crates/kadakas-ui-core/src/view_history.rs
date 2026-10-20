@@ -112,6 +112,18 @@ impl<S: Copy + PartialEq> ViewHistory<S> {
         self.entries.is_empty()
     }
 
+    /// Changes every view of the history (and the one that is waiting to settle) with `f`, for a
+    /// change of the coordinates of the scene. The history keeps its entries and its place, and
+    /// the change is not an entry of its own.
+    pub fn map_all(&mut self, f: impl Fn(S) -> S) {
+        for e in &mut self.entries {
+            *e = f(*e);
+        }
+        if let Some((s, _)) = &mut self.seen {
+            *s = f(*s);
+        }
+    }
+
     /// Forget everything (a new document).
     pub fn clear(&mut self) {
         *self = ViewHistory::default();

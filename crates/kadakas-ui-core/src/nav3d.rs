@@ -405,6 +405,17 @@ impl Nav3d {
         self.history.observe(now, self.camera)
     }
 
+    /// The scene moved by `delta` in its own coordinates (its origin moved by `-delta`): the
+    /// camera and every view of the history move with it, so the views still show the same place
+    /// of the world. The move is not an entry of the history.
+    pub fn shift_world(&mut self, delta: Vec3) {
+        self.camera.target += delta;
+        self.history.map_all(|mut c| {
+            c.target += delta;
+            c
+        });
+    }
+
     /// Goes back to the view before this one. False when there is none.
     pub fn previous_view(&mut self) -> bool {
         // The view that you leave can be reached again with Next.
@@ -1126,5 +1137,31 @@ mod tests {
             point_under(&empty, &Nav3d::new().camera, SIZE / 2.0, SIZE),
             None
         );
+    }
+
+    #[test]
+    fn a_shift_of_the_scene_moves_the_history_with_it_and_is_no_entry() {
+        let mut n = Nav3d::new();
+        n.camera.target = Vec3::new(10.0, 0.0, 0.0);
+        n.observe(0.0);
+        n.observe(1.0);
+        n.camera.target = Vec3::new(50.0, 0.0, 0.0);
+        n.observe(1.1);
+        n.observe(2.0);
+        assert!(n.can_go_back());
+        n.shift_world(Vec3::new(-5.0, 2.0, 0.0));
+        // Nothing new waits to settle, and no entry was added by the shift.
+        assert!(!n.observe(2.1));
+        assert!(!n.observe(5.0));
+        assert_eq!(n.camera.target, Vec3::new(45.0, 2.0, 0.0));
+        assert!(n.previous_view());
+        assert_eq!(
+            n.camera.target,
+            Vec3::new(5.0, 2.0, 0.0),
+            "the old view shows the same place of the world"
+        );
+        assert!(!n.can_go_back(), "only the two views");
+        assert!(n.next_view());
+        assert_eq!(n.camera.target, Vec3::new(45.0, 2.0, 0.0));
     }
 }

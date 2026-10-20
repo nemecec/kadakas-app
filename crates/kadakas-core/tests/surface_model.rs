@@ -309,3 +309,53 @@ fn push_pull_and_add_curve_are_one_undo_step_each() {
     assert!(ed.undo());
     assert_eq!(model(&ed, id), &boxed);
 }
+
+#[test]
+fn smooth_edges_are_not_lines_and_the_faces_of_a_model_are_two_sided() {
+    let mut ed = Editor::with_sequential_ids();
+    let id = add_model(&mut ed);
+    edit(
+        &mut ed,
+        id,
+        Edit::AddCurve {
+            points: (0..12)
+                .map(|i| {
+                    let a = std::f64::consts::TAU * f64::from(i) / 12.0;
+                    [300.0 * a.cos(), 300.0 * a.sin(), 0.0]
+                })
+                .collect(),
+            closed: true,
+        },
+    )
+    .unwrap();
+    let face = model(&ed, id).faces().next().unwrap().0;
+    edit(
+        &mut ed,
+        id,
+        Edit::PushPull {
+            face,
+            distance: 800.0,
+        },
+    )
+    .unwrap();
+    let scene = mesh::build(ed.doc());
+    // 12 + 12 edges of the two circles; the 12 smooth edges of the side are not drawn.
+    assert_eq!(scene.lines.segment_count(), 24);
+    assert_eq!(model(&ed, id).edge_count(), 36);
+    assert!(!scene.mesh.positions.is_empty());
+    assert!((0..scene.mesh.positions.len()).all(|i| scene.mesh.is_two_sided(i)));
+    // Other objects are one-sided.
+    let mut ed2 = Editor::default();
+    ed2.execute(&Command::AddObject {
+        shape: Shape::Rect {
+            min: DVec2::ZERO,
+            max: DVec2::splat(100.0),
+        },
+        layer: None,
+        class: None,
+        attrs: Attributes::default(),
+    })
+    .unwrap();
+    let s2 = mesh::build(ed2.doc());
+    assert!((0..s2.mesh.positions.len()).all(|i| !s2.mesh.is_two_sided(i)));
+}

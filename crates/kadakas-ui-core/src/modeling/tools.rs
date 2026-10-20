@@ -137,6 +137,8 @@ enum Run {
         base: DVec3,
         normal: DVec3,
         loops: Vec<Vec<DVec3>>,
+        /// The edges of the face: they move or stay with it, so the inference skips them too.
+        edges: Vec<EdgeId>,
         distance: f64,
     },
 }
@@ -279,13 +281,25 @@ impl Modeling {
     pub fn excluded(&self) -> Excluded {
         let mut e = Excluded::default();
         match &self.run {
-            Run::Pull { model, face, .. } => {
+            Run::Pull {
+                model, face, edges, ..
+            } => {
                 e.faces.insert((*model, *face));
+                e.edges.extend(edges.iter().map(|x| (*model, *x)));
             }
             Run::Erase { marked, .. } => e.edges.clone_from(marked),
             _ => {}
         }
         e
+    }
+
+    /// Drops what is in progress and the typed text at once, whatever it was (an undo or a redo
+    /// can remove the face or the points that a tool holds). The tool stays chosen.
+    pub fn abort(&mut self) {
+        self.run = Run::Idle;
+        self.cursor = None;
+        self.typed.clear();
+        self.hover_edge = None;
     }
 
     /// Ends what is in progress or clears the typed text. True if there was something.
@@ -772,6 +786,7 @@ impl Modeling {
             base: p.inf.point,
             normal: pl.n,
             loops: w.face_loops(model, face),
+            edges: super::select::face_edges(w.doc, model, face),
             distance: 0.0,
         };
         self.cursor = Some(p.inf.point);
@@ -780,7 +795,7 @@ impl Modeling {
 
     fn finish_pull(&mut self, model: ObjectId, face: FaceId, d: f64, redo: bool) -> Out {
         if d.abs() < MIN_LEN {
-            return Out::default();
+            return Out::msg(tr!("uic-modeling-too-small"));
         }
         self.last_pull = Some(d);
         self.pending = Some(Last::Pull {
@@ -828,6 +843,14 @@ impl Modeling {
                 self.typed = text;
                 Out::msg(e.message())
             }
+        }
+    }
+
+    /// The actions were refused and the step that was taken back for them is back: the revision
+    /// moved on, but the document is as it was, so the step can still be redone with a new value.
+    pub fn refused(&mut self, revision: u64) {
+        if let Some((l, _)) = self.last {
+            self.last = Some((l, revision));
         }
     }
 

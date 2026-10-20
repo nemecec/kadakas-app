@@ -22,8 +22,14 @@ fn poly(m: &mut SurfaceModel, pts: &[P]) {
     m.apply(&Edit::AddEdges { edges }).unwrap();
 }
 
+/// A push/pull that must leave a valid model whenever it works.
 fn pull(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<(), SurfaceError> {
-    m.apply(&Edit::PushPull { face, distance: d })
+    let r = m.apply(&Edit::PushPull { face, distance: d });
+    if r.is_ok() {
+        let rep = m.check();
+        assert!(rep.is_valid(), "{:?}", rep.problems);
+    }
+    r
 }
 
 fn only_face(m: &SurfaceModel) -> FaceId {
@@ -390,4 +396,161 @@ fn a_degenerate_curve_is_refused() {
         .is_err()
     );
     assert!(m.is_empty());
+}
+
+/// The box (1000 x 1000 x 500) with its top split by a line at x = 500 into two faces. Returns the
+/// left half (x < 500) and the right half.
+fn split_top() -> (SurfaceModel, FaceId, FaceId) {
+    let mut m = box_model();
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[500.0, 0.0, 500.0], [500.0, 1000.0, 500.0]]],
+    })
+    .unwrap();
+    let halves: Vec<(FaceId, f64)> = m
+        .faces()
+        .filter(|(_, f)| f.plane.normal.z > 0.9)
+        .map(|(id, f)| {
+            let x: f64 =
+                f.outer.iter().map(|v| m.vertex(*v).unwrap().x).sum::<f64>() / f.outer.len() as f64;
+            (id, x)
+        })
+        .collect();
+    assert_eq!(halves.len(), 2);
+    let (l, r) = if halves[0].1 < halves[1].1 {
+        (halves[0].0, halves[1].0)
+    } else {
+        (halves[1].0, halves[0].0)
+    };
+    (m, l, r)
+}
+
+#[test]
+fn half_of_a_split_top_pushed_down_makes_a_step_and_stretches_the_walls() {
+    let (mut m, left, right) = split_top();
+    assert_eq!(m.face_count(), 7);
+    pull(&mut m, left, -200.0).unwrap();
+    let r = m.check();
+    assert!(r.is_closed(), "{r:?}");
+    // One new wall (under the middle line); the side walls got a step, no wall overlaps them.
+    assert_eq!(m.face_count(), 8);
+    let (lo, hi) = m.local_bounds().unwrap();
+    assert_eq!((lo.z, hi.z), (0.0, 500.0));
+    assert!((m.face(left).unwrap().plane.offset - 300.0).abs() < 1e-9);
+    assert!((m.face(right).unwrap().plane.offset - 500.0).abs() < 1e-9);
+    // The volume: 1000 x 1000 x 500 less 500 x 1000 x 200 = 4e8 mm3, from the area projected.
+    let mut vol = 0.0;
+    for (id, f) in m.faces() {
+        // Divergence theorem: sum of (area * n . p0) / 3.
+        let p0 = m.vertex(f.outer[0]).unwrap();
+        vol += m.face_area(id).unwrap() * f.plane.normal.dot(p0) / 3.0;
+    }
+    assert!((vol - 4.0e8).abs() < 1.0, "{vol}");
+}
+
+#[test]
+fn half_of_a_split_top_pulled_up_stretches_the_walls_without_extra_walls() {
+    let (mut m, left, _right) = split_top();
+    pull(&mut m, left, 300.0).unwrap();
+    let r = m.check();
+    assert!(r.is_closed(), "{r:?}");
+    assert_eq!(m.face_count(), 8, "one wall at the middle line only");
+    // No two coplanar faces are neighbours with a line between them: every pair of faces that
+    // share an edge is either at an angle, or the two halves of nothing.
+    for (e, _) in m.edges() {
+        let fs = m.faces_of_edge(e);
+        if let [a, b] = fs.as_slice() {
+            let (na, nb) = (
+                m.face(*a).unwrap().plane.normal,
+                m.face(*b).unwrap().plane.normal,
+            );
+            assert!(na.dot(nb) < 1.0 - 1e-9, "coplanar neighbours at edge {e}");
+        }
+    }
+    assert_eq!(m.local_bounds().unwrap().1.z, 800.0);
+    let mut vol = 0.0;
+    for (id, f) in m.faces() {
+        let p0 = m.vertex(f.outer[0]).unwrap();
+        vol += m.face_area(id).unwrap() * f.plane.normal.dot(p0) / 3.0;
+    }
+    assert!((vol - 6.5e8).abs() < 1.0, "{vol}");
+}
+
+#[test]
+fn the_outer_top_with_a_hole_is_pulled_and_pushed_with_a_pocket_in_the_middle() {
+    for d in [100.0, -100.0] {
+        let (mut m, top, _inner) = box_with_inner_square();
+        pull(&mut m, top, d).unwrap();
+        let r = m.check();
+        assert!(r.is_closed(), "{d}: {r:?}");
+        // 7 faces and 4 walls around the hole.
+        assert_eq!(m.face_count(), 11, "{d}");
+        assert_eq!(m.face(top).unwrap().holes.len(), 1);
+    }
+}
+
+#[test]
+fn a_pocket_deeper_than_the_solid_is_refused_with_a_reason() {
+    let (m0, _top, inner) = box_with_inner_square();
+    for d in [-600.0, -500.0, -9000.0] {
+        let mut m = m0.clone();
+        let e = m
+            .apply(&Edit::PushPull {
+                face: inner,
+                distance: d,
+            })
+            .unwrap_err();
+        match e {
+            SurfaceError::Unsolved(why) => assert!(why.contains("through"), "{d}: {why}"),
+            other => panic!("{d}: {other:?}"),
+        }
+        assert_eq!(m, m0, "{d}: nothing changed");
+    }
+    // A pocket that stays inside is fine.
+    let mut m = m0.clone();
+    pull(&mut m, inner, -400.0).unwrap();
+    assert!(m.check().is_closed());
+}
+
+#[test]
+fn a_bump_that_would_run_into_another_solid_is_refused() {
+    // Two boxes: pulling the top of a bump up into the underside of a plate above it.
+    let mut m = box_model();
+    let mut plate = vec![];
+    for (a, b) in [
+        ([0.0, 0.0, 800.0], [1000.0, 0.0, 800.0]),
+        ([1000.0, 0.0, 800.0], [1000.0, 1000.0, 800.0]),
+        ([1000.0, 1000.0, 800.0], [0.0, 1000.0, 800.0]),
+        ([0.0, 1000.0, 800.0], [0.0, 0.0, 800.0]),
+    ] {
+        plate.push([a, b]);
+    }
+    m.apply(&Edit::AddEdges { edges: plate }).unwrap();
+    let top = m
+        .faces()
+        .find(|(_, f)| f.plane.normal.z > 0.9 && f.plane.offset == 500.0)
+        .unwrap()
+        .0;
+    m.apply(&Edit::AddEdges {
+        edges: (0..4)
+            .map(|i| {
+                let p = [
+                    [250.0, 250.0, 500.0],
+                    [750.0, 250.0, 500.0],
+                    [750.0, 750.0, 500.0],
+                    [250.0, 750.0, 500.0],
+                ];
+                [p[i], p[(i + 1) % 4]]
+            })
+            .collect(),
+    })
+    .unwrap();
+    let inner = m
+        .faces()
+        .find(|(id, f)| *id != top && f.plane.normal.z > 0.9 && f.plane.offset == 500.0)
+        .unwrap()
+        .0;
+    let before = m.clone();
+    assert!(pull(&mut m, inner, 400.0).is_err());
+    assert_eq!(m, before);
+    assert!(pull(&mut m, inner, 200.0).is_ok());
 }

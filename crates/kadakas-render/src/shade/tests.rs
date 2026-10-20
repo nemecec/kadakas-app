@@ -593,3 +593,24 @@ fn object_ranks_follow_the_document_order() {
     assert_eq!(ranks[&ids[1]], 1);
     assert!(crate::look::DEPTH_RANK_STEP * crate::look::DEPTH_RANK_MAX as f32 <= 3e-4);
 }
+
+#[test]
+fn the_pbr_renderer_shows_the_back_of_a_surface_model_face_in_the_back_color() {
+    let mut ed = Editor::default();
+    add_surface_square(&mut ed, 500.0);
+    let scene = scene_of(&ed);
+    let look = Look::build(ed.doc(), &scene, false);
+    let opts = ShadeOptions {
+        width: 60,
+        height: 60,
+        edges: false,
+        ..Default::default()
+    };
+    let front = render_scene(&scene, &look, &top_ortho(1000.0), &opts).pixel(30, 30);
+    let back = render_scene(&scene, &look, &bottom_ortho(1000.0), &opts).pixel(30, 30);
+    assert!(
+        front[0].abs_diff(front[2]) < 30,
+        "front is neutral: {front:?}"
+    );
+    assert!(back[2] > back[0] + 15, "back is bluish: {back:?}");
+}

@@ -18,7 +18,13 @@ pub struct SurfaceVertex {
     /// Place of the object in the drawing order (capped). Later objects move toward the viewer by
     /// `order * DEPTH_RANK_STEP`, so coplanar surfaces of different objects do not flicker.
     pub order: f32,
+    /// Bit flags, see `FLAG_TWO_SIDED`.
+    pub flags: u32,
 }
+
+/// The vertex belongs to a two-sided surface: the shader draws a back face in the back color
+/// (not when the vertex has a material: then the material shows on both sides).
+pub const FLAG_TWO_SIDED: u32 = 1;
 
 /// The material index of a vertex without material.
 pub const NO_MATERIAL: u32 = u32::MAX;
@@ -84,6 +90,7 @@ pub fn surface_vertices(scene: &Scene, look: Option<&Look>) -> Vec<SurfaceVertex
                 order: owner[i]
                     .and_then(|o| ranks.get(&o))
                     .map_or(0.0, |r| *r as f32),
+                flags: if m.is_two_sided(i) { FLAG_TWO_SIDED } else { 0 },
             }
         })
         .collect()
@@ -133,7 +140,7 @@ mod tests {
         let l = line_vertices(&scene);
         assert_eq!(l.len(), scene.lines.positions.len());
         assert_eq!(l[0].color, l[1].color);
-        assert_eq!(std::mem::size_of::<SurfaceVertex>(), 44);
+        assert_eq!(std::mem::size_of::<SurfaceVertex>(), 48);
         assert_eq!(s[0].material, NO_MATERIAL);
         assert_eq!(std::mem::size_of::<LineVertex>(), 28);
     }

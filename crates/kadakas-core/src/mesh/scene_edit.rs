@@ -55,6 +55,10 @@ impl Scene {
                         out.mesh.positions.push(self.mesh.positions[v]);
                         out.mesh.normals.push(self.mesh.normals[v]);
                         out.mesh.colors.push(self.mesh.colors[v]);
+                        if self.mesh.is_two_sided(v) {
+                            out.mesh.two_sided.resize(map[v] as usize, false);
+                            out.mesh.two_sided.push(true);
+                        }
                     }
                     out.mesh.indices.push(map[v]);
                 }
@@ -96,6 +100,10 @@ impl Scene {
             .extend(other.mesh.positions.iter().map(moved));
         self.mesh.normals.extend_from_slice(&other.mesh.normals);
         self.mesh.colors.extend_from_slice(&other.mesh.colors);
+        for (i, _) in other.mesh.two_sided.iter().enumerate().filter(|(_, t)| **t) {
+            self.mesh.two_sided.resize(base as usize + i, false);
+            self.mesh.two_sided.push(true);
+        }
         self.mesh
             .indices
             .extend(other.mesh.indices.iter().map(|i| i + base));

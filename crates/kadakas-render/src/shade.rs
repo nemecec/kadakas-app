@@ -517,7 +517,7 @@ pub fn render_scene(scene: &Scene, look: &Look, camera: &Camera, opts: &ShadeOpt
 
     let shade_frag = |t: usize, face_n: Vec3, f: &Frag| -> ([f32; 3], f32) {
         let mat = look.material_of(t);
-        let (albedo, alpha, rough, metal) = match mat {
+        let (mut albedo, alpha, rough, metal) = match mat {
             Some(m) => {
                 let base = match m.texture {
                     Some(ti) => {
@@ -542,6 +542,11 @@ pub fn render_scene(scene: &Scene, look: &Look, camera: &Camera, opts: &ShadeOpt
         // Both sides are lit: turn the normal toward the viewer.
         if face_n.dot(to_eye) < 0.0 {
             n = -n;
+            // The back of a face of a surface model has its own color (not with a material).
+            if mat.is_none() && mesh.is_two_sided(mesh.indices[t * 3] as usize) {
+                let b = kadakas_core::mesh::SURFACE_BACK;
+                albedo = [f32::from(b[0]), f32::from(b[1]), f32::from(b[2])];
+            }
         }
         let (light, spec) = match (opts.light, sun) {
             (Light::Sun(_), Some(l)) => {

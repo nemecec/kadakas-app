@@ -9,7 +9,7 @@ use kadakas_core::command::{Command, CommandError, Editor};
 use kadakas_core::model::{Attributes, Document, ObjectId, Shape};
 use kadakas_core::surface::{EdgeId, Edit, FaceId};
 
-use super::scenes::{elevation, frame_of};
+use super::scenes::{elevation, frame_of, model_of};
 
 /// The model that an action works in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,7 +168,7 @@ fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Comman
         Action::PushPull { face, distance, .. } => {
             vec![edit(Edit::PushPull {
                 face: *face,
-                distance: *distance,
+                distance: local_distance(doc, id, *face, *distance),
             })]
         }
         Action::Delete { faces, edges, .. } => {
@@ -185,6 +185,26 @@ fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Comman
             }
             v
         }
+    }
+}
+
+/// A distance along the normal of a face in the world (mm), as a distance along its normal in the
+/// local coordinates of the model: a model that is scaled has other units inside.
+pub fn local_distance(doc: &Document, id: ObjectId, face: FaceId, d: f64) -> f64 {
+    let Some(f) = model_of(doc, id).and_then(|m| m.face(face)) else {
+        return d;
+    };
+    let m3 = frame_of(doc, id).matrix3;
+    if m3.determinant().abs() < 1e-12 {
+        return d;
+    }
+    let n_local = f.plane.normal;
+    let n_world = (m3.inverse().transpose() * n_local).normalize_or_zero();
+    let v = m3.inverse() * (n_world * d);
+    if v.dot(n_local) < 0.0 {
+        -v.length()
+    } else {
+        v.length()
     }
 }
 

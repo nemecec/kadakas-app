@@ -383,3 +383,5 @@ fn the_modeling_texts_exist_in_both_languages() {
     let et = kadakas_l10n::with_language("et", || ModelerTool::Line.hint());
     assert_ne!(en, et);
 }
+
+mod editing;

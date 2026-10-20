@@ -165,7 +165,7 @@ impl Edit3d {
         if let Some(old) = self.origin
             && old != origin
         {
-            nav.camera.target += (old - origin).as_vec3();
+            nav.shift_world((old - origin).as_vec3());
         }
         self.origin = Some(origin);
     }
@@ -266,7 +266,7 @@ impl Edit3d {
         let mut out = Out::default();
         let mut selection_changed = false;
         let mut object_pick: Option<Option<kadakas_core::model::ObjectId>> = None;
-        let mut triple_model: Option<kadakas_core::model::ObjectId> = None;
+        let mut triple: Option<Item> = None;
         {
             let doc = session.editor.doc();
             let scenes = self.cache.get(doc, rev);
@@ -368,17 +368,12 @@ impl Edit3d {
                 {
                     let hit = modeling::select::pick(&world, &mut self.picker, &cam, local(p));
                     if inp.resp.triple_clicked_by(primary) {
-                        triple_model = hit.map(Item::model);
+                        // Everything connected to what was hit.
+                        triple = hit;
                     } else if inp.resp.double_clicked_by(primary) {
-                        // A face with its edges.
-                        if let Some(Item::Face(m, f)) = hit {
-                            let mut items = vec![Item::Face(m, f)];
-                            items.extend(
-                                modeling::select::face_edges(doc, m, f)
-                                    .into_iter()
-                                    .map(|e| Item::Edge(m, e)),
-                            );
-                            self.sub.set(items);
+                        // A face with its edges, or an edge with its faces.
+                        if let Some(item) = hit {
+                            self.sub.set(modeling::select::with_neighbors(doc, item));
                             selection_changed = true;
                         }
                     } else if hit.is_some() {
@@ -401,15 +396,18 @@ impl Edit3d {
             refresh_visuals(&mut self.visuals, &self.sub, &world, rev);
         }
 
-        if let Some(model) = triple_model {
-            self.sub.clear();
-            session.selection = vec![model];
+        if let Some(item) = triple {
+            self.sub
+                .set(modeling::select::connected(session.editor.doc(), item));
+            session.selection.clear();
         } else if selection_changed {
             if !self.sub.is_empty() {
                 session.selection.clear();
             }
         } else if let Some(None) = object_pick {
-            // Not on a part: a whole object (or nothing).
+            // A click that is on no face or edge of a surface model: the object under the
+            // pointer (or nothing). It replaces the selection of parts, but Shift on empty space
+            // keeps it.
             view3d.camera = *nav_cam;
             let size = inp.size;
             if let Some(p) = inp.resp.interact_pointer_pos() {
@@ -443,8 +441,9 @@ impl Edit3d {
             }
             Err(e) => {
                 self.message = Some(tr!("modeler-edit-failed", reason = e));
-                // A step that was taken back for a redo is not given back: the person sees the
-                // message and can undo or redo.
+                // A step that was taken back for a redo is back again (`exec::run`), so the tool
+                // can redo it with a corrected value.
+                self.modeling.refused(session.editor.revision());
             }
         }
     }

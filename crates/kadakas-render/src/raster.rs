@@ -237,11 +237,14 @@ pub fn render(scene: &Scene, camera: &Camera, opts: &RenderOptions) -> Image {
                 Projection::Orthographic => -fwd,
                 Projection::Perspective => (eye - mesh.positions[i[0]]).normalize_or_zero(),
             };
+            let mut base = mesh.colors[i[0]];
             if n.dot(to_eye) < 0.0 {
                 n = -n;
+                if mesh.is_two_sided(i[0]) {
+                    base = kadakas_core::mesh::SURFACE_BACK;
+                }
             }
             let f = lambert(n);
-            let base = mesh.colors[i[0]];
             let color = [
                 (base[0] as f32 * f) as u8,
                 (base[1] as f32 * f) as u8,
@@ -610,5 +613,24 @@ mod tests {
             .filter(|p| p[1] > p[0] && p[1] > p[2] && *p != &BACKGROUND[..])
             .count();
         assert!(green > 500, "canopy pixels: {green}");
+    }
+
+    #[test]
+    fn the_back_of_a_surface_model_face_has_the_back_color_like_on_the_gpu() {
+        let mut ed = Editor::default();
+        add_surface_square(&mut ed, 500.0);
+        let scene = scene_of(&ed);
+        let opts = RenderOptions {
+            width: 100,
+            height: 100,
+            ..Default::default()
+        };
+        let front = render(&scene, &top_ortho(1000.0), &opts).pixel(50, 50);
+        let back = render(&scene, &bottom_ortho(1000.0), &opts).pixel(50, 50);
+        assert!(
+            front[0].abs_diff(front[2]) < 30,
+            "front is neutral: {front:?}"
+        );
+        assert!(back[2] > back[0] + 15, "back is bluish: {back:?}");
     }
 }
