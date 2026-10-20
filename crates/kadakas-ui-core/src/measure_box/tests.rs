@@ -181,7 +181,7 @@ fn angles_with_marks_and_slopes() {
 
 #[test]
 fn copies_and_divisions() {
-    let after = |t: &str| run(t, &metric(), Tool::Move, Phase::Done);
+    let after = |t: &str| run(t, &metric(), Tool::Move, Phase::Copied);
     for t in ["5x", "5X", "x5", "*5", "5*", "5 x", "x 5", "5×"] {
         assert_eq!(after(t), Ok(Value::Count(5)), "{t}");
     }
@@ -204,7 +204,7 @@ fn copies_and_divisions() {
     assert!(matches!(after("x"), Err(InputError::NotAValue { .. })));
     // Rotate arrays too; but not while the tool runs.
     assert_eq!(
-        run("3x", &metric(), Tool::Rotate, Phase::Done),
+        run("3x", &metric(), Tool::Rotate, Phase::Copied),
         Ok(Value::Count(3))
     );
     assert_eq!(
@@ -212,6 +212,21 @@ fn copies_and_divisions() {
         Err(InputError::NotAccepted {
             kind: Kind::Count,
             accepted: &[Kind::Length, Kind::PointAbs, Kind::PointRel]
+        })
+    );
+    // Not after a plain move: only after a copy.
+    assert_eq!(
+        run("3x", &metric(), Tool::Move, Phase::Done),
+        Err(InputError::NotAccepted {
+            kind: Kind::Count,
+            accepted: &[Kind::Length, Kind::PointAbs, Kind::PointRel]
+        })
+    );
+    assert_eq!(
+        run("/3", &metric(), Tool::Rotate, Phase::Done),
+        Err(InputError::NotAccepted {
+            kind: Kind::Divide,
+            accepted: &[Kind::Angle]
         })
     );
     assert_eq!(
@@ -356,21 +371,31 @@ fn which_tool_takes_which_kind() {
     assert_eq!(a(Tool::Rectangle, Phase::Done).kinds, &[Pair]);
     assert_eq!(a(Tool::Circle, Phase::Step(1)).kinds, &[Length, Sides]);
     assert_eq!(a(Tool::Polygon, Phase::Done).kinds, &[Length, Sides]);
-    assert_eq!(a(Tool::Arc, Phase::Step(0)).kinds, &[Length, Sides]);
-    assert_eq!(a(Tool::Arc, Phase::Step(1)).kinds, &[Angle, Sides]);
+    // Step(n) counts the clicks: center, start (radius), end (angle).
+    assert_eq!(a(Tool::Circle, Phase::Step(0)).kinds, &[Sides]);
+    assert_eq!(a(Tool::Arc, Phase::Step(0)).kinds, &[Sides]);
+    assert_eq!(a(Tool::Arc, Phase::Step(1)).kinds, &[Length, Sides]);
+    assert_eq!(a(Tool::Arc, Phase::Step(2)).kinds, &[Angle, Sides]);
     assert_eq!(a(Tool::Arc, Phase::Done).kinds, &[Sides, Radius]);
-    assert_eq!(a(Tool::TwoPointArc, Phase::Step(0)).kinds, &[Length]);
+    // Start, end of the chord (length), then the bulge.
+    assert_eq!(a(Tool::TwoPointArc, Phase::Step(0)).kinds, &[Sides]);
+    assert_eq!(a(Tool::TwoPointArc, Phase::Step(1)).kinds, &[Length]);
     assert_eq!(
-        a(Tool::TwoPointArc, Phase::Step(1)).kinds,
+        a(Tool::TwoPointArc, Phase::Step(2)).kinds,
         &[Length, Radius, Sides]
     );
     assert_eq!(
         a(Tool::TwoPointArc, Phase::Done).kinds,
         &[Length, Radius, Sides]
     );
-    assert!(a(Tool::Move, Phase::Done).takes(Count) && !a(Tool::Move, Phase::Step(1)).takes(Count));
     assert!(
-        a(Tool::Rotate, Phase::Done).takes(Divide)
+        a(Tool::Move, Phase::Copied).takes(Count)
+            && !a(Tool::Move, Phase::Done).takes(Count)
+            && !a(Tool::Move, Phase::Step(1)).takes(Count)
+    );
+    assert!(
+        a(Tool::Rotate, Phase::Copied).takes(Divide)
+            && !a(Tool::Rotate, Phase::Done).takes(Divide)
             && !a(Tool::Rotate, Phase::Step(1)).takes(Divide)
     );
     for t in [Tool::PushPull, Tool::Offset, Tool::TapeMeasure] {
@@ -440,7 +465,7 @@ fn every_tool_phase_and_kind_agree_with_the_parser() {
         Tool::Select,
     ];
     for tool in tools {
-        for phase in [Phase::Step(0), Phase::Step(1), Phase::Step(2), Phase::Done] {
+        for phase in [Phase::Step(0), Phase::Step(1), Phase::Step(2), Phase::Done, Phase::Copied] {
             let acc = accepts(tool, phase);
             for (kind, text) in samples {
                 let r = run(text, &metric(), tool, phase);
@@ -487,6 +512,7 @@ fn the_errors_speak_the_language_of_the_person() {
         InputError::SidesRange,
         InputError::Negative,
         InputError::TooLarge,
+        InputError::AmbiguousComma { text: "1,000".into() },
     ];
     for e in &errors {
         let en = e.message();
@@ -580,10 +606,10 @@ proptest! {
     #[test]
     fn counts_and_divisions_round_trip(n in 1u32..=1000, form in 0usize..4) {
         let t = [format!("{n}x"), format!("x{n}"), format!("*{n}"), format!("{n}*")][form].clone();
-        prop_assert_eq!(run(&t, &metric(), Tool::Move, Phase::Done), Ok(Value::Count(n)));
+        prop_assert_eq!(run(&t, &metric(), Tool::Move, Phase::Copied), Ok(Value::Count(n)));
         if n >= 2 {
-            prop_assert_eq!(run(&format!("/{n}"), &metric(), Tool::Move, Phase::Done), Ok(Value::Divide(n)));
-            prop_assert_eq!(run(&format!("{n}/"), &metric(), Tool::Rotate, Phase::Done), Ok(Value::Divide(n)));
+            prop_assert_eq!(run(&format!("/{n}"), &metric(), Tool::Move, Phase::Copied), Ok(Value::Divide(n)));
+            prop_assert_eq!(run(&format!("{n}/"), &metric(), Tool::Rotate, Phase::Copied), Ok(Value::Divide(n)));
         }
     }
 
@@ -613,7 +639,7 @@ proptest! {
     fn any_text_gives_a_value_or_an_error(text in "\\PC{0,24}", which in 0usize..3, tool in 0usize..13, step in 0u8..3, done in any::<bool>()) {
         let tools = [Tool::Line, Tool::Rectangle, Tool::Circle, Tool::Polygon, Tool::Arc, Tool::TwoPointArc, Tool::Move, Tool::Rotate, Tool::PushPull, Tool::Offset, Tool::TapeMeasure, Tool::Protractor, Tool::Select];
         let u = [metric(), estonian(), inches()][which];
-        let phase = if done { Phase::Done } else { Phase::Step(step) };
+        let phase = if done { [Phase::Done, Phase::Copied][usize::from(step % 2)] } else { Phase::Step(step) };
         match run(&text, &u, tools[tool], phase) {
             Ok(v) => prop_assert!(accepts(tools[tool], phase).takes(v.kind())),
             Err(e) => prop_assert!(!e.message().is_empty()),
@@ -628,4 +654,83 @@ proptest! {
             let _ = run(&text, &u, tool, Phase::Done);
         }
     }
+}
+
+#[test]
+fn a_bare_number_before_the_first_click_is_the_sides() {
+    for tool in [Tool::Circle, Tool::Polygon, Tool::Arc, Tool::TwoPointArc] {
+        let at = |t: &str| run(t, &metric(), tool, Phase::Step(0));
+        assert_eq!(at("24"), Ok(Value::Sides(24)), "{tool:?}");
+        assert_eq!(at("24s"), Ok(Value::Sides(24)), "{tool:?}");
+        assert_eq!(at("2"), Err(InputError::SidesRange), "{tool:?}");
+        assert!(
+            matches!(at("2m"), Err(InputError::NotAccepted { kind: Kind::Length, .. })),
+            "{tool:?}"
+        );
+        assert!(
+            matches!(at("2.5"), Err(InputError::NotAccepted { kind: Kind::Length, .. })),
+            "{tool:?}"
+        );
+    }
+    // After the center is clicked a bare number is the radius.
+    assert_eq!(
+        run("24", &meters(), Tool::Circle, Phase::Step(1)),
+        Ok(Value::Length(24000.0))
+    );
+    assert_eq!(
+        run("24", &meters(), Tool::Arc, Phase::Step(1)),
+        Ok(Value::Length(24000.0))
+    );
+    // The arc's angle comes after the second click.
+    assert_eq!(
+        run("90", &metric(), Tool::Arc, Phase::Step(2)),
+        Ok(Value::Angle(90.0))
+    );
+    assert!(run("90", &metric(), Tool::Arc, Phase::Step(1)).is_ok_and(|v| v.kind() == Kind::Length));
+}
+
+#[test]
+fn a_bare_number_after_an_arc_is_refused_and_says_what_is_taken() {
+    assert_eq!(accepts(Tool::Arc, Phase::Done).bare, None);
+    assert_eq!(
+        run("5", &metric(), Tool::Arc, Phase::Done),
+        Err(InputError::NotAccepted {
+            kind: Kind::Length,
+            accepted: &[Kind::Sides, Kind::Radius]
+        })
+    );
+    assert_eq!(run("5r", &metric(), Tool::Arc, Phase::Done), Ok(Value::Radius(5.0)));
+}
+
+#[test]
+fn one_comma_and_three_digits_is_not_guessed() {
+    // A decimal point: `1,000` may be a thousands group, so a length refuses it.
+    for t in ["1,000", "12,345", "-1,000"] {
+        assert!(
+            matches!(mv(t, &metric()), Err(InputError::AmbiguousComma { .. })),
+            "{t}"
+        );
+        assert!(
+            matches!(
+                run(t, &metric(), Tool::Circle, Phase::Step(1)),
+                Err(InputError::AmbiguousComma { .. })
+            ),
+            "{t}"
+        );
+    }
+    // A decimal comma habit still works with other digit counts.
+    assert!(near(len(mv("2,5", &metric())), 2.5));
+    assert!(near(len(mv("1,50", &metric())), 1.5));
+    assert!(near(len(mv("1,0000", &metric())), 1.0));
+    // Where a pair is accepted it is a pair.
+    assert_eq!(
+        run("1,000", &metric(), Tool::Rectangle, Phase::Step(1)),
+        Ok(Value::Pair(Some(1.0), Some(0.0)))
+    );
+    // A decimal comma: `1,000` is exactly one.
+    assert!(near(len(mv("1,000", &estonian())), 1000.0));
+    // The message is in both languages and names what was typed.
+    let e = mv("1,000", &metric()).unwrap_err();
+    assert!(e.message().contains("1,000"));
+    assert_ne!(e.message(), kadakas_l10n::with_language("et", || e.message()));
 }
