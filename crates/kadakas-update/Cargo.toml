@@ -13,6 +13,7 @@ sign = []
 
 [dependencies]
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+kadakas-crash = { version = "0.1.0", path = "../kadakas-crash" }
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 flate2 = "1.1.10"
 serde = { version = "1.0.229", features = ["derive"] }

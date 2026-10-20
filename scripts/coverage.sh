@@ -14,7 +14,7 @@ LIB_MIN=95
 # lower because some start-up error paths (a broken terminal, a closed stdout) cannot be reached.
 CLI_MIN=90
 
-LIBS=(units l10n sys container file crs plants core props review collab collab-ws render io annot gis ifc x3d irrigation script script-js plugin-abi plugin site sheet print api update sign-manifest ui-core feedback)
+LIBS=(units l10n sys container file crs plants core props review collab collab-ws render io annot gis ifc x3d irrigation script script-js plugin-abi plugin site sheet print api update sign-manifest ui-core feedback crash)
 
 if [ "$#" -gt 0 ]; then
   CRATES=("$@")

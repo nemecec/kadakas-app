@@ -228,6 +228,9 @@ impl Updates {
     /// The program ends. If a restart is pending, tells the launcher with the open documents.
     /// Then writes the clean-exit mark, as the very last thing of a normal exit.
     pub fn finish(&mut self, documents: &[PathBuf]) {
+        // A clean end: the crash file of this run (if a thread panicked and the app lived on)
+        // is no crash report (PLAT-20).
+        crate::crash_ui::clean_exit();
         let Some(link) = &self.link else {
             return;
         };

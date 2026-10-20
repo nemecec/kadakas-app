@@ -60,6 +60,11 @@ fn update_line(status: &Option<UpdateStatus>) -> String {
     }
 }
 
+/// The note that crash reports wait (they are shown by the app at its next start).
+fn crash_note(count: usize) -> String {
+    tr!("crash-ui-launcher-waiting", count = count)
+}
+
 fn skip_text(reason: SkipReason) -> String {
     match reason {
         SkipReason::Crashed => tr!("launcher-tag-crashed"),
@@ -105,6 +110,9 @@ impl eframe::App for LauncherApp {
                     ui.spinner();
                 }
                 ui.label(&self.model.status);
+                if self.model.crash_reports > 0 {
+                    ui.label(crash_note(self.model.crash_reports));
+                }
             });
         });
 
@@ -309,6 +317,18 @@ mod tests {
         assert_eq!(channel_label(Channel::Beta), "Nightly");
         assert!(channel_label(Channel::Local).starts_with("Local"));
         assert_eq!(channel_label(Channel::Stable), "Stable");
+    }
+
+    #[test]
+    fn the_crash_note_counts_in_both_languages() {
+        for tag in ["en-US", "et"] {
+            kadakas_l10n::with_language(tag, || {
+                let one = crash_note(1);
+                let many = crash_note(3);
+                assert!(!one.is_empty() && one != many, "{one} / {many}");
+                assert!(many.contains('3'), "{many}");
+            });
+        }
     }
 
     #[test]

@@ -13,6 +13,8 @@ use kadakas_units::{
 #[derive(Default)]
 pub struct PrefsDialog {
     open: bool,
+    /// What Preferences > Privacy read from the feedback settings (PLAT-20).
+    privacy: crate::privacy_ui::PrivacyState,
 }
 
 /// What the dialog changes.
@@ -29,6 +31,9 @@ pub struct PrefsEdit<'a> {
     pub max_version_mib: &'a mut u32,
     /// Animate the view when an agent moves it.
     pub animate_agent_view: &'a mut bool,
+    /// Preferences > Privacy (PLAT-20): crash reports and the installation ID. The settings are
+    /// in the feedback hub.
+    pub privacy: &'a mut kadakas_feedback::Hub,
     /// Preferences > Updates (PLAT-16).
     #[cfg(not(target_arch = "wasm32"))]
     pub updates: &'a mut crate::app_updates::Updates,
@@ -37,6 +42,7 @@ pub struct PrefsEdit<'a> {
 impl PrefsDialog {
     pub fn open(&mut self) {
         self.open = true;
+        self.privacy.reset();
     }
 
     /// Shows the dialog when it is open.
@@ -91,6 +97,8 @@ impl PrefsDialog {
                     ui.add_space(6.0);
                 }
                 autosave.settings_section(ui);
+                ui.add_space(6.0);
+                crate::privacy_ui::section(ui, edit.privacy, &mut self.privacy);
             });
         self.open = open;
     }
@@ -304,6 +312,7 @@ mod tests {
             max_versions: Box::leak(Box::new(crate::prefs::DEFAULT_MAX_VERSIONS)),
             max_version_mib: Box::leak(Box::new(crate::prefs::DEFAULT_MAX_VERSION_MIB)),
             animate_agent_view: Box::leak(Box::new(true)),
+            privacy: Box::leak(Box::new(kadakas_feedback::Hub::in_memory())),
             updates: Box::leak(Box::new(crate::app_updates::Updates::new(None, None))),
         }
     }

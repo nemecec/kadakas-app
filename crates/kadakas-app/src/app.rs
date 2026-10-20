@@ -192,6 +192,9 @@ pub struct KadakasApp {
     about: crate::about::About,
     /// Feedback: the button, the form, the outbox window, the review and the consent (UI-14).
     feedback: crate::feedback_ui::FeedbackUi,
+    /// Crash reports of the last run: the question and the sending (PLAT-20).
+    #[cfg(not(target_arch = "wasm32"))]
+    crash: crate::crash_ui::CrashUi,
     /// The id of the last key action, for "Report this" on an error message.
     last_command: String,
     prefs_ui: crate::prefs_ui::PrefsDialog,
@@ -302,6 +305,15 @@ impl KadakasApp {
         // The WebAssembly plug-in modules that the user installed and trusted before.
         app.plugin_ui.attach_user_storage(&mut app.session);
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let info = rs.adapter.get_info();
+                crate::crash_ui::set_gpu(
+                    &info.name,
+                    format!("{} {}", info.driver, info.driver_info).trim(),
+                    &format!("{:?}", info.backend),
+                );
+            }
             let gpu = Gpu3d::new(&rs.device, &rs.queue, rs.target_format);
             rs.renderer.write().callback_resources.insert(gpu);
             app.gpu_ready = true;
@@ -381,6 +393,8 @@ impl KadakasApp {
                 .set_storage(Box::new(kadakas_feedback::store::DirStorage::new(dir)));
         }
         app.feedback.start_sending();
+        // Crash reports that the launcher kept after an unexpected end of the last run.
+        app.crash.start(&mut app.session.feedback.hub);
         if let Some(port) = agent_port {
             let ctx = cc.egui_ctx.clone();
             let info_path = kadakas_sys::agent::agent_info_path();
@@ -572,6 +586,10 @@ impl KadakasApp {
             autosave: crate::autosave_ui::AutosaveUi::inert(),
             about: crate::about::About::default(),
             feedback: crate::feedback_ui::FeedbackUi::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            crash: crate::crash_ui::CrashUi::new(crate::crash_ui::root(
+                &crate::app_updates::launch_env,
+            )),
             last_command: String::new(),
             prefs_ui: crate::prefs_ui::PrefsDialog::default(),
             collab: crate::collab_ui::CollabUi::new(Default::default()),
@@ -1890,6 +1908,8 @@ impl KadakasApp {
             return;
         }
         self.last_command = action.id().to_string();
+        // The name of the command (never its parameters) for a crash report (PLAT-20).
+        kadakas_crash::ring::note_command(action.id());
         // The dimension keys pick the mode too: N is a linear dimension, `.` angular and `,` radial.
         let linear = |m: DimToolMode| {
             matches!(
@@ -3605,6 +3625,7 @@ impl eframe::App for KadakasApp {
                 max_versions: &mut self.prefs.max_versions,
                 max_version_mib: &mut self.prefs.max_version_mib,
                 animate_agent_view: &mut self.prefs.animate_agent_view,
+                privacy: &mut self.session.feedback.hub,
                 #[cfg(not(target_arch = "wasm32"))]
                 updates: &mut self.updates,
             },
@@ -3717,6 +3738,13 @@ impl eframe::App for KadakasApp {
         self.handle_requests(requests);
         if let Some(line) = self.feedback.show(&ctx, &mut self.session) {
             self.status = line;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.crash.show(&ctx, &mut self.session.feedback.hub);
+            if let Some(line) = self.crash.take_note() {
+                self.status = line;
+            }
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.io_ui.show(&ctx, &mut self.session, &mut self.status)

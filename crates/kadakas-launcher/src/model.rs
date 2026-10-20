@@ -28,6 +28,8 @@ pub struct Model {
     pub update: Option<UpdateStatus>,
     /// One line for the status bar.
     pub status: String,
+    /// Crash reports that wait for the person (they are shown in the app).
+    pub crash_reports: usize,
     running: Option<Receiver<Result<Outcome>>>,
 }
 
@@ -76,6 +78,7 @@ impl Model {
             selected: None,
             update: None,
             status: String::new(),
+            crash_reports: 0,
             running: None,
         };
         m.refresh();
@@ -85,6 +88,7 @@ impl Model {
     /// Reads the install folder again.
     pub fn refresh(&mut self) {
         let store = self.updater.store();
+        self.crash_reports = store.kept_crash_reports();
         self.installed = store.list();
         self.skipped = store
             .rolled_back_slots()

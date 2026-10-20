@@ -296,6 +296,11 @@ impl AppLink {
         &self.root
     }
 
+    /// The id of the run (the name of its files in `runs/`).
+    pub fn run_id(&self) -> &str {
+        &self.id
+    }
+
     /// The status that the launcher wrote, if any.
     pub fn status(&self) -> Option<RunStatus> {
         read_status(&self.root, &self.id)
