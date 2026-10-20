@@ -109,7 +109,7 @@ impl SubSelection {
 /// The face or edge under the pointer. `engine` is an inferencer of its own, so that the locks
 /// of a tool do not change what a click selects.
 pub fn pick(world: &World, engine: &mut Inferencer, cam: &Camera, cursor: DVec2) -> Option<Item> {
-    let inf = engine.infer(world.scenes.scene(), cam, cursor, None);
+    let inf = world.infer(engine, cam, cursor, None, &super::Excluded::default());
     let model = world.scenes.object(inf.source)?;
     match inf.source.kind() {
         TagKind::Edge => Some(Item::Edge(model, EdgeId(inf.source.id()))),

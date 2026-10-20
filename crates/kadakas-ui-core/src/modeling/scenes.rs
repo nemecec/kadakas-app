@@ -5,13 +5,14 @@
 //! frame. `Scenes::scene` is the one place that gives the scene to the inference. When the
 //! inference takes one scene per model, this holder keeps one per object id and returns the list.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use glam::{DAffine3, DVec3};
 use kadakas_core::model::{Document, ObjectId, Shape};
 use kadakas_core::surface::{CurveId, EdgeId, FaceId, SurfaceModel};
 
-use crate::infer3d::{Scene, SceneBuilder, Tag};
+use crate::infer3d::{Scene, Tag};
 
 /// The elevation of the layer of an object (mm). Surface models are measured from it.
 pub fn elevation(doc: &Document, id: ObjectId) -> f64 {
@@ -35,51 +36,44 @@ pub fn frame_of(doc: &Document, id: ObjectId) -> DAffine3 {
     DAffine3::from_translation(DVec3::new(0.0, 0.0, elevation(doc, id))) * t
 }
 
-/// The inference scene of a document and the numbers it uses for the models.
+/// What decides that the scene of a model can be kept: the number it has in the tags, its
+/// revision, its placement and the elevation of its layer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ModelKey {
+    number: u32,
+    rev: u64,
+    placement: [f64; 12],
+    elevation: f64,
+}
+
+/// The inference scenes of a document, one for each visible surface model, and the numbers the
+/// tags use for the models.
 pub struct Scenes {
     ids: Vec<ObjectId>,
-    scene: Scene,
-    /// The document revision the scene was built from.
+    scenes: Vec<Arc<Scene>>,
+    /// The document revision the scenes were built from.
     pub rev: u64,
 }
 
 impl Scenes {
-    /// Builds the scene of all visible surface models.
+    /// Builds the scenes of all visible surface models.
     pub fn build(doc: &Document, rev: u64) -> Scenes {
-        let mut b = SceneBuilder::new();
-        let mut ids = Vec::new();
-        for o in doc.objects.values() {
-            let Shape::SurfaceModel(m) = &o.shape else {
-                continue;
-            };
-            if !doc.is_visible(o) {
-                continue;
-            }
-            let number = ids.len() as u32;
-            let elev = elevation(doc, o.id);
-            if elev == 0.0 {
-                b.add_surface_model(m, number);
-            } else {
-                let mut moved = (**m).clone();
-                moved.transform =
-                    DAffine3::from_translation(DVec3::new(0.0, 0.0, elev)) * moved.transform;
-                b.add_surface_model(&moved, number);
-            }
-            ids.push(o.id);
-        }
-        Scenes {
-            ids,
-            scene: b.finish(),
-            rev,
-        }
+        let mut cache = SceneCache::default();
+        cache.get(doc, rev);
+        cache.scenes.take().expect("just built")
     }
 
-    /// The scene for the inference.
-    pub fn scene(&self) -> &Scene {
-        &self.scene
+    /// The scenes for the inference.
+    pub fn refs(&self) -> Vec<&Scene> {
+        self.scenes.iter().map(|s| &**s).collect()
     }
 
-    /// The object of a tag of the scene.
+    /// The number of faces in all scenes.
+    pub fn face_count(&self) -> usize {
+        self.scenes.iter().map(|s| s.face_count()).sum()
+    }
+
+    /// The object of a tag of the scenes.
     pub fn object(&self, tag: Tag) -> Option<ObjectId> {
         if tag == Tag::NONE {
             return None;
@@ -87,34 +81,73 @@ impl Scenes {
         self.ids.get(tag.model() as usize).copied()
     }
 
-    /// The objects in the scene, in the order of their numbers.
+    /// The objects in the scenes, in the order of their numbers.
     pub fn objects(&self) -> &[ObjectId] {
         &self.ids
     }
 }
 
-/// Keeps the scene of the last revision.
+/// Keeps the scenes of the last revision. A model whose revision, placement and number did not
+/// change keeps its scene, so an edit builds only the scene of the model that it changed.
 #[derive(Default)]
 pub struct SceneCache {
     scenes: Option<Scenes>,
-    /// How many times the scene was built.
+    kept: BTreeMap<ObjectId, (ModelKey, Arc<Scene>)>,
+    /// How many times the scenes were built (a revision that changed).
     pub builds: u64,
+    /// How many scenes of single models were built.
+    pub model_builds: u64,
 }
 
 impl SceneCache {
-    /// The scene for the revision `rev` of the document: the one that is kept, or a new one when
-    /// the revision changed.
+    /// The scenes for the revision `rev` of the document: the ones that are kept, or new ones
+    /// when the revision changed.
     pub fn get(&mut self, doc: &Document, rev: u64) -> &Scenes {
         if self.scenes.as_ref().is_none_or(|s| s.rev != rev) {
-            self.scenes = Some(Scenes::build(doc, rev));
+            let mut ids = Vec::new();
+            let mut scenes = Vec::new();
+            let mut kept = BTreeMap::new();
+            for o in doc.objects.values() {
+                let Shape::SurfaceModel(m) = &o.shape else {
+                    continue;
+                };
+                if !doc.is_visible(o) {
+                    continue;
+                }
+                let key = ModelKey {
+                    number: ids.len() as u32,
+                    rev: m.rev(),
+                    placement: m.transform.to_cols_array(),
+                    elevation: elevation(doc, o.id),
+                };
+                let scene = match self.kept.get(&o.id) {
+                    Some((k, s)) if *k == key => s.clone(),
+                    _ => {
+                        self.model_builds += 1;
+                        let mut model = (**m).clone();
+                        if key.elevation != 0.0 {
+                            model.transform =
+                                DAffine3::from_translation(DVec3::new(0.0, 0.0, key.elevation))
+                                    * model.transform;
+                        }
+                        Arc::new(Scene::from_surface_model(model, key.number))
+                    }
+                };
+                kept.insert(o.id, (key, scene.clone()));
+                ids.push(o.id);
+                scenes.push(scene);
+            }
+            self.kept = kept;
+            self.scenes = Some(Scenes { ids, scenes, rev });
             self.builds += 1;
         }
         self.scenes.as_ref().expect("just built")
     }
 
-    /// Forgets the scene (a new document has other revisions that can repeat).
+    /// Forgets the scenes (a new document has other revisions that can repeat).
     pub fn clear(&mut self) {
         self.scenes = None;
+        self.kept.clear();
     }
 }
 
@@ -130,6 +163,32 @@ impl World<'_> {
     pub fn model(&self, tag: Tag) -> Option<(ObjectId, &SurfaceModel)> {
         let id = self.scenes.object(tag)?;
         Some((id, model_of(self.doc, id)?))
+    }
+
+    /// The inference over the scenes of all models, leaving out the excluded geometry.
+    pub fn infer(
+        &self,
+        engine: &mut crate::infer3d::Inferencer,
+        cam: &crate::infer3d::Camera,
+        cursor: glam::DVec2,
+        reference: Option<DVec3>,
+        excluded: &super::Excluded,
+    ) -> crate::infer3d::Inference {
+        let skip = |tag: Tag| -> bool {
+            let Some(model) = self.scenes.object(tag) else {
+                return false;
+            };
+            match tag.kind() {
+                crate::infer3d::TagKind::Face => {
+                    excluded.faces.contains(&(model, FaceId(tag.id())))
+                }
+                crate::infer3d::TagKind::Edge => {
+                    excluded.edges.contains(&(model, EdgeId(tag.id())))
+                }
+                _ => false,
+            }
+        };
+        engine.infer_scenes(&self.scenes.refs(), cam, cursor, reference, &skip)
     }
 
     /// The height of the ground plane for new geometry: the elevation of the active layer.

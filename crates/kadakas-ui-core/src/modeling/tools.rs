@@ -338,8 +338,10 @@ impl Modeling {
         if done {
             return Phase::Done;
         }
+        // Step 0: nothing clicked yet (sides can be typed). Then the clicks so far; the
+        // two-point arc is at step 1 for the chord and step 2 for the bulge.
         match &self.run {
-            Run::Arc { pts, .. } => Phase::Step(u8::from(pts.len() >= 2)),
+            Run::Arc { pts, .. } => Phase::Step(pts.len() as u8),
             Run::Idle => Phase::Step(0),
             _ => Phase::Step(1),
         }

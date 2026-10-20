@@ -776,7 +776,7 @@ fn the_scene_is_built_again_only_when_the_revision_changes() {
     r.click(v(200.0, 0.0, 0.0));
     r.click(v(300.0, 100.0, 0.0));
     let rev = r.ed.revision();
-    let n = r.cache.get(r.ed.doc(), rev).scene().face_count();
+    let n = r.cache.get(r.ed.doc(), rev).face_count();
     assert_eq!(n, 2);
     assert!(r.cache.builds > builds);
 }
@@ -999,17 +999,18 @@ fn the_scene_build_cost_is_measured_and_stays_small() {
     let t = std::time::Instant::now();
     let scenes = Scenes::build(ed.doc(), ed.revision());
     let build = t.elapsed();
-    assert_eq!(scenes.scene().face_count(), n * n);
+    assert_eq!(scenes.face_count(), n * n);
     // One inference at a point on the grid.
     let cam = top_camera();
     let mut eng = Inferencer::default();
     let t = std::time::Instant::now();
     for i in 0..100 {
-        let _ = eng.infer(
-            scenes.scene(),
+        let _ = eng.infer_scenes(
+            &scenes.refs(),
             &cam,
             DVec2::new(100.0 + f64::from(i), 300.0),
             None,
+            &|_| false,
         );
     }
     let infer = t.elapsed() / 100;
@@ -1055,4 +1056,72 @@ fn a_refused_redo_gives_the_step_back() {
     assert!(res.is_err());
     assert_eq!(r.model(), &good, "the step is back");
     assert_eq!(r.ed.undo_depth(), depth2);
+}
+
+#[test]
+fn an_edit_builds_only_the_scene_of_the_model_it_changed() {
+    let mut r = rig(ModelerTool::Rectangle);
+    r.click(v(0.0, 0.0, 0.0));
+    r.click(v(100.0, 100.0, 0.0));
+    r.ed.execute(&kadakas_core::command::Command::AddObject {
+        shape: Shape::SurfaceModel(Box::default()),
+        layer: None,
+        class: None,
+        attrs: Default::default(),
+    })
+    .unwrap();
+    let second = *r.ed.doc().objects.keys().last().unwrap();
+    let rev = r.ed.revision();
+    let _ = r.cache.get(r.ed.doc(), rev);
+    let before = r.cache.model_builds;
+    // Draw in the second model only (it is selected): the first keeps its scene.
+    r.act(|t, w| {
+        for p in [v(500.0, 0.0, 0.0), v(600.0, 100.0, 0.0)] {
+            let inf = free(p);
+            let pt = Pointer {
+                inf: &inf,
+                ray: down_ray(p),
+                selected: Some(second),
+            };
+            t.moved(w, &pt);
+            let o = t.click(w, &pt);
+            if !o.actions.is_empty() {
+                return o;
+            }
+        }
+        Out::default()
+    });
+    let rev = r.ed.revision();
+    let _ = r.cache.get(r.ed.doc(), rev);
+    assert_eq!(
+        r.cache.model_builds - before,
+        1,
+        "one scene was built again"
+    );
+    assert_eq!(r.cache.get(r.ed.doc(), rev).objects().len(), 2);
+}
+
+#[test]
+fn the_geometry_being_pulled_is_left_out_of_the_inference() {
+    let mut r = rig(ModelerTool::Rectangle);
+    r.click(v(0.0, 0.0, 0.0));
+    r.click(v(1000.0, 1000.0, 0.0));
+    let model = r.model_id();
+    let face = r.model().faces().next().unwrap().0;
+    let rev = r.ed.revision();
+    let scenes = r.cache.get(r.ed.doc(), rev);
+    let world = World {
+        doc: r.ed.doc(),
+        scenes,
+    };
+    let cam = top_camera();
+    let mid = cam.project(v(500.0, 500.0, 0.0)).unwrap();
+    let mut eng = Inferencer::default();
+    let none = Excluded::default();
+    let hit = world.infer(&mut eng, &cam, mid, None, &none);
+    assert_eq!(hit.source.kind(), crate::infer3d::TagKind::Face);
+    let mut ex = Excluded::default();
+    ex.faces.insert((model, face));
+    let skipped = world.infer(&mut Inferencer::default(), &cam, mid, None, &ex);
+    assert_ne!(skipped.source.kind(), crate::infer3d::TagKind::Face);
 }

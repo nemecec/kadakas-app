@@ -281,11 +281,12 @@ impl Edit3d {
                 .find(|id| modeling::model_of(doc, *id).is_some());
             if let (true, Some(h)) = (drawing, hover) {
                 let cursor = local(h);
-                let inf = self.inferencer.infer(
-                    world.scenes.scene(),
+                let inf = world.infer(
+                    &mut self.inferencer,
                     &cam,
                     cursor,
                     self.modeling.reference(),
+                    &self.modeling.excluded(),
                 );
                 if self.last_pointer != Some(h) {
                     self.last_pointer = Some(h);
