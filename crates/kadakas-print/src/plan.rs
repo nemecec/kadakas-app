@@ -539,6 +539,20 @@ fn shape_core(
                 out.push(Prim::Image(img));
             }
         }
+        Shape::SurfaceModel(m) => {
+            // Plan view: the box around the model (MOD-13 draws its edges).
+            if let Some((lo, hi)) = m.bounds() {
+                let (lo, hi) = (lo.truncate(), hi.truncate());
+                out.push(path(
+                    mapped(
+                        &[lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)],
+                        xf,
+                    ),
+                    true,
+                    &st,
+                ));
+            }
+        }
         Shape::Mesh3d(m) => {
             // Plan view: the box around the mesh.
             let (lo, hi) = m.bounds3();

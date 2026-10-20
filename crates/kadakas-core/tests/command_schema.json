@@ -288,6 +288,114 @@
       "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
       "type": "string"
     },
+    "EdgeId": {
+      "description": "The id of a edge in its surface model.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Edit": {
+      "description": "One edit of a surface model. In a command: `{\"op\": \"edit_surface\", \"id\": ..., \"edit\":\n{\"action\": \"add_edges\", \"edges\": [[[0, 0, 0], [1000, 0, 0]]]}}`.",
+      "oneOf": [
+        {
+          "description": "Draws straight edges, each `[[x, y, z], [x, y, z]]` in the local coordinates of the model\n(mm). Ends weld to vertices and edges, crossings split, and faces are made and split.",
+          "properties": {
+            "action": {
+              "const": "add_edges",
+              "type": "string"
+            },
+            "edges": {
+              "items": {
+                "items": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "action",
+            "edges"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Erases edges: coplanar faces on both sides merge, other faces of the edges go.",
+          "properties": {
+            "action": {
+              "const": "erase_edges",
+              "type": "string"
+            },
+            "edges": {
+              "items": {
+                "$ref": "#/$defs/EdgeId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "action",
+            "edges"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Erases faces only; their edges stay.",
+          "properties": {
+            "action": {
+              "const": "erase_faces",
+              "type": "string"
+            },
+            "faces": {
+              "items": {
+                "$ref": "#/$defs/FaceId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "action",
+            "faces"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Turns faces over: front and back change places.",
+          "properties": {
+            "action": {
+              "const": "reverse_faces",
+              "type": "string"
+            },
+            "faces": {
+              "items": {
+                "$ref": "#/$defs/FaceId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "action",
+            "faces"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FaceId": {
+      "description": "The id of a face in its surface model.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
     "FileLink": {
       "additionalProperties": false,
       "description": "A link to the original file of an import, instead of the summaries of its entities (see the\nmodule docs). It is a hint: the file may be gone or changed, and the hash tells.",
@@ -1250,7 +1358,8 @@
                 "mesh3d",
                 "extrude",
                 "sweep",
-                "irrigation"
+                "irrigation",
+                "surface_model"
               ]
             }
           },
@@ -3821,6 +3930,27 @@
         "issue",
         "viewpoint",
         "now"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Edit a surface model (MOD-06, see `crate::surface`): add edges, erase edges or faces, or\nreverse faces. One undo step; an edit that fails changes nothing.",
+      "properties": {
+        "edit": {
+          "$ref": "#/$defs/Edit"
+        },
+        "id": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "op": {
+          "const": "edit_surface",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "edit"
       ],
       "type": "object"
     },

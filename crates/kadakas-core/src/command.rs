@@ -26,6 +26,7 @@ mod present_ops;
 mod record_ops;
 mod retaining_ops;
 mod steps;
+mod surface_ops;
 mod table_ops;
 mod transform_ops;
 
@@ -626,6 +627,12 @@ pub enum Command {
         viewpoint: crate::issue::ViewpointId,
         now: i64,
     },
+    /// Edit a surface model (MOD-06, see `crate::surface`): add edges, erase edges or faces, or
+    /// reverse faces. One undo step; an edit that fails changes nothing.
+    EditSurface {
+        id: ObjectId,
+        edit: crate::surface::Edit,
+    },
     /// Several commands as one undo step. Stops at the first error.
     Batch {
         commands: Vec<Command>,
@@ -831,6 +838,7 @@ pub(crate) fn object_bytes(o: &Object) -> u64 {
     OBJECT_BYTES
         + match &o.shape {
             Shape::Underlay(u) => u.png.resident_len() as u64,
+            Shape::SurfaceModel(s) => s.approx_bytes(),
             _ => 0,
         }
 }
@@ -1852,6 +1860,7 @@ impl<'a> Tx<'a> {
             Command::AttachRecord { .. }
             | Command::DetachRecord { .. }
             | Command::SetRecordFields { .. } => self.run_record(cmd)?,
+            Command::EditSurface { id, edit } => self.run_surface(*id, edit)?,
             Command::AddWorksheetTable { .. } | Command::SetWorksheetTable { .. } => {
                 self.run_table(cmd, out)?
             }

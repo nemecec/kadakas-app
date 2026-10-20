@@ -426,7 +426,7 @@ fn in_corner(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> bool {
     angle(next, d - b) < back_angle
 }
 
-fn cap_triangles(rings: &[Vec<DVec2>]) -> Option<Vec<[u32; 3]>> {
+pub(crate) fn cap_triangles(rings: &[Vec<DVec2>]) -> Option<Vec<[u32; 3]>> {
     let mut pts: Vec<DVec2> = rings[0].clone();
     let mut ids: Vec<u32> = (0..rings[0].len() as u32).collect();
     let mut offsets = Vec::new();

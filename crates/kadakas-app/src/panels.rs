@@ -1455,6 +1455,7 @@ fn edit_shape(
                 f.count(ui, m.footprint.len());
             }
             Shape::Mesh3d(m) => f.count(ui, m.vertices.len()),
+            Shape::SurfaceModel(m) => f.count(ui, m.vertex_count()),
             Shape::Extrude(e) => crate::solid_ui::extrude_fields(ui, &mut f, e),
             Shape::Sweep(sw) => crate::solid_ui::sweep_fields(ui, &mut f, sw),
             Shape::Underlay(u) => f.commit |= crate::gis_ui::underlay_fields(ui, u),

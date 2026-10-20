@@ -206,6 +206,17 @@ impl Mapper<'_> {
             }
             Shape::Locus3d { p } => *p = self.point3(*p)?,
             Shape::Mesh3d(m) => self.vec3(&mut m.vertices)?,
+            // The origin of the model moves; its plan directions turn and scale as the map does
+            // there (as for a sweep), and heights follow the scale.
+            Shape::SurfaceModel(m) => {
+                let t = m.transform.translation;
+                let o = self.point3(t)?;
+                let step = 1000.0;
+                let at = t.truncate();
+                let dx = (self.point(at + DVec2::new(step, 0.0))? - o.truncate()) / step;
+                let dy = (self.point(at + DVec2::new(0.0, step))? - o.truncate()) / step;
+                m.remap_plan(o, dx, dy, self.scale);
+            }
             Shape::Polyline3d { points, .. } => self.vec3(points)?,
             Shape::SiteModel {
                 points,

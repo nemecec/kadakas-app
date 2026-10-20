@@ -78,7 +78,7 @@ change different parts both keep their change:
 
 The property `id` does not exist. It is the identity. Names have 1 to 256 characters.
 
-The **shape** is one property, except for a site model (above). Moving one point of a site model sends
+The **shape** is one property, except for a site model (above). A surface model (MOD-06) is one property too: an edit of its vertices, edges or faces sends the whole model, and the last writer wins on the whole model. Its limits keep the text below the size of one property. Moving one point of a site model sends
 one chunk of 256 points, not all points. Two users who move points in different chunks both keep
 their change; in the same chunk, the last writer wins. Inserting or removing a point shifts the
 later chunks, which are sent again.

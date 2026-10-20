@@ -241,6 +241,9 @@ pub enum Shape {
     /// An irrigation object: outlet, line, point of connection, valve or controller
     /// (see `crate::irrigation`). In JSON it is `{"kind": "irrigation", "type": "outlet", ...}`.
     Irrigation(Box<crate::irrigation::IrrigationShape>),
+    /// A surface model: vertices, edges and faces with holes in local coordinates, placed by a
+    /// transform (see `surface`, MOD-06).
+    SurfaceModel(Box<crate::surface::SurfaceModel>),
 }
 
 fn default_symbol_scale() -> f64 {
@@ -310,6 +313,7 @@ impl Shape {
             Shape::Extrude(_) => "extrude",
             Shape::Sweep(_) => "sweep",
             Shape::Irrigation(i) => i.kind(),
+            Shape::SurfaceModel(_) => "surface_model",
         }
     }
 
@@ -352,6 +356,7 @@ impl Shape {
             Shape::Extrude(e) => e.is_finite(),
             Shape::Sweep(s) => s.is_finite(),
             Shape::Irrigation(i) => i.is_finite(),
+            Shape::SurfaceModel(s) => s.is_finite(),
             Shape::Symbol {
                 at,
                 rotation,
@@ -447,6 +452,7 @@ impl Shape {
             | Shape::Group { .. }
             | Shape::Unknown { .. } => {}
             Shape::Irrigation(i) => i.for_each_number(f),
+            Shape::SurfaceModel(s) => s.for_each_number(f),
             Shape::Annotation(a) => a.numbers(f),
             Shape::Massing(m) => {
                 m.footprint.iter().for_each(|x| vertex(x, f));
@@ -614,6 +620,7 @@ impl Shape {
             Shape::Mesh3d(m) => m.problem(),
             Shape::Extrude(e) => e.problem(),
             Shape::Sweep(s) => s.problem(),
+            Shape::SurfaceModel(s) => s.problem(),
             Shape::SiteModel { settings, .. } => settings.problem().map(String::from),
             Shape::SiteModifier { .. } => crate::texture_bed::problem(self).map(String::from),
             _ => None,
@@ -670,6 +677,7 @@ impl Shape {
                 p.y += d.y;
             }),
             Shape::Irrigation(i) => i.translate(d),
+            Shape::SurfaceModel(s) => s.translate(DVec3::new(d.x, d.y, 0.0)),
             Shape::Symbol { at, .. } => mv(at),
             Shape::Locus3d { p } => {
                 p.x += d.x;
@@ -760,6 +768,10 @@ impl Shape {
             Shape::Group { .. } | Shape::Unknown { .. } => from_points(&[]),
             Shape::Symbol { at, .. } => (*at, *at),
             Shape::Irrigation(i) => i.bounds(),
+            Shape::SurfaceModel(s) => s.bounds().map_or_else(
+                || from_points(&[]),
+                |(lo, hi)| (lo.truncate(), hi.truncate()),
+            ),
             Shape::Locus3d { p } => (p.truncate(), p.truncate()),
             Shape::Polyline3d { points, .. } => {
                 from_points(&points.iter().map(|p| p.truncate()).collect::<Vec<_>>())
@@ -1031,6 +1043,13 @@ mod shape_serde {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Shape, D::Error> {
         let (raw, png) = d.deserialize_any(RawShape)?;
+        // A surface model of a newer format stays as it is.
+        if crate::surface::is_newer(&raw) {
+            return Ok(Shape::Unknown {
+                kind: "surface_model".into(),
+                raw,
+            });
+        }
         // The picture was taken out of `raw` only for a shape with the kind `underlay`, a kind that
         // this version knows. It never becomes `Shape::Unknown`, so no text is lost.
         match Shape::deserialize(&raw) {

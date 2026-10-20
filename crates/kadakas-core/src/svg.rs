@@ -503,6 +503,18 @@ fn draw_object(
                 d.join(" ")
             )
         }
+        Shape::SurfaceModel(m) => match m.bounds() {
+            // Plan view: the box around the model (MOD-13 draws its edges).
+            Some((lo, hi)) => writeln!(
+                s,
+                r#"<rect x="{}" y="{}" width="{}" height="{}" {style} data-kind="surface_model"/>"#,
+                lo.x,
+                -hi.y,
+                hi.x - lo.x,
+                hi.y - lo.y
+            ),
+            None => Ok(()),
+        },
         Shape::Sweep(sw) => {
             // Plan view: the box around the solid.
             let (lo, hi) = sw.bounds3();
