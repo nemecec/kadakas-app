@@ -3176,6 +3176,7 @@ dependencies = [
  "kadakas-review",
  "kadakas-site",
  "kadakas-units",
+ "proptest",
  "serde_json",
 ]
 
