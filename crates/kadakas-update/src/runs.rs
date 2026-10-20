@@ -31,6 +31,14 @@
 //! | `<id>.status.json` | supervisor | what the app shows (`handshake::RunStatus`) |
 //! | `<id>.restart.json` | the app | "restart to update", with the open documents |
 //! | `<id>.download` | the app | "download the new version now" (Notify only) |
+//! | `<id>.crash.json` | the app | what the app knew when it died (PLAT-20, `kadakas-crash`) |
+//!
+//! **Crash reports (PLAT-20).** A run that ends without the mark and has a crash file keeps it:
+//! the file moves to `crash-reports/<id>.json` (at most 10 files, the oldest go first). The app
+//! shows the report at its next start. A run that ends with the mark deletes the crash file (a
+//! panic that the app survived is no crash). When the run ended by a signal or an exception that
+//! the app could not report (it has no file), the launcher writes a small report of its own with
+//! the name of the signal.
 
 use crate::error::Result;
 use crate::store::{Slot, Store};
@@ -154,13 +162,21 @@ impl RunGuard {
 
     /// The run ended. Reads the clean-exit mark, records the result in `health.json`, and
     /// deletes the files of the run.
-    pub fn finish(mut self, store: &Store) -> RunEnd {
+    pub fn finish(self, store: &Store) -> RunEnd {
+        self.finish_with(store, &ProcessEnd::default())
+    }
+
+    /// Like [`RunGuard::finish`]. `end` tells how the process ended, if the system said so.
+    /// A crash signal without a crash file of the app becomes a small report. A crash file
+    /// of a process that did not end by a failure (exit code 101 or a crash signal) is labelled
+    /// as a survived panic.
+    pub fn finish_with(mut self, store: &Store, end: &ProcessEnd) -> RunEnd {
         let clean = run_file(&self.root, &self.id, "clean").is_file();
-        let _ = store.note_run_end_after(
-            &self.slot,
-            clean,
-            now_seconds().saturating_sub(self.started),
-        );
+        let seconds = now_seconds().saturating_sub(self.started);
+        let _ = store.note_run_end_after(&self.slot, clean, seconds);
+        if !clean {
+            keep_crash(store, &self.id, &self.slot, end, seconds);
+        }
         self.remove_files();
         RunEnd { clean }
     }
@@ -185,8 +201,68 @@ impl Drop for RunGuard {
     }
 }
 
+/// How a process ended, as far as the system says.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProcessEnd {
+    /// The exit code, when the process exited by itself.
+    pub code: Option<i32>,
+    /// The name of the crash signal or exception (`SIGSEGV`, `EXCEPTION_ACCESS_VIOLATION`).
+    pub signal: Option<String>,
+    /// Another signal ended the process (a kill, a hang-up): no failure of the app.
+    pub killed: bool,
+}
+
+/// The exit code of an unwinding panic of the main thread.
+pub const PANIC_EXIT_CODE: i32 = 101;
+
+impl ProcessEnd {
+    /// A crash signal or the exit code of a panic.
+    pub fn failure(&self) -> bool {
+        self.signal.is_some() || self.code == Some(PANIC_EXIT_CODE)
+    }
+
+    /// The system said how the process ended.
+    pub fn known(&self) -> bool {
+        self.code.is_some() || self.signal.is_some() || self.killed
+    }
+}
+
+/// Keeps the crash file of an unclean run for the next start of the app. When the app left none
+/// but the system says a crash signal ended it, writes a small report from that.
+///
+/// A crash file is a crash only if the process failed (exit code 101 or a crash signal). If the
+/// process ended in another way (a kill, a shutdown, another exit code), the panic was survived
+/// and the report says so, with the time between the panic and the end.
+fn keep_crash(store: &Store, id: &str, slot: &Slot, end: &ProcessEnd, seconds: u64) {
+    let root = store.root();
+    let survived = end.known() && !end.failure();
+    if kadakas_crash::queue::keep_as(root, id, survived).unwrap_or(false) {
+        return;
+    }
+    let Some(signal) = end.signal.as_deref() else {
+        return;
+    };
+    let mut f = kadakas_crash::CrashFile::new(kadakas_crash::CrashKind::Native);
+    f.run_id = id.to_string();
+    f.created = now_seconds();
+    f.version = match slot {
+        Slot::Version(v) => v.to_string(),
+        Slot::Bundled => store
+            .bundled()
+            .map(|b| b.version.to_string())
+            .unwrap_or_default(),
+    };
+    f.channel = store.meta(slot).label;
+    f.os = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+    f.message = format!("{signal} (reported by the launcher; the app left no crash file)");
+    f.uptime_secs = seconds;
+    let _ = kadakas_crash::queue::store(root, id, &f);
+}
+
 fn remove_run_files(root: &Path, id: &str) {
     for suffix in [
+        "crash.json",
+        "crash.json.tmp",
         "json",
         "clean",
         "status.json",
@@ -376,6 +452,12 @@ impl Store {
         }
     }
 
+    /// How many crash reports wait for the person (PLAT-20): kept after an unclean end, not yet
+    /// shown or decided in the app.
+    pub fn kept_crash_reports(&self) -> usize {
+        kadakas_crash::queue::count(self.root())
+    }
+
     /// The versions that run now (the supervisor or the app holds the lock of the run).
     pub fn running_slots(&self) -> Vec<Slot> {
         read_records(self.root())
@@ -405,6 +487,9 @@ impl Store {
                 let clean = run_file(self.root(), &id, "clean").is_file();
                 let seconds = now_seconds().saturating_sub(r.started);
                 let _ = self.note_run_end_locked(&r.slot, clean, seconds);
+                if !clean {
+                    keep_crash(self, &id, &r.slot, &ProcessEnd::default(), seconds);
+                }
             }
             remove_run_files(self.root(), &id);
             let _ = std::fs::remove_file(run_file(self.root(), &id, "lock"));

@@ -94,7 +94,9 @@ impl FeedbackState {
         if self.log.len() >= LOG_RING {
             self.log.pop_front();
         }
-        self.log.push_back(scrub::text(line, 200));
+        let line = scrub::text(line, 200);
+        kadakas_crash::ring::note_log(&line);
+        self.log.push_back(line);
     }
 
     /// The name of the MCP client (from `initialize`), added to reports.
@@ -213,8 +215,14 @@ impl Session {
         f: impl FnOnce(&mut Session) -> Result<T, RpcError>,
     ) -> Result<T, RpcError> {
         install_panic_hook();
+        // The name of the method (never its parameters) goes into the ring that a crash report
+        // reads (PLAT-20). A panic that is caught here is no crash: no crash file for it.
+        kadakas_crash::ring::note_command(method);
         let depth = self.editor.undo_depth();
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
+        let caught = kadakas_crash::ring::CatchGuard::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+        drop(caught);
+        match result {
             Ok(r) => r,
             Err(_) => {
                 // The command that panicked took its own changes back. The steps that the method

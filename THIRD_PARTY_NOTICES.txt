@@ -7,7 +7,7 @@ named for it. This file is made by scripts/notices.sh (cargo-about). Do not edit
 ================================================================================
 SUMMARY
 ================================================================================
-456 crates: MIT License
+459 crates: MIT License
 43 crates: Apache License 2.0
 19 crates: ISC License
 19 crates: Unicode License v3
@@ -5334,6 +5334,8 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 --------------------------------------------------------------------------------
 Used by:
+  - crash-context 0.8.0 (https://github.com/rust-minidump/minidump-writer)
+  - crash-handler 0.8.1 (https://github.com/EmbarkStudios/crash-handling)
   - presser 0.3.1 (https://github.com/EmbarkStudios/presser)
 
 Copyright (c) 2019 Embark Studios
@@ -7447,6 +7449,7 @@ Used by:
   - kadakas-collab-ws 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-container 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-core 0.1.0 (https://github.com/kadakas/kadakas)
+  - kadakas-crash 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-crs 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-feedback 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-file 0.1.0 (https://github.com/kadakas/kadakas)

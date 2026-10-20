@@ -33,6 +33,7 @@ kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
 kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
 kadakas-review = { version = "0.1.0", path = "../kadakas-review" }
 kadakas-feedback = { version = "0.1.0", path = "../kadakas-feedback" }
+kadakas-crash = { version = "0.1.0", path = "../kadakas-crash" }
 kadakas-file = { version = "0.1.0", path = "../kadakas-file" }
 kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }
 kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
@@ -50,6 +51,8 @@ getrandom = "0.4.3"
 kadakas-gis = { version = "0.1.0", path = "../kadakas-gis" }
 kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
 kadakas-update = { version = "0.1.0", path = "../kadakas-update" }
+# The panic hook and the native crash handler (PLAT-20).
+kadakas-crash = { version = "0.1.0", path = "../kadakas-crash", features = ["capture"] }
 sys-locale = "0.3.2"
 
 # The web build: WebGPU first, WebGL2 as the fallback (eframe picks at start).
