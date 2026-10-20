@@ -41,6 +41,9 @@ mod file_io;
 mod gis_dialogs;
 mod gis_ui;
 mod grading_ui;
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod handover;
 mod icon_size;
 mod icons;
 #[cfg(not(target_arch = "wasm32"))]
@@ -105,6 +108,21 @@ fn main() -> eframe::Result {
     // The panic hook and the native crash handler (PLAT-20), as early as the run id is known.
     crash_ui::install(&app_updates::launch_env);
     kadakas_sys::process::remove_secrets_from_env();
+    // macOS: the inner bundle was started by something other than the launcher (Keep in Dock on
+    // its icon, `open` on the bundle). Hand over to the launcher, which owns updates and `.kad`
+    // files. If that fails, run alone as before.
+    #[cfg(target_os = "macos")]
+    if let Some(open_args) = handover::launcher_open_args(
+        std::env::current_exe().ok().as_deref(),
+        app_updates::launch_env(kadakas_update::handshake::ENV_VIA).is_some(),
+        &agent::parse_open_files(&args),
+    ) && std::process::Command::new("/usr/bin/open")
+        .args(open_args)
+        .status()
+        .is_ok_and(|s| s.success())
+    {
+        return Ok(());
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 900.0])

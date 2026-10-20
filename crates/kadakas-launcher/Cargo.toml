@@ -18,3 +18,10 @@ kadakas-update = { version = "0.1.0", path = "../kadakas-update" }
 eframe = { version = "0.35.0", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
 egui = "0.35.0"
 sys-locale = "0.3.2"
+
+# macOS: the open-documents Apple event of a double click on a .kad file (PLAT-16). The same
+# versions as winit uses, so no second copy is built.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "NSApplication", "NSResponder", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSNotification", "NSObject", "NSString", "NSURL"] }

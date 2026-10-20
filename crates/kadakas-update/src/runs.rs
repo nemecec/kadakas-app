@@ -31,6 +31,7 @@
 //! | `<id>.status.json` | supervisor | what the app shows (`handshake::RunStatus`) |
 //! | `<id>.restart.json` | the app | "restart to update", with the open documents |
 //! | `<id>.download` | the app | "download the new version now" (Notify only) |
+//! | `<id>.open-<n>.json` | supervisor | documents to open in the running app (`inbox`) |
 //! | `<id>.crash.json` | the app | what the app knew when it died (PLAT-20, `kadakas-crash`) |
 //!
 //! **Crash reports (PLAT-20).** A run that ends without the mark and has a crash file keeps it:
@@ -260,6 +261,7 @@ fn keep_crash(store: &Store, id: &str, slot: &Slot, end: &ProcessEnd, seconds: u
 }
 
 fn remove_run_files(root: &Path, id: &str) {
+    crate::handshake::remove_open(root, id);
     for suffix in [
         "crash.json",
         "crash.json.tmp",
@@ -269,6 +271,7 @@ fn remove_run_files(root: &Path, id: &str) {
         "restart.json",
         "download",
         "app.lock",
+        "alive",
     ] {
         let _ = std::fs::remove_file(run_file(root, id, suffix));
     }

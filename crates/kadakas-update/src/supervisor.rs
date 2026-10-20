@@ -16,6 +16,7 @@ use crate::choose::{self, Choice};
 use crate::error::{Result, UpdateError};
 use crate::flavors;
 use crate::handshake::{self, ENV_ROOT, ENV_RUN, RunStatus, SkipReason, Skipped, UpdateState};
+use crate::inbox::{Inbox, Running};
 use crate::launch;
 use crate::manifest::Channel;
 use crate::runs::{ProcessEnd, RunGuard};
@@ -33,6 +34,11 @@ use std::time::{Duration, Instant};
 pub trait Process: Send {
     /// `Ok(Some(success))` when the program has ended, `Ok(None)` while it runs.
     fn try_wait(&mut self) -> std::io::Result<Option<bool>>;
+
+    /// The process id, if the system has one.
+    fn id(&self) -> Option<u32> {
+        None
+    }
 
     /// After the end: how the program ended, as far as the system says (the exit code, the
     /// crash signal or exception, a kill).
@@ -67,6 +73,10 @@ impl Process for SystemProcess {
             self.1 = status;
         }
         Ok(status.map(|s| s.success()))
+    }
+
+    fn id(&self) -> Option<u32> {
+        Some(self.0.id())
     }
 
     fn end(&self) -> ProcessEnd {
@@ -194,6 +204,8 @@ pub struct Supervisor {
     make_updater: UpdaterFactory,
     spawner: Arc<dyn Spawner>,
     timing: Timing,
+    /// Where documents wait that arrive while the app runs (a double click on a `.kad` file).
+    inbox: Arc<Inbox>,
 }
 
 /// The newest version that restarting would start and that is newer than the running one:
@@ -275,12 +287,26 @@ impl Supervisor {
         make_updater: UpdaterFactory,
         spawner: Arc<dyn Spawner>,
     ) -> Supervisor {
+        let root_for_inbox = root.clone();
         Supervisor {
             root,
             make_updater,
             spawner,
             timing: Timing::default(),
+            inbox: Inbox::new(root_for_inbox),
         }
+    }
+
+    /// Uses a shared inbox: the thread that gets the system events puts documents in it, and the
+    /// supervisor hands them to the app (to the running one, or to the next start).
+    pub fn with_inbox(mut self, inbox: Arc<Inbox>) -> Supervisor {
+        self.inbox = inbox;
+        self
+    }
+
+    /// The inbox of this supervisor.
+    pub fn inbox(&self) -> Arc<Inbox> {
+        self.inbox.clone()
     }
 
     pub fn with_timing(mut self, timing: Timing) -> Supervisor {
@@ -298,15 +324,26 @@ impl Supervisor {
         let mut reports = Vec::new();
         let mut files = files;
         loop {
+            // Documents that arrived while no app ran start with this one.
+            for f in self.inbox.take_pending() {
+                if !files.contains(&f) {
+                    files.push(f);
+                }
+            }
             let settings = Settings::load(&self.root);
             let updater = (self.make_updater)(&settings);
             updater.store().set_keep_older(settings.keep_older);
             let _ = updater.store().prune();
             let (mut child, guard, choice, base) = self.start(&updater, &settings, &files)?;
             let running = choice.active.version.clone();
+            // Documents that arrived as the app ended start it again, also without a restart
+            // request: the person asked for them. The requests are taken back before the files
+            // of the run are deleted.
+            let late;
             let (request, clean) = match guard {
                 Some(guard) => {
                     self.watch(child.as_mut(), &guard, &running, base);
+                    late = self.inbox.end_run();
                     let id = guard.id().to_string();
                     let request = handshake::take_restart(&self.root, &id);
                     let end = child.end();
@@ -318,6 +355,7 @@ impl Supervisor {
                     while matches!(child.try_wait(), Ok(None)) {
                         std::thread::sleep(self.timing.poll);
                     }
+                    late = self.inbox.end_run();
                     (None, false)
                 }
             };
@@ -328,9 +366,15 @@ impl Supervisor {
                 clean,
                 skipped: choice.skipped,
             });
-            let Some(request) = request.filter(|_| clean) else {
-                return Ok(reports);
-            };
+            let request = request.filter(|_| clean);
+            if request.is_none() {
+                if late.is_empty() {
+                    return Ok(reports);
+                }
+                files = late;
+                continue;
+            }
+            let request = request.expect("checked above");
             // Restart to update: in the manual modes the person's accept is the switch.
             let now = Settings::load(&self.root);
             if now.mode != UpdateMode::AutoUpdate {
@@ -344,6 +388,11 @@ impl Supervisor {
                 }
             }
             files = request.documents.into_iter().map(Into::into).collect();
+            for f in late {
+                if !files.contains(&f) {
+                    files.push(f);
+                }
+            }
         }
     }
 
@@ -383,7 +432,7 @@ impl Supervisor {
                 update: UpdateState::Checking,
                 skipped: choice.skipped.clone(),
             };
-            let mut env = Vec::new();
+            let mut env = vec![(handshake::ENV_VIA.to_string(), "1".to_string())];
             if let Some(g) = &guard {
                 let _ = handshake::write_status(store.root(), g.id(), &base);
                 env.push((ENV_ROOT.into(), store.root().to_string_lossy().into_owned()));
@@ -397,7 +446,19 @@ impl Supervisor {
                 env,
             };
             match self.spawner.spawn(&spec) {
-                Ok(child) => return Ok((child, guard, choice, base)),
+                Ok(child) => {
+                    if let Some(g) = &guard {
+                        self.inbox.set_running(Running {
+                            id: g.id().to_string(),
+                            pid: child.id(),
+                            spec,
+                        });
+                    }
+                    if guard.is_none() {
+                        self.inbox.set_unlinked();
+                    }
+                    return Ok((child, guard, choice, base));
+                }
                 Err(_) => {
                     // Not a crash of the version: it never ran. Skip it for this start.
                     failed.push(choice.active.slot.clone());
@@ -515,6 +576,10 @@ mod tests {
         download: bool,
         /// Looks at the status file and keeps what it saw.
         watch_status: bool,
+        /// At this poll the system sends these files to the launcher (a double click).
+        deliver: Option<(u32, Arc<Inbox>, Vec<OsString>)>,
+        /// Reads the open requests of the launcher, as the real app does.
+        read_open: bool,
         /// Leaves a crash file when it ends (the app's panic hook did that).
         crash_file: bool,
         /// The system says that this signal ended it.
@@ -530,12 +595,27 @@ mod tests {
         link: Option<AppLink>,
         polls: u32,
         seen: Arc<Mutex<Vec<UpdateState>>>,
+        opened: Arc<Mutex<Vec<PathBuf>>>,
         asked: bool,
     }
 
     impl Process for ScriptedProcess {
+        fn id(&self) -> Option<u32> {
+            Some(4242)
+        }
+
         fn try_wait(&mut self) -> std::io::Result<Option<bool>> {
             self.polls += 1;
+            if let Some((at, inbox, files)) = &self.script.deliver
+                && *at == self.polls
+            {
+                inbox.deliver(files.clone());
+            }
+            if self.script.read_open
+                && let Some(l) = &self.link
+            {
+                self.opened.lock().unwrap().extend(l.take_open());
+            }
             if let Some(l) = &self.link {
                 if self.script.download && !self.asked {
                     // Wait until the launcher offers the download (Notify only).
@@ -596,6 +676,7 @@ mod tests {
         /// Versions (directory names) that cannot be started.
         broken: Mutex<Vec<String>>,
         seen: Arc<Mutex<Vec<UpdateState>>>,
+        opened: Arc<Mutex<Vec<PathBuf>>>,
     }
 
     impl Spawner for FakeSpawner {
@@ -620,6 +701,7 @@ mod tests {
                 link: AppLink::from_env(&env),
                 polls: 0,
                 seen: self.seen.clone(),
+                opened: self.opened.clone(),
                 asked: false,
             }))
         }
@@ -705,6 +787,57 @@ mod tests {
         assert!(crate::runs::valid_run_id(&env[ENV_RUN]));
         // The run is settled: nothing is left.
         assert!(w.store().running_slots().is_empty());
+        std::fs::remove_dir_all(&w.root).unwrap();
+    }
+
+    #[test]
+    fn files_that_wait_start_with_the_app() {
+        let (w, sup) = world("sup-pending", "1.0.0");
+        // A double click arrived before the app started (the launcher was just started).
+        sup.inbox().deliver(vec![OsString::from("/b.kad")]);
+        let reports = sup.run(vec![OsString::from("/a.kad")]).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(
+            w.started()[0].files,
+            [OsString::from("/a.kad"), OsString::from("/b.kad")]
+        );
+        std::fs::remove_dir_all(&w.root).unwrap();
+    }
+
+    #[test]
+    fn a_double_click_while_the_app_runs_goes_to_that_app() {
+        let (w, sup) = world("sup-forward", "1.0.0");
+        w.script(Script {
+            polls: 6,
+            clean: true,
+            read_open: true,
+            deliver: Some((2, sup.inbox(), vec![OsString::from("/second.kad")])),
+            ..Script::default()
+        });
+        sup.run(vec![OsString::from("/first.kad")]).unwrap();
+        // One app only: the second file went to it, as a request, not to a new process.
+        assert_eq!(w.started().len(), 1);
+        assert_eq!(
+            *w.spawner.opened.lock().unwrap(),
+            [PathBuf::from("/second.kad")]
+        );
+        assert!(sup.inbox().running().is_none());
+        std::fs::remove_dir_all(&w.root).unwrap();
+    }
+
+    #[test]
+    fn files_that_arrive_as_the_app_ends_start_it_again() {
+        let (w, sup) = world("sup-late", "1.0.0");
+        // The app never reads requests and ends at the poll that follows the double click.
+        w.script(Script {
+            polls: 2,
+            clean: true,
+            deliver: Some((3, sup.inbox(), vec![OsString::from("/late.kad")])),
+            ..Script::default()
+        });
+        let reports = sup.run(vec![]).unwrap();
+        assert_eq!(reports.len(), 2);
+        assert_eq!(w.started()[1].files, [OsString::from("/late.kad")]);
         std::fs::remove_dir_all(&w.root).unwrap();
     }
 
@@ -1098,9 +1231,10 @@ mod tests {
         assert!(!reports[0].clean, "nothing is known about how it ended");
         let spec = &w.started()[0];
         assert_eq!(spec.files, [OsString::from("/a/one.kad")]);
-        assert!(
-            spec.env.is_empty(),
-            "the app gets no run id it could not use"
+        // No run id it could not use; only the mark that the launcher started it.
+        assert_eq!(
+            spec.env,
+            [(handshake::ENV_VIA.to_string(), "1".to_string())]
         );
         std::fs::remove_dir_all(&w.root).unwrap();
     }

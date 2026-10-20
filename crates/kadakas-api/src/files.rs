@@ -390,6 +390,7 @@ fn file_call_inner(
         s.doc_dir = dir_of(&p);
         Ok(FileDone::Saved(p, form, notes))
     } else {
+        s.refuse_replace(crate::Blocked::Open(p.clone()), "file.open")?;
         let mut opened = open_document(&p, s.limits.document_file_bytes, ReadMode::Lazy)?;
         s.check_document_fits(&opened.doc)?;
         let form = opened.form;
@@ -588,6 +589,80 @@ mod tests {
         );
         assert_eq!(t.editor.doc().objects.len(), 1);
         assert_eq!(t.doc_dir.as_deref(), Some(dir.as_path()));
+    }
+
+    /// An agent must not replace a drawing with changes that the person has not saved (the app
+    /// turns the guard on). Headless sessions keep replacing, as before.
+    #[test]
+    fn the_guard_refuses_to_replace_unsaved_changes() {
+        let dir = tmp("guard");
+        let f = dir.join("other.kad");
+        let mut w = restricted(&dir);
+        add_circle(&mut w);
+        assert_eq!(call(&mut w, "file.save", &f)["result"]["ok"], true);
+
+        let mut s = restricted(&dir);
+        s.set_guard_unsaved(true);
+        // A new drawing is clean: the open works.
+        assert!(!s.has_unsaved_changes());
+        assert_eq!(call(&mut s, "file.open", &f)["result"]["ok"], true);
+        assert!(!s.has_unsaved_changes());
+        // An edit makes it unsaved: file.open, document.load and collab.connect (also with
+        // replace) are refused with the reason, and the drawing stays.
+        add_circle(&mut s);
+        assert!(s.has_unsaved_changes());
+        let r = call(&mut s, "file.open", &f);
+        assert_eq!(r["error"]["data"]["reason"], "unsaved_changes", "{r}");
+        assert_eq!(r["error"]["data"]["kind"], "conflict");
+        assert!(
+            r["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Ask the person to save"),
+            "{r}"
+        );
+        assert_eq!(s.editor.doc().objects.len(), 2);
+        assert_eq!(s.take_blocked(), Some(crate::Blocked::Open(f.clone())));
+        assert_eq!(s.take_blocked(), None);
+        let e = s
+            .handle(
+                "document.load",
+                json!({"document": serde_json::to_value(s.editor.doc()).unwrap()}),
+            )
+            .unwrap_err();
+        assert_eq!(e.reason, Some(crate::REASON_UNSAVED_CHANGES));
+        assert_eq!(s.take_blocked(), Some(crate::Blocked::Load));
+        let e = s
+            .handle(
+                "collab.connect",
+                json!({"url": "ws://127.0.0.1:1", "doc": "00000000-0000-0000-0000-000000000000", "replace": true}),
+            )
+            .unwrap_err();
+        assert_eq!(e.reason, Some(crate::REASON_UNSAVED_CHANGES));
+        assert_eq!(s.take_blocked(), Some(crate::Blocked::Connect));
+        assert_eq!(s.editor.doc().objects.len(), 2, "nothing was replaced");
+
+        // After a save the open works again, and the guard stays on for the new document.
+        let mine = dir.join("mine.kad");
+        assert_eq!(call(&mut s, "file.save", &mine)["result"]["ok"], true);
+        assert!(!s.has_unsaved_changes());
+        assert_eq!(call(&mut s, "file.open", &f)["result"]["ok"], true);
+        add_circle(&mut s);
+        assert!(call(&mut s, "file.open", &f)["error"].is_object());
+        // A recovered copy was never saved.
+        let mut r = restricted(&dir);
+        r.set_guard_unsaved(true);
+        r.mark_unsaved();
+        assert!(r.has_unsaved_changes());
+        assert!(call(&mut r, "file.open", &f)["error"].is_object());
+
+        // The default (headless): no guard, the call replaces, as it always did.
+        let mut h = restricted(&dir);
+        add_circle(&mut h);
+        add_circle(&mut h);
+        assert_eq!(call(&mut h, "file.open", &f)["result"]["ok"], true);
+        assert_eq!(h.editor.doc().objects.len(), 1);
+        assert_eq!(h.take_blocked(), None);
     }
 
     #[test]

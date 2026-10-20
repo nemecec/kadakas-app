@@ -20,7 +20,7 @@ pub struct Snapshot {
 }
 
 /// The history of views. `S` is what a view is: the pan and zoom of the plan by default; the 3D
-/// modeler keeps camera snapshots (`nav3d::CameraSnapshot`).
+/// modeler keeps the camera (`kadakas_render::Camera`, see `nav3d::Nav3d`).
 #[derive(Debug)]
 pub struct ViewHistory<S = Snapshot> {
     entries: Vec<S>,

@@ -39,3 +39,17 @@ app-updates-reason-not-started = it could not be started
 
 app-updates-request-failed = Could not tell the launcher: { $error }
 app-updates-save-failed = Could not save the update settings: { $error }
+
+app-open-title = Open drawing
+app-open-unsaved-question = You have changes that are not saved. Save them before opening { $name }?
+app-open-save-and-open = Save and open
+app-open-dont-save = Don't save
+app-open-cancelled = Opening { $name } was cancelled. Your drawing is unchanged.
+app-open-not-saved = The changes could not be saved, so { $name } was not opened.
+app-open-unsaved-new = You have changes that are not saved. Save them before you start a new drawing?
+app-open-unsaved-agent = An agent wants to open { $name }, and you have changes that are not saved. Save them first?
+app-open-refuse = Refuse
+app-open-new-drawing = a new drawing
+app-open-dropped = Not opened: { $dropped }. Kadakas is waiting for your answer about { $waiting } first.
+app-open-agent-refused = You refused. The agent did not open { $name }, and your drawing is unchanged.
+app-open-agent-load-refused = An agent tried to load a document and was refused, because you have changes that are not saved. Save your drawing, then ask the agent to try again.

@@ -59,6 +59,32 @@ type Opening = std::path::PathBuf;
 #[cfg(target_arch = "wasm32")]
 type Opening = (String, Vec<u8>);
 
+/// A way to replace the drawing that waits for the answer to the question about unsaved changes.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Replace {
+    /// File > Open, or a file that the launcher sent.
+    Open(std::path::PathBuf),
+    /// File > New.
+    New,
+    /// A call of an agent (`file.open`) that was refused. The person may open the file anyway.
+    Agent(std::path::PathBuf),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Replace {
+    /// What the questions and the status line call it: the file name, or a new drawing.
+    fn name(&self) -> String {
+        match self {
+            Replace::Open(p) | Replace::Agent(p) => p.file_name().map_or_else(
+                || p.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            ),
+            Replace::New => tr!("app-open-new-drawing"),
+        }
+    }
+}
+
 pub struct KadakasApp {
     session: Session,
     view: View,
@@ -152,10 +178,10 @@ pub struct KadakasApp {
     /// Updates through the launcher: the notice, the restart, Preferences > Updates (PLAT-16).
     #[cfg(not(target_arch = "wasm32"))]
     updates: crate::app_updates::Updates,
-    /// The editor revision at the last open, new or save. Another revision means that the
-    /// drawing has changes that are not saved (the restart to update asks about them).
+    /// Something waits for the answer to "save your changes first?" (File > Open, File > New, a
+    /// request of the launcher, a call of an agent, any other way to replace the drawing).
     #[cfg(not(target_arch = "wasm32"))]
-    saved_revision: u64,
+    pending_replace: Option<Replace>,
     /// File > Compare Drawings...: two DXF or DWG files without an import (IOP-24).
     #[cfg(not(target_arch = "wasm32"))]
     drawings_ui: crate::drawings_ui::DrawingsUi,
@@ -477,6 +503,8 @@ impl KadakasApp {
 
     fn blank() -> Self {
         let mut session = Session::default();
+        // A person is at the screen: an agent must not replace a drawing with unsaved changes.
+        session.set_guard_unsaved(true);
         // The API checks the consent to delete the work of somebody else against this name.
         session.set_identity(&crate::issues_ui::author_name());
         // The WebSocket for `collab.connect`; the same code runs in the browser and on the
@@ -484,8 +512,6 @@ impl KadakasApp {
         session.set_collab_endpoint_factory(Box::new(|url, token| {
             kadakas_collab_ws::endpoint_for(url, token).map_err(|e| e.to_string())
         }));
-        #[cfg(not(target_arch = "wasm32"))]
-        let saved_revision = session.editor.revision();
         KadakasApp {
             profiles: Default::default(),
             session,
@@ -553,7 +579,7 @@ impl KadakasApp {
             #[cfg(not(target_arch = "wasm32"))]
             updates: crate::app_updates::Updates::from_env(&crate::app_updates::launch_env),
             #[cfg(not(target_arch = "wasm32"))]
-            saved_revision,
+            pending_replace: None,
             #[cfg(not(target_arch = "wasm32"))]
             drawings_ui: Default::default(),
             readout: Default::default(),
@@ -868,10 +894,6 @@ impl KadakasApp {
         if !notes.is_empty() {
             self.status = tr!("app-load-notes", notes = notes.join("; "));
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.saved_revision = self.session.editor.revision();
-        }
         true
     }
 
@@ -1108,7 +1130,12 @@ impl KadakasApp {
         }
         match action {
             MenuAction::New => {
-                self.replace_document(Document::default(), None);
+                #[cfg(not(target_arch = "wasm32"))]
+                self.new_drawing(ctx);
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.replace_document(Document::default(), None);
+                }
             }
             MenuAction::Undo => self.undo(),
             MenuAction::Redo => self.redo(),
@@ -1335,10 +1362,11 @@ impl KadakasApp {
         }
     }
 
-    /// True when the drawing has changes that are not saved.
+    /// True when the drawing has changes that are not saved. The session knows (it is the one
+    /// place that the window, the restart to update and the agent calls ask).
     #[cfg(not(target_arch = "wasm32"))]
     fn is_dirty(&self) -> bool {
-        self.session.editor.revision() != self.saved_revision
+        self.session.has_unsaved_changes()
     }
 
     /// "Restart to update": with unsaved changes the person is asked first. Then the window
@@ -1373,7 +1401,13 @@ impl KadakasApp {
             ctx.request_repaint();
         }
         if self.updates.has_launcher() {
-            ctx.request_repaint_after(std::time::Duration::from_secs(2));
+            // Also the wait for a document that the launcher sends (a double click on a file).
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        self.open_ask_frame(ctx);
+        let sent = self.updates.take_open(ctx.input(|i| i.time));
+        if let Some(first) = sent.first() {
+            self.open_sent(ctx, first.clone(), sent.len());
         }
         if let Some(note) = self.updates.skipped_note() {
             self.status = note;
@@ -1408,6 +1442,22 @@ impl KadakasApp {
         }
     }
 
+    /// A document that the launcher sent: a double click on a `.kad` file while this app runs.
+    /// It opens like File > Open (the big-file question, the collaboration and script guards).
+    /// The window comes to the front.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_sent(&mut self, ctx: &egui::Context, first: std::path::PathBuf, count: usize) {
+        self.open_path(ctx, first.clone());
+        if count > 1 && self.path.as_ref() == Some(&first) {
+            self.status = tr!(
+                "app-opened-first-of-several",
+                name = first.display(),
+                count = count - 1
+            );
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
     /// The end of a normal exit, for the launcher: a pending restart with the open documents,
     /// then the clean-exit mark.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1436,11 +1486,119 @@ impl KadakasApp {
         self.open_path(ctx, path);
     }
 
-    /// Opens a `.kad` file of the person from File > Open. A big file is asked about first, and a
-    /// file that the computer cannot hold is refused (DOC-19, `file_io::open_decision`). Every new
-    /// way to open a file of the person must come here.
+    /// Opens a `.kad` file of the person from File > Open or from the launcher. With unsaved
+    /// changes the file waits and the person is asked first (Save and open, Don't save, Cancel):
+    /// the open document is never replaced without that answer. Then a big file is asked about,
+    /// and a file that the computer cannot hold is refused (DOC-19, `file_io::open_decision`).
+    /// Every new way to open a file of the person (a recent file, a drop) must come here.
     #[cfg(not(target_arch = "wasm32"))]
     fn open_path(&mut self, ctx: &egui::Context, path: std::path::PathBuf) {
+        if self.is_dirty() && !self.collab.is_active() && !self.session.script_running() {
+            self.ask_replace(ctx, Replace::Open(path));
+            return;
+        }
+        self.open_path_clean(ctx, path);
+    }
+
+    /// An agent asked to replace a drawing that has unsaved changes. The call was refused; the
+    /// person is told, and may save and open the file themselves.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pump_blocked(&mut self, ctx: &egui::Context) {
+        let Some(blocked) = self.session.take_blocked() else {
+            return;
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        match blocked {
+            kadakas_api::Blocked::Open(p) => self.ask_replace(ctx, Replace::Agent(p)),
+            kadakas_api::Blocked::Load | kadakas_api::Blocked::Connect => {
+                self.status = tr!("app-open-agent-load-refused");
+            }
+        }
+    }
+
+    /// File > New. With unsaved changes the person is asked first, as for File > Open.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn new_drawing(&mut self, ctx: &egui::Context) {
+        if self.is_dirty() && !self.collab.is_active() && !self.session.script_running() {
+            self.ask_replace(ctx, Replace::New);
+            return;
+        }
+        self.replace_document(Document::default(), None);
+    }
+
+    /// Parks a way to replace the drawing until the person has answered the question about the
+    /// unsaved changes. Only one question is open at a time. A second request does not replace
+    /// the first: it is dropped, and the status line names it, so that nobody wonders.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ask_replace(&mut self, ctx: &egui::Context, what: Replace) {
+        if let Some(waiting) = &self.pending_replace {
+            if *waiting != what {
+                self.status = tr!(
+                    "app-open-dropped",
+                    dropped = what.name(),
+                    waiting = waiting.name()
+                );
+            }
+        } else {
+            self.pending_replace = Some(what);
+        }
+        ctx.request_repaint();
+    }
+
+    /// Each frame: the question about unsaved changes shows while something waits.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_ask_frame(&mut self, ctx: &egui::Context) {
+        let Some(what) = self.pending_replace.clone() else {
+            return;
+        };
+        let kind = match what {
+            Replace::Open(_) => crate::app_updates::AskKind::Open,
+            Replace::New => crate::app_updates::AskKind::New,
+            Replace::Agent(_) => crate::app_updates::AskKind::Agent,
+        };
+        if let Some(choice) = crate::app_updates::open_dialog(ctx, kind, &what.name()) {
+            self.on_open_choice(ctx, choice);
+        }
+    }
+
+    /// The person answered the question about unsaved changes before something replaces the
+    /// drawing.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn on_open_choice(&mut self, ctx: &egui::Context, choice: crate::app_updates::OpenChoice) {
+        use crate::app_updates::OpenChoice;
+        let Some(what) = self.pending_replace.take() else {
+            return;
+        };
+        let name = what.name();
+        let go = |app: &mut Self, ctx: &egui::Context| match &what {
+            Replace::Open(p) | Replace::Agent(p) => app.open_path_clean(ctx, p.clone()),
+            Replace::New => {
+                app.replace_document(Document::default(), None);
+            }
+        };
+        match choice {
+            OpenChoice::SaveAndOpen => {
+                self.save(false, ctx);
+                if self.is_dirty() {
+                    // Not saved (cancelled or failed): the drawing stays, nothing is opened.
+                    self.status = tr!("app-open-not-saved", name = name);
+                } else {
+                    go(self, ctx);
+                }
+            }
+            OpenChoice::DiscardAndOpen => go(self, ctx),
+            OpenChoice::Cancel => {
+                self.status = match what {
+                    Replace::Agent(_) => tr!("app-open-agent-refused", name = name),
+                    _ => tr!("app-open-cancelled", name = name),
+                };
+            }
+        }
+    }
+
+    /// [`KadakasApp::open_path`] after the question about unsaved changes.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_path_clean(&mut self, ctx: &egui::Context, path: std::path::PathBuf) {
         if self.collab.is_active() {
             self.status = tr!("collab-ui-blocked-replace");
             return;
@@ -1467,7 +1625,7 @@ impl KadakasApp {
         if let Some(agreed) = agreed
             && file_io::file_len(&path).is_some_and(|now| now > agreed)
         {
-            self.open_path(ctx, path);
+            self.open_path_clean(ctx, path);
             return;
         }
         match file_io::open_file(&path) {
@@ -1557,7 +1715,6 @@ impl KadakasApp {
                     )
                 };
                 self.session.collab_mark_saved();
-                self.saved_revision = self.session.editor.revision();
                 self.path = Some(path);
                 self.set_title(ctx);
             }
@@ -2812,6 +2969,8 @@ impl KadakasApp {
                     | Action::NudgeDown
             ) || a.id().starts_with("mode.")
                 || !a.implemented()
+                // The actions of the 3D modeler do nothing here.
+                || a.modeler_only()
                 || (a == Action::CommandLine && !self.profiles.has_aliases())
         };
         for a in Action::ALL.iter().copied().filter(|a| !skip(*a)) {
@@ -3391,6 +3550,8 @@ impl eframe::App for KadakasApp {
             self.title_dirty |= fx.path_changed;
         }
         #[cfg(not(target_arch = "wasm32"))]
+        self.pump_blocked(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
         self.finish_screenshots(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         self.agent_connection_notice(&ctx);
@@ -3484,16 +3645,19 @@ impl eframe::App for KadakasApp {
             &mut self.resource_ui,
             &mut self.status,
         );
-        // A recovered copy is offered only while no shared document is joined: it would replace
-        // the open document, and the recovery files must stay until it is opened.
-        if let Some(r) = self.autosave.show(&ctx, !self.collab.is_active())
-            && self.replace_document(r.doc, None)
+        // A recovered copy is offered only while no shared document is joined and the open drawing
+        // has no unsaved changes: it would replace the open document, and the recovery files must
+        // stay until it is opened.
+        if let Some(r) = self.autosave.show(
+            &ctx,
+            !self.collab.is_active() && !self.session.has_unsaved_changes(),
+        ) && self.replace_document(r.doc, None)
         {
             self.status = r.status;
             // A recovered copy was never saved.
             #[cfg(not(target_arch = "wasm32"))]
             {
-                self.saved_revision = u64::MAX;
+                self.session.mark_unsaved();
             }
         }
         if let Some(versions) = self.autosave.take_report_request() {
@@ -4452,6 +4616,21 @@ mod tests {
                 .iter()
                 .all(|i| i.label != Action::CommandLine.label())
         );
+    }
+
+    #[test]
+    fn quick_search_leaves_out_the_actions_of_the_3d_modeler() {
+        let app = KadakasApp::blank();
+        let items = app.quick_items();
+        let mut seen = 0;
+        for a in Action::ALL.iter().filter(|a| a.modeler_only()) {
+            seen += 1;
+            assert!(
+                items.iter().all(|i| i.label != a.label()),
+                "{a:?} is in the quick search of the app"
+            );
+        }
+        assert_eq!(seen, 12);
     }
 
     #[test]
@@ -6027,6 +6206,25 @@ mod tests {
     }
 
     #[test]
+    fn a_document_sent_by_the_launcher_opens_in_the_running_app() {
+        let (mut app, root) = launched_app("sent");
+        let ctx = egui::Context::default();
+        let first = root.join("one.json");
+        let second = root.join("two.json");
+        file_io::write_document_raw(&first, &Document::default()).unwrap();
+        file_io::write_document_raw(&second, &Document::default()).unwrap();
+        assert!(app.path.is_none());
+        // A double click on two files: the launcher writes the request, the app opens the first.
+        kadakas_update::handshake::send_open(&root, "1a-2b", &[first.clone(), second]).unwrap();
+        app.updates_frame(&ctx);
+        assert_eq!(app.path.as_ref(), Some(&first));
+        assert!(app.status.contains("one.json"), "{}", app.status);
+        // The request is used up.
+        assert!(!kadakas_update::handshake::open_pending(&root, "1a-2b"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn a_normal_exit_marks_clean_and_asks_for_no_restart() {
         let (mut app, root) = launched_app("exit");
         app.finish_updates();
@@ -6093,6 +6291,236 @@ mod tests {
         assert!(app.is_dirty());
         assert_eq!(app.updates.restart(), Restart::None);
         assert!(!closes(&ctx));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A saved plan with one unsaved change, and another file that waits to be opened.
+    fn dirty_app_with_a_waiting_file(
+        name: &str,
+    ) -> (
+        KadakasApp,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let (mut app, root) = launched_app(name);
+        let ctx = egui::Context::default();
+        let plan = root.join("plan.json");
+        let other = root.join("other.json");
+        file_io::write_document_raw(&plan, &Document::default()).unwrap();
+        file_io::write_document_raw(&other, &Document::default()).unwrap();
+        app.open_path(&ctx, plan.clone());
+        app.exec(&add_rect_command(0.0));
+        assert!(app.is_dirty());
+        (app, root, plan, other)
+    }
+
+    #[test]
+    fn a_file_never_replaces_unsaved_changes_without_an_answer() {
+        use crate::app_updates::OpenChoice;
+        let ctx = egui::Context::default();
+
+        // Every way in goes through open_path, so File > Open (after the picker), the request of
+        // the launcher and the next ways (recent files, a drop) all wait for the answer.
+        let (mut app, root, plan, other) = dirty_app_with_a_waiting_file("open-ask");
+        app.open_path(&ctx, other.clone());
+        assert_eq!(
+            app.pending_replace.as_ref(),
+            Some(&Replace::Open(other.clone()))
+        );
+        assert_eq!(app.path.as_ref(), Some(&plan), "the drawing stays");
+        assert!(app.is_dirty());
+        // The request of the launcher is read at once (so its 5 s fallback is not used), and the
+        // question is up.
+        let (mut app2, root2, plan2, other2) = dirty_app_with_a_waiting_file("open-ask-sent");
+        kadakas_update::handshake::send_open(&root2, "1a-2b", std::slice::from_ref(&other2))
+            .unwrap();
+        app2.updates_frame(&ctx);
+        assert!(!kadakas_update::handshake::open_pending(&root2, "1a-2b"));
+        assert_eq!(
+            app2.pending_replace.as_ref(),
+            Some(&Replace::Open(other2.clone()))
+        );
+        assert_eq!(app2.path.as_ref(), Some(&plan2));
+        assert!(app2.is_dirty());
+
+        // Cancel: nothing changes, and the status line says so.
+        app.on_open_choice(&ctx, OpenChoice::Cancel);
+        assert!(app.pending_replace.is_none());
+        assert_eq!(app.path.as_ref(), Some(&plan));
+        assert!(app.is_dirty());
+        assert!(app.status.contains("other.json"), "{}", app.status);
+
+        // Don't save: the person said so.
+        app.open_path(&ctx, other.clone());
+        app.on_open_choice(&ctx, OpenChoice::DiscardAndOpen);
+        assert_eq!(app.path.as_ref(), Some(&other));
+        assert!(!app.is_dirty());
+        // The discarded change is not in the file.
+        assert_eq!(
+            file_io::open_file(&plan).unwrap().doc.objects.len(),
+            0,
+            "the plan on disk is as it was"
+        );
+
+        // Save and open: the change is written first.
+        let (mut app3, root3, plan3, other3) = dirty_app_with_a_waiting_file("open-save");
+        app3.open_path(&ctx, other3.clone());
+        app3.on_open_choice(&ctx, OpenChoice::SaveAndOpen);
+        assert_eq!(app3.path.as_ref(), Some(&other3));
+        assert!(!app3.is_dirty());
+        assert_eq!(file_io::open_file(&plan3).unwrap().doc.objects.len(), 1);
+
+        // Save fails (the folder is gone): the drawing stays and the file is not opened.
+        let (mut app4, root4) = launched_app("open-fail");
+        let gone = root4.join("gone");
+        std::fs::create_dir_all(&gone).unwrap();
+        let plan4 = gone.join("plan.json");
+        let other4 = root4.join("other.json");
+        file_io::write_document_raw(&plan4, &Document::default()).unwrap();
+        file_io::write_document_raw(&other4, &Document::default()).unwrap();
+        app4.open_path(&ctx, plan4.clone());
+        app4.exec(&add_rect_command(0.0));
+        std::fs::remove_dir_all(&gone).unwrap();
+        app4.open_path(&ctx, other4);
+        app4.on_open_choice(&ctx, OpenChoice::SaveAndOpen);
+        assert!(app4.is_dirty());
+        assert_eq!(app4.path.as_ref(), Some(&plan4));
+        assert!(app4.status.contains("other.json"), "{}", app4.status);
+
+        // A drawing without changes opens at once, with no question.
+        let (mut app5, root5) = launched_app("open-clean");
+        let f = root5.join("f.json");
+        file_io::write_document_raw(&f, &Document::default()).unwrap();
+        app5.open_path(&ctx, f.clone());
+        assert!(app5.pending_replace.is_none());
+        assert_eq!(app5.path.as_ref(), Some(&f));
+        for r in [root, root2, root3, root4, root5] {
+            let _ = std::fs::remove_dir_all(r);
+        }
+    }
+
+    #[test]
+    fn file_new_asks_before_it_drops_unsaved_changes() {
+        use crate::app_updates::OpenChoice;
+        let ctx = egui::Context::default();
+        // Clean: the new drawing starts at once.
+        let (mut clean, r0) = launched_app("new-clean");
+        clean.apply_menu(&ctx, MenuAction::New);
+        assert!(clean.pending_replace.is_none());
+
+        let (mut app, root, plan, _other) = dirty_app_with_a_waiting_file("new-ask");
+        app.apply_menu(&ctx, MenuAction::New);
+        assert_eq!(app.pending_replace, Some(Replace::New));
+        assert_eq!(app.path.as_ref(), Some(&plan), "the drawing stays");
+        assert!(app.is_dirty());
+        // Cancel keeps everything.
+        app.on_open_choice(&ctx, OpenChoice::Cancel);
+        assert!(app.pending_replace.is_none() && app.is_dirty());
+        // Don't save: the new drawing starts.
+        app.apply_menu(&ctx, MenuAction::New);
+        app.on_open_choice(&ctx, OpenChoice::DiscardAndOpen);
+        assert!(app.path.is_none() && !app.is_dirty());
+        // Save and start new: the plan is written first.
+        let (mut app2, root2, plan2, _o) = dirty_app_with_a_waiting_file("new-save");
+        app2.apply_menu(&ctx, MenuAction::New);
+        app2.on_open_choice(&ctx, OpenChoice::SaveAndOpen);
+        assert!(app2.path.is_none() && !app2.is_dirty());
+        assert_eq!(file_io::open_file(&plan2).unwrap().doc.objects.len(), 1);
+        for r in [r0, root, root2] {
+            let _ = std::fs::remove_dir_all(r);
+        }
+    }
+
+    #[test]
+    fn a_second_request_while_the_question_is_open_is_named_not_swallowed() {
+        let ctx = egui::Context::default();
+        let (mut app, root, plan, other) = dirty_app_with_a_waiting_file("second");
+        let third = root.join("third.json");
+        app.open_path(&ctx, other.clone());
+        app.open_path(&ctx, third.clone());
+        // The first stays, and the status line names the one that was not opened.
+        assert_eq!(app.pending_replace, Some(Replace::Open(other)));
+        assert!(app.status.contains("third.json"), "{}", app.status);
+        assert!(app.status.contains("other.json"), "{}", app.status);
+        // File > New while the question is open is named too.
+        app.apply_menu(&ctx, MenuAction::New);
+        assert!(app.status.contains("new drawing"), "{}", app.status);
+        assert_eq!(app.path.as_ref(), Some(&plan));
+        // The same request again changes nothing.
+        let before = app.status.clone();
+        let again = app.pending_replace.clone().unwrap();
+        app.ask_replace(&ctx, again);
+        assert_eq!(app.status, before);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// An agent must never drop the unsaved drawing: the call is refused with the reason, the
+    /// person gets a notice, and may save and open, open without saving, or refuse.
+    #[test]
+    fn an_agent_cannot_replace_unsaved_changes_and_the_person_decides() {
+        use crate::app_updates::OpenChoice;
+        let ctx = egui::Context::default();
+        let (mut app, root, plan, other) = dirty_app_with_a_waiting_file("agent");
+        // The app's session has the guard on (the headless default is off).
+        let reply = app
+            .session
+            .handle("file.open", serde_json::json!({"path": other}))
+            .unwrap_err();
+        assert_eq!(reply.reason, Some(kadakas_api::REASON_UNSAVED_CHANGES));
+        assert!(
+            reply.message.contains("Ask the person to save"),
+            "{}",
+            reply.message
+        );
+        assert_eq!(app.path.as_ref(), Some(&plan));
+        assert!(app.is_dirty());
+        // The frame turns the refusal into the notice.
+        app.updates_frame(&ctx);
+        app.pump_blocked(&ctx);
+        assert_eq!(app.pending_replace, Some(Replace::Agent(other.clone())));
+        // Refuse: nothing changes, and the status says so.
+        app.on_open_choice(&ctx, OpenChoice::Cancel);
+        assert!(app.status.contains("refused"), "{}", app.status);
+        assert_eq!(app.path.as_ref(), Some(&plan));
+        assert!(app.is_dirty());
+        // document.load: no file to open later, so the person only hears about it.
+        let doc = serde_json::to_value(app.session.editor.doc()).unwrap();
+        let e = app
+            .session
+            .handle("document.load", serde_json::json!({"document": doc}))
+            .unwrap_err();
+        assert_eq!(e.reason, Some(kadakas_api::REASON_UNSAVED_CHANGES));
+        app.pump_blocked(&ctx);
+        assert!(app.pending_replace.is_none());
+        assert!(app.status.contains("try again"), "{}", app.status);
+        assert!(app.is_dirty());
+        // Save and open: the person's choice saves first and opens the file the agent wanted.
+        let _ = app
+            .session
+            .handle("file.open", serde_json::json!({"path": other}));
+        app.pump_blocked(&ctx);
+        app.on_open_choice(&ctx, OpenChoice::SaveAndOpen);
+        assert_eq!(app.path.as_ref(), Some(&other));
+        assert_eq!(file_io::open_file(&plan).unwrap().doc.objects.len(), 1);
+        // Once the drawing is saved, the agent may open files again.
+        assert!(!app.is_dirty());
+        let ok = app
+            .session
+            .handle("file.open", serde_json::json!({"path": plan}));
+        assert!(ok.is_ok(), "{ok:?}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_recovered_copy_is_not_offered_over_unsaved_changes() {
+        let (mut app, root, _plan, _other) = dirty_app_with_a_waiting_file("recover");
+        // The same condition as the call in `ui`: the recovery dialog opens only on a clean
+        // drawing, and its files stay.
+        let offer = !app.collab.is_active() && !app.is_dirty();
+        assert!(!offer);
+        app.session.mark_unsaved();
+        assert!(app.is_dirty());
         let _ = std::fs::remove_dir_all(root);
     }
 

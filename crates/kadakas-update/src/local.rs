@@ -183,23 +183,76 @@ pub struct LocalBuild {
     /// The files to copy, relative to `dir`: the app, the `kadakas` tool and the other UI
     /// flavors (`flavors.json` and its programs).
     pub files: Vec<PathBuf>,
+    /// Symbolic links inside a bundle (a framework has some), as (path, target), both relative.
+    /// They are made again in the store, so a copied bundle works. Only links that stay inside
+    /// the bundle are taken (the same rule as for an update archive).
+    pub links: Vec<(PathBuf, PathBuf)>,
 }
 
 fn exe(name: &str) -> String {
     format!("{name}{}", std::env::consts::EXE_SUFFIX)
 }
 
+/// Adds every file below `rel` (a folder in `dir`) to `files`, and every symbolic link to `links`
+/// (file links and folder links). A link must stay inside the bundle, by the rules of the update
+/// archive (`archive::check_link_target`); another link makes the build invalid.
+fn collect_files(
+    dir: &Path,
+    rel: &Path,
+    files: &mut Vec<PathBuf>,
+    links: &mut Vec<(PathBuf, PathBuf)>,
+) -> Result<()> {
+    for e in std::fs::read_dir(dir.join(rel))? {
+        let e = e?;
+        let sub = rel.join(e.file_name());
+        let full = dir.join(&sub);
+        if e.file_type()?.is_symlink() {
+            let to = std::fs::read_link(&full)?;
+            crate::archive::check_link_target(&sub, &to).map_err(|_| {
+                UpdateError::BadBuild(format!("{} is a link out of the bundle", sub.display()))
+            })?;
+            links.push((sub, to));
+        } else if full.is_dir() {
+            collect_files(dir, &sub, files, links)?;
+        } else if full.is_file() {
+            files.push(sub);
+        }
+    }
+    Ok(())
+}
+
 /// Finds the files of a build. `path` is the folder of the build (for example `target/release`)
 /// or the app program in it. The app must be there; `kadakas` and the other flavors are copied
 /// when they are.
 pub fn find_build(path: &Path) -> Result<LocalBuild> {
-    let dir = if path.is_file() {
+    let is_bundle = path.is_dir() && path.extension().is_some_and(|e| e == "app");
+    let dir = if path.is_file() || is_bundle {
         path.parent()
             .map(Path::to_path_buf)
             .ok_or_else(|| UpdateError::BadBuild(path.display().to_string()))?
     } else {
         path.to_path_buf()
     };
+    // A build can be a folder with the bundle `Kadakas Engine.app` (macOS): the whole bundle is copied.
+    if !dir.join(exe(crate::settings::MAIN_FLAVOR)).is_file()
+        && crate::flavors::has_app(&dir)
+        && dir.join(crate::flavors::APP_BUNDLE).is_dir()
+    {
+        let mut files = Vec::new();
+        let mut links = Vec::new();
+        collect_files(
+            &dir,
+            Path::new(crate::flavors::APP_BUNDLE),
+            &mut files,
+            &mut links,
+        )?;
+        files.sort();
+        links.sort();
+        if dir.join("flavors.json").is_file() {
+            files.push(PathBuf::from("flavors.json"));
+        }
+        return Ok(LocalBuild { dir, files, links });
+    }
     let app = PathBuf::from(exe(crate::settings::MAIN_FLAVOR));
     if !dir.join(&app).is_file() {
         return Err(UpdateError::BadBuild(format!(
@@ -221,7 +274,11 @@ pub fn find_build(path: &Path) -> Result<LocalBuild> {
     if dir.join("flavors.json").is_file() {
         files.push(PathBuf::from("flavors.json"));
     }
-    Ok(LocalBuild { dir, files })
+    Ok(LocalBuild {
+        dir,
+        files,
+        links: Vec::new(),
+    })
 }
 
 /// The address of the update site (the folder with `manifest-<channel>.json`).
@@ -411,6 +468,68 @@ mod tests {
         );
         // A local build is a pre-release of its base, so it sorts below the release.
         assert!(local_version(&base, None, 5).unwrap() < base);
+    }
+
+    #[test]
+    fn an_app_bundle_is_a_build_and_is_copied_whole() {
+        let d = tmp("findbundle");
+        let mac = d.join("Kadakas Engine.app/Contents/MacOS");
+        std::fs::create_dir_all(&mac).unwrap();
+        std::fs::create_dir_all(d.join("Kadakas Engine.app/Contents/Resources")).unwrap();
+        for f in [
+            "Contents/MacOS/kadakas-app",
+            "Contents/MacOS/kadakas",
+            "Contents/Info.plist",
+            "Contents/Resources/icon.icns",
+        ] {
+            std::fs::write(d.join("Kadakas Engine.app").join(f), b"x").unwrap();
+        }
+        let expected = [
+            "Kadakas Engine.app/Contents/Info.plist",
+            "Kadakas Engine.app/Contents/MacOS/kadakas",
+            "Kadakas Engine.app/Contents/MacOS/kadakas-app",
+            "Kadakas Engine.app/Contents/Resources/icon.icns",
+        ]
+        .map(PathBuf::from);
+        // The folder with the bundle, and the bundle itself.
+        for p in [d.clone(), d.join("Kadakas Engine.app")] {
+            let b = find_build(&p).unwrap();
+            assert_eq!(b.dir, d);
+            assert_eq!(b.files, expected);
+        }
+        // A bundle without the program is no build.
+        std::fs::remove_file(mac.join("kadakas-app")).unwrap();
+        assert!(matches!(find_build(&d), Err(UpdateError::BadBuild(_))));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_inside_a_bundle_are_kept_and_links_out_of_it_refuse_the_build() {
+        let d = tmp("bundlelinks");
+        let c = d.join("Kadakas Engine.app/Contents");
+        std::fs::create_dir_all(c.join("MacOS")).unwrap();
+        std::fs::create_dir_all(c.join("Frameworks/F.framework/Versions/A")).unwrap();
+        std::fs::write(c.join("MacOS/kadakas-app"), b"x").unwrap();
+        std::fs::write(c.join("Frameworks/F.framework/Versions/A/F"), b"lib").unwrap();
+        // The usual framework links: a folder link and a file link.
+        std::os::unix::fs::symlink("A", c.join("Frameworks/F.framework/Versions/Current")).unwrap();
+        std::os::unix::fs::symlink("Versions/Current/F", c.join("Frameworks/F.framework/F"))
+            .unwrap();
+        let b = find_build(&d).unwrap();
+        assert_eq!(b.links.len(), 2);
+        assert!(b.files.iter().all(|f| !f.ends_with("Current")));
+        // They are made again in the store, and the framework resolves.
+        let store = crate::store::Store::new(d.join("data"), None);
+        let v = Version::parse("1.0.0-local.gz").unwrap();
+        store.add_local(&v, &b, None).unwrap();
+        let there = store.versions_dir().join(v.to_string());
+        let lib = there.join("Kadakas Engine.app/Contents/Frameworks/F.framework/F");
+        assert_eq!(std::fs::read(lib).unwrap(), b"lib");
+        // A link out of the bundle makes the build invalid.
+        std::os::unix::fs::symlink("../../../../x", c.join("MacOS/escape")).unwrap();
+        assert!(matches!(find_build(&d), Err(UpdateError::BadBuild(_))));
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

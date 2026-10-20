@@ -9,7 +9,13 @@
 //! - the app writes `<id>.download` to ask for the download (Notify only);
 //! - the app writes `<id>.restart.json` with the open documents and then exits. The launcher
 //!   starts the newest version again with the documents as arguments;
-//! - the app writes `<id>.clean` when it closes in the normal way (the crash marker).
+//! - the app writes `<id>.clean` when it closes in the normal way (the crash marker);
+//! - the app keeps `<id>.alive` fresh from a timer thread (not the window loop), so the launcher
+//!   knows that a version that does not answer a request at once (a file dialog is open, a big
+//!   file loads) is alive, and that a version without the file never reads requests;
+//! - the launcher writes `<id>.open-<n>.json` with documents to open (a double click on a `.kad`
+//!   file while the app runs, see `inbox`). The app reads and deletes it, and opens the first
+//!   document as File > Open does. A file that stays means the app does not read requests.
 
 use crate::runs::{run_file, valid_run_id};
 use crate::settings::UpdateMode;
@@ -21,6 +27,10 @@ use std::path::{Path, PathBuf};
 pub const ENV_ROOT: &str = "KADAKAS_LAUNCHER_ROOT";
 /// The variable with the run id.
 pub const ENV_RUN: &str = "KADAKAS_RUN_ID";
+/// Set to `1` by the launcher for every app it starts, with or without a run record. An app on
+/// macOS that is started without it (Keep in Dock on the app, `open` on the inner bundle) hands
+/// over to the launcher instead of running alone.
+pub const ENV_VIA: &str = "KADAKAS_VIA_LAUNCHER";
 
 /// What the update check found.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +93,150 @@ pub struct RunStatus {
 #[serde(default)]
 pub struct RestartRequest {
     pub documents: Vec<PathBuf>,
+}
+
+/// The most documents one open request may name. More are cut off.
+pub const MAX_OPEN_PATHS: usize = 256;
+
+/// The documents to open, as the launcher writes them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenRequest {
+    pub paths: Vec<PathBuf>,
+}
+
+fn open_prefix(id: &str) -> String {
+    format!("{id}.open-")
+}
+
+/// The open request files of a run, oldest first (the names carry the time).
+fn open_files(root: &Path, id: &str) -> Vec<PathBuf> {
+    let prefix = open_prefix(id);
+    let mut out: Vec<PathBuf> = std::fs::read_dir(crate::runs::runs_dir(root))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with(&prefix) && n.ends_with(".json")
+        })
+        .map(|e| e.path())
+        .collect();
+    out.sort();
+    out
+}
+
+/// Asks the running app of run `id` to open documents (the launcher does this).
+pub fn send_open(root: &Path, id: &str, paths: &[PathBuf]) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    if !valid_run_id(id) {
+        return Err(std::io::Error::other("bad run id"));
+    }
+    let req = OpenRequest {
+        paths: paths.iter().take(MAX_OPEN_PATHS).cloned().collect(),
+    };
+    let text = serde_json::to_vec(&req).map_err(std::io::Error::other)?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let name = format!(
+        "open-{nanos:040}-{:06}.json",
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    write_atomic(&run_file(root, id, &name), &text)
+}
+
+/// True while a request of run `id` has not been read.
+pub fn open_pending(root: &Path, id: &str) -> bool {
+    !open_files(root, id).is_empty()
+}
+
+/// How often the app refreshes its alive stamp.
+const HEARTBEAT_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// True when the app of run `id` writes an alive stamp (a version that reads open requests does).
+pub fn heartbeat_exists(root: &Path, id: &str) -> bool {
+    run_file(root, id, "alive").is_file()
+}
+
+/// The alive stamp of the app: a small file that a timer thread writes every second. It stops and
+/// the file goes when this value is dropped.
+pub struct Heartbeat {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    path: PathBuf,
+}
+
+impl Heartbeat {
+    fn start(root: &Path, id: &str) -> Heartbeat {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let path = run_file(root, id, "alive");
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let stamp = |path: &Path| {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            let _ = write_atomic(path, nanos.to_string().as_bytes());
+        };
+        // The first stamp is there when this returns.
+        stamp(&path);
+        let (flag, p) = (stop.clone(), path.clone());
+        let thread = std::thread::Builder::new()
+            .name("kadakas-alive".into())
+            .spawn(move || {
+                let mut waited = std::time::Duration::ZERO;
+                while !flag.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    waited += std::time::Duration::from_millis(50);
+                    if waited >= HEARTBEAT_EVERY {
+                        waited = std::time::Duration::ZERO;
+                        stamp(&p);
+                    }
+                }
+            })
+            .ok();
+        Heartbeat { stop, thread, path }
+    }
+}
+
+impl Drop for Heartbeat {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Reads and deletes the open requests of a run. A damaged file is deleted and gives nothing.
+/// The app calls this through [`AppLink::take_open`]; the launcher calls it to get back requests
+/// that the app did not read.
+pub fn take_open(root: &Path, id: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for f in open_files(root, id) {
+        let bytes = std::fs::read(&f);
+        // Delete first, so two readers never open the same request twice.
+        if std::fs::remove_file(&f).is_err() {
+            continue;
+        }
+        if let Some(req) = bytes
+            .ok()
+            .and_then(|b| serde_json::from_slice::<OpenRequest>(&b).ok())
+        {
+            out.extend(req.paths);
+        }
+    }
+    out.truncate(MAX_OPEN_PATHS);
+    out
+}
+
+/// Deletes the open requests of a run (its files are cleaned up).
+pub(crate) fn remove_open(root: &Path, id: &str) {
+    for f in open_files(root, id) {
+        let _ = std::fs::remove_file(f);
+    }
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -179,6 +333,21 @@ impl AppLink {
             .ok()?;
         f.try_lock().ok()?;
         Some(f)
+    }
+
+    /// Starts the alive stamp (see the module text). Keep the value as long as the app lives.
+    pub fn start_heartbeat(&self) -> Heartbeat {
+        Heartbeat::start(&self.root, &self.id)
+    }
+
+    /// Takes the documents that the launcher asked to open (a double click on a `.kad` file while
+    /// the app runs). The app opens the first one, as File > Open does. The request files are
+    /// **deleted before the app opens anything**: the launcher must see at once that the app has
+    /// the request (it starts no second app), and the app then keeps the file in its own
+    /// state while it asks the person about unsaved changes. A crash between the delete and the
+    /// open loses the request, never the person's drawing.
+    pub fn take_open(&self) -> Vec<PathBuf> {
+        take_open(&self.root, &self.id)
     }
 
     /// Asks the launcher to download the new version (Notify only).

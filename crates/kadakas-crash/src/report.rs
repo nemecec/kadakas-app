@@ -43,6 +43,22 @@ pub struct Assembled {
 }
 
 /// Scrubs `file` with `ctx` and builds the parts of the report.
+/// The name of the program for the report. Only a plain program name is used (lower case letters,
+/// digits and hyphens, at most 40): the field comes from a file. Anything else, and an empty field,
+/// gives "Kadakas".
+fn program_name(program: &str) -> String {
+    let plain = !program.is_empty()
+        && program.len() <= 40
+        && program
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if plain {
+        program.to_string()
+    } else {
+        "Kadakas".to_string()
+    }
+}
+
 pub fn assemble(file: &CrashFile, ctx: &Context) -> Assembled {
     let signature = signature::of(file);
     let mut message = scrub::text(&file.message, ctx);
@@ -97,14 +113,15 @@ pub fn assemble(file: &CrashFile, ctx: &Context) -> Assembled {
         "uptime_secs": file.uptime_secs,
         "survived_gap_secs": file.survived_gap_secs,
     });
+    let who = program_name(&file.program);
     let title = format!("Crash {signature} in {version}");
     let body = match file.survived_gap_secs {
         None => format!(
-            "Kadakas {version} ({channel}) on {os} ended with a {} in thread {thread}.",
+            "{who} {version} ({channel}) on {os} ended with a {} in thread {thread}.",
             file.kind.id()
         ),
         Some(gap) => format!(
-            "Kadakas {version} ({channel}) on {os} survived a {} in thread {thread} and ended {gap} s later in another way.",
+            "{who} {version} ({channel}) on {os} survived a {} in thread {thread} and ended {gap} s later in another way.",
             file.kind.id()
         ),
     };
@@ -113,7 +130,11 @@ pub fn assemble(file: &CrashFile, ctx: &Context) -> Assembled {
     draft.severity = Some(Severity::High);
     draft.context.version = version;
     draft.context.os = os;
-    draft.context.client_name = "kadakas".into();
+    draft.context.client_name = if who == "Kadakas" {
+        "kadakas".into()
+    } else {
+        who.clone()
+    };
     Assembled {
         signature,
         draft,
@@ -412,6 +433,33 @@ mod tests {
         // The group is the same panic.
         assert_eq!(a.signature, assemble(&fake_file(), &ctx()).signature);
         assert!(assemble(&fake_file(), &ctx()).crash["survived_gap_secs"].is_null());
+    }
+
+    #[test]
+    fn the_report_names_the_program_that_crashed() {
+        let plain = assemble(&fake_file(), &ctx());
+        assert!(
+            plain.draft.body.starts_with("Kadakas "),
+            "{}",
+            plain.draft.body
+        );
+        assert_eq!(plain.draft.context.client_name, "kadakas");
+        let mut f = fake_file();
+        f.program = "kadakas-modeler".into();
+        let a = assemble(&f, &ctx());
+        assert!(
+            a.draft.body.starts_with("kadakas-modeler "),
+            "{}",
+            a.draft.body
+        );
+        assert_eq!(a.draft.context.client_name, "kadakas-modeler");
+        // The program is not part of the signature: the same crash is one crash.
+        assert_eq!(a.signature, plain.signature);
+        // A name that is not a plain program name is not shown.
+        f.program = "evil name\n/Users/x".into();
+        let b = assemble(&f, &ctx());
+        assert!(b.draft.body.starts_with("Kadakas "));
+        assert_eq!(b.draft.context.client_name, "kadakas");
     }
 
     #[test]

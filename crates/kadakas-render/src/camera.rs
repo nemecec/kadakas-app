@@ -52,6 +52,8 @@ fn orthographic_rh(half_w: f32, half_h: f32, near: f32, far: f32) -> Mat4 {
     )
 }
 
+/// The cube that `Camera::fit` frames for a box that is smaller than this in every direction, in mm.
+pub const MIN_FIT_BOX: f32 = 10.0;
 const MIN_DISTANCE: f32 = 1.0;
 const MAX_DISTANCE: f32 = 1.0e9;
 
@@ -175,6 +177,14 @@ impl Camera {
         };
         let (lo, hi) = finite_bounds(bounds).unwrap_or((Vec3::splat(-1000.0), Vec3::splat(1000.0)));
         let center = (lo + hi) / 2.0;
+        // A box with no size at all (one point, a stack of equal points) still gets a view that is
+        // not absurd: a cube of MIN_FIT_BOX mm. A flat box (a plate) is framed as it is.
+        let (lo, hi) = if (hi - lo).max_element() < MIN_FIT_BOX {
+            let half = Vec3::splat(MIN_FIT_BOX / 2.0);
+            (center - half, center + half)
+        } else {
+            (lo, hi)
+        };
         self.target = center;
         let (right, up, fwd) = (self.right(), self.up(), self.forward());
         let t = (self.fov_y / 2.0).tan();
@@ -406,6 +416,31 @@ mod tests {
         assert_eq!(c.distance, MAX_DISTANCE);
         c.zoom_at(1e30, Vec2::ZERO, 1.0);
         assert_eq!(c.distance, MIN_DISTANCE);
+    }
+
+    #[test]
+    fn fit_on_a_point_gives_a_sane_view() {
+        for proj in [Projection::Orthographic, Projection::Perspective] {
+            let p = Vec3::new(4000.0, -2500.0, 300.0);
+            let mut c = Camera::standard(StandardView::RightIsometric, proj);
+            c.fit(Some((p, p)), 1.5);
+            assert_eq!(c.target, p);
+            // A 10 mm box fills the view: far from the 1 mm stop, and not zoomed out.
+            assert!(
+                c.distance > 10.0 && c.distance < 1000.0,
+                "{proj:?}: {}",
+                c.distance
+            );
+            let n = c.project(p, 1.5, None).unwrap();
+            assert!(n.x.abs() < 1e-4 && n.y.abs() < 1e-4);
+            // A flat box (a thin plate) is framed as it is.
+            let mut f = Camera::standard(StandardView::Front, proj);
+            f.fit(
+                Some((Vec3::new(0.0, 0.0, 0.0), Vec3::new(2000.0, 0.0, 1000.0))),
+                1.0,
+            );
+            assert!(f.distance.is_finite() && f.distance > 1000.0);
+        }
     }
 
     #[test]

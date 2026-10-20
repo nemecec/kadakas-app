@@ -33,7 +33,7 @@ fn main() -> eframe::Result {
     launch::install_crash_capture();
     kadakas_sys::process::remove_secrets_from_env();
     // The language is needed for the title of the window.
-    let (prefs, _) = prefs::load();
+    let (prefs, warning) = prefs::load();
     prefs.apply_language(&prefs::system_languages());
     let files = launch::files_from_args(&args);
     let options = eframe::NativeOptions {
@@ -46,7 +46,14 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Kadakas Modeler",
         options,
-        Box::new(move |cc| Ok(Box::new(app::ModelerApp::new(cc, &files)))),
+        Box::new(move |cc| {
+            Ok(Box::new(app::ModelerApp::new(
+                cc,
+                &files,
+                prefs.clone(),
+                warning.clone(),
+            )))
+        }),
     )
 }
 

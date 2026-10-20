@@ -83,11 +83,25 @@ modeler-save-overwrite-title = Kas asendada fail?
 modeler-save-overwrite-text = Mõni teine programm muutis faili { $file } pärast selle avamist. Kas asendada see selle mudeliga?
 modeler-save-missing-title = Faili osad puuduvad
 modeler-save-missing-text = Failis { $file } ei ole enam osi, millele see mudel viitab: { $what } Kas salvestada ilma nendeta?
-modeler-discard-title = Salvestamata muudatused
-modeler-discard-text = Selles mudelis on salvestamata muudatusi. Kas jätkata ja need kaotada?
 modeler-prefs-ignored = Seadistuste faili { $path } ei arvestata: { $error }
 modeler-prefs-cannot-write = Seadistuste faili { $path } ei saa kirjutada: { $error }
 
 modeler-about-title = Kadakas Modelleerija info
 modeler-about-description = 3D-keskne modelleerija tuttavate modelleerimisprogrammide paigutuse ja klahvidega. See avab ja salvestab samu .kad faile nagu Kadakas.
 modeler-about-trademark = SketchUp on ettevõtte Trimble Inc. kaubamärk. Kadakas Modelleerija on sõltumatu projekt ning Trimble Inc. ei ole sellega seotud, ei toeta ega sponsoreeri seda. Nimi SketchUpi-sarnane ütleb vaid, millised on klahvid ja paigutus.
+
+modeler-unsaved-title = Salvestamata muudatused
+modeler-unsaved-open = Sul on salvestamata muudatusi. Kas salvestada need enne faili { $name } avamist?
+modeler-unsaved-new = Sul on salvestamata muudatusi. Kas salvestada need enne uue mudeli alustamist?
+modeler-unsaved-quit = Sul on salvestamata muudatusi. Kas salvestada need enne väljumist?
+modeler-unsaved-save-and-open = Salvesta ja ava
+modeler-unsaved-save-and-new = Salvesta ja alusta
+modeler-unsaved-save-and-quit = Salvesta ja välju
+modeler-unsaved-dont-save = Ära salvesta
+modeler-unsaved-cancel = Loobu
+modeler-open-new-model = uus mudel
+modeler-open-quit = väljumine
+modeler-open-dropped = Jäi tegemata: { $dropped }. Kadakas Modelleerija ootab esmalt sinu vastust küsimusele: { $waiting }.
+modeler-open-not-saved = Muudatusi ei saanud salvestada, seega { $name } jäi tegemata ja mudel jääb alles.
+modeler-open-cancelled-by-you = { $name } katkestati. Sinu mudel on muutmata.
+modeler-opened-first-of-several = Avatud { $name }. Veel { $count } faili saadeti ja neid ei avatud.

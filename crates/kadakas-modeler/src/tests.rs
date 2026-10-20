@@ -10,7 +10,7 @@ use kadakas_render::{Projection, StandardView};
 use kadakas_ui_core::modeler::ModelerTool;
 use kadakas_ui_core::nav3d::NavAction;
 
-use crate::app::{Cmd, ModelerApp};
+use crate::app::{Answer, Cmd, ModelerApp};
 use crate::files::{Ask, Question};
 use crate::prefs::{Prefs, ThemeChoice};
 
@@ -31,8 +31,9 @@ fn app() -> ModelerApp {
     app_with(Prefs::default())
 }
 
-fn raw(events: Vec<egui::Event>, time: f64) -> egui::RawInput {
+fn raw(events: Vec<egui::Event>, time: f64, modifiers: egui::Modifiers) -> egui::RawInput {
     egui::RawInput {
+        modifiers,
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,
             egui::vec2(1400.0, 900.0),
@@ -50,7 +51,18 @@ fn frame(
     events: Vec<egui::Event>,
     time: f64,
 ) -> egui::FullOutput {
-    ctx.run_ui(raw(events, time), |ui| app.draw(ui))
+    frame_with(ctx, app, events, time, egui::Modifiers::NONE)
+}
+
+/// One frame with keys held.
+fn frame_with(
+    ctx: &egui::Context,
+    app: &mut ModelerApp,
+    events: Vec<egui::Event>,
+    time: f64,
+    modifiers: egui::Modifiers,
+) -> egui::FullOutput {
+    ctx.run_ui(raw(events, time, modifiers), |ui| app.draw(ui))
 }
 
 fn press(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
@@ -378,29 +390,6 @@ fn a_model_saved_by_the_modeler_opens_again_and_the_title_follows_the_file() {
 }
 
 #[test]
-fn unsaved_changes_are_not_lost_without_a_yes() {
-    let d = temp("discard");
-    let path = d.join("other.kad");
-    let mut other = app();
-    other.save_to(path.clone());
-    let mut a = ModelerApp::headless(Prefs::default(), Box::new(Always(false)));
-    add_square(&mut a);
-    a.open_path(path.clone());
-    assert_eq!(
-        a.session.editor.doc().objects.len(),
-        1,
-        "the person said no: nothing was replaced"
-    );
-    a.new_document();
-    assert_eq!(a.session.editor.doc().objects.len(), 1);
-    let mut yes = ModelerApp::headless(Prefs::default(), Box::new(Always(true)));
-    add_square(&mut yes);
-    yes.new_document();
-    assert_eq!(yes.session.editor.doc().objects.len(), 0);
-    let _ = std::fs::remove_dir_all(&d);
-}
-
-#[test]
 fn select_all_and_none_and_undo_work_on_the_model() {
     let mut app = app();
     let size = glam::Vec2::new(900.0, 600.0);
@@ -483,4 +472,700 @@ fn the_theme_and_the_language_menu_commands_change_the_settings() {
     assert_eq!(app.prefs.language.as_deref(), Some("et"));
     app.run(Cmd::Language(None), size);
     assert_eq!(app.prefs.language, None);
+}
+
+// ---- the pointer: a test seam with a GPU that is only claimed ----------------------------------
+//
+// With `gpu_ready` set, the canvas lays out, reads the pointer and the wheel, navigates and puts a
+// paint callback in the frame. Nothing is drawn, because no GPU runs, but every input path is real.
+
+/// A program with a model and a canvas that reads the pointer. The first frames fit the view.
+fn live() -> (egui::Context, ModelerApp, f64) {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    app.gpu_ready = true;
+    add_square(&mut app);
+    let mut t = 0.0;
+    for _ in 0..3 {
+        let _ = frame(&ctx, &mut app, vec![], t);
+        t += 0.1;
+    }
+    assert!(app.canvas_rect.is_some());
+    (ctx, app, t)
+}
+
+fn center(app: &ModelerApp) -> egui::Pos2 {
+    app.canvas_rect.unwrap().center()
+}
+
+fn size(app: &ModelerApp) -> glam::Vec2 {
+    let r = app.canvas_rect.unwrap();
+    glam::Vec2::new(r.width(), r.height())
+}
+
+fn at(app: &ModelerApp, p: egui::Pos2) -> glam::Vec2 {
+    let r = app.canvas_rect.unwrap();
+    glam::Vec2::new(p.x - r.min.x, p.y - r.min.y)
+}
+
+fn moved(p: egui::Pos2) -> egui::Event {
+    egui::Event::PointerMoved(p)
+}
+
+fn button(
+    p: egui::Pos2,
+    b: egui::PointerButton,
+    pressed: bool,
+    modifiers: egui::Modifiers,
+) -> egui::Event {
+    egui::Event::PointerButton {
+        pos: p,
+        button: b,
+        pressed,
+        modifiers,
+    }
+}
+
+/// The pointer goes to `from`, presses `b`, moves to `to` in a few frames with `during` held,
+/// and lets go with `release` held. Returns the time after the last frame.
+#[allow(clippy::too_many_arguments)]
+fn drag(
+    ctx: &egui::Context,
+    app: &mut ModelerApp,
+    b: egui::PointerButton,
+    from: egui::Pos2,
+    to: egui::Pos2,
+    at_press: egui::Modifiers,
+    during: egui::Modifiers,
+    mut t: f64,
+) -> f64 {
+    let _ = frame_with(ctx, app, vec![moved(from)], t, at_press);
+    t += 0.05;
+    let _ = frame_with(ctx, app, vec![button(from, b, true, at_press)], t, at_press);
+    t += 0.05;
+    for i in 1..=6 {
+        let k = i as f32 / 6.0;
+        let p = from + (to - from) * k;
+        let _ = frame_with(
+            ctx,
+            app,
+            vec![moved(p)],
+            t,
+            if i == 1 { at_press } else { during },
+        );
+        t += 0.05;
+    }
+    let _ = frame_with(ctx, app, vec![button(to, b, false, during)], t, during);
+    t += 0.05;
+    let _ = frame(ctx, app, vec![], t);
+    t + 0.05
+}
+
+#[test]
+fn the_wheel_zooms_to_the_pointer_and_the_point_under_it_stays() {
+    let (ctx, mut app, mut t) = live();
+    let sz = size(&app);
+    // Look at the slab from the iso view, in perspective.
+    assert!(app.nav.is_perspective());
+    let p = center(&app) + egui::vec2(60.0, 40.0);
+    let _ = frame(&ctx, &mut app, vec![moved(p)], t);
+    t += 0.05;
+    let scene = app.session.scene();
+    let hit = kadakas_ui_core::nav3d::point_under(&scene, &app.nav.camera, at(&app, p), sz)
+        .expect("the pointer is over the slab");
+    let depth = app.nav.depth_of(hit);
+    let want = {
+        let n = app
+            .nav
+            .camera
+            .project(hit, sz.x / sz.y, scene.bounds)
+            .unwrap();
+        glam::Vec2::new(n.x, n.y)
+    };
+    for _ in 0..12 {
+        let ev = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            phase: egui::TouchPhase::Move,
+            delta: egui::vec2(0.0, 25.0),
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = frame(&ctx, &mut app, vec![ev], t);
+        t += 0.05;
+    }
+    for _ in 0..30 {
+        let _ = frame(&ctx, &mut app, vec![], t);
+        t += 0.05;
+    }
+    let now = app.nav.depth_of(hit);
+    assert!(
+        now < depth * 0.9,
+        "zoomed in: the point is nearer ({depth} to {now})"
+    );
+    let got = {
+        let n = app
+            .nav
+            .camera
+            .project(hit, sz.x / sz.y, scene.bounds)
+            .unwrap();
+        glam::Vec2::new(n.x, n.y)
+    };
+    assert!(
+        (got - want).length() < 0.02,
+        "the point stayed under the pointer: {got:?} {want:?}"
+    );
+    // A turn the other way zooms out.
+    for _ in 0..12 {
+        let ev = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            phase: egui::TouchPhase::Move,
+            delta: egui::vec2(0.0, -25.0),
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = frame(&ctx, &mut app, vec![ev], t);
+        t += 0.05;
+    }
+    for _ in 0..30 {
+        let _ = frame(&ctx, &mut app, vec![], t);
+        t += 0.05;
+    }
+    assert!(app.nav.depth_of(hit) > now);
+}
+
+#[test]
+fn a_middle_button_drag_orbits_in_every_tool_and_shift_pans() {
+    let (ctx, mut app, t) = live();
+    let c = center(&app);
+    let before = app.nav.camera;
+    let t = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Middle,
+        c,
+        c + egui::vec2(90.0, 20.0),
+        egui::Modifiers::NONE,
+        egui::Modifiers::NONE,
+        t,
+    );
+    let after = app.nav.camera;
+    assert!(
+        (after.eye_dir() - before.eye_dir()).length() > 0.1,
+        "the view turned"
+    );
+    assert_eq!(
+        app.tools.active(),
+        ModelerTool::Select,
+        "the tool did not change"
+    );
+    // The point under the pointer when the drag started is the pivot: it stays where it was.
+    let sz = size(&app);
+    let scene = app.session.scene();
+    let aspect = sz.x / sz.y;
+    let pivot = kadakas_ui_core::nav3d::point_under(&scene, &before, at(&app, c), sz).unwrap();
+    let a = before.project(pivot, aspect, scene.bounds).unwrap();
+    let b = after.project(pivot, aspect, scene.bounds).unwrap();
+    assert!(
+        (a - b).truncate().length() < 0.02,
+        "pivot moved {a:?} {b:?}"
+    );
+
+    // Shift and the middle button pan: the target moves, the direction does not.
+    let before = app.nav.camera;
+    let _ = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Middle,
+        c,
+        c + egui::vec2(-80.0, 30.0),
+        egui::Modifiers::SHIFT,
+        egui::Modifiers::SHIFT,
+        t,
+    );
+    let after = app.nav.camera;
+    assert!((after.target - before.target).length() > 10.0, "panned");
+    assert!((after.eye_dir() - before.eye_dir()).length() < 1e-4);
+    assert_eq!(after.distance, before.distance);
+}
+
+#[test]
+fn the_orbit_pan_and_zoom_tools_use_the_primary_button() {
+    let (ctx, mut app, mut t) = live();
+    let c = center(&app);
+    // The Select tool does not navigate with the primary button.
+    let before = app.nav.camera;
+    t = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Primary,
+        c,
+        c + egui::vec2(60.0, 0.0),
+        egui::Modifiers::NONE,
+        egui::Modifiers::NONE,
+        t,
+    );
+    assert_eq!(app.nav.camera, before);
+    // Orbit tool.
+    let _ = frame(&ctx, &mut app, tap(egui::Key::O, egui::Modifiers::NONE), t);
+    t += 0.1;
+    t = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Primary,
+        c,
+        c + egui::vec2(60.0, 0.0),
+        egui::Modifiers::NONE,
+        egui::Modifiers::NONE,
+        t,
+    );
+    assert!((app.nav.camera.eye_dir() - before.eye_dir()).length() > 0.05);
+    // Pan tool.
+    let _ = frame(&ctx, &mut app, tap(egui::Key::H, egui::Modifiers::NONE), t);
+    t += 0.1;
+    let before = app.nav.camera;
+    t = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Primary,
+        c,
+        c + egui::vec2(40.0, 40.0),
+        egui::Modifiers::NONE,
+        egui::Modifiers::NONE,
+        t,
+    );
+    assert!((app.nav.camera.target - before.target).length() > 10.0);
+    // Zoom tool: a drag up zooms in. Shift and a drag change the field of view.
+    let _ = frame(&ctx, &mut app, tap(egui::Key::Z, egui::Modifiers::NONE), t);
+    t += 0.1;
+    let before = app.nav.camera;
+    t = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Primary,
+        c,
+        c - egui::vec2(0.0, 80.0),
+        egui::Modifiers::NONE,
+        egui::Modifiers::NONE,
+        t,
+    );
+    assert!(app.nav.camera.distance < before.distance, "up zooms in");
+    let fov = app.nav.fov_deg();
+    let _ = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Primary,
+        c,
+        c - egui::vec2(0.0, 80.0),
+        egui::Modifiers::SHIFT,
+        egui::Modifiers::SHIFT,
+        t,
+    );
+    assert!(app.nav.fov_deg() < fov, "up narrows the field of view");
+}
+
+#[test]
+fn zoom_window_draws_a_window_and_zooms_to_it() {
+    let (ctx, mut app, mut t) = live();
+    let _ = frame(&ctx, &mut app, tap(egui::Key::Z, egui::Modifiers::NONE), t);
+    t += 0.1;
+    let c = center(&app);
+    let (from, to) = (c + egui::vec2(-100.0, -60.0), c + egui::vec2(100.0, 60.0));
+    let cmd = egui::Modifiers::COMMAND;
+    let before = app.nav.camera;
+    // Press and move: the window shows.
+    let _ = frame_with(&ctx, &mut app, vec![moved(from)], t, cmd);
+    t += 0.05;
+    let _ = frame_with(
+        &ctx,
+        &mut app,
+        vec![button(from, egui::PointerButton::Primary, true, cmd)],
+        t,
+        cmd,
+    );
+    t += 0.05;
+    for i in 1..=4 {
+        let p = from + (to - from) * (i as f32 / 4.0);
+        let _ = frame_with(&ctx, &mut app, vec![moved(p)], t, cmd);
+        t += 0.05;
+    }
+    let w = crate::canvas::window_drag(&ctx).expect("the window shows while you drag");
+    assert!((w.to - w.from).length() > 100.0);
+    assert_eq!(
+        app.nav.camera, before,
+        "nothing zooms before the button is released"
+    );
+    // Release.
+    let _ = frame_with(
+        &ctx,
+        &mut app,
+        vec![button(to, egui::PointerButton::Primary, false, cmd)],
+        t,
+        cmd,
+    );
+    t += 0.05;
+    let _ = frame(&ctx, &mut app, vec![], t);
+    assert!(
+        crate::canvas::window_drag(&ctx).is_none(),
+        "the window is gone"
+    );
+    assert!(
+        app.nav.camera.distance < before.distance,
+        "zoomed to the window"
+    );
+}
+
+#[test]
+fn letting_go_of_the_key_first_does_not_leave_the_zoom_window_on_the_screen() {
+    let (ctx, mut app, mut t) = live();
+    let _ = frame(&ctx, &mut app, tap(egui::Key::Z, egui::Modifiers::NONE), t);
+    t += 0.1;
+    let c = center(&app);
+    let (from, to) = (c + egui::vec2(-90.0, -50.0), c + egui::vec2(90.0, 50.0));
+    let cmd = egui::Modifiers::COMMAND;
+    let before = app.nav.camera;
+    // Cmd is held when the drag starts, and let go while the button is still down.
+    t = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Primary,
+        from,
+        to,
+        cmd,
+        egui::Modifiers::NONE,
+        t,
+    );
+    assert!(
+        crate::canvas::window_drag(&ctx).is_none(),
+        "no window stays"
+    );
+    assert!(
+        app.nav.camera.distance < before.distance,
+        "the drag was decided at its start: it is still a window"
+    );
+    // The next drag with no key is a plain zoom, not a window.
+    let again = app.nav.camera;
+    let _ = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Primary,
+        c,
+        c - egui::vec2(0.0, 60.0),
+        egui::Modifiers::NONE,
+        egui::Modifiers::NONE,
+        t,
+    );
+    assert!(crate::canvas::window_drag(&ctx).is_none());
+    assert!(app.nav.camera.distance < again.distance);
+    // Zoom Window armed by its key: the next drag is a window even without Cmd, and only once.
+    app.run(Cmd::ZoomWindow, size(&app));
+    assert!(app.tools.window_armed());
+    let _ = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Primary,
+        from,
+        to,
+        egui::Modifiers::NONE,
+        egui::Modifiers::NONE,
+        t + 2.0,
+    );
+    assert!(!app.tools.window_armed());
+    assert!(crate::canvas::window_drag(&ctx).is_none());
+}
+
+#[test]
+fn a_click_with_the_select_tool_selects_the_object_under_the_pointer() {
+    let (ctx, mut app, mut t) = live();
+    let c = center(&app);
+    assert!(app.session.selection.is_empty());
+    let _ = frame(&ctx, &mut app, vec![moved(c)], t);
+    t += 0.05;
+    let _ = frame(
+        &ctx,
+        &mut app,
+        vec![button(
+            c,
+            egui::PointerButton::Primary,
+            true,
+            egui::Modifiers::NONE,
+        )],
+        t,
+    );
+    t += 0.05;
+    let _ = frame(
+        &ctx,
+        &mut app,
+        vec![button(
+            c,
+            egui::PointerButton::Primary,
+            false,
+            egui::Modifiers::NONE,
+        )],
+        t,
+    );
+    t += 0.05;
+    let _ = frame(&ctx, &mut app, vec![], t);
+    t += 0.05;
+    assert_eq!(app.session.selection.len(), 1, "the slab is selected");
+    // The Entity Info panel shows it.
+    let shown = texts(&frame(&ctx, &mut app, vec![], t)).join("\n");
+    assert!(shown.contains("Hardscape"), "{shown}");
+    // A click on empty space clears the selection.
+    let corner = app.canvas_rect.unwrap().min + egui::vec2(6.0, 6.0);
+    t += 0.05;
+    let _ = frame(&ctx, &mut app, vec![moved(corner)], t);
+    t += 0.05;
+    let _ = frame(
+        &ctx,
+        &mut app,
+        vec![button(
+            corner,
+            egui::PointerButton::Primary,
+            true,
+            egui::Modifiers::NONE,
+        )],
+        t,
+    );
+    t += 0.05;
+    let _ = frame(
+        &ctx,
+        &mut app,
+        vec![button(
+            corner,
+            egui::PointerButton::Primary,
+            false,
+            egui::Modifiers::NONE,
+        )],
+        t,
+    );
+    t += 0.05;
+    let _ = frame(&ctx, &mut app, vec![], t);
+    assert!(app.session.selection.is_empty());
+    // Other tools do not select with a click.
+    let _ = frame(
+        &ctx,
+        &mut app,
+        tap(egui::Key::O, egui::Modifiers::NONE),
+        t + 0.1,
+    );
+    let t = t + 0.2;
+    let _ = frame(&ctx, &mut app, vec![moved(c)], t);
+    let _ = frame(
+        &ctx,
+        &mut app,
+        vec![button(
+            c,
+            egui::PointerButton::Primary,
+            true,
+            egui::Modifiers::NONE,
+        )],
+        t + 0.05,
+    );
+    let _ = frame(
+        &ctx,
+        &mut app,
+        vec![button(
+            c,
+            egui::PointerButton::Primary,
+            false,
+            egui::Modifiers::NONE,
+        )],
+        t + 0.1,
+    );
+    assert!(app.session.selection.is_empty());
+}
+
+// ---- unsaved changes ---------------------------------------------------------------------------
+
+fn saved_file(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let d = temp(name);
+    let path = d.join("other.kad");
+    let mut other = app();
+    other.save_to(path.clone());
+    (d, path)
+}
+
+#[test]
+fn a_model_with_changes_is_not_replaced_until_the_person_answers() {
+    let (d, path) = saved_file("unsaved");
+    let mut a = app();
+    add_square(&mut a);
+    assert!(a.dirty());
+    // Open: the file waits, and nothing changes.
+    a.open_path(path.clone());
+    assert_eq!(a.pending, Some(crate::app::Replace::Open(path.clone())));
+    assert_eq!(a.session.editor.doc().objects.len(), 1);
+    // A second request does not take the place of the first: it is dropped and said.
+    a.new_document();
+    assert_eq!(a.pending, Some(crate::app::Replace::Open(path.clone())));
+    assert!(a.status.contains("other.kad"), "{}", a.status);
+    // Cancel keeps the model.
+    a.answer(Answer::Cancel);
+    assert_eq!(a.pending, None);
+    assert_eq!(a.session.editor.doc().objects.len(), 1);
+    assert!(a.dirty());
+    // Do not save: the file opens and the changes are gone.
+    a.open_path(path.clone());
+    a.answer(Answer::DontSave);
+    assert_eq!(a.session.editor.doc().objects.len(), 0);
+    assert_eq!(a.path.as_deref(), Some(path.as_path()));
+    assert!(!a.dirty(), "an opened file has no unsaved changes");
+    // New with changes asks too.
+    add_square(&mut a);
+    a.new_document();
+    assert_eq!(a.pending, Some(crate::app::Replace::New));
+    a.answer(Answer::DontSave);
+    assert_eq!(a.session.editor.doc().objects.len(), 0);
+    assert_eq!(a.path, None);
+    // Without changes nothing is asked.
+    a.open_path(path.clone());
+    assert_eq!(a.pending, None);
+    assert_eq!(a.path.as_deref(), Some(path.as_path()));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn save_and_open_saves_first_and_a_failed_save_stops_everything() {
+    let (d, other) = saved_file("save-and-open");
+    let mine = d.join("mine.kad");
+    let mut a = app();
+    add_square(&mut a);
+    a.path = Some(mine.clone());
+    a.open_path(other.clone());
+    a.answer(Answer::SaveAndGo);
+    assert!(mine.is_file(), "the changes were saved first");
+    assert_eq!(
+        a.path.as_deref(),
+        Some(other.as_path()),
+        "then the file opened"
+    );
+    assert!(!a.dirty());
+    // A save that cannot be done keeps the model and does not open the file.
+    let mut b = app();
+    add_square(&mut b);
+    b.path = Some(d.join("no-such-folder").join("x.kad"));
+    b.open_path(other.clone());
+    b.answer(Answer::SaveAndGo);
+    assert!(b.dirty());
+    assert_eq!(b.session.editor.doc().objects.len(), 1);
+    assert_eq!(
+        b.path.as_deref(),
+        Some(d.join("no-such-folder").join("x.kad").as_path())
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn quit_and_the_close_button_ask_when_there_are_unsaved_changes() {
+    let ctx = egui::Context::default();
+    let mut a = app();
+    let sz = glam::Vec2::new(900.0, 600.0);
+    a.run(Cmd::Quit, sz);
+    assert!(a.quitting(), "no changes: it ends");
+    let mut b = app();
+    add_square(&mut b);
+    b.run(Cmd::Quit, sz);
+    assert!(!b.quitting());
+    assert_eq!(b.pending, Some(crate::app::Replace::Quit));
+    b.answer(Answer::Cancel);
+    assert!(!b.quitting() && b.pending.is_none());
+    // The close button of the window: the window stays and the question comes.
+    let mut c = app();
+    add_square(&mut c);
+    let mut input = raw(vec![], 0.0, egui::Modifiers::NONE);
+    input
+        .viewports
+        .entry(egui::ViewportId::ROOT)
+        .or_default()
+        .events
+        .push(egui::ViewportEvent::Close);
+    let _ = ctx.run_ui(input, |ui| c.draw(ui));
+    assert_eq!(c.pending, Some(crate::app::Replace::Quit));
+    assert!(!c.quitting());
+    c.answer(Answer::DontSave);
+    assert!(c.quitting());
+    // The question is a window of the frame.
+    let mut d = app();
+    add_square(&mut d);
+    d.open_path(std::path::PathBuf::from("x.kad"));
+    let _ = frame(&ctx, &mut d, vec![], 1.0);
+    let out = frame(&ctx, &mut d, vec![], 1.1);
+    let all = texts(&out).join("\n");
+    assert!(all.contains(&tr!("modeler-unsaved-title")), "{all}");
+    assert!(all.contains(&tr!("modeler-unsaved-save-and-open")));
+    assert!(all.contains(&tr!("modeler-unsaved-dont-save")));
+    assert!(all.contains(&tr!("modeler-unsaved-cancel")));
+}
+
+// ---- the launcher ------------------------------------------------------------------------------
+
+#[test]
+fn a_document_that_the_launcher_sends_opens_in_the_running_modeler() {
+    use kadakas_update::handshake::{AppLink, ENV_ROOT, ENV_RUN, heartbeat_exists, send_open};
+    let (d, path) = saved_file("launcher-open");
+    let root = d.join("launcher");
+    std::fs::create_dir_all(&root).unwrap();
+    let env = {
+        let (root, id) = (root.display().to_string(), "1a-2b".to_string());
+        move |k: &str| match k {
+            ENV_ROOT => Some(root.clone()),
+            ENV_RUN => Some(id.clone()),
+            _ => None,
+        }
+    };
+    let link = AppLink::from_env(&env).unwrap();
+    let mut a = app();
+    a.set_launch(crate::launch::Launch::new(Some(link)));
+    // The alive stamp is written by a timer thread of the program.
+    let mut alive = false;
+    for _ in 0..100 {
+        if heartbeat_exists(&root, "1a-2b") {
+            alive = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+    assert!(alive, "the program writes the alive stamp");
+    let ctx = egui::Context::default();
+    let _ = frame(&ctx, &mut a, vec![], 0.0);
+    assert_eq!(a.session.editor.doc().objects.len(), 0);
+    send_open(&root, "1a-2b", std::slice::from_ref(&path)).unwrap();
+    // The requests are looked at twice a second at most.
+    let _ = frame(&ctx, &mut a, vec![], 0.1);
+    assert_eq!(a.path, None);
+    let _ = frame(&ctx, &mut a, vec![], 0.7);
+    assert_eq!(a.path.as_deref(), Some(path.as_path()), "the file opened");
+    assert!(
+        !kadakas_update::handshake::open_pending(&root, "1a-2b"),
+        "the request was taken"
+    );
+    // With unsaved changes the sent file waits for the answer, like File > Open.
+    add_square(&mut a);
+    let second = d.join("second.kad");
+    let mut s = app();
+    s.save_to(second.clone());
+    send_open(&root, "1a-2b", std::slice::from_ref(&second)).unwrap();
+    let _ = frame(&ctx, &mut a, vec![], 1.5);
+    assert_eq!(a.pending, Some(crate::app::Replace::Open(second.clone())));
+    assert_eq!(a.path.as_deref(), Some(path.as_path()));
+    a.answer(Answer::DontSave);
+    assert_eq!(a.path.as_deref(), Some(second.as_path()));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn the_actions_of_the_modeler_are_the_ones_it_runs() {
+    use kadakas_ui_core::keymap::Action;
+    // Every action that only the modeler has is run by it, so it can list them.
+    for a in Action::ALL.iter().filter(|a| a.modeler_only()) {
+        assert!(ModelerApp::runs(*a), "{a:?}");
+    }
+    assert!(ModelerApp::runs(Action::FileSave) && ModelerApp::runs(Action::ZoomFit));
+    // The tools of the Vectorworks-like app are not.
+    for a in [
+        Action::ToolText,
+        Action::ToolPlant,
+        Action::CmdExtrude,
+        Action::ToolMirror,
+    ] {
+        assert!(!ModelerApp::runs(a), "{a:?}");
+    }
 }

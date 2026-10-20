@@ -20,6 +20,7 @@ fn child_setup() -> Option<PathBuf> {
     capture::install(Config {
         root: root.clone(),
         run_id: RUN.into(),
+        program: "kadakas-test".into(),
         version: "9.9.9".into(),
         channel: "nightly".into(),
         os: capture::default_os(),

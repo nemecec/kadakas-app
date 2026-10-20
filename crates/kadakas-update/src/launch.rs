@@ -96,6 +96,24 @@ mod tests {
     }
 
     #[test]
+    fn a_bundle_is_started_by_its_main_executable() {
+        let bundle = Flavor {
+            exe: crate::flavors::bundle_exe("kadakas-app"),
+            ..flavor()
+        };
+        let files = [OsString::from("/a/b.kad")];
+        let env = [("KADAKAS_RUN_ID".to_string(), "1a".to_string())];
+        let c = command_with(Path::new("/v/1.0.0"), &bundle, "", &files, &env).unwrap();
+        assert_eq!(
+            c.get_program(),
+            Path::new("/v/1.0.0/Kadakas Engine.app/Contents/MacOS/kadakas-app").as_os_str()
+        );
+        let args: Vec<&OsStr> = c.get_args().collect();
+        assert_eq!(args, ["--", "/a/b.kad"]);
+        assert_eq!(c.get_current_dir(), Some(Path::new("/v/1.0.0")));
+    }
+
+    #[test]
     fn no_profile_means_no_argument() {
         let c = command(Path::new("/v"), &flavor(), "").unwrap();
         assert_eq!(c.get_args().count(), 0);

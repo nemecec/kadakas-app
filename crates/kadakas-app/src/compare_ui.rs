@@ -11,7 +11,6 @@
 //! the sides are in `kadakas-api` (`Session::compare_overlay`, `compare_doc`, `compare_scene`),
 //! and the logic of the slider and the list is in `kadakas_ui_core::compare`.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use egui::{Color32, Ui};
@@ -56,14 +55,7 @@ pub struct Compare3d {
     pub key: u64,
 }
 
-/// The look of the 3D compare scene: the ghosts of removed objects in the color of removed
-/// objects, see-through with the opacity of the style (the GPU draws them in its blend pass,
-/// far to near).
-pub(crate) fn ghost_look(t: &kadakas_review::overlay::Tinted, style: &CompareStyle) -> Look {
-    let ghosts: HashSet<ObjectId> = t.ghosts.iter().copied().collect();
-    let [r, g, b] = style.color(Status::Removed);
-    Look::ghosted(&t.scene, &|id| ghosts.contains(&id), [r, g, b], style.ghost)
-}
+pub(crate) use kadakas_view3d::view3d::ghost_look;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tab {

@@ -57,6 +57,7 @@ pub fn install_crash_capture() {
     kadakas_crash::capture::install(kadakas_crash::capture::Config {
         root,
         run_id,
+        program: "kadakas-modeler".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         channel,
         os: kadakas_crash::capture::default_os(),
@@ -72,11 +73,18 @@ pub fn set_gpu(adapter: &str, driver: &str, backend: &str) {
     });
 }
 
+/// How often the requests to open documents are looked at, in seconds.
+const OPEN_POLL_SECONDS: f64 = 0.5;
+
 /// The link to the launcher, if the launcher started this run.
 pub struct Launch {
     link: Option<AppLink>,
     /// The lock of the run. It is held until the program ends.
     _lock: Option<std::fs::File>,
+    /// The alive stamp: a timer thread tells the launcher that this program lives, also while the
+    /// window loop waits (a file dialog is open, a big file loads). Dropped with the program.
+    _heartbeat: Option<kadakas_update::handshake::Heartbeat>,
+    next_open_poll: f64,
 }
 
 impl Launch {
@@ -88,12 +96,27 @@ impl Launch {
     pub fn new(link: Option<AppLink>) -> Launch {
         Launch {
             _lock: link.as_ref().and_then(AppLink::hold_run_lock),
+            _heartbeat: link.as_ref().map(AppLink::start_heartbeat),
             link,
+            next_open_poll: 0.0,
         }
     }
 
+    /// The documents that the launcher sent (a double click on a `.kad` file while this program
+    /// runs). Looks at most twice a second. The request files are deleted when they are read, so
+    /// the launcher sees at once that this program has the request.
+    pub fn take_open(&mut self, now: f64) -> Vec<PathBuf> {
+        let Some(link) = &self.link else {
+            return Vec::new();
+        };
+        if now < self.next_open_poll {
+            return Vec::new();
+        }
+        self.next_open_poll = now + OPEN_POLL_SECONDS;
+        link.take_open()
+    }
+
     /// True when the launcher started this run.
-    #[cfg(test)]
     pub fn is_launched(&self) -> bool {
         self.link.is_some()
     }

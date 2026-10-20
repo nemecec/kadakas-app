@@ -180,6 +180,15 @@ impl Session {
         self.collab.target_url = None;
     }
 
+    /// The revision at the last save or load, if there was one.
+    pub(crate) fn clean_rev(&self) -> Option<u64> {
+        self.collab.clean_rev
+    }
+
+    pub(crate) fn set_clean_rev(&mut self, r: Option<u64>) {
+        self.collab.clean_rev = r;
+    }
+
     /// The document was saved to a file or loaded from one: `collab.connect` does not call its
     /// content unsaved any more. A host that saves without the API (the window) calls this.
     pub fn collab_mark_saved(&mut self) {
@@ -453,6 +462,11 @@ impl FileStore {
 }
 
 fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    // A host with a person at the screen (the guard) never lets the shared document replace a
+    // drawing with unsaved changes, also with `replace: true` (that flag is for the person).
+    if !s.collab.link.as_ref().is_some_and(|l| l.client.has_state()) {
+        s.refuse_replace(crate::Blocked::Connect, "collab.connect")?;
+    }
     let now = now_ms(m)?;
     let text = |key: &str| m.get(key).and_then(Value::as_str).map(str::to_string);
     for key in ["url", "doc", "token", "user", "name", "store"] {

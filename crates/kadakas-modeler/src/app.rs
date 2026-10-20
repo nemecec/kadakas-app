@@ -17,7 +17,7 @@ use kadakas_view3d::view3d::View3d;
 
 use crate::about::About;
 use crate::canvas::{self, Canvas};
-use crate::files::{self, Ask, Question};
+use crate::files::{self, Ask};
 use crate::launch::Launch;
 use crate::prefs::{self, Prefs, ThemeChoice};
 use crate::toolbar;
@@ -49,6 +49,26 @@ pub enum Cmd {
     About,
 }
 
+/// A way to replace or end the model that waits for the answer to the question about unsaved
+/// changes (the same question as in `kadakas-app`: save, do not save, or cancel).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Replace {
+    /// File > Open, a file that the launcher sent, or a file on the command line.
+    Open(PathBuf),
+    /// File > New.
+    New,
+    /// File > Quit, or the close button of the window.
+    Quit,
+}
+
+/// What the person answers to the question about unsaved changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    SaveAndGo,
+    DontSave,
+    Cancel,
+}
+
 /// The program.
 pub struct ModelerApp {
     pub session: Session,
@@ -65,7 +85,6 @@ pub struct ModelerApp {
     language_applied: Option<Option<String>>,
     /// The file of the model, if it has one.
     pub path: Option<PathBuf>,
-    saved_revision: u64,
     pub status: String,
     pub gpu_ready: bool,
     fit_pending: bool,
@@ -73,16 +92,19 @@ pub struct ModelerApp {
     pub about: About,
     launch: Launch,
     ask: Box<dyn Ask>,
+    /// What waits for the answer about unsaved changes. One question at a time.
+    pub pending: Option<Replace>,
     close_confirmed: bool,
     title_shown: Option<String>,
     quit: bool,
+    /// The rectangle of the 3D view in the last frame.
+    pub canvas_rect: Option<egui::Rect>,
 }
 
 impl ModelerApp {
     /// A program without a window and a GPU: the tests build it, and `new` builds on it.
     pub fn headless(prefs: Prefs, ask: Box<dyn Ask>) -> ModelerApp {
         let session = Session::default();
-        let saved_revision = session.editor.revision();
         let prefs_language = prefs.language.clone();
         ModelerApp {
             session,
@@ -97,7 +119,6 @@ impl ModelerApp {
             // The tests set the language for their own thread. The window sets it for the process.
             language_applied: Some(prefs_language),
             path: None,
-            saved_revision,
             status: String::new(),
             gpu_ready: false,
             fit_pending: true,
@@ -105,15 +126,21 @@ impl ModelerApp {
             about: About::default(),
             launch: Launch::new(None),
             ask,
+            pending: None,
             close_confirmed: false,
             title_shown: None,
             quit: false,
+            canvas_rect: None,
         }
     }
 
     /// The program in a window. `files` are the paths on the command line; the first one opens.
-    pub fn new(cc: &eframe::CreationContext<'_>, files: &[PathBuf]) -> ModelerApp {
-        let (prefs, warning) = prefs::load();
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        files: &[PathBuf],
+        prefs: Prefs,
+        warning: Option<String>,
+    ) -> ModelerApp {
         let mut app = ModelerApp::headless(prefs, Box::new(files::Dialogs));
         app.prefs_dir = prefs::dir();
         app.launch = Launch::from_env();
@@ -138,9 +165,16 @@ impl ModelerApp {
         app
     }
 
-    /// True when the model changed since it was opened or saved.
+    /// A launcher link for the tests (the run lock, the alive stamp and the open requests).
+    #[cfg(test)]
+    pub fn set_launch(&mut self, launch: Launch) {
+        self.launch = launch;
+    }
+
+    /// True when the model has changes that nobody saved. The session knows: it is the one place
+    /// that the title, the questions and the end of the program ask.
     pub fn dirty(&self) -> bool {
-        self.session.editor.revision() != self.saved_revision
+        self.session.has_unsaved_changes()
     }
 
     /// The title of the window: the file, a star when it has unsaved changes, and the program.
@@ -159,24 +193,50 @@ impl ModelerApp {
 
     // ---- files -------------------------------------------------------------------------------
 
-    /// Asks what to do with unsaved changes before they are lost. True: go on.
-    fn discard_ok(&mut self) -> bool {
-        !self.dirty() || self.ask.ask(&Question::Discard)
+    /// Parks a way to replace the model until the person has answered the question about unsaved
+    /// changes. Only one question is open at a time. A second request does not replace the first:
+    /// it is dropped, and the status line names both, so that nobody wonders.
+    fn ask_replace(&mut self, what: Replace) {
+        match &self.pending {
+            Some(waiting) if *waiting != what => {
+                self.status = tr!(
+                    "modeler-open-dropped",
+                    dropped = replace_name(&what),
+                    waiting = replace_name(waiting)
+                );
+            }
+            Some(_) => {}
+            None => self.pending = Some(what),
+        }
     }
 
+    /// File > New. With unsaved changes the person is asked first.
     pub fn new_document(&mut self) {
-        if !self.discard_ok() {
-            return;
+        if self.dirty() {
+            self.ask_replace(Replace::New);
+        } else {
+            self.new_clean();
         }
-        let mut s = Session::default();
-        std::mem::swap(&mut s, &mut self.session);
+    }
+
+    fn new_clean(&mut self) {
+        self.session = Session::default();
         self.after_replace(None);
     }
 
+    /// Opens a file of the person from File > Open, the command line or the launcher. With unsaved
+    /// changes the file waits and the person is asked first: the open model is never replaced
+    /// without that answer. Every way to open a file must come here.
     pub fn open_path(&mut self, path: PathBuf) {
-        if !self.discard_ok() {
-            return;
+        if self.dirty() {
+            self.ask_replace(Replace::Open(path));
+        } else {
+            self.open_clean(path);
         }
+    }
+
+    /// [`ModelerApp::open_path`] after the question about unsaved changes.
+    fn open_clean(&mut self, path: PathBuf) {
         match files::open(&mut self.session, &path, &mut *self.ask) {
             Ok(notes) => {
                 self.after_replace(Some(path.clone()));
@@ -194,11 +254,100 @@ impl ModelerApp {
         }
     }
 
+    /// The person answered the question about unsaved changes.
+    pub fn answer(&mut self, answer: Answer) {
+        let Some(what) = self.pending.take() else {
+            return;
+        };
+        let name = replace_name(&what);
+        match answer {
+            Answer::SaveAndGo => {
+                self.save(false);
+                if self.dirty() {
+                    // Not saved (cancelled or failed): the model stays and nothing else happens.
+                    self.status = tr!("modeler-open-not-saved", name = name);
+                    return;
+                }
+                self.go(what);
+            }
+            Answer::DontSave => self.go(what),
+            Answer::Cancel => self.status = tr!("modeler-open-cancelled-by-you", name = name),
+        }
+    }
+
+    fn go(&mut self, what: Replace) {
+        match what {
+            Replace::Open(p) => self.open_clean(p),
+            Replace::New => self.new_clean(),
+            Replace::Quit => {
+                self.close_confirmed = true;
+                self.quit = true;
+            }
+        }
+    }
+
+    /// A document that the launcher sent: a double click on a `.kad` file while this program
+    /// runs. It opens like File > Open. The window comes to the front.
+    fn open_sent(&mut self, ctx: &egui::Context, first: PathBuf, count: usize) {
+        self.open_path(first.clone());
+        if count > 1 && self.path.as_ref() == Some(&first) {
+            self.status = tr!(
+                "modeler-opened-first-of-several",
+                name = first.display(),
+                count = count - 1
+            );
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    /// The question about unsaved changes, while something waits.
+    fn unsaved_dialog(&mut self, ctx: &egui::Context) {
+        let Some(what) = self.pending.clone() else {
+            return;
+        };
+        let (question, save) = match &what {
+            Replace::Open(_) => (
+                tr!("modeler-unsaved-open", name = replace_name(&what)),
+                tr!("modeler-unsaved-save-and-open"),
+            ),
+            Replace::New => (
+                tr!("modeler-unsaved-new"),
+                tr!("modeler-unsaved-save-and-new"),
+            ),
+            Replace::Quit => (
+                tr!("modeler-unsaved-quit"),
+                tr!("modeler-unsaved-save-and-quit"),
+            ),
+        };
+        let mut answer = None;
+        egui::Window::new(tr!("modeler-unsaved-title"))
+            .id(egui::Id::new("win-modeler-unsaved"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(question);
+                ui.horizontal(|ui| {
+                    if ui.button(save).clicked() {
+                        answer = Some(Answer::SaveAndGo);
+                    }
+                    if ui.button(tr!("modeler-unsaved-dont-save")).clicked() {
+                        answer = Some(Answer::DontSave);
+                    }
+                    if ui.button(tr!("modeler-unsaved-cancel")).clicked() {
+                        answer = Some(Answer::Cancel);
+                    }
+                });
+            });
+        if let Some(a) = answer {
+            self.answer(a);
+        }
+    }
+
     /// What follows a new or opened model: nothing is selected, the view shows all of it.
     fn after_replace(&mut self, path: Option<PathBuf>) {
         self.session.selection.clear();
         self.path = path;
-        self.saved_revision = self.session.editor.revision();
         self.nav.clear_history();
         self.fit_pending = true;
         self.tools.select();
@@ -228,7 +377,6 @@ impl ModelerApp {
                     )
                 };
                 self.path = Some(saved.path);
-                self.saved_revision = self.session.editor.revision();
             }
             Err(e) => self.status = e,
         }
@@ -254,7 +402,13 @@ impl ModelerApp {
             }
             Cmd::Save => self.save(false),
             Cmd::SaveAs => self.save(true),
-            Cmd::Quit => self.quit = true,
+            Cmd::Quit => {
+                if self.dirty() {
+                    self.ask_replace(Replace::Quit);
+                } else {
+                    self.quit = true;
+                }
+            }
             Cmd::Undo => {
                 if !self.session.editor.undo() {
                     self.status = tr!("modeler-nothing-to-undo");
@@ -310,6 +464,19 @@ impl ModelerApp {
             Cmd::Language(l) => self.prefs.language = l,
             Cmd::About => self.about.open(),
         }
+    }
+
+    #[cfg(test)]
+    /// True when the program is going to end (the answer to a question, or File > Quit).
+    pub fn quitting(&self) -> bool {
+        self.quit
+    }
+
+    #[cfg(test)]
+    /// True when the modeler runs the key action. This is the set of actions of the modeler: the
+    /// tools, the navigation, the files, undo and redo, and the selection.
+    pub fn runs(action: Action) -> bool {
+        ModelerApp::cmd_of(action).is_some()
     }
 
     /// The command that a key action gives.
@@ -440,6 +607,7 @@ impl ModelerApp {
                 },
             );
         });
+        self.canvas_rect = shown.rect;
         let size = shown
             .rect
             .map_or(size, |r| glam::Vec2::new(r.width(), r.height()));
@@ -455,6 +623,16 @@ impl ModelerApp {
                 kadakas_ui_core::view_history::SETTLE,
             ));
         }
+        // A document that the launcher sent, and the question about unsaved changes.
+        let sent = self.launch.take_open(now);
+        if let Some(first) = sent.first() {
+            self.open_sent(&ctx, first.clone(), sent.len());
+        }
+        if self.launch.is_launched() {
+            // Also the wait for a document that the launcher sends.
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        self.unsaved_dialog(&ctx);
         self.about.show(&ctx);
         self.finish_frame(&ctx);
     }
@@ -466,26 +644,39 @@ impl ModelerApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title_shown = Some(title);
         }
+        // The close button with unsaved changes: the window stays, and the person is asked.
         let close_asked = ctx.input(|i| i.viewport().close_requested());
         if close_asked && !self.close_confirmed {
-            if self.discard_ok() {
-                self.close_confirmed = true;
-            } else {
+            if self.dirty() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.ask_replace(Replace::Quit);
+            } else {
+                self.close_confirmed = true;
             }
         }
         if self.quit {
             self.quit = false;
-            if self.discard_ok() {
-                self.close_confirmed = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+            self.close_confirmed = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
     /// The program ends: the launcher gets the clean-exit mark, as the last thing.
     pub fn on_exit(&mut self) {
         self.launch.finish();
+    }
+}
+
+/// What the questions and the status line call a way to replace the model: the file name, a new
+/// model, or the end of the program.
+fn replace_name(what: &Replace) -> String {
+    match what {
+        Replace::Open(p) => p.file_name().map_or_else(
+            || p.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+        Replace::New => tr!("modeler-open-new-model"),
+        Replace::Quit => tr!("modeler-open-quit"),
     }
 }
 

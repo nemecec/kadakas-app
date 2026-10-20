@@ -29,6 +29,7 @@ pub fn capture_env() {
     let taken = kadakas_sys::process::take_env(&[
         kadakas_update::handshake::ENV_RUN,
         kadakas_update::handshake::ENV_ROOT,
+        kadakas_update::handshake::ENV_VIA,
     ]);
     let _ = CAPTURED.set(taken);
 }
@@ -44,6 +45,9 @@ pub fn launch_env(name: &str) -> Option<String> {
 
 /// How often the status file is looked at, in seconds.
 const POLL_SECONDS: f64 = 2.0;
+
+/// How often the requests to open documents are looked at, in seconds.
+const OPEN_POLL_SECONDS: f64 = 0.5;
 
 /// Where the restart stands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -74,6 +78,9 @@ pub enum SaveChoice {
 
 pub struct Updates {
     link: Option<AppLink>,
+    /// The alive stamp: a timer thread tells the launcher that this app lives, also while the
+    /// window loop waits (a file dialog is open, a big file loads). Dropped with the app.
+    _heartbeat: Option<kadakas_update::handshake::Heartbeat>,
     /// The lock of this app on its run: the launcher sees that the app lives, also when the
     /// launcher itself is gone. Held until the program ends.
     _run_lock: Option<std::fs::File>,
@@ -82,6 +89,7 @@ pub struct Updates {
     status: Option<RunStatus>,
     stamp: Option<SystemTime>,
     next_poll: f64,
+    next_open_poll: f64,
     /// The version whose notice the person put off with "Later" in this run.
     later: Option<String>,
     restart: Restart,
@@ -109,12 +117,14 @@ impl Updates {
     pub fn new(link: Option<AppLink>, root: Option<PathBuf>) -> Updates {
         let settings = root.as_deref().map(Settings::load).unwrap_or_default();
         Updates {
+            _heartbeat: link.as_ref().map(AppLink::start_heartbeat),
             _run_lock: link.as_ref().and_then(AppLink::hold_run_lock),
             link,
             root,
             status: None,
             stamp: None,
             next_poll: 0.0,
+            next_open_poll: 0.0,
             later: None,
             restart: Restart::None,
             skipped_told: false,
@@ -148,6 +158,19 @@ impl Updates {
         let changed = status != self.status;
         self.status = status;
         changed
+    }
+
+    /// Takes the documents that the launcher sent (a double click on a `.kad` file while this app
+    /// runs). Looks at most twice a second.
+    pub fn take_open(&mut self, now: f64) -> Vec<PathBuf> {
+        let Some(link) = &self.link else {
+            return Vec::new();
+        };
+        if now < self.next_open_poll {
+            return Vec::new();
+        }
+        self.next_open_poll = now + OPEN_POLL_SECONDS;
+        link.take_open()
     }
 
     /// The notice to show, if any.
@@ -373,6 +396,60 @@ pub fn notice_bar(ui: &mut egui::Ui, n: &Notice) -> Option<NoticeAction> {
         }
     });
     action
+}
+
+/// What the person chose in the question about unsaved changes before a file replaces the drawing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenChoice {
+    SaveAndOpen,
+    DiscardAndOpen,
+    Cancel,
+}
+
+/// What waits behind the question.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AskKind {
+    /// A file of the person (File > Open, the launcher).
+    Open,
+    /// File > New.
+    New,
+    /// A file that an agent wanted to open (the call was refused).
+    Agent,
+}
+
+/// The question about unsaved changes before something replaces the drawing. `name` is the file
+/// (or the new drawing) that waits.
+pub fn open_dialog(ctx: &egui::Context, kind: AskKind, name: &str) -> Option<OpenChoice> {
+    let mut choice = None;
+    egui::Window::new(tr!("app-open-title"))
+        .id(egui::Id::new("win-open-unsaved"))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label(match kind {
+                AskKind::Open => tr!("app-open-unsaved-question", name = name),
+                AskKind::New => tr!("app-open-unsaved-new"),
+                AskKind::Agent => tr!("app-open-unsaved-agent", name = name),
+            });
+            ui.horizontal(|ui| {
+                if ui.button(tr!("app-open-save-and-open")).clicked() {
+                    choice = Some(OpenChoice::SaveAndOpen);
+                }
+                if ui.button(tr!("app-open-dont-save")).clicked() {
+                    choice = Some(OpenChoice::DiscardAndOpen);
+                }
+                let cancel = if kind == AskKind::Agent {
+                    tr!("app-open-refuse")
+                } else {
+                    tr!("app-updates-cancel")
+                };
+                if ui.button(cancel).clicked() {
+                    choice = Some(OpenChoice::Cancel);
+                }
+            });
+        });
+    choice
 }
 
 /// The question about unsaved changes before the restart.

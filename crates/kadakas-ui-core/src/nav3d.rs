@@ -12,7 +12,7 @@
 //! is a `Vec2`.
 
 use glam::{Vec2, Vec3};
-use kadakas_core::mesh::Bounds3;
+use kadakas_core::mesh::{Bounds3, Scene};
 use kadakas_render::{Camera, Projection, StandardView};
 
 use crate::keymap::Action;
@@ -39,6 +39,28 @@ pub const KEY_ZOOM: f32 = 2.0;
 pub const KEY_PAN_POINTS: f32 = 40.0;
 /// The smallest window of Zoom Window, in points. A smaller drag is a click and does nothing.
 pub const MIN_WINDOW_POINTS: f32 = 4.0;
+/// The nearest that a zoom to a picked point comes to the point, in mm. A zoom goes by a share of
+/// the distance to the point, so it never stops at a fixed distance of the target.
+pub const MIN_APPROACH: f32 = 0.01;
+
+/// The point of the scene under the screen point `at` (points from the top left, in a viewport of
+/// `size`): where the ray of the camera first hits a surface. `None` over empty space. The point
+/// is in the local coordinates of the scene.
+pub fn point_under(scene: &Scene, camera: &Camera, at: Vec2, size: Vec2) -> Option<Vec3> {
+    let size = size.max(Vec2::ONE);
+    let ndc = Vec2::new(at.x / size.x * 2.0 - 1.0, 1.0 - at.y / size.y * 2.0);
+    let (mut origin, dir) = camera.ray(ndc, size.x / size.y);
+    // Parallel rays start on the plane through the target, which can be inside the scene: step
+    // back out of it, as the picking of the renderer does.
+    if camera.projection == Projection::Orthographic {
+        let reach = scene
+            .bounds
+            .map_or(0.0, |(lo, hi)| (hi - lo).length() + (lo + hi).length());
+        origin -= dir * (camera.distance + reach);
+    }
+    let (_, t) = kadakas_render::pick::pick_ray(scene, origin, dir)?;
+    Some(origin + dir * t)
+}
 
 /// A mouse button, as the navigation sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,9 +71,10 @@ pub enum Button {
 }
 
 /// What a drag does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Drag {
     /// The drag is not navigation (the tool or the selection uses it).
+    #[default]
     None,
     Orbit,
     Pan,
@@ -221,6 +244,24 @@ impl Nav3d {
         self.camera.pan(delta.x, delta.y, height);
     }
 
+    /// Drags the scene so that the point at `depth` (mm in front of the eye, along the view
+    /// direction) follows the pointer exactly. In the parallel projection every depth moves the
+    /// same, so `depth` does not matter there. `None` pans at the depth of the target.
+    pub fn pan_at_depth(&mut self, delta: Vec2, height: f32, depth: Option<f32>) {
+        let scale = match depth {
+            Some(d) if self.is_perspective() && d.is_finite() && d > 0.0 => {
+                d / self.camera.distance.max(1e-6)
+            }
+            _ => 1.0,
+        };
+        self.camera.pan(delta.x * scale, delta.y * scale, height);
+    }
+
+    /// The depth of a point in front of the eye, along the view direction (mm). Negative behind.
+    pub fn depth_of(&self, p: Vec3) -> f32 {
+        (p - self.camera.eye()).dot(self.camera.forward())
+    }
+
     /// Zooms in by `factor` (more than 1 zooms in) toward the screen point `at`: the point of the
     /// scene under the pointer stays under the pointer. `at` is in points from the top left.
     pub fn zoom_at(&mut self, factor: f32, at: Vec2, size: Vec2) {
@@ -230,6 +271,33 @@ impl Nav3d {
         );
         self.camera
             .zoom_at(factor, ndc, size.x.max(1.0) / size.y.max(1.0));
+    }
+
+    /// Zooms in by `factor` so that `focus`, a point of the scene under the pointer, stays under
+    /// the pointer at `at`. In the perspective projection the eye moves along the ray through
+    /// the pointer by a share of its distance to `focus` (so the zoom has no fixed stop, and a
+    /// point far in front of or behind the target plane stays put too). It never comes nearer
+    /// than [`MIN_APPROACH`]. In the parallel projection, and without a focus point, this is
+    /// [`Nav3d::zoom_at`], which keeps every point of the ray where it is.
+    pub fn zoom_at_point(&mut self, factor: f32, at: Vec2, size: Vec2, focus: Option<Vec3>) {
+        let Some(p) = focus.filter(|p| p.is_finite()) else {
+            return self.zoom_at(factor, at, size);
+        };
+        if !self.is_perspective() || !(factor.is_finite() && factor > 0.0) {
+            return self.zoom_at(factor, at, size);
+        }
+        let eye = self.camera.eye();
+        let fwd = self.camera.forward();
+        if (p - eye).dot(fwd) <= 0.0 {
+            // Behind the eye: no sane ray.
+            return self.zoom_at(factor, at, size);
+        }
+        let gap = (eye - p).length();
+        let new_gap = (gap / factor).clamp(MIN_APPROACH, 1.0e9);
+        let new_eye = p + (eye - p).normalize_or_zero() * new_gap;
+        let depth = (p - new_eye).dot(fwd).clamp(MIN_APPROACH, 1.0e9);
+        self.camera.distance = depth;
+        self.camera.target = new_eye + fwd * depth;
     }
 
     /// Zoom about the center of the view.
@@ -296,14 +364,16 @@ impl Nav3d {
     }
 
     /// Does a drag step. `delta` is the movement in points since the last step; `at` is the pointer
-    /// and `size` the viewport. `pivot` is the point that Orbit turns about (`None`: the center of
-    /// the view). A window drag does nothing here (the caller shows the window and calls
+    /// and `size` the viewport. `pivot` is the point of the scene under the pointer when the drag
+    /// started: Orbit turns about it and Pan moves at its depth (`None`: the center of the view). A window drag does nothing here (the caller shows the window and calls
     /// [`Nav3d::zoom_window`] when the button is released).
     pub fn drag(&mut self, drag: Drag, delta: Vec2, size: Vec2, pivot: Option<Vec3>) {
         match drag {
             Drag::Orbit => self.orbit_about(delta, pivot),
-            Drag::Pan => self.pan(delta, size.y),
+            Drag::Pan => self.pan_at_depth(delta, size.y, pivot.map(|p| self.depth_of(p))),
             Drag::Zoom => self.zoom_center((-delta.y * ZOOM_PER_POINT).exp()),
+            // The parallel projection has no field of view.
+            Drag::Fov if !self.is_perspective() => {}
             Drag::Fov => self.set_fov_deg(self.fov_deg() + delta.y * FOV_DEG_PER_POINT),
             Drag::ZoomWindow | Drag::None => {}
         }
@@ -860,5 +930,201 @@ mod tests {
         assert!((n.fov_deg() - DEFAULT_FOV_DEG).abs() < 1e-3);
         assert!(n.next_view());
         assert!(!n.is_perspective() && (n.fov_deg() - 70.0).abs() < 1e-3);
+    }
+
+    // ---- the depth under the pointer ----
+
+    /// A point on the ray through `at`, `along` mm further along the ray than the target plane
+    /// (negative: nearer to the eye).
+    fn ray_point(c: &Camera, at: Vec2, along: f32) -> Vec3 {
+        let (_, d) = c.ray(ndc_of(at), SIZE.x / SIZE.y);
+        target_plane_point(c, at) + d * along
+    }
+
+    #[test]
+    fn zoom_to_the_cursor_keeps_a_point_that_is_not_on_the_target_plane_in_both_projections() {
+        for projection in [Projection::Perspective, Projection::Orthographic] {
+            for behind in [-3000.0f32, 0.0, 2500.0] {
+                let mut n = Nav3d::new();
+                n.set_projection(projection);
+                let at = Vec2::new(150.0, 480.0);
+                let p = ray_point(&n.camera, at, behind);
+                for factor in [1.7, 0.5, 4.0, 1.2] {
+                    n.zoom_at_point(factor, at, SIZE, Some(p));
+                    let s = screen_of(&n.camera, p);
+                    let want = ndc_of(at);
+                    assert!(
+                        (s - want).length() < 2e-3,
+                        "{projection:?} behind {behind} x{factor}: {s:?} want {want:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_perspective_zoom_goes_by_the_distance_to_the_point_and_has_no_stop_at_one_mm() {
+        let mut n = Nav3d::new();
+        let at = Vec2::new(500.0, 200.0);
+        let p = ray_point(&n.camera, at, 0.0);
+        let first = n.depth_of(p);
+        let mut depth = first;
+        for _ in 0..12 {
+            n.zoom_at_point(2.0, at, SIZE, Some(p));
+            let d = n.depth_of(p);
+            assert!(
+                (d - depth / 2.0).abs() < depth * 1e-3 + 1e-4,
+                "{d} after {depth}"
+            );
+            depth = d;
+        }
+        // 10 000 mm halved twelve times is 2.4 mm. The old limit was a distance of 1 mm to the
+        // target: now the zoom goes on until it is within MIN_APPROACH of the point.
+        for _ in 0..30 {
+            n.zoom_at_point(2.0, at, SIZE, Some(p));
+        }
+        let near = n.depth_of(p);
+        assert!((MIN_APPROACH * 0.5..1.0).contains(&near), "{near}");
+        // (A few hundredths of a mm from a point at 5 m is the limit of f32: only roughly there.)
+        assert!((screen_of(&n.camera, p) - ndc_of(at)).length() < 0.2);
+        // Zooming out comes back, and the point is still under the pointer.
+        for _ in 0..30 {
+            n.zoom_at_point(0.5, at, SIZE, Some(p));
+        }
+        assert!(n.depth_of(p) > near * 1000.0);
+        assert!((screen_of(&n.camera, p) - ndc_of(at)).length() < 0.2);
+        assert!(n.camera.distance.is_finite() && n.camera.target.is_finite());
+    }
+
+    #[test]
+    fn a_zoom_without_a_point_or_with_a_bad_one_is_the_plain_zoom() {
+        let at = Vec2::new(620.0, 140.0);
+        let mut a = Nav3d::new();
+        let mut b = Nav3d::new();
+        a.zoom_at(1.8, at, SIZE);
+        b.zoom_at_point(1.8, at, SIZE, None);
+        assert_eq!(a.camera, b.camera);
+        let mut c = Nav3d::new();
+        c.zoom_at_point(1.8, at, SIZE, Some(Vec3::NAN));
+        assert_eq!(a.camera, c.camera);
+        // A point behind the eye makes no ray.
+        let mut d = Nav3d::new();
+        let behind = d.camera.eye() - d.camera.forward() * 100.0;
+        d.zoom_at_point(1.8, at, SIZE, Some(behind));
+        assert_eq!(a.camera, d.camera);
+        // A bad factor changes nothing.
+        let mut e = Nav3d::new();
+        let kept = e.camera;
+        let p = ray_point(&e.camera, at, 0.0);
+        e.zoom_at_point(f32::NAN, at, SIZE, Some(p));
+        e.zoom_at_point(-2.0, at, SIZE, Some(p));
+        assert_eq!(e.camera, kept);
+    }
+
+    #[test]
+    fn a_pan_at_the_depth_of_a_point_moves_that_point_with_the_pointer() {
+        for behind in [-4000.0f32, 0.0, 6000.0] {
+            let mut n = Nav3d::new();
+            n.camera.set_view(StandardView::Front);
+            let p = ray_point(&n.camera, Vec2::new(300.0, 250.0), behind);
+            let before = screen_of(&n.camera, p);
+            let delta = Vec2::new(40.0, -25.0);
+            n.drag(Drag::Pan, delta, SIZE, Some(p));
+            let after = screen_of(&n.camera, p);
+            // 40 points to the right, 25 up, as NDC of a viewport of SIZE.
+            let want = Vec2::new(2.0 * delta.x / SIZE.x, -2.0 * delta.y / SIZE.y);
+            assert!(
+                ((after - before) - want).length() < 1e-3,
+                "behind {behind}: moved {:?}, wanted {want:?}",
+                after - before
+            );
+        }
+        // Without a point it pans at the depth of the target, as before.
+        let mut a = Nav3d::new();
+        let mut b = Nav3d::new();
+        a.pan(Vec2::new(10.0, 5.0), SIZE.y);
+        b.drag(Drag::Pan, Vec2::new(10.0, 5.0), SIZE, None);
+        assert_eq!(a.camera, b.camera);
+        // In the parallel projection the depth does not matter.
+        let mut o = Nav3d::new();
+        o.set_projection(Projection::Orthographic);
+        let mut o2 = Nav3d::new();
+        o2.set_projection(Projection::Orthographic);
+        o.drag(
+            Drag::Pan,
+            Vec2::new(10.0, 5.0),
+            SIZE,
+            Some(Vec3::new(9000.0, 0.0, 0.0)),
+        );
+        o2.pan(Vec2::new(10.0, 5.0), SIZE.y);
+        assert_eq!(o.camera, o2.camera);
+    }
+
+    #[test]
+    fn the_field_of_view_drag_does_nothing_in_the_parallel_projection() {
+        let mut n = Nav3d::new();
+        n.set_projection(Projection::Orthographic);
+        let kept = n.camera;
+        n.drag(Drag::Fov, Vec2::new(0.0, -80.0), SIZE, None);
+        assert_eq!(n.camera, kept);
+    }
+
+    fn square_scene() -> Scene {
+        use kadakas_core::command::{Command, Editor};
+        use kadakas_core::model::{Attributes, Shape};
+        let mut ed = Editor::default();
+        ed.execute(&Command::AddObject {
+            shape: Shape::Hardscape {
+                boundary: kadakas_core::curve::corners(&[
+                    glam::DVec2::new(-2000.0, -2000.0),
+                    glam::DVec2::new(2000.0, -2000.0),
+                    glam::DVec2::new(2000.0, 2000.0),
+                    glam::DVec2::new(-2000.0, 2000.0),
+                ]),
+                material: "m".into(),
+                thickness: Some(200.0),
+                elevation: None,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        kadakas_core::mesh::build(ed.doc())
+    }
+
+    #[test]
+    fn the_point_under_the_pointer_is_the_first_surface_the_ray_hits() {
+        let scene = square_scene();
+        let top = scene.bounds.unwrap().1.z;
+        for projection in [Projection::Perspective, Projection::Orthographic] {
+            let mut n = Nav3d::new();
+            n.set_projection(projection);
+            n.camera.set_view(StandardView::Top);
+            n.zoom_extents(&Frame {
+                bounds: scene.bounds,
+                size: SIZE,
+            });
+            // The middle of the view looks at the top of the slab.
+            let p = point_under(&scene, &n.camera, SIZE / 2.0, SIZE).expect("a hit");
+            assert!((p.z - top).abs() < 1.0, "{projection:?}: {p:?} top {top}");
+            assert!(p.truncate().length() < 5.0);
+            // A point near a corner of the slab, seen from the iso view, is on the slab.
+            n.camera.set_view(StandardView::RightIsometric);
+            let q = point_under(&scene, &n.camera, SIZE / 2.0, SIZE).expect("a hit");
+            let s = screen_of(&n.camera, q);
+            assert!(s.length() < 5e-3, "the hit projects to the pointer: {s:?}");
+            // Over empty space there is none.
+            assert_eq!(
+                point_under(&scene, &n.camera, Vec2::new(2.0, 2.0), SIZE),
+                None
+            );
+        }
+        // An empty scene never hits.
+        let empty = kadakas_core::mesh::build(&kadakas_core::model::Document::default());
+        assert_eq!(
+            point_under(&empty, &Nav3d::new().camera, SIZE / 2.0, SIZE),
+            None
+        );
     }
 }

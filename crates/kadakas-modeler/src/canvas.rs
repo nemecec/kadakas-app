@@ -28,6 +28,32 @@ pub const AXIS_RED: Color32 = Color32::from_rgb(214, 62, 62);
 pub const AXIS_GREEN: Color32 = Color32::from_rgb(70, 170, 70);
 pub const AXIS_BLUE: Color32 = Color32::from_rgb(64, 110, 220);
 
+const ACTIVE_KEY: &str = "modeler-active-drag";
+const WINDOW_KEY: &str = "modeler-zoom-window";
+
+/// The drag that runs: what it does (decided when it started), the button, and the point of the
+/// model under the pointer at the start.
+#[derive(Clone, Copy, Debug, Default)]
+struct ActiveDrag {
+    middle: bool,
+    kind: Drag,
+    pivot: Option<Vec3>,
+}
+
+/// Forgets the drag and its window.
+fn clear_drag(ui: &egui::Ui) {
+    ui.memory_mut(|m| {
+        m.data.remove_temp::<ActiveDrag>(ACTIVE_KEY.into());
+        m.data.remove_temp::<WindowDrag>(WINDOW_KEY.into());
+    });
+}
+
+/// The window that a Zoom Window drag shows now, if one is being drawn.
+#[cfg(test)]
+pub fn window_drag(ctx: &egui::Context) -> Option<WindowDrag> {
+    ctx.memory(|m| m.data.get_temp::<WindowDrag>(WINDOW_KEY.into()))
+}
+
 /// What the canvas needs from the program.
 pub struct Canvas<'a> {
     pub session: &'a mut Session,
@@ -150,52 +176,80 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
     });
     let local = |p: Pos2| Vec2::new(p.x - rect.min.x, p.y - rect.min.y);
 
-    // The wheel zooms to the pointer.
+    // The wheel zooms to the pointer. In the perspective projection the point of the model under
+    // the pointer stays under it (the zoom goes toward that point), with no stop at a fixed
+    // distance.
     if let (true, Some(h)) = (resp.hovered(), hover) {
         let factor = nav3d::wheel_factor(scroll, pinch);
         if (factor - 1.0).abs() > 1e-6 {
-            nav.zoom_at(factor, local(h), size);
+            let focus = if nav.is_perspective() {
+                nav3d::point_under(&scene, &nav.camera, local(h), size)
+            } else {
+                None
+            };
+            nav.zoom_at_point(factor, local(h), size, focus);
             shown.navigated = true;
         }
     }
 
-    // Drags: the button and the tool decide.
-    let window_key = egui::Id::new("zoom-window");
+    // Drags. What a drag does is decided once, when it starts, from the tool, the button and the
+    // keys held at that moment. Letting go of a key later does not change the drag.
     for (button, egui_button) in [
         (Button::Primary, egui::PointerButton::Primary),
         (Button::Middle, egui::PointerButton::Middle),
     ] {
         if resp.drag_started_by(egui_button) {
-            let _ = ui.memory_mut(|m| m.data.remove_temp::<WindowDrag>(window_key));
+            let kind = nav3d::drag_for(tools.active(), button, mods, tools.window_armed());
+            clear_drag(ui);
+            if kind != Drag::None {
+                // Orbit turns about, and Pan follows, the point of the model under the pointer.
+                let pivot = match (kind, ui.input(|i| i.pointer.press_origin())) {
+                    (Drag::Orbit | Drag::Pan, Some(o)) => {
+                        nav3d::point_under(&scene, &nav.camera, local(o), size)
+                    }
+                    _ => None,
+                };
+                let active = ActiveDrag {
+                    middle: button == Button::Middle,
+                    kind,
+                    pivot,
+                };
+                ui.memory_mut(|m| m.data.insert_temp(ACTIVE_KEY.into(), active));
+            }
         }
-        let drag = nav3d::drag_for(tools.active(), button, mods, tools.window_armed());
-        if drag == Drag::None {
-            continue;
-        }
-        if resp.dragged_by(egui_button) {
-            if drag == Drag::ZoomWindow {
+    }
+    if let Some(active) = ui.memory(|m| m.data.get_temp::<ActiveDrag>(ACTIVE_KEY.into())) {
+        let button = if active.middle {
+            egui::PointerButton::Middle
+        } else {
+            egui::PointerButton::Primary
+        };
+        if resp.dragged_by(button) {
+            if active.kind == Drag::ZoomWindow {
                 if let Some(start) = ui.input(|i| i.pointer.press_origin()) {
                     let to = ui.input(|i| i.pointer.latest_pos()).unwrap_or(start);
                     let w = WindowDrag {
                         from: local(start),
                         to: local(to),
                     };
-                    ui.memory_mut(|m| m.data.insert_temp(window_key, w));
+                    ui.memory_mut(|m| m.data.insert_temp(WINDOW_KEY.into(), w));
                 }
             } else {
                 let d = resp.drag_delta();
-                nav.drag(drag, Vec2::new(d.x, d.y), size, None);
+                nav.drag(active.kind, Vec2::new(d.x, d.y), size, active.pivot);
                 shown.navigated = true;
             }
         }
-        if resp.drag_stopped_by(egui_button)
-            && drag == Drag::ZoomWindow
-            && let Some(w) = ui.memory_mut(|m| m.data.remove_temp::<WindowDrag>(window_key))
-        {
-            if nav.zoom_window(w.from, w.to, size) {
-                shown.navigated = true;
+        if resp.drag_stopped_by(button) {
+            if active.kind == Drag::ZoomWindow {
+                if let Some(w) = ui.memory(|m| m.data.get_temp::<WindowDrag>(WINDOW_KEY.into()))
+                    && nav.zoom_window(w.from, w.to, size)
+                {
+                    shown.navigated = true;
+                }
+                tools.disarm_window();
             }
-            tools.disarm_window();
+            clear_drag(ui);
         }
     }
 
@@ -273,7 +327,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
     }
 
     // The window of Zoom Window.
-    if let Some(w) = ui.memory(|m| m.data.get_temp::<WindowDrag>(window_key)) {
+    if let Some(w) = ui.memory(|m| m.data.get_temp::<WindowDrag>(WINDOW_KEY.into())) {
         let r = Rect::from_two_pos(
             Pos2::new(rect.min.x + w.from.x, rect.min.y + w.from.y),
             Pos2::new(rect.min.x + w.to.x, rect.min.y + w.to.y),

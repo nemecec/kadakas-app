@@ -534,6 +534,12 @@ pub fn customize_window(ctx: &egui::Context, p: &mut Profiles) {
     }
 }
 
+/// The actions that the Shortcuts window lists: all but the ones of the 3D modeler, which do
+/// nothing in this program.
+pub fn shortcut_actions() -> impl Iterator<Item = Action> {
+    Action::ALL.iter().copied().filter(|a| !a.modeler_only())
+}
+
 fn shortcuts(ui: &mut Ui, p: &mut Profiles, edits: &mut Vec<Edit>) {
     ui.horizontal(|ui| {
         ui.label(tr!("profiles-ui-filter"));
@@ -544,7 +550,7 @@ fn shortcuts(ui: &mut Ui, p: &mut Profiles, edits: &mut Vec<Edit>) {
         .num_columns(2)
         .striped(true)
         .show(ui, |ui| {
-            for a in Action::ALL.iter().copied() {
+            for a in shortcut_actions() {
                 let label = a.label();
                 if !filter.is_empty()
                     && !label.to_lowercase().contains(&filter)
@@ -684,6 +690,18 @@ pub fn command_line_ui(ui: &mut Ui, p: &mut Profiles) -> Option<Outcome> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_shortcuts_window_leaves_out_the_actions_of_the_3d_modeler() {
+        let listed: Vec<_> = super::shortcut_actions().collect();
+        assert!(listed.contains(&super::Action::ToolLine));
+        assert!(listed.iter().all(|a| !a.modeler_only()));
+        assert_eq!(
+            listed.len() + 12,
+            super::Action::ALL.len(),
+            "twelve actions are for the modeler only"
+        );
+    }
+
     use super::*;
 
     fn chord(s: &str) -> Chord {

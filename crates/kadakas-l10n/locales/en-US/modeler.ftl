@@ -83,11 +83,25 @@ modeler-save-overwrite-title = Replace the file?
 modeler-save-overwrite-text = Another program changed { $file } since you opened it. Replace it with this model?
 modeler-save-missing-title = Parts of the file are missing
 modeler-save-missing-text = The file { $file } no longer has parts that this model refers to: { $what } Save without them?
-modeler-discard-title = Unsaved changes
-modeler-discard-text = This model has changes that are not saved. Go on and lose them?
 modeler-prefs-ignored = The settings file { $path } is ignored: { $error }
 modeler-prefs-cannot-write = Cannot write the settings file { $path }: { $error }
 
 modeler-about-title = About Kadakas Modeler
 modeler-about-description = A 3D-first modeler with the layout and the keys of familiar modeling programs. It opens and saves the same .kad files as Kadakas.
 modeler-about-trademark = SketchUp is a trademark of Trimble Inc. Kadakas Modeler is an independent project and is not affiliated with, endorsed by, or sponsored by Trimble Inc. The name SketchUp-like only says what the keys and the layout are like.
+
+modeler-unsaved-title = Unsaved changes
+modeler-unsaved-open = You have changes that are not saved. Save them before opening { $name }?
+modeler-unsaved-new = You have changes that are not saved. Save them before you start a new model?
+modeler-unsaved-quit = You have changes that are not saved. Save them before you quit?
+modeler-unsaved-save-and-open = Save and open
+modeler-unsaved-save-and-new = Save and start
+modeler-unsaved-save-and-quit = Save and quit
+modeler-unsaved-dont-save = Don't save
+modeler-unsaved-cancel = Cancel
+modeler-open-new-model = a new model
+modeler-open-quit = quit
+modeler-open-dropped = Not done: { $dropped }. Kadakas Modeler is waiting for your answer about { $waiting } first.
+modeler-open-not-saved = The changes could not be saved, so { $name } was not done and the model stays.
+modeler-open-cancelled-by-you = { $name } was cancelled. Your model is unchanged.
+modeler-opened-first-of-several = Opened { $name }. { $count } more files were sent and not opened.

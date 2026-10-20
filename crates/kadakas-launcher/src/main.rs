@@ -13,7 +13,10 @@
 // (The output of `add` and `--help` is not shown there; `manage` shows everything in the window.)
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+#[cfg(target_os = "macos")]
+mod appkit;
 mod cli;
+mod events;
 mod model;
 mod ui;
 
@@ -37,10 +40,12 @@ const TRUSTED_KEYS: &str = include_str!("../trusted-keys.txt");
 const DEFAULT_MANIFEST_BASE: &str =
     "https://github.com/kadakas/kadakas/releases/download/update-manifests";
 
-/// The version that the installer put next to the launcher, if the app is there.
+/// The version that the installer put next to the launcher, if the app is there. On Windows and
+/// Linux the program `kadakas-app` is next to the launcher. On macOS the launcher is the main
+/// executable of the outer bundle, and the packager puts the app bundle next to it
+/// (`Kadakas.app/Contents/MacOS/Kadakas Engine.app`, `embedded-apps` in `packager-macos.toml`).
 fn bundled_in(exe_dir: &Path) -> Option<Bundled> {
-    let app = format!("kadakas-app{}", std::env::consts::EXE_SUFFIX);
-    exe_dir.join(app).is_file().then(|| Bundled {
+    kadakas_update::flavors::has_app(exe_dir).then(|| Bundled {
         version: Version::parse(env!("CARGO_PKG_VERSION")).expect("crate version is valid"),
         dir: exe_dir.to_path_buf(),
     })
@@ -82,9 +87,6 @@ fn updater_factory(root: PathBuf, exe_dir: Option<PathBuf>, sites: Sites) -> Upd
             base,
             current_platform(),
         )
-        // On macOS an update archive would be a bare executable, not a `.app` (see
-        // `packager-macos.toml`): nothing is downloaded there.
-        .with_install_support(!cfg!(target_os = "macos"))
     })
 }
 
@@ -163,6 +165,52 @@ fn window(root: PathBuf, factory: &UpdaterFactory, status: Option<String>) -> ef
     )
 }
 
+/// macOS, from inside the app bundle: the launcher is the program of the outer `Kadakas.app`. It
+/// runs the system event loop on the main thread, so that the open-documents Apple event of a
+/// double click arrives (also while the app runs), and the supervisor on a worker thread. The app
+/// starts as soon as the loop is up (a few tens of milliseconds), with the files of the event.
+#[cfg(target_os = "macos")]
+fn start_in_bundle(
+    root: PathBuf,
+    exe: PathBuf,
+    files: Vec<std::ffi::OsString>,
+    site: Option<String>,
+) -> ExitCode {
+    use kadakas_update::inbox::Inbox;
+    use kadakas_update::supervisor::{Spawner, Supervisor};
+    let factory = updater_factory(root.clone(), exe_dir(), sites_from_env(site));
+    let inbox = Inbox::new(&root);
+    let spawner: Arc<dyn Spawner> = Arc::new(SystemSpawner);
+    let system = Arc::new(appkit::AppKitEvents);
+    let forwarder = events::Forwarder::new(inbox.clone(), system.clone(), spawner.clone());
+    let supervisor = Supervisor::new(root, factory, spawner).with_inbox(inbox);
+    let ok = events::run_with_events(
+        system,
+        forwarder,
+        files,
+        std::time::Duration::from_secs(2),
+        move |files| match supervisor.run(files) {
+            Ok(_) => true,
+            Err(e) => {
+                // Nothing could start. The window needs the main thread, which runs the event
+                // loop, so it opens as a new process, with the reason.
+                let text = tr!("launcher-status-start-failed", error = e.to_string());
+                eprintln!("kadakas-launcher: {text}");
+                let _ = std::process::Command::new(exe)
+                    .arg("manage")
+                    .env("KADAKAS_LAUNCHER_STATUS", text)
+                    .spawn();
+                false
+            }
+        },
+    );
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 fn main() -> ExitCode {
     init_language();
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
@@ -201,7 +249,12 @@ fn main() -> ExitCode {
         }
         cli::Command::Manage => {
             let factory = updater_factory(root.clone(), exe_dir(), sites_from_env(None));
-            match window(root, &factory, None) {
+            // A launcher that could not start anything opens this window as a new process (macOS,
+            // where the first process runs the system event loop) and says why in the variable.
+            let status = std::env::var("KADAKAS_LAUNCHER_STATUS")
+                .ok()
+                .filter(|s| !s.is_empty());
+            match window(root, &factory, status) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("kadakas-launcher: {e}");
@@ -210,6 +263,13 @@ fn main() -> ExitCode {
             }
         }
         cli::Command::Start { files, site } => {
+            #[cfg(target_os = "macos")]
+            if let Some(exe) = std::env::current_exe()
+                .ok()
+                .filter(|e| events::in_app_bundle(e))
+            {
+                return start_in_bundle(root, exe, files, site);
+            }
             let factory = updater_factory(root.clone(), exe_dir(), sites_from_env(site));
             let supervisor = kadakas_update::supervisor::Supervisor::new(
                 root.clone(),
@@ -269,7 +329,7 @@ mod tests {
         let factory = updater_factory(d.join("data"), Some(d.clone()), Sites::default());
         let stable = factory(&Settings::default());
         assert!(stable.store().active().is_some());
-        assert_eq!(stable.can_check(), !cfg!(target_os = "macos"));
+        assert!(stable.can_check());
         assert!(!stable.is_local_site());
         // The channel local has no default site: nothing to ask. With a site: a local folder.
         let local = Settings {
@@ -297,6 +357,28 @@ mod tests {
             ..Settings::default()
         };
         assert_eq!(factory(&keep).store().keep_older(), 4);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_bundled_app_of_the_outer_macos_bundle_is_found() {
+        // Kadakas.app/Contents/MacOS/kadakas-launcher is the launcher. The base version is the
+        // app bundle next to it, in the same folder.
+        let d = tmp("outer");
+        let macos = d.join("Kadakas.app/Contents/MacOS");
+        std::fs::create_dir_all(&macos).unwrap();
+        assert!(bundled_in(&macos).is_none());
+        let inner = macos.join("Kadakas Engine.app/Contents/MacOS");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("kadakas-app"), b"x").unwrap();
+        let b = bundled_in(&macos).unwrap();
+        assert_eq!(b.dir, macos);
+        assert!(events::in_app_bundle(&macos.join("kadakas-launcher")));
+        // The store starts the inner bundle's executable.
+        let store = Store::new(d.join("data"), Some(b));
+        let active = store.active().unwrap();
+        let flavors = kadakas_update::flavors::discover(&active.dir);
+        assert_eq!(active.dir.join(&flavors[0].exe), inner.join("kadakas-app"));
         std::fs::remove_dir_all(&d).unwrap();
     }
 

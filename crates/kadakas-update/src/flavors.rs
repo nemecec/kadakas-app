@@ -11,6 +11,13 @@
 //!
 //! `exe` is a path inside the version folder, without the `.exe` ending on Windows. The launcher
 //! adds it. A flavor whose program is missing is not listed.
+//!
+//! **macOS.** A version folder holds one app bundle, `Kadakas Engine.app`, and the program of the app is
+//! the main executable of that bundle: `Kadakas Engine.app/Contents/MacOS/kadakas-app`. The launcher
+//! starts that path itself (not `open`), so it can pass arguments and the run variables. Because
+//! the path is inside a `.app`, the system finds the bundle (its name, its icon in the Dock) from
+//! the path. A folder with the program directly in it (a plain build) works as well, on every
+//! system.
 
 use crate::archive::safe_relative;
 use crate::settings::{MAIN_FLAVOR, valid_name};
@@ -42,15 +49,38 @@ struct RawFlavor {
 /// the name that the UI shows. A flavor is listed when its program is in the version folder.
 pub const BUILT_IN: &[(&str, &str)] = &[("kadakas-modeler", "Kadakas Modeler (SketchUp-like)")];
 
+/// The name of the app bundle in a version folder on macOS.
+pub const APP_BUNDLE: &str = "Kadakas Engine.app";
+
 fn exe_path(base: &str) -> PathBuf {
     PathBuf::from(format!("{base}{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// The main executable of a program inside the app bundle of a version folder.
+pub fn bundle_exe(base: &str) -> PathBuf {
+    Path::new(APP_BUNDLE)
+        .join("Contents")
+        .join("MacOS")
+        .join(base)
+}
+
+/// The program `base` in the folder `dir`: directly in it, or inside the app bundle. `None` when
+/// it is in neither place.
+pub fn find_exe(dir: &Path, base: &str) -> Option<PathBuf> {
+    [exe_path(base), bundle_exe(base)]
+        .into_iter()
+        .find(|rel| dir.join(rel).is_file())
+}
+
+/// True when the folder holds a program that can start (a version folder, plain or a bundle).
+pub fn has_app(dir: &Path) -> bool {
+    find_exe(dir, MAIN_FLAVOR).is_some()
 }
 
 /// The flavors that are installed in `dir`. The main app comes first.
 pub fn discover(dir: &Path) -> Vec<Flavor> {
     let mut out = Vec::new();
-    let main = exe_path(MAIN_FLAVOR);
-    if dir.join(&main).is_file() {
+    if let Some(main) = find_exe(dir, MAIN_FLAVOR) {
         out.push(Flavor {
             id: MAIN_FLAVOR.into(),
             name: "Kadakas".into(),
@@ -58,8 +88,8 @@ pub fn discover(dir: &Path) -> Vec<Flavor> {
         });
     }
     for (id, name) in BUILT_IN {
-        let exe = exe_path(id);
-        if dir.join(&exe).is_file() {
+        // Directly in the folder, or inside the app bundle on macOS, like the main app.
+        if let Some(exe) = find_exe(dir, id) {
             out.push(Flavor {
                 id: (*id).into(),
                 name: (*name).into(),
@@ -120,6 +150,40 @@ mod tests {
     }
 
     #[test]
+    fn the_program_inside_an_app_bundle_is_found() {
+        let d = tmp("flv-bundle");
+        assert!(!has_app(&d));
+        touch(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-app");
+        touch(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-sketch");
+        assert!(has_app(&d));
+        std::fs::write(
+            d.join("flavors.json"),
+            r#"{"flavors":[{"id":"sketch","name":"3D","exe":"Kadakas Engine.app/Contents/MacOS/kadakas-sketch"}]}"#,
+        )
+        .unwrap();
+        let f = discover(&d);
+        assert_eq!(f.len(), 2);
+        assert_eq!(f[0].exe, bundle_exe("kadakas-app"));
+        assert_eq!(
+            f[0].exe,
+            Path::new("Kadakas Engine.app/Contents/MacOS/kadakas-app")
+        );
+        assert_eq!(f[1].id, "sketch");
+        // A plain program next to the bundle wins (a plain build is the same as before).
+        touch(&d, "kadakas-app");
+        assert_eq!(
+            discover(&d)[0].exe,
+            Path::new(&format!("kadakas-app{}", std::env::consts::EXE_SUFFIX))
+        );
+        // A folder with a different bundle name is no version folder.
+        let e = tmp("flv-other");
+        touch(&e, "Other.app/Contents/MacOS/kadakas-app");
+        assert!(!has_app(&e));
+        std::fs::remove_dir_all(&d).unwrap();
+        std::fs::remove_dir_all(&e).unwrap();
+    }
+
+    #[test]
     fn the_modeler_is_a_flavor_when_its_program_is_there_and_needs_no_file() {
         let d = tmp("flv-modeler");
         touch(&d, "kadakas-app");
@@ -142,6 +206,23 @@ mod tests {
         let f = discover(&d);
         assert_eq!(f.len(), 2);
         assert_eq!(f[1].name, "Kadakas Modeler (SketchUp-like)");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_modeler_inside_the_app_bundle_is_a_flavor_too() {
+        let d = tmp("flv-modeler-bundle");
+        touch(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-app");
+        assert_eq!(discover(&d).len(), 1);
+        touch(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-modeler");
+        let f = discover(&d);
+        assert_eq!(f.len(), 2);
+        assert_eq!(f[1].id, "kadakas-modeler");
+        assert_eq!(f[1].exe, bundle_exe("kadakas-modeler"));
+        assert_eq!(
+            f[1].exe,
+            Path::new("Kadakas Engine.app/Contents/MacOS/kadakas-modeler")
+        );
         std::fs::remove_dir_all(&d).unwrap();
     }
 

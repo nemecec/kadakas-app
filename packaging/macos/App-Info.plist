@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Info.plist of the inner app bundle `Kadakas Engine.app` (the app itself, see
+     packager-macos.toml and scripts/macos-app.sh). @VERSION@ is replaced by the script.
+
+     Why it looks like this:
+     - The FILE name is "Kadakas Engine.app", the NAME shown (CFBundleName, CFBundleDisplayName,
+       the Dock label, the menu bar) is "Kadakas". Copies of this bundle live in the version store
+       (versions/<version>/), and a bundle with the file name "Kadakas.app" there could be taken
+       for the installed app by `open -a Kadakas` or Launch Services. A nested bundle inside
+       another app is not registered by Launch Services by itself (tried: `lsregister -f` of the
+       outer bundle did not make "Kadakas Engine" known), and the distinct file name keeps a
+       registered copy apart.
+     - A different identifier (net.kadakas.Kadakas.app), and no document types: the outer
+       bundle owns .kad, so that Finder always sends a double click to the launcher.
+     - There is no Info.plist key that hides an app from Launch Services, so "Keep in Dock" on the
+       running app cannot be prevented. The app handles it: started without the launcher, it
+       hands over to the launcher (`open -b net.kadakas.Kadakas`, kadakas-app/src/handover.rs).
+     - The privacy texts (NSCameraUsageDescription and the like) belong in the OUTER Info.plist
+       too if the app ever needs them: macOS asks for the permission of the app that is started
+       by the user (the "responsible" program), and that is the outer bundle. Put them in both. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>kadakas-app</string>
+  <key>CFBundleIconFile</key>
+  <string>icon.icns</string>
+  <key>CFBundleIdentifier</key>
+  <string>net.kadakas.Kadakas.app</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>Kadakas</string>
+  <key>CFBundleDisplayName</key>
+  <string>Kadakas</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@VERSION@</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.graphics-design</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+</dict>
+</plist>

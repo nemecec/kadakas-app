@@ -28,8 +28,6 @@ pub enum Question {
     Overwrite(String),
     /// Save without the parts that cannot be found. The file and what is missing.
     SaveWithout { file: String, what: String },
-    /// Unsaved changes would be lost by a new model, an open or the end of the program.
-    Discard,
 }
 
 /// Answers the questions: a dialog in the program, a fixed answer in a test.
@@ -48,7 +46,6 @@ impl Ask for Dialogs {
                 tr!("modeler-save-overwrite-title"),
                 tr!("modeler-save-overwrite-text", file = file.as_str()),
             ),
-            Question::Discard => (tr!("modeler-discard-title"), tr!("modeler-discard-text")),
             Question::SaveWithout { file, what } => (
                 tr!("modeler-save-missing-title"),
                 tr!(
