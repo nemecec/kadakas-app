@@ -158,7 +158,7 @@ fn rect_corners(min: DVec2, max: DVec2) -> [DVec2; 4] {
 }
 
 /// The kinds of shapes that `map_shape` can transform, for error messages.
-pub const SUPPORTED: &str = "line, rect, circle, arc, polyline, text, plant, existing_tree, plant_tag, locus3d, polyline3d, extrude, sweep, symbol, group";
+pub const SUPPORTED: &str = "line, rect, circle, arc, polyline, text, plant, existing_tree, plant_tag, locus3d, polyline3d, extrude, sweep, surface_model, symbol, group";
 
 /// `shape` after the transform. Refuses shapes that the transform cannot keep (see the module notes).
 pub fn map_shape(shape: &Shape, xf: &Xf) -> Result<Shape, String> {
@@ -344,6 +344,23 @@ pub fn map_shape(shape: &Shape, xf: &Xf) -> Result<Shape, String> {
             let origin = xf.apply(s.origin.truncate());
             s.remap_plan(origin, xf.m, k, xf.is_reflection());
             Shape::Sweep(Box::new(s))
+        }
+        Shape::SurfaceModel(m) => {
+            // Any plan map is an affine map of the local coordinates; a uniform scale scales the
+            // heights too.
+            let k = sim.unwrap_or(1.0);
+            let mut m = (**m).clone();
+            let o = xf.apply(DVec2::ZERO);
+            let map = glam::DAffine3 {
+                matrix3: glam::DMat3::from_cols(
+                    xf.m.x_axis.extend(0.0),
+                    xf.m.y_axis.extend(0.0),
+                    glam::DVec3::Z * k,
+                ),
+                translation: o.extend(0.0),
+            };
+            m.place(map * m.transform);
+            Shape::SurfaceModel(Box::new(m))
         }
         Shape::Group { name } => Shape::Group { name: name.clone() },
         other => {

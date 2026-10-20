@@ -37,8 +37,9 @@
 //! loop runs counterclockwise seen from the front and the holes run clockwise. Every vertex of a
 //! face lies within the plane tolerance of the plane. The plane is kept, not derived, so that a
 //! face that is split or merged keeps exactly its plane and nothing drifts. A new face takes its
-//! side from a neighbour face that shares an edge (so the two agree, as in a closed solid); with no
-//! neighbour it faces up (+Z), and a vertical face faces +Y, then +X.
+//! side from a neighbour face that shares an edge (so the two agree, as in a closed solid): a
+//! neighbour in the same plane first, else (at a fold or a fin) the neighbour with the lowest id.
+//! With no neighbour it faces up (+Z), and a vertical face faces +Y, then +X.
 //!
 //! Inside one plane the faces never overlap. The edges in a plane form a planar graph; its regions
 //! (with holes) are found by walking the graph (the "sharpest left turn" walk), and a face is a
@@ -77,7 +78,16 @@
 //!   length tolerance never cross when they are seen in the plane.
 //!
 //! The size `s` comes from the points that are compared, not from the whole model: an edit far away
-//! never changes the result of a test here.
+//! never changes the result of a test here. The validity check uses the same plane test as the
+//! edits, so a face is valid exactly when the edits see it in its plane.
+//!
+//! # Room to grow and collaboration
+//!
+//! Edges and faces have free attribute maps ([`Attrs`]: soft, smooth, hidden, material in later
+//! rows), and fields that this version does not know are kept. Curves ([`CurveId`]) are chains of
+//! edges that stay one arc or circle when they are cut. `rev` counts the edits and a short log
+//! holds them as replayable intents, so that two users who edit one model at once both keep their
+//! work (see [`sync`]).
 //!
 //! # Determinism and ids
 //!
@@ -104,6 +114,7 @@ mod check;
 mod edit;
 mod geom;
 mod serial;
+pub mod sync;
 mod topo;
 
 #[cfg(test)]
@@ -172,6 +183,12 @@ macro_rules! id_type {
 id_type!(VertexId, "vertex");
 id_type!(EdgeId, "edge");
 id_type!(FaceId, "face");
+id_type!(CurveId, "curve");
+
+/// Free attributes of an edge or a face: soft, smooth, hidden, a material and so on (later rows).
+/// The saved form keeps every key, also the keys that this version does not know, and writes them
+/// back unchanged.
+pub type Attrs = BTreeMap<String, serde_json::Value>;
 
 /// A straight edge between two vertices. The order of the two is the order it was drawn in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,9 +225,25 @@ pub struct Face {
     pub plane: Plane,
     pub outer: Vec<VertexId>,
     pub holes: Vec<Vec<VertexId>>,
+    /// Free attributes (see [`Attrs`]). A part of a split face keeps them; a merged face takes
+    /// the attributes of the face with the lower id.
+    pub attrs: Attrs,
+    /// Fields of the saved face that this version does not know. They are written back.
+    pub extra: Attrs,
 }
 
 impl Face {
+    /// A face with no attributes.
+    pub fn new(plane: Plane, outer: Vec<VertexId>, holes: Vec<Vec<VertexId>>) -> Face {
+        Face {
+            plane,
+            outer,
+            holes,
+            attrs: Attrs::new(),
+            extra: Attrs::new(),
+        }
+    }
+
     /// The outer loop and then the holes.
     pub fn loops(&self) -> impl Iterator<Item = &Vec<VertexId>> {
         std::iter::once(&self.outer).chain(self.holes.iter())
@@ -265,6 +298,17 @@ pub struct SurfaceModel {
     faces: BTreeMap<FaceId, Face>,
     /// The next free id. Ids are never reused.
     next_id: u32,
+    /// Attributes of edges (see [`Attrs`]); an edge without attributes has no entry.
+    edge_attrs: BTreeMap<EdgeId, Attrs>,
+    /// Curves: chains of edges that stay one arc or circle after they are cut (MOD-08). An edge is
+    /// in one curve at most; a split keeps both parts in the curve, a heal joins them again.
+    curves: BTreeMap<CurveId, Vec<EdgeId>>,
+    /// The number of edits so far (each edit adds one).
+    rev: u64,
+    /// The recent edits as replayable intents (see [`sync`]).
+    log: Vec<sync::Entry>,
+    /// Fields of the saved model that this version does not know. They are written back.
+    extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for SurfaceModel {
@@ -308,15 +352,77 @@ impl SurfaceModel {
             edges: BTreeMap::new(),
             faces: BTreeMap::new(),
             next_id: 1,
+            edge_attrs: BTreeMap::new(),
+            curves: BTreeMap::new(),
+            rev: 0,
+            log: Vec::new(),
+            extra: serde_json::Map::new(),
         }
     }
 
-    /// Runs one edit. On an error the model is unchanged.
+    /// Runs one edit. On an error the model is unchanged. An edit that changes the geometry adds
+    /// one to the revision and goes into the log as an intent that can be replayed (see [`sync`]).
     pub fn apply(&mut self, edit: &Edit) -> Result<(), SurfaceError> {
+        let intent = sync::Intent::of(self, edit);
         let mut work = self.clone();
         edit::run(&mut work, edit)?;
+        if !work.same_geometry(self) {
+            sync::record(&mut work, self, intent);
+        }
         *self = work;
         Ok(())
+    }
+
+    /// True if the vertices, edges, faces, curves and attributes are the same.
+    fn same_geometry(&self, o: &SurfaceModel) -> bool {
+        self.vertices == o.vertices
+            && self.edges == o.edges
+            && self.faces == o.faces
+            && self.edge_attrs == o.edge_attrs
+            && self.curves == o.curves
+    }
+
+    /// The number of edits so far.
+    pub fn rev(&self) -> u64 {
+        self.rev
+    }
+
+    /// The recent edits, oldest first.
+    pub fn log(&self) -> &[sync::Entry] {
+        &self.log
+    }
+
+    /// The attributes of an edge (empty when it has none).
+    pub fn edge_attrs(&self, id: EdgeId) -> Option<&Attrs> {
+        self.edge_attrs.get(&id)
+    }
+
+    /// The curves, each a chain of edges in order.
+    pub fn curves(&self) -> impl Iterator<Item = (CurveId, &Vec<EdgeId>)> {
+        self.curves.iter().map(|(k, v)| (*k, v))
+    }
+
+    /// The curve of an edge.
+    pub fn curve_of(&self, e: EdgeId) -> Option<CurveId> {
+        self.curves
+            .iter()
+            .find(|(_, es)| es.contains(&e))
+            .map(|(id, _)| *id)
+    }
+
+    /// Makes a curve of a chain of edges (each one meets the next), for the tools that draw arcs
+    /// and circles (MOD-08). Fails when an edge does not exist, is in a curve already, or the
+    /// edges are not a chain.
+    pub fn add_curve(&mut self, edges: Vec<EdgeId>) -> Result<CurveId, SurfaceError> {
+        let mut work = self.clone();
+        let id = CurveId(work.alloc());
+        work.curves.insert(id, edges);
+        if let Some(p) = check::curves(&work) {
+            return Err(SurfaceError::Unsolved(p.to_string()));
+        }
+        sync::record(&mut work, self, sync::Intent::Unlogged);
+        *self = work;
+        Ok(id)
     }
 
     pub fn vertex(&self, id: VertexId) -> Option<DVec3> {
@@ -510,9 +616,27 @@ impl SurfaceModel {
         }
     }
 
-    /// Moves the model in the drawing.
+    /// Moves the model in the drawing, in 3D.
     pub fn translate(&mut self, d: DVec3) {
-        self.transform.translation += d;
+        if d != DVec3::ZERO {
+            self.place(DAffine3::from_translation(d) * self.transform);
+        }
+    }
+
+    /// Places the model with a new transform. The change goes into the log, so that a concurrent
+    /// edit of the geometry by another user can be replayed with it (see [`sync`]).
+    pub fn place(&mut self, transform: DAffine3) {
+        if transform != self.transform {
+            let before = self.clone();
+            self.transform = transform;
+            sync::record(
+                self,
+                &before,
+                sync::Intent::Place {
+                    transform: transform.to_cols_array(),
+                },
+            );
+        }
     }
 
     /// Places the model again after a change of the map (a CRS change): its origin goes to `origin`,
@@ -520,8 +644,10 @@ impl SurfaceModel {
     /// scaled by `z_scale`.
     pub fn remap_plan(&mut self, origin: DVec3, dx: DVec2, dy: DVec2, z_scale: f64) {
         let map = glam::DMat3::from_cols(dx.extend(0.0), dy.extend(0.0), DVec3::Z * z_scale);
-        self.transform.matrix3 = map * self.transform.matrix3;
-        self.transform.translation = origin;
+        self.place(DAffine3 {
+            matrix3: map * self.transform.matrix3,
+            translation: origin,
+        });
     }
 
     /// A rough size in memory, for the bytes of the undo history.
@@ -549,6 +675,11 @@ impl SurfaceModel {
             edges,
             faces,
             next_id,
+            edge_attrs: BTreeMap::new(),
+            curves: BTreeMap::new(),
+            rev: 0,
+            log: Vec::new(),
+            extra: serde_json::Map::new(),
         }
     }
 

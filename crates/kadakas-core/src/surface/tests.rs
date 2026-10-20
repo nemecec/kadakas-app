@@ -448,7 +448,8 @@ fn reversing_a_face_swaps_front_and_back() {
     }
     valid(&m);
     m.apply(&Edit::ReverseFaces { faces: ids.clone() }).unwrap();
-    assert_eq!(m, before);
+    assert!(m.faces().eq(before.faces()));
+    assert_eq!(m.rev(), before.rev() + 2);
     assert_eq!(
         m.apply(&Edit::ReverseFaces {
             faces: vec![FaceId(0)]
@@ -849,14 +850,14 @@ fn model_with(
 }
 
 fn tri_face(l: &[u32]) -> Face {
-    Face {
-        plane: Plane {
+    Face::new(
+        Plane {
             normal: DVec3::Z,
             offset: 0.0,
         },
-        outer: l.iter().map(|v| VertexId(*v)).collect(),
-        holes: Vec::new(),
-    }
+        l.iter().map(|v| VertexId(*v)).collect(),
+        Vec::new(),
+    )
 }
 
 #[test]
@@ -1406,4 +1407,624 @@ fn perf_limits() {
         start.elapsed(),
         b.face_count()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Review fixes
+
+#[test]
+fn closing_a_gap_in_a_straight_side_makes_the_face() {
+    let mut m = SurfaceModel::new();
+    add(
+        &mut m,
+        &[
+            ([0.0, 0.0, 0.0], [400.0, 0.0, 0.0]),
+            ([600.0, 0.0, 0.0], [1000.0, 0.0, 0.0]),
+            ([1000.0, 0.0, 0.0], [1000.0, 1000.0, 0.0]),
+            ([1000.0, 1000.0, 0.0], [0.0, 1000.0, 0.0]),
+            ([0.0, 1000.0, 0.0], [0.0, 0.0, 0.0]),
+        ],
+    )
+    .unwrap();
+    assert_eq!(m.face_count(), 0);
+    // Both ends of the gap have only edges in the same line.
+    add(&mut m, &[([400.0, 0.0, 0.0], [600.0, 0.0, 0.0])]).unwrap();
+    assert_eq!(m.face_count(), 1);
+    assert!(close(m.area(), 1e6));
+    valid(&m);
+}
+
+#[test]
+fn closing_a_gap_next_to_a_vertical_edge_makes_the_face() {
+    let mut m = SurfaceModel::new();
+    add(
+        &mut m,
+        &[
+            ([0.0, 0.0, 0.0], [400.0, 0.0, 0.0]),
+            ([400.0, 0.0, 0.0], [400.0, 0.0, 800.0]),
+            ([600.0, 0.0, 0.0], [1000.0, 0.0, 0.0]),
+            ([1000.0, 0.0, 0.0], [1000.0, 1000.0, 0.0]),
+            ([1000.0, 1000.0, 0.0], [0.0, 1000.0, 0.0]),
+            ([0.0, 1000.0, 0.0], [0.0, 0.0, 0.0]),
+        ],
+    )
+    .unwrap();
+    add(&mut m, &[([400.0, 0.0, 0.0], [600.0, 0.0, 0.0])]).unwrap();
+    assert_eq!(m.face_count(), 1);
+    assert_eq!(m.faces().next().unwrap().1.plane.normal, DVec3::Z);
+    valid(&m);
+}
+
+#[test]
+fn the_check_and_the_edits_use_one_plane_tolerance() {
+    // A vertex 1.5 times the plane tolerance off the plane: the edits do not see the face in its
+    // plane, so the check must refuse it too.
+    let off = 1.5 * plane_tolerance_at(0.0);
+    let m = model_with(
+        vec![(7, tri_face(&[1, 2, 3]))],
+        vec![(4, [1, 2]), (5, [2, 3]), (6, [3, 1])],
+        vec![
+            (1, [0.0; 3]),
+            (2, [1000.0, 0.0, 0.0]),
+            (3, [0.0, 1000.0, off]),
+        ],
+    );
+    assert_eq!(
+        m.problem(),
+        Some(Problem::OffPlane(FaceId(7), VertexId(3)).to_string())
+    );
+    // Two coplanar faces on the same side of an edge overlap: the quick check sees it.
+    let v = vec![
+        (1, [0.0, 0.0, 0.0]),
+        (2, [1000.0, 0.0, 0.0]),
+        (3, [0.0, 1000.0, 0.0]),
+    ];
+    let e = vec![(4, [1, 2]), (5, [2, 3]), (6, [3, 1])];
+    let m = model_with(
+        vec![(7, tri_face(&[1, 2, 3])), (8, tri_face(&[1, 2, 3]))],
+        e,
+        v,
+    );
+    assert_eq!(
+        m.problem(),
+        Some(Problem::Overlap(FaceId(7), FaceId(8), EdgeId(4)).to_string())
+    );
+}
+
+#[test]
+fn a_hole_that_touches_the_outer_loop_at_a_vertex_works() {
+    // The hole touches the outer loop at the vertex (1000, 500): the region sample and the
+    // triangles do not depend on a bridge from the hole.
+    let mut m = SurfaceModel::new();
+    poly(
+        &mut m,
+        &[
+            [0.0, 0.0, 0.0],
+            [1000.0, 0.0, 0.0],
+            [1000.0, 500.0, 0.0],
+            [1000.0, 1000.0, 0.0],
+            [0.0, 1000.0, 0.0],
+        ],
+    );
+    poly(
+        &mut m,
+        &[
+            [1000.0, 500.0, 0.0],
+            [100.0, 100.0, 0.0],
+            [100.0, 900.0, 0.0],
+        ],
+    );
+    assert_eq!(m.face_count(), 2);
+    let tri = 0.5 * 800.0 * 900.0;
+    let a = areas(&m);
+    assert!(close(a[0], tri) && close(a[1], 1e6 - tri), "{a:?}");
+    valid(&m);
+    let mesh = m.mesh().unwrap();
+    let total: f64 = mesh
+        .triangles
+        .iter()
+        .map(|t| {
+            let [a, b, c] = t.map(|i| mesh.positions[i as usize]);
+            (b - a).cross(c - a).z / 2.0
+        })
+        .sum();
+    assert!(close(total, 1e6), "{total}");
+    // Splitting the face with the touching hole works too.
+    add(&mut m, &[([0.0, 500.0, 0.0], [100.0, 500.0, 0.0])]).unwrap();
+    valid(&m);
+    // The sample of rings: inside the outer ring, outside the hole.
+    let rings = vec![
+        vec![
+            DVec2::ZERO,
+            DVec2::new(10.0, 0.0),
+            DVec2::new(10.0, 10.0),
+            DVec2::new(0.0, 10.0),
+        ],
+        vec![
+            DVec2::new(10.0, 10.0),
+            DVec2::new(9.0, 2.0),
+            DVec2::new(2.0, 9.0),
+        ],
+    ];
+    let p = super::arrange::sample_rings(&rings).unwrap();
+    assert!(inside(p, &rings));
+    assert_eq!(
+        super::arrange::sample_rings(&[vec![DVec2::ZERO, DVec2::X]]),
+        None
+    );
+}
+
+#[test]
+fn a_new_face_at_a_fin_follows_its_coplanar_neighbour() {
+    let mut m = SurfaceModel::new();
+    // A fin first (lower id), then a ground face next to it.
+    poly(
+        &mut m,
+        &[
+            [1000.0, 0.0, 0.0],
+            [1000.0, 1000.0, 0.0],
+            [1000.0, 1000.0, 1000.0],
+            [1000.0, 0.0, 1000.0],
+        ],
+    );
+    poly(&mut m, &square(0.0, 0.0, 1000.0, 0.0));
+    let ground = m
+        .faces()
+        .find(|(_, f)| f.plane.normal.z != 0.0)
+        .unwrap()
+        .1
+        .plane
+        .normal;
+    // The new face on the other side of the fin edge continues the ground.
+    poly(&mut m, &square(1000.0, 0.0, 1000.0, 0.0));
+    let flat: Vec<DVec3> = m
+        .faces()
+        .filter(|(_, f)| f.plane.normal.z != 0.0)
+        .map(|(_, f)| f.plane.normal)
+        .collect();
+    assert_eq!(flat, vec![ground, ground]);
+    valid(&m);
+}
+
+#[test]
+fn unknown_fields_and_attributes_are_kept() {
+    let mut m = SurfaceModel::new();
+    poly(&mut m, &square(0.0, 0.0, 1000.0, 0.0));
+    let mut v = serde_json::to_value(&m).unwrap();
+    v["future"] = serde_json::json!({"x": 1});
+    v["faces"][0]["future"] = serde_json::json!(true);
+    v["faces"][0]["attrs"] = serde_json::json!({"material": "brick"});
+    v["edges"][0]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"soft": true, "next": 2}));
+    let back: SurfaceModel = serde_json::from_value(v.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&back).unwrap(), v);
+    let (fid, f) = back.faces().next().unwrap();
+    assert_eq!(f.attrs["material"], "brick");
+    assert_eq!(f.extra["future"], true);
+    let e = back.edges().next().unwrap().0;
+    assert_eq!(back.edge_attrs(e).unwrap()["soft"], true);
+    valid(&back);
+    // A split keeps the attributes of the face and of the edge.
+    let mut split = back.clone();
+    add(&mut split, &[([500.0, 0.0, 0.0], [500.0, 1000.0, 0.0])]).unwrap();
+    assert!(split.faces().all(|(_, f)| f.attrs["material"] == "brick"));
+    assert!(
+        split
+            .edges()
+            .filter(|(id, _)| split.edge_attrs(*id).is_some())
+            .count()
+            == 2
+    );
+    valid(&split);
+    // Bad edges are refused.
+    for bad in [
+        serde_json::json!([9, 1]),
+        serde_json::json!([9, 1, 2, 3]),
+        serde_json::json!([9, 1, 2, {}, 5]),
+    ] {
+        let mut w = v.clone();
+        w["edges"].as_array_mut().unwrap().push(bad);
+        assert!(serde_json::from_value::<SurfaceModel>(w).is_err());
+    }
+    let mut w = v.clone();
+    w["curves"] = serde_json::json!([[]]);
+    assert!(serde_json::from_value::<SurfaceModel>(w).is_err());
+    assert!(back.face(fid).is_some());
+}
+
+#[test]
+fn the_shape_moves_in_3d() {
+    let mut s = crate::model::Shape::SurfaceModel(Box::default());
+    s.translate3(DVec3::new(1.0, 2.0, 3.0));
+    let crate::model::Shape::SurfaceModel(m) = &s else {
+        panic!()
+    };
+    assert_eq!(m.transform.translation, DVec3::new(1.0, 2.0, 3.0));
+    assert_eq!(m.rev(), 1, "a placement is an edit");
+    let mut line = crate::model::Shape::Line {
+        a: DVec2::ZERO,
+        b: DVec2::X,
+    };
+    line.translate3(DVec3::new(1.0, 0.0, 5.0));
+    assert_eq!(line.bounds().0, DVec2::new(1.0, 0.0));
+}
+
+#[test]
+fn curves_follow_splits_and_heals() {
+    let mut m = SurfaceModel::new();
+    add(
+        &mut m,
+        &[
+            ([0.0, 0.0, 0.0], [1000.0, 0.0, 0.0]),
+            ([1000.0, 0.0, 0.0], [1000.0, 1000.0, 0.0]),
+        ],
+    )
+    .unwrap();
+    let ids: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
+    // The chain from the second edge to the first: a split of the first puts its new part before it.
+    let ids = vec![ids[1], ids[0]];
+    let c = m.add_curve(ids.clone()).unwrap();
+    assert_eq!(m.curve_of(ids[0]), Some(c));
+    // A crossing splits the first edge: both parts stay in the curve, as a chain.
+    add(&mut m, &[([500.0, -500.0, 0.0], [500.0, 500.0, 0.0])]).unwrap();
+    let curve: Vec<EdgeId> = m.curves().next().unwrap().1.clone();
+    assert_eq!(curve.len(), 3);
+    valid(&m);
+    // Erasing the crossing heals the edge back into one, still in the curve.
+    let cross: Vec<EdgeId> = m
+        .edges()
+        .filter(|(id, _)| m.curve_of(*id).is_none())
+        .map(|(id, _)| id)
+        .collect();
+    erase(&mut m, &cross).unwrap();
+    assert_eq!(m.curves().next().unwrap().1, &ids);
+    valid(&m);
+    // Splitting the second edge from the far end keeps the order of the chain.
+    add(&mut m, &[([800.0, 600.0, 0.0], [1200.0, 600.0, 0.0])]).unwrap();
+    valid(&m);
+    // An edge in a curve does not heal with one outside it.
+    let mut n = SurfaceModel::new();
+    add(
+        &mut n,
+        &[
+            ([0.0, 0.0, 0.0], [500.0, 0.0, 0.0]),
+            ([500.0, 0.0, 0.0], [1000.0, 0.0, 0.0]),
+            ([500.0, 0.0, 0.0], [500.0, 500.0, 0.0]),
+        ],
+    )
+    .unwrap();
+    let first = n
+        .edge_between(
+            n.vertices().next().unwrap().0,
+            n.vertices().nth(1).unwrap().0,
+        )
+        .unwrap();
+    n.add_curve(vec![first]).unwrap();
+    let up = n.edges().last().unwrap().0;
+    erase(&mut n, &[up]).unwrap();
+    assert_eq!(n.edge_count(), 2);
+    // Bad curves are refused.
+    assert!(n.add_curve(vec![]).is_err());
+    assert!(
+        n.add_curve(vec![first]).is_err(),
+        "an edge is in one curve at most"
+    );
+    assert!(n.add_curve(vec![EdgeId(999)]).is_err());
+    // Removing the curved edge removes the curve.
+    erase(&mut n, &[first]).unwrap();
+    assert_eq!(n.curves().count(), 0);
+}
+
+#[test]
+fn edits_count_and_log_their_intents() {
+    let mut m = SurfaceModel::new();
+    poly(&mut m, &square(0.0, 0.0, 1000.0, 0.0));
+    assert_eq!(m.rev(), 1);
+    let (f, _) = m.faces().next().unwrap();
+    m.apply(&Edit::ReverseFaces { faces: vec![f] }).unwrap();
+    m.apply(&Edit::EraseFaces { faces: vec![] }).unwrap();
+    assert_eq!(m.rev(), 2, "an edit that changes nothing does not count");
+    let e = m.edges().next().unwrap().0;
+    erase(&mut m, &[e]).unwrap();
+    let kinds: Vec<&sync::Intent> = m.log().iter().map(|e| &e.intent).collect();
+    assert!(matches!(kinds[0], sync::Intent::AddEdges { .. }));
+    assert!(matches!(kinds[1], sync::Intent::ReverseFacesAt { points } if points.len() == 1));
+    assert!(
+        matches!(kinds[2], sync::Intent::EraseEdgesAt { points } if points == &vec![[500.0, 0.0, 0.0]])
+    );
+    assert_eq!(m.log()[1].base, m.log()[0].stamp);
+    // The log is bounded.
+    let mut big = SurfaceModel::new();
+    for i in 0..(sync::LOG_ENTRIES + 5) {
+        let x = i as f64 * 10.0;
+        add(&mut big, &[([x, 0.0, 0.0], [x, 5.0, 0.0])]).unwrap();
+    }
+    assert_eq!(big.log().len(), sync::LOG_ENTRIES);
+    assert_eq!(big.rev(), (sync::LOG_ENTRIES + 5) as u64);
+}
+
+fn shape_value(m: &SurfaceModel) -> serde_json::Value {
+    serde_json::to_value(crate::model::Shape::SurfaceModel(Box::new(m.clone()))).unwrap()
+}
+
+#[test]
+fn a_lost_edit_is_replayed_on_the_other_model() {
+    let mut base = SurfaceModel::new();
+    poly(&mut base, &square(0.0, 0.0, 1000.0, 0.0));
+    // Two users edit the same model at the same time.
+    let mut mine = base.clone();
+    add(&mut mine, &[([500.0, 0.0, 0.0], [500.0, 1000.0, 0.0])]).unwrap();
+    let mut theirs = base.clone();
+    poly(&mut theirs, &square(2000.0, 0.0, 1000.0, 0.0));
+    let own: std::collections::BTreeSet<u64> = sync::missing(&mine, &base)
+        .iter()
+        .map(|e| e.stamp)
+        .collect();
+    // Their model arrives over mine: my split is replayed on it.
+    let sync::Repair::Merged(v) = sync::repair(&shape_value(&mine), &shape_value(&theirs), &own)
+    else {
+        panic!()
+    };
+    let crate::model::Shape::SurfaceModel(merged) = serde_json::from_value(v).unwrap() else {
+        panic!()
+    };
+    assert_eq!(merged.face_count(), 3);
+    valid(&merged);
+    // Nothing of mine is lost: nothing to do. Not a surface model: nothing to do.
+    assert_eq!(
+        sync::repair(&shape_value(&base), &shape_value(&theirs), &own),
+        sync::Repair::Nothing
+    );
+    assert_eq!(
+        sync::repair(
+            &shape_value(&mine),
+            &serde_json::json!({"kind": "line"}),
+            &own
+        ),
+        sync::Repair::Nothing
+    );
+    assert!(sync::stamps(&serde_json::json!({"kind": "line"})).is_empty());
+    // Erases and reverses are found again by position.
+    let mut mine2 = base.clone();
+    let e = mine2.edges().next().unwrap().0;
+    let (f, _) = mine2.faces().next().unwrap();
+    mine2.apply(&Edit::ReverseFaces { faces: vec![f] }).unwrap();
+    mine2.translate(DVec3::new(0.0, 0.0, 10.0));
+    erase(&mut mine2, &[e]).unwrap();
+    let own2: std::collections::BTreeSet<u64> = sync::missing(&mine2, &base)
+        .iter()
+        .map(|e| e.stamp)
+        .collect();
+    let sync::Repair::Merged(v) = sync::repair(&shape_value(&mine2), &shape_value(&theirs), &own2)
+    else {
+        panic!()
+    };
+    let crate::model::Shape::SurfaceModel(merged) = serde_json::from_value(v).unwrap() else {
+        panic!()
+    };
+    assert_eq!(merged.face_count(), 1);
+    assert_eq!(merged.transform.translation.z, 10.0);
+    // An edit that cannot be replayed (the face is gone over there) is a conflict.
+    let mut gone = base.clone();
+    gone.apply(&Edit::EraseFaces { faces: vec![f] }).unwrap();
+    let mut rev = base.clone();
+    rev.apply(&Edit::ReverseFaces { faces: vec![f] }).unwrap();
+    let own3: std::collections::BTreeSet<u64> =
+        sync::missing(&rev, &base).iter().map(|e| e.stamp).collect();
+    assert!(matches!(
+        sync::repair(&shape_value(&rev), &shape_value(&gone), &own3),
+        sync::Repair::Conflict { .. }
+    ));
+    let mut nothing_there = base.clone();
+    let all: Vec<EdgeId> = nothing_there.edges().map(|(id, _)| id).collect();
+    erase(&mut nothing_there, &all).unwrap();
+    let mut er = base.clone();
+    erase(&mut er, &[e]).unwrap();
+    let own4: std::collections::BTreeSet<u64> =
+        sync::missing(&er, &base).iter().map(|e| e.stamp).collect();
+    assert!(matches!(
+        sync::repair(&shape_value(&er), &shape_value(&nothing_there), &own4),
+        sync::Repair::Conflict { .. }
+    ));
+    // A curve change cannot be replayed; nor can an entry older than the other log.
+    let mut cur = base.clone();
+    cur.add_curve(vec![e]).unwrap();
+    let own5: std::collections::BTreeSet<u64> =
+        sync::missing(&cur, &base).iter().map(|e| e.stamp).collect();
+    assert!(matches!(
+        sync::repair(&shape_value(&cur), &shape_value(&theirs), &own5),
+        sync::Repair::Conflict { .. }
+    ));
+    let mut long = theirs.clone();
+    for i in 0..sync::LOG_ENTRIES {
+        let x = 5000.0 + i as f64 * 10.0;
+        add(&mut long, &[([x, 0.0, 0.0], [x, 5.0, 0.0])]).unwrap();
+    }
+    assert!(matches!(
+        sync::repair(&shape_value(&mine), &shape_value(&long), &own),
+        sync::Repair::Conflict { .. }
+    ));
+    let broken = serde_json::json!({"kind": "surface_model", "v": 1, "next_id": 1, "edges": [[1]], "log": [{"stamp": 1, "base": 0, "n": 1, "do": "unlogged"}]});
+    let one: std::collections::BTreeSet<u64> = [1].into_iter().collect();
+    assert!(matches!(
+        sync::repair(&broken, &shape_value(&theirs), &one),
+        sync::Repair::Conflict { .. }
+    ));
+}
+
+/// Holes that touch the outline or each other at a vertex: the triangles and the region sample
+/// work for each (a search of 20,000 random cases found no failure of the bridge either; the
+/// sample no longer needs it, and the drawing has a fallback that joins such holes at the shared
+/// vertex).
+#[test]
+fn touching_holes_triangulate_and_sample() {
+    let sq = vec![
+        DVec2::new(0.0, 0.0),
+        DVec2::new(10.0, 0.0),
+        DVec2::new(10.0, 10.0),
+        DVec2::new(0.0, 10.0),
+    ];
+    let v = |x: f64, y: f64| DVec2::new(x, y);
+    let cases: Vec<Vec<Vec<DVec2>>> = vec![
+        vec![sq.clone(), vec![v(10.0, 10.0), v(8.0, 5.0), v(5.0, 8.0)]],
+        vec![sq.clone(), vec![v(10.0, 0.0), v(5.0, 2.0), v(8.0, 5.0)]],
+        vec![sq.clone(), vec![v(10.0, 10.0), v(9.0, 2.0), v(2.0, 9.0)]],
+        vec![sq.clone(), vec![v(10.0, 0.0), v(2.0, 1.0), v(9.0, 9.0)]],
+        vec![sq.clone(), vec![v(10.0, 10.0), v(9.5, 1.0), v(9.0, 9.5)]],
+        vec![sq.clone(), vec![v(10.0, 5.0), v(5.0, 4.0), v(5.0, 6.0)]],
+        vec![
+            vec![
+                v(0.0, 0.0),
+                v(10.0, 0.0),
+                v(10.0, 5.0),
+                v(10.0, 10.0),
+                v(0.0, 10.0),
+            ],
+            vec![v(10.0, 5.0), v(5.0, 4.0), v(5.0, 6.0)],
+        ],
+        vec![
+            vec![
+                v(0.0, 0.0),
+                v(10.0, 0.0),
+                v(10.0, 5.0),
+                v(10.0, 10.0),
+                v(0.0, 10.0),
+            ],
+            vec![v(10.0, 5.0), v(1.0, 1.0), v(1.0, 9.0)],
+        ],
+        // Two holes that touch each other at (5, 5).
+        vec![
+            sq.clone(),
+            vec![v(2.0, 2.0), v(2.0, 8.0), v(5.0, 5.0)],
+            vec![v(5.0, 5.0), v(8.0, 8.0), v(8.0, 2.0)],
+        ],
+        // Two holes that touch each other and the outline at (10, 5).
+        vec![
+            vec![
+                v(0.0, 0.0),
+                v(10.0, 0.0),
+                v(10.0, 5.0),
+                v(10.0, 10.0),
+                v(0.0, 10.0),
+            ],
+            vec![v(10.0, 5.0), v(2.0, 1.0), v(2.0, 4.5)],
+            vec![v(10.0, 5.0), v(2.0, 5.5), v(2.0, 9.0)],
+        ],
+        // Two holes touching the outline at two corners and each other in the middle.
+        vec![
+            sq.clone(),
+            vec![v(10.0, 10.0), v(5.0, 5.0), v(9.0, 4.0)],
+            vec![v(5.0, 5.0), v(0.0, 0.0), v(1.0, 6.0)],
+        ],
+    ];
+    for c in &cases {
+        assert!(geom::triangulate_rings(c).is_some());
+        let p = super::arrange::sample_rings(c).unwrap();
+        assert!(inside(p, c));
+    }
+    // Random search: a star outline, holes made of an outline vertex and two points inside.
+    let mut seed = 12345u64;
+    let mut rnd = || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((seed >> 33) as f64) / (1u64 << 31) as f64
+    };
+    let mut fails = 0;
+    for _ in 0..2000 {
+        let n = 5 + (rnd() * 6.0) as usize;
+        let outer: Vec<DVec2> = (0..n)
+            .map(|k| {
+                let a = k as f64 / n as f64 * std::f64::consts::TAU;
+                let r = 5.0 + rnd() * 5.0;
+                DVec2::new(r * a.cos(), r * a.sin())
+            })
+            .collect();
+        let holes = 1 + (rnd() * 2.0) as usize;
+        let mut rings = vec![outer.clone()];
+        for h in 0..holes {
+            let k = (h * 3 + (rnd() * n as f64) as usize) % n;
+            let v = outer[k];
+            let p = v * (0.2 + rnd() * 0.5);
+            let q = v * (0.2 + rnd() * 0.5) + DVec2::new(rnd() - 0.5, rnd() - 0.5) * 3.0;
+            let mut ring = vec![v, p, q];
+            if geom::area2(&ring) > 0.0 {
+                ring.swap(1, 2);
+            }
+            rings.push(ring);
+        }
+        // Only holes inside the outline, apart from the shared vertex, and apart from each other.
+        let samples = |r: &Vec<DVec2>| -> Vec<DVec2> {
+            let mut out = Vec::new();
+            for i in 0..3 {
+                for t in [0.1, 0.3, 0.5, 0.7, 0.9] {
+                    out.push(r[i] + (r[(i + 1) % 3] - r[i]) * t);
+                }
+            }
+            out.push(r[1]);
+            out.push(r[2]);
+            out
+        };
+        let ok = rings[1..].iter().enumerate().all(|(i, h)| {
+            samples(h).iter().all(|p| {
+                inside(*p, std::slice::from_ref(&outer))
+                    && rings[1..]
+                        .iter()
+                        .enumerate()
+                        .all(|(j, g)| j == i || !inside(*p, std::slice::from_ref(g)))
+            })
+        });
+        if !ok {
+            continue;
+        }
+        if geom::triangulate_rings(&rings).is_none() {
+            fails += 1;
+        }
+        assert!(inside(
+            super::arrange::sample_rings(&rings).unwrap(),
+            &rings
+        ));
+    }
+    assert_eq!(fails, 0);
+    // The fallback that joins a touching hole at its shared vertex covers the face too.
+    let mut m = SurfaceModel::new();
+    poly(
+        &mut m,
+        &[
+            [0.0, 0.0, 0.0],
+            [1000.0, 0.0, 0.0],
+            [1000.0, 500.0, 0.0],
+            [1000.0, 1000.0, 0.0],
+            [0.0, 1000.0, 0.0],
+        ],
+    );
+    poly(
+        &mut m,
+        &[
+            [1000.0, 500.0, 0.0],
+            [100.0, 100.0, 0.0],
+            [100.0, 900.0, 0.0],
+        ],
+    );
+    poly(
+        &mut m,
+        &[
+            [200.0, 950.0, 0.0],
+            [250.0, 950.0, 0.0],
+            [250.0, 980.0, 0.0],
+        ],
+    );
+    let (id, f) = m.faces().find(|(_, f)| f.holes.len() == 2).unwrap();
+    let vertices: Vec<VertexId> = f.loops().flatten().copied().collect();
+    let tris = geom::spliced(f, &vertices, &|v| m.vertex(v).unwrap()).unwrap();
+    let area: f64 = tris
+        .iter()
+        .map(|t| {
+            let [a, b, c] = t.map(|i| m.vertex(vertices[i as usize]).unwrap());
+            (b - a).cross(c - a).z / 2.0
+        })
+        .sum();
+    assert!(close(area, m.face_area(id).unwrap()), "{area}");
 }

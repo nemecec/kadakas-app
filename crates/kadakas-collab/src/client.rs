@@ -108,12 +108,13 @@ use serde_json::Value;
 
 use crate::blob;
 use crate::docsync;
-use crate::op::{InvalidTxn, Op, Txn, Writer, ops_digest, validate_ops};
+use crate::op::{InvalidTxn, Op, Target, Txn, Writer, ops_digest, validate_ops};
 use crate::presence::{self, Outgoing, Peer, Peers, PresenceError, PresenceState};
 use crate::protocol::{ClientMsg, Entry, ErrorClass, ErrorCode, PROTOCOL_VERSION, ServerMsg};
 use crate::replica::Replica;
 use crate::store::{Checkpoint, Journal, MAX_JOURNAL_BYTES, OpLogStore, Slot};
 use crate::undo::{MAX_STEPS, UndoEntry, UndoReport, filter_inverse};
+use kadakas_core::surface::sync;
 
 /// The first wait before a transaction is sent again after a retry error, in milliseconds.
 pub const RETRY_BASE_MS: u64 = 250;
@@ -191,6 +192,14 @@ pub enum ClientEvent {
     /// The client went offline on purpose and the host should connect again (for example after
     /// `op_id_reused`: the numbers are fixed at the next sign-in).
     Reconnect(String),
+    /// Another user wrote a surface model over edits made here, and the edits could not be
+    /// replayed on the new model (see `kadakas_core::surface::sync`). `lost` is the shape that
+    /// held them, so the host can show it to the person; nothing was dropped silently.
+    SurfaceConflict {
+        object: Uid,
+        reason: String,
+        lost: Value,
+    },
 }
 
 /// Why an edit was refused.
@@ -316,6 +325,10 @@ pub struct Client {
     view: Replica,
     shadow: Option<Replica>,
     pending: VecDeque<Txn>,
+    /// The log stamps of the surface model edits made here (see `kadakas_core::surface::sync`).
+    /// Only the author replays an edit that another user's write lost, so the repairs never go
+    /// back and forth. Kept in memory: after a restart old edits are not repaired.
+    own_stamps: BTreeSet<u64>,
     last_op: u64,
     undo: Vec<UndoEntry>,
     redo: Vec<UndoEntry>,
@@ -380,6 +393,7 @@ impl Client {
             view: Replica::new(),
             shadow: None,
             pending: VecDeque::new(),
+            own_stamps: BTreeSet::new(),
             last_op: 0,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -763,6 +777,7 @@ impl Client {
             op: op_id,
         };
         let total = ops.len();
+        self.note_own_stamps(&ops);
         let (applied, inverse) = apply_with_inverse(&mut self.view, w, ops);
         if applied.len() < total {
             // The merge rules dropped some operations (a delete of a thing that cannot go, an
@@ -1298,6 +1313,7 @@ impl Client {
     /// went offline then).
     fn apply_entries(&mut self, entries: &[Entry]) -> bool {
         let mut rebuild = false;
+        let mut repairs = Vec::new();
         for e in entries {
             if e.seq <= self.confirmed_seq {
                 continue;
@@ -1324,6 +1340,7 @@ impl Client {
             if mine {
                 self.confirm_own(w, e.ops.clone());
             } else {
+                repairs.extend(self.surface_repairs(&e.ops));
                 self.confirmed.apply_all(w, &e.ops);
             }
             self.confirmed_seq = e.seq;
@@ -1345,8 +1362,91 @@ impl Client {
         if rebuild {
             self.rebuild_view();
         }
+        self.apply_repairs(repairs);
         self.save_journal();
         true
+    }
+
+    /// Remembers the stamps of the surface model edits in local operations.
+    fn note_own_stamps(&mut self, ops: &[Op]) {
+        for op in ops {
+            let Op::Set {
+                target,
+                prop,
+                value,
+            } = op
+            else {
+                continue;
+            };
+            if prop != "shape" {
+                continue;
+            }
+            let old: BTreeSet<u64> = self
+                .view
+                .get(*target)
+                .and_then(|e| e.get("shape"))
+                .map(sync::stamps)
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            self.own_stamps
+                .extend(sync::stamps(value).into_iter().filter(|s| !old.contains(s)));
+        }
+    }
+
+    /// For the operations of another user: the surface models that they write over edits made
+    /// here, with what to do about each.
+    fn surface_repairs(&self, ops: &[Op]) -> Vec<(Target, sync::Repair)> {
+        if self.own_stamps.is_empty() {
+            return Vec::new();
+        }
+        ops.iter()
+            .filter_map(|op| match op {
+                Op::Set {
+                    target,
+                    prop,
+                    value,
+                } if prop == "shape" => {
+                    let old = self.confirmed.get(*target)?.get("shape")?;
+                    match sync::repair(old, value, &self.own_stamps) {
+                        sync::Repair::Nothing => None,
+                        r => Some((*target, r)),
+                    }
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Sends the replayed models as new edits, or tells the host about a conflict.
+    fn apply_repairs(&mut self, repairs: Vec<(Target, sync::Repair)>) {
+        for (target, r) in repairs {
+            match r {
+                sync::Repair::Merged(value) => {
+                    let op = Op::Set {
+                        target,
+                        prop: "shape".into(),
+                        value,
+                    };
+                    match self.commit(vec![op], false) {
+                        Ok(_) => self.changed = true,
+                        Err(e) => self.events.push(ClientEvent::SurfaceConflict {
+                            object: target.id,
+                            reason: e.to_string(),
+                            lost: Value::Null,
+                        }),
+                    }
+                }
+                sync::Repair::Conflict { reason, lost } => {
+                    self.events.push(ClientEvent::SurfaceConflict {
+                        object: target.id,
+                        reason,
+                        lost,
+                    })
+                }
+                sync::Repair::Nothing => {}
+            }
+        }
     }
 
     fn on_ack(&mut self, op_id: u64, seq: u64, chain: Option<String>) {

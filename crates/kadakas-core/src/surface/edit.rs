@@ -138,10 +138,16 @@ impl<'a> Work<'a> {
         Some(f)
     }
 
+    /// Removes an edge with its attributes and its place in a curve (an empty curve goes).
     fn remove_edge(&mut self, id: EdgeId) {
         if let Some(e) = self.m.edges.remove(&id) {
             self.t.remove_edge(id, e);
         }
+        self.m.edge_attrs.remove(&id);
+        self.m.curves.retain(|_, es| {
+            es.retain(|e| *e != id);
+            !es.is_empty()
+        });
     }
 
     /// Splits an edge at `p` (a point on it). The edge keeps its id for the part at its first
@@ -164,7 +170,22 @@ impl<'a> Work<'a> {
         let first = Edge { v: [c, w] };
         self.m.edges.insert(e, first);
         self.t.add_edge(e, first);
-        self.new_edge(w, d);
+        let second = self.new_edge(w, d);
+        // The new part keeps the attributes and takes its place in the curve, next to the part
+        // that it touches in the chain.
+        if let Some(a) = self.m.edge_attrs.get(&e).cloned() {
+            self.m.edge_attrs.insert(second, a);
+        }
+        let edges = &self.m.edges;
+        for es in self.m.curves.values_mut() {
+            if let Some(i) = es.iter().position(|x| *x == e) {
+                // `e` is now c–w and `second` w–d: `second` goes on the side of the chain that
+                // continues at d.
+                let prev_at_d = i > 0 && edges[&es[i - 1]].v.contains(&d);
+                let next_at_c = es.get(i + 1).is_some_and(|n| edges[n].v.contains(&c));
+                es.insert(if prev_at_d || next_at_c { i } else { i + 1 }, second);
+            }
+        }
         for f in &faces {
             let face = self.m.faces.get_mut(f).expect("a face of the edge");
             for l in std::iter::once(&mut face.outer).chain(face.holes.iter_mut()) {
@@ -311,17 +332,54 @@ impl<'a> Work<'a> {
         f.loops().flatten().all(|v| on_plane(plane, self.pos(*v)))
     }
 
-    /// The side of a new face of region `r` (in the axes of `plane`): the side that agrees with a
-    /// face that shares one of its edges (the two use the edge in opposite directions), else up.
+    /// The side of a new face of region `r` (in the axes of `plane`). It agrees with a face that
+    /// shares one of its edges (the two use the edge in opposite directions). A neighbour in the
+    /// same plane comes first (the face continues a flat surface, so it faces the same way); at a
+    /// fold or a fin the neighbour with the lowest id decides. With no neighbour the face looks up.
     fn side_of_new(&self, r: &Region, plane: &Plane) -> Plane {
+        let mut best: Option<(bool, FaceId, bool)> = None;
         for (a, b) in r.half_edges() {
             let Some(e) = self.t.edge(a, b) else { continue };
-            if let Some(g) = self.t.faces_of(e).next() {
-                let same = self.m.faces[&g].uses().any(|u| u == (a, b));
-                return if same { plane.flipped() } else { *plane };
+            for g in self.t.faces_of(e) {
+                let gf = &self.m.faces[&g];
+                let flat = self.face_on(plane, gf);
+                let same = gf.uses().any(|u| u == (a, b));
+                // Coplanar first, then the lowest id.
+                if best.is_none_or(|(bf, bg, _)| {
+                    (flat, std::cmp::Reverse(g)) > (bf, std::cmp::Reverse(bg))
+                }) {
+                    best = Some((flat, g, same));
+                }
             }
         }
-        upward(plane)
+        match best {
+            Some((_, _, true)) => plane.flipped(),
+            Some((_, _, false)) => *plane,
+            None => upward(plane),
+        }
+    }
+
+    /// The vertices next to the straight run of edges through `u`–`v`: the other ends of the
+    /// edges at the vertices of the run that leave the line.
+    fn beside_run(&self, u: VertexId, v: VertexId) -> BTreeSet<VertexId> {
+        let (pu, pv) = (self.pos(u), self.pos(v));
+        let mut run: BTreeSet<VertexId> = [u, v].into_iter().collect();
+        let mut todo = vec![u, v];
+        let mut beside = BTreeSet::new();
+        while let Some(x) = todo.pop() {
+            for e in self.t.edges_at(x) {
+                let w = self.m.edges[&e].other(x).expect("an edge at x");
+                let pw = self.pos(w);
+                if geom::point_line(pw, pu, pv) <= geom::tol(&[pu, pv, pw]) {
+                    if run.insert(w) {
+                        todo.push(w);
+                    }
+                } else {
+                    beside.insert(w);
+                }
+            }
+        }
+        beside
     }
 
     /// Solves the faces of every plane that holds a new piece, after edges were added.
@@ -340,17 +398,11 @@ impl<'a> Work<'a> {
                 planes.push(f.plane);
             }
         }
-        // The planes where a piece closes a loop with the edges at its ends.
+        // The planes where a piece closes a loop: through the piece and a vertex next to the
+        // straight run of edges that holds it (so a gap closed in a straight side counts too).
         for &(u, v) in drawn {
             let (pu, pv) = (self.pos(u), self.pos(v));
-            let others: BTreeSet<VertexId> = self
-                .t
-                .edges_at(u)
-                .chain(self.t.edges_at(v))
-                .flat_map(|e| self.m.edges[&e].v)
-                .filter(|w| *w != u && *w != v)
-                .collect();
-            for z in others {
+            for z in self.beside_run(u, v) {
                 let pz = self.pos(z);
                 if geom::point_line(pz, pu, pv) <= geom::tol(&[pu, pv, pz]) {
                     continue;
@@ -526,9 +578,9 @@ impl<'a> Work<'a> {
                 let (ra, rb) = (&arr.regions[a], &arr.regions[b]);
                 rb.area.total_cmp(&ra.area).then(ra.outer.cmp(&rb.outer))
             });
-            let fp = self.m.faces[&o.id].plane;
+            let like = self.m.faces[&o.id].clone();
             for (k, &i) in ps.iter().enumerate() {
-                let face = from_region(&arr.regions[i], &plane, fp);
+                let face = from_region(&arr.regions[i], &plane, like.plane, Some(&like));
                 if k == 0 {
                     self.put_face(o.id, face);
                 } else {
@@ -539,7 +591,7 @@ impl<'a> Work<'a> {
         for i in fresh {
             let r = &arr.regions[i];
             let side = self.side_of_new(r, &plane);
-            let face = from_region(r, &plane, side);
+            let face = from_region(r, &plane, side, None);
             self.new_face(face);
         }
         Ok(())
@@ -610,22 +662,21 @@ fn in_axes(f: &Face, plane: &Plane) -> (Vec<VertexId>, Vec<Vec<VertexId>>) {
 }
 
 /// A face of region `r` (found in the axes of `axes`) with the plane `side`.
-fn from_region(r: &Region, axes: &Plane, side: Plane) -> Face {
-    if side.normal.dot(axes.normal) >= 0.0 {
-        Face {
-            plane: side,
-            outer: r.outer.clone(),
-            holes: r.holes.clone(),
-        }
+/// A face of region `r` (found in the axes of `axes`) with the plane `side`, and the attributes
+/// of `like` (the face that it is a part of, or the face that a merge keeps).
+fn from_region(r: &Region, axes: &Plane, side: Plane, like: Option<&Face>) -> Face {
+    let mut f = if side.normal.dot(axes.normal) >= 0.0 {
+        Face::new(side, r.outer.clone(), r.holes.clone())
     } else {
         let mut holes: Vec<Vec<VertexId>> = r.holes.iter().map(|h| reversed(h)).collect();
         holes.sort();
-        Face {
-            plane: side,
-            outer: reversed(&r.outer),
-            holes,
-        }
+        Face::new(side, reversed(&r.outer), holes)
+    };
+    if let Some(l) = like {
+        f.attrs = l.attrs.clone();
+        f.extra = l.extra.clone();
     }
+    f
 }
 
 /// The plane turned to face up (+Z); a vertical plane faces +Y, then +X.
@@ -769,7 +820,7 @@ fn erase_edges(m: &mut SurfaceModel, ids: &[EdgeId]) -> Result<(), SurfaceError>
                 "the merge of faces {fs:?} has no region"
             )));
         };
-        let face = from_region(&arr.regions[i], &plane, plane);
+        let face = from_region(&arr.regions[i], &plane, plane, Some(&faces[0]));
         w.put_face(keep, face);
     }
     w.heal(&ends);
@@ -810,12 +861,17 @@ impl Work<'_> {
                 .loops()
                 .any(|l| l.contains(&v) && l.len() <= 3)
         });
-        if !straight || f1 != f2 || short || self.t.edge(x, y).is_some() {
+        // Two edges with other attributes or in other curves stay two.
+        let same_kind = self.m.edge_attrs.get(&e1) == self.m.edge_attrs.get(&e2)
+            && self.m.curve_of(e1) == self.m.curve_of(e2);
+        if !straight || !same_kind || f1 != f2 || short || self.t.edge(x, y).is_some() {
             return;
         }
         let faces: Vec<Face> = f1.iter().filter_map(|f| self.take_face(*f)).collect();
         let first = self.m.edges[&e1];
-        self.remove_edge(e1);
+        // The joined edge keeps the id, the attributes and the place in the curve of `e1`.
+        self.m.edges.remove(&e1);
+        self.t.remove_edge(e1, first);
         self.remove_edge(e2);
         let joined = Edge {
             v: if first.v[0] == v { [y, x] } else { [x, y] },

@@ -194,6 +194,55 @@ pub(super) fn triangulate_rings(rings: &[Vec<DVec2>]) -> Option<Vec<[u32; 3]>> {
     crate::solid3d::cap_triangles(rings)
 }
 
+/// The triangles of a face whose holes touch the outer loop at a vertex, where a bridge cannot be
+/// found: each such hole is joined to the outer loop at the shared vertex (a bridge of length
+/// zero), and the other holes are bridged as usual. Indices are into `vertices` (the loops one
+/// after the other).
+pub(super) fn spliced(
+    f: &Face,
+    vertices: &[VertexId],
+    pos: &impl Fn(VertexId) -> DVec3,
+) -> Option<Vec<[u32; 3]>> {
+    let mut ring: Vec<VertexId> = f.outer.clone();
+    let mut rest: Vec<&Vec<VertexId>> = Vec::new();
+    for h in &f.holes {
+        let shared = ring
+            .iter()
+            .enumerate()
+            .find_map(|(i, v)| h.iter().position(|w| w == v).map(|j| (i, j)));
+        match shared {
+            Some((i, j)) => {
+                let n = h.len();
+                let mut joined: Vec<VertexId> = ring[..=i].to_vec();
+                joined.extend((1..=n).map(|k| h[(j + k) % n]));
+                joined.extend_from_slice(&ring[i + 1..]);
+                ring = joined;
+            }
+            None => rest.push(h),
+        }
+    }
+    let rings: Vec<Vec<DVec2>> = std::iter::once(&ring)
+        .chain(rest.iter().copied())
+        .map(|l| l.iter().map(|v| f.plane.project(pos(*v))).collect())
+        .collect();
+    let mut ids: Vec<VertexId> = ring.clone();
+    for h in &rest {
+        ids.extend(h.iter().copied());
+    }
+    let first: std::collections::BTreeMap<VertexId, u32> = vertices
+        .iter()
+        .enumerate()
+        .rev()
+        .map(|(i, v)| (*v, i as u32))
+        .collect();
+    let tris = triangulate_rings(&rings)?;
+    Some(
+        tris.into_iter()
+            .map(|t| t.map(|i| first[&ids[i as usize]]))
+            .collect(),
+    )
+}
+
 /// The triangles of a face, counterclockwise seen from the front.
 pub(super) fn triangulate_face(
     id: FaceId,
@@ -206,7 +255,10 @@ pub(super) fn triangulate_face(
         .loops()
         .map(|l| l.iter().map(|v| f.plane.project(pos(*v))).collect())
         .collect();
-    let triangles = triangulate_rings(&rings)?;
+    let triangles = match triangulate_rings(&rings) {
+        Some(t) => t,
+        None => spliced(f, &vertices, &pos)?,
+    };
     Some(FaceTriangles {
         face: id,
         normal: f.plane.normal,

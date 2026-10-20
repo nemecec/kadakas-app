@@ -741,6 +741,15 @@ impl Shape {
         }
     }
 
+    /// Moves the shape in 3D. A surface model moves in `z` too; the other shapes move in the plan
+    /// only (their heights come from their layer and their own fields).
+    pub fn translate3(&mut self, d: DVec3) {
+        match self {
+            Shape::SurfaceModel(s) => s.translate(d),
+            _ => self.translate(d.truncate()),
+        }
+    }
+
     /// Axis-aligned bounding box as (min, max).
     pub fn bounds(&self) -> (DVec2, DVec2) {
         let from_points = |pts: &[DVec2]| {

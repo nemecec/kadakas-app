@@ -1,8 +1,9 @@
 //! The validity check of a surface model.
 //!
-//! `quick` runs on every load and after every change: ids, references, limits, numbers, planes and
-//! the sides of the loops, in linear time (holes: the size of the hole times the size of the outer
-//! loop). `full` adds the distances (no two vertices, no vertex and edge, no two edges closer than
+//! `quick` runs on every load and after every change: ids, references, limits, numbers, planes,
+//! the sides of the loops, curves, and coplanar faces that overlap at an edge, in `O(n log n)`
+//! time (holes: the size of the hole times the size of the outer loop). The plane test is the one
+//! that the edits use, so a face is valid exactly when the edits see it in its plane. `full` adds the distances (no two vertices, no vertex and edge, no two edges closer than
 //! half the length tolerance unless they meet), overlapping faces, and the manifold state of each
 //! edge, which the solid tools (MOD-09) need.
 
@@ -71,6 +72,10 @@ pub enum Problem {
     ShortEdge(EdgeId),
     #[error("faces {0} and {1} overlap at edge {2}")]
     Overlap(FaceId, FaceId, EdgeId),
+    #[error("curve {0} names an edge that does not exist or is in another curve, or is no chain")]
+    BadCurve(super::CurveId),
+    #[error("edge {0} has attributes but does not exist")]
+    EdgeAttrs(EdgeId),
 }
 
 /// The result of [`SurfaceModel::check`].
@@ -141,15 +146,18 @@ pub(super) fn full(m: &SurfaceModel) -> Report {
     }
     if ok {
         distances(m, &mut r.problems);
-        overlaps(m, &uses, &mut r.problems);
     }
     r
 }
 
 /// Calls `found` for each problem of the fast checks; stops when it returns false.
+// `clean` is set by every report; after the reports that end the check it is not read.
+#[allow(unused_assignments)]
 fn structure(m: &SurfaceModel, found: &mut dyn FnMut(Problem) -> bool) {
+    let mut clean = true;
     macro_rules! report {
         ($p:expr) => {
+            clean = false;
             if !found($p) {
                 return;
             }
@@ -185,7 +193,8 @@ fn structure(m: &SurfaceModel, found: &mut dyn FnMut(Problem) -> bool) {
         .keys()
         .map(|v| v.0)
         .chain(m.edges.keys().map(|e| e.0))
-        .chain(m.faces.keys().map(|f| f.0));
+        .chain(m.faces.keys().map(|f| f.0))
+        .chain(m.curves.keys().map(|c| c.0));
     for id in all {
         if id == 0 || id >= m.next_id || !ids.insert(id) {
             report!(Problem::BadId(id));
@@ -254,11 +263,13 @@ fn structure(m: &SurfaceModel, found: &mut dyn FnMut(Problem) -> bool) {
         if broken {
             continue;
         }
-        // Twice the plane tolerance: a face that a nearly equal plane split stays valid.
-        if let Some(v) = f.loops().flatten().find(|v| {
-            let p = m.vertices[v];
-            f.plane.distance(p).abs() > 2.0 * geom::plane_tolerance_at(geom::size(p))
-        }) {
+        // The same test as the edits use, so a face is valid exactly when the edits see it in
+        // its plane.
+        if let Some(v) = f
+            .loops()
+            .flatten()
+            .find(|v| !geom::on_plane(&f.plane, m.vertices[v]))
+        {
             report!(Problem::OffPlane(id, *v));
             continue;
         }
@@ -283,6 +294,50 @@ fn structure(m: &SurfaceModel, found: &mut dyn FnMut(Problem) -> bool) {
             }
         }
     }
+    if let Some(e) = m.edge_attrs.keys().find(|e| !m.edges.contains_key(e)) {
+        report!(Problem::EdgeAttrs(*e));
+    }
+    if let Some(p) = curves(m) {
+        report!(p);
+    }
+    if clean {
+        let mut uses: BTreeMap<(VertexId, VertexId), Vec<(FaceId, bool)>> = BTreeMap::new();
+        for (&id, f) in &m.faces {
+            for (a, b) in f.uses() {
+                uses.entry(key(a, b)).or_default().push((id, a < b));
+            }
+        }
+        for (k, list) in &uses {
+            if let Some(p) = overlap(m, *k, list, &pairs) {
+                report!(p);
+            }
+        }
+    }
+}
+
+/// The first problem of the curves: an edge that does not exist, an edge in two curves or twice,
+/// an empty curve, or edges that are not a chain.
+pub(super) fn curves(m: &SurfaceModel) -> Option<Problem> {
+    let mut seen: BTreeSet<EdgeId> = BTreeSet::new();
+    for (&id, es) in &m.curves {
+        let bad = Some(Problem::BadCurve(id));
+        if es.is_empty()
+            || es
+                .iter()
+                .any(|e| !m.edges.contains_key(e) || !seen.insert(*e))
+        {
+            return bad;
+        }
+        if es.windows(2).any(|w| {
+            !m.edges[&w[0]]
+                .v
+                .iter()
+                .any(|v| m.edges[&w[1]].v.contains(v))
+        }) {
+            return bad;
+        }
+    }
+    None
 }
 
 /// The distance checks, with a sweep along x.
@@ -375,28 +430,27 @@ fn distances(m: &SurfaceModel, out: &mut Vec<Problem>) {
 }
 
 /// Two coplanar faces on the same side of an edge overlap.
-fn overlaps(
+fn overlap(
     m: &SurfaceModel,
-    uses: &BTreeMap<(VertexId, VertexId), Vec<(FaceId, bool)>>,
-    out: &mut Vec<Problem>,
-) {
+    k: (VertexId, VertexId),
+    list: &[(FaceId, bool)],
+    pairs: &BTreeMap<(VertexId, VertexId), EdgeId>,
+) -> Option<Problem> {
     let on = |p: &Plane, f: FaceId| {
         m.faces[&f]
             .loops()
             .flatten()
             .all(|v| geom::on_plane(p, m.vertices[v]))
     };
-    for (k, list) in uses {
-        for (i, &(f, fa)) in list.iter().enumerate() {
-            let pf = m.faces[&f].plane;
-            for &(g, ga) in &list[i + 1..] {
-                let pg = m.faces[&g].plane;
-                let same_side = (fa == ga) == (pf.normal.dot(pg.normal) > 0.0);
-                if same_side && on(&pf, g) {
-                    let e = m.edge_between(k.0, k.1).expect("a used edge exists");
-                    out.push(Problem::Overlap(f, g, e));
-                }
+    for (i, &(f, fa)) in list.iter().enumerate() {
+        let pf = m.faces[&f].plane;
+        for &(g, ga) in &list[i + 1..] {
+            let pg = m.faces[&g].plane;
+            let same_side = (fa == ga) == (pf.normal.dot(pg.normal) > 0.0);
+            if same_side && on(&pf, g) {
+                return Some(Problem::Overlap(f, g, pairs[&k]));
             }
         }
     }
+    None
 }

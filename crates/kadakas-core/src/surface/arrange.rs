@@ -262,25 +262,47 @@ impl Arrangement {
             .collect()
     }
 
-    /// A point well inside a region: the middle of its largest triangle.
+    /// A point well inside a region (see [`sample_rings`]).
     pub fn sample(&self, r: &Region) -> Result<DVec2, SurfaceError> {
-        let rings = self.rings(r);
-        let flat: Vec<DVec2> = rings.iter().flatten().copied().collect();
-        let tris = geom::triangulate_rings(&rings).unwrap_or_default();
-        tris.iter()
-            .map(|t| {
-                let (a, b, c) = (
-                    flat[t[0] as usize],
-                    flat[t[1] as usize],
-                    flat[t[2] as usize],
-                );
-                ((b - a).perp_dot(c - a), (a + b + c) / 3.0)
-            })
-            .filter(|(area, _)| *area > 0.0)
-            .max_by(|x, y| x.0.total_cmp(&y.0))
-            .map(|(_, p)| p)
-            .ok_or_else(|| SurfaceError::Unsolved("a region cannot be cut into triangles".into()))
+        sample_rings(&self.rings(r))
+            .ok_or_else(|| SurfaceError::Unsolved("a region has no inside".into()))
     }
+}
+
+/// A point inside the area of rings (even-odd: inside the outer ring, outside the holes), with no
+/// triangulation, so loops that touch at a vertex work. A horizontal line between two vertex
+/// heights cuts the rings into spans; the middle of the widest span on the lines through the
+/// largest gaps between the heights is taken.
+pub(super) fn sample_rings(rings: &[Vec<DVec2>]) -> Option<DVec2> {
+    let mut ys: Vec<f64> = rings.iter().flatten().map(|p| p.y).collect();
+    ys.sort_by(f64::total_cmp);
+    ys.dedup();
+    let mut gaps: Vec<(f64, f64)> = ys
+        .windows(2)
+        .map(|w| (w[1] - w[0], (w[0] + w[1]) / 2.0))
+        .collect();
+    gaps.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.total_cmp(&b.1)));
+    let mut best: Option<(f64, DVec2)> = None;
+    for &(_, y) in gaps.iter().take(16) {
+        let mut xs: Vec<f64> = Vec::new();
+        for ring in rings {
+            let n = ring.len();
+            for i in 0..n {
+                let (a, b) = (ring[i], ring[(i + 1) % n]);
+                if (a.y > y) != (b.y > y) {
+                    xs.push(a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x));
+                }
+            }
+        }
+        xs.sort_by(f64::total_cmp);
+        for [a, b] in xs.as_chunks::<2>().0 {
+            let w = b - a;
+            if w > 0.0 && best.is_none_or(|(bw, _)| w > bw) {
+                best = Some((w, DVec2::new((a + b) / 2.0, y)));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 /// The box of 2D points.
