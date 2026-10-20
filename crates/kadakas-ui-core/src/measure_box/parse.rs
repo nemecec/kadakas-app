@@ -20,6 +20,12 @@ pub fn parse(text: &str, units: &Units, tool: Tool, phase: Phase) -> Result<Valu
         && acc.takes(super::Kind::Length)
         && let Some(l) = comma_as_decimal(text, units)
     {
+        // `1,000` could be a thousands group: do not guess.
+        if looks_like_thousands(text) {
+            return Err(InputError::AmbiguousComma {
+                text: text.trim().to_string(),
+            });
+        }
         v = Value::Length(l);
     }
     // A rectangle takes one length as the first value of the pair.
@@ -47,6 +53,16 @@ pub fn parse(text: &str, units: &Units, tool: Tool, phase: Phase) -> Result<Valu
         return Err(InputError::Negative);
     }
     Ok(v)
+}
+
+/// Digits, one comma, exactly three digits (`1,000`, `-12,345`): a thousands group in some
+/// settings and a decimal comma in others.
+fn looks_like_thousands(text: &str) -> bool {
+    let t = text.trim().trim_start_matches(['-', '+']);
+    match t.split_once(',') {
+        Some((a, b)) => all_digits(a) && b.len() == 3 && all_digits(b),
+        None => false,
+    }
 }
 
 /// `1,5` as one and a half, for a text with a point as decimal separator.
@@ -97,6 +113,10 @@ pub fn parse_any(text: &str, units: &Units, bare: Bare) -> Result<Value, InputEr
                     Bare::Length => Value::Length(length(t, units, &nf)?),
                     Bare::Angle => Value::Angle(nf.parse(t).ok_or_else(not_a_value)?),
                     Bare::PairFirst => Value::Pair(Some(length(t, units, &nf)?), None),
+                    Bare::Sides => match bare_sides(t) {
+                        Some(r) => r?,
+                        None => Value::Length(length(t, units, &nf)?),
+                    },
                 }
             } else {
                 Value::Length(length(t, units, &nf)?)
@@ -104,6 +124,20 @@ pub fn parse_any(text: &str, units: &Units, bare: Bare) -> Result<Value, InputEr
         }
     };
     finite(v)
+}
+
+/// A bare whole number as the number of sides. `None` for a text that is not a whole number
+/// (a length with a unit or a decimal goes on to the length reading).
+fn bare_sides(t: &str) -> Option<Result<Value, InputError>> {
+    if !all_digits(t) {
+        return None;
+    }
+    let n = whole(t);
+    Some(if (MIN_SIDES..=MAX_SIDES).contains(&n) {
+        Ok(Value::Sides(n))
+    } else {
+        Err(InputError::SidesRange)
+    })
 }
 
 pub(super) fn finite(v: Value) -> Result<Value, InputError> {

@@ -83,7 +83,7 @@ pub(crate) struct PointItem {
     pub tag: Tag,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct EdgeItem {
     pub a: DVec3,
     pub b: DVec3,
@@ -106,7 +106,7 @@ impl FaceItem {
     }
 }
 
-/// A scene under construction.
+/// A scene under construction. It owns its data and is `Send`, so a worker thread can build it.
 #[derive(Clone, Debug, Default)]
 pub struct SceneBuilder {
     points: Vec<PointItem>,
@@ -141,9 +141,32 @@ impl SceneBuilder {
 
     /// A planar face from its outer loop and its holes. The face is a hit target for "on face"
     /// and for the intersections of edges with it. A face with fewer than three points or no area
-    /// is left out. A regular polygon (all corners on a circle, all sides equal) also gives its
-    /// center as a point.
+    /// is left out. It gives no center point: a rectangle or a square has none. For the face of
+    /// a circle or a regular polygon use [`SceneBuilder::add_polygon_face`].
     pub fn add_face(&mut self, outer: Vec<DVec3>, holes: Vec<Vec<DVec3>>, tag: Tag) -> &mut Self {
+        self.push_face(outer, holes, tag, false)
+    }
+
+    /// A face that is the inside of a circle or a regular polygon (a curve). Like
+    /// [`SceneBuilder::add_face`], and when all corners lie on a circle with equal sides (and
+    /// there are no holes) the center is a point to snap to. A surface model gets the centers of
+    /// its curves from [`SceneBuilder::add_surface_model`].
+    pub fn add_polygon_face(
+        &mut self,
+        outer: Vec<DVec3>,
+        holes: Vec<Vec<DVec3>>,
+        tag: Tag,
+    ) -> &mut Self {
+        self.push_face(outer, holes, tag, true)
+    }
+
+    fn push_face(
+        &mut self,
+        outer: Vec<DVec3>,
+        holes: Vec<Vec<DVec3>>,
+        tag: Tag,
+        curve: bool,
+    ) -> &mut Self {
         if outer.len() < 3 || !outer.iter().all(|p| p.is_finite()) {
             return self;
         }
@@ -163,7 +186,8 @@ impl SceneBuilder {
         } else {
             2
         };
-        if holes.is_empty()
+        if curve
+            && holes.is_empty()
             && let Some(c) = regular_center(&outer)
         {
             self.points.push(PointItem {
@@ -339,6 +363,14 @@ pub struct Scene {
 }
 
 impl Scene {
+    /// Builds the scene of one surface model from owned data. Call it on a worker thread (the
+    /// model is moved in, the scene is `Send`) and hand the scene to the UI thread.
+    pub fn from_surface_model(m: SurfaceModel, model: u32) -> Scene {
+        let mut b = SceneBuilder::new();
+        b.add_surface_model(&m, model);
+        b.finish()
+    }
+
     pub fn edge_count(&self) -> usize {
         self.edges.len()
     }
@@ -397,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn a_regular_face_has_a_center_and_a_rectangle_has_none() {
+    fn only_a_polygon_face_has_a_center() {
         let mut b = SceneBuilder::new();
         let sq = |w: f64, h: f64| {
             vec![
@@ -407,10 +439,12 @@ mod tests {
                 DVec3::new(0.0, h, 0.0),
             ]
         };
-        b.add_face(sq(10.0, 10.0), vec![], Tag(1));
-        b.add_face(sq(10.0, 20.0), vec![], Tag(2));
+        // A plain face (a square from the rectangle tool) has no center.
+        b.add_face(sq(10.0, 10.0), vec![], Tag(3));
+        b.add_polygon_face(sq(10.0, 10.0), vec![], Tag(1));
+        b.add_polygon_face(sq(10.0, 20.0), vec![], Tag(2));
         let s = b.finish();
-        assert_eq!(s.face_count(), 2);
+        assert_eq!(s.face_count(), 3);
         assert_eq!(s.point_count(), 1);
         assert!(s.points[0].p.distance(DVec3::new(5.0, 5.0, 0.0)) < 1e-9);
         assert_eq!(s.points[0].kind, PointKind::Center);
@@ -440,8 +474,8 @@ mod tests {
         let s = b.finish();
         assert_eq!(s.edge_count(), 12);
         assert_eq!(s.face_count(), 1);
-        // The curve center and the regular face center.
-        assert_eq!(s.point_count(), 2);
+        // The curve center only: the face adds none.
+        assert_eq!(s.point_count(), 1);
         for p in &s.points {
             assert!(p.p.distance(DVec3::new(100.0, 0.0, 0.0)) < 1e-6);
         }

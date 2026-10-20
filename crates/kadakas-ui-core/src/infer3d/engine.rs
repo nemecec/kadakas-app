@@ -5,9 +5,9 @@ use std::cmp::Ordering;
 use glam::{DVec2, DVec3};
 
 use super::bvh::Aabb;
-use super::camera::Camera;
+use super::camera::{Camera, Ray};
 use super::math::{inside_loops, line_line, nearest_on_screen_seg, ray_plane};
-use super::scene::{PointKind, Scene, Tag};
+use super::scene::{EdgeItem, FaceItem, PointKind, Scene, Tag};
 use super::{Axis, Constraint, ConstraintLine, Inference, Kind, Options};
 
 /// The keys that the inference reacts to.
@@ -63,7 +63,9 @@ struct Cand {
     source: Tag,
     other: Tag,
     /// The scene edge the candidate belongs to.
-    edge: Option<usize>,
+    edge: Option<EdgeItem>,
+    /// The normal of the face (for an on-face candidate).
+    normal: Option<DVec3>,
 }
 
 fn cmp_cand(a: &Cand, b: &Cand) -> Ordering {
@@ -77,10 +79,6 @@ fn cmp_cand(a: &Cand, b: &Cand) -> Ordering {
         .then(a.point.z.total_cmp(&b.point.z))
         .then(a.source.cmp(&b.source))
         .then(a.other.cmp(&b.other))
-}
-
-fn best(cands: impl Iterator<Item = Cand>) -> Option<Cand> {
-    cands.min_by(cmp_cand)
 }
 
 /// A line inference that is within the angle tolerance.
@@ -124,19 +122,112 @@ impl Default for Inferencer {
     }
 }
 
-/// True when the box may be inside the pad around the pixel.
-fn overlaps_rect(cam: &Camera, b: &Aabb, c: DVec2, pad: f64) -> bool {
+/// True when the part of the box in front of the near plane may be inside the pad around the
+/// pixel. The box is cut at the near plane; a box fully behind the camera is never inside.
+pub(super) fn overlaps_rect(cam: &Camera, b: &Aabb, c: DVec2, pad: f64) -> bool {
+    let corners = b.corners();
+    let depth: [f64; 8] = corners.map(|p| cam.depth(p));
+    let near = cam.near;
     let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
-    for corner in b.corners() {
-        let h = cam.hc(corner);
-        if h.depth <= cam.near {
-            return true;
+    let mut any = false;
+    let mut add = |p: DVec3| {
+        let px = cam.pixel(cam.hc(p));
+        lo = lo.min(px);
+        hi = hi.max(px);
+        any = true;
+    };
+    for k in 0..8 {
+        if depth[k] > near {
+            add(corners[k]);
         }
-        let p = cam.pixel(h);
-        lo = lo.min(p);
-        hi = hi.max(p);
+        // The twelve edges of the box join the corners that differ in one bit of the index.
+        for bit in [1usize, 2, 4] {
+            let m = k | bit;
+            if m != k && (depth[k] > near) != (depth[m] > near) {
+                let t = ((near - depth[k]) / (depth[m] - depth[k])).clamp(0.0, 1.0);
+                add(corners[k].lerp(corners[m], t));
+            }
+        }
     }
-    hi.x >= c.x - pad && lo.x <= c.x + pad && hi.y >= c.y - pad && lo.y <= c.y + pad
+    any && hi.x >= c.x - pad && lo.x <= c.x + pad && hi.y >= c.y - pad && lo.y <= c.y + pad
+}
+
+/// What the engine looks at: the scenes, what to leave out and the tolerance.
+struct Ctx<'a> {
+    scenes: &'a [&'a Scene],
+    skip: &'a dyn Fn(Tag) -> bool,
+    eps: f64,
+}
+
+/// The nearest face along a ray.
+struct Hit {
+    t: f64,
+    normal: DVec3,
+    tag: Tag,
+}
+
+impl<'a> Ctx<'a> {
+    fn new(scenes: &'a [&'a Scene], skip: &'a dyn Fn(Tag) -> bool) -> Ctx<'a> {
+        let eps = scenes.iter().map(|s| s.eps()).fold(0.0, f64::max);
+        Ctx { scenes, skip, eps }
+    }
+
+    /// The nearest face along the ray, over all scenes (an equal distance goes to the smaller
+    /// tag).
+    fn first_hit(&self, ray: &Ray) -> Option<Hit> {
+        let mut best_hit: Option<Hit> = None;
+        for scene in self.scenes {
+            scene.bvh_faces.query(
+                &|b| b.ray_enter(ray.origin, ray.dir, self.eps).is_some(),
+                &mut |i| {
+                    let f = &scene.faces[i as usize];
+                    if (self.skip)(f.tag) {
+                        return;
+                    }
+                    let Some(t) = ray_plane(ray.origin, ray.dir, f.origin(), f.normal) else {
+                        return;
+                    };
+                    let p = ray.origin + ray.dir * t;
+                    if !inside_loops(p, &f.loops, f.drop) {
+                        return;
+                    }
+                    let better = match &best_hit {
+                        None => true,
+                        Some(h) => t < h.t || (t == h.t && f.tag < h.tag),
+                    };
+                    if better {
+                        best_hit = Some(Hit {
+                            t,
+                            normal: f.normal,
+                            tag: f.tag,
+                        });
+                    }
+                },
+            );
+        }
+        best_hit
+    }
+
+    /// False when a face hides the candidate: the first face along the ray through the pixel of
+    /// the candidate is nearer than the candidate.
+    fn visible(&self, cam: &Camera, c: &Cand) -> bool {
+        let Some(px) = cam.project(c.point) else {
+            return false;
+        };
+        let ray = cam.ray(px);
+        let t = (c.point - ray.origin).dot(ray.dir);
+        match self.first_hit(&ray) {
+            None => true,
+            Some(h) => h.t >= t - self.eps.max(1e-6 * t.abs()),
+        }
+    }
+
+    /// The best candidate, in the order of `cmp_cand`, that passes `pred` and is not hidden.
+    fn pick(&self, cam: &Camera, cands: &[Cand], pred: impl Fn(&Cand) -> bool) -> Option<Cand> {
+        let mut v: Vec<Cand> = cands.iter().copied().filter(|c| pred(c)).collect();
+        v.sort_by(cmp_cand);
+        v.into_iter().find(|c| self.visible(cam, c))
+    }
 }
 
 /// The point of the line nearest to the pixel on the screen (perspective correct).
@@ -333,19 +424,29 @@ impl Inferencer {
         let Some(c) = l.constraint else {
             return false;
         };
-        let spec = match (l.kind, c) {
+        // With a reference point, a point (an endpoint, a midpoint or a center) locks the
+        // direction from the reference point through it; without one, the point itself.
+        let through = match (l.kind, self.last_ref) {
+            (Kind::Endpoint | Kind::Midpoint | Kind::Center, Some(r)) => {
+                (l.point - r).try_normalize()
+            }
+            _ => None,
+        };
+        let (spec, kind) = match (l.kind, c, through) {
+            (_, _, Some(dir)) => (Spec::Dir(dir), Kind::ThroughPoint),
             (
                 Kind::OnAxis(_) | Kind::Parallel | Kind::Perpendicular,
                 Constraint::Line { dir, .. },
-            ) => Spec::Dir(dir),
-            _ => Spec::Fixed(c),
+                _,
+            ) => (Spec::Dir(dir), l.kind),
+            _ => (Spec::Fixed(c), l.kind),
         };
         let helper = matches!(l.kind, Kind::Parallel | Kind::Perpendicular)
             .then(|| self.hover.map(|h| (h.a, h.b)))
             .flatten();
         self.lock = Some(Lock {
             spec,
-            kind: l.kind,
+            kind,
             source: l.source,
             other: l.other,
             helper,
@@ -363,6 +464,23 @@ impl Inferencer {
         cursor: DVec2,
         reference: Option<DVec3>,
     ) -> Inference {
+        self.infer_scenes(&[scene], cam, cursor, reference, &|_| false)
+    }
+
+    /// Like [`Inferencer::infer`] over several scenes (one per model, so an edit rebuilds only
+    /// its own scene) and with geometry left out: `skip` gets the tag of every point, edge and
+    /// face and returns true for the ones that must not be offered or hide anything (the
+    /// geometry that a move or a push/pull is working on).
+    pub fn infer_scenes(
+        &mut self,
+        scenes: &[&Scene],
+        cam: &Camera,
+        cursor: DVec2,
+        reference: Option<DVec3>,
+        skip: &dyn Fn(Tag) -> bool,
+    ) -> Inference {
+        let ctx = Ctx::new(scenes, skip);
+        let scene = &ctx;
         self.last_ref = reference;
         let active = self.lock.filter(|l| match l.spec {
             Spec::Dir(_) => reference.is_some(),
@@ -421,163 +539,182 @@ impl Inferencer {
 
     // ----- candidates -------------------------------------------------------------------------
 
-    /// The edges near the pointer: (pixel distance, index), nearest first. Also pushes the point
+    /// The edges near the pointer: (pixel distance, edge), nearest first. Also pushes the point
     /// candidates that edges give (when `cands` is given).
     fn edges_near(
         &self,
-        scene: &Scene,
+        ctx: &Ctx,
         cam: &Camera,
         cursor: DVec2,
         mut cands: Option<&mut Vec<Cand>>,
-    ) -> Vec<(f64, usize)> {
+    ) -> Vec<(f64, EdgeItem)> {
         let o = &self.options;
         let pad = o.pad();
         let reach = o.px(o.edge_px.max(o.intersection_px));
         let (ep, mp, edp) = (o.px(o.endpoint_px), o.px(o.midpoint_px), o.px(o.edge_px));
-        let mut near: Vec<(f64, usize)> = Vec::new();
-        scene
-            .bvh_edges
-            .query(&|b| overlaps_rect(cam, b, cursor, pad), &mut |i| {
-                let e = &scene.edges[i as usize];
-                let Some(seg) = cam.screen_seg(e.a, e.b) else {
-                    return;
-                };
-                let (s, d) = nearest_on_screen_seg(cursor, seg.p[0], seg.p[1]);
-                if d <= reach {
-                    near.push((d, i as usize));
-                }
-                let Some(cands) = cands.as_deref_mut() else {
-                    return;
-                };
-                let mut push = |kind: Kind, point: DVec3, dist: f64| {
-                    cands.push(Cand {
-                        kind,
-                        point,
-                        dist,
-                        depth: cam.depth(point),
-                        source: e.tag,
-                        other: Tag::NONE,
-                        edge: Some(i as usize),
-                    });
-                };
-                if seg.t[0] == 0.0 {
-                    let dd = (seg.p[0] - cursor).length();
-                    if dd <= ep {
-                        push(Kind::Endpoint, e.a, dd);
+        let mut near: Vec<(f64, EdgeItem)> = Vec::new();
+        for scene in ctx.scenes {
+            scene
+                .bvh_edges
+                .query(&|b| overlaps_rect(cam, b, cursor, pad), &mut |i| {
+                    let e = scene.edges[i as usize];
+                    if (ctx.skip)(e.tag) {
+                        return;
                     }
-                }
-                if seg.t[1] == 1.0 {
-                    let dd = (seg.p[1] - cursor).length();
-                    if dd <= ep {
-                        push(Kind::Endpoint, e.b, dd);
+                    let Some(seg) = cam.screen_seg(e.a, e.b) else {
+                        return;
+                    };
+                    let (s, d) = nearest_on_screen_seg(cursor, seg.p[0], seg.p[1]);
+                    if d <= reach {
+                        near.push((d, e));
                     }
-                }
-                if seg.t[0] <= 0.5 && 0.5 <= seg.t[1] {
-                    let m = e.a.lerp(e.b, 0.5);
-                    if let Some(px) = cam.project(m) {
-                        let dd = (px - cursor).length();
-                        if dd <= mp {
-                            push(Kind::Midpoint, m, dd);
+                    let Some(cands) = cands.as_deref_mut() else {
+                        return;
+                    };
+                    let mut push = |kind: Kind, point: DVec3, dist: f64| {
+                        cands.push(Cand {
+                            kind,
+                            point,
+                            dist,
+                            depth: cam.depth(point),
+                            source: e.tag,
+                            other: Tag::NONE,
+                            edge: Some(e),
+                            normal: None,
+                        });
+                    };
+                    if seg.t[0] == 0.0 {
+                        let dd = (seg.p[0] - cursor).length();
+                        if dd <= ep {
+                            push(Kind::Endpoint, e.a, dd);
                         }
                     }
-                }
-                if d <= edp {
-                    push(Kind::OnEdge, e.a.lerp(e.b, seg.world_param(s)), d);
-                }
-            });
-        near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                    if seg.t[1] == 1.0 {
+                        let dd = (seg.p[1] - cursor).length();
+                        if dd <= ep {
+                            push(Kind::Endpoint, e.b, dd);
+                        }
+                    }
+                    if seg.t[0] <= 0.5 && 0.5 <= seg.t[1] {
+                        let m = e.a.lerp(e.b, 0.5);
+                        if let Some(px) = cam.project(m) {
+                            let dd = (px - cursor).length();
+                            if dd <= mp {
+                                push(Kind::Midpoint, m, dd);
+                            }
+                        }
+                    }
+                    if d <= edp {
+                        push(Kind::OnEdge, e.a.lerp(e.b, seg.world_param(s)), d);
+                    }
+                });
+        }
+        // The same order for any order of the geometry.
+        near.sort_by(|x, y| {
+            x.0.total_cmp(&y.0)
+                .then(x.1.tag.cmp(&y.1.tag))
+                .then(x.1.a.x.total_cmp(&y.1.a.x))
+                .then(x.1.a.y.total_cmp(&y.1.a.y))
+                .then(x.1.a.z.total_cmp(&y.1.a.z))
+                .then(x.1.b.x.total_cmp(&y.1.b.x))
+                .then(x.1.b.y.total_cmp(&y.1.b.y))
+                .then(x.1.b.z.total_cmp(&y.1.b.z))
+        });
         near.truncate(o.max_near_edges);
         near
     }
 
-    fn explicit_points(&self, scene: &Scene, cam: &Camera, cursor: DVec2, cands: &mut Vec<Cand>) {
+    fn explicit_points(&self, ctx: &Ctx, cam: &Camera, cursor: DVec2, cands: &mut Vec<Cand>) {
         let o = &self.options;
-        scene
-            .bvh_points
-            .query(&|b| overlaps_rect(cam, b, cursor, o.pad()), &mut |i| {
-                let it = &scene.points[i as usize];
-                let Some(px) = cam.project(it.p) else {
-                    return;
-                };
-                let d = (px - cursor).length();
-                let (kind, r) = match it.kind {
-                    PointKind::Endpoint => (Kind::Endpoint, o.endpoint_px),
-                    PointKind::Center => (Kind::Center, o.center_px),
-                };
-                if d <= o.px(r) {
-                    cands.push(Cand {
-                        kind,
-                        point: it.p,
-                        dist: d,
-                        depth: cam.depth(it.p),
-                        source: it.tag,
-                        other: Tag::NONE,
-                        edge: None,
-                    });
-                }
-            });
+        for scene in ctx.scenes {
+            scene
+                .bvh_points
+                .query(&|b| overlaps_rect(cam, b, cursor, o.pad()), &mut |i| {
+                    let it = &scene.points[i as usize];
+                    if (ctx.skip)(it.tag) {
+                        return;
+                    }
+                    let Some(px) = cam.project(it.p) else {
+                        return;
+                    };
+                    let d = (px - cursor).length();
+                    let (kind, r) = match it.kind {
+                        PointKind::Endpoint => (Kind::Endpoint, o.endpoint_px),
+                        PointKind::Center => (Kind::Center, o.center_px),
+                    };
+                    if d <= o.px(r) {
+                        cands.push(Cand {
+                            kind,
+                            point: it.p,
+                            dist: d,
+                            depth: cam.depth(it.p),
+                            source: it.tag,
+                            other: Tag::NONE,
+                            edge: None,
+                            normal: None,
+                        });
+                    }
+                });
+        }
     }
 
-    /// The faces near the pointer, in index order.
-    fn faces_near(&self, scene: &Scene, cam: &Camera, cursor: DVec2) -> Vec<usize> {
+    /// The faces near the pointer: the nearest ones on the screen, at most `max_near_faces`.
+    /// (The distance is from the pixel to the box of the projected outer loop; 0 when it is
+    /// inside or the face reaches behind the near plane.)
+    fn faces_near<'s>(&self, ctx: &Ctx<'s>, cam: &Camera, cursor: DVec2) -> Vec<&'s FaceItem> {
         let o = &self.options;
-        let mut faces = Vec::new();
-        scene
-            .bvh_faces
-            .query(&|b| overlaps_rect(cam, b, cursor, o.pad()), &mut |i| {
-                faces.push(i as usize)
-            });
-        faces.sort_unstable();
+        let mut faces: Vec<(f64, &FaceItem)> = Vec::new();
+        for scene in ctx.scenes {
+            scene
+                .bvh_faces
+                .query(&|b| overlaps_rect(cam, b, cursor, o.pad()), &mut |i| {
+                    let f = &scene.faces[i as usize];
+                    if (ctx.skip)(f.tag) {
+                        return;
+                    }
+                    faces.push((screen_distance(cam, f, cursor), f));
+                });
+        }
+        faces.sort_by(|a, b| {
+            a.0.total_cmp(&b.0)
+                .then(a.1.tag.cmp(&b.1.tag))
+                .then(a.1.loops[0][0].x.total_cmp(&b.1.loops[0][0].x))
+                .then(a.1.loops[0][0].y.total_cmp(&b.1.loops[0][0].y))
+                .then(a.1.loops[0][0].z.total_cmp(&b.1.loops[0][0].z))
+        });
         faces.truncate(o.max_near_faces);
-        faces
+        faces.into_iter().map(|(_, f)| f).collect()
     }
 
-    /// The nearest face along the ray.
-    fn face_hit(&self, scene: &Scene, cam: &Camera, cursor: DVec2) -> Option<Cand> {
+    /// The nearest face along the pointer ray.
+    fn face_hit(&self, ctx: &Ctx, cam: &Camera, cursor: DVec2) -> Option<Cand> {
         let ray = cam.ray(cursor);
-        let mut best_hit: Option<(f64, usize)> = None;
-        scene.bvh_faces.query(
-            &|b| b.ray_enter(ray.origin, ray.dir, scene.eps()).is_some(),
-            &mut |i| {
-                let f = &scene.faces[i as usize];
-                let Some(t) = ray_plane(ray.origin, ray.dir, f.origin(), f.normal) else {
-                    return;
-                };
-                let p = ray.origin + ray.dir * t;
-                if !inside_loops(p, &f.loops, f.drop) {
-                    return;
-                }
-                let better = match best_hit {
-                    None => true,
-                    Some((bt, bi)) => t < bt || (t == bt && f.tag < scene.faces[bi].tag),
-                };
-                if better {
-                    best_hit = Some((t, i as usize));
-                }
-            },
-        );
-        best_hit.map(|(t, i)| Cand {
-            kind: Kind::OnFace,
-            point: ray.origin + ray.dir * t,
-            dist: 0.0,
-            depth: cam.depth(ray.origin + ray.dir * t),
-            source: scene.faces[i].tag,
-            other: Tag::NONE,
-            edge: None,
+        ctx.first_hit(&ray).map(|h| {
+            let point = ray.origin + ray.dir * h.t;
+            Cand {
+                kind: Kind::OnFace,
+                point,
+                dist: 0.0,
+                depth: cam.depth(point),
+                source: h.tag,
+                other: Tag::NONE,
+                edge: None,
+                normal: Some(h.normal),
+            }
         })
     }
 
     /// Crossings of the edges near the pointer with each other and with the faces near them.
     fn crossings(
         &self,
-        scene: &Scene,
+        ctx: &Ctx,
         cam: &Camera,
         cursor: DVec2,
-        near: &[(f64, usize)],
+        near: &[(f64, EdgeItem)],
         cands: &mut Vec<Cand>,
     ) {
         let reach = self.options.px(self.options.intersection_px);
-        let eps = scene.eps();
+        let eps = ctx.eps;
         let mut add = |kind: Kind, p: DVec3, a: Tag, b: Tag| {
             if let Some(px) = cam.project(p) {
                 let d = (px - cursor).length();
@@ -590,16 +727,15 @@ impl Inferencer {
                         source: a,
                         other: b,
                         edge: None,
+                        normal: None,
                     });
                 }
             }
         };
         let inner = |t: f64| t > 1e-6 && t < 1.0 - 1e-6;
-        for (k, (_, i)) in near.iter().enumerate() {
-            let e1 = &scene.edges[*i];
+        for (k, (_, e1)) in near.iter().enumerate() {
             let d1 = e1.b - e1.a;
-            for (_, j) in near.iter().skip(k + 1) {
-                let e2 = &scene.edges[*j];
+            for (_, e2) in near.iter().skip(k + 1) {
                 let d2 = e2.b - e2.a;
                 if let Some((s, t)) = line_line(e1.a, d1, e2.a, d2)
                     && inner(s)
@@ -620,10 +756,8 @@ impl Inferencer {
         if near.is_empty() {
             return;
         }
-        for fi in self.faces_near(scene, cam, cursor) {
-            let f = &scene.faces[fi];
-            for (_, i) in near {
-                let e = &scene.edges[*i];
+        for f in self.faces_near(ctx, cam, cursor) {
+            for (_, e) in near {
                 let (sa, sb) = (
                     (e.a - f.origin()).dot(f.normal),
                     (e.b - f.origin()).dot(f.normal),
@@ -641,21 +775,20 @@ impl Inferencer {
         }
     }
 
-    /// Where a line crosses an edge near the pointer.
+    /// Where a line crosses an edge near the pointer (not hidden by a face).
     fn line_crossing(
         &self,
-        scene: &Scene,
+        ctx: &Ctx,
         cam: &Camera,
         cursor: DVec2,
-        near: &[(f64, usize)],
+        near: &[(f64, EdgeItem)],
         origin: DVec3,
         dir: DVec3,
     ) -> Option<Cand> {
         let reach = self.options.px(self.options.intersection_px);
-        let eps = scene.eps();
+        let eps = ctx.eps;
         let mut found = Vec::new();
-        for (_, i) in near {
-            let e = &scene.edges[*i];
+        for (_, e) in near {
             let d = e.b - e.a;
             let Some((s, t)) = line_line(origin, dir, e.a, d) else {
                 continue;
@@ -679,11 +812,12 @@ impl Inferencer {
                     depth: cam.depth(p2),
                     source: e.tag,
                     other: Tag::NONE,
-                    edge: Some(*i),
+                    edge: Some(*e),
+                    normal: None,
                 });
             }
         }
-        best(found.into_iter())
+        ctx.pick(cam, &found, |_| true)
     }
 
     // ----- linear inferences ------------------------------------------------------------------
@@ -717,7 +851,7 @@ impl Inferencer {
         Some((angle, line_point(cam, cursor, origin, dir)?))
     }
 
-    fn linear(&self, scene: &Scene, cam: &Camera, cursor: DVec2, r: DVec3) -> Option<Linear> {
+    fn linear(&self, ctx: &Ctx, cam: &Camera, cursor: DVec2, r: DVec3) -> Option<Linear> {
         let mut lines: Vec<LineCand> = Vec::new();
         let mut try_line =
             |kind: Kind, origin: DVec3, dir: DVec3, order: u8, from_point: bool, helper| {
@@ -767,7 +901,7 @@ impl Inferencer {
         }
         // Two lines, one from the reference point and one from the paused point, that cross.
         let reach = self.options.px(self.options.intersection_px) * 2.0;
-        let eps = scene.eps();
+        let eps = ctx.eps;
         let mut pair: Option<(f64, u8, u8, usize, usize, DVec3)> = None;
         for (i, a) in lines.iter().enumerate().filter(|(_, l)| !l.from_point) {
             for (j, b) in lines.iter().enumerate().filter(|(_, l)| l.from_point) {
@@ -853,24 +987,25 @@ impl Inferencer {
 
     fn natural(
         &mut self,
-        scene: &Scene,
+        ctx: &Ctx,
         cam: &Camera,
         cursor: DVec2,
         reference: Option<DVec3>,
     ) -> Inference {
         let mut cands: Vec<Cand> = Vec::new();
-        self.explicit_points(scene, cam, cursor, &mut cands);
-        let near = self.edges_near(scene, cam, cursor, Some(&mut cands));
-        self.crossings(scene, cam, cursor, &near, &mut cands);
+        self.explicit_points(ctx, cam, cursor, &mut cands);
+        let near = self.edges_near(ctx, cam, cursor, Some(&mut cands));
+        self.crossings(ctx, cam, cursor, &near, &mut cands);
 
-        // Points first: endpoint, center, midpoint, intersection.
+        // Points first: endpoint, center, midpoint, intersection. A point behind a face is not
+        // offered.
         let mut result: Option<Inference> = None;
-        if let Some(c) = best(cands.iter().copied().filter(|c| c.kind.is_point())) {
+        if let Some(c) = ctx.pick(cam, &cands, |c| c.kind.is_point()) {
             result = Some(self.cand_result(cam, cursor, &c, Vec::new()));
-            self.remember(scene, &c);
+            self.remember(&c);
         }
         let linear = if result.is_none() {
-            reference.and_then(|r| self.linear(scene, cam, cursor, r))
+            reference.and_then(|r| self.linear(ctx, cam, cursor, r))
         } else {
             None
         };
@@ -878,7 +1013,7 @@ impl Inferencer {
         if result.is_none()
             && let Some(l) = &linear
             && let Some((origin, dir, color)) = l.line
-            && let Some(c) = self.line_crossing(scene, cam, cursor, &near, origin, dir)
+            && let Some(c) = self.line_crossing(ctx, cam, cursor, &near, origin, dir)
         {
             let lines = vec![ConstraintLine {
                 from: origin,
@@ -891,17 +1026,16 @@ impl Inferencer {
             result = Some(i);
         }
         if result.is_none()
-            && let Some(c) = best(cands.iter().copied().filter(|c| c.kind == Kind::OnEdge))
+            && let Some(c) = ctx.pick(cam, &cands, |c| c.kind == Kind::OnEdge)
         {
             let mut i = self.cand_result(cam, cursor, &c, Vec::new());
-            if let Some(ei) = c.edge {
-                let e = &scene.edges[ei];
+            if let Some(e) = c.edge {
                 i.constraint = Some(Constraint::Line {
                     origin: e.a,
                     dir: (e.b - e.a).normalize_or_zero(),
                 });
             }
-            self.remember(scene, &c);
+            self.remember(&c);
             result = Some(i);
         }
         if result.is_none()
@@ -916,14 +1050,13 @@ impl Inferencer {
             result = Some(i);
         }
         if result.is_none()
-            && let Some(c) = self.face_hit(scene, cam, cursor)
+            && let Some(c) = self.face_hit(ctx, cam, cursor)
         {
-            let f = scene.faces.iter().find(|f| f.tag == c.source);
             let mut i = self.cand_result(cam, cursor, &c, Vec::new());
-            if let Some(f) = f {
+            if let Some(normal) = c.normal {
                 i.constraint = Some(Constraint::Plane {
                     origin: c.point,
-                    normal: f.normal,
+                    normal,
                 });
             }
             result = Some(i);
@@ -944,11 +1077,10 @@ impl Inferencer {
         self.make(cam, cursor, Kind::Free, point, None, Vec::new())
     }
 
-    fn remember(&mut self, scene: &Scene, c: &Cand) {
+    fn remember(&mut self, c: &Cand) {
         if matches!(c.kind, Kind::OnEdge | Kind::Endpoint | Kind::Midpoint)
-            && let Some(i) = c.edge
+            && let Some(e) = c.edge
         {
-            let e = &scene.edges[i];
             self.hover = Some(Hover {
                 a: e.a,
                 b: e.b,
@@ -960,7 +1092,7 @@ impl Inferencer {
     fn locked(
         &self,
         lock: &Lock,
-        scene: &Scene,
+        ctx: &Ctx,
         cam: &Camera,
         cursor: DVec2,
         reference: Option<DVec3>,
@@ -989,35 +1121,78 @@ impl Inferencer {
                 )
             }
             Constraint::Line { origin, dir } => {
-                let p = line_point(cam, cursor, origin, dir)
-                    .or_else(|| {
-                        line_line(ray.origin, ray.dir, origin, dir).map(|(_, t)| origin + dir * t)
-                    })
-                    .unwrap_or(origin);
+                let mut cands: Vec<Cand> = Vec::new();
+                self.explicit_points(ctx, cam, cursor, &mut cands);
+                let near = self.edges_near(ctx, cam, cursor, Some(&mut cands));
                 let color = lock.kind.color();
-                if p.distance(origin) > 0.0 && matches!(lock.spec, Spec::Dir(_)) {
-                    lines.push(ConstraintLine {
-                        from: origin,
-                        to: p,
-                        color,
-                        dotted: false,
-                    });
-                }
-                if let Some((a, b)) = lock.helper {
-                    lines.push(ConstraintLine {
-                        from: a,
-                        to: b,
-                        color,
-                        dotted: true,
-                    });
-                }
-                let near = self.edges_near(scene, cam, cursor, None);
-                if let Some(c) = self.line_crossing(scene, cam, cursor, &near, origin, dir) {
+                let push_helper = |lines: &mut Vec<ConstraintLine>| {
+                    if let Some((a, b)) = lock.helper {
+                        lines.push(ConstraintLine {
+                            from: a,
+                            to: b,
+                            color,
+                            dotted: true,
+                        });
+                    }
+                };
+                let solid = |lines: &mut Vec<ConstraintLine>, p: DVec3| {
+                    if p.distance(origin) > 0.0 && matches!(lock.spec, Spec::Dir(_)) {
+                        lines.push(ConstraintLine {
+                            from: origin,
+                            to: p,
+                            color,
+                            dotted: false,
+                        });
+                    }
+                };
+                // A line that crosses an edge near the pointer.
+                if let Some(c) = self.line_crossing(ctx, cam, cursor, &near, origin, dir) {
+                    solid(&mut lines, c.point);
+                    push_helper(&mut lines);
                     let mut i = self.cand_result(cam, cursor, &c, lines);
                     i.constraint = Some(Constraint::Point(c.point));
                     i.locked = true;
                     return i;
                 }
+                // An endpoint, midpoint or center under the pointer: its place along the line
+                // (the end of the perpendicular from the point to the line), with a dotted
+                // helper from the point to it.
+                let snap = ctx.pick(cam, &cands, |c| {
+                    matches!(c.kind, Kind::Endpoint | Kind::Midpoint | Kind::Center)
+                });
+                if let Some(c) = snap
+                    && let Some(d) = dir.try_normalize()
+                {
+                    let p = origin + d * (c.point - origin).dot(d);
+                    solid(&mut lines, p);
+                    if p.distance(c.point) > ctx.eps {
+                        lines.push(ConstraintLine {
+                            from: c.point,
+                            to: p,
+                            color,
+                            dotted: true,
+                        });
+                    }
+                    push_helper(&mut lines);
+                    let mut i = self.make(
+                        cam,
+                        cursor,
+                        lock.kind,
+                        p,
+                        Some(Constraint::Line { origin, dir }),
+                        lines,
+                    );
+                    i.locked = true;
+                    i.source = c.source;
+                    return i;
+                }
+                let p = line_point(cam, cursor, origin, dir)
+                    .or_else(|| {
+                        line_line(ray.origin, ray.dir, origin, dir).map(|(_, t)| origin + dir * t)
+                    })
+                    .unwrap_or(origin);
+                solid(&mut lines, p);
+                push_helper(&mut lines);
                 (lock.kind, p, constraint, lock.source, lock.other)
             }
         };
@@ -1027,4 +1202,21 @@ impl Inferencer {
         i.other = other;
         i
     }
+}
+
+/// The distance in pixels from the pixel to the box of the projected outer loop of a face (0
+/// inside the box, and when a corner is not in front of the near plane).
+fn screen_distance(cam: &Camera, f: &FaceItem, cursor: DVec2) -> f64 {
+    let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+    for p in &f.loops[0] {
+        let h = cam.hc(*p);
+        if h.depth <= cam.near {
+            return 0.0;
+        }
+        let px = cam.pixel(h);
+        lo = lo.min(px);
+        hi = hi.max(px);
+    }
+    let d = (lo - cursor).max(cursor - hi).max(DVec2::ZERO);
+    d.length()
 }

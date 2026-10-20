@@ -23,3 +23,4 @@ uic-measure-kind-radius = a radius
 uic-measure-kind-point-abs = an absolute point
 uic-measure-kind-point-rel = a relative point
 uic-measure-kind-none = no typed value
+uic-measure-ambiguous-comma = “{ $text }” could be a decimal comma or a group of thousands. Write 1.5 for a decimal, or the number without the comma.

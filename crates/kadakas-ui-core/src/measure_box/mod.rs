@@ -9,9 +9,9 @@
 //! | `2.5`, `2.5m`, `250cm`, `3'6"`, `5' 6 1/2"` | [`Value::Length`] (mm) | a bare number counts in the document length unit |
 //! | `3;4`, `3,4` | [`Value::Pair`] | `;` always; `,` only when the decimal separator is a point. A value may be empty: `,4` and `3;` |
 //! | `45`, `45°`, `-30`, `8:12` | [`Value::Angle`] (degrees) | `8:12` is a slope, rise to run |
-//! | `5x`, `x5`, `5*`, `*5` | [`Value::Count`] | copies after a copy |
+//! | `5x`, `x5`, `5*`, `*5` | [`Value::Count`] | copies, only after a copy ([`Phase::Copied`]) |
 //! | `/5`, `5/` | [`Value::Divide`] | divides the copies evenly |
-//! | `12s` | [`Value::Sides`] | the number of segments or sides |
+//! | `12s` | [`Value::Sides`] | the number of segments or sides; a bare number before the first click of a circle, polygon or arc |
 //! | `24r` | [`Value::Radius`] (mm) | a radius, after an arc |
 //! | `[1,2,3]` | [`Value::PointAbs`] (mm) | an absolute point; `;` between values when the decimal is a comma |
 //! | `<1,2,3>` | [`Value::PointRel`] (mm) | a point relative to the start |
@@ -74,8 +74,12 @@ pub enum Tool {
 pub enum Phase {
     /// The tool is running and waits for its next click. `step` counts the clicks so far.
     Step(u8),
-    /// The operation ended: a new value redoes it.
+    /// The operation ended: a new value redoes it. For Move and Rotate this means the last
+    /// operation was a plain move, not a copy (no `5x` and no `/5`).
     Done,
+    /// The operation ended and it was a copy (Move or Rotate with Ctrl/Option): `5x` and `/5`
+    /// are now accepted. For the other tools it is the same as `Done`.
+    Copied,
 }
 
 /// The kinds of typed values.
@@ -149,6 +153,8 @@ pub enum Bare {
     Angle,
     /// The first value of a pair (a rectangle takes a length first).
     PairFirst,
+    /// The number of sides (Circle, Polygon and the arcs before the first click).
+    Sides,
 }
 
 /// What a tool takes at a step.
@@ -178,26 +184,27 @@ const NONE: Accepts = Accepts {
 };
 
 /// Which tool accepts which kinds, at which phase. The modeler asks this to show what the box
-/// accepts and [`parse`] uses it to refuse the rest.
+/// accepts and [`parse`] uses it to refuse the rest. `Phase::Step(n)` counts the clicks so far.
 ///
 /// | Tool | While it runs | After it ended |
 /// |---|---|---|
 /// | Line | length, point (absolute, relative) | the same |
 /// | Rectangle | pair (a single length is the first value) | the same |
-/// | Circle, Polygon | radius (a length), sides | the same |
-/// | Arc | step 0 radius, step 1 angle (both: sides) | sides, radius |
-/// | Two-point arc | step 0 length, step 1 bulge | bulge, radius, sides |
-/// | Move | length, point | length, point, copies, division |
-/// | Rotate | angle | angle, copies, division |
+/// | Circle, Polygon | step 0 (no click): sides, a bare number is the sides; later: radius (a length), sides | the same |
+/// | Arc | step 0: sides; step 1 (center clicked): radius, sides; step 2 (start clicked): angle, sides | sides, radius (no bare number) |
+/// | Two-point arc | step 0: sides; step 1 (start clicked): chord length; step 2 (end clicked): bulge, radius, sides | bulge, radius, sides |
+/// | Move | length, point | length, point (after a copy: also copies, division) |
+/// | Rotate | angle | angle (after a copy: also copies, division) |
 /// | Push/Pull, Offset, Tape measure | length | length |
 /// | Protractor | angle | angle |
 /// | the others | nothing | nothing |
 pub fn accepts(tool: Tool, phase: Phase) -> Accepts {
     use Kind::*;
-    let done = phase == Phase::Done;
+    let done = !matches!(phase, Phase::Step(_));
+    let copied = phase == Phase::Copied;
     let step = match phase {
         Phase::Step(n) => n,
-        Phase::Done => u8::MAX,
+        Phase::Done | Phase::Copied => u8::MAX,
     };
     let a = |kinds: &'static [Kind], bare, signed| Accepts {
         kinds,
@@ -207,19 +214,30 @@ pub fn accepts(tool: Tool, phase: Phase) -> Accepts {
     match tool {
         Tool::Line => a(&[Length, PointAbs, PointRel], Bare::Length, true),
         Tool::Rectangle => a(&[Pair], Bare::PairFirst, true),
-        Tool::Circle | Tool::Polygon => a(&[Length, Sides], Bare::Length, false),
+        Tool::Circle | Tool::Polygon => match (done, step) {
+            (false, 0) => a(&[Sides], Bare::Sides, false),
+            _ => a(&[Length, Sides], Bare::Length, false),
+        },
+        // Click 1 is the center, click 2 the start (radius), click 3 the end (angle).
         Tool::Arc => match (done, step) {
-            (true, _) => a(&[Sides, Radius], Bare::Length, false),
-            (false, 0) => a(&[Length, Sides], Bare::Length, false),
+            (true, _) => Accepts {
+                kinds: &[Sides, Radius],
+                bare: None,
+                signed: false,
+            },
+            (false, 0) => a(&[Sides], Bare::Sides, false),
+            (false, 1) => a(&[Length, Sides], Bare::Length, false),
             (false, _) => a(&[Angle, Sides], Bare::Angle, true),
         },
+        // Click 1 is the start, click 2 the end of the chord, then the bulge.
         Tool::TwoPointArc => match (done, step) {
             (true, _) => a(&[Length, Radius, Sides], Bare::Length, true),
-            (false, 0) => a(&[Length], Bare::Length, false),
+            (false, 0) => a(&[Sides], Bare::Sides, false),
+            (false, 1) => a(&[Length], Bare::Length, false),
             (false, _) => a(&[Length, Radius, Sides], Bare::Length, true),
         },
         Tool::Move => {
-            if done {
+            if copied {
                 a(
                     &[Length, PointAbs, PointRel, Count, Divide],
                     Bare::Length,
@@ -230,7 +248,7 @@ pub fn accepts(tool: Tool, phase: Phase) -> Accepts {
             }
         }
         Tool::Rotate => {
-            if done {
+            if copied {
                 a(&[Angle, Count, Divide], Bare::Angle, true)
             } else {
                 a(&[Angle], Bare::Angle, true)
@@ -282,6 +300,11 @@ pub enum InputError {
     Negative,
     /// A number too large to use.
     TooLarge,
+    /// `1,000` in a setting with a decimal point: it could be a thousands group or a decimal
+    /// comma, so it is refused. `text` is what was typed.
+    AmbiguousComma {
+        text: String,
+    },
 }
 
 impl InputError {
@@ -332,6 +355,9 @@ impl InputError {
             ),
             InputError::Negative => tr!("uic-measure-negative"),
             InputError::TooLarge => tr!("uic-measure-too-large"),
+            InputError::AmbiguousComma { text } => {
+                tr!("uic-measure-ambiguous-comma", text = text.as_str())
+            }
         }
     }
 }

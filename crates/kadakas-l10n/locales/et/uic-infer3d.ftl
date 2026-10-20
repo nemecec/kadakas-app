@@ -12,3 +12,4 @@ uic-infer3d-on-blue-axis = Sinisel teljel
 uic-infer3d-from-point = Punktist
 uic-infer3d-parallel = Servaga paralleelne
 uic-infer3d-perpendicular = Servaga risti
+uic-infer3d-through-point = Läbi punkti

@@ -23,3 +23,4 @@ uic-measure-kind-radius = raadius
 uic-measure-kind-point-abs = absoluutne punkt
 uic-measure-kind-point-rel = suhteline punkt
 uic-measure-kind-none = ei midagi
+uic-measure-ambiguous-comma = „{ $text }“ võib olla kümnendkoma või tuhandete rühm. Kirjuta kümnendiku jaoks punkt (1.5) või arv ilma komata.

@@ -3,16 +3,22 @@
 use glam::{DVec2, DVec3};
 
 /// The parameters `(s, t)` of the closest points of the lines `o1 + s*d1` and `o2 + t*d2`.
-/// `None` when the lines are parallel.
+/// `None` when the lines are parallel: the angle between them is under about 1e-6 radians
+/// (relative to the lengths of the directions, so the size of the numbers does not matter).
+///
+/// The cross product of the directions is used, not `a*c - b*b`, which loses all digits for
+/// lines that are almost parallel.
 pub(crate) fn line_line(o1: DVec3, d1: DVec3, o2: DVec3, d2: DVec3) -> Option<(f64, f64)> {
-    let w = o1 - o2;
-    let (a, b, c) = (d1.dot(d1), d1.dot(d2), d2.dot(d2));
-    let (d, e) = (d1.dot(w), d2.dot(w));
-    let den = a * c - b * b;
-    if den.abs() <= 1e-12 * a * c || a == 0.0 || c == 0.0 {
+    let n = d1.cross(d2);
+    let n2 = n.length_squared();
+    let (a, c) = (d1.length_squared(), d2.length_squared());
+    if a == 0.0 || c == 0.0 || !n2.is_finite() || n2 <= 1e-12 * a * c {
         return None;
     }
-    Some(((b * e - c * d) / den, (a * e - b * d) / den))
+    let w = o2 - o1;
+    let s = w.cross(d2).dot(n) / n2;
+    let t = w.cross(d1).dot(n) / n2;
+    Some((s, t))
 }
 
 /// The closest point of a screen segment to a pixel: the parameter (0 to 1, clamped) and the
@@ -113,6 +119,42 @@ mod tests {
         assert!((s - 2.0).abs() < 1e-12 && (t - 3.0).abs() < 1e-12);
         assert!(line_line(DVec3::ZERO, DVec3::X, DVec3::Y, DVec3::X * 2.0).is_none());
         assert!(line_line(DVec3::ZERO, DVec3::ZERO, DVec3::Y, DVec3::X).is_none());
+    }
+
+    #[test]
+    fn near_parallel_lines_are_stable() {
+        // Far from the origin, with long directions, at small angles.
+        for scale in [1.0, 1.0e3, 1.0e6] {
+            for angle in [1.0e-7f64, 5.0e-7, 2.0e-6, 1.0e-5, 1.0e-3] {
+                let (o1, o2) = (
+                    DVec3::new(1.0e5, -2.0e5, 3.0e4),
+                    DVec3::new(1.0e5, -2.0e5 + 1.0, 3.0e4),
+                );
+                let d1 = DVec3::X * scale;
+                let d2 = DVec3::new(angle.cos(), angle.sin(), 0.0) * (2.0 * scale);
+                let r = line_line(o1, d1, o2, d2);
+                if angle < 1.0e-6 {
+                    assert!(r.is_none(), "{scale} {angle}");
+                } else if let Some((s, t)) = r {
+                    // The points are the closest ones: the line between them is orthogonal
+                    // to both (checked against the exact crossing in the plane z = const).
+                    let (p1, p2) = (o1 + d1 * s, o2 + d2 * t);
+                    assert!(s.is_finite() && t.is_finite());
+                    assert!(
+                        p1.distance(p2) < 1e-6 * (1.0 + p1.length()),
+                        "{scale} {angle}"
+                    );
+                    // Exact crossing: y of line 2 is o2.y + t*d2.y = o1.y.
+                    let exact = (o1.y - o2.y) / d2.y;
+                    assert!(
+                        ((t - exact) / exact).abs() < 1e-6,
+                        "{scale} {angle} {t} {exact}"
+                    );
+                } else {
+                    panic!("{scale} {angle} was taken for parallel");
+                }
+            }
+        }
     }
 
     #[test]
