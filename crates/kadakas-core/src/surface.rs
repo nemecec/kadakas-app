@@ -64,6 +64,11 @@
 //!   faces is healed (the two edges become one again).
 //! - **Erase faces** ([`Edit::EraseFaces`]): only the faces go; their edges stay.
 //! - **Reverse faces** ([`Edit::ReverseFaces`]): front and back change places.
+//! - **Add curve** ([`Edit::AddCurve`]): a chain of edges through points that stays one curve (a
+//!   circle or an arc), with the faces that it closes.
+//! - **Push/Pull** ([`Edit::PushPull`]): a face moves along its normal (the walls follow), or is
+//!   extruded into a bump, a pocket or a closed solid. The hole through a slab, when a push reaches
+//!   the opposite face, is a later step and is refused.
 //!
 //! # Tolerances
 //!
@@ -119,6 +124,8 @@ mod topo;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_pushpull;
 
 pub use check::{Problem, Report};
 pub use edit::Edit;

@@ -72,6 +72,7 @@ pub fn entity_info(ui: &mut egui::Ui, info: &EntityInfo) {
             class,
             size,
             min,
+            surface,
         } => {
             egui::Grid::new("entity-info-one")
                 .num_columns(2)
@@ -87,7 +88,80 @@ pub fn entity_info(ui: &mut egui::Ui, info: &EntityInfo) {
                     if let Some(m) = min {
                         row(ui, tr!("modeler-entity-corner"), lengths(*m));
                     }
+                    if let Some(s) = surface {
+                        row(ui, tr!("modeler-entity-vertices"), s.vertices.to_string());
+                        row(ui, tr!("modeler-entity-edges"), s.edges.to_string());
+                        row(ui, tr!("modeler-entity-faces"), s.faces.to_string());
+                        row(
+                            ui,
+                            tr!("modeler-entity-solid"),
+                            if s.closed {
+                                tr!("modeler-entity-solid-closed")
+                            } else {
+                                tr!("modeler-entity-solid-open")
+                            },
+                        );
+                    }
                 });
+        }
+        EntityInfo::Face {
+            model,
+            id,
+            area,
+            normal,
+            edges,
+            holes,
+        } => {
+            let u = kadakas_units::current();
+            egui::Grid::new("entity-info-face")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    row(ui, tr!("modeler-entity-type"), tr!("modeler-entity-face"));
+                    row(ui, tr!("modeler-entity-id"), id.to_string());
+                    row(ui, tr!("modeler-entity-model"), model.clone());
+                    row(ui, tr!("modeler-entity-area"), u.area_text(*area));
+                    row(
+                        ui,
+                        tr!("modeler-entity-normal"),
+                        format!("{:.2}, {:.2}, {:.2}", normal[0], normal[1], normal[2]),
+                    );
+                    row(ui, tr!("modeler-entity-loop-edges"), edges.to_string());
+                    row(ui, tr!("modeler-entity-holes"), holes.to_string());
+                });
+        }
+        EntityInfo::Edge {
+            model,
+            id,
+            length,
+            start,
+            end,
+            curve,
+            faces,
+        } => {
+            let u = kadakas_units::current();
+            egui::Grid::new("entity-info-edge")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    row(ui, tr!("modeler-entity-type"), tr!("modeler-entity-edge"));
+                    row(ui, tr!("modeler-entity-id"), id.to_string());
+                    row(ui, tr!("modeler-entity-model"), model.clone());
+                    row(ui, tr!("modeler-entity-length"), u.length_text(*length));
+                    row(ui, tr!("modeler-entity-start"), lengths(*start));
+                    row(ui, tr!("modeler-entity-end"), lengths(*end));
+                    if let Some((c, n)) = curve {
+                        row(
+                            ui,
+                            tr!("modeler-entity-curve"),
+                            tr!("modeler-entity-curve-value", id = *c, edges = *n),
+                        );
+                    }
+                    row(ui, tr!("modeler-entity-face-uses"), faces.to_string());
+                });
+        }
+        EntityInfo::Parts { faces, edges } => {
+            ui.label(tr!("modeler-entity-parts", faces = *faces, edges = *edges));
         }
         EntityInfo::Many { count, size } => {
             ui.label(tr!("modeler-entity-many", count = *count));

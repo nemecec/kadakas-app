@@ -16,11 +16,13 @@ use kadakas_api::Session;
 use kadakas_l10n::tr;
 use kadakas_render::Projection;
 use kadakas_render::styled::{light_for, resolve_style};
-use kadakas_ui_core::modeler::{ModelerTool, ToolState};
+use kadakas_ui_core::modeler::ToolState;
 use kadakas_ui_core::nav3d::{self, Button, Drag, Frame, Nav3d};
 use kadakas_view3d::gpu3d::{GpuStyle, SceneCallback};
 use kadakas_view3d::input::modifiers;
-use kadakas_view3d::view3d::{self, View3d};
+use kadakas_view3d::view3d::View3d;
+
+use crate::edit3d::{Edit3d, Input};
 
 /// The colors of the drawing axes: red is the right-left axis, green runs into the screen and blue
 /// is up.
@@ -60,6 +62,8 @@ pub struct Canvas<'a> {
     pub view3d: &'a mut View3d,
     pub nav: &'a mut Nav3d,
     pub tools: &'a mut ToolState,
+    /// Modeling: the drawing tools, the selection of parts and the inference.
+    pub edit: &'a mut Edit3d,
     /// The GPU renderer is available. Without it the canvas only explains that.
     pub gpu_ready: bool,
     /// Show the whole model at the next frame (after an open, and at the start).
@@ -133,6 +137,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
         view3d,
         nav,
         tools,
+        edit,
         gpu_ready,
         fit_pending,
     } = c;
@@ -155,6 +160,8 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
     let aspect = size.x / size.y;
     let pixel_size = f64::from(nav.camera.half_height() * 2.0 / size.y);
     let scene = session.scene_for_pixel_size(pixel_size);
+    edit.keep_view(scene.origin, nav);
+    edit.follow(tools.active());
     let rev = session.editor.revision();
     let frame = Frame {
         bounds: scene.bounds,
@@ -253,22 +260,32 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
         }
     }
 
-    // A click with the Select tool selects.
-    if resp.clicked()
-        && tools.active() == ModelerTool::Select
-        && let Some(p) = resp.interact_pointer_pos()
-    {
-        view3d.camera = nav.camera;
-        let hit = view3d
-            .pick(&scene, local(p), size)
-            .filter(|id| session.editor.doc().object(*id).is_some());
-        session.selection = view3d::click_selection(&session.selection, hit, mods.shift);
+    // The Select tool and the drawing tools: picks, inference, shapes (MOD-08).
+    let before = session.editor.revision();
+    edit.pointer(
+        session,
+        view3d,
+        &nav.camera,
+        &Input {
+            ui,
+            resp: &resp,
+            rect,
+            size,
+            scene: &scene,
+            tool: tools.active(),
+            mods,
+        },
+    );
+    if session.editor.revision() != before {
+        ui.ctx().request_repaint();
     }
 
     // The scene.
     let cam = nav.camera;
     let bounds = scene.bounds;
-    let (overlay, overlay_rev) = view3d.selection_lines(&scene, rev, &session.selection);
+    let (extra_key, extra) = edit.overlay(scene.origin);
+    let (overlay, overlay_rev) =
+        view3d.selection_lines_with(&scene, rev, &session.selection, extra_key, || extra);
     let doc = session.editor.doc();
     let mut style = resolve_style(doc, None);
     style.mode = session.view.mode;
@@ -325,6 +342,9 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
             painter.line_segment([pa, pb], Stroke::new(if positive { 1.5 } else { 1.0 }, c));
         }
     }
+
+    // The marks of the tools: inference, the shape being drawn, selected edges.
+    edit.paint(&painter, rect, &nav.camera, scene.origin, size);
 
     // The window of Zoom Window.
     if let Some(w) = ui.memory(|m| m.data.get_temp::<WindowDrag>(WINDOW_KEY.into())) {

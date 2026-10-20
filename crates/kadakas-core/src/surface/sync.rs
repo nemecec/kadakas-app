@@ -53,6 +53,10 @@ pub enum Intent {
     EraseFacesAt { points: Vec<[f64; 3]> },
     /// Faces reversed, by a point inside each.
     ReverseFacesAt { points: Vec<[f64; 3]> },
+    /// A curve (circle or arc) drawn as a chain of edges, by its corner points.
+    AddCurve { points: Vec<[f64; 3]>, closed: bool },
+    /// A face pushed or pulled along its normal, by a point inside it.
+    PushPullAt { point: [f64; 3], distance: f64 },
     /// A new transform.
     Place { transform: [f64; 12] },
     /// A change that cannot be replayed (for example a new curve).
@@ -80,6 +84,17 @@ impl Intent {
             },
             Edit::EraseFaces { faces: ids } => Intent::EraseFacesAt { points: faces(ids) },
             Edit::ReverseFaces { faces: ids } => Intent::ReverseFacesAt { points: faces(ids) },
+            Edit::AddCurve { points, closed } => Intent::AddCurve {
+                points: points.clone(),
+                closed: *closed,
+            },
+            Edit::PushPull { face, distance } => match face_point(m, *face) {
+                Some(p) => Intent::PushPullAt {
+                    point: p.to_array(),
+                    distance: *distance,
+                },
+                None => Intent::Unlogged,
+            },
         }
     }
 
@@ -89,7 +104,8 @@ impl Intent {
             Intent::EraseEdgesAt { points }
             | Intent::EraseFacesAt { points }
             | Intent::ReverseFacesAt { points } => points.len(),
-            Intent::Place { .. } | Intent::Unlogged => 1,
+            Intent::AddCurve { points, .. } => points.len(),
+            Intent::Place { .. } | Intent::Unlogged | Intent::PushPullAt { .. } => 1,
         }
     }
 }
@@ -210,6 +226,17 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
             } else {
                 m.apply(&Edit::ReverseFaces { faces })
             }
+        }
+        Intent::AddCurve { points, closed } => m.apply(&Edit::AddCurve {
+            points: points.clone(),
+            closed: *closed,
+        }),
+        Intent::PushPullAt { point, distance } => {
+            let face = face_at(m, DVec3::from(*point)).ok_or_else(|| gone("face", point))?;
+            m.apply(&Edit::PushPull {
+                face,
+                distance: *distance,
+            })
         }
         Intent::Place { transform } => {
             m.place(DAffine3::from_cols_array(transform));

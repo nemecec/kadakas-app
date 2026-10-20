@@ -19,13 +19,13 @@
 | Status bar | The instruction for the active tool, or the last message. At the right is the **Measurements** box. |
 | Tray | **Entity Info**, **Materials** and **Scenes**. A click on a title bar collapses the panel. View > Tray hides the tray. |
 
-Only Select and the navigation tools run today. The other tools are in the tool bar, disabled. Their tooltip says "coming in a later version". Their keys show the same note in the status bar. The rows MOD-03 to MOD-05 and MOD-08 turn them on one by one.
+Select, the drawing tools of MOD-08 (Eraser, Line, Rectangle, Circle, Arc, Push/Pull) and the navigation tools run. The other tools (Move, Rotate, Scale, Tape Measure, Paint Bucket) are in the tool bar, disabled. Their tooltip says "coming in a later version". Their keys show the same note in the status bar. The rows MOD-05 and the rest of MOD-08 turn them on.
 
-**Measurements box.** It only shows a value today. It shows the size of the selection (length, width and height in the units of the person). While the Zoom tool is active, it shows the field of view. MOD-04 lets you type into it.
+**Measurements box.** It shows the size of the selection (length, width and height in the units of the person), the field of view while the Zoom tool is active, and the live value of a drawing tool that runs (length, width and height, radius, bulge, distance). You type into it without a click: digits and the marks of values start the text, letters follow once the text has started (`24s`, `500r`, `3'6"`), Backspace erases, Enter applies and Esc clears. See "Modeling" below.
 
-**Entity Info.** It shows the type, the id, the layer, the class, the size and the lowest corner of the selected object. For several objects it shows the count and the size of the box around them. With no selection it shows the active layer and class. **Materials** and **Scenes** are placeholders. Paint comes with MOD-05 and scenes with MOD-10.
+**Entity Info.** It shows the type, the id, the layer, the class, the size and the lowest corner of the selected object. For several objects it shows the count and the size of the box around them. With no selection it shows the active layer and class. A surface model also shows its numbers of vertices, edges and faces and whether the faces close a volume. A selected face shows its area, normal, edges and holes. A selected edge shows its length, ends, curve and the number of faces on it. Several faces and edges show their counts. **Materials** and **Scenes** are placeholders. Paint comes with MOD-05 and scenes with MOD-10.
 
-**Unsaved changes.** The session knows when the model has changes that nobody saved. File > New, File > Open, a file from the launcher, File > Quit and the close button then ask the same three questions as the app: Save and open, Don't save, or Cancel. Only one question is open at a time. A second request is dropped, and the status line says so. Today the modeler cannot edit, so a model has unsaved changes only after an undo or a later tool.
+**Unsaved changes.** The session knows when the model has changes that nobody saved. File > New, File > Open, a file from the launcher, File > Quit and the close button then ask the same three questions as the app: Save and open, Don't save, or Cancel. Only one question is open at a time. A second request is dropped, and the status line says so. A drawing tool or an undo makes unsaved changes.
 
 **Language and theme.** The program has en-US and Estonian. View > Language changes the language at once. View > Theme gives System, Light and Dark. Both are kept in `modeler.json` in the config folder (`KADAKAS_PREFS_DIR` names another folder). The units come from the `prefs.json` of the app. The modeler reads that file and never writes it.
 
@@ -64,12 +64,46 @@ The logic is in `kadakas-ui-core`. The program only reads the pointer and the ke
 
 The tool bar icons are our own drawings from written ideas, in `assets/icons/modeler/`. They follow the style rules of `docs/icons.md`. Nothing is traced or copied.
 
+## Modeling (MOD-08, first part)
+
+The code that decides is in `kadakas_ui_core::modeling` (no window, no GPU, no clock). The modeler only feeds it the pointer and the keys, runs what it returns and draws. `crates/kadakas-modeler/src/edit3d.rs` is the glue.
+
+### Look and selection
+
+- A surface model is drawn by the scene builder of `kadakas-core`: the faces as triangles and every edge (not the ones with the attribute `hidden`) as a line. A face shows its **front** in a light color and its **back** in a bluish color (the GPU does this for vertices with the alpha 254; a fill color keeps its hue on the front).
+- **Select** (Space): a click picks the face or edge under the pointer (an edge within a few pixels wins); Shift adds or removes. A double click on a face selects it with its edges. A triple click selects the whole model. A click on nothing that is a part falls back to the selection of whole objects. A drag is a selection rectangle: left to right is a **window** (parts that are fully inside), right to left is a **crossing** (parts that it touches, drawn dashed). Selected edges are thick blue; a selected face shows blue hatch lines (they are depth tested). Delete erases the selected faces and then the selected edges in one step, or the selected objects.
+- Faces and edges of a model are never selected together with whole objects.
+
+### Tools
+
+Each finished action is one `edit_surface` command and one undo step. A new model is made by the same step as its first edge. The geometry goes into the model under the first click, else the selected model, else the model that was drawn in last, else the first model of the document, else a new one.
+
+| Tool (key) | Clicks | Typed in the box |
+|---|---|---|
+| Line (L) | start, then each next point; a click on the start closes the loop and ends; Esc ends | a length along the pointer, a point `[x,y,z]`, a relative point `<x,y,z>`; a negative length goes the other way |
+| Rectangle (R) | two corners on the face under the first click, else on the horizontal plane; the sides follow the axes of the face | `width;height` (`;` with a decimal comma), `,4` keeps the width |
+| Circle (C) | center, then a point | a radius; `24s` for the number of sides (the default is 24) |
+| Arc (A), two-point arc | start and end of the chord, then the bulge | a chord length, then a bulge or a radius (`500r`); `12s` for the segments (default 12) |
+| Eraser (E) | click an edge, or drag over edges: they turn red and go on release | nothing |
+| Push/Pull (P) | click a face, move along its normal, click; a double click on a face repeats the last distance | a signed distance |
+
+A circle or an arc is made by `edit_surface` with the action `add_curve`: a chain of edges that stays **one curve**, also after other edges cut it. The Eraser removes the whole curve. Pushing or pulling a circle copies the curve to the cap, and the new edges between the pieces get the attribute `smooth`.
+
+**Typing after a tool ended.** Right after a Rectangle, Circle, Arc or Push/Pull a new value redoes it: the app takes back that step and makes the new one (still one undo step). This only works while nothing else changed the document.
+
+**Push/Pull in the core** (`edit_surface` with `push_pull {face, distance}`): if every edge of the face is shared with a wall at a right angle (a prism), the face moves and the walls stretch or shrink. Otherwise the face is extruded: a lone face becomes a closed solid; a face on other faces (a square drawn on a wall) becomes a bump, or a pocket for a push, and the opening stays. The face keeps its id and is the cap. **Not done yet:** a push that reaches the opposite face of a slab (a hole through) is refused with an error and changes nothing; it is a later step.
+
+### Inference and the scene
+
+The tools use `infer3d` (see `docs/modeler-inference.md`) with the last point of the tool as reference. Shift keeps the inference and the arrow keys lock an axis while a tool runs (so the arrow keys do not pan then). When the pointer rests, the point becomes the start of the dotted axis lines. Points are drawn as squares, lines and faces as dots, cue lines in their colors, and the label next to the pointer.
+
+The inference scene (`modeling::SceneCache`) is built once per document revision, never every frame. It costs about 30 ms (debug build) for a model of 1,600 faces and 3,280 edges (`the_scene_build_cost_is_measured_and_stays_small`); one inference takes about 0.1 ms. The holder `Scenes` keeps the numbers of the models, so a scene for each model and a set of excluded faces and edges (`Modeling::excluded`) can be plugged in when the inference takes them.
+
+When the model grows, the middle of the plan (the scene origin) moves. The window moves the camera target by the same amount, so the view does not jump.
+
 ## Surface models (MOD-06)
 
-The modeler shows every object that the scene builder of `kadakas-core` turns into triangles and lines. A surface model (`Shape::SurfaceModel`, MOD-06) was not in the core when this page was written. When it lands, it appears in the 3D view without a change of the modeler, because the scene builder makes its mesh. Two small places need a line each:
-
-- `kadakas_ui_core::modeler::entity_info` (look for `HOOK(MOD-06)`): add the number of vertices, edges and faces to Entity Info.
-- `kadakas-modeler/src/tray.rs`: show those numbers.
+A surface model (`Shape::SurfaceModel`, MOD-06) is drawn by the same GPU renderer as the other objects. See `docs/feature-spec.md` for what the core does.
 
 ## Clean room
 
@@ -78,7 +112,7 @@ The layout, the tool names, the logic of the tools and the default keys follow p
 ## Not done yet
 
 - A window of the web build. The program is for the desktop. The 3D view and the tray need a native window and a file dialog.
-- Editing: the tools that draw and change geometry (MOD-03 to MOD-05 and MOD-08).
-- The inference engine (MOD-03) and typing into the Measurements box (MOD-04).
+- The tools Move, Rotate, Scale, Tape Measure and Paint Bucket (MOD-05), and the rest of MOD-08: Polygon, Follow Me, Offset, Intersect, soft and smooth edges, and the hole through a slab for Push/Pull.
+- Not tried in a real window: the drawing, the marks and the hatch on a GPU window were checked in headless frames and in one GPU test of the back color, not by hand.
 - An editor for the keys of the modeler, and a review window for crash reports. A report stays in the queue until `kadakas-app` starts.
 - Autosave and the agent server of the app.

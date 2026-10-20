@@ -1,0 +1,64 @@
+//! Modeling in the 3D modeler (MOD-08, first part): the drawing tools as headless state machines,
+//! the selection of faces and edges, and the commands that a finished tool runs.
+//!
+//! The modeler (`kadakas-modeler`) only draws and feeds input:
+//!
+//! 1. [`SceneCache::get`] gives the inference scene of the document revision. It is built once per
+//!    revision, not every frame.
+//! 2. On a pointer move the window calls the inference (`infer3d`) with `Modeling::reference` and
+//!    passes the result with the pointer ray to [`Modeling::moved`].
+//! 3. Clicks go to [`Modeling::click`] (the Eraser: `press` and `release`). The [`Out`] holds the
+//!    [`Action`]s; [`exec::run`] runs them as one undo step, and `Modeling::committed` tells the
+//!    tool which model was used.
+//! 4. [`Modeling::preview`] and [`Modeling::live`] give what to draw and what the Measurements
+//!    box shows; [`Modeling::type_char`] and [`Modeling::enter`] take what the person types.
+//!
+//! Select (Space) uses [`select`]: [`select::pick`], [`select::rect_select`] and
+//! [`select::SubSelection`]. See `docs/modeler.md`.
+
+pub mod exec;
+mod plane;
+mod scenes;
+pub mod select;
+mod tools;
+
+pub use exec::{Action, Target, run as run_actions};
+pub use plane::Plane3;
+pub use scenes::{SceneCache, Scenes, World, elevation, frame_of, model_of};
+pub use select::{Item, SubSelection};
+pub use tools::{
+    DEFAULT_ARC_SIDES, DEFAULT_SIDES, Excluded, LiveLabel, Modeling, Out, Pointer, Preview,
+    arc_points, bulge_of, circle_points, delete_actions, is_drawing_tool, radius_to_bulge,
+};
+
+/// The camera of the inference for the view of the modeler. `origin` is the world position of the
+/// local point (0, 0, 0) of the scene (`Scene::origin`), `size` the size of the view in points.
+/// `None` when the view cannot be projected (no area).
+pub fn infer_camera(
+    cam: &kadakas_render::Camera,
+    origin: glam::DVec3,
+    size: glam::Vec2,
+) -> Option<crate::infer3d::Camera> {
+    use crate::infer3d::{Camera, Projection};
+    let eye = cam.eye().as_dvec3() + origin;
+    let target = cam.target.as_dvec3() + origin;
+    let projection = match cam.projection {
+        kadakas_render::Projection::Perspective => Projection::Perspective {
+            fov_y: f64::from(cam.fov_y),
+        },
+        kadakas_render::Projection::Orthographic => Projection::Orthographic {
+            height: f64::from(cam.half_height() * 2.0),
+        },
+    };
+    // The up vector of the view: in the top and bottom views Z is parallel to the view.
+    Camera::look_at(
+        eye,
+        target,
+        cam.up().as_dvec3(),
+        projection,
+        glam::DVec2::new(f64::from(size.x), f64::from(size.y)),
+    )
+}
+
+#[cfg(test)]
+mod tests;

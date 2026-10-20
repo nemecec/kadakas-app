@@ -136,6 +136,10 @@ fn shade(i: SurfaceOut) -> vec4<f32> {
     // Both sides are lit: turn the normal toward the viewer.
     if (dot(n, to_eye) < 0.0) {
         n = -n;
+        // A face of a surface model (vertex alpha 254/255) shows its back in the back color.
+        if (i.color.a > 0.99 && i.color.a < 0.9985 && !has_material) {
+            albedo = vec3<f32>(0.58, 0.66, 0.78);
+        }
     }
 
     // The shadow map is read in uniform control flow too.

@@ -162,12 +162,19 @@ impl ModelerTool {
             .find(|t| t.action() == action)
     }
 
-    /// True for the tools that run in this version: Select and the navigation tools. The rest
-    /// are shown, disabled.
+    /// True for the tools that run in this version: Select, the drawing tools of MOD-08 (Eraser,
+    /// Line, Rectangle, Circle, Arc, Push/Pull) and the navigation tools. The rest are shown,
+    /// disabled.
     pub fn works(self) -> bool {
         matches!(
             self,
             ModelerTool::Select
+                | ModelerTool::Eraser
+                | ModelerTool::Line
+                | ModelerTool::Rectangle
+                | ModelerTool::Circle
+                | ModelerTool::Arc
+                | ModelerTool::PushPull
                 | ModelerTool::Orbit
                 | ModelerTool::Pan
                 | ModelerTool::Zoom
@@ -193,6 +200,12 @@ impl ModelerTool {
     pub fn hint(self) -> String {
         match self {
             ModelerTool::Select => tr!("uic-modeler-hint-select"),
+            ModelerTool::Eraser => tr!("uic-modeler-hint-eraser"),
+            ModelerTool::Line => tr!("uic-modeler-hint-line"),
+            ModelerTool::Rectangle => tr!("uic-modeler-hint-rectangle"),
+            ModelerTool::Circle => tr!("uic-modeler-hint-circle"),
+            ModelerTool::Arc => tr!("uic-modeler-hint-arc"),
+            ModelerTool::PushPull => tr!("uic-modeler-hint-push-pull"),
             ModelerTool::Orbit => tr!("uic-modeler-hint-orbit"),
             ModelerTool::Pan => tr!("uic-modeler-hint-pan"),
             ModelerTool::Zoom => tr!("uic-modeler-hint-zoom"),
@@ -295,12 +308,51 @@ pub enum EntityInfo {
         size: Option<[f64; 3]>,
         /// The lowest corner of that box.
         min: Option<[f64; 3]>,
+        /// The counts of a surface model.
+        surface: Option<SurfaceStats>,
     },
+    /// One face of a surface model.
+    Face {
+        model: String,
+        id: u32,
+        /// Area in mm².
+        area: f64,
+        /// The front normal in the drawing.
+        normal: [f64; 3],
+        /// Edges of the outer loop and of the holes together.
+        edges: usize,
+        holes: usize,
+    },
+    /// One edge of a surface model.
+    Edge {
+        model: String,
+        id: u32,
+        /// Length in mm.
+        length: f64,
+        start: [f64; 3],
+        end: [f64; 3],
+        /// The curve (circle or arc) it belongs to, and the edges of that curve.
+        curve: Option<(u32, usize)>,
+        /// How many faces use it.
+        faces: usize,
+    },
+    /// Several faces and edges of surface models.
+    Parts { faces: usize, edges: usize },
     /// Several objects.
     Many {
         count: usize,
         size: Option<[f64; 3]>,
     },
+}
+
+/// The counts of a surface model, for Entity Info.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceStats {
+    pub vertices: usize,
+    pub edges: usize,
+    pub faces: usize,
+    /// The faces close a volume (a solid).
+    pub closed: bool,
 }
 
 /// The size of a box and its lowest corner. The box is relative to the origin of the scene; the
@@ -345,10 +397,15 @@ pub fn entity_info(doc: &Document, scene: &Scene, selection: &[ObjectId]) -> Ent
         [id] => {
             let obj = doc.object(*id).expect("filtered above");
             let bounds = scene.object_bounds(*id).map(|b| dims(b, scene.origin));
-            // HOOK(MOD-06): when `Shape::SurfaceModel` exists, add the number of vertices, edges
-            // and faces to `EntityInfo::One` here, and show them in the Entity Info panel
-            // (`kadakas-modeler/src/tray.rs`). The 3D view needs no change: the scene builder of
-            // `kadakas-core` makes the mesh, and the GPU draws it.
+            let surface = match &obj.shape {
+                kadakas_core::model::Shape::SurfaceModel(m) => Some(SurfaceStats {
+                    vertices: m.vertex_count(),
+                    edges: m.edge_count(),
+                    faces: m.face_count(),
+                    closed: m.face_count() > 0 && m.check().is_closed(),
+                }),
+                _ => None,
+            };
             EntityInfo::One {
                 id: id.to_string(),
                 kind: obj.shape.kind().to_string(),
@@ -360,6 +417,7 @@ pub fn entity_info(doc: &Document, scene: &Scene, selection: &[ObjectId]) -> Ent
                     .map_or_else(|| "?".to_string(), |c| c.name.clone()),
                 size: bounds.map(|b| b.0),
                 min: bounds.map(|b| b.1),
+                surface,
             }
         }
         many => EntityInfo::Many {
@@ -370,7 +428,75 @@ pub fn entity_info(doc: &Document, scene: &Scene, selection: &[ObjectId]) -> Ent
     }
 }
 
-/// What the Measurements box shows. The box only displays today; MOD-04 lets you type into it.
+/// The Entity Info of a selection that may hold faces and edges of surface models. With none, it
+/// is [`entity_info`] of the selected objects.
+pub fn entity_info_with_parts(
+    doc: &Document,
+    scene: &Scene,
+    selection: &[ObjectId],
+    parts: &crate::modeling::SubSelection,
+) -> EntityInfo {
+    use crate::modeling::{Item, frame_of, model_of};
+    let items: Vec<Item> = parts
+        .items()
+        .filter(|i| match i {
+            Item::Face(m, f) => model_of(doc, *m).is_some_and(|s| s.face(*f).is_some()),
+            Item::Edge(m, e) => model_of(doc, *m).is_some_and(|s| s.edge(*e).is_some()),
+        })
+        .collect();
+    match items.as_slice() {
+        [] => entity_info(doc, scene, selection),
+        [Item::Face(mid, fid)] => {
+            let m = model_of(doc, *mid).expect("filtered above");
+            let f = m.face(*fid).expect("filtered above");
+            let fr = frame_of(doc, *mid);
+            let n = fr.matrix3.inverse().transpose() * f.plane.normal;
+            EntityInfo::Face {
+                model: mid.to_string(),
+                id: fid.0,
+                // The scale of the transform changes areas; the models are placed rigidly.
+                area: m.face_area(*fid).unwrap_or(0.0)
+                    * fr.matrix3.determinant().abs().cbrt().powi(2),
+                normal: n.normalize_or_zero().to_array(),
+                edges: f.loop_len(),
+                holes: f.holes.len(),
+            }
+        }
+        [Item::Edge(mid, eid)] => {
+            let m = model_of(doc, *mid).expect("filtered above");
+            let e = m.edge(*eid).expect("filtered above");
+            let fr = frame_of(doc, *mid);
+            let p = |v| {
+                m.vertex(v)
+                    .map(|q| fr.transform_point3(q))
+                    .unwrap_or_default()
+            };
+            let (a, b) = (p(e.v[0]), p(e.v[1]));
+            EntityInfo::Edge {
+                model: mid.to_string(),
+                id: eid.0,
+                length: a.distance(b),
+                start: a.to_array(),
+                end: b.to_array(),
+                curve: m.curve_of(*eid).map(|c| {
+                    (
+                        c.0,
+                        m.curves()
+                            .find(|(k, _)| *k == c)
+                            .map_or(0, |(_, es)| es.len()),
+                    )
+                }),
+                faces: m.faces_of_edge(*eid).len(),
+            }
+        }
+        many => EntityInfo::Parts {
+            faces: many.iter().filter(|i| matches!(i, Item::Face(..))).count(),
+            edges: many.iter().filter(|i| matches!(i, Item::Edge(..))).count(),
+        },
+    }
+}
+
+/// What the Measurements box shows. The box shows a value and takes typed values (MOD-04).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Measurement {
     /// Nothing to show (the box is empty).
@@ -379,6 +505,8 @@ pub enum Measurement {
     Dimensions(String),
     /// The vertical field of view while the Zoom tool is active.
     FieldOfView(String),
+    /// The value of a drawing tool that runs (the length of a line, the sides of a rectangle).
+    Live(crate::modeling::LiveLabel, String),
 }
 
 impl Measurement {
@@ -389,6 +517,13 @@ impl Measurement {
                 msg!("uic-modeler-measure-dimensions")
             }
             Measurement::FieldOfView(_) => msg!("uic-modeler-measure-fov"),
+            Measurement::Live(l, _) => match l {
+                crate::modeling::LiveLabel::Length => msg!("uic-modeler-measure-length"),
+                crate::modeling::LiveLabel::Dimensions => msg!("uic-modeler-measure-dimensions"),
+                crate::modeling::LiveLabel::Radius => msg!("uic-modeler-measure-radius"),
+                crate::modeling::LiveLabel::Bulge => msg!("uic-modeler-measure-bulge"),
+                crate::modeling::LiveLabel::Distance => msg!("uic-modeler-measure-distance"),
+            },
         }
     }
 
@@ -396,7 +531,7 @@ impl Measurement {
     pub fn text(&self) -> &str {
         match self {
             Measurement::Empty => "",
-            Measurement::Dimensions(t) | Measurement::FieldOfView(t) => t,
+            Measurement::Dimensions(t) | Measurement::FieldOfView(t) | Measurement::Live(_, t) => t,
         }
     }
 }
@@ -469,13 +604,28 @@ mod tests {
     }
 
     #[test]
-    fn only_select_and_navigation_work_now() {
+    fn select_the_drawing_tools_and_navigation_work_now() {
         let working: Vec<_> = ModelerTool::ALL
             .iter()
             .filter(|t| t.works())
             .map(|t| t.id())
             .collect();
-        assert_eq!(working, ["select", "orbit", "pan", "zoom", "zoom-extents"]);
+        assert_eq!(
+            working,
+            [
+                "select",
+                "eraser",
+                "line",
+                "rectangle",
+                "circle",
+                "arc",
+                "push-pull",
+                "orbit",
+                "pan",
+                "zoom",
+                "zoom-extents"
+            ]
+        );
         let mut s = ToolState::default();
         assert_eq!(s.active(), ModelerTool::Select);
         for t in ModelerTool::ALL.iter().filter(|t| !t.works()) {
@@ -517,8 +667,8 @@ mod tests {
     #[test]
     fn a_tool_that_does_not_run_says_so_in_its_tooltip() {
         assert!(!ModelerTool::Select.tooltip("Space").contains("later"));
-        let tip = ModelerTool::PushPull.tooltip("P");
-        assert!(tip.contains("Push/Pull") && tip.contains('P'));
+        let tip = ModelerTool::Move.tooltip("M");
+        assert!(tip.contains("Move") && tip.contains('M'));
         assert!(tip.contains(&tr!("uic-modeler-coming-later")));
         // Without a key there is no empty bracket.
         assert_eq!(ModelerTool::Select.tooltip(""), ModelerTool::Select.name());
@@ -558,7 +708,8 @@ mod tests {
         for t in ModelerTool::ALL {
             assert!(!t.hint().is_empty());
         }
-        assert_eq!(ModelerTool::Eraser.hint(), tr!("uic-modeler-coming-later"));
+        assert_eq!(ModelerTool::Move.hint(), tr!("uic-modeler-coming-later"));
+        assert_ne!(ModelerTool::Line.hint(), ModelerTool::Rectangle.hint());
         assert_ne!(ModelerTool::Orbit.hint(), ModelerTool::Pan.hint());
     }
 

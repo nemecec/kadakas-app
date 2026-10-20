@@ -68,6 +68,7 @@ struct LookCache {
 
 struct SelectionCache {
     scene_rev: u64,
+    extra_key: u64,
     ids: Vec<ObjectId>,
     lines: Arc<Vec<LineVertex>>,
 }
@@ -221,10 +222,23 @@ impl View3d {
         scene_rev: u64,
         selection: &[ObjectId],
     ) -> (Arc<Vec<LineVertex>>, u64) {
-        let fresh = self
-            .selection_cache
-            .as_ref()
-            .is_some_and(|c| c.scene_rev == scene_rev && c.ids == selection);
+        self.selection_lines_with(scene, scene_rev, selection, 0, Vec::new)
+    }
+
+    /// Like [`View3d::selection_lines`], with more lines of the caller (the hatch of selected
+    /// faces). `extra_key` names what the extra lines show: they are made again (by `extra`) only
+    /// when the key, the selection or the scene revision changes.
+    pub fn selection_lines_with(
+        &mut self,
+        scene: &Scene,
+        scene_rev: u64,
+        selection: &[ObjectId],
+        extra_key: u64,
+        extra: impl FnOnce() -> Vec<LineVertex>,
+    ) -> (Arc<Vec<LineVertex>>, u64) {
+        let fresh = self.selection_cache.as_ref().is_some_and(|c| {
+            c.scene_rev == scene_rev && c.ids == selection && c.extra_key == extra_key
+        });
         if !fresh {
             let mut lines = Vec::new();
             for id in selection {
@@ -232,8 +246,10 @@ impl View3d {
                     box_lines(lo, hi, &mut lines);
                 }
             }
+            lines.extend(extra());
             self.selection_cache = Some(SelectionCache {
                 scene_rev,
+                extra_key,
                 ids: selection.to_vec(),
                 lines: Arc::new(lines),
             });

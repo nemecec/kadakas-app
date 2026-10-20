@@ -892,3 +892,50 @@ fn blend_order_puts_the_farthest_triangle_first_and_keeps_ties_stable() {
         assert_eq!(firsts, [1, 3, 0, 2], "ortho {ortho}");
     }
 }
+
+/// A face of a surface model shows its front in the front color and its back in the back color
+/// (the alpha 254 of the vertex color marks the two-sided surface).
+#[test]
+fn a_surface_model_face_has_a_front_and_a_back_color() {
+    let Some((device, queue)) = device_or_skip("a_surface_model_face_has_a_front_and_a_back_color")
+    else {
+        return;
+    };
+    let mut rig = Rig::new(device, queue, [100, 100]);
+    let mut ed = Editor::default();
+    let id = kadakas_core::model::ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::SurfaceModel(Box::default()),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let p = [
+        [-500.0, -500.0, 0.0],
+        [500.0, -500.0, 0.0],
+        [500.0, 500.0, 0.0],
+        [-500.0, 500.0, 0.0],
+    ];
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: kadakas_core::surface::Edit::AddEdges {
+            edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+        },
+    })
+    .unwrap();
+    let style = GpuStyle::default();
+    let top = rig.draw(&ed, &top_cam(1000.0), &style, &[]);
+    let mut under = Camera::standard(StandardView::Bottom, Projection::Orthographic);
+    under.distance = top_cam(1000.0).distance;
+    let bottom = rig.draw(&ed, &under, &style, &[]);
+    let (f, b) = (px(&top, 100, 50, 50), px(&bottom, 100, 50, 50));
+    assert!(
+        f[0] > 150 && f[2] < f[0] + 30,
+        "front is the light face color: {f:?}"
+    );
+    assert!(b[2] > b[0] + 10 && b[2] > f[2] / 8, "back is bluish: {b:?}");
+    assert!(f[0].abs_diff(f[2]) < 30, "front is neutral: {f:?}");
+}

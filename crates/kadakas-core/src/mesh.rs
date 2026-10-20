@@ -711,6 +711,11 @@ impl UnitSphere {
     }
 }
 
+/// The alpha of a vertex color that marks a two-sided surface (a face of a surface model).
+pub const SURFACE_TWO_SIDED: u8 = 254;
+/// The front color of a face of a surface model that has no fill.
+pub const SURFACE_FRONT: [u8; 4] = [236, 236, 230, 255];
+
 const TRUNK_SIDES: usize = 8;
 
 struct Builder<'a> {
@@ -879,7 +884,12 @@ impl Builder<'_> {
             Shape::SurfaceModel(m) => {
                 // Local coordinates through the transform; `z` is measured from the layer.
                 if let Ok(sm) = m.mesh() {
-                    let color = fill.unwrap_or(crate::solid3d::DEFAULT_COLOR);
+                    // The alpha 254 marks a two-sided surface: the GPU shows the back of a face
+                    // in the back color (see `SURFACE_TWO_SIDED`).
+                    let mut color = fill.unwrap_or(SURFACE_FRONT);
+                    if color[3] == 255 {
+                        color[3] = SURFACE_TWO_SIDED;
+                    }
                     let pts: Vec<Vec3> = sm
                         .positions
                         .iter()
@@ -900,6 +910,27 @@ impl Builder<'_> {
                     };
                     self.scene.mesh.part = PART_MAIN;
                     add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
+                }
+                // The edges (not the hidden ones) as lines.
+                for (eid, e) in m.edges() {
+                    let hidden = m
+                        .edge_attrs(eid)
+                        .and_then(|a| a.get("hidden"))
+                        .is_some_and(|v| v == &serde_json::Value::Bool(true));
+                    if hidden {
+                        continue;
+                    }
+                    if let (Some(a), Some(b)) = (m.vertex(e.v[0]), m.vertex(e.v[1])) {
+                        let at = |p: DVec3| {
+                            let q = m.transform.transform_point3(p);
+                            Vec3::new(
+                                (q.x - o.x) as f32,
+                                (q.y - o.y) as f32,
+                                (z + q.z - o.z) as f32,
+                            )
+                        };
+                        self.scene.lines.push(at(a), at(b), edge, id);
+                    }
                 }
             }
             Shape::Extrude(_) | Shape::Sweep(_) => {

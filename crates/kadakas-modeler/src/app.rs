@@ -17,11 +17,22 @@ use kadakas_view3d::view3d::View3d;
 
 use crate::about::About;
 use crate::canvas::{self, Canvas};
+use crate::edit3d::Edit3d;
 use crate::files::{self, Ask};
 use crate::launch::Launch;
 use crate::prefs::{self, Prefs, ThemeChoice};
 use crate::toolbar;
 use crate::tray::{self, TrayState};
+
+/// The key of the Entity Info cache and its value.
+type InfoKey = (
+    (
+        u64,
+        Vec<kadakas_core::model::ObjectId>,
+        kadakas_ui_core::modeling::SubSelection,
+    ),
+    modeler::EntityInfo,
+);
 
 /// A command from the menu, the tool bar or a key.
 #[derive(Clone, Debug, PartialEq)]
@@ -35,6 +46,8 @@ pub enum Cmd {
     Redo,
     SelectAll,
     SelectNone,
+    /// Delete the selected faces and edges, or the selected objects.
+    Delete,
     /// A tool or command of the tool bar.
     Tool(ModelerTool),
     /// Zoom Window: the next drag of the Zoom tool is a window.
@@ -75,6 +88,10 @@ pub struct ModelerApp {
     pub view3d: View3d,
     pub nav: Nav3d,
     pub tools: ToolState,
+    /// Modeling (MOD-08): the drawing tools, the selected parts, the inference scene.
+    pub edit: Edit3d,
+    /// Entity Info for a revision, a selection and a selection of parts.
+    info_cache: Option<InfoKey>,
     pub keys: Keymap,
     pub prefs: Prefs,
     /// The settings as they are on disk. A change is written when the two differ.
@@ -111,6 +128,8 @@ impl ModelerApp {
             view3d: View3d::default(),
             nav: Nav3d::new(),
             tools: ToolState::default(),
+            edit: Edit3d::default(),
+            info_cache: None,
             keys: Profile::sketchup().keymap,
             prefs_saved: prefs.clone(),
             prefs,
@@ -347,6 +366,8 @@ impl ModelerApp {
     /// What follows a new or opened model: nothing is selected, the view shows all of it.
     fn after_replace(&mut self, path: Option<PathBuf>) {
         self.session.selection.clear();
+        self.edit.reset();
+        self.info_cache = None;
         self.path = path;
         self.nav.clear_history();
         self.fit_pending = true;
@@ -410,16 +431,25 @@ impl ModelerApp {
                 }
             }
             Cmd::Undo => {
+                self.edit.modeling.cancel();
                 if !self.session.editor.undo() {
                     self.status = tr!("modeler-nothing-to-undo");
                 }
             }
             Cmd::Redo => {
+                self.edit.modeling.cancel();
                 if !self.session.editor.redo() {
                     self.status = tr!("modeler-nothing-to-redo");
                 }
             }
+            Cmd::Delete => {
+                self.edit.delete(&mut self.session);
+                if let Some(m) = self.edit.message.take() {
+                    self.status = m;
+                }
+            }
             Cmd::SelectAll => {
+                self.edit.sub.clear();
                 self.session.selection = self
                     .session
                     .editor
@@ -430,7 +460,10 @@ impl ModelerApp {
                     .map(|o| o.id)
                     .collect();
             }
-            Cmd::SelectNone => self.session.selection.clear(),
+            Cmd::SelectNone => {
+                self.session.selection.clear();
+                self.edit.sub.clear();
+            }
             Cmd::Tool(t) if t.is_command() => {
                 let frame = self.frame(size);
                 self.nav.zoom_extents(&frame);
@@ -497,6 +530,7 @@ impl ModelerApp {
             Action::Redo => Cmd::Redo,
             Action::SelectAll => Cmd::SelectAll,
             Action::SelectNone => Cmd::SelectNone,
+            Action::Delete => Cmd::Delete,
             // Escape and Space both go back to the Select tool.
             Action::Cancel => Cmd::Tool(ModelerTool::Select),
             _ => return None,
@@ -523,7 +557,29 @@ impl ModelerApp {
                 })
                 .collect()
         });
+        let drawing = kadakas_ui_core::modeling::is_drawing_tool(self.tools.active())
+            && self.tools.active() != ModelerTool::Eraser;
+        let texts: Vec<String> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Text(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .collect()
+        });
+        if drawing {
+            for t in &texts {
+                for c in t.chars() {
+                    self.edit.modeling.type_char(c);
+                }
+            }
+        }
         for (key, physical, mods, repeat) in events {
+            self.edit.follow(self.tools.active());
+            if self.measurement_key(key, mods, drawing, size) {
+                continue;
+            }
             let Some((action, _)) = action_for_event(&self.keys, key, physical, mods) else {
                 continue;
             };
@@ -533,6 +589,87 @@ impl ModelerApp {
             if let Some(cmd) = ModelerApp::cmd_of(action) {
                 self.run(cmd, size);
             }
+        }
+    }
+
+    /// A key that belongs to the Measurements box or to the tool in progress. True if it was
+    /// used (the key action is then not run). Characters come as text events; this decides which
+    /// keys must not also run their action (digits do not choose standard views, the letters of a
+    /// unit do not choose tools).
+    fn measurement_key(
+        &mut self,
+        key: egui::Key,
+        mods: egui::Modifiers,
+        drawing: bool,
+        size: glam::Vec2,
+    ) -> bool {
+        use egui::Key;
+        let plain = !mods.command && !mods.ctrl && !mods.alt;
+        let typed = !self.edit.modeling.typed().is_empty();
+        match key {
+            Key::Enter if drawing => {
+                self.enter_typed(size);
+                return true;
+            }
+            Key::Backspace | Key::Delete if drawing && typed => {
+                self.edit.modeling.backspace();
+                return true;
+            }
+            Key::Escape => {
+                if self.edit.modeling.cancel() {
+                    self.status.clear();
+                    return true;
+                }
+            }
+            Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown
+                if self.edit.arrow(key) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        if !(drawing && plain) {
+            return false;
+        }
+        let value_key = matches!(
+            key,
+            Key::Num0
+                | Key::Num1
+                | Key::Num2
+                | Key::Num3
+                | Key::Num4
+                | Key::Num5
+                | Key::Num6
+                | Key::Num7
+                | Key::Num8
+                | Key::Num9
+                | Key::Period
+                | Key::Comma
+                | Key::Semicolon
+                | Key::Colon
+                | Key::Minus
+                | Key::Slash
+                | Key::Quote
+                | Key::OpenBracket
+                | Key::CloseBracket
+        );
+        let letter = key.name().len() == 1 && key.name().chars().all(|c| c.is_ascii_alphabetic());
+        value_key || (letter && typed)
+    }
+
+    /// Enter in the Measurements box.
+    fn enter_typed(&mut self, _size: glam::Vec2) {
+        let rev = self.session.editor.revision();
+        let selected = self.session.selection.first().copied();
+        let out = {
+            let doc = self.session.editor.doc();
+            let scenes = self.edit.cache.get(doc, rev);
+            let world = kadakas_ui_core::modeling::World { doc, scenes };
+            self.edit.modeling.enter(&world, selected, rev)
+        };
+        self.edit.run(&mut self.session, out);
+        if let Some(m) = self.edit.message.take() {
+            self.status = m;
         }
     }
 
@@ -559,6 +696,29 @@ impl ModelerApp {
         }
     }
 
+    /// Entity Info for the selection. It is made again only when the revision or the selection
+    /// changes (a closed-volume check of a big model is not cheap).
+    fn info(&mut self, scene: &kadakas_core::mesh::Scene) -> modeler::EntityInfo {
+        let key = (
+            self.session.editor.revision(),
+            self.session.selection.clone(),
+            self.edit.sub.clone(),
+        );
+        if let Some((k, info)) = &self.info_cache
+            && *k == key
+        {
+            return info.clone();
+        }
+        let info = modeler::entity_info_with_parts(
+            self.session.editor.doc(),
+            scene,
+            &self.session.selection,
+            &self.edit.sub,
+        );
+        self.info_cache = Some((key, info.clone()));
+        info
+    }
+
     // ---- the frame ---------------------------------------------------------------------------
 
     /// Draws the window. Runs once per frame.
@@ -581,8 +741,13 @@ impl ModelerApp {
 
         // The scene is needed for Entity Info; it is made once per revision.
         let scene = self.session.scene();
-        let info = modeler::entity_info(self.session.editor.doc(), &scene, &self.session.selection);
-        let measurement = modeler::measurement(&info, self.tools.active(), self.nav.fov_deg());
+        let info = self.info(&scene);
+        let measurement = self.edit.measurement().unwrap_or_else(|| {
+            modeler::measurement(&info, self.tools.active(), self.nav.fov_deg())
+        });
+        if let Some(m) = self.edit.message.take() {
+            self.status = m;
+        }
 
         egui::Panel::bottom("status").show(ui, |ui| {
             crate::statusbar::show(ui, &self.status, self.tools.active(), &measurement);
@@ -602,6 +767,7 @@ impl ModelerApp {
                     view3d: &mut self.view3d,
                     nav: &mut self.nav,
                     tools: &mut self.tools,
+                    edit: &mut self.edit,
                     gpu_ready: self.gpu_ready,
                     fit_pending: &mut self.fit_pending,
                 },
@@ -616,6 +782,7 @@ impl ModelerApp {
         for cmd in cmds {
             self.run(cmd, size);
         }
+        self.edit.follow(self.tools.active());
         // A view that has rested becomes an entry of the history (Previous and Next).
         let now = ctx.input(|i| i.time);
         if self.nav.observe(now) {

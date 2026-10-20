@@ -10,8 +10,8 @@ use super::arrange::{self, Arrangement, Region, canonical, inside, reversed};
 use super::geom::{self, Plane, on_plane};
 use super::topo::Topo;
 use super::{
-    Edge, EdgeId, Face, FaceId, MAX_EDGES, MAX_EDIT_EDGES, MAX_FACES, MAX_LOOP_VERTICES,
-    MAX_VERTICES, SurfaceError, SurfaceModel, VertexId, key,
+    Edge, EdgeId, Face, FaceId, LENGTH_TOLERANCE, MAX_EDGES, MAX_EDIT_EDGES, MAX_FACES,
+    MAX_LOOP_VERTICES, MAX_VERTICES, SurfaceError, SurfaceModel, VertexId, key,
 };
 use crate::model::MAX_COORD;
 
@@ -29,12 +29,25 @@ pub enum Edit {
     EraseFaces { faces: Vec<FaceId> },
     /// Turns faces over: front and back change places.
     ReverseFaces { faces: Vec<FaceId> },
+    /// Draws a chain of straight edges through the points (a closed one joins the last point to
+    /// the first) and keeps them as one curve (a circle or an arc, MOD-08), so that the pieces
+    /// stay one curve when other edges cut them. Welds, splits and faces work as in `AddEdges`.
+    /// When one of the pieces is in a curve already, the edges are drawn and no new curve is made.
+    AddCurve { points: Vec<[f64; 3]>, closed: bool },
+    /// Pushes or pulls a face along its normal by `distance` mm (positive is toward the front,
+    /// negative toward the back). See the module `pushpull` for the cases. The face keeps its id
+    /// and ends as the cap.
+    PushPull { face: FaceId, distance: f64 },
 }
+
+mod pushpull;
 
 pub(super) fn run(m: &mut SurfaceModel, edit: &Edit) -> Result<(), SurfaceError> {
     match edit {
         Edit::AddEdges { edges } => add_edges(m, edges),
         Edit::EraseEdges { edges } => erase_edges(m, edges),
+        Edit::AddCurve { points, closed } => add_curve(m, points, *closed),
+        Edit::PushPull { face, distance } => pushpull::push_pull(m, *face, *distance),
         Edit::EraseFaces { faces } => {
             let ids = existing_faces(m, faces)?;
             let mut w = Work::new(m);
@@ -717,6 +730,88 @@ fn add_edges(m: &mut SurfaceModel, segs: &[[[f64; 3]; 2]]) -> Result<(), Surface
     }
     w.solve_after_add(&drawn, &touched)?;
     check_limits(w.m)
+}
+
+fn add_curve(m: &mut SurfaceModel, points: &[[f64; 3]], closed: bool) -> Result<(), SurfaceError> {
+    let n = points.len();
+    let count = if closed { n } else { n.saturating_sub(1) };
+    if n < 2 || count < 1 {
+        return Err(SurfaceError::TooShort {
+            tol: LENGTH_TOLERANCE,
+        });
+    }
+    if count > MAX_EDIT_EDGES {
+        return Err(SurfaceError::Limit {
+            what: "edges in one edit",
+            max: MAX_EDIT_EDGES,
+            count,
+        });
+    }
+    let mut w = Work::new(m);
+    let mut drawn = Vec::new();
+    let mut touched = BTreeSet::new();
+    // For each segment, the pieces it was drawn in (start and end vertex).
+    let mut spans: Vec<(VertexId, VertexId)> = Vec::new();
+    for i in 0..count {
+        let (a, b) = (DVec3::from(points[i]), DVec3::from(points[(i + 1) % n]));
+        if [a, b]
+            .iter()
+            .any(|p| !p.is_finite() || geom::size(*p) > MAX_COORD)
+        {
+            return Err(SurfaceError::BadPoint);
+        }
+        let from = drawn.len();
+        w.insert_segment(a, b, &mut drawn, &mut touched)?;
+        spans.push((drawn[from].0, drawn[drawn.len() - 1].1));
+        check_limits(w.m)?;
+    }
+    w.solve_after_add(&drawn, &touched)?;
+    // Later segments can cut the earlier pieces: find the edges that run between the span ends.
+    let mut chain: Vec<EdgeId> = Vec::new();
+    for (x, y) in spans {
+        match w.chain_between(x, y) {
+            Some(es) => chain.extend(es),
+            None => return check_limits(w.m),
+        }
+    }
+    let used: BTreeSet<EdgeId> = w.m.curves.values().flatten().copied().collect();
+    let unique: BTreeSet<EdgeId> = chain.iter().copied().collect();
+    if unique.len() == chain.len() && chain.iter().all(|e| !used.contains(e)) {
+        let id = super::CurveId(w.m.alloc());
+        w.m.curves.insert(id, chain);
+    }
+    check_limits(w.m)
+}
+
+impl Work<'_> {
+    /// The edges that run along the straight line from `x` to `y`, in order, or `None` when no
+    /// such chain exists.
+    fn chain_between(&self, x: VertexId, y: VertexId) -> Option<Vec<EdgeId>> {
+        let (p, q) = (self.pos(x), self.pos(y));
+        let len = p.distance(q);
+        let mut out = Vec::new();
+        let mut cur = x;
+        let mut at = 0.0;
+        while cur != y {
+            let mut best: Option<(f64, EdgeId, VertexId)> = None;
+            for e in self.t.edges_at(cur) {
+                let o = self.m.edges[&e].other(cur)?;
+                let po = self.pos(o);
+                let (d, s) = geom::point_segment(po, p, q);
+                if d <= geom::tol(&[p, q, po]) && s * len > at + 1e-12 {
+                    let s = s * len;
+                    if best.is_none_or(|(bs, _, _)| s < bs) {
+                        best = Some((s, e, o));
+                    }
+                }
+            }
+            let (s, e, o) = best?;
+            out.push(e);
+            at = s;
+            cur = o;
+        }
+        Some(out)
+    }
 }
 
 /// A small union-find of faces; `FaceId(0)` stands for "no face" (ids start at 1).

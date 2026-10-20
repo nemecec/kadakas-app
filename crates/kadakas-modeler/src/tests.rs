@@ -271,13 +271,7 @@ fn a_tool_that_does_not_run_yet_stays_off_and_says_why() {
     let mut app = app();
     let none = egui::Modifiers::NONE;
     for key in [
-        egui::Key::L,
-        egui::Key::R,
-        egui::Key::C,
-        egui::Key::A,
-        egui::Key::P,
         egui::Key::M,
-        egui::Key::E,
         egui::Key::B,
         egui::Key::T,
         egui::Key::Q,
@@ -1169,3 +1163,5 @@ fn the_actions_of_the_modeler_are_the_ones_it_runs() {
         assert!(!ModelerApp::runs(a), "{a:?}");
     }
 }
+
+mod modeling;

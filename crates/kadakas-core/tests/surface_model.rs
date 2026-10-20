@@ -235,3 +235,77 @@ fn the_plan_snapping_and_the_3d_scene_show_the_model() {
     assert!(mesh::build(empty.doc()).mesh.positions.is_empty());
     assert_eq!(Shape::SurfaceModel(Box::default()).kind(), "surface_model");
 }
+
+#[test]
+fn push_pull_and_add_curve_are_one_undo_step_each() {
+    let mut ed = Editor::with_sequential_ids();
+    let id = add_model(&mut ed);
+    let depth = ed.undo_depth();
+    edit(&mut ed, id, square(1000.0)).unwrap();
+    let face = model(&ed, id).faces().next().unwrap().0;
+    edit(
+        &mut ed,
+        id,
+        Edit::PushPull {
+            face,
+            distance: 400.0,
+        },
+    )
+    .unwrap();
+    assert_eq!(ed.undo_depth(), depth + 2);
+    let boxed = model(&ed, id).clone();
+    assert_eq!(
+        (boxed.vertex_count(), boxed.edge_count(), boxed.face_count()),
+        (8, 12, 6)
+    );
+    assert!(boxed.check().is_closed());
+    // The JSON form of the command.
+    let cmd: Command = serde_json::from_value(serde_json::json!({
+        "op": "edit_surface", "id": id,
+        "edit": {"action": "push_pull", "face": face.0, "distance": 100.0}
+    }))
+    .unwrap();
+    ed.execute(&cmd).unwrap();
+    assert_eq!(ed.undo_depth(), depth + 3);
+    assert!(ed.undo());
+    assert_eq!(model(&ed, id), &boxed);
+    // A failed push changes nothing and adds no step.
+    let top = boxed
+        .faces()
+        .find(|(_, f)| f.plane.normal.z > 0.9)
+        .unwrap()
+        .0;
+    let steps = ed.undo_depth();
+    assert!(
+        edit(
+            &mut ed,
+            id,
+            Edit::PushPull {
+                face: top,
+                distance: -400.0
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(ed.undo_depth(), steps);
+    assert_eq!(model(&ed, id), &boxed);
+    // A circle is a curve in one step.
+    edit(
+        &mut ed,
+        id,
+        Edit::AddCurve {
+            points: (0..12)
+                .map(|i| {
+                    let a = std::f64::consts::TAU * f64::from(i) / 12.0;
+                    [5000.0 + 300.0 * a.cos(), 300.0 * a.sin(), 0.0]
+                })
+                .collect(),
+            closed: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(ed.undo_depth(), steps + 1);
+    assert_eq!(model(&ed, id).curves().count(), 1);
+    assert!(ed.undo());
+    assert_eq!(model(&ed, id), &boxed);
+}

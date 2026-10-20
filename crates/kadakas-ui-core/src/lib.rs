@@ -29,6 +29,7 @@ pub mod keys;
 pub mod massing;
 pub mod measure_box;
 pub mod modeler;
+pub mod modeling;
 pub mod nav3d;
 pub mod open_limit;
 pub mod paving;
