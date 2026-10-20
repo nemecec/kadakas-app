@@ -210,8 +210,32 @@ impl CrashUi {
         }
     }
 
+    /// True if the text on the screen is the text that the report gives now. If it is not (for
+    /// example the person turned the installation ID off while the window was open), the screen
+    /// gets the new text, a line tells the person, and nothing is sent: Send must send exactly
+    /// the text that was read.
+    fn shown_text_is_current(&mut self, hub: &mut Hub) -> bool {
+        let Some(c) = &mut self.current else {
+            return false;
+        };
+        match c.review.payload(hub) {
+            Ok(fresh) if fresh == c.text => true,
+            Ok(fresh) => {
+                c.text = fresh;
+                c.text_for = c.review.extras.clone();
+                self.note = Some(tr!("crash-ui-text-changed"));
+                false
+            }
+            // The store says why in `send`.
+            Err(_) => true,
+        }
+    }
+
     /// Send: the exact text is stored as approved and goes out.
     pub fn press_send(&mut self, hub: &mut Hub) {
+        if !self.shown_text_is_current(hub) {
+            return;
+        }
         let Some(c) = self.current.take() else { return };
         let id = c.kept.id.clone();
         match c.review.send(hub) {
@@ -239,6 +263,9 @@ impl CrashUi {
     /// Always send: sets the preference, and sends this report and the others that wait. It
     /// changes nothing else.
     pub fn press_always(&mut self, hub: &mut Hub) {
+        if !self.shown_text_is_current(hub) {
+            return;
+        }
         if let Err(e) = hub.set_crash_policy(CrashPolicy::Always) {
             self.note = Some(tr!("crash-ui-store-failed", error = e.to_string()));
             return;
@@ -489,6 +516,52 @@ mod tests {
         // The policy did not change.
         assert_eq!(hub.crash_policy(), CrashPolicy::Ask);
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn send_sends_exactly_the_text_on_the_screen() {
+        let d = tmp("exact");
+        keep(&d, 1);
+        let mut hub = Hub::in_memory();
+        hub.set_send(Some(true)).unwrap();
+        let id = hub.installation_id();
+        let mut c = ui(&d);
+        c.start(&mut hub);
+        c.open_next(&mut hub);
+        let first = c.current_text().unwrap().to_string();
+        assert!(first.contains(&id));
+        // The person turns the installation ID off in Preferences while the window is open.
+        hub.set_include_installation(false).unwrap();
+        c.press_send(&mut hub);
+        assert!(
+            hub.outgoing(true, 10, 1_000).is_empty(),
+            "the old text is not sent"
+        );
+        assert!(c.take_note().is_some(), "the person is told");
+        let now = c.current_text().unwrap().to_string();
+        assert_ne!(now, first);
+        assert!(!now.contains(&id));
+        // The second press sends the text that is on the screen now.
+        c.press_send(&mut hub);
+        let out = hub.outgoing(true, 10, 1_000);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].payload, now);
+        // The same for Always send: the policy does not change on a refused press.
+        let d2 = tmp("exact-always");
+        keep(&d2, 2);
+        let mut hub = Hub::in_memory();
+        let mut c = ui(&d2);
+        c.start(&mut hub);
+        c.open_next(&mut hub);
+        hub.set_include_installation(false).unwrap();
+        c.press_always(&mut hub);
+        assert_eq!(hub.crash_policy(), CrashPolicy::Ask);
+        assert!(hub.outgoing(true, 10, 1_000).is_empty());
+        c.press_always(&mut hub);
+        assert_eq!(hub.crash_policy(), CrashPolicy::Always);
+        assert_eq!(hub.outgoing(true, 10, 1_000).len(), 1);
+        std::fs::remove_dir_all(&d).unwrap();
+        std::fs::remove_dir_all(&d2).unwrap();
     }
 
     #[test]

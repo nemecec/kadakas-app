@@ -16,6 +16,7 @@ crash-ui-always-send = Saada alati
 crash-ui-always-hint = Saada alati muudab ainult seadet kohas Eelistused > Privaatsus > Jooksutuse aruanded. Seal saad selle igal ajal tagasi võtta.
 crash-ui-close-hint = Sulge see aken, et otsustada järgmisel korral. Aruanne jääb selle ajani sellesse arvutisse.
 crash-ui-store-failed = Jooksutuse aruannet ei saanud salvestada: { $error }
+crash-ui-text-changed = Saadetav tekst muutus, näiteks seetõttu, et muutsid privaatsuse seadet. Loe see uuesti läbi ja vajuta nuppu uuesti.
 crash-ui-queued = Jooksutuse aruanne ootab saatmist.
 
 crash-ui-prefs-privacy = Privaatsus

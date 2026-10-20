@@ -148,6 +148,49 @@ mod tests {
         assert_eq!(s.include, Some(false));
     }
 
+    fn approved_crash(hub: &mut Hub) -> String {
+        use kadakas_crash::report::Review;
+        let mut f = kadakas_crash::CrashFile::new(kadakas_crash::CrashKind::Panic);
+        f.version = "1".into();
+        f.message = "boom".into();
+        let r = Review::open(hub, &f, &kadakas_crash::scrub::Context::default(), 1)
+            .unwrap()
+            .unwrap();
+        let id = r.id().to_string();
+        r.send(hub).unwrap();
+        id
+    }
+
+    #[test]
+    fn never_reaches_crash_reports_that_are_queued() {
+        let mut hub = Hub::in_memory();
+        hub.set_send(Some(true)).unwrap();
+        let id = approved_crash(&mut hub);
+        let mut s = PrivacyState::default();
+        s.load(&mut hub);
+        s.set_policy(&mut hub, CrashPolicy::Never);
+        assert_eq!(
+            hub.get(&id).unwrap().status,
+            kadakas_feedback::Status::Withdrawn
+        );
+        assert!(hub.outgoing(true, 10, 1_000).is_empty());
+    }
+
+    #[test]
+    fn the_switch_reaches_crash_reports_that_are_queued() {
+        let mut hub = Hub::in_memory();
+        hub.set_send(Some(true)).unwrap();
+        approved_crash(&mut hub);
+        let mut s = PrivacyState::default();
+        s.load(&mut hub);
+        let id = s.id().unwrap().to_string();
+        s.set_include(&mut hub, false);
+        let out = hub.outgoing(true, 10, 1_000);
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].payload.contains(&id), "{}", out[0].payload);
+        assert!(out[0].payload.contains("\"crash\""));
+    }
+
     #[test]
     fn the_section_draws_and_names_exist_in_both_languages() {
         for tag in ["en-US", "et"] {

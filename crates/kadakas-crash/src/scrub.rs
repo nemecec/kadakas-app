@@ -35,28 +35,53 @@ pub struct Context {
     pub user: Option<String>,
     /// The home folder.
     pub home: Option<String>,
+    /// Other names of a home folder (`USERPROFILE` next to `HOME`, a drive and a path).
+    pub more_homes: Vec<String>,
 }
 
 impl Context {
-    /// Reads the login name and the home folder from the environment.
+    /// Reads the login name and the home folders from the environment.
     pub fn from_env() -> Context {
+        Context::from_lookup(&|k| std::env::var(k).ok())
+    }
+
+    /// Like [`Context::from_env`], with the variables given. On Windows `HOME` is often not set
+    /// and `USERPROFILE` is the home folder; both are used when both exist.
+    pub fn from_lookup(get: &dyn Fn(&str) -> Option<String>) -> Context {
         let get = |k: &str| {
-            std::env::var(k)
-                .ok()
+            get(k)
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
         };
         let user = get("USER")
             .or_else(|| get("USERNAME"))
             .or_else(|| get("LOGNAME"));
-        let home = get("HOME").or_else(|| get("USERPROFILE"));
-        Context { user, home }
+        let mut homes: Vec<String> = Vec::new();
+        let drive_path = match (get("HOMEDRIVE"), get("HOMEPATH")) {
+            (Some(d), Some(p)) => Some(format!("{d}{p}")),
+            _ => None,
+        };
+        for h in [get("HOME"), get("USERPROFILE"), drive_path]
+            .into_iter()
+            .flatten()
+        {
+            if !homes.contains(&h) {
+                homes.push(h);
+            }
+        }
+        let mut it = homes.into_iter();
+        Context {
+            user,
+            home: it.next(),
+            more_homes: it.collect(),
+        }
     }
 
     pub fn new(user: &str, home: &str) -> Context {
         Context {
             user: Some(user.to_string()).filter(|u| !u.is_empty()),
             home: Some(home.to_string()).filter(|u| !u.is_empty()),
+            more_homes: Vec::new(),
         }
     }
 }
@@ -220,9 +245,13 @@ fn urls(s: &str) -> String {
                 Some(i) => (&url[..i], &url[i..]),
                 None => (url, ""),
             };
-            // No user or password.
+            // No user or password. Only the official sites keep their name.
             let host = authority.rsplit('@').next().unwrap_or(authority);
-            out.push_str(host);
+            if official_host(host) {
+                out.push_str(host);
+            } else {
+                out.push_str("<host>");
+            }
             if !tail.is_empty() && tail != "/" {
                 out.push_str("/<url-path>");
             }
@@ -230,6 +259,93 @@ fn urls(s: &str) -> String {
         rest = &after[end..];
     }
     out.push_str(rest);
+    out
+}
+
+/// The domain of the official Kadakas servers: the last two labels of the address of the
+/// feedback server (`feedback.kadakas.invalid` gives `kadakas.invalid`).
+fn official_domain() -> String {
+    let url = kadakas_feedback::DEFAULT_URL;
+    let host = url
+        .split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split(['/', ':'])
+        .next()
+        .unwrap_or("");
+    let labels: Vec<&str> = host.split('.').collect();
+    labels[labels.len().saturating_sub(2)..].join(".")
+}
+
+/// True for the official Kadakas domain and its subdomains (with or without a port).
+fn official_host(host: &str) -> bool {
+    let host = host.rsplit_once(':').map_or(host, |(h, p)| {
+        if p.bytes().all(|b| b.is_ascii_digit()) {
+            h
+        } else {
+            host
+        }
+    });
+    let host = host.to_ascii_lowercase();
+    let domain = official_domain();
+    !domain.is_empty()
+        && (host == domain
+            || host
+                .strip_suffix(domain.as_str())
+                .is_some_and(|h| h.ends_with('.')))
+}
+
+/// File extensions that make a name a file name.
+const FILE_EXTS: [&str; 33] = [
+    "kad", "json", "dxf", "dwg", "ifc", "shp", "geojson", "png", "jpg", "jpeg", "svg", "pdf",
+    "csv", "py", "wasm", "txt", "gltf", "glb", "obj", "xml", "gpkg", "kml", "kmz", "tif", "tiff",
+    "bcfzip", "zip", "js", "toml", "ini", "bak", "tmp", "log",
+];
+
+/// Replaces a file name that has a known extension with `<file>`, also when the name has spaces
+/// and no quotes (`opening My Garden Plan.kad failed`). Where the name starts is not known, so
+/// the text before the extension goes back to the last mark (a quote, a bracket, `:`, `,`, `;`,
+/// `=`, `>` or the start of the line). That removes more than the name, never less.
+fn file_names(s: &str) -> String {
+    s.split('\n').map(line_names).collect::<Vec<_>>().join("\n")
+}
+
+fn line_names(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let is_mark = |c: char| "\"'`()[]{}<>:,;=|".contains(c);
+    let mut out = String::with_capacity(line.len());
+    let mut done = 0; // chars before this index are in `out`
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '.' && i > done && !chars[i - 1].is_whitespace() {
+            let mut e = i + 1;
+            while e < chars.len() && chars[e].is_ascii_alphanumeric() {
+                e += 1;
+            }
+            let ext: String = chars[i + 1..e]
+                .iter()
+                .collect::<String>()
+                .to_ascii_lowercase();
+            let after_ok = e >= chars.len() || !(chars[e].is_alphanumeric() || chars[e] == '_');
+            if after_ok && FILE_EXTS.contains(&ext.as_str()) {
+                // Back to the last mark; the white space after the mark stays.
+                let mut start = i;
+                while start > done && !is_mark(chars[start - 1]) {
+                    start -= 1;
+                }
+                while start < i && chars[start].is_whitespace() {
+                    start += 1;
+                }
+                out.extend(&chars[done..start]);
+                out.push_str("<file>");
+                done = e;
+                i = e;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out.extend(&chars[done..]);
     out
 }
 
@@ -272,9 +388,9 @@ pub fn text(s: &str, ctx: &Context) -> String {
         .collect();
     let (s, kept) = protect(&s);
     let s = urls(&s);
-    let s = strings(&paths(&s));
+    let s = file_names(&strings(&paths(&s)));
     let mut s = s;
-    if let Some(home) = &ctx.home {
+    for home in ctx.home.iter().chain(ctx.more_homes.iter()) {
         // A home folder that is written without its path rules (a bare mention).
         let home = home.trim_end_matches(is_sep);
         if home.chars().count() >= 4 {
@@ -557,23 +673,110 @@ mod tests {
     }
 
     #[test]
-    fn urls_keep_the_host_only() {
+    fn urls_keep_the_scheme_and_only_the_official_host() {
         assert_eq!(
             t("get https://tiles.example.com/v1/12/3/4.png?key=abc123def456 failed"),
-            "get https://tiles.example.com/<url-path> failed"
+            "get https://<host>/<url-path> failed"
         );
         assert_eq!(
             t("https://user:s3cret@host.example:8443/x"),
-            "https://host.example:8443/<url-path>"
+            "https://<host>/<url-path>"
         );
-        assert_eq!(t("see http://localhost:8080/"), "see http://localhost:8080");
-        assert_eq!(t("https://a.b/c#frag"), "https://a.b/<url-path>");
+        assert_eq!(t("see http://localhost:8080/"), "see http://<host>");
+        assert_eq!(t("https://a.b/c#frag"), "https://<host>/<url-path>");
         assert_eq!(
             t("wss://collab.example.org/room/abc?token=zzz"),
-            "wss://collab.example.org/<url-path>"
+            "wss://<host>/<url-path>"
         );
-        assert_eq!(t("(https://x.y/z?a=b)"), "(https://x.y/<url-path>)");
+        assert_eq!(t("(https://x.y/z?a=b)"), "(https://<host>/<url-path>)");
         assert_eq!(t("bare :// is not a url"), "bare :// is not a url");
+        // The official servers keep their name (the feedback server and its relatives).
+        assert_eq!(
+            t("POST https://feedback.kadakas.invalid/v1/feedback failed"),
+            "POST https://feedback.kadakas.invalid/<url-path> failed"
+        );
+        assert_eq!(
+            t("https://KADAKAS.invalid:8443"),
+            "https://KADAKAS.invalid:8443"
+        );
+        // A name that only looks alike does not.
+        assert_eq!(
+            t("https://evil-kadakas.invalid/x"),
+            "https://<host>/<url-path>"
+        );
+        assert_eq!(
+            t("https://kadakas.invalid.example.com/x"),
+            "https://<host>/<url-path>"
+        );
+        assert_eq!(
+            t("https://user:pw@feedback.kadakas.invalid/x"),
+            "https://feedback.kadakas.invalid/<url-path>"
+        );
+    }
+
+    #[test]
+    fn file_names_with_spaces_and_no_quotes_go_whole() {
+        for (input, want) in [
+            ("opening My Garden Plan.kad failed", "<file> failed"),
+            ("could not read Smith house survey.DXF now", "<file> now"),
+            ("error: Oak Row.json: not found", "error: <file>: not found"),
+            ("saved Plan v2.final.kad.", "<file>."),
+            ("a, My Plan.pdf, b", "a, <file>, b"),
+            ("lines.txt and Other Plan.kad", "<file> <file>"),
+        ] {
+            let out = t(input);
+            assert_eq!(out, want, "{input}");
+        }
+        // Words that only have a dot stay.
+        assert_eq!(
+            t("version 0.4.0 of kadakas.app"),
+            "version 0.4.0 of kadakas.app"
+        );
+        assert_eq!(t("e.g. a note. The end"), "e.g. a note. The end");
+        assert_eq!(t("file .kad alone"), "file .kad alone");
+        assert_eq!(t("data.kadx stays"), "data.kadx stays");
+    }
+
+    #[test]
+    fn the_home_folder_comes_from_userprofile_without_home() {
+        let env = |k: &str| match k {
+            "USERNAME" => Some("Annika".to_string()),
+            "USERPROFILE" => Some(r"C:\Users\Annika".to_string()),
+            _ => None,
+        };
+        let c = Context::from_lookup(&env);
+        assert_eq!(c.user.as_deref(), Some("Annika"));
+        assert_eq!(c.home.as_deref(), Some(r"C:\Users\Annika"));
+        let out = text(r"profile is C:\Users\Annika and Annika", &c);
+        assert!(!out.to_lowercase().contains("annika"), "{out}");
+        // Both HOME and USERPROFILE (a Git Bash on Windows), and a drive with a path.
+        let env2 = |k: &str| match k {
+            "HOME" => Some("/c/Users/Bob".to_string()),
+            "USERPROFILE" => Some(r"C:\Users\Bob".to_string()),
+            "HOMEDRIVE" => Some("D:".to_string()),
+            "HOMEPATH" => Some(r"\Users\Bob".to_string()),
+            _ => None,
+        };
+        let c = Context::from_lookup(&env2);
+        assert_eq!(c.more_homes.len(), 2);
+        let out = text(r"x D:\Users\Bob / C:\Users\Bob", &c);
+        assert!(!out.contains("Bob"), "{out}");
+        assert_eq!(Context::from_lookup(&|_| None), Context::default());
+    }
+
+    #[test]
+    fn unc_paths_and_homes_go() {
+        let c = Context::new("ann", r"\\fileserver\home\ann");
+        for s in [
+            r"open \\fileserver\home\ann\Plans\My Garden.kad now",
+            r"home is \\fileserver\home\ann.",
+            r"at \\nas\share\Smith Job\x.dxf",
+        ] {
+            let out = text(s, &c);
+            for leak in ["fileserver", "ann", "Garden", "Smith", "share", "nas"] {
+                assert!(!out.contains(leak), "{leak} in {out} (from {s})");
+            }
+        }
     }
 
     #[test]
@@ -599,7 +802,10 @@ mod tests {
             !out.contains("SECRETVALUE") && !out.contains("access_token"),
             "{out}"
         );
-        assert!(out.contains("api.example.com"));
+        assert!(
+            out.contains("<host>") && !out.contains("api.example.com"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -770,6 +976,32 @@ mod tests {
     use proptest::prelude::*;
 
     proptest! {
+        #[test]
+        fn random_paths_and_user_names_never_leak(
+            user in "[a-z]{3,9}",
+            folders in proptest::collection::vec("Qz[A-Za-z0-9 ._-]{3,10}", 1..5),
+            stem in "Qz[A-Za-z0-9 _-]{3,12}",
+            style in 0usize..4,
+        ) {
+            prop_assume!(!["path", "user", "file", "home", "host", "text", "name", "email", "secret"].contains(&user.as_str()));
+            let ctx = Context::new(&user, "");
+            let dir = folders.join(if style == 1 { "\\" } else { "/" });
+            let path = match style {
+                0 => format!("/Users/{user}/{dir}/{stem}.kad"),
+                1 => format!("C:\\Users\\{user}\\{dir}\\{stem}.kad"),
+                2 => format!("/home/{user}/{dir}/{stem}.dxf"),
+                _ => format!("\\\\server\\{user}\\{dir}\\{stem}.ifc"),
+            };
+            let msg = format!("failed to open {path} for {user}");
+            let out = text(&msg, &ctx);
+            prop_assert!(!out.to_lowercase().contains(&user), "{out} from {msg}");
+            prop_assert!(!out.contains(stem.trim()) || stem.trim().len() < 2 || "<path><user>".contains(stem.trim()), "{out} from {msg}");
+            prop_assert!(!out.contains(".kad") && !out.contains(".dxf") && !out.contains(".ifc"), "{out}");
+            for f in folders.iter().map(|f| f.trim()).filter(|f| f.len() > 3) {
+                prop_assert!(!out.contains(f) || "<path><user><file>".contains(f), "{f} in {out}");
+            }
+        }
+
         #[test]
         fn scrubbing_never_panics_and_is_idempotent_enough(s in "\\PC{0,200}") {
             let c = ctx();

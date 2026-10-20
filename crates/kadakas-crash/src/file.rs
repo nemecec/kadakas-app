@@ -83,7 +83,13 @@ pub struct CrashFile {
     /// The peak resident memory of the process, in MiB.
     pub memory_peak_mib: Option<u64>,
     pub uptime_secs: u64,
+    /// Set by the launcher: the app survived this panic and ended later by other means. The
+    /// number is the seconds between the panic and the end of the run.
+    pub survived_gap_secs: Option<u64>,
 }
+
+/// The longest function name or file path of a frame that is kept.
+pub const MAX_FRAME_FIELD: usize = 400;
 
 impl CrashFile {
     pub fn new(kind: CrashKind) -> CrashFile {
@@ -96,15 +102,16 @@ impl CrashFile {
 
     /// Cuts every part to its limit, so a damaged or hostile file cannot be large.
     pub fn bounded(mut self) -> CrashFile {
-        let cut = |s: &mut String| {
-            if s.len() > MAX_FIELD {
-                let mut end = MAX_FIELD;
+        let cut_at = |s: &mut String, max: usize| {
+            if s.len() > max {
+                let mut end = max;
                 while !s.is_char_boundary(end) {
                     end -= 1;
                 }
                 s.truncate(end);
             }
         };
+        let cut = |s: &mut String| cut_at(s, MAX_FIELD);
         cut(&mut self.message);
         cut(&mut self.thread);
         cut(&mut self.version);
@@ -113,9 +120,9 @@ impl CrashFile {
         cut(&mut self.run_id);
         self.frames.truncate(MAX_FRAMES);
         for f in &mut self.frames {
-            cut(&mut f.function);
+            cut_at(&mut f.function, MAX_FRAME_FIELD);
             if let Some(file) = &mut f.file {
-                cut(file);
+                cut_at(file, MAX_FRAME_FIELD);
             }
         }
         let keep_last = |v: &mut Vec<String>, n: usize| {
@@ -132,6 +139,35 @@ impl CrashFile {
             cut(&mut g.adapter);
             cut(&mut g.driver);
             cut(&mut g.backend);
+        }
+        self.fit()
+    }
+
+    /// Takes parts away until the written file is below [`MAX_FILE_BYTES`] with room to spare.
+    /// JSON escaping can make a text six times longer (`\u0001`), so the field limits alone do
+    /// not prove the size. The order: old log lines, old command names, deep frames. What is
+    /// left after that (the fixed fields, each cut to [`MAX_FIELD`]) is at most about 110 KB
+    /// even when every character is escaped, so the loop always ends below the limit.
+    fn fit(mut self) -> CrashFile {
+        let limit = (MAX_FILE_BYTES as usize).saturating_sub(4096);
+        while self.to_json().len() > limit {
+            if !self.log.is_empty() {
+                let n = self.log.len().div_ceil(2);
+                self.log.drain(..n);
+            } else if !self.commands.is_empty() {
+                let n = self.commands.len().div_ceil(2);
+                self.commands.drain(..n);
+            } else if self.frames.len() > 1 {
+                let n = self.frames.len().div_ceil(2);
+                self.frames.truncate(n);
+            } else {
+                self.frames.clear();
+                self.message.truncate(self.message.len() / 2);
+                self.thread.truncate(self.thread.len() / 2);
+                if self.message.is_empty() && self.thread.is_empty() {
+                    break;
+                }
+            }
         }
         self
     }
@@ -293,6 +329,60 @@ mod tests {
         assert_eq!(b.frames.len(), MAX_FRAMES);
         let back = CrashFile::parse(&b.to_json()).unwrap();
         assert_eq!(back, b);
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(16))]
+        #[test]
+        fn any_bounded_file_is_written_below_the_limit_and_parses(
+            message in "\\PC{0,3000}|[\\x00-\\x1f]{0,3000}",
+            lines in proptest::collection::vec("[\\x00-\\x1f\"\\\\a-z]{0,1200}", 0..60),
+            frames in proptest::collection::vec(("[\\x00-\\x1f\\x{e4}a-z:<>]{0,1200}", "[\\x00-\\x1f\\x{e4}a-z/]{0,1200}"), 0..80),
+        ) {
+            let mut f = CrashFile::new(CrashKind::Panic);
+            f.message = message;
+            f.thread = f.message.clone();
+            f.log = lines.clone();
+            f.commands = lines;
+            f.frames = frames
+                .into_iter()
+                .map(|(function, file)| Frame { function, file: Some(file), line: Some(1) })
+                .collect();
+            f.gpu = Some(Gpu { adapter: f.message.clone(), driver: f.message.clone(), backend: f.message.clone() });
+            let b = f.bounded();
+            let json = b.to_json();
+            prop_assert!((json.len() as u64) < MAX_FILE_BYTES, "{}", json.len());
+            prop_assert_eq!(CrashFile::parse(&json), Some(b));
+        }
+    }
+
+    #[test]
+    fn the_worst_case_of_escaping_fits() {
+        let mut f = CrashFile::new(CrashKind::Panic);
+        let bad = "\u{1}".repeat(MAX_FIELD);
+        f.message = bad.clone();
+        f.thread = bad.clone();
+        f.os = bad.clone();
+        f.gpu = Some(Gpu {
+            adapter: bad.clone(),
+            driver: bad.clone(),
+            backend: bad.clone(),
+        });
+        f.log = vec![bad.clone(); 50];
+        f.commands = vec![bad.clone(); 40];
+        f.frames = vec![
+            Frame {
+                function: bad.clone(),
+                file: Some(bad),
+                line: None
+            };
+            64
+        ];
+        let b = f.bounded();
+        assert!((b.to_json().len() as u64) < MAX_FILE_BYTES);
+        assert!(CrashFile::parse(&b.to_json()).is_some());
     }
 
     #[test]

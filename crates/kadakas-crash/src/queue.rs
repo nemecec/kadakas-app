@@ -112,23 +112,54 @@ pub fn store(root: &Path, id: &str, file: &CrashFile) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Moves the crash file of run `id` to the kept reports. Returns false when there was none (or
-/// it was damaged: then it is deleted). The launcher calls this after an abnormal end.
+/// Moves the crash file of run `id` to the kept reports. Returns false when there was none.
+/// The launcher calls this after an abnormal end.
+///
+/// A file that cannot be read (too large, damaged, or from a newer Kadakas) is never deleted
+/// silently: it moves to `crash-reports/<id>.unreadable`, and a small report says so.
 pub fn keep(root: &Path, id: &str) -> std::io::Result<bool> {
+    keep_as(root, id, false)
+}
+
+/// Like [`keep`]. With `survived` the report says that the app survived the panic and ended
+/// later by other means (a force quit, a shutdown): the gap between the panic and now is
+/// written into the file.
+pub fn keep_as(root: &Path, id: &str, survived: bool) -> std::io::Result<bool> {
     if !valid_id(id) {
         return Ok(false);
     }
     let live = live_path(root, id);
-    let Some(mut file) = read_file(&live) else {
-        let _ = std::fs::remove_file(&live);
+    let Ok(meta) = std::fs::metadata(&live) else {
         return Ok(false);
+    };
+    let Some(mut file) = read_file(&live) else {
+        let mut stub = CrashFile::new(crate::file::CrashKind::Native);
+        stub.run_id = id.to_string();
+        stub.created = now_secs();
+        stub.message = format!(
+            "UNREADABLE_CRASH_FILE ({} bytes; too large, damaged or from a newer Kadakas; kept as {id}.unreadable)",
+            meta.len()
+        );
+        kadakas_sys::fsio::create_private_dir(&kept_dir(root))?;
+        std::fs::rename(&live, kept_dir(root).join(format!("{id}.unreadable")))?;
+        store(root, id, &stub)?;
+        return Ok(true);
     };
     if file.run_id.is_empty() {
         file.run_id = id.to_string();
     }
+    if survived {
+        file.survived_gap_secs = Some(now_secs().saturating_sub(file.created));
+    }
     store(root, id, &file)?;
     let _ = std::fs::remove_file(&live);
     Ok(true)
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// The kept reports, oldest first.
@@ -175,6 +206,12 @@ pub fn trim(root: &Path, max: usize) {
     while entries.len() > max {
         let (_, id) = entries.remove(0);
         remove(root, &id);
+    }
+    // An unreadable original goes with its report.
+    for id in ids_in(&dir, ".unreadable") {
+        if !kept_path(root, &id).exists() {
+            let _ = std::fs::remove_file(dir.join(format!("{id}.unreadable")));
+        }
     }
 }
 
@@ -244,13 +281,57 @@ mod tests {
     }
 
     #[test]
-    fn a_damaged_live_file_is_deleted_and_not_kept() {
+    fn a_damaged_or_oversized_live_file_is_never_deleted_silently() {
         let d = tmp("damaged");
         std::fs::create_dir_all(runs_dir(&d)).unwrap();
         std::fs::write(live_path(&d, "aa"), b"{ not json").unwrap();
-        assert!(!keep(&d, "aa").unwrap());
-        assert!(!live_path(&d, "aa").exists());
-        assert_eq!(count(&d), 0);
+        let big = vec![b' '; (crate::file::MAX_FILE_BYTES + 10) as usize];
+        std::fs::write(live_path(&d, "bb"), &big).unwrap();
+        assert!(keep(&d, "aa").unwrap());
+        assert!(keep(&d, "bb").unwrap());
+        assert!(!live_path(&d, "aa").exists() && !live_path(&d, "bb").exists());
+        // The originals are kept, and a report says what happened.
+        assert_eq!(
+            std::fs::read(kept_dir(&d).join("aa.unreadable")).unwrap(),
+            b"{ not json"
+        );
+        assert_eq!(
+            std::fs::read(kept_dir(&d).join("bb.unreadable"))
+                .unwrap()
+                .len(),
+            big.len()
+        );
+        let l = list(&d);
+        assert_eq!(l.len(), 2);
+        assert!(l[0].file.message.starts_with("UNREADABLE_CRASH_FILE"));
+        assert!(l.iter().any(|k| k.file.message.contains("bytes")));
+        // The original goes with its report.
+        remove(&d, "aa");
+        trim(&d, 10);
+        assert!(!kept_dir(&d).join("aa.unreadable").exists());
+        assert!(kept_dir(&d).join("bb.unreadable").exists());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_survived_panic_gets_the_gap_and_a_failure_does_not() {
+        let d = tmp("survived");
+        let mut f = file(1_000, "panic once");
+        f.created = now_secs().saturating_sub(90);
+        write_live(&d, "a1", &f);
+        write_live(&d, "a2", &f);
+        assert!(keep_as(&d, "a1", true).unwrap());
+        assert!(keep_as(&d, "a2", false).unwrap());
+        let l = list(&d);
+        let gap = |id: &str| {
+            l.iter()
+                .find(|k| k.id == id)
+                .unwrap()
+                .file
+                .survived_gap_secs
+        };
+        assert!((90..120).contains(&gap("a1").unwrap()));
+        assert_eq!(gap("a2"), None);
         std::fs::remove_dir_all(&d).unwrap();
     }
 

@@ -32,7 +32,40 @@ fn child_setup() -> Option<PathBuf> {
     ring::note_log("opened /Users/someone/Documents/Secret Plan.kad");
     ring::note_command("file.open");
     ring::note_command("edit.move");
+    capture::refresh();
     Some(root)
+}
+
+extern "C" fn cannot_unwind() {
+    panic!("no way out of here");
+}
+
+#[test]
+fn child_panics_where_it_cannot_unwind() {
+    if child_setup().is_none() {
+        return;
+    }
+    // The panic hook runs, then the program aborts (SIGABRT). The native handler must not
+    // replace the file of the panic.
+    cannot_unwind();
+}
+
+#[test]
+fn child_keeps_the_first_of_two_panics() {
+    let Some(root) = child_setup() else { return };
+    assert!(
+        std::thread::spawn(|| panic!("the first one"))
+            .join()
+            .is_err()
+    );
+    assert!(
+        std::thread::spawn(|| panic!("the second one"))
+            .join()
+            .is_err()
+    );
+    let f = queue::read_live(&root, RUN).unwrap();
+    assert_eq!(f.message, "the first one");
+    capture::clean_exit();
 }
 
 #[test]
@@ -145,6 +178,34 @@ fn a_real_panic_in_a_child_leaves_a_crash_file() {
 }
 
 #[test]
+fn a_panic_that_ends_in_an_abort_keeps_its_backtrace() {
+    let root = tmp("abort");
+    let status = run_child("child_panics_where_it_cannot_unwind", &root);
+    assert!(!status.success());
+    let f = queue::read_live(&root, RUN).expect("the child wrote a crash file");
+    assert_eq!(
+        f.kind,
+        CrashKind::Panic,
+        "the native handler wrote nothing over it"
+    );
+    assert_eq!(f.message, "no way out of here");
+    assert!(f.frames.len() > 3);
+    assert!(
+        f.frames
+            .iter()
+            .any(|fr| fr.function.contains("cannot_unwind"))
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn only_the_first_panic_of_a_run_is_written() {
+    let root = tmp("first");
+    assert!(run_child("child_keeps_the_first_of_two_panics", &root).success());
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn a_caught_panic_is_no_crash_and_a_clean_exit_removes_the_file() {
     let root = tmp("caught");
     let status = run_child("child_survives_a_caught_panic_and_exits_clean", &root);
@@ -169,6 +230,9 @@ fn a_real_native_crash_in_a_child_leaves_a_crash_file() {
         "SIGSEGV"
     };
     assert!(f.message.starts_with(expect), "{}", f.message);
+    assert!(f.message.contains("(code "), "{}", f.message);
+    assert_eq!(f.channel, "nightly");
+    assert_eq!(f.gpu.as_ref().unwrap().backend, "Metal");
     assert_eq!(f.commands, vec!["file.open", "edit.move"]);
     assert!(!f.log.is_empty());
     std::fs::remove_dir_all(&root).unwrap();

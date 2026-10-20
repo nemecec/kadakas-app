@@ -16,6 +16,7 @@ crash-ui-always-send = Always send
 crash-ui-always-hint = Always send only changes the setting in Preferences > Privacy > Crash reports. You can take it back there at any time.
 crash-ui-close-hint = Close this window to decide next time. The report stays on this computer until then.
 crash-ui-store-failed = The crash report could not be stored: { $error }
+crash-ui-text-changed = The text to send has changed, for example because you changed a privacy setting. Read it again and press the button again.
 crash-ui-queued = The crash report waits to be sent.
 
 crash-ui-prefs-privacy = Privacy

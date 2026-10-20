@@ -69,6 +69,10 @@ thread_local! {
 /// Marks a place where a panic is caught on purpose (`catch_unwind`). While a guard lives, the
 /// panic hook of this crate writes no crash file for a panic on this thread: the program goes
 /// on, so it is no crash. Hold the guard around the `catch_unwind` call.
+///
+/// `std::panic::resume_unwind` does not call the panic hook at all, so a panic that is caught
+/// and resumed inside a guard writes no file. A new panic in the handler of a caught panic is a
+/// panic of its own and is written unless another guard is held.
 pub struct CatchGuard(());
 
 impl CatchGuard {

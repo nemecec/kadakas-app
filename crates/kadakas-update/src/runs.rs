@@ -163,18 +163,19 @@ impl RunGuard {
     /// The run ended. Reads the clean-exit mark, records the result in `health.json`, and
     /// deletes the files of the run.
     pub fn finish(self, store: &Store) -> RunEnd {
-        self.finish_with(store, None)
+        self.finish_with(store, &ProcessEnd::default())
     }
 
-    /// Like [`RunGuard::finish`]. `signal` names the signal or exception that ended the app, if
-    /// the system said so (`SIGSEGV`): without a crash file of the app, it becomes a small
-    /// report.
-    pub fn finish_with(mut self, store: &Store, signal: Option<&str>) -> RunEnd {
+    /// Like [`RunGuard::finish`]. `end` tells how the process ended, if the system said so.
+    /// A crash signal without a crash file of the app becomes a small report. A crash file
+    /// of a process that did not end by a failure (exit code 101 or a crash signal) is labelled
+    /// as a survived panic.
+    pub fn finish_with(mut self, store: &Store, end: &ProcessEnd) -> RunEnd {
         let clean = run_file(&self.root, &self.id, "clean").is_file();
         let seconds = now_seconds().saturating_sub(self.started);
         let _ = store.note_run_end_after(&self.slot, clean, seconds);
         if !clean {
-            keep_crash(store, &self.id, &self.slot, signal, seconds);
+            keep_crash(store, &self.id, &self.slot, end, seconds);
         }
         self.remove_files();
         RunEnd { clean }
@@ -200,14 +201,47 @@ impl Drop for RunGuard {
     }
 }
 
+/// How a process ended, as far as the system says.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProcessEnd {
+    /// The exit code, when the process exited by itself.
+    pub code: Option<i32>,
+    /// The name of the crash signal or exception (`SIGSEGV`, `EXCEPTION_ACCESS_VIOLATION`).
+    pub signal: Option<String>,
+    /// Another signal ended the process (a kill, a hang-up): no failure of the app.
+    pub killed: bool,
+}
+
+/// The exit code of an unwinding panic of the main thread.
+pub const PANIC_EXIT_CODE: i32 = 101;
+
+impl ProcessEnd {
+    /// A crash signal or the exit code of a panic.
+    pub fn failure(&self) -> bool {
+        self.signal.is_some() || self.code == Some(PANIC_EXIT_CODE)
+    }
+
+    /// The system said how the process ended.
+    pub fn known(&self) -> bool {
+        self.code.is_some() || self.signal.is_some() || self.killed
+    }
+}
+
 /// Keeps the crash file of an unclean run for the next start of the app. When the app left none
 /// but the system says a crash signal ended it, writes a small report from that.
-fn keep_crash(store: &Store, id: &str, slot: &Slot, signal: Option<&str>, seconds: u64) {
+///
+/// A crash file is a crash only if the process failed (exit code 101 or a crash signal). If the
+/// process ended in another way (a kill, a shutdown, another exit code), the panic was survived
+/// and the report says so, with the time between the panic and the end.
+fn keep_crash(store: &Store, id: &str, slot: &Slot, end: &ProcessEnd, seconds: u64) {
     let root = store.root();
-    if kadakas_crash::queue::keep(root, id).unwrap_or(false) {
+    let survived = end.known() && !end.failure();
+    if kadakas_crash::queue::keep_as(root, id, survived).unwrap_or(false) {
         return;
     }
-    let Some(signal) = signal else { return };
+    let Some(signal) = end.signal.as_deref() else {
+        return;
+    };
     let mut f = kadakas_crash::CrashFile::new(kadakas_crash::CrashKind::Native);
     f.run_id = id.to_string();
     f.created = now_seconds();
@@ -228,6 +262,7 @@ fn keep_crash(store: &Store, id: &str, slot: &Slot, signal: Option<&str>, second
 fn remove_run_files(root: &Path, id: &str) {
     for suffix in [
         "crash.json",
+        "crash.json.tmp",
         "json",
         "clean",
         "status.json",
@@ -453,7 +488,7 @@ impl Store {
                 let seconds = now_seconds().saturating_sub(r.started);
                 let _ = self.note_run_end_locked(&r.slot, clean, seconds);
                 if !clean {
-                    keep_crash(self, &id, &r.slot, None, seconds);
+                    keep_crash(self, &id, &r.slot, &ProcessEnd::default(), seconds);
                 }
             }
             remove_run_files(self.root(), &id);

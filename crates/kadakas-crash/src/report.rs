@@ -45,7 +45,11 @@ pub struct Assembled {
 /// Scrubs `file` with `ctx` and builds the parts of the report.
 pub fn assemble(file: &CrashFile, ctx: &Context) -> Assembled {
     let signature = signature::of(file);
-    let message = scrub::text(&file.message, ctx);
+    let mut message = scrub::text(&file.message, ctx);
+    if let Some(gap) = file.survived_gap_secs {
+        message =
+            format!("survived panic, the app ended later ({gap} s after the panic): {message}");
+    }
     let frames: Vec<Frame> = file.frames.iter().map(scrub::frame).collect();
     let log: Vec<String> = file.log.iter().map(|l| scrub::text(l, ctx)).collect();
     let mut log_text = log.join("\n");
@@ -91,12 +95,19 @@ pub fn assemble(file: &CrashFile, ctx: &Context) -> Assembled {
         "frames": frames,
         "memory_peak_mib": file.memory_peak_mib,
         "uptime_secs": file.uptime_secs,
+        "survived_gap_secs": file.survived_gap_secs,
     });
     let title = format!("Crash {signature} in {version}");
-    let body = format!(
-        "Kadakas {version} ({channel}) on {os} ended with a {} in thread {thread}.",
-        file.kind.id()
-    );
+    let body = match file.survived_gap_secs {
+        None => format!(
+            "Kadakas {version} ({channel}) on {os} ended with a {} in thread {thread}.",
+            file.kind.id()
+        ),
+        Some(gap) => format!(
+            "Kadakas {version} ({channel}) on {os} survived a {} in thread {thread} and ended {gap} s later in another way.",
+            file.kind.id()
+        ),
+    };
     let mut draft = Draft::new(Kind::Bug, &title, &body, Origin::Crash);
     draft.error = message;
     draft.severity = Some(Severity::High);
@@ -384,6 +395,23 @@ mod tests {
         // No log lines: only the command names are attached.
         f.log.clear();
         assert_eq!(assemble(&f, &ctx()).attachments().len(), 1);
+    }
+
+    #[test]
+    fn a_survived_panic_is_labelled_with_the_gap() {
+        let mut f = fake_file();
+        f.survived_gap_secs = Some(42);
+        let a = assemble(&f, &ctx());
+        assert!(
+            a.draft
+                .error
+                .starts_with("survived panic, the app ended later (42 s")
+        );
+        assert_eq!(a.crash["survived_gap_secs"], 42);
+        assert!(a.draft.body.contains("survived"));
+        // The group is the same panic.
+        assert_eq!(a.signature, assemble(&fake_file(), &ctx()).signature);
+        assert!(assemble(&fake_file(), &ctx()).crash["survived_gap_secs"].is_null());
     }
 
     #[test]

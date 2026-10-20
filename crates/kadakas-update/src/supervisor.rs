@@ -18,7 +18,7 @@ use crate::flavors;
 use crate::handshake::{self, ENV_ROOT, ENV_RUN, RunStatus, SkipReason, Skipped, UpdateState};
 use crate::launch;
 use crate::manifest::Channel;
-use crate::runs::RunGuard;
+use crate::runs::{ProcessEnd, RunGuard};
 use crate::settings::{Settings, UpdateMode};
 use crate::store::{Slot, Store};
 use crate::updater::{UpdateStatus, Updater};
@@ -34,10 +34,10 @@ pub trait Process: Send {
     /// `Ok(Some(success))` when the program has ended, `Ok(None)` while it runs.
     fn try_wait(&mut self) -> std::io::Result<Option<bool>>;
 
-    /// After the end: the name of the crash signal or exception that ended the program, if the
-    /// system said so (`SIGSEGV`, `EXCEPTION_ACCESS_VIOLATION`). Not for a normal exit code.
-    fn crash_signal(&self) -> Option<String> {
-        None
+    /// After the end: how the program ended, as far as the system says (the exit code, the
+    /// crash signal or exception, a kill).
+    fn end(&self) -> ProcessEnd {
+        ProcessEnd::default()
     }
 }
 
@@ -69,8 +69,29 @@ impl Process for SystemProcess {
         Ok(status.map(|s| s.success()))
     }
 
-    fn crash_signal(&self) -> Option<String> {
-        self.1.and_then(crash_signal_of)
+    fn end(&self) -> ProcessEnd {
+        let Some(status) = self.1 else {
+            return ProcessEnd::default();
+        };
+        let signal = crash_signal_of(status);
+        ProcessEnd {
+            code: status.code().filter(|_| signal.is_none()),
+            killed: signal.is_none() && ended_by_signal(status),
+            signal,
+        }
+    }
+}
+
+fn ended_by_signal(status: std::process::ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal().is_some()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        false
     }
 }
 
@@ -87,6 +108,8 @@ fn crash_signal_of(status: std::process::ExitStatus) -> Option<String> {
             6 => "SIGABRT",
             8 => "SIGFPE",
             11 => "SIGSEGV",
+            // The timer of the crash handler: it hung (a crash inside the allocator).
+            14 => "SIGALRM",
             n if n == bus => "SIGBUS",
             _ => return None,
         };
@@ -102,6 +125,8 @@ fn crash_signal_of(status: std::process::ExitStatus) -> Option<String> {
             0xC000_00FD => "EXCEPTION_STACK_OVERFLOW",
             0xC000_0374 => "STATUS_HEAP_CORRUPTION",
             0xC000_0409 => "STATUS_STACK_BUFFER_OVERRUN",
+            // The watchdog of the crash handler ended the process (kadakas-crash).
+            0xE000_0001 => "KADAKAS_CRASH_HANDLER_HUNG",
             _ => return None,
         };
         Some(name.to_string())
@@ -284,11 +309,8 @@ impl Supervisor {
                     self.watch(child.as_mut(), &guard, &running, base);
                     let id = guard.id().to_string();
                     let request = handshake::take_restart(&self.root, &id);
-                    let signal = child.crash_signal();
-                    (
-                        request,
-                        guard.finish_with(updater.store(), signal.as_deref()).clean,
-                    )
+                    let end = child.end();
+                    (request, guard.finish_with(updater.store(), &end).clean)
                 }
                 // No record could be written: the app runs without the update features, and
                 // nothing is known about how it ends. No restart.
@@ -497,6 +519,10 @@ mod tests {
         crash_file: bool,
         /// The system says that this signal ended it.
         signal: Option<&'static str>,
+        /// The exit code that the system gives.
+        code: Option<i32>,
+        /// A kill ended it.
+        killed: bool,
     }
 
     struct ScriptedProcess {
@@ -554,8 +580,12 @@ mod tests {
             Ok(Some(true))
         }
 
-        fn crash_signal(&self) -> Option<String> {
-            self.script.signal.map(str::to_string)
+        fn end(&self) -> ProcessEnd {
+            ProcessEnd {
+                code: self.script.code,
+                signal: self.script.signal.map(str::to_string),
+                killed: self.script.killed,
+            }
         }
     }
 
@@ -792,6 +822,57 @@ mod tests {
             0
         );
         std::fs::remove_dir_all(&w.root).unwrap();
+    }
+
+    #[test]
+    fn a_panic_file_is_a_crash_only_when_the_process_failed() {
+        // Exit code 101 (an unwinding panic) and a crash signal are failures.
+        for (name, code, signal, killed, survived) in [
+            ("sup-end-101", Some(101), None, false, false),
+            ("sup-end-sigabrt", None, Some("SIGABRT"), false, false),
+            ("sup-end-killed", None, None, true, true),
+            ("sup-end-code-0", Some(0), None, false, true),
+            ("sup-end-unknown", None, None, false, false),
+        ] {
+            let (w, sup) = world(name, "1.0.0");
+            w.script(Script {
+                clean: false,
+                crash_file: true,
+                code,
+                signal,
+                killed,
+                ..Script::default()
+            });
+            sup.run(vec![]).unwrap();
+            let kept = kadakas_crash::queue::list(&w.root.join("r"));
+            assert_eq!(kept.len(), 1, "{name}");
+            assert_eq!(kept[0].file.survived_gap_secs.is_some(), survived, "{name}");
+            std::fs::remove_dir_all(&w.root).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_statuses_are_read() {
+        use std::os::unix::process::ExitStatusExt;
+        let st = |raw| std::process::ExitStatus::from_raw(raw);
+        assert_eq!(crash_signal_of(st(11)).as_deref(), Some("SIGSEGV"));
+        assert_eq!(crash_signal_of(st(6)).as_deref(), Some("SIGABRT"));
+        assert_eq!(crash_signal_of(st(14)).as_deref(), Some("SIGALRM"));
+        assert_eq!(crash_signal_of(st(9)), None, "a kill is no crash");
+        assert!(ended_by_signal(st(9)));
+        assert!(!ended_by_signal(st(101 << 8)));
+        let proc_end = |raw| SystemProcess(spawn_true(), Some(st(raw))).end();
+        assert_eq!(proc_end(101 << 8).code, Some(101));
+        assert!(proc_end(101 << 8).failure());
+        assert!(proc_end(9).killed && !proc_end(9).failure());
+        assert!(proc_end(11).failure());
+        assert!(!proc_end(0).failure() && proc_end(0).known());
+    }
+
+    #[cfg(unix)]
+    fn spawn_true() -> std::process::Child {
+        std::process::Command::new("true").spawn().unwrap()
     }
 
     #[test]
