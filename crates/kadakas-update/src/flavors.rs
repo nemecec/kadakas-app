@@ -1,7 +1,9 @@
 //! UI flavors: the programs in a version folder that the launcher can start.
 //!
-//! Today there is one: the main app, `kadakas-app`. Later versions can ship more programs and
-//! list them in a file `flavors.json` in the version folder:
+//! The main app, `kadakas-app`, is always a flavor when it is there. The 3D modeler
+//! (`kadakas-modeler`, PLAT-11) is a flavor too, when its program is in the folder: the installers
+//! and the update archives bring it, and no file lists it. Other programs are listed in a file
+//! `flavors.json` in the version folder:
 //!
 //! ```json
 //! { "flavors": [ { "id": "sketch-like", "name": "3D-first UI", "exe": "kadakas-sketch" } ] }
@@ -36,6 +38,10 @@ struct RawFlavor {
     exe: String,
 }
 
+/// The flavors that need no `flavors.json`: the id (which is also the name of the program), and
+/// the name that the UI shows. A flavor is listed when its program is in the version folder.
+pub const BUILT_IN: &[(&str, &str)] = &[("kadakas-modeler", "Kadakas Modeler (SketchUp-like)")];
+
 fn exe_path(base: &str) -> PathBuf {
     PathBuf::from(format!("{base}{}", std::env::consts::EXE_SUFFIX))
 }
@@ -50,6 +56,16 @@ pub fn discover(dir: &Path) -> Vec<Flavor> {
             name: "Kadakas".into(),
             exe: main,
         });
+    }
+    for (id, name) in BUILT_IN {
+        let exe = exe_path(id);
+        if dir.join(&exe).is_file() {
+            out.push(Flavor {
+                id: (*id).into(),
+                name: (*name).into(),
+                exe,
+            });
+        }
     }
     let extra: Vec<RawFlavor> = std::fs::read(dir.join("flavors.json"))
         .ok()
@@ -100,6 +116,32 @@ mod tests {
         assert_eq!(f[0].id, "kadakas-app");
         assert_eq!(pick(&f, "other").unwrap().id, "kadakas-app");
         assert!(pick(&[], "x").is_none());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_modeler_is_a_flavor_when_its_program_is_there_and_needs_no_file() {
+        let d = tmp("flv-modeler");
+        touch(&d, "kadakas-app");
+        assert_eq!(discover(&d).len(), 1, "no modeler program, no flavor");
+        touch(&d, "kadakas-modeler");
+        let f = discover(&d);
+        let ids: Vec<&str> = f.iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(ids, ["kadakas-app", "kadakas-modeler"]);
+        assert_eq!(f[1].name, "Kadakas Modeler (SketchUp-like)");
+        assert_eq!(
+            pick(&f, "kadakas-modeler").unwrap().exe,
+            exe_path("kadakas-modeler")
+        );
+        // A file cannot list the same id again.
+        std::fs::write(
+            d.join("flavors.json"),
+            br#"{"flavors":[{"id":"kadakas-modeler","name":"Other","exe":"kadakas-modeler"}]}"#,
+        )
+        .unwrap();
+        let f = discover(&d);
+        assert_eq!(f.len(), 2);
+        assert_eq!(f[1].name, "Kadakas Modeler (SketchUp-like)");
         std::fs::remove_dir_all(&d).unwrap();
     }
 

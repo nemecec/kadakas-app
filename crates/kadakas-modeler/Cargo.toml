@@ -1,0 +1,33 @@
+[package]
+name = "kadakas-modeler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The 3D-first modeler of Kadakas (PLAT-11, MOD-01): a second UI flavor with a SketchUp-like tool bar, measurements box and tray. It opens and saves the same .kad files as kadakas-app."
+
+[[bin]]
+name = "kadakas-modeler"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.35.0", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
+egui = "0.35.0"
+glam = { version = "0.34.1", features = ["serde"] }
+kadakas-api = { version = "0.1.0", path = "../kadakas-api", default-features = false }
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+kadakas-crash = { version = "0.1.0", path = "../kadakas-crash", features = ["capture"] }
+kadakas-file = { version = "0.1.0", path = "../kadakas-file" }
+kadakas-l10n = { version = "0.1.0", path = "../kadakas-l10n" }
+kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
+kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+kadakas-ui-core = { version = "0.1.0", path = "../kadakas-ui-core" }
+kadakas-units = { version = "0.1.0", path = "../kadakas-units" }
+kadakas-update = { version = "0.1.0", path = "../kadakas-update" }
+kadakas-view3d = { version = "0.1.0", path = "../kadakas-view3d" }
+resvg = { version = "0.48.1", default-features = false }
+rfd = { version = "0.15", features = ["file-handle-inner"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sys-locale = "0.3.2"

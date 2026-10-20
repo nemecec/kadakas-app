@@ -293,6 +293,7 @@ impl CameraReq {
                 .clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2),
             distance: (dist as f32).clamp(1.0, 1.0e9),
             projection: self.projection.unwrap_or(projection),
+            fov_y: kadakas_render::FOV_Y,
         }
     }
 }
@@ -935,6 +936,7 @@ impl CamAnim {
             pitch: self.from.pitch + (self.to.pitch - self.from.pitch) * e,
             distance: (self.from.distance.ln() * (1.0 - e) + self.to.distance.ln() * e).exp(),
             projection: self.to.projection,
+            fov_y: kadakas_render::FOV_Y,
         };
         (cam, false)
     }
@@ -1421,6 +1423,7 @@ mod tests {
             pitch: 0.0,
             distance: 1000.0,
             projection: Projection::Orthographic,
+            fov_y: kadakas_render::FOV_Y,
         };
         let to = Camera {
             yaw: std::f32::consts::TAU - 0.1,

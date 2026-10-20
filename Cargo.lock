@@ -2765,6 +2765,7 @@ dependencies = [
  "kadakas-ui-core",
  "kadakas-units",
  "kadakas-update",
+ "kadakas-view3d",
  "pollster 1.0.1",
  "resvg",
  "rfd",
@@ -2987,6 +2988,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "kadakas-modeler"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "glam",
+ "kadakas-api",
+ "kadakas-core",
+ "kadakas-crash",
+ "kadakas-file",
+ "kadakas-l10n",
+ "kadakas-render",
+ "kadakas-sys",
+ "kadakas-ui-core",
+ "kadakas-units",
+ "kadakas-update",
+ "kadakas-view3d",
+ "resvg",
+ "rfd",
+ "serde",
+ "serde_json",
+ "sys-locale",
+]
+
+[[package]]
 name = "kadakas-plants"
 version = "0.1.0"
 dependencies = [
@@ -3200,6 +3226,23 @@ dependencies = [
  "tar",
  "thiserror 2.0.21",
  "ureq",
+]
+
+[[package]]
+name = "kadakas-view3d"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "eframe",
+ "egui",
+ "glam",
+ "kadakas-api",
+ "kadakas-core",
+ "kadakas-render",
+ "kadakas-review",
+ "kadakas-ui-core",
+ "pollster 1.0.1",
+ "serde_json",
 ]
 
 [[package]]

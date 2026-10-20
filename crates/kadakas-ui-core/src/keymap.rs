@@ -284,6 +284,18 @@ actions! {
     ViewHiddenLine => "view.hidden_line", msg!("action-view-hidden-line"), ["Cmd/Ctrl+Shift+E"], true;
     ViewDashedHiddenLine => "view.dashed_hidden_line", msg!("action-view-dashed-hidden-line"), ["Cmd/Ctrl+Shift+D"], true;
     ViewRealistic => "view.realistic", msg!("action-view-realistic"), ["Cmd/Ctrl+Shift+F"], true;
+    ToolEraser => "tool.eraser", msg!("action-tool-eraser"), [], false;
+    ToolArc => "tool.arc", msg!("action-tool-arc"), [], false;
+    ToolPushPull => "tool.push_pull", msg!("action-tool-push-pull"), [], false;
+    ToolMove => "tool.move", msg!("action-tool-move"), [], false;
+    ToolTapeMeasure => "tool.tape_measure", msg!("action-tool-tape-measure"), [], false;
+    ToolPaintBucket => "tool.paint_bucket", msg!("action-tool-paint-bucket"), [], false;
+    NavOrbit => "nav.orbit", msg!("action-nav-orbit"), [], true;
+    NavPan => "nav.pan", msg!("action-nav-pan"), [], true;
+    NavZoom => "nav.zoom", msg!("action-nav-zoom"), [], true;
+    NavZoomWindow => "nav.zoom_window", msg!("action-nav-zoom-window"), [], true;
+    ViewBottom => "view.bottom", msg!("action-view-bottom"), [], true;
+    SelectNone => "edit.select_none", msg!("action-edit-select-none"), [], true;
 }
 
 impl Action {
@@ -386,6 +398,26 @@ impl Action {
             .iter()
             .copied()
             .find(|a| a.standard_view() == Some(view))
+    }
+
+    /// True for the actions that only the 3D modeler (`kadakas-modeler`, PLAT-11) has. They have
+    /// no default key in the Vectorworks-like profile, and the app leaves them out of its lists.
+    pub fn modeler_only(self) -> bool {
+        matches!(
+            self,
+            Action::ToolEraser
+                | Action::ToolArc
+                | Action::ToolPushPull
+                | Action::ToolMove
+                | Action::ToolTapeMeasure
+                | Action::ToolPaintBucket
+                | Action::NavOrbit
+                | Action::NavPan
+                | Action::NavZoom
+                | Action::NavZoomWindow
+                | Action::ViewBottom
+                | Action::SelectNone
+        )
     }
 
     /// Keys that repeat while held.
@@ -751,7 +783,8 @@ mod tests {
         for a in Action::ALL {
             assert_eq!(Action::from_id(a.id()), Some(*a));
             assert!(!a.label().is_empty());
-            assert!(a.implemented());
+            // The tools of the modeler that are not built yet are bound but not implemented.
+            assert!(a.implemented() || a.modeler_only(), "{a:?}");
         }
         assert_eq!(Action::from_id("nope"), None);
         assert!(Action::PanLeft.repeats() && Action::NudgeDown.repeats());

@@ -204,6 +204,54 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Class options (active only, gray, show, snap) | Cmd+Shift+Option+3 to 8 / Ctrl+Shift+Alt+3 to 8 | Ctrl+Shift+Alt+3 to 8 | planned |
 | Layer options (active only, gray, show, snap) | Cmd+Option+3 to 8 / Ctrl+Alt+3 to 8 | Ctrl+Alt+3 to 8 | planned |
 
+## 3D modeler actions (`kadakas-modeler`)
+
+The 3D modeler (`docs/modeler.md`) has actions that the Vectorworks-like app does not use. They have no key in the Vectorworks-like profile. The column says "none". The SketchUp-like profile binds them (next section). The app leaves them out of its lists. Status `done` means that the modeler runs the action. Status `planned` means that the tool is in the tool bar, disabled. Its row in section 4.23 of the feature spec is not built.
+
+| Function | Vectorworks 2026 default (Mac / Windows) | Kadakas binding | Status |
+|---|---|---|---|
+| Eraser tool (`tool.eraser`, MOD-05) | none | none | planned |
+| Arc tool (`tool.arc`, MOD-08) | none | none | planned |
+| Push/Pull tool (`tool.push_pull`, MOD-05, MOD-08) | none | none | planned |
+| Move tool (`tool.move`, MOD-05) | none | none | planned |
+| Tape Measure tool (`tool.tape_measure`, MOD-05) | none | none | planned |
+| Paint Bucket tool (`tool.paint_bucket`, MOD-05) | none | none | planned |
+| Orbit tool (`nav.orbit`, MOD-02) | none | none | done |
+| Pan tool (`nav.pan`, MOD-02) | none | none | done |
+| Zoom tool (`nav.zoom`, MOD-02) | none | none | done |
+| Zoom Window: the next drag of the Zoom tool draws a window (`nav.zoom_window`, MOD-02) | none | none | done |
+| Bottom view (`view.bottom`, MOD-02) | none (Vectorworks gives Bottom no key) | none | done |
+| Select None (`edit.select_none`) | none | none | done |
+
+## SketchUp-like profile (3D modeler)
+
+The profile `sketchup` is the default of `kadakas-modeler`. The file is `crates/kadakas-ui-core/profiles/sketchup.json`. The keys are the public default shortcuts of programs of that kind. A tool has one letter, and Space is Select. The profile is not in the profile list of the Vectorworks-like app. The test `the_sketchup_like_profile_has_the_public_default_keys_of_that_kind_of_program` checks the table below.
+
+| Key | Action |
+|---|---|
+| Space | Select |
+| E, L, R, C, A | Eraser, Line, Rectangle, Circle, Arc |
+| P, M, Q, S, F | Push/Pull, Move, Rotate, Scale, Offset |
+| T, B | Tape Measure, Paint Bucket |
+| O, H, Z | Orbit, Pan, Zoom |
+| Shift+Z (also Cmd/Ctrl+Shift+E) | Zoom Extents |
+| Cmd/Ctrl+Shift+W | Zoom Window |
+| Shift+S | Quick search |
+| Cmd/Ctrl+Z or Alt+Backspace | Undo |
+| Cmd/Ctrl+Y or Cmd/Ctrl+Shift+Z | Redo |
+| Cmd/Ctrl+A | Select All |
+| Cmd/Ctrl+T | Select None |
+| Cmd/Ctrl+N, O, S | New, Open, Save |
+| Cmd/Ctrl+Shift+S | Save As |
+| Cmd/Ctrl+Shift+, and Cmd/Ctrl+Shift+. | Previous view, Next view |
+| Cmd/Ctrl+1 and Cmd/Ctrl+2 | Zoom in, zoom out (factor 2) |
+| Arrow keys | Pan the view (MOD-03 will use them to lock an axis) |
+| Esc | Back to Select |
+
+The standard views (Top, Bottom, Front, Back, Left, Right, Iso) have no key. This is the same in programs of that kind. They are in the Camera menu. The Vectorworks tool keys (`X`, `2`, `4`, `6` and the others) are free in this profile. Only the tools that run today react to their key. The other tools show "coming in a later version" in the status bar.
+
+Mouse: the middle button orbits in every tool. With Shift it pans. The wheel zooms to the pointer. The Orbit, Pan and Zoom tools use the primary button. With the Zoom tool, Shift and a drag change the field of view. Cmd/Ctrl and a drag draw a window.
+
 ## Edit and menus
 
 | Function | Vectorworks 2026 default (Mac / Windows) | Kadakas binding | Status |

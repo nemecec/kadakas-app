@@ -19,10 +19,20 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// The crates with user interface text. A crate with egui calls must be here.
-const UI_CRATES: &[&str] = &["kadakas-app", "kadakas-ui-core", "kadakas-launcher"];
+const UI_CRATES: &[&str] = &[
+    "kadakas-app",
+    "kadakas-ui-core",
+    "kadakas-launcher",
+    "kadakas-modeler",
+];
 
 /// Crates that use messages (all the crates with `tr!`, `msg!` or `translate` calls).
-const CODE_CRATES: &[&str] = &["kadakas-app", "kadakas-ui-core", "kadakas-launcher"];
+const CODE_CRATES: &[&str] = &[
+    "kadakas-app",
+    "kadakas-ui-core",
+    "kadakas-launcher",
+    "kadakas-modeler",
+];
 
 /// Message ids that no code uses on purpose: examples and tests of the l10n crate itself.
 const UNUSED_OK: &[&str] = &[
@@ -76,6 +86,10 @@ const SAME_OK: &[&str] = &[
     "enum-length-unit-cm",
     "enum-length-unit-m",
     "enum-length-unit-km",
+    // The modeler: a pattern of variables and symbols only.
+    "uic-modeler-tool-with-key",
+    "uic-modeler-tool-later",
+    "uic-modeler-dimensions-value",
 ];
 
 /// String literals that may stay in an egui call, as (source file, literal). These are not
@@ -118,6 +132,9 @@ const LITERAL_OK: &[(&str, &str)] = &[
     ("io_dialog.rs", "IFC4"),
     ("io_dialog.rs", "Shapefile"),
     ("plant_ui.rs", "CSV"),
+    // Names of file types in the file dialogs of the modeler.
+    ("files.rs", "Kadakas"),
+    ("files.rs", "JSON"),
     // The title of the window is the name of the program.
     ("main.rs", "Kadakas"),
     // An empty text, a bare placeholder.

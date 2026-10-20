@@ -34,3 +34,5 @@ uic-profile-problem-terms-too-long = Terminid { $lang }: tekst on liiga pikk
 uic-profile-problem-terms-not-allowed = Terminid { $lang }: sõnumit { $id } ei tohi asendada
 uic-profile-problem-terms-reference = Terminid { $lang }: sõnum { $id } viitab teisele sõnumile või sisaldab atribuute
 uic-profile-error-too-large = Profiilifail on suurem kui 1 MB
+uic-profile-name-sketchup = SketchUpi-sarnane
+uic-profile-about-sketchup = 3D-modelleerija klahvid: iga tööriista jaoks täht ja tühik valimiseks. Tiirlemine on O, nihutamine H, suumimine Z ja kogu mudeli nähtavale toomine Shift+Z.

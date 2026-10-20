@@ -18,7 +18,7 @@ HOOKS='fault-injection|test-hook|testkit'
 PATTERN="feature \"(${HOOKS})\""
 
 shipped=$(cargo tree -e normal,build,features --target all \
-  -p kadakas-app -p kadakas-cli -p kadakas-launcher)
+  -p kadakas-app -p kadakas-modeler -p kadakas-cli -p kadakas-launcher)
 if grep -Eq "$PATTERN" <<<"$shipped"; then
   echo "!! a test-only feature is in the feature tree of a shipped program:"
   grep -E "$PATTERN" <<<"$shipped"
@@ -34,4 +34,4 @@ if ! grep -Eq 'feature "fault-injection"' <<<"$with_dev"; then
   exit 1
 fi
 
-echo "ok: no test-only feature in kadakas-app, kadakas-cli or kadakas-launcher"
+echo "ok: no test-only feature in kadakas-app, kadakas-modeler, kadakas-cli or kadakas-launcher"

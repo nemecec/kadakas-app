@@ -64,6 +64,10 @@ pub struct Camera {
     /// Distance from the eye to the target. For the orthographic camera it sets the zoom.
     pub distance: f32,
     pub projection: Projection,
+    /// Vertical field of view of the perspective camera, in radians. The orthographic camera
+    /// uses it only to relate `distance` to the visible height, so it keeps the same size
+    /// when the projection changes. The default is [`FOV_Y`].
+    pub fov_y: f32,
 }
 
 impl Default for Camera {
@@ -81,6 +85,7 @@ impl Camera {
             pitch,
             distance: 10_000.0,
             projection,
+            fov_y: FOV_Y,
         }
     }
 
@@ -118,7 +123,7 @@ impl Camera {
 
     /// Half the visible height at the target, in mm.
     pub fn half_height(&self) -> f32 {
-        self.distance * (FOV_Y / 2.0).tan()
+        self.distance * (self.fov_y / 2.0).tan()
     }
 
     /// Near and far plane distances along the view direction that include the box.
@@ -146,7 +151,7 @@ impl Camera {
     pub fn proj_matrix(&self, aspect: f32, bounds: Option<Bounds3>) -> Mat4 {
         let (near, far) = self.clip_range(bounds);
         match self.projection {
-            Projection::Perspective => perspective_rh(FOV_Y, aspect, near, far),
+            Projection::Perspective => perspective_rh(self.fov_y, aspect, near, far),
             Projection::Orthographic => {
                 let hh = self.half_height();
                 orthographic_rh(hh * aspect, hh, near, far)
@@ -172,7 +177,7 @@ impl Camera {
         let center = (lo + hi) / 2.0;
         self.target = center;
         let (right, up, fwd) = (self.right(), self.up(), self.forward());
-        let t = (FOV_Y / 2.0).tan();
+        let t = (self.fov_y / 2.0).tan();
         let mut need = 1.0f32;
         for i in 0..8 {
             let corner = Vec3::new(
@@ -242,8 +247,8 @@ impl Camera {
             ),
             Projection::Perspective => {
                 let dir = (fwd
-                    + right * ndc.x * (FOV_Y / 2.0).tan() * aspect
-                    + up * ndc.y * (FOV_Y / 2.0).tan())
+                    + right * ndc.x * (self.fov_y / 2.0).tan() * aspect
+                    + up * ndc.y * (self.fov_y / 2.0).tan())
                 .normalize();
                 (self.eye(), dir)
             }

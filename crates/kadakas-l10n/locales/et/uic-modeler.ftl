@@ -1,0 +1,29 @@
+## uic-modeler: modeler.rs
+
+uic-modeler-tool-select = Vali
+uic-modeler-tool-eraser = Kustutaja
+uic-modeler-tool-line = Joon
+uic-modeler-tool-rectangle = Ristkülik
+uic-modeler-tool-circle = Ring
+uic-modeler-tool-arc = Kaar
+uic-modeler-tool-push-pull = Lükka/tõmba
+uic-modeler-tool-move = Teisalda
+uic-modeler-tool-rotate = Pööra
+uic-modeler-tool-scale = Skaleeri
+uic-modeler-tool-tape-measure = Mõõdulint
+uic-modeler-tool-paint-bucket = Värvikopp
+uic-modeler-tool-orbit = Tiirle
+uic-modeler-tool-pan = Nihuta
+uic-modeler-tool-zoom = Suumi
+uic-modeler-tool-zoom-extents = Suumi kõik
+uic-modeler-tool-with-key = { $name } ({ $key })
+uic-modeler-tool-later = { $name }: { $note }
+uic-modeler-coming-later = tuleb hilisemas versioonis
+uic-modeler-hint-select = Klõpsa objektil, et see valida. Shift lisab või eemaldab objekti. Tiirlemiseks hoia all hiire keskmist nuppu.
+uic-modeler-hint-orbit = Lohista, et tiirelda. Shift nihutab vaadet.
+uic-modeler-hint-pan = Lohista, et vaadet nihutada.
+uic-modeler-hint-zoom = Lohista üles või alla, et suumida. Shift muudab vaatenurka. Ctrl või Cmd joonistab suumiakna.
+uic-modeler-hint-zoom-extents = Toob kogu mudeli nähtavale.
+uic-modeler-measure-dimensions = Mõõtmed
+uic-modeler-measure-fov = Vaatenurk
+uic-modeler-dimensions-value = { $x } × { $y } × { $z }

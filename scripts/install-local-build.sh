@@ -10,6 +10,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-cargo build --release -p kadakas-app -p kadakas-cli -p kadakas-launcher
+cargo build --release -p kadakas-app -p kadakas-modeler -p kadakas-cli -p kadakas-launcher
 target="${CARGO_TARGET_DIR:-target}"
 "$target/release/kadakas-launcher" add "$target/release"

@@ -19,19 +19,31 @@ pub struct Snapshot {
     pub zoom: f64,
 }
 
-#[derive(Debug, Default)]
-pub struct ViewHistory {
-    entries: Vec<Snapshot>,
+/// The history of views. `S` is what a view is: the pan and zoom of the plan by default; the 3D
+/// modeler keeps camera snapshots (`nav3d::CameraSnapshot`).
+#[derive(Debug)]
+pub struct ViewHistory<S = Snapshot> {
+    entries: Vec<S>,
     /// The entry that is shown now.
     pos: usize,
     /// The view in the last frame, and since when it has not changed.
-    seen: Option<(Snapshot, f64)>,
+    seen: Option<(S, f64)>,
 }
 
-impl ViewHistory {
+impl<S> Default for ViewHistory<S> {
+    fn default() -> Self {
+        ViewHistory {
+            entries: Vec::new(),
+            pos: 0,
+            seen: None,
+        }
+    }
+}
+
+impl<S: Copy + PartialEq> ViewHistory<S> {
     /// Call once per frame with the time in seconds and the current view. Returns true while a
     /// change waits to settle, so the caller can ask for a repaint after `SETTLE`.
-    pub fn observe(&mut self, now: f64, view: Snapshot) -> bool {
+    pub fn observe(&mut self, now: f64, view: S) -> bool {
         match self.seen {
             Some((s, _)) if s == view => {}
             _ => self.seen = Some((view, now)),
@@ -47,7 +59,7 @@ impl ViewHistory {
         true
     }
 
-    fn push(&mut self, view: Snapshot) {
+    fn push(&mut self, view: S) {
         self.entries
             .truncate(self.pos + usize::from(!self.entries.is_empty()));
         self.entries.push(view);
@@ -59,14 +71,14 @@ impl ViewHistory {
 
     /// Counts the current view at once, even if it has not rested yet. Call it before going
     /// back, so that the view you leave can be reached again with Next View.
-    pub fn flush(&mut self, view: Snapshot) {
+    pub fn flush(&mut self, view: S) {
         if self.entries.get(self.pos) != Some(&view) {
             self.push(view);
         }
     }
 
     /// The view before the current one, which then becomes the current view.
-    pub fn previous(&mut self) -> Option<Snapshot> {
+    pub fn previous(&mut self) -> Option<S> {
         (self.pos > 0).then(|| {
             self.pos -= 1;
             self.entries[self.pos]
@@ -75,7 +87,7 @@ impl ViewHistory {
 
     /// The view after the current one.
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<Snapshot> {
+    pub fn next(&mut self) -> Option<S> {
         (self.pos + 1 < self.entries.len()).then(|| {
             self.pos += 1;
             self.entries[self.pos]

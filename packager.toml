@@ -1,7 +1,7 @@
 # Installer settings for cargo-packager. See docs/release.md.
 #
 #   cargo install cargo-packager --locked
-#   cargo build --release -p kadakas-app -p kadakas-cli -p kadakas-launcher
+#   cargo build --release -p kadakas-app -p kadakas-modeler -p kadakas-cli -p kadakas-launcher
 #   cargo packager --release --config packager-macos.toml --formats app,dmg   # macOS: see that file
 #   cargo packager --release --formats nsis,wix         # Windows
 #   cargo packager --release --formats appimage,deb     # Linux
@@ -30,11 +30,13 @@ binaries-dir = "target/release"
 # start it. It starts the chosen version of the app at once (no wait for the network), passes the
 # file arguments on, and checks for updates in the background. The app that the installer brings
 # (`kadakas-app`, next to the launcher) is the base version: it is never copied and never
-# deleted, and the launcher can always fall back to it. The `kadakas` command line tool (the MCP
+# deleted, and the launcher can always fall back to it. The 3D modeler (`kadakas-modeler`, PLAT-11)
+# is installed next to it: the launcher lists it as a UI flavor when it finds the program. The `kadakas` command line tool (the MCP
 # server and the renderer) is installed next to them, so agents find it at a fixed place.
 binaries = [
   { path = "kadakas-launcher", main = true },
   { path = "kadakas-app" },
+  { path = "kadakas-modeler" },
   { path = "kadakas" },
 ]
 

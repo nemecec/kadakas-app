@@ -793,7 +793,11 @@ fn compare_scene_and_look() -> (kadakas_review::overlay::Tinted, Look, CompareSt
             &style,
         )
         .unwrap();
-    let look = crate::compare_ui::ghost_look(&t, &style);
+    // The look of the compare window (`ghost_look` in kadakas-app): the ghosts see-through.
+    let ghosts: std::collections::HashSet<kadakas_core::model::ObjectId> =
+        t.ghosts.iter().copied().collect();
+    let [r, g, b] = style.color(kadakas_review::overlay::Status::Removed);
+    let look = Look::ghosted(&t.scene, &|id| ghosts.contains(&id), [r, g, b], style.ghost);
     (t, look, style)
 }
 

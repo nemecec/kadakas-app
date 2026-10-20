@@ -34,3 +34,5 @@ uic-profile-problem-terms-too-long = Terms { $lang }: the text is too long
 uic-profile-problem-terms-not-allowed = Terms { $lang }: the message { $id } may not be replaced
 uic-profile-problem-terms-reference = Terms { $lang }: the message { $id } refers to another message or has attributes
 uic-profile-error-too-large = The profile file is larger than 1 MB
+uic-profile-name-sketchup = SketchUp-like
+uic-profile-about-sketchup = The keys of the 3D modeler: a letter for each tool and Space for Select. Orbit is O, Pan is H, Zoom is Z and Zoom Extents is Shift+Z.

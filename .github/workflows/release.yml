@@ -61,7 +61,7 @@ jobs:
         shell: bash
         run: scripts/notices.sh
       - name: Build the app, the kadakas command line tool and the launcher
-        run: cargo build --release -p kadakas-app -p kadakas-cli -p kadakas-launcher
+        run: cargo build --release -p kadakas-app -p kadakas-modeler -p kadakas-cli -p kadakas-launcher
       - name: Package
         run: cargo packager --release --config ${{ matrix.config }} --formats ${{ matrix.formats }}
       # No update archive for macOS yet: it would hold bare executables, not a `.app` (see
@@ -72,7 +72,7 @@ jobs:
         run: |
           mkdir -p dist
           ext=""; if [ "$RUNNER_OS" = "Windows" ]; then ext=".exe"; fi
-          tar -czf "dist/kadakas-update-${{ matrix.platform }}.tar.gz" -C target/release "kadakas-app$ext" "kadakas$ext"
+          tar -czf "dist/kadakas-update-${{ matrix.platform }}.tar.gz" -C target/release "kadakas-app$ext" "kadakas-modeler$ext" "kadakas$ext"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: kadakas-${{ matrix.name }}

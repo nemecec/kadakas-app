@@ -40,7 +40,6 @@ mod file_io;
 #[cfg(not(target_arch = "wasm32"))]
 mod gis_dialogs;
 mod gis_ui;
-mod gpu3d;
 mod grading_ui;
 mod icon_size;
 mod icons;
@@ -87,9 +86,9 @@ mod units_ui;
 #[cfg(not(target_arch = "wasm32"))]
 mod update_ui;
 mod versions_ui;
-mod vertex;
 mod view;
-mod view3d;
+// The 3D view moved to a crate that the modeler shares (PLAT-11). The paths stay the same.
+use kadakas_view3d::{gpu3d, vertex, view3d};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
