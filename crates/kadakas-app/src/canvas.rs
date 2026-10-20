@@ -252,6 +252,21 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
             fill_polygon(painter, &flat, &sp, st.fill);
             path(&flat, true);
         }
+        Shape::SurfaceModel(m) => {
+            // Plan view: the box around the model (MOD-13 draws its edges). The 3D view shows
+            // the faces.
+            if let Some((lo, hi)) = m.bounds() {
+                let flat = [
+                    lo.truncate(),
+                    DVec2::new(hi.x, lo.y),
+                    hi.truncate(),
+                    DVec2::new(lo.x, hi.y),
+                ];
+                let sp: Vec<Pos2> = flat.iter().map(|p| s(*p)).collect();
+                fill_polygon(painter, &flat, &sp, st.fill);
+                path(&flat, true);
+            }
+        }
         Shape::Mesh3d(m) => {
             // Plan view: the box around the mesh. The 3D view shows the triangles.
             let (lo, hi) = m.bounds3();

@@ -876,6 +876,32 @@ impl Builder<'_> {
                 self.scene.mesh.part = PART_MAIN;
                 add_shaded(&mut self.scene.mesh, &pts, &m.triangles, color, id);
             }
+            Shape::SurfaceModel(m) => {
+                // Local coordinates through the transform; `z` is measured from the layer.
+                if let Ok(sm) = m.mesh() {
+                    let color = fill.unwrap_or(crate::solid3d::DEFAULT_COLOR);
+                    let pts: Vec<Vec3> = sm
+                        .positions
+                        .iter()
+                        .map(|p| {
+                            let q = m.transform.transform_point3(*p);
+                            Vec3::new(
+                                (q.x - o.x) as f32,
+                                (q.y - o.y) as f32,
+                                (z + q.z - o.z) as f32,
+                            )
+                        })
+                        .collect();
+                    // A mirror turns the triangles over; keep them counterclockwise.
+                    let tris: Vec<[u32; 3]> = if m.transform.matrix3.determinant() < 0.0 {
+                        sm.triangles.iter().map(|t| [t[0], t[2], t[1]]).collect()
+                    } else {
+                        sm.triangles
+                    };
+                    self.scene.mesh.part = PART_MAIN;
+                    add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
+                }
+            }
             Shape::Extrude(_) | Shape::Sweep(_) => {
                 // The mesh is measured from the layer: add its elevation.
                 if let Some(sm) = obj.shape.solid_mesh() {

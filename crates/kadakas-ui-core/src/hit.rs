@@ -92,6 +92,15 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             ];
             edge_dist(&corners, true, p) <= tol || point_in_polygon(p, &corners)
         }
+        Shape::SurfaceModel(m) => m.bounds().is_some_and(|(lo, hi)| {
+            let corners = [
+                lo.truncate(),
+                DVec2::new(hi.x, lo.y),
+                hi.truncate(),
+                DVec2::new(lo.x, hi.y),
+            ];
+            edge_dist(&corners, true, p) <= tol || point_in_polygon(p, &corners)
+        }),
         Shape::Mesh3d(m) => {
             let (lo, hi) = m.bounds3();
             let corners = [

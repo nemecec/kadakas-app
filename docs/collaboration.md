@@ -78,7 +78,7 @@ change different parts both keep their change:
 
 The property `id` does not exist. It is the identity. Names have 1 to 256 characters.
 
-The **shape** is one property, except for a site model (above). Moving one point of a site model sends
+The **shape** is one property, except for a site model (above). A surface model (MOD-06) is one property too: an edit of its vertices, edges or faces sends the whole model, and the last writer wins on the whole model. Its limits keep the text below the size of one property. So that a write of another user does not lose an edit made here, the model carries a short log of its edits as intents (`kadakas_core::surface::sync`). When a model from another user arrives over a model that holds edits of this client that the new one lacks, this client (only the author) replays them on the new model and sends the result as a new transaction; the other user's edit is in the new model, so both stay, and only the author repairs, so repairs never go back and forth. A replay that fails (the edge or face is gone, an undo, an entry older than the log) gives the event `SurfaceConflict` with the lost model for the host to show; nothing is dropped silently. The stamps of the own edits are kept in memory only, so after a restart old edits are not repaired. Full sync of each edit as its own operation is a later row. Moving one point of a site model sends
 one chunk of 256 points, not all points. Two users who move points in different chunks both keep
 their change; in the same chunk, the last writer wins. Inserting or removing a point shifts the
 later chunks, which are sent again.

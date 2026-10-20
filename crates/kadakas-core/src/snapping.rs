@@ -301,6 +301,11 @@ impl Geometry {
                 let (lo, hi) = m.bounds3();
                 self.add_box(lo.truncate(), hi.truncate());
             }
+            Shape::SurfaceModel(m) => {
+                for (_, p) in m.vertices().take(5000) {
+                    self.add_point(m.transform.transform_point3(p).truncate(), Endpoint);
+                }
+            }
             Shape::Underlay(u) => self.add_box(u.min, u.max),
             Shape::Viewport(vp) => self.add_box(vp.min, vp.max),
             Shape::SiteModel { points, lines, .. } => {

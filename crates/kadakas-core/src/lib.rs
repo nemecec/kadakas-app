@@ -51,6 +51,7 @@ pub mod snapping;
 pub mod solid3d;
 pub mod solid_batch;
 pub mod sun;
+pub mod surface;
 pub mod survey;
 pub mod svg;
 pub mod svg_overlay;

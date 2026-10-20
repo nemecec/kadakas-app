@@ -31,6 +31,9 @@ impl<W: Write> Exporter<'_, W> {
             Shape::Mesh3d(_) => self.mesh3d(obj),
             Shape::Extrude(_) | Shape::Sweep(_) => self.solid(obj),
             Shape::Underlay(_) => skip("map underlay (a picture)"),
+            Shape::SurfaceModel(_) => {
+                skip("surface model: IFC export of surface models is not done yet (MOD-12)")
+            }
             Shape::SiteModifier {
                 modifier: kadakas_core::site::ModifierKind::TextureBed { .. },
                 ..

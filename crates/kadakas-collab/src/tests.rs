@@ -61,7 +61,10 @@ struct Net {
 
 impl Net {
     fn new(n: usize) -> Net {
-        let initial = replica_of(&Document::default());
+        Net::with_base(n, replica_of(&Document::default()))
+    }
+
+    fn with_base(n: usize, initial: Replica) -> Net {
         let mut seq = Sequencer::new(initial);
         // The tests use made-up properties; the check of the things has its own tests.
         seq.check_entities(false);
@@ -4235,5 +4238,135 @@ proptest! {
         acts in prop::collection::vec(twin_act(), 1..100),
     ) {
         run_busy(n, seed, acts, true)?;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Surface models (MOD-06): a write of the whole model must not lose the edit of another user.
+
+mod surface_models {
+    use super::*;
+    use kadakas_core::command::{Command, Editor};
+    use kadakas_core::model::{Attributes, ObjectId, Shape};
+    use kadakas_core::surface::{Edit, SurfaceModel};
+
+    fn square(x: f64) -> Edit {
+        let p = [
+            [x, 0.0, 0.0],
+            [x + 1000.0, 0.0, 0.0],
+            [x + 1000.0, 1000.0, 0.0],
+            [x, 1000.0, 0.0],
+        ];
+        Edit::AddEdges {
+            edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+        }
+    }
+
+    fn start() -> (Net, Target) {
+        let mut ed = Editor::with_sequential_ids();
+        let id = ObjectId(
+            ed.execute(&Command::AddObject {
+                shape: Shape::SurfaceModel(Box::default()),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
+        ed.execute(&Command::EditSurface {
+            id,
+            edit: square(0.0),
+        })
+        .unwrap();
+        let mut net = Net::with_base(2, replica_of(ed.doc()));
+        net.connect(0);
+        net.connect(1);
+        net.settle();
+        (net, Target::new(Kind::Object, id.0))
+    }
+
+    fn model(c: &Client, t: Target) -> SurfaceModel {
+        let v = c.view().get(t).unwrap().get("shape").unwrap().clone();
+        match serde_json::from_value(v).unwrap() {
+            Shape::SurfaceModel(m) => *m,
+            _ => panic!(),
+        }
+    }
+
+    fn write(net: &mut Net, i: usize, t: Target, m: &SurfaceModel) {
+        let value = serde_json::to_value(Shape::SurfaceModel(Box::new(m.clone()))).unwrap();
+        net.clients[i]
+            .edit(vec![Op::Set {
+                target: t,
+                prop: "shape".into(),
+                value,
+            }])
+            .unwrap();
+    }
+
+    #[test]
+    fn two_users_who_edit_one_model_at_once_both_keep_their_work() {
+        for first in [0, 1] {
+            let (mut net, t) = start();
+            let mut a = model(&net.clients[0], t);
+            a.apply(&Edit::AddEdges {
+                edges: vec![[[500.0, 0.0, 0.0], [500.0, 1000.0, 0.0]]],
+            })
+            .unwrap();
+            let mut b = model(&net.clients[1], t);
+            b.apply(&square(2000.0)).unwrap();
+            // Both write before either sees the other; `first` reaches the server first.
+            write(&mut net, 0, t, &a);
+            write(&mut net, 1, t, &b);
+            net.flush(first);
+            net.flush(1 - first);
+            net.settle();
+            net.all_equal();
+            let m = model(&net.clients[0], t);
+            assert_eq!(
+                m.face_count(),
+                3,
+                "the split and the new square are both there"
+            );
+            assert!(m.check().is_valid());
+            for c in &mut net.clients {
+                assert!(
+                    !c.take_events()
+                        .iter()
+                        .any(|e| matches!(e, ClientEvent::SurfaceConflict { .. }))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_edit_that_cannot_be_replayed_is_a_conflict_not_a_loss() {
+        let (mut net, t) = start();
+        let mut a = model(&net.clients[0], t);
+        let face = a.faces().next().unwrap().0;
+        a.apply(&Edit::ReverseFaces { faces: vec![face] }).unwrap();
+        let mut b = model(&net.clients[1], t);
+        b.apply(&Edit::EraseFaces { faces: vec![face] }).unwrap();
+        write(&mut net, 0, t, &a);
+        write(&mut net, 1, t, &b);
+        net.flush(0);
+        net.flush(1);
+        net.settle();
+        let events = net.clients[0].take_events();
+        let lost = events.iter().find_map(|e| match e {
+            ClientEvent::SurfaceConflict { object, lost, .. } if *object == t.id => {
+                Some(lost.clone())
+            }
+            _ => None,
+        });
+        let lost = lost.expect("the person is told");
+        assert_eq!(lost["kind"], "surface_model");
+        assert!(
+            net.clients[1]
+                .take_events()
+                .iter()
+                .all(|e| !matches!(e, ClientEvent::SurfaceConflict { .. }))
+        );
     }
 }

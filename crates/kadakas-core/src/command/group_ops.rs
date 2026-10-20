@@ -183,6 +183,17 @@ pub fn rotate_shape(shape: &Shape, center: DVec2, angle: f64) -> Result<Shape, S
             turned.ridge_angle = turned.ridge_angle.map(|a| a + angle);
             Shape::Massing(Box::new(turned))
         }
+        Shape::SurfaceModel(m) => {
+            let mut turned = (**m).clone();
+            let c = center.extend(0.0);
+            turned.place(
+                glam::DAffine3::from_translation(c)
+                    * glam::DAffine3::from_rotation_z(angle)
+                    * glam::DAffine3::from_translation(-c)
+                    * turned.transform,
+            );
+            Shape::SurfaceModel(Box::new(turned))
+        }
         other => return Err(format!("a {} cannot be turned", other.kind())),
     })
 }

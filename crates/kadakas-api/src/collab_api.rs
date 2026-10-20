@@ -79,7 +79,7 @@ pub const DISCONNECT: (&str, &str) = (
 );
 pub const SYNC: (&str, &str) = (
     "collab.sync",
-    "Send local changes, move messages, and apply changes of other users to the open document. Call it after your edits and now and then to hear of others. params: {now_ms?}. Returns {pushed (numbers of the transactions sent), problems (changes that could not be shared, as texts), received, sent, document_changed, events, quarantined, repairs, status}. events lists what happened: connected, disconnected, rejected {op_id, code, message}, server_error, failed, gap, store_failed, store_corrupt, regressed, renumbered, reconnect.",
+    "Send local changes, move messages, and apply changes of other users to the open document. Call it after your edits and now and then to hear of others. params: {now_ms?}. Returns {pushed (numbers of the transactions sent), problems (changes that could not be shared, as texts), received, sent, document_changed, events, quarantined, repairs, status}. events lists what happened: connected, disconnected, rejected {op_id, code, message}, server_error, failed, gap, store_failed, store_corrupt, regressed, renumbered, reconnect, surface_conflict {object, reason, lost} (another user wrote a surface model over edits made here and they could not be replayed on it; `lost` is the model that held them: show it to the person).",
 );
 pub const PRESENCE: (&str, &str) = (
     "collab.presence",
@@ -929,6 +929,11 @@ fn event_json(e: &ClientEvent) -> Value {
         ClientEvent::ServerRegressed { resent } => json!({"event": "regressed", "resent": resent}),
         ClientEvent::Renumbered { count } => json!({"event": "renumbered", "count": count}),
         ClientEvent::Reconnect(m) => json!({"event": "reconnect", "message": m}),
+        ClientEvent::SurfaceConflict {
+            object,
+            reason,
+            lost,
+        } => json!({"event": "surface_conflict", "object": object, "reason": reason, "lost": lost}),
     }
 }
 
