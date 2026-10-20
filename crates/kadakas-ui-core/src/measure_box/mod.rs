@@ -9,9 +9,9 @@
 //! | `2.5`, `2.5m`, `250cm`, `3'6"`, `5' 6 1/2"` | [`Value::Length`] (mm) | a bare number counts in the document length unit |
 //! | `3;4`, `3,4` | [`Value::Pair`] | `;` always; `,` only when the decimal separator is a point. A value may be empty: `,4` and `3;` |
 //! | `45`, `45°`, `-30`, `8:12` | [`Value::Angle`] (degrees) | `8:12` is a slope, rise to run |
-//! | `5x`, `x5`, `5*`, `*5` | [`Value::Count`] | copies after a copy |
+//! | `5x`, `x5`, `5*`, `*5` | [`Value::Count`] | copies, only after a copy ([`Phase::Copied`]) |
 //! | `/5`, `5/` | [`Value::Divide`] | divides the copies evenly |
-//! | `12s` | [`Value::Sides`] | the number of segments or sides |
+//! | `12s` | [`Value::Sides`] | the number of segments or sides; a bare number before the first click of a circle, polygon or arc |
 //! | `24r` | [`Value::Radius`] (mm) | a radius, after an arc |
 //! | `[1,2,3]` | [`Value::PointAbs`] (mm) | an absolute point; `;` between values when the decimal is a comma |
 //! | `<1,2,3>` | [`Value::PointRel`] (mm) | a point relative to the start |

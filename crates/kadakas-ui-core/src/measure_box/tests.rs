@@ -465,7 +465,13 @@ fn every_tool_phase_and_kind_agree_with_the_parser() {
         Tool::Select,
     ];
     for tool in tools {
-        for phase in [Phase::Step(0), Phase::Step(1), Phase::Step(2), Phase::Done, Phase::Copied] {
+        for phase in [
+            Phase::Step(0),
+            Phase::Step(1),
+            Phase::Step(2),
+            Phase::Done,
+            Phase::Copied,
+        ] {
             let acc = accepts(tool, phase);
             for (kind, text) in samples {
                 let r = run(text, &metric(), tool, phase);
@@ -512,7 +518,9 @@ fn the_errors_speak_the_language_of_the_person() {
         InputError::SidesRange,
         InputError::Negative,
         InputError::TooLarge,
-        InputError::AmbiguousComma { text: "1,000".into() },
+        InputError::AmbiguousComma {
+            text: "1,000".into(),
+        },
     ];
     for e in &errors {
         let en = e.message();
@@ -664,11 +672,23 @@ fn a_bare_number_before_the_first_click_is_the_sides() {
         assert_eq!(at("24s"), Ok(Value::Sides(24)), "{tool:?}");
         assert_eq!(at("2"), Err(InputError::SidesRange), "{tool:?}");
         assert!(
-            matches!(at("2m"), Err(InputError::NotAccepted { kind: Kind::Length, .. })),
+            matches!(
+                at("2m"),
+                Err(InputError::NotAccepted {
+                    kind: Kind::Length,
+                    ..
+                })
+            ),
             "{tool:?}"
         );
         assert!(
-            matches!(at("2.5"), Err(InputError::NotAccepted { kind: Kind::Length, .. })),
+            matches!(
+                at("2.5"),
+                Err(InputError::NotAccepted {
+                    kind: Kind::Length,
+                    ..
+                })
+            ),
             "{tool:?}"
         );
     }
@@ -686,7 +706,9 @@ fn a_bare_number_before_the_first_click_is_the_sides() {
         run("90", &metric(), Tool::Arc, Phase::Step(2)),
         Ok(Value::Angle(90.0))
     );
-    assert!(run("90", &metric(), Tool::Arc, Phase::Step(1)).is_ok_and(|v| v.kind() == Kind::Length));
+    assert!(
+        run("90", &metric(), Tool::Arc, Phase::Step(1)).is_ok_and(|v| v.kind() == Kind::Length)
+    );
 }
 
 #[test]
@@ -699,7 +721,10 @@ fn a_bare_number_after_an_arc_is_refused_and_says_what_is_taken() {
             accepted: &[Kind::Sides, Kind::Radius]
         })
     );
-    assert_eq!(run("5r", &metric(), Tool::Arc, Phase::Done), Ok(Value::Radius(5.0)));
+    assert_eq!(
+        run("5r", &metric(), Tool::Arc, Phase::Done),
+        Ok(Value::Radius(5.0))
+    );
 }
 
 #[test]
@@ -732,5 +757,8 @@ fn one_comma_and_three_digits_is_not_guessed() {
     // The message is in both languages and names what was typed.
     let e = mv("1,000", &metric()).unwrap_err();
     assert!(e.message().contains("1,000"));
-    assert_ne!(e.message(), kadakas_l10n::with_language("et", || e.message()));
+    assert_ne!(
+        e.message(),
+        kadakas_l10n::with_language("et", || e.message())
+    );
 }

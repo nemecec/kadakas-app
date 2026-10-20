@@ -17,6 +17,9 @@
 //!    [`Inferencer::infer`] with the pointer in pixels and the reference point of the tool (the
 //!    last point you clicked, `None` before the first click). Draw the [`Inference`]: the dot or
 //!    square at `point` in `color`, the `label` at the pointer, and the `lines`.
+//!    With several models keep one scene per model and call [`Inferencer::infer_scenes`], which
+//!    also takes a predicate that skips the geometry a tool is moving. A scene is `Send`: build it
+//!    on a worker thread ([`Scene::from_surface_model`]).
 //! 4. Forward keys with [`Inferencer::key`]; call [`Inferencer::pause`] when the pointer has rested
 //!    for [`PAUSE_SECONDS`]; call [`Inferencer::reset`] when the tool starts or ends and
 //!    [`Inferencer::release_locks`] after a click when the tool wants a fresh start.
@@ -101,6 +104,9 @@ pub enum Kind {
     Parallel,
     /// On a line through the reference point, perpendicular to the edge that you hovered.
     Perpendicular,
+    /// On the line from the reference point through a point that Shift locked (an endpoint,
+    /// midpoint or center that you were on when Shift went down).
+    ThroughPoint,
     OnFace,
     /// Nothing was near: the point on the ground plane or in the air along the pointer ray.
     Free,
@@ -117,7 +123,11 @@ impl Kind {
             Kind::Midpoint => 2,
             Kind::Intersection => 3,
             Kind::OnEdge => 4,
-            Kind::OnAxis(_) | Kind::FromPoint(_) | Kind::Parallel | Kind::Perpendicular => 5,
+            Kind::OnAxis(_)
+            | Kind::FromPoint(_)
+            | Kind::Parallel
+            | Kind::Perpendicular
+            | Kind::ThroughPoint => 5,
             Kind::OnFace => 6,
             Kind::Free => 7,
         }
@@ -141,7 +151,7 @@ impl Kind {
             Kind::OnEdge => Rgb(0xd9, 0x30, 0x30),
             Kind::OnFace => Rgb(0x2f, 0x6b, 0xe0),
             Kind::OnAxis(a) | Kind::FromPoint(a) => a.color(),
-            Kind::Parallel | Kind::Perpendicular => MAGENTA,
+            Kind::Parallel | Kind::Perpendicular | Kind::ThroughPoint => MAGENTA,
             Kind::Free => Rgb(0x80, 0x80, 0x80),
         }
     }
@@ -161,6 +171,7 @@ impl Kind {
             Kind::FromPoint(_) => tr!("uic-infer3d-from-point"),
             Kind::Parallel => tr!("uic-infer3d-parallel"),
             Kind::Perpendicular => tr!("uic-infer3d-perpendicular"),
+            Kind::ThroughPoint => tr!("uic-infer3d-through-point"),
             Kind::Free => String::new(),
         }
     }

@@ -12,3 +12,4 @@ uic-infer3d-on-blue-axis = On Blue Axis
 uic-infer3d-from-point = From Point
 uic-infer3d-parallel = Parallel to Edge
 uic-infer3d-perpendicular = Perpendicular to Edge
+uic-infer3d-through-point = Through Point

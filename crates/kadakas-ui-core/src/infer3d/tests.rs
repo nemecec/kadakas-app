@@ -1101,8 +1101,8 @@ fn a_cube_from_a_surface_model_snaps_like_a_cube() {
         px(&c, DVec3::new(500.0, 500.0, 1000.0)),
         None,
     );
-    // The center of the square top face (regular) is the center of the cube top.
-    assert_eq!(r.kind, Kind::Center);
+    // The square top face is not a circle or a polygon: no center.
+    assert_eq!(r.kind, Kind::OnFace);
     let r = ask(
         &mut i,
         &s,
@@ -1342,6 +1342,12 @@ fn perf_a_50k_edge_surface_model_infers_within_a_frame() {
             DVec3::new(8000.0, 4000.0, 1500.0),
             DVec3::new(8000.0, 8000.0, 0.0),
         ),
+        // Eye level inside the model: half of the boxes of the index are behind the camera.
+        (
+            "inside",
+            DVec3::new(8000.0, 6000.0, 1000.0),
+            DVec3::new(8000.0, 12000.0, 700.0),
+        ),
     ];
     let mut worst99 = 0.0f64;
     for (name, eye, target) in views {
@@ -1389,4 +1395,331 @@ fn perf_a_50k_edge_surface_model_infers_within_a_frame() {
     }
     let p99 = worst99;
     assert!(p99 < 4.0, "p99 {p99} ms is over a quarter of a 60 Hz frame");
+}
+
+// ----- the review fixes ---------------------------------------------------------------------
+
+/// A cube of `size` with its corner at the origin: six faces and twelve edges. The tags run
+/// from `tag0` (faces) and `tag0 + 100` (edges).
+fn cube(b: &mut SceneBuilder, size: f64, tag0: u64) {
+    let c = |x: f64, y: f64, z: f64| DVec3::new(x, y, z) * size;
+    let quad = |p: [[f64; 3]; 4]| p.map(|q| c(q[0], q[1], q[2])).to_vec();
+    let faces = [
+        quad([[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.]]),
+        quad([[0., 0., 1.], [1., 0., 1.], [1., 1., 1.], [0., 1., 1.]]),
+        quad([[0., 0., 0.], [0., 1., 0.], [0., 1., 1.], [0., 0., 1.]]),
+        quad([[1., 0., 0.], [1., 1., 0.], [1., 1., 1.], [1., 0., 1.]]),
+        quad([[0., 0., 0.], [1., 0., 0.], [1., 0., 1.], [0., 0., 1.]]),
+        quad([[0., 1., 0.], [1., 1., 0.], [1., 1., 1.], [0., 1., 1.]]),
+    ];
+    for (k, f) in faces.into_iter().enumerate() {
+        for j in 0..4 {
+            b.add_edge(f[j], f[(j + 1) % 4], Tag(tag0 + 100 + (k * 4 + j) as u64));
+        }
+        b.add_face(f, vec![], Tag(tag0 + k as u64));
+    }
+}
+
+/// A 3/4 view from the front left above.
+fn three_quarter() -> Camera {
+    Camera::look_at(
+        DVec3::new(-3000.0, -4000.0, 3000.0),
+        DVec3::new(500.0, 500.0, 500.0),
+        DVec3::Z,
+        Projection::Perspective { fov_y: 0.8 },
+        DVec2::new(800.0, 800.0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_hidden_back_corner_is_not_offered_through_a_front_face() {
+    let s = scene(|b| cube(b, 1000.0, 1));
+    let c = three_quarter();
+    let hidden = DVec3::new(1000.0, 1000.0, 0.0);
+    let mut i = Inferencer::default();
+    let r = ask(&mut i, &s, &c, px(&c, hidden), None);
+    assert_ne!(r.kind, Kind::Endpoint, "{r:?}");
+    assert!(r.point.distance(hidden) > 100.0, "{r:?}");
+    assert_eq!(r.kind, Kind::OnFace, "{r:?}");
+    // The front corner is still found, and so is an edge on the near side.
+    let front = DVec3::new(0.0, 0.0, 1000.0);
+    assert_eq!(ask(&mut i, &s, &c, px(&c, front), None).point, front);
+    let on = DVec3::new(0.0, 0.0, 300.0);
+    assert_eq!(ask(&mut i, &s, &c, px(&c, on), None).kind, Kind::OnEdge);
+    // Hidden midpoints too: the midpoint of the far bottom edge.
+    let mid = DVec3::new(500.0, 1000.0, 0.0);
+    let r = ask(&mut i, &s, &c, px(&c, mid), None);
+    assert!(r.point.distance(mid) > 100.0, "{r:?}");
+    // Across scenes: the face in one scene hides a point of another.
+    let faces = scene(|b| cube(b, 1000.0, 1));
+    let lone = scene(|b| {
+        b.add_point(hidden, PointKind::Endpoint, Tag(900));
+    });
+    let r = i.infer_scenes(&[&lone, &faces], &c, px(&c, hidden), None, &|_| false);
+    assert_ne!(r.source, Tag(900), "{r:?}");
+    assert_eq!(r.kind, Kind::OnFace);
+    // Without the face in the way the point is there.
+    let r = i.infer_scenes(&[&lone], &c, px(&c, hidden), None, &|_| false);
+    assert_eq!((r.kind, r.source), (Kind::Endpoint, Tag(900)));
+}
+
+#[test]
+fn a_skipped_tag_neither_snaps_nor_hides() {
+    let s = scene(|b| cube(b, 1000.0, 1));
+    let c = three_quarter();
+    let hidden = DVec3::new(1000.0, 1000.0, 0.0);
+    let mut i = Inferencer::default();
+    // Skip the faces: the back corner shows.
+    let no_faces = |t: Tag| (1..=6).contains(&t.0);
+    let r = i.infer_scenes(&[&s], &c, px(&c, hidden), None, &no_faces);
+    assert_eq!(r.kind, Kind::Endpoint);
+    assert_eq!(r.point, hidden);
+    // Skip everything: nothing to snap to.
+    let r = i.infer_scenes(&[&s], &c, px(&c, hidden), None, &|_| true);
+    assert_eq!(r.kind, Kind::Free);
+    // Skip the edges: the front corner is gone.
+    let front = DVec3::new(0.0, 0.0, 1000.0);
+    let r = i.infer_scenes(&[&s], &c, px(&c, front), None, &|_| false);
+    assert_eq!(r.kind, Kind::Endpoint);
+    let r = i.infer_scenes(&[&s], &c, px(&c, front), None, &|t| t.0 >= 100);
+    assert_ne!(r.kind, Kind::Endpoint);
+}
+
+#[test]
+fn several_scenes_give_the_result_of_one_merged_scene() {
+    let a = scene(|b| edge(b, [0.0, 0.0, 0.0], [2000.0, 0.0, 0.0], 1));
+    let b2 = scene(|b| edge(b, [1000.0, -1000.0, 0.0], [1000.0, 1000.0, 0.0], 2));
+    let both = scene(|b| {
+        edge(b, [0.0, 0.0, 0.0], [2000.0, 0.0, 0.0], 1);
+        edge(b, [1000.0, -1000.0, 0.0], [1000.0, 1000.0, 0.0], 2);
+    });
+    let c = cam();
+    let mut i = Inferencer::default();
+    for at in [
+        DVec3::new(1000.0, 0.0, 0.0),
+        DVec3::new(300.0, 0.0, 0.0),
+        DVec3::new(1000.0, 600.0, 0.0),
+        DVec3::new(2000.0, 0.0, 0.0),
+    ] {
+        let p = px(&c, at) + DVec2::new(1.0, 2.0);
+        let one = ask(&mut i, &both, &c, p, None);
+        let two = i.infer_scenes(&[&a, &b2], &c, p, None, &|_| false);
+        assert_eq!(one, two, "{at:?}");
+        let two = i.infer_scenes(&[&b2, &a], &c, p, None, &|_| false);
+        assert_eq!(one, two, "{at:?}");
+    }
+    // The crossing of an edge of one scene with an edge of the other: the middle of both.
+    let p = px(&c, DVec3::new(1000.0, 0.0, 0.0));
+    let r = i.infer_scenes(&[&a, &b2], &c, p, None, &|_| false);
+    assert!(
+        matches!(r.kind, Kind::Midpoint | Kind::Intersection),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn scenes_can_be_built_on_another_thread() {
+    fn is_send<T: Send + Sync>() {}
+    is_send::<Scene>();
+    is_send::<SceneBuilder>();
+    let mut m = SurfaceModel::new();
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[0.0, 0.0, 0.0], [1000.0, 0.0, 0.0]]],
+    })
+    .unwrap();
+    let h = std::thread::spawn(move || Scene::from_surface_model(m, 3));
+    let s = h.join().unwrap();
+    assert_eq!(s.edge_count(), 1);
+    let c = cam();
+    let mut i = Inferencer::default();
+    let r = ask(&mut i, &s, &c, px(&c, DVec3::ZERO), None);
+    assert_eq!((r.kind, r.source.model()), (Kind::Endpoint, 3));
+    // A builder made by hand goes to a thread as well.
+    let mut b = SceneBuilder::new();
+    b.add_edge(DVec3::ZERO, DVec3::X, Tag(1));
+    let s = std::thread::spawn(move || b.finish()).join().unwrap();
+    assert_eq!(s.edge_count(), 1);
+}
+
+#[test]
+fn under_a_blue_lock_a_corner_gives_its_height_on_the_line() {
+    let s = scene(|b| edge(b, [0.0, 0.0, 800.0], [2000.0, 0.0, 800.0], 1));
+    let c = cam();
+    let mut i = Inferencer::default();
+    let r0 = DVec3::new(500.0, -500.0, 0.0);
+    ask(
+        &mut i,
+        &s,
+        &c,
+        px(&c, DVec3::new(500.0, -500.0, 300.0)),
+        Some(r0),
+    );
+    assert!(i.key(Key::Up));
+    // The pointer is on the corner (0, 0, 800), which is not on the blue line.
+    let corner = DVec3::new(0.0, 0.0, 800.0);
+    let r = ask(&mut i, &s, &c, px(&c, corner), Some(r0));
+    assert!(r.locked);
+    assert_eq!(r.kind, Kind::OnAxis(Axis::Z));
+    let want = DVec3::new(500.0, -500.0, 800.0);
+    assert!(r.point.distance(want) < 1e-6, "{:?}", r.point);
+    assert_eq!(r.source, Tag(1));
+    assert!(matches!(r.constraint, Some(Constraint::Line { .. })));
+    // The line from the reference point and a dotted helper from the corner to the point.
+    assert!(r.lines.iter().any(|l| !l.dotted && l.from == r0));
+    assert!(
+        r.lines
+            .iter()
+            .any(|l| l.dotted && l.from == corner && l.to == r.point)
+    );
+    // A midpoint works the same way.
+    let mid = DVec3::new(1000.0, 0.0, 800.0);
+    let r = ask(&mut i, &s, &c, px(&c, mid), Some(r0));
+    assert!(r.point.distance(want) < 1e-6, "{:?}", r.point);
+    // Away from any point the line is followed as before.
+    let far = DVec3::new(500.0, -500.0, 1500.0);
+    let r = ask(&mut i, &s, &c, px(&c, far), Some(r0));
+    assert!((r.point - r0).cross(DVec3::Z).length() < 1e-6);
+}
+
+#[test]
+fn a_box_behind_the_camera_is_not_traversed() {
+    use super::engine::overlaps_rect;
+    let c = Camera::look_at(
+        DVec3::new(0.0, 0.0, 1500.0),
+        DVec3::new(0.0, 10000.0, 1500.0),
+        DVec3::Z,
+        Projection::Perspective { fov_y: 0.8 },
+        DVec2::new(1000.0, 800.0),
+    )
+    .unwrap();
+    let centre = DVec2::new(500.0, 400.0);
+    let bx = |y0: f64, y1: f64| Aabb {
+        min: DVec3::new(-100.0, y0, 1400.0),
+        max: DVec3::new(100.0, y1, 1600.0),
+    };
+    // Fully behind the camera: no, wherever the pointer is.
+    assert!(!overlaps_rect(&c, &bx(-3000.0, -1000.0), centre, 10.0));
+    let corner = DVec2::new(10.0, 10.0);
+    assert!(!overlaps_rect(&c, &bx(-3000.0, -1000.0), corner, 10.0));
+    // In front: yes. Across the camera: yes (the part in front can reach the pointer).
+    assert!(overlaps_rect(&c, &bx(1000.0, 2000.0), centre, 10.0));
+    assert!(overlaps_rect(&c, &bx(-1000.0, 2000.0), centre, 10.0));
+    // A box in front but far to the side of the view is outside the pad.
+    let side = Aabb {
+        min: DVec3::new(50_000.0, 1000.0, 1400.0),
+        max: DVec3::new(50_100.0, 2000.0, 1600.0),
+    };
+    assert!(!overlaps_rect(&c, &side, centre, 10.0));
+}
+
+#[test]
+fn shift_on_a_point_with_a_reference_locks_the_direction_through_it() {
+    let s = one_edge();
+    let c = cam();
+    let r0 = DVec3::new(500.0, -1500.0, 600.0);
+    let end = DVec3::new(2000.0, 0.0, 0.0);
+    for through in [end, DVec3::new(1000.0, 0.0, 0.0)] {
+        let mut i = Inferencer::default();
+        let r = ask(&mut i, &s, &c, px(&c, through), Some(r0));
+        assert!(matches!(r.kind, Kind::Endpoint | Kind::Midpoint));
+        assert!(i.key(Key::ShiftDown));
+        assert_eq!(i.locked_kind(), Some(Kind::ThroughPoint));
+        // The pointer moves away along the line and across it: the point stays on the line.
+        let dir = (through - r0).normalize();
+        for t in [0.5, 1.5, 2.5] {
+            let on_line = r0 + dir * ((through - r0).length() * t);
+            for off in [DVec2::ZERO, DVec2::new(40.0, 30.0)] {
+                let r = ask(&mut i, &s, &c, px(&c, on_line) + off, Some(r0));
+                assert!(r.locked && r.kind == Kind::ThroughPoint, "{r:?}");
+                assert!((r.point - r0).cross(dir).length() < 1e-6, "{r:?}");
+                assert_eq!(r.label, "Through Point");
+            }
+        }
+        assert!(i.key(Key::ShiftUp));
+        assert!(!ask(&mut i, &s, &c, px(&c, end), Some(r0)).locked);
+    }
+    // Without a reference the point itself is kept.
+    let mut i = Inferencer::default();
+    ask(&mut i, &s, &c, px(&c, end), None);
+    assert!(i.key(Key::ShiftDown));
+    assert_eq!(i.locked_kind(), Some(Kind::Endpoint));
+    let r = ask(&mut i, &s, &c, px(&c, DVec3::new(500.0, 0.0, 0.0)), None);
+    assert_eq!((r.kind, r.point), (Kind::Endpoint, end));
+    kadakas_l10n::with_language("et", || {
+        assert_eq!(Kind::ThroughPoint.label(), "Läbi punkti")
+    });
+}
+
+#[test]
+fn the_nearest_faces_are_kept_not_the_first_ones() {
+    // Three tiny decoy faces next to the pointer (added first) and the face that the edge
+    // crosses under the pointer (added last). Only two faces are kept.
+    let o = Options {
+        max_near_faces: 2,
+        ..Options::default()
+    };
+    let c = cam();
+    let s = scene(|b| {
+        for (k, dx) in [40.0, -40.0, 30.0].into_iter().enumerate() {
+            let q = |x: f64, y: f64| DVec3::new(dx + x, y, 0.0);
+            b.add_face(
+                vec![q(0.0, 0.0), q(8.0, 0.0), q(8.0, 8.0), q(0.0, 8.0)],
+                vec![],
+                Tag(10 + k as u64),
+            );
+        }
+        // The crossed face: a square around the origin.
+        b.add_face(
+            vec![
+                DVec3::new(-200.0, -200.0, 0.0),
+                DVec3::new(200.0, -200.0, 0.0),
+                DVec3::new(200.0, 200.0, 0.0),
+                DVec3::new(-200.0, 200.0, 0.0),
+            ],
+            vec![],
+            Tag(99),
+        );
+        edge(b, [0.0, 0.0, -300.0], [0.0, 0.0, 900.0], 5);
+    });
+    let mut i = Inferencer::new(o);
+    let r = ask(&mut i, &s, &c, px(&c, DVec3::ZERO), None);
+    assert_eq!(r.kind, Kind::Intersection, "{r:?}");
+    assert_eq!((r.source, r.other), (Tag(5), Tag(99)));
+}
+
+#[test]
+fn the_face_normal_comes_from_the_face_that_was_hit() {
+    // Two faces with the same tag: a horizontal one and a vertical one.
+    let s = scene(|b| {
+        b.add_face(
+            vec![
+                DVec3::new(0.0, 0.0, 0.0),
+                DVec3::new(1000.0, 0.0, 0.0),
+                DVec3::new(1000.0, 1000.0, 0.0),
+                DVec3::new(0.0, 1000.0, 0.0),
+            ],
+            vec![],
+            Tag(5),
+        );
+        b.add_face(
+            vec![
+                DVec3::new(3000.0, 0.0, 0.0),
+                DVec3::new(3000.0, 1000.0, 0.0),
+                DVec3::new(3000.0, 1000.0, 1000.0),
+                DVec3::new(3000.0, 0.0, 1000.0),
+            ],
+            vec![],
+            Tag(5),
+        );
+    });
+    let c = three_quarter();
+    let mut i = Inferencer::default();
+    let at = px(&c, DVec3::new(3000.0, 400.0, 400.0));
+    let r = ask(&mut i, &s, &c, at, None);
+    assert_eq!(r.kind, Kind::OnFace);
+    let Some(Constraint::Plane { normal, .. }) = r.constraint else {
+        panic!("{r:?}")
+    };
+    assert!(normal.dot(DVec3::X).abs() > 0.999, "{normal:?}");
 }
