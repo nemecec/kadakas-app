@@ -1217,13 +1217,11 @@ mod tests {
                 .contains("refused")
         );
         h.join().unwrap();
-        let free = TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .to_string();
+        // Port 1 (tcpmux) has no listener on a normal machine. A port that a test frees and then
+        // dials can be taken again by a parallel test in between.
+        let free = "127.0.0.1:1";
         assert!(
-            connect_remote(&free, "t")
+            connect_remote(free, "t")
                 .unwrap_err()
                 .contains("cannot connect")
         );
