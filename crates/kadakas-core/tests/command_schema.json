@@ -387,6 +387,58 @@
             "faces"
           ],
           "type": "object"
+        },
+        {
+          "description": "Draws a chain of straight edges through the points (a closed one joins the last point to\nthe first) and keeps them as one curve (a circle or an arc, MOD-08), so that the pieces\nstay one curve when other edges cut them. Welds, splits and faces work as in `AddEdges`.\nWhen one of the pieces is in a curve already, the edges are drawn and no new curve is made.",
+          "properties": {
+            "action": {
+              "const": "add_curve",
+              "type": "string"
+            },
+            "closed": {
+              "type": "boolean"
+            },
+            "points": {
+              "items": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "action",
+            "points",
+            "closed"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Pushes or pulls a face along its normal by `distance` mm (positive is toward the front,\nnegative toward the back). See the module `pushpull` for the cases. The face keeps its id\nand ends as the cap.",
+          "properties": {
+            "action": {
+              "const": "push_pull",
+              "type": "string"
+            },
+            "distance": {
+              "format": "double",
+              "type": "number"
+            },
+            "face": {
+              "$ref": "#/$defs/FaceId"
+            }
+          },
+          "required": [
+            "action",
+            "face",
+            "distance"
+          ],
+          "type": "object"
         }
       ]
     },
