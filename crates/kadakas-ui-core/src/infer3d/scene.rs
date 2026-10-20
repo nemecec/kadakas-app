@@ -1,0 +1,532 @@
+//! The scene the inference works on: points, straight edges and planar faces in world
+//! coordinates, with a spatial index. A surface model (MOD-06) is added with
+//! [`SceneBuilder::add_surface_model`]; other 3D objects add their points, edges and faces with the
+//! plain `add_*` calls. Build the scene again when the geometry changes.
+
+use glam::DVec3;
+use kadakas_core::surface::{CurveId, EdgeId, FaceId, SurfaceModel};
+
+use super::bvh::{Aabb, Bvh};
+use super::math::{circumcenter, newell, world_eps};
+
+/// What a caller knows about a piece of the scene. The inference gives it back in the result,
+/// so a tool can tell which edge or face was hit. The tags of a surface model say the model (the
+/// number given to `add_surface_model`), the kind and the id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Tag(pub u64);
+
+/// The kind part of a [`Tag`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TagKind {
+    Edge,
+    Face,
+    Curve,
+    Other,
+}
+
+impl Tag {
+    /// For geometry that has no tag.
+    pub const NONE: Tag = Tag(u64::MAX);
+
+    fn pack(kind: u64, model: u32, id: u32) -> Tag {
+        Tag(kind << 62 | u64::from(model & 0x3fff_ffff) << 32 | u64::from(id))
+    }
+
+    pub fn edge(model: u32, id: EdgeId) -> Tag {
+        Tag::pack(0, model, id.0)
+    }
+
+    pub fn face(model: u32, id: FaceId) -> Tag {
+        Tag::pack(1, model, id.0)
+    }
+
+    pub fn curve(model: u32, id: CurveId) -> Tag {
+        Tag::pack(2, model, id.0)
+    }
+
+    pub fn kind(self) -> TagKind {
+        if self == Tag::NONE {
+            return TagKind::Other;
+        }
+        match self.0 >> 62 {
+            0 => TagKind::Edge,
+            1 => TagKind::Face,
+            2 => TagKind::Curve,
+            _ => TagKind::Other,
+        }
+    }
+
+    /// The model number of a surface model tag.
+    pub fn model(self) -> u32 {
+        ((self.0 >> 32) & 0x3fff_ffff) as u32
+    }
+
+    /// The id inside the model (an edge, face or curve id).
+    pub fn id(self) -> u32 {
+        self.0 as u32
+    }
+}
+
+/// What an explicit point is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointKind {
+    /// A vertex, an end or a guide point.
+    Endpoint,
+    /// The center of a circle, an arc or a regular polygon.
+    Center,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PointItem {
+    pub p: DVec3,
+    pub kind: PointKind,
+    pub tag: Tag,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EdgeItem {
+    pub a: DVec3,
+    pub b: DVec3,
+    pub tag: Tag,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FaceItem {
+    /// The outer loop first, then the holes.
+    pub loops: Vec<Vec<DVec3>>,
+    pub normal: DVec3,
+    /// The axis to leave out when the polygon is flattened for the inside test.
+    pub drop: usize,
+    pub tag: Tag,
+}
+
+impl FaceItem {
+    pub fn origin(&self) -> DVec3 {
+        self.loops[0][0]
+    }
+}
+
+/// A scene under construction.
+#[derive(Clone, Debug, Default)]
+pub struct SceneBuilder {
+    points: Vec<PointItem>,
+    edges: Vec<EdgeItem>,
+    faces: Vec<FaceItem>,
+}
+
+/// Edges of a surface model that carry this attribute with the value `true` are not offered.
+pub const HIDDEN_ATTR: &str = "hidden";
+
+impl SceneBuilder {
+    pub fn new() -> SceneBuilder {
+        SceneBuilder::default()
+    }
+
+    /// A point to snap to. A point or a center that is not finite is left out.
+    pub fn add_point(&mut self, p: DVec3, kind: PointKind, tag: Tag) -> &mut Self {
+        if p.is_finite() {
+            self.points.push(PointItem { p, kind, tag });
+        }
+        self
+    }
+
+    /// A straight edge. Its two ends are endpoints and its middle is a midpoint. An edge that is
+    /// not finite or has no length is left out.
+    pub fn add_edge(&mut self, a: DVec3, b: DVec3, tag: Tag) -> &mut Self {
+        if a.is_finite() && b.is_finite() && a != b {
+            self.edges.push(EdgeItem { a, b, tag });
+        }
+        self
+    }
+
+    /// A planar face from its outer loop and its holes. The face is a hit target for "on face"
+    /// and for the intersections of edges with it. A face with fewer than three points or no area
+    /// is left out. A regular polygon (all corners on a circle, all sides equal) also gives its
+    /// center as a point.
+    pub fn add_face(&mut self, outer: Vec<DVec3>, holes: Vec<Vec<DVec3>>, tag: Tag) -> &mut Self {
+        if outer.len() < 3 || !outer.iter().all(|p| p.is_finite()) {
+            return self;
+        }
+        let n = newell(&outer);
+        let len = n.length();
+        let size = outer
+            .iter()
+            .fold(0.0f64, |m, p| m.max(p.abs().max_element()));
+        if len <= 1e-12 * (1.0 + size * size) {
+            return self;
+        }
+        let normal = n / len;
+        let drop = if normal.x.abs() >= normal.y.abs() && normal.x.abs() >= normal.z.abs() {
+            0
+        } else if normal.y.abs() >= normal.z.abs() {
+            1
+        } else {
+            2
+        };
+        if holes.is_empty()
+            && let Some(c) = regular_center(&outer)
+        {
+            self.points.push(PointItem {
+                p: c,
+                kind: PointKind::Center,
+                tag,
+            });
+        }
+        let mut loops = vec![outer];
+        loops.extend(
+            holes
+                .into_iter()
+                .filter(|h| h.len() >= 3 && h.iter().all(|p| p.is_finite())),
+        );
+        self.faces.push(FaceItem {
+            loops,
+            normal,
+            drop,
+            tag,
+        });
+        self
+    }
+
+    /// A surface model: its edges (not the hidden ones), its faces and the centers of its curves
+    /// that are circles or arcs. `model` is the number that goes into the tags.
+    pub fn add_surface_model(&mut self, m: &SurfaceModel, model: u32) -> &mut Self {
+        let w = |p: DVec3| m.transform.transform_point3(p);
+        let hidden = |attrs: Option<&kadakas_core::surface::Attrs>| {
+            attrs
+                .and_then(|a| a.get(HIDDEN_ATTR))
+                .is_some_and(|v| v == &serde_json::Value::Bool(true))
+        };
+        for (id, e) in m.edges() {
+            if hidden(m.edge_attrs(id)) {
+                continue;
+            }
+            if let (Some(a), Some(b)) = (m.vertex(e.v[0]), m.vertex(e.v[1])) {
+                self.add_edge(w(a), w(b), Tag::edge(model, id));
+            }
+        }
+        for (id, f) in m.faces() {
+            if hidden(Some(&f.attrs)) {
+                continue;
+            }
+            let loops: Vec<Vec<DVec3>> = f
+                .loops()
+                .map(|l| {
+                    l.iter()
+                        .filter_map(|v| m.vertex(*v).map(w))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            let mut it = loops.into_iter();
+            if let Some(outer) = it.next() {
+                self.add_face(outer, it.collect(), Tag::face(model, id));
+            }
+        }
+        for (cid, edges) in m.curves() {
+            if let Some(c) = curve_center(m, edges) {
+                self.add_point(w(c), PointKind::Center, Tag::curve(model, cid));
+            }
+        }
+        self
+    }
+
+    /// Builds the spatial index.
+    pub fn finish(self) -> Scene {
+        let pad = DVec3::ZERO;
+        let pb: Vec<Aabb> = self
+            .points
+            .iter()
+            .map(|p| Aabb {
+                min: p.p - pad,
+                max: p.p + pad,
+            })
+            .collect();
+        let eb: Vec<Aabb> = self
+            .edges
+            .iter()
+            .map(|e| Aabb::of_points(&[e.a, e.b]))
+            .collect();
+        let fb: Vec<Aabb> = self
+            .faces
+            .iter()
+            .map(|f| f.loops[0].iter().fold(Aabb::EMPTY, |b, p| b.grow(*p)))
+            .collect();
+        let mut scale = 0.0f64;
+        for b in pb.iter().chain(&eb).chain(&fb) {
+            scale = scale
+                .max(b.min.abs().max_element())
+                .max(b.max.abs().max_element());
+        }
+        Scene {
+            bvh_points: Bvh::build(&pb),
+            bvh_edges: Bvh::build(&eb),
+            bvh_faces: Bvh::build(&fb),
+            points: self.points,
+            edges: self.edges,
+            faces: self.faces,
+            scale,
+        }
+    }
+}
+
+/// The center of a regular polygon (all corners at the same distance from the middle, all sides
+/// equal), or `None`.
+fn regular_center(outer: &[DVec3]) -> Option<DVec3> {
+    let n = outer.len();
+    let c = outer.iter().copied().sum::<DVec3>() / n as f64;
+    let r = outer.iter().map(|p| p.distance(c)).sum::<f64>() / n as f64;
+    if r <= 0.0 {
+        return None;
+    }
+    let tol = 1e-6 * r;
+    let side = outer[0].distance(outer[1]);
+    let ok = (0..n).all(|i| {
+        (outer[i].distance(c) - r).abs() <= tol
+            && (outer[i].distance(outer[(i + 1) % n]) - side).abs() <= tol
+    });
+    ok.then_some(c)
+}
+
+/// The center of a curve (a chain of edges) that is a circle or an arc, or `None` for another
+/// curve. The corners must lie on one circle.
+fn curve_center(m: &SurfaceModel, edges: &[EdgeId]) -> Option<DVec3> {
+    // Walk the chain from the first edge.
+    let first = m.edge(*edges.first()?)?;
+    let second = edges.get(1).and_then(|e| m.edge(*e));
+    let mut verts = Vec::with_capacity(edges.len() + 1);
+    match second {
+        Some(s) if s.v.contains(&first.v[1]) => verts.extend([first.v[0], first.v[1]]),
+        Some(_) => verts.extend([first.v[1], first.v[0]]),
+        None => verts.extend([first.v[0], first.v[1]]),
+    }
+    for id in &edges[1..] {
+        let e = m.edge(*id)?;
+        let last = *verts.last()?;
+        verts.push(e.other(last)?);
+    }
+    let closed = verts.len() > 2 && verts.first() == verts.last();
+    if closed {
+        verts.pop();
+    }
+    let pts: Vec<DVec3> = verts.iter().map(|v| m.vertex(*v)).collect::<Option<_>>()?;
+    let n = pts.len();
+    if n < 3 {
+        return None;
+    }
+    let c = circumcenter(pts[0], pts[n / 2], pts[n - 1])
+        .or_else(|| circumcenter(pts[0], pts[n / 3], pts[2 * n / 3]))?;
+    let r = c.distance(pts[0]);
+    let tol = 1e-6 * r.max(1e-9);
+    // All corners on the circle and in its plane.
+    let normal = (pts[n / 2] - pts[0])
+        .cross(pts[n - 1] - pts[0])
+        .normalize_or_zero();
+    let on_circle = pts
+        .iter()
+        .all(|p| (p.distance(c) - r).abs() <= tol && (*p - c).dot(normal).abs() <= tol);
+    on_circle.then_some(c)
+}
+
+/// The geometry of a scene with its index.
+#[derive(Clone, Debug, Default)]
+pub struct Scene {
+    pub(crate) points: Vec<PointItem>,
+    pub(crate) edges: Vec<EdgeItem>,
+    pub(crate) faces: Vec<FaceItem>,
+    pub(crate) bvh_points: Bvh,
+    pub(crate) bvh_edges: Bvh,
+    pub(crate) bvh_faces: Bvh,
+    scale: f64,
+}
+
+impl Scene {
+    pub fn edge_count(&self) -> usize {
+        self.edges.len()
+    }
+
+    pub fn face_count(&self) -> usize {
+        self.faces.len()
+    }
+
+    pub fn point_count(&self) -> usize {
+        self.points.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty() && self.edges.is_empty() && self.faces.is_empty()
+    }
+
+    /// The tolerance for "the same point" in this scene, in world units.
+    pub(crate) fn eps(&self) -> f64 {
+        world_eps(self.scale)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kadakas_core::surface::Edit;
+
+    #[test]
+    fn tags_round_trip() {
+        let t = Tag::edge(7, EdgeId(42));
+        assert_eq!((t.kind(), t.model(), t.id()), (TagKind::Edge, 7, 42));
+        let t = Tag::face(3, FaceId(9));
+        assert_eq!((t.kind(), t.model(), t.id()), (TagKind::Face, 3, 9));
+        let t = Tag::curve(1, CurveId(5));
+        assert_eq!((t.kind(), t.model(), t.id()), (TagKind::Curve, 1, 5));
+        assert_eq!(Tag::NONE.kind(), TagKind::Other);
+        assert_eq!(Tag(3 << 62 | 5).kind(), TagKind::Other);
+    }
+
+    #[test]
+    fn bad_input_is_left_out() {
+        let mut b = SceneBuilder::new();
+        b.add_point(DVec3::NAN, PointKind::Endpoint, Tag::NONE);
+        b.add_edge(DVec3::ZERO, DVec3::ZERO, Tag::NONE);
+        b.add_edge(DVec3::ZERO, DVec3::INFINITY, Tag::NONE);
+        b.add_face(vec![DVec3::ZERO, DVec3::X], vec![], Tag::NONE);
+        b.add_face(
+            vec![DVec3::ZERO, DVec3::X, DVec3::X * 2.0],
+            vec![],
+            Tag::NONE,
+        );
+        b.add_face(vec![DVec3::ZERO, DVec3::X, DVec3::NAN], vec![], Tag::NONE);
+        let s = b.finish();
+        assert!(s.is_empty());
+        assert_eq!((s.edge_count(), s.face_count(), s.point_count()), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_regular_face_has_a_center_and_a_rectangle_has_none() {
+        let mut b = SceneBuilder::new();
+        let sq = |w: f64, h: f64| {
+            vec![
+                DVec3::ZERO,
+                DVec3::new(w, 0.0, 0.0),
+                DVec3::new(w, h, 0.0),
+                DVec3::new(0.0, h, 0.0),
+            ]
+        };
+        b.add_face(sq(10.0, 10.0), vec![], Tag(1));
+        b.add_face(sq(10.0, 20.0), vec![], Tag(2));
+        let s = b.finish();
+        assert_eq!(s.face_count(), 2);
+        assert_eq!(s.point_count(), 1);
+        assert!(s.points[0].p.distance(DVec3::new(5.0, 5.0, 0.0)) < 1e-9);
+        assert_eq!(s.points[0].kind, PointKind::Center);
+        assert!(s.eps() > 0.0);
+    }
+
+    #[test]
+    fn a_surface_model_gives_edges_faces_and_curve_centers() {
+        let mut m = SurfaceModel::new();
+        m.transform = glam::DAffine3::from_translation(DVec3::new(100.0, 0.0, 0.0));
+        // A hexagon-like circle of 12 sides: a closed curve.
+        let n = 12;
+        let pts: Vec<[f64; 3]> = (0..n)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / n as f64;
+                [500.0 * a.cos(), 500.0 * a.sin(), 0.0]
+            })
+            .collect();
+        m.apply(&Edit::AddEdges {
+            edges: (0..n).map(|i| [pts[i], pts[(i + 1) % n]]).collect(),
+        })
+        .unwrap();
+        let ids: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
+        m.add_curve(ids).unwrap();
+        let mut b = SceneBuilder::new();
+        b.add_surface_model(&m, 4);
+        let s = b.finish();
+        assert_eq!(s.edge_count(), 12);
+        assert_eq!(s.face_count(), 1);
+        // The curve center and the regular face center.
+        assert_eq!(s.point_count(), 2);
+        for p in &s.points {
+            assert!(p.p.distance(DVec3::new(100.0, 0.0, 0.0)) < 1e-6);
+        }
+        assert!(
+            s.points
+                .iter()
+                .any(|p| p.tag.kind() == TagKind::Curve && p.tag.model() == 4)
+        );
+        assert!(s.edges.iter().all(|e| e.tag.kind() == TagKind::Edge));
+    }
+
+    #[test]
+    fn a_hidden_edge_and_an_open_polyline_curve() {
+        let mut m = SurfaceModel::new();
+        m.apply(&Edit::AddEdges {
+            edges: vec![
+                [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]],
+                [[100.0, 0.0, 0.0], [100.0, 100.0, 0.0]],
+                [[100.0, 100.0, 0.0], [300.0, 100.0, 0.0]],
+            ],
+        })
+        .unwrap();
+        let ids: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
+        m.add_curve(ids.clone()).unwrap();
+        let mut b = SceneBuilder::new();
+        b.add_surface_model(&m, 0);
+        let s = b.finish();
+        // Not a circle: no center.
+        assert_eq!(s.point_count(), 0);
+        assert_eq!(s.edge_count(), 3);
+        assert!(curve_center(&m, &[]).is_none());
+        assert!(curve_center(&m, &ids[..1]).is_none());
+        assert!(curve_center(&m, &[EdgeId(999)]).is_none());
+    }
+
+    #[test]
+    fn an_open_arc_has_a_center() {
+        let mut m = SurfaceModel::new();
+        let pts: Vec<[f64; 3]> = (0..=6)
+            .map(|i| {
+                let a = 0.5 * std::f64::consts::PI * i as f64 / 6.0;
+                [300.0 * a.cos(), 300.0 * a.sin(), 50.0]
+            })
+            .collect();
+        m.apply(&Edit::AddEdges {
+            edges: (0..6).map(|i| [pts[i], pts[i + 1]]).collect(),
+        })
+        .unwrap();
+        let mut ids: Vec<(EdgeId, kadakas_core::surface::Edge)> = m.edges().collect();
+        // Give the chain in a shuffled start: the walker follows the shared ends.
+        ids.sort_by_key(|(id, _)| id.0);
+        let chain: Vec<EdgeId> = ids.iter().map(|(id, _)| *id).collect();
+        let c = curve_center(&m, &chain).unwrap();
+        assert!(c.distance(DVec3::new(0.0, 0.0, 50.0)) < 1e-6);
+        // Edges that do not form a chain give nothing.
+        let broken = [chain[0], chain[2]];
+        assert!(curve_center(&m, &broken).is_none());
+    }
+
+    #[test]
+    fn hidden_edges_and_faces_are_skipped() {
+        let mut m = SurfaceModel::new();
+        m.apply(&Edit::AddEdges {
+            edges: vec![
+                [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]],
+                [[100.0, 0.0, 0.0], [100.0, 100.0, 0.0]],
+                [[100.0, 100.0, 0.0], [0.0, 100.0, 0.0]],
+                [[0.0, 100.0, 0.0], [0.0, 0.0, 0.0]],
+            ],
+        })
+        .unwrap();
+        let count = |m: &SurfaceModel| {
+            let mut b = SceneBuilder::new();
+            b.add_surface_model(m, 0);
+            let s = b.finish();
+            (s.edge_count(), s.face_count())
+        };
+        assert_eq!(count(&m), (4, 1));
+        let mut v = serde_json::to_value(&m).unwrap();
+        v["edges"][0]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"hidden": true}));
+        v["faces"][0]["attrs"] = serde_json::json!({"hidden": true});
+        let hidden: SurfaceModel = serde_json::from_value(v).unwrap();
+        assert_eq!(count(&hidden), (3, 0));
+    }
+}

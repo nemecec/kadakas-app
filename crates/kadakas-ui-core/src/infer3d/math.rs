@@ -1,0 +1,181 @@
+//! Small geometry helpers of the inference.
+
+use glam::{DVec2, DVec3};
+
+/// The parameters `(s, t)` of the closest points of the lines `o1 + s*d1` and `o2 + t*d2`.
+/// `None` when the lines are parallel.
+pub(crate) fn line_line(o1: DVec3, d1: DVec3, o2: DVec3, d2: DVec3) -> Option<(f64, f64)> {
+    let w = o1 - o2;
+    let (a, b, c) = (d1.dot(d1), d1.dot(d2), d2.dot(d2));
+    let (d, e) = (d1.dot(w), d2.dot(w));
+    let den = a * c - b * b;
+    if den.abs() <= 1e-12 * a * c || a == 0.0 || c == 0.0 {
+        return None;
+    }
+    Some(((b * e - c * d) / den, (a * e - b * d) / den))
+}
+
+/// The closest point of a screen segment to a pixel: the parameter (0 to 1, clamped) and the
+/// distance in pixels.
+pub(crate) fn nearest_on_screen_seg(p: DVec2, a: DVec2, b: DVec2) -> (f64, f64) {
+    let d = b - a;
+    let l2 = d.length_squared();
+    let s = if l2 < 1e-18 {
+        0.0
+    } else {
+        ((p - a).dot(d) / l2).clamp(0.0, 1.0)
+    };
+    (s, (a + d * s - p).length())
+}
+
+/// The distance along a ray where it meets a plane (`None` when parallel or behind).
+pub(crate) fn ray_plane(origin: DVec3, dir: DVec3, point: DVec3, normal: DVec3) -> Option<f64> {
+    let den = dir.dot(normal);
+    if den.abs() < 1e-12 {
+        return None;
+    }
+    let t = (point - origin).dot(normal) / den;
+    (t > 0.0 && t.is_finite()).then_some(t)
+}
+
+/// Even-odd test of a point in the loops of a planar polygon. `drop` is the axis to leave out
+/// (the dominant axis of the normal).
+pub(crate) fn inside_loops(p: DVec3, loops: &[Vec<DVec3>], drop: usize) -> bool {
+    let (u, v) = match drop {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let (px, py) = (p[u], p[v]);
+    let mut inside = false;
+    for l in loops {
+        let n = l.len();
+        let mut j = n - 1;
+        for i in 0..n {
+            let (a, b) = (l[i], l[j]);
+            if (a[v] > py) != (b[v] > py) {
+                let x = (b[u] - a[u]) * (py - a[v]) / (b[v] - a[v]) + a[u];
+                if px < x {
+                    inside = !inside;
+                }
+            }
+            j = i;
+        }
+    }
+    inside
+}
+
+/// The normal of a polygon by Newell's method (not normalized; zero for a degenerate polygon).
+pub(crate) fn newell(points: &[DVec3]) -> DVec3 {
+    let mut n = DVec3::ZERO;
+    for i in 0..points.len() {
+        let (a, b) = (points[i], points[(i + 1) % points.len()]);
+        n += DVec3::new(
+            (a.y - b.y) * (a.z + b.z),
+            (a.z - b.z) * (a.x + b.x),
+            (a.x - b.x) * (a.y + b.y),
+        );
+    }
+    n
+}
+
+/// The center of the circle through three points (`None` when they are on a line).
+pub(crate) fn circumcenter(a: DVec3, b: DVec3, c: DVec3) -> Option<DVec3> {
+    let (ab, ac) = (b - a, c - a);
+    let n = ab.cross(ac);
+    let n2 = n.length_squared();
+    if n2
+        < 1e-18
+            * ab.length_squared()
+                .max(ac.length_squared())
+                .powi(2)
+                .max(1e-300)
+    {
+        return None;
+    }
+    let to = (n.cross(ab) * ac.length_squared() + ac.cross(n) * ab.length_squared()) / (2.0 * n2);
+    Some(a + to)
+}
+
+/// A tolerance for "the same point" in world units, from the size of the numbers.
+pub(crate) fn world_eps(scale: f64) -> f64 {
+    1e-7 * (1.0 + scale.abs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lines_cross_or_are_parallel() {
+        let (s, t) =
+            line_line(DVec3::ZERO, DVec3::X, DVec3::new(2.0, -3.0, 0.0), DVec3::Y).unwrap();
+        assert!((s - 2.0).abs() < 1e-12 && (t - 3.0).abs() < 1e-12);
+        assert!(line_line(DVec3::ZERO, DVec3::X, DVec3::Y, DVec3::X * 2.0).is_none());
+        assert!(line_line(DVec3::ZERO, DVec3::ZERO, DVec3::Y, DVec3::X).is_none());
+    }
+
+    #[test]
+    fn nearest_point_on_a_screen_segment() {
+        let (s, d) =
+            nearest_on_screen_seg(DVec2::new(5.0, 3.0), DVec2::ZERO, DVec2::new(10.0, 0.0));
+        assert_eq!((s, d), (0.5, 3.0));
+        let (s, d) =
+            nearest_on_screen_seg(DVec2::new(-4.0, 3.0), DVec2::ZERO, DVec2::new(10.0, 0.0));
+        assert_eq!((s, d), (0.0, 5.0));
+        let (s, d) = nearest_on_screen_seg(DVec2::new(3.0, 4.0), DVec2::ZERO, DVec2::ZERO);
+        assert_eq!((s, d), (0.0, 5.0));
+    }
+
+    #[test]
+    fn ray_and_plane() {
+        assert_eq!(
+            ray_plane(DVec3::new(0.0, 0.0, 5.0), -DVec3::Z, DVec3::ZERO, DVec3::Z),
+            Some(5.0)
+        );
+        assert!(ray_plane(DVec3::new(0.0, 0.0, 5.0), DVec3::Z, DVec3::ZERO, DVec3::Z).is_none());
+        assert!(ray_plane(DVec3::new(0.0, 0.0, 5.0), DVec3::X, DVec3::ZERO, DVec3::Z).is_none());
+    }
+
+    #[test]
+    fn a_point_in_a_polygon_with_a_hole() {
+        let sq = |a: f64, b: f64| {
+            vec![
+                DVec3::new(a, a, 0.0),
+                DVec3::new(b, a, 0.0),
+                DVec3::new(b, b, 0.0),
+                DVec3::new(a, b, 0.0),
+            ]
+        };
+        let loops = vec![sq(0.0, 10.0), sq(4.0, 6.0)];
+        assert!(inside_loops(DVec3::new(1.0, 1.0, 0.0), &loops, 2));
+        assert!(!inside_loops(DVec3::new(5.0, 5.0, 0.0), &loops, 2));
+        assert!(!inside_loops(DVec3::new(11.0, 5.0, 0.0), &loops, 2));
+        // The same polygon in the other planes.
+        let xz: Vec<Vec<DVec3>> = loops
+            .iter()
+            .map(|l| l.iter().map(|p| DVec3::new(p.x, 0.0, p.y)).collect())
+            .collect();
+        assert!(inside_loops(DVec3::new(1.0, 0.0, 1.0), &xz, 1));
+        let yz: Vec<Vec<DVec3>> = loops
+            .iter()
+            .map(|l| l.iter().map(|p| DVec3::new(0.0, p.x, p.y)).collect())
+            .collect();
+        assert!(inside_loops(DVec3::new(0.0, 1.0, 1.0), &yz, 0));
+    }
+
+    #[test]
+    fn newell_and_circumcenter() {
+        let sq = [DVec3::ZERO, DVec3::X, DVec3::new(1.0, 1.0, 0.0), DVec3::Y];
+        assert!((newell(&sq) - DVec3::new(0.0, 0.0, 2.0)).length() < 1e-12);
+        let c = circumcenter(
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(0.0, 1.0, 0.0),
+            DVec3::new(-1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        assert!(c.length() < 1e-12);
+        assert!(circumcenter(DVec3::ZERO, DVec3::X, DVec3::X * 2.0).is_none());
+        assert!(world_eps(1e6) > world_eps(1.0));
+    }
+}
