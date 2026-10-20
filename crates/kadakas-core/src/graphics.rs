@@ -156,6 +156,10 @@ pub struct SymbolDef {
     /// A new instance is turned toward a second point that the caller gives (`rotate_to`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rotate_on_insert: bool,
+    /// 3D content of a component (MOD-07, see `crate::component`): surface models, groups and
+    /// instances of other components. Instances are `Shape::Component`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<crate::component::Part>,
 }
 
 fn world() -> PatternUnits {
@@ -175,6 +179,7 @@ impl Default for SymbolDef {
             units: PatternUnits::World,
             insert_class: None,
             rotate_on_insert: false,
+            parts: Vec::new(),
         }
     }
 }
@@ -188,8 +193,16 @@ impl SymbolDef {
         !self.items.is_empty()
     }
 
-    /// "2d", "3d" or "hybrid".
+    /// True if the symbol is a component definition (it has 3D parts, MOD-07).
+    pub fn is_component(&self) -> bool {
+        !self.parts.is_empty()
+    }
+
+    /// "2d", "3d", "hybrid" or "component".
     pub fn kind(&self) -> &'static str {
+        if self.is_component() {
+            return "component";
+        }
         match (self.has_2d(), self.has_3d()) {
             (true, true) => "hybrid",
             (false, true) => "3d",
@@ -425,6 +438,9 @@ impl GraphicResource {
                 if let Some(m) = s.solids.iter().find_map(Solid3d::problem) {
                     return Err(m);
                 }
+                if let Some(m) = crate::component::parts_problem(&s.parts) {
+                    return Err(m);
+                }
                 Ok(())
             }
             GraphicResource::Hatch(h) => {
@@ -536,6 +552,7 @@ impl GraphicResource {
                     }
                     v
                 })
+                .chain(crate::component::part_refs(&s.parts).map(|r| (r, RefKind::Symbol)))
                 .collect(),
             GraphicResource::Tile(t) => vec![(t.symbol, RefKind::Symbol)],
             GraphicResource::LineType(l) => l
@@ -575,6 +592,11 @@ impl GraphicResource {
                     it.attrs.fill_pattern = it.attrs.fill_pattern.map(f);
                     it.attrs.line_type = it.attrs.line_type.map(f);
                     if let Shape::Symbol { symbol, .. } = &mut it.shape {
+                        *symbol = f(*symbol);
+                    }
+                }
+                for p in &mut s.parts {
+                    if let Shape::Component { symbol, .. } = &mut p.shape {
                         *symbol = f(*symbol);
                     }
                 }

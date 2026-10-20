@@ -43,6 +43,12 @@ impl Tx<'_> {
             Shape::Symbol { symbol, .. } if self.doc.resources.symbol(*symbol).is_none() => {
                 Err(invalid(format!("resource {symbol} is not a symbol")))
             }
+            Shape::Component { symbol, .. } if self.doc.resources.get(*symbol).is_none() => {
+                Err(CommandError::NoResource(*symbol))
+            }
+            Shape::Component { symbol, .. } if self.doc.resources.symbol(*symbol).is_none() => {
+                Err(invalid(format!("resource {symbol} is not a component")))
+            }
             _ => Ok(()),
         }
     }
@@ -106,7 +112,9 @@ impl Tx<'_> {
                 for oid in &usage.objects {
                     self.touch(*oid);
                     let o = self.doc.object_mut(*oid).expect("exists");
-                    if let Shape::Symbol { symbol, .. } = &mut o.shape {
+                    if let Shape::Symbol { symbol, .. } | Shape::Component { symbol, .. } =
+                        &mut o.shape
+                    {
                         *symbol = swap(*symbol);
                     }
                     o.attrs.fill_pattern = o.attrs.fill_pattern.map(swap);

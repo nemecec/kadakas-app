@@ -1169,3 +1169,169 @@ fn the_actions_of_the_modeler_are_the_ones_it_runs() {
         assert!(!ModelerApp::runs(a), "{a:?}");
     }
 }
+
+/// A surface model with a square, selected.
+fn add_model_square(app: &mut ModelerApp, x: f64) -> kadakas_core::model::ObjectId {
+    use kadakas_core::surface::Edit;
+    let out = app
+        .session
+        .editor
+        .execute(&Command::AddObject {
+            shape: ModelShape::SurfaceModel(Box::default()),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+    let id = kadakas_core::model::ObjectId(out.created[0]);
+    let p = [
+        [x, 0.0, 0.0],
+        [x + 1000.0, 0.0, 0.0],
+        [x + 1000.0, 1000.0, 0.0],
+        [x, 1000.0, 0.0],
+    ];
+    app.session
+        .editor
+        .execute(&Command::EditSurface {
+            id,
+            edit: Edit::AddEdges {
+                edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+            },
+        })
+        .unwrap();
+    id
+}
+
+#[test]
+fn the_edit_menu_makes_groups_and_components_and_enters_them() {
+    let size = glam::Vec2::new(800.0, 600.0);
+    let mut app = app();
+    let a = add_model_square(&mut app, 0.0);
+    let b = add_model_square(&mut app, 3000.0);
+    // Nothing is selected: the commands say so and change nothing.
+    assert!(!app.can_structure(&Cmd::MakeGroup));
+    let depth = app.session.editor.undo_depth();
+    app.run(Cmd::MakeGroup, size);
+    assert_eq!(app.status, tr!("modeler-nothing-selected"));
+    assert_eq!(app.session.editor.undo_depth(), depth);
+    app.run(Cmd::EditSelected, size);
+    assert_eq!(app.status, tr!("modeler-select-one-to-edit"));
+    // Make Group of the two models: one undo step, the group is selected.
+    app.session.selection = vec![a, b];
+    assert!(app.can_structure(&Cmd::MakeGroup) && !app.can_structure(&Cmd::Explode));
+    app.run(Cmd::MakeGroup, size);
+    assert_eq!(app.session.editor.undo_depth(), depth + 1);
+    assert_eq!(app.session.selection.len(), 1);
+    let g = app.session.selection[0];
+    assert!(app.session.editor.doc().is_group(g));
+    // Edit Group: the context is open, the selection is clear, the rest cannot be chosen.
+    assert!(app.can_structure(&Cmd::EditSelected));
+    app.run(Cmd::EditSelected, size);
+    assert_eq!(app.context.path(), vec![g]);
+    assert!(app.session.selection.is_empty());
+    assert!(app.can_structure(&Cmd::CloseContext));
+    app.run(Cmd::CloseContext, size);
+    assert!(app.context.is_root());
+    assert_eq!(app.session.selection, vec![g]);
+    // Make Component of the group: the definition has a name that is not taken.
+    app.run(Cmd::MakeComponent, size);
+    let inst = app.session.selection[0];
+    assert!(matches!(
+        app.session.editor.doc().object(inst).unwrap().shape,
+        ModelShape::Component { .. }
+    ));
+    assert_eq!(
+        app.session
+            .editor
+            .doc()
+            .resources
+            .iter()
+            .next()
+            .unwrap()
+            .name,
+        "Component 1"
+    );
+    assert!(app.can_structure(&Cmd::Explode) && app.can_structure(&Cmd::EditSelected));
+    // Make Unique on the only instance says why it cannot.
+    assert!(app.can_structure(&Cmd::MakeUnique));
+    app.run(Cmd::MakeUnique, size);
+    assert!(app.status.contains("already unique"), "{}", app.status);
+    // Edit Component, then undo: the open component is dropped from the context.
+    app.run(Cmd::EditSelected, size);
+    assert_eq!(app.context.path(), vec![inst]);
+    app.run(Cmd::Undo, size);
+    assert!(app.context.is_root());
+    // Enter again and close with the menu: one undo step each.
+    app.run(Cmd::EditSelected, size);
+    assert!(
+        app.context.is_root(),
+        "the selection was cleared when the context opened"
+    );
+    app.session.selection = vec![inst];
+    app.run(Cmd::EditSelected, size);
+    let open_depth = app.session.editor.undo_depth();
+    app.run(Cmd::CloseContext, size);
+    assert_eq!(app.session.editor.undo_depth(), open_depth + 1);
+    // Explode the instance: the models are back, merged into one.
+    app.session.selection = vec![inst];
+    app.run(Cmd::Explode, size);
+    assert!(app.session.selection.is_empty());
+    assert!(app.session.editor.doc().resources.is_empty());
+    // A new document starts with a closed context.
+    app.run(Cmd::New, size);
+    assert!(app.context.is_root());
+}
+
+#[test]
+fn a_command_that_cannot_run_shows_its_message() {
+    let size = glam::Vec2::new(800.0, 600.0);
+    let mut app = app();
+    let id = add_square(&mut app);
+    app.session.selection = vec![id];
+    // A hardscape cannot be part of a component.
+    app.run(Cmd::MakeComponent, size);
+    assert!(
+        app.status.contains("cannot be part of a component"),
+        "{}",
+        app.status
+    );
+    // Nothing of the selection is a group: Explode has nothing to do.
+    assert!(!app.can_structure(&Cmd::Explode));
+    app.run(Cmd::Explode, size);
+    assert!(app.status.contains("at least one"), "{}", app.status);
+    // Edit on something that is neither a group nor a component.
+    app.run(Cmd::EditSelected, size);
+    assert!(
+        app.status.contains("only a group or a component"),
+        "{}",
+        app.status
+    );
+    assert!(!app.can_structure(&Cmd::Tool(ModelerTool::Select)));
+    // Close with nothing open does nothing.
+    app.status.clear();
+    app.run(Cmd::CloseContext, size);
+    assert!(app.status.is_empty());
+}
+
+#[test]
+fn the_edit_menu_shows_the_group_and_component_items_in_both_languages() {
+    for lang in ["en-US", "et"] {
+        kadakas_l10n::with_language(lang, || {
+            for id in [
+                "modeler-edit-make-group",
+                "modeler-edit-make-component",
+                "modeler-edit-explode",
+                "modeler-edit-make-unique",
+                "modeler-edit-edit-selected",
+                "modeler-edit-close-context",
+            ] {
+                assert!(!tr!(id).is_empty());
+                assert_ne!(tr!(id), id, "{lang}: {id}");
+            }
+            assert_ne!(
+                tr!("modeler-component-name", n = 2),
+                "modeler-component-name"
+            );
+        });
+    }
+}

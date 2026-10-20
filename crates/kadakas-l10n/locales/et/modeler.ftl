@@ -21,6 +21,15 @@ modeler-edit-undo = Võta tagasi
 modeler-edit-redo = Tee uuesti
 modeler-edit-select-all = Vali kõik
 modeler-edit-select-none = Tühista valik
+modeler-edit-make-group = Tee grupp
+modeler-edit-make-component = Tee komponent
+modeler-edit-explode = Lahuta
+modeler-edit-make-unique = Tee ainulaadseks
+modeler-edit-edit-selected = Muuda gruppi või komponenti
+modeler-edit-close-context = Sulge grupp või komponent
+modeler-component-name = Komponent { $n }
+modeler-nothing-selected = Vali kõigepealt midagi.
+modeler-select-one-to-edit = Vali muutmiseks üks grupp või komponent.
 modeler-help-about = Kadakas Modelleerija info
 
 modeler-camera-previous = Eelmine

@@ -148,6 +148,34 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
                 !app.session.selection.is_empty(),
                 Cmd::SelectNone,
             );
+            ui.separator();
+            // Groups and components (MOD-07).
+            for (id, cmd) in [
+                ("modeler-edit-make-group", Cmd::MakeGroup),
+                ("modeler-edit-make-component", Cmd::MakeComponent),
+                ("modeler-edit-explode", Cmd::Explode),
+                ("modeler-edit-make-unique", Cmd::MakeUnique),
+            ] {
+                let enabled = app.can_structure(&cmd);
+                entry(ui, cmds, tr!(id), String::new(), enabled, cmd);
+            }
+            ui.separator();
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-edit-selected"),
+                String::new(),
+                app.can_structure(&Cmd::EditSelected),
+                Cmd::EditSelected,
+            );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-close-context"),
+                String::new(),
+                app.can_structure(&Cmd::CloseContext),
+                Cmd::CloseContext,
+            );
         });
         ui.menu_button(tr!("modeler-menu-camera"), |ui| camera_menu(ui, app, cmds));
         ui.menu_button(tr!("modeler-menu-tools"), |ui| {

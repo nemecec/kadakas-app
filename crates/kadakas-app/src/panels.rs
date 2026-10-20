@@ -1303,6 +1303,12 @@ fn edit_shape(
                 f.scalar(ui, &tr!("panels-scale-y"), &mut sy, 0.1);
                 *scale_y = (sy != *scale).then_some(sy);
             }
+            Shape::Component { transform, .. } => {
+                let mut at = DVec2::new(transform[9], transform[10]);
+                f.xy(ui, &tr!("panels-position"), &mut at);
+                transform[9] = at.x;
+                transform[10] = at.y;
+            }
             Shape::Line { a, b } => {
                 f.xy(ui, &tr!("panels-start"), a);
                 f.xy(ui, &tr!("panels-end"), b);

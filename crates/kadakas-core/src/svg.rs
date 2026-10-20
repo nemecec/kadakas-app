@@ -515,6 +515,24 @@ fn draw_object(
             ),
             None => Ok(()),
         },
+        Shape::Component { symbol, transform } => {
+            // Plan view: the box around the instance (MOD-13 draws its edges).
+            match crate::component::instance_bounds(
+                &doc.resources,
+                *symbol,
+                &crate::component::affine(transform),
+            ) {
+                Some((lo, hi)) => writeln!(
+                    s,
+                    r#"<rect x="{}" y="{}" width="{}" height="{}" {style} data-kind="component"/>"#,
+                    lo.x,
+                    -hi.y,
+                    hi.x - lo.x,
+                    hi.y - lo.y
+                ),
+                None => Ok(()),
+            }
+        }
         Shape::Sweep(sw) => {
             // Plan view: the box around the solid.
             let (lo, hi) = sw.bounds3();

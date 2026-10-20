@@ -1723,3 +1723,199 @@ fn the_face_normal_comes_from_the_face_that_was_hit() {
     };
     assert!(normal.dot(DVec3::X).abs() > 0.999, "{normal:?}");
 }
+
+mod instances {
+    use super::*;
+    use kadakas_core::command::{Command, Editor};
+    use kadakas_core::component;
+    use kadakas_core::model::{Attributes, ObjectId, Shape};
+    use kadakas_core::resource::ResourceId;
+
+    /// A component of one square (1 m) with two instances: at the origin and 3 m to the right.
+    fn two_instances() -> (Editor, ResourceId, ObjectId, ObjectId) {
+        let mut ed = Editor::with_sequential_ids();
+        let m = ObjectId(
+            ed.execute(&Command::AddObject {
+                shape: Shape::SurfaceModel(Box::default()),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let p = [
+            [0.0, 0.0, 0.0],
+            [1000.0, 0.0, 0.0],
+            [1000.0, 1000.0, 0.0],
+            [0.0, 1000.0, 0.0],
+        ];
+        ed.execute(&Command::EditSurface {
+            id: m,
+            edit: Edit::AddEdges {
+                edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+            },
+        })
+        .unwrap();
+        let face = match &ed.doc().object(m).unwrap().shape {
+            Shape::SurfaceModel(s) => s.faces().next().unwrap().0,
+            _ => unreachable!(),
+        };
+        let out = ed
+            .execute(&Command::MakeComponent {
+                name: "Tile".into(),
+                model: Some(m),
+                faces: vec![face],
+                edges: vec![],
+                objects: vec![],
+                replace: true,
+            })
+            .unwrap();
+        let (sym, a) = (ResourceId(out.created[0]), ObjectId(out.created[1]));
+        let b = ObjectId(
+            ed.execute(&Command::CopyObjects {
+                ids: vec![a],
+                delta: DVec2::new(3000.0, 0.0),
+            })
+            .unwrap()
+            .created[0],
+        );
+        (ed, sym, a, b)
+    }
+
+    #[test]
+    fn instances_share_the_definition_and_each_is_placed() {
+        let (ed, sym, a, b) = two_instances();
+        let r = scene_of_instances(ed.doc(), &[a, b], 10).unwrap();
+        assert_eq!(r.placed.len(), 2);
+        assert_eq!((r.placed[0].first_model, r.placed[1].first_model), (10, 11));
+        assert_eq!(r.scene.edge_count(), 8);
+        assert_eq!(r.scene.face_count(), 2);
+        let def = DefinitionScene::of(&ed.doc().resources, sym).unwrap();
+        assert_eq!(def.model_count(), 1);
+        // The pointer on a corner of the second instance: the endpoint, and the tag names it.
+        let (c, mut i) = (cam(), Inferencer::default());
+        let corner = DVec3::new(4000.0, 1000.0, 0.0);
+        let hit = i.infer(&r.scene, &c, px(&c, corner), None);
+        assert_eq!(hit.kind, Kind::Endpoint);
+        assert!(hit.point.distance(corner) < 1e-9);
+        assert_eq!(r.instance_of(hit.source), Some((b, 0)));
+        let first = i.infer(&r.scene, &c, px(&c, DVec3::new(0.0, 0.0, 0.0)), None);
+        assert_eq!(r.instance_of(first.source), Some((a, 0)));
+        assert_eq!(r.instance_of(Tag::NONE), None);
+        assert_eq!(
+            r.instance_of(Tag::edge(99, kadakas_core::surface::EdgeId(1))),
+            None
+        );
+    }
+
+    #[test]
+    fn a_turned_and_mirrored_instance_is_placed_by_its_transform() {
+        let (mut ed, _, a, _) = two_instances();
+        ed.execute(&Command::RotateObjects {
+            ids: vec![a],
+            center: DVec2::ZERO,
+            angle: std::f64::consts::FRAC_PI_2,
+        })
+        .unwrap();
+        let r = scene_of_instances(ed.doc(), &[a], 0).unwrap();
+        // The square is now to the left of the y axis: its corner (1000, 1000) went to (-1000, 1000).
+        let (c, mut i) = (cam(), Inferencer::default());
+        let corner = DVec3::new(-1000.0, 1000.0, 0.0);
+        let hit = i.infer(&r.scene, &c, px(&c, corner), None);
+        assert_eq!(hit.kind, Kind::Endpoint);
+        assert!(hit.point.distance(corner) < 1e-6);
+        // A mirror: still a scene with the same edges and face.
+        let Shape::Component { symbol, transform } = ed.doc().object(a).unwrap().shape.clone()
+        else {
+            panic!()
+        };
+        let flipped = component::raw(
+            &(DAffine3::from_scale(DVec3::new(-1.0, 1.0, 1.0)) * component::affine(&transform)),
+        );
+        ed.execute(&Command::ModifyObject {
+            id: a,
+            shape: Some(Shape::Component {
+                symbol,
+                transform: flipped,
+            }),
+            layer: None,
+            class: None,
+            attrs: None,
+        })
+        .unwrap();
+        let r = scene_of_instances(ed.doc(), &[a], 0).unwrap();
+        assert_eq!((r.scene.edge_count(), r.scene.face_count()), (4, 1));
+    }
+
+    #[test]
+    fn the_definition_scene_is_built_once_and_forgotten_on_demand() {
+        let (ed, sym, a, b) = two_instances();
+        let mut cache = DefinitionCache::default();
+        assert!(cache.is_empty());
+        scene_of_instances_cached(ed.doc(), &[a, b], 0, &mut cache).unwrap();
+        assert_eq!(cache.len(), 1);
+        let first = cache.get(&ed.doc().resources, sym).unwrap();
+        let second = cache.get(&ed.doc().resources, sym).unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "the data of the definition is shared"
+        );
+        cache.forget(sym);
+        assert!(cache.is_empty());
+        cache.get(&ed.doc().resources, sym).unwrap();
+        cache.clear();
+        assert!(cache.is_empty());
+        // The scene is empty for no instances.
+        assert!(
+            scene_of_instances(ed.doc(), &[], 0)
+                .unwrap()
+                .scene
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn what_is_not_an_instance_is_refused_with_a_message() {
+        let (mut ed, _, a, _) = two_instances();
+        let plain = ObjectId(
+            ed.execute(&Command::AddObject {
+                shape: Shape::Circle {
+                    center: DVec2::ZERO,
+                    radius: 5.0,
+                },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let e = scene_of_instances(ed.doc(), &[plain], 0).unwrap_err();
+        assert!(e.to_string().contains("not a component instance"));
+        let gone = ObjectId::from_num(31337);
+        assert!(
+            scene_of_instances(ed.doc(), &[gone], 0)
+                .unwrap_err()
+                .to_string()
+                .contains("does not exist")
+        );
+        // A model number too large for the tags.
+        let e = scene_of_instances(ed.doc(), &[a], 0x3fff_ffff).unwrap_err();
+        assert!(e.to_string().contains("too many"));
+        // A definition that is gone.
+        assert!(DefinitionScene::of(&ed.doc().resources, ResourceId::from_num(4040)).is_err());
+    }
+
+    #[test]
+    fn tags_of_other_kinds_keep_their_number() {
+        assert_eq!(Tag::NONE.shifted(5), Tag::NONE);
+        let t = Tag::edge(3, kadakas_core::surface::EdgeId(9));
+        assert_eq!(t.shifted(4).model(), 7);
+        assert_eq!(t.shifted(4).id(), 9);
+        assert_eq!(t.shifted(4).kind(), TagKind::Edge);
+        let other = Tag(3u64 << 62 | 5);
+        assert_eq!(other.kind(), TagKind::Other);
+        assert_eq!(other.shifted(1), other);
+    }
+}

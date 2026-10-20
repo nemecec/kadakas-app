@@ -244,6 +244,13 @@ pub enum Shape {
     /// A surface model: vertices, edges and faces with holes in local coordinates, placed by a
     /// transform (see `surface`, MOD-06).
     SurfaceModel(Box<crate::surface::SurfaceModel>),
+    /// An instance of a component definition (MOD-07, see `component`): the definition is a symbol
+    /// resource with 3D parts, `transform` places it in the drawing (the twelve numbers of
+    /// `DAffine3`: three columns of the matrix, then the move; `z` from the layer elevation).
+    Component {
+        symbol: ResourceId,
+        transform: [f64; 12],
+    },
 }
 
 fn default_symbol_scale() -> f64 {
@@ -314,6 +321,7 @@ impl Shape {
             Shape::Sweep(_) => "sweep",
             Shape::Irrigation(i) => i.kind(),
             Shape::SurfaceModel(_) => "surface_model",
+            Shape::Component { .. } => "component",
         }
     }
 
@@ -357,6 +365,7 @@ impl Shape {
             Shape::Sweep(s) => s.is_finite(),
             Shape::Irrigation(i) => i.is_finite(),
             Shape::SurfaceModel(s) => s.is_finite(),
+            Shape::Component { transform, .. } => transform.iter().all(|x| x.is_finite()),
             Shape::Symbol {
                 at,
                 rotation,
@@ -453,6 +462,7 @@ impl Shape {
             | Shape::Unknown { .. } => {}
             Shape::Irrigation(i) => i.for_each_number(f),
             Shape::SurfaceModel(s) => s.for_each_number(f),
+            Shape::Component { transform, .. } => transform.iter().for_each(|x| f(*x)),
             Shape::Annotation(a) => a.numbers(f),
             Shape::Massing(m) => {
                 m.footprint.iter().for_each(|x| vertex(x, f));
@@ -621,6 +631,11 @@ impl Shape {
             Shape::Extrude(e) => e.problem(),
             Shape::Sweep(s) => s.problem(),
             Shape::SurfaceModel(s) => s.problem(),
+            Shape::Component { transform, .. }
+                if !crate::component::is_regular(&crate::component::affine(transform)) =>
+            {
+                Some("a component instance needs a transform that can be inverted".into())
+            }
             Shape::SiteModel { settings, .. } => settings.problem().map(String::from),
             Shape::SiteModifier { .. } => crate::texture_bed::problem(self).map(String::from),
             _ => None,
@@ -678,6 +693,10 @@ impl Shape {
             }),
             Shape::Irrigation(i) => i.translate(d),
             Shape::SurfaceModel(s) => s.translate(DVec3::new(d.x, d.y, 0.0)),
+            Shape::Component { transform, .. } => {
+                transform[9] += d.x;
+                transform[10] += d.y;
+            }
             Shape::Symbol { at, .. } => mv(at),
             Shape::Locus3d { p } => {
                 p.x += d.x;
@@ -746,6 +765,11 @@ impl Shape {
     pub fn translate3(&mut self, d: DVec3) {
         match self {
             Shape::SurfaceModel(s) => s.translate(d),
+            Shape::Component { transform, .. } => {
+                transform[9] += d.x;
+                transform[10] += d.y;
+                transform[11] += d.z;
+            }
             _ => self.translate(d.truncate()),
         }
     }
@@ -776,6 +800,11 @@ impl Shape {
             // The size of these depends on the document. See `Document::object_bounds`.
             Shape::Group { .. } | Shape::Unknown { .. } => from_points(&[]),
             Shape::Symbol { at, .. } => (*at, *at),
+            // The size of an instance depends on its definition. See `Document::object_bounds`.
+            Shape::Component { transform, .. } => {
+                let at = DVec2::new(transform[9], transform[10]);
+                (at, at)
+            }
             Shape::Irrigation(i) => i.bounds(),
             Shape::SurfaceModel(s) => s.bounds().map_or_else(
                 || from_points(&[]),

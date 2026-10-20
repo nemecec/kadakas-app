@@ -723,6 +723,42 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
+    /// Draws a surface model placed by `tf` (local coordinates to the drawing; `z` is measured
+    /// from the layer).
+    fn surface_model(
+        &mut self,
+        m: &crate::surface::SurfaceModel,
+        tf: &glam::DAffine3,
+        z: f64,
+        color: [u8; 4],
+        id: ObjectId,
+    ) {
+        let o = self.origin;
+        let Ok(sm) = m.mesh() else {
+            return;
+        };
+        let pts: Vec<Vec3> = sm
+            .positions
+            .iter()
+            .map(|p| {
+                let q = tf.transform_point3(*p);
+                Vec3::new(
+                    (q.x - o.x) as f32,
+                    (q.y - o.y) as f32,
+                    (z + q.z - o.z) as f32,
+                )
+            })
+            .collect();
+        // A mirror turns the triangles over; keep them counterclockwise.
+        let tris: Vec<[u32; 3]> = if tf.matrix3.determinant() < 0.0 {
+            sm.triangles.iter().map(|t| [t[0], t[2], t[1]]).collect()
+        } else {
+            sm.triangles
+        };
+        self.scene.mesh.part = PART_MAIN;
+        add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
+    }
+
     fn add_object(&mut self, obj: &Object, layer: &Layer) {
         let o = self.origin;
         let attrs = crate::hardscape::styled_attrs(self.doc, obj, self.doc.resolved_attrs(obj));
@@ -877,29 +913,17 @@ impl Builder<'_> {
                 add_shaded(&mut self.scene.mesh, &pts, &m.triangles, color, id);
             }
             Shape::SurfaceModel(m) => {
-                // Local coordinates through the transform; `z` is measured from the layer.
-                if let Ok(sm) = m.mesh() {
-                    let color = fill.unwrap_or(crate::solid3d::DEFAULT_COLOR);
-                    let pts: Vec<Vec3> = sm
-                        .positions
-                        .iter()
-                        .map(|p| {
-                            let q = m.transform.transform_point3(*p);
-                            Vec3::new(
-                                (q.x - o.x) as f32,
-                                (q.y - o.y) as f32,
-                                (z + q.z - o.z) as f32,
-                            )
-                        })
-                        .collect();
-                    // A mirror turns the triangles over; keep them counterclockwise.
-                    let tris: Vec<[u32; 3]> = if m.transform.matrix3.determinant() < 0.0 {
-                        sm.triangles.iter().map(|t| [t[0], t[2], t[1]]).collect()
-                    } else {
-                        sm.triangles
-                    };
-                    self.scene.mesh.part = PART_MAIN;
-                    add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
+                let color = fill.unwrap_or(crate::solid3d::DEFAULT_COLOR);
+                self.surface_model(m, &m.transform, z, color, id);
+            }
+            Shape::Component { symbol, transform } => {
+                // The models of the definition (shared, not copied) through the instance transform.
+                let color = fill.unwrap_or(crate::solid3d::DEFAULT_COLOR);
+                let inst = crate::component::affine(transform);
+                if let Ok(leaves) = crate::component::leaves(&self.doc.resources, *symbol) {
+                    for leaf in leaves {
+                        self.surface_model(leaf.model, &(inst * leaf.transform), z, color, id);
+                    }
                 }
             }
             Shape::Extrude(_) | Shape::Sweep(_) => {

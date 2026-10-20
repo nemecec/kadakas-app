@@ -483,6 +483,13 @@ impl Document {
                 }
                 if finite(&b) { b } else { (*at, *at) }
             }
+            Shape::Component { symbol, transform } => {
+                let xf = crate::component::affine(transform);
+                match crate::component::instance_bounds(&self.resources, *symbol, &xf) {
+                    Some((lo, hi)) => (lo.truncate(), hi.truncate()),
+                    None => obj.shape.bounds(),
+                }
+            }
             shape => shape.bounds(),
         }
     }
@@ -547,7 +554,7 @@ pub fn hit_instance(doc: &Document, obj: &Object, p: DVec2, tol: f64) -> bool {
 pub fn is_used_by_objects(doc: &Document, symbol: ResourceId) -> bool {
     doc.objects
         .values()
-        .any(|o| matches!(o.shape, Shape::Symbol { symbol: s, .. } if s == symbol))
+        .any(|o| matches!(o.shape, Shape::Symbol { symbol: s, .. } | Shape::Component { symbol: s, .. } if s == symbol))
 }
 
 /// Repairs a document after a load: an instance that is marked as being edited, but whose edit group
@@ -698,7 +705,7 @@ pub fn plant_symbol_objects(
 pub fn instance_ids(doc: &Document, symbol: ResourceId) -> Vec<ObjectId> {
     doc.objects
         .values()
-        .filter(|o| matches!(o.shape, Shape::Symbol { symbol: s, .. } if s == symbol))
+        .filter(|o| matches!(o.shape, Shape::Symbol { symbol: s, .. } | Shape::Component { symbol: s, .. } if s == symbol))
         .map(|o| o.id)
         .collect()
 }

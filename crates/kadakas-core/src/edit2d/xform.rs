@@ -362,6 +362,23 @@ pub fn map_shape(shape: &Shape, xf: &Xf) -> Result<Shape, String> {
             m.place(map * m.transform);
             Shape::SurfaceModel(Box::new(m))
         }
+        Shape::Component { symbol, transform } => {
+            // The same plan map as for a surface model, applied to the instance transform.
+            let k = sim.unwrap_or(1.0);
+            let o = xf.apply(DVec2::ZERO);
+            let map = glam::DAffine3 {
+                matrix3: glam::DMat3::from_cols(
+                    xf.m.x_axis.extend(0.0),
+                    xf.m.y_axis.extend(0.0),
+                    glam::DVec3::Z * k,
+                ),
+                translation: o.extend(0.0),
+            };
+            Shape::Component {
+                symbol: *symbol,
+                transform: crate::component::raw(&(map * crate::component::affine(transform))),
+            }
+        }
         Shape::Group { name } => Shape::Group { name: name.clone() },
         other => {
             return Err(format!(

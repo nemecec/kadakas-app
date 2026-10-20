@@ -19,7 +19,9 @@
 //!    square at `point` in `color`, the `label` at the pointer, and the `lines`.
 //!    With several models keep one scene per model and call [`Inferencer::infer_scenes`], which
 //!    also takes a predicate that skips the geometry a tool is moving. A scene is `Send`: build it
-//!    on a worker thread ([`Scene::from_surface_model`]).
+//!    on a worker thread ([`Scene::from_surface_model`]). Instances of components (MOD-07) have
+//!    their own helper: [`scene_of_instances`] builds one scene of any number of instances, and
+//!    the definition data is built once per definition and shared ([`DefinitionScene`]).
 //! 4. Forward keys with [`Inferencer::key`]; call [`Inferencer::pause`] when the pointer has rested
 //!    for [`PAUSE_SECONDS`]; call [`Inferencer::reset`] when the tool starts or ends and
 //!    [`Inferencer::release_locks`] after a click when the tool wants a fresh start.
@@ -30,12 +32,17 @@
 mod bvh;
 mod camera;
 mod engine;
+mod instances;
 mod math;
 mod scene;
 
 pub use bvh::{Aabb, Bvh};
 pub use camera::{Camera, Projection, Ray};
 pub use engine::{Inferencer, Key};
+pub use instances::{
+    DefinitionCache, DefinitionScene, InstanceScenes, Placed, scene_of_instances,
+    scene_of_instances_cached,
+};
 pub use scene::{PointKind, Scene, SceneBuilder, Tag, TagKind};
 
 use glam::{DVec2, DVec3};

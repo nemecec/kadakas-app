@@ -157,7 +157,7 @@ pub(super) fn face_point(m: &SurfaceModel, id: FaceId) -> Option<DVec3> {
 }
 
 /// The face whose area holds the point.
-fn face_at(m: &SurfaceModel, p: DVec3) -> Option<FaceId> {
+pub(super) fn face_at(m: &SurfaceModel, p: DVec3) -> Option<FaceId> {
     m.faces.iter().find_map(|(id, f)| {
         if !on_plane(&f.plane, p) {
             return None;
@@ -171,7 +171,7 @@ fn face_at(m: &SurfaceModel, p: DVec3) -> Option<FaceId> {
 }
 
 /// The edge that passes through the point (within the length tolerance).
-fn edge_at(m: &SurfaceModel, p: DVec3) -> Option<EdgeId> {
+pub(super) fn edge_at(m: &SurfaceModel, p: DVec3) -> Option<EdgeId> {
     m.edges
         .iter()
         .map(|(id, e)| {

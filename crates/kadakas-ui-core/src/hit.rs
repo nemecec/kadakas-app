@@ -150,6 +150,8 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
         Shape::Irrigation(i) => irrigation_hit(i, p, tol),
         // A symbol is picked through its expanded shapes, see `hit_test`.
         Shape::Symbol { .. } => false,
+        // A component instance is picked at the box around its definition, see `object_hit`.
+        Shape::Component { .. } => false,
         // Annotations need the document (see `object_hit`).
         Shape::Annotation(_) => false,
         Shape::Viewport(_) | Shape::TitleBlock(_) => {
@@ -173,6 +175,14 @@ fn object_hit(pk: Prims, doc: &Document, o: &Object, p: DVec2, tol: f64) -> bool
     }
     if matches!(o.shape, Shape::Annotation(_)) {
         return pk.hit(doc, o, p, tol);
+    }
+    if matches!(o.shape, Shape::Component { .. }) {
+        // The box around the instance (its definition is read from the document).
+        let (lo, hi) = doc.object_bounds(o);
+        let corners = [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
+        return lo.is_finite()
+            && hi.is_finite()
+            && (edge_dist(&corners, true, p) <= tol || point_in_polygon(p, &corners));
     }
     let filled = doc.resolved_attrs(o).fill.is_some_and(|c| c.0[3] > 0);
     shape_hit(&o.shape, filled, p, tol)
@@ -677,5 +687,64 @@ mod tests {
         };
         assert!(irrigation_hit(&poc, DVec2::new(8.0, 0.0), 5.0));
         assert!(!irrigation_hit(&poc, DVec2::new(11.0, 0.0), 5.0));
+    }
+
+    #[test]
+    fn a_component_instance_is_picked_at_the_box_around_its_definition() {
+        use kadakas_core::command::{Command, Editor};
+        use kadakas_core::model::Attributes;
+        use kadakas_core::surface::Edit;
+        let mut ed = Editor::with_sequential_ids();
+        let m = ObjectId(
+            ed.execute(&Command::AddObject {
+                shape: Shape::SurfaceModel(Box::default()),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let p = [
+            [0.0, 0.0, 0.0],
+            [1000.0, 0.0, 0.0],
+            [1000.0, 1000.0, 0.0],
+            [0.0, 1000.0, 0.0],
+        ];
+        ed.execute(&Command::EditSurface {
+            id: m,
+            edit: Edit::AddEdges {
+                edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+            },
+        })
+        .unwrap();
+        let out = ed
+            .execute(&Command::MakeComponent {
+                name: "Tile".into(),
+                model: None,
+                faces: vec![],
+                edges: vec![],
+                objects: vec![m],
+                replace: true,
+            })
+            .unwrap();
+        let inst = ObjectId(out.created[1]);
+        assert_eq!(
+            hit_test(ed.doc(), DVec2::new(500.0, 500.0), 5.0),
+            Some(inst)
+        );
+        assert_eq!(hit_test(ed.doc(), DVec2::new(-3.0, 500.0), 5.0), Some(inst));
+        assert_eq!(hit_test(ed.doc(), DVec2::new(1500.0, 500.0), 5.0), None);
+        // The shape alone does not know its definition.
+        let Shape::Component { symbol, transform } = ed.doc().object(inst).unwrap().shape.clone()
+        else {
+            panic!()
+        };
+        assert!(!shape_hit(
+            &Shape::Component { symbol, transform },
+            true,
+            DVec2::new(500.0, 500.0),
+            5.0
+        ));
     }
 }

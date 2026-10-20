@@ -169,6 +169,13 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
             painter.line_segment([c - egui::vec2(4.0, 0.0), c + egui::vec2(4.0, 0.0)], stroke);
             painter.line_segment([c - egui::vec2(0.0, 4.0), c + egui::vec2(0.0, 4.0)], stroke);
         }
+        Shape::Component { transform, .. } => {
+            // The shape does not know its definition: a cross at the origin of the instance.
+            // (MOD-13 draws the plan of components; the 3D view shows the faces.)
+            let c = s(DVec2::new(transform[9], transform[10]));
+            painter.line_segment([c - egui::vec2(4.0, 0.0), c + egui::vec2(4.0, 0.0)], stroke);
+            painter.line_segment([c - egui::vec2(0.0, 4.0), c + egui::vec2(0.0, 4.0)], stroke);
+        }
         Shape::Polyline3d { points, closed } => {
             let flat: Vec<DVec2> = points.iter().map(|p| p.truncate()).collect();
             if *closed {

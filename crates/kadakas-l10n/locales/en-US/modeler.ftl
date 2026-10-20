@@ -21,6 +21,15 @@ modeler-edit-undo = Undo
 modeler-edit-redo = Redo
 modeler-edit-select-all = Select All
 modeler-edit-select-none = Select None
+modeler-edit-make-group = Make Group
+modeler-edit-make-component = Make Component
+modeler-edit-explode = Explode
+modeler-edit-make-unique = Make Unique
+modeler-edit-edit-selected = Edit Group or Component
+modeler-edit-close-context = Close Group or Component
+modeler-component-name = Component { $n }
+modeler-nothing-selected = Select something first.
+modeler-select-one-to-edit = Select one group or component to edit.
 modeler-help-about = About Kadakas Modeler
 
 modeler-camera-previous = Previous

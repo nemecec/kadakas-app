@@ -113,6 +113,7 @@ mod arrange;
 mod check;
 mod edit;
 mod geom;
+mod part;
 mod serial;
 pub mod sync;
 mod topo;
@@ -123,6 +124,7 @@ mod tests;
 pub use check::{Problem, Report};
 pub use edit::Edit;
 pub use geom::{Plane, on_plane, plane_tolerance_at, tolerance_at};
+pub use part::Selection;
 
 /// The version of the saved form of a surface model (the field `v`). A file with a higher number
 /// is from a newer program: it is kept as it is and cannot be edited (`Shape::Unknown`).
