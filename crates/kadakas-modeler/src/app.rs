@@ -50,6 +50,10 @@ pub enum Cmd {
     EditSelected,
     /// Close Group or Close Component: leave the one that is open.
     CloseContext,
+    /// Close Component after a conflict: keep my edit as a new component.
+    CloseKeepMine,
+    /// Close Component after a conflict: throw my edit away.
+    CloseDiscardMine,
     /// A tool or command of the tool bar.
     Tool(ModelerTool),
     /// Zoom Window: the next drag of the Zoom tool is a window.
@@ -444,9 +448,14 @@ impl ModelerApp {
                 self.structure(&cmd)
             }
             Cmd::EditSelected => self.edit_selected(),
-            Cmd::CloseContext => {
+            Cmd::CloseContext | Cmd::CloseKeepMine | Cmd::CloseDiscardMine => {
                 self.context.validate(self.session.editor.doc());
-                match self.context.exit(&mut self.session.editor) {
+                let resolve = match cmd {
+                    Cmd::CloseKeepMine => Some(kadakas_core::component::Resolve::KeepAsNew),
+                    Cmd::CloseDiscardMine => Some(kadakas_core::component::Resolve::Discard),
+                    _ => None,
+                };
+                match self.context.exit_with(&mut self.session.editor, resolve) {
                     Ok(Some(id)) => {
                         self.session.selection = vec![id];
                         self.status.clear();
@@ -540,7 +549,9 @@ impl ModelerApp {
                 sel.len() == 1
                     && any(|s| matches!(s, Shape::Group { .. } | Shape::Component { .. }))
             }
-            Cmd::CloseContext => !self.context.is_root(),
+            Cmd::CloseContext | Cmd::CloseKeepMine | Cmd::CloseDiscardMine => {
+                !self.context.is_root()
+            }
             _ => false,
         }
     }

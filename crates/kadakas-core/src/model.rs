@@ -1871,6 +1871,14 @@ impl Document {
         }
         notes.extend(crate::provenance::repair(self));
         notes.extend(self.issues.repair());
+        // An instance that cannot be drawn (a definition that is missing, is not a component,
+        // contains itself or is over the limits) stays in the file and is reported.
+        notes.extend(crate::component::definition_findings(self));
+        notes.extend(
+            crate::component::findings(self)
+                .into_iter()
+                .map(|f| f.message),
+        );
         self.load_notes = notes;
         let mut seen = std::collections::HashSet::new();
         let ids = self

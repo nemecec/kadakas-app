@@ -150,15 +150,38 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
             );
             ui.separator();
             // Groups and components (MOD-07).
-            for (id, cmd) in [
-                ("modeler-edit-make-group", Cmd::MakeGroup),
-                ("modeler-edit-make-component", Cmd::MakeComponent),
-                ("modeler-edit-explode", Cmd::Explode),
-                ("modeler-edit-make-unique", Cmd::MakeUnique),
-            ] {
-                let enabled = app.can_structure(&cmd);
-                entry(ui, cmds, tr!(id), String::new(), enabled, cmd);
-            }
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-make-group"),
+                String::new(),
+                app.can_structure(&Cmd::MakeGroup),
+                Cmd::MakeGroup,
+            );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-make-component"),
+                String::new(),
+                app.can_structure(&Cmd::MakeComponent),
+                Cmd::MakeComponent,
+            );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-explode"),
+                String::new(),
+                app.can_structure(&Cmd::Explode),
+                Cmd::Explode,
+            );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-make-unique"),
+                String::new(),
+                app.can_structure(&Cmd::MakeUnique),
+                Cmd::MakeUnique,
+            );
             ui.separator();
             entry(
                 ui,
@@ -175,6 +198,23 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
                 String::new(),
                 app.can_structure(&Cmd::CloseContext),
                 Cmd::CloseContext,
+            );
+            // After a conflict (somebody else changed the component while it was open).
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-close-keep-mine"),
+                String::new(),
+                app.can_structure(&Cmd::CloseKeepMine),
+                Cmd::CloseKeepMine,
+            );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-close-discard-mine"),
+                String::new(),
+                app.can_structure(&Cmd::CloseDiscardMine),
+                Cmd::CloseDiscardMine,
             );
         });
         ui.menu_button(tr!("modeler-menu-camera"), |ui| camera_menu(ui, app, cmds));

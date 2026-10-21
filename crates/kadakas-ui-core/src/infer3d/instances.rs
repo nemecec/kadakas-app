@@ -53,31 +53,40 @@ impl DefinitionScene {
     }
 }
 
-/// The definition scenes of a document, kept between frames. A definition that changes (an edit
-/// in place that is closed) must be forgotten with [`DefinitionCache::forget`], or the cache
-/// cleared.
+/// The definition scenes of a document, kept between frames. An entry is kept with the content
+/// version of the definition at the time it was built (`component::version`: the revisions of
+/// the surface models, the placement of nested components, and the nested definitions). An undo,
+/// a change by another user and a change of a nested component all change the version, so a
+/// stale scene is never returned and nothing has to be forgotten by hand.
 #[derive(Clone, Debug, Default)]
 pub struct DefinitionCache {
-    map: HashMap<ResourceId, Arc<DefinitionScene>>,
+    map: HashMap<ResourceId, (u64, Arc<DefinitionScene>)>,
 }
 
 impl DefinitionCache {
-    /// The scene of a definition, built the first time.
+    /// The scene of a definition: built the first time, and again whenever its content version
+    /// is not the one that was kept.
     pub fn get(
         &mut self,
         res: &Resources,
         symbol: ResourceId,
     ) -> Result<Arc<DefinitionScene>, ComponentError> {
-        if let Some(s) = self.map.get(&symbol) {
+        let Some(version) = component::version(res, symbol) else {
+            // Gives the reason: a missing definition, a cycle, a limit.
+            self.map.remove(&symbol);
+            return DefinitionScene::of(res, symbol).map(Arc::new);
+        };
+        if let Some((v, s)) = self.map.get(&symbol)
+            && *v == version
+        {
             return Ok(s.clone());
         }
         let s = Arc::new(DefinitionScene::of(res, symbol)?);
-        self.map.insert(symbol, s.clone());
+        self.map.insert(symbol, (version, s.clone()));
         Ok(s)
     }
 
-    /// Drops one definition. Instances of the definitions that use it must be dropped by the
-    /// caller as well (use [`DefinitionCache::clear`] when in doubt).
+    /// Drops one definition. Not needed for correctness (the version decides), it frees memory.
     pub fn forget(&mut self, symbol: ResourceId) {
         self.map.remove(&symbol);
     }
@@ -144,6 +153,8 @@ pub fn scene_of_instances_cached(
     let mut builder = SceneBuilder::new();
     let mut placed = Vec::with_capacity(instances.len());
     let mut next = u64::from(first_model);
+    // One look-up (and one version) for each definition in this call, however many instances.
+    let mut local: HashMap<ResourceId, Arc<DefinitionScene>> = HashMap::new();
     for &id in instances {
         let o = doc
             .object(id)
@@ -151,7 +162,14 @@ pub fn scene_of_instances_cached(
         let (symbol, xf) = component::placement(&o.shape).ok_or_else(|| {
             ComponentError::Invalid(format!("object {id} is not a component instance"))
         })?;
-        let def = cache.get(&doc.resources, symbol)?;
+        let def = match local.get(&symbol) {
+            Some(d) => d.clone(),
+            None => {
+                let d = cache.get(&doc.resources, symbol)?;
+                local.insert(symbol, d.clone());
+                d
+            }
+        };
         if next + u64::from(def.models) > MAX_MODEL {
             return Err(ComponentError::Invalid(
                 "there are too many surface models for the tags of the scene".into(),

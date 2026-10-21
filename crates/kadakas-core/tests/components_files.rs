@@ -491,7 +491,11 @@ fn a_group_in_a_component_survives_the_round_trip_of_edit_in_place() {
             .created[0],
     );
     assert_eq!(ed.doc().with_members(&[eg]).len(), 4);
-    ed.execute(&Command::CloseComponent { group: eg }).unwrap();
+    ed.execute(&Command::CloseComponent {
+        group: eg,
+        resolve: None,
+    })
+    .unwrap();
     assert_eq!(ed.doc().resources.symbol(sym).unwrap(), &def);
     // Explode: the group comes back as a group with its model; the other model is the level's.
     ed.execute(&Command::Explode { ids: vec![i] }).unwrap();
@@ -539,7 +543,11 @@ fn a_moved_instance_keeps_its_definition_numbers_through_edit_in_place() {
             .unwrap()
             .created[0],
     );
-    ed.execute(&Command::CloseComponent { group: eg }).unwrap();
+    ed.execute(&Command::CloseComponent {
+        group: eg,
+        resolve: None,
+    })
+    .unwrap();
     assert_eq!(ed.doc().resources.symbol(sym).unwrap(), &before);
     // The edit group sits at the instance: its model is in the drawing.
     let eg = ObjectId(

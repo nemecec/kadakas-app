@@ -221,7 +221,9 @@ fn urls(s: &str) -> String {
         let before = &rest[..p];
         let scheme_start = before
             .rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
-            .map_or(0, |i| i + 1);
+            .map_or(0, |i| {
+                i + before[i..].chars().next().map_or(1, char::len_utf8)
+            });
         let scheme = &before[scheme_start..];
         let after = &rest[p + 3..];
         // The URL ends at white space or a quote or a closing bracket.

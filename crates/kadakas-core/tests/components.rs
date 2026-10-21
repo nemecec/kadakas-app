@@ -660,7 +660,11 @@ fn instances_share_the_definition_and_edit_in_place_changes_all() {
     let inner = ed.doc().children(eg);
     assert_eq!(inner.len(), 1);
     edit(&mut ed, inner[0], square(1000.0, 0.0, 1000.0));
-    ed.execute(&Command::CloseComponent { group: eg }).unwrap();
+    ed.execute(&Command::CloseComponent {
+        group: eg,
+        resolve: None,
+    })
+    .unwrap();
     assert!(ed.doc().object(eg).is_none());
     assert!(!kadakas_core::symbols::is_being_edited(
         ed.doc().object(a).unwrap()
@@ -723,7 +727,11 @@ fn make_unique_gives_an_instance_its_own_definition() {
     );
     let inner = ed.doc().children(eg)[0];
     edit(&mut ed, inner, square(1000.0, 0.0, 1000.0));
-    ed.execute(&Command::CloseComponent { group: eg }).unwrap();
+    ed.execute(&Command::CloseComponent {
+        group: eg,
+        resolve: None,
+    })
+    .unwrap();
     let area = |s| -> f64 {
         component::leaves(&ed.doc().resources, s)
             .unwrap()
@@ -892,7 +900,10 @@ fn a_component_cannot_contain_itself() {
     })
     .unwrap();
     invalid(
-        ed.execute(&Command::CloseComponent { group: eg }),
+        ed.execute(&Command::CloseComponent {
+            group: eg,
+            resolve: None,
+        }),
         "contain itself",
     );
     // Nothing changed: the edit is still open.
@@ -1170,7 +1181,10 @@ fn nested_contexts_write_back_in_order() {
     assert_eq!(cx.path(), vec![o1, nested]);
     // The outer edit group cannot close while the inner one is open.
     invalid(
-        ed.execute(&Command::CloseComponent { group: eg }),
+        ed.execute(&Command::CloseComponent {
+            group: eg,
+            resolve: None,
+        }),
         "still open",
     );
     let raw = cx.raw_model(ed.doc()).unwrap();
@@ -1205,7 +1219,10 @@ fn the_edit_group_of_a_component_is_not_a_2d_symbol_edit() {
         "close_component",
     );
     invalid(
-        ed.execute(&Command::CloseComponent { group: a }),
+        ed.execute(&Command::CloseComponent {
+            group: a,
+            resolve: None,
+        }),
         "not the edit group",
     );
     invalid(

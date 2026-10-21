@@ -34,6 +34,9 @@ impl<W: Write> Exporter<'_, W> {
             Shape::SurfaceModel(_) => {
                 skip("surface model: IFC export of surface models is not done yet (MOD-12)")
             }
+            Shape::Component { .. } => {
+                skip("component: IFC export of components is not done yet (MOD-12)")
+            }
             Shape::SiteModifier {
                 modifier: kadakas_core::site::ModifierKind::TextureBed { .. },
                 ..

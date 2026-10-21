@@ -2,7 +2,7 @@
 //! symbol instance or an attribute may refer to, and what happens when a resource is deleted.
 
 use super::*;
-use crate::graphics::RefKind;
+use crate::graphics::{GraphicResource, RefKind};
 use crate::resource::Resource;
 
 fn invalid(m: impl Into<String>) -> CommandError {
@@ -34,6 +34,69 @@ impl Tx<'_> {
         Ok(())
     }
 
+    /// After the resource `id` changed or was added: it and every component definition that uses
+    /// it must still expand within the limits (nesting 16, 20,000 models, no cycle). Nothing is
+    /// cut off silently: the command fails and the document stays as it was.
+    pub(super) fn check_component_expansion(&self, id: ResourceId) -> Result<(), CommandError> {
+        let res = &self.doc.resources;
+        if res.symbol(id).is_none() {
+            return Ok(());
+        }
+        for r in res.iter() {
+            if res.symbol(r.id).is_some_and(|d| d.is_component())
+                && (r.id == id || res.symbol_reaches(r.id, id))
+            {
+                crate::component::leaves(res, r.id)
+                    .map_err(|e| invalid(format!("component '{}': {e}", r.name)))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// A symbol body that changes must keep the kind that its users expect: a definition that
+    /// has component instances must keep its 3D parts, and one that has symbol instances must
+    /// keep a 2D side.
+    pub(super) fn check_instance_kinds(
+        &self,
+        id: ResourceId,
+        body: &ResourceBody,
+    ) -> Result<(), CommandError> {
+        let ResourceBody::Graphic(g) = body else {
+            return Ok(());
+        };
+        let GraphicResource::Symbol(d) = &**g else {
+            return Ok(());
+        };
+        let flat = d.items.is_empty() && d.solids.is_empty();
+        let comp_users = self
+            .doc
+            .objects
+            .values()
+            .any(|o| matches!(&o.shape, Shape::Component { symbol, .. } if *symbol == id))
+            || self.doc.resources.iter().any(|r| {
+                self.doc
+                    .resources
+                    .symbol(r.id)
+                    .is_some_and(|x| crate::component::part_refs(&x.parts).any(|s| s == id))
+            });
+        if comp_users && !d.is_component() {
+            return Err(invalid(format!(
+                "resource {id} is used as a component. Its 3D parts cannot be removed"
+            )));
+        }
+        let sym_users = self
+            .doc
+            .objects
+            .values()
+            .any(|o| matches!(&o.shape, Shape::Symbol { symbol, .. } if *symbol == id));
+        if sym_users && d.is_component() && flat {
+            return Err(invalid(format!(
+                "resource {id} is used as a symbol. A 3D component cannot replace its 2D side"
+            )));
+        }
+        Ok(())
+    }
+
     /// A symbol instance must refer to a symbol that exists.
     pub(super) fn check_symbol_shape(&self, shape: &Shape) -> Result<(), CommandError> {
         match shape {
@@ -46,8 +109,25 @@ impl Tx<'_> {
             Shape::Component { symbol, .. } if self.doc.resources.get(*symbol).is_none() => {
                 Err(CommandError::NoResource(*symbol))
             }
-            Shape::Component { symbol, .. } if self.doc.resources.symbol(*symbol).is_none() => {
-                Err(invalid(format!("resource {symbol} is not a component")))
+            Shape::Component { symbol, .. }
+                if !self
+                    .doc
+                    .resources
+                    .symbol(*symbol)
+                    .is_some_and(|d| d.is_component()) =>
+            {
+                Err(invalid(format!(
+                    "resource {symbol} is not a component (it has no 3D parts)"
+                )))
+            }
+            Shape::Symbol { symbol, .. }
+                if self.doc.resources.symbol(*symbol).is_some_and(|d| {
+                    d.is_component() && d.items.is_empty() && d.solids.is_empty()
+                }) =>
+            {
+                Err(invalid(format!(
+                    "resource {symbol} is a 3D component. Use a component instance, not a symbol instance"
+                )))
             }
             _ => Ok(()),
         }

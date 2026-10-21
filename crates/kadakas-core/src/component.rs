@@ -519,3 +519,229 @@ pub fn materialize(parts: &[Part], xf: &DAffine3) -> Vec<Made> {
         })
         .collect()
 }
+
+/// What to do when a component was changed by somebody else while it was open for edit
+/// (`Command::CloseComponent`). Without an answer the close is refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Resolve {
+    /// Keep my edit as a new component (`Name (mine)`); the instance uses it. The other
+    /// version of the definition stays as it is.
+    KeepAsNew,
+    /// Throw my edit away; the definition stays as the other user left it.
+    Discard,
+}
+
+/// A version of a definition: 53 bits of a hash of its parts. Two definitions with the same
+/// parts have the same version. The edit group of an open component keeps the version that it
+/// started from, to find a change by somebody else (`Resolve`).
+pub fn definition_version(def: &crate::graphics::SymbolDef) -> u64 {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(serde_json::to_vec(&def.parts).unwrap_or_default());
+    u64::from_le_bytes(d[..8].try_into().expect("8 bytes")) & ((1 << 53) - 1)
+}
+
+/// A cheap version of the expansion of a definition, nested components included: it changes when
+/// a surface model of the definition changes (revision, last edit, sizes, placement, the
+/// coordinates) or when the parts change. Scene caches key on it, so an undo, a change by
+/// another user and a change of a nested component all show. `None` if the definition cannot be
+/// expanded (see [`leaves`]).
+pub fn version(res: &Resources, symbol: ResourceId) -> Option<u64> {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    // Refuses a missing definition, a cycle and a size over the limits.
+    leaves(res, symbol).ok()?;
+    version_of(res, symbol, &mut h)?;
+    Some(h.finish())
+}
+
+fn version_of(res: &Resources, symbol: ResourceId, h: &mut impl std::hash::Hasher) -> Option<()> {
+    use std::hash::Hash;
+    let def = res.symbol(symbol)?;
+    for p in &def.parts {
+        p.parent.hash(h);
+        p.class.hash(h);
+        match &p.shape {
+            Shape::SurfaceModel(m) => {
+                (m.rev(), m.log().last().map(|e| e.stamp), m.next_id()).hash(h);
+                (m.vertex_count(), m.edge_count(), m.face_count()).hash(h);
+                for x in m.transform.to_cols_array() {
+                    x.to_bits().hash(h);
+                }
+                let mut sum = 0u64;
+                for (id, p) in m.vertices() {
+                    let bits = p.x.to_bits()
+                        ^ p.y.to_bits().rotate_left(21)
+                        ^ p.z.to_bits().rotate_left(42);
+                    sum = sum.wrapping_add(u64::from(id.0).wrapping_mul(bits | 1));
+                }
+                sum.hash(h);
+            }
+            Shape::Component { symbol, transform } => {
+                for x in transform {
+                    x.to_bits().hash(h);
+                }
+                symbol.hash(h);
+                version_of(res, *symbol, h)?;
+            }
+            Shape::Group { name } => name.hash(h),
+            _ => {}
+        }
+    }
+    Some(())
+}
+
+/// A problem of a component instance or of a symbol instance, for the person to see.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Finding {
+    pub object: ObjectId,
+    pub message: String,
+}
+
+/// Why the instance cannot be drawn or used, or `None` if it is fine. An instance of a symbol
+/// (2D) of a definition that is only a component is a problem too.
+pub fn instance_problem(doc: &Document, shape: &Shape) -> Option<String> {
+    match shape {
+        Shape::Component { symbol, .. } => match doc.resources.get(*symbol) {
+            None => Some(ComponentError::Missing(*symbol).to_string()),
+            Some(_) => match doc.resources.symbol(*symbol) {
+                None => Some(format!("resource {symbol} is not a component")),
+                Some(d) if !d.is_component() => Some(format!(
+                    "resource {symbol} is not a component (it has no 3D parts)"
+                )),
+                Some(_) => leaves(&doc.resources, *symbol).err().map(|e| e.to_string()),
+            },
+        },
+        Shape::Symbol { symbol, .. } => doc
+            .resources
+            .symbol(*symbol)
+            .filter(|d| d.is_component() && d.items.is_empty() && d.solids.is_empty())
+            .map(|_| {
+                format!(
+                    "resource {symbol} is a 3D component. Use a component instance, not a symbol instance"
+                )
+            }),
+        _ => None,
+    }
+}
+
+/// The instances that cannot be drawn or used, with the reason. The file load reports them as
+/// notes (`Document::load_notes`), and the 3D scene, the plan and the exports draw a marked
+/// placeholder for each ([`plan_mark`]).
+pub fn findings(doc: &Document) -> Vec<Finding> {
+    doc.objects
+        .values()
+        .filter_map(|o| {
+            instance_problem(doc, &o.shape).map(|m| Finding {
+                object: o.id,
+                message: format!("object {}: {m}", o.id),
+            })
+        })
+        .collect()
+}
+
+/// The definitions that cannot be expanded (a cycle, nesting or size over the limits, a missing
+/// nested definition), as notes for the person. A file with such a definition still loads; its
+/// instances are drawn as marked placeholders ([`plan_mark`]).
+pub fn definition_findings(doc: &Document) -> Vec<String> {
+    doc.resources
+        .iter()
+        .filter(|r| doc.resources.symbol(r.id).is_some_and(|d| d.is_component()))
+        .filter_map(|r| {
+            leaves(&doc.resources, r.id)
+                .err()
+                .map(|e| format!("component '{}' ({}): {e}", r.name, r.id))
+        })
+        .collect()
+}
+
+/// The colour (RGBA) of the mark of an instance that cannot be drawn: in the plan, the 3D scene
+/// and the exports.
+pub const WARNING_COLOR: [u8; 4] = [230, 126, 34, 255];
+
+/// How an instance shows in the plan.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PlanMark {
+    /// The box around the instance: the corners, counterclockwise, in the drawing.
+    Box([glam::DVec2; 4]),
+    /// An instance that cannot be drawn: the mark (a cross) at its origin, and the reason.
+    Broken(glam::DVec2, String),
+    /// A definition with no geometry: nothing to draw.
+    Empty,
+}
+
+/// What the plan, the SVG and the print draw for an instance (the same everywhere, AGR-01).
+pub fn plan_mark(doc: &Document, shape: &Shape) -> Option<PlanMark> {
+    let Shape::Component { symbol, transform } = shape else {
+        return None;
+    };
+    if let Some(why) = instance_problem(doc, shape) {
+        return Some(PlanMark::Broken(
+            glam::DVec2::new(transform[9], transform[10]),
+            why,
+        ));
+    }
+    Some(
+        match instance_bounds(&doc.resources, *symbol, &affine(transform)) {
+            Some((lo, hi)) => PlanMark::Box([
+                glam::DVec2::new(lo.x, lo.y),
+                glam::DVec2::new(hi.x, lo.y),
+                glam::DVec2::new(hi.x, hi.y),
+                glam::DVec2::new(lo.x, hi.y),
+            ]),
+            None => PlanMark::Empty,
+        },
+    )
+}
+
+/// What Object Info shows for an instance.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InstanceInfo {
+    /// The name of the definition (empty if it is missing).
+    pub name: String,
+    pub position: DVec3,
+    /// The turn about the z axis, in degrees.
+    pub rotation_deg: f64,
+    /// The length of each axis of the instance.
+    pub scale: DVec3,
+}
+
+/// The name, position, rotation and scale of an instance.
+pub fn instance_info(doc: &Document, shape: &Shape) -> Option<InstanceInfo> {
+    let (symbol, a) = placement(shape)?;
+    Some(InstanceInfo {
+        name: doc
+            .resources
+            .get(symbol)
+            .map(|r| r.name.clone())
+            .unwrap_or_default(),
+        position: a.translation,
+        rotation_deg: a.matrix3.x_axis.y.atan2(a.matrix3.x_axis.x).to_degrees(),
+        scale: DVec3::new(
+            a.matrix3.x_axis.length(),
+            a.matrix3.y_axis.length(),
+            a.matrix3.z_axis.length(),
+        ),
+    })
+}
+
+/// The box (min, max) around an object in the drawing: its surface models and instances, groups
+/// followed to their members. `None` if there is no geometry.
+pub fn object_bounds3(doc: &Document, id: ObjectId) -> Option<(DVec3, DVec3)> {
+    let mut lo = DVec3::splat(f64::INFINITY);
+    let mut hi = DVec3::splat(f64::NEG_INFINITY);
+    for leaf in doc.leaves(&[id]) {
+        let b = match &doc.object(leaf)?.shape {
+            Shape::SurfaceModel(m) => m.bounds(),
+            Shape::Component { symbol, transform } => {
+                instance_bounds(&doc.resources, *symbol, &affine(transform))
+            }
+            _ => None,
+        };
+        if let Some((a, b)) = b {
+            lo = lo.min(a);
+            hi = hi.max(b);
+        }
+    }
+    (lo.x <= hi.x).then_some((lo, hi))
+}

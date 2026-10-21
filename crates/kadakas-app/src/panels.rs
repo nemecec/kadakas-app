@@ -1262,6 +1262,7 @@ fn edit_shape(
     materials: &[(kadakas_core::resource::ResourceId, String)],
     effective_tile: Option<f64>,
     site_mapping: kadakas_core::texture_bed::BedMapping,
+    component: Option<&kadakas_core::component::InstanceInfo>,
 ) -> bool {
     let mut f = Fields { commit: false };
     egui::Grid::new("shape_fields")
@@ -1304,10 +1305,46 @@ fn edit_shape(
                 *scale_y = (sy != *scale).then_some(sy);
             }
             Shape::Component { transform, .. } => {
+                // The definition (read only), the position (x, y, z), the turn about the z
+                // axis in degrees, and the length of each axis.
+                if let Some(info) = component {
+                    ui.label(tr!("panels-component"));
+                    ui.label(if info.name.is_empty() {
+                        "?".to_string()
+                    } else {
+                        info.name.clone()
+                    });
+                    ui.end_row();
+                }
                 let mut at = DVec2::new(transform[9], transform[10]);
                 f.xy(ui, &tr!("panels-position"), &mut at);
                 transform[9] = at.x;
                 transform[10] = at.y;
+                f.length_scalar(ui, &tr!("panels-z"), &mut transform[11], 10.0);
+                let a = kadakas_core::component::affine(transform);
+                let mut deg = a.matrix3.x_axis.y.atan2(a.matrix3.x_axis.x).to_degrees();
+                let before = deg;
+                ui.label(tr!("panels-rotation-deg"));
+                let r = ui.add(DragValue::new(&mut deg).speed(1.0));
+                f.commit |= r.drag_stopped() || r.lost_focus();
+                ui.end_row();
+                if deg != before {
+                    // Turn the three axes about the z axis; the position stays.
+                    let turn = glam::DMat3::from_rotation_z((deg - before).to_radians());
+                    let mut b = a;
+                    b.matrix3 = turn * a.matrix3;
+                    *transform = kadakas_core::component::raw(&b);
+                }
+                if let Some(info) = component {
+                    ui.label(tr!("panels-scale"));
+                    ui.label(tr!(
+                        "panels-scale-xyz",
+                        x = format!("{:.3}", info.scale.x),
+                        y = format!("{:.3}", info.scale.y),
+                        z = format!("{:.3}", info.scale.z)
+                    ));
+                    ui.end_row();
+                }
             }
             Shape::Line { a, b } => {
                 f.xy(ui, &tr!("panels-start"), a);
@@ -1584,7 +1621,15 @@ pub fn object_info(
         _ => None,
     };
     let site_mapping = kadakas_core::texture_bed::site_mapping(session.editor.doc(), obj.layer);
-    let commit = edit_shape(ui, edited, &materials, effective_tile, site_mapping);
+    let component = kadakas_core::component::instance_info(session.editor.doc(), edited);
+    let commit = edit_shape(
+        ui,
+        edited,
+        &materials,
+        effective_tile,
+        site_mapping,
+        component.as_ref(),
+    );
     // Vertex edits are sent as `set_vertex` commands, one per changed vertex.
     if edited.vertices().is_some() {
         let base_vertices = edit

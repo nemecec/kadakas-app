@@ -685,9 +685,13 @@ pub enum Command {
         id: ObjectId,
     },
     /// Close Component: the objects of the edit group become the parts of the definition, and every
-    /// instance shows the change.
+    /// instance shows the change. If somebody else changed the definition while it was open, the
+    /// close is refused (a conflict) unless `resolve` says what to do: `keep_as_new` keeps this
+    /// edit as a new component for this instance, `discard` throws this edit away.
     CloseComponent {
         group: ObjectId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolve: Option<crate::component::Resolve>,
     },
     /// Several commands as one undo step. Stops at the first error.
     Batch {

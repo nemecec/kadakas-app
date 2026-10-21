@@ -119,12 +119,23 @@ impl EditContext {
     /// Leaves the innermost container. For a component the change is written to the definition,
     /// and every instance shows it. On an error the container stays open.
     pub fn exit(&mut self, ed: &mut Editor) -> Result<Option<ObjectId>, CommandError> {
+        self.exit_with(ed, None)
+    }
+
+    /// Like [`EditContext::exit`], with the answer to a conflict: somebody else changed the
+    /// component while it was open (`Command::CloseComponent`). Without an answer the close
+    /// fails with a message that starts with `conflict:` and the container stays open.
+    pub fn exit_with(
+        &mut self,
+        ed: &mut Editor,
+        resolve: Option<super::Resolve>,
+    ) -> Result<Option<ObjectId>, CommandError> {
         self.validate(ed.doc());
         let Some(f) = self.frames.last().copied() else {
             return Ok(None);
         };
         if let Some(g) = f.edit_group {
-            ed.execute(&Command::CloseComponent { group: g })?;
+            ed.execute(&Command::CloseComponent { group: g, resolve })?;
         }
         self.frames.pop();
         Ok(Some(f.id))
@@ -191,7 +202,9 @@ impl EditContext {
 
     /// A point of the drawing in the local coordinates of the raw model.
     pub fn to_local(&self, doc: &Document, world: DVec3) -> Option<DVec3> {
-        Some(self.model(doc)?.transform.inverse().transform_point3(world))
+        let xf = self.model(doc)?.transform;
+        // A transform that cannot be inverted has no local coordinates.
+        super::is_regular(&xf).then(|| xf.inverse().transform_point3(world))
     }
 
     /// A point in the local coordinates of the raw model, in the drawing.
@@ -232,6 +245,11 @@ impl EditContext {
             };
             let local = match (edit, run.doc().object(id).map(|o| &o.shape)) {
                 (Edit::AddEdges { edges }, Some(Shape::SurfaceModel(m))) => {
+                    if !super::is_regular(&m.transform) {
+                        return Err(invalid(
+                            "the surface model has a transform that cannot be inverted",
+                        ));
+                    }
                     let inv = m.transform.inverse();
                     Edit::AddEdges {
                         edges: edges

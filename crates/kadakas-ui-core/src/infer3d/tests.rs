@@ -1875,6 +1875,96 @@ mod instances {
         );
     }
 
+    /// Adds a second square next to the one of the definition through an edit in place.
+    fn widen(ed: &mut Editor, instance: ObjectId) {
+        let g = ObjectId(
+            ed.execute(&Command::EditComponent { id: instance })
+                .unwrap()
+                .created[0],
+        );
+        let model = ed
+            .doc()
+            .children(g)
+            .into_iter()
+            .find(|c| matches!(ed.doc().object(*c).unwrap().shape, Shape::SurfaceModel(_)))
+            .unwrap();
+        let p = [
+            [1000.0, 0.0, 0.0],
+            [2000.0, 0.0, 0.0],
+            [2000.0, 1000.0, 0.0],
+            [1000.0, 1000.0, 0.0],
+        ];
+        ed.execute(&Command::EditSurface {
+            id: model,
+            edit: Edit::AddEdges {
+                edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+            },
+        })
+        .unwrap();
+        ed.execute(&Command::CloseComponent {
+            group: g,
+            resolve: None,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn the_cache_follows_a_change_of_the_definition_and_its_undo() {
+        let (mut ed, _, a, _) = two_instances();
+        let mut cache = DefinitionCache::default();
+        let faces = |ed: &Editor, cache: &mut DefinitionCache| {
+            scene_of_instances_cached(ed.doc(), &[a], 0, cache)
+                .unwrap()
+                .scene
+                .face_count()
+        };
+        assert_eq!(faces(&ed, &mut cache), 1);
+        widen(&mut ed, a);
+        // Nobody called `forget`: the changed content is what decides.
+        assert_eq!(faces(&ed, &mut cache), 2, "stale after the edit");
+        assert!(ed.undo());
+        assert_eq!(faces(&ed, &mut cache), 1, "stale after the undo");
+        assert!(ed.redo());
+        assert_eq!(faces(&ed, &mut cache), 2, "stale after the redo");
+    }
+
+    #[test]
+    fn a_nested_definition_that_changes_shows_in_the_outer_one() {
+        let (mut ed, _, a, _) = two_instances();
+        // An outer component that holds an instance of the tile.
+        let out = ed
+            .execute(&Command::MakeComponent {
+                name: "Pair".into(),
+                model: None,
+                faces: vec![],
+                edges: vec![],
+                objects: vec![a],
+                replace: true,
+            })
+            .unwrap();
+        let outer = ObjectId(out.created[1]);
+        let mut cache = DefinitionCache::default();
+        let faces = |ed: &Editor, cache: &mut DefinitionCache| {
+            scene_of_instances_cached(ed.doc(), &[outer], 0, cache)
+                .unwrap()
+                .scene
+                .face_count()
+        };
+        assert_eq!(faces(&ed, &mut cache), 1);
+        // Change the tile by editing the other instance of it in place.
+        let b = ed
+            .doc()
+            .objects
+            .values()
+            .find(|o| {
+                matches!(o.shape, Shape::Component { .. }) && o.id != outer && o.parent.is_none()
+            })
+            .map(|o| o.id)
+            .unwrap();
+        widen(&mut ed, b);
+        assert_eq!(faces(&ed, &mut cache), 2, "stale in the outer definition");
+    }
+
     #[test]
     fn what_is_not_an_instance_is_refused_with_a_message() {
         let (mut ed, _, a, _) = two_instances();

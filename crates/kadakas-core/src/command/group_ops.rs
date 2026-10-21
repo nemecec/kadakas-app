@@ -329,6 +329,12 @@ impl Tx<'_> {
                         ));
                     }
                 }
+                let height = ids
+                    .iter()
+                    .map(|o| crate::component::group_height(self.doc, *o))
+                    .max()
+                    .unwrap_or(0);
+                self.check_group_depth(parent, 1 + height)?;
                 let gid = ObjectId(self.alloc()?);
                 let mut g = Object::new(gid, layer, class, Shape::Group { name });
                 g.parent = parent;

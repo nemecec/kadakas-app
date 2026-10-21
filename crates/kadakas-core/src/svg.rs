@@ -515,14 +515,12 @@ fn draw_object(
             ),
             None => Ok(()),
         },
-        Shape::Component { symbol, transform } => {
-            // Plan view: the box around the instance (MOD-13 draws its edges).
-            match crate::component::instance_bounds(
-                &doc.resources,
-                *symbol,
-                &crate::component::affine(transform),
-            ) {
-                Some((lo, hi)) => writeln!(
+        Shape::Component { .. } => {
+            // Plan view: the box around the instance (MOD-13 draws its edges). An instance that
+            // cannot be drawn gets a cross in the warning colour and the reason, not nothing.
+            // The plan on the screen and in the print draw the same (`component::plan_mark`).
+            match crate::component::plan_mark(doc, &o.shape) {
+                Some(crate::component::PlanMark::Box([lo, _, hi, _])) => writeln!(
                     s,
                     r#"<rect x="{}" y="{}" width="{}" height="{}" {style} data-kind="component"/>"#,
                     lo.x,
@@ -530,7 +528,25 @@ fn draw_object(
                     hi.x - lo.x,
                     hi.y - lo.y
                 ),
-                None => Ok(()),
+                Some(crate::component::PlanMark::Broken(p, why)) => {
+                    let h = crate::model::LOCUS_MARKER_HALF;
+                    let [r, g, b, _] = crate::component::WARNING_COLOR;
+                    writeln!(
+                        s,
+                        r#"<path d="M {} {} L {} {} M {} {} L {} {}" stroke="rgb({r},{g},{b})" fill="none" stroke-width="{sw}" data-id="{}" data-kind="component" data-problem="{}"/>"#,
+                        p.x - h,
+                        -p.y,
+                        p.x + h,
+                        -p.y,
+                        p.x,
+                        -p.y - h,
+                        p.x,
+                        -p.y + h,
+                        o.id,
+                        esc(&why)
+                    )
+                }
+                _ => Ok(()),
             }
         }
         Shape::Sweep(sw) => {

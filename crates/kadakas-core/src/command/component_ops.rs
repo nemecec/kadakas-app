@@ -33,6 +33,22 @@ struct Chosen {
 }
 
 impl Tx<'_> {
+    /// A new group under `parent` that holds a tree `height` levels of groups high (the new
+    /// group itself counts as one) must stay within [`component::MAX_GROUP_DEPTH`].
+    pub(super) fn check_group_depth(
+        &self,
+        parent: Option<ObjectId>,
+        height: usize,
+    ) -> Result<(), CommandError> {
+        let above = parent.map_or(0, |p| self.doc.ancestors(p).len() + 1);
+        if above + height > component::MAX_GROUP_DEPTH {
+            return Err(refuse(ComponentError::GroupsTooDeep {
+                max: component::MAX_GROUP_DEPTH,
+            }));
+        }
+        Ok(())
+    }
+
     /// Checks the choice of `MakeGroup` and `MakeComponent`.
     fn choose(
         &self,
@@ -143,12 +159,7 @@ impl Tx<'_> {
             .map(|o| component::group_height(self.doc, *o))
             .max()
             .unwrap_or(0);
-        let above = ch.parent.map_or(0, |p| self.doc.ancestors(p).len() + 1);
-        if above + 1 + height > component::MAX_GROUP_DEPTH {
-            return Err(refuse(ComponentError::GroupsTooDeep {
-                max: component::MAX_GROUP_DEPTH,
-            }));
-        }
+        self.check_group_depth(ch.parent, 1 + height)?;
         let gid = ObjectId(self.alloc()?);
         let mut g = Object::new(gid, ch.layer, ch.class, Shape::Group { name });
         g.parent = ch.parent;
@@ -200,9 +211,23 @@ impl Tx<'_> {
     ) -> Result<(), CommandError> {
         let ch = self.choose(model, faces, edges, objects)?;
         // The axes of the definition are the axes of the model.
+        // A component made from objects only has its origin at the minimum corner of their
+        // bounds, so the definition is small numbers and not drawing coordinates.
         let origin = match model.and_then(|m| self.doc.object(m)).map(|o| &o.shape) {
             Some(Shape::SurfaceModel(m)) => m.transform,
-            _ => DAffine3::IDENTITY,
+            _ => {
+                let mut lo = glam::DVec3::splat(f64::INFINITY);
+                for &o in &ch.objects {
+                    if let Some((a, _)) = component::object_bounds3(self.doc, o) {
+                        lo = lo.min(a);
+                    }
+                }
+                if lo.is_finite() {
+                    DAffine3::from_translation(lo)
+                } else {
+                    DAffine3::IDENTITY
+                }
+            }
         };
         if !component::is_regular(&origin) {
             return Err(invalid(
@@ -303,7 +328,22 @@ impl Tx<'_> {
         top: ObjectId,
         layer: LayerId,
         class: ClassId,
+        top_stays: bool,
     ) -> Result<Vec<ObjectId>, CommandError> {
+        // The groups of the parts, with `top`, must stay within the depth limit. When `top` is
+        // exploded at once (`top_stays` off) it does not count.
+        let mut levels: Vec<usize> = Vec::with_capacity(made.len());
+        for m in &made {
+            let base = m.parent.map_or(0, |q| levels[q]);
+            levels.push(base + usize::from(matches!(m.shape, Shape::Group { .. })));
+        }
+        let height = levels.iter().copied().max().unwrap_or(0);
+        let top_level = self.doc.ancestors(top).len() + usize::from(top_stays);
+        if top_level + height > component::MAX_GROUP_DEPTH {
+            return Err(refuse(ComponentError::GroupsTooDeep {
+                max: component::MAX_GROUP_DEPTH,
+            }));
+        }
         let ids = made
             .iter()
             .map(|_| self.alloc().map(ObjectId))
@@ -397,8 +437,15 @@ impl Tx<'_> {
         for kid in kids {
             self.editable(kid)?;
             let shape = self.doc.object(kid).expect("exists").shape.clone();
+            // A model with a look of its own (class, fill, line type) is not merged into one
+            // with another look: merging would change its colour silently. It stays a separate
+            // model of the level.
+            let same_look = target.as_ref().is_none_or(|(t, _)| {
+                let (a, b) = (self.doc.object(*t), self.doc.object(kid));
+                matches!((a, b), (Some(a), Some(b)) if a.attrs == b.attrs && a.class == b.class)
+            });
             match (shape, &mut target) {
-                (Shape::SurfaceModel(s), Some((_, t))) => {
+                (Shape::SurfaceModel(s), Some((_, t))) if same_look => {
                     let rel =
                         (s.transform != t.transform).then(|| t.transform.inverse() * s.transform);
                     if rel.is_some_and(|r| !component::is_regular(&r)) {
@@ -410,7 +457,7 @@ impl Tx<'_> {
                     dirty = true;
                     gone.push(kid);
                 }
-                (Shape::SurfaceModel(s), None) => {
+                (Shape::SurfaceModel(s), None) if same_look => {
                     // The first model of the group becomes the model of the level.
                     self.touch(kid);
                     self.doc.object_mut(kid).expect("exists").parent = level;
@@ -446,6 +493,7 @@ impl Tx<'_> {
             gid,
             inst.layer,
             inst.class,
+            false,
         )?;
         self.remove_objects(vec![id]);
         self.explode_group(gid)?;
@@ -538,6 +586,13 @@ impl Tx<'_> {
         }) {
             return Err(invalid("this component is being edited already"));
         }
+        let version = self
+            .doc
+            .resources
+            .symbol(symbol)
+            .map(component::definition_version)
+            .unwrap_or_default();
+        self.check_group_depth(inst.parent, 1)?;
         let gid = ObjectId(self.alloc()?);
         let mut g = Object::new(
             gid,
@@ -555,6 +610,8 @@ impl Tx<'_> {
                 "symbol": symbol.0,
                 "instance": id.0,
                 "xf": component::raw(&xf),
+                // The definition as it was when the edit started; the close compares it.
+                "version": version,
             }),
         );
         self.add_new(g);
@@ -563,6 +620,7 @@ impl Tx<'_> {
             gid,
             inst.layer,
             inst.class,
+            true,
         )?;
         self.touch(id);
         self.doc
@@ -574,7 +632,12 @@ impl Tx<'_> {
         Ok(())
     }
 
-    fn close_component(&mut self, group: ObjectId) -> Result<(), CommandError> {
+    fn close_component(
+        &mut self,
+        group: ObjectId,
+        resolve: Option<component::Resolve>,
+        out: &mut Outcome,
+    ) -> Result<(), CommandError> {
         self.editable(group)?;
         let g = self.doc.object(group).expect("checked");
         let info = g
@@ -629,6 +692,9 @@ impl Tx<'_> {
             .symbol(symbol)
             .ok_or(CommandError::NoResource(symbol))?
             .clone();
+        // Somebody else (a peer, or an undo) changed the definition while it was open.
+        let started = info.get("version").and_then(Value::as_u64);
+        let conflict = started.is_some_and(|v| v != component::definition_version(&old));
         let to_def = if xf == DAffine3::IDENTITY {
             DAffine3::IDENTITY
         } else {
@@ -636,22 +702,65 @@ impl Tx<'_> {
         };
         let parts = component::parts_from_objects(self.doc, &self.doc.children(group), &to_def)
             .map_err(refuse)?;
-        let def = SymbolDef { parts, ..old };
-        let body = ResourceBody::Graphic(Box::new(GraphicResource::Symbol(def)));
-        body.validate().map_err(invalid)?;
-        self.check_graphic_refs(Some(symbol), &body)?;
-        self.doc.resources.get_mut(symbol).expect("checked").body = body;
-        // Every definition that uses this one, and this one, must still be within the limits.
-        let users: Vec<ResourceId> = self
-            .doc
-            .resources
-            .iter()
-            .map(|r| r.id)
-            .filter(|r| self.doc.resources.symbol(*r).is_some())
-            .filter(|r| self.doc.resources.symbol_reaches(*r, symbol))
-            .collect();
-        for r in users {
-            component::leaves(&self.doc.resources, r).map_err(refuse)?;
+        let mut target = symbol;
+        if conflict {
+            match resolve {
+                None => {
+                    return Err(invalid(format!(
+                        "conflict: component '{}' was changed by somebody else while you edited it. \
+                         Close again with resolve keep_as_new (keep your edit as a new component) \
+                         or discard (throw your edit away)",
+                        self.doc
+                            .resources
+                            .get(symbol)
+                            .map_or("", |r| r.name.as_str())
+                    )));
+                }
+                Some(component::Resolve::Discard) => {}
+                Some(component::Resolve::KeepAsNew) => {
+                    let base = self
+                        .doc
+                        .resources
+                        .get(symbol)
+                        .map_or(String::new(), |r| r.name.clone());
+                    let taken = |n: &str| {
+                        self.doc.resources.iter().any(|r| {
+                            r.name.eq_ignore_ascii_case(n) && r.body.type_name() == "symbol"
+                        })
+                    };
+                    let name = std::iter::once(format!("{base} (mine)"))
+                        .chain((2..).map(|k| format!("{base} (mine {k})")))
+                        .find(|n| !taken(n))
+                        .expect("an endless range");
+                    let def = SymbolDef { parts, ..old };
+                    self.run(
+                        &Command::AddResource {
+                            name,
+                            body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(def))),
+                        },
+                        out,
+                    )?;
+                    target = ResourceId(*out.created.last().expect("added"));
+                }
+            }
+        } else {
+            let def = SymbolDef { parts, ..old };
+            let body = ResourceBody::Graphic(Box::new(GraphicResource::Symbol(def)));
+            body.validate().map_err(invalid)?;
+            self.check_graphic_refs(Some(symbol), &body)?;
+            self.doc.resources.get_mut(symbol).expect("checked").body = body;
+            // Every definition that uses this one, and this one, must still be within the limits.
+            self.check_component_expansion(symbol)?;
+        }
+        if target != symbol
+            && let Some(i) = instance.filter(|i| self.doc.object(*i).is_some())
+        {
+            self.touch(i);
+            if let Shape::Component { symbol: s, .. } =
+                &mut self.doc.object_mut(i).expect("exists").shape
+            {
+                *s = target;
+            }
         }
         self.remove_objects(all);
         if let Some(i) = instance.filter(|i| self.doc.object(*i).is_some()) {
@@ -689,7 +798,9 @@ impl Tx<'_> {
             Command::Explode { ids } => self.explode(ids),
             Command::MakeUnique { ids } => self.make_unique(ids, out),
             Command::EditComponent { id } => self.edit_component(*id, out),
-            Command::CloseComponent { group } => self.close_component(*group),
+            Command::CloseComponent { group, resolve } => {
+                self.close_component(*group, *resolve, out)
+            }
             _ => unreachable!("run routes only component commands here"),
         }
     }

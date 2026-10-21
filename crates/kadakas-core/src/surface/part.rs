@@ -10,7 +10,8 @@
 //!   so the rest of the model keeps its faces (the edge is then in both models).
 //! - [`SurfaceModel::absorb`] draws all edges of another model into this one (the other model
 //!   placed by `xf`), then gives the faces and edges that formed the attributes and the side of
-//!   the faces they came from. A closed loop of coplanar edges gets a face, as always in MOD-06,
+//!   the faces they came from. When several faces land on one face, the one with the larger area
+//!   decides (equal areas: the lower id), for the side and for the attributes it sets. A closed loop of coplanar edges gets a face, as always in MOD-06,
 //!   also when the other model had erased that face. Curves are kept when all their edges are
 //!   found again as whole edges; an edge that the geometry it met has cut takes its curve
 //!   identity no longer (the curve tools are MOD-08).
@@ -164,23 +165,48 @@ impl SurfaceModel {
         }
         // The side of the faces that formed, and the attributes of faces and edges.
         let normal_of = |n: DVec3| xf.map_or(n, |x| x.matrix3.inverse().transpose() * n);
-        let mut reverse: Vec<FaceId> = Vec::new();
-        let mut face_attrs: Vec<(FaceId, &Attrs)> = Vec::new();
+        // Several faces of `other` can land on one face of `work` (they were split or merged by
+        // the geometry they met). The face that decides the side and wins the attributes of the
+        // result is the one with the larger area, and with equal areas the one with the lower id.
+        // The rule does not depend on the order of the faces.
+        struct Source<'a> {
+            id: FaceId,
+            area: f64,
+            flip: bool,
+            attrs: &'a Attrs,
+        }
+        let mut landed: BTreeMap<FaceId, Vec<Source>> = BTreeMap::new();
         for (id, f) in &other.faces {
             let Some(nf) = sync::face_point(other, *id).and_then(|p| sync::face_at(&work, map(p)))
             else {
                 continue;
             };
-            if work.faces[&nf].plane.normal.dot(normal_of(f.plane.normal)) < 0.0 {
+            landed.entry(nf).or_default().push(Source {
+                id: *id,
+                area: other.face_area(*id).unwrap_or(0.0),
+                flip: work.faces[&nf].plane.normal.dot(normal_of(f.plane.normal)) < 0.0,
+                attrs: &f.attrs,
+            });
+        }
+        let mut reverse: Vec<FaceId> = Vec::new();
+        let mut face_attrs: Vec<(FaceId, Vec<&Attrs>)> = Vec::new();
+        for (nf, mut sources) in landed {
+            // The winner last: its attributes overwrite the others.
+            sources.sort_by(|a, b| a.area.total_cmp(&b.area).then(b.id.cmp(&a.id)));
+            let winner = sources.last().expect("one at least");
+            if winner.flip {
                 reverse.push(nf);
             }
-            if !f.attrs.is_empty() {
-                face_attrs.push((nf, &f.attrs));
+            let list: Vec<&Attrs> = sources
+                .iter()
+                .map(|s| s.attrs)
+                .filter(|a| !a.is_empty())
+                .collect();
+            if !list.is_empty() {
+                face_attrs.push((nf, list));
             }
         }
         if !reverse.is_empty() {
-            reverse.sort();
-            reverse.dedup();
             work.apply(&Edit::ReverseFaces { faces: reverse })?;
         }
         // The edge of `work` that is the whole of an edge of `other`.
@@ -194,10 +220,12 @@ impl SurfaceModel {
         };
         let before = work.clone();
         let mut changed = false;
-        for (nf, attrs) in face_attrs {
+        for (nf, list) in face_attrs {
             let f = work.faces.get_mut(&nf).expect("found above");
-            for (k, v) in attrs.iter() {
-                changed |= f.attrs.insert(k.clone(), v.clone()).as_ref() != Some(v);
+            for attrs in list {
+                for (k, v) in attrs.iter() {
+                    changed |= f.attrs.insert(k.clone(), v.clone()).as_ref() != Some(v);
+                }
             }
         }
         for (e, attrs) in &other.edge_attrs {

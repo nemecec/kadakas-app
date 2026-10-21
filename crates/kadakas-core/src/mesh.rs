@@ -917,12 +917,47 @@ impl Builder<'_> {
                 self.surface_model(m, &m.transform, z, color, id);
             }
             Shape::Component { symbol, transform } => {
-                // The models of the definition (shared, not copied) through the instance transform.
-                let color = fill.unwrap_or(crate::solid3d::DEFAULT_COLOR);
+                // The models of the definition (shared, not copied) through the instance
+                // transform. Each part has its own class and attributes; the look of the
+                // instance is for the parts that have none.
                 let inst = crate::component::affine(transform);
-                if let Ok(leaves) = crate::component::leaves(&self.doc.resources, *symbol) {
-                    for leaf in leaves {
-                        self.surface_model(leaf.model, &(inst * leaf.transform), z, color, id);
+                match crate::component::leaves(&self.doc.resources, *symbol) {
+                    Ok(leaves) => {
+                        for leaf in leaves {
+                            let own = leaf
+                                .attrs
+                                .fill
+                                .or_else(|| {
+                                    leaf.class
+                                        .and_then(|c| self.doc.class(c))
+                                        .and_then(|c| c.attrs.fill)
+                                })
+                                .filter(|c| c.0[3] > 0)
+                                .map(rgba);
+                            let color = own.or(fill).unwrap_or(crate::solid3d::DEFAULT_COLOR);
+                            self.surface_model(leaf.model, &(inst * leaf.transform), z, color, id);
+                        }
+                    }
+                    Err(_) => {
+                        // The reason is a finding (`component::findings`). The instance stays
+                        // in the scene as a cross in the warning colour at its origin.
+                        let h = crate::model::LOCUS_MARKER_HALF;
+                        let c = inst.translation;
+                        let at = |d: DVec3| {
+                            Vec3::new(
+                                (c.x + d.x - o.x) as f32,
+                                (c.y + d.y - o.y) as f32,
+                                (z + c.z + d.z - o.z) as f32,
+                            )
+                        };
+                        for axis in [DVec3::X, DVec3::Y, DVec3::Z] {
+                            self.scene.lines.push(
+                                at(-axis * h),
+                                at(axis * h),
+                                crate::component::WARNING_COLOR,
+                                id,
+                            );
+                        }
                     }
                 }
             }

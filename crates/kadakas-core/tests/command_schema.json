@@ -775,6 +775,21 @@
       ],
       "type": "string"
     },
+    "Resolve": {
+      "description": "What to do when a component was changed by somebody else while it was open for edit\n(`Command::CloseComponent`). Without an answer the close is refused.",
+      "oneOf": [
+        {
+          "const": "keep_as_new",
+          "description": "Keep my edit as a new component (`Name (mine)`); the instance uses it. The other\nversion of the definition stays as it is.",
+          "type": "string"
+        },
+        {
+          "const": "discard",
+          "description": "Throw my edit away; the definition stays as the other user left it.",
+          "type": "string"
+        }
+      ]
+    },
     "ResourceBody": {
       "additionalProperties": true,
       "description": "The content of a resource. `type` names it (plant_style, record_format, worksheet, hatch, tile, line_type, symbol, ... see describe: resources). The other keys depend on the type.",
@@ -4118,7 +4133,7 @@
       "type": "object"
     },
     {
-      "description": "Close Component: the objects of the edit group become the parts of the definition, and every\ninstance shows the change.",
+      "description": "Close Component: the objects of the edit group become the parts of the definition, and every\ninstance shows the change. If somebody else changed the definition while it was open, the\nclose is refused (a conflict) unless `resolve` says what to do: `keep_as_new` keeps this\nedit as a new component for this instance, `discard` throws this edit away.",
       "properties": {
         "group": {
           "$ref": "#/$defs/ObjectId"
@@ -4126,6 +4141,16 @@
         "op": {
           "const": "close_component",
           "type": "string"
+        },
+        "resolve": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Resolve"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

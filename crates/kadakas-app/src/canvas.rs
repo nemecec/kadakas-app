@@ -170,8 +170,9 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
             painter.line_segment([c - egui::vec2(0.0, 4.0), c + egui::vec2(0.0, 4.0)], stroke);
         }
         Shape::Component { transform, .. } => {
-            // The shape does not know its definition: a cross at the origin of the instance.
-            // (MOD-13 draws the plan of components; the 3D view shows the faces.)
+            // Without the document the shape does not know its definition: a small cross at
+            // the origin, for a drag ghost. The drawing itself goes through
+            // `draw_shape_or_object`, which draws the box like the SVG and the print.
             let c = s(DVec2::new(transform[9], transform[10]));
             painter.line_segment([c - egui::vec2(4.0, 0.0), c + egui::vec2(4.0, 0.0)], stroke);
             painter.line_segment([c - egui::vec2(0.0, 4.0), c + egui::vec2(0.0, 4.0)], stroke);
@@ -442,6 +443,39 @@ fn draw_shape_or_object(
             }
         }
         Shape::Group { .. } | Shape::Unknown { .. } => {}
+        Shape::Component { .. } => {
+            // The same as the SVG and the print (`component::plan_mark`): the box around the
+            // instance, or a cross in the warning colour if it cannot be drawn.
+            use kadakas_core::component::{PlanMark, WARNING_COLOR, plan_mark};
+            match plan_mark(doc, &o.shape) {
+                Some(PlanMark::Box(ring)) => {
+                    let s = |p: DVec2| view.to_screen(p + offset);
+                    let sp: Vec<Pos2> = ring.iter().map(|p| s(*p)).collect();
+                    fill_polygon(painter, &ring, &sp, st.fill);
+                    painter.add(PathShape {
+                        points: sp,
+                        closed: true,
+                        fill: Color32::TRANSPARENT,
+                        stroke: PathStroke::new(st.width, st.pen),
+                    });
+                }
+                Some(PlanMark::Broken(p, _)) => {
+                    let h = kadakas_core::model::LOCUS_MARKER_HALF;
+                    let [r, g, b, a] = WARNING_COLOR;
+                    let stroke = Stroke::new(st.width, Color32::from_rgba_unmultiplied(r, g, b, a));
+                    let s = |p: DVec2| view.to_screen(p + offset);
+                    painter.line_segment(
+                        [s(p - DVec2::new(h, 0.0)), s(p + DVec2::new(h, 0.0))],
+                        stroke,
+                    );
+                    painter.line_segment(
+                        [s(p - DVec2::new(0.0, h)), s(p + DVec2::new(0.0, h))],
+                        stroke,
+                    );
+                }
+                _ => {}
+            }
+        }
         Shape::Plant { at, spread, .. } => {
             let look = kadakas_core::viewrules::plant_look(doc, o);
             // The colors of the style apply when the object has none of its own.
