@@ -219,9 +219,11 @@ fn urls(s: &str) -> String {
     while let Some(p) = rest.find("://") {
         // The scheme: letters, digits, `+`, `-`, `.` right before `://`.
         let before = &rest[..p];
+        // The character found may take more than one byte: start after all of it.
         let scheme_start = before
-            .rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
-            .map_or(0, |i| i + 1);
+            .char_indices()
+            .rfind(|(_, c)| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
+            .map_or(0, |(i, c)| i + c.len_utf8());
         let scheme = &before[scheme_start..];
         let after = &rest[p + 3..];
         // The URL ends at white space or a quote or a closing bracket.
