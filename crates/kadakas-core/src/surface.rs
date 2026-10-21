@@ -128,6 +128,8 @@ mod topo;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_index;
+#[cfg(test)]
 mod tests_pushpull;
 
 pub use check::{Problem, Report};
