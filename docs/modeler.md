@@ -105,6 +105,46 @@ When the model grows, the middle of the plan (the scene origin) moves. The windo
 
 A surface model (`Shape::SurfaceModel`, MOD-06) is drawn by the same GPU renderer as the other objects. See `docs/feature-spec.md` for what the core does.
 
+### Performance of add_edges
+
+Before, each new edge was compared with every vertex, edge and face of the model. So an edit of `k` edges in a model of `E` edges took about `1.4e-7 × k × E` seconds.
+
+Now an edit uses a spatial index (`surface/edit/near.rs`). It keeps box trees of the vertices, the edges and the faces for the time of one edit. A tree is built when the edit first needs it, and it grows when the edit adds or changes an element. Other parts:
+
+- The planes to solve come from the faces grouped by their plane and from a tree of the ends of the new pieces.
+- The pieces on one straight run share the walk along the run.
+- The walks along a cycle in one plane are kept and read again.
+- Erase uses the same index for its merges.
+
+An edit now costs about `O(E log E + k log E)`: a build of the index once, then a short query for each new edge.
+
+The index only finds candidates. Every test is the same as before, on the same numbers, in the same order. So the result is the same to the bit. The old scans stay in the code (`surface/edit/reference.rs` lets a test choose them). The test `surface::tests_index` compares both ways on random edits: grid and free points, welds within the tolerance, near misses, crossings, holes, gaps closed last, curves, erase, Push/Pull, turned planes and survey coordinates (650 km from the origin). It passed 12,000 cases in a release build.
+
+Measurement (`crates/kadakas-core/tests/limits_measure.rs`, `limits_measure.py`; release build, Apple M1 Pro, one run each). The numbers are CPU time of one `edit_surface` command through the editor. The machine was shared; the load average is given.
+
+| Scenario | Before | After |
+|---|---|---|
+| 1,000 edges, empty model | 0.04 s | 0.011 s |
+| 5,000 edges, empty model | 1.4 s | 0.08 s |
+| 10,000 edges, empty model (grid / terrain / lines) | 5.8 / 15.3 / 12.2 s | 0.19 / 0.44 / 0.06 s |
+| 20,000 / 50,000 edges, empty model, in edits of 10,000 | 23 / 140 s | 0.45 / 1.6 s |
+| 1,000 edges, 80k-edge model (same plane / other plane / terrain / lines) | 9.5 / 10.6 / 15.3 / 23.2 s | 0.24 / 0.20 / 0.28 / 0.17 s |
+| 2,000 / 5,000 / 10,000 edges, 80k-edge model | 23 / 59 / 120 s | 0.27 / 0.37 / 0.57 s |
+| 1 edge, 80k-edge model (command / `apply` only) | 0.174 / 0.066 s | 0.167 / 0.055 s |
+| No change, 80k-edge model (command / `apply` only) | 0.149 / 0.045 s | 0.140 / 0.034 s |
+| Terrain of 75k edges, drawn in 8 edits | 773 s | 8.7 s |
+| 6,250 boxes, one edit each | 759 s | 212 s |
+| Erase every 7th edge of the 80k model (11,486 edges) | 158 s | 1.3 s (wall, test build) |
+| Load average during the runs | 5 to 17 | 5 to 13 |
+
+The results are the same: every scenario ends with the same counts of vertices, edges, faces and loop vertices.
+
+What is left:
+
+- Each command on an 80k-edge model still costs about 0.14 s. Most of it is the check of each command (`SurfaceModel::problem`, about 0.1 s), two copies of the model and the topology index (`Topo`). The topology index is now built from sorted lists.
+- Each edit builds the index again (`O(E log E)`). So many small edits in a row still add up: 6,250 boxes take 212 s, about 30 ms for each box at the end. To remove this, the index has to stay from one edit to the next. That is a larger change.
+- A long straight run shared by many pieces in many planes still makes the work grow faster than linear in the length of the run.
+
 ## Groups and components (MOD-07)
 
 Code: `kadakas_core::component` (rules, parts, walks, the edit context), `command/component_ops.rs` (the commands), `surface/part.rs` (take a part out of a surface model, draw a model into another one), `kadakas_ui_core::infer3d` (scenes of instances). Public behavior only, as in `docs/research/sketchup-public-features.md`.

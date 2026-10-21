@@ -57,7 +57,8 @@
 //!   Drawing an edge that exists again restores the faces next to it. A loop drawn inside an empty
 //!   region (a loop whose face was erased) fills only the new loop. Only the part of the plane that
 //!   the new pieces and the loops they close can reach is solved again, so the region work does
-//!   not grow with the faces elsewhere in the plane (the scans for welds and planes are linear).
+//!   not grow with the faces elsewhere in the plane. Welds, splits, crossings and the planes to
+//!   solve are found with a spatial index of the edit (`edit::near`), not by scans of the model.
 //! - **Erase edges** ([`Edit::EraseEdges`]): two coplanar faces on the two sides of an erased edge
 //!   merge (the lower id stays). Every other face that uses an erased edge goes away. A vertex left
 //!   with no edge goes away, and a vertex left between two edges in a straight line with the same
@@ -127,6 +128,8 @@ mod topo;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_index;
 #[cfg(test)]
 mod tests_pushpull;
 

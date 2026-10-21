@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use glam::DVec2;
 
 use super::geom::{self, Plane};
+use super::index::BoxTree;
 use super::topo::Topo;
 use super::{SurfaceError, SurfaceModel, VertexId};
 
@@ -225,12 +226,34 @@ impl Arrangement {
             })
             .collect();
         let mut owned: Vec<Vec<usize>> = vec![Vec::new(); outers.len()];
+        // With many loops, a box tree finds the outer loops whose box holds a probe (the choice
+        // below does not depend on the order of the candidates).
+        let tree = (holes.len() * outers.len() > 4096).then(|| {
+            BoxTree::new(
+                boxes
+                    .iter()
+                    .enumerate()
+                    .map(|(o, (lo, hi))| (lo.extend(0.0), hi.extend(0.0), o as u32))
+                    .collect(),
+            )
+        });
         for (h, (hole, _)) in holes.iter().enumerate() {
             // The middle of the first edge of the hole. It lies on no outer loop but the loop of
             // the region inside the hole, which holds that edge and is skipped.
             let probe = (pts[&hole[0]] + pts[&hole[1]]) / 2.0;
             let e = super::key(hole[0], hole[1]);
-            let best = (0..outers.len())
+            let candidates: Vec<usize> = match &tree {
+                Some(t) => {
+                    let mut c = Vec::new();
+                    let p = probe.extend(0.0);
+                    t.query(p, p, &mut |o| c.push(o as usize));
+                    c.sort_unstable();
+                    c
+                }
+                None => (0..outers.len()).collect(),
+            };
+            let best = candidates
+                .into_iter()
                 .filter(|&o| {
                     let (lo, hi) = boxes[o];
                     probe.cmpge(lo).all() && probe.cmple(hi).all() && !outer_edges[o].contains(&e)
@@ -311,6 +334,47 @@ pub(super) fn box_of(points: &[DVec2]) -> (DVec2, DVec2) {
         (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
         |(lo, hi), p| (lo.min(*p), hi.max(*p)),
     )
+}
+
+/// The cycle on the left of `a`→`b` in `plane`, walked as [`closes_on_left`] walks it: its
+/// vertices from `a` on, or `None` where that walk fails.
+pub(super) fn left_cycle(
+    m: &SurfaceModel,
+    topo: &Topo,
+    plane: &Plane,
+    a: VertexId,
+    b: VertexId,
+) -> Option<Vec<VertexId>> {
+    let mut pts: BTreeMap<VertexId, DVec2> = BTreeMap::new();
+    let mut around: BTreeMap<VertexId, Vec<VertexId>> = BTreeMap::new();
+    let start = (a, b);
+    let (mut x, mut y) = start;
+    let mut cycle = vec![x];
+    for _ in 0..=2 * m.edges.len() + 2 {
+        if let std::collections::btree_map::Entry::Vacant(slot) = around.entry(y) {
+            let mut list: Vec<VertexId> = topo
+                .edges_at(y)
+                .filter_map(|e| m.edges[&e].other(y))
+                .filter(|w| geom::on_plane(plane, m.vertices[w]))
+                .collect();
+            for w in list.iter().chain([&y]) {
+                pts.entry(*w)
+                    .or_insert_with(|| plane.project(m.vertices[w]));
+            }
+            let o = pts[&y];
+            sort_around(o, &mut list, |w| pts[&w]);
+            slot.insert(list);
+        }
+        let list = &around[&y];
+        let k = list.iter().position(|w| *w == x)?;
+        let z = list[(k + list.len() - 1) % list.len()];
+        (x, y) = (y, z);
+        if (x, y) == start {
+            return Some(cycle);
+        }
+        cycle.push(x);
+    }
+    None
 }
 
 /// The 2D box of the cycle on the left of `a`→`b` in `plane` when that cycle closes a bounded

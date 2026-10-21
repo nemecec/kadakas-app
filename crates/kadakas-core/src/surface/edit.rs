@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::arrange::{self, Arrangement, Region, canonical, inside, reversed};
 use super::geom::{self, Plane, on_plane};
+use super::index::BoxTree;
 use super::topo::Topo;
 use super::{
     Edge, EdgeId, Face, FaceId, LENGTH_TOLERANCE, MAX_EDGES, MAX_EDIT_EDGES, MAX_FACES,
@@ -40,7 +41,11 @@ pub enum Edit {
     PushPull { face: FaceId, distance: f64 },
 }
 
+mod near;
 mod pushpull;
+pub(super) mod reference;
+
+use near::{Near, Points, Runs, Walks};
 
 /// Runs `edit` on `m`, a copy of `before` (the model as it was, which Push/Pull compares with).
 /// Returns the notes of the edit (see `merge_attrs`).
@@ -117,6 +122,9 @@ pub(super) fn check_limits(m: &SurfaceModel) -> Result<(), SurfaceError> {
 struct Work<'a> {
     m: &'a mut SurfaceModel,
     t: Topo,
+    /// The spatial index, for the edits that add edges (see [`near`]). Without it the same tests
+    /// scan all vertices, edges and faces (the reference that the index is tested against).
+    near: Option<Near>,
 }
 
 /// A point where a new edge must be split.
@@ -129,7 +137,36 @@ enum Hit {
 impl<'a> Work<'a> {
     fn new(m: &'a mut SurfaceModel) -> Self {
         let t = Topo::of(m);
-        Work { m, t }
+        Work { m, t, near: None }
+    }
+
+    /// A work with the spatial index, for the edits that add or erase edges (unless a test asks for
+    /// the scans, see [`reference`]).
+    fn indexed(m: &'a mut SurfaceModel) -> Self {
+        let mut w = Work::new(m);
+        if reference::mode() == reference::Mode::Index {
+            w.near = Some(Near::of(w.m));
+        }
+        w
+    }
+
+    /// Refuses a model over one of the limits ([`check_limits`], with the loop count of the index).
+    fn check_limits(&self) -> Result<(), SurfaceError> {
+        let Some(n) = &self.near else {
+            return check_limits(self.m);
+        };
+        let m = &self.m;
+        for (what, max, count) in [
+            ("vertices", MAX_VERTICES, m.vertices.len()),
+            ("edges", MAX_EDGES, m.edges.len()),
+            ("faces", MAX_FACES, m.faces.len()),
+            ("vertex uses in face loops", MAX_LOOP_VERTICES, n.loops),
+        ] {
+            if count > max {
+                return Err(SurfaceError::Limit { what, max, count });
+            }
+        }
+        Ok(())
     }
 
     fn pos(&self, v: VertexId) -> DVec3 {
@@ -139,6 +176,9 @@ impl<'a> Work<'a> {
     fn new_vertex(&mut self, p: DVec3) -> VertexId {
         let id = VertexId(self.m.alloc());
         self.m.vertices.insert(id, p);
+        if let Some(n) = &mut self.near {
+            n.add_vertex(id, p);
+        }
         id
     }
 
@@ -147,14 +187,24 @@ impl<'a> Work<'a> {
         let e = Edge { v: [a, b] };
         self.m.edges.insert(id, e);
         self.t.add_edge(id, e);
+        if let Some(n) = &mut self.near {
+            n.add_edge(id, self.m.vertices[&a], self.m.vertices[&b]);
+        }
         id
     }
 
     fn put_face(&mut self, id: FaceId, f: Face) {
         if let Some(old) = self.m.faces.remove(&id) {
             self.t.remove_face(id, &old);
+            if let Some(n) = &mut self.near {
+                n.loops -= old.loop_len();
+            }
         }
         self.t.add_face(id, &f);
+        if let Some(n) = &mut self.near {
+            n.loops += f.loop_len();
+            n.add_face(id, &f, |v| self.m.vertices[&v]);
+        }
         self.m.faces.insert(id, f);
     }
 
@@ -167,6 +217,9 @@ impl<'a> Work<'a> {
     fn take_face(&mut self, id: FaceId) -> Option<Face> {
         let f = self.m.faces.remove(&id)?;
         self.t.remove_face(id, &f);
+        if let Some(n) = &mut self.near {
+            n.loops -= f.loop_len();
+        }
         Some(f)
     }
 
@@ -202,6 +255,9 @@ impl<'a> Work<'a> {
         let first = Edge { v: [c, w] };
         self.m.edges.insert(e, first);
         self.t.add_edge(e, first);
+        if let Some(n) = &mut self.near {
+            n.add_edge(e, self.m.vertices[&c], p);
+        }
         let second = self.new_edge(w, d);
         // The new part keeps the attributes and takes its place in the curve, next to the part
         // that it touches in the chain.
@@ -224,10 +280,16 @@ impl<'a> Work<'a> {
                 let n = l.len();
                 if let Some(i) = (0..n).find(|&i| key(l[i], l[(i + 1) % n]) == key(c, d)) {
                     l.insert(i + 1, w);
+                    if let Some(x) = &mut self.near {
+                        x.loops += 1;
+                    }
                 }
             }
             let face = self.m.faces[f].clone();
             self.t.add_face(*f, &face);
+            if let Some(x) = &mut self.near {
+                x.add_face(*f, &face, |v| self.m.vertices[&v]);
+            }
         }
         touched.insert(key(c, w));
         touched.insert(key(w, d));
@@ -237,8 +299,18 @@ impl<'a> Work<'a> {
     /// The vertex for an end point: the nearest vertex within the tolerance, else a split of the
     /// nearest edge within the tolerance, else a new vertex.
     fn snap(&mut self, a: DVec3, touched: &mut BTreeSet<(VertexId, VertexId)>) -> VertexId {
+        // The index finds the vertices and edges within the largest tolerance (each tolerance below
+        // is at most that; twice for rounding).
+        let (lo, hi) = match &self.near {
+            Some(n) => {
+                let pad = DVec3::splat(2.0 * n.tol(geom::size(a)));
+                (a - pad, a + pad)
+            }
+            None => (DVec3::NEG_INFINITY, DVec3::INFINITY),
+        };
         let mut best: Option<(f64, VertexId)> = None;
-        for (&id, &x) in &self.m.vertices {
+        for id in self.vertices_near(lo, hi) {
+            let x = self.pos(id);
             let d = a.distance(x);
             if d <= geom::tol(&[a, x]) && best.is_none_or(|(bd, _)| d < bd) {
                 best = Some((d, id));
@@ -248,7 +320,10 @@ impl<'a> Work<'a> {
             return v;
         }
         let mut near: Option<(f64, EdgeId, DVec3)> = None;
-        for (&id, e) in &self.m.edges {
+        for id in self.edges_near(lo, hi) {
+            let Some(e) = self.m.edges.get(&id) else {
+                continue;
+            };
             let (c, d) = (self.pos(e.v[0]), self.pos(e.v[1]));
             let (dist, s) = geom::point_segment(a, c, d);
             if dist <= geom::tol(&[a, c, d]) && near.is_none_or(|(bd, _, _)| dist < bd) {
@@ -292,7 +367,8 @@ impl<'a> Work<'a> {
         let (lo, hi) = (p.min(q) - DVec3::splat(t), p.max(q) + DVec3::splat(t));
         let mut hits: Vec<(f64, Hit)> = Vec::new();
         let mut on_line: BTreeSet<VertexId> = [va, vb].into_iter().collect();
-        for (&id, &x) in &self.m.vertices {
+        for id in self.vertices_near(lo, hi) {
+            let x = self.pos(id);
             if id == va || id == vb || x.cmplt(lo).any() || x.cmpgt(hi).any() {
                 continue;
             }
@@ -303,7 +379,10 @@ impl<'a> Work<'a> {
                 on_line.insert(id);
             }
         }
-        for (&id, e) in &self.m.edges {
+        for id in self.edges_near(lo, hi) {
+            let Some(e) = self.m.edges.get(&id) else {
+                continue;
+            };
             if e.v.iter().any(|v| on_line.contains(v)) {
                 continue;
             }
@@ -359,6 +438,27 @@ impl<'a> Work<'a> {
         Ok(())
     }
 
+    /// The vertices that may lie in the box `lo`–`hi`, in id order: from the index, or all.
+    fn vertices_near(&self, lo: DVec3, hi: DVec3) -> Vec<VertexId> {
+        match &self.near {
+            Some(n) => n
+                .vertices_in(self.m, lo, hi)
+                .into_iter()
+                .filter(|v| self.m.vertices.contains_key(v))
+                .collect(),
+            None => self.m.vertices.keys().copied().collect(),
+        }
+    }
+
+    /// The edges that may meet the box `lo`–`hi`, in id order: from the index (some may not exist
+    /// any more), or all.
+    fn edges_near(&self, lo: DVec3, hi: DVec3) -> Vec<EdgeId> {
+        match &self.near {
+            Some(n) => n.edges_in(self.m, lo, hi),
+            None => self.m.edges.keys().copied().collect(),
+        }
+    }
+
     /// True if every vertex of the face lies on the plane.
     fn face_on(&self, plane: &Plane, f: &Face) -> bool {
         f.loops().flatten().all(|v| on_plane(plane, self.pos(*v)))
@@ -394,6 +494,12 @@ impl<'a> Work<'a> {
     /// The vertices next to the straight run of edges through `u`–`v`: the other ends of the
     /// edges at the vertices of the run that leave the line.
     fn beside_run(&self, u: VertexId, v: VertexId) -> BTreeSet<VertexId> {
+        self.straight_run(u, v).1
+    }
+
+    /// The straight run of edges through `u`–`v` (its vertices) and the vertices beside it (see
+    /// [`Work::beside_run`]).
+    fn straight_run(&self, u: VertexId, v: VertexId) -> (BTreeSet<VertexId>, BTreeSet<VertexId>) {
         let (pu, pv) = (self.pos(u), self.pos(v));
         let mut run: BTreeSet<VertexId> = [u, v].into_iter().collect();
         let mut todo = vec![u, v];
@@ -411,7 +517,7 @@ impl<'a> Work<'a> {
                 }
             }
         }
-        beside
+        (run, beside)
     }
 
     /// Solves the faces of every plane that holds a new piece, after edges were added.
@@ -420,6 +526,176 @@ impl<'a> Work<'a> {
         drawn: &[(VertexId, VertexId)],
         touched: &BTreeSet<(VertexId, VertexId)>,
     ) -> Result<(), SurfaceError> {
+        // With the index, the walks along cycles are kept for the whole solve (the edges do not
+        // change in it, only the faces).
+        let (planes, on, mut walks) = if self.near.is_some() {
+            let mut walks = Walks::default();
+            let (planes, on) = self.planes_near(drawn, &mut walks);
+            (planes, on, Some(walks))
+        } else {
+            let (planes, on) = self.planes_scan(drawn);
+            (planes, on, None)
+        };
+        let keys: BTreeSet<(VertexId, VertexId)> = drawn.iter().map(|&(a, b)| key(a, b)).collect();
+        for (plane, pieces) in planes.into_iter().zip(on) {
+            // The area that can change: the pieces in the plane and the loops they close.
+            let mut area = Area::EMPTY;
+            for i in pieces {
+                let (u, v) = drawn[i];
+                area.add(plane.project(self.pos(u)));
+                area.add(plane.project(self.pos(v)));
+                for (a, b) in [(u, v), (v, u)] {
+                    let closed = match &mut walks {
+                        Some(w) => w.closes_on_left(self.m, &self.t, &plane, a, b),
+                        None => arrange::closes_on_left(self.m, &self.t, &plane, a, b),
+                    };
+                    if let Some((lo, hi)) = closed {
+                        area.add(lo);
+                        area.add(hi);
+                    }
+                }
+            }
+            self.solve_plane(plane, area, &keys, touched)?;
+        }
+        Ok(())
+    }
+
+    /// The planes to solve after edges were added, and for each plane the pieces (indices into
+    /// `drawn`) that lie in it, with the spatial index: the same planes in the same order as
+    /// [`Work::planes_scan`], but each test only looks at the planes, faces and pieces that can
+    /// pass it.
+    fn planes_near(
+        &self,
+        drawn: &[(VertexId, VertexId)],
+        walks: &mut Walks,
+    ) -> (Vec<Plane>, Vec<Vec<usize>>) {
+        let m = &*self.m;
+        let pos = |v: VertexId| m.vertices[&v];
+        // The ends of the pieces, the pieces at each end, and the planes found so far through
+        // each end.
+        let mut ends: Vec<VertexId> = drawn.iter().flat_map(|&(u, v)| [u, v]).collect();
+        ends.sort_unstable();
+        ends.dedup();
+        let slot = |v: VertexId| ends.binary_search(&v).expect("an end");
+        let end_pos: Vec<DVec3> = ends.iter().map(|v| pos(*v)).collect();
+        let points = Points::new(&end_pos);
+        let mut at: Vec<Vec<usize>> = vec![Vec::new(); ends.len()];
+        for (k, &(u, v)) in drawn.iter().enumerate() {
+            at[slot(u)].push(k);
+            at[slot(v)].push(k);
+        }
+        let mut planes: Vec<Plane> = Vec::new();
+        let mut through: Vec<Vec<usize>> = vec![Vec::new(); ends.len()];
+        let add = |planes: &mut Vec<Plane>, through: &mut [Vec<usize>], plane: Plane| {
+            for i in points.near_plane(&plane) {
+                if on_plane(&plane, end_pos[i]) {
+                    through[i].push(planes.len());
+                }
+            }
+            planes.push(plane);
+        };
+        // The planes of faces that hold a piece. Faces with the same plane (to the bit) pass or
+        // fail the test together.
+        let mut groups: BTreeMap<[u64; 4], Vec<FaceId>> = BTreeMap::new();
+        for (id, f) in &m.faces {
+            let (n, o) = (f.plane.normal, f.plane.offset);
+            let bits = [n.x, n.y, n.z, o].map(f64::to_bits);
+            groups.entry(bits).or_default().push(*id);
+        }
+        let mut holding: Vec<FaceId> = Vec::new();
+        for fs in groups.values() {
+            let plane = m.faces[&fs[0]].plane;
+            let holds = points.near_plane(&plane).into_iter().any(|i| {
+                on_plane(&plane, end_pos[i])
+                    && at[i].iter().any(|&k| {
+                        let (u, v) = drawn[k];
+                        on_plane(&plane, pos(u)) && on_plane(&plane, pos(v))
+                    })
+            });
+            if holds {
+                holding.extend(fs);
+            }
+        }
+        holding.sort_unstable();
+        // A face whose vertices lie on a plane found before adds no plane. Such a plane passes
+        // through the first vertex of the face, so only those planes are tested.
+        let first = |f: &Face| f.loops().flatten().next().map(|v| pos(*v));
+        let firsts: Vec<Option<DVec3>> = holding.iter().map(|f| first(&m.faces[f])).collect();
+        let first_points = Points::new(&firsts.iter().flatten().copied().collect::<Vec<_>>());
+        let with_first: Vec<usize> = (0..holding.len())
+            .filter(|h| firsts[*h].is_some())
+            .collect();
+        let mut before: Vec<Vec<usize>> = vec![Vec::new(); holding.len()];
+        for (h, id) in holding.iter().enumerate() {
+            let f = &m.faces[id];
+            let covered = match firsts[h] {
+                Some(_) => before[h].iter().any(|&j| self.face_on(&planes[j], f)),
+                // A face with no vertex lies on any plane.
+                None => !planes.is_empty(),
+            };
+            if covered {
+                continue;
+            }
+            for g in first_points.near_plane(&f.plane) {
+                let g = with_first[g];
+                if g > h && on_plane(&f.plane, firsts[g].expect("a first vertex")) {
+                    before[g].push(planes.len());
+                }
+            }
+            add(&mut planes, &mut through, f.plane);
+        }
+        // The planes where a piece closes a loop (see `planes_scan`). The pieces of one long
+        // straight run share the walk along it (see `Runs`).
+        let mut runs = Runs::default();
+        for &(u, v) in drawn {
+            let (pu, pv) = (pos(u), pos(v));
+            let k = match runs.find(u, v, pu, pv) {
+                Some(k) => k,
+                None => {
+                    let (run, beside) = self.straight_run(u, v);
+                    runs.add(pu, pv, run, beside, pos)
+                }
+            };
+            for &z in runs.beside(k) {
+                let pz = pos(z);
+                if geom::point_line(pz, pu, pv) <= geom::tol(&[pu, pv, pz]) {
+                    continue;
+                }
+                // The planes found so far through `pu`. (The scan makes the plane first; both
+                // tests only skip, so the order does not change the result.)
+                if through[slot(u)]
+                    .iter()
+                    .any(|&j| on_plane(&planes[j], pv) && on_plane(&planes[j], pz))
+                {
+                    continue;
+                }
+                let Some(plane) = Plane::new(pu, (pv - pu).cross(pz - pu)) else {
+                    continue;
+                };
+                let plane = upward(&plane);
+                if walks.closes_on_left(m, &self.t, &plane, u, v).is_some()
+                    || walks.closes_on_left(m, &self.t, &plane, v, u).is_some()
+                {
+                    add(&mut planes, &mut through, plane);
+                }
+            }
+        }
+        // The pieces in each plane: both ends on it.
+        let mut on: Vec<Vec<usize>> = vec![Vec::new(); planes.len()];
+        for (k, &(u, v)) in drawn.iter().enumerate() {
+            let tv = &through[slot(v)];
+            for &j in &through[slot(u)] {
+                if tv.binary_search(&j).is_ok() {
+                    on[j].push(k);
+                }
+            }
+        }
+        (planes, on)
+    }
+
+    /// The planes to solve after edges were added, and the pieces in each plane, by scans of all
+    /// faces, planes and pieces.
+    fn planes_scan(&self, drawn: &[(VertexId, VertexId)]) -> (Vec<Plane>, Vec<Vec<usize>>) {
         let mut planes: Vec<Plane> = Vec::new();
         // The planes of faces that hold a piece.
         for f in self.m.faces.values() {
@@ -456,44 +732,58 @@ impl<'a> Work<'a> {
                 }
             }
         }
-        let keys: BTreeSet<(VertexId, VertexId)> = drawn.iter().map(|&(a, b)| key(a, b)).collect();
-        for plane in planes {
-            // The area that can change: the pieces in the plane and the loops they close.
-            let mut area = Area::EMPTY;
-            for &(u, v) in drawn {
-                let (pu, pv) = (self.pos(u), self.pos(v));
-                if !on_plane(&plane, pu) || !on_plane(&plane, pv) {
-                    continue;
-                }
-                area.add(plane.project(pu));
-                area.add(plane.project(pv));
-                for (a, b) in [(u, v), (v, u)] {
-                    if let Some((lo, hi)) = arrange::closes_on_left(self.m, &self.t, &plane, a, b) {
-                        area.add(lo);
-                        area.add(hi);
-                    }
-                }
-            }
-            self.solve_plane(plane, area, &keys, touched)?;
-        }
-        Ok(())
+        let on = planes
+            .iter()
+            .map(|plane| {
+                (0..drawn.len())
+                    .filter(|&k| {
+                        let (u, v) = drawn[k];
+                        on_plane(plane, self.pos(u)) && on_plane(plane, self.pos(v))
+                    })
+                    .collect()
+            })
+            .collect();
+        (planes, on)
     }
 
     /// The faces in `plane` that overlap `area`, and the area grown to hold them, until no more
     /// faces overlap it. Faces that only touch it at their border are left out.
     fn faces_in(&self, plane: &Plane, mut area: Area) -> (Vec<FaceId>, Area) {
+        if let Some(n) = self.near.as_ref().filter(|_| area.is_finite()) {
+            // The same rounds as the scan below: each round takes every face that overlaps the
+            // area as it was at the start of the round.
+            let mut found: BTreeSet<FaceId> = BTreeSet::new();
+            loop {
+                let eps = area.tolerance();
+                let mut inside = Vec::new();
+                for id in n.faces_in_plane(self.m, plane, area.lo, area.hi, eps) {
+                    let Some(f) = self.m.faces.get(&id) else {
+                        continue;
+                    };
+                    if found.contains(&id) || !self.face_on(plane, f) {
+                        continue;
+                    }
+                    let b = self.outer_area(plane, f);
+                    if b.overlaps(&area, eps) {
+                        inside.push((id, b));
+                    }
+                }
+                if inside.is_empty() {
+                    break;
+                }
+                for (id, b) in inside {
+                    area.join(&b);
+                    found.insert(id);
+                }
+            }
+            return (found.into_iter().collect(), area);
+        }
         let mut boxes: Vec<(FaceId, Area)> = self
             .m
             .faces
             .iter()
             .filter(|(_, f)| self.face_on(plane, f))
-            .map(|(id, f)| {
-                let mut b = Area::EMPTY;
-                for v in &f.outer {
-                    b.add(plane.project(self.pos(*v)));
-                }
-                (*id, b)
-            })
+            .map(|(id, f)| (*id, self.outer_area(plane, f)))
             .collect();
         let mut found = Vec::new();
         loop {
@@ -513,12 +803,24 @@ impl<'a> Work<'a> {
         (found, area)
     }
 
+    /// The 2D box of the outer loop of a face in the axes of `plane`.
+    fn outer_area(&self, plane: &Plane, f: &Face) -> Area {
+        let mut b = Area::EMPTY;
+        for v in &f.outer {
+            b.add(plane.project(self.pos(*v)));
+        }
+        b
+    }
+
     /// The edges in `plane` (as vertex pairs) that touch `area`.
     fn edges_in(&self, plane: &Plane, area: &Area) -> BTreeSet<(VertexId, VertexId)> {
         let eps = area.tolerance();
-        self.m
-            .edges
-            .values()
+        let ids = match self.near.as_ref().filter(|_| area.is_finite()) {
+            Some(n) => n.edges_in_plane(self.m, plane, area.lo, area.hi, eps),
+            None => self.m.edges.keys().copied().collect(),
+        };
+        ids.iter()
+            .filter_map(|id| self.m.edges.get(id))
             .filter(|e| {
                 let (a, b) = (self.pos(e.v[0]), self.pos(e.v[1]));
                 if !on_plane(plane, a) || !on_plane(plane, b) {
@@ -566,6 +868,16 @@ impl<'a> Work<'a> {
             olds.push(Old { id, rings, lo, hi });
         }
         let eps = area.tolerance();
+        // With many old faces and regions, a box tree finds the old faces whose box holds a
+        // sample (the first in the order of `olds` is taken, as by the scan).
+        let tree = (olds.len() * arr.regions.len() > 4096).then(|| {
+            BoxTree::new(
+                olds.iter()
+                    .enumerate()
+                    .map(|(i, o)| (o.lo.extend(0.0), o.hi.extend(0.0), i as u32))
+                    .collect(),
+            )
+        });
         let mut kept: BTreeSet<FaceId> = BTreeSet::new();
         let mut parts: BTreeMap<FaceId, Vec<usize>> = BTreeMap::new();
         let mut fresh: Vec<usize> = Vec::new();
@@ -583,8 +895,19 @@ impl<'a> Work<'a> {
                 continue;
             }
             let s = arr.sample(r)?;
-            let owner = olds
-                .iter()
+            let candidates: Vec<usize> = match &tree {
+                Some(t) => {
+                    let mut c = Vec::new();
+                    let p = s.extend(0.0);
+                    t.query(p, p, &mut |i| c.push(i as usize));
+                    c.sort_unstable();
+                    c
+                }
+                None => (0..olds.len()).collect(),
+            };
+            let owner = candidates
+                .into_iter()
+                .map(|i| &olds[i])
                 .find(|o| s.cmpge(o.lo).all() && s.cmple(o.hi).all() && inside(s, &o.rings));
             let n = r.outer.len();
             let drawn_outer =
@@ -646,6 +969,10 @@ impl Area {
     fn add(&mut self, p: DVec2) {
         self.lo = self.lo.min(p);
         self.hi = self.hi.max(p);
+    }
+
+    fn is_finite(&self) -> bool {
+        self.lo.is_finite() && self.hi.is_finite()
     }
 
     fn join(&mut self, o: &Area) {
@@ -733,7 +1060,7 @@ fn add_edges(m: &mut SurfaceModel, segs: &[[[f64; 3]; 2]]) -> Result<(), Surface
             count: segs.len(),
         });
     }
-    let mut w = Work::new(m);
+    let mut w = Work::indexed(m);
     let mut drawn = Vec::new();
     let mut touched = BTreeSet::new();
     for s in segs {
@@ -745,10 +1072,10 @@ fn add_edges(m: &mut SurfaceModel, segs: &[[[f64; 3]; 2]]) -> Result<(), Surface
             return Err(SurfaceError::BadPoint);
         }
         w.insert_segment(a, b, &mut drawn, &mut touched)?;
-        check_limits(w.m)?;
+        w.check_limits()?;
     }
     w.solve_after_add(&drawn, &touched)?;
-    check_limits(w.m)
+    w.check_limits()
 }
 
 fn add_curve(m: &mut SurfaceModel, points: &[[f64; 3]], closed: bool) -> Result<(), SurfaceError> {
@@ -766,7 +1093,7 @@ fn add_curve(m: &mut SurfaceModel, points: &[[f64; 3]], closed: bool) -> Result<
             count,
         });
     }
-    let mut w = Work::new(m);
+    let mut w = Work::indexed(m);
     let mut drawn = Vec::new();
     let mut touched = BTreeSet::new();
     // For each segment, the pieces it was drawn in (start and end vertex).
@@ -782,7 +1109,7 @@ fn add_curve(m: &mut SurfaceModel, points: &[[f64; 3]], closed: bool) -> Result<
         let from = drawn.len();
         w.insert_segment(a, b, &mut drawn, &mut touched)?;
         spans.push((drawn[from].0, drawn[drawn.len() - 1].1));
-        check_limits(w.m)?;
+        w.check_limits()?;
     }
     w.solve_after_add(&drawn, &touched)?;
     // Later segments can cut the earlier pieces: find the edges that run between the span ends.
@@ -790,7 +1117,7 @@ fn add_curve(m: &mut SurfaceModel, points: &[[f64; 3]], closed: bool) -> Result<
     for (x, y) in spans {
         match w.chain_between(x, y) {
             Some(es) => chain.extend(es),
-            None => return check_limits(w.m),
+            None => return w.check_limits(),
         }
     }
     let used: BTreeSet<EdgeId> = w.m.curves.values().flatten().copied().collect();
@@ -799,7 +1126,7 @@ fn add_curve(m: &mut SurfaceModel, points: &[[f64; 3]], closed: bool) -> Result<
         let id = super::CurveId(w.m.alloc());
         w.m.curves.insert(id, chain);
     }
-    check_limits(w.m)
+    w.check_limits()
 }
 
 impl Work<'_> {
@@ -916,7 +1243,7 @@ fn erase_edges(
     if let Some(id) = ids.iter().find(|id| !m.edges.contains_key(id)) {
         return Err(SurfaceError::NoEdge(*id));
     }
-    let mut w = Work::new(m);
+    let mut w = Work::indexed(m);
     let mut groups = Groups::default();
     let mut ends: BTreeSet<VertexId> = BTreeSet::new();
     for &e in &ids {
@@ -1056,6 +1383,9 @@ impl Work<'_> {
         };
         self.m.edges.insert(e1, joined);
         self.t.add_edge(e1, joined);
+        if let Some(n) = &mut self.near {
+            n.add_edge(e1, self.m.vertices[&x], self.m.vertices[&y]);
+        }
         self.m.vertices.remove(&v);
         for (id, mut f) in f1.into_iter().zip(faces) {
             f.outer = canonical(
