@@ -319,6 +319,106 @@ fn walk<'a>(
     Ok(())
 }
 
+/// Checks, after the definition `changed` was added or changed, that it and every component
+/// definition that uses it (directly or through others) still expands within the limits: no
+/// missing definition, no cycle, nesting at most [`MAX_COMPONENT_DEPTH`] and at most
+/// [`MAX_LEAVES`] surface models. One pass over the graph, with the number of models and the
+/// depth of each definition counted once (no walk over the models, however many definitions use
+/// the same base). On a problem: the definition that fails, and why.
+pub fn check_expansion(
+    res: &Resources,
+    changed: ResourceId,
+) -> Result<(), (ResourceId, ComponentError)> {
+    use std::collections::{HashMap, HashSet};
+    // The reverse graph of the nested instances: who uses a definition.
+    let mut users: HashMap<ResourceId, Vec<ResourceId>> = HashMap::new();
+    for r in res.iter() {
+        if let Some(d) = res.symbol(r.id) {
+            for inner in part_refs(&d.parts) {
+                users.entry(inner).or_default().push(r.id);
+            }
+        }
+    }
+    // The definition and all that use it.
+    let mut affected: Vec<ResourceId> = vec![changed];
+    let mut seen: HashSet<ResourceId> = HashSet::from([changed]);
+    let mut i = 0;
+    while i < affected.len() {
+        for u in users.get(&affected[i]).into_iter().flatten() {
+            if seen.insert(*u) {
+                affected.push(*u);
+            }
+        }
+        i += 1;
+    }
+    struct Memo {
+        /// Models in the expansion, and the depth (1 for a definition with no instance inside).
+        done: HashMap<ResourceId, (usize, usize)>,
+        open: Vec<ResourceId>,
+    }
+    fn measure(
+        res: &Resources,
+        id: ResourceId,
+        memo: &mut Memo,
+    ) -> Result<(usize, usize), (ResourceId, ComponentError)> {
+        if let Some(v) = memo.done.get(&id) {
+            return Ok(*v);
+        }
+        if memo.open.contains(&id) {
+            return Err((id, ComponentError::Cycle(id)));
+        }
+        let def = res.symbol(id).ok_or((id, ComponentError::Missing(id)))?;
+        if memo.open.len() >= MAX_COMPONENT_DEPTH {
+            return Err((
+                id,
+                ComponentError::ComponentsTooDeep {
+                    max: MAX_COMPONENT_DEPTH,
+                },
+            ));
+        }
+        memo.open.push(id);
+        let mut models = 0usize;
+        let mut depth = 1usize;
+        for p in &def.parts {
+            match &p.shape {
+                Shape::SurfaceModel(_) => models += 1,
+                Shape::Component { symbol, .. } => {
+                    let (m, d) = measure(res, *symbol, memo).inspect_err(|_| {
+                        memo.open.pop();
+                    })?;
+                    models = models.saturating_add(m);
+                    depth = depth.max(d + 1);
+                }
+                _ => {}
+            }
+        }
+        memo.open.pop();
+        if models > MAX_LEAVES {
+            return Err((id, ComponentError::TooMany { max: MAX_LEAVES }));
+        }
+        if depth > MAX_COMPONENT_DEPTH {
+            return Err((
+                id,
+                ComponentError::ComponentsTooDeep {
+                    max: MAX_COMPONENT_DEPTH,
+                },
+            ));
+        }
+        memo.done.insert(id, (models, depth));
+        Ok((models, depth))
+    }
+    let mut memo = Memo {
+        done: HashMap::new(),
+        open: Vec::new(),
+    };
+    for id in affected {
+        if res.symbol(id).is_some_and(|d| d.is_component()) {
+            measure(res, id, &mut memo)?;
+        }
+    }
+    Ok(())
+}
+
 /// How deep the definition nests other definitions: 1 for a definition with no instance inside.
 /// A cycle or a missing definition counts as the depth reached.
 pub fn definition_depth(res: &Resources, symbol: ResourceId) -> usize {
@@ -340,27 +440,51 @@ pub fn definition_depth(res: &Resources, symbol: ResourceId) -> usize {
     go(res, symbol, &mut Vec::new())
 }
 
-/// The box (min, max) around an instance in the drawing, or `None` for an empty or damaged
-/// definition.
+/// The box (min, max) around the surface models of a definition, in the coordinates of the
+/// definition. `None` for an empty or damaged definition.
+pub fn definition_bounds(res: &Resources, symbol: ResourceId) -> Option<(DVec3, DVec3)> {
+    let mut lo = DVec3::splat(f64::INFINITY);
+    let mut hi = DVec3::splat(f64::NEG_INFINITY);
+    for leaf in leaves(res, symbol).ok()? {
+        let (a, b) = leaf.model.local_bounds()?;
+        for c in box_corners(a, b) {
+            let p = leaf.transform.transform_point3(c);
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+    }
+    (lo.x <= hi.x).then_some((lo, hi))
+}
+
+fn box_corners(a: DVec3, b: DVec3) -> impl Iterator<Item = DVec3> {
+    (0..8).map(move |i| {
+        DVec3::new(
+            if i & 1 == 0 { a.x } else { b.x },
+            if i & 2 == 0 { a.y } else { b.y },
+            if i & 4 == 0 { a.z } else { b.z },
+        )
+    })
+}
+
+/// The box (min, max) around an instance in the drawing: the box of the definition, with its
+/// eight corners placed by the instance transform. `None` for an empty or damaged definition.
+/// (A turned instance gets the box of the turned box: the plan, the SVG and the print all use
+/// this, so they agree.)
 pub fn instance_bounds(
     res: &Resources,
     symbol: ResourceId,
     xf: &DAffine3,
 ) -> Option<(DVec3, DVec3)> {
+    place_box(definition_bounds(res, symbol)?, xf)
+}
+
+fn place_box((a, b): (DVec3, DVec3), xf: &DAffine3) -> Option<(DVec3, DVec3)> {
     let mut lo = DVec3::splat(f64::INFINITY);
     let mut hi = DVec3::splat(f64::NEG_INFINITY);
-    for leaf in leaves(res, symbol).ok()? {
-        let (a, b) = leaf.model.local_bounds()?;
-        for i in 0..8 {
-            let c = DVec3::new(
-                if i & 1 == 0 { a.x } else { b.x },
-                if i & 2 == 0 { a.y } else { b.y },
-                if i & 4 == 0 { a.z } else { b.z },
-            );
-            let p = (*xf * leaf.transform).transform_point3(c);
-            lo = lo.min(p);
-            hi = hi.max(p);
-        }
+    for c in box_corners(a, b) {
+        let p = xf.transform_point3(c);
+        lo = lo.min(p);
+        hi = hi.max(p);
     }
     (lo.x <= hi.x).then_some((lo, hi))
 }
@@ -384,8 +508,28 @@ pub fn group_height(doc: &Document, id: ObjectId) -> usize {
         .unwrap_or(0)
 }
 
-/// The raw model of a level: the first surface model among the children of `container` (a
-/// group), or among the objects with no parent on `layer` when `container` is `None`.
+/// The class that the plain models of a level have: the class of the group (or edit group), and
+/// at the root the active class.
+fn level_class(doc: &Document, container: Option<ObjectId>) -> ClassId {
+    container
+        .and_then(|c| doc.object(c))
+        .map_or(doc.active_class, |o| o.class)
+}
+
+/// True if a surface model object has no look of its own: no attributes, and the class of its
+/// level (or no class). Only a plain model can be the raw model of a level, so geometry that is
+/// drawn or exploded into the level never takes the colour of a styled model.
+pub fn is_plain_model(doc: &Document, id: ObjectId, container: Option<ObjectId>) -> bool {
+    doc.object(id).is_some_and(|o| {
+        matches!(o.shape, Shape::SurfaceModel(_))
+            && o.attrs == Attributes::default()
+            && (o.class == crate::model::NONE_CLASS || o.class == level_class(doc, container))
+    })
+}
+
+/// The raw model of a level: the first plain surface model ([`is_plain_model`]) among the
+/// children of `container` (a group), or among the objects with no parent on `layer` when
+/// `container` is `None`. A level that has only styled models has none.
 pub fn raw_model(
     doc: &Document,
     container: Option<ObjectId>,
@@ -395,8 +539,8 @@ pub fn raw_model(
         .values()
         .find(|o| {
             o.parent == container
-                && matches!(o.shape, Shape::SurfaceModel(_))
                 && (container.is_some() || o.layer == layer)
+                && is_plain_model(doc, o.id, container)
         })
         .map(|o| o.id)
 }
@@ -525,11 +669,14 @@ pub fn materialize(parts: &[Part], xf: &DAffine3) -> Vec<Made> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Resolve {
-    /// Keep my edit as a new component (`Name (mine)`); the instance uses it. The other
+    /// Keep my edit as a new component (`Name#1`); the instance uses it. The other
     /// version of the definition stays as it is.
     KeepAsNew,
-    /// Throw my edit away; the definition stays as the other user left it.
+    /// Throw my edit away; the definition stays as it is. Works with or without a conflict.
     Discard,
+    /// Replace the definition with my edit, also if somebody else changed it (or if it is not
+    /// known whether they did). The other change is lost: a person says so on purpose.
+    Overwrite,
 }
 
 /// A version of a definition: 53 bits of a hash of its parts. Two definitions with the same
@@ -671,18 +818,40 @@ pub enum PlanMark {
 }
 
 /// What the plan, the SVG and the print draw for an instance (the same everywhere, AGR-01).
+///
+/// The work that depends only on the definition (the expansion, its problem, its box) is kept
+/// per definition and per content version ([`version`]), so many instances and many frames do
+/// not walk the models again. Inside a [`plan_frame`] the version of a definition is read once;
+/// outside, on every call.
 pub fn plan_mark(doc: &Document, shape: &Shape) -> Option<PlanMark> {
     let Shape::Component { symbol, transform } = shape else {
         return None;
     };
-    if let Some(why) = instance_problem(doc, shape) {
-        return Some(PlanMark::Broken(
+    let broken = |why: String| {
+        Some(PlanMark::Broken(
             glam::DVec2::new(transform[9], transform[10]),
             why,
-        ));
+        ))
+    };
+    // The kind of the definition is cheap to read; the expansion is the cached part.
+    match doc.resources.get(*symbol) {
+        None => return broken(ComponentError::Missing(*symbol).to_string()),
+        Some(_) => match doc.resources.symbol(*symbol) {
+            None => return broken(format!("resource {symbol} is not a component")),
+            Some(d) if !d.is_component() => {
+                return broken(format!(
+                    "resource {symbol} is not a component (it has no 3D parts)"
+                ));
+            }
+            Some(_) => {}
+        },
+    }
+    let info = PLAN.with(|p| p.borrow_mut().info(&doc.resources, *symbol));
+    if let Some(why) = &info.problem {
+        return broken(why.clone());
     }
     Some(
-        match instance_bounds(&doc.resources, *symbol, &affine(transform)) {
+        match info.bounds.and_then(|b| place_box(b, &affine(transform))) {
             Some((lo, hi)) => PlanMark::Box([
                 glam::DVec2::new(lo.x, lo.y),
                 glam::DVec2::new(hi.x, lo.y),
@@ -692,6 +861,89 @@ pub fn plan_mark(doc: &Document, shape: &Shape) -> Option<PlanMark> {
             None => PlanMark::Empty,
         },
     )
+}
+
+/// What is kept for a definition: why it cannot be expanded, and its box.
+struct DefInfo {
+    problem: Option<String>,
+    bounds: Option<(DVec3, DVec3)>,
+}
+
+struct Entry {
+    version: Option<u64>,
+    info: std::rc::Rc<DefInfo>,
+    /// The frame in which the version was read.
+    frame: u64,
+}
+
+#[derive(Default)]
+struct PlanState {
+    /// Nesting of `plan_frame` guards; 0 outside any frame.
+    open: usize,
+    frame: u64,
+    map: std::collections::HashMap<ResourceId, Entry>,
+}
+
+impl PlanState {
+    fn info(&mut self, res: &Resources, symbol: ResourceId) -> std::rc::Rc<DefInfo> {
+        if self.open > 0
+            && let Some(e) = self.map.get(&symbol)
+            && e.frame == self.frame
+        {
+            return e.info.clone();
+        }
+        let version = version(res, symbol);
+        if let Some(e) = self.map.get_mut(&symbol)
+            && e.version == version
+            && version.is_some()
+        {
+            e.frame = self.frame;
+            return e.info.clone();
+        }
+        let info = std::rc::Rc::new(DefInfo {
+            problem: leaves(res, symbol).err().map(|e| e.to_string()),
+            bounds: definition_bounds(res, symbol),
+        });
+        self.map.insert(
+            symbol,
+            Entry {
+                version,
+                info: info.clone(),
+                frame: self.frame,
+            },
+        );
+        info
+    }
+}
+
+thread_local! {
+    static PLAN: std::cell::RefCell<PlanState> = std::cell::RefCell::new(PlanState::default());
+}
+
+/// While this guard lives, [`plan_mark`] reads the version of each definition once. Take one for
+/// the drawing of a plan or an export, where the document does not change. Outside a frame every
+/// call reads the version.
+pub struct PlanFrame(());
+
+pub fn plan_frame() -> PlanFrame {
+    PLAN.with(|p| {
+        let mut p = p.borrow_mut();
+        if p.open == 0 {
+            p.frame += 1;
+            // Do not keep the definitions of a document that is closed.
+            if p.map.len() > 4096 {
+                p.map.clear();
+            }
+        }
+        p.open += 1;
+    });
+    PlanFrame(())
+}
+
+impl Drop for PlanFrame {
+    fn drop(&mut self) {
+        PLAN.with(|p| p.borrow_mut().open -= 1);
+    }
 }
 
 /// What Object Info shows for an instance.

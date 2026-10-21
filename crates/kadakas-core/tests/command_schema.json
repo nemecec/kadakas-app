@@ -780,12 +780,17 @@
       "oneOf": [
         {
           "const": "keep_as_new",
-          "description": "Keep my edit as a new component (`Name (mine)`); the instance uses it. The other\nversion of the definition stays as it is.",
+          "description": "Keep my edit as a new component (`Name#1`); the instance uses it. The other\nversion of the definition stays as it is.",
           "type": "string"
         },
         {
           "const": "discard",
-          "description": "Throw my edit away; the definition stays as the other user left it.",
+          "description": "Throw my edit away; the definition stays as it is. Works with or without a conflict.",
+          "type": "string"
+        },
+        {
+          "const": "overwrite",
+          "description": "Replace the definition with my edit, also if somebody else changed it (or if it is not\nknown whether they did). The other change is lost: a person says so on purpose.",
           "type": "string"
         }
       ]

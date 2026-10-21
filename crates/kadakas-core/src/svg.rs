@@ -162,6 +162,8 @@ pub fn render_overlay_with(
     overlay: Option<&dyn SvgOverlay>,
     opts: &RenderOptions,
 ) -> String {
+    // The definitions of components are read once for this render.
+    let _frame = crate::component::plan_frame();
     // A region of the call, or a view that the overlay gives, is the final box. Else the box is
     // the drawing and the ghosts, with a margin.
     let given = opts.region.or_else(|| overlay.and_then(|o| o.view()));

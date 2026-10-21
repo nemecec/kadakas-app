@@ -444,6 +444,11 @@ impl Tx<'_> {
                 let (a, b) = (self.doc.object(*t), self.doc.object(kid));
                 matches!((a, b), (Some(a), Some(b)) if a.attrs == b.attrs && a.class == b.class)
             });
+            // Only a model with no look of its own becomes the raw model of the level.
+            let kid_is_plain = self.doc.object(kid).is_some_and(|k| {
+                k.attrs == Attributes::default()
+                    && (k.class == g.class || component::is_plain_model(self.doc, kid, level))
+            });
             match (shape, &mut target) {
                 (Shape::SurfaceModel(s), Some((_, t))) if same_look => {
                     let rel =
@@ -457,7 +462,7 @@ impl Tx<'_> {
                     dirty = true;
                     gone.push(kid);
                 }
-                (Shape::SurfaceModel(s), None) if same_look => {
+                (Shape::SurfaceModel(s), None) if kid_is_plain => {
                     // The first model of the group becomes the model of the level.
                     self.touch(kid);
                     self.doc.object_mut(kid).expect("exists").parent = level;
@@ -591,7 +596,7 @@ impl Tx<'_> {
             .resources
             .symbol(symbol)
             .map(component::definition_version)
-            .unwrap_or_default();
+            .expect("checked by `instance`");
         self.check_group_depth(inst.parent, 1)?;
         let gid = ObjectId(self.alloc()?);
         let mut g = Object::new(
@@ -692,47 +697,61 @@ impl Tx<'_> {
             .symbol(symbol)
             .ok_or(CommandError::NoResource(symbol))?
             .clone();
-        // Somebody else (a peer, or an undo) changed the definition while it was open.
+        // Does the definition still have the version that the edit started from? A peer or an
+        // undo can have changed it. An edit group without a stored version (saved by an older
+        // build) is an unknown version: it is never written without an explicit answer.
         let started = info.get("version").and_then(Value::as_u64);
-        let conflict = started.is_some_and(|v| v != component::definition_version(&old));
-        let to_def = if xf == DAffine3::IDENTITY {
-            DAffine3::IDENTITY
-        } else {
-            xf.inverse()
-        };
-        let parts = component::parts_from_objects(self.doc, &self.doc.children(group), &to_def)
-            .map_err(refuse)?;
+        let must_ask = started.is_none_or(|v| v != component::definition_version(&old));
+        let name_of = self
+            .doc
+            .resources
+            .get(symbol)
+            .map_or(String::new(), |r| r.name.clone());
         let mut target = symbol;
-        if conflict {
-            match resolve {
-                None => {
+        match resolve {
+            // Throw the edit away, with or without a conflict.
+            Some(component::Resolve::Discard) => {}
+            None if must_ask => {
+                let why = if started.is_some() {
+                    "was changed by somebody else while you edited it"
+                } else {
+                    "has no saved version from before the edit, so a change by somebody else cannot be excluded"
+                };
+                return Err(invalid(format!(
+                    "conflict: component '{name_of}' {why}. Close again with resolve keep_as_new (keep your edit as a new component), overwrite (replace the component with your edit) or discard (throw your edit away)"
+                )));
+            }
+            _ => {
+                let to_def = if xf == DAffine3::IDENTITY {
+                    DAffine3::IDENTITY
+                } else {
+                    xf.inverse()
+                };
+                let parts =
+                    component::parts_from_objects(self.doc, &self.doc.children(group), &to_def)
+                        .map_err(refuse)?;
+                // An emptied component would leave every other instance without geometry.
+                if parts.is_empty() {
                     return Err(invalid(format!(
-                        "conflict: component '{}' was changed by somebody else while you edited it. \
-                         Close again with resolve keep_as_new (keep your edit as a new component) \
-                         or discard (throw your edit away)",
-                        self.doc
-                            .resources
-                            .get(symbol)
-                            .map_or("", |r| r.name.as_str())
+                        "component '{name_of}' would be empty. Put geometry back, close with resolve discard to keep the old content, or delete the instance"
                     )));
                 }
-                Some(component::Resolve::Discard) => {}
-                Some(component::Resolve::KeepAsNew) => {
-                    let base = self
-                        .doc
-                        .resources
-                        .get(symbol)
-                        .map_or(String::new(), |r| r.name.clone());
+                let def = SymbolDef { parts, ..old };
+                if resolve == Some(component::Resolve::KeepAsNew) {
+                    let base = name_of
+                        .rsplit_once('#')
+                        .filter(|(_, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+                        .map_or(name_of.as_str(), |(b, _)| b)
+                        .to_string();
                     let taken = |n: &str| {
                         self.doc.resources.iter().any(|r| {
                             r.name.eq_ignore_ascii_case(n) && r.body.type_name() == "symbol"
                         })
                     };
-                    let name = std::iter::once(format!("{base} (mine)"))
-                        .chain((2..).map(|k| format!("{base} (mine {k})")))
+                    let name = (1..)
+                        .map(|k| format!("{base}#{k}"))
                         .find(|n| !taken(n))
                         .expect("an endless range");
-                    let def = SymbolDef { parts, ..old };
                     self.run(
                         &Command::AddResource {
                             name,
@@ -741,16 +760,17 @@ impl Tx<'_> {
                         out,
                     )?;
                     target = ResourceId(*out.created.last().expect("added"));
+                } else {
+                    let body = ResourceBody::Graphic(Box::new(GraphicResource::Symbol(def)));
+                    body.validate().map_err(invalid)?;
+                    self.check_graphic_refs(Some(symbol), &body)?;
+                    self.check_instance_kinds(symbol, &body)?;
+                    self.doc.resources.get_mut(symbol).expect("checked").body = body;
+                    // Every definition that uses this one, and this one, must still be within
+                    // the limits.
+                    self.check_component_expansion(symbol)?;
                 }
             }
-        } else {
-            let def = SymbolDef { parts, ..old };
-            let body = ResourceBody::Graphic(Box::new(GraphicResource::Symbol(def)));
-            body.validate().map_err(invalid)?;
-            self.check_graphic_refs(Some(symbol), &body)?;
-            self.doc.resources.get_mut(symbol).expect("checked").body = body;
-            // Every definition that uses this one, and this one, must still be within the limits.
-            self.check_component_expansion(symbol)?;
         }
         if target != symbol
             && let Some(i) = instance.filter(|i| self.doc.object(*i).is_some())

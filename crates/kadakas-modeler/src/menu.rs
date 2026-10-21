@@ -216,6 +216,14 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
                 app.can_structure(&Cmd::CloseDiscardMine),
                 Cmd::CloseDiscardMine,
             );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-close-overwrite"),
+                String::new(),
+                app.can_structure(&Cmd::CloseOverwrite),
+                Cmd::CloseOverwrite,
+            );
         });
         ui.menu_button(tr!("modeler-menu-camera"), |ui| camera_menu(ui, app, cmds));
         ui.menu_button(tr!("modeler-menu-tools"), |ui| {

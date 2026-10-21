@@ -167,37 +167,37 @@ impl SurfaceModel {
         let normal_of = |n: DVec3| xf.map_or(n, |x| x.matrix3.inverse().transpose() * n);
         // Several faces of `other` can land on one face of `work` (they were split or merged by
         // the geometry they met). The face that decides the side and wins the attributes of the
-        // result is the one with the larger area, and with equal areas the one with the lower id.
-        // The rule does not depend on the order of the faces.
-        struct Source<'a> {
-            id: FaceId,
-            area: f64,
-            flip: bool,
-            attrs: &'a Attrs,
-        }
-        let mut landed: BTreeMap<FaceId, Vec<Source>> = BTreeMap::new();
+        // result is the one with the larger area, and with equal areas the one with the lower id
+        // (`decide`). The rule does not depend on the order of the faces. A face of `other` that
+        // is much smaller than the face it lands on, when that face was already in this model,
+        // changes neither its side nor its attributes.
+        let scale = xf.map_or(1.0, |x| x.matrix3.determinant().abs().powf(2.0 / 3.0));
+        let mut landed: BTreeMap<FaceId, Vec<Landed>> = BTreeMap::new();
         for (id, f) in &other.faces {
             let Some(nf) = sync::face_point(other, *id).and_then(|p| sync::face_at(&work, map(p)))
             else {
                 continue;
             };
-            landed.entry(nf).or_default().push(Source {
+            landed.entry(nf).or_default().push(Landed {
                 id: *id,
-                area: other.face_area(*id).unwrap_or(0.0),
+                area: other.face_area(*id).unwrap_or(0.0) * scale,
                 flip: work.faces[&nf].plane.normal.dot(normal_of(f.plane.normal)) < 0.0,
                 attrs: &f.attrs,
             });
         }
         let mut reverse: Vec<FaceId> = Vec::new();
         let mut face_attrs: Vec<(FaceId, Vec<&Attrs>)> = Vec::new();
-        for (nf, mut sources) in landed {
-            // The winner last: its attributes overwrite the others.
-            sources.sort_by(|a, b| a.area.total_cmp(&b.area).then(b.id.cmp(&a.id)));
-            let winner = sources.last().expect("one at least");
+        for (nf, sources) in landed {
+            let existing = self.faces.contains_key(&nf);
+            let area = work.face_area(nf).unwrap_or(0.0);
+            let ordered = decide(sources, existing.then_some(area));
+            let Some(winner) = ordered.last() else {
+                continue;
+            };
             if winner.flip {
                 reverse.push(nf);
             }
-            let list: Vec<&Attrs> = sources
+            let list: Vec<&Attrs> = ordered
                 .iter()
                 .map(|s| s.attrs)
                 .filter(|a| !a.is_empty())
@@ -248,5 +248,78 @@ impl SurfaceModel {
         }
         *self = work;
         Ok(())
+    }
+}
+
+/// A face of the absorbed model that lands on a face of the result.
+struct Landed<'a> {
+    id: FaceId,
+    /// In the units of the result.
+    area: f64,
+    /// Its side is the other way round from the side of the face it landed on.
+    flip: bool,
+    attrs: &'a Attrs,
+}
+
+/// Which faces that landed on one face count, in the order of their weight: the last one decides
+/// the side and its attributes win. Larger area first wins, equal areas: the lower id.
+/// `existing` is the area of the face that was already in the model, if it was: a face less than
+/// half as large as that does not count at all.
+fn decide(mut sources: Vec<Landed>, existing: Option<f64>) -> Vec<Landed> {
+    if let Some(area) = existing {
+        sources.retain(|s| s.area >= 0.5 * area);
+    }
+    sources.sort_by(|a, b| a.area.total_cmp(&b.area).then(b.id.cmp(&a.id)));
+    sources
+}
+
+#[cfg(test)]
+mod decide_tests {
+    use super::*;
+
+    static NONE: std::sync::LazyLock<Attrs> = std::sync::LazyLock::new(Attrs::default);
+
+    fn l(id: u32, area: f64, flip: bool) -> Landed<'static> {
+        Landed {
+            id: FaceId(id),
+            area,
+            flip,
+            attrs: &NONE,
+        }
+    }
+
+    fn winner(v: Vec<Landed>, existing: Option<f64>) -> Option<(u32, bool)> {
+        decide(v, existing).last().map(|s| (s.id.0, s.flip))
+    }
+
+    #[test]
+    fn the_larger_face_decides_in_any_order() {
+        let a = || l(1, 10.0, true);
+        let b = || l(2, 90.0, false);
+        assert_eq!(winner(vec![a(), b()], None), Some((2, false)));
+        assert_eq!(winner(vec![b(), a()], None), Some((2, false)));
+        // Equal areas: the lower id.
+        let c = || l(7, 5.0, true);
+        let d = || l(3, 5.0, false);
+        assert_eq!(winner(vec![c(), d()], None), Some((3, false)));
+        assert_eq!(winner(vec![d(), c()], None), Some((3, false)));
+    }
+
+    #[test]
+    fn a_small_face_does_not_change_a_face_that_was_in_the_model() {
+        // The face of the model has area 100. A face of 10 that lands on it is ignored; one of
+        // 60 counts, and the larger of two still wins.
+        assert_eq!(winner(vec![l(1, 10.0, true)], Some(100.0)), None);
+        assert_eq!(winner(vec![l(1, 60.0, true)], Some(100.0)), Some((1, true)));
+        assert_eq!(
+            winner(vec![l(1, 60.0, true), l(2, 10.0, false)], Some(100.0)),
+            Some((1, true))
+        );
+        assert_eq!(
+            winner(vec![l(2, 10.0, false), l(1, 60.0, true)], Some(100.0)),
+            Some((1, true))
+        );
+        // A face that is new in the result takes any size.
+        assert_eq!(winner(vec![l(1, 10.0, true)], None), Some((1, true)));
     }
 }

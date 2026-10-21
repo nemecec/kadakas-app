@@ -596,7 +596,7 @@ fn a_definition_changed_during_an_edit_is_a_conflict_the_person_resolves() {
         (ed, sym, i, g)
     };
     // No answer: refused, nothing changes.
-    let (mut ed, sym, _, g) = setup();
+    let (mut ed, sym, i0, g) = setup();
     let before = ed.doc().clone();
     invalid(
         ed.execute(&Command::CloseComponent {
@@ -615,8 +615,19 @@ fn a_definition_changed_during_an_edit_is_a_conflict_the_person_resolves() {
         .unwrap();
     let mine = ResourceId(*out.created.last().unwrap());
     assert_ne!(mine, sym);
-    assert_eq!(ed.doc().resources.get(mine).unwrap().name, "Tile (mine)");
+    assert_eq!(ed.doc().resources.get(mine).unwrap().name, "Tile#1");
+    // The new definition holds my edit (the one square), the old one the other change.
+    let mine_parts = &ed.doc().resources.symbol(mine).unwrap().parts;
+    assert_eq!(mine_parts.len(), 1);
+    assert!(
+        matches!(&mine_parts[0].shape, Shape::SurfaceModel(m) if m.face_count() == 1),
+        "{mine_parts:?}"
+    );
     assert_eq!(ed.doc().resources.symbol(sym).unwrap().parts.len(), 2);
+    assert!(matches!(
+        &ed.doc().object(i0).unwrap().shape,
+        Shape::Component { symbol, .. } if *symbol == mine
+    ));
     assert!(ed.doc().object(g).is_none());
     // Discard: the other version stays and the edit is gone.
     let (mut ed, sym, i, g) = setup();
@@ -750,4 +761,291 @@ fn the_plan_mark_is_the_box_that_the_svg_draws() {
         )) && text.contains(r#"data-kind="component""#),
         "{text}"
     );
+}
+
+// ---------------------------------------------------------------- review round 2
+
+fn open_edit(ed: &mut Editor, i: ObjectId) -> ObjectId {
+    ObjectId(
+        ed.execute(&Command::EditComponent { id: i })
+            .unwrap()
+            .created[0],
+    )
+}
+
+#[test]
+fn emptying_a_component_and_closing_is_refused() {
+    let mut ed = fresh();
+    let (sym, i) = tile(&mut ed);
+    // A second instance must not end up as a placeholder.
+    let other = ObjectId(
+        ed.execute(&Command::CopyObjects {
+            ids: vec![i],
+            delta: DVec2::new(5000.0, 0.0),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let g = open_edit(&mut ed, i);
+    let kids = ed.doc().with_members(&[g]);
+    ed.execute(&Command::DeleteObjects {
+        ids: kids.into_iter().filter(|k| *k != g).collect(),
+    })
+    .unwrap();
+    let before = ed.doc().clone();
+    for resolve in [None, Some(Resolve::Overwrite), Some(Resolve::KeepAsNew)] {
+        invalid(
+            ed.execute(&Command::CloseComponent { group: g, resolve }),
+            "would be empty",
+        );
+        assert_eq!(ed.doc(), &before);
+    }
+    assert_eq!(ed.doc().resources.symbol(sym).unwrap().parts.len(), 1);
+    assert!(component::findings(ed.doc()).is_empty());
+    // Discard is always possible and keeps the old content.
+    ed.execute(&Command::CloseComponent {
+        group: g,
+        resolve: Some(Resolve::Discard),
+    })
+    .unwrap();
+    assert!(component::findings(ed.doc()).is_empty());
+    assert!(ed.doc().object(other).is_some());
+}
+
+#[test]
+fn discard_throws_the_edit_away_also_without_a_conflict() {
+    let mut ed = fresh();
+    let (sym, i) = tile(&mut ed);
+    let before = ed.doc().clone();
+    let g = open_edit(&mut ed, i);
+    // Draw something in the edit.
+    let model = ed
+        .doc()
+        .children(g)
+        .into_iter()
+        .find(|c| matches!(ed.doc().object(*c).unwrap().shape, Shape::SurfaceModel(_)))
+        .unwrap();
+    ed.execute(&Command::EditSurface {
+        id: model,
+        edit: square(5000.0, 0.0, 1000.0),
+    })
+    .unwrap();
+    ed.execute(&Command::CloseComponent {
+        group: g,
+        resolve: Some(Resolve::Discard),
+    })
+    .unwrap();
+    assert_eq!(ed.doc().resources.symbol(sym).unwrap().parts.len(), 1);
+    let Shape::SurfaceModel(m) = &ed.doc().resources.symbol(sym).unwrap().parts[0].shape else {
+        panic!()
+    };
+    assert_eq!(m.face_count(), 1, "the drawing in the edit is gone");
+    // The same document as before the edit.
+    assert_eq!(ed.doc().resources, before.resources);
+    assert_eq!(
+        ed.doc().objects.keys().collect::<Vec<_>>(),
+        before.objects.keys().collect::<Vec<_>>()
+    );
+    assert!(!kadakas_core::symbols::is_being_edited(
+        ed.doc().object(i).unwrap()
+    ));
+}
+
+#[test]
+fn an_edit_without_a_saved_version_is_never_written_without_an_answer() {
+    let mut ed = fresh();
+    let (sym, i) = tile(&mut ed);
+    let g = open_edit(&mut ed, i);
+    // An edit group from a build before the version was kept.
+    let mut doc = ed.doc().clone();
+    doc.object_mut(g)
+        .unwrap()
+        .data
+        .get_mut(kadakas_core::symbols::EDIT_GROUP_KEY)
+        .and_then(|v| v.as_object_mut())
+        .unwrap()
+        .remove("version");
+    let mut ed = Editor::new(doc);
+    let before = ed.doc().clone();
+    invalid(
+        ed.execute(&Command::CloseComponent {
+            group: g,
+            resolve: None,
+        }),
+        "conflict",
+    );
+    assert_eq!(ed.doc(), &before);
+    // The person says overwrite: it is written.
+    ed.execute(&Command::CloseComponent {
+        group: g,
+        resolve: Some(Resolve::Overwrite),
+    })
+    .unwrap();
+    assert!(ed.doc().object(g).is_none());
+    assert_eq!(ed.doc().resources.symbol(sym).unwrap().parts.len(), 1);
+}
+
+#[test]
+fn many_definitions_on_one_base_are_checked_in_one_pass() {
+    // 5,000 definitions that each use a base of 10,000 models: the old check walked 50 million
+    // models for one change of the base.
+    let mut doc = Editor::with_sequential_ids().doc().clone();
+    let base = push_symbol(
+        &mut doc,
+        "Base",
+        parts_def((0..component::MAX_PARTS).map(|_| empty_model()).collect()),
+    );
+    for k in 0..5000 {
+        push_symbol(&mut doc, &format!("D{k}"), parts_def(vec![inst(base)]));
+    }
+    let mut ed = Editor::new(doc);
+    let t = std::time::Instant::now();
+    ed.execute(&Command::ModifyResource {
+        id: base,
+        name: None,
+        body: Some(symbol_body(parts_def(
+            (0..component::MAX_PARTS - 1)
+                .map(|_| empty_model())
+                .collect(),
+        ))),
+    })
+    .unwrap();
+    let took = t.elapsed();
+    assert!(took.as_secs_f64() < 3.0, "took {took:?}");
+    // And the check still finds the real problem: two of them in one definition are too many.
+    let mut parts = vec![inst(base), inst(base), inst(base)];
+    parts.truncate(3);
+    invalid(
+        add_symbol(&mut ed, "Three", parts_def(parts)),
+        "over a limit",
+    );
+}
+
+#[test]
+fn the_plan_mark_follows_the_definition_inside_and_outside_a_frame() {
+    let mut ed = fresh();
+    let (sym, i) = tile(&mut ed);
+    let shape = ed.doc().object(i).unwrap().shape.clone();
+    let boxed = |ed: &Editor| match component::plan_mark(ed.doc(), &shape) {
+        Some(PlanMark::Box([lo, _, hi, _])) => (lo, hi),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(boxed(&ed).1, DVec2::new(1000.0, 1000.0));
+    let g = open_edit(&mut ed, i);
+    let model = ed
+        .doc()
+        .children(g)
+        .into_iter()
+        .find(|c| matches!(ed.doc().object(*c).unwrap().shape, Shape::SurfaceModel(_)))
+        .unwrap();
+    ed.execute(&Command::EditSurface {
+        id: model,
+        edit: square(1000.0, 0.0, 1000.0),
+    })
+    .unwrap();
+    ed.execute(&Command::CloseComponent {
+        group: g,
+        resolve: None,
+    })
+    .unwrap();
+    assert_eq!(boxed(&ed).1, DVec2::new(2000.0, 1000.0), "outside a frame");
+    {
+        let _frame = component::plan_frame();
+        assert_eq!(boxed(&ed).1, DVec2::new(2000.0, 1000.0));
+        assert_eq!(boxed(&ed).1, DVec2::new(2000.0, 1000.0), "read again");
+    }
+    assert!(ed.undo());
+    assert_eq!(boxed(&ed).1, DVec2::new(1000.0, 1000.0), "after the undo");
+    assert!(component::definition_version(ed.doc().resources.symbol(sym).unwrap()) > 0);
+    // Many instances in one frame are fast.
+    let big = {
+        let mut doc = Editor::with_sequential_ids().doc().clone();
+        let d = push_symbol(
+            &mut doc,
+            "Big",
+            parts_def((0..5000).map(|_| empty_model()).collect()),
+        );
+        let ids: Vec<ObjectId> = (0..5000).map(|_| push_instance(&mut doc, d)).collect();
+        (doc, ids)
+    };
+    let t = std::time::Instant::now();
+    let _frame = component::plan_frame();
+    for id in &big.1 {
+        component::plan_mark(&big.0, &big.0.object(*id).unwrap().shape);
+    }
+    assert!(t.elapsed().as_secs_f64() < 3.0, "took {:?}", t.elapsed());
+}
+
+#[test]
+fn a_styled_model_is_never_the_raw_model_of_a_level() {
+    let mut ed = fresh();
+    let red = Attributes {
+        fill: Some(Color([200, 10, 10, 255])),
+        ..Attributes::default()
+    };
+    // The styled model has the lower id.
+    let styled = model_at(&mut ed, 0.0, red.clone());
+    assert_eq!(
+        component::raw_model(ed.doc(), None, ed.doc().active_layer),
+        None
+    );
+    let plain = model_at(&mut ed, 3000.0, Attributes::default());
+    assert_eq!(
+        component::raw_model(ed.doc(), None, ed.doc().active_layer),
+        Some(plain)
+    );
+    // Exploding a group of one plain model and one styled model into a level that has only the
+    // styled one: the plain geometry does not weld into it.
+    let a = model_at(&mut ed, 6000.0, Attributes::default());
+    let g = ObjectId(
+        ed.execute(&Command::MakeGroup {
+            model: None,
+            faces: vec![],
+            edges: vec![],
+            objects: vec![a],
+            name: None,
+        })
+        .unwrap()
+        .created[0],
+    );
+    ed.execute(&Command::DeleteObjects { ids: vec![plain] })
+        .unwrap();
+    ed.execute(&Command::Explode { ids: vec![g] }).unwrap();
+    assert_eq!(
+        model(&ed, styled).face_count(),
+        1,
+        "the styled model is as it was"
+    );
+    assert_eq!(model(&ed, styled).edge_count(), 4);
+    assert!(ed.doc().object(a).is_some(), "the plain model stands apart");
+    assert_eq!(ed.doc().object(a).unwrap().parent, None);
+}
+
+#[test]
+fn a_definition_over_a_limit_that_came_from_outside_is_reported_and_named() {
+    let mut ed = fresh();
+    let mut doc = ed.doc().clone();
+    let base = push_symbol(&mut doc, "Base", parts_def(vec![empty_model()]));
+    let big = push_symbol(
+        &mut doc,
+        "Big",
+        parts_def((0..component::MAX_PARTS).map(|_| empty_model()).collect()),
+    );
+    let outer = push_symbol(
+        &mut doc,
+        "Outer",
+        parts_def(vec![inst(base), inst(big), inst(big), inst(big)]),
+    );
+    let _ = outer;
+    // Other users' document arrives with the problem: it is noted.
+    assert!(ed.apply_remote(doc).is_some());
+    let notes = ed.doc().load_notes().join("\n");
+    assert!(notes.contains("'Outer'"), "{notes}");
+    // A local edit of the shared base gets a message that names the cause.
+    let r = ed.execute(&Command::ModifyResource {
+        id: base,
+        name: None,
+        body: Some(symbol_body(parts_def(vec![empty_model(), empty_model()]))),
+    });
+    invalid(r, "which is over a limit");
 }

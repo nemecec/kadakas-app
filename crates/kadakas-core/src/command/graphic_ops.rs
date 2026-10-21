@@ -38,19 +38,18 @@ impl Tx<'_> {
     /// it must still expand within the limits (nesting 16, 20,000 models, no cycle). Nothing is
     /// cut off silently: the command fails and the document stays as it was.
     pub(super) fn check_component_expansion(&self, id: ResourceId) -> Result<(), CommandError> {
-        let res = &self.doc.resources;
-        if res.symbol(id).is_none() {
-            return Ok(());
-        }
-        for r in res.iter() {
-            if res.symbol(r.id).is_some_and(|d| d.is_component())
-                && (r.id == id || res.symbol_reaches(r.id, id))
-            {
-                crate::component::leaves(res, r.id)
-                    .map_err(|e| invalid(format!("component '{}': {e}", r.name)))?;
+        crate::component::check_expansion(&self.doc.resources, id).map_err(|(bad, e)| {
+            let name = self.doc.resources.get(bad).map_or("", |r| r.name.as_str());
+            if bad == id {
+                invalid(format!("component '{name}' is over a limit: {e}"))
+            } else {
+                // A definition that uses this one is over a limit (it was before, if it came
+                // with a file, a restored version or another user).
+                invalid(format!(
+                    "this definition is used by component '{name}', which is over a limit: {e}"
+                ))
             }
-        }
-        Ok(())
+        })
     }
 
     /// A symbol body that changes must keep the kind that its users expect: a definition that

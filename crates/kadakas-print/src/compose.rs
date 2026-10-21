@@ -126,6 +126,7 @@ pub fn compose_page_limited(
     sections: Option<(kadakas_x3d::section::SharedSections, u64)>,
     max_pixels: u64,
 ) -> Result<Page, PrintError> {
+    let _frame = kadakas_core::component::plan_frame();
     let l = doc.layer(layer).ok_or(PrintError::NoSheet(layer))?;
     if l.kind != LayerKind::Sheet {
         return Err(PrintError::NoSheet(layer));

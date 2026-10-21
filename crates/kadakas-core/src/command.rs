@@ -2610,7 +2610,20 @@ impl Editor {
                 Ok(())
             },
         )?;
+        self.note_definition_problems();
         Ok(self.revision != before)
+    }
+
+    /// A definition that came with a restored version or from other users can be over a limit
+    /// (the limits are held by the commands, not by the content that arrives). It stays, its
+    /// instances are drawn as marked placeholders, and the person gets a note instead of a
+    /// surprise at the next local edit.
+    fn note_definition_problems(&mut self) {
+        for note in crate::component::definition_findings(&self.doc) {
+            if !self.doc.load_notes().contains(&note) {
+                self.doc.add_load_note(note);
+            }
+        }
     }
 
     pub fn undo(&mut self) -> bool {
@@ -2700,6 +2713,7 @@ impl Editor {
         // The generator of IDs belongs to this editor, not to the document that came in.
         doc.swap_ids(&mut self.doc);
         self.doc = doc;
+        self.note_definition_problems();
         self.undo.clear();
         self.redo.clear();
         self.revision = next_revision();

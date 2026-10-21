@@ -29,6 +29,7 @@ modeler-edit-edit-selected = Edit Group or Component
 modeler-edit-close-context = Close Group or Component
 modeler-edit-close-keep-mine = Close Component, keep my edit as a new component
 modeler-edit-close-discard-mine = Close Component, discard my edit
+modeler-edit-close-overwrite = Close Component, replace it with my edit
 modeler-component-name = Component { $n }
 modeler-nothing-selected = Select something first.
 modeler-select-one-to-edit = Select one group or component to edit.

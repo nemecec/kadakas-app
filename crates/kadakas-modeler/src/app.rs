@@ -54,6 +54,8 @@ pub enum Cmd {
     CloseKeepMine,
     /// Close Component after a conflict: throw my edit away.
     CloseDiscardMine,
+    /// Close Component after a conflict: replace the component with my edit.
+    CloseOverwrite,
     /// A tool or command of the tool bar.
     Tool(ModelerTool),
     /// Zoom Window: the next drag of the Zoom tool is a window.
@@ -448,11 +450,15 @@ impl ModelerApp {
                 self.structure(&cmd)
             }
             Cmd::EditSelected => self.edit_selected(),
-            Cmd::CloseContext | Cmd::CloseKeepMine | Cmd::CloseDiscardMine => {
+            Cmd::CloseContext
+            | Cmd::CloseKeepMine
+            | Cmd::CloseDiscardMine
+            | Cmd::CloseOverwrite => {
                 self.context.validate(self.session.editor.doc());
                 let resolve = match cmd {
                     Cmd::CloseKeepMine => Some(kadakas_core::component::Resolve::KeepAsNew),
                     Cmd::CloseDiscardMine => Some(kadakas_core::component::Resolve::Discard),
+                    Cmd::CloseOverwrite => Some(kadakas_core::component::Resolve::Overwrite),
                     _ => None,
                 };
                 match self.context.exit_with(&mut self.session.editor, resolve) {
@@ -549,9 +555,10 @@ impl ModelerApp {
                 sel.len() == 1
                     && any(|s| matches!(s, Shape::Group { .. } | Shape::Component { .. }))
             }
-            Cmd::CloseContext | Cmd::CloseKeepMine | Cmd::CloseDiscardMine => {
-                !self.context.is_root()
-            }
+            Cmd::CloseContext
+            | Cmd::CloseKeepMine
+            | Cmd::CloseDiscardMine
+            | Cmd::CloseOverwrite => !self.context.is_root(),
             _ => false,
         }
     }

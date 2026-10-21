@@ -29,6 +29,7 @@ modeler-edit-edit-selected = Muuda gruppi või komponenti
 modeler-edit-close-context = Sulge grupp või komponent
 modeler-edit-close-keep-mine = Sule komponent, jäta minu muudatus uue komponendina
 modeler-edit-close-discard-mine = Sule komponent, loobu minu muudatusest
+modeler-edit-close-overwrite = Sule komponent, asenda see minu muudatusega
 modeler-component-name = Komponent { $n }
 modeler-nothing-selected = Vali kõigepealt midagi.
 modeler-select-one-to-edit = Vali muutmiseks üks grupp või komponent.

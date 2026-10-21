@@ -980,12 +980,12 @@ mod tests {
     proptest! {
         #[test]
         fn random_paths_and_user_names_never_leak(
-            user in "[a-z]{3,9}",
+            // "zq" never occurs in the text around the path, nor in the placeholders.
+            user in "zq[a-z]{3,7}",
             folders in proptest::collection::vec("Qz[A-Za-z0-9 ._-]{3,10}", 1..5),
             stem in "Qz[A-Za-z0-9 _-]{3,12}",
             style in 0usize..4,
         ) {
-            prop_assume!(!["path", "user", "file", "home", "host", "text", "name", "email", "secret"].contains(&user.as_str()));
             let ctx = Context::new(&user, "");
             let dir = folders.join(if style == 1 { "\\" } else { "/" });
             let path = match style {

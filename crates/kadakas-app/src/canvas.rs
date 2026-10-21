@@ -687,6 +687,8 @@ pub struct Frame<'a> {
 
 pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     let painter = painter.with_clip_rect(rect);
+    // The definitions of components are read once for this frame.
+    let _plan_frame = kadakas_core::component::plan_frame();
     let colors = crate::theme::canvas_colors(f.dark);
     set_dark(f.dark);
     set_grey(false);
