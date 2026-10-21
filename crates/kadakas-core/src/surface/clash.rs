@@ -12,9 +12,11 @@
 //!   stray edge on a face is valid; an edge of another face in the same plane that lies in the face
 //!   is not (the two faces overlap), and an edit must not move an edge into a face.
 //!
-//! Two coplanar faces **overlap** when they share an area: an edge of one lies in the other, or a
-//! point inside one is inside the other (one face in the other, or the same face twice). Faces
-//! that only touch along an edge or at a vertex do not overlap.
+//! Two coplanar faces **overlap** when they share an area and look the same way: an edge of one
+//! lies in the other, or a point inside one is inside the other (one face in the other, or the
+//! same face twice). Faces that only touch along an edge or at a vertex do not overlap, and a
+//! hole is no area of its face. Two faces that share an area and look opposite ways lie **back to
+//! back** (valid, a warning of the check).
 //!
 //! A face is looked at through its [`Shape`]: the rings in the 2D axes of its plane with a box tree
 //! of their sides, and its vertices and edges as sets, so that a test against a face with
@@ -320,25 +322,35 @@ fn crosses_plane(a: DVec3, b: DVec3, g: &Face) -> bool {
     (sa > pt && sb < -pt) || (sa < -pt && sb > pt)
 }
 
-/// True if the two faces lie in one plane (either side to the front).
-fn coplanar(m: &SurfaceModel, f: &Face, g: &Face) -> bool {
-    f.plane.normal.dot(g.plane.normal).abs() >= 1.0 - 1e-9
-        && geom::on_plane(&g.plane, m.vertices[&f.outer[0]])
+/// How two faces lie in one plane: `Some(true)` when they look the same way, `Some(false)` when
+/// they look opposite ways (back to back), `None` when they are not in one plane.
+fn coplanar(m: &SurfaceModel, f: &Face, g: &Face) -> Option<bool> {
+    let dot = f.plane.normal.dot(g.plane.normal);
+    (dot.abs() >= 1.0 - 1e-9 && geom::on_plane(&g.plane, m.vertices[&f.outer[0]]))
+        .then_some(dot > 0.0)
 }
 
 /// The result of [`through_and_overlaps`].
 pub(super) struct Clashes {
     /// Edges that pass through a face.
     pub through: Vec<(EdgeId, FaceId)>,
-    /// Edges of a face that lie in another face of the same plane.
+    /// Edges of a face that lie in another face of the same plane that looks the same way.
     pub lies_in: Vec<(EdgeId, FaceId)>,
-    /// Coplanar faces that overlap.
+    /// Coplanar faces that look the same way and overlap.
     pub overlaps: Vec<(FaceId, FaceId)>,
+    /// Coplanar faces that look opposite ways and share an area (back to back).
+    pub back_to_back: Vec<(FaceId, FaceId)>,
 }
 
 /// The edges that pass through a face, the edges of a face that lie in a coplanar face, and the
 /// pairs of coplanar faces that overlap, of a model whose references hold. Each pair once, in id
 /// order. A stray edge (of no face) in a face is valid and not reported.
+///
+/// The rule of the sides: two faces of one plane that share an area and look the same way
+/// overlap (an error: the same surface twice). Two that look opposite ways lie back to back (a
+/// box standing on a slab, with its own vertices): that is valid, and reported apart as
+/// `back_to_back`, so that the solid tools can treat the pair as an inner face. An edge of a face
+/// that lies in a face back to back with it is no error either.
 pub(super) fn through_and_overlaps(m: &SurfaceModel, window: f64) -> Clashes {
     let tree = face_tree(m, window, &|_| true);
     let mut shapes = Shapes::new(m);
@@ -352,6 +364,7 @@ pub(super) fn through_and_overlaps(m: &SurfaceModel, window: f64) -> Clashes {
         through: Vec::new(),
         lies_in: Vec::new(),
         overlaps: Vec::new(),
+        back_to_back: Vec::new(),
     };
     let mut cands: Vec<(FaceId, bool)> = Vec::new();
     for (&id, e) in &m.edges {
@@ -363,7 +376,9 @@ pub(super) fn through_and_overlaps(m: &SurfaceModel, window: f64) -> Clashes {
             let gf = &m.faces[&g];
             if crosses_plane(a, b, gf) {
                 cands.push((g, true));
-            } else if !own.contains(&g) && own.iter().any(|h| coplanar(m, &m.faces[h], gf)) {
+            } else if !own.contains(&g)
+                && own.iter().any(|h| coplanar(m, &m.faces[h], gf).is_some())
+            {
                 cands.push((g, false));
             }
         });
@@ -376,24 +391,37 @@ pub(super) fn through_and_overlaps(m: &SurfaceModel, window: f64) -> Clashes {
                     out.through.push((id, g));
                 }
             } else if lies_in(a, b, e.v, gf, s).is_some() {
-                out.lies_in.push((id, g));
+                let mut same = false;
                 for h in own {
-                    if coplanar(m, &m.faces[h], gf) {
-                        out.overlaps.push((g.min(*h), g.max(*h)));
+                    match coplanar(m, &m.faces[h], gf) {
+                        Some(true) => {
+                            same = true;
+                            out.overlaps.push((g.min(*h), g.max(*h)));
+                        }
+                        Some(false) => out.back_to_back.push((g.min(*h), g.max(*h))),
+                        None => {}
                     }
+                }
+                if same {
+                    out.lies_in.push((id, g));
                 }
             }
         }
     }
     // One face inside the other with no edge inside (the same area twice).
-    let mut near: Vec<FaceId> = Vec::new();
+    // A point inside the area of `id` that is in `g` (not in a hole of `g`); if the sample point
+    // falls into a hole of `g`, an overlap with the rest of `g` crosses a side of the hole or of
+    // `g`, so the edges above find it.
+    let mut near: Vec<(FaceId, bool)> = Vec::new();
     for (&id, f) in &m.faces {
         let (lo, hi) = face_box(m, f, 0.0);
         near.clear();
         tree.query(lo, hi, &mut |g| {
             let g = FaceId(g);
-            if g != id && coplanar(m, f, &m.faces[&g]) {
-                near.push(g);
+            if g != id
+                && let Some(same) = coplanar(m, f, &m.faces[&g])
+            {
+                near.push((g, same));
             }
         });
         if near.is_empty() {
@@ -403,14 +431,21 @@ pub(super) fn through_and_overlaps(m: &SurfaceModel, window: f64) -> Clashes {
             continue;
         };
         let half = geom::tol(&[p]) / 2.0;
-        for &g in &near {
+        for &(g, same) in &near {
             let gf = &m.faces[&g];
             if shapes.get(g).strictly_inside(gf.plane.project(p), half) {
-                out.overlaps.push((id.min(g), id.max(g)));
+                let pair = (id.min(g), id.max(g));
+                if same {
+                    out.overlaps.push(pair);
+                } else {
+                    out.back_to_back.push(pair);
+                }
             }
         }
     }
-    out.overlaps.sort_unstable();
-    out.overlaps.dedup();
+    for list in [&mut out.overlaps, &mut out.back_to_back] {
+        list.sort_unstable();
+        list.dedup();
+    }
     out
 }

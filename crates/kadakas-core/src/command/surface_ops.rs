@@ -9,6 +9,7 @@ impl Tx<'_> {
         &mut self,
         id: ObjectId,
         edit: &crate::surface::Edit,
+        out: &mut Outcome,
     ) -> Result<(), CommandError> {
         self.editable(id)?;
         let Some(Shape::SurfaceModel(model)) = self.doc.object(id).map(|o| &o.shape) else {
@@ -17,12 +18,15 @@ impl Tx<'_> {
             )));
         };
         let mut model = (**model).clone();
-        model
-            .apply(edit)
+        let notes = model
+            .apply_with_notes(edit)
             .map_err(|e| CommandError::Invalid(e.to_string()))?;
         if let Some(problem) = model.problem() {
             return Err(CommandError::Invalid(problem));
         }
+        // The notes of the edit (a material dropped in a merge) go to the result.
+        out.notes
+            .extend(notes.into_iter().map(|n| format!("object {id}: {n}")));
         self.touch(id);
         self.doc.object_mut(id).expect("checked").shape = Shape::SurfaceModel(Box::new(model));
         Ok(())

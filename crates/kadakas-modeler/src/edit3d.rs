@@ -434,10 +434,12 @@ impl Edit3d {
         if out.actions.is_empty() {
             return;
         }
-        match modeling::run_actions(&mut session.editor, &out.actions, out.redo) {
-            Ok(used) => {
+        match modeling::run_actions_noted(&mut session.editor, &out.actions, out.redo) {
+            Ok((used, notes)) => {
                 self.modeling.committed(used, session.editor.revision());
-                self.message = None;
+                // What the edit changed that was not asked for (a material of a merged face).
+                self.message =
+                    (!notes.is_empty()).then(|| tr!("modeler-edit-note", note = notes.join("; ")));
             }
             Err(e) => {
                 self.message = Some(tr!("modeler-edit-failed", reason = e));

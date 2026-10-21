@@ -778,6 +778,10 @@ pub enum CommandError {
 pub struct Outcome {
     /// IDs of new objects, layers and classes, in creation order.
     pub created: Vec<Uid>,
+    /// What the command changed that was not asked for, in words (for example the material of a
+    /// face that merged into another face in `edit_surface`). Left out when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// Snapshot of the document parts that are not objects.
@@ -1924,7 +1928,7 @@ impl<'a> Tx<'a> {
             Command::AttachRecord { .. }
             | Command::DetachRecord { .. }
             | Command::SetRecordFields { .. } => self.run_record(cmd)?,
-            Command::EditSurface { id, edit } => self.run_surface(*id, edit)?,
+            Command::EditSurface { id, edit } => self.run_surface(*id, edit, out)?,
             Command::MakeGroup { .. }
             | Command::MakeComponent { .. }
             | Command::Explode { .. }

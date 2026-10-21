@@ -1,7 +1,8 @@
 //! The validity check of a surface model.
 //!
 //! `quick` runs on every load and after every change: ids, references, limits, numbers, planes,
-//! the sides of the loops, curves, and coplanar faces that overlap at an edge, in `O(n log n)`
+//! the sides of the loops, curves, and coplanar faces that look the same way and overlap at an
+//! edge (faces back to back are a warning of `full`, not a problem), in `O(n log n)`
 //! time (holes: the size of the hole times the size of the outer loop). The plane test is the one
 //! that the edits use, so a face is valid exactly when the edits see it in its plane. `full` adds the distances (no two vertices, no vertex and edge, no two edges closer than
 //! half the length tolerance unless they meet), the edges that pass through a face, the coplanar
@@ -82,6 +83,12 @@ pub enum Problem {
     EdgeInFace(EdgeId, FaceId),
     #[error("faces {0} and {1} lie in one plane and overlap")]
     FacesOverlap(FaceId, FaceId),
+    /// A warning, not an error (see [`Report::warnings`]).
+    #[error(
+        "faces {0} and {1} lie back to back in one plane (they look opposite ways and share an \
+         area: an inner face)"
+    )]
+    BackToBack(FaceId, FaceId),
     #[error("curve {0} names an edge that does not exist or is in another curve, or is no chain")]
     BadCurve(super::CurveId),
     #[error("edge {0} has attributes but does not exist")]
@@ -92,6 +99,10 @@ pub enum Problem {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Report {
     pub problems: Vec<Problem>,
+    /// Things that are valid but worth a look: two coplanar faces back to back
+    /// ([`Problem::BackToBack`], a box standing on a slab with its own vertices). The solid tools
+    /// (MOD-09) can treat such a pair as an inner face.
+    pub warnings: Vec<Problem>,
     /// Edges that no face uses.
     pub wire_edges: Vec<EdgeId>,
     /// Edges that one face uses: the border of an open surface.
@@ -172,6 +183,16 @@ pub(super) fn full(m: &SurfaceModel) -> Report {
                 .into_iter()
                 .map(|(f, g)| Problem::FacesOverlap(f, g)),
         );
+        let mut back: BTreeSet<Problem> = c
+            .back_to_back
+            .into_iter()
+            .map(|(f, g)| Problem::BackToBack(f, g))
+            .collect();
+        let none = BTreeMap::new();
+        for (k, list) in &uses {
+            back.extend(overlap(m, *k, list, &none, true));
+        }
+        r.warnings.extend(back);
     }
     r
 }
@@ -457,7 +478,7 @@ fn structure(m: &SurfaceModel, found: &mut dyn FnMut(Problem) -> bool) {
             }
         }
         for (k, list) in &uses {
-            if let Some(p) = overlap(m, *k, list, &pairs) {
+            if let Some(p) = overlap(m, *k, list, &pairs, false) {
                 report!(p);
             }
         }
@@ -578,12 +599,15 @@ fn distances(m: &SurfaceModel, out: &mut Vec<Problem>) {
     }
 }
 
-/// Two coplanar faces on the same side of an edge overlap.
+/// Two coplanar faces on the same side of an edge share an area. When they look the same way
+/// they overlap ([`Problem::Overlap`], an error); when they look opposite ways they lie back to
+/// back ([`Problem::BackToBack`], a warning). `back` chooses which of the two kinds is looked for.
 fn overlap(
     m: &SurfaceModel,
     k: (VertexId, VertexId),
     list: &[(FaceId, bool)],
     pairs: &BTreeMap<(VertexId, VertexId), EdgeId>,
+    back: bool,
 ) -> Option<Problem> {
     let on = |p: &Plane, f: FaceId| {
         m.faces[&f]
@@ -595,9 +619,14 @@ fn overlap(
         let pf = m.faces[&f].plane;
         for &(g, ga) in &list[i + 1..] {
             let pg = m.faces[&g].plane;
-            let same_side = (fa == ga) == (pf.normal.dot(pg.normal) > 0.0);
-            if same_side && on(&pf, g) {
-                return Some(Problem::Overlap(f, g, pairs[&k]));
+            let same_way = pf.normal.dot(pg.normal) > 0.0;
+            let same_side = (fa == ga) == same_way;
+            if same_side && same_way != back && on(&pf, g) {
+                return Some(if back {
+                    Problem::BackToBack(f.min(g), f.max(g))
+                } else {
+                    Problem::Overlap(f, g, pairs[&k])
+                });
             }
         }
     }

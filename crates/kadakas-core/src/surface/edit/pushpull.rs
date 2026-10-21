@@ -41,12 +41,28 @@
 //! face of the same plane and side that it now shares an edge with, by the rules of Erase (the
 //! face with the lower id stays). A push that passes a vertex along the normal (the top pushed
 //! past a line across a wall) goes in steps: first to that vertex, then on. A face that merged on
-//! the way does not go on: the push is refused.
+//! the way does not go on: the push is refused (a pocket floor with a bump on it, pulled to the
+//! top, stops at the bump; the next push goes on). This is by design.
+//!
+//! The same weld happens when a vertex that moves, or the copy of a vertex that stays, lands on a
+//! vertex or inside an edge of a face in the plane that the cap goes to (a square at the foot of a
+//! step pulled up to the high side): the edge is split at the landing point first, a welded
+//! T-junction. A copy that lands is made and then welded, so the stretched walls next to it go
+//! through the same collapse as the walls of a moving vertex; a wall whose loop touches itself
+//! after the weld (its middle collapsed) is cut into the parts that keep an area. A push that ends
+//! within the length tolerance of such geometry goes exactly to it (`Plan::Snap`), so the welded
+//! vertices lie in the plane of the cap.
+//!
+//! Ids: the vertex that was there stays (the vertex that moved or the copy goes), of edges that
+//! fall together the lower id, of faces that merge the lower id. An edge that falls onto an edge
+//! of a curve leaves its own curve, so an edge is never in two curves. The attributes of merged
+//! faces follow `merge_attrs` (in `edit`), and each change is a note of the edit.
 //!
 //! # Refused
 //!
 //! - A move that reaches the opposite face (the face becomes flush with a face that looks the
-//!   other way, or a copy ends on it). The hole through a slab is a later step.
+//!   other way, beside it or back to back under it, or a copy ends on it). The hole through a
+//!   slab is a later step.
 //! - A wall edge with more than one other face, one of which lies where the new wall would go (a
 //!   fin: the face is pushed into a wall that it shares an edge with).
 //! - A result in which a new or moved edge passes through, ends on, or lies in a face that it does
@@ -72,30 +88,45 @@ use super::*;
 const MAX_STEPS: usize = 64;
 
 /// Pushes `face` of `m` by `distance`. `before` is the model before the edit (`m` is its copy).
+/// The notes of the merges go to `notes`.
 pub(super) fn push_pull(
     m: &mut SurfaceModel,
     before: &SurfaceModel,
     face: FaceId,
     distance: f64,
+    notes: &mut Vec<String>,
 ) -> Result<(), SurfaceError> {
     let mut rest = distance;
     // The model before the current step (the first step starts from `before`).
     let mut base: Option<SurfaceModel> = None;
     for _ in 0..MAX_STEPS {
         let from = base.as_ref().unwrap_or(before);
-        match run(m, face, rest)? {
+        let plan = match run(m, face, rest, true)? {
+            // Nearly flush: the push goes exactly to the geometry it lands on.
+            Plan::Snap(s) => {
+                rest = s;
+                run(m, face, s, false)?
+            }
+            p => p,
+        };
+        match plan {
             Plan::Done(t, welds) => {
-                finish_and_check(m, from, t, &welds)?;
+                finish_and_check(m, from, t, &welds, notes)?;
                 return Ok(());
+            }
+            Plan::Snap(_) => {
+                return Err(SurfaceError::Unsolved(
+                    "the push/pull does not land exactly on the geometry it meets".into(),
+                ));
             }
             Plan::Step(d) => {
                 // Nothing changed yet: push to the vertex on the way first.
-                let Plan::Done(t, welds) = run(m, face, d)? else {
+                let Plan::Done(t, welds) = run(m, face, d, false)? else {
                     return Err(SurfaceError::Unsolved(
                         "the push/pull does not reach the vertex on its way".into(),
                     ));
                 };
-                if finish_and_check(m, from, t, &welds)? {
+                if finish_and_check(m, from, t, &welds, notes)? {
                     return Err(SurfaceError::Unsolved(format!(
                         "the face becomes flush with another face after {} mm and merges with \
                          it; a push past that is a later step",
@@ -112,11 +143,13 @@ pub(super) fn push_pull(
     ))
 }
 
-/// What `run` found: the push is done (and what it touched, and the vertices to weld), or it must
-/// first go to a vertex on its way (`Step(distance)`, nothing changed).
+/// What `run` found: the push is done (and what it touched, and the vertices to weld), it must
+/// first go to a vertex on its way (`Step(distance)`, nothing changed), or it lands within the
+/// tolerance of geometry and must go exactly there (`Snap(distance)`, nothing changed).
 enum Plan {
     Done(Touched, BTreeMap<VertexId, VertexId>),
     Step(f64),
+    Snap(f64),
 }
 
 /// One boundary edge of the face.
@@ -140,7 +173,9 @@ struct Touched {
     face: FaceId,
 }
 
-fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Plan, SurfaceError> {
+/// One push of `face` by `d`. With `snap`, a push that lands within the tolerance of geometry but
+/// not exactly on it returns `Snap` with the exact distance.
+fn run(m: &mut SurfaceModel, face: FaceId, d: f64, snap: bool) -> Result<Plan, SurfaceError> {
     let f = m
         .faces
         .get(&face)
@@ -291,41 +326,132 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Plan, SurfaceError>
         return Ok(Plan::Step(s));
     }
 
-    // The copies must not land on a vertex of the model (but on the far end of their edge).
+    // Flush in general: a vertex that moves, or the copy of one that stays, that lands on a vertex
+    // or inside an edge of the geometry that does not move, is welded to it after the push (the
+    // edge is split there first: a welded T-junction). The far end of an edge along the normal
+    // (above) is one such case.
+    let in_verts: BTreeSet<VertexId> = verts.iter().copied().collect();
+    let moving = |x: &VertexId| in_verts.contains(x) && !stays.contains(x);
     let big =
         w.m.vertices
             .values()
             .fold(0.0f64, |m, p| m.max(geom::size(*p)))
             .max(geom::size(pts[0]) + d.abs());
-    let window = geom::tolerance_at(big);
-    let mut by_x: Vec<(f64, DVec3)> = w.m.vertices.values().map(|p| (p.x, *p)).collect();
-    by_x.sort_by(|p, q| p.0.total_cmp(&q.0));
-    for &v in verts
-        .iter()
-        .filter(|v| stays.contains(v) && !lands.contains_key(v))
-    {
-        // A vertex that stays leaves a copy behind; one that moves leaves its place free.
-        let p = new_pos[&v];
-        let start = by_x.partition_point(|(x, _)| *x < p.x - window);
-        let hit = by_x[start..]
+    // Only the edges near the box of the cap: a cheap filter first, so a big model costs one
+    // pass over its edges and a small tree.
+    let pad = DVec3::splat(geom::tolerance_at(big));
+    let (clo, chi) = geom::bounds(new_pos.values().copied()).unwrap_or_default();
+    let (clo, chi) = (clo - pad, chi + pad);
+    let tree = super::super::index::BoxTree::new(
+        w.m.edges
             .iter()
-            .take_while(|(x, _)| *x <= p.x + window)
-            .any(|(_, q)| p.distance(*q) <= geom::tol(&[p, *q]));
-        if hit {
-            return Err(SurfaceError::TooClose {
-                tol: geom::tol(&[p]),
-            });
+            .filter_map(|(id, e)| {
+                let (a, b) = (w.m.vertices[&e.v[0]], w.m.vertices[&e.v[1]]);
+                let (lo, hi) = (a.min(b) - pad, a.max(b) + pad);
+                (lo.cmple(chi).all() && hi.cmpge(clo).all()).then_some((lo, hi, id.0))
+            })
+            .collect(),
+    );
+    let mut on_vertex: BTreeMap<VertexId, VertexId> = BTreeMap::new();
+    let mut on_edge: BTreeMap<EdgeId, Vec<(f64, VertexId, DVec3)>> = BTreeMap::new();
+    // Where each vertex lands, for the snap.
+    let mut landing: Vec<(VertexId, DVec3)> = Vec::new();
+    for &v in &verts {
+        if let Some(o) = welds.get(&v).or(lands.get(&v)) {
+            landing.push((v, w.pos(*o)));
+            continue;
+        }
+        if merge.contains_key(&v) {
+            continue;
+        }
+        let p = new_pos[&v];
+        let mut best_v: Option<(f64, VertexId)> = None;
+        let mut best_e: Option<(f64, EdgeId, f64, DVec3)> = None;
+        tree.query(p, p, &mut |e| {
+            let e = EdgeId(e);
+            let ed = w.m.edges[&e];
+            // Only the geometry of a face in the plane that the cap goes to: the face meets it
+            // there (a stray line that the push touches is not welded, the checks refuse it).
+            let flush = || {
+                w.t.faces_of(e).any(|g| {
+                    let gf = &w.m.faces[&g];
+                    gf.plane.normal.dot(n).abs() >= 1.0 - 1e-9 && on_plane(&gf.plane, p)
+                })
+            };
+            if ed.v.contains(&v) || ed.v.iter().any(&moving) || !flush() {
+                return;
+            }
+            let (a, b) = (w.pos(ed.v[0]), w.pos(ed.v[1]));
+            for (x, q) in [(ed.v[0], a), (ed.v[1], b)] {
+                let dist = p.distance(q);
+                if !in_verts.contains(&x)
+                    && dist <= geom::tol(&[p, q])
+                    && best_v.is_none_or(|(bd, bx)| dist < bd || (dist == bd && x < bx))
+                {
+                    best_v = Some((dist, x));
+                }
+            }
+            let (dist, t) = geom::point_segment(p, a, b);
+            let (len, tt) = (a.distance(b), geom::tol(&[p, a, b]));
+            if dist <= tt
+                && t * len > tt
+                && (1.0 - t) * len > tt
+                && best_e.is_none_or(|(bd, be, ..)| dist < bd || (dist == bd && e < be))
+            {
+                best_e = Some((dist, e, t, a + (b - a) * t));
+            }
+        });
+        if let Some((_, q)) = best_v {
+            on_vertex.insert(v, q);
+            landing.push((v, w.pos(q)));
+        } else if let Some((_, e, t, x)) = best_e {
+            on_edge.entry(e).or_default().push((t, v, x));
+            landing.push((v, x));
+        }
+    }
+    // Nearly flush: go exactly to the first landing point, so that the cap is in the plane of
+    // the points it is welded to.
+    if snap {
+        let fine = geom::plane_tol(&pts) / 4.0;
+        if let Some(s) = landing
+            .iter()
+            .map(|(v, q)| (*q - w.pos(*v)).dot(n))
+            .find(|s| (s - d).abs() > fine)
+        {
+            return Ok(Plan::Snap(s));
         }
     }
 
     let mut faces_out: BTreeSet<FaceId> = BTreeSet::new();
+    // Split the edges that vertices land in. The points of one edge are split from its far end,
+    // so each next point lies on the part that keeps the id.
+    let mut split_at: BTreeMap<VertexId, VertexId> = BTreeMap::new();
+    for (e, mut hits) in on_edge {
+        faces_out.extend(w.t.faces_of(e).collect::<Vec<_>>());
+        hits.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        let mut last: Option<(DVec3, VertexId)> = None;
+        for (_, v, x) in hits {
+            let c = match last {
+                Some((y, c)) if y.distance(x) <= geom::tol(&[x, y]) => c,
+                _ => w.split_edge(e, x, &mut BTreeSet::new()),
+            };
+            last = Some((x, c));
+            split_at.insert(v, c);
+        }
+    }
     // Copies, in loop order. A vertex that moves is its own copy.
     let mut mv: BTreeMap<VertexId, VertexId> = BTreeMap::new();
     for &v in &verts {
+        let target = lands
+            .get(&v)
+            .or(on_vertex.get(&v))
+            .or(split_at.get(&v))
+            .copied();
         if !stays.contains(&v) {
             mv.insert(v, v);
-        } else if let Some(&o) = lands.get(&v) {
-            mv.insert(v, o);
+            if let Some(o) = target {
+                welds.insert(v, o);
+            }
         } else if let Some(&e) = merge.get(&v) {
             for g in w.t.faces_of(e).collect::<Vec<_>>() {
                 faces_out.insert(g);
@@ -334,8 +460,13 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Plan, SurfaceError>
             let c = w.split_edge(e, new_pos[&v], &mut keys);
             mv.insert(v, c);
         } else {
+            // A copy that lands is welded to the vertex it meets after the push, so the walls
+            // that collapse there go through the weld.
             let id = w.new_vertex(new_pos[&v]);
             mv.insert(v, id);
+            if let Some(o) = target {
+                welds.insert(id, o);
+            }
         }
     }
     let mut vertical: BTreeMap<VertexId, EdgeId> = BTreeMap::new();
@@ -616,16 +747,17 @@ fn finish_and_check(
     before: &SurfaceModel,
     t: Touched,
     welds: &BTreeMap<VertexId, VertexId>,
+    notes: &mut Vec<String>,
 ) -> Result<bool, SurfaceError> {
     let to = |v: VertexId| *welds.get(&v).unwrap_or(&v);
     if !welds.is_empty() {
-        weld(m, welds);
+        weld(m, welds, notes);
     }
     let targets: BTreeSet<VertexId> = t.verts.iter().map(|v| to(*v)).collect();
     let merges = flush_merges(m, t.face, &targets)?;
     let merged = !merges.is_empty();
     if merged {
-        super::erase_edges(m, &merges)?;
+        super::erase_edges(m, &merges, notes)?;
     }
     // What is touched now: the vertices that are left, their edges, and the faces at them.
     let verts: BTreeSet<VertexId> = targets
@@ -662,10 +794,14 @@ fn finish_and_check(
     Ok(merged)
 }
 
-/// Replaces each vertex of `map` by its value: edges that fall on one vertex go, edges that fall
-/// together become one (the lower id stays and takes the attributes and the curve place of the
-/// other), loops that lose their area go, and a face whose outer loop loses its area goes.
-fn weld(m: &mut SurfaceModel, map: &BTreeMap<VertexId, VertexId>) {
+/// Replaces each vertex of `map` by its value (the vertex that was there stays, the one that
+/// moved onto it goes): edges that fall on one vertex go, edges that fall together become one
+/// (the lower id stays and takes the attributes of the other, and its place in a curve when the
+/// kept edge is in no curve; else the other leaves its curve, so an edge is never in two curves),
+/// loops that lose their area go, a face whose outer loop loses its area goes, and a face whose
+/// loop now touches itself (a wall whose middle collapsed) is cut into the parts that keep an
+/// area. A face that goes with attributes, and an edge attribute that is dropped, give a note.
+fn weld(m: &mut SurfaceModel, map: &BTreeMap<VertexId, VertexId>, notes: &mut Vec<String>) {
     let to = |v: VertexId| *map.get(&v).unwrap_or(&v);
     let mut by_key: BTreeMap<(VertexId, VertexId), EdgeId> = BTreeMap::new();
     let mut gone: Vec<(EdgeId, Option<EdgeId>)> = Vec::new();
@@ -694,15 +830,27 @@ fn weld(m: &mut SurfaceModel, map: &BTreeMap<VertexId, VertexId>) {
         if let (Some(k), Some(attrs)) = (kept, attrs) {
             let into = m.edge_attrs.entry(k).or_default();
             for (name, v) in attrs {
-                into.entry(name).or_insert(v);
+                match into.get(&name) {
+                    Some(own) if *own != v => notes.push(format!(
+                        "edge {id} fell onto edge {k}: its attribute {name} = {v} was dropped \
+                         (edge {k} keeps {own})"
+                    )),
+                    Some(_) => {}
+                    None => {
+                        into.insert(name, v);
+                    }
+                }
             }
         }
+        // The kept edge already in a curve (the ring of a bump pushed back onto the ring it
+        // stands on) keeps that place; the other edge leaves its own curve.
+        let k_curved = kept.is_some_and(|k| m.curves.values().any(|es| es.contains(&k)));
         for (c, es) in &mut m.curves {
             let Some(i) = es.iter().position(|e| *e == id) else {
                 continue;
             };
             match kept {
-                Some(k) if !es.contains(&k) => es[i] = k,
+                Some(k) if !k_curved => es[i] = k,
                 _ => {
                     es.remove(i);
                 }
@@ -720,6 +868,14 @@ fn weld(m: &mut SurfaceModel, map: &BTreeMap<VertexId, VertexId>) {
         .filter(|(_, f)| f.loops().flatten().any(|v| map.contains_key(v)))
         .map(|(id, _)| *id)
         .collect();
+    let gone_note = |id: FaceId, f: &Face, notes: &mut Vec<String>| {
+        if !f.attrs.is_empty() || !f.extra.is_empty() {
+            notes.push(format!(
+                "face {id} lost its area in the flush and went with its attributes"
+            ));
+        }
+    };
+    let mut parts: Vec<Face> = Vec::new();
     for id in ids {
         let mut f = m.faces.remove(&id).expect("listed");
         let clean = |l: &Vec<VertexId>| -> Option<Vec<VertexId>> {
@@ -737,14 +893,56 @@ fn weld(m: &mut SurfaceModel, map: &BTreeMap<VertexId, VertexId>) {
             (l.len() >= 3 && area2 > geom::tol(&pts) * round).then_some(l)
         };
         let Some(outer) = clean(&f.outer) else {
+            gone_note(id, &f, notes);
             continue;
         };
         f.outer = outer;
         f.holes = f.holes.iter().filter_map(&clean).collect();
         f.holes.sort();
+        let touches_itself = f.loops().any(|l| {
+            let mut seen = BTreeSet::new();
+            !l.iter().all(|v| seen.insert(*v))
+        });
+        if !touches_itself {
+            m.faces.insert(id, f);
+            continue;
+        }
+        let mut pieces = cut_apart(m, &f).into_iter();
+        match pieces.next() {
+            Some(first) => {
+                m.faces.insert(id, first);
+                parts.extend(pieces);
+            }
+            None => gone_note(id, &f, notes),
+        }
+    }
+    for f in parts {
+        let id = FaceId(m.alloc());
         m.faces.insert(id, f);
     }
     rechain(m, &recheck);
+}
+
+/// The parts of a face whose loops touch themselves: its sides solved in its plane (a side that
+/// the face uses both ways has the face on both sides and goes), each region on the inner side of
+/// the face's own loops a face with the attributes of the face, the largest first.
+fn cut_apart(m: &SurfaceModel, f: &Face) -> Vec<Face> {
+    let uses: BTreeSet<(VertexId, VertexId)> = f.uses().collect();
+    let keys: BTreeSet<(VertexId, VertexId)> = uses.iter().map(|&(a, b)| key(a, b)).collect();
+    let arr = Arrangement::solve(m, f.plane, &keys);
+    let mut regions: Vec<&Region> = arr
+        .regions
+        .iter()
+        .filter(|r| {
+            let n = r.outer.len();
+            (0..n).any(|i| uses.contains(&(r.outer[i], r.outer[(i + 1) % n])))
+        })
+        .collect();
+    regions.sort_by(|a, b| b.area.total_cmp(&a.area).then(a.outer.cmp(&b.outer)));
+    regions
+        .into_iter()
+        .map(|r| from_region(r, &f.plane, f.plane, Some(f)))
+        .collect()
 }
 
 /// The edges at `targets` where the pushed face now meets a face of the same plane: to be erased
@@ -781,7 +979,9 @@ fn flush_merges(
                 if let Some(e) = m.edge_between(a, b) {
                     out.insert(e);
                 }
-            } else if !same_side && same_way {
+            } else if !same_side {
+                // A face that looks the other way: beside the face (it uses the edge the same
+                // way) or under it (back to back: a slab pushed to zero thickness).
                 return Err(SurfaceError::Unsolved(
                     "the face cannot be pushed through to the opposite face yet".into(),
                 ));
@@ -934,4 +1134,72 @@ fn new_contact(
             !old
         })
         .map(|(e, g, c, _)| (e, g, c))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cap_edge_welded_onto_an_edge_of_a_curve_leaves_its_own_curve() {
+        // A cylinder of 12 sides pulled 300 out of the top of a box: the ring on the top and its
+        // copy on the cap are two curves.
+        let mut m = SurfaceModel::new();
+        let sq = [[0.0, 0.0], [1000.0, 0.0], [1000.0, 1000.0], [0.0, 1000.0]];
+        m.apply(&Edit::AddEdges {
+            edges: (0..4)
+                .map(|i| {
+                    let (a, b) = (sq[i], sq[(i + 1) % 4]);
+                    [[a[0], a[1], 0.0], [b[0], b[1], 0.0]]
+                })
+                .collect(),
+        })
+        .unwrap();
+        let base = *m.faces.keys().next().unwrap();
+        m.apply(&Edit::PushPull {
+            face: base,
+            distance: 500.0,
+        })
+        .unwrap();
+        let points: Vec<[f64; 3]> = (0..12)
+            .map(|i| {
+                let a = std::f64::consts::TAU * f64::from(i) / 12.0;
+                [500.0 + 300.0 * a.cos(), 500.0 + 300.0 * a.sin(), 500.0]
+            })
+            .collect();
+        m.apply(&Edit::AddCurve {
+            points,
+            closed: true,
+        })
+        .unwrap();
+        let disc = *m.faces.iter().find(|(_, f)| f.outer.len() == 12).unwrap().0;
+        m.apply(&Edit::PushPull {
+            face: disc,
+            distance: 300.0,
+        })
+        .unwrap();
+        assert_eq!(m.curves.len(), 2);
+        // Weld each vertex of the cap onto the ring under it, as a push back down does.
+        let ring: Vec<(VertexId, DVec3)> = m
+            .vertices
+            .iter()
+            .filter(|(_, p)| p.z == 500.0)
+            .map(|(id, p)| (*id, *p))
+            .collect();
+        let map: BTreeMap<VertexId, VertexId> = m.faces[&disc]
+            .outer
+            .iter()
+            .map(|v| {
+                let p = m.vertices[v] - DVec3::Z * 300.0;
+                let under = ring.iter().find(|(_, q)| q.distance(p) < 1e-6).unwrap().0;
+                (*v, under)
+            })
+            .collect();
+        let mut notes = Vec::new();
+        weld(&mut m, &map, &mut notes);
+        assert_eq!(check::curves(&m), None, "no edge is in two curves");
+        assert_eq!(m.curves.len(), 1);
+        assert_eq!(m.curves.values().next().unwrap().len(), 12);
+        assert!(notes.is_empty(), "{notes:?}");
+    }
 }
