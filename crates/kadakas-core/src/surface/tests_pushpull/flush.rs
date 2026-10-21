@@ -96,7 +96,8 @@ fn three_strips() -> (SurfaceModel, [FaceId; 3]) {
 #[test]
 fn the_middle_strip_pushed_down_and_back_up_merges_into_one_top_the_same_way_every_time() {
     let (mut m, strips) = three_strips();
-    set_material(&mut m, strips[0], "brick");
+    // The middle strip is the largest, so its material is the look of the merged top.
+    set_material(&mut m, strips[1], "brick");
     pull(&mut m, strips[1], -200.0).unwrap();
     let (mut a, mut b) = (m.clone(), m.clone());
     let notes = a
@@ -120,13 +121,15 @@ fn the_middle_strip_pushed_down_and_back_up_merges_into_one_top_the_same_way_eve
         1
     );
     assert!(a.face(keep).is_some(), "the strip with the lowest id stays");
-    assert_eq!(material(&a, keep), Some("brick"), "the material survives");
-    if keep != strips[0] {
-        assert!(
-            notes.iter().any(|n| n.contains("material")),
-            "the merge says what happened to the material: {notes:?}"
-        );
-    }
+    assert_eq!(
+        material(&a, keep),
+        Some("brick"),
+        "the material of the largest strip is the look of the merged top"
+    );
+    assert!(
+        !notes.iter().any(|n| n.contains("dropped")),
+        "nothing was dropped: {notes:?}"
+    );
     assert_eq!(a.curves().count(), 0);
 }
 
@@ -428,8 +431,9 @@ fn a_hole_under_the_sample_point_does_not_hide_an_overlap() {
 }
 
 #[test]
-fn merging_faces_keeps_the_attributes_of_the_face_that_stays_and_says_what_changed() {
-    // A bump with a material pushed flat: the top stays and takes the material of the cap.
+fn merging_faces_gives_the_larger_face_the_look_and_says_what_was_dropped() {
+    // A bump with a material pushed flat: the top is larger and has none, so the top stays
+    // plain; the material of the cap is dropped, and a note says so (it is not spread).
     let (mut m, top, inner) = box_with_inner_square();
     pull(&mut m, inner, 300.0).unwrap();
     set_material(&mut m, inner, "brick");
@@ -439,9 +443,30 @@ fn merging_faces_keeps_the_attributes_of_the_face_that_stays_and_says_what_chang
             distance: -300.0,
         })
         .unwrap();
-    assert_eq!(material(&m, top), Some("brick"));
-    assert!(notes.iter().any(|n| n.contains("material")), "{notes:?}");
-    // Two materials: the face that stays keeps its own and the note names the dropped one.
+    assert_eq!(
+        material(&m, top),
+        None,
+        "a small face does not paint a large one"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("dropped") && n.contains("brick") && n.contains("has none")),
+        "{notes:?}"
+    );
+    // A bump with no material on a painted top: the top keeps its look, no note.
+    let (mut m, top, inner) = box_with_inner_square();
+    set_material(&mut m, top, "stone");
+    pull(&mut m, inner, 300.0).unwrap();
+    let notes = m
+        .apply_with_notes(&Edit::PushPull {
+            face: inner,
+            distance: -300.0,
+        })
+        .unwrap();
+    assert_eq!(material(&m, top), Some("stone"));
+    assert!(notes.is_empty(), "{notes:?}");
+    // Two materials: the larger face keeps its own and the note names the dropped one.
     let (mut m, top, inner) = box_with_inner_square();
     pull(&mut m, inner, 300.0).unwrap();
     set_material(&mut m, inner, "brick");
@@ -459,15 +484,59 @@ fn merging_faces_keeps_the_attributes_of_the_face_that_stays_and_says_what_chang
             .any(|n| n.contains("dropped") && n.contains("brick")),
         "{notes:?}"
     );
-    // The same rule for Erase.
+    // The same rule for Erase. Two halves of equal area: the lower id decides.
     let (mut m, left, right) = split_top();
     set_material(&mut m, left.max(right), "brick");
     let line = eid(&m, [500.0, 0.0, 500.0], [500.0, 1000.0, 500.0]);
     let notes = m
         .apply_with_notes(&Edit::EraseEdges { edges: vec![line] })
         .unwrap();
-    assert_eq!(material(&m, left.min(right)), Some("brick"));
+    assert_eq!(
+        material(&m, left.min(right)),
+        None,
+        "the lower id decides a tie"
+    );
     assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].contains("dropped") && notes[0].contains("brick"),
+        "{notes:?}"
+    );
+    let (mut m, left, right) = split_top();
+    set_material(&mut m, left.min(right), "brick");
+    let line = eid(&m, [500.0, 0.0, 500.0], [500.0, 1000.0, 500.0]);
+    let notes = m
+        .apply_with_notes(&Edit::EraseEdges { edges: vec![line] })
+        .unwrap();
+    assert_eq!(material(&m, left.min(right)), Some("brick"));
+    assert!(notes.is_empty(), "{notes:?}");
+    // Unequal areas: the larger strip decides, whatever the ids.
+    let (mut m, strips) = three_strips();
+    set_material(&mut m, strips[0], "brick");
+    set_material(&mut m, strips[1], "stone");
+    let line = eid(&m, [300.0, 0.0, 500.0], [300.0, 1000.0, 500.0]);
+    let notes = m
+        .apply_with_notes(&Edit::EraseEdges { edges: vec![line] })
+        .unwrap();
+    let kept = strips[0].min(strips[1]);
+    assert_eq!(
+        material(&m, kept),
+        Some("stone"),
+        "the middle strip is larger"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("dropped") && n.contains("brick")),
+        "{notes:?}"
+    );
+    let (mut m, strips) = three_strips();
+    set_material(&mut m, strips[1], "stone");
+    let line = eid(&m, [300.0, 0.0, 500.0], [300.0, 1000.0, 500.0]);
+    let notes = m
+        .apply_with_notes(&Edit::EraseEdges { edges: vec![line] })
+        .unwrap();
+    assert_eq!(material(&m, strips[0].min(strips[1])), Some("stone"));
+    assert!(notes.is_empty(), "{notes:?}");
     // Equal attributes need no note.
     let (mut m, _, _) = split_top();
     let line = eid(&m, [500.0, 0.0, 500.0], [500.0, 1000.0, 500.0]);

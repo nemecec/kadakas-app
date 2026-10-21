@@ -858,35 +858,52 @@ impl Groups {
     }
 }
 
-/// The attributes of a merged face. The face that stays (`keep`, the lowest id) keeps its own
-/// attributes (a material too) and unknown fields, and takes those of the merged faces `others`
-/// that it does not have. A value of a merged face that differs from the one kept is dropped.
-/// Each change is told in a note, so a merge never drops or spreads a material silently.
-fn merge_attrs(keep: FaceId, into: &mut Face, others: &[(FaceId, Face)], notes: &mut Vec<String>) {
-    macro_rules! take {
-        ($what:literal, $mine:expr, $theirs:expr, $id:expr) => {
-            for (k, v) in $theirs.iter() {
-                match $mine.get(k) {
-                    None => {
-                        notes.push(format!(
-                            "face {keep} took the {} {k} = {v} of face {}, which merged into it",
-                            $what, $id
-                        ));
-                        $mine.insert(k.clone(), v.clone());
-                    }
-                    Some(own) if own != v => notes.push(format!(
-                        "face {} merged into face {keep}: its {} {k} = {v} was dropped (face \
-                         {keep} keeps {own})",
-                        $id, $what
-                    )),
-                    Some(_) => {}
+/// The attributes of a merged face. The id that stays is the lowest (`keep`), but the look is that
+/// of the merged face with the largest area (a tie goes to the lower id): its attributes (a
+/// material too) and unknown fields become those of the new face, whole. Nothing is taken from the
+/// smaller faces, so a small face never changes how a large one looks (a painted bump pushed
+/// flat does not paint the top). Each value of a smaller face that differs from the one kept, or
+/// that the larger face does not have, is dropped with a note, so a merge never drops a material
+/// silently. `taken` is sorted by id and `areas` has the area of each face in the same order.
+fn merge_attrs(
+    keep: FaceId,
+    into: &mut Face,
+    taken: &[(FaceId, Face)],
+    areas: &[f64],
+    notes: &mut Vec<String>,
+) {
+    let mut win = 0;
+    for (i, a) in areas.iter().enumerate() {
+        // `>` keeps the first (lowest id) of equal areas.
+        if *a > areas[win] {
+            win = i;
+        }
+    }
+    let (win_id, winner) = &taken[win];
+    into.attrs = winner.attrs.clone();
+    into.extra = winner.extra.clone();
+    for (i, (id, f)) in taken.iter().enumerate() {
+        if i == win {
+            continue;
+        }
+        for (what, mine, theirs) in [
+            ("attribute", &winner.attrs, &f.attrs),
+            ("field", &winner.extra, &f.extra),
+        ] {
+            for (k, v) in theirs.iter() {
+                let own = mine.get(k);
+                if own != Some(v) {
+                    let kept = match own {
+                        Some(own) => format!("keeps {own}"),
+                        None => "has none".to_string(),
+                    };
+                    notes.push(format!(
+                        "face {id} merged into face {keep}: its {what} {k} = {v} was dropped \
+                         (the larger face {win_id} {kept})"
+                    ));
                 }
             }
-        };
-    }
-    for (id, f) in others {
-        take!("attribute", into.attrs, f.attrs, id);
-        take!("field", into.extra, f.extra, id);
+        }
     }
 }
 
@@ -977,7 +994,11 @@ fn erase_edges(
             )));
         };
         let mut face = from_region(&arr.regions[i], &plane, plane, Some(faces[0]));
-        merge_attrs(keep, &mut face, &taken[1..], notes);
+        let areas: Vec<f64> = taken
+            .iter()
+            .map(|(_, f)| geom::face_area(f, |v| w.pos(v)))
+            .collect();
+        merge_attrs(keep, &mut face, &taken, &areas, notes);
         w.put_face(keep, face);
     }
     w.heal(&ends);
