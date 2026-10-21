@@ -116,8 +116,10 @@ use serde::{Deserialize, Serialize};
 
 mod arrange;
 mod check;
+mod clash;
 mod edit;
 mod geom;
+mod index;
 mod serial;
 pub mod sync;
 mod topo;
@@ -586,8 +588,9 @@ impl SurfaceModel {
         Ok(out)
     }
 
-    /// The full validity check: structure, planes, loop sides, distances, and the manifold state
-    /// of every edge. It takes `O(n log n)` time.
+    /// The full validity check: structure, planes, loop sides, distances, edges that pass through
+    /// a face, coplanar faces that overlap, and the manifold state of every edge. It takes
+    /// `O(n log n)` time (box trees for the faces).
     pub fn check(&self) -> Report {
         check::full(self)
     }

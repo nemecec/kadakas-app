@@ -4,15 +4,19 @@
 //! the sides of the loops, curves, and coplanar faces that overlap at an edge, in `O(n log n)`
 //! time (holes: the size of the hole times the size of the outer loop). The plane test is the one
 //! that the edits use, so a face is valid exactly when the edits see it in its plane. `full` adds the distances (no two vertices, no vertex and edge, no two edges closer than
-//! half the length tolerance unless they meet), overlapping faces, and the manifold state of each
-//! edge, which the solid tools (MOD-09) need.
+//! half the length tolerance unless they meet), the edges that pass through a face, the coplanar
+//! faces that overlap (see `clash`), and the manifold state of each edge, which the solid tools
+//! (MOD-09) need. The geometric checks need a model whose references hold; an edit checks the
+//! geometry that it touched with `near` and `clash` in any case.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DVec2, DVec3};
 
 use super::arrange::inside;
+use super::clash;
 use super::geom::{self, Plane};
+use super::index::BoxTree;
 use super::{
     EdgeId, FaceId, MAX_EDGES, MAX_FACES, MAX_LOOP_VERTICES, MAX_VERTICES, SurfaceModel, VertexId,
     key,
@@ -20,7 +24,7 @@ use super::{
 use crate::model::MAX_COORD;
 
 /// One thing that is wrong with a model.
-#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, thiserror::Error)]
 pub enum Problem {
     #[error("a number is not finite or out of range")]
     Range,
@@ -72,6 +76,10 @@ pub enum Problem {
     ShortEdge(EdgeId),
     #[error("faces {0} and {1} overlap at edge {2}")]
     Overlap(FaceId, FaceId, EdgeId),
+    #[error("edge {0} passes through face {1}")]
+    EdgeThroughFace(EdgeId, FaceId),
+    #[error("faces {0} and {1} lie in one plane and overlap")]
+    FacesOverlap(FaceId, FaceId),
     #[error("curve {0} names an edge that does not exist or is in another curve, or is no chain")]
     BadCurve(super::CurveId),
     #[error("edge {0} has attributes but does not exist")]
@@ -146,8 +154,118 @@ pub(super) fn full(m: &SurfaceModel) -> Report {
     }
     if ok {
         distances(m, &mut r.problems);
+        let c = clash::through_and_overlaps(m, window(m));
+        r.problems.extend(
+            c.through
+                .into_iter()
+                .map(|(e, f)| Problem::EdgeThroughFace(e, f)),
+        );
+        r.problems.extend(
+            c.overlaps
+                .into_iter()
+                .map(|(f, g)| Problem::FacesOverlap(f, g)),
+        );
     }
     r
+}
+
+/// All problems of the fast checks, as a set.
+pub(super) fn structure_problems(m: &SurfaceModel) -> BTreeSet<Problem> {
+    let mut out = BTreeSet::new();
+    structure(m, &mut |p| {
+        out.insert(p);
+        true
+    });
+    out
+}
+
+/// A bound for every length tolerance in the model.
+fn window(m: &SurfaceModel) -> f64 {
+    let biggest = m
+        .vertices
+        .values()
+        .map(|p| geom::size(*p))
+        .fold(0.0, f64::max);
+    geom::tolerance_at(biggest)
+}
+
+/// The distance problems (as in `full`) of pairs in which one item is in `edges` or `verts`: the
+/// vertices of `verts` against all vertices and edges, and the edges of `edges` against all
+/// vertices and edges. The references of the model must hold for these items.
+pub(super) fn near(
+    m: &SurfaceModel,
+    edges: &BTreeSet<EdgeId>,
+    verts: &BTreeSet<VertexId>,
+) -> BTreeSet<Problem> {
+    let window = window(m);
+    let pad = DVec3::splat(window);
+    let ok = |e: &super::Edge| e.v.iter().all(|v| m.vertices.contains_key(v));
+    let tree = BoxTree::new(
+        m.edges
+            .iter()
+            .filter(|(_, e)| ok(e))
+            .map(|(id, e)| {
+                let (a, b) = (m.vertices[&e.v[0]], m.vertices[&e.v[1]]);
+                (a.min(b) - pad, a.max(b) + pad, id.0)
+            })
+            .collect(),
+    );
+    let half = |ps: &[DVec3]| geom::tol(ps) / 2.0;
+    let mut out = BTreeSet::new();
+    let vertex_against = |v: VertexId, p: DVec3, out: &mut BTreeSet<Problem>| {
+        tree.query(p, p, &mut |c| {
+            let c = EdgeId(c);
+            let ce = m.edges[&c];
+            let (x, y) = (m.vertices[&ce.v[0]], m.vertices[&ce.v[1]]);
+            for (w, q) in [(ce.v[0], x), (ce.v[1], y)] {
+                if w != v && p.distance(q) <= half(&[p, q]) {
+                    out.insert(Problem::CloseVertices(v.min(w), v.max(w)));
+                }
+            }
+            if !ce.v.contains(&v) && geom::point_segment(p, x, y).0 <= half(&[x, y, p]) {
+                out.insert(Problem::VertexOnEdge(v, c));
+            }
+        });
+    };
+    for &v in verts {
+        if let Some(p) = m.vertices.get(&v) {
+            vertex_against(v, *p, &mut out);
+        }
+    }
+    for &id in edges {
+        let Some(e) = m.edges.get(&id).filter(|e| ok(e)) else {
+            continue;
+        };
+        let (a, b) = (m.vertices[&e.v[0]], m.vertices[&e.v[1]]);
+        if a.distance(b) <= half(&[a, b]) {
+            out.insert(Problem::ShortEdge(id));
+        }
+        for (v, p) in [(e.v[0], a), (e.v[1], b)] {
+            vertex_against(v, p, &mut out);
+        }
+        tree.query(a.min(b), a.max(b), &mut |c| {
+            let c = EdgeId(c);
+            if c == id {
+                return;
+            }
+            let ce = m.edges[&c];
+            let (x, y) = (m.vertices[&ce.v[0]], m.vertices[&ce.v[1]]);
+            for (w, q) in [(ce.v[0], x), (ce.v[1], y)] {
+                if !e.v.contains(&w) && geom::point_segment(q, a, b).0 <= half(&[a, b, q]) {
+                    out.insert(Problem::VertexOnEdge(w, id));
+                }
+            }
+            if e.v.iter().any(|v| ce.v.contains(v)) {
+                return;
+            }
+            if let Some((_, _, dist)) = geom::segment_segment(a, b, x, y)
+                && dist <= half(&[a, b, x, y])
+            {
+                out.insert(Problem::Crossing(id.min(c), id.max(c)));
+            }
+        });
+    }
+    out
 }
 
 /// Calls `found` for each problem of the fast checks; stops when it returns false.

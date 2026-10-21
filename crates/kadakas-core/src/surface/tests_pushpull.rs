@@ -2,6 +2,7 @@
 
 use glam::DVec3;
 
+use super::geom::{self, Plane};
 use super::*;
 
 type P = [f64; 3];
@@ -553,4 +554,365 @@ fn a_bump_that_would_run_into_another_solid_is_refused() {
     assert!(pull(&mut m, inner, 400.0).is_err());
     assert_eq!(m, before);
     assert!(pull(&mut m, inner, 200.0).is_ok());
+}
+
+/// `count` copies of the box of `box_model`, in a grid with gaps, built from parts (fast).
+fn many_boxes(count: usize) -> SurfaceModel {
+    let one = box_model();
+    let stride = one.next_id();
+    let side = (count as f64).sqrt().ceil() as usize;
+    let (mut vs, mut es, mut fs) = (
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::new(),
+    );
+    for k in 0..count {
+        let off = u32::try_from(k).unwrap() * stride;
+        let shift = DVec3::new((k % side) as f64 * 2000.0, (k / side) as f64 * 2000.0, 0.0);
+        for (id, p) in one.vertices() {
+            vs.insert(VertexId(id.0 + off), p + shift);
+        }
+        for (id, e) in one.edges() {
+            es.insert(
+                EdgeId(id.0 + off),
+                Edge {
+                    v: e.v.map(|v| VertexId(v.0 + off)),
+                },
+            );
+        }
+        for (id, f) in one.faces() {
+            let mv = |l: &Vec<VertexId>| l.iter().map(|v| VertexId(v.0 + off)).collect();
+            let mut g = Face::new(
+                Plane {
+                    normal: f.plane.normal,
+                    offset: f.plane.offset + f.plane.normal.dot(shift),
+                },
+                mv(&f.outer),
+                f.holes.iter().map(mv).collect(),
+            );
+            g.attrs = f.attrs.clone();
+            fs.insert(FaceId(id.0 + off), g);
+        }
+    }
+    let next = u32::try_from(count).unwrap() * stride;
+    SurfaceModel::from_parts(vs, es, fs, next)
+}
+
+/// Timing of one push on a model with about 50 000 edges, the best of five (run with
+/// `--ignored --nocapture`, in release).
+#[test]
+#[ignore = "timing"]
+fn push_pull_timing_on_a_large_model() {
+    let m0 = many_boxes(4200);
+    println!("edges {}, faces {}", m0.edge_count(), m0.face_count());
+    assert!(m0.check().is_valid());
+    let top = m0
+        .faces()
+        .find(|(_, f)| f.plane.normal.z > 0.9)
+        .map(|(id, _)| id)
+        .unwrap();
+    let (mut push, mut check) = (f64::INFINITY, f64::INFINITY);
+    for _ in 0..5 {
+        let mut m = m0.clone();
+        let t = std::time::Instant::now();
+        m.apply(&Edit::PushPull {
+            face: top,
+            distance: 250.0,
+        })
+        .unwrap();
+        push = push.min(t.elapsed().as_secs_f64());
+        let t = std::time::Instant::now();
+        assert!(m.check().is_valid());
+        check = check.min(t.elapsed().as_secs_f64());
+    }
+    println!(
+        "stretch pull: {:.0} ms, one check: {:.0} ms",
+        push * 1e3,
+        check * 1e3
+    );
+}
+
+fn vid(m: &SurfaceModel, p: P) -> VertexId {
+    let p = DVec3::from(p);
+    m.vertices()
+        .find(|(_, q)| q.distance(p) < 1e-6)
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| panic!("no vertex at {p}"))
+}
+
+fn eid(m: &SurfaceModel, a: P, b: P) -> EdgeId {
+    m.edge_between(vid(m, a), vid(m, b)).unwrap()
+}
+
+fn volume(m: &SurfaceModel) -> f64 {
+    m.faces()
+        .map(|(id, f)| {
+            let p0 = m.vertex(f.outer[0]).unwrap();
+            m.face_area(id).unwrap() * f.plane.normal.dot(p0) / 3.0
+        })
+        .sum()
+}
+
+fn refused_with(m: &mut SurfaceModel, face: FaceId, d: f64, words: &str) -> String {
+    let before = m.clone();
+    let e = m
+        .apply(&Edit::PushPull { face, distance: d })
+        .expect_err("the push must be refused");
+    assert_eq!(*m, before, "a refused push changes nothing");
+    let why = e.to_string();
+    assert!(why.contains(words), "{why}");
+    why
+}
+
+/// A plate (a lone square face) at height `z`, from -500 to 1500 in x and y: wider than the box.
+fn plate(m: &mut SurfaceModel, z: f64) {
+    poly(m, &square(-500.0, -500.0, 2000.0, z));
+}
+
+#[test]
+fn stretched_walls_that_would_cut_a_plate_are_refused() {
+    // All edges of the top stretch: no new edge is made, but the walls would pass through the
+    // plate above the box.
+    let mut m = box_model();
+    let top = top_face(&m);
+    plate(&mut m, 800.0);
+    assert!(m.check().is_valid());
+    refused_with(&mut m, top, 500.0, "through");
+    // Up to the plate: the cap would lie in it.
+    refused_with(&mut m, top, 300.0, "through");
+    // Below the plate it is fine.
+    pull(&mut m, top, 200.0).unwrap();
+}
+
+#[test]
+fn the_check_finds_an_edge_through_a_face_and_overlapping_coplanar_faces() {
+    // A plate across the middle of the box: the corner edges pass through it.
+    let mut m = box_model();
+    plate(&mut m, 300.0);
+    let r = m.check();
+    let through = r
+        .problems
+        .iter()
+        .filter(|p| matches!(p, Problem::EdgeThroughFace(..)))
+        .count();
+    assert_eq!(through, 4, "{:?}", r.problems);
+    // A push that does not change the contacts is still allowed on such a model.
+    let top = top_face(&m);
+    let r2 = m.apply(&Edit::PushPull {
+        face: top,
+        distance: 100.0,
+    });
+    assert!(r2.is_ok(), "{r2:?}");
+
+    // Two coplanar faces, one inside the other, with their own vertices.
+    let mut vs = std::collections::BTreeMap::new();
+    let mut es = std::collections::BTreeMap::new();
+    let mut fs = std::collections::BTreeMap::new();
+    let mut id = 1;
+    for (x0, w) in [(0.0, 1000.0), (250.0, 500.0)] {
+        let ids: Vec<VertexId> = square(x0, x0, w, 0.0)
+            .iter()
+            .map(|p| {
+                vs.insert(VertexId(id), DVec3::from(*p));
+                id += 1;
+                VertexId(id - 1)
+            })
+            .collect();
+        for i in 0..4 {
+            es.insert(
+                EdgeId(id),
+                Edge {
+                    v: [ids[i], ids[(i + 1) % 4]],
+                },
+            );
+            id += 1;
+        }
+        fs.insert(
+            FaceId(id),
+            Face::new(
+                Plane {
+                    normal: DVec3::Z,
+                    offset: 0.0,
+                },
+                ids,
+                Vec::new(),
+            ),
+        );
+        id += 1;
+    }
+    let m = SurfaceModel::from_parts(vs, es, fs, id);
+    assert!(m.problem().is_none());
+    assert_eq!(
+        m.check().problems,
+        vec![Problem::FacesOverlap(FaceId(9), FaceId(18))]
+    );
+}
+
+#[test]
+fn a_model_with_a_structural_problem_is_still_checked_where_the_push_moves() {
+    // A line from the place where a corner of the top lands after the pull, away from the box.
+    let mut m = box_model();
+    let top = top_face(&m);
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[0.0, 0.0, 800.0], [-500.0, -500.0, 1200.0]]],
+    })
+    .unwrap();
+    // A loose vertex far away: a structural problem, so the distance checks of the whole model
+    // do not run.
+    let loose = VertexId(m.next_id);
+    m.vertices.insert(loose, DVec3::new(9000.0, 9000.0, 0.0));
+    m.next_id += 1;
+    assert!(m.problem().is_some());
+    refused_with(&mut m, top, 300.0, "");
+    // A pull that keeps clear of the line is fine; the old problem stays and does not count.
+    m.apply(&Edit::PushPull {
+        face: top,
+        distance: 200.0,
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_push_that_fixes_one_problem_and_makes_another_is_refused_and_names_the_new_one() {
+    let mut m = box_model();
+    let top = top_face(&m);
+    // Two lines put in by hand (not welded): one ends on the front edge of the top (a problem the
+    // pull takes away), one ends where that edge will be after the pull (a new problem).
+    let line = |m: &mut SurfaceModel, a: P, b: P| -> EdgeId {
+        let (va, vb, e) = (
+            VertexId(m.next_id),
+            VertexId(m.next_id + 1),
+            EdgeId(m.next_id + 2),
+        );
+        m.next_id += 3;
+        m.vertices.insert(va, DVec3::from(a));
+        m.vertices.insert(vb, DVec3::from(b));
+        m.edges.insert(e, Edge { v: [va, vb] });
+        e
+    };
+    let _old = line(&mut m, [500.0, 0.0, 500.0], [500.0, -500.0, 500.0]);
+    let new = line(&mut m, [300.0, 0.0, 800.0], [300.0, -500.0, 800.0]);
+    // The touch is a vertex on an edge and a crossing; after the pull the new line has the same
+    // two, so the number of problems would not change.
+    let before = m.check().problems.len();
+    assert_eq!(before, 2, "{:?}", m.check().problems);
+    let why = refused_with(&mut m, top, 300.0, "");
+    assert!(why.contains(&format!("edge {new} ")), "{why}");
+}
+
+#[test]
+fn a_replaced_stretch_edge_keeps_its_attributes_and_its_place_in_a_curve() {
+    let (mut m, left, _right) = split_top();
+    let front = eid(&m, [0.0, 0.0, 500.0], [500.0, 0.0, 500.0]);
+    let side = eid(&m, [0.0, 0.0, 500.0], [0.0, 1000.0, 500.0]);
+    m.edge_attrs.insert(
+        front,
+        [("layer".to_string(), serde_json::json!("fence"))].into(),
+    );
+    let c = m.add_curve(vec![side, front]).unwrap();
+    pull(&mut m, left, -200.0).unwrap();
+    // The front edge of the half had a vertex that stays (on the middle line): it is replaced.
+    assert!(m.edge(front).is_none());
+    let now = eid(&m, [0.0, 0.0, 300.0], [500.0, 0.0, 300.0]);
+    assert_eq!(
+        m.edge_attrs(now).and_then(|a| a.get("layer")),
+        Some(&serde_json::json!("fence"))
+    );
+    let es = m
+        .curves()
+        .find(|(id, _)| *id == c)
+        .map(|(_, es)| es.clone());
+    assert_eq!(es, Some(vec![side, now]));
+}
+
+/// The box with the top moved by `dx` in x: the walls at x = 0 and x = 1000 lean a little.
+fn leaning_box(dx: f64) -> SurfaceModel {
+    let b = box_model();
+    let vs: std::collections::BTreeMap<VertexId, DVec3> = b
+        .vertices()
+        .map(|(id, p)| (id, if p.z > 1.0 { p + DVec3::X * dx } else { p }))
+        .collect();
+    let fs = b
+        .faces()
+        .map(|(id, f)| {
+            let pts: Vec<DVec3> = f.outer.iter().map(|v| vs[v]).collect();
+            let mut g = f.clone();
+            g.plane = Plane::new(pts[0], geom::newell(&pts)).unwrap();
+            (id, g)
+        })
+        .collect();
+    let es = b.edges().collect();
+    SurfaceModel::from_parts(vs, es, fs, b.next_id())
+}
+
+#[test]
+fn a_nearly_upright_wall_stretches_for_a_short_push_and_gets_a_new_wall_for_a_long_one() {
+    // The lean is 5e-7 (below the old angle bound of 1e-6).
+    let m0 = leaning_box(2.5e-4);
+    assert!(m0.check().is_closed(), "{:?}", m0.check());
+    let top = top_face(&m0);
+    let mut m = m0.clone();
+    pull(&mut m, top, 100.0).unwrap();
+    assert_eq!(m.face_count(), 6, "a short pull stretches all walls");
+    // 100 m: the corners would leave the leaning walls by 0.05 mm, more than the plane tolerance.
+    let mut m = m0.clone();
+    pull(&mut m, top, 1.0e5).unwrap();
+    assert_eq!(
+        m.face_count(),
+        8,
+        "the two leaning walls get a new wall above them"
+    );
+    assert!(m.check().is_closed());
+}
+
+#[test]
+fn a_top_split_corner_to_corner_pushed_down_merges_the_vertical_with_the_corner_edge() {
+    let mut m = box_model();
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[0.0, 0.0, 500.0], [1000.0, 1000.0, 500.0]]],
+    })
+    .unwrap();
+    // The half with the corner (1000, 0).
+    let half = m
+        .faces()
+        .find(|(_, f)| {
+            f.plane.normal.z > 0.9
+                && f.outer.iter().any(|v| {
+                    m.vertex(*v)
+                        .unwrap()
+                        .distance(DVec3::new(1000.0, 0.0, 500.0))
+                        < 1e-6
+                })
+        })
+        .unwrap()
+        .0;
+    let corner = eid(&m, [0.0, 0.0, 0.0], [0.0, 0.0, 500.0]);
+    pull(&mut m, half, -200.0).unwrap();
+    let r = m.check();
+    assert!(r.is_closed(), "{r:?}");
+    // The corner edges at (0, 0) and (1000, 1000) are split at the height of the new floor; the
+    // lower part keeps the id.
+    assert_eq!(m.edge(corner).unwrap().v[0], vid(&m, [0.0, 0.0, 0.0]));
+    assert_eq!(m.edge(corner).unwrap().v[1], vid(&m, [0.0, 0.0, 300.0]));
+    eid(&m, [0.0, 0.0, 300.0], [0.0, 0.0, 500.0]);
+    eid(&m, [1000.0, 1000.0, 300.0], [1000.0, 1000.0, 500.0]);
+    // 7 faces and one new wall on the diagonal.
+    assert_eq!(m.face_count(), 8);
+    assert!((volume(&m) - 4.0e8).abs() < 1.0, "{}", volume(&m));
+    // The step closes up: the front wall no longer reaches the old top corner.
+    let front = m.faces().find(|(_, f)| f.plane.normal.y < -0.9).unwrap().1;
+    assert_eq!(front.outer.len(), 4, "{front:?}");
+}
+
+#[test]
+fn a_fin_edge_pushed_into_its_wall_is_refused_and_pulled_away_works() {
+    // An apron around the top: each edge of the top has the top, a side wall and the apron.
+    let mut m = box_model();
+    let top = top_face(&m);
+    poly(&mut m, &square(-500.0, -500.0, 2000.0, 500.0));
+    let e = eid(&m, [0.0, 0.0, 500.0], [1000.0, 0.0, 500.0]);
+    assert_eq!(m.faces_of_edge(e).len(), 3);
+    assert!(m.check().is_valid());
+    refused_with(&mut m, top, -200.0, "would lie on face");
+    pull(&mut m, top, 200.0).unwrap();
 }
