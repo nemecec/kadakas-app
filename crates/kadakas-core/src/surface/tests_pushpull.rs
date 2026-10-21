@@ -1105,7 +1105,28 @@ fn the_check_finds_a_partial_overlap_of_coplanar_faces_and_not_a_touch() {
             "{x0}: {:?}",
             r.problems
         );
+        assert!(r.warnings.is_empty());
+        // The second one turned over: the two lie back to back, a warning and no error.
+        let mut m = m;
+        m.apply(&Edit::ReverseFaces {
+            faces: vec![FaceId(18)],
+        })
+        .unwrap();
+        let r = m.check();
+        assert!(
+            !r.problems
+                .iter()
+                .any(|p| matches!(p, Problem::FacesOverlap(..) | Problem::EdgeInFace(..))),
+            "{x0}: {:?}",
+            r.problems
+        );
+        assert_eq!(
+            r.warnings,
+            vec![Problem::BackToBack(FaceId(9), FaceId(18))],
+            "{x0}"
+        );
     }
+    // With holes: see `flush::a_hole_under_the_sample_point_does_not_hide_an_overlap`.
     // Next to each other, sharing a side (with own vertices: those are close vertices, but no
     // overlap), and apart.
     let r = rects(&[(0.0, 0.0, 1000.0, 1000.0), (1000.0, 0.0, 2000.0, 1000.0)]).check();
@@ -1160,7 +1181,18 @@ fn counts(m: &SurfaceModel) -> (usize, usize, usize) {
 
 #[test]
 fn a_bump_pushed_back_down_is_flush_and_merges() {
+    let plain = box_model();
     let (mut m, top, inner) = box_with_inner_square();
+    m.faces
+        .get_mut(&top)
+        .unwrap()
+        .attrs
+        .insert("material".into(), serde_json::json!("stone"));
+    let walls: Vec<(FaceId, Attrs)> = m
+        .faces()
+        .filter(|(_, f)| f.plane.normal.z.abs() < 0.5)
+        .map(|(id, f)| (id, f.attrs.clone()))
+        .collect();
     pull(&mut m, inner, 300.0).unwrap();
     let rev = m.rev();
     pull(&mut m, inner, -300.0).unwrap();
@@ -1169,7 +1201,18 @@ fn a_bump_pushed_back_down_is_flush_and_merges() {
     assert_eq!(counts(&m), (8, 12, 6));
     let t = m.face(top).expect("the top stays");
     assert!(t.holes.is_empty());
+    assert_eq!(t.attrs["material"], "stone", "the top keeps its attributes");
     assert!(m.face(inner).is_none(), "the bump top merged into the top");
+    // The box is the box again: the same vertex and edge ids, the old walls with their
+    // attributes, and no curve.
+    let vs = |m: &SurfaceModel| m.vertices().collect::<Vec<_>>();
+    assert_eq!(vs(&m), vs(&plain));
+    let es = |m: &SurfaceModel| m.edges().map(|(id, _)| id).collect::<Vec<_>>();
+    assert_eq!(es(&m), es(&plain));
+    for (id, attrs) in walls {
+        assert_eq!(m.face(id).unwrap().attrs, attrs);
+    }
+    assert_eq!(m.curves().count(), 0);
 }
 
 #[test]
@@ -1189,13 +1232,36 @@ fn a_pocket_floor_pulled_back_up_restores_the_single_top() {
 
 #[test]
 fn the_second_half_of_a_split_top_pushed_to_the_level_of_the_first_merges() {
+    let plain = box_model();
     let (mut m, left, right) = split_top();
+    let (keep, gone) = (left.min(right), left.max(right));
+    for (f, name) in [(keep, "stone"), (gone, "brick")] {
+        m.faces
+            .get_mut(&f)
+            .unwrap()
+            .attrs
+            .insert("material".into(), serde_json::json!(name));
+    }
     pull(&mut m, left, -200.0).unwrap();
-    pull(&mut m, right, -200.0).unwrap();
+    let notes = m
+        .apply_with_notes(&Edit::PushPull {
+            face: right,
+            distance: -200.0,
+        })
+        .unwrap();
     assert!(m.check().is_closed(), "{:?}", m.check());
     assert_eq!(counts(&m), (8, 12, 6));
     assert_eq!(m.local_bounds().unwrap().1.z, 300.0);
     assert!((volume(&m) - 3.0e8).abs() < 1.0, "{}", volume(&m));
+    // The half with the lower id stays with its own material; the other one is named.
+    assert!(m.face(gone).is_none());
+    assert_eq!(m.face(keep).unwrap().attrs["material"], "stone");
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("brick") && notes[0].contains("dropped"));
+    // The vertices that moved down keep their ids; the ones that met them were welded away.
+    let ids = |m: &SurfaceModel| m.vertices().map(|(id, _)| id).collect::<Vec<_>>();
+    assert_eq!(ids(&m), ids(&plain));
+    assert_eq!(m.curves().count(), 0);
 }
 
 #[test]
@@ -1373,3 +1439,5 @@ fn a_cylinder_on_a_slanted_face_pulls_with_smooth_walls() {
     );
     assert!(m.curves().all(|(_, es)| es.len() == 96));
 }
+
+mod flush;

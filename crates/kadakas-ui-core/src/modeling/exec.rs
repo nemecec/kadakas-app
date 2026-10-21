@@ -92,8 +92,18 @@ pub fn run(
     actions: &[Action],
     undo_first: bool,
 ) -> Result<Option<ObjectId>, String> {
+    run_noted(editor, actions, undo_first).map(|(used, _)| used)
+}
+
+/// Runs the actions like [`run`] and also returns the notes of the commands (what the step changed
+/// that was not asked for, such as the material of a face that merged away), for the status line.
+pub fn run_noted(
+    editor: &mut Editor,
+    actions: &[Action],
+    undo_first: bool,
+) -> Result<(Option<ObjectId>, Vec<String>), String> {
     if actions.is_empty() {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     }
     if undo_first {
         editor.undo();
@@ -138,7 +148,7 @@ pub fn run(
         Ok(())
     });
     match out {
-        Ok(_) => Ok(used),
+        Ok(o) => Ok((used, o.notes)),
         Err(e) => {
             // The step that was taken back for the redo comes back: a refused value loses nothing.
             if undo_first {

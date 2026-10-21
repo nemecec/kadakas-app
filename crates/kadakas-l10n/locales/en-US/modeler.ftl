@@ -138,4 +138,5 @@ modeler-entity-curve-value = { $id } ({ $edges } edges)
 modeler-entity-face-uses = Faces on it
 modeler-entity-parts = { $faces } faces and { $edges } edges
 modeler-edit-failed = The edit failed: { $reason }
+modeler-edit-note = Done. Note: { $note }
 modeler-delete-nothing = Nothing is selected to delete.

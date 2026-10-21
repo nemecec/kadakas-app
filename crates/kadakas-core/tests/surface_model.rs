@@ -162,6 +162,54 @@ fn the_command_reads_and_writes_as_json() {
 }
 
 #[test]
+fn a_merge_that_drops_a_material_says_so_in_the_result() {
+    // Two halves of a square, the right one with a material.
+    let mut m = SurfaceModel::new();
+    m.apply(&square(1000.0)).unwrap();
+    let line = Edit::AddEdges {
+        edges: vec![[[500.0, 0.0, 0.0], [500.0, 1000.0, 0.0]]],
+    };
+    m.apply(&line).unwrap();
+    let mut v = serde_json::to_value(&m).unwrap();
+    v["faces"][1]["attrs"] = serde_json::json!({"material": "brick"});
+    let m: SurfaceModel = serde_json::from_value(v).unwrap();
+    let edge = m
+        .edges()
+        .find(|(_, e)| {
+            e.v.iter()
+                .all(|x| (m.vertex(*x).unwrap().x - 500.0).abs() < 1e-9)
+        })
+        .unwrap()
+        .0;
+    let mut ed = Editor::with_sequential_ids();
+    let id = ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::SurfaceModel(Box::new(m)),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let out = ed
+        .execute(&Command::EditSurface {
+            id,
+            edit: Edit::EraseEdges { edges: vec![edge] },
+        })
+        .unwrap();
+    assert_eq!(model(&ed, id).face_count(), 1);
+    assert_eq!(out.notes.len(), 1, "{:?}", out.notes);
+    assert!(out.notes[0].contains("material"), "{:?}", out.notes);
+    // The notes are in the JSON of the result; an edit without notes has none.
+    assert!(serde_json::to_value(&out).unwrap()["notes"].is_array());
+    let out = ed
+        .execute(&Command::EditSurface { id, edit: line })
+        .unwrap();
+    assert!(serde_json::to_value(&out).unwrap().get("notes").is_none());
+}
+
+#[test]
 fn the_file_keeps_the_model() {
     let mut ed = Editor::with_sequential_ids();
     let id = add_model(&mut ed);

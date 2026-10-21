@@ -48,16 +48,30 @@ pub(super) mod reference;
 use near::{Near, Points, Runs, Walks};
 
 /// Runs `edit` on `m`, a copy of `before` (the model as it was, which Push/Pull compares with).
+/// Returns the notes of the edit (see `merge_attrs`).
 pub(super) fn run(
     m: &mut SurfaceModel,
     edit: &Edit,
     before: &SurfaceModel,
+) -> Result<Vec<String>, SurfaceError> {
+    let mut notes = Vec::new();
+    run_noted(m, edit, before, &mut notes)?;
+    Ok(notes)
+}
+
+fn run_noted(
+    m: &mut SurfaceModel,
+    edit: &Edit,
+    before: &SurfaceModel,
+    notes: &mut Vec<String>,
 ) -> Result<(), SurfaceError> {
     match edit {
         Edit::AddEdges { edges } => add_edges(m, edges),
-        Edit::EraseEdges { edges } => erase_edges(m, edges),
+        Edit::EraseEdges { edges } => erase_edges(m, edges, notes),
         Edit::AddCurve { points, closed } => add_curve(m, points, *closed),
-        Edit::PushPull { face, distance } => pushpull::push_pull(m, before, *face, *distance),
+        Edit::PushPull { face, distance } => {
+            pushpull::push_pull(m, before, *face, *distance, notes)
+        }
         Edit::EraseFaces { faces } => {
             let ids = existing_faces(m, faces)?;
             let mut w = Work::new(m);
@@ -1171,7 +1185,43 @@ impl Groups {
     }
 }
 
-fn erase_edges(m: &mut SurfaceModel, ids: &[EdgeId]) -> Result<(), SurfaceError> {
+/// The attributes of a merged face. The face that stays (`keep`, the lowest id) keeps its own
+/// attributes (a material too) and unknown fields, and takes those of the merged faces `others`
+/// that it does not have. A value of a merged face that differs from the one kept is dropped.
+/// Each change is told in a note, so a merge never drops or spreads a material silently.
+fn merge_attrs(keep: FaceId, into: &mut Face, others: &[(FaceId, Face)], notes: &mut Vec<String>) {
+    macro_rules! take {
+        ($what:literal, $mine:expr, $theirs:expr, $id:expr) => {
+            for (k, v) in $theirs.iter() {
+                match $mine.get(k) {
+                    None => {
+                        notes.push(format!(
+                            "face {keep} took the {} {k} = {v} of face {}, which merged into it",
+                            $what, $id
+                        ));
+                        $mine.insert(k.clone(), v.clone());
+                    }
+                    Some(own) if own != v => notes.push(format!(
+                        "face {} merged into face {keep}: its {} {k} = {v} was dropped (face \
+                         {keep} keeps {own})",
+                        $id, $what
+                    )),
+                    Some(_) => {}
+                }
+            }
+        };
+    }
+    for (id, f) in others {
+        take!("attribute", into.attrs, f.attrs, id);
+        take!("field", into.extra, f.extra, id);
+    }
+}
+
+fn erase_edges(
+    m: &mut SurfaceModel,
+    ids: &[EdgeId],
+    notes: &mut Vec<String>,
+) -> Result<(), SurfaceError> {
     let ids: BTreeSet<EdgeId> = ids.iter().copied().collect();
     if let Some(id) = ids.iter().find(|id| !m.edges.contains_key(id)) {
         return Err(SurfaceError::NoEdge(*id));
@@ -1208,18 +1258,24 @@ fn erase_edges(m: &mut SurfaceModel, ids: &[EdgeId]) -> Result<(), SurfaceError>
         let r = groups.root(f);
         by_root.entry(r).or_default().push(f);
     }
-    let mut merges: Vec<(Vec<FaceId>, Vec<Face>)> = Vec::new();
+    // Each merge: its faces, the lowest id first.
+    let mut merges: Vec<Vec<(FaceId, Face)>> = Vec::new();
     for (root, fs) in by_root {
-        let faces: Vec<Face> = fs.iter().filter_map(|f| w.take_face(*f)).collect();
-        if root != EMPTY {
-            merges.push((fs, faces));
+        let faces: Vec<(FaceId, Face)> = fs
+            .iter()
+            .filter_map(|f| w.take_face(*f).map(|g| (*f, g)))
+            .collect();
+        if root != EMPTY && !faces.is_empty() {
+            merges.push(faces);
         }
     }
     for &e in &ids {
         w.remove_edge(e);
     }
-    for (fs, faces) in merges {
-        let keep = fs[0];
+    for taken in merges {
+        let keep = taken[0].0;
+        let fs: Vec<FaceId> = taken.iter().map(|(id, _)| *id).collect();
+        let faces: Vec<&Face> = taken.iter().map(|(_, f)| f).collect();
         let plane = faces[0].plane;
         let mut area = Area::EMPTY;
         for f in &faces {
@@ -1247,7 +1303,8 @@ fn erase_edges(m: &mut SurfaceModel, ids: &[EdgeId]) -> Result<(), SurfaceError>
                 "the merge of faces {fs:?} has no region"
             )));
         };
-        let face = from_region(&arr.regions[i], &plane, plane, Some(&faces[0]));
+        let mut face = from_region(&arr.regions[i], &plane, plane, Some(faces[0]));
+        merge_attrs(keep, &mut face, &taken[1..], notes);
         w.put_face(keep, face);
     }
     w.heal(&ends);

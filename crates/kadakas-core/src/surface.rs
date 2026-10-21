@@ -376,14 +376,21 @@ impl SurfaceModel {
     /// Runs one edit. On an error the model is unchanged. An edit that changes the geometry adds
     /// one to the revision and goes into the log as an intent that can be replayed (see [`sync`]).
     pub fn apply(&mut self, edit: &Edit) -> Result<(), SurfaceError> {
+        self.apply_with_notes(edit).map(|_| ())
+    }
+
+    /// Runs one edit like [`SurfaceModel::apply`] and returns its notes: what the edit changed
+    /// that the person did not ask for, such as the attributes of a face that merged into
+    /// another one (see the module `edit`). Empty for most edits.
+    pub fn apply_with_notes(&mut self, edit: &Edit) -> Result<Vec<String>, SurfaceError> {
         let intent = sync::Intent::of(self, edit);
         let mut work = self.clone();
-        edit::run(&mut work, edit, self)?;
+        let notes = edit::run(&mut work, edit, self)?;
         if !work.same_geometry(self) {
             sync::record(&mut work, self, intent);
         }
         *self = work;
-        Ok(())
+        Ok(notes)
     }
 
     /// True if the vertices, edges, faces, curves and attributes are the same.

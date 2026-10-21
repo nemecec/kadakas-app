@@ -138,4 +138,5 @@ modeler-entity-curve-value = { $id } ({ $edges } serva)
 modeler-entity-face-uses = Tahke sellel
 modeler-entity-parts = { $faces } tahku ja { $edges } serva
 modeler-edit-failed = Muudatus ebaõnnestus: { $reason }
+modeler-edit-note = Tehtud. Märkus: { $note }
 modeler-delete-nothing = Kustutamiseks pole midagi valitud.

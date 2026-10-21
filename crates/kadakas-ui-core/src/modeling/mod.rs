@@ -22,7 +22,7 @@ mod scenes;
 pub mod select;
 mod tools;
 
-pub use exec::{Action, Target, run as run_actions};
+pub use exec::{Action, Target, run as run_actions, run_noted as run_actions_noted};
 pub use plane::Plane3;
 pub use scenes::{SceneCache, Scenes, World, elevation, frame_of, model_of};
 pub use select::{Item, SubSelection};
