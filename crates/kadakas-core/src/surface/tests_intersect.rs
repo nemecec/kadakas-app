@@ -248,16 +248,368 @@ fn a_hole_is_no_part_of_a_face_that_is_intersected() {
     );
     assert_eq!(not_intersected(&m).len(), 4, "{:?}", not_intersected(&m));
     intersect_all(&mut m);
-    // No new edge runs inside the hole (1000 < x < 2000 on the line y = 0, z = 1500).
-    for (_, e) in m.edges() {
-        let (a, b) = (m.vertex(e.v[0]).unwrap(), m.vertex(e.v[1]).unwrap());
-        let mid = (a + b) / 2.0;
-        let in_hole = mid.y.abs() < 1e-6
-            && (mid.z - z).abs() < 1e-6
-            && mid.x > 1000.0 + 1e-6
-            && mid.x < 2000.0 - 1e-6;
-        assert!(!in_hole, "{a:?} {b:?}");
+    // The edges on the line y = 0, z = 1500: exactly the two pieces where the plate has area,
+    // from its border to the sides of the hole, and nothing inside the hole.
+    let mut on_line = line_edges(&m, |p| p.y.abs() < 1e-6 && (p.z - z).abs() < 1e-6);
+    on_line.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert_eq!(on_line, vec![(0.0, 1000.0), (2000.0, 3000.0)]);
+    // The vertical plate is cut into the part above and the part below (each with half of the
+    // hole as a notch); the horizontal plate is not split.
+    let vertical = m
+        .faces()
+        .filter(|(_, f)| f.plane.normal.y.abs() > 0.99)
+        .count();
+    assert_eq!(vertical, 2);
+    assert_eq!(m.face_count(), 3);
+}
+
+/// The x ranges of the edges whose two ends pass `on`, merged where they meet.
+fn line_edges(m: &SurfaceModel, on: impl Fn(DVec3) -> bool) -> Vec<(f64, f64)> {
+    let mut spans: Vec<(f64, f64)> = m
+        .edges()
+        .filter_map(|(_, e)| {
+            let (a, b) = (m.vertex(e.v[0]).unwrap(), m.vertex(e.v[1]).unwrap());
+            (on(a) && on(b)).then(|| (a.x.min(b.x), a.x.max(b.x)))
+        })
+        .collect();
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for (lo, hi) in spans {
+        match out.last_mut() {
+            Some(l) if (l.1 - lo).abs() < 1e-6 => l.1 = hi,
+            _ => out.push((lo, hi)),
+        }
     }
+    out
+}
+
+/// Puts a line (an edge with no face) into the model as a file or an import can hold it, without
+/// the rules of `add_edges` (no weld, no split). Returns its edge.
+fn put_line(m: &mut SurfaceModel, a: P, b: P) -> EdgeId {
+    let vertex = |m: &mut SurfaceModel, p: P| {
+        let p = DVec3::from(p);
+        let found = m.vertices().find(|(_, q)| q.distance(p) < 1e-9);
+        match found {
+            Some((v, _)) => v,
+            None => {
+                let v = VertexId(m.alloc());
+                m.vertices.insert(v, p);
+                v
+            }
+        }
+    };
+    let (va, vb) = (vertex(m, a), vertex(m, b));
+    let e = EdgeId(m.alloc());
+    m.edges.insert(e, Edge { v: [va, vb] });
+    e
+}
+
+#[test]
+fn a_crossing_left_out_splits_no_edge_and_stays_a_warning() {
+    // A plate z = 0 with two lines 8 µm apart across the place where a wall stands through it:
+    // the piece between the lines would be shorter than the tolerance.
+    let mut m = SurfaceModel::new();
+    add(&mut m, square(0.0, 0.0, 3000.0, 0.0));
+    put_line(&mut m, [1500.0, 1200.0, 0.0], [1500.0, 1800.0, 0.0]);
+    put_line(&mut m, [1500.008, 1200.0, 0.0], [1500.008, 1800.0, 0.0]);
+    let rect = [
+        [1000.0, 1500.0, -500.0],
+        [2000.0, 1500.0, -500.0],
+        [2000.0, 1500.0, 500.0],
+        [1000.0, 1500.0, 500.0],
+    ];
+    add(
+        &mut m,
+        (0..4).map(|i| [rect[i], rect[(i + 1) % 4]]).collect(),
+    );
+    let r = m.check();
+    assert!(r.is_valid(), "{:?}", r.problems);
+    // The two verticals of the wall pass through the plate, and the two lines through the wall.
+    assert_eq!(r.not_intersected(), 4);
+    let (vertices, edges) = (m.vertex_count(), m.edge_count());
+    let notes = m.apply_with_notes(&model_scope()).unwrap();
+    // Only a line (no face) is split where it passes through the wall: the first one. The second
+    // one passes within the tolerance of that split and stays whole. The piece of the crossing is
+    // not drawn: no hidden T-vertex on the verticals, and their warnings stay.
+    assert_eq!(
+        (m.vertex_count(), m.edge_count()),
+        (vertices + 1, edges + 1)
+    );
+    for x in [1000.0, 2000.0] {
+        let p = DVec3::new(x, 1500.0, 0.0);
+        assert!(
+            m.vertices().all(|(_, q)| q.distance(p) > 1.0),
+            "a vertex at {p:?}"
+        );
+    }
+    let r = m.check();
+    assert!(r.is_valid(), "{:?}", r.problems);
+    assert_eq!(r.not_intersected(), 3);
+    for w in &r.warnings {
+        let Problem::NotIntersected(_, _, at) = w else {
+            continue;
+        };
+        let x = at.point().x;
+        assert!([1000.0, 2000.0, 1500.008].contains(&x), "{w}");
+    }
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|n| n.contains("it is split there"))
+            .count(),
+        1,
+        "{notes:?}"
+    );
+    assert!(
+        notes.iter().any(|n| n.contains("was left out")),
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes.iter().filter(|n| n.contains("still passes")).count(),
+        3,
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn a_shallow_crossing_far_from_the_origin_is_intersected() {
+    // Survey coordinates (650 km): a vertical plate in the plane x = X0, and a face that is
+    // turned 1e-7 radians from it. They cross on the line x = X0, y = Y0 for 1 m (z 0 to 1000).
+    let (x0, y0) = (6.5e8, 6.4e8);
+    let mut m = SurfaceModel::new();
+    let quad =
+        |pts: [P; 4]| -> Vec<[P; 2]> { (0..4).map(|i| [pts[i], pts[(i + 1) % 4]]).collect() };
+    add(
+        &mut m,
+        quad([
+            [x0, y0 - 3e6, 0.0],
+            [x0, y0 + 3e6, 0.0],
+            [x0, y0 + 3e6, 1000.0],
+            [x0, y0 - 3e6, 1000.0],
+        ]),
+    );
+    let tilt = |y: f64| x0 + (y - y0) * 1e-7;
+    add(
+        &mut m,
+        quad([
+            [tilt(y0 - 5e6), y0 - 5e6, -500.0],
+            [tilt(y0 + 5e6), y0 + 5e6, -500.0],
+            [tilt(y0 + 5e6), y0 + 5e6, 1500.0],
+            [tilt(y0 - 5e6), y0 - 5e6, 1500.0],
+        ]),
+    );
+    assert_eq!(m.face_count(), 2);
+    assert_eq!(not_intersected(&m).len(), 2, "{:?}", not_intersected(&m));
+    intersect_all(&mut m);
+    // One edge on the line, from the bottom to the top of the plate.
+    let tol = tolerance_at(x0);
+    let on = |p: DVec3| (p.x - x0).abs() < tol && (p.y - y0).abs() < tol;
+    let ends: Vec<(f64, f64)> = m
+        .edges()
+        .filter_map(|(_, e)| {
+            let (a, b) = (m.vertex(e.v[0]).unwrap(), m.vertex(e.v[1]).unwrap());
+            (on(a) && on(b)).then(|| (a.z.min(b.z), a.z.max(b.z)))
+        })
+        .collect();
+    assert_eq!(ends.len(), 1, "{ends:?}");
+    assert!(
+        ends[0].0.abs() < tol && (ends[0].1 - 1000.0).abs() < tol,
+        "{ends:?}"
+    );
+    // The plate is cut in two; the turned face only gets the line.
+    assert_eq!(m.face_count(), 3);
+}
+
+#[test]
+fn a_crossing_that_ends_on_a_border_makes_one_edge_and_splits_the_border() {
+    // A square z = 0 (0 to 1000), and a vertical square in the plane y = 500 from x 500 to 1500:
+    // the crossing runs from inside the first square to its border at x = 1000.
+    let mut m = SurfaceModel::new();
+    add(&mut m, square(0.0, 0.0, 1000.0, 0.0));
+    let rect = [
+        [500.0, 500.0, -500.0],
+        [1500.0, 500.0, -500.0],
+        [1500.0, 500.0, 500.0],
+        [500.0, 500.0, 500.0],
+    ];
+    add(
+        &mut m,
+        (0..4).map(|i| [rect[i], rect[(i + 1) % 4]]).collect(),
+    );
+    assert_eq!(not_intersected(&m).len(), 2);
+    let edges = m.edge_count();
+    intersect_all(&mut m);
+    // One new edge, and two splits: the border x = 1000 (a T-junction) and the vertical x = 500.
+    assert_eq!(m.edge_count(), edges + 3);
+    let line = line_edges(&m, |p| (p.y - 500.0).abs() < 1e-6 && p.z.abs() < 1e-6);
+    assert_eq!(line, vec![(500.0, 1000.0)]);
+    let t = m
+        .vertices()
+        .find(|(_, p)| p.distance(DVec3::new(1000.0, 500.0, 0.0)) < 1e-6)
+        .map(|(v, _)| v)
+        .expect("the border is split");
+    let border = m
+        .edges()
+        .filter(|(_, e)| e.v.contains(&t))
+        .filter(|(_, e)| {
+            let o = m.vertex(e.other(t).unwrap()).unwrap();
+            (o.x - 1000.0).abs() < 1e-6 && o.z.abs() < 1e-6
+        })
+        .count();
+    assert_eq!(border, 2, "the border edge x = 1000 is in two parts");
+    // Neither face is cut through: the new edge ends inside both.
+    assert_eq!(m.face_count(), 2);
+}
+
+#[test]
+fn a_crossing_through_a_corner_of_a_hole_welds_at_the_corner() {
+    // A vertical plate y = 0 (x and z 0 to 3000) with a diamond hole whose left and right corners
+    // lie on the line z = 1500, and a horizontal plate z = 1500 through it.
+    let mut m = SurfaceModel::new();
+    let ring = |pts: &[P]| -> Vec<[P; 2]> {
+        (0..pts.len())
+            .map(|i| [pts[i], pts[(i + 1) % pts.len()]])
+            .collect()
+    };
+    add(
+        &mut m,
+        ring(&[
+            [0.0, 0.0, 0.0],
+            [3000.0, 0.0, 0.0],
+            [3000.0, 0.0, 3000.0],
+            [0.0, 0.0, 3000.0],
+        ]),
+    );
+    add(
+        &mut m,
+        ring(&[
+            [1500.0, 0.0, 1000.0],
+            [2000.0, 0.0, 1500.0],
+            [1500.0, 0.0, 2000.0],
+            [1000.0, 0.0, 1500.0],
+        ]),
+    );
+    let inner = m
+        .faces()
+        .find(|(id, _)| (m.face_area(*id).unwrap() - 5e5).abs() < 1.0)
+        .unwrap()
+        .0;
+    m.apply(&Edit::EraseFaces { faces: vec![inner] }).unwrap();
+    let corner = |x: f64| {
+        m.vertices()
+            .find(|(_, p)| p.distance(DVec3::new(x, 0.0, 1500.0)) < 1e-6)
+            .unwrap()
+            .0
+    };
+    let (left, right) = (corner(1000.0), corner(2000.0));
+    add(
+        &mut m,
+        ring(&[
+            [-500.0, -500.0, 1500.0],
+            [3500.0, -500.0, 1500.0],
+            [3500.0, 500.0, 1500.0],
+            [-500.0, 500.0, 1500.0],
+        ]),
+    );
+    assert_eq!(not_intersected(&m).len(), 2);
+    let vertices = m.vertex_count();
+    intersect_all(&mut m);
+    // Two pieces, welded at the corners of the hole (no new vertex there).
+    let line = line_edges(&m, |p| p.y.abs() < 1e-6 && (p.z - 1500.0).abs() < 1e-6);
+    assert_eq!(line, vec![(0.0, 1000.0), (2000.0, 3000.0)]);
+    assert_eq!(
+        m.vertex_count(),
+        vertices + 2,
+        "only the two splits of the outer border"
+    );
+    for v in [left, right] {
+        let flat = m
+            .edges()
+            .filter(|(_, e)| e.v.contains(&v))
+            .filter(|(_, e)| {
+                let o = m.vertex(e.other(v).unwrap()).unwrap();
+                (o.z - 1500.0).abs() < 1e-6
+            })
+            .count();
+        assert_eq!(flat, 1, "the piece ends at the corner {v}");
+    }
+    // The vertical plate is cut into the part above and the part below.
+    assert_eq!(m.face_count(), 3);
+}
+
+#[test]
+fn a_line_along_the_crossing_does_not_stop_the_faces_from_splitting() {
+    // Two faces that cross on y = 0, z = 0 (their borders already meet at the ends of the line),
+    // and a line along the crossing that no face uses, as a file can hold it. Drawn by
+    // `add_edges`, such a line would split both faces at once, so it is put in directly.
+    let mut m = SurfaceModel::new();
+    let quad =
+        |pts: [P; 4]| -> Vec<[P; 2]> { (0..4).map(|i| [pts[i], pts[(i + 1) % 4]]).collect() };
+    add(
+        &mut m,
+        quad([
+            [0.0, -500.0, 0.0],
+            [1000.0, -500.0, 0.0],
+            [1000.0, 500.0, 0.0],
+            [0.0, 500.0, 0.0],
+        ]),
+    );
+    add(
+        &mut m,
+        quad([
+            [0.0, 0.0, -500.0],
+            [1000.0, 0.0, -500.0],
+            [1000.0, 0.0, 500.0],
+            [0.0, 0.0, 500.0],
+        ]),
+    );
+    assert_eq!(m.face_count(), 2);
+    let line = put_line(&mut m, [0.0, 0.0, 0.0], [1000.0, 0.0, 0.0]);
+    assert!(m.check().is_valid());
+    intersect_all(&mut m);
+    // Both faces split along the line, which is now their edge.
+    assert_eq!(m.face_count(), 4);
+    assert_eq!(m.faces_of_edge(line).len(), 4);
+}
+
+#[test]
+fn a_run_over_the_edge_limit_is_refused_and_changes_nothing() {
+    // 3,420 small walls through one plate: each makes a new edge and two splits, more than
+    // `MAX_EDIT_EDGES` new edges in one run, though there are fewer pieces than that.
+    let mut m = SurfaceModel::new();
+    add(&mut m, square(-500.0, -500.0, 19_000.0, 0.0));
+    let mut batch = Vec::new();
+    for i in 0..60 {
+        for j in 0..57 {
+            let (x, y) = (f64::from(i) * 300.0, f64::from(j) * 300.0);
+            let r = [
+                [x, y, -100.0],
+                [x + 200.0, y, -100.0],
+                [x + 200.0, y, 100.0],
+                [x, y, 100.0],
+            ];
+            batch.extend((0..4).map(|k| [r[k], r[(k + 1) % 4]]));
+            if batch.len() >= 9000 {
+                add(&mut m, std::mem::take(&mut batch));
+            }
+        }
+    }
+    add(&mut m, batch);
+    assert!(m.face_count() < MAX_EDIT_EDGES);
+    let before = m.clone();
+    let e = m.apply(&model_scope()).unwrap_err();
+    assert!(
+        matches!(
+            e,
+            SurfaceError::Limit {
+                max: MAX_EDIT_EDGES,
+                ..
+            }
+        ),
+        "{e}"
+    );
+    assert!(e.to_string().contains("new edges"), "{e}");
+    assert_eq!(m, before);
 }
 
 #[test]
@@ -323,8 +675,29 @@ fn intersect_with_selection_only_resolves_the_chosen_faces() {
     assert_eq!(m, twin);
     let r = m.check();
     assert!(r.is_valid(), "{:?}", r.problems);
-    // The other box and plane are left as they were.
+    // The first plane gets a hole and an inner face, the walls of the first box are cut in two;
+    // the other box and plane are left as they were.
     assert_eq!(r.not_intersected(), 4);
+    assert_eq!(m.face_count(), 6 + 1 + 6 + 1 + 1 + 4);
+    let near_first = |m: &SurfaceModel, flat: bool| {
+        m.faces()
+            .filter(|(id, f)| {
+                (f.plane.normal.z.abs() > 0.99) == flat && m.face_bounds(*id).unwrap().1.x <= 1500.0
+            })
+            .count()
+    };
+    assert_eq!(
+        near_first(&m, true),
+        2 + 2,
+        "top and bottom, the ring and the inner face"
+    );
+    assert_eq!(near_first(&m, false), 4 * 2, "each wall in two");
+    let far = |m: &SurfaceModel| {
+        m.faces()
+            .filter(|(id, _)| m.face_bounds(*id).unwrap().0.x >= 4500.0)
+            .count()
+    };
+    assert_eq!(far(&m), 6 + 1, "the second box and plane unchanged");
     for w in &r.warnings {
         if let Problem::NotIntersected(_, _, at) = w {
             assert!(at.point().x > 4000.0, "{w}");
@@ -349,7 +722,14 @@ fn intersect_with_selection_only_resolves_the_chosen_faces() {
     })
     .unwrap();
     assert_eq!(m.check().not_intersected(), 0);
-    assert_eq!(m.edge_count(), 6);
+    // The line is in two parts that meet at the face; the face is not split.
+    assert_eq!((m.edge_count(), m.face_count()), (6, 1));
+    let mid = m
+        .vertices()
+        .find(|(_, p)| p.distance(DVec3::new(500.0, 500.0, 0.0)) < 1e-6)
+        .unwrap()
+        .0;
+    assert_eq!(m.edges().filter(|(_, e)| e.v.contains(&mid)).count(), 2);
 }
 
 #[test]
@@ -552,6 +932,10 @@ proptest! {
                             prop_assert!(notes.iter().any(|n| n.contains("still passes")));
                         }
                     }
+                    // A crossing that was left out is still there to see.
+                    if notes.iter().any(|n| n.contains("was left out")) {
+                        prop_assert!(report.not_intersected() > 0, "{:?}", notes);
+                    }
                     let (a, b) = (m.area(), before.area());
                     prop_assert!((a - b).abs() <= 1e-6 * b.max(1.0), "area {} -> {}", b, a);
                     let again = m.clone();
@@ -591,17 +975,39 @@ fn intersect_timing() {
     let t = std::time::Instant::now();
     let warned = m.check().not_intersected();
     let check_s = t.elapsed().as_secs_f64();
+    // All at once would make about 13,440 new edges, more than `MAX_EDIT_EDGES`: refused.
+    assert!(matches!(
+        m.clone().apply(&model_scope()),
+        Err(SurfaceError::Limit { .. })
+    ));
+    // So in three runs With Selection: the walls of a third of the boxes each.
+    let walls: Vec<FaceId> = m
+        .faces()
+        .filter(|(_, f)| f.plane.normal.z.abs() < 0.5)
+        .filter(|(id, _)| m.face_bounds(*id).unwrap().0.z < 0.0)
+        .map(|(id, _)| id)
+        .collect();
     let t = std::time::Instant::now();
-    let notes = m.apply_with_notes(&model_scope()).unwrap();
+    let mut notes = Vec::new();
+    for part in walls.chunks(walls.len().div_ceil(3)) {
+        notes.extend(
+            m.apply_with_notes(&Edit::IntersectFaces {
+                scope: IntersectScope::Selection,
+                faces: part.to_vec(),
+                edges: Vec::new(),
+            })
+            .unwrap(),
+        );
+    }
     let run_s = t.elapsed().as_secs_f64();
     let t = std::time::Instant::now();
     let again = m.apply_with_notes(&model_scope()).unwrap();
     let again_s = t.elapsed().as_secs_f64();
     let r = m.check();
     eprintln!(
-        "intersect: {faces} faces, {warned} warnings before; check {check_s:.3} s; intersect \
-         {run_s:.3} s -> {} faces, {} edges ({notes:?}); second run {again_s:.3} s ({again:?}); \
-         {} warnings left",
+        "intersect: {faces} faces, {warned} warnings before; check {check_s:.3} s; intersect in \
+         three runs {run_s:.3} s -> {} faces, {} edges ({notes:?}); a run on the whole model \
+         after it {again_s:.3} s ({again:?}); {} warnings left",
         m.face_count(),
         m.edge_count(),
         r.not_intersected()

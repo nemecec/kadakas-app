@@ -155,6 +155,12 @@ struct Work<'a> {
     near: Option<Near>,
 }
 
+/// Where a point snaps to: a vertex, or a point inside an edge (that edge is split there).
+enum Snap {
+    Vertex(VertexId),
+    Split(EdgeId, DVec3),
+}
+
 /// A point where a new edge must be split.
 enum Hit {
     Vertex(VertexId),
@@ -340,6 +346,15 @@ impl<'a> Work<'a> {
         a: DVec3,
         touched: &mut BTreeSet<(VertexId, VertexId)>,
     ) -> Option<VertexId> {
+        match self.snap_target(a)? {
+            Snap::Vertex(v) => Some(v),
+            Snap::Split(e, x) => Some(self.split_edge(e, x, touched)),
+        }
+    }
+
+    /// What [`Work::snap_existing`] does for the point, without a change: the vertex it takes, or
+    /// the edge it splits and where.
+    fn snap_target(&self, a: DVec3) -> Option<Snap> {
         // The index finds the vertices and edges within the largest tolerance (each tolerance below
         // is at most that; twice for rounding).
         let (lo, hi) = match &self.near {
@@ -358,7 +373,7 @@ impl<'a> Work<'a> {
             }
         }
         if let Some((_, v)) = best {
-            return Some(v);
+            return Some(Snap::Vertex(v));
         }
         let mut near: Option<(f64, EdgeId, DVec3)> = None;
         for id in self.edges_near(lo, hi) {
@@ -371,46 +386,49 @@ impl<'a> Work<'a> {
                 near = Some((dist, id, c + (d - c) * s));
             }
         }
-        if let Some((_, e, x)) = near {
-            let [c, d] = self.m.edges[&e].v;
-            for end in [c, d] {
-                let pe = self.pos(end);
-                if x.distance(pe) <= geom::tol(&[x, pe]) {
-                    return Some(end);
-                }
+        let (_, e, x) = near?;
+        let [c, d] = self.m.edges[&e].v;
+        for end in [c, d] {
+            let pe = self.pos(end);
+            if x.distance(pe) <= geom::tol(&[x, pe]) {
+                return Some(Snap::Vertex(end));
             }
-            return Some(self.split_edge(e, x, touched));
         }
-        None
+        Some(Snap::Split(e, x))
     }
 
-    /// Adds the edge `a`–`b`: welds its ends, splits it at vertices and crossings, and records the
-    /// pieces (in the drawing direction) in `drawn`.
-    fn insert_segment(
-        &mut self,
-        a: DVec3,
-        b: DVec3,
-        drawn: &mut Vec<(VertexId, VertexId)>,
-        touched: &mut BTreeSet<(VertexId, VertexId)>,
-    ) -> Result<(), SurfaceError> {
-        let t = geom::tol(&[a, b]);
-        if a.distance(b) <= t {
-            return Err(SurfaceError::TooShort { tol: t });
+    /// True if [`Work::insert_segment`] of `a`–`b` would work. Nothing changes. It may refuse a
+    /// segment that would work (an end that splits an edge it nearly runs along), never the other
+    /// way round: the points it tests hold all the points that the insert tests.
+    fn segment_fits(&self, a: DVec3, b: DVec3) -> bool {
+        if a.distance(b) <= geom::tol(&[a, b]) {
+            return false;
         }
-        let va = self.snap(a, touched);
-        let vb = self.snap(b, touched);
-        let (p, q) = (self.pos(va), self.pos(vb));
+        let end = |x: DVec3| match self.snap_target(x) {
+            Some(Snap::Vertex(v)) => (self.pos(v), Some(v)),
+            Some(Snap::Split(_, y)) => (y, None),
+            None => (x, None),
+        };
+        let ((p, va), (q, vb)) = (end(a), end(b));
+        if (va.is_some() && va == vb) || p.distance(q) <= geom::tol(&[p, q]) {
+            return false;
+        }
+        let ends: Vec<VertexId> = [va, vb].into_iter().flatten().collect();
+        let hits = self.hits_on(p, q, &ends);
+        self.pieces_fit(p, q, &hits).is_ok()
+    }
+
+    /// The vertices and the crossings of edges inside the segment `p`–`q`, in order along it. The
+    /// vertices `ends` and the edges at them are left out.
+    fn hits_on(&self, p: DVec3, q: DVec3, ends: &[VertexId]) -> Vec<(f64, Hit)> {
         let t = geom::tol(&[p, q]);
-        if va == vb || p.distance(q) <= t {
-            return Err(SurfaceError::TooShort { tol: t });
-        }
         let len = p.distance(q);
         let (lo, hi) = (p.min(q) - DVec3::splat(t), p.max(q) + DVec3::splat(t));
         let mut hits: Vec<(f64, Hit)> = Vec::new();
-        let mut on_line: BTreeSet<VertexId> = [va, vb].into_iter().collect();
+        let mut on_line: BTreeSet<VertexId> = ends.iter().copied().collect();
         for id in self.vertices_near(lo, hi) {
             let x = self.pos(id);
-            if id == va || id == vb || x.cmplt(lo).any() || x.cmpgt(hi).any() {
+            if ends.contains(&id) || x.cmplt(lo).any() || x.cmpgt(hi).any() {
                 continue;
             }
             let tt = geom::tol(&[p, q, x]);
@@ -446,9 +464,13 @@ impl<'a> Work<'a> {
             }
         }
         hits.sort_by(|x, y| x.0.total_cmp(&y.0));
-        // The pieces must not be shorter than the tolerance.
+        hits
+    }
+
+    /// Refuses pieces of `p`–`q` between the hits that are not longer than the tolerance.
+    fn pieces_fit(&self, p: DVec3, q: DVec3, hits: &[(f64, Hit)]) -> Result<(), SurfaceError> {
         let mut points = vec![p];
-        for (_, h) in &hits {
+        for (_, h) in hits {
             points.push(match h {
                 Hit::Vertex(v) => self.pos(*v),
                 Hit::Cross(_, x) => *x,
@@ -461,6 +483,32 @@ impl<'a> Work<'a> {
                 return Err(SurfaceError::TooClose { tol: tt });
             }
         }
+        Ok(())
+    }
+
+    /// Adds the edge `a`–`b`: welds its ends, splits it at vertices and crossings, and records the
+    /// pieces (in the drawing direction) in `drawn`.
+    fn insert_segment(
+        &mut self,
+        a: DVec3,
+        b: DVec3,
+        drawn: &mut Vec<(VertexId, VertexId)>,
+        touched: &mut BTreeSet<(VertexId, VertexId)>,
+    ) -> Result<(), SurfaceError> {
+        let t = geom::tol(&[a, b]);
+        if a.distance(b) <= t {
+            return Err(SurfaceError::TooShort { tol: t });
+        }
+        let va = self.snap(a, touched);
+        let vb = self.snap(b, touched);
+        let (p, q) = (self.pos(va), self.pos(vb));
+        let t = geom::tol(&[p, q]);
+        if va == vb || p.distance(q) <= t {
+            return Err(SurfaceError::TooShort { tol: t });
+        }
+        let hits = self.hits_on(p, q, &[va, vb]);
+        // The pieces must not be shorter than the tolerance.
+        self.pieces_fit(p, q, &hits)?;
         let mut chain = vec![va];
         for (_, h) in hits {
             chain.push(match h {
@@ -567,6 +615,17 @@ impl<'a> Work<'a> {
         drawn: &[(VertexId, VertexId)],
         touched: &BTreeSet<(VertexId, VertexId)>,
     ) -> Result<(), SurfaceError> {
+        self.solve_after_add_with(drawn, touched, true)
+    }
+
+    /// [`Work::solve_after_add`]; with `fill` false a region in no face gets no new face (only
+    /// faces that are there split: Intersect Faces).
+    fn solve_after_add_with(
+        &mut self,
+        drawn: &[(VertexId, VertexId)],
+        touched: &BTreeSet<(VertexId, VertexId)>,
+        fill: bool,
+    ) -> Result<(), SurfaceError> {
         // With the index, the walks along cycles are kept for the whole solve (the edges do not
         // change in it, only the faces).
         let (planes, on, mut walks) = if self.near.is_some() {
@@ -577,7 +636,12 @@ impl<'a> Work<'a> {
             let (planes, on) = self.planes_scan(drawn);
             (planes, on, None)
         };
-        let keys: BTreeSet<(VertexId, VertexId)> = drawn.iter().map(|&(a, b)| key(a, b)).collect();
+        // The pieces that may give a region in no face a new face.
+        let keys: BTreeSet<(VertexId, VertexId)> = if fill {
+            drawn.iter().map(|&(a, b)| key(a, b)).collect()
+        } else {
+            BTreeSet::new()
+        };
         for (plane, pieces) in planes.into_iter().zip(on) {
             // The area that can change: the pieces in the plane and the loops they close.
             let mut area = Area::EMPTY;

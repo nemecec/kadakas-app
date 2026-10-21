@@ -168,6 +168,14 @@ fn intersect_faces_with_selection_works_on_the_selected_faces() {
     // The corner edge of the second box through that top and the two edges of the top through
     // the walls of the second box are split; the three places under the top stay.
     assert_eq!(r.not_intersected(), 3, "{:?}", r.warnings);
+    // Only the selected top is cut (an L of new edges from border to border); the walls of the
+    // second box only get the ends of the new edges.
+    assert_eq!(surface(&app).face_count(), 13);
+    let tops = surface(&app)
+        .faces()
+        .filter(|(_, f)| f.plane.normal.z.abs() > 0.99 && f.plane.offset.abs() == 1000.0)
+        .count();
+    assert_eq!(tops, 2);
     assert!(
         app.edit.sub.is_empty(),
         "the parts were split: the selection is cleared"

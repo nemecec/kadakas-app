@@ -12,15 +12,20 @@
 //!   weld to vertices and split at crossings, and both planes are solved again, so both faces
 //!   split. A part of a split face keeps the attributes of the face; split edges keep their
 //!   attributes and their place in a curve (the curve stays one chain).
-//! - **Edges.** An edge that passes through a face and is not split by the new edges (a line with
-//!   no face, a guide) is split at the point where it passes through. Its two parts then stand on
-//!   the face, as a line drawn from a face does (a note says so).
-//! - **Not done.** Faces of one plane that overlap are a problem of the model, not a crossing.
-//!   They are left alone. A piece shorter than the length tolerance is left out with a note, and a
-//!   crossing that stays is named in a note.
+//! - **Lines.** A line with no face that passes through a face is split at that point. Its two
+//!   parts then stand on the face, as a line drawn from a face does (a note says so). An edge of a
+//!   face is split only by the end of a new piece on it.
+//! - **Left out.** A piece that would be shorter than the length tolerance next to other geometry
+//!   is left out whole (`Work::segment_fits` decides before anything is drawn), so no edge is split
+//!   for it, the crossing stays a `NotIntersected` warning, and a note names it. Faces of one plane
+//!   that overlap are a problem of the model, not a crossing: they are left alone.
+//! - **Limit.** An edit makes at most `MAX_EDIT_EDGES` new edges, the edges of the splits
+//!   included; a larger one is refused and changes nothing.
 //!
-//! The pieces that existing edges already cover are left out, so a second run changes nothing.
-//! The order is fixed (pairs in id order), so the same model gives the same ids.
+//! A piece is covered only by edges that both faces use; such pieces are left out, so a second
+//! run changes nothing. An edge on the line that one face uses, or none (a line, a guide), does
+//! not cover it: the piece is drawn and the other face splits there. The order is fixed (pairs in
+//! id order), so the same model gives the same ids.
 
 use super::super::check;
 use super::super::clash::{self, Shapes};
@@ -34,6 +39,8 @@ const SMALL: usize = 24;
 struct Sides {
     sides: Vec<(DVec3, DVec3)>,
     tree: Option<BoxTree>,
+    /// The edges of the face, as vertex pairs.
+    keys: BTreeSet<(VertexId, VertexId)>,
 }
 
 impl Sides {
@@ -54,7 +61,11 @@ impl Sides {
                     .collect(),
             )
         });
-        Sides { sides, tree }
+        Sides {
+            sides,
+            tree,
+            keys: f.uses().map(|(a, b)| key(a, b)).collect(),
+        }
     }
 
     /// Calls `f` with each side whose box meets `lo`–`hi` (every side without a tree).
@@ -81,14 +92,20 @@ struct Line {
 
 impl Line {
     /// The line of the planes `p` and `q`, with `o` next to `near`. `None` for parallel planes.
+    ///
+    /// The line is solved relative to `near`: the planes are moved by their distances at `near`,
+    /// so the numbers stay small far from the origin and at small angles (the point of the line
+    /// nearest the origin would be about `offset / sin(angle)` away, where a unit of the last
+    /// place is larger than the tolerance).
     fn of(p: &Plane, q: &Plane, near: DVec3) -> Option<Line> {
         let d = p.normal.cross(q.normal);
         let len2 = d.length_squared();
-        // Parallel to 1e-9 radians: no line that the tolerances could hold.
-        if len2 <= 1e-18 {
+        if parallel(p, q) {
             return None;
         }
-        let o = (q.normal.cross(d) * p.offset + d.cross(p.normal) * q.offset) / len2;
+        // The point x with p.normal · (x - near) = -p.distance(near), and the same for q.
+        let (dp, dq) = (-p.distance(near), -q.distance(near));
+        let o = near + (q.normal.cross(d) * dp + d.cross(p.normal) * dq) / len2;
         let d = d / len2.sqrt();
         Some(Line {
             o: o + d * (near - o).dot(d),
@@ -99,6 +116,11 @@ impl Line {
     fn t(&self, p: DVec3) -> f64 {
         (p - self.o).dot(self.d)
     }
+}
+
+/// True for planes that are parallel to 1e-9 radians: no line that the tolerances could hold.
+fn parallel(p: &Plane, q: &Plane) -> bool {
+    p.normal.cross(q.normal).length_squared() <= 1e-18
 }
 
 /// The points where the sides of a face (those whose box meets `lo`–`hi`) meet the plane `p`, as
@@ -191,7 +213,8 @@ fn crossing(
         cb.retain(|c| c.0 > s0 && c.0 < s1);
         cb.push((s0, p0));
         cb.push((s1, p1));
-        // The ends of the piece of `a` first, so that they stay when a cut of `b` falls on them.
+        // In order: a cut of `b` within the tolerance after `s0` goes (the end of `a` stays), a
+        // cut of `b` within the tolerance before `s1` stays and `s1` goes.
         let cb = sorted(cb);
         for [(_, q0), (_, q1)] in pieces(&cb, &mut |p| in_face(shapes, ib, fb, p)) {
             if q0.distance(q1) > geom::tol(&[q0, q1]) {
@@ -202,9 +225,17 @@ fn crossing(
     out
 }
 
-/// The parts of the segment `p`–`q` that no edge of the model covers (an edge along the same line,
-/// within the length tolerance), each longer than the tolerance.
-fn uncovered(m: &SurfaceModel, edges: &BoxTree, p: DVec3, q: DVec3) -> Vec<(DVec3, DVec3)> {
+/// The parts of the segment `p`–`q` that no edge of both faces covers (an edge along the same line,
+/// within the length tolerance, that the faces with the edges `ka` and `kb` both use), each longer
+/// than the tolerance. An edge that only one of the faces uses, or none (a line, a guide, the foot
+/// of a wall in the middle of a slab), does not cover: the other face is still to be split there.
+fn uncovered(
+    m: &SurfaceModel,
+    edges: &BoxTree,
+    (p, q): (DVec3, DVec3),
+    ka: &BTreeSet<(VertexId, VertexId)>,
+    kb: &BTreeSet<(VertexId, VertexId)>,
+) -> Vec<(DVec3, DVec3)> {
     let tol = geom::tol(&[p, q]);
     let len = p.distance(q);
     let u = (q - p) / len;
@@ -214,6 +245,9 @@ fn uncovered(m: &SurfaceModel, edges: &BoxTree, p: DVec3, q: DVec3) -> Vec<(DVec
         let Some(ed) = m.edges.get(&EdgeId(e)) else {
             return;
         };
+        if !(ka.contains(&ed.key()) && kb.contains(&ed.key())) {
+            return;
+        }
         let (c, d) = (m.vertices[&ed.v[0]], m.vertices[&ed.v[1]]);
         let t = geom::tol(&[p, q, c, d]);
         if geom::point_line(c, p, q) <= t && geom::point_line(d, p, q) <= t {
@@ -266,6 +300,7 @@ pub(super) fn intersect_faces(
             let g = FaceId(g);
             if g != f
                 && (scope == IntersectScope::Selection || g > f)
+                && !parallel(&face.plane, &m.faces[&g].plane)
                 && clash::coplanar(m, face, &m.faces[&g]).is_none()
             {
                 pairs.insert((f.min(g), f.max(g)));
@@ -288,16 +323,24 @@ pub(super) fn intersect_faces(
         } else {
             (f, g)
         };
-        for (p, q) in crossing(m, (a, &sides[&a]), (b, &sides[&b]), &mut shapes) {
-            segs.extend(uncovered(m, &edge_tree, p, q));
+        for pq in crossing(m, (a, &sides[&a]), (b, &sides[&b]), &mut shapes) {
+            segs.extend(uncovered(
+                m,
+                &edge_tree,
+                pq,
+                &sides[&a].keys,
+                &sides[&b].keys,
+            ));
         }
     }
+    // Each piece makes at least one edge: refuse early when the pieces alone pass the limit.
+    let too_many = |count: usize| SurfaceError::Limit {
+        what: "new edges in one edit (with the splits)",
+        max: MAX_EDIT_EDGES,
+        count,
+    };
     if segs.len() > MAX_EDIT_EDGES {
-        return Err(SurfaceError::Limit {
-            what: "edges in one edit",
-            max: MAX_EDIT_EDGES,
-            count: segs.len(),
-        });
+        return Err(too_many(segs.len()));
     }
     // The edges that pass through a face, and where.
     let pierces = match scope {
@@ -307,40 +350,73 @@ pub(super) fn intersect_faces(
         }
     };
     let mut w = Work::indexed(m);
-    let wire: BTreeSet<EdgeId> = pierces
+    // Only a line with no face is split at the face it passes through. An edge of a face is split
+    // by the end of a new piece on it; when that piece is left out, the edge stays whole, so the
+    // crossing stays a warning of the check.
+    let wire: Vec<(EdgeId, DVec3)> = pierces
         .iter()
         .filter(|(e, _, _)| w.t.faces_of(*e).next().is_none())
-        .map(|(e, _, _)| *e)
+        .map(|(e, _, x)| (*e, *x))
         .collect();
     let mut drawn = Vec::new();
     let mut touched = BTreeSet::new();
-    let mut short = 0usize;
+    let mut left_out: Vec<(DVec3, DVec3)> = Vec::new();
     for (p, q) in segs {
-        match w.insert_segment(p, q, &mut drawn, &mut touched) {
-            Ok(()) => {}
-            // A piece that would be shorter than the tolerance next to other geometry.
-            Err(SurfaceError::TooShort { .. } | SurfaceError::TooClose { .. }) => short += 1,
-            Err(e) => return Err(e),
+        // A piece that would be shorter than the tolerance next to other geometry is left out
+        // whole: nothing of it is drawn (no end splits an edge).
+        if !w.segment_fits(p, q) {
+            left_out.push((p, q));
+            continue;
         }
+        w.insert_segment(p, q, &mut drawn, &mut touched)?;
         w.check_limits()?;
-    }
-    for (e, g, x) in &pierces {
-        let was = w.m.vertices.len();
-        let made = w.snap_existing(*x, &mut touched);
-        if wire.contains(e) && made.is_some() && w.m.vertices.len() > was {
-            notes.push(format!(
-                "edge {e} passed through face {g} at {}: it is split there, and its parts stand \
-                 on the face",
-                At::of(*x)
-            ));
+        let made = w.m.edges.len().saturating_sub(before_edges);
+        if made > MAX_EDIT_EDGES {
+            return Err(too_many(made));
         }
     }
-    w.solve_after_add(&drawn, &touched)?;
+    let mut split: Vec<(EdgeId, DVec3)> = Vec::new();
+    for (e, x) in wire {
+        let was = w.m.vertices.len();
+        if w.snap_existing(x, &mut touched).is_some() && w.m.vertices.len() > was {
+            split.push((e, x));
+        }
+    }
+    // The pieces lie in faces: a region in no face (next to a piece along an edge of one face)
+    // gets no new face.
+    w.solve_after_add_with(&drawn, &touched, false)?;
     w.check_limits()?;
-    if short > 0 {
+    let made = m.edges.len().saturating_sub(before_edges);
+    if made > MAX_EDIT_EDGES {
+        return Err(too_many(made));
+    }
+    // The notes name the faces as they are after the edit.
+    let face_at = |x: DVec3| crate::surface::sync::face_at(m, x);
+    for (e, x) in split.iter().take(5) {
+        let on = face_at(*x).map_or_else(|| "a face".to_string(), |f| format!("face {f}"));
         notes.push(format!(
-            "{short} piece(s) where faces cross were left out: they would be shorter than the \
-             length tolerance next to other geometry"
+            "edge {e} passed through {on} at {}: it is split there, and its parts stand on the face",
+            At::of(*x)
+        ));
+    }
+    if split.len() > 5 {
+        notes.push(format!(
+            "{} more lines are split where they pass through a face",
+            split.len() - 5
+        ));
+    }
+    for (p, q) in left_out.iter().take(5) {
+        notes.push(format!(
+            "the crossing from {} to {} was left out: its pieces would be shorter than the length \
+             tolerance next to other geometry",
+            At::of(*p),
+            At::of(*q)
+        ));
+    }
+    if left_out.len() > 5 {
+        notes.push(format!(
+            "{} more crossings were left out",
+            left_out.len() - 5
         ));
     }
     let left = match scope {
@@ -361,14 +437,47 @@ pub(super) fn intersect_faces(
             left.len() - 5
         ));
     }
-    let (made_edges, made_faces) = (
-        m.edges.len().saturating_sub(before_edges),
-        m.faces.len().saturating_sub(before_faces),
-    );
+    let (made_edges, made_faces) = (made, m.faces.len().saturating_sub(before_faces));
     notes.push(if made_edges == 0 && made_faces == 0 {
         "Intersect Faces: nothing to intersect".to_string()
     } else {
         format!("Intersect Faces: {made_edges} new edges, {made_faces} new faces")
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_line_of_two_planes_at_a_small_angle_far_from_the_origin_lies_on_both() {
+        // Two planes 1e-7 radians apart through a point 650 km from the origin. The point of
+        // their line nearest the origin is about 6.5e15 mm away, where a unit of the last place
+        // is about 1 mm: the line is solved next to `near` instead.
+        let near = DVec3::new(6.5e8, 6.4e8, 500.0);
+        let pt = geom::plane_tolerance_at(geom::size(near));
+        // Planes in a few directions (turned so that no number is round).
+        for k in 0..8 {
+            let turn = glam::DMat3::from_euler(
+                glam::EulerRot::XYZ,
+                0.3 + f64::from(k),
+                0.7 * f64::from(k),
+                0.11 * f64::from(k),
+            );
+            let p = Plane::new(near, turn * DVec3::X).unwrap();
+            let q = Plane::new(near, turn * DVec3::new(1.0, -1e-7, 0.0)).unwrap();
+            let line = Line::of(&p, &q, near).unwrap();
+            for along in [0.0, -500.0, 500.0] {
+                let x = line.o + line.d * along;
+                assert!(p.distance(x).abs() < pt / 10.0, "{k}: {}", p.distance(x));
+                assert!(q.distance(x).abs() < pt / 10.0, "{k}: {}", q.distance(x));
+            }
+            assert!(line.o.distance(near) < 1.0, "{k}");
+            assert!(
+                Line::of(&p, &p, near).is_none(),
+                "parallel planes have no line"
+            );
+        }
+    }
 }

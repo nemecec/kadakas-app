@@ -109,11 +109,11 @@ In the core the tool is `edit_surface` with `intersect_faces {scope: "model" | "
 1. A box tree of the faces finds the pairs of faces in two planes whose boxes meet.
 2. For each pair, the sides of both faces cut the line where the two planes meet. A large face uses a box tree of its sides.
 3. The pieces of the line that lie in both faces become new edges. A hole is no part of its face. A border counts.
-4. The pieces are drawn as `add_edges` draws them, with the same tolerances. An end on an edge splits the edge. The pieces weld to vertices and split at crossings. Both planes are solved again, so both faces split.
+4. The pieces are drawn as `add_edges` draws them, with the same tolerances. An end on an edge splits the edge. The pieces weld to vertices and split at crossings. Both planes are solved again, so both faces split. Unlike drawing, a region in no face gets no new face.
 
-A piece that existing edges already cover is left out. So a second run changes nothing, and the same model always gives the same ids. A line with no face that passes through a face is split at that point. Its two parts stand on the face, and a note says so. The parts of a split face keep the attributes of the face. Split edges keep their attributes and their place in a curve, and the curve stays one chain. Each run gives a note for the status line ("Intersect Faces: 12 new edges, 6 new faces"). A place that cannot get an edge stays a warning, and a note names it. Such a place is within the length tolerance of other geometry.
+A piece is left out when an edge that both faces use already covers it. So a second run changes nothing, and the same model always gives the same ids. An edge along the line that only one face uses, or no face (a line, a guide), does not cover the piece: the piece is drawn, and the other face splits there. A line with no face that passes through a face is split at that point. Its two parts stand on the face, and a note says so. An edge of a face is split only by the end of a new piece on it. The parts of a split face keep the attributes of the face. Split edges keep their attributes and their place in a curve, and the curve stays one chain. Each run gives a note for the status line ("Intersect Faces: 12 new edges, 6 new faces"). A piece that would be shorter than the length tolerance next to other geometry is left out whole: before anything is drawn, a test without changes (`segment_fits`) decides. So no edge is split for it, the crossing stays a `NotIntersected` warning, and notes name the piece and the place.
 
-Measurement (release build, `surface::tests_intersect::intersect_timing`): 840 boxes stand through one slab. The model has 5,046 faces and 6,720 places where an edge passes through a face. The check takes 0.05 s. Intersect Faces takes 0.53 s and makes 13,440 edges and 8,400 faces. No warning is left. A second run takes 0.27 s and changes nothing.
+Measurement (release build, `surface::tests_intersect::intersect_timing`): 840 boxes stand through one slab. The model has 5,046 faces and 6,720 places where an edge passes through a face. The check takes 0.05 s. One run on the whole model would make 13,440 new edges, more than the limit, so it is refused. Three runs With Selection (the walls of a third of the boxes each) take 0.72 s together and make 13,440 edges and 8,400 faces. No warning is left. A run on the whole model after them takes 0.28 s and changes nothing.
 
 **Push/Pull stays strict.** When new or moved geometry passes through, ends on or lies in a face, Push/Pull refuses the push. This includes a new `NotIntersected` place. A place that was there before the push, at the same place, does not stop it.
 
@@ -121,7 +121,7 @@ Measurement (release build, `surface::tests_intersect::intersect_timing`): 840 b
 
 - With Context. The geometry of two surface models (for example, one in a group and one outside it) is not intersected. Each model is intersected alone. A later step can merge the models into the raw model first.
 - Coplanar faces that overlap. They are an error of the model, and the tool leaves them.
-- More than 10,000 new edges in one run (`MAX_EDIT_EDGES`). Such a run is refused. With Selection can do the work in parts.
+- More than 10,000 new edges in one run (`MAX_EDIT_EDGES`), the edges of the splits included. Such a run is refused and changes nothing. With Selection can do the work in parts.
 
 **Curves after Erase.** When an erase takes edges out of a curve, the rest is cut into chains. A circle that loses one edge stays one arc. When it loses two edges that do not meet, two arcs stay.
 
