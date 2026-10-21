@@ -9,10 +9,12 @@ use kadakas_api::Session;
 use kadakas_core::command::Command;
 use kadakas_core::component::EditContext;
 use kadakas_core::model::{ObjectId, Shape};
+use kadakas_core::surface::IntersectScope;
 use kadakas_l10n::tr;
 use kadakas_render::StandardView;
 use kadakas_ui_core::keymap::{Action, Keymap};
 use kadakas_ui_core::modeler::{self, ModelerTool, ToolState};
+use kadakas_ui_core::modeling;
 use kadakas_ui_core::nav3d::{self, Frame, Nav3d, NavAction};
 use kadakas_ui_core::profile::Profile;
 use kadakas_view3d::input::action_for_event;
@@ -69,6 +71,8 @@ pub enum Cmd {
     CloseDiscardMine,
     /// Close Component after a conflict: replace the component with my edit.
     CloseOverwrite,
+    /// Intersect Faces (MOD-08): with the whole model, or of the selected faces and edges.
+    IntersectFaces(IntersectScope),
     /// A tool or command of the tool bar.
     Tool(ModelerTool),
     /// Zoom Window: the next drag of the Zoom tool is a window.
@@ -473,6 +477,7 @@ impl ModelerApp {
                 self.structure(&cmd)
             }
             Cmd::EditSelected => self.edit_selected(),
+            Cmd::IntersectFaces(scope) => self.intersect(scope),
             Cmd::CloseContext
             | Cmd::CloseKeepMine
             | Cmd::CloseDiscardMine
@@ -594,6 +599,69 @@ impl ModelerApp {
             | Cmd::CloseOverwrite => !self.context.is_root(),
             _ => false,
         }
+    }
+
+    /// The surface models that Intersect Faces With Model works on: the selected ones (in the open
+    /// group or component), else, with no part selected either, every surface model of the open
+    /// level.
+    fn intersect_models(&self) -> Vec<ObjectId> {
+        let doc = self.session.editor.doc();
+        let is_model = |id: &ObjectId| {
+            doc.object(*id)
+                .is_some_and(|o| matches!(o.shape, Shape::SurfaceModel(_)))
+        };
+        let chosen: Vec<ObjectId> = self
+            .selected()
+            .into_iter()
+            .filter(|id| is_model(id) && self.context.contains(doc, *id))
+            .collect();
+        if !chosen.is_empty() || !self.edit.sub.is_empty() {
+            return chosen;
+        }
+        let level = self.context.container();
+        doc.objects
+            .values()
+            .filter(|o| o.parent == level && is_model(&o.id))
+            .map(|o| o.id)
+            .collect()
+    }
+
+    /// True if Intersect Faces has something to work on: selected faces or edges, or (With
+    /// Model) a surface model.
+    pub fn can_intersect(&self, scope: IntersectScope) -> bool {
+        !self.edit.sub.is_empty()
+            || (scope == IntersectScope::Model && !self.intersect_models().is_empty())
+    }
+
+    /// Whether With Model and With Selection of Intersect Faces are enabled.
+    pub fn intersect_flags(&self) -> [bool; 2] {
+        [
+            self.can_intersect(IntersectScope::Model),
+            self.can_intersect(IntersectScope::Selection),
+        ]
+    }
+
+    /// Intersect Faces: one undo step for all models; the notes go to the status line.
+    fn intersect(&mut self, scope: IntersectScope) {
+        let models = match scope {
+            IntersectScope::Model => self.intersect_models(),
+            IntersectScope::Selection => Vec::new(),
+        };
+        let actions = modeling::intersect_actions(&self.edit.sub, scope, &models);
+        if actions.is_empty() {
+            self.status = tr!("modeler-intersect-nothing");
+            return;
+        }
+        self.edit.run(
+            &mut self.session,
+            modeling::Out {
+                actions,
+                ..modeling::Out::default()
+            },
+        );
+        // The parts that the edit split have new ids: the selection of parts is cleared.
+        self.edit.sub.clear();
+        self.status = self.edit.message.take().unwrap_or_default();
     }
 
     /// A name for a new component that no component has.
@@ -944,6 +1012,7 @@ impl ModelerApp {
                 .show(ui, |ui| tray::show(ui, &mut self.tray, &info));
         }
         let mut shown = canvas::Shown::default();
+        let intersect = self.intersect_flags();
         egui::CentralPanel::no_frame().show(ui, |ui| {
             shown = canvas::show(
                 ui,
@@ -955,9 +1024,11 @@ impl ModelerApp {
                     edit: &mut self.edit,
                     gpu_ready: self.gpu_ready,
                     fit_pending: &mut self.fit_pending,
+                    intersect,
                 },
             );
         });
+        cmds.extend(shown.command.take());
         self.canvas_rect = shown.rect;
         let size = shown
             .rect

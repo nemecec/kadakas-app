@@ -1,7 +1,73 @@
 //! More tests of the modeling tools: scaled models, the edges that Push/Pull leaves out of the
-//! inference, and the selection of connected geometry.
+//! inference, the selection of connected geometry, and Intersect Faces.
 
 use super::*;
+
+#[test]
+fn intersect_actions_group_the_parts_by_model_and_run_as_one_step() {
+    use kadakas_core::command::Command;
+    use kadakas_core::surface::{Edit, IntersectScope};
+    let mut ed = Editor::with_sequential_ids();
+    ed.execute(&Command::AddObject {
+        shape: Shape::SurfaceModel(Box::default()),
+        layer: None,
+        class: None,
+        attrs: Default::default(),
+    })
+    .unwrap();
+    let id = *ed.doc().objects.keys().next().unwrap();
+    // A square, and a line through it.
+    let p = [
+        [0.0, 0.0, 0.0],
+        [1000.0, 0.0, 0.0],
+        [1000.0, 1000.0, 0.0],
+        [0.0, 1000.0, 0.0],
+    ];
+    let mut edges: Vec<[[f64; 3]; 2]> = (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect();
+    edges.push([[500.0, 500.0, -500.0], [500.0, 500.0, 500.0]]);
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: Edit::AddEdges { edges },
+    })
+    .unwrap();
+    let m = model_of(ed.doc(), id).unwrap();
+    assert_eq!(m.check().not_intersected(), 1);
+    let face = m.faces().next().unwrap().0;
+    let mut sel = SubSelection::default();
+    // Nothing chosen: no action for With Selection, nor for With Model without a model.
+    assert!(intersect_actions(&sel, IntersectScope::Selection, &[id]).is_empty());
+    assert!(intersect_actions(&sel, IntersectScope::Model, &[]).is_empty());
+    // With Model on a chosen model: the whole model.
+    assert_eq!(
+        intersect_actions(&sel, IntersectScope::Model, &[id]),
+        vec![Action::Intersect {
+            model: id,
+            scope: IntersectScope::Model,
+            faces: vec![],
+            edges: vec![],
+        }]
+    );
+    sel.set([Item::Face(id, face)]);
+    let actions = intersect_actions(&sel, IntersectScope::Selection, &[]);
+    assert_eq!(
+        actions,
+        vec![Action::Intersect {
+            model: id,
+            scope: IntersectScope::Selection,
+            faces: vec![face],
+            edges: vec![],
+        }]
+    );
+    let (_, notes) = run_actions_noted(&mut ed, &actions, false).unwrap();
+    assert!(
+        notes.iter().any(|n| n.contains("it is split there")),
+        "{notes:?}"
+    );
+    assert_eq!(model_of(ed.doc(), id).unwrap().check().not_intersected(), 0);
+    // One undo step takes it back.
+    ed.undo();
+    assert_eq!(model_of(ed.doc(), id).unwrap().check().not_intersected(), 1);
+}
 
 #[test]
 fn a_typed_distance_is_in_world_mm_even_when_the_model_is_scaled() {

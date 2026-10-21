@@ -22,6 +22,7 @@ use kadakas_view3d::gpu3d::{GpuStyle, SceneCallback};
 use kadakas_view3d::input::modifiers;
 use kadakas_view3d::view3d::View3d;
 
+use crate::app::Cmd;
 use crate::edit3d::{Edit3d, Input};
 
 /// The colors of the drawing axes: red is the right-left axis, green runs into the screen and blue
@@ -68,15 +69,19 @@ pub struct Canvas<'a> {
     pub gpu_ready: bool,
     /// Show the whole model at the next frame (after an open, and at the start).
     pub fit_pending: &'a mut bool,
+    /// Whether Intersect Faces With Model and With Selection are enabled (the context menu).
+    pub intersect: [bool; 2],
 }
 
 /// What the canvas tells the program.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Shown {
     /// The rectangle of the canvas.
     pub rect: Option<Rect>,
     /// The person changed the view in this frame.
     pub navigated: bool,
+    /// A command of the context menu.
+    pub command: Option<Cmd>,
 }
 
 /// The window that a Zoom Window drag draws, in points from the top left of the canvas.
@@ -140,11 +145,13 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
         edit,
         gpu_ready,
         fit_pending,
+        intersect,
     } = c;
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     let mut shown = Shown {
         rect: Some(rect),
         navigated: false,
+        command: None,
     };
     if !gpu_ready {
         ui.painter_at(rect).text(
@@ -359,6 +366,15 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
             egui::StrokeKind::Inside,
         );
     }
+
+    // The context menu (the secondary button, which no drag uses).
+    resp.context_menu(|ui| {
+        let mut cmds = Vec::new();
+        crate::menu::intersect_menu(ui, intersect, &mut cmds);
+        if let Some(c) = cmds.pop() {
+            shown.command = Some(c);
+        }
+    });
     shown
 }
 

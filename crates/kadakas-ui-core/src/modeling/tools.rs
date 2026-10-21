@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::DVec3;
 use kadakas_core::model::ObjectId;
-use kadakas_core::surface::{EdgeId, FaceId};
+use kadakas_core::surface::{EdgeId, FaceId, IntersectScope};
 use kadakas_l10n::tr;
 use kadakas_units::Units;
 
@@ -1149,6 +1149,45 @@ pub fn delete_actions(sel: &SubSelection) -> Vec<Action> {
             model,
             faces,
             edges,
+        })
+        .collect()
+}
+
+/// Intersect Faces on the selection: with `Selection` one action for each model with selected
+/// faces or edges (those against the rest of the model); with `Model` one action for each model
+/// that has a selected part or is in `models` (the whole model).
+pub fn intersect_actions(
+    sel: &SubSelection,
+    scope: IntersectScope,
+    models: &[ObjectId],
+) -> Vec<Action> {
+    let mut by_model: BTreeMap<ObjectId, (Vec<FaceId>, Vec<EdgeId>)> = BTreeMap::new();
+    for (m, f) in sel.faces() {
+        by_model.entry(m).or_default().0.push(f);
+    }
+    for (m, e) in sel.edges() {
+        by_model.entry(m).or_default().1.push(e);
+    }
+    if scope == IntersectScope::Model {
+        for m in models {
+            by_model.entry(*m).or_default();
+        }
+    }
+    by_model
+        .into_iter()
+        .map(|(model, (faces, edges))| match scope {
+            IntersectScope::Model => Action::Intersect {
+                model,
+                scope,
+                faces: Vec::new(),
+                edges: Vec::new(),
+            },
+            IntersectScope::Selection => Action::Intersect {
+                model,
+                scope,
+                faces,
+                edges,
+            },
         })
         .collect()
 }

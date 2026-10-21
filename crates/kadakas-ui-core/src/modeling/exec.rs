@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use glam::DVec3;
 use kadakas_core::command::{Command, CommandError, Editor};
 use kadakas_core::model::{Attributes, Document, ObjectId, Shape};
-use kadakas_core::surface::{EdgeId, Edit, FaceId};
+use kadakas_core::surface::{EdgeId, Edit, FaceId, IntersectScope};
 
 use super::scenes::{elevation, frame_of, model_of};
 
@@ -48,6 +48,13 @@ pub enum Action {
         faces: Vec<FaceId>,
         edges: Vec<EdgeId>,
     },
+    /// Intersect Faces in one model: the whole model, or the chosen faces and edges against it.
+    Intersect {
+        model: ObjectId,
+        scope: IntersectScope,
+        faces: Vec<FaceId>,
+        edges: Vec<EdgeId>,
+    },
 }
 
 /// The model that an action works in (a new model counts as `None`).
@@ -60,7 +67,8 @@ impl Action {
             },
             Action::EraseEdges { model, .. }
             | Action::PushPull { model, .. }
-            | Action::Delete { model, .. } => Some(*model),
+            | Action::Delete { model, .. }
+            | Action::Intersect { model, .. } => Some(*model),
         }
     }
 }
@@ -181,6 +189,16 @@ fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Comman
                 distance: local_distance(doc, id, *face, *distance),
             })]
         }
+        Action::Intersect {
+            scope,
+            faces,
+            edges,
+            ..
+        } => vec![edit(Edit::IntersectFaces {
+            scope: *scope,
+            faces: faces.clone(),
+            edges: edges.clone(),
+        })],
         Action::Delete { faces, edges, .. } => {
             let mut v = Vec::new();
             if !faces.is_empty() {

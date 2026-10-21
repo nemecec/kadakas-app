@@ -2,6 +2,7 @@
 //! MOD-02: Previous and Next view, Standard Views, Perspective and Parallel Projection, Field of
 //! View, Zoom Extents and Zoom Window. Items give a `Cmd`; the program runs them after the frame.
 
+use kadakas_core::surface::IntersectScope;
 use kadakas_l10n::tr;
 use kadakas_render::StandardView;
 use kadakas_ui_core::keymap::Action;
@@ -54,6 +55,32 @@ fn entry(
         cmds.push(cmd);
         ui.close();
     }
+}
+
+/// The submenu Intersect Faces (MOD-08) of the Edit menu and of the context menu of the 3D view:
+/// With Model and With Selection, each enabled by its flag.
+pub fn intersect_menu(ui: &mut egui::Ui, enabled: [bool; 2], cmds: &mut Vec<Cmd>) {
+    ui.menu_button(tr!("modeler-edit-intersect"), |ui| {
+        for (i, (label, scope)) in [
+            (tr!("modeler-edit-intersect-model"), IntersectScope::Model),
+            (
+                tr!("modeler-edit-intersect-selection"),
+                IntersectScope::Selection,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            entry(
+                ui,
+                cmds,
+                label,
+                String::new(),
+                enabled[i],
+                Cmd::IntersectFaces(scope),
+            );
+        }
+    });
 }
 
 /// An item that shows whether it is on.
@@ -148,6 +175,8 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
                 !app.session.selection.is_empty(),
                 Cmd::SelectNone,
             );
+            ui.separator();
+            intersect_menu(ui, app.intersect_flags(), cmds);
             ui.separator();
             // Groups and components (MOD-07).
             entry(

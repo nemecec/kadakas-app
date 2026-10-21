@@ -28,7 +28,8 @@ pub use scenes::{SceneCache, Scenes, World, elevation, frame_of, model_of};
 pub use select::{Item, SubSelection};
 pub use tools::{
     DEFAULT_ARC_SIDES, DEFAULT_SIDES, Excluded, LiveLabel, Modeling, Out, Pointer, Preview,
-    arc_points, bulge_of, circle_points, delete_actions, is_drawing_tool, radius_to_bulge,
+    arc_points, bulge_of, circle_points, delete_actions, intersect_actions, is_drawing_tool,
+    radius_to_bulge,
 };
 
 /// The camera of the inference for the view of the modeler. `origin` is the world position of the

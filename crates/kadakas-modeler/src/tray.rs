@@ -101,6 +101,16 @@ pub fn entity_info(ui: &mut egui::Ui, info: &EntityInfo) {
                                 tr!("modeler-entity-solid-open")
                             },
                         );
+                        if s.not_intersected > 0 {
+                            row(
+                                ui,
+                                tr!("modeler-entity-not-intersected"),
+                                tr!(
+                                    "modeler-entity-not-intersected-value",
+                                    count = s.not_intersected
+                                ),
+                            );
+                        }
                     }
                 });
         }

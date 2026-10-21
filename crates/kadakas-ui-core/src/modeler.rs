@@ -353,6 +353,9 @@ pub struct SurfaceStats {
     pub faces: usize,
     /// The faces close a volume (a solid).
     pub closed: bool,
+    /// The places where an edge passes through a face without an edge there: Intersect Faces
+    /// makes the edges (the `NotIntersected` warnings of the check).
+    pub not_intersected: usize,
 }
 
 /// The size of a box and its lowest corner. The box is relative to the origin of the scene; the
@@ -398,12 +401,16 @@ pub fn entity_info(doc: &Document, scene: &Scene, selection: &[ObjectId]) -> Ent
             let obj = doc.object(*id).expect("filtered above");
             let bounds = scene.object_bounds(*id).map(|b| dims(b, scene.origin));
             let surface = match &obj.shape {
-                kadakas_core::model::Shape::SurfaceModel(m) => Some(SurfaceStats {
-                    vertices: m.vertex_count(),
-                    edges: m.edge_count(),
-                    faces: m.face_count(),
-                    closed: m.face_count() > 0 && m.check().is_closed(),
-                }),
+                kadakas_core::model::Shape::SurfaceModel(m) => {
+                    let report = m.check();
+                    Some(SurfaceStats {
+                        vertices: m.vertex_count(),
+                        edges: m.edge_count(),
+                        faces: m.face_count(),
+                        closed: m.face_count() > 0 && report.is_closed(),
+                        not_intersected: report.not_intersected(),
+                    })
+                }
                 _ => None,
             };
             EntityInfo::One {
