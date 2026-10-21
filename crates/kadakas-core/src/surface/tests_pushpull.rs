@@ -286,6 +286,63 @@ fn a_circle_is_one_curve_and_a_face() {
 }
 
 #[test]
+fn erasing_edges_of_a_curve_cuts_it_into_chains() {
+    let circle = || {
+        let mut m = SurfaceModel::new();
+        m.apply(&Edit::AddCurve {
+            points: circle_points(12, 500.0),
+            closed: true,
+        })
+        .unwrap();
+        let ring = m.curves().next().unwrap().1.clone();
+        (m, ring)
+    };
+    let lens = |m: &SurfaceModel| {
+        let mut l: Vec<usize> = m.curves().map(|(_, es)| es.len()).collect();
+        l.sort_unstable();
+        l
+    };
+    // One edge of a circle: the rest is one arc.
+    let (mut m, ring) = circle();
+    m.apply(&Edit::EraseEdges {
+        edges: vec![ring[5]],
+    })
+    .unwrap();
+    assert_eq!(m.problem(), None);
+    assert_eq!(check::curves(&m), None);
+    assert_eq!(lens(&m), vec![11]);
+    // Two edges that do not meet: two arcs, each a chain.
+    let (mut m, ring) = circle();
+    m.apply(&Edit::EraseEdges {
+        edges: vec![ring[2], ring[7]],
+    })
+    .unwrap();
+    assert_eq!(m.problem(), None);
+    assert_eq!(lens(&m), vec![4, 6]);
+    // The same through two erases, and the same model twice.
+    let (mut a, ring) = circle();
+    for e in [ring[2], ring[7]] {
+        a.apply(&Edit::EraseEdges { edges: vec![e] }).unwrap();
+        assert_eq!(a.problem(), None);
+    }
+    assert_eq!(lens(&a), vec![4, 6]);
+    // An open arc that loses a middle edge.
+    let mut m = SurfaceModel::new();
+    m.apply(&Edit::AddCurve {
+        points: circle_points(12, 500.0)[..7].to_vec(),
+        closed: false,
+    })
+    .unwrap();
+    let arc = m.curves().next().unwrap().1.clone();
+    m.apply(&Edit::EraseEdges {
+        edges: vec![arc[2]],
+    })
+    .unwrap();
+    assert_eq!(m.problem(), None);
+    assert_eq!(lens(&m), vec![2, 3]);
+}
+
+#[test]
 fn an_open_curve_is_a_chain_and_a_cut_keeps_it_one_curve() {
     let mut m = SurfaceModel::new();
     let pts: Vec<P> = (0..=8)
@@ -685,17 +742,60 @@ fn stretched_walls_that_would_cut_a_plate_are_refused() {
 }
 
 #[test]
+fn push_pull_refuses_new_crossings_but_not_old_ones() {
+    // Box A with a plate through it (four `NotIntersected` warnings, accepted in a sketch), and
+    // box B with a plate above it.
+    let mut m = box_model();
+    plate(&mut m, 300.0);
+    poly(&mut m, &square(3000.0, 0.0, 1000.0, 0.0));
+    let b_base = m
+        .faces()
+        .find(|(_, f)| m.vertex(f.outer[0]).unwrap().x >= 3000.0)
+        .unwrap()
+        .0;
+    pull(&mut m, b_base, 500.0).unwrap();
+    poly(&mut m, &square(2500.0, -500.0, 2000.0, 800.0));
+    let r = m.check();
+    assert!(r.is_valid(), "{:?}", r.problems);
+    assert_eq!(r.not_intersected(), 4);
+    let top_of = |m: &SurfaceModel, x: f64| {
+        m.faces()
+            .find(|(id, f)| {
+                f.plane.normal.z > 0.99
+                    && m.face_bounds(*id).unwrap().0.x == x
+                    && m.face_area(*id).unwrap() == 1e6
+            })
+            .unwrap()
+            .0
+    };
+    let (a, b) = (top_of(&m, 0.0), top_of(&m, 3000.0));
+    // New crossings with the plate above B: through it, and the cap in it.
+    refused_with(&mut m, b, 500.0, "through");
+    refused_with(&mut m, b, 300.0, "ends on");
+    // The old crossings of A do not stop a push that makes no new one.
+    pull(&mut m, a, 100.0).unwrap();
+    pull(&mut m, b, 100.0).unwrap();
+    assert_eq!(m.check().not_intersected(), 4);
+    // The cap of A landing in the plate is new.
+    refused_with(&mut m, a, -300.0, "cut through other faces");
+    // Below the plate the old crossings go.
+    pull(&mut m, a, -400.0).unwrap();
+    assert_eq!(m.check().not_intersected(), 0);
+}
+
+#[test]
 fn the_check_finds_an_edge_through_a_face_and_overlapping_coplanar_faces() {
     // A plate across the middle of the box: the corner edges pass through it.
     let mut m = box_model();
     plate(&mut m, 300.0);
     let r = m.check();
     let through = r
-        .problems
+        .warnings
         .iter()
-        .filter(|p| matches!(p, Problem::EdgeThroughFace(..)))
+        .filter(|p| matches!(p, Problem::NotIntersected(..)))
         .count();
-    assert_eq!(through, 4, "{:?}", r.problems);
+    assert_eq!(through, 4, "{:?}", r.warnings);
+    assert!(r.is_valid() && !r.is_closed(), "a warning, not a problem");
     // A push that does not change the contacts is still allowed on such a model.
     let top = top_face(&m);
     let r2 = m.apply(&Edit::PushPull {

@@ -378,15 +378,13 @@ fn many_holes_in_one_plane_find_their_frames() {
     assert!(fast.check().is_valid());
 }
 
-/// Known problem (found by `random_edits_keep_the_model_valid_and_are_deterministic`, also on the
-/// code before the index): an edge that passes through the inside of a face in another plane is
-/// not split there, so the full check reports `EdgeThroughFace`. It happens both ways: a face made
-/// over an edge that is already there, and an edge drawn through a face. This test records what
-/// the edits do now (the index must not change it).
-// TODO: decide the rule (split the edge at the point where it passes through, refuse the edit, or
-// accept it as a sketch does) and change this test with it.
+/// An edge that passes through the inside of a face in another plane is accepted, as a sketch
+/// does (found by `random_edits_keep_the_model_valid_and_are_deterministic`): drawing does not
+/// split it, the check warns (`NotIntersected`, not a problem), and Intersect Faces splits it. It
+/// happens both ways: a face made over an edge that is already there, and an edge drawn through a
+/// face. The index and the scans give the same models.
 #[test]
-fn an_edge_through_a_face_in_another_plane_is_not_split_yet() {
+fn an_edge_through_a_face_in_another_plane_is_a_warning_until_intersected() {
     let tri = [
         ([0.0, 3000.0, 500.0], [0.0, 2000.0, 1000.0]),
         ([0.0, 3000.0, 500.0], [2500.0, 2000.0, 1000.0]),
@@ -398,6 +396,7 @@ fn an_edge_through_a_face_in_another_plane_is_not_split_yet() {
         vec![tri[0], tri[1], through, tri[2]],
         vec![tri[0], tri[1], tri[2], through],
     ] {
+        let mut models = Vec::new();
         for mode in [Mode::Index, Mode::Scan] {
             let mut m = SurfaceModel::new();
             for (a, b) in &order {
@@ -409,9 +408,23 @@ fn an_edge_through_a_face_in_another_plane_is_not_split_yet() {
                 .unwrap();
             }
             assert_eq!((m.edge_count(), m.face_count()), (4, 1));
-            let problems = m.check().problems;
-            assert_eq!(problems.len(), 1, "{problems:?}");
-            assert!(matches!(problems[0], check::Problem::EdgeThroughFace(..)));
+            let r = m.check();
+            assert!(r.is_valid(), "{:?}", r.problems);
+            assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+            assert!(matches!(r.warnings[0], check::Problem::NotIntersected(..)));
+            reference::with(mode, || {
+                m.apply(&Edit::IntersectFaces {
+                    scope: IntersectScope::Model,
+                    faces: Vec::new(),
+                    edges: Vec::new(),
+                })
+            })
+            .unwrap();
+            let r = m.check();
+            assert!(r.is_valid() && r.warnings.is_empty(), "{r:?}");
+            assert_eq!((m.edge_count(), m.face_count()), (5, 1));
+            models.push(m);
         }
+        assert_eq!(models[0], models[1]);
     }
 }

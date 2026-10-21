@@ -5,9 +5,11 @@
 //! edge (faces back to back are a warning of `full`, not a problem), in `O(n log n)`
 //! time (holes: the size of the hole times the size of the outer loop). The plane test is the one
 //! that the edits use, so a face is valid exactly when the edits see it in its plane. `full` adds the distances (no two vertices, no vertex and edge, no two edges closer than
-//! half the length tolerance unless they meet), the edges that pass through a face, the coplanar
-//! faces that overlap (see `clash`), and the manifold state of each edge, which the solid tools
-//! (MOD-09) need. The geometric checks need a model whose references hold; an edit checks the
+//! half the length tolerance unless they meet), the coplanar faces that overlap (see `clash`),
+//! and the manifold state of each edge, which the solid tools (MOD-09) need. An edge that passes
+//! through a face in another plane is a warning (`NotIntersected`), not a problem: a sketch may
+//! hold it until Intersect Faces makes the edges, but a closed solid may not (`is_closed`). The
+//! fast checks never look at it, so the two checks agree. The geometric checks need a model whose references hold; an edit checks the
 //! geometry that it touched with `near` and `clash` in any case.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -77,8 +79,15 @@ pub enum Problem {
     ShortEdge(EdgeId),
     #[error("faces {0} and {1} overlap at edge {2}")]
     Overlap(FaceId, FaceId, EdgeId),
-    #[error("edge {0} passes through face {1}")]
-    EdgeThroughFace(EdgeId, FaceId),
+    /// A warning, not an error (see [`Report::warnings`]): the edge passes through the inside of
+    /// a face in another plane, and nothing splits them there. A sketch may hold this, as in other
+    /// modelers; Intersect Faces makes the edges. A closed solid may not hold it
+    /// ([`Report::is_closed`]).
+    #[error(
+        "edge {0} passes through face {1} at {2} and is not intersected with it (Intersect Faces \
+         makes the edges there)"
+    )]
+    NotIntersected(EdgeId, FaceId, At),
     #[error("edge {0} of a face lies inside face {1}, which is in the same plane")]
     EdgeInFace(EdgeId, FaceId),
     #[error("faces {0} and {1} lie in one plane and overlap")]
@@ -95,13 +104,49 @@ pub enum Problem {
     EdgeAttrs(EdgeId),
 }
 
+/// A point of a problem in µm (whole numbers, so that problems compare and sort exactly).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct At(pub [i64; 3]);
+
+impl At {
+    /// The point rounded to µm.
+    pub fn of(p: DVec3) -> At {
+        // In range: coordinates are at most `MAX_COORD` (1e9 mm), so 1e12 µm fits an i64.
+        At((p * 1000.0).round().to_array().map(|x| x as i64))
+    }
+
+    /// The point in mm.
+    pub fn point(&self) -> DVec3 {
+        DVec3::from(self.0.map(|x| x as f64)) / 1000.0
+    }
+}
+
+impl std::fmt::Display for At {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mm = |x: i64| {
+            let s = if x < 0 { "-" } else { "" };
+            let a = x.unsigned_abs();
+            format!("{s}{}.{:03}", a / 1000, a % 1000)
+        };
+        write!(
+            f,
+            "({}, {}, {})",
+            mm(self.0[0]),
+            mm(self.0[1]),
+            mm(self.0[2])
+        )
+    }
+}
+
 /// The result of [`SurfaceModel::check`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Report {
     pub problems: Vec<Problem>,
     /// Things that are valid but worth a look: two coplanar faces back to back
-    /// ([`Problem::BackToBack`], a box standing on a slab with its own vertices). The solid tools
-    /// (MOD-09) can treat such a pair as an inner face.
+    /// ([`Problem::BackToBack`], a box standing on a slab with its own vertices; the solid tools
+    /// (MOD-09) can treat such a pair as an inner face), and edges that pass through a face in
+    /// another plane without an edge there ([`Problem::NotIntersected`]: a sketch may hold them,
+    /// Intersect Faces resolves them, a closed solid may not hold them).
     pub warnings: Vec<Problem>,
     /// Edges that no face uses.
     pub wire_edges: Vec<EdgeId>,
@@ -119,10 +164,21 @@ impl Report {
         self.problems.is_empty()
     }
 
+    /// The number of [`Problem::NotIntersected`] warnings: places where Intersect Faces would make
+    /// edges.
+    pub fn not_intersected(&self) -> usize {
+        self.warnings
+            .iter()
+            .filter(|p| matches!(p, Problem::NotIntersected(..)))
+            .count()
+    }
+
     /// True for a valid model whose faces close a volume: every edge has exactly two faces that
-    /// use it in opposite directions.
+    /// use it in opposite directions, and no edge passes through a face without an edge there
+    /// (faces that cross without being intersected close no volume).
     pub fn is_closed(&self) -> bool {
         self.is_valid()
+            && self.not_intersected() == 0
             && self.wire_edges.is_empty()
             && self.border_edges.is_empty()
             && self.nonmanifold_edges.is_empty()
@@ -168,10 +224,10 @@ pub(super) fn full(m: &SurfaceModel) -> Report {
     if ok {
         distances(m, &mut r.problems);
         let c = clash::through_and_overlaps(m, window(m));
-        r.problems.extend(
+        r.warnings.extend(
             c.through
                 .into_iter()
-                .map(|(e, f)| Problem::EdgeThroughFace(e, f)),
+                .map(|(e, f, at)| Problem::NotIntersected(e, f, At::of(at))),
         );
         r.problems.extend(
             c.lies_in
@@ -193,6 +249,7 @@ pub(super) fn full(m: &SurfaceModel) -> Report {
             back.extend(overlap(m, *k, list, &none, true));
         }
         r.warnings.extend(back);
+        r.warnings.sort();
     }
     r
 }

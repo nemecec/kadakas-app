@@ -34,7 +34,7 @@ use sha2::{Digest, Sha256};
 
 use super::arrange::{inside, sample_rings};
 use super::geom::{self, on_plane};
-use super::{EdgeId, Edit, FaceId, SurfaceError, SurfaceModel};
+use super::{EdgeId, Edit, FaceId, IntersectScope, SurfaceError, SurfaceModel};
 
 /// Most entries in the log of a model.
 pub const LOG_ENTRIES: usize = 64;
@@ -57,6 +57,14 @@ pub enum Intent {
     AddCurve { points: Vec<[f64; 3]>, closed: bool },
     /// A face pushed or pulled along its normal, by a point inside it.
     PushPullAt { point: [f64; 3], distance: f64 },
+    /// Intersect Faces on the whole model.
+    IntersectModel,
+    /// Intersect Faces on chosen faces and edges, by a point inside each face and the middle of
+    /// each edge.
+    IntersectAt {
+        faces: Vec<[f64; 3]>,
+        edges: Vec<[f64; 3]>,
+    },
     /// A new transform.
     Place { transform: [f64; 12] },
     /// A change that cannot be replayed (for example a new curve).
@@ -72,15 +80,29 @@ impl Intent {
                 .map(|p| p.to_array())
                 .collect()
         };
+        let middles = |ids: &[EdgeId]| -> Vec<[f64; 3]> {
+            unique(ids)
+                .filter_map(|id| m.edges.get(&id))
+                .map(|e| ((m.vertices[&e.v[0]] + m.vertices[&e.v[1]]) / 2.0).to_array())
+                .collect()
+        };
         match edit {
             Edit::AddEdges { edges } => Intent::AddEdges {
                 edges: edges.clone(),
             },
             Edit::EraseEdges { edges } => Intent::EraseEdgesAt {
-                points: unique(edges)
-                    .filter_map(|id| m.edges.get(&id))
-                    .map(|e| ((m.vertices[&e.v[0]] + m.vertices[&e.v[1]]) / 2.0).to_array())
-                    .collect(),
+                points: middles(edges),
+            },
+            Edit::IntersectFaces {
+                scope,
+                faces: fs,
+                edges,
+            } => match scope {
+                IntersectScope::Model => Intent::IntersectModel,
+                IntersectScope::Selection => Intent::IntersectAt {
+                    faces: faces(fs),
+                    edges: middles(edges),
+                },
             },
             Edit::EraseFaces { faces: ids } => Intent::EraseFacesAt { points: faces(ids) },
             Edit::ReverseFaces { faces: ids } => Intent::ReverseFacesAt { points: faces(ids) },
@@ -105,7 +127,11 @@ impl Intent {
             | Intent::EraseFacesAt { points }
             | Intent::ReverseFacesAt { points } => points.len(),
             Intent::AddCurve { points, .. } => points.len(),
-            Intent::Place { .. } | Intent::Unlogged | Intent::PushPullAt { .. } => 1,
+            Intent::IntersectAt { faces, edges } => (faces.len() + edges.len()).max(1),
+            Intent::Place { .. }
+            | Intent::Unlogged
+            | Intent::PushPullAt { .. }
+            | Intent::IntersectModel => 1,
         }
     }
 }
@@ -236,6 +262,26 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
             m.apply(&Edit::PushPull {
                 face,
                 distance: *distance,
+            })
+        }
+        Intent::IntersectModel => m.apply(&Edit::IntersectFaces {
+            scope: IntersectScope::Model,
+            faces: Vec::new(),
+            edges: Vec::new(),
+        }),
+        Intent::IntersectAt { faces, edges } => {
+            let faces = faces
+                .iter()
+                .map(|p| face_at(m, DVec3::from(*p)).ok_or_else(|| gone("face", p)))
+                .collect::<Result<Vec<_>, _>>()?;
+            let edges = edges
+                .iter()
+                .map(|p| edge_at(m, DVec3::from(*p)).ok_or_else(|| gone("edge", p)))
+                .collect::<Result<Vec<_>, _>>()?;
+            m.apply(&Edit::IntersectFaces {
+                scope: IntersectScope::Selection,
+                faces,
+                edges,
             })
         }
         Intent::Place { transform } => {

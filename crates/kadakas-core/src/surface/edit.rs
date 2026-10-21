@@ -39,8 +39,31 @@ pub enum Edit {
     /// negative toward the back). See the module `pushpull` for the cases. The face keeps its id
     /// and ends as the cap.
     PushPull { face: FaceId, distance: f64 },
+    /// Intersect Faces (MOD-08): makes edges where faces in other planes cross, so that both
+    /// faces are split there, and splits edges where they pass through a face. `model`: all faces
+    /// and edges of the model. `selection`: where the given `faces` cross anything and where the
+    /// given `edges` pass through a face. Faces in one plane that overlap are not handled (they
+    /// are a problem of the model). See the module `intersect`.
+    IntersectFaces {
+        scope: IntersectScope,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        faces: Vec<FaceId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        edges: Vec<EdgeId>,
+    },
 }
 
+/// What Intersect Faces looks at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IntersectScope {
+    /// All faces and edges of the model.
+    Model,
+    /// The given faces and edges against the whole model.
+    Selection,
+}
+
+mod intersect;
 mod near;
 mod pushpull;
 pub(super) mod reference;
@@ -72,6 +95,11 @@ fn run_noted(
         Edit::PushPull { face, distance } => {
             pushpull::push_pull(m, before, *face, *distance, notes)
         }
+        Edit::IntersectFaces {
+            scope,
+            faces,
+            edges,
+        } => intersect::intersect_faces(m, *scope, faces, edges, notes),
         Edit::EraseFaces { faces } => {
             let ids = existing_faces(m, faces)?;
             let mut w = Work::new(m);
@@ -299,6 +327,19 @@ impl<'a> Work<'a> {
     /// The vertex for an end point: the nearest vertex within the tolerance, else a split of the
     /// nearest edge within the tolerance, else a new vertex.
     fn snap(&mut self, a: DVec3, touched: &mut BTreeSet<(VertexId, VertexId)>) -> VertexId {
+        match self.snap_existing(a, touched) {
+            Some(v) => v,
+            None => self.new_vertex(a),
+        }
+    }
+
+    /// The vertex for a point on the geometry: the nearest vertex within the tolerance, else a
+    /// split of the nearest edge within the tolerance, else `None`.
+    fn snap_existing(
+        &mut self,
+        a: DVec3,
+        touched: &mut BTreeSet<(VertexId, VertexId)>,
+    ) -> Option<VertexId> {
         // The index finds the vertices and edges within the largest tolerance (each tolerance below
         // is at most that; twice for rounding).
         let (lo, hi) = match &self.near {
@@ -317,7 +358,7 @@ impl<'a> Work<'a> {
             }
         }
         if let Some((_, v)) = best {
-            return v;
+            return Some(v);
         }
         let mut near: Option<(f64, EdgeId, DVec3)> = None;
         for id in self.edges_near(lo, hi) {
@@ -335,12 +376,12 @@ impl<'a> Work<'a> {
             for end in [c, d] {
                 let pe = self.pos(end);
                 if x.distance(pe) <= geom::tol(&[x, pe]) {
-                    return end;
+                    return Some(end);
                 }
             }
-            return self.split_edge(e, x, touched);
+            return Some(self.split_edge(e, x, touched));
         }
-        self.new_vertex(a)
+        None
     }
 
     /// Adds the edge `a`–`b`: welds its ends, splits it at vertices and crossings, and records the
@@ -1286,6 +1327,13 @@ fn erase_edges(
             merges.push(faces);
         }
     }
+    // The curves that lose an edge: what is left of each is cut into chains below.
+    let broken: BTreeSet<super::CurveId> =
+        w.m.curves
+            .iter()
+            .filter(|(_, es)| es.iter().any(|e| ids.contains(e)))
+            .map(|(c, _)| *c)
+            .collect();
     for &e in &ids {
         w.remove_edge(e);
     }
@@ -1329,7 +1377,49 @@ fn erase_edges(
         w.put_face(keep, face);
     }
     w.heal(&ends);
+    rechain(w.m, &broken);
     Ok(())
+}
+
+/// Cuts each of the curves `ids` into chains: an edge that does not meet the edge before it
+/// starts a new curve (the first chain keeps the id). A closed curve that lost edges is first
+/// turned so that it starts after a gap, so its ends join again (a circle with one edge erased
+/// stays one arc). An empty curve goes.
+fn rechain(m: &mut SurfaceModel, ids: &BTreeSet<super::CurveId>) {
+    let meet = |m: &SurfaceModel, a: EdgeId, b: EdgeId| {
+        let (p, q) = (m.edges[&a].v, m.edges[&b].v);
+        p.iter().any(|v| q.contains(v))
+    };
+    for id in ids {
+        let Some(mut es) = m.curves.get(id).cloned() else {
+            continue;
+        };
+        if es.is_empty() {
+            m.curves.remove(id);
+            continue;
+        }
+        let gap = (1..es.len()).find(|&i| !meet(m, es[i - 1], es[i]));
+        if let Some(i) = gap
+            && es.len() > 2
+            && meet(m, es[es.len() - 1], es[0])
+        {
+            es.rotate_left(i);
+        }
+        let mut pieces: Vec<Vec<EdgeId>> = vec![vec![es[0]]];
+        for pair in es.windows(2) {
+            if meet(m, pair[0], pair[1]) {
+                pieces.last_mut().expect("one piece").push(pair[1]);
+            } else {
+                pieces.push(vec![pair[1]]);
+            }
+        }
+        let mut pieces = pieces.into_iter();
+        m.curves.insert(*id, pieces.next().expect("one piece"));
+        for p in pieces {
+            let c = super::CurveId(m.alloc());
+            m.curves.insert(c, p);
+        }
+    }
 }
 
 impl Work<'_> {

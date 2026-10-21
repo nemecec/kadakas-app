@@ -711,35 +711,6 @@ fn drop_spikes(l: &mut Vec<VertexId>) {
     }
 }
 
-/// Cuts each of the curves that is no longer one chain into chains: the first keeps the id, the
-/// others get new ids, so every edge stays in a curve.
-fn rechain(m: &mut SurfaceModel, ids: &BTreeSet<CurveId>) {
-    for id in ids {
-        let Some(es) = m.curves.get(id).cloned() else {
-            continue;
-        };
-        if es.is_empty() {
-            m.curves.remove(id);
-            continue;
-        }
-        let mut pieces: Vec<Vec<EdgeId>> = vec![vec![es[0]]];
-        for pair in es.windows(2) {
-            let (p, q) = (m.edges[&pair[0]].v, m.edges[&pair[1]].v);
-            if p.iter().any(|v| q.contains(v)) {
-                pieces.last_mut().expect("one piece").push(pair[1]);
-            } else {
-                pieces.push(vec![pair[1]]);
-            }
-        }
-        let mut pieces = pieces.into_iter();
-        m.curves.insert(*id, pieces.next().expect("one piece"));
-        for p in pieces {
-            let c = CurveId(m.alloc());
-            m.curves.insert(c, p);
-        }
-    }
-}
-
 /// Welds the flush vertices, merges the faces that became one, and checks the result against
 /// `before`. True if the pushed face merged with another face.
 fn finish_and_check(

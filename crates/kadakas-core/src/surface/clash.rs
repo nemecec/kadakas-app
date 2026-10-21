@@ -3,8 +3,9 @@
 //! (Push/Pull) also refuses the cases that a new or moved edge or face must not make.
 //!
 //! - **Through**: the edge passes through the face (its ends are on the two sides of the plane and
-//!   the crossing point is inside the face). Always wrong: two faces of the model cut each other
-//!   without an edge between them.
+//!   the crossing point is inside the face): two faces of the model cut each other, or a line
+//!   passes through a face, without an edge between them. A sketch may hold it (the check warns,
+//!   `NotIntersected`, and Intersect Faces makes the edges); an edit must not make it.
 //! - **Ends on**: an end of the edge that is not a vertex of the face lies on the face (in it or on
 //!   its border). A line that stands on a face is valid, but an edit must not make one by moving
 //!   geometry onto a face.
@@ -322,9 +323,63 @@ fn crosses_plane(a: DVec3, b: DVec3, g: &Face) -> bool {
     (sa > pt && sb < -pt) || (sa < -pt && sb > pt)
 }
 
+/// The edges that pass through a face (as in [`through_and_overlaps`]), with the point where, for
+/// the pairs in which the edge is in `edges` or the face is in `faces` (`None` is all), in id
+/// order. The references of the model must hold.
+pub(super) fn through(
+    m: &SurfaceModel,
+    window: f64,
+    edges: Option<&BTreeSet<EdgeId>>,
+    faces: Option<&BTreeSet<FaceId>>,
+) -> Vec<(EdgeId, FaceId, DVec3)> {
+    let all = edges.is_none() && faces.is_none();
+    let tree = face_tree(m, window, &|_| true);
+    let mut shapes = Shapes::new(m);
+    // The edges to look at: all, or the chosen ones and those near the chosen faces.
+    let mut look: BTreeSet<EdgeId> = edges.cloned().unwrap_or_default();
+    if let Some(fs) = faces {
+        let etree = edge_tree(m, window);
+        for f in fs {
+            if let Some(face) = m.faces.get(f) {
+                let (lo, hi) = face_box(m, face, window);
+                etree.query(lo, hi, &mut |e| {
+                    look.insert(EdgeId(e));
+                });
+            }
+        }
+    }
+    let ids: Vec<EdgeId> = if all {
+        m.edges.keys().copied().collect()
+    } else {
+        look.into_iter().collect()
+    };
+    let mut out = Vec::new();
+    let mut cands: Vec<FaceId> = Vec::new();
+    for id in ids {
+        let Some(e) = m.edges.get(&id) else { continue };
+        let (a, b) = (m.vertices[&e.v[0]], m.vertices[&e.v[1]]);
+        let chosen_edge = all || edges.is_some_and(|s| s.contains(&id));
+        cands.clear();
+        tree.query(a.min(b), a.max(b), &mut |g| {
+            let g = FaceId(g);
+            let chosen = chosen_edge || faces.is_some_and(|s| s.contains(&g));
+            if chosen && crosses_plane(a, b, &m.faces[&g]) {
+                cands.push(g);
+            }
+        });
+        cands.sort_unstable();
+        for &g in &cands {
+            if let Some((_, at)) = contact(a, b, e.v, &m.faces[&g], shapes.get(g), false) {
+                out.push((id, g, at));
+            }
+        }
+    }
+    out
+}
+
 /// How two faces lie in one plane: `Some(true)` when they look the same way, `Some(false)` when
 /// they look opposite ways (back to back), `None` when they are not in one plane.
-fn coplanar(m: &SurfaceModel, f: &Face, g: &Face) -> Option<bool> {
+pub(super) fn coplanar(m: &SurfaceModel, f: &Face, g: &Face) -> Option<bool> {
     let dot = f.plane.normal.dot(g.plane.normal);
     (dot.abs() >= 1.0 - 1e-9 && geom::on_plane(&g.plane, m.vertices[&f.outer[0]]))
         .then_some(dot > 0.0)
@@ -332,8 +387,8 @@ fn coplanar(m: &SurfaceModel, f: &Face, g: &Face) -> Option<bool> {
 
 /// The result of [`through_and_overlaps`].
 pub(super) struct Clashes {
-    /// Edges that pass through a face.
-    pub through: Vec<(EdgeId, FaceId)>,
+    /// Edges that pass through a face, and the point where.
+    pub through: Vec<(EdgeId, FaceId, DVec3)>,
     /// Edges of a face that lie in another face of the same plane that looks the same way.
     pub lies_in: Vec<(EdgeId, FaceId)>,
     /// Coplanar faces that look the same way and overlap.
@@ -387,8 +442,8 @@ pub(super) fn through_and_overlaps(m: &SurfaceModel, window: f64) -> Clashes {
             let gf = &m.faces[&g];
             let s = shapes.get(g);
             if crossing {
-                if contact(a, b, e.v, gf, s, false).is_some() {
-                    out.through.push((id, g));
+                if let Some((_, at)) = contact(a, b, e.v, gf, s, false) {
+                    out.through.push((id, g, at));
                 }
             } else if lies_in(a, b, e.v, gf, s).is_some() {
                 let mut same = false;

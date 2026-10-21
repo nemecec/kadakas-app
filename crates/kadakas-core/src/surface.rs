@@ -70,6 +70,13 @@
 //! - **Push/Pull** ([`Edit::PushPull`]): a face moves along its normal (the walls follow), or is
 //!   extruded into a bump, a pocket or a closed solid. The hole through a slab, when a push reaches
 //!   the opposite face, is a later step and is refused.
+//! - **Intersect Faces** ([`Edit::IntersectFaces`]): drawing does not split faces in other planes
+//!   that cross, nor an edge that passes through a face in another plane (as in other modelers of
+//!   this kind; the check warns, [`Problem::NotIntersected`]). This edit makes the edges where
+//!   faces cross, so both faces split, and splits the edges where they pass through a face; for
+//!   the whole model or for chosen faces and edges.
+//! - Erasing edges of a curve leaves the rest as chains: a curve that is no longer one chain is
+//!   cut into curves.
 //!
 //! # Tolerances
 //!
@@ -131,10 +138,12 @@ mod tests;
 #[cfg(test)]
 mod tests_index;
 #[cfg(test)]
+mod tests_intersect;
+#[cfg(test)]
 mod tests_pushpull;
 
-pub use check::{Problem, Report};
-pub use edit::Edit;
+pub use check::{At, Problem, Report};
+pub use edit::{Edit, IntersectScope};
 pub use geom::{Plane, on_plane, plane_tolerance_at, tolerance_at};
 pub use part::Selection;
 

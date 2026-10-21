@@ -439,6 +439,35 @@
             "distance"
           ],
           "type": "object"
+        },
+        {
+          "description": "Intersect Faces (MOD-08): makes edges where faces in other planes cross, so that both\nfaces are split there, and splits edges where they pass through a face. `model`: all faces\nand edges of the model. `selection`: where the given `faces` cross anything and where the\ngiven `edges` pass through a face. Faces in one plane that overlap are not handled (they\nare a problem of the model). See the module `intersect`.",
+          "properties": {
+            "action": {
+              "const": "intersect_faces",
+              "type": "string"
+            },
+            "edges": {
+              "items": {
+                "$ref": "#/$defs/EdgeId"
+              },
+              "type": "array"
+            },
+            "faces": {
+              "items": {
+                "$ref": "#/$defs/FaceId"
+              },
+              "type": "array"
+            },
+            "scope": {
+              "$ref": "#/$defs/IntersectScope"
+            }
+          },
+          "required": [
+            "action",
+            "scope"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -485,6 +514,21 @@
     "ImageResource": {
       "description": "A picture: {sha256, format (png|jpeg), width, height, data (base64 of the file), thumb (base64 PNG), source?}. Use plant_style.set_picture to make one from a file.",
       "type": "object"
+    },
+    "IntersectScope": {
+      "description": "What Intersect Faces looks at.",
+      "oneOf": [
+        {
+          "const": "model",
+          "description": "All faces and edges of the model.",
+          "type": "string"
+        },
+        {
+          "const": "selection",
+          "description": "The given faces and edges against the whole model.",
+          "type": "string"
+        }
+      ]
     },
     "Issue": {
       "description": "A review issue.",
