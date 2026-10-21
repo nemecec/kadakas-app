@@ -78,6 +78,8 @@ pub enum Problem {
     Overlap(FaceId, FaceId, EdgeId),
     #[error("edge {0} passes through face {1}")]
     EdgeThroughFace(EdgeId, FaceId),
+    #[error("edge {0} of a face lies inside face {1}, which is in the same plane")]
+    EdgeInFace(EdgeId, FaceId),
     #[error("faces {0} and {1} lie in one plane and overlap")]
     FacesOverlap(FaceId, FaceId),
     #[error("curve {0} names an edge that does not exist or is in another curve, or is no chain")]
@@ -161,6 +163,11 @@ pub(super) fn full(m: &SurfaceModel) -> Report {
                 .map(|(e, f)| Problem::EdgeThroughFace(e, f)),
         );
         r.problems.extend(
+            c.lies_in
+                .into_iter()
+                .map(|(e, f)| Problem::EdgeInFace(e, f)),
+        );
+        r.problems.extend(
             c.overlaps
                 .into_iter()
                 .map(|(f, g)| Problem::FacesOverlap(f, g)),
@@ -179,8 +186,32 @@ pub(super) fn structure_problems(m: &SurfaceModel) -> BTreeSet<Problem> {
     out
 }
 
+/// A point where a distance problem is: the vertex, the middle of the two vertices or of the
+/// short edge, or the nearest point of two edges. `None` for the other problems or when the items
+/// are gone.
+pub(super) fn place(m: &SurfaceModel, p: &Problem) -> Option<DVec3> {
+    let v = |v: &VertexId| m.vertices.get(v).copied();
+    let e = |e: &EdgeId| {
+        let ed = m.edges.get(e)?;
+        Some((v(&ed.v[0])?, v(&ed.v[1])?))
+    };
+    match p {
+        Problem::VertexOnEdge(a, _) => v(a),
+        Problem::CloseVertices(a, b) => Some((v(a)? + v(b)?) / 2.0),
+        Problem::ShortEdge(x) => e(x).map(|(a, b)| (a + b) / 2.0),
+        Problem::Crossing(x, y) => {
+            let ((a, b), (c, d)) = (e(x)?, e(y)?);
+            match geom::segment_segment(a, b, c, d) {
+                Some((s, t, _)) => Some((a + (b - a) * s + c + (d - c) * t) / 2.0),
+                None => Some((a + b) / 2.0),
+            }
+        }
+        _ => None,
+    }
+}
+
 /// A bound for every length tolerance in the model.
-fn window(m: &SurfaceModel) -> f64 {
+pub(super) fn window(m: &SurfaceModel) -> f64 {
     let biggest = m
         .vertices
         .values()

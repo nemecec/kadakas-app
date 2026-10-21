@@ -742,9 +742,17 @@ fn the_check_finds_an_edge_through_a_face_and_overlapping_coplanar_faces() {
     }
     let m = SurfaceModel::from_parts(vs, es, fs, id);
     assert!(m.problem().is_none());
-    assert_eq!(
-        m.check().problems,
-        vec![Problem::FacesOverlap(FaceId(9), FaceId(18))]
+    let r = m.check();
+    assert!(
+        r.problems
+            .contains(&Problem::FacesOverlap(FaceId(9), FaceId(18))),
+        "{:?}",
+        r.problems
+    );
+    // The edges of the small face lie in the big one.
+    assert!(
+        r.problems
+            .contains(&Problem::EdgeInFace(EdgeId(14), FaceId(9)))
     );
 }
 
@@ -915,4 +923,453 @@ fn a_fin_edge_pushed_into_its_wall_is_refused_and_pulled_away_works() {
     assert!(m.check().is_valid());
     refused_with(&mut m, top, -200.0, "would lie on face");
     pull(&mut m, top, 200.0).unwrap();
+}
+
+/// A slab `side` x `side` x 500 with `k` squares (side 500, in a grid) on its top, each pulled up
+/// by `h` (a bump) or pushed down (a pocket, `h < 0`). Built from parts.
+fn slab_with(k: usize, side: f64, h: f64) -> SurfaceModel {
+    let mut vs = std::collections::BTreeMap::new();
+    let mut fs = std::collections::BTreeMap::new();
+    let mut next = 1u32;
+    let mut vert = |vs: &mut std::collections::BTreeMap<VertexId, DVec3>, p: DVec3| {
+        let id = VertexId(next);
+        next += 1;
+        vs.insert(id, p);
+        id
+    };
+    let face = |vs: &std::collections::BTreeMap<VertexId, DVec3>,
+                outer: Vec<VertexId>,
+                holes: Vec<Vec<VertexId>>| {
+        let pts: Vec<DVec3> = outer.iter().map(|v| vs[v]).collect();
+        Face::new(
+            Plane::new(pts[0], geom::newell(&pts)).unwrap(),
+            outer,
+            holes,
+        )
+    };
+    let top_z = 500.0;
+    let corners = |x0: f64, y0: f64, w: f64, z: f64| {
+        [
+            DVec3::new(x0, y0, z),
+            DVec3::new(x0 + w, y0, z),
+            DVec3::new(x0 + w, y0 + w, z),
+            DVec3::new(x0, y0 + w, z),
+        ]
+    };
+    let b: Vec<VertexId> = corners(0.0, 0.0, side, 0.0)
+        .iter()
+        .map(|p| vert(&mut vs, *p))
+        .collect();
+    let t: Vec<VertexId> = corners(0.0, 0.0, side, top_z)
+        .iter()
+        .map(|p| vert(&mut vs, *p))
+        .collect();
+    let mut faces: Vec<Face> = Vec::new();
+    faces.push(face(&vs, b.iter().rev().copied().collect(), Vec::new()));
+    for i in 0..4 {
+        let j = (i + 1) % 4;
+        faces.push(face(&vs, vec![b[i], b[j], t[j], t[i]], Vec::new()));
+    }
+    let per_row = (k as f64).sqrt().ceil() as usize;
+    let pitch = side / (per_row as f64 + 1.0);
+    let mut holes = Vec::new();
+    for n in 0..k {
+        let (x0, y0) = (
+            pitch * ((n % per_row) as f64 + 1.0) - 250.0,
+            pitch * ((n / per_row) as f64 + 1.0) - 250.0,
+        );
+        let c: Vec<VertexId> = corners(x0, y0, 500.0, top_z)
+            .iter()
+            .map(|p| vert(&mut vs, *p))
+            .collect();
+        let u: Vec<VertexId> = corners(x0, y0, 500.0, top_z + h)
+            .iter()
+            .map(|p| vert(&mut vs, *p))
+            .collect();
+        holes.push(c.iter().rev().copied().collect::<Vec<_>>());
+        for i in 0..4 {
+            let j = (i + 1) % 4;
+            // Outward for a bump, into the pocket for a pocket: the same loop.
+            faces.push(face(&vs, vec![c[i], c[j], u[j], u[i]], Vec::new()));
+        }
+        faces.push(face(&vs, u.clone(), Vec::new()));
+    }
+    faces.push(face(&vs, t.clone(), holes));
+    let mut es = std::collections::BTreeMap::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for f in &faces {
+        for (a, b) in f.uses() {
+            if seen.insert(key(a, b)) {
+                es.insert(EdgeId(next), Edge { v: [a, b] });
+                next += 1;
+            }
+        }
+    }
+    for f in faces {
+        fs.insert(FaceId(next), f);
+        next += 1;
+    }
+    SurfaceModel::from_parts(vs, es, fs, next)
+}
+
+/// The top of a slab with many pockets or bumps pulled up: the touched face has thousands of
+/// holes. Release build, `--ignored --nocapture`.
+#[test]
+fn a_slab_with_pockets_and_bumps_from_parts_is_closed() {
+    for h in [-200.0, 300.0] {
+        let m = slab_with(9, 5000.0, h);
+        assert!(m.check().is_closed(), "{h}: {:?}", m.check());
+    }
+}
+
+#[test]
+#[ignore = "timing"]
+fn push_pull_timing_on_a_slab_with_many_holes() {
+    for (k, h) in [(400, -200.0), (4200, 300.0)] {
+        let m0 = slab_with(k, 100_000.0, h);
+        assert!(m0.check().is_closed(), "{:?}", m0.check().problems.first());
+        let top = m0
+            .faces()
+            .find(|(_, f)| f.holes.len() == k)
+            .map(|(id, _)| id)
+            .unwrap();
+        let mut m = m0.clone();
+        let t = std::time::Instant::now();
+        m.apply(&Edit::PushPull {
+            face: top,
+            distance: 100.0,
+        })
+        .unwrap();
+        let push = t.elapsed();
+        let t = std::time::Instant::now();
+        assert!(m.check().is_closed());
+        let check = t.elapsed();
+        println!(
+            "{k} holes ({} edges): pull {:.0} ms, check {:.0} ms",
+            m.edge_count(),
+            push.as_secs_f64() * 1e3,
+            check.as_secs_f64() * 1e3
+        );
+        assert!(push.as_secs_f64() < 5.0 && check.as_secs_f64() < 5.0);
+    }
+}
+
+/// Coplanar rectangles at z = 0, each with its own vertices and edges, as faces of one model.
+fn rects(rs: &[(f64, f64, f64, f64)]) -> SurfaceModel {
+    let mut vs = std::collections::BTreeMap::new();
+    let mut es = std::collections::BTreeMap::new();
+    let mut fs = std::collections::BTreeMap::new();
+    let mut id = 1;
+    for &(x0, y0, x1, y1) in rs {
+        let ids: Vec<VertexId> = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+            .iter()
+            .map(|p| {
+                vs.insert(VertexId(id), DVec3::new(p[0], p[1], 0.0));
+                id += 1;
+                VertexId(id - 1)
+            })
+            .collect();
+        for i in 0..4 {
+            es.insert(
+                EdgeId(id),
+                Edge {
+                    v: [ids[i], ids[(i + 1) % 4]],
+                },
+            );
+            id += 1;
+        }
+        fs.insert(
+            FaceId(id),
+            Face::new(
+                Plane {
+                    normal: DVec3::Z,
+                    offset: 0.0,
+                },
+                ids,
+                Vec::new(),
+            ),
+        );
+        id += 1;
+    }
+    SurfaceModel::from_parts(vs, es, fs, id)
+}
+
+#[test]
+fn the_check_finds_a_partial_overlap_of_coplanar_faces_and_not_a_touch() {
+    for x0 in [600.0, 500.0] {
+        let m = rects(&[(0.0, 0.0, 1000.0, 1000.0), (x0, 0.0, x0 + 1000.0, 1000.0)]);
+        let r = m.check();
+        assert!(
+            r.problems
+                .contains(&Problem::FacesOverlap(FaceId(9), FaceId(18))),
+            "{x0}: {:?}",
+            r.problems
+        );
+    }
+    // Next to each other, sharing a side (with own vertices: those are close vertices, but no
+    // overlap), and apart.
+    let r = rects(&[(0.0, 0.0, 1000.0, 1000.0), (1000.0, 0.0, 2000.0, 1000.0)]).check();
+    assert!(
+        !r.problems
+            .iter()
+            .any(|p| matches!(p, Problem::FacesOverlap(..) | Problem::EdgeInFace(..))),
+        "{:?}",
+        r.problems
+    );
+    assert!(
+        rects(&[(0.0, 0.0, 1000.0, 1000.0), (1500.0, 0.0, 2000.0, 1000.0)])
+            .check()
+            .is_valid()
+    );
+}
+
+#[test]
+fn touching_faces_and_solids_do_not_block_a_push() {
+    // A lone plate on the level of the top, sharing the edge at x = 1000.
+    let mut m = box_model();
+    let top = top_face(&m);
+    poly(
+        &mut m,
+        &[
+            [1000.0, 0.0, 500.0],
+            [2000.0, 0.0, 500.0],
+            [2000.0, 1000.0, 500.0],
+            [1000.0, 1000.0, 500.0],
+        ],
+    );
+    assert!(m.check().is_valid());
+    pull(&mut m, top, 100.0).unwrap();
+    // A second box that shares one corner vertex.
+    let mut m = box_model();
+    let top = top_face(&m);
+    poly(&mut m, &square(1000.0, 1000.0, 1000.0, 0.0));
+    let other = m
+        .faces()
+        .find(|(_, f)| f.outer.iter().any(|v| m.vertex(*v).unwrap().x > 1500.0))
+        .unwrap()
+        .0;
+    pull(&mut m, other, -500.0).unwrap();
+    assert!(m.check().is_closed());
+    pull(&mut m, top, 100.0).unwrap();
+    assert!(m.check().is_closed(), "{:?}", m.check());
+}
+
+fn counts(m: &SurfaceModel) -> (usize, usize, usize) {
+    (m.vertex_count(), m.edge_count(), m.face_count())
+}
+
+#[test]
+fn a_bump_pushed_back_down_is_flush_and_merges() {
+    let (mut m, top, inner) = box_with_inner_square();
+    pull(&mut m, inner, 300.0).unwrap();
+    let rev = m.rev();
+    pull(&mut m, inner, -300.0).unwrap();
+    assert_eq!(m.rev(), rev + 1, "one undo step");
+    assert!(m.check().is_closed(), "{:?}", m.check());
+    assert_eq!(counts(&m), (8, 12, 6));
+    let t = m.face(top).expect("the top stays");
+    assert!(t.holes.is_empty());
+    assert!(m.face(inner).is_none(), "the bump top merged into the top");
+}
+
+#[test]
+fn a_pocket_floor_pulled_back_up_restores_the_single_top() {
+    let (mut m, top, inner) = box_with_inner_square();
+    let plain = box_model();
+    pull(&mut m, inner, -200.0).unwrap();
+    pull(&mut m, inner, 200.0).unwrap();
+    assert!(m.check().is_closed(), "{:?}", m.check());
+    assert_eq!(counts(&m), counts(&plain));
+    assert_eq!(
+        m.face(top).unwrap().outer,
+        plain.face(top_face(&plain)).unwrap().outer
+    );
+    assert!(m.face(top).unwrap().holes.is_empty());
+}
+
+#[test]
+fn the_second_half_of_a_split_top_pushed_to_the_level_of_the_first_merges() {
+    let (mut m, left, right) = split_top();
+    pull(&mut m, left, -200.0).unwrap();
+    pull(&mut m, right, -200.0).unwrap();
+    assert!(m.check().is_closed(), "{:?}", m.check());
+    assert_eq!(counts(&m), (8, 12, 6));
+    assert_eq!(m.local_bounds().unwrap().1.z, 300.0);
+    assert!((volume(&m) - 3.0e8).abs() < 1.0, "{}", volume(&m));
+}
+
+#[test]
+fn the_top_pushed_past_a_line_across_a_wall_goes_in_steps() {
+    let mut m = box_model();
+    let top = top_face(&m);
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[0.0, 0.0, 250.0], [1000.0, 0.0, 250.0]]],
+    })
+    .unwrap();
+    assert_eq!(m.face_count(), 7);
+    let rev = m.rev();
+    pull(&mut m, top, -300.0).unwrap();
+    assert_eq!(m.rev(), rev + 1, "one undo step");
+    assert!(m.check().is_closed(), "{:?}", m.check());
+    assert_eq!(counts(&m), (8, 12, 6), "the line went with the upper part");
+    assert_eq!(m.local_bounds().unwrap().1.z, 200.0);
+    assert!((volume(&m) - 2.0e8).abs() < 1.0);
+    // Exactly onto the line works too.
+    let mut m = box_model();
+    let top = top_face(&m);
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[0.0, 0.0, 250.0], [1000.0, 0.0, 250.0]]],
+    })
+    .unwrap();
+    pull(&mut m, top, -250.0).unwrap();
+    assert_eq!(counts(&m), (8, 12, 6));
+}
+
+#[test]
+fn a_slab_with_a_bump_pulled_up_around_it() {
+    let make = || {
+        let (mut m, top, inner) = box_with_inner_square();
+        pull(&mut m, inner, 300.0).unwrap();
+        (m, top)
+    };
+    let (mut m, top) = make();
+    pull(&mut m, top, 100.0).unwrap();
+    assert!(m.check().is_closed());
+    let walls: Vec<f64> = m
+        .faces()
+        .filter(|(_, f)| f.plane.normal.z.abs() < 1e-9)
+        .filter(|(_, f)| {
+            f.outer.iter().all(|v| {
+                let p = m.vertex(*v).unwrap();
+                p.x > 200.0 && p.x < 800.0 && p.y > 200.0 && p.y < 800.0
+            })
+        })
+        .flat_map(|(_, f)| f.outer.iter().map(|v| m.vertex(*v).unwrap().z))
+        .collect();
+    assert!(
+        walls.iter().all(|z| *z == 600.0 || *z == 800.0),
+        "{walls:?}"
+    );
+    // Up to the top of the bump: the two tops are flush and merge (as a bump pushed back down).
+    let (mut m, top) = make();
+    pull(&mut m, top, 300.0).unwrap();
+    assert!(m.check().is_closed());
+    assert_eq!(counts(&m), (8, 12, 6));
+    // Past it: refused, nothing changes, and the same edit gives the same ids.
+    let (mut m, top) = make();
+    let m2 = m.clone();
+    refused_with(&mut m, top, 400.0, "flush");
+    assert_eq!(m, m2);
+    let (mut a, mut b) = (make().0, make().0);
+    pull(&mut a, top, 100.0).unwrap();
+    pull(&mut b, top, 100.0).unwrap();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn a_contact_that_was_there_before_counts_as_old_on_a_split_off_part() {
+    // The corners of the box pass through a plate at z = 400 (a model with that problem). The
+    // half of a top split corner to corner pushed down splits two corner edges; the upper parts
+    // (new ids) still pass through the plate at the same points.
+    let mut m = box_model();
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[0.0, 0.0, 500.0], [1000.0, 1000.0, 500.0]]],
+    })
+    .unwrap();
+    plate(&mut m, 400.0);
+    let half = m
+        .faces()
+        .find(|(_, f)| {
+            f.plane.normal.z > 0.9
+                && f.plane.offset == 500.0
+                && f.outer.iter().any(|v| {
+                    m.vertex(*v)
+                        .unwrap()
+                        .distance(DVec3::new(1000.0, 0.0, 500.0))
+                        < 1e-6
+                })
+        })
+        .unwrap()
+        .0;
+    let r = m.apply(&Edit::PushPull {
+        face: half,
+        distance: -200.0,
+    });
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn an_old_problem_at_a_new_place_counts_as_new() {
+    // A line put in by hand along the corner at (0, 0), from 400 to 900: the top corner lies on
+    // it. Pulling the top moves the corner along the line: still on it, but at a new place.
+    let mut m = box_model();
+    let top = top_face(&m);
+    let (va, vb, e) = (
+        VertexId(m.next_id),
+        VertexId(m.next_id + 1),
+        EdgeId(m.next_id + 2),
+    );
+    m.next_id += 3;
+    m.vertices.insert(va, DVec3::new(0.0, 0.0, 400.0));
+    m.vertices.insert(vb, DVec3::new(0.0, 0.0, 900.0));
+    m.edges.insert(e, Edge { v: [va, vb] });
+    assert!(!m.check().is_valid());
+    // The line crosses the plane of the top at the corner, now at 600 instead of 500.
+    let why = refused_with(&mut m, top, 100.0, "");
+    assert!(why.contains(&format!("edge {e} ")), "{why}");
+}
+
+#[test]
+fn a_cylinder_on_a_slanted_face_pulls_with_smooth_walls() {
+    // A box tilted by 30 degrees about x.
+    let (c, s) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+    let (u, v) = (DVec3::X, DVec3::new(0.0, c, s));
+    let at = |x: f64, y: f64, h: f64| -> P {
+        let p = u * x + v * y + u.cross(v) * h;
+        [p.x, p.y, p.z]
+    };
+    let mut m = SurfaceModel::new();
+    poly(
+        &mut m,
+        &[
+            at(0.0, 0.0, 0.0),
+            at(2000.0, 0.0, 0.0),
+            at(2000.0, 2000.0, 0.0),
+            at(0.0, 2000.0, 0.0),
+        ],
+    );
+    let f = only_face(&m);
+    pull(&mut m, f, 500.0).unwrap();
+    assert!(m.check().is_closed());
+    let circle: Vec<P> = (0..96)
+        .map(|i| {
+            let a = std::f64::consts::TAU * f64::from(i) / 96.0;
+            at(1000.0 + 400.0 * a.cos(), 1000.0 + 400.0 * a.sin(), 500.0)
+        })
+        .collect();
+    m.apply(&Edit::AddCurve {
+        points: circle,
+        closed: true,
+    })
+    .unwrap();
+    let disc = m.faces().find(|(_, f)| f.outer.len() == 96).unwrap().0;
+    let before = m.face_count();
+    pull(&mut m, disc, 300.0).unwrap();
+    assert!(m.check().is_closed(), "{:?}", m.check());
+    assert_eq!(m.face_count(), before + 96);
+    let smooth = m
+        .edges()
+        .filter(|(id, _)| {
+            m.edge_attrs(*id)
+                .and_then(|a| a.get("smooth"))
+                .is_some_and(|v| v == &serde_json::Value::Bool(true))
+        })
+        .count();
+    assert_eq!(smooth, 96);
+    assert_eq!(
+        m.curves().count(),
+        2,
+        "one curve at the bottom, one at the top"
+    );
+    assert!(m.curves().all(|(_, es)| es.len() == 96));
 }

@@ -31,10 +31,22 @@
 //! faces leaves the opening where it was: a pull adds a bump with the walls outward, a push digs a
 //! pocket and the walls face into it (the walls always face the empty side).
 //!
+//! # Flush
+//!
+//! When a vertex of the face lands on the far end of an edge along the normal (a bump pushed back
+//! down, a pocket floor pulled up to the top, the second half of a split top pushed to the level
+//! of the first), the walls between collapse: the vertex is welded to the one it meets, edges
+//! that fall together become one (the older id stays and takes the attributes and the place in a
+//! curve of the other), loops and faces that have no area left go, and the face merges with a
+//! face of the same plane and side that it now shares an edge with, by the rules of Erase (the
+//! face with the lower id stays). A push that passes a vertex along the normal (the top pushed
+//! past a line across a wall) goes in steps: first to that vertex, then on. A face that merged on
+//! the way does not go on: the push is refused.
+//!
 //! # Refused
 //!
-//! - A move that reaches the far end of a wall edge (the push goes through to the opposite face).
-//!   The hole through a slab is a later step.
+//! - A move that reaches the opposite face (the face becomes flush with a face that looks the
+//!   other way, or a copy ends on it). The hole through a slab is a later step.
 //! - A wall edge with more than one other face, one of which lies where the new wall would go (a
 //!   fin: the face is pushed into a wall that it shares an edge with).
 //! - A result in which a new or moved edge passes through, ends on, or lies in a face that it does
@@ -54,17 +66,57 @@
 use super::super::CurveId;
 use super::super::check::{self, Problem};
 use super::super::clash::{self, Contact};
-use super::super::index::BoxTree;
 use super::*;
 
+/// The most steps of one push (each passes a vertex along the normal).
+const MAX_STEPS: usize = 64;
+
+/// Pushes `face` of `m` by `distance`. `before` is the model before the edit (`m` is its copy).
 pub(super) fn push_pull(
     m: &mut SurfaceModel,
+    before: &SurfaceModel,
     face: FaceId,
     distance: f64,
 ) -> Result<(), SurfaceError> {
-    let before = m.clone();
-    let touched = run(m, face, distance)?;
-    validate(&before, m, &touched)
+    let mut rest = distance;
+    // The model before the current step (the first step starts from `before`).
+    let mut base: Option<SurfaceModel> = None;
+    for _ in 0..MAX_STEPS {
+        let from = base.as_ref().unwrap_or(before);
+        match run(m, face, rest)? {
+            Plan::Done(t, welds) => {
+                finish_and_check(m, from, t, &welds)?;
+                return Ok(());
+            }
+            Plan::Step(d) => {
+                // Nothing changed yet: push to the vertex on the way first.
+                let Plan::Done(t, welds) = run(m, face, d)? else {
+                    return Err(SurfaceError::Unsolved(
+                        "the push/pull does not reach the vertex on its way".into(),
+                    ));
+                };
+                if finish_and_check(m, from, t, &welds)? {
+                    return Err(SurfaceError::Unsolved(format!(
+                        "the face becomes flush with another face after {} mm and merges with \
+                         it; a push past that is a later step",
+                        d.abs()
+                    )));
+                }
+                rest -= d;
+                base = Some(m.clone());
+            }
+        }
+    }
+    Err(SurfaceError::Unsolved(
+        "the push/pull passes too many vertices on its way".into(),
+    ))
+}
+
+/// What `run` found: the push is done (and what it touched, and the vertices to weld), or it must
+/// first go to a vertex on its way (`Step(distance)`, nothing changed).
+enum Plan {
+    Done(Touched, BTreeMap<VertexId, VertexId>),
+    Step(f64),
 }
 
 /// One boundary edge of the face.
@@ -82,12 +134,13 @@ struct Touched {
     verts: BTreeSet<VertexId>,
     /// The edges at those vertices.
     edges: BTreeSet<EdgeId>,
-    /// The faces that are new or changed, with the face of the model before that was at the same
-    /// place (`None` for a new wall).
-    faces: BTreeMap<FaceId, Option<FaceId>>,
+    /// The faces that are new or changed.
+    faces: BTreeSet<FaceId>,
+    /// The face that was pushed (the cap, unless it merged).
+    face: FaceId,
 }
 
-fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Touched, SurfaceError> {
+fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Plan, SurfaceError> {
     let f = m
         .faces
         .get(&face)
@@ -194,10 +247,13 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Touched, SurfaceErr
 
     // An edge of the model that runs from a vertex along the normal.
     let in_face: BTreeSet<(VertexId, VertexId)> = f.uses().map(|(a, b)| key(a, b)).collect();
-    let through = || {
-        SurfaceError::Unsolved("the face cannot be pushed through to the opposite face yet".into())
-    };
     let mut merge: BTreeMap<VertexId, EdgeId> = BTreeMap::new();
+    // Flush: a vertex that moves onto the far end of the edge is welded to it after the push; the
+    // copy of a vertex that stays is that end.
+    let mut welds: BTreeMap<VertexId, VertexId> = BTreeMap::new();
+    let mut lands: BTreeMap<VertexId, VertexId> = BTreeMap::new();
+    // The nearest vertex on the way: the push goes there first.
+    let mut step: Option<f64> = None;
     for &v in &verts {
         let p = w.pos(v);
         for e in w.t.edges_at(v).collect::<Vec<_>>() {
@@ -214,21 +270,28 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Touched, SurfaceErr
             if s * d <= 0.0 {
                 continue;
             }
-            if !stays.contains(&v) {
-                // A vertex that moves in place may not reach the far end of the edge.
-                if (s - d) * s <= 0.0 || (s - d).abs() <= tol {
-                    return Err(through());
+            if (s - d).abs() <= tol {
+                if stays.contains(&v) {
+                    lands.insert(v, o);
+                } else {
+                    welds.insert(v, o);
                 }
-            } else if s.abs() > d.abs() + tol {
+            } else if s.abs() < d.abs() {
+                if step.is_none_or(|x| s.abs() < x.abs()) {
+                    step = Some(s);
+                }
+            } else if stays.contains(&v) {
                 // The copy lies on the edge: the edge is split there and its part is the vertical.
                 merge.insert(v, e);
-            } else if s.abs() < d.abs() - tol {
-                return Err(through());
             }
         }
     }
 
-    // The copies must not land on a vertex of the model.
+    if let Some(s) = step {
+        return Ok(Plan::Step(s));
+    }
+
+    // The copies must not land on a vertex of the model (but on the far end of their edge).
     let big =
         w.m.vertices
             .values()
@@ -237,7 +300,10 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Touched, SurfaceErr
     let window = geom::tolerance_at(big);
     let mut by_x: Vec<(f64, DVec3)> = w.m.vertices.values().map(|p| (p.x, *p)).collect();
     by_x.sort_by(|p, q| p.0.total_cmp(&q.0));
-    for &v in verts.iter().filter(|v| stays.contains(v)) {
+    for &v in verts
+        .iter()
+        .filter(|v| stays.contains(v) && !lands.contains_key(v))
+    {
         // A vertex that stays leaves a copy behind; one that moves leaves its place free.
         let p = new_pos[&v];
         let start = by_x.partition_point(|(x, _)| *x < p.x - window);
@@ -252,15 +318,17 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Touched, SurfaceErr
         }
     }
 
-    let mut faces_out: BTreeMap<FaceId, Option<FaceId>> = BTreeMap::new();
+    let mut faces_out: BTreeSet<FaceId> = BTreeSet::new();
     // Copies, in loop order. A vertex that moves is its own copy.
     let mut mv: BTreeMap<VertexId, VertexId> = BTreeMap::new();
     for &v in &verts {
         if !stays.contains(&v) {
             mv.insert(v, v);
+        } else if let Some(&o) = lands.get(&v) {
+            mv.insert(v, o);
         } else if let Some(&e) = merge.get(&v) {
             for g in w.t.faces_of(e).collect::<Vec<_>>() {
-                faces_out.insert(g, Some(g));
+                faces_out.insert(g);
             }
             let mut keys = BTreeSet::new();
             let c = w.split_edge(e, new_pos[&v], &mut keys);
@@ -318,7 +386,7 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Touched, SurfaceErr
         let plane =
             Plane::new(p0, (p1 - p0).cross(p2 - p1)).ok_or(SurfaceError::TooShort { tol: 0.0 })?;
         let id = w.new_face(Face::new(plane, l, Vec::new()));
-        faces_out.insert(id, None);
+        faces_out.insert(id);
     }
 
     // The walls that follow an edge with a vertex that stays get the step in their outline.
@@ -326,7 +394,7 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Touched, SurfaceErr
         let Some(g) = bd.stretch else { continue };
         let (sa, sb) = (stays.contains(&bd.a), stays.contains(&bd.b));
         if !sa && !sb {
-            faces_out.insert(g, Some(g));
+            faces_out.insert(g);
             continue;
         }
         let mut wall = w.m.faces[&g].clone();
@@ -365,7 +433,7 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Touched, SurfaceErr
             ));
         }
         w.put_face(g, wall);
-        faces_out.insert(g, Some(g));
+        faces_out.insert(g);
     }
 
     // The cap keeps the id of the face.
@@ -399,10 +467,10 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Touched, SurfaceErr
             flip(&mut cap);
             w.new_face(f.clone())
         };
-        faces_out.insert(id, Some(face));
+        faces_out.insert(id);
     }
     w.put_face(face, cap);
-    faces_out.insert(face, Some(face));
+    faces_out.insert(face);
 
     // A stretched edge whose end stayed is replaced by the edge between the copies, which takes
     // its attributes and its place in a curve.
@@ -481,11 +549,15 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64) -> Result<Touched, SurfaceErr
         .chain(mv.values().copied())
         .collect();
     let tedges: BTreeSet<EdgeId> = tverts.iter().flat_map(|v| w.t.edges_at(*v)).collect();
-    Ok(Touched {
-        verts: tverts,
-        edges: tedges,
-        faces: faces_out,
-    })
+    Ok(Plan::Done(
+        Touched {
+            verts: tverts,
+            edges: tedges,
+            faces: faces_out,
+            face,
+        },
+        welds,
+    ))
 }
 
 /// Takes out the places where a loop goes to a vertex and straight back (`… x, y, x …`).
@@ -537,9 +609,193 @@ fn rechain(m: &mut SurfaceModel, ids: &BTreeSet<CurveId>) {
     }
 }
 
+/// Welds the flush vertices, merges the faces that became one, and checks the result against
+/// `before`. True if the pushed face merged with another face.
+fn finish_and_check(
+    m: &mut SurfaceModel,
+    before: &SurfaceModel,
+    t: Touched,
+    welds: &BTreeMap<VertexId, VertexId>,
+) -> Result<bool, SurfaceError> {
+    let to = |v: VertexId| *welds.get(&v).unwrap_or(&v);
+    if !welds.is_empty() {
+        weld(m, welds);
+    }
+    let targets: BTreeSet<VertexId> = t.verts.iter().map(|v| to(*v)).collect();
+    let merges = flush_merges(m, t.face, &targets)?;
+    let merged = !merges.is_empty();
+    if merged {
+        super::erase_edges(m, &merges)?;
+    }
+    // What is touched now: the vertices that are left, their edges, and the faces at them.
+    let verts: BTreeSet<VertexId> = targets
+        .into_iter()
+        .filter(|v| m.vertices.contains_key(v))
+        .collect();
+    let edges: BTreeSet<EdgeId> = m
+        .edges
+        .iter()
+        .filter(|(_, e)| e.v.iter().any(|v| verts.contains(v)))
+        .map(|(id, _)| *id)
+        .collect();
+    let mut faces: BTreeSet<FaceId> = t
+        .faces
+        .iter()
+        .copied()
+        .filter(|f| m.faces.contains_key(f))
+        .collect();
+    if merged {
+        faces.extend(
+            m.faces
+                .iter()
+                .filter(|(_, f)| f.loops().flatten().any(|v| verts.contains(v)))
+                .map(|(id, _)| *id),
+        );
+    }
+    let t = Touched {
+        verts,
+        edges,
+        faces,
+        face: t.face,
+    };
+    validate(before, m, &t)?;
+    Ok(merged)
+}
+
+/// Replaces each vertex of `map` by its value: edges that fall on one vertex go, edges that fall
+/// together become one (the lower id stays and takes the attributes and the curve place of the
+/// other), loops that lose their area go, and a face whose outer loop loses its area goes.
+fn weld(m: &mut SurfaceModel, map: &BTreeMap<VertexId, VertexId>) {
+    let to = |v: VertexId| *map.get(&v).unwrap_or(&v);
+    let mut by_key: BTreeMap<(VertexId, VertexId), EdgeId> = BTreeMap::new();
+    let mut gone: Vec<(EdgeId, Option<EdgeId>)> = Vec::new();
+    let ids: Vec<EdgeId> = m.edges.keys().copied().collect();
+    for id in ids {
+        let e = m.edges[&id];
+        let nv = e.v.map(to);
+        if nv[0] == nv[1] {
+            gone.push((id, None));
+            continue;
+        }
+        match by_key.entry(key(nv[0], nv[1])) {
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(id);
+                m.edges.insert(id, Edge { v: nv });
+            }
+            std::collections::btree_map::Entry::Occupied(kept) => {
+                gone.push((id, Some(*kept.get())))
+            }
+        }
+    }
+    let mut recheck: BTreeSet<CurveId> = BTreeSet::new();
+    for (id, kept) in gone {
+        m.edges.remove(&id);
+        let attrs = m.edge_attrs.remove(&id);
+        if let (Some(k), Some(attrs)) = (kept, attrs) {
+            let into = m.edge_attrs.entry(k).or_default();
+            for (name, v) in attrs {
+                into.entry(name).or_insert(v);
+            }
+        }
+        for (c, es) in &mut m.curves {
+            let Some(i) = es.iter().position(|e| *e == id) else {
+                continue;
+            };
+            match kept {
+                Some(k) if !es.contains(&k) => es[i] = k,
+                _ => {
+                    es.remove(i);
+                }
+            }
+            recheck.insert(*c);
+        }
+    }
+    m.curves.retain(|_, es| !es.is_empty());
+    for v in map.keys() {
+        m.vertices.remove(v);
+    }
+    let ids: Vec<FaceId> = m
+        .faces
+        .iter()
+        .filter(|(_, f)| f.loops().flatten().any(|v| map.contains_key(v)))
+        .map(|(id, _)| *id)
+        .collect();
+    for id in ids {
+        let mut f = m.faces.remove(&id).expect("listed");
+        let clean = |l: &Vec<VertexId>| -> Option<Vec<VertexId>> {
+            let mut l: Vec<VertexId> = l.iter().map(|v| to(*v)).collect();
+            l.dedup();
+            while l.len() > 1 && l.first() == l.last() {
+                l.pop();
+            }
+            drop_spikes(&mut l);
+            let pts: Vec<DVec3> = l.iter().map(|v| m.vertices[v]).collect();
+            let round: f64 = (0..pts.len())
+                .map(|i| pts[i].distance(pts[(i + 1) % pts.len()]))
+                .sum();
+            let area2 = geom::newell(&pts).length();
+            (l.len() >= 3 && area2 > geom::tol(&pts) * round).then_some(l)
+        };
+        let Some(outer) = clean(&f.outer) else {
+            continue;
+        };
+        f.outer = outer;
+        f.holes = f.holes.iter().filter_map(&clean).collect();
+        f.holes.sort();
+        m.faces.insert(id, f);
+    }
+    rechain(m, &recheck);
+}
+
+/// The edges at `targets` where the pushed face now meets a face of the same plane: to be erased
+/// when the two look the same way (they merge), refused when they look opposite ways (the push
+/// reached the opposite face).
+fn flush_merges(
+    m: &SurfaceModel,
+    face: FaceId,
+    targets: &BTreeSet<VertexId>,
+) -> Result<Vec<EdgeId>, SurfaceError> {
+    let Some(f) = m.faces.get(&face) else {
+        return Ok(Vec::new());
+    };
+    let mine: BTreeMap<(VertexId, VertexId), bool> = f
+        .uses()
+        .filter(|(a, b)| targets.contains(a) || targets.contains(b))
+        .map(|(a, b)| (key(a, b), a < b))
+        .collect();
+    let mut out: BTreeSet<EdgeId> = BTreeSet::new();
+    for (&id, g) in &m.faces {
+        if id == face
+            || g.plane.normal.dot(f.plane.normal).abs() < 1.0 - 1e-9
+            || !on_plane(&f.plane, m.vertices[&g.outer[0]])
+        {
+            continue;
+        }
+        let same_side = g.plane.normal.dot(f.plane.normal) > 0.0;
+        for (a, b) in g.uses() {
+            let Some(&dir) = mine.get(&key(a, b)) else {
+                continue;
+            };
+            let same_way = dir == (a < b);
+            if same_side && !same_way {
+                if let Some(e) = m.edge_between(a, b) {
+                    out.insert(e);
+                }
+            } else if !same_side && same_way {
+                return Err(SurfaceError::Unsolved(
+                    "the face cannot be pushed through to the opposite face yet".into(),
+                ));
+            }
+        }
+    }
+    Ok(out.into_iter().collect())
+}
+
 /// The checks of the result of a push: new structural problems of the model, contacts of the new
 /// or moved geometry with other faces and edges, and new distance problems of the touched vertices
-/// and edges. Problems (and contacts) that the model had before do not count.
+/// and edges. A problem or contact counts as old only when the model before had one of the same
+/// kind at the same place (so new ids for old geometry do not matter, and old ids at a new place
+/// do).
 fn validate(before: &SurfaceModel, m: &SurfaceModel, t: &Touched) -> Result<(), SurfaceError> {
     let invalid = |p: &Problem| {
         SurfaceError::Unsolved(format!("the push/pull would make the model invalid: {p}"))
@@ -563,9 +819,27 @@ fn validate(before: &SurfaceModel, m: &SurfaceModel, t: &Touched) -> Result<(), 
         )));
     }
     let after = check::near(m, &t.edges, &t.verts);
-    if !after.is_empty() {
-        let old = check::near(before, &t.edges, &t.verts);
-        if let Some(p) = after.difference(&old).next() {
+    if after.is_empty() {
+        return Ok(());
+    }
+    let pad = check::window(before).max(check::window(m));
+    let edges = clash::edge_tree(before, pad);
+    for p in &after {
+        let Some(at) = check::place(m, p) else {
+            return Err(invalid(p));
+        };
+        // The problems of the model before around the same place.
+        let mut es: BTreeSet<EdgeId> = BTreeSet::new();
+        edges.query(at, at, &mut |e| {
+            es.insert(EdgeId(e));
+        });
+        let vs: BTreeSet<VertexId> = es.iter().flat_map(|e| before.edges[e].v).collect();
+        let tol = geom::tol(&[at]);
+        let old = check::near(before, &es, &vs).iter().any(|q| {
+            std::mem::discriminant(q) == std::mem::discriminant(p)
+                && check::place(before, q).is_some_and(|x| x.distance(at) <= tol)
+        });
+        if !old {
             return Err(invalid(p));
         }
     }
@@ -573,7 +847,7 @@ fn validate(before: &SurfaceModel, m: &SurfaceModel, t: &Touched) -> Result<(), 
 }
 
 /// The first contact (in id order) of a touched edge with a face, or of a touched face with an
-/// edge, that the model before did not have.
+/// edge, that the model before did not have at the same place.
 fn new_contact(
     before: &SurfaceModel,
     m: &SurfaceModel,
@@ -585,34 +859,18 @@ fn new_contact(
         let ed = m.edges.get(&e)?;
         Some((*m.vertices.get(&ed.v[0])?, *m.vertices.get(&ed.v[1])?, ed.v))
     };
-    let pad = geom::tolerance_at(
-        m.vertices
-            .values()
-            .map(|p| geom::size(*p))
-            .fold(0.0, f64::max),
-    );
-    let faces = BoxTree::new(
-        m.faces
-            .iter()
-            .filter(|(_, f)| whole(m, f))
-            .map(|(id, f)| {
-                let (lo, hi) = clash::face_box(m, f, pad);
-                (lo, hi, id.0)
-            })
-            .collect(),
-    );
-    let mut rings: BTreeMap<FaceId, Vec<Vec<DVec2>>> = BTreeMap::new();
+    let pad = check::window(m);
+    let faces = clash::face_tree(m, pad, &|f| whole(m, f));
+    let mut shapes = clash::Shapes::new(m);
     let mut found: BTreeSet<(EdgeId, FaceId)> = BTreeSet::new();
-    let mut hits: Vec<(EdgeId, FaceId, Contact)> = Vec::new();
-    let mut test = |e: EdgeId, g: FaceId, hits: &mut Vec<(EdgeId, FaceId, Contact)>| {
+    let mut hits: Vec<(EdgeId, FaceId, Contact, DVec3)> = Vec::new();
+    let mut test = |e: EdgeId, g: FaceId, hits: &mut Vec<(EdgeId, FaceId, Contact, DVec3)>| {
         if !found.insert((e, g)) {
             return;
         }
         let Some((a, b, vs)) = ends(m, e) else { return };
-        let gf = &m.faces[&g];
-        let r = rings.entry(g).or_insert_with(|| clash::rings(m, gf));
-        if let Some(c) = clash::contact(a, b, vs, gf, r, true) {
-            hits.push((e, g, c));
+        if let Some((c, at)) = clash::contact(a, b, vs, &m.faces[&g], shapes.get(g), true) {
+            hits.push((e, g, c, at));
         }
     };
     for &e in &t.edges {
@@ -625,16 +883,8 @@ fn new_contact(
             test(e, g, &mut hits);
         }
     }
-    let edges = BoxTree::new(
-        m.edges
-            .keys()
-            .filter_map(|id| {
-                let (a, b, _) = ends(m, *id)?;
-                Some((a.min(b), a.max(b), id.0))
-            })
-            .collect(),
-    );
-    for &g in t.faces.keys() {
+    let edges = clash::edge_tree(m, 0.0);
+    for &g in &t.faces {
         let Some(gf) = m.faces.get(&g).filter(|f| whole(m, f)) else {
             continue;
         };
@@ -645,22 +895,43 @@ fn new_contact(
             test(e, g, &mut hits);
         }
     }
+    if hits.is_empty() {
+        return None;
+    }
     hits.sort_by_key(|h| (h.0, h.1));
-    hits.into_iter().find(|&(e, g, _)| {
-        // The same contact at the place before: the edge as it was, and the face that was there.
-        let old = match t.faces.get(&g) {
-            Some(o) => *o,
-            None => Some(g),
-        };
-        let Some((a, b, vs)) = ends(before, e) else {
-            return true;
-        };
-        let Some(gf) = old
-            .and_then(|o| before.faces.get(&o))
-            .filter(|f| whole(before, f))
-        else {
-            return true;
-        };
-        clash::contact(a, b, vs, gf, &clash::rings(before, gf), true).is_none()
-    })
+    // The same contact before: an edge along the same line through the place, and a face in the
+    // same plane at the place, that meet.
+    let bpad = check::window(before).max(pad);
+    let bfaces = clash::face_tree(before, bpad, &|f| whole(before, f));
+    let bedges = clash::edge_tree(before, bpad);
+    let mut bshapes = clash::Shapes::new(before);
+    hits.into_iter()
+        .find(|&(e, g, _, at)| {
+            let (a, b, _) = ends(m, e).expect("a hit has its edge");
+            let dir = (b - a).normalize_or_zero();
+            let gp = m.faces[&g].plane;
+            let tol = geom::tol(&[at]);
+            let mut es = Vec::new();
+            bedges.query(at, at, &mut |x| es.push(EdgeId(x)));
+            let mut gs = Vec::new();
+            bfaces.query(at, at, &mut |x| gs.push(FaceId(x)));
+            let old = es.iter().any(|&x| {
+                let Some((c, d, vs)) = ends(before, x) else {
+                    return false;
+                };
+                if geom::point_segment(at, c, d).0 > tol
+                    || (d - c).normalize_or_zero().cross(dir).length() > 1e-6
+                {
+                    return false;
+                }
+                gs.iter().any(|&y| {
+                    let bg = &before.faces[&y];
+                    bg.plane.normal.dot(gp.normal).abs() >= 1.0 - 1e-9
+                        && on_plane(&bg.plane, at)
+                        && clash::contact(c, d, vs, bg, bshapes.get(y), true).is_some()
+                })
+            });
+            !old
+        })
+        .map(|(e, g, c, _)| (e, g, c))
 }

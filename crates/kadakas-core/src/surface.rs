@@ -374,7 +374,7 @@ impl SurfaceModel {
     pub fn apply(&mut self, edit: &Edit) -> Result<(), SurfaceError> {
         let intent = sync::Intent::of(self, edit);
         let mut work = self.clone();
-        edit::run(&mut work, edit)?;
+        edit::run(&mut work, edit, self)?;
         if !work.same_geometry(self) {
             sync::record(&mut work, self, intent);
         }

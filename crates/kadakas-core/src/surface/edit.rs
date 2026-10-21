@@ -42,12 +42,17 @@ pub enum Edit {
 
 mod pushpull;
 
-pub(super) fn run(m: &mut SurfaceModel, edit: &Edit) -> Result<(), SurfaceError> {
+/// Runs `edit` on `m`, a copy of `before` (the model as it was, which Push/Pull compares with).
+pub(super) fn run(
+    m: &mut SurfaceModel,
+    edit: &Edit,
+    before: &SurfaceModel,
+) -> Result<(), SurfaceError> {
     match edit {
         Edit::AddEdges { edges } => add_edges(m, edges),
         Edit::EraseEdges { edges } => erase_edges(m, edges),
         Edit::AddCurve { points, closed } => add_curve(m, points, *closed),
-        Edit::PushPull { face, distance } => pushpull::push_pull(m, *face, *distance),
+        Edit::PushPull { face, distance } => pushpull::push_pull(m, before, *face, *distance),
         Edit::EraseFaces { faces } => {
             let ids = existing_faces(m, faces)?;
             let mut w = Work::new(m);
