@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::arrange::{self, Arrangement, Region, canonical, inside, reversed};
 use super::geom::{self, Plane, on_plane};
 use super::index::BoxTree;
+use super::sync;
 use super::topo::Topo;
 use super::{
     Edge, EdgeId, Face, FaceId, LENGTH_TOLERANCE, MAX_EDGES, MAX_EDIT_EDGES, MAX_FACES,
@@ -108,18 +109,20 @@ fn run_noted(
             }
             Ok(())
         }
-        Edit::ReverseFaces { faces } => {
-            for id in existing_faces(m, faces)? {
-                let f = m.faces.get_mut(&id).expect("checked");
-                f.plane = f.plane.flipped();
-                f.outer = reversed(&f.outer);
-                let mut holes: Vec<Vec<VertexId>> = f.holes.iter().map(|h| reversed(h)).collect();
-                holes.sort();
-                f.holes = holes;
-            }
-            Ok(())
-        }
+        Edit::ReverseFaces { faces } => reverse_faces(m, faces),
     }
+}
+
+fn reverse_faces(m: &mut SurfaceModel, faces: &[FaceId]) -> Result<(), SurfaceError> {
+    for id in existing_faces(m, faces)? {
+        let f = m.faces.get_mut(&id).expect("checked");
+        f.plane = f.plane.flipped();
+        f.outer = reversed(&f.outer);
+        let mut holes: Vec<Vec<VertexId>> = f.holes.iter().map(|h| reversed(h)).collect();
+        holes.sort();
+        f.holes = holes;
+    }
+    Ok(())
 }
 
 fn existing_faces(m: &SurfaceModel, ids: &[FaceId]) -> Result<BTreeSet<FaceId>, SurfaceError> {
@@ -1165,7 +1168,11 @@ fn add_edges(m: &mut SurfaceModel, segs: &[[[f64; 3]; 2]]) -> Result<(), Surface
             count: segs.len(),
         });
     }
-    let mut w = Work::indexed(m);
+    add_edges_in(&mut Work::indexed(m), segs)
+}
+
+/// The body of [`add_edges`], on a work that the caller made (and may keep).
+fn add_edges_in(w: &mut Work<'_>, segs: &[[[f64; 3]; 2]]) -> Result<(), SurfaceError> {
     let mut drawn = Vec::new();
     let mut touched = BTreeSet::new();
     for s in segs {
@@ -1181,6 +1188,126 @@ fn add_edges(m: &mut SurfaceModel, segs: &[[[f64; 3]; 2]]) -> Result<(), Surface
     }
     w.solve_after_add(&drawn, &touched)?;
     w.check_limits()
+}
+
+/// One model that takes many edits one after another and keeps its indexes between them. Each
+/// edit gives the model, the log and the revision that [`SurfaceModel::apply`] gives (the result
+/// is the same to the bit, and a test compares it with the plain edits). The cost of an edit is
+/// that of its own edges and not that of the whole model: `apply` copies the model and builds the
+/// indexes again each time, which is what made a long run of small edits (an explode of many
+/// parts) cost more than the square of its size.
+///
+/// The model changes only through the methods of the session, so the indexes stay true (the
+/// attributes and the curves are not in an index, see [`Session::model_mut`]). After an error the
+/// session is not to be used again.
+pub(super) struct Session {
+    m: SurfaceModel,
+    t: Topo,
+    near: Option<Near>,
+}
+
+impl Session {
+    pub(super) fn new(m: SurfaceModel) -> Session {
+        let t = Topo::of(&m);
+        let near = (reference::mode() == reference::Mode::Index).then(|| Near::of(&m));
+        Session { m, t, near }
+    }
+
+    pub(super) fn model(&self) -> &SurfaceModel {
+        &self.m
+    }
+
+    /// The model, for a change that touches no vertex, edge or face geometry: attributes and
+    /// curves.
+    pub(super) fn model_mut(&mut self) -> &mut SurfaceModel {
+        &mut self.m
+    }
+
+    pub(super) fn into_model(self) -> SurfaceModel {
+        self.m
+    }
+
+    /// `apply(&Edit::AddEdges { edges })`, on the model of the session.
+    pub(super) fn add_edges(&mut self, segs: &[[[f64; 3]; 2]]) -> Result<(), SurfaceError> {
+        let intent = sync::Intent::AddEdges {
+            edges: segs.to_vec(),
+        };
+        let base = self.m.log.is_empty().then(|| self.m.clone());
+        let shape = (
+            self.m.vertices.len(),
+            self.m.edges.len(),
+            self.m.faces.len(),
+            self.m.next_id,
+            self.near.as_ref().map(|n| n.loops),
+        );
+        let t = std::mem::take(&mut self.t);
+        let mut w = Work {
+            m: &mut self.m,
+            t,
+            near: self.near.take(),
+        };
+        let r = add_edges_in(&mut w, segs);
+        let Work { t, near, .. } = w;
+        self.t = t;
+        self.near = near;
+        r?;
+        // `apply` records an edit that changed the geometry. An edit that allocated nothing and
+        // changed no count did not (every change of an edge or a face makes a new id or changes a
+        // count).
+        let after = (
+            self.m.vertices.len(),
+            self.m.edges.len(),
+            self.m.faces.len(),
+            self.m.next_id,
+            self.near.as_ref().map(|n| n.loops),
+        );
+        if after != shape {
+            sync::record_in_place(&mut self.m, base.as_ref(), intent);
+        }
+        Ok(())
+    }
+
+    /// `apply(&Edit::ReverseFaces { faces })`, on the model of the session.
+    pub(super) fn reverse_faces(&mut self, faces: Vec<FaceId>) -> Result<(), SurfaceError> {
+        let intent = sync::Intent::of(
+            &self.m,
+            &Edit::ReverseFaces {
+                faces: faces.clone(),
+            },
+        );
+        let base = self.m.log.is_empty().then(|| self.m.clone());
+        reverse_faces(&mut self.m, &faces)?;
+        if !faces.is_empty() {
+            sync::record_in_place(&mut self.m, base.as_ref(), intent);
+        }
+        Ok(())
+    }
+
+    /// The same as `sync::face_at`, found through the index.
+    pub(super) fn face_at(&self, p: DVec3) -> Option<FaceId> {
+        let Some(near) = &self.near else {
+            return sync::face_at(&self.m, p);
+        };
+        let pad = DVec3::splat(4.0 * near.tol(geom::size(p)));
+        near.faces_meeting(&self.m, p - pad, p + pad)
+            .into_iter()
+            .find(|id| {
+                self.m
+                    .faces
+                    .get(id)
+                    .is_some_and(|f| sync::face_holds(&self.m, f, p))
+            })
+    }
+
+    /// The same as `sync::edge_at`, found through the index.
+    pub(super) fn edge_at(&self, p: DVec3) -> Option<EdgeId> {
+        let Some(near) = &self.near else {
+            return sync::edge_at(&self.m, p);
+        };
+        let pad = DVec3::splat(4.0 * near.tol(geom::size(p)));
+        let ids = near.edges_in(&self.m, p - pad, p + pad);
+        sync::nearest_edge(&self.m, p, ids.into_iter())
+    }
 }
 
 fn add_curve(m: &mut SurfaceModel, points: &[[f64; 3]], closed: bool) -> Result<(), SurfaceError> {

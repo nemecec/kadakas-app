@@ -510,17 +510,7 @@ fn build_resources(
     }
     // Cycles: the smallest ID in the cycle goes to quarantine, until there is no cycle.
     while res.find_cycle().is_some() {
-        let members: Vec<ResourceId> = res
-            .iter()
-            .filter(|r| {
-                res.graphic(r.id).is_some_and(|g| {
-                    g.refs()
-                        .into_iter()
-                        .any(|(x, _)| res.symbol_reaches(x, r.id))
-                })
-            })
-            .map(|r| r.id)
-            .collect();
+        let members: Vec<ResourceId> = res.on_cycle();
         let Some(cut) = members.into_iter().min() else {
             break;
         };

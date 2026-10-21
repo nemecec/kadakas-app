@@ -8,7 +8,7 @@ use glam::DAffine3;
 use super::*;
 use crate::component::{self, ComponentError, Made, Part};
 use crate::graphics::{GraphicResource, SymbolDef};
-use crate::surface::{Selection, SurfaceModel};
+use crate::surface::{Absorber, Selection, SurfaceModel};
 use crate::symbols::{EDIT_GROUP_KEY, EDITING_KEY};
 
 fn invalid(m: impl Into<String>) -> CommandError {
@@ -17,6 +17,20 @@ fn invalid(m: impl Into<String>) -> CommandError {
 
 fn refuse(e: ComponentError) -> CommandError {
     CommandError::Invalid(e.to_string())
+}
+
+/// Refuses an explode that would weld more than [`component::MAX_EXPLODE_FACES`] faces into the
+/// model of the level. The weld of many parts costs more than the number of faces (it was 5
+/// minutes for 10,000 squares), so the person is told before the work starts.
+fn check_explode_size(faces: usize) -> Result<(), CommandError> {
+    if faces > component::MAX_EXPLODE_FACES {
+        return Err(invalid(format!(
+            "this explode would weld {} faces, the limit is {}. Explode the parts in smaller groups, or keep the component",
+            component::grouped(faces),
+            component::grouped(component::MAX_EXPLODE_FACES)
+        )));
+    }
+    Ok(())
 }
 
 /// Longest name of a group.
@@ -419,11 +433,22 @@ impl Tx<'_> {
         let g = self.doc.object(gid).expect("checked").clone();
         let level = g.parent;
         let kids = self.doc.children(gid);
+        let faces: usize = kids
+            .iter()
+            .filter_map(|k| match &self.doc.object(*k)?.shape {
+                Shape::SurfaceModel(m) => Some(m.face_count()),
+                _ => None,
+            })
+            .sum();
+        check_explode_size(faces)?;
         // The raw model of the level that is not a part of the group.
-        let mut target: Option<(ObjectId, SurfaceModel)> =
+        // The models of the group are taken into it one after another, with the indexes of the
+        // target kept between them (`Absorber`), so the cost grows with the parts and not with
+        // the square of their number.
+        let mut target: Option<(ObjectId, Absorber)> =
             component::raw_model(self.doc, level, g.layer).and_then(|t| {
                 match &self.doc.object(t)?.shape {
-                    Shape::SurfaceModel(m) => Some((t, (**m).clone())),
+                    Shape::SurfaceModel(m) => Some((t, Absorber::new((**m).clone()))),
                     _ => None,
                 }
             });
@@ -449,8 +474,8 @@ impl Tx<'_> {
             });
             match (shape, &mut target) {
                 (Shape::SurfaceModel(s), Some((_, t))) if same_look => {
-                    let rel =
-                        (s.transform != t.transform).then(|| t.transform.inverse() * s.transform);
+                    let tt = t.model().transform;
+                    let rel = (s.transform != tt).then(|| tt.inverse() * s.transform);
                     if rel.is_some_and(|r| !component::is_regular(&r)) {
                         return Err(invalid(
                             "a surface model has a transform that cannot be inverted",
@@ -464,7 +489,7 @@ impl Tx<'_> {
                     // The first model of the group becomes the model of the level.
                     self.touch(kid);
                     self.doc.object_mut(kid).expect("exists").parent = level;
-                    target = Some((kid, *s));
+                    target = Some((kid, Absorber::new(*s)));
                 }
                 _ => {
                     self.touch(kid);
@@ -473,7 +498,7 @@ impl Tx<'_> {
             }
         }
         if dirty && let Some((t, m)) = target {
-            self.put_model(t, m)?;
+            self.put_model(t, m.finish())?;
         }
         gone.push(gid);
         self.remove_objects(gone);
@@ -487,6 +512,16 @@ impl Tx<'_> {
                 "the instance has a transform that cannot be inverted",
             ));
         }
+        // Refuse before the parts are made into objects.
+        check_explode_size(
+            parts
+                .iter()
+                .map(|p| match &p.shape {
+                    Shape::SurfaceModel(m) => m.face_count(),
+                    _ => 0,
+                })
+                .sum(),
+        )?;
         let gid = ObjectId(self.alloc()?);
         let mut g = Object::new(gid, inst.layer, inst.class, Shape::Group { name });
         g.parent = inst.parent;

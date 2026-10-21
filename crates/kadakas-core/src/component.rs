@@ -1599,6 +1599,21 @@ mod tests {
     }
 
     fn check_graph(res: &Resources, ids: &[ResourceId]) {
+        // The resources that use themselves, found by asking every resource (the old way) and
+        // in one pass.
+        let asked: Vec<ResourceId> = res
+            .iter()
+            .filter(|r| {
+                res.graphic(r.id).is_some_and(|g| {
+                    g.refs()
+                        .into_iter()
+                        .any(|(x, _)| res.symbol_reaches(x, r.id))
+                })
+            })
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(res.on_cycle(), asked);
+        assert_eq!(res.find_cycle(), asked.first().copied());
         for &id in ids {
             let reference = plain(res, id, &mut Vec::new(), 0.0);
             let within =

@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DAffine3, DVec3};
 
+use super::edit::Session;
 use super::geom::tol;
 use super::sync::{self, Intent};
 use super::{
@@ -144,6 +145,22 @@ impl SurfaceModel {
         other: &SurfaceModel,
         xf: Option<DAffine3>,
     ) -> Result<(), SurfaceError> {
+        let mut a = Absorber::new(self.clone());
+        a.absorb(other, xf)?;
+        *self = a.finish();
+        Ok(())
+    }
+
+    /// The plain version of [`SurfaceModel::absorb`], one `apply` per step, that the version with
+    /// a session is compared with. Draws all edges of `other` into this model, `other` placed by `xf` (in the local
+    /// coordinates of this model; `None`: as they are). See the module documentation. On an error
+    /// the model is unchanged.
+    #[cfg(test)]
+    pub(super) fn absorb_reference(
+        &mut self,
+        other: &SurfaceModel,
+        xf: Option<DAffine3>,
+    ) -> Result<(), SurfaceError> {
         let map = |p: DVec3| xf.map_or(p, |x| x.transform_point3(p));
         let ends = |e: &Edge| -> Option<[DVec3; 2]> {
             Some([
@@ -247,6 +264,143 @@ impl SurfaceModel {
             }
         }
         *self = work;
+        Ok(())
+    }
+}
+
+/// A model that takes many models one after another ([`SurfaceModel::absorb`]) and keeps its
+/// indexes between them. The result is the same to the bit as that of one `absorb` after the
+/// other (a test compares the two); the cost of each is that of the model that is taken in and
+/// not that of the whole result. The explode of a component with thousands of parts uses it.
+/// After an error it is not to be used again.
+pub struct Absorber {
+    s: Session,
+}
+
+impl Absorber {
+    pub fn new(m: SurfaceModel) -> Absorber {
+        Absorber { s: Session::new(m) }
+    }
+
+    pub fn model(&self) -> &SurfaceModel {
+        self.s.model()
+    }
+
+    pub fn finish(self) -> SurfaceModel {
+        self.s.into_model()
+    }
+
+    /// Like [`SurfaceModel::absorb`] on the model of this absorber.
+    pub fn absorb(
+        &mut self,
+        other: &SurfaceModel,
+        xf: Option<DAffine3>,
+    ) -> Result<(), SurfaceError> {
+        let map = |p: DVec3| xf.map_or(p, |x| x.transform_point3(p));
+        let ends = |e: &Edge| -> Option<[DVec3; 2]> {
+            Some([
+                map(*other.vertices.get(&e.v[0])?),
+                map(*other.vertices.get(&e.v[1])?),
+            ])
+        };
+        let edges: Vec<[[f64; 3]; 2]> = other
+            .edges
+            .values()
+            .filter_map(ends)
+            .map(|[a, b]| [a.to_array(), b.to_array()])
+            .collect();
+        // The faces that were in the model before are those with an id below this one.
+        let first_new = self.s.model().next_id;
+        for chunk in edges.chunks(MAX_EDIT_EDGES) {
+            self.s.add_edges(chunk)?;
+        }
+        let normal_of = |n: DVec3| xf.map_or(n, |x| x.matrix3.inverse().transpose() * n);
+        // Several faces of `other` can land on one face of the result (see `absorb_reference`).
+        let scale = xf.map_or(1.0, |x| x.matrix3.determinant().abs().powf(2.0 / 3.0));
+        let mut landed: BTreeMap<FaceId, Vec<Landed>> = BTreeMap::new();
+        for (id, f) in &other.faces {
+            let Some(nf) = sync::face_point(other, *id).and_then(|p| self.s.face_at(map(p))) else {
+                continue;
+            };
+            landed.entry(nf).or_default().push(Landed {
+                id: *id,
+                area: other.face_area(*id).unwrap_or(0.0) * scale,
+                flip: self.s.model().faces[&nf]
+                    .plane
+                    .normal
+                    .dot(normal_of(f.plane.normal))
+                    < 0.0,
+                attrs: &f.attrs,
+            });
+        }
+        let mut reverse: Vec<FaceId> = Vec::new();
+        let mut face_attrs: Vec<(FaceId, Vec<&Attrs>)> = Vec::new();
+        for (nf, sources) in landed {
+            let existing = nf.0 < first_new;
+            let area = self.s.model().face_area(nf).unwrap_or(0.0);
+            let ordered = decide(sources, existing.then_some(area));
+            let Some(winner) = ordered.last() else {
+                continue;
+            };
+            if winner.flip {
+                reverse.push(nf);
+            }
+            let list: Vec<&Attrs> = ordered
+                .iter()
+                .map(|s| s.attrs)
+                .filter(|a| !a.is_empty())
+                .collect();
+            if !list.is_empty() {
+                face_attrs.push((nf, list));
+            }
+        }
+        if !reverse.is_empty() {
+            self.s.reverse_faces(reverse)?;
+        }
+        // The edge of the result that is the whole of an edge of `other`.
+        let find = |s: &Session, e: EdgeId| -> Option<EdgeId> {
+            let [a, b] = ends(other.edges.get(&e)?)?;
+            let id = s.edge_at((a + b) / 2.0)?;
+            let m = s.model();
+            let found = m.edges[&id];
+            let (pa, pb) = (m.vertices[&found.v[0]], m.vertices[&found.v[1]]);
+            let near = |p: DVec3, q: DVec3| p.distance(q) <= tol(&[p, q]);
+            ((near(pa, a) && near(pb, b)) || (near(pa, b) && near(pb, a))).then_some(id)
+        };
+        // The attributes change no geometry. The log gets one entry for them, as `absorb` does.
+        let base = self
+            .s
+            .model()
+            .log
+            .is_empty()
+            .then(|| self.s.model().clone());
+        let mut changed = false;
+        for (nf, list) in face_attrs {
+            let f = self.s.model_mut().faces.get_mut(&nf).expect("found above");
+            for attrs in list {
+                for (k, v) in attrs.iter() {
+                    changed |= f.attrs.insert(k.clone(), v.clone()).as_ref() != Some(v);
+                }
+            }
+        }
+        for (e, attrs) in &other.edge_attrs {
+            if let Some(id) = find(&self.s, *e) {
+                let slot = self.s.model_mut().edge_attrs.entry(id).or_default();
+                for (k, v) in attrs {
+                    changed |= slot.insert(k.clone(), v.clone()).as_ref() != Some(v);
+                }
+            }
+        }
+        if changed {
+            sync::record_in_place(self.s.model_mut(), base.as_ref(), Intent::Unlogged);
+        }
+        for es in other.curves.values() {
+            let mapped: Option<Vec<EdgeId>> = es.iter().map(|e| find(&self.s, *e)).collect();
+            if let Some(list) = mapped {
+                // A chain that is not a chain any more (the edge was cut) is not a curve.
+                let _ = self.s.model_mut().add_curve(list);
+            }
+        }
         Ok(())
     }
 }

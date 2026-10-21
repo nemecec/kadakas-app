@@ -730,3 +730,94 @@ fn a_definition_over_the_size_in_a_file_loads_with_a_finding() {
 // A small anchor so that the imports above stay used in every build.
 #[allow(dead_code)]
 fn _keep(_: DAffine3) {}
+
+// ------------------------------------------------------------------ 4. explode
+
+fn grid_part(n: usize, ox: f64) -> Part {
+    model_part(limits_common::construct(&limits_common::grid_mesh(
+        n, ox, 0.0, 0.0,
+    )))
+}
+
+/// A document with one instance of a definition with the given parts.
+fn explode_world(parts: Vec<Part>) -> (Editor, ObjectId) {
+    let mut doc = Document::with_sequential_ids();
+    let sym = push_def(&mut doc, "Parts", parts);
+    let ids = push_instances(&mut doc, sym, 1);
+    (Editor::new(doc), ids[0])
+}
+
+#[test]
+fn an_explode_of_more_than_20000_faces_is_refused_and_changes_nothing() {
+    assert_eq!(component::MAX_EXPLODE_FACES, 20_000);
+    // 10,000 + 10,000 + 1 faces.
+    let (mut ed, inst) = explode_world(vec![
+        grid_part(100, 0.0),
+        grid_part(100, 200_000.0),
+        grid_part(1, 400_000.0),
+    ]);
+    let (rev, n) = (ed.revision(), ed.doc().objects.len());
+    let t = Instant::now();
+    let e = ed
+        .execute(&Command::Explode { ids: vec![inst] })
+        .unwrap_err()
+        .to_string();
+    assert!(t.elapsed() < Duration::from_secs(1));
+    assert!(
+        e.contains("would weld 20,001 faces, the limit is 20,000") && e.contains("smaller groups"),
+        "{e}"
+    );
+    assert_eq!((ed.revision(), ed.doc().objects.len()), (rev, n));
+}
+
+#[test]
+#[ignore = "slow in a debug build (the real weld of 20,000 faces); run it with --ignored"]
+fn an_explode_of_exactly_20000_faces_runs() {
+    let (mut ed, inst) = explode_world(vec![grid_part(100, 0.0), grid_part(100, 200_000.0)]);
+    ed.execute(&Command::Explode { ids: vec![inst] })
+        .expect("20,000 faces are within the limit");
+    let models: Vec<usize> = ed
+        .doc()
+        .objects
+        .values()
+        .filter_map(|o| match &o.shape {
+            Shape::SurfaceModel(m) => Some(m.face_count()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(models, vec![20_000]);
+}
+
+#[test]
+fn a_group_of_more_than_20000_faces_is_refused_too() {
+    let (mut ed, _) = explode_world(vec![]);
+    let mut ids = Vec::new();
+    for (i, n) in [100usize, 100, 1].iter().enumerate() {
+        let m = limits_common::construct(&limits_common::grid_mesh(
+            *n,
+            i as f64 * 200_000.0,
+            0.0,
+            0.0,
+        ));
+        let out = ed
+            .execute(&Command::AddObject {
+                shape: Shape::SurfaceModel(Box::new(m)),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
+        ids.push(ObjectId(out.created[0]));
+    }
+    let g = ed
+        .execute(&Command::Group { ids, name: None })
+        .unwrap()
+        .created[0];
+    let e = ed
+        .execute(&Command::Explode {
+            ids: vec![ObjectId(g)],
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("20,001 faces"), "{e}");
+}

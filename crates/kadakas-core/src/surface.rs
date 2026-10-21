@@ -136,6 +136,8 @@ mod topo;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_absorb;
+#[cfg(test)]
 mod tests_index;
 #[cfg(test)]
 mod tests_intersect;
@@ -145,7 +147,7 @@ mod tests_pushpull;
 pub use check::{At, Problem, Report};
 pub use edit::{Edit, IntersectScope};
 pub use geom::{Plane, on_plane, plane_tolerance_at, tolerance_at};
-pub use part::Selection;
+pub use part::{Absorber, Selection};
 
 /// The version of the saved form of a surface model (the field `v`). A file with a higher number
 /// is from a newer program: it is kept as it is and cannot be edited (`Shape::Unknown`).

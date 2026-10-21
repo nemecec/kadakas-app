@@ -186,6 +186,37 @@ pub(super) fn record(work: &mut SurfaceModel, before: &SurfaceModel, intent: Int
     }
 }
 
+/// Like [`record`], for a model that was changed in place. `base_model` is the model as it was
+/// before the change; it is read only when the log is empty (the first edit takes the hash of the
+/// content as its base), so a caller keeps a copy only then.
+pub(super) fn record_in_place(
+    work: &mut SurfaceModel,
+    base_model: Option<&SurfaceModel>,
+    intent: Intent,
+) {
+    let base = match work.log.last() {
+        Some(e) => e.stamp,
+        None => hash(&[
+            &serde_json::to_vec(base_model.expect("a copy of the model before"))
+                .unwrap_or_default(),
+        ]),
+    };
+    let text = serde_json::to_vec(&intent).unwrap_or_default();
+    let stamp = hash(&[&base.to_le_bytes(), &work.rev.to_le_bytes(), &text]);
+    let n = work.rev + 1;
+    work.log.push(Entry {
+        stamp,
+        base,
+        n,
+        intent,
+    });
+    work.rev = n;
+    let mut points: usize = work.log.iter().map(|e| e.intent.points()).sum();
+    while work.log.len() > 1 && (work.log.len() > LOG_ENTRIES || points > LOG_POINTS) {
+        points -= work.log.remove(0).intent.points();
+    }
+}
+
 /// A point inside a face, in local coordinates.
 pub(super) fn face_point(m: &SurfaceModel, id: FaceId) -> Option<DVec3> {
     let f = m.faces.get(&id)?;
@@ -200,29 +231,42 @@ pub(super) fn face_point(m: &SurfaceModel, id: FaceId) -> Option<DVec3> {
 
 /// The face whose area holds the point.
 pub(super) fn face_at(m: &SurfaceModel, p: DVec3) -> Option<FaceId> {
-    m.faces.iter().find_map(|(id, f)| {
-        if !on_plane(&f.plane, p) {
-            return None;
-        }
-        let rings: Vec<Vec<DVec2>> = f
-            .loops()
-            .map(|l| l.iter().map(|v| f.plane.project(m.vertices[v])).collect())
-            .collect();
-        inside(f.plane.project(p), &rings).then_some(*id)
-    })
+    m.faces
+        .iter()
+        .find_map(|(id, f)| face_holds(m, f, p).then_some(*id))
+}
+
+/// True if the point is in the plane of the face and inside its area.
+pub(super) fn face_holds(m: &SurfaceModel, f: &super::Face, p: DVec3) -> bool {
+    if !on_plane(&f.plane, p) {
+        return false;
+    }
+    let rings: Vec<Vec<DVec2>> = f
+        .loops()
+        .map(|l| l.iter().map(|v| f.plane.project(m.vertices[v])).collect())
+        .collect();
+    inside(f.plane.project(p), &rings)
 }
 
 /// The edge that passes through the point (within the length tolerance).
 pub(super) fn edge_at(m: &SurfaceModel, p: DVec3) -> Option<EdgeId> {
-    m.edges
-        .iter()
-        .map(|(id, e)| {
-            let (a, b) = (m.vertices[&e.v[0]], m.vertices[&e.v[1]]);
-            (geom::point_segment(p, a, b).0, *id, geom::tol(&[a, b, p]))
-        })
-        .filter(|(d, _, t)| d <= t)
-        .min_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)))
-        .map(|(_, id, _)| id)
+    nearest_edge(m, p, m.edges.keys().copied())
+}
+
+/// The edge among `ids` that passes through the point: the nearest, the lower id on a tie.
+pub(super) fn nearest_edge(
+    m: &SurfaceModel,
+    p: DVec3,
+    ids: impl Iterator<Item = EdgeId>,
+) -> Option<EdgeId> {
+    ids.filter_map(|id| {
+        let e = m.edges.get(&id)?;
+        let (a, b) = (m.vertices[&e.v[0]], m.vertices[&e.v[1]]);
+        Some((geom::point_segment(p, a, b).0, id, geom::tol(&[a, b, p])))
+    })
+    .filter(|(d, _, t)| d <= t)
+    .min_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)))
+    .map(|(_, id, _)| id)
 }
 
 fn gone(what: &str, p: &[f64; 3]) -> SurfaceError {

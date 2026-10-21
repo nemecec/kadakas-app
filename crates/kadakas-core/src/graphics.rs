@@ -694,16 +694,96 @@ impl crate::resource::Resources {
 
     /// The first graphic resource that uses itself, directly or through others.
     pub fn find_cycle(&self) -> Option<ResourceId> {
-        self.iter()
+        self.on_cycle().into_iter().next()
+    }
+
+    /// Every graphic resource that uses itself, directly or through others, in the order of the
+    /// list. One pass over the references (the strongly connected parts of the graph), so a
+    /// file with thousands of definitions that use one another costs the size of the graph and
+    /// not that size for every definition.
+    pub fn on_cycle(&self) -> Vec<ResourceId> {
+        let ids: Vec<ResourceId> = self
+            .iter()
             .filter(|r| matches!(r.body, crate::resource::ResourceBody::Graphic(_)))
-            .find(|r| {
-                self.graphic(r.id).is_some_and(|g| {
-                    g.refs()
-                        .into_iter()
-                        .any(|(x, _)| self.symbol_reaches(x, r.id))
-                })
-            })
             .map(|r| r.id)
+            .collect();
+        let index: std::collections::HashMap<ResourceId, usize> =
+            ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+        let edges: Vec<Vec<usize>> = ids
+            .iter()
+            .map(|id| {
+                self.graphic(*id)
+                    .map(|g| {
+                        g.refs()
+                            .into_iter()
+                            .filter_map(|(r, _)| index.get(&r).copied())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+        // Tarjan, with an explicit stack (a chain of references can be long).
+        let n = ids.len();
+        let mut order = vec![usize::MAX; n];
+        let mut low = vec![0usize; n];
+        let mut on_stack = vec![false; n];
+        let mut stack: Vec<usize> = Vec::new();
+        let mut cyclic = vec![false; n];
+        let mut next = 0usize;
+        for root in 0..n {
+            if order[root] != usize::MAX {
+                continue;
+            }
+            // (node, next edge to look at)
+            let mut work: Vec<(usize, usize)> = vec![(root, 0)];
+            order[root] = next;
+            low[root] = next;
+            next += 1;
+            stack.push(root);
+            on_stack[root] = true;
+            while let Some(&mut (v, ref mut k)) = work.last_mut() {
+                if let Some(&w) = edges[v].get(*k) {
+                    *k += 1;
+                    if w == v {
+                        cyclic[v] = true;
+                    }
+                    if order[w] == usize::MAX {
+                        order[w] = next;
+                        low[w] = next;
+                        next += 1;
+                        stack.push(w);
+                        on_stack[w] = true;
+                        work.push((w, 0));
+                    } else if on_stack[w] {
+                        low[v] = low[v].min(order[w]);
+                    }
+                } else {
+                    work.pop();
+                    if let Some(&(parent, _)) = work.last() {
+                        low[parent] = low[parent].min(low[v]);
+                    }
+                    if low[v] == order[v] {
+                        let mut part = Vec::new();
+                        while let Some(w) = stack.pop() {
+                            on_stack[w] = false;
+                            part.push(w);
+                            if w == v {
+                                break;
+                            }
+                        }
+                        if part.len() > 1 {
+                            for w in part {
+                                cyclic[w] = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ids.into_iter()
+            .zip(cyclic)
+            .filter_map(|(id, c)| c.then_some(id))
+            .collect()
     }
 
     /// True if the resource `target` is `from` or is used by it, directly or through other resources.

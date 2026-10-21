@@ -128,6 +128,11 @@ impl Near {
         eps: f64,
     ) -> Vec<FaceId> {
         let (a, b) = self.lifted(plane, lo, hi, eps);
+        self.faces_meeting(m, a, b)
+    }
+
+    /// The faces whose box meets the box `lo`–`hi`, in id order (some may not exist any more).
+    pub fn faces_meeting(&self, m: &SurfaceModel, lo: DVec3, hi: DVec3) -> Vec<FaceId> {
         let t = self.faces.get_or_init(|| {
             Boxes::new(
                 m.faces
@@ -139,7 +144,7 @@ impl Near {
                     .collect(),
             )
         });
-        t.ids_meeting(a, b).into_iter().map(FaceId).collect()
+        t.ids_meeting(lo, hi).into_iter().map(FaceId).collect()
     }
 
     /// The 3D box of the 2D box `lo`–`hi` (grown by `eps`) of the axes of `plane`, lifted onto the
