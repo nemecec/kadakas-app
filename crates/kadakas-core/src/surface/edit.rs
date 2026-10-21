@@ -142,7 +142,7 @@ pub(super) fn check_limits(m: &SurfaceModel) -> Result<(), SurfaceError> {
         ("faces", MAX_FACES, m.faces.len()),
         ("vertex uses in face loops", MAX_LOOP_VERTICES, loops),
     ] {
-        if count > max {
+        if count > max * super::limit_scale() {
             return Err(SurfaceError::Limit { what, max, count });
         }
     }
@@ -199,7 +199,7 @@ impl<'a> Work<'a> {
             ("faces", MAX_FACES, m.faces.len()),
             ("vertex uses in face loops", MAX_LOOP_VERTICES, n.loops),
         ] {
-            if count > max {
+            if count > max * super::limit_scale() {
                 return Err(SurfaceError::Limit { what, max, count });
             }
         }

@@ -1022,6 +1022,375 @@ fn deepest(stack_kib: usize) {
     result("stack", &format!("stack_kib={stack_kib} survived=true"));
 }
 
+// ---------------------------------------------------------------------------------------------
+// Scenarios of the second campaign (guards, raised limits).
+
+/// Multiplies the count limits of the surface model for this process (`LM_SCALE`, default 1).
+/// Needs `--features measure-limits` on `kadakas-core`.
+fn scale_limits() -> usize {
+    let n: usize = std::env::var("LM_SCALE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    #[cfg(feature = "measure-limits")]
+    kadakas_core::surface::set_limit_scale(n);
+    #[cfg(not(feature = "measure-limits"))]
+    assert_eq!(
+        n, 1,
+        "LM_SCALE needs --features measure-limits on kadakas-core"
+    );
+    n
+}
+
+fn add_model(ed: &mut Editor, m: SurfaceModel) -> ObjectId {
+    ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::SurfaceModel(Box::new(m)),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .expect("the model fits the limits of this run")
+        .created[0],
+    )
+}
+
+/// A model above the current limits, made with `from_parts` and measured under the raised limits
+/// (`LM_SCALE`): the per-command check, the full check, the saved text, load, one small edit, one
+/// big edit, Push/Pull of a face, Intersect Faces. Args: shape, parameter.
+fn big() {
+    let a = args();
+    let (shape, p) = (a[0].as_str(), num(&a, 1));
+    let scale = scale_limits();
+    let rss0 = rss();
+    let (m, tbuild) = timed(|| construct(&mesh_of(shape, p)));
+    let c = counts(&m);
+    result(
+        "big",
+        &format!(
+            "shape={shape} param={p} scale={scale} {c} build_wall_s={:.3} rss_model_mb={}",
+            tbuild.wall,
+            mb(rss().saturating_sub(rss0))
+        ),
+    );
+    let (problem, tq) = timed(|| m.problem());
+    let (rep, tfull) = timed(|| m.check());
+    let (text, tsave) = timed(|| serde_json::to_string(&m).unwrap());
+    let (back, tparse) = timed(|| serde_json::from_str::<SurfaceModel>(&text));
+    result(
+        "big",
+        &format!(
+            "verdict={} quick_check_{} full_check_{} full_check_problems={} model_json_mb={} save_{} parse_{} parse_ok={}",
+            problem.unwrap_or_else(|| "fits".into()).replace(' ', "_"),
+            fmt_took(&tq),
+            fmt_took(&tfull),
+            rep.problems.len(),
+            mb(text.len()),
+            fmt_took(&tsave),
+            fmt_took(&tparse),
+            back.is_ok()
+        ),
+    );
+    drop(back);
+    drop(text);
+    // In a document: the command that adds it runs the check, then save and load.
+    let first_face = m.faces().next().map(|(f, _)| f);
+    let mut ed = Editor::with_sequential_ids();
+    let (id, tadd) = timed(|| add_model(&mut ed, m));
+    let (doc_text, tdoc) = timed(|| save_text(ed.doc()));
+    let r0 = rss();
+    let (loaded, tload) = timed(|| Document::from_json(&doc_text));
+    let r1 = rss();
+    result(
+        "big",
+        &format!(
+            "add_object_{} doc_compact_mb={} doc_save_{} load_ok={} load_{} load_rss_delta_mb={}",
+            fmt_took(&tadd),
+            mb(doc_text.len()),
+            fmt_took(&tdoc),
+            loaded.is_ok(),
+            fmt_took(&tload),
+            mb(r1.saturating_sub(r0))
+        ),
+    );
+    drop(loaded);
+    drop(doc_text);
+    // One edge, then 1,000 edges, far from the model (the cost is the model's, not the geometry).
+    for (name, k) in [("add_1_edge", 1usize), ("add_1000_edges", 1000)] {
+        let edges: Vec<Seg> = (0..k)
+            .map(|i| {
+                let x = -9.0e6 - i as f64 * 3000.0;
+                [[x, -9.0e6, 0.0], [x + 1000.0, -9.0e6, 0.0]]
+            })
+            .collect();
+        let (r, t) = timed(|| {
+            ed.execute(&Command::EditSurface {
+                id,
+                edit: Edit::AddEdges { edges },
+            })
+        });
+        result("big", &format!("{name} ok={} {}", r.is_ok(), fmt_took(&t)));
+        if let Err(e) = r {
+            result(
+                "big",
+                &format!("{name} error={}", e.to_string().replace(' ', "_")),
+            );
+        }
+    }
+    // Push/Pull of a face.
+    if let Some(f) = first_face {
+        let (r, t) = timed(|| {
+            ed.execute(&Command::EditSurface {
+                id,
+                edit: Edit::PushPull {
+                    face: f,
+                    distance: 500.0,
+                },
+            })
+        });
+        result(
+            "big",
+            &format!("push_pull ok={} {}", r.is_ok(), fmt_took(&t)),
+        );
+        if let Err(e) = r {
+            result(
+                "big",
+                &format!("push_pull error={}", e.to_string().replace(' ', "_")),
+            );
+        }
+    }
+    // Intersect Faces on the whole model.
+    let (r, t) = timed(|| {
+        ed.execute(&Command::EditSurface {
+            id,
+            edit: Edit::IntersectFaces {
+                scope: kadakas_core::surface::IntersectScope::Model,
+                faces: vec![],
+                edges: vec![],
+            },
+        })
+    });
+    result(
+        "big",
+        &format!("intersect_faces ok={} {}", r.is_ok(), fmt_took(&t)),
+    );
+    if let Err(e) = r {
+        result(
+            "big",
+            &format!("intersect_faces error={}", e.to_string().replace(' ', "_")),
+        );
+    }
+}
+
+/// The cost of every walk of a chain of definitions that hold no model: `levels` levels, `fan`
+/// instances per level. Prints the time of each walk (and, on a build with the guards, the refusal).
+fn chain() {
+    let a = args();
+    let (levels, fan) = (num(&a, 0), num(&a, 1));
+    let mut doc = Document::with_sequential_ids();
+    let mut def = push_def(&mut doc, "D0", def_parts("empty", 1));
+    for lvl in 1..=levels {
+        let parts: Vec<Part> = (0..fan)
+            .map(|k| Part::new(instance_shape(def, k)))
+            .collect();
+        def = push_def(&mut doc, &format!("D{lvl}"), parts);
+    }
+    push_instances(&mut doc, def, 3);
+    let ed = Editor::new(doc);
+    phase("definition_depth", || {
+        component::definition_depth(&ed.doc().resources, def)
+    });
+    phase("leaves", || {
+        component::leaves(&ed.doc().resources, def)
+            .map(|l| l.len())
+            .map_err(|e| e.to_string())
+    });
+    phase("findings", || component::findings(ed.doc()).len());
+    phase("mesh_build", || mesh::build(ed.doc()).lines.segment_count());
+    let text = save_text(ed.doc());
+    phase("load", || {
+        Document::from_json(&text)
+            .map(|d| d.load_notes().len())
+            .map_err(|e| e.to_string())
+    });
+}
+
+/// The time to refuse a chain over the budget when a command makes it (AddResource, one level at
+/// a time): the level at which it is refused and the time of the refusal.
+fn chain_commands() {
+    let a = args();
+    let (levels, fan) = (num(&a, 0), num(&a, 1));
+    let mut ed = Editor::with_sequential_ids();
+    let first = ed
+        .execute(&Command::AddResource {
+            name: "D0".into(),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
+                parts: def_parts("empty", 1),
+                ..SymbolDef::default()
+            }))),
+        })
+        .unwrap();
+    let mut def = ResourceId(first.created[0]);
+    for lvl in 1..=levels {
+        let parts: Vec<Part> = (0..fan)
+            .map(|k| Part::new(instance_shape(def, k)))
+            .collect();
+        let (r, t) = timed(|| {
+            ed.execute(&Command::AddResource {
+                name: format!("D{lvl}"),
+                body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
+                    parts,
+                    ..SymbolDef::default()
+                }))),
+            })
+        });
+        match r {
+            Ok(o) => {
+                def = ResourceId(*o.created.last().unwrap());
+                result("chain_cmd", &format!("level={lvl} ok {}", fmt_took(&t)));
+            }
+            Err(e) => {
+                let mut why = e.to_string();
+                why.truncate(100);
+                result(
+                    "chain_cmd",
+                    &format!("level={lvl} REFUSED {} error=\"{why}\"", fmt_took(&t)),
+                );
+                break;
+            }
+        }
+    }
+}
+
+/// A definition at the size limits. `kind`: `cubes` (parts of cubes with about 100,000 edges in
+/// all) or `text` (one part padded to 16 MiB of saved text). Prints the text size, the time to add
+/// it, to open it for edit and to close it.
+fn defsize() {
+    let a = args();
+    let kind = a[0].as_str();
+    let parts: Vec<Part> = match kind {
+        "cubes" => {
+            // 12 edges per cube: 8,333 cubes are 99,996 edges.
+            let m = model_of("cube");
+            (0..8_333).map(|k| part_at(&m, k)).collect()
+        }
+        "text" => {
+            let mut m = SurfaceModel::new();
+            m.name = "x".repeat(16 * 1024 * 1024 - 400);
+            vec![Part::new(Shape::SurfaceModel(Box::new(m)))]
+        }
+        other => panic!("unknown kind {other}"),
+    };
+    let edges = component::definition_edges(&parts);
+    let (bytes, tbytes) = timed(|| component::definition_bytes(&parts));
+    result(
+        "defsize",
+        &format!(
+            "kind={kind} parts={} edges={edges} saved_text_mb={} count_bytes_{}",
+            parts.len(),
+            mb(bytes),
+            fmt_took(&tbytes)
+        ),
+    );
+    let mut ed = Editor::with_sequential_ids();
+    let (r, t) = timed(|| {
+        ed.execute(&Command::AddResource {
+            name: "Big".into(),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
+                parts,
+                ..SymbolDef::default()
+            }))),
+        })
+    });
+    result(
+        "defsize",
+        &format!("add_resource ok={} {}", r.is_ok(), fmt_took(&t)),
+    );
+    let Ok(out) = r else { return };
+    let sym = ResourceId(out.created[0]);
+    let ids = push_instances_in(&mut ed, sym, 2);
+    let (open, t) = timed(|| ed.execute(&Command::EditComponent { id: ids[0] }));
+    result(
+        "defsize",
+        &format!("edit_component ok={} {}", open.is_ok(), fmt_took(&t)),
+    );
+    let Ok(open) = open else { return };
+    let g = ObjectId(open.created[0]);
+    let (r, t) = timed(|| {
+        ed.execute(&Command::CloseComponent {
+            group: g,
+            resolve: Some(component::Resolve::Overwrite),
+        })
+    });
+    result(
+        "defsize",
+        &format!("close_component ok={} {}", r.is_ok(), fmt_took(&t)),
+    );
+    let text = save_text(ed.doc());
+    result(
+        "defsize",
+        &format!("document_compact_mb={}", mb(text.len())),
+    );
+}
+
+fn push_instances_in(ed: &mut Editor, sym: ResourceId, n: usize) -> Vec<ObjectId> {
+    (0..n)
+        .map(|k| {
+            ObjectId(
+                ed.execute(&Command::AddObject {
+                    shape: instance_shape(sym, k),
+                    layer: None,
+                    class: None,
+                    attrs: Attributes::default(),
+                })
+                .unwrap()
+                .created[0],
+            )
+        })
+        .collect()
+}
+
+/// The cost of the total of models: `parts` models in a definition, `count` instances; builds the
+/// mesh (the 3D scene) and prints the time and the memory. Models are empty (`empty`) or cubes
+/// (`cube`).
+fn total_models() {
+    let a = args();
+    let (kind, parts, count) = (a[0].as_str(), num(&a, 1), num(&a, 2));
+    let r0 = rss();
+    let (mut doc, tbuild) = timed(|| {
+        let mut doc = Document::with_sequential_ids();
+        let sym = push_def(&mut doc, "Def", def_parts(kind, parts));
+        push_instances(&mut doc, sym, count);
+        doc
+    });
+    let models = parts * count;
+    let findings = component::definition_findings(&doc);
+    result(
+        "total_models",
+        &format!(
+            "kind={kind} parts={parts} instances={count} models={models} build_{} rss_doc_mb={} notes={}",
+            fmt_took(&tbuild),
+            mb(rss().saturating_sub(r0)),
+            findings.len()
+        ),
+    );
+    let r1 = rss();
+    let (scene, t) = timed(|| mesh::build(&doc));
+    result(
+        "total_models",
+        &format!(
+            "mesh_{} positions={} line_segments={} rss_after_mb={} rss_delta_mb={}",
+            fmt_took(&t),
+            scene.mesh.positions.len(),
+            scene.lines.segment_count(),
+            mb(rss()),
+            mb(rss().saturating_sub(r1))
+        ),
+    );
+    drop(scene);
+    let _ = &mut doc;
+}
+
 #[test]
 #[ignore = "measurement: run in release mode, see the header of this file"]
 fn scenario() {
@@ -1042,6 +1411,11 @@ fn scenario() {
         "nest" => nest(),
         "oversize" => oversize(),
         "depth_cost" => depth_cost(),
+        "big" => big(),
+        "chain" => chain(),
+        "chain_cmd" => chain_commands(),
+        "defsize" => defsize(),
+        "total_models" => total_models(),
         "stack" => deepest(num(&args(), 0)),
         "limits" => {
             let _: BTreeMap<u8, u8> = BTreeMap::new();

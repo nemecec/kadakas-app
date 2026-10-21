@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 description = "The property model of a Kadakas document: things by Uid with properties, operations on them, the merge rules and a total build of a document. Shared by collaboration and review. Pure and wasm-compatible."
 
+[features]
+# Only for tests/limits_measure.rs: the limits of the surface model can be raised for a measurement.
+measure-limits = ["kadakas-core/measure-limits"]
+
 [dependencies]
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -16,3 +20,5 @@ thiserror = "2.0.21"
 
 [dev-dependencies]
 proptest = "1.11.0"
+# Only for tests/limits_measure.rs (the measurement of collaboration updates).
+glam = "0.34.1"

@@ -3083,6 +3083,7 @@ dependencies = [
 name = "kadakas-props"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "kadakas-core",
  "proptest",
  "serde",

@@ -2,8 +2,10 @@
 # The measurement campaign of docs/modeler-limits.md. Usage:
 #   CORE=<limits_measure test binary of kadakas-core> UI=<of kadakas-ui-core> PROPS=<of kadakas-props> \
 #   OUT=<directory for the results> limits_campaign.sh STAGE
-# STAGE is one of: a1 a2 a2big a3 b4 b5 b6 collab. Each line runs one scenario RUNS times in its own
-# process (see limits_measure.py). Release binaries only.
+# STAGE is one of: a1 a2 a2big a3 b4 b5 b6 collab (first campaign) and big guards explode collab2
+# (second campaign, with BASE: the binary of the code before the guards, and with the feature
+# measure-limits on kadakas-core for the stages that raise the limits). Each line runs one
+# scenario RUNS times in its own process (see limits_measure.py). Release binaries only.
 set -u
 PY="$(dirname "$0")/limits_measure.py"
 mkdir -p "$OUT"
@@ -12,6 +14,7 @@ run() { # name binary runs scenario args
   local name=$1 bin=$2 runs=$3 scen=$4 args=$5
   { python3 "$PY" "$bin" "$runs" "$scen" "$args"; } >> "$OUT/$name.txt" 2>&1
 }
+{ echo "## stage $1 on $(date) uptime: $(uptime)"; } >> "$OUT/uptime.txt"
 case "$1" in
 a1)
   for a in "grid 221" "grid 222" "grid 223" "terrain 158" "terrain 159" "noisy 158" "noisy 159" \
@@ -94,5 +97,46 @@ collab)
   run b7_collab $PROPS 5 collab "move_instance cube 10 20000"
   run b7_collab $PROPS 5 collab "move_instance cube 1000 20000"
   for p in 1000 5000 10000; do run b7_collab $PROPS 5 collab "close_edit sq $p"; run b7_collab $PROPS 5 collab "close_edit cube $p"; done
+  ;;
+big)
+  # Models above the current limits, measured with the limits multiplied by 3 (feature
+  # measure-limits). The first three lines are at the current limits, for comparison.
+  for a in "terrain 158" "grid 222" "sphere 112"; do LM_SCALE=1 run big_now $CORE 5 big "$a"; done
+  for a in "terrain 194" "terrain 223" "grid 273" "grid 316" "sphere 194" "sphere 224" "spiky 194" "spiky 224"; do
+    LM_SCALE=3 run big_raised $CORE 5 big "$a"
+  done
+  ;;
+guards)
+  for a in "6 8" "8 8" "10 8" "12 8"; do run g_chain_new $CORE 5 chain "$a"; done
+  for a in "6 8 empty" "8 8 empty" "10 8 empty"; do run g_chain_old $BASE 3 depth_cost "$a"; done
+  run g_chain_cmd $CORE 5 chain_cmd "10 8"
+  run g_total $CORE 5 total_models "cube 10 20000"
+  run g_total $CORE 5 total_models "cube 10 25000"
+  run g_total_scene $UI 5 infer "cube 10 25000"
+  run g_total_scene $UI 5 infer "cube 10 20000"
+  run g_defsize $CORE 5 defsize "cubes"
+  run g_defsize $CORE 5 defsize "text"
+  ;;
+explode)
+  for a in "sq 1000" "sq 5000" "sq 10000" "cube 1000" "cube 3333" "cube 5000" "cube 10000"; do
+    run g_explode_new $CORE 3 ops "$a"
+  done
+  for a in "sq 1000" "sq 5000" "cube 1000"; do run g_explode_old $BASE 3 ops "$a"; done
+  for a in "sq 10000" "cube 3333" "cube 5000"; do run g_explode_old $BASE 1 ops "$a"; done
+  ;;
+collab2)
+  for a in "edit_surface grid 222" "edit_surface terrain 158" "make_group grid 222" "make_group terrain 158"; do
+    LM_SCALE=1 run c2_now $PROPS 5 collab "$a"
+  done
+  for a in "edit_surface terrain 223" "edit_surface grid 316" "make_group terrain 223" "make_group grid 316"; do
+    LM_SCALE=3 run c2_raised $PROPS 5 collab "$a"
+  done
+  for a in "close_edit cube 8333" "close_edit sq 10000" "close_edit cube 10000"; do run c2_defs $PROPS 5 collab "$a"; done
+  ;;
+big2)
+  for a in "sphere 137" "sphere 158" "spiky 137" "spiky 158"; do LM_SCALE=3 run big_raised $CORE 3 big "$a"; done
+  ;;
+collab3)
+  for a in "edit_surface grid 215" "edit_surface terrain 150"; do LM_SCALE=1 run c2_now $PROPS 5 collab "$a"; done
   ;;
 esac

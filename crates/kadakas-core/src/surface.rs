@@ -159,6 +159,29 @@ pub const RELATIVE_TOLERANCE: f64 = 1e-9;
 /// The plane tolerance is this share of the length tolerance.
 pub const PLANE_TOLERANCE_FACTOR: f64 = 0.25;
 
+/// The factor for the four count limits below: always 1, unless the feature `measure-limits` is
+/// on and a measurement sets another ([`set_limit_scale`]).
+#[cfg(feature = "measure-limits")]
+static LIMIT_SCALE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+
+/// Multiplies the limits of vertices, edges, faces and loop vertices by `n` for the whole
+/// process, to measure what raised limits would cost. Only with the feature `measure-limits`.
+#[cfg(feature = "measure-limits")]
+pub fn set_limit_scale(n: usize) {
+    LIMIT_SCALE.store(n.max(1), std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(feature = "measure-limits")]
+pub(crate) fn limit_scale() -> usize {
+    LIMIT_SCALE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(not(feature = "measure-limits"))]
+#[inline(always)]
+pub(crate) const fn limit_scale() -> usize {
+    1
+}
+
 /// Most vertices of one model.
 ///
 /// Measured in `tests::perf_limits` (release build). A 300 x 300 grid of faces in one plane

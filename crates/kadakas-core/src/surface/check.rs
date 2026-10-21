@@ -397,7 +397,7 @@ fn structure(m: &SurfaceModel, found: &mut dyn FnMut(Problem) -> bool) {
         ("faces", MAX_FACES, m.faces.len()),
         ("vertex uses in face loops", MAX_LOOP_VERTICES, loops),
     ] {
-        if count > max {
+        if count > max * super::limit_scale() {
             report!(Problem::Limit { what, max, count });
             return;
         }
