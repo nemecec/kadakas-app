@@ -221,9 +221,10 @@ fn urls(s: &str) -> String {
         let before = &rest[..p];
         // The character found may take more than one byte: start after all of it.
         let scheme_start = before
-            .char_indices()
-            .rfind(|(_, c)| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
-            .map_or(0, |(i, c)| i + c.len_utf8());
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
+            .map_or(0, |i| {
+                i + before[i..].chars().next().map_or(1, char::len_utf8)
+            });
         let scheme = &before[scheme_start..];
         let after = &rest[p + 3..];
         // The URL ends at white space or a quote or a closing bracket.
@@ -980,12 +981,12 @@ mod tests {
     proptest! {
         #[test]
         fn random_paths_and_user_names_never_leak(
-            user in "[a-z]{3,9}",
+            // "zq" never occurs in the text around the path, nor in the placeholders.
+            user in "zq[a-z]{3,7}",
             folders in proptest::collection::vec("Qz[A-Za-z0-9 ._-]{3,10}", 1..5),
             stem in "Qz[A-Za-z0-9 _-]{3,12}",
             style in 0usize..4,
         ) {
-            prop_assume!(!["path", "user", "file", "home", "host", "text", "name", "email", "secret"].contains(&user.as_str()));
             let ctx = Context::new(&user, "");
             let dir = folders.join(if style == 1 { "\\" } else { "/" });
             let path = match style {

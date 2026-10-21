@@ -68,7 +68,7 @@ pub fn remap_body(body: &ResourceBody, f: &dyn Fn(ResourceId) -> ResourceId) -> 
 fn object_uses(o: &Object, id: ResourceId, tag: &Value) -> bool {
     crate::plants::link::style_of(o) == Some(id)
         || matches!(o.shape, Shape::PlantTag { style, .. } if style == id)
-        || matches!(o.shape, Shape::Symbol { symbol, .. } if symbol == id)
+        || matches!(o.shape, Shape::Symbol { symbol, .. } | Shape::Component { symbol, .. } if symbol == id)
         || crate::hardscape::style_id(o) == Some(id)
         || crate::landscape::style_id(o) == Some(id)
         || o.attrs.fill_pattern == Some(id)

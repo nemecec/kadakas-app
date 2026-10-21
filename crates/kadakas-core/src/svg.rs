@@ -162,6 +162,8 @@ pub fn render_overlay_with(
     overlay: Option<&dyn SvgOverlay>,
     opts: &RenderOptions,
 ) -> String {
+    // The definitions of components are read once for this render.
+    let _frame = crate::component::plan_frame();
     // A region of the call, or a view that the overlay gives, is the final box. Else the box is
     // the drawing and the ghosts, with a margin.
     let given = opts.region.or_else(|| overlay.and_then(|o| o.view()));
@@ -515,6 +517,40 @@ fn draw_object(
             ),
             None => Ok(()),
         },
+        Shape::Component { .. } => {
+            // Plan view: the box around the instance (MOD-13 draws its edges). An instance that
+            // cannot be drawn gets a cross in the warning colour and the reason, not nothing.
+            // The plan on the screen and in the print draw the same (`component::plan_mark`).
+            match crate::component::plan_mark(doc, &o.shape) {
+                Some(crate::component::PlanMark::Box([lo, _, hi, _])) => writeln!(
+                    s,
+                    r#"<rect x="{}" y="{}" width="{}" height="{}" {style} data-kind="component"/>"#,
+                    lo.x,
+                    -hi.y,
+                    hi.x - lo.x,
+                    hi.y - lo.y
+                ),
+                Some(crate::component::PlanMark::Broken(p, why)) => {
+                    let h = crate::model::LOCUS_MARKER_HALF;
+                    let [r, g, b, _] = crate::component::WARNING_COLOR;
+                    writeln!(
+                        s,
+                        r#"<path d="M {} {} L {} {} M {} {} L {} {}" stroke="rgb({r},{g},{b})" fill="none" stroke-width="{sw}" data-id="{}" data-kind="component" data-problem="{}"/>"#,
+                        p.x - h,
+                        -p.y,
+                        p.x + h,
+                        -p.y,
+                        p.x,
+                        -p.y - h,
+                        p.x,
+                        -p.y + h,
+                        o.id,
+                        esc(&why)
+                    )
+                }
+                _ => Ok(()),
+            }
+        }
         Shape::Sweep(sw) => {
             // Plan view: the box around the solid.
             let (lo, hi) = sw.bounds3();

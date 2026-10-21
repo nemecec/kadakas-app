@@ -217,6 +217,17 @@ impl Mapper<'_> {
                 let dy = (self.point(at + DVec2::new(0.0, step))? - o.truncate()) / step;
                 m.remap_plan(o, dx, dy, self.scale);
             }
+            // An instance of a component moves like a surface model: the definition stays as it is.
+            Shape::Component { transform, .. } => {
+                let a = kadakas_core::component::affine(transform);
+                let t = a.translation;
+                let o = self.point3(t)?;
+                let step = 1000.0;
+                let at = t.truncate();
+                let dx = (self.point(at + DVec2::new(step, 0.0))? - o.truncate()) / step;
+                let dy = (self.point(at + DVec2::new(0.0, step))? - o.truncate()) / step;
+                *transform = kadakas_core::component::remap_plan(transform, o, dx, dy, self.scale);
+            }
             Shape::Polyline3d { points, .. } => self.vec3(points)?,
             Shape::SiteModel {
                 points,

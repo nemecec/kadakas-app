@@ -827,6 +827,26 @@
       ],
       "type": "string"
     },
+    "Resolve": {
+      "description": "What to do when a component was changed by somebody else while it was open for edit\n(`Command::CloseComponent`). Without an answer the close is refused.",
+      "oneOf": [
+        {
+          "const": "keep_as_new",
+          "description": "Keep my edit as a new component (`Name#1`); the instance uses it. The other\nversion of the definition stays as it is.",
+          "type": "string"
+        },
+        {
+          "const": "discard",
+          "description": "Throw my edit away; the definition stays as it is. Works with or without a conflict.",
+          "type": "string"
+        },
+        {
+          "const": "overwrite",
+          "description": "Replace the definition with my edit, also if somebody else changed it (or if it is not\nknown whether they did). The other change is lost: a person says so on purpose.",
+          "type": "string"
+        }
+      ]
+    },
     "ResourceBody": {
       "additionalProperties": true,
       "description": "The content of a resource. `type` names it (plant_style, record_format, worksheet, hatch, tile, line_type, symbol, ... see describe: resources). The other keys depend on the type.",
@@ -1411,7 +1431,8 @@
                 "extrude",
                 "sweep",
                 "irrigation",
-                "surface_model"
+                "surface_model",
+                "component"
               ]
             }
           },
@@ -4003,6 +4024,195 @@
         "op",
         "id",
         "edit"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Make Group (MOD-07, see `crate::component`): the chosen faces and edges of the surface model\n`model` and the chosen `objects` (groups, component instances, whole surface models) go into\na new group. The geometry moves into a surface model of its own (same ids and placement), so\nit no longer welds to the rest. The objects and the model must be on one layer and in one\ngroup. Returns the ID of the group, then the ID of the new surface model, if one was made.",
+      "properties": {
+        "edges": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EdgeId"
+          },
+          "type": "array"
+        },
+        "faces": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FaceId"
+          },
+          "type": "array"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "objects": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "make_group",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Make Component: the same choice as `MakeGroup` becomes the parts of a new component\ndefinition (a symbol), and, with `replace` (default true), one instance takes its place.\nReturns the ID of the definition, then the ID of the instance.",
+      "properties": {
+        "edges": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EdgeId"
+          },
+          "type": "array"
+        },
+        "faces": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FaceId"
+          },
+          "type": "array"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "objects": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "make_component",
+          "type": "string"
+        },
+        "replace": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "op",
+        "name"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Explode groups and component instances: their surface models merge into the surface model of\nthe level (the first one among the siblings, else the first one of the group becomes it),\nwelding and making faces by the rules of surface models; groups and instances inside move up\none level. An instance that was the last user of its definition takes the definition with it.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "explode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Make Unique: each instance gets a copy of its definition. Instances in one call that share a\ndefinition share the copy. Fails for an instance that is the only user of its definition.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "make_unique",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Edit Component: the parts of the definition become objects in an edit group at the instance\n(the instance is hidden meanwhile). Returns the ID of the edit group.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "op": {
+          "const": "edit_component",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Close Component: the objects of the edit group become the parts of the definition, and every\ninstance shows the change. If somebody else changed the definition while it was open, the\nclose is refused (a conflict) unless `resolve` says what to do: `keep_as_new` keeps this\nedit as a new component for this instance, `discard` throws this edit away.",
+      "properties": {
+        "group": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "op": {
+          "const": "close_component",
+          "type": "string"
+        },
+        "resolve": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Resolve"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "group"
       ],
       "type": "object"
     },

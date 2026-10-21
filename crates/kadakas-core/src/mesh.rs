@@ -743,6 +743,57 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
+    /// Draws a surface model placed by `tf` (local coordinates to the drawing; `z` is measured
+    /// from the layer).
+    /// A surface model through `tf`, `z` measured from the layer: its faces two-sided (the back of
+    /// a face in the back color) and its edges as lines, but not the hidden ones and not the
+    /// smooth ones (the edges that shade a curved surface round, like the sides of a cylinder).
+    fn surface_model(
+        &mut self,
+        m: &crate::surface::SurfaceModel,
+        tf: &glam::DAffine3,
+        z: f64,
+        color: [u8; 4],
+        edge: [u8; 4],
+        id: ObjectId,
+    ) {
+        let o = self.origin;
+        let at = |p: DVec3| {
+            let q = tf.transform_point3(p);
+            Vec3::new(
+                (q.x - o.x) as f32,
+                (q.y - o.y) as f32,
+                (z + q.z - o.z) as f32,
+            )
+        };
+        if let Ok(sm) = m.mesh() {
+            let pts: Vec<Vec3> = sm.positions.iter().map(|p| at(*p)).collect();
+            // A mirror turns the triangles over; keep them counterclockwise.
+            let tris: Vec<[u32; 3]> = if tf.matrix3.determinant() < 0.0 {
+                sm.triangles.iter().map(|t| [t[0], t[2], t[1]]).collect()
+            } else {
+                sm.triangles
+            };
+            self.scene.mesh.part = PART_MAIN;
+            self.scene.mesh.two_sided_mode = true;
+            add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
+            self.scene.mesh.two_sided_mode = false;
+        }
+        for (eid, e) in m.edges() {
+            let flagged = |k: &str| {
+                m.edge_attrs(eid)
+                    .and_then(|a| a.get(k))
+                    .is_some_and(|v| v == &serde_json::Value::Bool(true))
+            };
+            if flagged("hidden") || flagged("smooth") {
+                continue;
+            }
+            if let (Some(a), Some(b)) = (m.vertex(e.v[0]), m.vertex(e.v[1])) {
+                self.scene.lines.push(at(a), at(b), edge, id);
+            }
+        }
+    }
+
     fn add_object(&mut self, obj: &Object, layer: &Layer) {
         let o = self.origin;
         let attrs = crate::hardscape::styled_attrs(self.doc, obj, self.doc.resolved_attrs(obj));
@@ -897,54 +948,58 @@ impl Builder<'_> {
                 add_shaded(&mut self.scene.mesh, &pts, &m.triangles, color, id);
             }
             Shape::SurfaceModel(m) => {
-                // Local coordinates through the transform; `z` is measured from the layer.
-                if let Ok(sm) = m.mesh() {
-                    // A two-sided surface: the back of a face is drawn in the back color.
-                    let color = fill.unwrap_or(SURFACE_FRONT);
-                    let pts: Vec<Vec3> = sm
-                        .positions
-                        .iter()
-                        .map(|p| {
-                            let q = m.transform.transform_point3(*p);
-                            Vec3::new(
-                                (q.x - o.x) as f32,
-                                (q.y - o.y) as f32,
-                                (z + q.z - o.z) as f32,
-                            )
-                        })
-                        .collect();
-                    // A mirror turns the triangles over; keep them counterclockwise.
-                    let tris: Vec<[u32; 3]> = if m.transform.matrix3.determinant() < 0.0 {
-                        sm.triangles.iter().map(|t| [t[0], t[2], t[1]]).collect()
-                    } else {
-                        sm.triangles
-                    };
-                    self.scene.mesh.part = PART_MAIN;
-                    self.scene.mesh.two_sided_mode = true;
-                    add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
-                    self.scene.mesh.two_sided_mode = false;
-                }
-                // The edges as lines, but not the hidden ones and not the smooth ones (the
-                // edges that shade a curved surface round, like the sides of a cylinder).
-                for (eid, e) in m.edges() {
-                    let flagged = |k: &str| {
-                        m.edge_attrs(eid)
-                            .and_then(|a| a.get(k))
-                            .is_some_and(|v| v == &serde_json::Value::Bool(true))
-                    };
-                    if flagged("hidden") || flagged("smooth") {
-                        continue;
+                let color = fill.unwrap_or(SURFACE_FRONT);
+                self.surface_model(m, &m.transform, z, color, edge, id);
+            }
+            Shape::Component { symbol, transform } => {
+                // The models of the definition (shared, not copied) through the instance
+                // transform. Each part has its own class and attributes; the look of the
+                // instance is for the parts that have none.
+                let inst = crate::component::affine(transform);
+                match crate::component::leaves(&self.doc.resources, *symbol) {
+                    Ok(leaves) => {
+                        for leaf in leaves {
+                            let own = leaf
+                                .attrs
+                                .fill
+                                .or_else(|| {
+                                    leaf.class
+                                        .and_then(|c| self.doc.class(c))
+                                        .and_then(|c| c.attrs.fill)
+                                })
+                                .filter(|c| c.0[3] > 0)
+                                .map(rgba);
+                            let color = own.or(fill).unwrap_or(SURFACE_FRONT);
+                            self.surface_model(
+                                leaf.model,
+                                &(inst * leaf.transform),
+                                z,
+                                color,
+                                edge,
+                                id,
+                            );
+                        }
                     }
-                    if let (Some(a), Some(b)) = (m.vertex(e.v[0]), m.vertex(e.v[1])) {
-                        let at = |p: DVec3| {
-                            let q = m.transform.transform_point3(p);
+                    Err(_) => {
+                        // The reason is a finding (`component::findings`). The instance stays
+                        // in the scene as a cross in the warning colour at its origin.
+                        let h = crate::model::LOCUS_MARKER_HALF;
+                        let c = inst.translation;
+                        let at = |d: DVec3| {
                             Vec3::new(
-                                (q.x - o.x) as f32,
-                                (q.y - o.y) as f32,
-                                (z + q.z - o.z) as f32,
+                                (c.x + d.x - o.x) as f32,
+                                (c.y + d.y - o.y) as f32,
+                                (z + c.z + d.z - o.z) as f32,
                             )
                         };
-                        self.scene.lines.push(at(a), at(b), edge, id);
+                        for axis in [DVec3::X, DVec3::Y, DVec3::Z] {
+                            self.scene.lines.push(
+                                at(-axis * h),
+                                at(axis * h),
+                                crate::component::WARNING_COLOR,
+                                id,
+                            );
+                        }
                     }
                 }
             }

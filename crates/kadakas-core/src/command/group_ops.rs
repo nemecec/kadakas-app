@@ -194,6 +194,16 @@ pub fn rotate_shape(shape: &Shape, center: DVec2, angle: f64) -> Result<Shape, S
             );
             Shape::SurfaceModel(Box::new(turned))
         }
+        Shape::Component { symbol, transform } => {
+            let c = center.extend(0.0);
+            let turn = glam::DAffine3::from_translation(c)
+                * glam::DAffine3::from_rotation_z(angle)
+                * glam::DAffine3::from_translation(-c);
+            Shape::Component {
+                symbol: *symbol,
+                transform: crate::component::raw(&(turn * crate::component::affine(transform))),
+            }
+        }
         other => return Err(format!("a {} cannot be turned", other.kind())),
     })
 }
@@ -319,6 +329,12 @@ impl Tx<'_> {
                         ));
                     }
                 }
+                let height = ids
+                    .iter()
+                    .map(|o| crate::component::group_height(self.doc, *o))
+                    .max()
+                    .unwrap_or(0);
+                self.check_group_depth(parent, 1 + height)?;
                 let gid = ObjectId(self.alloc()?);
                 let mut g = Object::new(gid, layer, class, Shape::Group { name });
                 g.parent = parent;
@@ -709,6 +725,11 @@ impl Tx<'_> {
             g.data.get(EDIT_GROUP_KEY).cloned().ok_or_else(|| {
                 invalid(format!("object {group} is not the group of a symbol edit"))
             })?;
+        if info.get("kind").and_then(Value::as_str) == Some("component") {
+            return Err(invalid(format!(
+                "object {group} is the edit group of a component. Use close_component"
+            )));
+        }
         let symbol = ResourceId(
             info.get("symbol")
                 .and_then(AsUid::as_uid)

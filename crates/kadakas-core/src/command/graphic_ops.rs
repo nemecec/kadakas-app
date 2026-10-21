@@ -2,7 +2,7 @@
 //! symbol instance or an attribute may refer to, and what happens when a resource is deleted.
 
 use super::*;
-use crate::graphics::RefKind;
+use crate::graphics::{GraphicResource, RefKind};
 use crate::resource::Resource;
 
 fn invalid(m: impl Into<String>) -> CommandError {
@@ -34,6 +34,68 @@ impl Tx<'_> {
         Ok(())
     }
 
+    /// After the resource `id` changed or was added: it and every component definition that uses
+    /// it must still expand within the limits (nesting 16, 20,000 models, no cycle). Nothing is
+    /// cut off silently: the command fails and the document stays as it was.
+    pub(super) fn check_component_expansion(&self, id: ResourceId) -> Result<(), CommandError> {
+        crate::component::check_expansion(&self.doc.resources, id).map_err(|(bad, e)| {
+            let name = self.doc.resources.get(bad).map_or("", |r| r.name.as_str());
+            if bad == id {
+                invalid(format!("component '{name}' is over a limit: {e}"))
+            } else {
+                // A definition that uses this one is over a limit (it was before, if it came
+                // with a file, a restored version or another user).
+                invalid(format!(
+                    "this definition is used by component '{name}', which is over a limit: {e}"
+                ))
+            }
+        })
+    }
+
+    /// A symbol body that changes must keep the kind that its users expect: a definition that
+    /// has component instances must keep its 3D parts, and one that has symbol instances must
+    /// keep a 2D side.
+    pub(super) fn check_instance_kinds(
+        &self,
+        id: ResourceId,
+        body: &ResourceBody,
+    ) -> Result<(), CommandError> {
+        let ResourceBody::Graphic(g) = body else {
+            return Ok(());
+        };
+        let GraphicResource::Symbol(d) = &**g else {
+            return Ok(());
+        };
+        let flat = d.items.is_empty() && d.solids.is_empty();
+        let comp_users = self
+            .doc
+            .objects
+            .values()
+            .any(|o| matches!(&o.shape, Shape::Component { symbol, .. } if *symbol == id))
+            || self.doc.resources.iter().any(|r| {
+                self.doc
+                    .resources
+                    .symbol(r.id)
+                    .is_some_and(|x| crate::component::part_refs(&x.parts).any(|s| s == id))
+            });
+        if comp_users && !d.is_component() {
+            return Err(invalid(format!(
+                "resource {id} is used as a component. Its 3D parts cannot be removed"
+            )));
+        }
+        let sym_users = self
+            .doc
+            .objects
+            .values()
+            .any(|o| matches!(&o.shape, Shape::Symbol { symbol, .. } if *symbol == id));
+        if sym_users && d.is_component() && flat {
+            return Err(invalid(format!(
+                "resource {id} is used as a symbol. A 3D component cannot replace its 2D side"
+            )));
+        }
+        Ok(())
+    }
+
     /// A symbol instance must refer to a symbol that exists.
     pub(super) fn check_symbol_shape(&self, shape: &Shape) -> Result<(), CommandError> {
         match shape {
@@ -42,6 +104,29 @@ impl Tx<'_> {
             }
             Shape::Symbol { symbol, .. } if self.doc.resources.symbol(*symbol).is_none() => {
                 Err(invalid(format!("resource {symbol} is not a symbol")))
+            }
+            Shape::Component { symbol, .. } if self.doc.resources.get(*symbol).is_none() => {
+                Err(CommandError::NoResource(*symbol))
+            }
+            Shape::Component { symbol, .. }
+                if !self
+                    .doc
+                    .resources
+                    .symbol(*symbol)
+                    .is_some_and(|d| d.is_component()) =>
+            {
+                Err(invalid(format!(
+                    "resource {symbol} is not a component (it has no 3D parts)"
+                )))
+            }
+            Shape::Symbol { symbol, .. }
+                if self.doc.resources.symbol(*symbol).is_some_and(|d| {
+                    d.is_component() && d.items.is_empty() && d.solids.is_empty()
+                }) =>
+            {
+                Err(invalid(format!(
+                    "resource {symbol} is a 3D component. Use a component instance, not a symbol instance"
+                )))
             }
             _ => Ok(()),
         }
@@ -106,7 +191,9 @@ impl Tx<'_> {
                 for oid in &usage.objects {
                     self.touch(*oid);
                     let o = self.doc.object_mut(*oid).expect("exists");
-                    if let Shape::Symbol { symbol, .. } = &mut o.shape {
+                    if let Shape::Symbol { symbol, .. } | Shape::Component { symbol, .. } =
+                        &mut o.shape
+                    {
                         *symbol = swap(*symbol);
                     }
                     o.attrs.fill_pattern = o.attrs.fill_pattern.map(swap);

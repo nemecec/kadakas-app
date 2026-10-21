@@ -17,6 +17,7 @@ use crate::uid::Uid;
 
 mod annot_ops;
 mod area_ops;
+mod component_ops;
 mod drawing_ops;
 mod graphic_ops;
 mod group_ops;
@@ -633,6 +634,65 @@ pub enum Command {
         id: ObjectId,
         edit: crate::surface::Edit,
     },
+    /// Make Group (MOD-07, see `crate::component`): the chosen faces and edges of the surface model
+    /// `model` and the chosen `objects` (groups, component instances, whole surface models) go into
+    /// a new group. The geometry moves into a surface model of its own (same ids and placement), so
+    /// it no longer welds to the rest. The objects and the model must be on one layer and in one
+    /// group. Returns the ID of the group, then the ID of the new surface model, if one was made.
+    MakeGroup {
+        #[serde(default)]
+        model: Option<ObjectId>,
+        #[serde(default)]
+        faces: Vec<crate::surface::FaceId>,
+        #[serde(default)]
+        edges: Vec<crate::surface::EdgeId>,
+        #[serde(default)]
+        objects: Vec<ObjectId>,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Make Component: the same choice as `MakeGroup` becomes the parts of a new component
+    /// definition (a symbol), and, with `replace` (default true), one instance takes its place.
+    /// Returns the ID of the definition, then the ID of the instance.
+    MakeComponent {
+        name: String,
+        #[serde(default)]
+        model: Option<ObjectId>,
+        #[serde(default)]
+        faces: Vec<crate::surface::FaceId>,
+        #[serde(default)]
+        edges: Vec<crate::surface::EdgeId>,
+        #[serde(default)]
+        objects: Vec<ObjectId>,
+        #[serde(default = "yes")]
+        replace: bool,
+    },
+    /// Explode groups and component instances: their surface models merge into the surface model of
+    /// the level (the first one among the siblings, else the first one of the group becomes it),
+    /// welding and making faces by the rules of surface models; groups and instances inside move up
+    /// one level. An instance that was the last user of its definition takes the definition with it.
+    Explode {
+        ids: Vec<ObjectId>,
+    },
+    /// Make Unique: each instance gets a copy of its definition. Instances in one call that share a
+    /// definition share the copy. Fails for an instance that is the only user of its definition.
+    MakeUnique {
+        ids: Vec<ObjectId>,
+    },
+    /// Edit Component: the parts of the definition become objects in an edit group at the instance
+    /// (the instance is hidden meanwhile). Returns the ID of the edit group.
+    EditComponent {
+        id: ObjectId,
+    },
+    /// Close Component: the objects of the edit group become the parts of the definition, and every
+    /// instance shows the change. If somebody else changed the definition while it was open, the
+    /// close is refused (a conflict) unless `resolve` says what to do: `keep_as_new` keeps this
+    /// edit as a new component for this instance, `discard` throws this edit away.
+    CloseComponent {
+        group: ObjectId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolve: Option<crate::component::Resolve>,
+    },
     /// Several commands as one undo step. Stops at the first error.
     Batch {
         commands: Vec<Command>,
@@ -1079,6 +1139,10 @@ fn insert_at(objects: &mut Objects, items: &[(usize, Object)]) {
             objects.insert(id, o);
         }
     }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Removes repeated IDs and keeps the first of each.
@@ -1861,6 +1925,12 @@ impl<'a> Tx<'a> {
             | Command::DetachRecord { .. }
             | Command::SetRecordFields { .. } => self.run_record(cmd)?,
             Command::EditSurface { id, edit } => self.run_surface(*id, edit)?,
+            Command::MakeGroup { .. }
+            | Command::MakeComponent { .. }
+            | Command::Explode { .. }
+            | Command::MakeUnique { .. }
+            | Command::EditComponent { .. }
+            | Command::CloseComponent { .. } => self.run_component(cmd, out)?,
             Command::AddWorksheetTable { .. } | Command::SetWorksheetTable { .. } => {
                 self.run_table(cmd, out)?
             }
@@ -2540,7 +2610,20 @@ impl Editor {
                 Ok(())
             },
         )?;
+        self.note_definition_problems();
         Ok(self.revision != before)
+    }
+
+    /// A definition that came with a restored version or from other users can be over a limit
+    /// (the limits are held by the commands, not by the content that arrives). It stays, its
+    /// instances are drawn as marked placeholders, and the person gets a note instead of a
+    /// surprise at the next local edit.
+    fn note_definition_problems(&mut self) {
+        for note in crate::component::definition_findings(&self.doc) {
+            if !self.doc.load_notes().contains(&note) {
+                self.doc.add_load_note(note);
+            }
+        }
     }
 
     pub fn undo(&mut self) -> bool {
@@ -2630,6 +2713,7 @@ impl Editor {
         // The generator of IDs belongs to this editor, not to the document that came in.
         doc.swap_ids(&mut self.doc);
         self.doc = doc;
+        self.note_definition_problems();
         self.undo.clear();
         self.redo.clear();
         self.revision = next_revision();

@@ -306,6 +306,10 @@ impl Geometry {
                     self.add_point(m.transform.transform_point3(p).truncate(), Endpoint);
                 }
             }
+            // The shape alone does not know its definition: the origin of the instance.
+            Shape::Component { transform, .. } => {
+                self.add_point(DVec2::new(transform[9], transform[10]), Endpoint)
+            }
             Shape::Underlay(u) => self.add_box(u.min, u.max),
             Shape::Viewport(vp) => self.add_box(vp.min, vp.max),
             Shape::SiteModel { points, lines, .. } => {

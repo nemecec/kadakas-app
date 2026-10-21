@@ -68,3 +68,32 @@ fn extrudes_and_sweeps_are_meshes_at_the_layer_elevation() {
     let (text, _) = export(&doc, &ExportOptions::default());
     assert_eq!(count(&text, "POLYLINE"), 1);
 }
+
+#[test]
+fn components_and_surface_models_are_skipped_with_the_reason_of_the_modeler() {
+    use kadakas_core::model::{Object, ObjectId};
+    use kadakas_core::resource::ResourceId;
+    let mut doc = Editor::with_sequential_ids().doc().clone();
+    let (layer, class) = (doc.active_layer, doc.active_class);
+    for shape in [
+        Shape::Component {
+            symbol: ResourceId::from_num(1),
+            transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        },
+        Shape::SurfaceModel(Box::default()),
+    ] {
+        let id = ObjectId(doc.alloc_id());
+        doc.objects.insert(id, Object::new(id, layer, class, shape));
+    }
+    let (_, report) = export(&doc, &ExportOptions::default());
+    let kinds: Vec<&str> = report.skipped.iter().map(|s| s.entity.as_str()).collect();
+    assert!(
+        kinds.contains(&"component") && kinds.contains(&"surface_model"),
+        "{kinds:?}"
+    );
+    assert!(
+        report.skipped.iter().all(|s| s.reason.contains("MOD-12")),
+        "{:?}",
+        report.skipped
+    );
+}

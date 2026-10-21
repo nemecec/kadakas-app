@@ -553,6 +553,35 @@ fn shape_core(
                 ));
             }
         }
+        Shape::Component { .. } => {
+            // Plan view: the box around the instance (MOD-13 draws its edges). An instance that
+            // cannot be drawn gets a cross in the warning colour. The same as the screen and
+            // the SVG (`component::plan_mark`).
+            match kadakas_core::component::plan_mark(doc, &obj.shape) {
+                Some(kadakas_core::component::PlanMark::Box(ring)) => {
+                    out.push(path(mapped(&ring, xf), true, &st));
+                }
+                Some(kadakas_core::component::PlanMark::Broken(p, _)) => {
+                    let h = kadakas_core::model::LOCUS_MARKER_HALF;
+                    let warn = Style {
+                        stroke: Some(kadakas_core::component::WARNING_COLOR),
+                        fill: None,
+                        ..st
+                    };
+                    out.push(path(
+                        mapped(&[p - DVec2::new(h, 0.0), p + DVec2::new(h, 0.0)], xf),
+                        false,
+                        &warn,
+                    ));
+                    out.push(path(
+                        mapped(&[p - DVec2::new(0.0, h), p + DVec2::new(0.0, h)], xf),
+                        false,
+                        &warn,
+                    ));
+                }
+                _ => {}
+            }
+        }
         Shape::Mesh3d(m) => {
             // Plan view: the box around the mesh.
             let (lo, hi) = m.bounds3();

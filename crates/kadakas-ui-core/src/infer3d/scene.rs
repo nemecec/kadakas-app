@@ -3,7 +3,7 @@
 //! [`SceneBuilder::add_surface_model`]; other 3D objects add their points, edges and faces with the
 //! plain `add_*` calls. Build the scene again when the geometry changes.
 
-use glam::DVec3;
+use glam::{DAffine3, DVec3};
 use kadakas_core::surface::{CurveId, EdgeId, FaceId, SurfaceModel};
 
 use super::bvh::{Aabb, Bvh};
@@ -64,6 +64,15 @@ impl Tag {
     /// The id inside the model (an edge, face or curve id).
     pub fn id(self) -> u32 {
         self.0 as u32
+    }
+
+    /// The same tag with `add` added to the model number (for the models of an instance). A tag
+    /// that has no model is returned as it is.
+    pub(crate) fn shifted(self, add: u32) -> Tag {
+        if self == Tag::NONE || self.kind() == TagKind::Other {
+            return self;
+        }
+        Tag::pack(self.0 >> 62, self.model().wrapping_add(add), self.id())
     }
 }
 
@@ -214,7 +223,19 @@ impl SceneBuilder {
     /// A surface model: its edges (not the hidden ones), its faces and the centers of its curves
     /// that are circles or arcs. `model` is the number that goes into the tags.
     pub fn add_surface_model(&mut self, m: &SurfaceModel, model: u32) -> &mut Self {
-        let w = |p: DVec3| m.transform.transform_point3(p);
+        self.add_surface_model_placed(m, &m.transform, model)
+    }
+
+    /// Like [`SceneBuilder::add_surface_model`], with the placement `xf` (from the local
+    /// coordinates of the model to the scene) instead of the transform of the model. A model of a
+    /// component definition is placed by the instance and the transform of the model inside it.
+    pub fn add_surface_model_placed(
+        &mut self,
+        m: &SurfaceModel,
+        xf: &DAffine3,
+        model: u32,
+    ) -> &mut Self {
+        let w = |p: DVec3| xf.transform_point3(p);
         let hidden = |attrs: Option<&kadakas_core::surface::Attrs>| {
             attrs
                 .and_then(|a| a.get(HIDDEN_ATTR))
@@ -248,6 +269,34 @@ impl SceneBuilder {
         for (cid, edges) in m.curves() {
             if let Some(c) = curve_center(m, edges) {
                 self.add_point(w(c), PointKind::Center, Tag::curve(model, cid));
+            }
+        }
+        self
+    }
+
+    /// Adds everything of `other` placed by `xf`, with `shift` added to the model number of every
+    /// tag. This is how the instances of a component share the data of the definition: `other`
+    /// is built once, in the coordinates of the definition ([`super::DefinitionScene`]), and each
+    /// instance adds a placed copy of the points, edges and faces, which is all the index needs.
+    /// The definition itself, its surface models and their ids, are not copied.
+    pub fn add_placed(&mut self, other: &SceneBuilder, xf: &DAffine3, shift: u32) -> &mut Self {
+        let w = |p: DVec3| xf.transform_point3(p);
+        self.points.reserve(other.points.len());
+        for p in &other.points {
+            self.add_point(w(p.p), p.kind, p.tag.shifted(shift));
+        }
+        self.edges.reserve(other.edges.len());
+        for e in &other.edges {
+            self.add_edge(w(e.a), w(e.b), e.tag.shifted(shift));
+        }
+        self.faces.reserve(other.faces.len());
+        for f in &other.faces {
+            let mut loops = f
+                .loops
+                .iter()
+                .map(|l| l.iter().map(|p| w(*p)).collect::<Vec<_>>());
+            if let Some(outer) = loops.next() {
+                self.push_face(outer, loops.collect(), f.tag.shifted(shift), false);
             }
         }
         self

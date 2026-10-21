@@ -171,6 +171,8 @@ impl Tx<'_> {
                     name: name.trim().to_string(),
                     body: body.clone(),
                 });
+                // A component definition must expand within the limits of nesting and size.
+                self.check_component_expansion(id)?;
                 out.created.push(id.0);
             }
             Command::ModifyResource { id, name, body } => {
@@ -198,9 +200,13 @@ impl Tx<'_> {
                 self.check_body_refs(&new_body)?;
                 self.check_graphic_refs(Some(*id), &new_body)?;
                 self.check_resource_name(&new_name, &new_body, Some(*id))?;
+                self.check_instance_kinds(*id, &new_body)?;
                 let r = self.doc.resources.get_mut(*id).expect("checked");
                 r.name = new_name.trim().to_string();
                 r.body = new_body;
+                // This definition and every definition that uses it must still expand within
+                // the limits (a nested component changed).
+                self.check_component_expansion(*id)?;
                 self.conform_records(*id, &old_name);
                 let users = self.users_of(*id);
                 self.resync(&users);

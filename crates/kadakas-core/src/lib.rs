@@ -9,6 +9,7 @@ pub mod blob;
 pub mod cache;
 pub mod change;
 pub mod command;
+pub mod component;
 pub mod csv;
 pub mod curve;
 pub mod datamap;

@@ -6,6 +6,9 @@
 use std::path::PathBuf;
 
 use kadakas_api::Session;
+use kadakas_core::command::Command;
+use kadakas_core::component::EditContext;
+use kadakas_core::model::{ObjectId, Shape};
 use kadakas_l10n::tr;
 use kadakas_render::StandardView;
 use kadakas_ui_core::keymap::{Action, Keymap};
@@ -48,6 +51,24 @@ pub enum Cmd {
     SelectNone,
     /// Delete the selected faces and edges, or the selected objects.
     Delete,
+    /// Make Group of the selected objects (MOD-07).
+    MakeGroup,
+    /// Make Component of the selected objects (MOD-07).
+    MakeComponent,
+    /// Explode the selected groups and components.
+    Explode,
+    /// Make Unique: the selected component instances get their own definition.
+    MakeUnique,
+    /// Edit Group or Edit Component: enter the selected one.
+    EditSelected,
+    /// Close Group or Close Component: leave the one that is open.
+    CloseContext,
+    /// Close Component after a conflict: keep my edit as a new component.
+    CloseKeepMine,
+    /// Close Component after a conflict: throw my edit away.
+    CloseDiscardMine,
+    /// Close Component after a conflict: replace the component with my edit.
+    CloseOverwrite,
     /// A tool or command of the tool bar.
     Tool(ModelerTool),
     /// Zoom Window: the next drag of the Zoom tool is a window.
@@ -116,6 +137,8 @@ pub struct ModelerApp {
     quit: bool,
     /// The rectangle of the 3D view in the last frame.
     pub canvas_rect: Option<egui::Rect>,
+    /// The groups and components that are open for edit (MOD-07).
+    pub context: EditContext,
 }
 
 impl ModelerApp {
@@ -150,6 +173,7 @@ impl ModelerApp {
             title_shown: None,
             quit: false,
             canvas_rect: None,
+            context: EditContext::new(),
         }
     }
 
@@ -368,6 +392,7 @@ impl ModelerApp {
         self.session.selection.clear();
         self.edit.reset();
         self.info_cache = None;
+        self.context = EditContext::new();
         self.path = path;
         self.nav.clear_history();
         self.fit_pending = true;
@@ -435,11 +460,37 @@ impl ModelerApp {
                 if !self.session.editor.undo() {
                     self.status = tr!("modeler-nothing-to-undo");
                 }
+                self.after_history();
             }
             Cmd::Redo => {
                 self.edit.modeling.abort();
                 if !self.session.editor.redo() {
                     self.status = tr!("modeler-nothing-to-redo");
+                }
+                self.after_history();
+            }
+            Cmd::MakeGroup | Cmd::MakeComponent | Cmd::Explode | Cmd::MakeUnique => {
+                self.structure(&cmd)
+            }
+            Cmd::EditSelected => self.edit_selected(),
+            Cmd::CloseContext
+            | Cmd::CloseKeepMine
+            | Cmd::CloseDiscardMine
+            | Cmd::CloseOverwrite => {
+                self.context.validate(self.session.editor.doc());
+                let resolve = match cmd {
+                    Cmd::CloseKeepMine => Some(kadakas_core::component::Resolve::KeepAsNew),
+                    Cmd::CloseDiscardMine => Some(kadakas_core::component::Resolve::Discard),
+                    Cmd::CloseOverwrite => Some(kadakas_core::component::Resolve::Overwrite),
+                    _ => None,
+                };
+                match self.context.exit_with(&mut self.session.editor, resolve) {
+                    Ok(Some(id)) => {
+                        self.session.selection = vec![id];
+                        self.status.clear();
+                    }
+                    Ok(None) => {}
+                    Err(e) => self.status = e.to_string(),
                 }
             }
             Cmd::Delete => {
@@ -496,6 +547,140 @@ impl ModelerApp {
             Cmd::Theme(t) => self.prefs.theme = t,
             Cmd::Language(l) => self.prefs.language = l,
             Cmd::About => self.about.open(),
+        }
+    }
+
+    /// What follows an undo or a redo: the selection and the open groups keep only what exists.
+    fn after_history(&mut self) {
+        let doc = self.session.editor.doc();
+        self.session
+            .selection
+            .retain(|id| doc.object(*id).is_some());
+        self.context.validate(doc);
+    }
+
+    /// The selected objects that exist.
+    fn selected(&self) -> Vec<ObjectId> {
+        let doc = self.session.editor.doc();
+        self.session
+            .selection
+            .iter()
+            .copied()
+            .filter(|id| doc.object(*id).is_some())
+            .collect()
+    }
+
+    /// True if the structure command makes sense for the selection: any object for Make Group and
+    /// Make Component, a group or an instance for Explode, an instance for Make Unique, one group
+    /// or instance for Edit, and an open group or component for Close.
+    pub fn can_structure(&self, cmd: &Cmd) -> bool {
+        let doc = self.session.editor.doc();
+        let sel = self.selected();
+        let any = |f: fn(&Shape) -> bool| {
+            sel.iter()
+                .any(|id| doc.object(*id).is_some_and(|o| f(&o.shape)))
+        };
+        match cmd {
+            Cmd::MakeGroup | Cmd::MakeComponent => !sel.is_empty(),
+            Cmd::Explode => any(|s| matches!(s, Shape::Group { .. } | Shape::Component { .. })),
+            Cmd::MakeUnique => any(|s| matches!(s, Shape::Component { .. })),
+            Cmd::EditSelected => {
+                sel.len() == 1
+                    && any(|s| matches!(s, Shape::Group { .. } | Shape::Component { .. }))
+            }
+            Cmd::CloseContext
+            | Cmd::CloseKeepMine
+            | Cmd::CloseDiscardMine
+            | Cmd::CloseOverwrite => !self.context.is_root(),
+            _ => false,
+        }
+    }
+
+    /// A name for a new component that no component has.
+    fn new_component_name(&self) -> String {
+        let doc = self.session.editor.doc();
+        (1..)
+            .map(|n| tr!("modeler-component-name", n = n))
+            .find(|name| {
+                !doc.resources
+                    .iter()
+                    .any(|r| r.name.eq_ignore_ascii_case(name) && r.body.type_name() == "symbol")
+            })
+            .expect("an endless range")
+    }
+
+    /// Make Group, Make Component, Explode and Make Unique on the selection. One undo step each.
+    /// Only objects in the open group or component can be chosen.
+    fn structure(&mut self, cmd: &Cmd) {
+        self.context.validate(self.session.editor.doc());
+        let doc = self.session.editor.doc();
+        let sel: Vec<ObjectId> = self
+            .selected()
+            .into_iter()
+            .filter(|id| self.context.contains(doc, *id) && Some(*id) != self.context.container())
+            .collect();
+        let of_kind = |f: fn(&Shape) -> bool| -> Vec<ObjectId> {
+            sel.iter()
+                .copied()
+                .filter(|id| doc.object(*id).is_some_and(|o| f(&o.shape)))
+                .collect()
+        };
+        let command = match cmd {
+            Cmd::MakeGroup => Command::MakeGroup {
+                model: None,
+                faces: vec![],
+                edges: vec![],
+                objects: sel.clone(),
+                name: None,
+            },
+            Cmd::MakeComponent => Command::MakeComponent {
+                name: self.new_component_name(),
+                model: None,
+                faces: vec![],
+                edges: vec![],
+                objects: sel.clone(),
+                replace: true,
+            },
+            Cmd::Explode => Command::Explode {
+                ids: of_kind(|s| matches!(s, Shape::Group { .. } | Shape::Component { .. })),
+            },
+            _ => Command::MakeUnique {
+                ids: of_kind(|s| matches!(s, Shape::Component { .. })),
+            },
+        };
+        if sel.is_empty() {
+            self.status = tr!("modeler-nothing-selected");
+            return;
+        }
+        match self.session.editor.execute(&command) {
+            Ok(out) => {
+                // What was made is selected: the group or the instance.
+                let made = match cmd {
+                    Cmd::MakeGroup => out.created.first().copied(),
+                    Cmd::MakeComponent => out.created.get(1).copied(),
+                    _ => None,
+                };
+                self.session.selection = made.map(|u| vec![ObjectId(u)]).unwrap_or_default();
+                self.status.clear();
+            }
+            Err(e) => self.status = e.to_string(),
+        }
+        self.after_history();
+    }
+
+    /// Edit Group or Edit Component: enters the selected group or instance.
+    fn edit_selected(&mut self) {
+        let sel = self.selected();
+        let [id] = sel.as_slice() else {
+            self.status = tr!("modeler-select-one-to-edit");
+            return;
+        };
+        match self.context.enter(&mut self.session.editor, *id) {
+            Ok(()) => {
+                self.session.selection.clear();
+                self.status.clear();
+            }
+            Err(e) => self.status = e.to_string(),
         }
     }
 

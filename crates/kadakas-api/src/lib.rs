@@ -1610,6 +1610,12 @@ impl Session {
                         _ => None,
                     }).collect::<Vec<_>>(),
                     "bounds": bounds,
+                    // Component instances that cannot be drawn, with the reason (a missing
+                    // definition, a cycle, a limit). They show as a marked cross.
+                    "broken_components": kadakas_core::component::findings(doc)
+                        .into_iter()
+                        .map(|f| json!({"id": f.object, "problem": f.message}))
+                        .collect::<Vec<_>>(),
                     "georeference": doc.georef,
                     "grey": doc.drawing.grey,
                     "can_undo": self.editor.can_undo(),
@@ -2388,9 +2394,9 @@ mod tests {
             (3, "invalid value: radius must be positive")
         );
 
-        let (code, msg) = fail(&mut s, "execute", json!({"command": {"op": "explode"}}));
+        let (code, msg) = fail(&mut s, "execute", json!({"command": {"op": "no_such_op"}}));
         assert_eq!(code, -32602);
-        assert!(msg.contains("explode"), "{msg}");
+        assert!(msg.contains("no_such_op"), "{msg}");
 
         let (code, _) = fail(&mut s, "execute", json!({}));
         assert_eq!(code, -32602);
@@ -2467,6 +2473,40 @@ mod tests {
         assert_eq!(d["objects"].as_array().unwrap().len(), 1);
         assert_eq!(d["objects"][0]["shape"]["kind"], "circle");
         assert_eq!(d["layers"][0]["name"], "Layer 1");
+    }
+
+    #[test]
+    fn the_summary_lists_component_instances_that_cannot_be_drawn() {
+        let mut s = Session::with_sequential_ids();
+        let mut doc = Document::default();
+        let id = kadakas_core::model::ObjectId(doc.alloc_id());
+        let (layer, class) = (doc.active_layer, doc.active_class);
+        doc.objects.insert(
+            id,
+            kadakas_core::model::Object::new(
+                id,
+                layer,
+                class,
+                Shape::Component {
+                    symbol: kadakas_core::resource::ResourceId::from_num(31337),
+                    transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+                },
+            ),
+        );
+        ok(
+            &mut s,
+            "document.load",
+            json!({"document": serde_json::to_value(&doc).unwrap()}),
+        );
+        let sum = ok(&mut s, "document.summary", json!({}));
+        let rows = sum["broken_components"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{sum}");
+        assert!(
+            rows[0]["problem"]
+                .as_str()
+                .unwrap()
+                .contains("does not exist")
+        );
     }
 
     #[test]

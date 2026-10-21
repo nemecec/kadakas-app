@@ -356,7 +356,13 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         if write_object(&mut ents, &mut cx, o, &layer, hidden_layer) {
             report.count(o.shape.kind());
         } else {
-            report.skip(o.shape.kind(), "unsupported kind");
+            let why = match o.shape {
+                Shape::SurfaceModel(_) | Shape::Component { .. } => {
+                    "surface models and components of the 3D modeler: DXF export is not done yet (MOD-12)"
+                }
+                _ => "unsupported kind",
+            };
+            report.skip(o.shape.kind(), why);
         }
     }
 
