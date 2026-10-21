@@ -1449,7 +1449,7 @@ mod tests {
     }
 
     fn model_part() -> Part {
-        Part::new(Shape::SurfaceModel(Box::new(SurfaceModel::new())))
+        Part::new(Shape::SurfaceModel(Box::default()))
     }
 
     fn instance(symbol: ResourceId, k: usize) -> Part {

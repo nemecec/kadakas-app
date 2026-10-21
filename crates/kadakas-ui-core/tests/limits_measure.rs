@@ -56,7 +56,7 @@ fn infer() {
         );
         return;
     }
-    let (ed, sym, ids) = world(&kind, parts, count);
+    let (ed, sym, ids) = world(kind, parts, count);
     let rss0 = rss();
     let (r, t) = timed(|| scene_of_instances(ed.doc(), &ids, 0));
     let r = r.expect("scene");
