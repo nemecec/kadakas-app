@@ -155,6 +155,8 @@ pub fn scene_of_instances_cached(
     let mut next = u64::from(first_model);
     // One look-up (and one version) for each definition in this call, however many instances.
     let mut local: HashMap<ResourceId, Arc<DefinitionScene>> = HashMap::new();
+    let mut found = Vec::with_capacity(instances.len());
+    let mut total = 0usize;
     for &id in instances {
         let o = doc
             .object(id)
@@ -170,6 +172,19 @@ pub fn scene_of_instances_cached(
                 d
             }
         };
+        total = total.saturating_add(def.models as usize);
+        found.push((id, xf, def));
+    }
+    // The scene holds its own copy of the points of every instance (no instancing in the
+    // index), so the memory is the total of models: refuse before a byte is made.
+    if total > component::MAX_TOTAL_MODELS {
+        return Err(ComponentError::TotalModels {
+            total,
+            max: component::MAX_TOTAL_MODELS,
+            hint: "Build the scene of fewer instances".into(),
+        });
+    }
+    for (id, xf, def) in found {
         if next + u64::from(def.models) > MAX_MODEL {
             return Err(ComponentError::Invalid(
                 "there are too many surface models for the tags of the scene".into(),

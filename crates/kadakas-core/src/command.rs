@@ -2312,6 +2312,15 @@ pub struct Editor {
     last_moved: Option<(u64, bool)>,
     /// The highest serial of a step that the history limit dropped (0: none).
     max_trimmed_serial: u64,
+    /// True while a restore of a saved version runs: the content of a version comes as it is
+    /// (a finding and placeholders, never a refusal), so the limit of models over all
+    /// instances is not held against it.
+    restoring: bool,
+    /// The models over all instances, valid for the revision it is stored with (see
+    /// `check_total_models`).
+    total_cache: Option<(u64, usize)>,
+    /// The total that the step in progress leaves, stored with its revision when it succeeds.
+    pending_total: Option<usize>,
 }
 
 /// Source of the serials of undo steps. One counter for the process, so a serial from an editor
@@ -2377,6 +2386,9 @@ impl Editor {
             open_run: None,
             last_moved: None,
             max_trimmed_serial: 0,
+            restoring: false,
+            total_cache: None,
+            pending_total: None,
         }
     }
 
@@ -2476,10 +2488,19 @@ impl Editor {
             Some((_, after)) if !after.is_finite() => Err(CommandError::Invalid(NOT_FINITE.into())),
             _ => Ok(()),
         });
+        self.pending_total = None;
+        let result = result.and_then(|()| {
+            if self.restoring {
+                Ok(())
+            } else {
+                self.check_total_models(&patch)
+            }
+        });
         match result {
             Ok(()) => {
                 if !patch.is_empty() {
                     self.revision = next_revision();
+                    self.total_cache = self.pending_total.map(|t| (self.revision, t));
                     let mut cs = patch.change_set(true, self.revision, &op(), self.origin);
                     cs.detail = detail;
                     self.log.push(cs);
@@ -2605,7 +2626,8 @@ impl Editor {
         detail: Option<Value>,
     ) -> Result<bool, CommandError> {
         let before = self.revision;
-        self.transact(
+        self.restoring = true;
+        let done = self.transact(
             || op.to_string(),
             detail,
             |tx, _| {
@@ -2613,9 +2635,68 @@ impl Editor {
                 tx.doc.history = history;
                 Ok(())
             },
-        )?;
+        );
+        self.restoring = false;
+        done?;
         self.note_definition_problems();
         Ok(self.revision != before)
+    }
+
+    /// Refuses a step that takes the models over all instances over
+    /// [`component::MAX_TOTAL_MODELS`] (MOD-07): the scene of an instance holds its own copy of the
+    /// points, so the total is what memory must hold. A step that does not make the total
+    /// larger is always allowed, also in a document that is over the limit already (it came
+    /// with a file, a restored version or another user, and it has a finding).
+    ///
+    /// The total of the document is kept from step to step. A step that changes no resource
+    /// adds the models of the instances it adds and takes off those it removes, so a script that
+    /// adds a thousand instances one by one does not walk all objects a thousand times. A step
+    /// that changes the resources (or a first step) counts all instances once.
+    fn check_total_models(&mut self, patch: &Patch) -> Result<(), CommandError> {
+        let cached = self
+            .total_cache
+            .filter(|(rev, _)| *rev == self.revision)
+            .map(|(_, t)| t);
+        let after = match (cached, &patch.meta) {
+            (Some(before), None) => {
+                let mut cache = crate::component::ExpansionCache::new(&self.doc.resources);
+                let mut models =
+                    |o: &Object| crate::component::instance_models(o, &mut cache).unwrap_or(0);
+                let added: usize = patch.added.iter().map(|(_, o)| models(o)).sum();
+                let removed: usize = patch.removed.iter().map(|(_, o)| models(o)).sum();
+                let (mut up, mut down) = (0usize, 0usize);
+                for (b, a) in &patch.modified {
+                    up += models(a);
+                    down += models(b);
+                }
+                (before + added + up).saturating_sub(removed + down)
+            }
+            _ => crate::component::total_models(&self.doc),
+        };
+        self.pending_total = Some(after);
+        if after <= crate::component::MAX_TOTAL_MODELS {
+            return Ok(());
+        }
+        // Over the limit. What was the total before the step?
+        let before = match cached {
+            Some(t) => t,
+            None => {
+                patch.apply(&mut self.doc, false);
+                let t = crate::component::total_models(&self.doc);
+                patch.apply(&mut self.doc, true);
+                t
+            }
+        };
+        if after <= before {
+            return Ok(());
+        }
+        self.pending_total = None;
+        let mut cache = crate::component::ExpansionCache::new(&self.doc.resources);
+        let budget = crate::component::Budget::of(&self.doc, &mut cache);
+        let message = budget
+            .error(&self.doc, &mut cache)
+            .map_or_else(|| "too many models".to_string(), |e| e.to_string());
+        Err(CommandError::Invalid(message))
     }
 
     /// A definition that came with a restored version or from other users can be over a limit

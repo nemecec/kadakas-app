@@ -164,6 +164,7 @@ impl Tx<'_> {
                 body.verify().map_err(invalid)?;
                 self.check_body_refs(body)?;
                 self.check_graphic_refs(None, body)?;
+                self.check_definition_size(body)?;
                 self.check_resource_name(name, body, None)?;
                 let id = ResourceId(self.alloc()?);
                 self.doc.resources.push(Resource {
@@ -199,6 +200,9 @@ impl Tx<'_> {
                 }
                 self.check_body_refs(&new_body)?;
                 self.check_graphic_refs(Some(*id), &new_body)?;
+                if body.is_some() {
+                    self.check_definition_size(&new_body)?;
+                }
                 self.check_resource_name(&new_name, &new_body, Some(*id))?;
                 self.check_instance_kinds(*id, &new_body)?;
                 let r = self.doc.resources.get_mut(*id).expect("checked");

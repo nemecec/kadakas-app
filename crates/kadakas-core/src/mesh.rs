@@ -740,6 +740,11 @@ struct Builder<'a> {
     scene: Scene,
     sphere: UnitSphere,
     detail: Detail,
+    /// The sizes of the component definitions, found once for the whole scene.
+    expansions: crate::component::ExpansionCache<'a>,
+    /// The instances beyond the total of models ([`crate::component::MAX_TOTAL_MODELS`]): they
+    /// are drawn as placeholders, so the scene stays within memory.
+    over_budget: std::collections::HashSet<ObjectId>,
 }
 
 impl Builder<'_> {
@@ -956,8 +961,13 @@ impl Builder<'_> {
                 // transform. Each part has its own class and attributes; the look of the
                 // instance is for the parts that have none.
                 let inst = crate::component::affine(transform);
-                match crate::component::leaves(&self.doc.resources, *symbol) {
-                    Ok(leaves) => {
+                let leaves = if self.over_budget.contains(&id) {
+                    None
+                } else {
+                    crate::component::leaves_in(&mut self.expansions, *symbol).ok()
+                };
+                match leaves {
+                    Some(leaves) => {
                         for leaf in leaves {
                             let own = leaf
                                 .attrs
@@ -980,7 +990,7 @@ impl Builder<'_> {
                             );
                         }
                     }
-                    Err(_) => {
+                    None => {
                         // The reason is a finding (`component::findings`). The instance stays
                         // in the scene as a cross in the warning colour at its origin.
                         let h = crate::model::LOCUS_MARKER_HALF;
@@ -1558,10 +1568,17 @@ pub fn build_with_detail(
     } else {
         SPHERE_COARSE
     };
+    let mut expansions = crate::component::ExpansionCache::new(&doc.resources);
+    let over_budget = crate::component::Budget::of(doc, &mut expansions)
+        .over
+        .into_iter()
+        .collect();
     let mut b = Builder {
         ext,
         doc,
         origin,
+        expansions,
+        over_budget,
         scene: Scene {
             origin,
             ..Scene::default()

@@ -273,10 +273,8 @@ impl Tx<'_> {
             return Err(invalid("a component needs at least one part"));
         }
         // Nesting: the new definition is one level deeper than the deepest one that it uses.
-        let deepest = component::part_refs(&parts)
-            .map(|s| component::definition_depth(&self.doc.resources, s))
-            .max()
-            .unwrap_or(0);
+        let deepest =
+            component::max_definition_depth(&self.doc.resources, component::part_refs(&parts));
         if deepest + 1 > component::MAX_COMPONENT_DEPTH {
             return Err(refuse(ComponentError::ComponentsTooDeep {
                 max: component::MAX_COMPONENT_DEPTH,
@@ -763,6 +761,7 @@ impl Tx<'_> {
                 } else {
                     let body = ResourceBody::Graphic(Box::new(GraphicResource::Symbol(def)));
                     body.validate().map_err(invalid)?;
+                    self.check_definition_size(&body)?;
                     self.check_graphic_refs(Some(symbol), &body)?;
                     self.check_instance_kinds(symbol, &body)?;
                     self.doc.resources.get_mut(symbol).expect("checked").body = body;

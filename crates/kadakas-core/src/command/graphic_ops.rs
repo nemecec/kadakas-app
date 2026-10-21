@@ -52,6 +52,20 @@ impl Tx<'_> {
         })
     }
 
+    /// The parts of a component definition must stay within the size of a definition: at most
+    /// [`crate::component::MAX_DEFINITION_EDGES`] edges and
+    /// [`crate::component::MAX_DEFINITION_BYTES`] bytes of saved text. The command fails and the
+    /// document stays as it was.
+    pub(super) fn check_definition_size(&self, body: &ResourceBody) -> Result<(), CommandError> {
+        if let ResourceBody::Graphic(g) = body
+            && let GraphicResource::Symbol(d) = &**g
+            && let Some(why) = crate::component::definition_size_problem(&d.parts)
+        {
+            return Err(invalid(why));
+        }
+        Ok(())
+    }
+
     /// A symbol body that changes must keep the kind that its users expect: a definition that
     /// has component instances must keep its 3D parts, and one that has symbol instances must
     /// keep a 2D side.

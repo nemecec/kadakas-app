@@ -1,0 +1,732 @@
+//! Guards of the walks over component definitions (MOD-07): the cost of a walk is bounded by the
+//! size of the definition graph and not by the number of paths in it, a visited-node budget
+//! refuses what is too big, the total of models over all instances, the size of a definition
+//! and the cost of an explode are bounded. Every limit is tested at the exact value (passes) and
+//! at the value plus one (refused).
+
+#[path = "limits_common.rs"]
+mod limits_common;
+
+use std::time::{Duration, Instant};
+
+use glam::{DAffine3, DVec3};
+use kadakas_core::command::{Command, Editor};
+use kadakas_core::component::{self, ComponentError, Part};
+use kadakas_core::graphics::{GraphicResource, SymbolDef};
+use kadakas_core::mesh;
+use kadakas_core::model::*;
+use kadakas_core::resource::{ResourceBody, ResourceId};
+use kadakas_core::surface::{Edge, EdgeId, SurfaceModel, VertexId};
+use limits_common::{def_parts, instance_shape, push_def, push_instances};
+
+// ------------------------------------------------------------------ helpers
+
+/// A chain of `levels` definitions in which definition i holds `fan` instances of definition
+/// i-1. The bottom definition is one empty group, so the chain has no model at all, but the
+/// number of paths through it is `fan` to the power `levels`.
+fn empty_chain(levels: usize, fan: usize) -> (Document, ResourceId, Vec<ObjectId>) {
+    let mut doc = Document::with_sequential_ids();
+    let mut def = push_def(&mut doc, "D0", def_parts("empty", 1));
+    for lvl in 1..=levels {
+        let parts: Vec<Part> = (0..fan)
+            .map(|k| Part::new(instance_shape(def, k)))
+            .collect();
+        def = push_def(&mut doc, &format!("D{lvl}"), parts);
+    }
+    let ids = push_instances(&mut doc, def, 3);
+    (doc, def, ids)
+}
+
+fn under(what: &str, limit: Duration, f: impl FnOnce()) {
+    let t = Instant::now();
+    f();
+    let took = t.elapsed();
+    assert!(took < limit, "{what} took {took:?}, the limit is {limit:?}");
+}
+
+fn symbol_body(parts: Vec<Part>) -> ResourceBody {
+    ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
+        parts,
+        ..SymbolDef::default()
+    })))
+}
+
+fn add_resource(ed: &mut Editor, name: &str, parts: Vec<Part>) -> Result<ResourceId, String> {
+    ed.execute(&Command::AddResource {
+        name: name.into(),
+        body: symbol_body(parts),
+    })
+    .map(|o| ResourceId(*o.created.last().expect("added")))
+    .map_err(|e| e.to_string())
+}
+
+fn add_instance(ed: &mut Editor, symbol: ResourceId, k: usize) -> Result<ObjectId, String> {
+    ed.execute(&Command::AddObject {
+        shape: instance_shape(symbol, k),
+        layer: None,
+        class: None,
+        attrs: Attributes::default(),
+    })
+    .map(|o| ObjectId(o.created[0]))
+    .map_err(|e| e.to_string())
+}
+
+/// `n` empty surface models (they count as models, and draw nothing).
+fn empty_models(n: usize) -> Vec<Part> {
+    (0..n)
+        .map(|_| Part::new(Shape::SurfaceModel(Box::new(SurfaceModel::new()))))
+        .collect()
+}
+
+/// A model of `k` loose edges (1 m long, each apart from the others): `k` edges and `2k` vertices.
+fn loose_edges(k: usize) -> SurfaceModel {
+    let mut vertices = std::collections::BTreeMap::new();
+    let mut edges = std::collections::BTreeMap::new();
+    let mut next = 1u32;
+    for i in 0..k {
+        let (x, y) = ((i % 100) as f64 * 2000.0, (i / 100) as f64 * 2000.0);
+        let (a, b) = (VertexId(next), VertexId(next + 1));
+        vertices.insert(a, DVec3::new(x, y, 0.0));
+        vertices.insert(b, DVec3::new(x + 1000.0, y, 0.0));
+        edges.insert(EdgeId(next + 2), Edge { v: [a, b] });
+        next += 3;
+    }
+    SurfaceModel::from_parts(vertices, edges, Default::default(), next)
+}
+
+fn model_part(m: SurfaceModel) -> Part {
+    Part::new(Shape::SurfaceModel(Box::new(m)))
+}
+
+/// Parts with exactly `edges` edges: models of loose edges, 25,000 at most in a model.
+fn parts_with_edges(edges: usize) -> Vec<Part> {
+    let mut parts = Vec::new();
+    let mut left = edges;
+    while left > 0 {
+        let k = left.min(25_000);
+        parts.push(model_part(loose_edges(k)));
+        left -= k;
+    }
+    parts
+}
+
+// ---------------------------------------------------------- 1. the walks
+
+#[test]
+fn a_chain_of_empty_definitions_is_not_walked_path_by_path() {
+    // 8 instances per level, 10 levels: 8^10 = 1 billion paths, 22 s with the plain walk.
+    let (doc, top, ids) = empty_chain(10, 8);
+    under("every walk of the chain", Duration::from_secs(1), || {
+        assert!(matches!(
+            component::leaves(&doc.resources, top),
+            Err(ComponentError::TooBig { .. })
+        ));
+        let _ = component::definition_depth(&doc.resources, top);
+        assert!(component::version(&doc.resources, top).is_none());
+        assert!(component::definition_bounds(&doc.resources, top).is_none());
+        assert!(!component::definition_findings(&doc).is_empty());
+        assert_eq!(component::findings(&doc).len(), 3);
+        let shape = &doc.object(ids[0]).unwrap().shape;
+        assert!(matches!(
+            component::plan_mark(&doc, shape),
+            Some(component::PlanMark::Broken(..))
+        ));
+        let scene = mesh::build(&doc);
+        assert_eq!(scene.lines.segment_count(), 9, "a cross for each of 3");
+    });
+}
+
+#[test]
+fn the_levels_6_8_10_12_all_finish_at_once() {
+    for levels in [6, 8, 10, 12] {
+        let (doc, top, _) = empty_chain(levels, 8);
+        under(&format!("{levels} levels"), Duration::from_secs(1), || {
+            let r = component::leaves(&doc.resources, top);
+            let _ = component::definition_depth(&doc.resources, top);
+            let _ = component::findings(&doc);
+            // 8^6 = 262,144 visited parts are within the budget of a million, 8^7 are not.
+            if levels <= 6 {
+                assert!(r.is_ok(), "{levels} levels: {:?}", r.err());
+            } else {
+                assert!(
+                    matches!(r, Err(ComponentError::TooBig { .. })),
+                    "{levels} levels"
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn the_budget_of_visited_parts_is_exact() {
+    // D0 has 1000 parts. D1 has `n` instances of D0 and `g` groups: it visits
+    // (n + g) + n * 1000 parts.
+    let build = |n: usize, g: usize| {
+        let mut doc = Document::with_sequential_ids();
+        let d0 = push_def(&mut doc, "Base", def_parts("empty", 1000));
+        let mut parts: Vec<Part> = (0..n).map(|k| Part::new(instance_shape(d0, k))).collect();
+        parts.extend(def_parts("empty", g));
+        let top = push_def(&mut doc, "Top", parts);
+        (doc, top)
+    };
+    // 1000 + 999 * 1000 = 1,000,000: passes.
+    let (doc, top) = build(999, 1);
+    assert_eq!(component::MAX_VISITED, 1_000_000);
+    let e = component::ExpansionCache::new(&doc.resources)
+        .get(top)
+        .unwrap();
+    assert_eq!(e.nodes, 1_000_000);
+    assert!(component::leaves(&doc.resources, top).unwrap().is_empty());
+    assert!(component::findings(&doc).is_empty());
+    // One more part: 1,000,001, refused, with the name of the definition and the numbers.
+    let (doc, top) = build(999, 2);
+    let err = component::leaves(&doc.resources, top).unwrap_err();
+    assert!(
+        matches!(&err, ComponentError::TooBig { name, max: 1_000_000 } if name == "Top"),
+        "{err:?}"
+    );
+    let text = err.to_string();
+    assert!(
+        text.contains("'Top'") && text.contains("1,000,000"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_command_that_makes_a_chain_over_the_budget_is_refused_and_changes_nothing() {
+    let mut ed = Editor::with_sequential_ids();
+    let mut def = add_resource(&mut ed, "D0", def_parts("empty", 1)).unwrap();
+    let t = Instant::now();
+    let mut refused = None;
+    for lvl in 1..=10 {
+        let parts: Vec<Part> = (0..8).map(|k| Part::new(instance_shape(def, k))).collect();
+        let before = ed.doc().resources.iter().count();
+        match add_resource(&mut ed, &format!("D{lvl}"), parts) {
+            Ok(id) => def = id,
+            Err(e) => {
+                assert_eq!(ed.doc().resources.iter().count(), before, "unchanged");
+                refused = Some((lvl, e));
+                break;
+            }
+        }
+    }
+    assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+    let (lvl, e) = refused.expect("the chain is refused");
+    assert_eq!(lvl, 7, "8^7 visited parts are over the budget");
+    assert!(e.contains("'D7'") && e.contains("1,000,000"), "{e}");
+}
+
+#[test]
+fn the_other_commands_do_not_walk_the_chain_either() {
+    // A definition over the budget came with a file. Explode, make unique and edit run at once.
+    let (doc, top, ids) = empty_chain(10, 8);
+    let mut ed = Editor::new(doc);
+    under("the commands", Duration::from_secs(1), || {
+        // The instance cannot be edited or made unique, and says why. Explode moves its parts up.
+        let _ = ed.execute(&Command::MakeUnique { ids: vec![ids[0]] });
+        let _ = ed.execute(&Command::EditComponent { id: ids[1] });
+        let _ = ed.execute(&Command::Explode { ids: vec![ids[2]] });
+        // A new definition on top of it is refused.
+        let parts = vec![Part::new(instance_shape(top, 0))];
+        let e = add_resource(&mut ed, "Above", parts).unwrap_err();
+        assert!(e.contains("over a limit"), "{e}");
+    });
+}
+
+#[test]
+fn a_file_with_the_chain_loads_at_once_with_a_finding_and_draws_placeholders() {
+    let (doc, _top, ids) = empty_chain(10, 8);
+    let text = limits_common::save_text(&doc);
+    under("load and draw", Duration::from_secs(2), || {
+        let loaded = Document::from_json(&text).expect("loads");
+        assert!(
+            loaded.load_notes().iter().any(|n| n.contains("'D10'")),
+            "{:?}",
+            loaded.load_notes()
+        );
+        let broken = component::findings(&loaded);
+        assert_eq!(broken.len(), 3);
+        assert!(ids.iter().all(|i| broken.iter().any(|f| f.object == *i)));
+        let scene = mesh::build(&loaded);
+        assert_eq!(scene.lines.segment_count(), 9);
+    });
+}
+
+// ------------------------------------------------- 2. models over all instances
+
+/// A document with a definition of 10,000 empty models, and `n` instances of it.
+fn world_of_10k(n: usize) -> (Editor, ResourceId) {
+    let mut doc = Document::with_sequential_ids();
+    let sym = push_def(&mut doc, "Big", empty_models(10_000));
+    push_instances(&mut doc, sym, n);
+    (Editor::new(doc), sym)
+}
+
+#[test]
+fn the_total_of_models_over_all_instances_is_at_most_250000() {
+    assert_eq!(component::MAX_TOTAL_MODELS, 250_000);
+    // 25 instances of 10,000 models: exactly 250,000.
+    let (mut ed, sym) = world_of_10k(25);
+    assert_eq!(component::total_models(ed.doc()), 250_000);
+    assert!(component::findings(ed.doc()).is_empty());
+    // One more instance: 260,000, refused with a clear text, the document unchanged.
+    let (rev, count) = (ed.revision(), ed.doc().objects.len());
+    let e = add_instance(&mut ed, sym, 99).unwrap_err();
+    assert!(
+        e.contains("total models would be 260,000, the limit is 250,000"),
+        "{e}"
+    );
+    assert!(e.contains("'Big'") && e.contains("26 instances"), "{e}");
+    assert_eq!((ed.revision(), ed.doc().objects.len()), (rev, count));
+    // A definition of one model: 250,001 is refused, and the one that is not an instance is fine.
+    let one = add_resource(&mut ed, "One", empty_models(1)).unwrap();
+    let e = add_instance(&mut ed, one, 0).unwrap_err();
+    assert!(e.contains("total models would be 250,001"), "{e}");
+    // After a removal there is room again: 249,999 + 1.
+    let victim = *ed.doc().objects.keys().next().unwrap();
+    ed.execute(&Command::DeleteObjects { ids: vec![victim] })
+        .unwrap();
+    assert_eq!(component::total_models(ed.doc()), 240_000);
+    add_instance(&mut ed, one, 0).unwrap();
+    assert_eq!(component::total_models(ed.doc()), 240_001);
+}
+
+#[test]
+fn copy_array_and_paste_are_held_to_the_total() {
+    let (mut ed, sym) = world_of_10k(24);
+    let first = *ed.doc().objects.keys().next().unwrap();
+    // One copy: 250,000, fine. A second one: refused.
+    ed.execute(&Command::CopyObjects {
+        ids: vec![first],
+        delta: glam::DVec2::new(1.0, 1.0),
+    })
+    .unwrap();
+    assert_eq!(component::total_models(ed.doc()), 250_000);
+    let rev = ed.revision();
+    let e = ed
+        .execute(&Command::CopyObjects {
+            ids: vec![first],
+            delta: glam::DVec2::new(2.0, 2.0),
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("total models would be 260,000"), "{e}");
+    assert_eq!(ed.revision(), rev, "unchanged");
+    // An array of 3 more copies (the original stays): refused as a whole.
+    let e = ed
+        .execute(&Command::ArrayObjects {
+            ids: vec![first],
+            array: kadakas_core::edit2d::spec::ArrayParams {
+                layout: kadakas_core::edit2d::spec::ArrayLayout::Linear {
+                    count: 3,
+                    offset: Some(glam::DVec2::new(5.0, 0.0)),
+                    distance: None,
+                    angle: None,
+                },
+                resize: None,
+                rotate: None,
+                retain: true,
+            },
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("total models would be"), "{e}");
+    assert_eq!(ed.revision(), rev);
+    // A paste is a batch of AddObject.
+    let e = ed
+        .execute(&Command::Batch {
+            commands: vec![Command::AddObject {
+                shape: instance_shape(sym, 5),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            }],
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("total models would be 260,000"), "{e}");
+    assert_eq!(component::total_models(ed.doc()), 250_000);
+}
+
+#[test]
+fn a_change_of_a_definition_is_held_to_the_total() {
+    let (mut ed, sym) = world_of_10k(25);
+    // Add a model to the definition: 25 * 10,001 = 250,025.
+    let mut parts = ed.doc().resources.symbol(sym).unwrap().parts.clone();
+    parts.truncate(9_999);
+    // One model fewer is fine: 25 * 9,999.
+    ed.execute(&Command::ModifyResource {
+        id: sym,
+        name: None,
+        body: Some(symbol_body(parts.clone())),
+    })
+    .unwrap();
+    assert_eq!(component::total_models(ed.doc()), 249_975);
+    // Back to 10,000 models (250,000: exactly the limit) passes.
+    parts.push(model_part(SurfaceModel::new()));
+    ed.execute(&Command::ModifyResource {
+        id: sym,
+        name: None,
+        body: Some(symbol_body(parts.clone())),
+    })
+    .unwrap();
+    assert_eq!(component::total_models(ed.doc()), 250_000);
+    let one = add_resource(&mut ed, "One", empty_models(1)).unwrap();
+    parts.pop();
+    parts.push(Part::new(instance_shape(one, 0)));
+    // 9,999 models and a nested instance of 1 model: still 10,000 per instance, passes.
+    ed.execute(&Command::ModifyResource {
+        id: sym,
+        name: None,
+        body: Some(symbol_body(parts.clone())),
+    })
+    .unwrap();
+    assert_eq!(component::total_models(ed.doc()), 250_000);
+    // Replace a group part with a nested instance of a definition of 2 models: 25 more, refused.
+    let two = add_resource(&mut ed, "Two", empty_models(2)).unwrap();
+    let mut more = parts.clone();
+    more[0] = Part::new(instance_shape(two, 0));
+    let rev = ed.revision();
+    let e = ed
+        .execute(&Command::ModifyResource {
+            id: sym,
+            name: None,
+            body: Some(symbol_body(more)),
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("total models would be 250,025"), "{e}");
+    assert_eq!(ed.revision(), rev, "unchanged");
+    assert_eq!(component::total_models(ed.doc()), 250_000);
+}
+
+#[test]
+fn closing_an_edit_is_held_to_the_total() {
+    let (mut ed, _sym) = world_of_10k(25);
+    let inst = *ed.doc().objects.keys().next().unwrap();
+    let out = ed.execute(&Command::EditComponent { id: inst }).unwrap();
+    let group = ObjectId(out.created[0]);
+    // Take one model out and put an instance of a component of 2 models in: 10,001 models in the
+    // definition, 250,025 in all.
+    let two = add_resource(&mut ed, "Two", empty_models(2)).unwrap();
+    let victim = ed.doc().children(group)[0];
+    ed.execute(&Command::DeleteObjects { ids: vec![victim] })
+        .unwrap();
+    ed.execute(&Command::AddObjectIn {
+        parent: group,
+        shape: instance_shape(two, 0),
+        class: None,
+        attrs: Attributes::default(),
+        id: None,
+    })
+    .unwrap();
+    let rev = ed.revision();
+    let e = ed
+        .execute(&Command::CloseComponent {
+            group,
+            resolve: Some(component::Resolve::Overwrite),
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("total models would be 250,025"), "{e}");
+    assert_eq!(ed.revision(), rev, "unchanged: the edit is still open");
+    assert!(ed.doc().object(group).is_some());
+    // With an instance of one model instead the close is exactly at the limit and passes.
+    let one = add_resource(&mut ed, "One", empty_models(1)).unwrap();
+    let extra = *ed.doc().children(group).last().unwrap();
+    ed.execute(&Command::DeleteObjects { ids: vec![extra] })
+        .unwrap();
+    ed.execute(&Command::AddObjectIn {
+        parent: group,
+        shape: instance_shape(one, 0),
+        class: None,
+        attrs: Attributes::default(),
+        id: None,
+    })
+    .unwrap();
+    ed.execute(&Command::CloseComponent {
+        group,
+        resolve: Some(component::Resolve::Overwrite),
+    })
+    .unwrap();
+    assert_eq!(component::total_models(ed.doc()), 250_000);
+}
+
+#[test]
+fn make_component_does_not_add_models_when_it_replaces() {
+    let (mut ed, sym) = world_of_10k(24);
+    // Two instances become one definition with two nested instances: the total stays.
+    let ids: Vec<ObjectId> = ed.doc().objects.keys().take(2).copied().collect();
+    let before = component::total_models(ed.doc());
+    ed.execute(&Command::MakeComponent {
+        name: "Pair".into(),
+        model: None,
+        faces: vec![],
+        edges: vec![],
+        objects: ids,
+        replace: true,
+    })
+    .unwrap();
+    assert_eq!(component::total_models(ed.doc()), before);
+    // At the limit, one more instance is refused.
+    add_instance(&mut ed, sym, 1).unwrap();
+    assert_eq!(component::total_models(ed.doc()), 250_000);
+    assert!(add_instance(&mut ed, sym, 2).is_err());
+}
+
+#[test]
+fn undo_and_redo_keep_the_total_true() {
+    let (mut ed, sym) = world_of_10k(24);
+    add_instance(&mut ed, sym, 1).unwrap();
+    assert!(add_instance(&mut ed, sym, 2).is_err());
+    assert!(ed.undo());
+    assert_eq!(component::total_models(ed.doc()), 240_000);
+    add_instance(&mut ed, sym, 3).unwrap();
+    assert!(ed.undo());
+    assert!(ed.redo());
+    assert_eq!(component::total_models(ed.doc()), 250_000);
+    assert!(add_instance(&mut ed, sym, 4).is_err());
+}
+
+#[test]
+fn a_document_over_the_total_loads_with_a_finding_and_draws_placeholders() {
+    // 26 instances of 10,000 models, as a file (or another user) can bring.
+    let (ed, _) = world_of_10k(26);
+    let text = limits_common::save_text(ed.doc());
+    let loaded = Document::from_json(&text).expect("loads, nothing is cut off");
+    assert_eq!(loaded.objects.len(), 26);
+    let notes = loaded.load_notes().join("\n");
+    assert!(
+        notes.contains("260,000 models") && notes.contains("limit is 250,000"),
+        "{notes}"
+    );
+    assert!(
+        notes.contains("1 instances are drawn as placeholders"),
+        "{notes}"
+    );
+    // The finding names the last instance.
+    let found = component::findings(&loaded);
+    assert_eq!(found.len(), 1);
+    assert_eq!(Some(&found[0].object), loaded.objects.keys().last());
+    // The scene draws a cross for that instance (3 lines) and nothing for the empty models.
+    let scene = mesh::build(&loaded);
+    assert_eq!(scene.lines.segment_count(), 3);
+    assert!(
+        scene
+            .lines
+            .colors
+            .iter()
+            .all(|c| *c == component::WARNING_COLOR)
+    );
+    // Editing a document that is over the limit is not blocked, unless it makes the total larger.
+    let mut ed = Editor::new(loaded);
+    let first = *ed.doc().objects.keys().next().unwrap();
+    ed.execute(&Command::MoveObjects {
+        ids: vec![first],
+        delta: glam::DVec2::new(10.0, 0.0),
+    })
+    .expect("a move adds no model");
+    let sym = match &ed.doc().object(first).unwrap().shape {
+        Shape::Component { symbol, .. } => *symbol,
+        _ => unreachable!(),
+    };
+    assert!(add_instance(&mut ed, sym, 1).is_err(), "it adds models");
+    // Removing one makes room.
+    let last = *ed.doc().objects.keys().last().unwrap();
+    ed.execute(&Command::DeleteObjects { ids: vec![last] })
+        .unwrap();
+    assert_eq!(component::total_models(ed.doc()), 250_000);
+}
+
+#[test]
+fn restoring_a_version_over_the_total_is_a_finding_and_not_a_refusal() {
+    let (mut ed, _sym) = world_of_10k(25);
+    let (big, _) = world_of_10k(27);
+    let target = big.doc().clone();
+    assert!(ed.restore_content(&target, None).unwrap());
+    assert_eq!(ed.doc().objects.len(), 27);
+    assert!(
+        ed.doc()
+            .load_notes()
+            .iter()
+            .any(|n| n.contains("270,000 models")),
+        "{:?}",
+        ed.doc().load_notes()
+    );
+    assert_eq!(component::findings(ed.doc()).len(), 2);
+}
+
+#[test]
+fn remote_content_over_the_total_is_a_finding_and_not_a_refusal() {
+    let (mut ed, _sym) = world_of_10k(25);
+    let (big, _) = world_of_10k(27);
+    ed.apply_remote(big.doc().clone()).expect("a change");
+    assert_eq!(ed.doc().objects.len(), 27);
+    assert!(
+        ed.doc()
+            .load_notes()
+            .iter()
+            .any(|n| n.contains("270,000 models")),
+        "{:?}",
+        ed.doc().load_notes()
+    );
+}
+
+// ------------------------------------------------------- 3. size of a definition
+
+#[test]
+fn a_definition_has_at_most_100000_edges_in_all_its_parts() {
+    assert_eq!(component::MAX_DEFINITION_EDGES, 100_000);
+    let mut ed = Editor::with_sequential_ids();
+    // Exactly 100,000: passes. The parts are four models of 25,000 loose edges.
+    let ok = add_resource(&mut ed, "Full", parts_with_edges(100_000)).unwrap();
+    assert_eq!(
+        component::definition_edges(&ed.doc().resources.symbol(ok).unwrap().parts),
+        100_000
+    );
+    // 100,001: refused, and nothing is added.
+    let count = ed.doc().resources.iter().count();
+    let e = add_resource(&mut ed, "Over", parts_with_edges(100_001)).unwrap_err();
+    assert!(
+        e.contains("at most 100,000 edges") && e.contains("100,001"),
+        "{e}"
+    );
+    assert_eq!(ed.doc().resources.iter().count(), count);
+    // A change of the definition is held to the same size.
+    let rev = ed.revision();
+    let e = ed
+        .execute(&Command::ModifyResource {
+            id: ok,
+            name: None,
+            body: Some(symbol_body(parts_with_edges(100_001))),
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("100,001"), "{e}");
+    assert_eq!(ed.revision(), rev);
+    ed.execute(&Command::ModifyResource {
+        id: ok,
+        name: None,
+        body: Some(symbol_body(parts_with_edges(99_999))),
+    })
+    .unwrap();
+}
+
+#[test]
+fn closing_an_edit_is_held_to_the_size_of_a_definition() {
+    let mut ed = Editor::with_sequential_ids();
+    let sym = add_resource(&mut ed, "Full", parts_with_edges(99_990)).unwrap();
+    let inst = add_instance(&mut ed, sym, 0).unwrap();
+    let out = ed.execute(&Command::EditComponent { id: inst }).unwrap();
+    let group = ObjectId(out.created[0]);
+    let add = |ed: &mut Editor, k: usize| {
+        ed.execute(&Command::AddObjectIn {
+            parent: group,
+            shape: Shape::SurfaceModel(Box::new(loose_edges(k))),
+            class: None,
+            attrs: Attributes::default(),
+            id: None,
+        })
+        .unwrap();
+    };
+    // 99,990 + 11 = 100,001: refused.
+    add(&mut ed, 11);
+    let rev = ed.revision();
+    let e = ed
+        .execute(&Command::CloseComponent {
+            group,
+            resolve: Some(component::Resolve::Overwrite),
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("at most 100,000 edges"), "{e}");
+    assert_eq!(ed.revision(), rev, "unchanged: the edit is still open");
+    // Keep as new is held to the same size.
+    let e = ed
+        .execute(&Command::CloseComponent {
+            group,
+            resolve: Some(component::Resolve::KeepAsNew),
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("at most 100,000 edges"), "{e}");
+    // Take the 11 away and put 10 in: exactly 100,000, the close passes.
+    let extra = *ed.doc().children(group).last().unwrap();
+    ed.execute(&Command::DeleteObjects { ids: vec![extra] })
+        .unwrap();
+    add(&mut ed, 10);
+    ed.execute(&Command::CloseComponent {
+        group,
+        resolve: Some(component::Resolve::Overwrite),
+    })
+    .unwrap();
+}
+
+/// Parts whose saved text is exactly `bytes` long, with no edge: one model whose name is padded.
+fn parts_with_text(bytes: usize) -> Vec<Part> {
+    let mut parts = vec![model_part(SurfaceModel::new())];
+    let Shape::SurfaceModel(m) = &mut parts[0].shape else {
+        unreachable!()
+    };
+    // A model with a name of one character; each more character is one more byte.
+    m.name = "x".into();
+    let base = component::definition_bytes(&parts);
+    assert!(bytes >= base);
+    let Shape::SurfaceModel(m) = &mut parts[0].shape else {
+        unreachable!()
+    };
+    m.name = "x".repeat(bytes - base + 1);
+    assert_eq!(component::definition_bytes(&parts), bytes);
+    parts
+}
+
+#[test]
+fn a_definition_has_at_most_16_mib_of_saved_text() {
+    assert_eq!(component::MAX_DEFINITION_BYTES, 16 * 1024 * 1024);
+    let mut ed = Editor::with_sequential_ids();
+    let exact = component::MAX_DEFINITION_BYTES;
+    let ok = add_resource(&mut ed, "Text", parts_with_text(exact)).unwrap();
+    let count = ed.doc().resources.iter().count();
+    let e = add_resource(&mut ed, "Over", parts_with_text(exact + 1)).unwrap_err();
+    assert!(e.contains("at most 16 MiB"), "{e}");
+    assert_eq!(ed.doc().resources.iter().count(), count);
+    let rev = ed.revision();
+    assert!(
+        ed.execute(&Command::ModifyResource {
+            id: ok,
+            name: None,
+            body: Some(symbol_body(parts_with_text(exact + 1))),
+        })
+        .is_err()
+    );
+    assert_eq!(ed.revision(), rev);
+}
+
+#[test]
+fn a_definition_over_the_size_in_a_file_loads_with_a_finding() {
+    let mut doc = Document::with_sequential_ids();
+    let sym = push_def(&mut doc, "Fat", parts_with_edges(100_001));
+    push_instances(&mut doc, sym, 1);
+    let thin = push_def(
+        &mut doc,
+        "Text",
+        parts_with_text(component::MAX_DEFINITION_BYTES + 1),
+    );
+    push_instances(&mut doc, thin, 1);
+    let text = limits_common::save_text(&doc);
+    let loaded = Document::from_json(&text).expect("loads, nothing is cut off");
+    let notes = loaded.load_notes().join("\n");
+    assert!(
+        notes.contains("'Fat'") && notes.contains("100,001"),
+        "{notes}"
+    );
+    assert!(
+        notes.contains("'Text'") && notes.contains("16 MiB"),
+        "{notes}"
+    );
+    assert_eq!(loaded.resources.iter().count(), 2, "the definitions stay");
+}
+
+// A small anchor so that the imports above stay used in every build.
+#[allow(dead_code)]
+fn _keep(_: DAffine3) {}
