@@ -2004,8 +2004,10 @@ mod instances {
         assert_eq!(t.shifted(4).model(), 7);
         assert_eq!(t.shifted(4).id(), 9);
         assert_eq!(t.shifted(4).kind(), TagKind::Edge);
-        let other = Tag(3u64 << 62 | 5);
-        assert_eq!(other.kind(), TagKind::Other);
-        assert_eq!(other.shifted(1), other);
+        // A guide has no model: it keeps its number.
+        let guide = Tag(3u64 << 62 | 5);
+        assert_eq!(guide.kind(), TagKind::Guide);
+        assert_eq!(guide.shifted(1), guide);
+        assert_eq!(Tag::NONE.kind(), TagKind::Other);
     }
 }

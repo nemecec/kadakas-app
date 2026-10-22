@@ -7,7 +7,7 @@ use glam::{DVec2, DVec3};
 use super::bvh::Aabb;
 use super::camera::{Camera, Ray};
 use super::math::{inside_loops, line_line, nearest_on_screen_seg, ray_plane};
-use super::scene::{EdgeItem, FaceItem, PointKind, Scene, Tag};
+use super::scene::{EdgeItem, FaceItem, PointKind, Scene, Tag, TagKind};
 use super::{Axis, Constraint, ConstraintLine, Inference, Kind, Options};
 
 /// The keys that the inference reacts to.
@@ -427,7 +427,7 @@ impl Inferencer {
         // With a reference point, a point (an endpoint, a midpoint or a center) locks the
         // direction from the reference point through it; without one, the point itself.
         let through = match (l.kind, self.last_ref) {
-            (Kind::Endpoint | Kind::Midpoint | Kind::Center, Some(r)) => {
+            (Kind::Endpoint | Kind::GuidePoint | Kind::Midpoint | Kind::Center, Some(r)) => {
                 (l.point - r).try_normalize()
             }
             _ => None,
@@ -571,6 +571,22 @@ impl Inferencer {
                     let Some(cands) = cands.as_deref_mut() else {
                         return;
                     };
+                    // A guide line gives "on guide" only: its ends are no points to snap to.
+                    if e.tag.kind() == TagKind::Guide {
+                        if d <= edp {
+                            cands.push(Cand {
+                                kind: Kind::OnGuide,
+                                point: e.a.lerp(e.b, seg.world_param(s)),
+                                dist: d,
+                                depth: cam.depth(e.a.lerp(e.b, seg.world_param(s))),
+                                source: e.tag,
+                                other: Tag::NONE,
+                                edge: Some(e),
+                                normal: None,
+                            });
+                        }
+                        return;
+                    }
                     let mut push = |kind: Kind, point: DVec3, dist: f64| {
                         cands.push(Cand {
                             kind,
@@ -640,6 +656,7 @@ impl Inferencer {
                     let d = (px - cursor).length();
                     let (kind, r) = match it.kind {
                         PointKind::Endpoint => (Kind::Endpoint, o.endpoint_px),
+                        PointKind::Guide => (Kind::GuidePoint, o.endpoint_px),
                         PointKind::Center => (Kind::Center, o.center_px),
                     };
                     if d <= o.px(r) {
@@ -1026,7 +1043,9 @@ impl Inferencer {
             result = Some(i);
         }
         if result.is_none()
-            && let Some(c) = ctx.pick(cam, &cands, |c| c.kind == Kind::OnEdge)
+            && let Some(c) = ctx.pick(cam, &cands, |c| {
+                matches!(c.kind, Kind::OnEdge | Kind::OnGuide)
+            })
         {
             let mut i = self.cand_result(cam, cursor, &c, Vec::new());
             if let Some(e) = c.edge {
@@ -1158,7 +1177,10 @@ impl Inferencer {
                 // (the end of the perpendicular from the point to the line), with a dotted
                 // helper from the point to it.
                 let snap = ctx.pick(cam, &cands, |c| {
-                    matches!(c.kind, Kind::Endpoint | Kind::Midpoint | Kind::Center)
+                    matches!(
+                        c.kind,
+                        Kind::Endpoint | Kind::GuidePoint | Kind::Midpoint | Kind::Center
+                    )
                 });
                 if let Some(c) = snap
                     && let Some(d) = dir.try_normalize()

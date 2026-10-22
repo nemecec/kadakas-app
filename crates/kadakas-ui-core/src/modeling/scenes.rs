@@ -12,7 +12,7 @@ use glam::{DAffine3, DVec3};
 use kadakas_core::model::{Document, ObjectId, Shape};
 use kadakas_core::surface::{CurveId, EdgeId, FaceId, SurfaceModel};
 
-use crate::infer3d::{Scene, Tag};
+use crate::infer3d::{Scene, SceneBuilder, Tag, TagKind};
 
 /// The elevation of the layer of an object (mm). Surface models are measured from it.
 pub fn elevation(doc: &Document, id: ObjectId) -> f64 {
@@ -37,22 +37,47 @@ pub fn frame_of(doc: &Document, id: ObjectId) -> DAffine3 {
 }
 
 /// What decides that the scene of a model can be kept: the number it has in the tags, its
-/// revision, its placement and the elevation of its layer.
+/// revision, its placement, the elevation of its layer and whether hidden geometry is in it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ModelKey {
     number: u32,
     rev: u64,
     placement: [f64; 12],
     elevation: f64,
+    hidden: bool,
 }
 
-/// The inference scenes of a document, one for each visible surface model, and the numbers the
-/// tags use for the models.
+/// What the person chose to see (View > Guides, View > Hidden Geometry and Hidden Objects). The
+/// scenes follow it: the inference and the picking offer what is shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShowOptions {
+    /// The guides are shown, so the inference snaps to them.
+    pub guides: bool,
+    /// Hidden objects, faces and edges are shown (ghosted) and can be picked.
+    pub hidden: bool,
+}
+
+impl Default for ShowOptions {
+    fn default() -> Self {
+        ShowOptions {
+            guides: true,
+            hidden: false,
+        }
+    }
+}
+
+/// The inference scenes of a document, one for each visible surface model, one for the guides,
+/// and the numbers the tags use for the models and the guides.
 pub struct Scenes {
     ids: Vec<ObjectId>,
     scenes: Vec<Arc<Scene>>,
+    /// The guides, in the order of the numbers of their tags, and the scene that holds them.
+    guide_ids: Vec<ObjectId>,
+    guides: Option<Arc<Scene>>,
     /// The document revision the scenes were built from.
     pub rev: u64,
+    /// What was shown when the scenes were built.
+    pub show: ShowOptions,
 }
 
 impl Scenes {
@@ -63,9 +88,30 @@ impl Scenes {
         cache.scenes.take().expect("just built")
     }
 
-    /// The scenes for the inference.
+    /// The scenes for the inference: the models, then the guides.
     pub fn refs(&self) -> Vec<&Scene> {
-        self.scenes.iter().map(|s| &**s).collect()
+        self.scenes
+            .iter()
+            .chain(self.guides.iter())
+            .map(|s| &**s)
+            .collect()
+    }
+
+    /// The scene of the guides, if there are any shown.
+    pub fn guide_scene(&self) -> Option<&Scene> {
+        self.guides.as_deref()
+    }
+
+    /// The guide of a tag of the scenes (see [`Tag::guide`]).
+    pub fn guide(&self, tag: Tag) -> Option<ObjectId> {
+        (tag.kind() == TagKind::Guide)
+            .then(|| self.guide_ids.get(tag.id() as usize).copied())
+            .flatten()
+    }
+
+    /// The guides that are in the scenes, in the order of their numbers.
+    pub fn guide_ids(&self) -> &[ObjectId] {
+        &self.guide_ids
     }
 
     /// The number of faces in all scenes.
@@ -75,7 +121,7 @@ impl Scenes {
 
     /// The object of a tag of the scenes.
     pub fn object(&self, tag: Tag) -> Option<ObjectId> {
-        if tag == Tag::NONE {
+        if tag == Tag::NONE || tag.kind() == TagKind::Guide {
             return None;
         }
         self.ids.get(tag.model() as usize).copied()
@@ -97,21 +143,38 @@ pub struct SceneCache {
     pub builds: u64,
     /// How many scenes of single models were built.
     pub model_builds: u64,
+    /// What is shown. A change builds the scenes again at the next `get`.
+    pub show: ShowOptions,
+    built_with: ShowOptions,
 }
 
 impl SceneCache {
     /// The scenes for the revision `rev` of the document: the ones that are kept, or new ones
     /// when the revision changed.
     pub fn get(&mut self, doc: &Document, rev: u64) -> &Scenes {
+        if self.built_with != self.show {
+            // What is shown changed: the scenes of the models differ too.
+            self.scenes = None;
+            self.kept.clear();
+            self.built_with = self.show;
+        }
         if self.scenes.as_ref().is_none_or(|s| s.rev != rev) {
             let mut ids = Vec::new();
             let mut scenes = Vec::new();
             let mut kept = BTreeMap::new();
+            let show = self.show;
+            let visible = |o: &kadakas_core::model::Object| {
+                if show.hidden {
+                    doc.is_visible_with_hidden(o)
+                } else {
+                    doc.is_visible(o)
+                }
+            };
             for o in doc.objects.values() {
                 let Shape::SurfaceModel(m) = &o.shape else {
                     continue;
                 };
-                if !doc.is_visible(o) {
+                if !visible(o) {
                     continue;
                 }
                 let key = ModelKey {
@@ -119,6 +182,7 @@ impl SceneCache {
                     rev: m.rev(),
                     placement: m.transform.to_cols_array(),
                     elevation: elevation(doc, o.id),
+                    hidden: show.hidden,
                 };
                 let scene = match self.kept.get(&o.id) {
                     Some((k, s)) if *k == key => s.clone(),
@@ -130,15 +194,39 @@ impl SceneCache {
                                 DAffine3::from_translation(DVec3::new(0.0, 0.0, key.elevation))
                                     * model.transform;
                         }
-                        Arc::new(Scene::from_surface_model(model, key.number))
+                        Arc::new(Scene::from_surface_model_with(
+                            model,
+                            key.number,
+                            show.hidden,
+                        ))
                     }
                 };
                 kept.insert(o.id, (key, scene.clone()));
                 ids.push(o.id);
                 scenes.push(scene);
             }
+            // The guides are one scene: there are at most 10,000 and they are cheap.
+            let mut guide_ids = Vec::new();
+            let mut guides = None;
+            if show.guides {
+                let mut b = SceneBuilder::new();
+                for (o, g) in doc.guides().filter(|(o, _)| visible(o)) {
+                    b.add_guide(g, elevation(doc, o.id), guide_ids.len() as u32);
+                    guide_ids.push(o.id);
+                }
+                if !guide_ids.is_empty() {
+                    guides = Some(Arc::new(b.finish()));
+                }
+            }
             self.kept = kept;
-            self.scenes = Some(Scenes { ids, scenes, rev });
+            self.scenes = Some(Scenes {
+                ids,
+                scenes,
+                guide_ids,
+                guides,
+                rev,
+                show,
+            });
             self.builds += 1;
         }
         self.scenes.as_ref().expect("just built")

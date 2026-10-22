@@ -85,6 +85,7 @@ pub(crate) const FILES_EN_US: &[(&str, &str)] = files!(
     "uic-profile.ftl",
     "uic-snap.ftl",
     "uic-style-edit.ftl",
+    "uic-tape.ftl",
     "uic-tools.ftl",
     "update-ui.ftl",
     "versions-ui.ftl"
@@ -164,6 +165,7 @@ pub(crate) const FILES_ET: &[(&str, &str)] = files!(
     "uic-profile.ftl",
     "uic-snap.ftl",
     "uic-style-edit.ftl",
+    "uic-tape.ftl",
     "uic-tools.ftl",
     "update-ui.ftl",
     "versions-ui.ftl"

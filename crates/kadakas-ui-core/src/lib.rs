@@ -39,6 +39,7 @@ pub mod polygon3d;
 pub mod profile;
 pub mod snap;
 pub mod style_edit;
+pub mod tags;
 pub mod tools;
 pub mod versions;
 pub mod view;

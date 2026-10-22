@@ -39,6 +39,7 @@ use super::exec::{Action, Target};
 use super::plane::Plane3;
 use super::scenes::World;
 use super::select::SubSelection;
+use super::tape::Tape;
 use super::xform::{Context, Xform, is_transform_tool};
 use crate::infer3d::{Constraint, Inference, Key, Kind, Ray, Rgb, TagKind};
 use crate::measure_box::{self, Phase, Tool, Value};
@@ -67,6 +68,8 @@ pub struct Out {
     pub redo: bool,
     /// Something to tell the person (an input that was refused).
     pub message: Option<String>,
+    /// The Tape Measure asks to resize the model: the window asks the person first.
+    pub resize: Option<super::tape::Resize>,
 }
 
 impl Out {
@@ -99,6 +102,10 @@ pub struct Preview {
     pub grip_hover: Option<usize>,
     /// Move or Rotate is in copy mode (the window shows a plus at the pointer).
     pub copy: bool,
+    /// The guide the Tape Measure would make, drawn as a dashed line.
+    pub guides: Vec<super::tape::PreviewGuide>,
+    /// The guides that the Eraser will erase and the one under it (they are drawn in red).
+    pub erase_guides: Vec<ObjectId>,
 }
 
 /// The kind of the value in the Measurements box while a tool runs.
@@ -203,8 +210,13 @@ pub struct Modeling {
     /// The distance of the last Push/Pull, for a double click on another face.
     pub last_pull: Option<f64>,
     hover_edge: Option<(ObjectId, EdgeId)>,
+    /// The guides the Eraser has passed over and the guide under it (MOD-05).
+    erase_guides: BTreeSet<ObjectId>,
+    hover_guide: Option<ObjectId>,
     /// Move, Rotate and Scale.
     xf: Xform,
+    /// Tape Measure.
+    tape: Tape,
 }
 
 impl Default for Modeling {
@@ -221,7 +233,10 @@ impl Default for Modeling {
             last: None,
             last_pull: None,
             hover_edge: None,
+            erase_guides: BTreeSet::new(),
+            hover_guide: None,
             xf: Xform::default(),
+            tape: Tape::default(),
         }
     }
 }
@@ -240,9 +255,11 @@ pub fn is_drawing_tool(t: ModelerTool) -> bool {
 }
 
 /// True for the tools that take typed values and run the inference: the drawing tools (not the
-/// Eraser) and Move, Rotate and Scale.
+/// Eraser), Move, Rotate and Scale, and the Tape Measure.
 pub fn takes_values(t: ModelerTool) -> bool {
-    (is_drawing_tool(t) && t != ModelerTool::Eraser) || is_transform_tool(t)
+    (is_drawing_tool(t) && t != ModelerTool::Eraser)
+        || is_transform_tool(t)
+        || t == ModelerTool::TapeMeasure
 }
 
 fn mb_tool(t: ModelerTool) -> Tool {
@@ -256,6 +273,7 @@ fn mb_tool(t: ModelerTool) -> Tool {
         ModelerTool::Move => Tool::Move,
         ModelerTool::Rotate => Tool::Rotate,
         ModelerTool::Scale => Tool::Scale,
+        ModelerTool::TapeMeasure => Tool::TapeMeasure,
         _ => Tool::Select,
     }
 }
@@ -281,19 +299,22 @@ impl Modeling {
         self.cursor = None;
         self.typed.clear();
         self.hover_edge = None;
+        self.erase_guides.clear();
+        self.hover_guide = None;
         self.pending = None;
         self.last = None;
         self.xf.choose(tool);
+        self.tape.choose();
     }
 
     /// True while an operation is in progress (a click was made and the tool waits for more).
     pub fn in_progress(&self) -> bool {
-        !matches!(self.run, Run::Idle) || self.xf.in_progress()
+        !matches!(self.run, Run::Idle) || self.xf.in_progress() || self.tape.in_progress()
     }
 
     /// The last point of the tool: the inference works from it.
     pub fn reference(&self) -> Option<DVec3> {
-        if let Some(r) = self.xf.reference() {
+        if let Some(r) = self.xf.reference().or_else(|| self.tape.reference()) {
             return Some(r);
         }
         match &self.run {
@@ -334,9 +355,18 @@ impl Modeling {
     }
 
     /// Ctrl (Option on macOS) was pressed: Move and Rotate toggle copy, Scale toggles scaling about
-    /// the center.
+    /// the center, the Tape Measure toggles between making guides and measuring only.
     pub fn toggle_ctrl(&mut self) {
-        self.xf.toggle_ctrl();
+        if self.tool == ModelerTool::TapeMeasure {
+            self.tape.toggle_ctrl();
+        } else {
+            self.xf.toggle_ctrl();
+        }
+    }
+
+    /// True while the Tape Measure makes guides (Ctrl turns it off).
+    pub fn tape_creates_guides(&self) -> bool {
+        self.tape.creating()
     }
 
     /// True while Move or Rotate is in copy mode.
@@ -358,10 +388,13 @@ impl Modeling {
     /// can remove the face or the points that a tool holds). The tool stays chosen.
     pub fn abort(&mut self) {
         self.xf.abort();
+        self.tape.abort();
         self.run = Run::Idle;
         self.cursor = None;
         self.typed.clear();
         self.hover_edge = None;
+        self.erase_guides.clear();
+        self.hover_guide = None;
     }
 
     /// Ends what is in progress or clears the typed text. True if there was something.
@@ -372,6 +405,7 @@ impl Modeling {
         }
         let was = self.in_progress();
         self.xf.cancel();
+        self.tape.cancel();
         self.run = Run::Idle;
         self.cursor = None;
         was
@@ -414,6 +448,9 @@ impl Modeling {
         if is_transform_tool(self.tool) {
             return self.xf.phase();
         }
+        if self.tool == ModelerTool::TapeMeasure {
+            return self.tape.phase();
+        }
         let done = matches!(self.run, Run::Idle) && self.last.is_some();
         if done {
             return Phase::Done;
@@ -431,6 +468,9 @@ impl Modeling {
     pub fn live(&self, units: &Units) -> Option<(LiveLabel, String)> {
         if is_transform_tool(self.tool) {
             return self.xf.live(units);
+        }
+        if self.tool == ModelerTool::TapeMeasure {
+            return self.tape.live(units);
         }
         let c = self.cursor?;
         let len = |v: f64| units.length_text(v);
@@ -511,6 +551,11 @@ impl Modeling {
         w.scenes.object(p.inf.source)
     }
 
+    /// The guide under the pointer, if the inference found one.
+    fn guide_under(w: &World, p: &Pointer) -> Option<ObjectId> {
+        w.scenes.guide(p.inf.source)
+    }
+
     fn edge_under(w: &World, p: &Pointer) -> Option<(ObjectId, EdgeId)> {
         if p.inf.source.kind() != TagKind::Edge {
             return None;
@@ -523,6 +568,10 @@ impl Modeling {
     pub fn moved(&mut self, w: &World, p: &Pointer) {
         if is_transform_tool(self.tool) {
             self.xf.moved(w, p);
+            return;
+        }
+        if self.tool == ModelerTool::TapeMeasure {
+            self.tape.moved(w, p);
             return;
         }
         match &mut self.run {
@@ -552,16 +601,21 @@ impl Modeling {
             Run::Erase { marked, down } => {
                 let edge = Modeling::edge_under(w, p);
                 self.hover_edge = edge;
+                self.hover_guide = Modeling::guide_under(w, p);
                 if *down && let Some((m, e)) = edge {
                     for x in w.with_curve(m, e) {
                         marked.insert((m, x));
                     }
+                }
+                if *down && let Some(g) = self.hover_guide {
+                    self.erase_guides.insert(g);
                 }
             }
             Run::Idle => {
                 self.cursor = Some(p.inf.point);
                 if self.tool == ModelerTool::Eraser {
                     self.hover_edge = Modeling::edge_under(w, p);
+                    self.hover_guide = Modeling::guide_under(w, p);
                 }
             }
         }
@@ -576,6 +630,10 @@ impl Modeling {
                     marked.insert((m, x));
                 }
             }
+            self.erase_guides.clear();
+            if let Some(g) = Modeling::guide_under(w, p) {
+                self.erase_guides.insert(g);
+            }
             self.run = Run::Erase { marked, down: true };
         }
     }
@@ -587,11 +645,16 @@ impl Modeling {
             for (m, e) in marked {
                 by_model.entry(m).or_default().push(e);
             }
+            let mut actions: Vec<Action> = by_model
+                .into_iter()
+                .map(|(model, edges)| Action::EraseEdges { model, edges })
+                .collect();
+            let ids: Vec<ObjectId> = std::mem::take(&mut self.erase_guides).into_iter().collect();
+            if !ids.is_empty() {
+                actions.push(Action::EraseGuides { ids });
+            }
             return Out {
-                actions: by_model
-                    .into_iter()
-                    .map(|(model, edges)| Action::EraseEdges { model, edges })
-                    .collect(),
+                actions,
                 ..Out::default()
             };
         }
@@ -603,6 +666,9 @@ impl Modeling {
         self.typed.clear();
         if is_transform_tool(self.tool) {
             return self.xf.click(w, p);
+        }
+        if self.tool == ModelerTool::TapeMeasure {
+            return self.tape.click(p);
         }
         match self.tool {
             ModelerTool::Line => self.click_line(w, p),
@@ -698,6 +764,7 @@ impl Modeling {
             }],
             redo,
             message: None,
+            resize: None,
         }
     }
 
@@ -763,6 +830,7 @@ impl Modeling {
             }],
             redo,
             message: None,
+            resize: None,
         }
     }
 
@@ -832,6 +900,7 @@ impl Modeling {
             }],
             redo,
             message: None,
+            resize: None,
         }
     }
 
@@ -888,6 +957,7 @@ impl Modeling {
             }],
             redo,
             message: None,
+            resize: None,
         }
     }
 
@@ -943,6 +1013,9 @@ impl Modeling {
     fn apply(&mut self, w: &World, selected: Option<ObjectId>, revision: u64, v: Value) -> Out {
         if is_transform_tool(self.tool) {
             return self.xf.apply(v, revision);
+        }
+        if self.tool == ModelerTool::TapeMeasure {
+            return self.tape.apply(v);
         }
         if let Value::Sides(n) = v {
             return self.set_sides(w, selected, revision, n);
@@ -1139,6 +1212,10 @@ impl Modeling {
             self.xf.preview(w, &mut pv);
             return pv;
         }
+        if self.tool == ModelerTool::TapeMeasure {
+            self.tape.preview(&mut pv);
+            return pv;
+        }
         let cur = self.cursor;
         match &self.run {
             Run::Line { pts, .. } => {
@@ -1200,6 +1277,14 @@ impl Modeling {
                 }
             }
             Run::Idle => {}
+        }
+        if self.tool == ModelerTool::Eraser {
+            pv.erase_guides = self.erase_guides.iter().copied().collect();
+            if let Some(g) = self.hover_guide
+                && !pv.erase_guides.contains(&g)
+            {
+                pv.erase_guides.push(g);
+            }
         }
         if self.tool == ModelerTool::Eraser
             && let Some((m, e)) = self.hover_edge

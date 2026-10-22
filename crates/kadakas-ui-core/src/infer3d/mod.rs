@@ -37,13 +37,13 @@ mod math;
 mod scene;
 
 pub use bvh::{Aabb, Bvh};
-pub use camera::{Camera, Projection, Ray};
+pub use camera::{Camera, Projection, Ray, clip_segment};
 pub use engine::{Inferencer, Key};
 pub use instances::{
     DefinitionCache, DefinitionScene, InstanceScenes, Placed, scene_of_instances,
     scene_of_instances_cached,
 };
-pub use scene::{PointKind, Scene, SceneBuilder, Tag, TagKind};
+pub use scene::{GUIDE_REACH, PointKind, Scene, SceneBuilder, Tag, TagKind};
 
 use glam::{DVec2, DVec3};
 use kadakas_l10n::tr;
@@ -63,6 +63,9 @@ pub const GREEN: Rgb = Rgb(0x2e, 0xa0, 0x43);
 pub const BLUE: Rgb = Rgb(0x2f, 0x6b, 0xe0);
 /// Parallel and perpendicular inferences.
 pub const MAGENTA: Rgb = Rgb(0xc0, 0x2f, 0xc0);
+/// Guides: the lines, the points and the inferences that snap to them (MOD-05). An amber that no
+/// axis, no geometry and no other inference uses.
+pub const GUIDE: Rgb = Rgb(0xd0, 0x82, 0x1c);
 
 /// One of the three axes of the drawing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -103,6 +106,10 @@ pub enum Kind {
     /// Two edges cross, an edge crosses a face, or an inferred line crosses an edge.
     Intersection,
     OnEdge,
+    /// A guide point (MOD-05).
+    GuidePoint,
+    /// On a guide line (MOD-05).
+    OnGuide,
     /// On a line along an axis from the reference point.
     OnAxis(Axis),
     /// On a line along an axis from the point that you paused on.
@@ -121,15 +128,15 @@ pub enum Kind {
 
 impl Kind {
     /// The priority: a smaller number wins when more than one inference is in reach. The order is
-    /// endpoint, center, midpoint, intersection, on edge, the linear inferences, on face and
-    /// then nothing.
+    /// endpoint (and guide point), center, midpoint, intersection, on edge (and on guide), the
+    /// linear inferences, on face and then nothing.
     pub fn priority(self) -> u8 {
         match self {
-            Kind::Endpoint => 0,
+            Kind::Endpoint | Kind::GuidePoint => 0,
             Kind::Center => 1,
             Kind::Midpoint => 2,
             Kind::Intersection => 3,
-            Kind::OnEdge => 4,
+            Kind::OnEdge | Kind::OnGuide => 4,
             Kind::OnAxis(_)
             | Kind::FromPoint(_)
             | Kind::Parallel
@@ -144,7 +151,11 @@ impl Kind {
     pub fn is_point(self) -> bool {
         matches!(
             self,
-            Kind::Endpoint | Kind::Center | Kind::Midpoint | Kind::Intersection
+            Kind::Endpoint
+                | Kind::GuidePoint
+                | Kind::Center
+                | Kind::Midpoint
+                | Kind::Intersection
         )
     }
 
@@ -156,6 +167,7 @@ impl Kind {
             Kind::Midpoint => Rgb(0x1e, 0xb4, 0xc8),
             Kind::Intersection => Rgb(0x20, 0x20, 0x20),
             Kind::OnEdge => Rgb(0xd9, 0x30, 0x30),
+            Kind::GuidePoint | Kind::OnGuide => GUIDE,
             Kind::OnFace => Rgb(0x2f, 0x6b, 0xe0),
             Kind::OnAxis(a) | Kind::FromPoint(a) => a.color(),
             Kind::Parallel | Kind::Perpendicular | Kind::ThroughPoint => MAGENTA,
@@ -171,6 +183,8 @@ impl Kind {
             Kind::Midpoint => tr!("uic-infer3d-midpoint"),
             Kind::Intersection => tr!("uic-infer3d-intersection"),
             Kind::OnEdge => tr!("uic-infer3d-on-edge"),
+            Kind::GuidePoint => tr!("uic-infer3d-guide-point"),
+            Kind::OnGuide => tr!("uic-infer3d-on-guide"),
             Kind::OnFace => tr!("uic-infer3d-on-face"),
             Kind::OnAxis(Axis::X) => tr!("uic-infer3d-on-red-axis"),
             Kind::OnAxis(Axis::Y) => tr!("uic-infer3d-on-green-axis"),
@@ -286,3 +300,5 @@ impl Options {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_guide;

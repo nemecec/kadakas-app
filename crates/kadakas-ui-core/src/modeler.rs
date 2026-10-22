@@ -163,8 +163,8 @@ impl ModelerTool {
     }
 
     /// True for the tools that run in this version: Select, the drawing tools of MOD-08 (Eraser,
-    /// Line, Rectangle, Circle, Arc, Push/Pull), Move, Rotate and Scale (MOD-05) and the navigation
-    /// tools. The rest (Tape Measure, Paint Bucket) are shown, disabled.
+    /// Line, Rectangle, Circle, Arc, Push/Pull), Move, Rotate, Scale and Tape Measure (MOD-05) and
+    /// the navigation tools. Paint Bucket is shown, disabled.
     pub fn works(self) -> bool {
         matches!(
             self,
@@ -178,6 +178,7 @@ impl ModelerTool {
                 | ModelerTool::Move
                 | ModelerTool::Rotate
                 | ModelerTool::Scale
+                | ModelerTool::TapeMeasure
                 | ModelerTool::Orbit
                 | ModelerTool::Pan
                 | ModelerTool::Zoom
@@ -212,6 +213,7 @@ impl ModelerTool {
             ModelerTool::Move => tr!("uic-modeler-hint-move"),
             ModelerTool::Rotate => tr!("uic-modeler-hint-rotate"),
             ModelerTool::Scale => tr!("uic-modeler-hint-scale"),
+            ModelerTool::TapeMeasure => tr!("uic-modeler-hint-tape-measure"),
             ModelerTool::Orbit => tr!("uic-modeler-hint-orbit"),
             ModelerTool::Pan => tr!("uic-modeler-hint-pan"),
             ModelerTool::Zoom => tr!("uic-modeler-hint-zoom"),
@@ -712,6 +714,7 @@ mod tests {
                 "move",
                 "rotate",
                 "scale",
+                "tape-measure",
                 "orbit",
                 "pan",
                 "zoom",
@@ -759,9 +762,10 @@ mod tests {
     #[test]
     fn a_tool_that_does_not_run_says_so_in_its_tooltip() {
         assert!(!ModelerTool::Select.tooltip("Space").contains("later"));
-        let tip = ModelerTool::TapeMeasure.tooltip("T");
-        assert!(tip.contains("Tape Measure") && tip.contains('T'));
+        let tip = ModelerTool::PaintBucket.tooltip("B");
+        assert!(tip.contains("Paint Bucket") && tip.contains('B'));
         assert!(tip.contains(&tr!("uic-modeler-coming-later")));
+        assert!(!ModelerTool::TapeMeasure.tooltip("T").contains("later"));
         // Without a key there is no empty bracket.
         assert_eq!(ModelerTool::Select.tooltip(""), ModelerTool::Select.name());
     }
@@ -801,6 +805,10 @@ mod tests {
             assert!(!t.hint().is_empty());
         }
         assert_eq!(
+            ModelerTool::PaintBucket.hint(),
+            tr!("uic-modeler-coming-later")
+        );
+        assert_ne!(
             ModelerTool::TapeMeasure.hint(),
             tr!("uic-modeler-coming-later")
         );
