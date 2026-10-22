@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ba50bc6a26354478c94f56d4bf6a86b44aa130fdcdb6909396949744f3ee7888 # shrinks to ops = [Box([0.0, 2299.526462665733, 973.640554142138], [1200.0, 400.0, 400.0]), Box([0.0, 1500.0, 0.0], [400.0, 800.0, 1200.0])], at = (DMat3 { x_axis: DVec3(1.0, 0.0, 0.0), y_axis: DVec3(0.0, 1.0, 0.0), z_axis: DVec3(0.0, 0.0, 1.0) }, DVec3(650000000.0, 640000000.0, 12000.0))
+cc e1705144b167de2b63f70b909d86d922a4d32b91775eefa536c44ac7c97d7de8 # shrinks to ops = [Box([2500.0, 0.0, 0.0], [1200.0, 400.0, 1200.0]), Box([2901.100228470233, 0.3801006287671909, 18.824349477744562], [800.0, 400.0, 400.0])], at = (DMat3 { x_axis: DVec3(1.0, 0.0, 0.0), y_axis: DVec3(0.0, 1.0, 0.0), z_axis: DVec3(0.0, 0.0, 1.0) }, DVec3(650000000.0, 640000000.0, 12000.0))
