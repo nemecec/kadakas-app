@@ -67,6 +67,17 @@ impl Rig {
         out
     }
 
+    /// Like `act`, but the actions are not run.
+    fn act_no_run(&mut self, f: impl FnOnce(&mut Modeling, &World) -> Out) -> Out {
+        let rev = self.ed.revision();
+        let scenes = self.cache.get(self.ed.doc(), rev);
+        let world = World {
+            doc: self.ed.doc(),
+            scenes,
+        };
+        f(&mut self.tools, &world)
+    }
+
     fn click_inf(&mut self, inf: Inference, ray: Ray) -> Out {
         self.act(|t, w| {
             let p = Pointer {
@@ -1127,3 +1138,4 @@ fn the_geometry_being_pulled_is_left_out_of_the_inference() {
 }
 
 mod more;
+mod xform;

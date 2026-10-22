@@ -772,7 +772,11 @@ fn finish_and_check(
 /// loops that lose their area go, a face whose outer loop loses its area goes, and a face whose
 /// loop now touches itself (a wall whose middle collapsed) is cut into the parts that keep an
 /// area. A face that goes with attributes, and an edge attribute that is dropped, give a note.
-fn weld(m: &mut SurfaceModel, map: &BTreeMap<VertexId, VertexId>, notes: &mut Vec<String>) {
+pub(super) fn weld(
+    m: &mut SurfaceModel,
+    map: &BTreeMap<VertexId, VertexId>,
+    notes: &mut Vec<String>,
+) {
     let to = |v: VertexId| *map.get(&v).unwrap_or(&v);
     let mut by_key: BTreeMap<(VertexId, VertexId), EdgeId> = BTreeMap::new();
     let mut gone: Vec<(EdgeId, Option<EdgeId>)> = Vec::new();
@@ -989,19 +993,33 @@ fn validate(before: &SurfaceModel, m: &SurfaceModel, t: &Touched) -> Result<(), 
              through is a later step)"
         )));
     }
-    let after = check::near(m, &t.edges, &t.verts);
+    match new_distance_problem(before, m, &t.edges, &t.verts) {
+        Some(p) => Err(invalid(&p)),
+        None => Ok(()),
+    }
+}
+
+/// The first new distance problem (see `check::near`) of the vertices `verts` and the edges
+/// `edges` of `m`: one that the model `before` did not have at the same place with the same kind.
+pub(super) fn new_distance_problem(
+    before: &SurfaceModel,
+    m: &SurfaceModel,
+    edges: &BTreeSet<EdgeId>,
+    verts: &BTreeSet<VertexId>,
+) -> Option<Problem> {
+    let after = check::near(m, edges, verts);
     if after.is_empty() {
-        return Ok(());
+        return None;
     }
     let pad = check::window(before).max(check::window(m));
-    let edges = clash::edge_tree(before, pad);
+    let tree = clash::edge_tree(before, pad);
     for p in &after {
         let Some(at) = check::place(m, p) else {
-            return Err(invalid(p));
+            return Some(p.clone());
         };
         // The problems of the model before around the same place.
         let mut es: BTreeSet<EdgeId> = BTreeSet::new();
-        edges.query(at, at, &mut |e| {
+        tree.query(at, at, &mut |e| {
             es.insert(EdgeId(e));
         });
         let vs: BTreeSet<VertexId> = es.iter().flat_map(|e| before.edges[e].v).collect();
@@ -1011,10 +1029,10 @@ fn validate(before: &SurfaceModel, m: &SurfaceModel, t: &Touched) -> Result<(), 
                 && check::place(before, q).is_some_and(|x| x.distance(at) <= tol)
         });
         if !old {
-            return Err(invalid(p));
+            return Some(p.clone());
         }
     }
-    Ok(())
+    None
 }
 
 /// The first contact (in id order) of a touched edge with a face, or of a touched face with an

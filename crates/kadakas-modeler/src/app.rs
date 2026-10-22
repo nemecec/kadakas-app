@@ -810,8 +810,7 @@ impl ModelerApp {
                 })
                 .collect()
         });
-        let drawing = kadakas_ui_core::modeling::is_drawing_tool(self.tools.active())
-            && self.tools.active() != ModelerTool::Eraser;
+        let drawing = kadakas_ui_core::modeling::takes_values(self.tools.active());
         let texts: Vec<String> = ctx.input(|i| {
             i.events
                 .iter()

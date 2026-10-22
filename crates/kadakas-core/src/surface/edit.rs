@@ -52,6 +52,33 @@ pub enum Edit {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         edges: Vec<EdgeId>,
     },
+    /// Move, Rotate and Scale of geometry (MOD-05): moves the given `vertices`, all vertices of the
+    /// given `faces` and the ends of the given `edges` by an affine map. `matrix` has 12 numbers,
+    /// the three columns of the 3x3 part and then the translation (the layout of
+    /// `glam::DAffine3::to_cols_array`), in the local coordinates of the model. Every face that
+    /// has a moved vertex is refitted to a plane; a face that is no longer flat is folded into
+    /// triangles along new soft and smooth edges. See the module `transform`.
+    TransformVertices {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        vertices: Vec<VertexId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        faces: Vec<FaceId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        edges: Vec<EdgeId>,
+        matrix: [f64; 12],
+    },
+    /// Copy of faces and edges in the same model (Move with Ctrl, `5x`): `count` copies, the
+    /// first placed by `matrix`, the next by the matrix applied twice, three times and so on
+    /// (a row of copies at the same step; a rotation turns each copy further). The copies have new
+    /// ids and weld to the geometry they land on. See the module `transform`.
+    CopyGeometry {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        faces: Vec<FaceId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        edges: Vec<EdgeId>,
+        matrix: [f64; 12],
+        count: u32,
+    },
 }
 
 /// What Intersect Faces looks at.
@@ -68,6 +95,7 @@ mod intersect;
 mod near;
 mod pushpull;
 pub(super) mod reference;
+mod transform;
 
 use near::{Near, Points, Runs, Walks};
 
@@ -101,6 +129,18 @@ fn run_noted(
             faces,
             edges,
         } => intersect::intersect_faces(m, *scope, faces, edges, notes),
+        Edit::TransformVertices {
+            vertices,
+            faces,
+            edges,
+            matrix,
+        } => transform::transform_vertices(m, vertices, faces, edges, matrix, before, notes),
+        Edit::CopyGeometry {
+            faces,
+            edges,
+            matrix,
+            count,
+        } => transform::copy_geometry(m, faces, edges, matrix, *count),
         Edit::EraseFaces { faces } => {
             let ids = existing_faces(m, faces)?;
             let mut w = Work::new(m);
@@ -280,6 +320,19 @@ impl<'a> Work<'a> {
         p: DVec3,
         touched: &mut BTreeSet<(VertexId, VertexId)>,
     ) -> VertexId {
+        let w = self.new_vertex(p);
+        self.split_edge_at(e, w, touched);
+        w
+    }
+
+    /// Splits an edge at the vertex `w`, which lies on it (within the tolerance): the edge keeps
+    /// its id for the part at its first vertex; the faces that use it get `w` in their loops.
+    fn split_edge_at(
+        &mut self,
+        e: EdgeId,
+        w: VertexId,
+        touched: &mut BTreeSet<(VertexId, VertexId)>,
+    ) {
         let old = self.m.edges[&e];
         let [c, d] = old.v;
         let faces: Vec<FaceId> = self.t.faces_of(e).collect();
@@ -287,13 +340,12 @@ impl<'a> Work<'a> {
             let face = self.m.faces[f].clone();
             self.t.remove_face(*f, &face);
         }
-        let w = self.new_vertex(p);
         self.t.remove_edge(e, old);
         let first = Edge { v: [c, w] };
         self.m.edges.insert(e, first);
         self.t.add_edge(e, first);
         if let Some(n) = &mut self.near {
-            n.add_edge(e, self.m.vertices[&c], p);
+            n.add_edge(e, self.m.vertices[&c], self.m.vertices[&w]);
         }
         let second = self.new_edge(w, d);
         // The new part keeps the attributes and takes its place in the curve, next to the part
@@ -330,7 +382,6 @@ impl<'a> Work<'a> {
         }
         touched.insert(key(c, w));
         touched.insert(key(w, d));
-        w
     }
 
     /// The vertex for an end point: the nearest vertex within the tolerance, else a split of the

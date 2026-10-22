@@ -31,6 +31,8 @@ mod surface_ops;
 mod table_ops;
 mod transform_ops;
 
+pub use transform_ops::{height_note_kind, transform_object3};
+
 pub use steps::{
     Conflict, ConflictKind, Counted, Counts, ObjChange, Refusal, RevertReport, StepData, StepPlace,
 };
@@ -568,6 +570,25 @@ pub enum Command {
     ArrayObjects {
         ids: Vec<ObjectId>,
         array: crate::edit2d::ArrayParams,
+    },
+    /// Move, turn or scale objects in 3D, or copy them (MOD-05; the 3D tools of the modeler). The
+    /// map `matrix` has 12 numbers (the three columns of the 3x3 part, then the translation) in
+    /// world coordinates (the `z` includes the elevation of the layer). Surface models and
+    /// component instances take any affine map through their transform (a turn about any axis,
+    /// a stretch along any axes, a shear). Plan objects (plants, hardscapes, site models, symbols,
+    /// extrudes and the like) take only maps that keep the vertical: a move (its height is
+    /// ignored, with a note: their heights come from their layer), a turn about a vertical axis,
+    /// and a scale in the plan, with the rules of `TransformObjects`. A group moves as one unit.
+    /// With `copy` the originals stay; `count` copies are made, the first placed by the map, the
+    /// next by the map applied twice, and so on (an array along a vector, or around an axis), and
+    /// their IDs are returned in `created`, copy by copy. One undo step.
+    TransformObjects3d {
+        ids: Vec<ObjectId>,
+        matrix: [f64; 12],
+        #[serde(default)]
+        copy: bool,
+        #[serde(default = "one")]
+        count: u32,
     },
     /// Add a review issue (REV-04). A nil `issue.id` (and nil viewpoint ids) make new IDs; an ID
     /// from a BCF file stays. `pictures` are the PNG snapshots of the viewpoints: each becomes an
@@ -1147,6 +1168,10 @@ fn insert_at(objects: &mut Objects, items: &[(usize, Object)]) {
 
 fn yes() -> bool {
     true
+}
+
+fn one() -> u32 {
+    1
 }
 
 /// Removes repeated IDs and keeps the first of each.
@@ -1950,6 +1975,7 @@ impl<'a> Tx<'a> {
             | Command::DeleteView { .. }
             | Command::RestoreView { .. } => self.run_drawing(cmd, out)?,
             Command::TransformObjects { .. }
+            | Command::TransformObjects3d { .. }
             | Command::ArrayObjects { .. }
             | Command::AddObjectLike { .. } => self.run_transform(cmd, out)?,
             Command::Arrange { ids, how } => {

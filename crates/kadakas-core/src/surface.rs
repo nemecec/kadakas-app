@@ -75,6 +75,14 @@
 //!   this kind; the check warns, [`Problem::NotIntersected`]). This edit makes the edges where
 //!   faces cross, so both faces split, and splits the edges where they pass through a face; for
 //!   the whole model or for chosen faces and edges.
+//! - **Transform vertices** ([`Edit::TransformVertices`]): Move, Rotate and Scale of vertices, faces
+//!   and edges by an affine map. Every face that has a moved vertex is refitted to a plane; a face
+//!   that is not flat any more is folded into triangles along new `soft` and `smooth` edges (the
+//!   largest piece keeps the id of the face), vertices that land on others weld, and faces that
+//!   become coplanar merge. A map of all vertices of a face never folds it. See the module
+//!   `edit::transform`.
+//! - **Copy geometry** ([`Edit::CopyGeometry`]): copies of faces and edges in the same model, with
+//!   new ids, welded to the geometry they land on.
 //! - Erasing edges of a curve leaves the rest as chains: a curve that is no longer one chain is
 //!   cut into curves.
 //!
@@ -143,6 +151,8 @@ mod tests_index;
 mod tests_intersect;
 #[cfg(test)]
 mod tests_pushpull;
+#[cfg(test)]
+mod tests_transform;
 
 pub use check::{At, Problem, Report};
 pub use edit::{Edit, IntersectScope};
@@ -330,6 +340,8 @@ pub enum SurfaceError {
     NoEdge(EdgeId),
     #[error("face {0} does not exist")]
     NoFace(FaceId),
+    #[error("vertex {0} does not exist")]
+    NoVertex(VertexId),
     #[error("a surface model has at most {max} {what}; the edit needs {count}")]
     Limit {
         what: &'static str,
@@ -338,6 +350,10 @@ pub enum SurfaceError {
     },
     #[error("the faces of a plane could not be solved: {0}")]
     Unsolved(String),
+    /// An edit that would make a face collapse, a loop cross itself or the model invalid: the
+    /// reason is the message (Move, Rotate and Scale).
+    #[error("{0}")]
+    Refused(String),
 }
 
 /// A surface model: vertices, edges and faces in local coordinates, placed by `transform`.

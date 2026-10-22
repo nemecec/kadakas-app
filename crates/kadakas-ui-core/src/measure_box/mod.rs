@@ -13,6 +13,8 @@
 //! | `/5`, `5/` | [`Value::Divide`] | divides the copies evenly |
 //! | `12s` | [`Value::Sides`] | the number of segments or sides; a bare number before the first click of a circle, polygon or arc |
 //! | `24r` | [`Value::Radius`] (mm) | a radius, after an arc |
+//! | `2`, `-1`, `1.5` | [`Value::Factor`] | a scale factor: a bare number for Scale |
+//! | `1;1;2`, `1,2,3` | [`Value::Triple`] | three values (Move: a relative distance in x, y, z; Scale: a factor for each axis); a value may be empty |
 //! | `[1,2,3]` | [`Value::PointAbs`] (mm) | an absolute point; `;` between values when the decimal is a comma |
 //! | `<1,2,3>` | [`Value::PointRel`] (mm) | a point relative to the start |
 //!
@@ -53,6 +55,8 @@ pub enum Tool {
     TwoPointArc,
     Move,
     Rotate,
+    /// Scale (MOD-05): a factor, three factors, or a length.
+    Scale,
     PushPull,
     Offset,
     TapeMeasure,
@@ -87,6 +91,10 @@ pub enum Phase {
 pub enum Kind {
     Length,
     Pair,
+    /// Three values (Move: x, y, z; Scale: a factor for each axis).
+    Triple,
+    /// A scale factor.
+    Factor,
     Angle,
     Count,
     Divide,
@@ -102,6 +110,8 @@ impl Kind {
         match self {
             Kind::Length => tr!("uic-measure-kind-length"),
             Kind::Pair => tr!("uic-measure-kind-pair"),
+            Kind::Triple => tr!("uic-measure-kind-triple"),
+            Kind::Factor => tr!("uic-measure-kind-factor"),
             Kind::Angle => tr!("uic-measure-kind-angle"),
             Kind::Count => tr!("uic-measure-kind-count"),
             Kind::Divide => tr!("uic-measure-kind-divide"),
@@ -119,6 +129,11 @@ pub enum Value {
     Length(f64),
     /// Two lengths; a missing one means "keep what it is" (`,4` changes only the second).
     Pair(Option<f64>, Option<f64>),
+    /// Three values; a missing one means "keep what it is". Lengths (mm) for Move, factors for
+    /// Scale.
+    Triple([Option<f64>; 3]),
+    /// A scale factor (unitless).
+    Factor(f64),
     Angle(f64),
     /// This many copies.
     Count(u32),
@@ -135,6 +150,8 @@ impl Value {
         match self {
             Value::Length(_) => Kind::Length,
             Value::Pair(..) => Kind::Pair,
+            Value::Triple(_) => Kind::Triple,
+            Value::Factor(_) => Kind::Factor,
             Value::Angle(_) => Kind::Angle,
             Value::Count(_) => Kind::Count,
             Value::Divide(_) => Kind::Divide,
@@ -155,6 +172,8 @@ pub enum Bare {
     PairFirst,
     /// The number of sides (Circle, Polygon and the arcs before the first click).
     Sides,
+    /// A scale factor (Scale). A number with a unit is still a length.
+    Factor,
 }
 
 /// What a tool takes at a step.
@@ -193,8 +212,9 @@ const NONE: Accepts = Accepts {
 /// | Circle, Polygon | step 0 (no click): sides, a bare number is the sides; later: radius (a length), sides | the same |
 /// | Arc | step 0: sides; step 1 (center clicked): radius, sides; step 2 (start clicked): angle, sides | sides, radius (no bare number) |
 /// | Two-point arc | step 0: sides; step 1 (start clicked): chord length; step 2 (end clicked): bulge, radius, sides | bulge, radius, sides |
-/// | Move | length, point | length, point (after a copy: also copies, division) |
+/// | Move | length, three values (x;y;z), point | the same (after a copy: also copies, division) |
 /// | Rotate | angle | angle (after a copy: also copies, division) |
+/// | Scale | factor, three factors, length | the same |
 /// | Push/Pull, Offset, Tape measure | length | length |
 /// | Protractor | angle | angle |
 /// | the others | nothing | nothing |
@@ -239,14 +259,15 @@ pub fn accepts(tool: Tool, phase: Phase) -> Accepts {
         Tool::Move => {
             if copied {
                 a(
-                    &[Length, PointAbs, PointRel, Count, Divide],
+                    &[Length, Triple, PointAbs, PointRel, Count, Divide],
                     Bare::Length,
                     true,
                 )
             } else {
-                a(&[Length, PointAbs, PointRel], Bare::Length, true)
+                a(&[Length, Triple, PointAbs, PointRel], Bare::Length, true)
             }
         }
+        Tool::Scale => a(&[Factor, Triple, Length], Bare::Factor, true),
         Tool::Rotate => {
             if copied {
                 a(&[Angle, Count, Divide], Bare::Angle, true)
@@ -380,3 +401,5 @@ pub fn value_separator(units: &Units) -> char {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_xform;

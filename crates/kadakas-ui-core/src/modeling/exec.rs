@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use glam::DVec3;
+use glam::{DAffine3, DVec3};
 use kadakas_core::command::{Command, CommandError, Editor};
 use kadakas_core::model::{Attributes, Document, ObjectId, Shape};
 use kadakas_core::surface::{EdgeId, Edit, FaceId, IntersectScope};
@@ -55,6 +55,16 @@ pub enum Action {
         faces: Vec<FaceId>,
         edges: Vec<EdgeId>,
     },
+    /// Move, Rotate or Scale (and the copies of Move and Rotate) of whole objects and of faces and
+    /// edges of surface models, by one affine map in world coordinates. `copies` is 0 to change the
+    /// geometry in place, else the number of copies (the first placed by the map, the next by the
+    /// map applied twice, and so on).
+    Xform {
+        objects: Vec<ObjectId>,
+        parts: Vec<(ObjectId, Vec<FaceId>, Vec<EdgeId>)>,
+        matrix: DAffine3,
+        copies: u32,
+    },
 }
 
 /// The model that an action works in (a new model counts as `None`).
@@ -69,6 +79,7 @@ impl Action {
             | Action::PushPull { model, .. }
             | Action::Delete { model, .. }
             | Action::Intersect { model, .. } => Some(*model),
+            Action::Xform { parts, .. } => parts.first().map(|p| p.0),
         }
     }
 }
@@ -110,17 +121,53 @@ pub fn run_noted(
     actions: &[Action],
     undo_first: bool,
 ) -> Result<(Option<ObjectId>, Vec<String>), String> {
+    run_full(editor, actions, undo_first).map(|r| (r.used, r.notes))
+}
+
+/// What a run of actions did, for the window.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Ran {
+    /// The model that the last action worked in.
+    pub used: Option<ObjectId>,
+    /// What the step changed that was not asked for, in the language of the window.
+    pub notes: Vec<String>,
+    /// The copies of objects that a Move or Rotate with copy made (the last copy), which become
+    /// the selection.
+    pub objects: Vec<ObjectId>,
+    /// The faces and edges of the last copy of geometry, which become the selection.
+    pub parts: Vec<super::select::Item>,
+}
+
+/// Runs the actions like [`run_noted`] and also returns the copies that they made.
+pub fn run_full(editor: &mut Editor, actions: &[Action], undo_first: bool) -> Result<Ran, String> {
     if actions.is_empty() {
-        return Ok((None, Vec::new()));
+        return Ok(Ran::default());
     }
     if undo_first {
         editor.undo();
     }
     let before: BTreeSet<ObjectId> = editor.doc().objects.keys().copied().collect();
+    // The next id of each model that a copy of geometry goes into: what is above it is new.
+    let next_ids: std::collections::BTreeMap<ObjectId, u32> = actions
+        .iter()
+        .filter_map(|a| match a {
+            Action::Xform { parts, copies, .. } if *copies > 0 => Some(parts),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|(m, _, _)| model_of(editor.doc(), *m).map(|s| (*m, s.next_id())))
+        .collect();
     let mut used: Option<ObjectId> = None;
     let out = editor.execute_stepwise(|step| {
         let mut made: Option<ObjectId> = None;
         for a in actions {
+            if let Action::Xform { .. } = a {
+                for c in xform_commands(step.doc(), a) {
+                    step.run(&c)?;
+                }
+                used = a.model().or(used);
+                continue;
+            }
             // A model that the step taken back had made is not there any more: make it again.
             let mut model = a.model().filter(|id| {
                 step.doc().object(*id).is_some()
@@ -156,7 +203,53 @@ pub fn run_noted(
         Ok(())
     });
     match out {
-        Ok(o) => Ok((used, o.notes)),
+        Ok(o) => {
+            let mut ran = Ran {
+                used,
+                notes: o
+                    .notes
+                    .into_iter()
+                    .map(|n| match kadakas_core::command::height_note_kind(&n) {
+                        Some(kind) => kadakas_l10n::tr!("uic-modeling-height-kept", kind = kind),
+                        None => n,
+                    })
+                    .collect(),
+                ..Ran::default()
+            };
+            for a in actions {
+                let Action::Xform {
+                    objects,
+                    parts,
+                    matrix,
+                    copies,
+                } = a
+                else {
+                    continue;
+                };
+                if *copies == 0 {
+                    continue;
+                }
+                // The copies of objects come in the order of the copies: the last ones.
+                if !objects.is_empty() && o.created.len() >= objects.len() {
+                    ran.objects = o.created[o.created.len() - objects.len()..]
+                        .iter()
+                        .map(|u| ObjectId(*u))
+                        .collect();
+                }
+                for (m, faces, edges) in parts {
+                    ran.parts.extend(copied_parts(
+                        editor.doc(),
+                        *m,
+                        next_ids.get(m).copied().unwrap_or(u32::MAX),
+                        faces,
+                        edges,
+                        matrix,
+                        *copies,
+                    ));
+                }
+            }
+            Ok(ran)
+        }
         Err(e) => {
             // The step that was taken back for the redo comes back: a refused value loses nothing.
             if undo_first {
@@ -165,6 +258,106 @@ pub fn run_noted(
             Err(e.to_string())
         }
     }
+}
+
+/// The faces and edges of the last copy: those made by the step (ids from `next`) that lie where
+/// the chosen faces and edges go with the map applied `copies` times.
+fn copied_parts(
+    doc: &Document,
+    model: ObjectId,
+    next: u32,
+    faces: &[FaceId],
+    edges: &[EdgeId],
+    matrix: &DAffine3,
+    copies: u32,
+) -> Vec<super::select::Item> {
+    use super::select::Item;
+    let Some(m) = model_of(doc, model) else {
+        return Vec::new();
+    };
+    let fr = frame_of(doc, model);
+    if fr.matrix3.determinant().abs() < 1e-12 {
+        return Vec::new();
+    }
+    let local = fr.inverse() * *matrix * fr;
+    let mut at = DAffine3::IDENTITY;
+    for _ in 0..copies {
+        at = local * at;
+    }
+    let mid = |ps: Vec<DVec3>| ps.iter().copied().sum::<DVec3>() / ps.len().max(1) as f64;
+    let face_mid = |f: &kadakas_core::surface::Face| {
+        mid(f.outer.iter().filter_map(|v| m.vertex(*v)).collect())
+    };
+    let mut out = Vec::new();
+    for f in faces {
+        let Some(face) = m.face(*f) else { continue };
+        let want = at.transform_point3(face_mid(face));
+        if let Some((g, _)) = m
+            .faces()
+            .find(|(g, h)| g.0 >= next && face_mid(h).distance(want) < 0.05)
+        {
+            out.push(Item::Face(model, g));
+        }
+    }
+    for e in edges {
+        let Some(edge) = m.edge(*e) else { continue };
+        let ends = |e: &kadakas_core::surface::Edge| {
+            mid(e.v.iter().filter_map(|v| m.vertex(*v)).collect())
+        };
+        let want = at.transform_point3(ends(&edge));
+        if let Some((g, _)) = m
+            .edges()
+            .find(|(g, h)| g.0 >= next && ends(h).distance(want) < 0.05)
+        {
+            out.push(Item::Edge(model, g));
+        }
+    }
+    out
+}
+
+fn xform_commands(doc: &Document, a: &Action) -> Vec<Command> {
+    let Action::Xform {
+        objects,
+        parts,
+        matrix,
+        copies,
+    } = a
+    else {
+        return Vec::new();
+    };
+    let mut v = Vec::new();
+    if !objects.is_empty() {
+        v.push(Command::TransformObjects3d {
+            ids: objects.clone(),
+            matrix: matrix.to_cols_array(),
+            copy: *copies > 0,
+            count: (*copies).max(1),
+        });
+    }
+    for (model, faces, edges) in parts {
+        let fr = frame_of(doc, *model);
+        if fr.matrix3.determinant().abs() < 1e-12 {
+            continue;
+        }
+        let local = (fr.inverse() * *matrix * fr).to_cols_array();
+        let edit = if *copies > 0 {
+            Edit::CopyGeometry {
+                faces: faces.clone(),
+                edges: edges.clone(),
+                matrix: local,
+                count: *copies,
+            }
+        } else {
+            Edit::TransformVertices {
+                vertices: Vec::new(),
+                faces: faces.clone(),
+                edges: edges.clone(),
+                matrix: local,
+            }
+        };
+        v.push(Command::EditSurface { id: *model, edit });
+    }
+    v
 }
 
 fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Command> {
@@ -199,6 +392,7 @@ fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Comman
             faces: faces.clone(),
             edges: edges.clone(),
         })],
+        Action::Xform { .. } => Vec::new(),
         Action::Delete { faces, edges, .. } => {
             let mut v = Vec::new();
             if !faces.is_empty() {

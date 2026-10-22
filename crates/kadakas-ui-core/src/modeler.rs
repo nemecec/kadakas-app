@@ -163,8 +163,8 @@ impl ModelerTool {
     }
 
     /// True for the tools that run in this version: Select, the drawing tools of MOD-08 (Eraser,
-    /// Line, Rectangle, Circle, Arc, Push/Pull) and the navigation tools. The rest are shown,
-    /// disabled.
+    /// Line, Rectangle, Circle, Arc, Push/Pull), Move, Rotate and Scale (MOD-05) and the navigation
+    /// tools. The rest (Tape Measure, Paint Bucket) are shown, disabled.
     pub fn works(self) -> bool {
         matches!(
             self,
@@ -175,6 +175,9 @@ impl ModelerTool {
                 | ModelerTool::Circle
                 | ModelerTool::Arc
                 | ModelerTool::PushPull
+                | ModelerTool::Move
+                | ModelerTool::Rotate
+                | ModelerTool::Scale
                 | ModelerTool::Orbit
                 | ModelerTool::Pan
                 | ModelerTool::Zoom
@@ -206,6 +209,9 @@ impl ModelerTool {
             ModelerTool::Circle => tr!("uic-modeler-hint-circle"),
             ModelerTool::Arc => tr!("uic-modeler-hint-arc"),
             ModelerTool::PushPull => tr!("uic-modeler-hint-push-pull"),
+            ModelerTool::Move => tr!("uic-modeler-hint-move"),
+            ModelerTool::Rotate => tr!("uic-modeler-hint-rotate"),
+            ModelerTool::Scale => tr!("uic-modeler-hint-scale"),
             ModelerTool::Orbit => tr!("uic-modeler-hint-orbit"),
             ModelerTool::Pan => tr!("uic-modeler-hint-pan"),
             ModelerTool::Zoom => tr!("uic-modeler-hint-zoom"),
@@ -310,6 +316,8 @@ pub enum EntityInfo {
         min: Option<[f64; 3]>,
         /// The counts of a surface model.
         surface: Option<SurfaceStats>,
+        /// Where the object is, how it is turned and how large its scale is (read only).
+        placement: Option<Placement>,
     },
     /// One face of a surface model.
     Face {
@@ -343,6 +351,77 @@ pub enum EntityInfo {
         count: usize,
         size: Option<[f64; 3]>,
     },
+}
+
+/// The position, rotation and scale of an object, for Entity Info (MOD-05). The position is the
+/// origin of the object in the world (mm), the rotation the turn about the x, y and z axes in
+/// degrees (the x axis first), the scale the length of each axis of the object (1 for none).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement {
+    pub position: [f64; 3],
+    pub rotation_deg: [f64; 3],
+    pub scale: [f64; 3],
+    /// The axes of the object are not at right angles (a non-uniform scale after a turn): the
+    /// rotation then has no single meaning and Entity Info says "skewed".
+    pub skewed: bool,
+}
+
+impl Placement {
+    /// The placement of a transform from the local coordinates of an object to the world.
+    pub fn of_transform(t: &glam::DAffine3) -> Placement {
+        let m = t.matrix3;
+        let scale = glam::DVec3::new(m.x_axis.length(), m.y_axis.length(), m.z_axis.length());
+        // A mirror shows as a negative scale of the x axis.
+        let mirror = m.determinant() < 0.0;
+        let sx = if mirror { -scale.x } else { scale.x };
+        let unit = |v: glam::DVec3| v.try_normalize().unwrap_or(glam::DVec3::ZERO);
+        let (ux, uy, uz) = (unit(m.x_axis), unit(m.y_axis), unit(m.z_axis));
+        let skewed = ux.dot(uy).abs() > 1e-6 || ux.dot(uz).abs() > 1e-6 || uy.dot(uz).abs() > 1e-6;
+        // The rotation of the axes made orthonormal (the first axis is kept).
+        let x = if mirror { -ux } else { ux };
+        let y = (uy - x * x.dot(uy))
+            .try_normalize()
+            .unwrap_or(glam::DVec3::Y);
+        let z = x.cross(y);
+        let rot = glam::DMat3::from_cols(x, y, z);
+        let (ex, ey, ez) = glam::DQuat::from_mat3(&rot).to_euler(glam::EulerRot::XYZ);
+        let clean = |a: f64| {
+            let d = a.to_degrees();
+            // Rounding noise of a turn that is none.
+            if d.abs() < 1e-9 { 0.0 } else { d }
+        };
+        Placement {
+            position: t.translation.to_array(),
+            rotation_deg: [clean(ex), clean(ey), clean(ez)],
+            scale: [sx, scale.y, scale.z],
+            skewed,
+        }
+    }
+}
+
+/// The placement of an object that has a transform of its own (a surface model, a component
+/// instance) or a position and a turn (a plant).
+fn placement_of(doc: &Document, obj: &kadakas_core::model::Object) -> Option<Placement> {
+    use kadakas_core::model::Shape;
+    let elevation = doc.layer(obj.layer).map_or(0.0, |l| l.elevation);
+    let lift = glam::DAffine3::from_translation(glam::DVec3::new(0.0, 0.0, elevation));
+    match &obj.shape {
+        Shape::SurfaceModel(m) => Some(Placement::of_transform(&(lift * m.transform))),
+        Shape::Component { transform, .. } => Some(Placement::of_transform(
+            &(lift * kadakas_core::component::affine(transform)),
+        )),
+        Shape::Plant { at, .. } => Some(Placement {
+            position: [at.x, at.y, elevation],
+            rotation_deg: [
+                0.0,
+                0.0,
+                kadakas_core::plants::link::rotation(obj).to_degrees(),
+            ],
+            scale: [1.0, 1.0, 1.0],
+            skewed: false,
+        }),
+        _ => None,
+    }
 }
 
 /// The counts of a surface model, for Entity Info.
@@ -425,6 +504,7 @@ pub fn entity_info(doc: &Document, scene: &Scene, selection: &[ObjectId]) -> Ent
                 size: bounds.map(|b| b.0),
                 min: bounds.map(|b| b.1),
                 surface,
+                placement: placement_of(doc, obj),
             }
         }
         many => EntityInfo::Many {
@@ -530,6 +610,8 @@ impl Measurement {
                 crate::modeling::LiveLabel::Radius => msg!("uic-modeler-measure-radius"),
                 crate::modeling::LiveLabel::Bulge => msg!("uic-modeler-measure-bulge"),
                 crate::modeling::LiveLabel::Distance => msg!("uic-modeler-measure-distance"),
+                crate::modeling::LiveLabel::Angle => msg!("uic-modeler-measure-angle"),
+                crate::modeling::LiveLabel::Factor => msg!("uic-modeler-measure-scale"),
             },
         }
     }
@@ -611,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn select_the_drawing_tools_and_navigation_work_now() {
+    fn select_the_drawing_tools_move_rotate_scale_and_navigation_work_now() {
         let working: Vec<_> = ModelerTool::ALL
             .iter()
             .filter(|t| t.works())
@@ -627,6 +709,9 @@ mod tests {
                 "circle",
                 "arc",
                 "push-pull",
+                "move",
+                "rotate",
+                "scale",
                 "orbit",
                 "pan",
                 "zoom",
@@ -674,8 +759,8 @@ mod tests {
     #[test]
     fn a_tool_that_does_not_run_says_so_in_its_tooltip() {
         assert!(!ModelerTool::Select.tooltip("Space").contains("later"));
-        let tip = ModelerTool::Move.tooltip("M");
-        assert!(tip.contains("Move") && tip.contains('M'));
+        let tip = ModelerTool::TapeMeasure.tooltip("T");
+        assert!(tip.contains("Tape Measure") && tip.contains('T'));
         assert!(tip.contains(&tr!("uic-modeler-coming-later")));
         // Without a key there is no empty bracket.
         assert_eq!(ModelerTool::Select.tooltip(""), ModelerTool::Select.name());
@@ -715,7 +800,11 @@ mod tests {
         for t in ModelerTool::ALL {
             assert!(!t.hint().is_empty());
         }
-        assert_eq!(ModelerTool::Move.hint(), tr!("uic-modeler-coming-later"));
+        assert_eq!(
+            ModelerTool::TapeMeasure.hint(),
+            tr!("uic-modeler-coming-later")
+        );
+        assert_ne!(ModelerTool::Move.hint(), tr!("uic-modeler-coming-later"));
         assert_ne!(ModelerTool::Line.hint(), ModelerTool::Rectangle.hint());
         assert_ne!(ModelerTool::Orbit.hint(), ModelerTool::Pan.hint());
     }

@@ -211,7 +211,7 @@ fn copies_and_divisions() {
         run("3x", &metric(), Tool::Move, Phase::Step(1)),
         Err(InputError::NotAccepted {
             kind: Kind::Count,
-            accepted: &[Kind::Length, Kind::PointAbs, Kind::PointRel]
+            accepted: &[Kind::Length, Kind::Triple, Kind::PointAbs, Kind::PointRel]
         })
     );
     // Not after a plain move: only after a copy.
@@ -219,7 +219,7 @@ fn copies_and_divisions() {
         run("3x", &metric(), Tool::Move, Phase::Done),
         Err(InputError::NotAccepted {
             kind: Kind::Count,
-            accepted: &[Kind::Length, Kind::PointAbs, Kind::PointRel]
+            accepted: &[Kind::Length, Kind::Triple, Kind::PointAbs, Kind::PointRel]
         })
     );
     assert_eq!(

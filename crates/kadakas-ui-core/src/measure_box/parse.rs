@@ -26,7 +26,18 @@ pub fn parse(text: &str, units: &Units, tool: Tool, phase: Phase) -> Result<Valu
                 text: text.trim().to_string(),
             });
         }
-        v = Value::Length(l);
+        v = if bare == Bare::Factor {
+            // A factor is a plain number: `1,5` is one and a half.
+            let comma = NumberFormat {
+                decimal: Decimal::Comma,
+                ..units.number.plain()
+            };
+            comma
+                .parse(text.trim())
+                .map_or(Value::Length(l), Value::Factor)
+        } else {
+            Value::Length(l)
+        };
     }
     // A rectangle takes one length as the first value of the pair.
     if let Value::Length(l) = v
@@ -34,6 +45,12 @@ pub fn parse(text: &str, units: &Units, tool: Tool, phase: Phase) -> Result<Valu
         && !acc.takes(super::Kind::Length)
     {
         v = Value::Pair(Some(l), None);
+    }
+    // Three values for a tool that takes no triple: too many values.
+    if matches!(v, Value::Triple(_)) && !acc.takes(super::Kind::Triple) {
+        return Err(InputError::TooManyValues {
+            separator: value_separator(units),
+        });
     }
     if !acc.takes(v.kind()) {
         return Err(InputError::NotAccepted {
@@ -44,6 +61,7 @@ pub fn parse(text: &str, units: &Units, tool: Tool, phase: Phase) -> Result<Valu
     let negative = match v {
         Value::Length(l) | Value::Radius(l) => l < 0.0,
         Value::Pair(a, b) => a.is_some_and(|x| x < 0.0) || b.is_some_and(|x| x < 0.0),
+        Value::Triple(t) => t.iter().any(|x| x.is_some_and(|x| x < 0.0)),
         _ => false,
     };
     if negative && !acc.signed {
@@ -106,13 +124,14 @@ pub fn parse_any(text: &str, units: &Units, bare: Bare) -> Result<Value, InputEr
                     .replace("Deg", "°");
                 Value::Angle(parse_angle(&a, &nf).ok_or_else(not_a_value)?)
             } else if has_separator(t, units) {
-                pair(t, units, &nf)?
+                pair(t, units, &nf, bare)?
             } else if nf.parse(t).is_some() {
                 // A bare number.
                 match bare {
                     Bare::Length => Value::Length(length(t, units, &nf)?),
                     Bare::Angle => Value::Angle(nf.parse(t).ok_or_else(not_a_value)?),
                     Bare::PairFirst => Value::Pair(Some(length(t, units, &nf)?), None),
+                    Bare::Factor => Value::Factor(nf.parse(t).ok_or_else(not_a_value)?),
                     Bare::Sides => match bare_sides(t) {
                         Some(r) => r?,
                         None => Value::Length(length(t, units, &nf)?),
@@ -142,8 +161,9 @@ fn bare_sides(t: &str) -> Option<Result<Value, InputError>> {
 
 pub(super) fn finite(v: Value) -> Result<Value, InputError> {
     let ok = match v {
-        Value::Length(x) | Value::Angle(x) | Value::Radius(x) => x.is_finite(),
+        Value::Length(x) | Value::Angle(x) | Value::Radius(x) | Value::Factor(x) => x.is_finite(),
         Value::Pair(a, b) => a.is_none_or(f64::is_finite) && b.is_none_or(f64::is_finite),
+        Value::Triple(t) => t.iter().all(|x| x.is_none_or(f64::is_finite)),
         Value::PointAbs(p) | Value::PointRel(p) => p.is_finite(),
         _ => true,
     };
@@ -260,28 +280,37 @@ fn has_separator(t: &str, units: &Units) -> bool {
     t.contains(separators(units))
 }
 
-fn pair(t: &str, units: &Units, nf: &NumberFormat) -> Result<Value, InputError> {
+fn pair(t: &str, units: &Units, nf: &NumberFormat, bare: Bare) -> Result<Value, InputError> {
     let parts: Vec<&str> = t.split(separators(units)).collect();
-    if parts.len() > 2 {
+    if parts.len() > 3 {
         return Err(InputError::TooManyValues {
             separator: value_separator(units),
         });
     }
+    // A factor for Scale is a plain number; a number with a unit is a length.
     let one = |s: &str| -> Result<Option<f64>, InputError> {
         let s = s.trim();
         if s.is_empty() {
             Ok(None)
+        } else if bare == Bare::Factor {
+            match nf.parse(s) {
+                Some(x) => Ok(Some(x)),
+                None => length(s, units, nf).map(Some),
+            }
         } else {
             length(s, units, nf).map(Some)
         }
     };
-    let (a, b) = (one(parts[0])?, one(parts[1])?);
-    if a.is_none() && b.is_none() {
+    let vals: Vec<Option<f64>> = parts.iter().map(|p| one(p)).collect::<Result<_, _>>()?;
+    if vals.iter().all(Option::is_none) {
         return Err(InputError::NotAValue {
             text: t.to_string(),
         });
     }
-    Ok(Value::Pair(a, b))
+    if let [a, b, c] = vals[..] {
+        return Ok(Value::Triple([a, b, c]));
+    }
+    Ok(Value::Pair(vals[0], vals[1]))
 }
 
 fn point(t: &str, close: char, units: &Units) -> Result<DVec3, InputError> {

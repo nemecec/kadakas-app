@@ -19,7 +19,7 @@ use kadakas_ui_core::infer3d::{self, Inference, Inferencer, Key, PAUSE_SECONDS, 
 use kadakas_ui_core::keys::Modifiers;
 use kadakas_ui_core::modeler::ModelerTool;
 use kadakas_ui_core::modeling::{
-    self, Item, Modeling, Out, Pointer, Preview, SceneCache, SubSelection, World,
+    self, Item, Modeling, Out, Pointer, Preview, SceneCache, SubSelection, World, XContext,
 };
 use kadakas_view3d::vertex::LineVertex;
 use kadakas_view3d::view3d::{self, View3d};
@@ -47,6 +47,10 @@ pub struct Edit3d {
     paused: bool,
     last_pointer: Option<Pos2>,
     shift_down: bool,
+    /// The copy key (Ctrl, Option on a Mac) was down in the last frame: a press toggles copy.
+    copy_down: bool,
+    /// The copy key went down alone and nothing else was pressed since.
+    copy_arm: bool,
     /// The last inference under the pointer, for the marks.
     hover: Option<Inference>,
     preview: Preview,
@@ -79,6 +83,8 @@ impl Default for Edit3d {
             paused: false,
             last_pointer: None,
             shift_down: false,
+            copy_down: false,
+            copy_arm: false,
             hover: None,
             preview: Preview::default(),
             band: None,
@@ -175,7 +181,7 @@ impl Edit3d {
         use kadakas_ui_core::modeler::Measurement;
         use modeling::LiveLabel;
         let tool = self.modeling.tool();
-        if !modeling::is_drawing_tool(tool) || tool == ModelerTool::Eraser {
+        if !modeling::takes_values(tool) {
             return None;
         }
         let units = kadakas_units::current();
@@ -184,6 +190,8 @@ impl Edit3d {
             ModelerTool::Rectangle => LiveLabel::Dimensions,
             ModelerTool::Circle => LiveLabel::Radius,
             ModelerTool::PushPull => LiveLabel::Distance,
+            ModelerTool::Rotate => LiveLabel::Angle,
+            ModelerTool::Scale => LiveLabel::Factor,
             _ => LiveLabel::Length,
         };
         if !self.modeling.typed().is_empty() {
@@ -202,9 +210,6 @@ impl Edit3d {
 
     /// An arrow key while a drawing tool runs: locks the inference to an axis. True if used.
     pub fn arrow(&mut self, key: egui::Key) -> bool {
-        if !self.modeling.in_progress() || !modeling::is_drawing_tool(self.modeling.tool()) {
-            return false;
-        }
         let k = match key {
             egui::Key::ArrowRight => Key::Right,
             egui::Key::ArrowLeft => Key::Left,
@@ -212,6 +217,13 @@ impl Edit3d {
             egui::Key::ArrowDown => Key::Down,
             _ => return false,
         };
+        // The protractor of Rotate takes the arrow keys before its center is clicked.
+        if !self.modeling.in_progress() && self.modeling.arrow_plane(k) {
+            return true;
+        }
+        if !self.modeling.in_progress() || !modeling::takes_values(self.modeling.tool()) {
+            return false;
+        }
         self.inferencer.key(k);
         true
     }
@@ -252,6 +264,7 @@ impl Edit3d {
         };
         let tool = inp.tool;
         let drawing = modeling::is_drawing_tool(tool);
+        let xform = modeling::is_transform_tool(tool);
 
         // Shift keeps the inference.
         if inp.mods.shift != self.shift_down {
@@ -261,6 +274,12 @@ impl Edit3d {
             } else {
                 Key::ShiftUp
             });
+        }
+
+        if xform {
+            self.prepare_transform(session, view3d, nav_cam, inp, &cam, rev);
+        } else {
+            self.copy_down = false;
         }
 
         let mut out = Out::default();
@@ -279,7 +298,7 @@ impl Edit3d {
                 .iter()
                 .copied()
                 .find(|id| modeling::model_of(doc, *id).is_some());
-            if let (true, Some(h)) = (drawing, hover) {
+            if let (true, Some(h)) = (drawing || xform, hover) {
                 let cursor = local(h);
                 let inf = world.infer(
                     &mut self.inferencer,
@@ -388,7 +407,7 @@ impl Edit3d {
             }
 
             // What to draw.
-            self.preview = if drawing {
+            self.preview = if drawing || xform {
                 self.modeling.preview(&world)
             } else {
                 Preview::default()
@@ -426,6 +445,111 @@ impl Edit3d {
         self.run(session, out);
     }
 
+    /// Before the pointer events of Move, Rotate and Scale: the copy key, the pick of what is under
+    /// the pointer when nothing is selected, and the selection for the tool.
+    fn prepare_transform(
+        &mut self,
+        session: &mut Session,
+        view3d: &mut View3d,
+        nav_cam: &kadakas_render::Camera,
+        inp: &Input,
+        cam: &infer3d::Camera,
+        rev: u64,
+    ) {
+        // Ctrl (Option on a Mac) toggles copy when it is pressed alone and let go without another
+        // key or button (Ctrl+Z and the like do not toggle). Scale takes it held, as Shift.
+        let (key, others) = if cfg!(target_os = "macos") {
+            (
+                inp.mods.alt,
+                inp.mods.ctrl || inp.mods.command || inp.mods.shift,
+            )
+        } else {
+            (inp.mods.ctrl, inp.mods.alt || inp.mods.shift)
+        };
+        let used = inp.ui.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Key { pressed: true, .. }
+                        | egui::Event::PointerButton { pressed: true, .. }
+                )
+            })
+        });
+        if key && (others || used) {
+            self.copy_arm = false;
+        } else if key && !self.copy_down {
+            self.copy_arm = true;
+        }
+        if !key && self.copy_down && self.copy_arm && inp.tool != ModelerTool::Scale {
+            self.modeling.toggle_ctrl();
+        }
+        if !key {
+            self.copy_arm = false;
+        }
+        self.copy_down = key;
+        let center = key;
+        // With nothing selected, a click picks what is under the pointer first, as Select does:
+        // a face or an edge of a surface model, else an object.
+        let primary = egui::PointerButton::Primary;
+        if inp.resp.clicked_by(primary)
+            && session.selection.is_empty()
+            && self.sub.is_empty()
+            && !self.modeling.in_progress()
+            && let Some(p) = inp.resp.interact_pointer_pos()
+        {
+            let at = Vec2::new(p.x - inp.rect.min.x, p.y - inp.rect.min.y);
+            let hit = {
+                let doc = session.editor.doc();
+                let scenes = self.cache.get(doc, rev);
+                let world = World { doc, scenes };
+                modeling::select::pick(
+                    &world,
+                    &mut self.picker,
+                    cam,
+                    DVec2::new(f64::from(at.x), f64::from(at.y)),
+                )
+            };
+            match hit {
+                Some(item) => self.sub.set([item]),
+                None => {
+                    view3d.camera = *nav_cam;
+                    if let Some(id) = view3d
+                        .pick(inp.scene, at, inp.size)
+                        .filter(|id| session.editor.doc().object(*id).is_some())
+                    {
+                        session.selection = vec![id];
+                    }
+                }
+            }
+        }
+        // The box around the selected objects that are not surface models (the tool measures
+        // those itself).
+        let doc = session.editor.doc();
+        let mut object_bounds: Option<(DVec3, DVec3)> = None;
+        for id in &session.selection {
+            if modeling::model_of(doc, *id).is_some() {
+                continue;
+            }
+            if let Some((lo, hi)) = inp.scene.object_bounds(*id) {
+                let (lo, hi) = (
+                    lo.as_dvec3() + inp.scene.origin,
+                    hi.as_dvec3() + inp.scene.origin,
+                );
+                object_bounds = Some(match object_bounds {
+                    None => (lo, hi),
+                    Some((a, b)) => (a.min(lo), b.max(hi)),
+                });
+            }
+        }
+        self.modeling.set_context(XContext {
+            objects: session.selection.clone(),
+            parts: self.sub.clone(),
+            object_bounds,
+            shift: inp.mods.shift,
+            center,
+        });
+    }
+
     /// Runs the actions of a tool on the session (one undo step) and tells the tool.
     pub fn run(&mut self, session: &mut Session, out: Out) {
         if let Some(m) = out.message {
@@ -434,12 +558,20 @@ impl Edit3d {
         if out.actions.is_empty() {
             return;
         }
-        match modeling::run_actions_noted(&mut session.editor, &out.actions, out.redo) {
-            Ok((used, notes)) => {
-                self.modeling.committed(used, session.editor.revision());
+        match modeling::run_actions_full(&mut session.editor, &out.actions, out.redo) {
+            Ok(ran) => {
+                self.modeling.committed(ran.used, session.editor.revision());
                 // What the edit changed that was not asked for (a material of a merged face).
-                self.message =
-                    (!notes.is_empty()).then(|| tr!("modeler-edit-note", note = notes.join("; ")));
+                self.message = (!ran.notes.is_empty())
+                    .then(|| tr!("modeler-edit-note", note = ran.notes.join("; ")));
+                // The copies of a Move or Rotate become the selection: the next one moves them.
+                if !ran.objects.is_empty() {
+                    self.sub.clear();
+                    session.selection = ran.objects;
+                } else if !ran.parts.is_empty() {
+                    session.selection.clear();
+                    self.sub.set(ran.parts);
+                }
             }
             Err(e) => {
                 self.message = Some(tr!("modeler-edit-failed", reason = e));
@@ -531,9 +663,36 @@ impl Edit3d {
         for s in &self.preview.pull {
             seg(s, Stroke::new(1.5, Color32::from_rgb(30, 100, 235)));
         }
+        // The grips of Scale on the box around the selection.
+        for (i, g) in self.preview.grips.iter().enumerate() {
+            if let Some(c) = px(*g) {
+                let hot = self.preview.grip_hover == Some(i);
+                let fill = if hot {
+                    Color32::from_rgb(SELECTED[0], SELECTED[1], SELECTED[2])
+                } else {
+                    Color32::from_rgb(245, 245, 245)
+                };
+                let r = Rect::from_center_size(c, egui::vec2(8.0, 8.0));
+                painter.rect_filled(r, 1.0, fill);
+                painter.rect_stroke(r, 1.0, Stroke::new(1.0, dark), egui::StrokeKind::Inside);
+            }
+        }
+        // A plus at the pointer while Move or Rotate copies.
+        if self.preview.copy
+            && let Some(p) = self.last_pointer
+        {
+            painter.text(
+                p + egui::vec2(14.0, 14.0),
+                egui::Align2::LEFT_TOP,
+                "+",
+                egui::FontId::proportional(16.0),
+                Color32::from_rgb(SELECTED[0], SELECTED[1], SELECTED[2]),
+            );
+        }
         // The inference: cue lines, the mark and the label.
         if let Some(inf) = &self.hover
-            && modeling::is_drawing_tool(self.modeling.tool())
+            && modeling::takes_values(self.modeling.tool())
+            && self.modeling.tool() != ModelerTool::Scale
         {
             for l in &inf.lines {
                 if let (Some(a), Some(b)) = (px(l.from), px(l.to)) {

@@ -95,7 +95,7 @@ Sources: https://help.sketchup.com/en/sketchup/moving-entities-around ; https://
 ### Rotate (Q)
 Sources: https://help.sketchup.com/en/sketchup/flipping-mirroring-rotating-and-arrays ; https://help.sketchup.com/en/measuring-angles
 - Select, activate. Hover to infer the plane, Shift locks it, Alt (Command) frees the protractor from the inferred plane. Click the center, click the start of the angle, click the end. Ctrl (Option) toggles copy. Gray corner grips on a group or component let you rotate it directly.
-- Measurements: an angle in degrees (`34.1`) or a slope `rise:run` (`8:12`); negative is counter-clockwise. Precision 0.1 degree. Protractor ticks every 15 degrees near the center. Rotate arrays after a copy (`5x`, `/5`) are unverified.
+- Measurements: an angle in degrees (`34.1`) or a slope `rise:run` (`8:12`). Precision 0.1 degree. Protractor ticks every 15 degrees near the center. Rotate arrays after a copy (`5x`, `/5`) are unverified. The direction of a typed angle is unverified: the two help pages that were cited for "negative is counter-clockwise" do not say it (checked in review). Kadakas uses the familiar behaviour of programs of this kind: the typed angle goes the way the pointer was dragged, a minus reverses it, and with no drag a positive angle is counterclockwise as the viewer sees it.
 
 ### Scale (S)
 Source: https://help.sketchup.com/en/sketchup/scaling-your-model-or-parts-your-model

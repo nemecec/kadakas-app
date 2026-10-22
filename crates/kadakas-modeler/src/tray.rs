@@ -37,6 +37,16 @@ pub fn kind_text(kind: &str) -> String {
     }
 }
 
+/// Three angles in degrees.
+fn degrees(a: [f64; 3]) -> String {
+    format!("{:.1}°, {:.1}°, {:.1}°", a[0], a[1], a[2])
+}
+
+/// Three scale factors.
+fn factors(a: [f64; 3]) -> String {
+    format!("{:.3} × {:.3} × {:.3}", a[0], a[1], a[2])
+}
+
 fn lengths(size: [f64; 3]) -> String {
     let u = kadakas_units::current();
     tr!(
@@ -73,6 +83,7 @@ pub fn entity_info(ui: &mut egui::Ui, info: &EntityInfo) {
             size,
             min,
             surface,
+            placement,
         } => {
             egui::Grid::new("entity-info-one")
                 .num_columns(2)
@@ -87,6 +98,16 @@ pub fn entity_info(ui: &mut egui::Ui, info: &EntityInfo) {
                     }
                     if let Some(m) = min {
                         row(ui, tr!("modeler-entity-corner"), lengths(*m));
+                    }
+                    if let Some(p) = placement {
+                        row(ui, tr!("modeler-entity-position"), lengths(p.position));
+                        let rotation = if p.skewed {
+                            tr!("modeler-entity-skewed")
+                        } else {
+                            degrees(p.rotation_deg)
+                        };
+                        row(ui, tr!("modeler-entity-rotation"), rotation);
+                        row(ui, tr!("modeler-entity-scale"), factors(p.scale));
                     }
                     if let Some(s) = surface {
                         row(ui, tr!("modeler-entity-vertices"), s.vertices.to_string());
