@@ -277,7 +277,7 @@ impl Edit3d {
         }
 
         if xform {
-            self.prepare_transform(session, view3d, nav_cam, inp, &cam, rev, tool);
+            self.prepare_transform(session, view3d, nav_cam, inp, &cam, rev);
         } else {
             self.copy_down = false;
         }
@@ -455,7 +455,6 @@ impl Edit3d {
         inp: &Input,
         cam: &infer3d::Camera,
         rev: u64,
-        tool: ModelerTool,
     ) {
         // Ctrl (Option on a Mac) toggles copy when it is pressed alone and let go without another
         // key or button (Ctrl+Z and the like do not toggle). Scale takes it held, as Shift.
@@ -481,7 +480,7 @@ impl Edit3d {
         } else if key && !self.copy_down {
             self.copy_arm = true;
         }
-        if !key && self.copy_down && self.copy_arm && tool != ModelerTool::Scale {
+        if !key && self.copy_down && self.copy_arm && inp.tool != ModelerTool::Scale {
             self.modeling.toggle_ctrl();
         }
         if !key {
