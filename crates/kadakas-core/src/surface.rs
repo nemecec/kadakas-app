@@ -148,6 +148,8 @@ mod tests;
 #[cfg(test)]
 mod tests_absorb;
 #[cfg(test)]
+mod tests_followme;
+#[cfg(test)]
 mod tests_index;
 #[cfg(test)]
 mod tests_intersect;

@@ -113,6 +113,11 @@ pub enum Intent {
         smooth: bool,
         coplanar: bool,
     },
+    /// Follow Me, by a point inside the profile and the middle of each edge of the path.
+    FollowMeAt {
+        point: [f64; 3],
+        path: Vec<[f64; 3]>,
+    },
     /// A new transform.
     Place { transform: [f64; 12] },
     /// A change that cannot be replayed (for example a new curve).
@@ -225,6 +230,13 @@ impl Intent {
                 distance: *distance,
                 toward: *toward,
             },
+            Edit::FollowMe { face, path } => match face_point(m, *face) {
+                Some(p) => Intent::FollowMeAt {
+                    point: p.to_array(),
+                    path: middles(path),
+                },
+                None => Intent::Unlogged,
+            },
             Edit::SetEdgeStyle {
                 edges,
                 soft,
@@ -271,6 +283,7 @@ impl Intent {
             Intent::OffsetEdgesAt { edges, .. }
             | Intent::EdgeStyleAt { edges, .. }
             | Intent::SoftenAt { edges, .. } => edges.len().max(1),
+            Intent::FollowMeAt { path, .. } => path.len() + 1,
             Intent::Place { .. }
             | Intent::Unlogged
             | Intent::PushPullAt { .. }
@@ -544,6 +557,11 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
                 smooth: *smooth,
                 hidden: *hidden,
             })
+        }
+        Intent::FollowMeAt { point, path } => {
+            let face = face_at(m, DVec3::from(*point)).ok_or_else(|| gone("face", point))?;
+            let path = edges_at(m, path)?;
+            m.apply(&Edit::FollowMe { face, path })
         }
         Intent::SoftenAt {
             edges,

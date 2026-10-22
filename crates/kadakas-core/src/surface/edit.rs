@@ -130,6 +130,11 @@ pub enum Edit {
         #[serde(default)]
         coplanar: bool,
     },
+    /// Follow Me (MOD-08): sweeps the face `face` (the profile) along the chain of edges `path`
+    /// (open: a solid with the profile and a new face as caps; closed: a ring without caps). The
+    /// new faces get the paint of the profile; a curve of the path or of the profile gives soft
+    /// and smooth edges. See the module `followme`.
+    FollowMe { face: FaceId, path: Vec<EdgeId> },
 }
 
 fn yes() -> bool {
@@ -160,6 +165,7 @@ pub enum IntersectScope {
     Selection,
 }
 
+mod followme;
 mod intersect;
 mod near;
 mod offset;
@@ -231,6 +237,7 @@ fn run_noted(
             distance,
             toward,
         } => offset::offset_edges(m, edges, *distance, DVec3::from(*toward)),
+        Edit::FollowMe { face, path } => followme::follow_me(m, before, *face, path, notes),
         Edit::SetEdgeStyle {
             edges,
             soft,

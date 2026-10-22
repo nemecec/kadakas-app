@@ -151,7 +151,10 @@ fn fitted(
 /// The edges as one chain of vertices in order, and whether it is closed. An open chain starts
 /// at its end with the lower id; a closed one at its lowest vertex, toward the edge with the lower
 /// id.
-fn chain_of(m: &SurfaceModel, edges: &[EdgeId]) -> Result<(Vec<VertexId>, bool), SurfaceError> {
+pub(super) fn chain_of(
+    m: &SurfaceModel,
+    edges: &[EdgeId],
+) -> Result<(Vec<VertexId>, bool), SurfaceError> {
     let ids: BTreeSet<EdgeId> = edges.iter().copied().collect();
     let not_chain = || {
         SurfaceError::Refused(
