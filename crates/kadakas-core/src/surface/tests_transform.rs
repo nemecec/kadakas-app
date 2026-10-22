@@ -335,7 +335,7 @@ fn a_vertex_that_lands_on_another_vertex_welds() {
 }
 
 #[test]
-fn a_square_moved_against_another_in_one_plane_welds_and_merges_with_it() {
+fn a_square_moved_against_another_in_one_plane_welds_and_both_stay_faces() {
     let mut m = SurfaceModel::new();
     poly(&mut m, &square(0.0, 0.0, 1000.0, 0.0));
     poly(&mut m, &square(1500.0, 0.0, 1000.0, 0.0));
@@ -355,17 +355,18 @@ fn a_square_moved_against_another_in_one_plane_welds_and_merges_with_it() {
     )
     .unwrap();
     sound(&m);
-    // The two vertices on the shared side welded, the faces became one flat face (the shared
-    // edge and the two vertices in the straight sides are gone).
-    assert_eq!(m.face_count(), 1);
-    assert_eq!(m.vertex_count(), 4);
+    // The two vertices on the shared side welded and the two sides became one edge. The faces
+    // are coplanar now but stay two faces: a move never merges faces.
+    assert_eq!(m.face_count(), 2);
+    assert_eq!(m.vertex_count(), 6);
+    assert_eq!(m.edge_count(), 7);
     assert!((m.area() - 2_000_000.0).abs() < 1e-6);
 }
 
 #[test]
-fn a_face_that_becomes_coplanar_with_its_neighbour_merges_with_a_note() {
+fn a_face_that_becomes_coplanar_with_its_neighbour_stays_a_face() {
     // A roof: a slab with a wing at an angle. Pulling the wing flat makes it coplanar with the
-    // slab and the two merge; the material of the smaller face is dropped with a note.
+    // slab; the two stay apart with their materials, and the edge between them stays.
     let mut m = SurfaceModel::new();
     poly(&mut m, &square(0.0, 0.0, 1000.0, 0.0));
     poly(
@@ -390,14 +391,22 @@ fn a_face_that_becomes_coplanar_with_its_neighbour_merges_with_a_note() {
         vertex_at(&m, [1500.0, 1000.0, 400.0]),
         vertex_at(&m, [1500.0, 0.0, 400.0]),
     ];
+    let edges = m.edge_count();
     let notes = apply(&mut m, mv_vertices(&tip, DVec3::new(0.0, 0.0, -400.0))).unwrap();
     sound(&m);
-    assert_eq!(m.face_count(), 1, "the wing is flat with the slab now");
-    assert!(
-        !notes.is_empty(),
-        "the dropped material is noted: {notes:?}"
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!(
+        m.face_count(),
+        2,
+        "the wing is flat with the slab now, and apart"
     );
-    assert!(notes[0].contains("material"));
+    assert_eq!(m.edge_count(), edges);
+    for (k, id) in ids.iter().enumerate() {
+        assert_eq!(
+            m.face(*id).unwrap().attrs.get("material"),
+            Some(&format!("m{k}").into())
+        );
+    }
 }
 
 #[test]
@@ -921,7 +930,8 @@ fn perf_move() {
     m.apply(&mv_vertices(&[one], DVec3::new(0.0, 0.0, -300.0)))
         .unwrap();
     println!("lift it back: {:?}", start.elapsed());
-    // (Back down, the faces around it merge: the vertex heals away.)
+    assert_eq!(m.face_count(), n * n, "the cells unfold and stay apart");
+    // (Back down, the folds unfold: the four faces are as they were.)
     let other = vertex_at(&m, [30_000.0, 30_000.0, 0.0]);
     let start = Instant::now();
     m.apply(&mv_vertices(&[other], DVec3::new(100.0, 50.0, 0.0)))
@@ -939,6 +949,7 @@ fn perf_move() {
     m.apply(&mv_vertices(&block, DVec3::new(0.0, 0.0, -300.0)))
         .unwrap();
     println!("lift them back: {:?}", start.elapsed());
+    assert_eq!(m.face_count(), n * n);
     let start = Instant::now();
     assert!(m.problem().is_none());
     println!("quick check: {:?}", start.elapsed());
@@ -1078,7 +1089,7 @@ fn a_face_moved_into_a_coplanar_face_is_refused() {
 }
 
 #[test]
-fn an_edge_slid_along_another_becomes_one_edge_and_the_faces_merge() {
+fn an_edge_slid_along_another_becomes_one_edge_and_the_faces_stay_apart() {
     // Fable (2): B's bottom edge slides onto a part of A's top edge.
     let mut m = SurfaceModel::new();
     poly(&mut m, &square(0.0, 0.0, 1000.0, 0.0));
@@ -1094,7 +1105,7 @@ fn an_edge_slid_along_another_becomes_one_edge_and_the_faces_merge() {
             .any(|p| matches!(p, check::Problem::DoubleEdge(..)))
     );
     sound(&m);
-    assert_eq!(m.face_count(), 1, "the coplanar faces merged");
+    assert_eq!(m.face_count(), 2, "the coplanar faces stay apart");
     assert!((m.area() - area).abs() < 1e-6);
     // No two edges join the same vertices.
     let keys: std::collections::BTreeSet<_> = m.edges().map(|(_, e)| e.key()).collect();
@@ -1679,7 +1690,8 @@ fn the_local_work_gives_the_same_results_as_the_whole_model() {
             }
         }
     }
-    assert!(ok > 800 && landed > 10, "{ok} worked, {landed} welded");
+    // (Welds only: a move no longer merges faces, so no vertex heals away.)
+    assert!(ok > 800 && landed >= 5, "{ok} worked, {landed} welded");
 }
 
 #[test]
@@ -1695,4 +1707,301 @@ fn an_edge_that_a_merge_joins_is_checked_for_crossings() {
         Ok(()) => sound(&m),
         Err(_) => assert_eq!(m, before),
     }
+}
+
+// ---- no merge after a move; only folds unfold ---------------------------------------------------
+
+/// A floor of `n` x `n` separate square cells of 1000 at z = 0, drawn as lines.
+fn grid(n: usize) -> SurfaceModel {
+    let mut m = SurfaceModel::new();
+    let len = n as f64 * 1000.0;
+    let mut edges = Vec::new();
+    for i in 0..=n {
+        let t = i as f64 * 1000.0;
+        edges.push([[t, 0.0, 0.0], [t, len, 0.0]]);
+        edges.push([[0.0, t, 0.0], [len, t, 0.0]]);
+    }
+    m.apply(&Edit::AddEdges { edges }).unwrap();
+    assert_eq!(m.face_count(), n * n);
+    m
+}
+
+/// The number of edges with the attribute `name`.
+fn has_attr(m: &SurfaceModel, name: &str) -> usize {
+    m.edges()
+        .filter(|(id, _)| m.edge_attrs(*id).is_some_and(|a| a.contains_key(name)))
+        .count()
+}
+
+/// A floor of 2000 x 1000 in two faces, and the two ends of the edge between them.
+fn two_faces() -> (SurfaceModel, VertexId, VertexId) {
+    let mut m = SurfaceModel::new();
+    poly(
+        &mut m,
+        &[
+            [0.0, 0.0, 0.0],
+            [2000.0, 0.0, 0.0],
+            [2000.0, 1000.0, 0.0],
+            [0.0, 1000.0, 0.0],
+        ],
+    );
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[1000.0, 0.0, 0.0], [1000.0, 1000.0, 0.0]]],
+    })
+    .unwrap();
+    assert_eq!(m.face_count(), 2);
+    let lo = vertex_at(&m, [1000.0, 0.0, 0.0]);
+    let hi = vertex_at(&m, [1000.0, 1000.0, 0.0]);
+    (m, lo, hi)
+}
+
+#[test]
+fn a_grid_vertex_lifted_and_moved_back_gives_the_grid_with_its_lines() {
+    let original = grid(3);
+    let mut m = original.clone();
+    let v = vertex_at(&m, [1000.0, 1000.0, 0.0]);
+    apply(&mut m, mv_vertices(&[v], DVec3::new(0.0, 0.0, 400.0))).unwrap();
+    sound(&m);
+    assert_eq!(m.face_count(), 9 + 4, "the four cells at the vertex fold");
+    assert_eq!(has_attr(&m, "fold"), 4, "each fold edge is marked");
+    let notes = apply(&mut m, mv_vertices(&[v], DVec3::new(0.0, 0.0, -400.0))).unwrap();
+    sound(&m);
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!(m.face_count(), 9, "the cells stay apart");
+    assert_eq!(has_attr(&m, "fold") + has_attr(&m, "soft"), 0);
+    assert_same_geometry(&m, &original);
+}
+
+#[test]
+fn an_unfold_takes_the_look_of_the_larger_piece_with_a_note() {
+    let original = grid(3);
+    let mut m = original.clone();
+    let cell = |m: &SurfaceModel, x: f64, y: f64| {
+        face_with(m, &[[x, y, 0.0], [x + 1000.0, y + 1000.0, 0.0]])
+    };
+    let a = cell(&m, 0.0, 0.0);
+    let b = cell(&m, 1000.0, 0.0);
+    m.faces
+        .get_mut(&a)
+        .unwrap()
+        .attrs
+        .insert("material".into(), "grass".into());
+    let mut expected = m.clone();
+    let v = vertex_at(&m, [1000.0, 1000.0, 0.0]);
+    apply(&mut m, mv_vertices(&[v], DVec3::new(0.0, 0.0, 400.0))).unwrap();
+    // The pieces of a cell: the faces with all vertices in its square, the larger first.
+    let pieces = |m: &SurfaceModel, x: f64, y: f64| {
+        let mut p: Vec<(FaceId, f64)> = m
+            .faces()
+            .filter(|(_, f)| {
+                f.outer.iter().all(|v| {
+                    let p = m.vertex(*v).unwrap();
+                    (x..=x + 1000.0).contains(&p.x) && (y..=y + 1000.0).contains(&p.y)
+                })
+            })
+            .map(|(id, _)| (id, m.face_area(id).unwrap()))
+            .collect();
+        p.sort_by(|s, t| t.1.total_cmp(&s.1));
+        p
+    };
+    let pa = pieces(&m, 0.0, 0.0);
+    let pb = pieces(&m, 1000.0, 0.0);
+    assert_eq!((pa.len(), pb.len()), (2, 2));
+    assert_eq!((pa[0].0, pb[0].0), (a, b), "the larger piece keeps the id");
+    // Paint the smaller piece of A and the larger piece of B while they are folded.
+    m.faces
+        .get_mut(&pa[1].0)
+        .unwrap()
+        .attrs
+        .insert("material".into(), "stone".into());
+    m.faces
+        .get_mut(&b)
+        .unwrap()
+        .attrs
+        .insert("material".into(), "brick".into());
+    let notes = apply(&mut m, mv_vertices(&[v], DVec3::new(0.0, 0.0, -400.0))).unwrap();
+    sound(&m);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("stone"), "{notes:?}");
+    assert_eq!(m.face_count(), 9);
+    // A keeps grass (its larger piece decides), B takes brick (its larger piece was painted).
+    expected
+        .faces
+        .get_mut(&b)
+        .unwrap()
+        .attrs
+        .insert("material".into(), "brick".into());
+    assert_same_geometry(&m, &expected);
+}
+
+#[test]
+fn two_floor_faces_that_stay_coplanar_stay_two_faces() {
+    let (mut m, lo, hi) = two_faces();
+    let shared = m.edge_between(lo, hi).unwrap();
+    let corner = vertex_at(&m, [0.0, 0.0, 0.0]);
+    for (v, d) in [
+        (lo, DVec3::new(200.0, 0.0, 0.0)),
+        (corner, DVec3::new(-100.0, -300.0, 0.0)),
+        (hi, DVec3::new(-150.0, 0.0, 0.0)),
+    ] {
+        let notes = apply(&mut m, mv_vertices(&[v], d)).unwrap();
+        sound(&m);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(m.face_count(), 2);
+        assert_eq!(m.vertex_count(), 6);
+        assert_eq!(
+            m.edge_between(lo, hi),
+            Some(shared),
+            "the edge between them stays"
+        );
+    }
+}
+
+#[test]
+fn a_bump_brought_level_with_its_neighbours_keeps_every_cell() {
+    let original = grid(3);
+    let mut m = original.clone();
+    let up = DVec3::new(0.0, 0.0, 400.0);
+    for c in square(1000.0, 1000.0, 1000.0, 0.0) {
+        let v = vertex_at(&m, c);
+        apply(&mut m, mv_vertices(&[v], up)).unwrap();
+        sound(&m);
+    }
+    // The centre cell is flat again (it unfolded), the side cells are flat slopes (unfolded too),
+    // the corner cells are folded.
+    assert_eq!(m.face_count(), 1 + 4 + 4 * 2);
+    assert_eq!(has_attr(&m, "fold"), 4);
+    let rest: Vec<VertexId> = m
+        .vertices()
+        .filter(|(_, p)| p.z == 0.0)
+        .map(|(v, _)| v)
+        .collect();
+    assert_eq!(rest.len(), 12);
+    let notes = apply(&mut m, mv_vertices(&rest, up)).unwrap();
+    sound(&m);
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!(m.face_count(), 9, "all cells are coplanar and stay apart");
+    assert_eq!(has_attr(&m, "fold") + has_attr(&m, "soft"), 0);
+    let mut expected = original.clone();
+    let all: Vec<VertexId> = expected.vertices().map(|(v, _)| v).collect();
+    apply(&mut expected, mv_vertices(&all, up)).unwrap();
+    assert_same_geometry(&m, &expected);
+}
+
+#[test]
+fn a_user_soft_edge_between_coplanar_faces_stays() {
+    let (mut m, lo, hi) = two_faces();
+    let shared = m.edge_between(lo, hi).unwrap();
+    m.edge_attrs
+        .entry(shared)
+        .or_default()
+        .insert("soft".into(), true.into());
+    let original = m.clone();
+    // One corner up and back: the right face folds and unfolds.
+    let corner = vertex_at(&m, [2000.0, 1000.0, 0.0]);
+    apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, 400.0))).unwrap();
+    assert_eq!(m.face_count(), 3);
+    apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, -400.0))).unwrap();
+    sound(&m);
+    assert_eq!(m.face_count(), 2);
+    assert_same_geometry(&m, &original);
+    // The far side up (the right face tilts, flat) and back: coplanar again, still apart.
+    let far = [corner, vertex_at(&m, [2000.0, 0.0, 0.0])];
+    apply(&mut m, mv_vertices(&far, DVec3::new(0.0, 0.0, 400.0))).unwrap();
+    assert_eq!(m.face_count(), 2, "a tilt keeps the face flat");
+    let notes = apply(&mut m, mv_vertices(&far, DVec3::new(0.0, 0.0, -400.0))).unwrap();
+    sound(&m);
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_same_geometry(&m, &original);
+    // Moved in the plane: the edge and its attribute stay.
+    apply(&mut m, mv_vertices(&[lo], DVec3::new(100.0, 0.0, 0.0))).unwrap();
+    sound(&m);
+    assert_eq!(m.edge_between(lo, hi), Some(shared));
+    assert_eq!(
+        m.edge_attrs(shared).unwrap().get("soft"),
+        Some(&true.into())
+    );
+}
+
+#[test]
+fn a_landing_welds_the_vertices_and_the_faces_stay_faces() {
+    let mut m = SurfaceModel::new();
+    poly(&mut m, &square(0.0, 0.0, 1000.0, 0.0));
+    poly(&mut m, &square(1500.0, 0.0, 1000.0, 0.0));
+    let near = [
+        vertex_at(&m, [1500.0, 0.0, 0.0]),
+        vertex_at(&m, [1500.0, 1000.0, 0.0]),
+    ];
+    let kept = [
+        vertex_at(&m, [1000.0, 0.0, 0.0]),
+        vertex_at(&m, [1000.0, 1000.0, 0.0]),
+    ];
+    let notes = apply(&mut m, mv_vertices(&near, DVec3::new(-500.0, 0.0, 0.0))).unwrap();
+    sound(&m);
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!(m.face_count(), 2);
+    assert_eq!(
+        m.vertex_count(),
+        6,
+        "each landed vertex is one with the one there"
+    );
+    assert_eq!(m.edge_count(), 7, "the two sides are one edge");
+    assert!(near.iter().all(|v| m.vertex(*v).is_none()));
+    let shared = m.edge_between(kept[0], kept[1]).unwrap();
+    let users = m
+        .faces()
+        .filter(|(_, f)| f.uses().any(|(a, b)| m.edge_between(a, b) == Some(shared)))
+        .count();
+    assert_eq!(users, 2, "both faces use the shared edge");
+}
+
+#[test]
+fn a_circle_and_a_face_with_holes_unfold_into_the_face_they_were() {
+    // A circle of 48 sides (far pieces have no vertex near the lifted one), and a square with a
+    // hole and a hole that touches its corner.
+    let mut circle = SurfaceModel::new();
+    circle
+        .apply(&Edit::AddCurve {
+            points: (0..48)
+                .map(|i| {
+                    let t = std::f64::consts::TAU * f64::from(i) / 48.0;
+                    [2000.0 * t.cos(), 2000.0 * t.sin(), 0.0]
+                })
+                .collect(),
+            closed: true,
+        })
+        .unwrap();
+    let mut holes = pinched();
+    poly(&mut holes, &square(1500.0, 1500.0, 500.0, 0.0));
+    for (original, lift) in [(circle, [2000.0, 0.0, 0.0]), (holes, [3000.0, 3000.0, 0.0])] {
+        let mut m = original.clone();
+        let v = vertex_at(&m, lift);
+        apply(&mut m, mv_vertices(&[v], DVec3::new(0.0, 0.0, 300.0))).unwrap();
+        sound(&m);
+        assert!(m.face_count() > original.face_count() + 2, "it folded");
+        let notes = apply(&mut m, mv_vertices(&[v], DVec3::new(0.0, 0.0, -300.0))).unwrap();
+        sound(&m);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_same_geometry(&m, &original);
+    }
+}
+
+#[test]
+fn a_fold_with_a_line_drawn_on_a_piece_does_not_unfold() {
+    let mut m = box_model();
+    let corner = vertex_at(&m, [1000.0, 1000.0, 500.0]);
+    apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, 400.0))).unwrap();
+    assert_eq!(has_attr(&m, "fold"), 1);
+    // A line across the flat piece (at the corner (0, 0) of the top) splits it.
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[500.0, 0.0, 500.0], [0.0, 500.0, 500.0]]],
+    })
+    .unwrap();
+    sound(&m);
+    let faces = m.face_count();
+    apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, -400.0))).unwrap();
+    sound(&m);
+    assert_eq!(m.face_count(), faces, "nothing unfolds and nothing merges");
+    assert_eq!(has_attr(&m, "fold"), 1, "the fold edge stays");
+    assert_eq!(has_attr(&m, "soft"), 1);
 }
