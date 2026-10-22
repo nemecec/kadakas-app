@@ -31,16 +31,21 @@
 //! 4. **Fold.** A face that is no longer flat is cut into triangles (see the module `fold`: the
 //!    cut depends on the geometry only; a quad along the diagonal that bends the least, any other
 //!    face Delaunay-like in its best-fit plane), so that every face stays planar. The new edges
-//!    between the triangles have the attributes `soft: true` and `smooth: true`; an edge that was
-//!    there already is used as it is. Every piece keeps the attributes and the unknown fields of
+//!    between the triangles have the attributes `soft: true` and `smooth: true`, and the fold
+//!    mark `fold: {"face": id, "corners": [c, d]}` (the id of the face, and the third corners of
+//!    the two pieces at the edge). An edge that was there already is used as it is; then the fold
+//!    is not marked and never unfolds. Every piece keeps the attributes and the unknown fields of
 //!    the face (so its material). **Ids:** the pieces are ordered by area, the largest first
 //!    (equal areas: the lower sorted vertex ids first); the first piece keeps the id of the face
 //!    (the lowest id of all pieces), the others get new ids in that order, and new edges get ids
 //!    in the order of the pieces. The same model and the same edit always give the same ids.
-//! 5. **Merge.** A face that is now coplanar with a neighbour that it was not coplanar with before
-//!    merges with it by the rules of Erase (the lower id stays; the look of the larger face wins,
-//!    with a note for each dropped value: rule C). Neighbours that were coplanar before (the two
-//!    halves of a split face) stay apart, and the pieces of a fold stay triangles.
+//! 5. **Unfold.** The pieces of an earlier fold that are flat again (all in one plane within the
+//!    plane tolerance, looking the same way) join into one face, and the fold edges go. Only
+//!    exact pieces join: the two faces of each fold edge must still be the two triangles that
+//!    the mark names. A piece that was split or drawn on keeps the fold. The lowest id (that of
+//!    the largest piece) stays; the look of the larger piece wins, with a note for each dropped
+//!    value (merge rule C). **No other faces merge:** faces that a move makes coplanar or
+//!    adjacent stay apart, and no vertex heals away (a floor of cells keeps its lines).
 //!
 //! Refused, with the model unchanged: a loop of a face that would cross itself or touch itself
 //! (the reason names the face), a face that would collapse to zero area without a weld, a map that
@@ -464,7 +469,8 @@ pub(super) fn transform_vertices(
             .collect();
     to_check.sort_unstable();
     let mut folded: BTreeSet<FaceId> = BTreeSet::new();
-    let mut flat_changed: BTreeSet<FaceId> = BTreeSet::new();
+    // The flat faces with a moved vertex: the pieces of an earlier fold among them may unfold.
+    let mut flat_now: BTreeSet<FaceId> = BTreeSet::new();
     let mut fold_verts: BTreeSet<VertexId> = BTreeSet::new();
     for id in to_check {
         let face = w.m.faces[&id].clone();
@@ -495,9 +501,7 @@ pub(super) fn transform_vertices(
                 if p != face.plane {
                     w.m.faces.get_mut(&id).expect("exists").plane = p;
                 }
-                if !is_full {
-                    flat_changed.insert(id);
-                }
+                flat_now.insert(id);
             }
             None => {
                 let tris = fold::fold(w.m, &face, id)?;
@@ -517,6 +521,13 @@ pub(super) fn transform_vertices(
                 }
                 // The largest first; equal areas by vertex ids.
                 pieces.sort_by(|x, y| y.0.total_cmp(&x.0).then(x.1.cmp(&y.1)));
+                // The fold edges: the diagonals, each with the third corners of its two pieces.
+                // A fold that uses an edge that was there already is not marked (it cannot be
+                // told apart from the pieces later), so it never unfolds.
+                let tris: Vec<[VertexId; 3]> = pieces.iter().map(|p| p.1).collect();
+                let diagonals = fold::diagonals(&face, &tris).unwrap_or_default();
+                let mark = !diagonals.is_empty()
+                    && diagonals.keys().all(|(a, b)| w.t.edge(*a, *b).is_none());
                 // Edges between the pieces.
                 for (_, t, _) in &pieces {
                     for k in 0..3 {
@@ -527,6 +538,9 @@ pub(super) fn transform_vertices(
                             let at = w.m.edge_attrs.entry(e).or_default();
                             at.insert("soft".into(), true.into());
                             at.insert("smooth".into(), true.into());
+                            if let Some(c) = diagonals.get(&key(a, b)).filter(|_| mark) {
+                                at.insert(fold::FOLD.into(), fold::tag(id, *c));
+                            }
                         }
                     }
                 }
@@ -551,39 +565,11 @@ pub(super) fn transform_vertices(
             });
         }
     }
-    // Faces that are now coplanar with a neighbour that they were not coplanar with.
-    let mut merge: BTreeSet<EdgeId> = BTreeSet::new();
-    for &id in &flat_changed {
-        let Some(f) = w.m.faces.get(&id) else {
-            continue;
-        };
-        for (a, b) in f.uses() {
-            let Some(e) = w.t.edge(a, b) else { continue };
-            let fs: Vec<FaceId> = w.t.faces_of(e).collect();
-            let [x, y] = fs[..] else { continue };
-            let g = if x == id { y } else { x };
-            if folded.contains(&g) || merge.contains(&e) {
-                continue;
-            }
-            let gf = &w.m.faces[&g];
-            let f = &w.m.faces[&id];
-            let opposite = gf.uses().any(|u| u == (b, a));
-            if opposite
-                && f.plane.normal.dot(gf.plane.normal) > 0.0
-                && w.face_on(&f.plane, gf)
-                && !coplanar_before(before, id, g)
-            {
-                merge.insert(e);
-            }
-        }
-    }
-    if !merge.is_empty() {
-        let list: Vec<EdgeId> = merge.into_iter().collect();
-        if reference::mode() == reference::Mode::Index {
-            w.near = Some(Near::of(w.m));
-        }
-        super::erase_edges_in(&mut w, &list, notes)?;
-    }
+    // The pieces of earlier folds that are flat again join into the face they came from. No
+    // other faces merge: faces that a move makes coplanar stay apart.
+    flat_now.retain(|id| !folded.contains(id) && w.m.faces.contains_key(id));
+    let candidates: Vec<FaceId> = flat_now.into_iter().collect();
+    fold::unfold(&mut w, &candidates, &folded, notes);
     drop(w);
     finish(before, m, &survivors, &fold_verts)
 }
@@ -621,6 +607,28 @@ fn local_work<'a>(m: &'a mut SurfaceModel, seeds: impl Iterator<Item = VertexId>
         }
     }
     let mut wide = near.clone();
+    // The fold edges of the folds at these faces, all of them: an unfold looks at every piece.
+    let tags: BTreeSet<u32> = m
+        .edge_attrs
+        .keys()
+        .filter(|e| {
+            m.edges
+                .get(e)
+                .is_some_and(|x| x.v.iter().any(|v| has(&near, v)))
+        })
+        .filter_map(|e| fold::mark(m, *e).map(|(t, _)| t))
+        .collect();
+    if !tags.is_empty() {
+        for e in m.edge_attrs.keys() {
+            if let (Some((t, _)), Some(x)) = (fold::mark(m, *e), m.edges.get(e))
+                && tags.contains(&t)
+            {
+                for v in x.v {
+                    mark(&mut wide, v);
+                }
+            }
+        }
+    }
     for e in m.edges.values() {
         if e.v.iter().any(|v| has(&near, v)) {
             for v in e.v {
@@ -805,24 +813,6 @@ fn landing_offset(m: &SurfaceModel, s: &BTreeSet<VertexId>) -> Option<DVec3> {
 fn canonical_tri(t: [VertexId; 3]) -> [VertexId; 3] {
     let c = canonical(&t);
     [c[0], c[1], c[2]]
-}
-
-/// True if both faces were in the model before, shared an edge and were in one plane looking the
-/// same way.
-fn coplanar_before(before: &SurfaceModel, a: FaceId, b: FaceId) -> bool {
-    let (Some(fa), Some(fb)) = (before.faces.get(&a), before.faces.get(&b)) else {
-        return false;
-    };
-    if fa.plane.normal.dot(fb.plane.normal) <= 0.0
-        || !fb
-            .loops()
-            .flatten()
-            .all(|v| on_plane(&fa.plane, before.vertices[v]))
-    {
-        return false;
-    }
-    let uses: BTreeSet<(VertexId, VertexId)> = fb.uses().collect();
-    fa.uses().any(|(p, q)| uses.contains(&(q, p)))
 }
 
 /// The keys of the entries that differ between two maps (in one only, or with other values).

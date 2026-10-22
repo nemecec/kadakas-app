@@ -268,3 +268,218 @@ fn in_circle(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> bool {
         + lc * ((ad.x * bd.y).abs() + (bd.x * ad.y).abs());
     det > 1e-10 * bound
 }
+
+// ---- the fold mark and the unfold ------------------------------------------------------------
+
+/// The edge attribute that marks an edge made by a fold: `{"face": id, "corners": [c, d]}`, the
+/// id of the face that folded and the third corners of the two pieces at the edge (lower id
+/// first). User soft edges have no such mark, so they never unfold.
+pub(super) const FOLD: &str = "fold";
+
+/// The value of the fold mark of a fold edge of face `id` whose pieces have the corners `c`.
+pub(super) fn tag(id: FaceId, c: [VertexId; 2]) -> serde_json::Value {
+    serde_json::json!({ "face": id.0, "corners": [c[0].0, c[1].0] })
+}
+
+/// The fold mark of edge `e`: the id of the face that folded and the two corners. `None` for an
+/// edge with no mark, or with a value that is not a mark.
+pub(super) fn mark(m: &SurfaceModel, e: EdgeId) -> Option<(u32, [VertexId; 2])> {
+    let v = m.edge_attrs.get(&e)?.get(FOLD)?;
+    let id = |x: &serde_json::Value| x.as_u64().and_then(|n| u32::try_from(n).ok());
+    let face = id(v.get("face")?)?;
+    let [c, d] = v.get("corners")?.as_array()?.as_slice() else {
+        return None;
+    };
+    Some((face, [VertexId(id(c)?), VertexId(id(d)?)]))
+}
+
+/// The diagonals of a fold of `f` into `tris` (the sides that are not sides of the face), each
+/// with the third corners of its two triangles, lower id first. `None` when a diagonal does not
+/// have two triangles (then the fold is not marked).
+pub(super) fn diagonals(
+    f: &Face,
+    tris: &[[VertexId; 3]],
+) -> Option<BTreeMap<(VertexId, VertexId), [VertexId; 2]>> {
+    let sides: HashSet<(VertexId, VertexId)> = f.uses().map(|(a, b)| key(a, b)).collect();
+    let mut at: BTreeMap<(VertexId, VertexId), Vec<VertexId>> = BTreeMap::new();
+    for t in tris {
+        for k in 0..3 {
+            let ab = key(t[k], t[(k + 1) % 3]);
+            if !sides.contains(&ab) {
+                at.entry(ab).or_default().push(t[(k + 2) % 3]);
+            }
+        }
+    }
+    at.into_iter()
+        .map(|(ab, mut c)| {
+            c.sort_unstable();
+            match c[..] {
+                [x, y] => Some((ab, [x, y])),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// The pieces of one fold: its fold edges and its faces, lowest id first.
+struct Group {
+    edges: Vec<EdgeId>,
+    faces: Vec<FaceId>,
+}
+
+/// The fold that edge `start` belongs to, if all of it is still the pieces that the marks name:
+/// the two faces of each fold edge are the triangles with the marked corners, every fold edge of
+/// a piece has the same face in its mark, and no piece was made by this edit (`skip`). Every fold
+/// edge that is reached is added to `seen`.
+fn group(
+    w: &Work<'_>,
+    start: EdgeId,
+    face: u32,
+    skip: &BTreeSet<FaceId>,
+    seen: &mut BTreeSet<EdgeId>,
+) -> Option<Group> {
+    let mut stack = vec![start];
+    let mut edges: BTreeSet<EdgeId> = BTreeSet::new();
+    let mut faces: BTreeSet<FaceId> = BTreeSet::new();
+    let mut exact = true;
+    while let Some(e) = stack.pop() {
+        if !edges.insert(e) {
+            continue;
+        }
+        seen.insert(e);
+        let Some((_, corners)) = mark(w.m, e).filter(|(t, _)| *t == face) else {
+            exact = false;
+            continue;
+        };
+        let ends = w.m.edges[&e].v;
+        let fs: Vec<FaceId> = w.t.faces_of(e).collect();
+        if fs.len() != 2 {
+            exact = false;
+            continue;
+        }
+        let mut want = corners.to_vec();
+        for f in fs {
+            let piece = &w.m.faces[&f];
+            let third = piece.outer.iter().copied().find(|v| !ends.contains(v));
+            let at = third.and_then(|c| want.iter().position(|x| *x == c));
+            let triangle = piece.holes.is_empty() && piece.outer.len() == 3;
+            let Some(i) = at.filter(|_| triangle && !skip.contains(&f)) else {
+                exact = false;
+                continue;
+            };
+            want.remove(i);
+            faces.insert(f);
+            for (a, b) in piece.uses() {
+                if let Some(x) = w.t.edge(a, b)
+                    && !edges.contains(&x)
+                    && w.m
+                        .edge_attrs
+                        .get(&x)
+                        .is_some_and(|at| at.contains_key(FOLD))
+                {
+                    stack.push(x);
+                }
+            }
+        }
+    }
+    exact.then(|| Group {
+        edges: edges.into_iter().collect(),
+        faces: faces.into_iter().collect(),
+    })
+}
+
+/// Joins the pieces of each fold at the faces `at` that are flat again into the face they came
+/// from (see the module `transform`, step 5). A fold whose pieces are not exact, not in one plane
+/// or not looking the same way stays as it is.
+pub(super) fn unfold(
+    w: &mut Work<'_>,
+    at: &[FaceId],
+    skip: &BTreeSet<FaceId>,
+    notes: &mut Vec<String>,
+) {
+    let mut seen: BTreeSet<EdgeId> = BTreeSet::new();
+    let mut groups: Vec<Group> = Vec::new();
+    for f in at {
+        let Some(face) = w.m.faces.get(f) else {
+            continue;
+        };
+        for (a, b) in face.uses() {
+            let Some(e) = w.t.edge(a, b) else { continue };
+            if seen.contains(&e) {
+                continue;
+            }
+            let Some((tag, _)) = mark(w.m, e) else {
+                continue;
+            };
+            if let Some(g) = group(w, e, tag, skip, &mut seen) {
+                groups.push(g);
+            }
+        }
+    }
+    for g in groups {
+        join(w, &g, notes);
+    }
+}
+
+/// Joins the pieces of one exact fold if they lie in one plane and look the same way.
+fn join(w: &mut Work<'_>, g: &Group, notes: &mut Vec<String>) {
+    let keep = g.faces[0];
+    let plane = w.m.faces[&keep].plane;
+    let flat = g.faces.iter().all(|f| {
+        let piece = &w.m.faces[f];
+        piece.plane.normal.dot(plane.normal) > 0.0 && w.face_on(&plane, piece)
+    });
+    if !flat {
+        return;
+    }
+    // The sides of the joined face: the sides of the pieces that are not fold edges. Each fold
+    // edge is used by two pieces and each side by one.
+    let folds: BTreeSet<(VertexId, VertexId)> =
+        g.edges.iter().map(|e| w.m.edges[e].key()).collect();
+    let mut uses: BTreeMap<(VertexId, VertexId), usize> = BTreeMap::new();
+    for f in &g.faces {
+        for (a, b) in w.m.faces[f].uses() {
+            *uses.entry(key(a, b)).or_default() += 1;
+        }
+    }
+    if uses
+        .iter()
+        .any(|(k, n)| *n != if folds.contains(k) { 2 } else { 1 })
+    {
+        return;
+    }
+    let sides: BTreeSet<(VertexId, VertexId)> =
+        uses.into_keys().filter(|k| !folds.contains(k)).collect();
+    let arr = Arrangement::solve(w.m, plane, &sides);
+    let mut region_of: BTreeMap<(VertexId, VertexId), usize> = BTreeMap::new();
+    for (i, r) in arr.regions.iter().enumerate() {
+        for h in r.half_edges() {
+            region_of.insert(h, i);
+        }
+    }
+    let Some(i) = g
+        .faces
+        .iter()
+        .find_map(|f| w.m.faces[f].uses().find_map(|h| region_of.get(&h).copied()))
+    else {
+        return;
+    };
+    // The region must be the pieces together: the same area.
+    let area = |f: &Face| geom::face_area(f, |v| w.pos(v));
+    let mut face = from_region(&arr.regions[i], &plane, plane, Some(&w.m.faces[&keep]));
+    let areas: Vec<f64> = g.faces.iter().map(|f| area(&w.m.faces[f])).collect();
+    let total: f64 = areas.iter().sum();
+    if (area(&face) - total).abs() > 1e-6 * total.max(1.0) {
+        return;
+    }
+    let taken: Vec<(FaceId, Face)> = g
+        .faces
+        .iter()
+        .filter_map(|f| w.take_face(*f).map(|x| (*f, x)))
+        .collect();
+    for e in &g.edges {
+        w.remove_edge(*e);
+    }
+    merge_attrs(keep, &mut face, &taken, &areas, notes);
+    w.put_face(keep, face);
+}
