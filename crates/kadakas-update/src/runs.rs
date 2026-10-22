@@ -272,6 +272,7 @@ fn remove_run_files(root: &Path, id: &str) {
         "download",
         "app.lock",
         "alive",
+        "program",
     ] {
         let _ = std::fs::remove_file(run_file(root, id, suffix));
     }

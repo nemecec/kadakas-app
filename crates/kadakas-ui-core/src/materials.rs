@@ -7,12 +7,13 @@
 //! action is one undo step.
 
 use kadakas_core::command::{Command, Editor};
-use kadakas_core::model::{Color, Document};
+use kadakas_core::graphics::GraphicResource;
+use kadakas_core::model::{Color, Document, Shape};
 use kadakas_core::present::{
     self, MappingKind, Material, MaterialUses, Procedural, RenderResource, Texture,
 };
 use kadakas_core::resource::{Resource, ResourceBody, ResourceId};
-use kadakas_core::surface::{Edit, PaintSide};
+use kadakas_core::surface::{Edit, FaceId, PaintSide};
 use kadakas_l10n::tr;
 
 /// One line of the list.
@@ -29,7 +30,8 @@ pub struct MaterialRow {
     pub thumb_key: u64,
 }
 
-/// A number that changes when the swatch of the material would look different.
+/// A number that changes when the swatch of the material would look different: a hash of the
+/// color, the opacity and the whole texture (the pattern, or all the text of the image).
 pub fn thumb_key(m: &Material) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -38,19 +40,15 @@ pub fn thumb_key(m: &Material) -> u64 {
     match &m.texture {
         None => 0u8.hash(&mut h),
         Some(Texture::Procedural { kind, seed }) => (1u8, kind.id(), seed).hash(&mut h),
-        Some(Texture::Image { png_base64, .. }) => (
-            2u8,
-            png_base64.len(),
-            png_base64.get(..64),
-            png_base64.get(png_base64.len().saturating_sub(64)..),
-        )
-            .hash(&mut h),
+        Some(Texture::Image { png_base64, .. }) => (2u8, png_base64).hash(&mut h),
     }
     h.finish()
 }
 
-/// The materials of the document in the order they were made, with how often each is used.
+/// The materials of the document in the order they were made, with how often each is used. The
+/// uses are counted in one pass over the document.
 pub fn rows(doc: &Document) -> Vec<MaterialRow> {
+    let uses = present::material_use_map(doc);
     doc.resources
         .iter()
         .filter_map(|r| {
@@ -61,7 +59,7 @@ pub fn rows(doc: &Document) -> Vec<MaterialRow> {
                 color: m.base_color.0,
                 opacity: m.opacity,
                 textured: m.texture.is_some(),
-                uses: present::material_uses(doc, r.id).total(),
+                uses: uses.get(&r.id).map_or(0, MaterialUses::total),
                 thumb_key: thumb_key(m),
             })
         })
@@ -422,6 +420,44 @@ impl MaterialsPanel {
                     });
                 }
             }
+        }
+        // The parts of component definitions that use it: the definition is changed in the same
+        // step (an edit in place would do the same by hand).
+        let mut by_definition: std::collections::BTreeMap<
+            ResourceId,
+            Vec<(usize, Vec<FaceId>, Vec<FaceId>)>,
+        > = std::collections::BTreeMap::new();
+        for (def, i, front, back) in uses.parts {
+            by_definition.entry(def).or_default().push((i, front, back));
+        }
+        for (def, parts) in by_definition {
+            let Some(ResourceBody::Graphic(g)) = doc.resources.get(def).map(|r| &r.body) else {
+                continue;
+            };
+            let mut g = g.clone();
+            if let GraphicResource::Symbol(d) = g.as_mut() {
+                for (i, front, back) in parts {
+                    let Some(Shape::SurfaceModel(m)) = d.parts.get_mut(i).map(|p| &mut p.shape)
+                    else {
+                        continue;
+                    };
+                    for (faces, side) in [(front, PaintSide::Front), (back, PaintSide::Back)] {
+                        if !faces.is_empty() {
+                            m.apply(&Edit::SetFaceMaterial {
+                                faces,
+                                side,
+                                material: None,
+                            })
+                            .map_err(|e| e.to_string())?;
+                        }
+                    }
+                }
+            }
+            commands.push(Command::ModifyResource {
+                id: def,
+                name: None,
+                body: Some(ResourceBody::Graphic(g)),
+            });
         }
         commands.push(Command::DeleteResource { id, reassign: None });
         editor

@@ -338,3 +338,122 @@ fn a_gone_material_is_an_error_not_a_panic() {
         assert!(panel.apply(&mut ed, &mut bucket, req).is_err());
     }
 }
+
+#[test]
+fn a_material_that_only_a_texture_bed_uses_is_not_purged_and_asks_before_it_goes() {
+    use kadakas_core::model::{ModifierKind, Shape};
+    let mut ed = editor();
+    let mut panel = MaterialsPanel::default();
+    let mut bucket = None;
+    panel
+        .apply(&mut ed, &mut bucket, Request::AddDefaults)
+        .unwrap();
+    let grass = rows(ed.doc())[0].id;
+    ed.execute(&Command::AddObject {
+        shape: Shape::SiteModifier {
+            modifier: ModifierKind::TextureBed {
+                texture: Some(grass),
+                mapping: None,
+            },
+            boundary: kadakas_core::curve::corners(&[
+                glam::DVec2::new(0.0, 0.0),
+                glam::DVec2::new(100.0, 0.0),
+                glam::DVec2::new(100.0, 100.0),
+            ]),
+        },
+        layer: None,
+        class: None,
+        attrs: kadakas_core::model::Attributes::default(),
+    })
+    .unwrap();
+    assert_eq!(rows(ed.doc())[0].uses, 1, "the bed is a use");
+    let msg = panel.apply(&mut ed, &mut bucket, Request::Purge).unwrap();
+    assert_eq!(msg, tr!("uic-materials-purged", count = 6));
+    assert_eq!(names(&ed), ["Grass"], "the material of the bed stays");
+    // Delete asks first.
+    panel
+        .apply(&mut ed, &mut bucket, Request::Delete(grass))
+        .unwrap();
+    assert_eq!(panel.pending_delete.as_ref().unwrap().uses.slots, 1);
+    assert!(ed.doc().resources.get(grass).is_some());
+}
+
+#[test]
+fn a_material_in_a_component_definition_is_counted_and_cleared_in_the_same_step_as_the_delete() {
+    use kadakas_core::graphics::GraphicResource;
+    use kadakas_core::resource::ResourceBody;
+    let mut ed = editor();
+    let mut panel = MaterialsPanel::default();
+    let mut bucket = None;
+    panel
+        .apply(&mut ed, &mut bucket, Request::AddDefaults)
+        .unwrap();
+    let brick = rows(ed.doc())[5].id;
+    let (model, face) = model_with_face(&mut ed);
+    panel
+        .apply(
+            &mut ed,
+            &mut bucket,
+            Request::SetFaces {
+                model,
+                faces: vec![face],
+                side: PaintSide::Both,
+                material: Some(brick),
+            },
+        )
+        .unwrap();
+    let out = ed
+        .execute(&Command::MakeComponent {
+            name: "Square".into(),
+            model: Some(model),
+            faces: vec![face],
+            edges: vec![],
+            objects: vec![],
+            replace: true,
+        })
+        .unwrap();
+    let def = ResourceId(out.created[0]);
+    assert_eq!(rows(ed.doc())[5].uses, 2, "the faces of the part count");
+    panel
+        .apply(&mut ed, &mut bucket, Request::Delete(brick))
+        .unwrap();
+    let ask = panel.pending_delete.clone().expect("it asks");
+    assert_eq!(ask.uses.parts.len(), 1);
+    let depth = ed.undo_depth();
+    panel
+        .apply(&mut ed, &mut bucket, Request::ConfirmDelete)
+        .unwrap();
+    assert_eq!(ed.undo_depth(), depth + 1, "one undo step");
+    assert!(ed.doc().resources.get(brick).is_none());
+    // The definition has no paint left.
+    let Some(ResourceBody::Graphic(g)) = ed.doc().resources.get(def).map(|r| &r.body) else {
+        panic!("the definition is there");
+    };
+    let GraphicResource::Symbol(d) = g.as_ref() else {
+        panic!("a symbol");
+    };
+    let Shape::SurfaceModel(m) = &d.parts[0].shape else {
+        panic!("a surface model");
+    };
+    assert!(m.faces().all(|(_, f)| f.attrs.is_empty()));
+    assert!(ed.undo());
+    assert!(ed.doc().resources.get(brick).is_some());
+}
+
+#[test]
+fn the_thumbnail_key_sees_a_change_anywhere_in_an_image() {
+    let image = |middle: char| {
+        let mut text = "A".repeat(500);
+        text.replace_range(250..251, &middle.to_string());
+        Material {
+            texture: Some(Texture::Image {
+                png_base64: text,
+                width: 4,
+                height: 4,
+            }),
+            ..Default::default()
+        }
+    };
+    assert_ne!(thumb_key(&image('B')), thumb_key(&image('C')));
+    assert_eq!(thumb_key(&image('B')), thumb_key(&image('B')));
+}

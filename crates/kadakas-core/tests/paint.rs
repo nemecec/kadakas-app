@@ -426,3 +426,536 @@ fn material_uses_counts_slots_site_textures_and_both_sides_of_faces() {
         (Some(brick), None)
     );
 }
+
+// ---- the paint through the other edits of a surface model ---------------------------------------
+
+use glam::{DAffine3, DVec3};
+use kadakas_core::surface::VertexId;
+
+/// A square of 1000 split into two halves, `a` (the lower id) and `b`, and the two materials.
+fn split_square() -> (Editor, ObjectId, [FaceId; 2], ResourceId, ResourceId) {
+    let mut ed = Editor::with_sequential_ids();
+    let id = add_model(&mut ed);
+    let p = [
+        [0.0, 0.0, 0.0],
+        [1000.0, 0.0, 0.0],
+        [1000.0, 1000.0, 0.0],
+        [0.0, 1000.0, 0.0],
+    ];
+    let mut edges: Vec<[[f64; 3]; 2]> = (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect();
+    edges.push([[500.0, 0.0, 0.0], [500.0, 1000.0, 0.0]]);
+    edit(&mut ed, id, Edit::AddEdges { edges }).unwrap();
+    let mut faces: Vec<FaceId> = model(&ed, id).faces().map(|(f, _)| f).collect();
+    faces.sort();
+    assert_eq!(faces.len(), 2);
+    let brick = add_material(&mut ed, "Brick", [158, 78, 58, 255]);
+    let grass = add_material(&mut ed, "Grass", [96, 142, 62, 255]);
+    (ed, id, [faces[0], faces[1]], brick, grass)
+}
+
+fn vertex_at(m: &SurfaceModel, p: [f64; 3]) -> VertexId {
+    m.vertices()
+        .find(|(_, q)| q.distance(DVec3::from(p)) < 1e-6)
+        .map(|(v, _)| v)
+        .expect("a vertex there")
+}
+
+#[test]
+fn erasing_the_edge_between_two_halves_keeps_the_paint_of_the_face_that_stays() {
+    let (mut ed, id, [a, _], brick, grass) = split_square();
+    paint(&mut ed, id, &[a], PaintSide::Front, Some(brick)).unwrap();
+    paint(&mut ed, id, &[a], PaintSide::Back, Some(grass)).unwrap();
+    let (v1, v2) = {
+        let m = model(&ed, id);
+        (
+            vertex_at(m, [500.0, 0.0, 0.0]),
+            vertex_at(m, [500.0, 1000.0, 0.0]),
+        )
+    };
+    let e = model(&ed, id)
+        .edge_between(v1, v2)
+        .expect("the shared edge");
+    edit(&mut ed, id, Edit::EraseEdges { edges: vec![e] }).unwrap();
+    let m = model(&ed, id);
+    assert_eq!(m.face_count(), 1);
+    // Equal halves: the lower id stays, with its front and back paint.
+    let (f, _) = m.faces().next().unwrap();
+    assert_eq!(f, a);
+    assert_eq!(attr(&ed, id, f, ATTR_MATERIAL), Some(brick.to_string()));
+    assert_eq!(
+        attr(&ed, id, f, ATTR_BACK_MATERIAL),
+        Some(grass.to_string())
+    );
+}
+
+#[test]
+fn a_split_and_an_intersection_leave_the_paint_on_every_part() {
+    // A split by a new edge.
+    let (mut ed, id, [a, b], brick, grass) = split_square();
+    paint(&mut ed, id, &[a, b], PaintSide::Both, Some(brick)).unwrap();
+    edit(
+        &mut ed,
+        id,
+        Edit::AddEdges {
+            edges: vec![[[0.0, 500.0, 0.0], [500.0, 500.0, 0.0]]],
+        },
+    )
+    .unwrap();
+    assert_eq!(model(&ed, id).face_count(), 3);
+    assert!(model(&ed, id).faces().all(|(f, _)| {
+        attr(&ed, id, f, ATTR_MATERIAL) == Some(brick.to_string())
+            && attr(&ed, id, f, ATTR_BACK_MATERIAL) == Some(brick.to_string())
+    }));
+    // Intersect Faces: a painted square cut by a vertical, unpainted square.
+    let mut ed = Editor::with_sequential_ids();
+    let id = add_model(&mut ed);
+    let grass = {
+        let _ = grass;
+        add_material(&mut ed, "Grass", [96, 142, 62, 255])
+    };
+    let flat = [
+        [0.0, 0.0, 0.0],
+        [1000.0, 0.0, 0.0],
+        [1000.0, 1000.0, 0.0],
+        [0.0, 1000.0, 0.0],
+    ];
+    edit(
+        &mut ed,
+        id,
+        Edit::AddEdges {
+            edges: (0..4).map(|i| [flat[i], flat[(i + 1) % 4]]).collect(),
+        },
+    )
+    .unwrap();
+    let floor = model(&ed, id).faces().next().unwrap().0;
+    paint(&mut ed, id, &[floor], PaintSide::Both, Some(grass)).unwrap();
+    let wall = [
+        [500.0, -500.0, -500.0],
+        [500.0, 1500.0, -500.0],
+        [500.0, 1500.0, 500.0],
+        [500.0, -500.0, 500.0],
+    ];
+    edit(
+        &mut ed,
+        id,
+        Edit::AddEdges {
+            edges: (0..4).map(|i| [wall[i], wall[(i + 1) % 4]]).collect(),
+        },
+    )
+    .unwrap();
+    edit(
+        &mut ed,
+        id,
+        Edit::IntersectFaces {
+            scope: kadakas_core::surface::IntersectScope::Model,
+            faces: Vec::new(),
+            edges: Vec::new(),
+        },
+    )
+    .unwrap();
+    let m = model(&ed, id);
+    let flat_faces: Vec<FaceId> = m
+        .faces()
+        .filter(|(_, f)| f.plane.normal.z.abs() > 0.9)
+        .map(|(f, _)| f)
+        .collect();
+    assert_eq!(flat_faces.len(), 2, "the floor was cut in two");
+    for f in flat_faces {
+        assert_eq!(attr(&ed, id, f, ATTR_MATERIAL), Some(grass.to_string()));
+    }
+    let wall_painted = m
+        .faces()
+        .filter(|(_, f)| f.plane.normal.z.abs() < 0.1)
+        .filter(|(f, _)| attr(&ed, id, *f, ATTR_MATERIAL).is_some())
+        .count();
+    assert_eq!(wall_painted, 0, "the wall was not painted");
+}
+
+#[test]
+fn a_fold_and_its_unfold_keep_the_paint() {
+    let (mut ed, id, [a, b], brick, grass) = split_square();
+    // Make it one square first.
+    let (v1, v2) = {
+        let m = model(&ed, id);
+        (
+            vertex_at(m, [500.0, 0.0, 0.0]),
+            vertex_at(m, [500.0, 1000.0, 0.0]),
+        )
+    };
+    let e = model(&ed, id).edge_between(v1, v2).unwrap();
+    edit(&mut ed, id, Edit::EraseEdges { edges: vec![e] }).unwrap();
+    let _ = b;
+    paint(&mut ed, id, &[a], PaintSide::Front, Some(brick)).unwrap();
+    paint(&mut ed, id, &[a], PaintSide::Back, Some(grass)).unwrap();
+    // Lift a corner: the square is not flat any more and folds into two triangles.
+    let corner = vertex_at(model(&ed, id), [1000.0, 1000.0, 0.0]);
+    let lift = |d: f64| Edit::TransformVertices {
+        vertices: vec![corner],
+        faces: Vec::new(),
+        edges: Vec::new(),
+        matrix: DAffine3::from_translation(DVec3::new(0.0, 0.0, d)).to_cols_array(),
+    };
+    edit(&mut ed, id, lift(300.0)).unwrap();
+    assert_eq!(model(&ed, id).face_count(), 2, "folded");
+    for (f, _) in model(&ed, id).faces() {
+        assert_eq!(attr(&ed, id, f, ATTR_MATERIAL), Some(brick.to_string()));
+        assert_eq!(
+            attr(&ed, id, f, ATTR_BACK_MATERIAL),
+            Some(grass.to_string())
+        );
+    }
+    // Back to flat: the pieces of the fold unfold into one face with the paint.
+    edit(&mut ed, id, lift(-300.0)).unwrap();
+    assert_eq!(model(&ed, id).face_count(), 1, "unfolded");
+    let (f, _) = model(&ed, id).faces().next().unwrap();
+    assert_eq!(attr(&ed, id, f, ATTR_MATERIAL), Some(brick.to_string()));
+    assert_eq!(
+        attr(&ed, id, f, ATTR_BACK_MATERIAL),
+        Some(grass.to_string())
+    );
+}
+
+#[test]
+fn a_mirrored_model_keeps_its_front_in_front() {
+    let (mut ed, id, [a, _], brick, _) = split_square();
+    paint(&mut ed, id, &[a], PaintSide::Front, Some(brick)).unwrap();
+    let mirror = DAffine3::from_scale(DVec3::new(-1.0, 1.0, 1.0));
+    ed.execute(&Command::TransformObjects3d {
+        ids: vec![id],
+        matrix: mirror.to_cols_array(),
+        copy: false,
+        count: 1,
+    })
+    .unwrap();
+    let scene = mesh::build(ed.doc());
+    // The front of the face is still up: the triangles of the front set and the back set both
+    // wind counterclockwise seen from above, so the front is the side seen from above.
+    let mut front = 0;
+    for t in 0..scene.mesh.triangle_count() {
+        let [p0, p1, p2] = scene.mesh.triangle(t);
+        assert!((p1 - p0).cross(p2 - p0).z > 0.0, "triangle {t} faces up");
+        if scene.mesh.side_of(t) == SIDE_FRONT {
+            assert_eq!(scene.mesh.paint_of(t), Some(brick));
+            front += 1;
+        }
+    }
+    assert!(front > 0);
+}
+
+// ---- push/pull ---------------------------------------------------------------------------------
+
+#[test]
+fn push_pull_gives_walls_the_paint_and_keeps_the_paint_on_its_side() {
+    let (mut ed, id, [a, b], brick, grass) = {
+        let (ed, id, f, b, g) = two_faces();
+        (ed, id, f, b, g)
+    };
+    let _ = b;
+    paint(&mut ed, id, &[a], PaintSide::Front, Some(brick)).unwrap();
+    paint(&mut ed, id, &[a], PaintSide::Back, Some(grass)).unwrap();
+    edit(
+        &mut ed,
+        id,
+        Edit::PushPull {
+            face: a,
+            distance: 500.0,
+        },
+    )
+    .unwrap();
+    let m = model(&ed, id);
+    let side = |f: FaceId, key: &str| {
+        model(&ed, id)
+            .face(f)?
+            .attrs
+            .get(key)?
+            .as_str()
+            .map(str::to_string)
+    };
+    // The cap keeps the face, its id and its paint.
+    assert_eq!(side(a, ATTR_MATERIAL), Some(brick.to_string()));
+    assert_eq!(side(a, ATTR_BACK_MATERIAL), Some(grass.to_string()));
+    // The four walls have the paint of the face; the old place became the bottom, turned over,
+    // so the paint that was on its front is on its back now (the same physical side).
+    let mut walls = 0;
+    let mut bottoms = 0;
+    for (f, face) in m
+        .faces()
+        .filter(|(f, _)| m.face_area(*f).is_some() && *f != a)
+    {
+        // The second square of the model is not part of the solid.
+        if face.plane.normal.z.abs() > 0.9 {
+            if side(f, ATTR_BACK_MATERIAL) == Some(brick.to_string()) {
+                assert_eq!(side(f, ATTR_MATERIAL), Some(grass.to_string()));
+                bottoms += 1;
+            }
+        } else if side(f, ATTR_MATERIAL) == Some(brick.to_string()) {
+            assert_eq!(side(f, ATTR_BACK_MATERIAL), Some(grass.to_string()));
+            walls += 1;
+        }
+    }
+    assert_eq!((walls, bottoms), (4, 1));
+    // Turning a face over by hand does the same to the paint: the two agree.
+    let before = model(&ed, id).face(a).unwrap().attrs.clone();
+    edit(&mut ed, id, Edit::ReverseFaces { faces: vec![a] }).unwrap();
+    let after = model(&ed, id).face(a).unwrap().attrs.clone();
+    assert_eq!(after[ATTR_MATERIAL], before[ATTR_BACK_MATERIAL]);
+    assert_eq!(after[ATTR_BACK_MATERIAL], before[ATTR_MATERIAL]);
+}
+
+#[test]
+fn a_free_face_pushed_the_other_way_keeps_the_old_face_and_turns_the_cap() {
+    let (mut ed, id, [a, _], brick, grass) = two_faces();
+    paint(&mut ed, id, &[a], PaintSide::Front, Some(brick)).unwrap();
+    paint(&mut ed, id, &[a], PaintSide::Back, Some(grass)).unwrap();
+    let old: Vec<FaceId> = model(&ed, id).faces().map(|(f, _)| f).collect();
+    edit(
+        &mut ed,
+        id,
+        Edit::PushPull {
+            face: a,
+            distance: -500.0,
+        },
+    )
+    .unwrap();
+    // The cap (the id of the face) moved down and looks to the back: its paint is swapped. The
+    // old face stayed in place with the paint it had.
+    assert_eq!(attr(&ed, id, a, ATTR_MATERIAL), Some(grass.to_string()));
+    assert_eq!(
+        attr(&ed, id, a, ATTR_BACK_MATERIAL),
+        Some(brick.to_string())
+    );
+    let stayed = model(&ed, id)
+        .faces()
+        .filter(|(f, _)| !old.contains(f))
+        .filter(|(f, face)| {
+            face.plane.normal.z > 0.9
+                && attr(&ed, id, *f, ATTR_MATERIAL) == Some(brick.to_string())
+                && attr(&ed, id, *f, ATTR_BACK_MATERIAL) == Some(grass.to_string())
+        })
+        .count();
+    assert_eq!(stayed, 1, "the old face stays where it was, with its paint");
+}
+
+// ---- groups, plants and Explode ------------------------------------------------------------------
+
+fn add_plant(ed: &mut Editor) -> ObjectId {
+    ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::Plant {
+                at: DVec2::new(5000.0, 5000.0),
+                species: "Quercus".into(),
+                spread: 1000.0,
+                height: 2000.0,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    )
+}
+
+fn set_object_material(ed: &mut Editor, object: ObjectId, m: ResourceId) {
+    ed.execute(&Command::SetMaterialSlot {
+        target: SlotTarget::Object { object, slot: None },
+        material: Some(m),
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_material_on_a_group_does_not_turn_its_plants_and_hardscapes_into_that_material() {
+    let (mut ed, id, _, brick, _) = two_faces();
+    let plant = add_plant(&mut ed);
+    let slab = ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::Hardscape {
+                boundary: kadakas_core::curve::corners(&[
+                    DVec2::new(0.0, 0.0),
+                    DVec2::new(1000.0, 0.0),
+                    DVec2::new(1000.0, 1000.0),
+                ]),
+                material: "m".into(),
+                thickness: None,
+                elevation: None,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let grp = ed
+        .execute(&Command::Group {
+            ids: vec![id, plant, slab],
+            name: None,
+        })
+        .map(|o| ObjectId(o.created[0]))
+        .unwrap();
+    set_object_material(&mut ed, grp, brick);
+    let slots = present::SlotIndex::new(ed.doc());
+    let obj = |o: ObjectId| ed.doc().object(o).unwrap();
+    assert_eq!(slots.resolve(obj(id), 0), Some(brick), "the model takes it");
+    for (name, o) in [("plant", plant), ("hardscape", slab)] {
+        for part in [0, present::PART_TRUNK, present::PART_CANOPY] {
+            assert_eq!(slots.resolve(obj(o), part), None, "{name} part {part}");
+        }
+    }
+}
+
+#[test]
+fn exploding_a_painted_group_or_instance_leaves_the_paint_on_what_was_in_it() {
+    // A group with a material and a plain model.
+    let (mut ed, id, [a, _], brick, grass) = two_faces();
+    let plant = add_plant(&mut ed);
+    let grp = ed
+        .execute(&Command::Group {
+            ids: vec![id, plant],
+            name: None,
+        })
+        .map(|o| ObjectId(o.created[0]))
+        .unwrap();
+    set_object_material(&mut ed, grp, brick);
+    // A face of its own paint keeps it.
+    paint(&mut ed, id, &[a], PaintSide::Front, Some(grass)).unwrap();
+    ed.execute(&Command::Explode { ids: vec![grp] }).unwrap();
+    assert!(ed.doc().object(grp).is_none());
+    let models: Vec<ObjectId> = ed
+        .doc()
+        .objects
+        .values()
+        .filter(|o| matches!(o.shape, Shape::SurfaceModel(_)))
+        .map(|o| o.id)
+        .collect();
+    assert_eq!(models.len(), 1);
+    let m = models[0];
+    let mut front = std::collections::BTreeMap::new();
+    for (f, _) in model(&ed, m).faces() {
+        *front.entry(attr(&ed, m, f, ATTR_MATERIAL)).or_insert(0) += 1;
+        assert_eq!(
+            attr(&ed, m, f, ATTR_BACK_MATERIAL),
+            Some(brick.to_string()),
+            "the back takes the material of the group"
+        );
+    }
+    assert_eq!(front.get(&Some(grass.to_string())), Some(&1), "{front:?}");
+    assert_eq!(front.get(&Some(brick.to_string())), Some(&1), "{front:?}");
+    // The plant stays as it was: no material, and no slot is left behind.
+    let slots = present::SlotIndex::new(ed.doc());
+    assert_eq!(slots.resolve(ed.doc().object(plant).unwrap(), 0), None);
+    assert!(
+        ed.doc()
+            .drawing
+            .presentation
+            .slots
+            .iter()
+            .all(|e| { !matches!(&e.target, SlotTarget::Object { object, .. } if *object == grp) })
+    );
+
+    // An instance with a material.
+    let (mut ed, id, _, brick, _) = two_faces();
+    let all: Vec<FaceId> = model(&ed, id).faces().map(|(f, _)| f).collect();
+    let out = ed
+        .execute(&Command::MakeComponent {
+            name: "Pair".into(),
+            model: Some(id),
+            faces: all,
+            edges: vec![],
+            objects: vec![],
+            replace: true,
+        })
+        .unwrap();
+    let inst = ObjectId(out.created[1]);
+    set_object_material(&mut ed, inst, brick);
+    ed.execute(&Command::Explode { ids: vec![inst] }).unwrap();
+    let m = ed
+        .doc()
+        .objects
+        .values()
+        .find(|o| matches!(o.shape, Shape::SurfaceModel(_)))
+        .map(|o| o.id)
+        .expect("the model of the instance");
+    assert!(model(&ed, m).faces().all(|(f, _)| {
+        attr(&ed, m, f, ATTR_MATERIAL) == Some(brick.to_string())
+            && attr(&ed, m, f, ATTR_BACK_MATERIAL) == Some(brick.to_string())
+    }));
+}
+
+// ---- who uses a material -------------------------------------------------------------------------
+
+#[test]
+fn texture_beds_and_the_parts_of_definitions_count_as_uses() {
+    use kadakas_core::curve;
+    use kadakas_core::model::ModifierKind;
+    let (mut ed, id, [a, _], brick, grass) = two_faces();
+    // A texture bed holds the grass.
+    ed.execute(&Command::AddObject {
+        shape: Shape::SiteModifier {
+            modifier: ModifierKind::TextureBed {
+                texture: Some(grass),
+                mapping: None,
+            },
+            boundary: curve::corners(&[
+                DVec2::new(0.0, 0.0),
+                DVec2::new(100.0, 0.0),
+                DVec2::new(100.0, 100.0),
+            ]),
+        },
+        layer: None,
+        class: None,
+        attrs: Attributes::default(),
+    })
+    .unwrap();
+    let uses = present::material_uses(ed.doc(), grass);
+    assert_eq!((uses.slots, uses.faces), (1, 0));
+    assert!(!uses.is_unused());
+    // The faces of the parts of a component definition count, and keep the material.
+    paint(&mut ed, id, &[a], PaintSide::Both, Some(brick)).unwrap();
+    let all: Vec<FaceId> = model(&ed, id).faces().map(|(f, _)| f).collect();
+    ed.execute(&Command::MakeComponent {
+        name: "Pair".into(),
+        model: Some(id),
+        faces: all,
+        edges: vec![],
+        objects: vec![],
+        replace: true,
+    })
+    .unwrap();
+    let uses = present::material_uses(ed.doc(), brick);
+    assert_eq!(uses.faces, 2);
+    assert!(uses.models.is_empty() && uses.parts.len() == 1, "{uses:?}");
+    let err = ed
+        .execute(&Command::DeleteResource {
+            id: brick,
+            reassign: None,
+        })
+        .unwrap_err();
+    assert!(matches!(err, CommandError::ResourceInUse(_, 2)), "{err:?}");
+    // The map gives every material in one pass and agrees with the single question.
+    let map = present::material_use_map(ed.doc());
+    assert_eq!(map.get(&brick), Some(&uses));
+    assert_eq!(map.get(&grass).map(|u| u.slots), Some(1));
+}
+
+#[test]
+fn a_face_that_names_a_material_that_is_gone_shows_the_default_and_counts_for_nothing() {
+    let (ed, id, [a, _], brick, _) = two_faces();
+    // The text of an id that no material has (a material that another user deleted).
+    let ghost = ResourceId::from_num(31337).to_string();
+    let mut m = model(&ed, id).clone();
+    m.apply(&Edit::SetFaceMaterial {
+        faces: vec![a],
+        side: PaintSide::Both,
+        material: Some(ghost),
+    })
+    .unwrap();
+    let resolver = present::PaintResolver::new(ed.doc());
+    assert_eq!(
+        resolver.faces(&m.face(a).unwrap().attrs),
+        (None, None),
+        "nothing to draw"
+    );
+    assert!(present::material_uses(ed.doc(), brick).is_unused());
+}

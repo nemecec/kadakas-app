@@ -537,3 +537,152 @@ fn the_face_under_the_pointer_and_the_side_the_viewer_sees() {
     );
     let _ = brick;
 }
+
+#[test]
+fn a_fill_over_the_document_leaves_out_models_that_cannot_be_edited_and_counts_them() {
+    let (mut ed, id, brick, grass) = boxed();
+    // A second model on a layer that is locked.
+    let layer = kadakas_core::model::LayerId(
+        ed.execute(&Command::AddLayer {
+            name: "Locked".into(),
+            elevation: 0.0,
+            scale: None,
+            kind: None,
+        })
+        .unwrap()
+        .created[0],
+    );
+    let other = ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::SurfaceModel(Box::default()),
+            layer: Some(layer),
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let q = [
+        [0.0, 0.0, 0.0],
+        [500.0, 0.0, 0.0],
+        [500.0, 500.0, 0.0],
+        [0.0, 500.0, 0.0],
+    ];
+    ed.execute(&Command::EditSurface {
+        id: other,
+        edit: Edit::AddEdges {
+            edges: (0..4).map(|i| [q[i], q[(i + 1) % 4]]).collect(),
+        },
+    })
+    .unwrap();
+    ed.execute(&Command::ModifyLayer {
+        id: layer,
+        name: None,
+        visible: None,
+        locked: Some(true),
+        elevation: None,
+        scale: None,
+    })
+    .unwrap();
+    let f = faces(&ed, id);
+    let (items, skipped) = paint::fill_faces_checked(ed.doc(), id, f[0], true, Fill::SameMaterial);
+    assert_eq!(items.len(), 6, "the six faces of the box");
+    assert_eq!(skipped, 1, "the face on the locked layer");
+    // The click paints what it can: one step, and the message says what was left alone.
+    let mut p = paint::Paint::default();
+    p.set(Some(brick));
+    let shift = PaintMods {
+        shift: true,
+        ..Default::default()
+    };
+    let depth = ed.undo_depth();
+    let out = click(&mut ed, &mut p, face_hit(id, f[0], true), &[], shift);
+    assert_eq!(ed.undo_depth(), depth + 1);
+    assert!(out.message.unwrap().contains(&tr_skipped(1)));
+    for x in &f {
+        assert_eq!(attr(&ed, id, *x, ATTR_MATERIAL), Some(brick.to_string()));
+    }
+    let _ = grass;
+}
+
+fn tr_skipped(n: usize) -> String {
+    kadakas_l10n::tr!("uic-paint-skipped", count = n)
+}
+
+#[test]
+fn an_object_in_front_of_a_face_wins_the_click_and_a_face_in_front_does_not_lose() {
+    let mut ed = Editor::with_sequential_ids();
+    // A wall in the plane y = 0, x from -1000 to 1000, z from 0 to 2000.
+    let wall = ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::SurfaceModel(Box::default()),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let p = [
+        [-1000.0, 0.0, 0.0],
+        [1000.0, 0.0, 0.0],
+        [1000.0, 0.0, 2000.0],
+        [-1000.0, 0.0, 2000.0],
+    ];
+    ed.execute(&Command::EditSurface {
+        id: wall,
+        edit: Edit::AddEdges {
+            edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+        },
+    })
+    .unwrap();
+    let cam = Camera::look_at(
+        v(0.0, -8000.0, 1000.0),
+        v(0.0, 0.0, 1000.0),
+        DVec3::Z,
+        Projection::Orthographic { height: 4000.0 },
+        DVec2::new(800.0, 800.0),
+    )
+    .unwrap();
+    let cursor = cam.project(v(0.0, 0.0, 1000.0)).unwrap();
+    let hit = v(0.0, 0.0, 1000.0);
+    let scene = kadakas_core::mesh::build(ed.doc());
+    assert_eq!(
+        select::object_in_front(ed.doc(), &scene, &cam, cursor, hit),
+        None
+    );
+    // A tree stands in front of the wall.
+    let tree = ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::Plant {
+                at: DVec2::new(0.0, -1500.0),
+                species: "Quercus".into(),
+                spread: 1500.0,
+                height: 2000.0,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let scene = kadakas_core::mesh::build(ed.doc());
+    assert_eq!(
+        select::object_in_front(ed.doc(), &scene, &cam, cursor, hit),
+        Some(tree)
+    );
+    // A pointer next to the tree still gets the wall.
+    let beside = cam.project(v(900.0, 0.0, 1000.0)).unwrap();
+    assert_eq!(
+        select::object_in_front(ed.doc(), &scene, &cam, beside, v(900.0, 0.0, 1000.0)),
+        None
+    );
+    // A face that is in front of the tree wins over the tree behind it.
+    let behind = v(0.0, -3000.0, 1000.0);
+    assert_eq!(
+        select::object_in_front(ed.doc(), &scene, &cam, cursor, behind),
+        None,
+        "the tree is behind a hit that is nearer"
+    );
+}

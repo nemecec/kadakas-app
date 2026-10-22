@@ -657,6 +657,92 @@ fn add_shaded(mesh: &mut Mesh, pts: &[Vec3], tris: &[[u32; 3]], color: [u8; 4], 
     }
 }
 
+/// The look of one set of triangles of [`add_shaded_marked`]: the vertex color, the side that is
+/// drawn and the paint number (see [`Mesh::tri_paint`]).
+struct ShadeMark {
+    color: [u8; 4],
+    side: u8,
+    paint: u32,
+}
+
+/// Like [`add_shaded`], for triangles that differ in color, side and paint. `emits` lists what to
+/// draw: a triangle of `tris` and its mark; a triangle may be drawn twice (the front and the back
+/// of a face). The normals are the smooth ones of all the triangles together, so the borders of
+/// the marks do not show in the shading. A vertex is split by smoothing group and by mark.
+fn add_shaded_marked(
+    mesh: &mut Mesh,
+    pts: &[Vec3],
+    tris: &[[u32; 3]],
+    emits: &[(usize, usize)],
+    marks: &[ShadeMark],
+    object: ObjectId,
+) {
+    let ok = |t: &[u32; 3]| t.iter().all(|&i| (i as usize) < pts.len());
+    let faces: Vec<Vec3> = tris
+        .iter()
+        .map(|t| {
+            if ok(t) {
+                let [a, b, c] = t.map(|i| pts[i as usize]);
+                (b - a).cross(c - a)
+            } else {
+                Vec3::ZERO
+            }
+        })
+        .collect();
+    let mut incident: Vec<Vec<usize>> = vec![Vec::new(); pts.len()];
+    for (t, tri) in tris.iter().enumerate().filter(|(_, t)| ok(t)) {
+        for &i in tri {
+            incident[i as usize].push(t);
+        }
+    }
+    let cos = HARD_EDGE_DEGREES.to_radians().cos();
+    // For each (triangle, corner): the smoothing group of the vertex, and for each vertex the
+    // normal of each group.
+    let mut group_of = vec![[0usize; 3]; tris.len()];
+    let mut normals: Vec<Vec<Vec3>> = vec![Vec::new(); pts.len()];
+    for (v, list) in incident.iter().enumerate() {
+        let mut groups: Vec<Vec3> = Vec::new();
+        for &t in list {
+            let n = faces[t].normalize_or_zero();
+            let g = match groups
+                .iter_mut()
+                .position(|sum| sum.normalize_or_zero().dot(n) >= cos)
+            {
+                Some(g) => {
+                    groups[g] += faces[t];
+                    g
+                }
+                None => {
+                    groups.push(faces[t]);
+                    groups.len() - 1
+                }
+            };
+            let k = tris[t].iter().position(|&i| i as usize == v).unwrap_or(0);
+            group_of[t][k] = g;
+        }
+        normals[v] = groups.iter().map(|s| s.normalize_or_zero()).collect();
+    }
+    let mut copies: std::collections::HashMap<(usize, usize, usize), u32> =
+        std::collections::HashMap::new();
+    for &(t, m) in emits {
+        let Some(tri) = tris.get(t).filter(|t| ok(t)) else {
+            continue;
+        };
+        let mark = &marks[m];
+        let mut c = [0u32; 3];
+        for k in 0..3 {
+            let v = tri[k] as usize;
+            let g = group_of[t][k];
+            c[k] = *copies
+                .entry((v, g, m))
+                .or_insert_with(|| mesh.vertex(pts[v], normals[v][g], mark.color));
+        }
+        mesh.side_mode = mark.side;
+        mesh.paint_mode = mark.paint;
+        mesh.tri(c[0], c[1], c[2], object);
+    }
+}
+
 fn z_of(layer: &Layer) -> f64 {
     layer.elevation
 }
@@ -888,10 +974,11 @@ impl Builder<'_> {
         }
     }
 
-    /// The triangles of a model with painted faces (Paint Bucket). The faces are grouped by the
-    /// materials of their front and back. A face with one material on both sides is one set of
-    /// triangles; otherwise the front and the back are two sets, each drawn from its side only,
-    /// and a side without a material has the default front color or the back color.
+    /// The triangles of a model with painted faces (Paint Bucket). A face with one material on
+    /// both sides is one triangle set. Otherwise the front and the back are two sets, each drawn
+    /// from its side only, and a side without a material has the default front color or the back
+    /// color. The vertex normals are shared over the borders of the materials, so a curved
+    /// surface shades round where the paint changes.
     fn painted_faces(
         &mut self,
         m: &crate::surface::SurfaceModel,
@@ -902,41 +989,46 @@ impl Builder<'_> {
         id: ObjectId,
     ) {
         use crate::resource::ResourceId;
-        type Pair = (Option<ResourceId>, Option<ResourceId>);
-        let mut by_face: std::collections::HashMap<crate::surface::FaceId, Pair> =
+        let resolver = crate::present::PaintResolver::new(self.doc);
+        let mut by_face: std::collections::HashMap<
+            crate::surface::FaceId,
+            (Option<ResourceId>, Option<ResourceId>),
+        > = std::collections::HashMap::new();
+        let mut marks: Vec<ShadeMark> = Vec::new();
+        let mut mark_ix: std::collections::HashMap<([u8; 4], u8, u32), usize> =
             std::collections::HashMap::new();
-        let mut groups: std::collections::BTreeMap<Pair, Vec<[u32; 3]>> =
-            std::collections::BTreeMap::new();
-        for (t, tri) in tris.iter().enumerate() {
+        let mut emits: Vec<(usize, usize)> = Vec::with_capacity(tris.len());
+        let doc = self.doc;
+        for t in 0..tris.len() {
             let face = face_of_triangle[t];
-            let pair = *by_face.entry(face).or_insert_with(|| {
-                m.face(face).map_or((None, None), |f| {
-                    crate::present::face_materials(self.doc, &f.attrs)
-                })
+            let (front, back) = *by_face.entry(face).or_insert_with(|| {
+                m.face(face)
+                    .map_or((None, None), |f| resolver.faces(&f.attrs))
             });
-            groups.entry(pair).or_default().push(*tri);
-        }
-        let base_of = |this: &Self, rid: Option<ResourceId>| {
-            rid.and_then(|r| crate::present::material(this.doc, r))
-                .map_or(color, |mat| mat.base_color.0)
-        };
-        for ((front, back), list) in groups {
-            let emit = |this: &mut Self, side: u8, paint: Option<ResourceId>| {
-                let mesh = &mut this.scene.mesh;
-                mesh.side_mode = side;
-                mesh.paint_mode = paint.map_or(0, |p| mesh.paint_number(p));
-                let c = base_of(this, paint);
-                add_shaded(&mut this.scene.mesh, pts, &list, c, id);
+            let mut mark = |this: &mut Self, side: u8, paint: Option<ResourceId>| {
+                let c = paint
+                    .and_then(|r| crate::present::material(doc, r))
+                    .map_or(color, |mat| mat.base_color.0);
+                let number = paint.map_or(0, |p| this.scene.mesh.paint_number(p));
+                *mark_ix.entry((c, side, number)).or_insert_with(|| {
+                    marks.push(ShadeMark {
+                        color: c,
+                        side,
+                        paint: number,
+                    });
+                    marks.len() - 1
+                })
             };
             match (front, back) {
-                (None, None) => emit(self, SIDE_BOTH, None),
-                (Some(a), Some(b)) if a == b => emit(self, SIDE_BOTH, Some(a)),
+                (None, None) => emits.push((t, mark(self, SIDE_BOTH, None))),
+                (Some(a), Some(b)) if a == b => emits.push((t, mark(self, SIDE_BOTH, Some(a)))),
                 _ => {
-                    emit(self, SIDE_FRONT, front);
-                    emit(self, SIDE_BACK, back);
+                    emits.push((t, mark(self, SIDE_FRONT, front)));
+                    emits.push((t, mark(self, SIDE_BACK, back)));
                 }
             }
         }
+        add_shaded_marked(&mut self.scene.mesh, pts, tris, &emits, &marks, id);
         self.scene.mesh.side_mode = SIDE_BOTH;
         self.scene.mesh.paint_mode = 0;
     }

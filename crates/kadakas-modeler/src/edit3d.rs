@@ -371,7 +371,15 @@ impl Edit3d {
                     && let Some(p) = inp.resp.interact_pointer_pos()
                 {
                     let at = local(p);
-                    let mut hit = modeling::paint::hit_face(&world, &mut self.painter, &cam, at);
+                    let (mut hit, point) =
+                        modeling::paint::hit_face_at(&world, &mut self.painter, &cam, at);
+                    // An object in front of the face (a tree in front of a wall) is the target.
+                    if let Some(p) = point
+                        && let Some(o) =
+                            modeling::select::object_in_front(doc, inp.scene, &cam, at, p)
+                    {
+                        hit = modeling::paint::PaintHit::Object(o);
+                    }
                     if hit == modeling::paint::PaintHit::Nothing {
                         view3d.camera = *nav_cam;
                         let px = Vec2::new(at.x as f32, at.y as f32);
@@ -452,7 +460,13 @@ impl Edit3d {
                 if inp.resp.clicked_by(primary)
                     && let Some(p) = inp.resp.interact_pointer_pos()
                 {
-                    let hit = modeling::select::pick(&world, &mut self.picker, &cam, local(p));
+                    let hit = modeling::select::pick_visible(
+                        &world,
+                        &mut self.picker,
+                        &cam,
+                        local(p),
+                        inp.scene,
+                    );
                     if inp.resp.triple_clicked_by(primary) {
                         // Everything connected to what was hit.
                         triple = hit;
@@ -581,11 +595,12 @@ impl Edit3d {
                 let doc = session.editor.doc();
                 let scenes = self.cache.get(doc, rev);
                 let world = World { doc, scenes };
-                modeling::select::pick(
+                modeling::select::pick_visible(
                     &world,
                     &mut self.picker,
                     cam,
                     DVec2::new(f64::from(at.x), f64::from(at.y)),
+                    inp.scene,
                 )
             };
             match hit {

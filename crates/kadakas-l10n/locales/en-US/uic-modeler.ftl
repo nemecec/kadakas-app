@@ -68,3 +68,4 @@ uic-materials-purge-none = No unused materials.
 uic-materials-purged = Unused materials deleted: { $count }.
 uic-materials-name-empty = The name of a material cannot be empty.
 uic-materials-name-taken = There is a material named { $name } already.
+uic-paint-skipped = Faces left alone because their layer or class cannot be edited: { $count }.

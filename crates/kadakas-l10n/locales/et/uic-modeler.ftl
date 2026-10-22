@@ -68,3 +68,4 @@ uic-materials-purge-none = Kasutamata materjale pole.
 uic-materials-purged = Kustutatud kasutamata materjale: { $count }.
 uic-materials-name-empty = Materjali nimi ei tohi olla tühi.
 uic-materials-name-taken = Materjal nimega { $name } on juba olemas.
+uic-paint-skipped = Tahke jäeti muutmata, sest nende kihti või klassi ei saa muuta: { $count }.

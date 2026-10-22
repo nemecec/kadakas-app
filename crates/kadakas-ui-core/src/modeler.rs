@@ -551,17 +551,20 @@ pub fn summary_of(doc: &Document, obj: &kadakas_core::model::Object) -> Option<S
                 .iter()
                 .copied()
                 .chain(lines.iter().flat_map(|l| l.points.iter().copied()));
-            let (lo, hi) = all.fold(None, |acc: Option<(glam::DVec3, glam::DVec3)>, p| {
+            let bounds = all.fold(None, |acc: Option<(glam::DVec3, glam::DVec3)>, p| {
                 Some(match acc {
                     None => (p, p),
                     Some((a, b)) => (a.min(p), b.max(p)),
                 })
-            })?;
-            let d = hi - lo;
+            });
+            // A site model with no data has no extent, but it is still a site model.
             Summary::SiteModel {
                 points: points.len(),
                 lines: lines.len(),
-                extent: Some([d.x, d.y, d.z]),
+                extent: bounds.map(|(lo, hi)| {
+                    let d = hi - lo;
+                    [d.x, d.y, d.z]
+                }),
                 tile: (settings.surface_look == kadakas_core::site::SurfaceLook::Texture)
                     .then_some(settings.texture_tile),
             }

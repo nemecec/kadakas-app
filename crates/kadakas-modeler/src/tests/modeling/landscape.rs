@@ -438,7 +438,7 @@ fn open_in_the_kadakas_app_saves_first_and_starts_the_app_with_the_file() {
     let log = started.clone();
     app.starter = Box::new(move |p| {
         log.borrow_mut().push(p.to_path_buf());
-        Ok(())
+        Ok(crate::launch::Started::Spawned)
     });
     landscape(&mut app);
     app.path = Some(path.clone());
@@ -470,6 +470,73 @@ fn open_in_the_kadakas_app_saves_first_and_starts_the_app_with_the_file() {
     app.starter = Box::new(|_| Err("no app here".into()));
     app.run(Cmd::OpenInApp, size_of_window());
     assert_eq!(app.status, "no app here");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Answers the questions of the program and counts them.
+struct Counting(std::rc::Rc<std::cell::Cell<u32>>);
+
+impl crate::files::Ask for Counting {
+    fn ask(&mut self, _q: &crate::files::Question) -> bool {
+        self.0.set(self.0.get() + 1);
+        true
+    }
+}
+
+/// Another program writes the file: a different model, and a change time that is surely new.
+fn write_by_another_program(path: &std::path::Path) {
+    let mut other = app();
+    add_square(&mut other);
+    other.save_to(path.to_path_buf());
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(30);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+}
+
+#[test]
+fn a_file_that_the_other_program_changed_loads_again_or_warns_and_the_save_asks() {
+    let dir = temp("two-programs");
+    let path = dir.join("site.kad");
+    let questions: std::rc::Rc<std::cell::Cell<u32>> = Default::default();
+    let mut app = ModelerApp::headless(Prefs::default(), Box::new(Counting(questions.clone())));
+    app.starter = Box::new(|_| Ok(crate::launch::Started::Sent));
+    landscape(&mut app);
+    app.save_to(path.clone());
+    let objects = app.session.editor.doc().objects.len();
+    assert!(!app.dirty());
+    // The app gets the file: the status line says that it is open in two programs.
+    app.run(Cmd::OpenInApp, size_of_window());
+    assert!(app.status.contains("last save wins"), "{}", app.status);
+    let ctx = egui::Context::default();
+    // Nothing changed: nothing happens.
+    let _ = frame(&ctx, &mut app, vec![], 5.0);
+    assert_eq!(app.session.editor.doc().objects.len(), objects);
+    // The other program saves another model; the model has no unsaved changes: it is loaded again.
+    write_by_another_program(&path);
+    let _ = frame(&ctx, &mut app, vec![], 7.0);
+    assert_eq!(app.session.editor.doc().objects.len(), 1, "the other model");
+    assert!(
+        app.status.contains("site.kad") && app.status.contains("loaded again"),
+        "{}",
+        app.status
+    );
+    // With unsaved changes the model stays, the status line warns, and a save asks first.
+    add_square(&mut app);
+    assert!(app.dirty());
+    write_by_another_program(&path);
+    let _ = frame(&ctx, &mut app, vec![], 9.0);
+    assert_eq!(app.session.editor.doc().objects.len(), 2, "my model stays");
+    assert!(app.status.contains("not saved"), "{}", app.status);
+    let before = questions.get();
+    app.save(false);
+    assert!(
+        questions.get() > before,
+        "the save asked before it replaced the file"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

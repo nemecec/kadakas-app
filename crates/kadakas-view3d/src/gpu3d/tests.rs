@@ -1049,3 +1049,113 @@ fn a_painted_face_shows_each_material_on_its_own_side() {
         "green back: {bottom:?}"
     );
 }
+
+/// On a painted curved surface the side that is drawn comes from the winding of each triangle,
+/// not from the smoothed normal: the silhouette of a painted cylinder shows no sliver of the
+/// plain back, on the GPU as on the CPU (the screen equals the export).
+#[test]
+fn the_silhouette_of_a_painted_cylinder_shows_no_back_color_on_the_gpu_or_the_cpu() {
+    let Some((device, queue)) = device_or_skip(
+        "the_silhouette_of_a_painted_cylinder_shows_no_back_color_on_the_gpu_or_the_cpu",
+    ) else {
+        return;
+    };
+    let mut rig = Rig::new(device, queue, [400, 400]);
+    let mut ed = Editor::default();
+    let id = kadakas_core::model::ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::SurfaceModel(Box::default()),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let ring: Vec<[f64; 3]> = (0..12)
+        .map(|i| {
+            // 12 sides are smoothed (30 degrees); the offset puts a facet nearly edge-on to the
+            // viewer, where the smoothed normal turns away while the facet still looks at him.
+            let a = std::f64::consts::TAU * f64::from(i) / 12.0 + 5.0_f64.to_radians();
+            [300.0 * a.cos(), 300.0 * a.sin(), 0.0]
+        })
+        .collect();
+    let edit = |ed: &mut Editor, e| {
+        ed.execute(&Command::EditSurface { id, edit: e }).unwrap();
+    };
+    edit(
+        &mut ed,
+        kadakas_core::surface::Edit::AddCurve {
+            points: ring,
+            closed: true,
+        },
+    );
+    let face = match &ed.doc().object(id).unwrap().shape {
+        Shape::SurfaceModel(m) => m.faces().next().unwrap().0,
+        _ => unreachable!(),
+    };
+    edit(
+        &mut ed,
+        kadakas_core::surface::Edit::PushPull {
+            face,
+            distance: 800.0,
+        },
+    );
+    let red = ResourceId(
+        ed.execute(&Command::AddResource {
+            name: "Red".into(),
+            body: ResourceBody::Render(Box::new(RenderResource::Material(Material {
+                base_color: Color([220, 20, 20, 255]),
+                ..Default::default()
+            }))),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let faces: Vec<_> = match &ed.doc().object(id).unwrap().shape {
+        Shape::SurfaceModel(m) => m.faces().map(|(f, _)| f).collect(),
+        _ => unreachable!(),
+    };
+    edit(
+        &mut ed,
+        kadakas_core::surface::Edit::SetFaceMaterial {
+            faces,
+            side: kadakas_core::surface::PaintSide::Front,
+            material: Some(red.to_string()),
+        },
+    );
+    // Seen from outside every visible triangle is a front: the plain back color must not appear.
+    let mut side = Camera::standard(StandardView::Front, Projection::Orthographic);
+    side.distance = top_cam(1500.0).distance;
+    let bluish = |img: &[u8]| {
+        (0..400usize * 400)
+            .filter(|i| {
+                let (r, b) = (i32::from(img[i * 4]), i32::from(img[i * 4 + 2]));
+                b > r + 12
+            })
+            .count()
+    };
+    let gpu = rig.draw(&ed, &side, &style_for(&ed, true, |s| s.edges = false), &[]);
+    assert_eq!(bluish(&gpu), 0, "no sliver of the back color on the GPU");
+    let scene = build(ed.doc());
+    let look = Look::build(ed.doc(), &scene, true);
+    let cpu = kadakas_render::shade::render_scene(
+        &scene,
+        &look,
+        &side,
+        &kadakas_render::shade::ShadeOptions {
+            width: 400,
+            height: 400,
+            edges: false,
+            ..Default::default()
+        },
+    );
+    let bluish_cpu = (0..400u32)
+        .flat_map(|y| (0..400u32).map(move |x| (x, y)))
+        .filter(|(x, y)| {
+            let p = cpu.pixel(*x, *y);
+            i32::from(p[2]) > i32::from(p[0]) + 12
+        })
+        .count();
+    assert_eq!(bluish_cpu, 0, "no sliver of the back color on the CPU");
+}

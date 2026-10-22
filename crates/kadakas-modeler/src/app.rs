@@ -106,7 +106,7 @@ pub enum Replace {
 }
 
 /// Starts the Kadakas app with a file.
-pub type AppStarter = Box<dyn FnMut(&std::path::Path) -> Result<(), String>>;
+pub type AppStarter = Box<dyn FnMut(&std::path::Path) -> Result<crate::launch::Started, String>>;
 
 /// What the person answers to the question about unsaved changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,6 +147,9 @@ pub struct ModelerApp {
     rows_cache: Option<(u64, Vec<MaterialRow>)>,
     /// Starts the Kadakas app with a file. The tests put another one in.
     pub starter: AppStarter,
+    /// The file while it is open in the Kadakas app too: its path and its last stamp.
+    watch: Option<(PathBuf, (u64, Option<std::time::SystemTime>))>,
+    watch_next: f64,
     pub about: About,
     launch: Launch,
     ask: Box<dyn Ask>,
@@ -189,6 +192,8 @@ impl ModelerApp {
             materials: MaterialsPanel::default(),
             rows_cache: None,
             starter: Box::new(crate::launch::start_app),
+            watch: None,
+            watch_next: 0.0,
             about: About::default(),
             launch: Launch::new(None),
             ask,
@@ -390,9 +395,50 @@ impl ModelerApp {
             |n| n.to_string_lossy().into_owned(),
         );
         self.status = match (self.starter)(&path) {
-            Ok(()) => tr!("modeler-app-started", name = name),
+            Ok(how) => {
+                // From now on the file is open in two programs: watch it for a change by the
+                // other one.
+                self.watch = Some((path.clone(), file_stamp(&path)));
+                match how {
+                    crate::launch::Started::Spawned => tr!("modeler-app-started", name = name),
+                    crate::launch::Started::Sent => tr!("modeler-app-sent", name = name),
+                }
+            }
             Err(e) => e,
         };
+    }
+
+    /// While the file is open in the Kadakas app too (see [`ModelerApp::open_in_app`]): looks
+    /// once a second whether the file changed on disk. A model with no unsaved changes is
+    /// loaded again at once; with unsaved changes the status line says so, and a save asks
+    /// before it replaces the file (`files::save`).
+    fn check_external_change(&mut self, now: f64) {
+        if now < self.watch_next {
+            return;
+        }
+        self.watch_next = now + 1.0;
+        let Some((path, stamp)) = self.watch.clone() else {
+            return;
+        };
+        if self.path.as_ref() != Some(&path) {
+            self.watch = None;
+            return;
+        }
+        let current = file_stamp(&path);
+        if current == stamp {
+            return;
+        }
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        if self.dirty() {
+            self.status = tr!("modeler-file-changed-dirty", name = name);
+        } else {
+            self.open_clean(path.clone());
+            self.status = tr!("modeler-file-changed-reloaded", name = name);
+        }
+        self.watch = Some((path.clone(), file_stamp(&path)));
     }
 
     /// A document that the launcher sent: a double click on a `.kad` file while this program
@@ -459,6 +505,7 @@ impl ModelerApp {
 
     /// What follows a new or opened model: nothing is selected, the view shows all of it.
     fn after_replace(&mut self, path: Option<PathBuf>) {
+        self.watch = None;
         self.session.selection.clear();
         self.edit.reset();
         self.info_cache = None;
@@ -492,6 +539,12 @@ impl ModelerApp {
                         notes = saved.notes.join(" ")
                     )
                 };
+                // Our own save is not a change by the other program.
+                if let Some(w) = &mut self.watch
+                    && w.0 == saved.path
+                {
+                    w.1 = file_stamp(&saved.path);
+                }
                 self.path = Some(saved.path);
             }
             Err(e) => self.status = e,
@@ -1170,6 +1223,7 @@ impl ModelerApp {
             // Also the wait for a document that the launcher sends.
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
+        self.check_external_change(now);
         self.unsaved_dialog(&ctx);
         self.about.show(&ctx);
         self.finish_frame(&ctx);
@@ -1203,6 +1257,11 @@ impl ModelerApp {
     pub fn on_exit(&mut self) {
         self.launch.finish();
     }
+}
+
+/// The size and the time of the last change of a file: what tells that another program wrote it.
+fn file_stamp(path: &std::path::Path) -> (u64, Option<std::time::SystemTime>) {
+    std::fs::metadata(path).map_or((0, None), |m| (m.len(), m.modified().ok()))
 }
 
 /// What the questions and the status line call a way to replace the model: the file name, a new

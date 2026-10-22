@@ -153,11 +153,22 @@ mod tests {
         assert_eq!(c.get_program(), app.as_os_str());
         let args: Vec<&OsStr> = c.get_args().collect();
         assert_eq!(args, ["--", "/a/b.kad"]);
-        c.env("KADAKAS_RUN_ID", "stale");
+        // The run variables of the sender are taken out of the environment of the child, and the
+        // marker that stops the handover to the launcher is put in.
+        let envs: Vec<_> = c.get_envs().collect();
+        assert!(
+            envs.contains(&(OsStr::new("KADAKAS_RUN_ID"), None)),
+            "{envs:?}"
+        );
+        assert!(
+            envs.contains(&(OsStr::new("KADAKAS_LAUNCHER_ROOT"), None)),
+            "{envs:?}"
+        );
+        assert!(envs.contains(&(OsStr::new("KADAKAS_VIA_LAUNCHER"), Some(OsStr::new("1")))));
         let mut child = c.spawn().unwrap();
         assert!(child.wait().unwrap().success());
         let out = std::fs::read_to_string(d.join("out.txt")).unwrap();
-        assert!(out.starts_with("/a/b.kad 1 ["), "{out}");
+        assert!(out.starts_with("/a/b.kad 1 []"), "{out}");
         // Without the app next to the program there is no command.
         let lone = tmp("sibling-none");
         assert!(sibling_app_command(&lone.join("kadakas-modeler"), &files).is_none());

@@ -166,6 +166,8 @@ pub struct Heartbeat {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     path: PathBuf,
+    /// The file that names the program of the run (see [`running_program`]).
+    program: PathBuf,
 }
 
 impl Heartbeat {
@@ -179,8 +181,16 @@ impl Heartbeat {
                 .map_or(0, |d| d.as_nanos());
             let _ = write_atomic(path, nanos.to_string().as_bytes());
         };
-        // The first stamp is there when this returns.
+        // The first stamp is there when this returns. The name of the program goes beside it, so
+        // that another program can find the run of the main app (see `running_program`).
         stamp(&path);
+        let program = run_file(root, id, "program");
+        if let Some(name) = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.file_stem().map(|n| n.to_string_lossy().into_owned()))
+        {
+            let _ = write_atomic(&program, name.as_bytes());
+        }
         let (flag, p) = (stop.clone(), path.clone());
         let thread = std::thread::Builder::new()
             .name("kadakas-alive".into())
@@ -196,7 +206,12 @@ impl Heartbeat {
                 }
             })
             .ok();
-        Heartbeat { stop, thread, path }
+        Heartbeat {
+            stop,
+            thread,
+            path,
+            program,
+        }
     }
 }
 
@@ -207,7 +222,41 @@ impl Drop for Heartbeat {
             let _ = t.join();
         }
         let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_file(&self.program);
     }
+}
+
+/// How old the alive stamp of a run may be for [`running_program`] to count the run as running.
+const ALIVE_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The id of a run of the program `program` (`kadakas-app`, the file name without the ending)
+/// that runs now: it has an alive stamp of the last few seconds and names its program. `except`
+/// is the run of the caller. The launcher does not record the flavor of a run, so the program
+/// writes its own name beside the stamp. Used by the modeler to send a document to the running
+/// main app, with [`send_open`], instead of starting a second app.
+pub fn running_program(root: &Path, program: &str, except: &str) -> Option<String> {
+    let dir = crate::runs::runs_dir(root);
+    let mut found: Vec<(std::time::SystemTime, String)> = Vec::new();
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(id) = name.strip_suffix(".program") else {
+            continue;
+        };
+        if id == except || !valid_run_id(id) {
+            continue;
+        }
+        if std::fs::read_to_string(e.path()).ok().as_deref() != Some(program) {
+            continue;
+        }
+        let stamp = std::fs::metadata(run_file(root, id, "alive")).and_then(|m| m.modified());
+        if let Ok(t) = stamp
+            && t.elapsed().is_ok_and(|age| age <= ALIVE_WITHIN)
+        {
+            found.push((t, id.to_string()));
+        }
+    }
+    // The freshest stamp is the run that lives.
+    found.into_iter().max().map(|(_, id)| id)
 }
 
 /// Reads and deletes the open requests of a run. A damaged file is deleted and gives nothing.
@@ -433,6 +482,45 @@ mod tests {
         assert!(AppLink::from_env(&|k| (k == ENV_ROOT).then(|| "/x".into())).is_none());
         let l = AppLink::from_env(&env(&d, "1a-2b")).unwrap();
         assert_eq!(l.root(), d);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_program_finds_the_running_main_app_by_its_name_and_a_fresh_stamp() {
+        let d = tmp("hs-program");
+        let me = std::env::current_exe()
+            .unwrap()
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let app = AppLink::from_env(&env(&d, "1a-1")).unwrap();
+        let beat = app.start_heartbeat();
+        // The run names its program beside the alive stamp.
+        assert_eq!(
+            std::fs::read_to_string(run_file(&d, "1a-1", "program")).unwrap(),
+            me
+        );
+        assert_eq!(running_program(&d, &me, "2b-2").as_deref(), Some("1a-1"));
+        // Not the caller's own run, not another program.
+        assert_eq!(running_program(&d, &me, "1a-1"), None);
+        assert_eq!(running_program(&d, "kadakas-app-not-this", "2b-2"), None);
+        // A request to that run is the open request of the launcher.
+        send_open(&d, "1a-1", &[PathBuf::from("/a/b.kad")]).unwrap();
+        assert_eq!(app.take_open(), vec![PathBuf::from("/a/b.kad")]);
+        // A stamp that is not fresh is a run that is gone.
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(run_file(&d, "1a-1", "alive"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert_eq!(running_program(&d, &me, "2b-2"), None);
+        // The files go with the heartbeat.
+        drop(beat);
+        assert!(!run_file(&d, "1a-1", "program").exists());
+        assert_eq!(running_program(&d, &me, "2b-2"), None);
         std::fs::remove_dir_all(&d).unwrap();
     }
 

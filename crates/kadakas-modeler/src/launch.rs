@@ -73,15 +73,36 @@ pub fn set_gpu(adapter: &str, driver: &str, backend: &str) {
     });
 }
 
-/// Starts the main Kadakas app with a file (File > Open in the Kadakas App). The app is the
-/// program next to this one in the version folder; it runs on its own, outside the launcher's
-/// supervision (see `kadakas_update::launch::sibling_app_command`).
-pub fn start_app(file: &std::path::Path) -> Result<(), String> {
+/// How the main app got the file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Started {
+    /// A new app process was started.
+    Spawned,
+    /// The app that runs already was asked to open the file (the open request of the launcher).
+    Sent,
+}
+
+/// Opens `file` in the main Kadakas app (File > Open in the Kadakas App). If a main app runs
+/// (it has an alive stamp that names `kadakas-app`, see `handshake::running_program`), the file
+/// goes to it as an open request, the same as a double click through the launcher, and no second
+/// app starts. Otherwise the program `kadakas-app` that is next to this one in the version folder
+/// is started with the file (`kadakas_update::launch::sibling_app_command`). `root` is the folder
+/// of the launcher and `own` the id of this run.
+pub fn start_app_in(
+    root: Option<&std::path::Path>,
+    own: &str,
+    exe: &std::path::Path,
+    file: &std::path::Path,
+) -> Result<Started, String> {
     use kadakas_l10n::tr;
-    let exe =
-        std::env::current_exe().map_err(|e| tr!("modeler-app-failed", error = e.to_string()))?;
+    if let Some(root) = root
+        && let Some(id) = kadakas_update::handshake::running_program(root, "kadakas-app", own)
+        && kadakas_update::handshake::send_open(root, &id, &[file.to_path_buf()]).is_ok()
+    {
+        return Ok(Started::Sent);
+    }
     let Some(mut cmd) =
-        kadakas_update::launch::sibling_app_command(&exe, &[file.as_os_str().to_owned()])
+        kadakas_update::launch::sibling_app_command(exe, &[file.as_os_str().to_owned()])
     else {
         return Err(tr!("modeler-app-missing"));
     };
@@ -92,7 +113,18 @@ pub fn start_app(file: &std::path::Path) -> Result<(), String> {
     std::thread::spawn(move || {
         let _ = child.wait();
     });
-    Ok(())
+    Ok(Started::Spawned)
+}
+
+/// [`start_app_in`] for this program: the launcher folder and the run id come from the
+/// environment that the launcher gave (a program that was started by hand uses the usual folder).
+pub fn start_app(file: &std::path::Path) -> Result<Started, String> {
+    use kadakas_l10n::tr;
+    let exe =
+        std::env::current_exe().map_err(|e| tr!("modeler-app-failed", error = e.to_string()))?;
+    let root = kadakas_update::settings::launcher_root(launch_env(ENV_ROOT));
+    let own = launch_env(ENV_RUN).unwrap_or_default();
+    start_app_in(root.as_deref(), &own, &exe, file)
 }
 
 /// How often the requests to open documents are looked at, in seconds.
@@ -198,6 +230,77 @@ mod tests {
         launch.finish();
         assert!(run_file(&d, "1a-2b", "clean").is_file());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "kadakas-modeler-start-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn a_running_main_app_gets_the_file_as_an_open_request_and_no_second_app_starts() {
+        let root = temp("sent");
+        let runs = kadakas_update::runs::runs_dir(&root);
+        std::fs::create_dir_all(&runs).unwrap();
+        // A main app runs: its name and a fresh alive stamp.
+        std::fs::write(run_file(&root, "1a-1", "program"), "kadakas-app").unwrap();
+        std::fs::write(run_file(&root, "1a-1", "alive"), "1").unwrap();
+        // A second modeler runs too: it is not the main app.
+        std::fs::write(run_file(&root, "3c-3", "program"), "kadakas-modeler").unwrap();
+        std::fs::write(run_file(&root, "3c-3", "alive"), "1").unwrap();
+        let file = root.join("site.kad");
+        let how = start_app_in(
+            Some(&root),
+            "2b-2",
+            &root.join("bin").join("kadakas-modeler"),
+            &file,
+        );
+        assert_eq!(how, Ok(Started::Sent));
+        assert_eq!(
+            kadakas_update::handshake::take_open(&root, "1a-1"),
+            vec![file.clone()]
+        );
+        assert!(kadakas_update::handshake::take_open(&root, "3c-3").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn without_a_running_main_app_the_one_next_to_the_modeler_starts_with_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp("spawn");
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let app = bin.join("kadakas-app");
+        std::fs::write(&app, "#!/bin/sh\necho \"$2\" > started.txt\n").unwrap();
+        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let file = root.join("site.kad");
+        let exe = bin.join("kadakas-modeler");
+        let how = start_app_in(Some(&root), "2b-2", &exe, &file);
+        assert_eq!(how, Ok(Started::Spawned));
+        // The script ends by itself; wait for its note.
+        let note = bin.join("started.txt");
+        for _ in 0..250 {
+            if note.is_file() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&note).unwrap().trim(),
+            file.display().to_string()
+        );
+        // With no app next to the modeler, there is nothing to start.
+        let lone = root.join("lone");
+        std::fs::create_dir_all(&lone).unwrap();
+        let err = start_app_in(None, "", &lone.join("kadakas-modeler"), &file).unwrap_err();
+        assert_eq!(err, kadakas_l10n::tr!("modeler-app-missing"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

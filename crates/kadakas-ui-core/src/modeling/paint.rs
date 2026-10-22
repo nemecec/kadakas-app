@@ -25,7 +25,7 @@ use glam::DVec2;
 use kadakas_core::model::{Document, ObjectId, Shape};
 use kadakas_core::present;
 use kadakas_core::resource::ResourceId;
-use kadakas_core::surface::{ATTR_BACK_MATERIAL, ATTR_MATERIAL, FaceId};
+use kadakas_core::surface::FaceId;
 use kadakas_l10n::tr;
 
 use super::exec::Action;
@@ -107,21 +107,32 @@ pub fn face_engine() -> Inferencer {
 /// The face under the pointer and the side the viewer sees, or [`PaintHit::Nothing`] (the caller
 /// then looks for an object). `engine` should come from [`face_engine`].
 pub fn hit_face(w: &World, engine: &mut Inferencer, cam: &Camera, cursor: DVec2) -> PaintHit {
+    hit_face_at(w, engine, cam, cursor).0
+}
+
+/// Like [`hit_face`], with the point of the face under the pointer (for the comparison with the
+/// objects in front of it, see `select::object_in_front`).
+pub fn hit_face_at(
+    w: &World,
+    engine: &mut Inferencer,
+    cam: &Camera,
+    cursor: DVec2,
+) -> (PaintHit, Option<glam::DVec3>) {
     engine.reset();
     let inf = w.infer(engine, cam, cursor, None, &super::Excluded::default());
     if inf.source.kind() != TagKind::Face {
-        return PaintHit::Nothing;
+        return (PaintHit::Nothing, None);
     }
     let Some(model) = w.scenes.object(inf.source) else {
-        return PaintHit::Nothing;
+        return (PaintHit::Nothing, None);
     };
     let face = FaceId(inf.source.id());
     let Some(plane) = w.face_plane(inf.source) else {
-        return PaintHit::Nothing;
+        return (PaintHit::Nothing, None);
     };
     // The front is seen when the normal points toward the eye.
     let front = cam.ray(cursor).dir.dot(plane.n) < 0.0;
-    PaintHit::Face { model, face, front }
+    (PaintHit::Face { model, face, front }, Some(inf.point))
 }
 
 /// The material on one side of a face.
@@ -136,21 +147,6 @@ pub fn side_material(
     if front { a } else { b }
 }
 
-/// The text of the attribute for a side, whether it holds anything (even a name that no material
-/// has): a painted side counts as painted.
-fn side_attr(doc: &Document, model: ObjectId, face: FaceId, front: bool) -> Option<String> {
-    let f = model_of(doc, model)?.face(face)?;
-    let key = if front {
-        ATTR_MATERIAL
-    } else {
-        ATTR_BACK_MATERIAL
-    };
-    f.attrs
-        .get(key)
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-}
-
 /// The faces a fill covers, each with the side that is painted (`true`: the front). The clicked
 /// face is always first.
 pub fn fill_faces(
@@ -160,14 +156,28 @@ pub fn fill_faces(
     front: bool,
     fill: Fill,
 ) -> Vec<(ObjectId, FaceId, bool)> {
+    fill_faces_checked(doc, model, face, front, fill).0
+}
+
+/// Like [`fill_faces`], and the number of faces that were left out because their model cannot be
+/// edited now (a locked or grey layer, a grey class): one refusal would fail the whole step, so
+/// a fill over the document leaves them out and the status line says how many.
+pub fn fill_faces_checked(
+    doc: &Document,
+    model: ObjectId,
+    face: FaceId,
+    front: bool,
+    fill: Fill,
+) -> (Vec<(ObjectId, FaceId, bool)>, usize) {
     let Some(m) = model_of(doc, model) else {
-        return Vec::new();
+        return (Vec::new(), 0);
     };
     if m.face(face).is_none() {
-        return Vec::new();
+        return (Vec::new(), 0);
     }
+    let mut skipped = 0usize;
     let mut out = vec![(model, face, front)];
-    let want = side_attr(doc, model, face, front);
+    let want = side_material(doc, model, face, front);
     match fill {
         Fill::Single => {}
         Fill::Connected => {
@@ -188,7 +198,7 @@ pub fn fill_faces(
                         // way (a side of the surface that runs on), else the sides swap.
                         let agrees = gf.uses().any(|u| u == (b, a));
                         let g_front = if agrees { cur_front } else { !cur_front };
-                        if side_attr(doc, model, g, g_front) == want {
+                        if side_material(doc, model, g, g_front) == want {
                             seen.insert(g);
                             out.push((model, g, g_front));
                             work.push((g, g_front));
@@ -205,15 +215,20 @@ pub fn fill_faces(
                 let Shape::SurfaceModel(sm) = &obj.shape else {
                     continue;
                 };
+                let editable = present::can_edit(doc, obj);
                 for (fid, _) in sm.faces() {
-                    if (*id, fid) != (model, face) && side_attr(doc, *id, fid, front) == want {
+                    if !editable && side_material(doc, *id, fid, front) == want {
+                        skipped += 1;
+                        continue;
+                    }
+                    if (*id, fid) != (model, face) && side_material(doc, *id, fid, front) == want {
                         out.push((*id, fid, front));
                     }
                 }
             }
         }
     }
-    out
+    (out, skipped)
 }
 
 /// The paint action for faces with sides: grouped by model.
@@ -277,13 +292,13 @@ impl Paint {
         }
         match hit {
             PaintHit::Face { model, face, front } => {
-                let items = fill_faces(doc, model, face, front, mods.fill());
+                let (items, skipped) = fill_faces_checked(doc, model, face, front, mods.fill());
                 if items.is_empty() {
                     return Out::default();
                 }
                 let n = items.len();
                 let mut out = Out::act(paint_action(items, material));
-                out.message = Some(if n == 1 {
+                let mut text = if n == 1 {
                     tr!("uic-paint-painted-one", name = name_of(doc, material))
                 } else {
                     tr!(
@@ -291,7 +306,11 @@ impl Paint {
                         count = n,
                         name = name_of(doc, material)
                     )
-                });
+                };
+                if skipped > 0 {
+                    text = format!("{text} {}", tr!("uic-paint-skipped", count = skipped));
+                }
+                out.message = Some(text);
                 out
             }
             PaintHit::Object(_) | PaintHit::Nothing => Out::default(),

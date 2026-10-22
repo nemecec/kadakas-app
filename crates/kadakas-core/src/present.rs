@@ -22,8 +22,9 @@ use crate::sun::{self, SunTime};
 
 mod paint;
 pub use paint::{
-    MaterialUses, can_paint_object, face_materials, is_whole_object_slot, material_ref,
-    material_uses, object_material, paint_object_refusal,
+    MaterialUses, PaintResolver, bake_material, can_edit, can_paint_object, face_materials,
+    is_whole_object_slot, material_ref, material_use_map, material_uses, object_material,
+    paint_object_refusal,
 };
 
 /// Largest texture image, as base64 text of the PNG file.
@@ -866,7 +867,11 @@ impl SlotIndex {
         groups.sort_by_key(|(g, _)| (std::cmp::Reverse(doc.ancestors(*g).len()), *g));
         for (g, m) in groups {
             for d in doc.descendants(g) {
-                self.objects.entry((d, None)).or_insert(m);
+                // A plant or a hardscape keeps the material of its style: the group's material
+                // goes to the kinds that the Paint Bucket paints.
+                if doc.object(d).is_some_and(|o| can_paint_object(&o.shape)) {
+                    self.objects.entry((d, None)).or_insert(m);
+                }
             }
         }
     }

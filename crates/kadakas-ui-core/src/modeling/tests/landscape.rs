@@ -149,7 +149,11 @@ fn every_kind_of_landscape_object_has_a_summary() {
         }
         other => panic!("{other:?}"),
     }
-    assert_eq!(s(empty_site), None, "no data, no extent, no summary");
+    // No data: no extent, but still a site model that the Kadakas app edits.
+    match s(empty_site) {
+        Some(sum @ Summary::SiteModel { extent: None, .. }) => assert!(sum.needs_app()),
+        other => panic!("{other:?}"),
+    }
     assert_eq!(s(text), None);
     for kind in [s(plant), s(tree), s(slab), s(lawn), s(site)] {
         assert!(kind.unwrap().needs_app());

@@ -212,6 +212,19 @@ fn set_face_material(
     Ok(())
 }
 
+/// A face is turned over: the paint stays on the side it was on, so the material of the front
+/// becomes the material of the back and the other way round.
+pub(super) fn swap_paint(attrs: &mut super::Attrs) {
+    let front = attrs.remove(ATTR_MATERIAL);
+    let back = attrs.remove(ATTR_BACK_MATERIAL);
+    if let Some(v) = back {
+        attrs.insert(ATTR_MATERIAL.into(), v);
+    }
+    if let Some(v) = front {
+        attrs.insert(ATTR_BACK_MATERIAL.into(), v);
+    }
+}
+
 fn reverse_faces(m: &mut SurfaceModel, faces: &[FaceId]) -> Result<(), SurfaceError> {
     for id in existing_faces(m, faces)? {
         let f = m.faces.get_mut(&id).expect("checked");
@@ -220,15 +233,7 @@ fn reverse_faces(m: &mut SurfaceModel, faces: &[FaceId]) -> Result<(), SurfaceEr
         let mut holes: Vec<Vec<VertexId>> = f.holes.iter().map(|h| reversed(h)).collect();
         holes.sort();
         f.holes = holes;
-        // The paint stays on the side it was on.
-        let front = f.attrs.remove(ATTR_MATERIAL);
-        let back = f.attrs.remove(ATTR_BACK_MATERIAL);
-        if let Some(v) = back {
-            f.attrs.insert(ATTR_MATERIAL.into(), v);
-        }
-        if let Some(v) = front {
-            f.attrs.insert(ATTR_BACK_MATERIAL.into(), v);
-        }
+        swap_paint(&mut f.attrs);
     }
     Ok(())
 }

@@ -114,7 +114,7 @@ fn vs_shadow(@location(0) pos: vec3<f32>) -> @builtin(position) vec4<f32> {
 }
 
 // The color and the opacity of a surface point.
-fn shade(i: SurfaceOut) -> vec4<f32> {
+fn shade(i: SurfaceOut, front: bool) -> vec4<f32> {
     var albedo = i.color.rgb;
     var alpha = 1.0;
     var rough = 0.9;
@@ -139,11 +139,12 @@ fn shade(i: SurfaceOut) -> vec4<f32> {
     // Both sides are lit: turn the normal toward the viewer.
     if (dot(n, to_eye) < 0.0) {
         n = -n;
-        // A face of a surface model (flag 1) shows its back in the back color, unless it has a
-        // material: then the material shows on both sides.
-        if ((i.flags & 1u) != 0u && !has_material) {
-            albedo = vec3<f32>(0.5804, 0.6588, 0.7804);
-        }
+    }
+    // A face of a surface model (flag 1) shows its back in the back color, unless it has a
+    // material: then the material shows on both sides. The side is the one of the triangle
+    // (its winding), not of the smoothed normal, so it agrees with the CPU renderers.
+    if (!front && (i.flags & 1u) != 0u && !has_material) {
+        albedo = vec3<f32>(0.5804, 0.6588, 0.7804);
     }
 
     // The shadow map is read in uniform control flow too.
@@ -183,29 +184,24 @@ fn shade(i: SurfaceOut) -> vec4<f32> {
 }
 
 // True for a triangle that is drawn from one side only (flag 2: the front, flag 4: the back,
-// Paint Bucket) and is seen from the other side.
-fn culled(i: SurfaceOut) -> bool {
-    var to_eye = g.eye.xyz;
-    if (g.params.z < 0.5) {
-        to_eye = normalize(g.eye.xyz - i.world);
-    }
-    let back = dot(normalize(i.normal), to_eye) < 0.0;
-    return ((i.flags & 2u) != 0u && back) || ((i.flags & 4u) != 0u && !back);
+// Paint Bucket) and is seen from the other side. `front` is the side of the triangle itself.
+fn culled(i: SurfaceOut, front: bool) -> bool {
+    return ((i.flags & 2u) != 0u && !front) || ((i.flags & 4u) != 0u && front);
 }
 
 @fragment
-fn fs_surface(i: SurfaceOut) -> @location(0) vec4<f32> {
-    let c = shade(i);
-    if (culled(i)) {
+fn fs_surface(i: SurfaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let c = shade(i, front);
+    if (culled(i, front)) {
         discard;
     }
     return vec4<f32>(c.rgb, 1.0);
 }
 
 @fragment
-fn fs_surface_blend(i: SurfaceOut) -> @location(0) vec4<f32> {
-    let c = shade(i);
-    if (culled(i)) {
+fn fs_surface_blend(i: SurfaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let c = shade(i, front);
+    if (culled(i, front)) {
         discard;
     }
     return c;
