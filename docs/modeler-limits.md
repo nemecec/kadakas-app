@@ -250,3 +250,11 @@ CORE=... UI=... PROPS=... BASE=... OUT=/tmp/lm-out2 crates/kadakas-core/tests/li
 ```
 
 Single scenario: `LM_SCALE=3 python3 crates/kadakas-core/tests/limits_measure.py BINARY 5 big "terrain 223"`. A scenario test run without `LM` skips itself, so `cargo test -- --ignored` in CI is safe.
+
+## Guides (MOD-05)
+
+A document holds at most 10,000 guides (`kadakas_core::guide::MAX_GUIDES`). A command that adds more is refused and changes nothing. The limit is not measured like the others. It follows from how guides are used.
+
+- The inference reads all guides on every pointer move. They are one small scene, rebuilt with the document revision. 10,000 guides are far below the 50,000 edges that the inference measured at 0.1 ms.
+- Nobody draws 10,000 guides by hand. A script in a loop can. A clear error is better than a slow window.
+- Guides are saved as plain objects. One guide is about 80 bytes of text.

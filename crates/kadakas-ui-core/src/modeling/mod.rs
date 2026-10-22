@@ -28,10 +28,10 @@ pub use exec::{
     Action, GuideSpec, Ran, Target, run as run_actions, run_full as run_actions_full,
     run_noted as run_actions_noted,
 };
-pub use tape::{PreviewGuide, RESIZE_RANGE, Resize};
 pub use plane::Plane3;
 pub use scenes::{SceneCache, Scenes, ShowOptions, World, elevation, frame_of, model_of};
 pub use select::{Item, SubSelection};
+pub use tape::{PreviewGuide, RESIZE_RANGE, Resize};
 pub use tools::{
     DEFAULT_ARC_SIDES, DEFAULT_SIDES, Excluded, LiveLabel, Modeling, Out, Pointer, Preview,
     arc_points, bulge_of, circle_points, delete_actions, intersect_actions, is_drawing_tool,

@@ -9,7 +9,9 @@
 //! (`Document::is_visible`). Nothing here repeats that rule.
 
 use kadakas_core::command::Command;
-use kadakas_core::model::{Attributes, ClassId, Document, LayerId, LayerKind, NONE_CLASS, ObjectId};
+use kadakas_core::model::{
+    Attributes, ClassId, Document, LayerId, LayerKind, NONE_CLASS, ObjectId,
+};
 
 /// One row of the list of tags.
 #[derive(Clone, Debug, PartialEq)]

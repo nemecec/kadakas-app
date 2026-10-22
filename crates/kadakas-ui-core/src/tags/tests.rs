@@ -88,7 +88,10 @@ fn the_eye_hides_and_shows_a_tag_and_a_layer_with_the_existing_commands() {
     let cmd = toggle_tag(ed.doc(), t).unwrap();
     assert!(matches!(
         cmd,
-        Command::ModifyClass { visible: Some(false), .. }
+        Command::ModifyClass {
+            visible: Some(false),
+            ..
+        }
     ));
     ed.execute(&cmd).unwrap();
     assert!(!ed.doc().is_visible(ed.doc().object(o).unwrap()));
@@ -96,7 +99,8 @@ fn the_eye_hides_and_shows_a_tag_and_a_layer_with_the_existing_commands() {
     ed.execute(&toggle_tag(ed.doc(), t).unwrap()).unwrap();
     assert!(ed.doc().is_visible(ed.doc().object(o).unwrap()));
     // Layers work the same way.
-    ed.execute(&toggle_layer(ed.doc(), FIRST_LAYER).unwrap()).unwrap();
+    ed.execute(&toggle_layer(ed.doc(), FIRST_LAYER).unwrap())
+        .unwrap();
     assert!(!ed.doc().is_visible(ed.doc().object(o).unwrap()));
     assert!(!rows(ed.doc()).layers[0].visible);
     // Show All brings back every hidden tag and layer in one step.
@@ -137,7 +141,10 @@ fn a_tag_is_renamed_but_untagged_keeps_its_name() {
     assert!(rename_tag(ed.doc(), t, "BIG TREES").is_ok());
     assert_eq!(rename_tag(ed.doc(), t, "walls"), Err(NameProblem::Taken));
     assert_eq!(rename_tag(ed.doc(), t, ""), Err(NameProblem::Empty));
-    assert_eq!(rename_tag(ed.doc(), NONE_CLASS, "x"), Err(NameProblem::Untagged));
+    assert_eq!(
+        rename_tag(ed.doc(), NONE_CLASS, "x"),
+        Err(NameProblem::Untagged)
+    );
     assert_eq!(
         rename_tag(ed.doc(), ClassId::from_num(99), "x"),
         Err(NameProblem::NoSuchTag)
@@ -159,7 +166,11 @@ fn deleting_a_tag_counts_its_objects_and_moves_them_to_untagged() {
         assert_eq!(ed.doc().object(id).unwrap().class, NONE_CLASS);
     }
     let t2 = tag(&mut ed, "Empty", Attributes::default());
-    assert_eq!(delete_tag(ed.doc(), t2).unwrap().objects, 0, "no question for an empty tag");
+    assert_eq!(
+        delete_tag(ed.doc(), t2).unwrap().objects,
+        0,
+        "no question for an empty tag"
+    );
     assert_eq!(delete_tag(ed.doc(), NONE_CLASS), Err(NameProblem::Untagged));
     assert_eq!(
         delete_tag(ed.doc(), ClassId::from_num(99)),

@@ -214,7 +214,7 @@ The 3D modeler (`docs/modeler.md`) has actions that the Vectorworks-like app doe
 | Arc tool (`tool.arc`, MOD-08) | none | none | planned |
 | Push/Pull tool (`tool.push_pull`, MOD-05, MOD-08) | none | none | planned |
 | Move tool (`tool.move`, MOD-05) | none | none | planned |
-| Tape Measure tool (`tool.tape_measure`, MOD-05) | none | none | planned |
+| Tape Measure tool (`tool.tape_measure`, MOD-05) | none | none | done |
 | Paint Bucket tool (`tool.paint_bucket`, MOD-05) | none | none | planned |
 | Orbit tool (`nav.orbit`, MOD-02) | none | none | done |
 | Pan tool (`nav.pan`, MOD-02) | none | none | done |
@@ -222,6 +222,8 @@ The 3D modeler (`docs/modeler.md`) has actions that the Vectorworks-like app doe
 | Zoom Window: the next drag of the Zoom tool draws a window (`nav.zoom_window`, MOD-02) | none | none | done |
 | Bottom view (`view.bottom`, MOD-02) | none (Vectorworks gives Bottom no key) | none | done |
 | Select None (`edit.select_none`) | none | none | done |
+
+The Tape Measure (`T`) takes Ctrl (Option on macOS) pressed alone to switch between making guides and measuring only. Hide, Unhide, Unhide All, Delete Guides and the View items Guides, Hidden Geometry and Hidden Objects have no key. They are in the Edit and View menus (MOD-05).
 
 ## SketchUp-like profile (3D modeler)
 

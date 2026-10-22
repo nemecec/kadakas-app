@@ -158,13 +158,11 @@ pub fn rect_guides(
         let at = g.at + DVec3::new(0.0, 0.0, z0);
         let hit = match (g.unit_dir(), g.length) {
             (None, _) => cam.project(at).is_some_and(|p| in_rect(p, lo, hi)),
-            (Some(d), Some(l)) => {
-                match (cam.project(at), cam.project(at + d * l)) {
-                    (Some(p), Some(q)) if crossing => segment_hits_rect(p, q, lo, hi),
-                    (Some(p), Some(q)) => in_rect(p, lo, hi) && in_rect(q, lo, hi),
-                    _ => false,
-                }
-            }
+            (Some(d), Some(l)) => match (cam.project(at), cam.project(at + d * l)) {
+                (Some(p), Some(q)) if crossing => segment_hits_rect(p, q, lo, hi),
+                (Some(p), Some(q)) => in_rect(p, lo, hi) && in_rect(q, lo, hi),
+                _ => false,
+            },
             (Some(d), None) if crossing => {
                 // A line without ends: the part that the camera sees, as a long segment.
                 let reach = crate::infer3d::GUIDE_REACH;

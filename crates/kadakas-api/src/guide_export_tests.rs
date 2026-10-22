@@ -11,7 +11,8 @@ fn tmp(name: &str) -> PathBuf {
 }
 
 fn ok(s: &mut Session, method: &str, p: Value) -> Value {
-    s.handle(method, p).unwrap_or_else(|e| panic!("{method}: {e:?}"))
+    s.handle(method, p)
+        .unwrap_or_else(|e| panic!("{method}: {e:?}"))
 }
 
 /// Two lines and two guides. The ids of the lines come back.
@@ -43,8 +44,12 @@ fn guides_can_be_added_and_read_back_through_the_api() {
 #[test]
 fn an_export_says_how_many_guides_it_left_out() {
     let (mut s, _) = session();
-    for (name, format) in [("a.dxf", "dxf"), ("a.glb", "glb"), ("a.obj", "obj"), ("a.ifc", "ifc")]
-    {
+    for (name, format) in [
+        ("a.dxf", "dxf"),
+        ("a.glb", "glb"),
+        ("a.obj", "obj"),
+        ("a.ifc", "ifc"),
+    ] {
         let path = tmp(name);
         let r = ok(
             &mut s,
@@ -76,7 +81,11 @@ fn an_export_with_nothing_to_leave_out_has_no_note() {
         json!({"command": {"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [1000, 0]}}}),
     );
     let path = tmp("b.dxf");
-    let r = ok(&mut s, "export.file", json!({"path": path, "overwrite": true}));
+    let r = ok(
+        &mut s,
+        "export.file",
+        json!({"path": path, "overwrite": true}),
+    );
     assert!(r.get("left_out").is_none(), "{r}");
     let _ = std::fs::remove_file(path);
 }

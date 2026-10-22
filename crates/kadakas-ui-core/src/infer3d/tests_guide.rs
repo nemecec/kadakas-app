@@ -52,7 +52,11 @@ fn a_guide_line_snaps_along_its_whole_length() {
     // A line without ends along X at y = 2000, and one along Y that stops at 3000 mm.
     let s = scene(|b| {
         b.add_guide(&Guide::line(DVec3::new(0.0, 2000.0, 0.0), DVec3::X), 0.0, 0);
-        b.add_guide(&Guide::segment(DVec3::new(500.0, 0.0, 0.0), DVec3::Y, 3000.0), 0.0, 1);
+        b.add_guide(
+            &Guide::segment(DVec3::new(500.0, 0.0, 0.0), DVec3::Y, 3000.0),
+            0.0,
+            1,
+        );
     });
     let c = cam();
     let mut i = Inferencer::default();
@@ -84,7 +88,11 @@ fn the_ends_and_the_middle_of_a_guide_are_no_points() {
     });
     let c = cam();
     let mut i = Inferencer::default();
-    for p in [DVec3::ZERO, DVec3::new(1000.0, 0.0, 0.0), DVec3::new(2000.0, 0.0, 0.0)] {
+    for p in [
+        DVec3::ZERO,
+        DVec3::new(1000.0, 0.0, 0.0),
+        DVec3::new(2000.0, 0.0, 0.0),
+    ] {
         let r = i.infer(&s, &c, px(&c, p), None);
         assert_eq!(r.kind, Kind::OnGuide, "{p}");
     }
@@ -134,7 +142,11 @@ fn a_guide_point_beats_a_guide_line_and_a_line_beats_a_face() {
     let mut i = Inferencer::default();
     assert_eq!(i.infer(&s, &c, px(&c, p), None).kind, Kind::GuidePoint);
     let r = i.infer(&s, &c, px(&c, DVec3::new(-2000.0, 0.0, 0.0)), None);
-    assert_eq!(r.kind, Kind::OnGuide, "on the face and on the guide: the guide");
+    assert_eq!(
+        r.kind,
+        Kind::OnGuide,
+        "on the face and on the guide: the guide"
+    );
     let r = i.infer(&s, &c, px(&c, DVec3::new(-2000.0, 1500.0, 0.0)), None);
     assert_eq!(r.kind, Kind::OnFace);
 }
@@ -142,13 +154,26 @@ fn a_guide_point_beats_a_guide_line_and_a_line_beats_a_face() {
 #[test]
 fn a_guide_crosses_an_edge_and_another_guide() {
     let s = scene(|b| {
-        b.add_edge(DVec3::new(1000.0, -2000.0, 0.0), DVec3::new(1000.0, 3000.0, 0.0), Tag(4));
+        b.add_edge(
+            DVec3::new(1000.0, -2000.0, 0.0),
+            DVec3::new(1000.0, 3000.0, 0.0),
+            Tag(4),
+        );
         b.add_guide(&Guide::line(DVec3::ZERO, DVec3::X), 0.0, 0);
-        b.add_guide(&Guide::line(DVec3::new(-1500.0, 0.0, 0.0), DVec3::Y), 0.0, 1);
+        b.add_guide(
+            &Guide::line(DVec3::new(-1500.0, 0.0, 0.0), DVec3::Y),
+            0.0,
+            1,
+        );
     });
     let c = cam();
     let mut i = Inferencer::default();
-    let r = i.infer(&s, &c, px(&c, DVec3::new(1000.0, 0.0, 0.0)) + DVec2::new(2.0, 1.0), None);
+    let r = i.infer(
+        &s,
+        &c,
+        px(&c, DVec3::new(1000.0, 0.0, 0.0)) + DVec2::new(2.0, 1.0),
+        None,
+    );
     assert_eq!(r.kind, Kind::Intersection);
     assert!(r.point.distance(DVec3::new(1000.0, 0.0, 0.0)) < 1e-3);
     assert!(r.source == Tag(4) || r.other == Tag(4));
@@ -174,7 +199,11 @@ fn an_axis_line_from_the_reference_point_crosses_a_guide() {
         Some(DVec3::ZERO),
     );
     assert_eq!(r.kind, Kind::Intersection);
-    assert!(r.point.distance(DVec3::new(2500.0, 0.0, 0.0)) < 1e-3, "{:?}", r.point);
+    assert!(
+        r.point.distance(DVec3::new(2500.0, 0.0, 0.0)) < 1e-3,
+        "{:?}",
+        r.point
+    );
     assert_eq!(r.source, Tag::guide(0));
 }
 
@@ -187,9 +216,21 @@ fn a_tool_can_skip_the_guides() {
     let c = cam();
     let mut i = Inferencer::default();
     let skip_guides = |t: Tag| t.kind() == TagKind::Guide;
-    let r = i.infer_scenes(&[&s], &c, px(&c, DVec3::new(500.0, 0.0, 0.0)), None, &skip_guides);
+    let r = i.infer_scenes(
+        &[&s],
+        &c,
+        px(&c, DVec3::new(500.0, 0.0, 0.0)),
+        None,
+        &skip_guides,
+    );
     assert_eq!(r.kind, Kind::Free);
-    let r = i.infer_scenes(&[&s], &c, px(&c, DVec3::new(500.0, 0.0, 0.0)), None, &|_| false);
+    let r = i.infer_scenes(
+        &[&s],
+        &c,
+        px(&c, DVec3::new(500.0, 0.0, 0.0)),
+        None,
+        &|_| false,
+    );
     assert_eq!(r.kind, Kind::GuidePoint);
 }
 
@@ -206,7 +247,12 @@ fn shift_keeps_a_guide_point_as_a_through_point_and_the_estonian_labels_exist() 
     assert_eq!(r.kind, Kind::GuidePoint);
     assert!(i.key(Key::ShiftDown));
     // Far from the point, the lock keeps the line from the reference point through it.
-    let r = i.infer(&s, &c, px(&c, DVec3::new(4000.0, 2000.0, 0.0)), Some(reference));
+    let r = i.infer(
+        &s,
+        &c,
+        px(&c, DVec3::new(4000.0, 2000.0, 0.0)),
+        Some(reference),
+    );
     assert_eq!(r.kind, Kind::ThroughPoint);
     assert!(r.locked);
     assert!(r.point.cross(guide).length() / guide.length() < 1.0);
@@ -227,7 +273,10 @@ fn a_line_without_ends_is_clipped_to_the_view_for_drawing() {
         )
         .expect("the line crosses the view");
     for p in s {
-        assert!(p.x >= -1e-6 && p.x <= 1000.0 + 1e-6 && p.y >= -1e-6 && p.y <= 800.0 + 1e-6, "{p}");
+        assert!(
+            p.x >= -1e-6 && p.x <= 1000.0 + 1e-6 && p.y >= -1e-6 && p.y <= 800.0 + 1e-6,
+            "{p}"
+        );
     }
     assert!(s[0].distance(s[1]) > 100.0);
     // A line far behind the camera has nothing to draw.
@@ -245,9 +294,18 @@ fn a_line_without_ends_is_clipped_to_the_view_for_drawing() {
         clip_segment(DVec2::new(-5.0, 5.0), DVec2::new(15.0, 5.0), lo, hi),
         Some([DVec2::new(0.0, 5.0), DVec2::new(10.0, 5.0)])
     );
-    assert_eq!(clip_segment(DVec2::new(-5.0, -5.0), DVec2::new(-1.0, 20.0), lo, hi), None);
-    assert_eq!(clip_segment(DVec2::new(20.0, 5.0), DVec2::new(30.0, 5.0), lo, hi), None);
-    assert_eq!(clip_segment(DVec2::new(5.0, 20.0), DVec2::new(5.0, 30.0), lo, hi), None);
+    assert_eq!(
+        clip_segment(DVec2::new(-5.0, -5.0), DVec2::new(-1.0, 20.0), lo, hi),
+        None
+    );
+    assert_eq!(
+        clip_segment(DVec2::new(20.0, 5.0), DVec2::new(30.0, 5.0), lo, hi),
+        None
+    );
+    assert_eq!(
+        clip_segment(DVec2::new(5.0, 20.0), DVec2::new(5.0, 30.0), lo, hi),
+        None
+    );
     assert!(clip_segment(DVec2::new(f64::NAN, 0.0), DVec2::ONE, lo, hi).is_none());
     let inside = clip_segment(DVec2::ONE, DVec2::new(2.0, 2.0), lo, hi).unwrap();
     assert_eq!(inside, [DVec2::ONE, DVec2::new(2.0, 2.0)]);

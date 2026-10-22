@@ -94,14 +94,21 @@ fn measuring_a_box_edge_shows_its_length_in_the_box_and_the_status_line() {
     let _ = frame(&ctx, &mut app, vec![moved(b)], t);
     let on_screen = shown(&ctx, &mut app, &mut t);
     assert!(on_screen.contains("1000"), "{on_screen}");
-    assert!(on_screen.contains(&tr!("uic-modeler-measure-distance")), "{on_screen}");
+    assert!(
+        on_screen.contains(&tr!("uic-modeler-measure-distance")),
+        "{on_screen}"
+    );
     let status = tr!("modeler-tape-distance", value = "");
     assert!(
         on_screen.contains(status.trim_end()),
         "the status line has the distance too: {on_screen}"
     );
     click_at(&ctx, &mut app, b, &mut t);
-    assert_eq!(app.session.editor.undo_depth(), depth, "a measure changes nothing");
+    assert_eq!(
+        app.session.editor.undo_depth(),
+        depth,
+        "a measure changes nothing"
+    );
     assert!(guides(&app).is_empty());
     // The value stays in the box after the second click.
     let after = shown(&ctx, &mut app, &mut t);
@@ -126,8 +133,15 @@ fn a_click_on_an_edge_and_one_away_make_a_parallel_guide_that_the_inference_snap
     assert_eq!(app.session.editor.undo_depth(), depth + 1, "one undo step");
     let g = guides(&app);
     assert_eq!(g.len(), 1);
-    assert!(g[0].at.distance(DVec3::new(-500.0, 500.0, 500.0)) < 1e-6, "{:?}", g[0].at);
-    assert!(g[0].unit_dir().unwrap().dot(DVec3::X).abs() > 0.999999, "parallel to the edge");
+    assert!(
+        g[0].at.distance(DVec3::new(-500.0, 500.0, 500.0)) < 1e-6,
+        "{:?}",
+        g[0].at
+    );
+    assert!(
+        g[0].unit_dir().unwrap().dot(DVec3::X).abs() > 0.999999,
+        "parallel to the edge"
+    );
     assert_eq!(g[0].length, None);
     // The Line tool snaps to the guide: "On Guide" in the label of the inference.
     choose(&ctx, &mut app, egui::Key::L, &mut t);
@@ -135,7 +149,10 @@ fn a_click_on_an_edge_and_one_away_make_a_parallel_guide_that_the_inference_snap
     let _ = frame(&ctx, &mut app, vec![moved(over)], t);
     t += 0.1;
     let _ = frame(&ctx, &mut app, vec![moved(over)], t);
-    let inf = app.edit.hover_inference().expect("an inference under the pointer");
+    let inf = app
+        .edit
+        .hover_inference()
+        .expect("an inference under the pointer");
     assert_eq!(inf.label, tr!("uic-infer3d-on-guide"), "{inf:?}");
     assert!((inf.point.y - 500.0).abs() < 1e-6 && (inf.point.z - 500.0).abs() < 1e-6);
     // Undo takes the guide back.
@@ -154,7 +171,11 @@ fn a_click_on_a_corner_and_one_in_a_direction_make_a_guide_line_through_the_corn
     click_at(&ctx, &mut app, toward, &mut t);
     let g = guides(&app);
     assert_eq!(g.len(), 1);
-    assert!(g[0].at.distance(DVec3::new(500.0, -500.0, 500.0)) < 1e-6, "{:?}", g[0].at);
+    assert!(
+        g[0].at.distance(DVec3::new(500.0, -500.0, 500.0)) < 1e-6,
+        "{:?}",
+        g[0].at
+    );
     assert!(g[0].unit_dir().unwrap().dot(DVec3::Y).abs() > 0.999999);
     assert_eq!(g[0].length, None);
 }
@@ -176,12 +197,21 @@ fn a_typed_distance_sets_the_offset_and_escape_cancels() {
     assert_eq!(app.session.editor.undo_depth(), depth + 1);
     let g = guides(&app);
     assert_eq!(g.len(), 1);
-    assert!(g[0].at.distance(DVec3::new(-200.0, -250.0, 500.0)) < 0.1, "{:?}", g[0].at);
+    assert!(
+        g[0].at.distance(DVec3::new(-200.0, -250.0, 500.0)) < 0.1,
+        "{:?}",
+        g[0].at
+    );
     assert!(g[0].unit_dir().unwrap().dot(DVec3::X).abs() > 0.999999);
     // Escape: the second click does not come.
     click_at(&ctx, &mut app, on_edge, &mut t);
     assert!(app.edit.modeling.in_progress());
-    let _ = frame(&ctx, &mut app, tap(egui::Key::Escape, egui::Modifiers::NONE), t + 0.1);
+    let _ = frame(
+        &ctx,
+        &mut app,
+        tap(egui::Key::Escape, egui::Modifiers::NONE),
+        t + 0.1,
+    );
     assert!(!app.edit.modeling.in_progress());
     assert_eq!(guides(&app).len(), 1);
     assert_eq!(app.session.editor.undo_depth(), depth + 1);
@@ -230,10 +260,7 @@ fn a_measure_and_a_typed_length_resize_the_model_after_a_yes() {
 #[test]
 fn the_eraser_removes_a_guide_in_one_step() {
     let (ctx, mut app, mut t, _) = ready();
-    add_guide(
-        &mut app,
-        Guide::line(DVec3::new(0.0, 800.0, 0.0), DVec3::X),
-    );
+    add_guide(&mut app, Guide::line(DVec3::new(0.0, 800.0, 0.0), DVec3::X));
     choose(&ctx, &mut app, egui::Key::E, &mut t);
     let depth = app.session.editor.undo_depth();
     let over = screen_of(&mut app, DVec3::new(800.0, 800.0, 0.0));
@@ -247,10 +274,7 @@ fn the_eraser_removes_a_guide_in_one_step() {
 #[test]
 fn select_takes_a_guide_by_a_click_and_by_a_window() {
     let (ctx, mut app, mut t, _) = ready();
-    let g = add_guide(
-        &mut app,
-        Guide::line(DVec3::new(0.0, 800.0, 0.0), DVec3::X),
-    );
+    let g = add_guide(&mut app, Guide::line(DVec3::new(0.0, 800.0, 0.0), DVec3::X));
     let p = add_guide(&mut app, Guide::point(DVec3::new(-900.0, -800.0, 0.0)));
     choose(&ctx, &mut app, egui::Key::Space, &mut t);
     let on_line = screen_of(&mut app, DVec3::new(900.0, 800.0, 0.0));
@@ -261,15 +285,45 @@ fn select_takes_a_guide_by_a_click_and_by_a_window() {
     let a = screen_of(&mut app, DVec3::new(-300.0, 650.0, 0.0));
     let b = screen_of(&mut app, DVec3::new(300.0, 950.0, 0.0));
     app.session.selection.clear();
-    let t2 = drag(&ctx, &mut app, egui::PointerButton::Primary, b, a, none, none, t);
+    let t2 = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Primary,
+        b,
+        a,
+        none,
+        none,
+        t,
+    );
     assert_eq!(app.session.selection, vec![g]);
     app.session.selection.clear();
-    let t3 = drag(&ctx, &mut app, egui::PointerButton::Primary, a, b, none, none, t2);
-    assert!(app.session.selection.is_empty(), "a window does not hold a line without ends");
+    let t3 = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Primary,
+        a,
+        b,
+        none,
+        none,
+        t2,
+    );
+    assert!(
+        app.session.selection.is_empty(),
+        "a window does not hold a line without ends"
+    );
     // A window around the guide point takes it.
     let a = screen_of(&mut app, DVec3::new(-1100.0, -1000.0, 0.0));
     let b = screen_of(&mut app, DVec3::new(-700.0, -600.0, 0.0));
-    let _ = drag(&ctx, &mut app, egui::PointerButton::Primary, a, b, none, none, t3);
+    let _ = drag(
+        &ctx,
+        &mut app,
+        egui::PointerButton::Primary,
+        a,
+        b,
+        none,
+        none,
+        t3,
+    );
     assert_eq!(app.session.selection, vec![p]);
     // With View > Guides off, Select All takes no guide and the guides are not offered.
     app.run(Cmd::ToggleGuides, size(&app));
@@ -321,7 +375,10 @@ fn delete_guides_asks_when_there_are_more_than_a_few_and_is_one_undo_step() {
     add_guide(&mut app, Guide::point(DVec3::new(9.0, 0.0, 0.0)));
     let depth = app.session.editor.undo_depth();
     app.run(Cmd::DeleteGuides, size(&app));
-    assert_eq!(app.confirm, Some(Confirm::DeleteGuides(crate::app::FEW_GUIDES + 1)));
+    assert_eq!(
+        app.confirm,
+        Some(Confirm::DeleteGuides(crate::app::FEW_GUIDES + 1))
+    );
     assert_eq!(guides(&app).len(), crate::app::FEW_GUIDES + 1);
     app.answer_confirm(false);
     assert!(app.confirm.is_none());
@@ -361,8 +418,16 @@ fn a_hidden_face_is_not_drawn_not_picked_and_comes_back_with_hidden_geometry_and
     // Hidden Geometry shows it ghosted and lets the click pick it.
     app.run(Cmd::ToggleHiddenGeometry, size(&app));
     click_at(&ctx, &mut app, over, &mut t);
-    assert!(app.edit.sub.contains(Item::Face(id, top)), "{:?}", app.edit.sub);
-    assert_eq!(triangles(&mut app), full - 2, "the renderer still leaves it out");
+    assert!(
+        app.edit.sub.contains(Item::Face(id, top)),
+        "{:?}",
+        app.edit.sub
+    );
+    assert_eq!(
+        triangles(&mut app),
+        full - 2,
+        "the renderer still leaves it out"
+    );
     // Unhide on the selected hidden face.
     assert!(app.can_unhide());
     app.run(Cmd::Unhide, size(&app));
@@ -415,7 +480,11 @@ fn hiding_an_object_removes_it_from_the_view_and_unhide_all_brings_it_back() {
     assert_eq!(objects(&mut app), 0);
     app.run(Cmd::ToggleHiddenObjects, size(&app));
     assert_eq!(objects(&mut app), 1);
-    assert_eq!(triangles(&mut app), 0, "the renderer never draws hidden objects");
+    assert_eq!(
+        triangles(&mut app),
+        0,
+        "the renderer never draws hidden objects"
+    );
     // Select All takes it only now.
     app.run(Cmd::SelectAll, size(&app));
     assert_eq!(app.session.selection, vec![id]);
@@ -455,7 +524,9 @@ fn a_hidden_tag_hides_its_objects_in_the_view_the_picking_and_the_inference() {
             .created[0],
     );
     app.apply_tags(tags_panel::Outcome {
-        commands: tags::set_tag(app.session.editor.doc(), &[id], tag).into_iter().collect(),
+        commands: tags::set_tag(app.session.editor.doc(), &[id], tag)
+            .into_iter()
+            .collect(),
         ..tags_panel::Outcome::default()
     });
     assert_eq!(app.session.editor.doc().object(id).unwrap().class, tag);
@@ -463,23 +534,38 @@ fn a_hidden_tag_hides_its_objects_in_the_view_the_picking_and_the_inference() {
     // The eye hides the tag.
     let depth = app.session.editor.undo_depth();
     app.apply_tags(tags_panel::Outcome {
-        commands: tags::toggle_tag(app.session.editor.doc(), tag).into_iter().collect(),
+        commands: tags::toggle_tag(app.session.editor.doc(), tag)
+            .into_iter()
+            .collect(),
         ..tags_panel::Outcome::default()
     });
     assert_eq!(app.session.editor.undo_depth(), depth + 1);
     assert_eq!(triangles(&mut app), 0, "not drawn");
     let rev = app.session.editor.revision();
     let doc = app.session.editor.doc().clone();
-    assert!(app.edit.cache.get(&doc, rev).objects().is_empty(), "not in the inference");
+    assert!(
+        app.edit.cache.get(&doc, rev).objects().is_empty(),
+        "not in the inference"
+    );
     choose(&ctx, &mut app, egui::Key::Space, &mut t);
     let over = screen_of(&mut app, DVec3::new(100.0, 100.0, 500.0));
     click_at(&ctx, &mut app, over, &mut t);
-    assert!(app.edit.sub.is_empty() && app.session.selection.is_empty(), "not picked");
+    assert!(
+        app.edit.sub.is_empty() && app.session.selection.is_empty(),
+        "not picked"
+    );
     // The export leaves it out too: the same rule as for layers.
-    assert!(!app.session.editor.doc().is_visible(app.session.editor.doc().object(id).unwrap()));
+    assert!(
+        !app.session
+            .editor
+            .doc()
+            .is_visible(app.session.editor.doc().object(id).unwrap())
+    );
     // Show it again.
     app.apply_tags(tags_panel::Outcome {
-        commands: tags::toggle_tag(app.session.editor.doc(), tag).into_iter().collect(),
+        commands: tags::toggle_tag(app.session.editor.doc(), tag)
+            .into_iter()
+            .collect(),
         ..tags_panel::Outcome::default()
     });
     assert_eq!(triangles(&mut app), full);
@@ -504,7 +590,10 @@ fn the_tags_panel_lists_tags_and_layers_and_new_geometry_goes_to_the_active_tag(
         tr!("modeler-tags-new"),
         tr!("modeler-tags-delete"),
     ] {
-        assert!(on_screen.contains(&want), "{want:?} is not on the screen:\n{on_screen}");
+        assert!(
+            on_screen.contains(&want),
+            "{want:?} is not on the screen:\n{on_screen}"
+        );
     }
     // The active tag takes the new geometry.
     let doc = app.session.editor.doc();
@@ -527,7 +616,10 @@ fn the_tags_panel_is_in_estonian_too() {
         });
         let mut t = 0.0;
         let on_screen = shown(&ctx, &mut app, &mut t);
-        assert!(on_screen.contains("Sildid") && on_screen.contains("Sildita"), "{on_screen}");
+        assert!(
+            on_screen.contains("Sildid") && on_screen.contains("Sildita"),
+            "{on_screen}"
+        );
         assert!(on_screen.contains("Kihid"), "{on_screen}");
         assert!(!on_screen.contains("Untagged"), "{on_screen}");
     });
@@ -557,7 +649,10 @@ fn deleting_a_tag_with_objects_asks_first_and_moves_them_to_untagged() {
     let _ = shown(&ctx, &mut app, &mut t);
     let text = shown(&ctx, &mut app, &mut t);
     assert!(text.contains(&tr!("modeler-tags-delete-title")), "{text}");
-    assert!(app.session.editor.doc().class(tag).is_some(), "nothing moved without the answer");
+    assert!(
+        app.session.editor.doc().class(tag).is_some(),
+        "nothing moved without the answer"
+    );
     // The answer through the plan: tag deleted, objects in Untagged, one undo step.
     let plan = tags::delete_tag(app.session.editor.doc(), tag).unwrap();
     assert_eq!(plan.objects, 1);
@@ -569,7 +664,10 @@ fn deleting_a_tag_with_objects_asks_first_and_moves_them_to_untagged() {
     });
     assert_eq!(app.session.editor.undo_depth(), depth + 1);
     assert!(app.session.editor.doc().class(tag).is_none());
-    assert_eq!(app.session.editor.doc().object(id).unwrap().class, kadakas_core::model::NONE_CLASS);
+    assert_eq!(
+        app.session.editor.doc().object(id).unwrap().class,
+        kadakas_core::model::NONE_CLASS
+    );
     assert!(app.status.contains("Trees"));
 }
 
@@ -585,12 +683,20 @@ fn the_exports_of_a_modeler_document_say_what_they_left_out() {
     let path = dir.join("model.glb");
     let r = app
         .session
-        .handle("export.file", serde_json::json!({"path": path, "format": "glb"}))
+        .handle(
+            "export.file",
+            serde_json::json!({"path": path, "format": "glb"}),
+        )
         .unwrap();
     assert_eq!(r["left_out"]["guides"], 2, "{r}");
     assert_eq!(r["left_out"]["hidden_faces"], 1, "{r}");
     let notes = r["left_out"]["notes"].as_array().unwrap();
-    assert!(notes.iter().any(|n| n == "2 guides left out: construction geometry"), "{notes:?}");
+    assert!(
+        notes
+            .iter()
+            .any(|n| n == "2 guides left out: construction geometry"),
+        "{notes:?}"
+    );
     // The document in the window is unchanged by the export.
     assert_eq!(guides(&app).len(), 2);
     let _ = std::fs::remove_dir_all(dir);

@@ -157,7 +157,11 @@ fn a_hidden_face_is_not_in_the_scene_nor_picked_until_hidden_geometry_shows_it()
     };
     assert_eq!(pick(&mut r, &mut engine), Some(Item::Face(id, face)));
     hide_face(&mut r, id, face, true);
-    assert_eq!(pick(&mut r, &mut engine), None, "a hidden face is not picked");
+    assert_eq!(
+        pick(&mut r, &mut engine),
+        None,
+        "a hidden face is not picked"
+    );
     let rev = r.ed.revision();
     assert_eq!(r.cache.get(r.ed.doc(), rev).face_count(), 0);
     r.cache.show.hidden_geometry = true;
@@ -210,8 +214,16 @@ fn the_window_leaves_out_hidden_faces_and_edges_unless_they_are_shown() {
 #[test]
 fn a_guide_is_picked_by_its_point_or_its_line() {
     let mut r = rig(ModelerTool::Select);
-    let line = add_guide(&mut r, Guide::line(DVec3::new(0.0, 1000.0, 0.0), DVec3::X), None);
-    let point = add_guide(&mut r, Guide::point(DVec3::new(-1000.0, -1000.0, 0.0)), None);
+    let line = add_guide(
+        &mut r,
+        Guide::line(DVec3::new(0.0, 1000.0, 0.0), DVec3::X),
+        None,
+    );
+    let point = add_guide(
+        &mut r,
+        Guide::point(DVec3::new(-1000.0, -1000.0, 0.0)),
+        None,
+    );
     let cam = top();
     let mut engine = Inferencer::default();
     let mut pick = |r: &mut Rig, p: DVec3| {
@@ -240,7 +252,11 @@ fn a_window_takes_guide_points_and_finite_lines_and_a_crossing_takes_every_line(
         Guide::segment(DVec3::new(0.0, -1000.0, 0.0), DVec3::X, 800.0),
         None,
     );
-    let long = add_guide(&mut r, Guide::line(DVec3::new(0.0, 1000.0, 0.0), DVec3::X), None);
+    let long = add_guide(
+        &mut r,
+        Guide::line(DVec3::new(0.0, 1000.0, 0.0), DVec3::X),
+        None,
+    );
     let cam = top();
     let sel = |r: &mut Rig, a: DVec2, b: DVec2, crossing: bool| {
         let rev = r.ed.revision();
@@ -256,14 +272,23 @@ fn a_window_takes_guide_points_and_finite_lines_and_a_crossing_takes_every_line(
     let whole = (DVec2::ZERO, DVec2::new(800.0, 600.0));
     let mut want = vec![point, short];
     want.sort();
-    assert_eq!(sel(&mut r, whole.0, whole.1, false), want, "a line without ends is not inside");
+    assert_eq!(
+        sel(&mut r, whole.0, whole.1, false),
+        want,
+        "a line without ends is not inside"
+    );
     let mut want = vec![point, short, long];
     want.sort();
     assert_eq!(sel(&mut r, whole.0, whole.1, true), want);
     // A small window around the point takes only the point.
     let p = px(&cam, DVec3::new(-1000.0, 0.0, 0.0));
     assert_eq!(
-        sel(&mut r, p - DVec2::splat(10.0), p + DVec2::splat(10.0), false),
+        sel(
+            &mut r,
+            p - DVec2::splat(10.0),
+            p + DVec2::splat(10.0),
+            false
+        ),
         vec![point]
     );
     // Guides that are not shown are never taken.

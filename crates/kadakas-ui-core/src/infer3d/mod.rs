@@ -151,11 +151,7 @@ impl Kind {
     pub fn is_point(self) -> bool {
         matches!(
             self,
-            Kind::Endpoint
-                | Kind::GuidePoint
-                | Kind::Center
-                | Kind::Midpoint
-                | Kind::Intersection
+            Kind::Endpoint | Kind::GuidePoint | Kind::Center | Kind::Midpoint | Kind::Intersection
         )
     }
 

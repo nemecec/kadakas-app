@@ -173,7 +173,8 @@ impl Tape {
             && p.inf.kind == Kind::OnEdge
             && p.inf.source.kind() == TagKind::Edge
             && let Some(model) = w.scenes.object(p.inf.source)
-            && let Some([a, b]) = w.edge_ends(model, kadakas_core::surface::EdgeId(p.inf.source.id()))
+            && let Some([a, b]) =
+                w.edge_ends(model, kadakas_core::surface::EdgeId(p.inf.source.id()))
         {
             self.hover_length = Some(a.distance(b));
         }
@@ -185,9 +186,9 @@ impl Tape {
             // The first click.
             self.measured = None;
             let origin = match (p.inf.kind, p.inf.constraint) {
-                (Kind::OnEdge | Kind::OnGuide, Some(Constraint::Line { dir, .. })) => {
-                    dir.try_normalize().map_or(Origin::Point, |dir| Origin::Line { dir })
-                }
+                (Kind::OnEdge | Kind::OnGuide, Some(Constraint::Line { dir, .. })) => dir
+                    .try_normalize()
+                    .map_or(Origin::Point, |dir| Origin::Line { dir }),
                 _ => Origin::Point,
             };
             self.run = Run::From { start: pt, origin };
@@ -238,14 +239,16 @@ impl Tape {
                 match origin {
                     Origin::Line { dir } => {
                         // The side of the pointer; a negative length takes the other side.
-                        let side = perpendicular(cursor - start, dir).try_normalize().unwrap_or_else(|| {
-                            let axis = if dir.cross(DVec3::Z).length() > 1e-6 {
-                                DVec3::Z
-                            } else {
-                                DVec3::X
-                            };
-                            dir.cross(axis).normalize()
-                        });
+                        let side = perpendicular(cursor - start, dir)
+                            .try_normalize()
+                            .unwrap_or_else(|| {
+                                let axis = if dir.cross(DVec3::Z).length() > 1e-6 {
+                                    DVec3::Z
+                                } else {
+                                    DVec3::X
+                                };
+                                dir.cross(axis).normalize()
+                            });
                         guide(GuideSpec::line(start + side * d, dir))
                     }
                     Origin::Point => {
@@ -308,9 +311,7 @@ impl Tape {
 }
 
 fn guide(spec: GuideSpec) -> Out {
-    Out::act(Action::AddGuides {
-        guides: vec![spec],
-    })
+    Out::act(Action::AddGuides { guides: vec![spec] })
 }
 
 /// A guide that the window draws while the tool runs, in world coordinates.

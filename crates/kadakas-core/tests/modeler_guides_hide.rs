@@ -68,7 +68,10 @@ fn a_guide_is_an_object_that_round_trips_through_the_file() {
     let mut ed = Editor::with_sequential_ids();
     let line = add(
         &mut ed,
-        guide(Guide::line(DVec3::new(1.0, 2.0, 3.0), DVec3::new(0.0, 1.0, 0.0))),
+        guide(Guide::line(
+            DVec3::new(1.0, 2.0, 3.0),
+            DVec3::new(0.0, 1.0, 0.0),
+        )),
     );
     let seg = add(&mut ed, guide(Guide::segment(DVec3::ZERO, DVec3::X, 250.0)));
     let pt = add(&mut ed, guide(Guide::point(DVec3::new(5.0, 6.0, 7.0))));
@@ -95,7 +98,8 @@ fn a_guide_is_one_undo_step_and_goes_with_delete() {
     assert_eq!(ed.doc().guide_count(), 0);
     assert!(ed.redo());
     assert!(ed.doc().object(id).is_some());
-    ed.execute(&Command::DeleteObjects { ids: vec![id] }).unwrap();
+    ed.execute(&Command::DeleteObjects { ids: vec![id] })
+        .unwrap();
     assert_eq!(ed.doc().guide_count(), 0);
     assert!(ed.undo());
     assert_eq!(ed.doc().guide_count(), 1);
@@ -296,9 +300,26 @@ fn hide_is_one_undo_step_and_a_hidden_object_is_not_drawn() {
 #[test]
 fn hiding_a_group_hides_its_members() {
     let mut ed = Editor::with_sequential_ids();
-    let a = add(&mut ed, Shape::Line { a: DVec2::ZERO, b: DVec2::X });
-    let b = add(&mut ed, Shape::Line { a: DVec2::Y, b: DVec2::ONE });
-    let out = ed.execute(&Command::Group { ids: vec![a, b], name: None }).unwrap();
+    let a = add(
+        &mut ed,
+        Shape::Line {
+            a: DVec2::ZERO,
+            b: DVec2::X,
+        },
+    );
+    let b = add(
+        &mut ed,
+        Shape::Line {
+            a: DVec2::Y,
+            b: DVec2::ONE,
+        },
+    );
+    let out = ed
+        .execute(&Command::Group {
+            ids: vec![a, b],
+            name: None,
+        })
+        .unwrap();
     let group = ObjectId(out.created[0]);
     let cmd = set_hidden_command(ed.doc(), &[group], true).unwrap();
     ed.execute(&cmd).unwrap();
@@ -322,7 +343,10 @@ fn a_hidden_face_is_not_in_the_3d_scene() {
         .filter(|(_, f)| f.plane.normal.z > 0.9)
         .map(|(f, _)| f)
         .max_by(|a, b| {
-            model(&ed, id).face_area(*a).unwrap().total_cmp(&model(&ed, id).face_area(*b).unwrap())
+            model(&ed, id)
+                .face_area(*a)
+                .unwrap()
+                .total_cmp(&model(&ed, id).face_area(*b).unwrap())
         })
         .unwrap();
     ed.execute(&Command::EditSurface {
@@ -334,7 +358,11 @@ fn a_hidden_face_is_not_in_the_3d_scene() {
         },
     })
     .unwrap();
-    assert_eq!(tris(&ed), full - 2, "the two triangles of the top face are gone");
+    assert_eq!(
+        tris(&ed),
+        full - 2,
+        "the two triangles of the top face are gone"
+    );
     assert_eq!(
         mesh::build(ed.doc()).lines.segment_count(),
         lines,
@@ -378,7 +406,10 @@ fn deleting_a_class_moves_its_objects_to_the_default_class() {
     let t = tag(&mut ed, "Trees");
     let o = ObjectId(
         ed.execute(&Command::AddObject {
-            shape: Shape::Line { a: DVec2::ZERO, b: DVec2::X },
+            shape: Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::X,
+            },
             layer: None,
             class: Some(t),
             attrs: Attributes::default(),
@@ -392,7 +423,11 @@ fn deleting_a_class_moves_its_objects_to_the_default_class() {
     })
     .unwrap();
     let depth = ed.undo_depth();
-    ed.execute(&Command::DeleteClass { id: t, move_to: None }).unwrap();
+    ed.execute(&Command::DeleteClass {
+        id: t,
+        move_to: None,
+    })
+    .unwrap();
     assert_eq!(ed.undo_depth(), depth + 1, "one step");
     assert!(ed.doc().class(t).is_none());
     assert_eq!(ed.doc().object(o).unwrap().class, NONE_CLASS);
@@ -403,7 +438,11 @@ fn deleting_a_class_moves_its_objects_to_the_default_class() {
     assert_eq!(ed.doc().active_class, t);
     // To another class on request.
     let u = tag(&mut ed, "Walls");
-    ed.execute(&Command::DeleteClass { id: t, move_to: Some(u) }).unwrap();
+    ed.execute(&Command::DeleteClass {
+        id: t,
+        move_to: Some(u),
+    })
+    .unwrap();
     assert_eq!(ed.doc().object(o).unwrap().class, u);
 }
 
@@ -412,19 +451,31 @@ fn a_class_is_deleted_only_when_it_makes_sense() {
     let mut ed = Editor::with_sequential_ids();
     let t = tag(&mut ed, "Trees");
     assert!(matches!(
-        ed.execute(&Command::DeleteClass { id: NONE_CLASS, move_to: None }),
+        ed.execute(&Command::DeleteClass {
+            id: NONE_CLASS,
+            move_to: None
+        }),
         Err(CommandError::Invalid(_))
     ));
     assert_eq!(
-        ed.execute(&Command::DeleteClass { id: ClassId::from_num(999), move_to: None }),
+        ed.execute(&Command::DeleteClass {
+            id: ClassId::from_num(999),
+            move_to: None
+        }),
         Err(CommandError::NoClass(ClassId::from_num(999)))
     );
     assert_eq!(
-        ed.execute(&Command::DeleteClass { id: t, move_to: Some(ClassId::from_num(999)) }),
+        ed.execute(&Command::DeleteClass {
+            id: t,
+            move_to: Some(ClassId::from_num(999))
+        }),
         Err(CommandError::NoClass(ClassId::from_num(999)))
     );
     assert!(matches!(
-        ed.execute(&Command::DeleteClass { id: t, move_to: Some(t) }),
+        ed.execute(&Command::DeleteClass {
+            id: t,
+            move_to: Some(t)
+        }),
         Err(CommandError::Invalid(_))
     ));
     assert!(ed.doc().class(t).is_some());
@@ -436,7 +487,10 @@ fn a_hidden_tag_hides_its_objects_in_the_scene() {
     let t = tag(&mut ed, "Trees");
     for class in [None, Some(t)] {
         ed.execute(&Command::AddObject {
-            shape: Shape::Line { a: DVec2::ZERO, b: DVec2::X },
+            shape: Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::X,
+            },
             layer: None,
             class,
             attrs: Attributes::default(),
@@ -445,11 +499,21 @@ fn a_hidden_tag_hides_its_objects_in_the_scene() {
     }
     let segments = |ed: &Editor| mesh::build(ed.doc()).lines.segment_count();
     assert_eq!(segments(&ed), 2);
-    ed.execute(&Command::ModifyClass { id: t, name: None, visible: Some(false), attrs: None })
-        .unwrap();
+    ed.execute(&Command::ModifyClass {
+        id: t,
+        name: None,
+        visible: Some(false),
+        attrs: None,
+    })
+    .unwrap();
     assert_eq!(segments(&ed), 1);
-    ed.execute(&Command::ModifyClass { id: t, name: Some("Plants".into()), visible: Some(true), attrs: None })
-        .unwrap();
+    ed.execute(&Command::ModifyClass {
+        id: t,
+        name: Some("Plants".into()),
+        visible: Some(true),
+        attrs: None,
+    })
+    .unwrap();
     assert_eq!(segments(&ed), 2);
     assert_eq!(ed.doc().class(t).unwrap().name, "Plants");
 }
@@ -460,7 +524,13 @@ fn a_hidden_tag_hides_its_objects_in_the_scene() {
 fn what_an_export_leaves_out_is_counted() {
     let mut ed = Editor::with_sequential_ids();
     let id = boxed(&mut ed);
-    let line = add(&mut ed, Shape::Line { a: DVec2::ZERO, b: DVec2::X });
+    let line = add(
+        &mut ed,
+        Shape::Line {
+            a: DVec2::ZERO,
+            b: DVec2::X,
+        },
+    );
     add(&mut ed, guide(Guide::line(DVec3::ZERO, DVec3::X)));
     add(&mut ed, guide(Guide::point(DVec3::ZERO)));
     assert_eq!(LeftOut::of(ed.doc()).guides, 2);
@@ -472,14 +542,24 @@ fn what_an_export_leaves_out_is_counted() {
     let edge = model(&ed, id).edges().next().unwrap().0;
     ed.execute(&Command::EditSurface {
         id,
-        edit: Edit::SetHidden { faces: vec![face], edges: vec![edge], hidden: true },
+        edit: Edit::SetHidden {
+            faces: vec![face],
+            edges: vec![edge],
+            hidden: true,
+        },
     })
     .unwrap();
-    ed.execute(&set_hidden_command(ed.doc(), &[line], true).unwrap()).unwrap();
+    ed.execute(&set_hidden_command(ed.doc(), &[line], true).unwrap())
+        .unwrap();
     let n = LeftOut::of(ed.doc());
     assert_eq!(
         n,
-        LeftOut { guides: 2, hidden_objects: 1, hidden_faces: 1, hidden_edges: 1 }
+        LeftOut {
+            guides: 2,
+            hidden_objects: 1,
+            hidden_faces: 1,
+            hidden_edges: 1
+        }
     );
     assert_eq!(n.notes().len(), 3);
     // The document for the export has none of them.
@@ -494,7 +574,10 @@ fn what_an_export_leaves_out_is_counted() {
     // A hidden edge is only a mark on the border of faces: the export draws no line for it.
     assert_eq!(
         LeftOut::of(&clean),
-        LeftOut { hidden_edges: 1, ..LeftOut::default() }
+        LeftOut {
+            hidden_edges: 1,
+            ..LeftOut::default()
+        }
     );
     // The document itself is not changed.
     assert_eq!(ed.doc().guide_count(), 2);
@@ -510,7 +593,10 @@ fn what_an_export_leaves_out_is_counted() {
     assert_eq!(LeftOut::of(ed.doc()).guides, 3, "every guide counts");
     let line2 = ObjectId(
         ed.execute(&Command::AddObject {
-            shape: Shape::Line { a: DVec2::ZERO, b: DVec2::Y },
+            shape: Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::Y,
+            },
             layer: None,
             class: Some(t),
             attrs: Attributes::default(),
@@ -518,9 +604,15 @@ fn what_an_export_leaves_out_is_counted() {
         .unwrap()
         .created[0],
     );
-    ed.execute(&set_hidden_command(ed.doc(), &[line2], true).unwrap()).unwrap();
-    ed.execute(&Command::ModifyClass { id: t, name: None, visible: Some(false), attrs: None })
+    ed.execute(&set_hidden_command(ed.doc(), &[line2], true).unwrap())
         .unwrap();
+    ed.execute(&Command::ModifyClass {
+        id: t,
+        name: None,
+        visible: Some(false),
+        attrs: None,
+    })
+    .unwrap();
     assert_eq!(LeftOut::of(ed.doc()).hidden_objects, 1);
 }
 
@@ -551,9 +643,16 @@ fn a_guide_moves_turns_and_scales_with_the_objects_around_it() {
         _ => panic!(),
     };
     let s = g(seg);
-    assert!(s.at.distance(DVec3::new(0.0, 200.0, 0.0)) < 1e-9, "{:?}", s.at);
+    assert!(
+        s.at.distance(DVec3::new(0.0, 200.0, 0.0)) < 1e-9,
+        "{:?}",
+        s.at
+    );
     assert!(s.unit_dir().unwrap().distance(DVec3::Y) < 1e-9);
-    assert!((s.length.unwrap() - 100.0).abs() < 1e-9, "the length follows the scale");
+    assert!(
+        (s.length.unwrap() - 100.0).abs() < 1e-9,
+        "the length follows the scale"
+    );
     assert!(g(pt).at.distance(DVec3::new(-40.0, 20.0, 60.0)) < 1e-9);
     assert!(g(line).unit_dir().unwrap().distance(-DVec3::X) < 1e-9);
     assert_eq!(g(line).length, None);

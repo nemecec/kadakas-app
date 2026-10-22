@@ -15,12 +15,13 @@ use kadakas_api::Session;
 use kadakas_core::command::Command;
 use kadakas_core::mesh::Scene;
 use kadakas_l10n::tr;
-use kadakas_ui_core::infer3d::{self, GUIDE, GUIDE_REACH, Inference, Inferencer, Key, PAUSE_SECONDS, Rgb};
+use kadakas_ui_core::infer3d::{
+    self, GUIDE, GUIDE_REACH, Inference, Inferencer, Key, PAUSE_SECONDS, Rgb,
+};
 use kadakas_ui_core::keys::Modifiers;
 use kadakas_ui_core::modeler::ModelerTool;
 use kadakas_ui_core::modeling::{
-    self, Item, Modeling, Out, Pointer, Preview, Resize, SceneCache, SubSelection, World,
-    XContext,
+    self, Item, Modeling, Out, Pointer, Preview, Resize, SceneCache, SubSelection, World, XContext,
 };
 use kadakas_view3d::vertex::LineVertex;
 use kadakas_view3d::view3d::{self, View3d};
@@ -207,9 +208,13 @@ fn refresh_extras(extras: &mut Extras, world: &World, rev: u64) {
         let Some(m) = modeling::model_of(doc, id) else {
             continue;
         };
-        let whole = doc.object(id).is_some_and(kadakas_core::visibility::is_hidden);
+        let whole = doc
+            .object(id)
+            .is_some_and(kadakas_core::visibility::is_hidden);
         for (eid, _) in m.edges() {
-            if (whole || m.edge_hidden(eid)) && let Some(s) = world.edge_ends(id, eid) {
+            if (whole || m.edge_hidden(eid))
+                && let Some(s) = world.edge_ends(id, eid)
+            {
                 extras.ghost_edges.push(s);
             }
         }
@@ -296,6 +301,7 @@ impl Edit3d {
     }
 
     /// The inference under the pointer in the last frame: its kind, label and source.
+    #[cfg(test)]
     pub fn hover_inference(&self) -> Option<&Inference> {
         self.hover.as_ref()
     }
@@ -516,7 +522,8 @@ impl Edit3d {
                         self.sub.click(hit, inp.mods.shift);
                         selection_changed = true;
                     } else {
-                        guide_hit = modeling::select::pick_guide(&world, &mut self.picker, &cam, local(p));
+                        guide_hit =
+                            modeling::select::pick_guide(&world, &mut self.picker, &cam, local(p));
                         object_pick = Some(None);
                     }
                 }
@@ -798,17 +805,24 @@ impl Edit3d {
                 painter.extend(egui::Shape::dashed_line(&[px(p), px(q)], stroke, dash, gap));
             }
         };
-        let guide_line = |at: DVec3, dir: DVec3, length: Option<f64>, stroke: Stroke| {
-            match length {
-                Some(l) => dashed(at, at + dir * l, stroke, 6.0, 4.0),
-                None => dashed(at - dir * GUIDE_REACH, at + dir * GUIDE_REACH, stroke, 6.0, 4.0),
-            }
+        let guide_line = |at: DVec3, dir: DVec3, length: Option<f64>, stroke: Stroke| match length {
+            Some(l) => dashed(at, at + dir * l, stroke, 6.0, 4.0),
+            None => dashed(
+                at - dir * GUIDE_REACH,
+                at + dir * GUIDE_REACH,
+                stroke,
+                6.0,
+                4.0,
+            ),
         };
         let cross = |at: DVec3, stroke: Stroke| {
             if let Some(p) = cam.project(at) {
                 let c = px(p);
                 painter.line_segment([c - egui::vec2(4.0, 4.0), c + egui::vec2(4.0, 4.0)], stroke);
-                painter.line_segment([c - egui::vec2(4.0, -4.0), c + egui::vec2(4.0, -4.0)], stroke);
+                painter.line_segment(
+                    [c - egui::vec2(4.0, -4.0), c + egui::vec2(4.0, -4.0)],
+                    stroke,
+                );
             }
         };
         let erase = self.preview.erase_guides.clone();
@@ -816,7 +830,10 @@ impl Edit3d {
             let (stroke, width) = if erase.contains(&g.id) {
                 (Color32::from_rgb(220, 50, 50), 2.0)
             } else if self.extras.selected.contains(&g.id) {
-                (Color32::from_rgb(SELECTED[0], SELECTED[1], SELECTED[2]), 2.0)
+                (
+                    Color32::from_rgb(SELECTED[0], SELECTED[1], SELECTED[2]),
+                    2.0,
+                )
             } else if g.hidden {
                 (amber.gamma_multiply(0.45), 1.0)
             } else {
@@ -834,7 +851,12 @@ impl Edit3d {
         }
         // Hidden geometry and hidden objects, when the person asked to see them.
         let ghost = Stroke::new(1.0, Color32::from_gray(140));
-        for s in self.extras.ghost_edges.iter().chain(&self.extras.ghost_hatch) {
+        for s in self
+            .extras
+            .ghost_edges
+            .iter()
+            .chain(&self.extras.ghost_hatch)
+        {
             if let Some([p, q]) = cam.view_segment(s[0], s[1]) {
                 painter.extend(egui::Shape::dashed_line(&[px(p), px(q)], ghost, 2.0, 3.0));
             }

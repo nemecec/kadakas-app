@@ -513,14 +513,21 @@ mod tests {
         b.add_guide(&Guide::point(DVec3::NAN), 0.0, 4);
         let s = b.finish();
         assert_eq!((s.point_count(), s.edge_count()), (1, 2));
-        assert_eq!(s.points[0].p, DVec3::new(1.0, 2.0, 13.0), "the layer elevation is added");
+        assert_eq!(
+            s.points[0].p,
+            DVec3::new(1.0, 2.0, 13.0),
+            "the layer elevation is added"
+        );
         assert_eq!(s.points[0].kind, PointKind::Guide);
         assert!(s.points[0].tag == Tag::guide(0) && s.points[0].tag.kind() == TagKind::Guide);
         let long = s.edges.iter().find(|e| e.tag == Tag::guide(1)).unwrap();
         assert_eq!(long.a, DVec3::new(0.0, -GUIDE_REACH, 0.0));
         assert_eq!(long.b, DVec3::new(0.0, GUIDE_REACH, 0.0));
         let short = s.edges.iter().find(|e| e.tag == Tag::guide(2)).unwrap();
-        assert_eq!((short.a, short.b), (DVec3::new(0.0, 0.0, 5.0), DVec3::new(100.0, 0.0, 5.0)));
+        assert_eq!(
+            (short.a, short.b),
+            (DVec3::new(0.0, 0.0, 5.0), DVec3::new(100.0, 0.0, 5.0))
+        );
         assert_eq!(Tag::guide(7).id(), 7);
         assert_eq!(Tag::guide(7).shifted(5), Tag::guide(7), "no model to shift");
     }

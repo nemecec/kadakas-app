@@ -5,7 +5,7 @@ use glam::{DVec2, DVec3};
 use kadakas_core::command::Command;
 use kadakas_core::guide::Guide;
 use kadakas_core::model::{Attributes, ObjectId, Shape};
-use kadakas_core::surface::{Edit, EdgeId};
+use kadakas_core::surface::{EdgeId, Edit};
 
 use super::*;
 use crate::infer3d::Constraint;
@@ -91,7 +91,10 @@ fn a_click_on_an_edge_and_one_away_from_it_make_a_parallel_guide() {
     let mut r = rig(ModelerTool::TapeMeasure);
     let e = with_edge(&mut r);
     let depth = r.ed.undo_depth();
-    r.click_inf(on_edge(e, DVec3::new(300.0, 0.0, 0.0)), down_ray(DVec3::ZERO));
+    r.click_inf(
+        on_edge(e, DVec3::new(300.0, 0.0, 0.0)),
+        down_ray(DVec3::ZERO),
+    );
     // The offset shows while the pointer moves: the distance from the line of the edge.
     r.hover(DVec3::new(700.0, 400.0, 0.0));
     let (_, text) = r.tools.live(&units()).unwrap();
@@ -102,14 +105,20 @@ fn a_click_on_an_edge_and_one_away_from_it_make_a_parallel_guide() {
     let g = guides(&r);
     assert_eq!(g.len(), 1);
     assert_eq!(g[0].at, DVec3::new(700.0, 400.0, 0.0));
-    assert!(g[0].unit_dir().unwrap().dot(DVec3::X).abs() > 0.999999, "parallel");
+    assert!(
+        g[0].unit_dir().unwrap().dot(DVec3::X).abs() > 0.999999,
+        "parallel"
+    );
 }
 
 #[test]
 fn a_second_click_on_the_line_of_the_edge_makes_no_guide() {
     let mut r = rig(ModelerTool::TapeMeasure);
     let e = with_edge(&mut r);
-    r.click_inf(on_edge(e, DVec3::new(300.0, 0.0, 0.0)), down_ray(DVec3::ZERO));
+    r.click_inf(
+        on_edge(e, DVec3::new(300.0, 0.0, 0.0)),
+        down_ray(DVec3::ZERO),
+    );
     let out = r.click(DVec3::new(900.0, 0.0, 0.0));
     assert!(out.actions.is_empty());
     assert!(out.message.is_some());
@@ -120,15 +129,25 @@ fn a_second_click_on_the_line_of_the_edge_makes_no_guide() {
 fn a_typed_distance_sets_the_offset_from_an_edge_on_the_side_of_the_pointer() {
     let mut r = rig(ModelerTool::TapeMeasure);
     let e = with_edge(&mut r);
-    r.click_inf(on_edge(e, DVec3::new(200.0, 0.0, 0.0)), down_ray(DVec3::ZERO));
+    r.click_inf(
+        on_edge(e, DVec3::new(200.0, 0.0, 0.0)),
+        down_ray(DVec3::ZERO),
+    );
     r.hover(DVec3::new(250.0, -30.0, 0.0));
     r.type_text("250");
     assert_eq!(guides(&r).len(), 1);
     let g = &guides(&r)[0];
-    assert!(g.at.distance(DVec3::new(200.0, -250.0, 0.0)) < 1e-9, "{:?}", g.at);
+    assert!(
+        g.at.distance(DVec3::new(200.0, -250.0, 0.0)) < 1e-9,
+        "{:?}",
+        g.at
+    );
     assert!(!r.tools.in_progress());
     // A negative distance takes the other side.
-    r.click_inf(on_edge(e, DVec3::new(200.0, 0.0, 0.0)), down_ray(DVec3::ZERO));
+    r.click_inf(
+        on_edge(e, DVec3::new(200.0, 0.0, 0.0)),
+        down_ray(DVec3::ZERO),
+    );
     r.hover(DVec3::new(250.0, -30.0, 0.0));
     r.type_text("-250");
     let all = guides(&r);
@@ -194,7 +213,11 @@ fn a_typed_length_after_a_measure_asks_to_resize_the_model() {
     assert_eq!(resize.about, DVec3::new(1000.0, 0.0, 0.0));
     assert_eq!((resize.measured, resize.typed), (2000.0, 4000.0));
     assert!(out.actions.is_empty());
-    assert_eq!(r.ed.undo_depth(), depth, "the tool changes nothing by itself");
+    assert_eq!(
+        r.ed.undo_depth(),
+        depth,
+        "the tool changes nothing by itself"
+    );
     // A factor out of range is refused with a reason.
     let out = r.type_text("40000000");
     assert!(out.resize.is_none() && out.message.is_some());
@@ -290,13 +313,19 @@ fn the_preview_shows_the_measure_and_the_guide() {
         r.tools.preview(&w)
     };
     assert!(w_preview(&mut r).shape.is_empty());
-    r.click_inf(on_edge(e, DVec3::new(300.0, 0.0, 0.0)), down_ray(DVec3::ZERO));
+    r.click_inf(
+        on_edge(e, DVec3::new(300.0, 0.0, 0.0)),
+        down_ray(DVec3::ZERO),
+    );
     r.hover(DVec3::new(700.0, 400.0, 0.0));
     let pv = w_preview(&mut r);
     assert_eq!(pv.guides.len(), 1);
     assert_eq!(pv.guides[0].at, DVec3::new(300.0, 400.0, 0.0));
     assert!(pv.guides[0].dir.dot(DVec3::X).abs() > 0.999999);
-    assert_eq!(pv.shape, vec![[DVec3::new(300.0, 0.0, 0.0), DVec3::new(300.0, 400.0, 0.0)]]);
+    assert_eq!(
+        pv.shape,
+        vec![[DVec3::new(300.0, 0.0, 0.0), DVec3::new(300.0, 400.0, 0.0)]]
+    );
     // Measure only: a plain line and no guide.
     r.tools.toggle_ctrl();
     let pv = w_preview(&mut r);

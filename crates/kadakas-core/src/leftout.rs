@@ -56,7 +56,8 @@ impl LeftOut {
     /// The lines for the export report, in English like the other messages of the API.
     pub fn notes(&self) -> Vec<String> {
         let mut v = Vec::new();
-        let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let plural =
+            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
         if self.guides > 0 {
             v.push(format!(
                 "{} left out: construction geometry",

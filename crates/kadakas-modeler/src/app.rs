@@ -26,8 +26,8 @@ use crate::edit3d::Edit3d;
 use crate::files::{self, Ask};
 use crate::launch::Launch;
 use crate::prefs::{self, Prefs, ThemeChoice};
-use crate::toolbar;
 use crate::tags_panel::{self, TagsState};
+use crate::toolbar;
 use crate::tray::{self, TrayState};
 
 /// The key of the Entity Info cache and its value.
@@ -738,11 +738,7 @@ impl ModelerApp {
             return;
         }
         let count = ids.len();
-        match self
-            .session
-            .editor
-            .execute(&Command::DeleteObjects { ids })
-        {
+        match self.session.editor.execute(&Command::DeleteObjects { ids }) {
             Ok(_) => {
                 self.status = tr!("modeler-guides-deleted", count = count);
                 self.after_history();
@@ -779,14 +775,14 @@ impl ModelerApp {
     /// True if Unhide has something to work on: a selected hidden object, face or edge.
     pub fn can_unhide(&self) -> bool {
         let doc = self.session.editor.doc();
-        self.selected()
-            .iter()
-            .any(|id| doc.object(*id).is_some_and(kadakas_core::visibility::is_hidden))
-            || self.parts_by_model().into_iter().any(|(m, (fs, es))| {
-                modeling::model_of(doc, m).is_some_and(|s| {
-                    fs.iter().any(|f| s.face_hidden(*f)) || es.iter().any(|e| s.edge_hidden(*e))
-                })
+        self.selected().iter().any(|id| {
+            doc.object(*id)
+                .is_some_and(kadakas_core::visibility::is_hidden)
+        }) || self.parts_by_model().into_iter().any(|(m, (fs, es))| {
+            modeling::model_of(doc, m).is_some_and(|s| {
+                fs.iter().any(|f| s.face_hidden(*f)) || es.iter().any(|e| s.edge_hidden(*e))
             })
+        })
     }
 
     /// Hide (or Unhide) the selected objects, and the selected faces and edges, in one undo step.

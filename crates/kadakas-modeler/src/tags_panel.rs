@@ -118,7 +118,8 @@ fn swatch(ui: &mut egui::Ui, color: Option<[u8; 3]>) {
     let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
     match color {
         Some([r, g, b]) => {
-            ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(r, g, b));
+            ui.painter()
+                .rect_filled(rect, 2.0, Color32::from_rgb(r, g, b));
         }
         None => {
             ui.painter().rect_stroke(
@@ -164,7 +165,8 @@ fn selector(ui: &mut egui::Ui, view: &View) -> Outcome {
                 for t in &rows.tags {
                     let on = current == SelectionTag::One(t.id);
                     if ui.selectable_label(on, tag_name(t)).clicked() && !on {
-                        out.commands.extend(tags::set_tag(view.doc, view.objects, t.id));
+                        out.commands
+                            .extend(tags::set_tag(view.doc, view.objects, t.id));
                         out.after = Some(tr!(
                             "modeler-tags-changed",
                             count = view.objects.len(),
@@ -182,10 +184,17 @@ fn panel(ui: &mut egui::Ui, state: &mut TagsState, view: &View) -> Outcome {
     let doc = view.doc;
     let rows = tags::rows(doc);
     // A chosen row that is gone (deleted, or undone away) is forgotten.
-    if state.chosen.is_some_and(|c| !rows.tags.iter().any(|t| t.id == c)) {
+    if state
+        .chosen
+        .is_some_and(|c| !rows.tags.iter().any(|t| t.id == c))
+    {
         state.chosen = None;
     }
-    if state.renaming.as_ref().is_some_and(|(c, _)| doc.class(*c).is_none()) {
+    if state
+        .renaming
+        .as_ref()
+        .is_some_and(|(c, _)| doc.class(*c).is_none())
+    {
         state.renaming = None;
     }
     ui.horizontal_wrapped(|ui| {
@@ -326,7 +335,11 @@ fn delete_dialog(ctx: &egui::Context, state: &mut TagsState, doc: &Document, out
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.label(tr!("modeler-tags-delete-question", count = count, name = name.clone()));
+            ui.label(tr!(
+                "modeler-tags-delete-question",
+                count = count,
+                name = name.clone()
+            ));
             ui.horizontal(|ui| {
                 if ui.button(tr!("modeler-tags-delete-yes")).clicked() {
                     answer = Some(true);
