@@ -657,6 +657,76 @@ fn add_shaded(mesh: &mut Mesh, pts: &[Vec3], tris: &[[u32; 3]], color: [u8; 4], 
     }
 }
 
+/// The smoothing group of each corner of each triangle of a surface model's mesh: at a vertex, the
+/// faces that meet across a smooth edge at that vertex are one group (a union of faces per
+/// vertex). The numbers are unique over the whole mesh.
+fn surface_groups(
+    m: &crate::surface::SurfaceModel,
+    sm: &crate::surface::SurfaceMesh,
+) -> Vec<[u32; 3]> {
+    use crate::surface::{ATTR_SMOOTH, FaceId, VertexId, flagged};
+    use std::collections::HashMap;
+    // The faces of each smooth edge, by its vertex pair.
+    let mut smooth: HashMap<(VertexId, VertexId), Vec<FaceId>> = HashMap::new();
+    for (eid, e) in m.edges() {
+        let a = m.edge_attrs(eid);
+        if flagged(a, ATTR_SMOOTH) {
+            smooth.insert(e.key(), Vec::new());
+        }
+    }
+    if !smooth.is_empty() {
+        for (fid, f) in m.faces() {
+            for (a, b) in f.uses() {
+                let k = if a <= b { (a, b) } else { (b, a) };
+                if let Some(v) = smooth.get_mut(&k)
+                    && v.last() != Some(&fid)
+                {
+                    v.push(fid);
+                }
+            }
+        }
+    }
+    // A union of faces at each vertex.
+    let mut parent: HashMap<(VertexId, FaceId), FaceId> = HashMap::new();
+    fn root(parent: &mut HashMap<(VertexId, FaceId), FaceId>, v: VertexId, f: FaceId) -> FaceId {
+        let mut x = f;
+        while let Some(&p) = parent.get(&(v, x)) {
+            if p == x {
+                break;
+            }
+            x = p;
+        }
+        x
+    }
+    let mut keys: Vec<(&(VertexId, VertexId), &Vec<FaceId>)> = smooth.iter().collect();
+    keys.sort();
+    for ((a, b), fs) in keys {
+        for v in [*a, *b] {
+            for w in fs.windows(2) {
+                let (ra, rb) = (root(&mut parent, v, w[0]), root(&mut parent, v, w[1]));
+                if ra != rb {
+                    let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
+                    parent.insert((v, hi), lo);
+                    parent.entry((v, lo)).or_insert(lo);
+                }
+            }
+        }
+    }
+    let mut number: HashMap<(VertexId, FaceId), u32> = HashMap::new();
+    sm.triangles
+        .iter()
+        .zip(&sm.faces)
+        .map(|(t, f)| {
+            t.map(|i| {
+                let v = sm.vertices[i as usize];
+                let r = root(&mut parent, v, *f);
+                let next = number.len() as u32;
+                *number.entry((v, r)).or_insert(next)
+            })
+        })
+        .collect()
+}
+
 /// The look of one set of triangles of [`add_shaded_marked`]: the vertex color, the side that is
 /// drawn and the paint number (see [`Mesh::tri_paint`]).
 struct ShadeMark {
@@ -669,12 +739,16 @@ struct ShadeMark {
 /// draw: a triangle of `tris` and its mark; a triangle may be drawn twice (the front and the back
 /// of a face). The normals are the smooth ones of all the triangles together, so the borders of
 /// the marks do not show in the shading. A vertex is split by smoothing group and by mark.
+/// `groups` gives the smoothing group of each corner of each triangle (a surface model: its soft
+/// and smooth edges, see [`surface_groups`]); without it the corners closer than
+/// [`HARD_EDGE_DEGREES`] share a group.
 fn add_shaded_marked(
     mesh: &mut Mesh,
     pts: &[Vec3],
     tris: &[[u32; 3]],
     emits: &[(usize, usize)],
     marks: &[ShadeMark],
+    groups: Option<&[[u32; 3]]>,
     object: ObjectId,
 ) {
     let ok = |t: &[u32; 3]| t.iter().all(|&i| (i as usize) < pts.len());
@@ -701,26 +775,32 @@ fn add_shaded_marked(
     let mut group_of = vec![[0usize; 3]; tris.len()];
     let mut normals: Vec<Vec<Vec3>> = vec![Vec::new(); pts.len()];
     for (v, list) in incident.iter().enumerate() {
-        let mut groups: Vec<Vec3> = Vec::new();
+        let mut sums: Vec<Vec3> = Vec::new();
+        let mut keys: Vec<u32> = Vec::new();
         for &t in list {
-            let n = faces[t].normalize_or_zero();
-            let g = match groups
-                .iter_mut()
-                .position(|sum| sum.normalize_or_zero().dot(n) >= cos)
-            {
+            let k = tris[t].iter().position(|&i| i as usize == v).unwrap_or(0);
+            let found = match groups {
+                Some(gr) => keys.iter().position(|x| *x == gr[t][k]),
+                None => {
+                    let n = faces[t].normalize_or_zero();
+                    sums.iter()
+                        .position(|sum| sum.normalize_or_zero().dot(n) >= cos)
+                }
+            };
+            let g = match found {
                 Some(g) => {
-                    groups[g] += faces[t];
+                    sums[g] += faces[t];
                     g
                 }
                 None => {
-                    groups.push(faces[t]);
-                    groups.len() - 1
+                    sums.push(faces[t]);
+                    keys.push(groups.map_or(0, |gr| gr[t][k]));
+                    sums.len() - 1
                 }
             };
-            let k = tris[t].iter().position(|&i| i as usize == v).unwrap_or(0);
             group_of[t][k] = g;
         }
-        normals[v] = groups.iter().map(|s| s.normalize_or_zero()).collect();
+        normals[v] = sums.iter().map(|s| s.normalize_or_zero()).collect();
     }
     let mut copies: std::collections::HashMap<(usize, usize, usize), u32> =
         std::collections::HashMap::new();
@@ -919,7 +999,8 @@ impl Builder<'_> {
     /// from the layer).
     /// A surface model through `tf`, `z` measured from the layer: its faces two-sided (the back of
     /// a face in the back color) and its edges as lines, but not the hidden ones and not the
-    /// smooth ones (the edges that shade a curved surface round, like the sides of a cylinder).
+    /// soft ones (the edges of a curved surface, like the sides of a cylinder). The faces across a
+    /// smooth edge shade as one surface; every other edge is a crease.
     fn surface_model(
         &mut self,
         m: &crate::surface::SurfaceModel,
@@ -940,37 +1021,38 @@ impl Builder<'_> {
         };
         if let Ok(sm) = m.mesh() {
             let pts: Vec<Vec3> = sm.positions.iter().map(|p| at(*p)).collect();
-            // A hidden face (Hide, MOD-05) is not drawn.
-            let shown = |i: usize| !m.face_hidden(sm.faces[i]);
+            // The shading follows the smooth edges: the faces across one shade as one surface,
+            // every other edge is a crease.
+            let all_groups = surface_groups(m, &sm);
+            // A hidden face (Hide, MOD-05) is not drawn: its triangles, their smoothing groups and
+            // their faces are left out together, so the other faces keep their look.
             // A mirror turns the triangles over; keep them counterclockwise.
             let flip = tf.matrix3.determinant() < 0.0;
-            let tris: Vec<[u32; 3]> = sm
-                .triangles
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| shown(*i))
-                .map(|(_, t)| if flip { [t[0], t[2], t[1]] } else { *t })
-                .collect();
+            let mut tris: Vec<[u32; 3]> = Vec::with_capacity(sm.triangles.len());
+            let mut groups: Vec<[u32; 3]> = Vec::with_capacity(sm.triangles.len());
+            let mut faces: Vec<crate::surface::FaceId> = Vec::with_capacity(sm.triangles.len());
+            for (i, t) in sm.triangles.iter().enumerate() {
+                if m.face_hidden(sm.faces[i]) {
+                    continue;
+                }
+                let g = all_groups[i];
+                if flip {
+                    tris.push([t[0], t[2], t[1]]);
+                    groups.push([g[0], g[2], g[1]]);
+                } else {
+                    tris.push(*t);
+                    groups.push(g);
+                }
+                faces.push(sm.faces[i]);
+            }
             self.scene.mesh.part = PART_MAIN;
             self.scene.mesh.two_sided_mode = true;
-            let painted = m.faces().any(|(_, f)| {
-                f.attrs.contains_key(crate::surface::ATTR_MATERIAL)
-                    || f.attrs.contains_key(crate::surface::ATTR_BACK_MATERIAL)
-            });
-            if !painted {
-                add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
-            } else {
-                self.painted_faces(m, &sm.faces, &pts, &tris, color, id);
-            }
+            self.painted_faces(m, &faces, &pts, &tris, &groups, color, id);
             self.scene.mesh.two_sided_mode = false;
         }
         for (eid, e) in m.edges() {
-            let flagged = |k: &str| {
-                m.edge_attrs(eid)
-                    .and_then(|a| a.get(k))
-                    .is_some_and(|v| v == &serde_json::Value::Bool(true))
-            };
-            if flagged("hidden") || flagged("smooth") {
+            // A hidden edge and a soft edge are not drawn; a smooth edge that is not soft is.
+            if !m.edge_shown(eid) {
                 continue;
             }
             if let (Some(a), Some(b)) = (m.vertex(e.v[0]), m.vertex(e.v[1])) {
@@ -984,12 +1066,14 @@ impl Builder<'_> {
     /// from its side only, and a side without a material has the default front color or the back
     /// color. The vertex normals are shared over the borders of the materials, so a curved
     /// surface shades round where the paint changes.
+    #[allow(clippy::too_many_arguments)]
     fn painted_faces(
         &mut self,
         m: &crate::surface::SurfaceModel,
         face_of_triangle: &[crate::surface::FaceId],
         pts: &[Vec3],
         tris: &[[u32; 3]],
+        groups: &[[u32; 3]],
         color: [u8; 4],
         id: ObjectId,
     ) {
@@ -1032,7 +1116,15 @@ impl Builder<'_> {
                 }
             }
         }
-        add_shaded_marked(&mut self.scene.mesh, pts, tris, &emits, &marks, id);
+        add_shaded_marked(
+            &mut self.scene.mesh,
+            pts,
+            tris,
+            &emits,
+            &marks,
+            Some(groups),
+            id,
+        );
         self.scene.mesh.side_mode = SIDE_BOTH;
         self.scene.mesh.paint_mode = 0;
     }

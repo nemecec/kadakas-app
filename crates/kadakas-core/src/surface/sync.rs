@@ -60,7 +60,12 @@ pub enum Intent {
         material: Option<String>,
     },
     /// A curve (circle or arc) drawn as a chain of edges, by its corner points.
-    AddCurve { points: Vec<[f64; 3]>, closed: bool },
+    AddCurve {
+        points: Vec<[f64; 3]>,
+        closed: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        faceted: bool,
+    },
     /// A face pushed or pulled along its normal, by a point inside it.
     PushPullAt { point: [f64; 3], distance: f64 },
     /// Intersect Faces on the whole model.
@@ -82,6 +87,39 @@ pub enum Intent {
         edges: Vec<[f64; 3]>,
         matrix: [f64; 12],
         count: u32,
+    },
+    /// A face offset (MOD-08), by a point inside it.
+    OffsetAt {
+        point: [f64; 3],
+        distance: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        outward: bool,
+    },
+    /// Edges offset (MOD-08), by the middle of each.
+    OffsetEdgesAt {
+        edges: Vec<[f64; 3]>,
+        distance: f64,
+        toward: [f64; 3],
+    },
+    /// Edge flags set, by the middle of each edge.
+    EdgeStyleAt {
+        edges: Vec<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        soft: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        smooth: Option<bool>,
+    },
+    /// Soften Edges, by the middle of each edge.
+    SoftenAt {
+        edges: Vec<[f64; 3]>,
+        angle: f64,
+        smooth: bool,
+        coplanar: bool,
+    },
+    /// Follow Me, by a point inside the profile and the middle of each edge of the path.
+    FollowMeAt {
+        point: [f64; 3],
+        path: Vec<[f64; 3]>,
     },
     /// Faces (by a point inside each) and edges (by the middle of each) hidden or shown.
     HiddenAt {
@@ -139,9 +177,14 @@ impl Intent {
                 side: *side,
                 material: material.clone(),
             },
-            Edit::AddCurve { points, closed } => Intent::AddCurve {
+            Edit::AddCurve {
+                points,
+                closed,
+                faceted,
+            } => Intent::AddCurve {
                 points: points.clone(),
                 closed: *closed,
+                faceted: *faceted,
             },
             Edit::TransformVertices {
                 vertices,
@@ -180,6 +223,54 @@ impl Intent {
                 matrix: *matrix,
                 count: *count,
             },
+            Edit::OffsetFace {
+                face,
+                distance,
+                outward,
+            } => match face_point(m, *face) {
+                Some(p) => Intent::OffsetAt {
+                    point: p.to_array(),
+                    distance: *distance,
+                    outward: *outward,
+                },
+                None => Intent::Unlogged,
+            },
+            Edit::OffsetEdges {
+                edges,
+                distance,
+                toward,
+            } => Intent::OffsetEdgesAt {
+                edges: middles(edges),
+                distance: *distance,
+                toward: *toward,
+            },
+            Edit::FollowMe { face, path } => match face_point(m, *face) {
+                Some(p) => Intent::FollowMeAt {
+                    point: p.to_array(),
+                    path: middles(path),
+                },
+                None => Intent::Unlogged,
+            },
+            Edit::SetEdgeStyle {
+                edges,
+                soft,
+                smooth,
+            } => Intent::EdgeStyleAt {
+                edges: middles(edges),
+                soft: *soft,
+                smooth: *smooth,
+            },
+            Edit::SoftenEdges {
+                edges,
+                angle,
+                smooth,
+                coplanar,
+            } => Intent::SoftenAt {
+                edges: middles(edges),
+                angle: *angle,
+                smooth: *smooth,
+                coplanar: *coplanar,
+            },
             Edit::SetHidden {
                 faces: fs,
                 edges,
@@ -212,9 +303,14 @@ impl Intent {
             Intent::IntersectAt { faces, edges } | Intent::HiddenAt { faces, edges, .. } => {
                 (faces.len() + edges.len()).max(1)
             }
+            Intent::OffsetEdgesAt { edges, .. }
+            | Intent::EdgeStyleAt { edges, .. }
+            | Intent::SoftenAt { edges, .. } => edges.len().max(1),
+            Intent::FollowMeAt { path, .. } => path.len() + 1,
             Intent::Place { .. }
             | Intent::Unlogged
             | Intent::PushPullAt { .. }
+            | Intent::OffsetAt { .. }
             | Intent::IntersectModel => 1,
         }
     }
@@ -386,6 +482,14 @@ fn vertices_at(
         .collect()
 }
 
+/// The edges through the given middle points.
+fn edges_at(m: &SurfaceModel, points: &[[f64; 3]]) -> Result<Vec<EdgeId>, SurfaceError> {
+    points
+        .iter()
+        .map(|p| edge_at(m, DVec3::from(*p)).ok_or_else(|| gone("edge", p)))
+        .collect()
+}
+
 /// Runs an intent on a model (a new log entry for it).
 pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), SurfaceError> {
     match intent {
@@ -425,15 +529,78 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
                 material: material.clone(),
             })
         }
-        Intent::AddCurve { points, closed } => m.apply(&Edit::AddCurve {
+        Intent::AddCurve {
+            points,
+            closed,
+            faceted,
+        } => m.apply(&Edit::AddCurve {
             points: points.clone(),
             closed: *closed,
+            faceted: *faceted,
         }),
         Intent::PushPullAt { point, distance } => {
             let face = face_at(m, DVec3::from(*point)).ok_or_else(|| gone("face", point))?;
             m.apply(&Edit::PushPull {
                 face,
                 distance: *distance,
+            })
+        }
+        Intent::OffsetAt {
+            point,
+            distance,
+            outward,
+        } => {
+            let face = face_at(m, DVec3::from(*point)).ok_or_else(|| gone("face", point))?;
+            m.apply(&Edit::OffsetFace {
+                face,
+                distance: *distance,
+                outward: *outward,
+            })
+        }
+        Intent::OffsetEdgesAt {
+            edges,
+            distance,
+            toward,
+        } => {
+            let edges = edges
+                .iter()
+                .map(|p| edge_at(m, DVec3::from(*p)).ok_or_else(|| gone("edge", p)))
+                .collect::<Result<Vec<_>, _>>()?;
+            m.apply(&Edit::OffsetEdges {
+                edges,
+                distance: *distance,
+                toward: *toward,
+            })
+        }
+        Intent::EdgeStyleAt {
+            edges,
+            soft,
+            smooth,
+        } => {
+            let edges = edges_at(m, edges)?;
+            m.apply(&Edit::SetEdgeStyle {
+                edges,
+                soft: *soft,
+                smooth: *smooth,
+            })
+        }
+        Intent::FollowMeAt { point, path } => {
+            let face = face_at(m, DVec3::from(*point)).ok_or_else(|| gone("face", point))?;
+            let path = edges_at(m, path)?;
+            m.apply(&Edit::FollowMe { face, path })
+        }
+        Intent::SoftenAt {
+            edges,
+            angle,
+            smooth,
+            coplanar,
+        } => {
+            let edges = edges_at(m, edges)?;
+            m.apply(&Edit::SoftenEdges {
+                edges,
+                angle: *angle,
+                smooth: *smooth,
+                coplanar: *coplanar,
             })
         }
         Intent::IntersectModel => m.apply(&Edit::IntersectFaces {

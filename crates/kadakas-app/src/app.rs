@@ -4727,7 +4727,7 @@ mod tests {
                 "{a:?} is in the quick search of the app"
             );
         }
-        assert_eq!(seen, 12);
+        assert_eq!(seen, 14);
     }
 
     #[test]

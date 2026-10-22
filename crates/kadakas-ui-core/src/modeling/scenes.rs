@@ -81,6 +81,9 @@ pub struct Scenes {
     pub rev: u64,
     /// What was shown when the scenes were built.
     pub show: ShowOptions,
+    /// The soft surfaces of each model (MOD-08), found at the first click on the model and kept
+    /// for the revision.
+    soft: std::sync::Mutex<BTreeMap<ObjectId, Arc<kadakas_core::surface::SoftSurfaces>>>,
 }
 
 impl Scenes {
@@ -128,6 +131,22 @@ impl Scenes {
             return None;
         }
         self.ids.get(tag.model() as usize).copied()
+    }
+
+    /// The soft surfaces of a model, found once for the revision.
+    pub fn soft_surfaces(
+        &self,
+        doc: &Document,
+        id: ObjectId,
+    ) -> Option<Arc<kadakas_core::surface::SoftSurfaces>> {
+        let m = model_of(doc, id)?;
+        let mut cache = self.soft.lock().unwrap_or_else(|e| e.into_inner());
+        Some(
+            cache
+                .entry(id)
+                .or_insert_with(|| Arc::new(kadakas_core::surface::SoftSurfaces::of(m)))
+                .clone(),
+        )
     }
 
     /// The objects in the scenes, in the order of their numbers.
@@ -235,6 +254,7 @@ impl SceneCache {
                 guides,
                 rev,
                 show,
+                soft: std::sync::Mutex::new(BTreeMap::new()),
             });
             self.builds += 1;
         }

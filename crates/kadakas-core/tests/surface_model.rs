@@ -349,6 +349,7 @@ fn push_pull_and_add_curve_are_one_undo_step_each() {
                 })
                 .collect(),
             closed: true,
+            faceted: false,
         },
     )
     .unwrap();
@@ -373,6 +374,7 @@ fn smooth_edges_are_not_lines_and_the_faces_of_a_model_are_two_sided() {
                 })
                 .collect(),
             closed: true,
+            faceted: false,
         },
     )
     .unwrap();

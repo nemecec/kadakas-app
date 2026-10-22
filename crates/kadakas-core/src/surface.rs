@@ -148,17 +148,28 @@ mod tests;
 #[cfg(test)]
 mod tests_absorb;
 #[cfg(test)]
+mod tests_followme;
+#[cfg(test)]
 mod tests_hide;
 #[cfg(test)]
 mod tests_index;
 #[cfg(test)]
 mod tests_intersect;
 #[cfg(test)]
+mod tests_offset;
+#[cfg(test)]
 mod tests_pushpull;
+#[cfg(test)]
+mod tests_review;
+#[cfg(test)]
+mod tests_style;
 #[cfg(test)]
 mod tests_transform;
 
 pub use check::{At, Problem, Report};
+pub use edit::style::{
+    ATTR_FACETED, ATTR_SMOOTH, ATTR_SOFT, SoftSurfaces, dihedral_of, flagged, soften_plan,
+};
 pub use edit::{ATTR_BACK_MATERIAL, ATTR_MATERIAL, Edit, IntersectScope, PaintSide};
 pub use geom::{Plane, on_plane, plane_tolerance_at, tolerance_at};
 pub use part::{Absorber, Selection};
@@ -495,6 +506,22 @@ impl SurfaceModel {
             .is_some_and(|a| a.get("hidden") == Some(&serde_json::Value::Bool(true)))
     }
 
+    /// True if the edge is soft (MOD-08): not drawn, picked or inferred.
+    pub fn edge_soft(&self, id: EdgeId) -> bool {
+        flagged(self.edge_attrs.get(&id), ATTR_SOFT)
+    }
+
+    /// True if the edge is smooth (MOD-08): the faces on its sides shade as one surface.
+    pub fn edge_smooth(&self, id: EdgeId) -> bool {
+        flagged(self.edge_attrs.get(&id), ATTR_SMOOTH)
+    }
+
+    /// True if the edge is drawn, picked and inferred: neither hidden nor soft (View > Hidden
+    /// Geometry shows the others ghosted).
+    pub fn edge_shown(&self, id: EdgeId) -> bool {
+        !self.edge_hidden(id) && !self.edge_soft(id)
+    }
+
     /// The hidden faces, in the order of their ids.
     pub fn hidden_faces(&self) -> Vec<FaceId> {
         self.faces
@@ -661,6 +688,39 @@ impl SurfaceModel {
     pub fn to_local(&self, p: DVec3) -> Option<DVec3> {
         (self.transform.matrix3.determinant().abs() > 1e-12)
             .then(|| self.transform.inverse().transform_point3(p))
+    }
+
+    /// The loops that an Offset of `face` by `distance` would draw (outer loop first, local
+    /// coordinates), for a preview; the error is the reason the edit would give (MOD-08).
+    pub fn offset_outline(
+        &self,
+        face: FaceId,
+        distance: f64,
+        outward: bool,
+    ) -> Result<Vec<Vec<DVec3>>, SurfaceError> {
+        edit::offset::outline(self, face, distance, outward, true)
+    }
+
+    /// The line that an Offset of the chain `edges` by `distance` toward `toward` would draw
+    /// (local coordinates) and whether it is closed, for a preview (MOD-08).
+    pub fn offset_chain(
+        &self,
+        edges: &[EdgeId],
+        distance: f64,
+        toward: DVec3,
+    ) -> Result<(Vec<DVec3>, bool), SurfaceError> {
+        edit::offset::chain_line(self, edges, distance, toward, true).map(|(_, c, l)| (l, c))
+    }
+
+    /// The plane that an Offset of the chain `edges` toward `toward` works in (local), MOD-08.
+    pub fn offset_chain_plane(
+        &self,
+        edges: &[EdgeId],
+        toward: DVec3,
+    ) -> Result<Plane, SurfaceError> {
+        let (chain, _) = edit::offset::chain_of(self, edges)?;
+        let pts = self.loop_points(&chain);
+        edit::offset::chain_plane(self, edges, &pts, toward)
     }
 
     /// The triangles of one face (holes are left open).

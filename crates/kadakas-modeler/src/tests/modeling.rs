@@ -388,5 +388,6 @@ mod editing;
 mod guides;
 mod intersect;
 mod landscape;
+mod mod08;
 mod paint;
 mod transform;

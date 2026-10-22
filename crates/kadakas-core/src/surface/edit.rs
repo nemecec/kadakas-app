@@ -45,7 +45,15 @@ pub enum Edit {
     /// the first) and keeps them as one curve (a circle or an arc, MOD-08), so that the pieces
     /// stay one curve when other edges cut them. Welds, splits and faces work as in `AddEdges`.
     /// When one of the pieces is in a curve already, the edges are drawn and no new curve is made.
-    AddCurve { points: Vec<[f64; 3]>, closed: bool },
+    /// With `faceted` the curve is a polygon: its edges get the mark `faceted`, and the edges
+    /// that Push/Pull, Follow Me and Offset make between its sides stay creases (drawn, hard)
+    /// instead of soft and smooth.
+    AddCurve {
+        points: Vec<[f64; 3]>,
+        closed: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        faceted: bool,
+    },
     /// Pushes or pulls a face along its normal by `distance` mm (positive is toward the front,
     /// negative toward the back). See the module `pushpull` for the cases. The face keeps its id
     /// and ends as the cap.
@@ -99,6 +107,55 @@ pub enum Edit {
         edges: Vec<EdgeId>,
         hidden: bool,
     },
+    /// Offset (MOD-08): draws a copy of every loop of the face `distance` mm inside the face
+    /// (`outward` false, the default) or outside it, in the plane of the face, with miter
+    /// corners. The face splits along the new loops; a curve gives a curve. `distance` must be
+    /// larger than the length tolerance. See the module `offset`.
+    OffsetFace {
+        face: FaceId,
+        distance: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        outward: bool,
+    },
+    /// Offset of edges (MOD-08): a chain of edges in one plane (open, or closed) drawn again
+    /// `distance` mm to the side of the point `toward` (local coordinates), with miter corners;
+    /// the ends of an open chain move at a right angle. A curve gives a curve.
+    OffsetEdges {
+        edges: Vec<EdgeId>,
+        distance: f64,
+        toward: [f64; 3],
+    },
+    /// Soft and smooth edges (MOD-08): sets (`true`) or clears (`false`) the flags of the edges;
+    /// a flag that is not given stays as it is. A soft edge is not drawn, picked or inferred; the
+    /// faces on the sides of a smooth edge shade as one surface. Hidden is `set_hidden`. See the
+    /// module `style`.
+    SetEdgeStyle {
+        edges: Vec<EdgeId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        soft: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        smooth: Option<bool>,
+    },
+    /// Soften Edges (MOD-08): each of the edges between two faces at an angle below `angle`
+    /// degrees (0 to 180) becomes soft (and smooth with `smooth`); the others lose both flags.
+    /// Edges between coplanar faces are softened only with `coplanar`.
+    SoftenEdges {
+        edges: Vec<EdgeId>,
+        angle: f64,
+        #[serde(default = "yes")]
+        smooth: bool,
+        #[serde(default)]
+        coplanar: bool,
+    },
+    /// Follow Me (MOD-08): sweeps the face `face` (the profile) along the chain of edges `path`
+    /// (open: a solid with the profile and a new face as caps; closed: a ring without caps). The
+    /// new faces get the paint of the profile; a curve of the path or of the profile gives soft
+    /// and smooth edges. See the module `followme`.
+    FollowMe { face: FaceId, path: Vec<EdgeId> },
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Which side of a face a material goes on.
@@ -125,11 +182,14 @@ pub enum IntersectScope {
     Selection,
 }
 
+mod followme;
 mod hide;
 mod intersect;
 mod near;
+pub(super) mod offset;
 mod pushpull;
 pub(super) mod reference;
+pub(super) mod style;
 mod transform;
 
 use near::{Near, Points, Runs, Walks};
@@ -155,7 +215,11 @@ fn run_noted(
     match edit {
         Edit::AddEdges { edges } => add_edges(m, edges),
         Edit::EraseEdges { edges } => erase_edges(m, edges, notes),
-        Edit::AddCurve { points, closed } => add_curve(m, points, *closed),
+        Edit::AddCurve {
+            points,
+            closed,
+            faceted,
+        } => add_curve(m, points, *closed, *faceted),
         Edit::PushPull { face, distance } => {
             pushpull::push_pull(m, before, *face, *distance, notes)
         }
@@ -185,6 +249,28 @@ fn run_noted(
             Ok(())
         }
         Edit::ReverseFaces { faces } => reverse_faces(m, faces),
+        Edit::OffsetFace {
+            face,
+            distance,
+            outward,
+        } => offset::offset_face(m, *face, *distance, *outward),
+        Edit::OffsetEdges {
+            edges,
+            distance,
+            toward,
+        } => offset::offset_edges(m, edges, *distance, DVec3::from(*toward)),
+        Edit::FollowMe { face, path } => followme::follow_me(m, before, *face, path, notes),
+        Edit::SetEdgeStyle {
+            edges,
+            soft,
+            smooth,
+        } => style::set_edge_style(m, edges, *soft, *smooth),
+        Edit::SoftenEdges {
+            edges,
+            angle,
+            smooth,
+            coplanar,
+        } => style::soften_edges(m, edges, *angle, *smooth, *coplanar),
         Edit::SetHidden {
             faces,
             edges,
@@ -1450,7 +1536,12 @@ impl Session {
     }
 }
 
-fn add_curve(m: &mut SurfaceModel, points: &[[f64; 3]], closed: bool) -> Result<(), SurfaceError> {
+fn add_curve(
+    m: &mut SurfaceModel,
+    points: &[[f64; 3]],
+    closed: bool,
+    faceted: bool,
+) -> Result<(), SurfaceError> {
     let n = points.len();
     let count = if closed { n } else { n.saturating_sub(1) };
     if n < 2 || count < 1 {
@@ -1495,6 +1586,9 @@ fn add_curve(m: &mut SurfaceModel, points: &[[f64; 3]], closed: bool) -> Result<
     let used: BTreeSet<EdgeId> = w.m.curves.values().flatten().copied().collect();
     let unique: BTreeSet<EdgeId> = chain.iter().copied().collect();
     if unique.len() == chain.len() && chain.iter().all(|e| !used.contains(e)) {
+        if faceted {
+            style::mark_faceted(w.m, &chain);
+        }
         let id = super::CurveId(w.m.alloc());
         w.m.curves.insert(id, chain);
     }

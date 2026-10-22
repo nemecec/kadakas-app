@@ -829,9 +829,12 @@ fn no_chord_of_the_sketchup_like_profile_belongs_to_two_actions() {
 
 #[test]
 fn every_tool_of_the_tool_bar_has_a_key_in_the_sketchup_like_profile() {
+    use crate::modeler::ModelerTool;
     let km = Profile::sketchup().keymap;
-    for t in crate::modeler::ModelerTool::ALL {
-        assert!(!km.chords(t.action()).is_empty(), "{t:?} has no key");
+    // Polygon and Follow Me have no public default key in programs of that kind.
+    for t in ModelerTool::ALL {
+        let none = matches!(t, ModelerTool::Polygon | ModelerTool::FollowMe);
+        assert_eq!(km.chords(t.action()).is_empty(), none, "{t:?}");
     }
 }
 
@@ -844,8 +847,9 @@ fn the_vectorworks_like_defaults_do_not_bind_the_modeler_actions() {
             "{a:?} has a default key in the Vectorworks-like profile"
         );
     }
-    // Twelve actions are for the modeler only.
-    assert_eq!(Action::ALL.iter().filter(|a| a.modeler_only()).count(), 12);
+    // Fourteen actions are for the modeler only (Polygon and Follow Me came with MOD-08; Offset
+    // is the Offset action of the app).
+    assert_eq!(Action::ALL.iter().filter(|a| a.modeler_only()).count(), 14);
 }
 
 #[test]

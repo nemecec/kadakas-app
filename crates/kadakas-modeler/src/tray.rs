@@ -1,4 +1,4 @@
-//! The tray on the right: Entity Info, Materials and Scenes, one under the other, each with a
+//! The tray on the right: Entity Info, Materials, Soften Edges and Scenes, one under the other, each with a
 //! title bar that collapses it. Entity Info shows the data of the selection, the materials of a
 //! face and a summary of the plants, hardscapes and site models (MOD-05). Materials is the list
 //! of the materials of the model with thumbnails and a small editor. Scenes (saved views,
@@ -22,6 +22,8 @@ use kadakas_ui_core::modeler::{EntityInfo, Summary};
 pub struct TrayState {
     pub entity_info: bool,
     pub materials: bool,
+    /// Soften Edges (MOD-08).
+    pub soften: bool,
     pub scenes: bool,
     pub tags: bool,
 }
@@ -31,6 +33,7 @@ impl Default for TrayState {
         TrayState {
             entity_info: true,
             materials: true,
+            soften: true,
             scenes: true,
             tags: true,
         }
@@ -43,6 +46,10 @@ pub enum TrayAction {
     Material(Request),
     /// Open the model in the Kadakas app (File > Open in the Kadakas App).
     OpenInApp,
+    /// A value of the Soften Edges panel changed: apply it to the selection (MOD-08).
+    Soften,
+    /// The slider of the Soften Edges panel is being dragged: show what it would soften.
+    SoftenPreview,
 }
 
 /// What the tray draws from: the data of the program for one frame.
@@ -55,6 +62,8 @@ pub struct TrayData<'a> {
     pub panel: &'a MaterialsPanel,
     /// The material of the Paint Bucket.
     pub bucket: Option<ResourceId>,
+    /// Edges or faces of surface models are selected (the Soften Edges panel works on them).
+    pub edges_selected: bool,
 }
 
 /// The fields of the small editor while the person works on them. A field is applied (one undo
@@ -74,6 +83,8 @@ struct EditBuffer {
 pub struct TrayUi {
     thumbs: HashMap<ResourceId, (u64, egui::TextureHandle)>,
     buffer: Option<EditBuffer>,
+    /// The values of the Soften Edges panel.
+    pub soften: kadakas_ui_core::modeling::SoftenPanel,
 }
 
 impl TrayUi {
@@ -426,6 +437,7 @@ pub fn entity_info(ui: &mut egui::Ui, data: &TrayData, out: &mut Vec<TrayAction>
             end,
             curve,
             faces,
+            style,
         } => {
             let u = kadakas_units::current();
             egui::Grid::new("entity-info-edge")
@@ -446,10 +458,28 @@ pub fn entity_info(ui: &mut egui::Ui, data: &TrayData, out: &mut Vec<TrayAction>
                         );
                     }
                     row(ui, tr!("modeler-entity-face-uses"), faces.to_string());
+                    let yes_no = |b: bool| {
+                        if b {
+                            tr!("modeler-entity-yes")
+                        } else {
+                            tr!("modeler-entity-no")
+                        }
+                    };
+                    row(ui, tr!("modeler-entity-soft"), yes_no(style.soft));
+                    row(ui, tr!("modeler-entity-smooth"), yes_no(style.smooth));
+                    row(ui, tr!("modeler-entity-hidden"), yes_no(style.hidden));
                 });
         }
-        EntityInfo::Parts { faces, edges } => {
-            ui.label(tr!("modeler-entity-parts", faces = *faces, edges = *edges));
+        EntityInfo::Parts {
+            faces,
+            edges,
+            soft_surface,
+        } => {
+            if *soft_surface {
+                ui.label(tr!("modeler-entity-soft-surface", faces = *faces));
+            } else {
+                ui.label(tr!("modeler-entity-parts", faces = *faces, edges = *edges));
+            }
         }
         EntityInfo::Many { count, size } => {
             ui.label(tr!("modeler-entity-many", count = *count));
@@ -778,6 +808,17 @@ pub fn show(
             tr!("modeler-tray-materials"),
             &mut state.materials,
             |ui| materials(ui, tray, data, &mut out),
+        );
+        panel(
+            ui,
+            "tray-soften",
+            tr!("modeler-tray-soften"),
+            &mut state.soften,
+            |ui| match crate::soften::panel(ui, &mut tray.soften, data.edges_selected) {
+                Some(crate::soften::Change::Apply) => out.push(TrayAction::Soften),
+                Some(crate::soften::Change::Preview) => out.push(TrayAction::SoftenPreview),
+                None => {}
+            },
         );
         panel(
             ui,

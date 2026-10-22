@@ -21,8 +21,14 @@ pub enum ModelerTool {
     Line,
     Rectangle,
     Circle,
+    /// A regular polygon (MOD-08).
+    Polygon,
     Arc,
     PushPull,
+    /// Follow Me (MOD-08): a face swept along a path.
+    FollowMe,
+    /// Offset (MOD-08): the loops of a face, or a chain of edges, drawn again at a distance.
+    Offset,
     Move,
     Rotate,
     Scale,
@@ -36,14 +42,17 @@ pub enum ModelerTool {
 }
 
 impl ModelerTool {
-    pub const ALL: [ModelerTool; 16] = [
+    pub const ALL: [ModelerTool; 19] = [
         ModelerTool::Select,
         ModelerTool::Eraser,
         ModelerTool::Line,
         ModelerTool::Rectangle,
         ModelerTool::Circle,
+        ModelerTool::Polygon,
         ModelerTool::Arc,
         ModelerTool::PushPull,
+        ModelerTool::FollowMe,
+        ModelerTool::Offset,
         ModelerTool::Move,
         ModelerTool::Rotate,
         ModelerTool::Scale,
@@ -67,10 +76,13 @@ impl ModelerTool {
             ModelerTool::Line,
             ModelerTool::Rectangle,
             ModelerTool::Circle,
+            ModelerTool::Polygon,
             ModelerTool::Arc,
         ],
         &[
             ModelerTool::PushPull,
+            ModelerTool::FollowMe,
+            ModelerTool::Offset,
             ModelerTool::Move,
             ModelerTool::Rotate,
             ModelerTool::Scale,
@@ -92,8 +104,11 @@ impl ModelerTool {
             ModelerTool::Line => "line",
             ModelerTool::Rectangle => "rectangle",
             ModelerTool::Circle => "circle",
+            ModelerTool::Polygon => "polygon",
             ModelerTool::Arc => "arc",
             ModelerTool::PushPull => "push-pull",
+            ModelerTool::FollowMe => "follow-me",
+            ModelerTool::Offset => "offset",
             ModelerTool::Move => "move",
             ModelerTool::Rotate => "rotate",
             ModelerTool::Scale => "scale",
@@ -114,8 +129,11 @@ impl ModelerTool {
             ModelerTool::Line => msg!("uic-modeler-tool-line"),
             ModelerTool::Rectangle => msg!("uic-modeler-tool-rectangle"),
             ModelerTool::Circle => msg!("uic-modeler-tool-circle"),
+            ModelerTool::Polygon => msg!("uic-modeler-tool-polygon"),
             ModelerTool::Arc => msg!("uic-modeler-tool-arc"),
             ModelerTool::PushPull => msg!("uic-modeler-tool-push-pull"),
+            ModelerTool::FollowMe => msg!("uic-modeler-tool-follow-me"),
+            ModelerTool::Offset => msg!("uic-modeler-tool-offset"),
             ModelerTool::Move => msg!("uic-modeler-tool-move"),
             ModelerTool::Rotate => msg!("uic-modeler-tool-rotate"),
             ModelerTool::Scale => msg!("uic-modeler-tool-scale"),
@@ -141,8 +159,11 @@ impl ModelerTool {
             ModelerTool::Line => Action::ToolLine,
             ModelerTool::Rectangle => Action::ToolRect,
             ModelerTool::Circle => Action::ToolCircle,
+            ModelerTool::Polygon => Action::ToolPolygon,
             ModelerTool::Arc => Action::ToolArc,
             ModelerTool::PushPull => Action::ToolPushPull,
+            ModelerTool::FollowMe => Action::ToolFollowMe,
+            ModelerTool::Offset => Action::ToolOffset,
             ModelerTool::Move => Action::ToolMove,
             ModelerTool::Rotate => Action::ToolRotate,
             ModelerTool::Scale => Action::ToolScale,
@@ -174,8 +195,11 @@ impl ModelerTool {
                 | ModelerTool::Line
                 | ModelerTool::Rectangle
                 | ModelerTool::Circle
+                | ModelerTool::Polygon
                 | ModelerTool::Arc
                 | ModelerTool::PushPull
+                | ModelerTool::FollowMe
+                | ModelerTool::Offset
                 | ModelerTool::Move
                 | ModelerTool::Rotate
                 | ModelerTool::Scale
@@ -210,8 +234,11 @@ impl ModelerTool {
             ModelerTool::Line => tr!("uic-modeler-hint-line"),
             ModelerTool::Rectangle => tr!("uic-modeler-hint-rectangle"),
             ModelerTool::Circle => tr!("uic-modeler-hint-circle"),
+            ModelerTool::Polygon => tr!("uic-modeler-hint-polygon"),
             ModelerTool::Arc => tr!("uic-modeler-hint-arc"),
             ModelerTool::PushPull => tr!("uic-modeler-hint-push-pull"),
+            ModelerTool::FollowMe => tr!("uic-modeler-hint-follow-me"),
+            ModelerTool::Offset => tr!("uic-modeler-hint-offset"),
             ModelerTool::Move => tr!("uic-modeler-hint-move"),
             ModelerTool::Rotate => tr!("uic-modeler-hint-rotate"),
             ModelerTool::Scale => tr!("uic-modeler-hint-scale"),
@@ -357,14 +384,30 @@ pub enum EntityInfo {
         curve: Option<(u32, usize)>,
         /// How many faces use it.
         faces: usize,
+        /// Soft, smooth and hidden (MOD-08).
+        style: EdgeFlags,
     },
     /// Several faces and edges of surface models.
-    Parts { faces: usize, edges: usize },
+    Parts {
+        faces: usize,
+        edges: usize,
+        /// The faces and edges are one soft surface (MOD-08) and nothing else.
+        soft_surface: bool,
+    },
     /// Several objects.
     Many {
         count: usize,
         size: Option<[f64; 3]>,
     },
+}
+
+/// The flags of an edge of a surface model (MOD-08): soft (not drawn), smooth (the faces on its
+/// sides shade as one surface) and hidden.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EdgeFlags {
+    pub soft: bool,
+    pub smooth: bool,
+    pub hidden: bool,
 }
 
 /// The position, rotation and scale of an object, for Entity Info (MOD-05). The position is the
@@ -677,6 +720,28 @@ pub fn entity_info(doc: &Document, scene: &Scene, selection: &[ObjectId]) -> Ent
     }
 }
 
+/// True if the items are exactly the faces and soft edges of one soft surface (MOD-08).
+fn is_one_soft_surface(doc: &Document, items: &[crate::modeling::Item]) -> bool {
+    use crate::modeling::{Item, model_of};
+    let Some(&Item::Face(mid, f)) = items.iter().find(|i| matches!(i, Item::Face(..))) else {
+        return false;
+    };
+    let Some(m) = model_of(doc, mid) else {
+        return false;
+    };
+    let soft = kadakas_core::surface::SoftSurfaces::of(m);
+    let Some((fs, es)) = soft.surface(f) else {
+        return false;
+    };
+    let want: std::collections::BTreeSet<Item> = fs
+        .iter()
+        .map(|g| Item::Face(mid, *g))
+        .chain(es.iter().map(|e| Item::Edge(mid, *e)))
+        .collect();
+    let have: std::collections::BTreeSet<Item> = items.iter().copied().collect();
+    want == have
+}
+
 /// The Entity Info of a selection that may hold faces and edges of surface models. With none, it
 /// is [`entity_info`] of the selected objects.
 pub fn entity_info_with_parts(
@@ -739,11 +804,19 @@ pub fn entity_info_with_parts(
                     )
                 }),
                 faces: m.faces_of_edge(*eid).len(),
+                style: {
+                    EdgeFlags {
+                        soft: m.edge_soft(*eid),
+                        smooth: m.edge_smooth(*eid),
+                        hidden: m.edge_hidden(*eid),
+                    }
+                },
             }
         }
         many => EntityInfo::Parts {
             faces: many.iter().filter(|i| matches!(i, Item::Face(..))).count(),
             edges: many.iter().filter(|i| matches!(i, Item::Edge(..))).count(),
+            soft_surface: is_one_soft_surface(doc, many),
         },
     }
 }
@@ -841,15 +914,16 @@ mod tests {
     }
 
     #[test]
-    fn the_tool_bar_has_the_sixteen_getting_started_tools_once() {
+    fn the_tool_bar_has_the_getting_started_tools_and_the_mod08_tools_once() {
         let mut seen: Vec<ModelerTool> = ModelerTool::GROUPS
             .iter()
             .flat_map(|g| g.iter().copied())
             .collect();
-        assert_eq!(seen.len(), 16);
+        // The 16 of the Getting Started set and Polygon, Follow Me and Offset (MOD-08).
+        assert_eq!(seen.len(), 19);
         seen.sort_by_key(|t| t.id());
         seen.dedup();
-        assert_eq!(seen.len(), 16, "each tool is in one group");
+        assert_eq!(seen.len(), 19, "each tool is in one group");
         for t in ModelerTool::ALL {
             assert!(seen.contains(&t));
         }
@@ -872,8 +946,11 @@ mod tests {
                 "line",
                 "rectangle",
                 "circle",
+                "polygon",
                 "arc",
                 "push-pull",
+                "follow-me",
+                "offset",
                 "move",
                 "rotate",
                 "scale",

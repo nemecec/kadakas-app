@@ -75,6 +75,8 @@ pub enum Cmd {
     CloseOverwrite,
     /// Intersect Faces (MOD-08): with the whole model, or of the selected faces and edges.
     IntersectFaces(IntersectScope),
+    /// Soften, Smooth or Unsoften the selected edges (MOD-08).
+    EdgeStyle(kadakas_ui_core::modeling::EdgeStyle),
     /// Hide the selected objects, or the selected faces and edges (MOD-05).
     Hide,
     /// Unhide the selected hidden objects, faces and edges.
@@ -170,7 +172,7 @@ pub struct ModelerApp {
     pub gpu_ready: bool,
     fit_pending: bool,
     pub tray: TrayState,
-    tray_ui: TrayUi,
+    pub tray_ui: TrayUi,
     /// The Materials panel: the open editor and the question about a used material.
     pub materials: MaterialsPanel,
     /// The materials of the model and where they are used, for a revision.
@@ -636,6 +638,7 @@ impl ModelerApp {
             }
             Cmd::EditSelected => self.edit_selected(),
             Cmd::IntersectFaces(scope) => self.intersect(scope),
+            Cmd::EdgeStyle(style) => self.edge_style(style),
             Cmd::Hide => self.set_hidden(true),
             Cmd::Unhide => self.set_hidden(false),
             Cmd::UnhideAll => self.unhide_all(),
@@ -822,6 +825,48 @@ impl ModelerApp {
             self.can_intersect(IntersectScope::Model),
             self.can_intersect(IntersectScope::Selection),
         ]
+    }
+
+    /// Soften, Smooth or Unsoften on the selected edges: one undo step.
+    fn edge_style(&mut self, style: kadakas_ui_core::modeling::EdgeStyle) {
+        let actions =
+            modeling::edge_style_actions(self.session.editor.doc(), &self.edit.sub, style);
+        if actions.is_empty() {
+            self.status = tr!("modeler-soften-select");
+            return;
+        }
+        self.edit.run(
+            &mut self.session,
+            modeling::Out {
+                actions,
+                ..modeling::Out::default()
+            },
+        );
+        self.tray_ui.soften.forget();
+        self.status = self.edit.message.take().unwrap_or_default();
+    }
+
+    /// A change of the Soften Edges panel: applied to the selection at once; a row of changes is
+    /// one undo step.
+    fn soften_changed(&mut self) {
+        let rev = self.session.editor.revision();
+        let out = self
+            .tray_ui
+            .soften
+            .change(self.session.editor.doc(), &self.edit.sub, rev);
+        if out.actions.is_empty() {
+            self.status = tr!("modeler-soften-select");
+            return;
+        }
+        let (redo, depth) = (out.redo, self.session.editor.undo_depth());
+        self.edit.run(&mut self.session, out);
+        let after = self.session.editor.revision();
+        self.tray_ui
+            .soften
+            .ran(redo, depth, self.session.editor.undo_depth(), after);
+        if let Some(m) = self.edit.message.take() {
+            self.status = m;
+        }
     }
 
     /// Intersect Faces: one undo step for all models; the notes go to the status line.
@@ -1447,6 +1492,16 @@ impl ModelerApp {
     pub fn tray_action(&mut self, a: TrayAction) {
         match a {
             TrayAction::OpenInApp => self.open_in_app(),
+            TrayAction::Soften => {
+                self.edit.soften_preview.clear();
+                self.soften_changed();
+            }
+            TrayAction::SoftenPreview => {
+                self.edit.soften_preview = self
+                    .tray_ui
+                    .soften
+                    .preview(self.session.editor.doc(), &self.edit.sub);
+            }
             TrayAction::Material(req) => {
                 let result = self.materials.apply(
                     &mut self.session.editor,
@@ -1522,6 +1577,7 @@ impl ModelerApp {
                         missing,
                         panel: &self.materials,
                         bucket: self.edit.modeling.paint.bucket,
+                        edges_selected: !self.edit.sub.is_empty(),
                     };
                     let view = tags_panel::View {
                         doc: self.session.editor.doc(),
@@ -1549,6 +1605,7 @@ impl ModelerApp {
         }
         let mut shown = canvas::Shown::default();
         let intersect = self.intersect_flags();
+        let edges = !self.edit.sub.is_empty();
         let hide = [self.can_hide(), self.can_unhide()];
         egui::CentralPanel::no_frame().show(ui, |ui| {
             shown = canvas::show(
@@ -1562,6 +1619,7 @@ impl ModelerApp {
                     gpu_ready: self.gpu_ready,
                     fit_pending: &mut self.fit_pending,
                     intersect,
+                    edges,
                     hide,
                 },
             );
