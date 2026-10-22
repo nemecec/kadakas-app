@@ -639,6 +639,14 @@ impl Edit3d {
         }
         if !key && self.copy_down && self.copy_arm && inp.tool != ModelerTool::Scale {
             self.modeling.toggle_ctrl();
+            if inp.tool == ModelerTool::TapeMeasure {
+                // Say which mode the Tape Measure is in now.
+                self.message = Some(if self.modeling.tape_creates_guides() {
+                    tr!("modeler-tape-guides")
+                } else {
+                    tr!("modeler-tape-measure-only")
+                });
+            }
         }
         if !key {
             self.copy_arm = false;

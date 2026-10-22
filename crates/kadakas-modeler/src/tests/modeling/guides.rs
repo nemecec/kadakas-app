@@ -86,6 +86,14 @@ fn measuring_a_box_edge_shows_its_length_in_the_box_and_the_status_line() {
     // Ctrl alone: measure only.
     toggle_copy(&ctx, &mut app, &mut t);
     assert!(!app.edit.modeling.tape_creates_guides());
+    let _ = shown(&ctx, &mut app, &mut t);
+    assert_eq!(app.status, tr!("modeler-tape-measure-only"));
+    toggle_copy(&ctx, &mut app, &mut t);
+    assert!(app.edit.modeling.tape_creates_guides());
+    let _ = shown(&ctx, &mut app, &mut t);
+    assert_eq!(app.status, tr!("modeler-tape-guides"));
+    toggle_copy(&ctx, &mut app, &mut t);
+    assert!(!app.edit.modeling.tape_creates_guides());
     let depth = app.session.editor.undo_depth();
     let a = screen_of(&mut app, DVec3::new(-500.0, -500.0, 500.0));
     let b = screen_of(&mut app, DVec3::new(500.0, -500.0, 500.0));
