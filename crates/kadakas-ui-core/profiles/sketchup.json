@@ -2,7 +2,7 @@
   "format": 1,
   "id": "sketchup",
   "name": "SketchUp-like",
-  "description": "The keys of a 3D-first modeler: a letter for each tool (L line, R rectangle, P push/pull, O orbit, H pan, Z zoom) and Space for the Select tool. Built from the public default shortcuts of programs of this kind.",
+  "description": "The keys of a 3D-first modeler: a letter for each tool (L line, R rectangle, P push/pull, M move, Q rotate, S scale, O orbit, H pan, Z zoom) and Space for the Select tool. Built from the public default shortcuts of programs of this kind.",
   "based_on": "vectorworks",
   "keymap": {
     "tool.select": ["Space"],

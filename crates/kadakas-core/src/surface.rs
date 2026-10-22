@@ -75,6 +75,14 @@
 //!   this kind; the check warns, [`Problem::NotIntersected`]). This edit makes the edges where
 //!   faces cross, so both faces split, and splits the edges where they pass through a face; for
 //!   the whole model or for chosen faces and edges.
+//! - **Transform vertices** ([`Edit::TransformVertices`]): Move, Rotate and Scale of vertices, faces
+//!   and edges by an affine map. Every face that has a moved vertex is refitted to a plane; a face
+//!   that is not flat any more is folded into triangles along new `soft` and `smooth` edges (the
+//!   largest piece keeps the id of the face), vertices that land on others weld, and faces that
+//!   become coplanar merge. A map of all vertices of a face never folds it. See the module
+//!   `edit::transform`.
+//! - **Copy geometry** ([`Edit::CopyGeometry`]): copies of faces and edges in the same model, with
+//!   new ids, welded to the geometry they land on.
 //! - Erasing edges of a curve leaves the rest as chains: a curve that is no longer one chain is
 //!   cut into curves.
 //!

@@ -183,6 +183,23 @@ fn a_corner_that_goes_up_folds_the_faces_at_it_into_triangles_with_soft_edges() 
 }
 
 #[test]
+fn a_corner_moved_back_unfolds_the_triangles_into_the_flat_face() {
+    let mut m = box_model();
+    let top = top_face(&m);
+    let (v, e, f) = (m.vertex_count(), m.edge_count(), m.face_count());
+    let corner = vertex_at(&m, [1000.0, 1000.0, 500.0]);
+    apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, 400.0))).unwrap();
+    assert_eq!(m.face_count(), f + 1);
+    let notes = apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, -400.0))).unwrap();
+    sound(&m);
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!((m.vertex_count(), m.edge_count(), m.face_count()), (v, e, f));
+    assert!(m.check().is_closed());
+    assert!(m.face(top).is_some(), "the lower id stays");
+    assert!(m.edges().all(|(id, _)| m.edge_attrs(id).is_none_or(|a| !a.contains_key("soft"))));
+}
+
+#[test]
 fn a_corner_that_goes_sideways_folds_the_walls_at_it_too() {
     let mut m = box_model();
     let corner = vertex_at(&m, [1000.0, 1000.0, 500.0]);

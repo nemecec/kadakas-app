@@ -97,6 +97,8 @@ The test fails when the worst p99 is over 4 ms (a quarter of a 60 Hz frame). The
 | `2.5`, `2.5m`, `250cm`, `3'6"`, `5' 6 1/2"` | `Length` | units from `kadakas-units` |
 | `3;4`, `3,4`, `,4`, `3;` | `Pair(Option, Option)` | `;` always; `,` only with a decimal point. An empty side keeps the old value |
 | `45`, `45°`, `45deg`, `8:12` | `Angle` | `8:12` is rise to run |
+| `2`, `-1`, `1.5` | `Factor` | a scale factor; the bare number for Scale |
+| `1;1;2`, `1,2,3` | `Triple` | three values: Move (lengths, relative) and Scale (factors); a value may be empty |
 | `5x`, `x5`, `5*`, `*5` | `Count` | 1 to 1000 copies, only after a copy |
 | `/5`, `5/` | `Divide` | 2 to 1000 parts, only after a copy |
 | `12s` | `Sides` | 3 to 1000. A bare number before the first click of Circle, Polygon and the arcs is the sides too (`24`) |
@@ -117,10 +119,11 @@ With a decimal comma (Estonian) `2,5` is a length of two and a half, and two val
 | Circle, Polygon | step 0 (no click): sides; later: length (radius), sides | the same as later | step 0: sides, later: length | no |
 | Arc | step 0: sides; step 1 (center clicked): radius (length), sides; step 2 (start clicked): angle, sides | sides, radius | sides, then length, then angle; none after | angle yes |
 | Two-point arc | step 0: sides; step 1 (start clicked): length (chord); step 2 (end clicked): length (bulge), radius, sides | length, radius, sides | sides, then length | no at step 1 |
-| Move | length, point | length, point (after a copy: count, divide) | length | yes |
+| Move | length, three values (`x;y;z`), point | the same (after a copy: count, divide) | length | yes |
 | Rotate | angle | angle (after a copy: count, divide) | angle | yes |
+| Scale | factor, three factors (`1;1;2`), length | the same | factor | yes |
 | Push/Pull, Offset, Tape measure | length | length | length | yes |
 | Protractor | angle | angle | angle | yes |
 | Select, Eraser, Freehand, Follow Me, Orbit, Pan, Zoom, Paint | nothing | nothing | none | none |
 
-A valid value of a kind that the tool does not take gives `NotAccepted` with the kind and the list of kinds that the tool takes. Not in v1: a scale factor and three values for Scale, the rotated rectangle.
+A valid value of a kind that the tool does not take gives `NotAccepted` with the kind and the list of kinds that the tool takes. A bare number is a factor for Scale (`2`, `-1`, `1.5`; a decimal comma that was typed by habit is a factor too); a number with a unit is a length (`2m`: the new size along the grip). Three values with a separator are `Triple`: the three lengths of a Move or the three factors of a Scale; a value may be empty (`;;5`). A tool that takes no triple answers three values with `TooManyValues`. Not in v1: the rotated rectangle.

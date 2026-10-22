@@ -213,7 +213,7 @@ The 3D modeler (`docs/modeler.md`) has actions that the Vectorworks-like app doe
 | Eraser tool (`tool.eraser`, MOD-05) | none | none | planned |
 | Arc tool (`tool.arc`, MOD-08) | none | none | planned |
 | Push/Pull tool (`tool.push_pull`, MOD-05, MOD-08) | none | none | planned |
-| Move tool (`tool.move`, MOD-05) | none | none | planned |
+| Move tool (`tool.move`, MOD-05) | none | none | done |
 | Tape Measure tool (`tool.tape_measure`, MOD-05) | none | none | planned |
 | Paint Bucket tool (`tool.paint_bucket`, MOD-05) | none | none | planned |
 | Orbit tool (`nav.orbit`, MOD-02) | none | none | done |
@@ -245,8 +245,21 @@ The profile `sketchup` is the default of `kadakas-modeler`. The file is `crates/
 | Cmd/Ctrl+Shift+S | Save As |
 | Cmd/Ctrl+Shift+, and Cmd/Ctrl+Shift+. | Previous view, Next view |
 | Cmd/Ctrl+1 and Cmd/Ctrl+2 | Zoom in, zoom out (factor 2) |
-| Arrow keys | Pan the view (MOD-03 will use them to lock an axis) |
-| Esc | Back to Select |
+| Arrow keys | Pan the view. While a drawing tool, Move or Rotate runs they lock the direction to an axis (Right red, Left green, Up blue); with Rotate, before the center is clicked, they lock the plane of the protractor (Down frees it) |
+| Esc | Ends the tool that is running (Move, Rotate, Scale and the drawing tools), else back to Select |
+
+### Keys while Move, Rotate and Scale run (MOD-05)
+
+These are modifier keys of the tools. They are the same in every profile of the modeler.
+
+| Key | Move and Rotate | Scale |
+|---|---|---|
+| Ctrl (Option on macOS), pressed once | Toggles copy (a plus shows at the pointer). After a copy, type `5x` for five copies or `/5` for five copies that divide the step | Toggles scaling about the center of the box |
+| Shift (held) | Keeps the direction that the inference found (Move); keeps the plane that the pointer showed (Rotate) | Toggles uniform scaling |
+| Arrow keys | Lock the direction to an axis (Move); lock the plane of the protractor (Rotate) | none |
+| Enter | Applies the typed value | Applies the typed value |
+| Esc | Ends the tool without a change | Ends the tool without a change |
+
 
 The standard views (Top, Bottom, Front, Back, Left, Right, Iso) have no key. This is the same in programs of that kind. They are in the Camera menu. The Vectorworks tool keys (`X`, `2`, `4`, `6` and the others) are free in this profile. Only the tools that run today react to their key. The other tools show "coming in a later version" in the status bar.
 
