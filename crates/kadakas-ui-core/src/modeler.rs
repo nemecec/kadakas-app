@@ -163,8 +163,8 @@ impl ModelerTool {
     }
 
     /// True for the tools that run in this version: Select, the drawing tools of MOD-08 (Eraser,
-    /// Line, Rectangle, Circle, Arc, Push/Pull), Move, Rotate and Scale (MOD-05) and the navigation
-    /// tools. The rest (Tape Measure, Paint Bucket) are shown, disabled.
+    /// Line, Rectangle, Circle, Arc, Push/Pull), Move, Rotate and Scale and the Paint Bucket (MOD-05) and the
+    /// navigation tools. Tape Measure is shown, disabled.
     pub fn works(self) -> bool {
         matches!(
             self,
@@ -178,6 +178,7 @@ impl ModelerTool {
                 | ModelerTool::Move
                 | ModelerTool::Rotate
                 | ModelerTool::Scale
+                | ModelerTool::PaintBucket
                 | ModelerTool::Orbit
                 | ModelerTool::Pan
                 | ModelerTool::Zoom
@@ -212,6 +213,7 @@ impl ModelerTool {
             ModelerTool::Move => tr!("uic-modeler-hint-move"),
             ModelerTool::Rotate => tr!("uic-modeler-hint-rotate"),
             ModelerTool::Scale => tr!("uic-modeler-hint-scale"),
+            ModelerTool::PaintBucket => tr!("uic-modeler-hint-paint-bucket"),
             ModelerTool::Orbit => tr!("uic-modeler-hint-orbit"),
             ModelerTool::Pan => tr!("uic-modeler-hint-pan"),
             ModelerTool::Zoom => tr!("uic-modeler-hint-zoom"),

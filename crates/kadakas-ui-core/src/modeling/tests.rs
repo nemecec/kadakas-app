@@ -1139,3 +1139,4 @@ fn the_geometry_being_pulled_is_left_out_of_the_inference() {
 
 mod more;
 mod xform;
+mod paint;

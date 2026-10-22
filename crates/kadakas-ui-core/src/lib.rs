@@ -28,6 +28,7 @@ pub mod keymap;
 pub mod keys;
 pub mod massing;
 pub mod measure_box;
+pub mod materials;
 pub mod modeler;
 pub mod modeling;
 pub mod nav3d;
