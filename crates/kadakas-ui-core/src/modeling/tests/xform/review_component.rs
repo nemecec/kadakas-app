@@ -15,14 +15,13 @@ fn turned_instance(r: &mut Rig) -> ObjectId {
         replace: true,
     })
     .unwrap();
-    let inst = r
-        .ed
-        .doc()
-        .objects
-        .values()
-        .find(|o| matches!(o.shape, Shape::Component { .. }))
-        .map(|o| o.id)
-        .unwrap();
+    let inst =
+        r.ed.doc()
+            .objects
+            .values()
+            .find(|o| matches!(o.shape, Shape::Component { .. }))
+            .map(|o| o.id)
+            .unwrap();
     r.ed.execute(&Command::TransformObjects3d {
         ids: vec![inst],
         matrix: DAffine3::from_rotation_z(30.0_f64.to_radians()).to_cols_array(),
