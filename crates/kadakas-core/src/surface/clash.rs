@@ -90,7 +90,7 @@ impl Shape {
     }
 
     /// Calls `f` with each side whose box meets the box `lo`–`hi`.
-    fn sides_in(&self, lo: DVec2, hi: DVec2, f: &mut dyn FnMut(DVec2, DVec2)) {
+    pub fn sides_in(&self, lo: DVec2, hi: DVec2, f: &mut dyn FnMut(DVec2, DVec2)) {
         match &self.tree {
             Some(t) => t.query(z0(lo), z0(hi), &mut |i| {
                 let (a, b) = self.sides[i as usize];

@@ -549,7 +549,7 @@ fn the_outer_top_with_a_hole_is_pulled_and_pushed_with_a_pocket_in_the_middle() 
 #[test]
 fn a_pocket_deeper_than_the_solid_is_refused_with_a_reason() {
     let (m0, _top, inner) = box_with_inner_square();
-    for d in [-600.0, -500.0, -9000.0] {
+    for d in [-600.0, -9000.0] {
         let mut m = m0.clone();
         let e = m
             .apply(&Edit::PushPull {
@@ -1546,3 +1546,4 @@ fn a_cylinder_on_a_slanted_face_pulls_with_smooth_walls() {
 }
 
 mod flush;
+mod hole;

@@ -58,11 +58,18 @@
 //! of a curve leaves its own curve, so an edge is never in two curves. The attributes of merged
 //! faces follow `merge_attrs` (in `edit`), and each change is a note of the edit.
 //!
+//! # Hole through
+//!
+//! A pocket pushed exactly to the opposite side of a slab (the cap reaches the plane of a face
+//! that looks the other way and lies fully inside it) cuts a hole through: the cap goes, the face
+//! of the other side gets the hole, and the walls of the pocket are the walls of the hole. See
+//! the module `hole`.
+//!
 //! # Refused
 //!
-//! - A move that reaches the opposite face (the face becomes flush with a face that looks the
-//!   other way, beside it or back to back under it, or a copy ends on it). The hole through a
-//!   slab is a later step.
+//! - A move that reaches the opposite face in any other way (the face becomes flush with a face
+//!   that looks the other way, beside it or back to back under it, or a copy ends on it), and a
+//!   cap that reaches the opposite face but is not fully inside one face of it.
 //! - A wall edge with more than one other face, one of which lies where the new wall would go (a
 //!   fin: the face is pushed into a wall that it shares an edge with).
 //! - A result in which a new or moved edge passes through, ends on, or lies in a face that it does
@@ -84,6 +91,8 @@ use super::super::check::{self, Problem};
 use super::super::clash::{self, Contact};
 use super::*;
 
+mod hole;
+
 /// The most steps of one push (each passes a vertex along the normal).
 const MAX_STEPS: usize = 64;
 
@@ -96,22 +105,38 @@ pub(super) fn push_pull(
     distance: f64,
     notes: &mut Vec<String>,
 ) -> Result<(), SurfaceError> {
-    let mut rest = distance;
+    // A push to the opposite side of a slab cuts a hole through (see `hole`): exactly there.
+    let hole = hole::target(m, face, distance)?;
+    let mut rest = hole.map_or(distance, |(_, d)| d);
+    let hole = hole.map(|(g, _)| g);
+    let attrs = m
+        .faces
+        .get(&face)
+        .map(|f| (f.attrs.clone(), f.extra.clone()));
     // The model before the current step (the first step starts from `before`).
     let mut base: Option<SurfaceModel> = None;
     for _ in 0..MAX_STEPS {
         let from = base.as_ref().unwrap_or(before);
-        let plan = match run(m, face, rest, true)? {
+        let plan = match run(m, face, rest, true, hole)? {
             // Nearly flush: the push goes exactly to the geometry it lands on.
             Plan::Snap(s) => {
                 rest = s;
-                run(m, face, s, false)?
+                run(m, face, s, false, hole)?
             }
             p => p,
         };
         match plan {
             Plan::Done(t, welds) => {
+                let cut = t.hole;
                 finish_and_check(m, from, t, &welds, notes)?;
+                if let (Some(g), Some((a, x))) = (cut, &attrs)
+                    && !(a.is_empty() && x.is_empty())
+                {
+                    notes.push(format!(
+                        "face {face} was pushed through face {g}: the cap went with its \
+                         attributes (the new walls keep its paint)"
+                    ));
+                }
                 return Ok(());
             }
             Plan::Snap(_) => {
@@ -121,7 +146,7 @@ pub(super) fn push_pull(
             }
             Plan::Step(d) => {
                 // Nothing changed yet: push to the vertex on the way first.
-                let Plan::Done(t, welds) = run(m, face, d, false)? else {
+                let Plan::Done(t, welds) = run(m, face, d, false, hole)? else {
                     return Err(SurfaceError::Unsolved(
                         "the push/pull does not reach the vertex on its way".into(),
                     ));
@@ -169,13 +194,22 @@ struct Touched {
     edges: BTreeSet<EdgeId>,
     /// The faces that are new or changed.
     faces: BTreeSet<FaceId>,
-    /// The face that was pushed (the cap, unless it merged).
+    /// The face that was pushed (the cap, unless it merged or went through).
     face: FaceId,
+    /// The face of the other side that the push cut a hole through.
+    hole: Option<FaceId>,
 }
 
 /// One push of `face` by `d`. With `snap`, a push that lands within the tolerance of geometry but
 /// not exactly on it returns `Snap` with the exact distance.
-fn run(m: &mut SurfaceModel, face: FaceId, d: f64, snap: bool) -> Result<Plan, SurfaceError> {
+/// `hole` is the face of the other side that a push to its plane cuts a hole through.
+fn run(
+    m: &mut SurfaceModel,
+    face: FaceId,
+    d: f64,
+    snap: bool,
+    hole: Option<FaceId>,
+) -> Result<Plan, SurfaceError> {
     let f = m
         .faces
         .get(&face)
@@ -596,7 +630,40 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64, snap: bool) -> Result<Plan, S
         // Turned over, the paint stays on its physical side.
         super::swap_paint(&mut g.attrs);
     };
-    if !attached {
+    // The hole through: the cap lies in the plane of the face of the other side.
+    let cut = hole.filter(|g| {
+        attached
+            && w.m.faces.get(g).is_some_and(|gf| {
+                cap.outer
+                    .iter()
+                    .chain(cap.holes.iter().flatten())
+                    .all(|v| on_plane(&gf.plane, w.pos(*v)))
+            })
+    });
+    if let Some(g) = cut {
+        // The face of the other side gets the outer loop of the cap as a hole (the loop runs
+        // clockwise seen from the front of `g`), and each hole of the cap is an island of `g`.
+        let mut gf = w.m.faces[&g].clone();
+        gf.holes.push(canonical(&cap.outer));
+        gf.holes.sort();
+        let islands: Vec<Face> = cap
+            .holes
+            .iter()
+            .map(|h| {
+                let mut isl = Face::new(gf.plane, canonical(h), Vec::new());
+                isl.attrs = gf.attrs.clone();
+                isl.extra = gf.extra.clone();
+                isl
+            })
+            .collect();
+        w.put_face(g, gf);
+        faces_out.insert(g);
+        for isl in islands {
+            let id = w.new_face(isl);
+            faces_out.insert(id);
+        }
+        w.take_face(face);
+    } else if !attached {
         let id = if d > 0.0 {
             // The old position becomes the bottom, turned to the outside.
             let mut bottom = f.clone();
@@ -609,8 +676,10 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64, snap: bool) -> Result<Plan, S
         };
         faces_out.insert(id);
     }
-    w.put_face(face, cap);
-    faces_out.insert(face);
+    if cut.is_none() {
+        w.put_face(face, cap);
+        faces_out.insert(face);
+    }
 
     // A stretched edge whose end stayed is replaced by the edge between the copies, which takes
     // its attributes and its place in a curve.
@@ -695,6 +764,7 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64, snap: bool) -> Result<Plan, S
             edges: tedges,
             faces: faces_out,
             face,
+            hole: cut,
         },
         welds,
     ))
@@ -769,6 +839,7 @@ fn finish_and_check(
         edges,
         faces,
         face: t.face,
+        hole: t.hole,
     };
     validate(before, m, &t)?;
     Ok(merged)
@@ -966,9 +1037,11 @@ fn flush_merges(
             } else if !same_side {
                 // A face that looks the other way: beside the face (it uses the edge the same
                 // way) or under it (back to back: a slab pushed to zero thickness).
-                return Err(SurfaceError::Unsolved(
-                    "the face cannot be pushed through to the opposite face yet".into(),
-                ));
+                return Err(SurfaceError::Unsolved(format!(
+                    "face {face} would lie on face {id}, which looks the other way (a solid \
+                     pushed to zero thickness); to cut a hole through, draw the shape of the \
+                     hole inside the face first and push that"
+                )));
             }
         }
     }
@@ -999,7 +1072,7 @@ fn validate(before: &SurfaceModel, m: &SurfaceModel, t: &Touched) -> Result<(), 
         };
         return Err(SurfaceError::Unsolved(format!(
             "the push/pull would cut through other faces: edge {e} {how} face {g} (a hole \
-             through is a later step)"
+             through is cut only by a push that ends exactly on the opposite face)"
         )));
     }
     match new_distance_problem(before, m, &t.edges, &t.verts) {
