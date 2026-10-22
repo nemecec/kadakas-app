@@ -77,6 +77,12 @@ pub enum Intent {
         matrix: [f64; 12],
         count: u32,
     },
+    /// Faces (by a point inside each) and edges (by the middle of each) hidden or shown.
+    HiddenAt {
+        faces: Vec<[f64; 3]>,
+        edges: Vec<[f64; 3]>,
+        hidden: bool,
+    },
     /// A new transform.
     Place { transform: [f64; 12] },
     /// A change that cannot be replayed (for example a new curve).
@@ -159,6 +165,15 @@ impl Intent {
                 matrix: *matrix,
                 count: *count,
             },
+            Edit::SetHidden {
+                faces: fs,
+                edges,
+                hidden,
+            } => Intent::HiddenAt {
+                faces: faces(fs),
+                edges: middles(edges),
+                hidden: *hidden,
+            },
             Edit::PushPull { face, distance } => match face_point(m, *face) {
                 Some(p) => Intent::PushPullAt {
                     point: p.to_array(),
@@ -178,7 +193,9 @@ impl Intent {
             Intent::AddCurve { points, .. } => points.len(),
             Intent::TransformAt { vertices, .. } => vertices.len().max(1),
             Intent::CopyAt { faces, edges, .. } => (faces.len() + edges.len()).max(1),
-            Intent::IntersectAt { faces, edges } => (faces.len() + edges.len()).max(1),
+            Intent::IntersectAt { faces, edges } | Intent::HiddenAt { faces, edges, .. } => {
+                (faces.len() + edges.len()).max(1)
+            }
             Intent::Place { .. }
             | Intent::Unlogged
             | Intent::PushPullAt { .. }
@@ -406,6 +423,25 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
                 scope: IntersectScope::Selection,
                 faces,
                 edges,
+            })
+        }
+        Intent::HiddenAt {
+            faces,
+            edges,
+            hidden,
+        } => {
+            let faces = faces
+                .iter()
+                .map(|p| face_at(m, DVec3::from(*p)).ok_or_else(|| gone("face", p)))
+                .collect::<Result<Vec<_>, _>>()?;
+            let edges = edges
+                .iter()
+                .map(|p| edge_at(m, DVec3::from(*p)).ok_or_else(|| gone("edge", p)))
+                .collect::<Result<Vec<_>, _>>()?;
+            m.apply(&Edit::SetHidden {
+                faces,
+                edges,
+                hidden: *hidden,
             })
         }
         Intent::TransformAt { vertices, matrix } => {

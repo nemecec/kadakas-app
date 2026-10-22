@@ -240,6 +240,14 @@ pub enum Command {
         #[serde(default)]
         attrs: Option<Attributes>,
     },
+    /// Delete a class (a tag in the 3D modeler). The objects of the class go to `move_to` (the
+    /// default class "None", shown as Untagged, when missing). The default class cannot be deleted.
+    /// The active class becomes `move_to` when it was the deleted one.
+    DeleteClass {
+        id: ClassId,
+        #[serde(default)]
+        move_to: Option<ClassId>,
+    },
     SetActive {
         #[serde(default)]
         layer: Option<LayerId>,
@@ -1894,6 +1902,38 @@ impl<'a> Tx<'a> {
                     c.attrs = v.clone();
                 }
             }
+            Command::DeleteClass { id, move_to } => {
+                self.check_class(*id)?;
+                if *id == NONE_CLASS {
+                    return Err(CommandError::Invalid(
+                        "the default class cannot be deleted".into(),
+                    ));
+                }
+                let to = move_to.unwrap_or(NONE_CLASS);
+                self.check_class(to)?;
+                if to == *id {
+                    return Err(CommandError::Invalid(
+                        "the objects cannot move to the class that is deleted".into(),
+                    ));
+                }
+                let moved: Vec<ObjectId> = self
+                    .doc
+                    .objects
+                    .values()
+                    .filter(|o| o.class == *id)
+                    .map(|o| o.id)
+                    .collect();
+                for oid in moved {
+                    self.editable(oid)?;
+                    self.touch(oid);
+                    self.doc.object_mut(oid).expect("checked").class = to;
+                }
+                self.doc.classes.retain(|c| c.id != *id);
+                self.doc.drawing.grey.classes.remove(id);
+                if self.doc.active_class == *id {
+                    self.doc.active_class = to;
+                }
+            }
             Command::SetActive { layer, class } => {
                 if let Some(l) = layer {
                     self.doc.layer(*l).ok_or(CommandError::NoLayer(*l))?;
@@ -2106,6 +2146,19 @@ impl<'a> Tx<'a> {
                     id.0
                 )));
             }
+        }
+        // The limit of guides (MOD-05): a step that adds a guide may not take the document over it.
+        if self
+            .added
+            .iter()
+            .filter_map(|id| self.doc.object(*id))
+            .any(crate::guide::is_guide)
+            && self.doc.guide_count() > crate::guide::MAX_GUIDES
+        {
+            return Err(CommandError::Invalid(format!(
+                "a document may hold at most {} guides",
+                crate::guide::MAX_GUIDES
+            )));
         }
         let mut touched = self
             .added

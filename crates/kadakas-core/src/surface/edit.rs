@@ -79,6 +79,16 @@ pub enum Edit {
         matrix: [f64; 12],
         count: u32,
     },
+    /// Hide and Unhide (MOD-05): sets (`hidden: true`) or clears the attribute `hidden` of the
+    /// given faces and edges. Views, picking and the inference leave hidden items out unless
+    /// Hidden Geometry shows them. Nothing else changes: a hidden edge does not merge faces.
+    SetHidden {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        faces: Vec<FaceId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        edges: Vec<EdgeId>,
+        hidden: bool,
+    },
 }
 
 /// What Intersect Faces looks at.
@@ -91,6 +101,7 @@ pub enum IntersectScope {
     Selection,
 }
 
+mod hide;
 mod intersect;
 mod near;
 mod pushpull;
@@ -150,6 +161,11 @@ fn run_noted(
             Ok(())
         }
         Edit::ReverseFaces { faces } => reverse_faces(m, faces),
+        Edit::SetHidden {
+            faces,
+            edges,
+            hidden,
+        } => hide::set_hidden(m, faces, edges, *hidden),
     }
 }
 

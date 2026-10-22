@@ -337,6 +337,7 @@ impl Geometry {
             Shape::TitleBlock(_)
             | Shape::Group { .. }
             | Shape::Unknown { .. }
+            | Shape::Guide(_)
             | Shape::Annotation(_)
             | Shape::Irrigation(_) => {}
         }

@@ -773,12 +773,17 @@ impl Builder<'_> {
         };
         if let Ok(sm) = m.mesh() {
             let pts: Vec<Vec3> = sm.positions.iter().map(|p| at(*p)).collect();
+            // A hidden face (Hide, MOD-05) is not drawn.
+            let shown = |i: usize| !m.face_hidden(sm.faces[i]);
             // A mirror turns the triangles over; keep them counterclockwise.
-            let tris: Vec<[u32; 3]> = if tf.matrix3.determinant() < 0.0 {
-                sm.triangles.iter().map(|t| [t[0], t[2], t[1]]).collect()
-            } else {
-                sm.triangles
-            };
+            let flip = tf.matrix3.determinant() < 0.0;
+            let tris: Vec<[u32; 3]> = sm
+                .triangles
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| shown(*i))
+                .map(|(_, t)| if flip { [t[0], t[2], t[1]] } else { *t })
+                .collect();
             self.scene.mesh.part = PART_MAIN;
             self.scene.mesh.two_sided_mode = true;
             add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
@@ -1080,7 +1085,7 @@ impl Builder<'_> {
             // Sheet layer objects are paper space. They never reach the 3D scene.
             Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Annotation(_) => {}
             // A group draws through its members.
-            Shape::Group { .. } | Shape::Unknown { .. } => {}
+            Shape::Group { .. } | Shape::Unknown { .. } | Shape::Guide(_) => {}
             // Irrigation objects are flat and drawn in 2D only.
             Shape::Irrigation(_) => {}
             Shape::Symbol { .. } => {

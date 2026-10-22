@@ -42,6 +42,60 @@ impl VisMode {
     }
 }
 
+/// The key in `Object::data` that marks an object that the person hid with Hide (MOD-05). The
+/// value is `true`. The object stays in the document. Views, picking, inference and exports leave
+/// it out (an export says how many), and Unhide brings it back. A hidden group hides its members:
+/// Hide marks the group and all of its members.
+pub const HIDDEN_KEY: &str = "hidden_object";
+
+/// True if the person hid the object with Hide.
+pub fn is_hidden(obj: &Object) -> bool {
+    obj.data.get(HIDDEN_KEY) == Some(&serde_json::Value::Bool(true))
+}
+
+/// The command that hides (or shows again) the objects, and the members of the groups among them,
+/// as one undo step. `None` when no object would change.
+pub fn set_hidden_command(
+    doc: &Document,
+    ids: &[crate::model::ObjectId],
+    hidden: bool,
+) -> Option<crate::command::Command> {
+    use crate::command::Command;
+    let commands: Vec<Command> = doc
+        .with_members(ids)
+        .into_iter()
+        .filter(|id| doc.object(*id).is_some_and(|o| is_hidden(o) != hidden))
+        .map(|id| {
+            if hidden {
+                Command::SetData {
+                    id,
+                    set: std::collections::BTreeMap::from([(
+                        HIDDEN_KEY.to_string(),
+                        serde_json::Value::Bool(true),
+                    )]),
+                    remove: Vec::new(),
+                }
+            } else {
+                Command::SetData {
+                    id,
+                    set: Default::default(),
+                    remove: vec![HIDDEN_KEY.to_string()],
+                }
+            }
+        })
+        .collect();
+    (!commands.is_empty()).then_some(Command::Batch { commands })
+}
+
+/// The ids of the objects that are hidden with Hide.
+pub fn hidden_objects(doc: &Document) -> Vec<crate::model::ObjectId> {
+    doc.objects
+        .values()
+        .filter(|o| is_hidden(o))
+        .map(|o| o.id)
+        .collect()
+}
+
 /// The layers and classes that are grey.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GreySet {

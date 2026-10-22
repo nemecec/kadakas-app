@@ -550,6 +550,35 @@
             "count"
           ],
           "type": "object"
+        },
+        {
+          "description": "Hide and Unhide (MOD-05): sets (`hidden: true`) or clears the attribute `hidden` of the\ngiven faces and edges. Views, picking and the inference leave hidden items out unless\nHidden Geometry shows them. Nothing else changes: a hidden edge does not merge faces.",
+          "properties": {
+            "action": {
+              "const": "set_hidden",
+              "type": "string"
+            },
+            "edges": {
+              "items": {
+                "$ref": "#/$defs/EdgeId"
+              },
+              "type": "array"
+            },
+            "faces": {
+              "items": {
+                "$ref": "#/$defs/FaceId"
+              },
+              "type": "array"
+            },
+            "hidden": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "action",
+            "hidden"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1558,7 +1587,8 @@
                 "sweep",
                 "irrigation",
                 "surface_model",
-                "component"
+                "component",
+                "guide"
               ]
             }
           },
@@ -2513,6 +2543,34 @@
             "boolean",
             "null"
           ]
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Delete a class (a tag in the 3D modeler). The objects of the class go to `move_to` (the\ndefault class \"None\", shown as Untagged, when missing). The default class cannot be deleted.\nThe active class becomes `move_to` when it was the deleted one.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ClassId"
+        },
+        "move_to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "op": {
+          "const": "delete_class",
+          "type": "string"
         }
       },
       "required": [
