@@ -156,9 +156,12 @@ mod tests_offset;
 #[cfg(test)]
 mod tests_pushpull;
 #[cfg(test)]
+mod tests_style;
+#[cfg(test)]
 mod tests_transform;
 
 pub use check::{At, Problem, Report};
+pub use edit::style::{ATTR_HIDDEN, ATTR_SMOOTH, ATTR_SOFT, dihedral_of, flagged};
 pub use edit::{ATTR_BACK_MATERIAL, ATTR_MATERIAL, Edit, IntersectScope, PaintSide};
 pub use geom::{Plane, on_plane, plane_tolerance_at, tolerance_at};
 pub use part::{Absorber, Selection};

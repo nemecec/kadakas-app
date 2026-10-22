@@ -96,6 +96,23 @@ pub enum Intent {
         distance: f64,
         toward: [f64; 3],
     },
+    /// Edge flags set, by the middle of each edge.
+    EdgeStyleAt {
+        edges: Vec<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        soft: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        smooth: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hidden: Option<bool>,
+    },
+    /// Soften Edges, by the middle of each edge.
+    SoftenAt {
+        edges: Vec<[f64; 3]>,
+        angle: f64,
+        smooth: bool,
+        coplanar: bool,
+    },
     /// A new transform.
     Place { transform: [f64; 12] },
     /// A change that cannot be replayed (for example a new curve).
@@ -208,6 +225,28 @@ impl Intent {
                 distance: *distance,
                 toward: *toward,
             },
+            Edit::SetEdgeStyle {
+                edges,
+                soft,
+                smooth,
+                hidden,
+            } => Intent::EdgeStyleAt {
+                edges: middles(edges),
+                soft: *soft,
+                smooth: *smooth,
+                hidden: *hidden,
+            },
+            Edit::SoftenEdges {
+                edges,
+                angle,
+                smooth,
+                coplanar,
+            } => Intent::SoftenAt {
+                edges: middles(edges),
+                angle: *angle,
+                smooth: *smooth,
+                coplanar: *coplanar,
+            },
             Edit::PushPull { face, distance } => match face_point(m, *face) {
                 Some(p) => Intent::PushPullAt {
                     point: p.to_array(),
@@ -229,7 +268,9 @@ impl Intent {
             Intent::TransformAt { vertices, .. } => vertices.len().max(1),
             Intent::CopyAt { faces, edges, .. } => (faces.len() + edges.len()).max(1),
             Intent::IntersectAt { faces, edges } => (faces.len() + edges.len()).max(1),
-            Intent::OffsetEdgesAt { edges, .. } => edges.len().max(1),
+            Intent::OffsetEdgesAt { edges, .. }
+            | Intent::EdgeStyleAt { edges, .. }
+            | Intent::SoftenAt { edges, .. } => edges.len().max(1),
             Intent::Place { .. }
             | Intent::Unlogged
             | Intent::PushPullAt { .. }
@@ -405,6 +446,14 @@ fn vertices_at(
         .collect()
 }
 
+/// The edges through the given middle points.
+fn edges_at(m: &SurfaceModel, points: &[[f64; 3]]) -> Result<Vec<EdgeId>, SurfaceError> {
+    points
+        .iter()
+        .map(|p| edge_at(m, DVec3::from(*p)).ok_or_else(|| gone("edge", p)))
+        .collect()
+}
+
 /// Runs an intent on a model (a new log entry for it).
 pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), SurfaceError> {
     match intent {
@@ -480,6 +529,34 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
                 edges,
                 distance: *distance,
                 toward: *toward,
+            })
+        }
+        Intent::EdgeStyleAt {
+            edges,
+            soft,
+            smooth,
+            hidden,
+        } => {
+            let edges = edges_at(m, edges)?;
+            m.apply(&Edit::SetEdgeStyle {
+                edges,
+                soft: *soft,
+                smooth: *smooth,
+                hidden: *hidden,
+            })
+        }
+        Intent::SoftenAt {
+            edges,
+            angle,
+            smooth,
+            coplanar,
+        } => {
+            let edges = edges_at(m, edges)?;
+            m.apply(&Edit::SoftenEdges {
+                edges,
+                angle: *angle,
+                smooth: *smooth,
+                coplanar: *coplanar,
             })
         }
         Intent::IntersectModel => m.apply(&Edit::IntersectFaces {

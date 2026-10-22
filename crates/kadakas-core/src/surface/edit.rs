@@ -107,6 +107,33 @@ pub enum Edit {
         distance: f64,
         toward: [f64; 3],
     },
+    /// Soft, smooth and hidden edges (MOD-08): sets (`true`) or clears (`false`) the flags of the
+    /// edges; a flag that is not given stays as it is. A soft edge is not drawn; the faces on the
+    /// sides of a smooth edge shade as one surface. See the module `style`.
+    SetEdgeStyle {
+        edges: Vec<EdgeId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        soft: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        smooth: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hidden: Option<bool>,
+    },
+    /// Soften Edges (MOD-08): each of the edges between two faces at an angle below `angle`
+    /// degrees (0 to 180) becomes soft (and smooth with `smooth`); the others lose both flags.
+    /// Edges between coplanar faces are softened only with `coplanar`.
+    SoftenEdges {
+        edges: Vec<EdgeId>,
+        angle: f64,
+        #[serde(default = "yes")]
+        smooth: bool,
+        #[serde(default)]
+        coplanar: bool,
+    },
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Which side of a face a material goes on.
@@ -138,6 +165,7 @@ mod near;
 mod offset;
 mod pushpull;
 pub(super) mod reference;
+pub(super) mod style;
 mod transform;
 
 use near::{Near, Points, Runs, Walks};
@@ -203,6 +231,18 @@ fn run_noted(
             distance,
             toward,
         } => offset::offset_edges(m, edges, *distance, DVec3::from(*toward)),
+        Edit::SetEdgeStyle {
+            edges,
+            soft,
+            smooth,
+            hidden,
+        } => style::set_edge_style(m, edges, *soft, *smooth, *hidden),
+        Edit::SoftenEdges {
+            edges,
+            angle,
+            smooth,
+            coplanar,
+        } => style::soften_edges(m, edges, *angle, *smooth, *coplanar),
         Edit::SetFaceMaterial {
             faces,
             side,

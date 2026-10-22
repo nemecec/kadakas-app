@@ -81,7 +81,8 @@
 //!   the error names a new one. The model is unchanged.
 //!
 //! Curves on the wall edges of `F` are copied to the cap, and the new vertical edges between two
-//! pieces of a curve get the attribute `smooth: true` (a cylinder is shaded round).
+//! pieces of a curve get the attributes `soft: true` and `smooth: true` (a cylinder is shaded
+//! round and its sides are not drawn as lines).
 //!
 //! Ids are given in a fixed order (the copies of the vertices in loop order, then the vertical
 //! edges, the cap edges, the walls, then the bottom), so the same edit gives the same ids.
@@ -737,10 +738,9 @@ fn run(
             if c == 2
                 && let Some(ve) = vertical.get(&v)
             {
-                w.m.edge_attrs
-                    .entry(*ve)
-                    .or_default()
-                    .insert("smooth".into(), serde_json::Value::Bool(true));
+                let at = w.m.edge_attrs.entry(*ve).or_default();
+                at.insert("soft".into(), serde_json::Value::Bool(true));
+                at.insert("smooth".into(), serde_json::Value::Bool(true));
             }
         }
         let taken = w.m.curves.values().flatten().any(|e| up.contains(e));
