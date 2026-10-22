@@ -74,11 +74,8 @@ fn symbol_def(ed: &Editor, id: ResourceId) -> SymbolDef {
 }
 
 fn delete(ed: &mut Editor, id: ClassId) {
-    ed.execute(&Command::DeleteClass {
-        id,
-        move_to: None,
-    })
-    .unwrap();
+    ed.execute(&Command::DeleteClass { id, move_to: None })
+        .unwrap();
 }
 
 #[test]
@@ -87,7 +84,10 @@ fn the_parts_and_components_of_a_definition_move_to_untagged_and_undo_brings_the
     let t = tag(&mut ed, "Trees");
     let sym = symbol(&mut ed, t);
     let uses = classes::uses(ed.doc(), t);
-    assert_eq!(uses.definition_parts, 3, "a component, a part and the insert class");
+    assert_eq!(
+        uses.definition_parts, 3,
+        "a component, a part and the insert class"
+    );
     let before = ed.doc().clone();
     let depth = ed.undo_depth();
     delete(&mut ed, t);
@@ -238,7 +238,11 @@ fn saved_views_name_the_other_class_after_the_delete() {
     delete(&mut ed, t);
     let v = ed.doc().drawing.saved_view("Trees only").unwrap();
     assert!(!v.classes.contains_key(&t));
-    assert_eq!(v.classes.get(&NONE_CLASS), Some(&false), "the entry of Untagged stays");
+    assert_eq!(
+        v.classes.get(&NONE_CLASS),
+        Some(&false),
+        "the entry of Untagged stays"
+    );
     assert_eq!(v.active_class, Some(NONE_CLASS));
     assert!(ed.undo());
     assert_eq!(ed.doc(), &before);
@@ -296,8 +300,15 @@ fn a_class_material_becomes_a_material_of_each_moved_object() {
     delete(&mut ed, t);
     let slots = &ed.doc().drawing.presentation;
     assert_eq!(slots.slot(&SlotTarget::Class { class: t }), None);
-    let obj = |o| SlotTarget::Object { object: o, slot: None };
-    assert_eq!(slots.slot(&obj(a)), Some(m), "the moved object looks the same");
+    let obj = |o| SlotTarget::Object {
+        object: o,
+        slot: None,
+    };
+    assert_eq!(
+        slots.slot(&obj(a)),
+        Some(m),
+        "the moved object looks the same"
+    );
     assert_eq!(slots.slot(&obj(b)), Some(own));
     assert_eq!(
         slots.slot(&SlotTarget::Class { class: NONE_CLASS }),

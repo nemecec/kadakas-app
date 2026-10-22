@@ -975,9 +975,9 @@ impl ModelerApp {
 
     /// Unhide All: every hidden object, face and edge of the model, in one undo step.
     fn unhide_all(&mut self) {
-        let Some((command, count)) = kadakas_core::visibility::unhide_all_command(
-            self.session.editor.doc(),
-        ) else {
+        let Some((command, count)) =
+            kadakas_core::visibility::unhide_all_command(self.session.editor.doc())
+        else {
             self.status = tr!("modeler-unhide-all-nothing");
             return;
         };
@@ -1044,7 +1044,10 @@ impl ModelerApp {
         if plan.ids.is_empty() {
             self.status = tr!("modeler-resize-nothing");
         } else if !plan.locked_layers.is_empty() {
-            self.status = tr!("modeler-resize-locked", layers = plan.locked_layers.join(", "));
+            self.status = tr!(
+                "modeler-resize-locked",
+                layers = plan.locked_layers.join(", ")
+            );
         } else if plan.grey_objects > 0 {
             self.status = tr!("modeler-resize-grey", count = plan.grey_objects);
         } else {
@@ -1523,6 +1526,7 @@ impl ModelerApp {
                     let view = tags_panel::View {
                         doc: self.session.editor.doc(),
                         objects: &targets,
+                        rev: self.session.editor.revision(),
                         parts: !self.edit.sub.is_empty(),
                     };
                     let tags_state = &mut self.tags;

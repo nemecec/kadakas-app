@@ -310,3 +310,141 @@ fn a_line_without_ends_is_clipped_to_the_view_for_drawing() {
     let inside = clip_segment(DVec2::ONE, DVec2::new(2.0, 2.0), lo, hi).unwrap();
     assert_eq!(inside, [DVec2::ONE, DVec2::new(2.0, 2.0)]);
 }
+
+#[test]
+fn a_line_without_ends_reaches_ten_times_the_size_of_a_large_site() {
+    // A site of 5 km (the largest coordinate 5,000,000 mm): the line reaches 50 km, not 2 km.
+    let far = DVec3::new(3.0e6, 2000.0, 0.0);
+    let c = Camera::look_at(
+        far + DVec3::new(0.0, -8000.0, 6000.0),
+        far,
+        DVec3::Z,
+        Projection::Perspective { fov_y: 0.8 },
+        DVec2::new(1000.0, 800.0),
+    )
+    .unwrap();
+    let line = Guide::line(DVec3::new(0.0, 2000.0, 0.0), DVec3::X);
+    let mut small = SceneBuilder::new();
+    small.add_guide(&line, 0.0, 0);
+    let small = small.finish();
+    let mut large = SceneBuilder::new();
+    large.set_reach(reach_for(5.0e6));
+    large.add_guide(&line, 0.0, 0);
+    let large = large.finish();
+    let mut i = Inferencer::default();
+    let at = px(&c, far);
+    assert_eq!(i.infer(&small, &c, at, None).kind, Kind::Free, "past 2 km");
+    let r = i.infer(&large, &c, at, None);
+    assert_eq!(r.kind, Kind::OnGuide);
+    assert!((r.point.x - 3.0e6).abs() < 50.0, "{:?}", r.point);
+}
+
+/// 10,000 guides (half of them lines without ends) over a model of 50,000 edges, in a window of
+/// 1600 x 900: the cost of a pointer move, of the scene for a new revision and of the clip for
+/// drawing. Run with
+/// `cargo test -p kadakas-ui-core --release --lib -- --ignored --nocapture perf_10000_guides`.
+#[test]
+#[ignore]
+fn perf_10000_guides_infer_build_and_draw_within_a_frame() {
+    use super::tests::{grid_model, percentile};
+    let m = grid_model(160);
+    let mut guides = Vec::new();
+    for k in 0..10_000u32 {
+        let (x, y) = (f64::from(k * 7919 % 15900), f64::from(k * 104729 % 15900));
+        let g = match k % 4 {
+            0 | 1 => Guide::line(
+                DVec3::new(x, y, 0.0),
+                DVec3::new(f64::from(k % 5) - 2.0, f64::from(k % 7) - 3.0, 0.0) + DVec3::X,
+            ),
+            2 => Guide::segment(DVec3::new(x, y, 0.0), DVec3::X, 400.0),
+            _ => Guide::point(DVec3::new(x, y, 0.0)),
+        };
+        guides.push(g);
+    }
+    let t = std::time::Instant::now();
+    let model = scene(|b| {
+        b.add_surface_model(&m, 0);
+    });
+    let build_model = t.elapsed();
+    let t = std::time::Instant::now();
+    let mut b = SceneBuilder::new();
+    b.set_reach(reach_for(model.extent()));
+    for (n, g) in guides.iter().enumerate() {
+        b.add_guide(g, 0.0, n as u32);
+    }
+    let gs = b.finish();
+    let build_guides = t.elapsed();
+    eprintln!(
+        "guides: {} lines without ends, {} edges, {} points; build of the guide scene {:.1} ms (the model scene {:.1} ms)",
+        gs.line_count(),
+        gs.edge_count(),
+        gs.point_count(),
+        build_guides.as_secs_f64() * 1000.0,
+        build_model.as_secs_f64() * 1000.0
+    );
+    let mut worst99 = 0.0f64;
+    for (name, eye, target) in [
+        (
+            "overview",
+            DVec3::new(8000.0, -9000.0, 14000.0),
+            DVec3::new(8000.0, 8000.0, 0.0),
+        ),
+        (
+            "close",
+            DVec3::new(8000.0, 4000.0, 1500.0),
+            DVec3::new(8000.0, 8000.0, 0.0),
+        ),
+    ] {
+        let c = Camera::look_at(
+            eye,
+            target,
+            DVec3::Z,
+            Projection::Perspective { fov_y: 0.8 },
+            DVec2::new(1600.0, 900.0),
+        )
+        .unwrap();
+        let mut i = Inferencer::default();
+        let mut times = Vec::new();
+        for k in 0..3000u32 {
+            let p = DVec3::new(
+                f64::from(k * 7919 % 15900),
+                f64::from(k * 104729 % 15900),
+                0.0,
+            );
+            let Some(base) = c.project(p) else { continue };
+            let at = base + DVec2::new(f64::from(k % 9) - 4.0, f64::from(k % 7) - 3.0);
+            let t = std::time::Instant::now();
+            let r = i.infer_scenes(&[&model, &gs], &c, at, None, &|_| false);
+            times.push(t.elapsed().as_secs_f64() * 1000.0);
+            assert!(r.point.is_finite());
+        }
+        let (p50, p99, max) = (
+            percentile(&mut times.clone(), 0.5),
+            percentile(&mut times.clone(), 0.99),
+            percentile(&mut times, 1.0),
+        );
+        worst99 = worst99.max(p99);
+        // Drawing: the clip of every guide to the view.
+        let t = std::time::Instant::now();
+        let mut shown = 0usize;
+        for g in &guides {
+            let at = g.at;
+            let seg = match (g.unit_dir(), g.length) {
+                (Some(d), None) => {
+                    c.view_segment(at - d * GUIDE_DRAW_REACH, at + d * GUIDE_DRAW_REACH)
+                }
+                (Some(d), Some(l)) => c.view_segment(at, at + d * l),
+                (None, _) => c.project(at).map(|p| [p, p]),
+            };
+            shown += usize::from(seg.is_some());
+        }
+        let draw = t.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "guides {name}: infer p50 {p50:.3} ms, p99 {p99:.3} ms, max {max:.3} ms; clip for drawing {draw:.2} ms ({shown} shown)"
+        );
+    }
+    assert!(
+        worst99 < 4.0,
+        "p99 {worst99:.3} ms is over a quarter of a frame"
+    );
+}

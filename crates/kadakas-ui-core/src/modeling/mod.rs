@@ -31,9 +31,9 @@ pub use exec::{
     run_noted as run_actions_noted,
 };
 pub use plane::Plane3;
+pub use resize::{ResizePlan, resize_command, resize_plan};
 pub use scenes::{SceneCache, Scenes, ShowOptions, World, elevation, frame_of, model_of};
 pub use select::{Item, SubSelection};
-pub use resize::{ResizePlan, resize_command, resize_plan};
 pub use tape::{PreviewGuide, RESIZE_RANGE, Resize};
 pub use tools::{
     DEFAULT_ARC_SIDES, DEFAULT_SIDES, Excluded, LiveLabel, Modeling, Out, Pointer, Preview,

@@ -130,18 +130,60 @@ pub struct SceneBuilder {
     points: Vec<PointItem>,
     edges: Vec<EdgeItem>,
     faces: Vec<FaceItem>,
+    lines: Vec<LineItem>,
+    reach: f64,
 }
 
 /// Edges of a surface model that carry this attribute with the value `true` are not offered.
 pub const HIDDEN_ATTR: &str = "hidden";
 
-/// How far a guide line without ends reaches for the inference, on each side of its point (mm).
-/// The line is a long edge of the scene. Beyond this the pointer does not snap to it.
-pub const GUIDE_REACH: f64 = 1.0e6;
+/// How far a guide line without ends reaches for the inference, on each side of its point (mm),
+/// when the scene is small: 2 km. A scene sets a larger reach from its size
+/// ([`SceneBuilder::set_reach`]). Beyond the reach the pointer does not snap to the line.
+pub const GUIDE_REACH: f64 = 2.0e6;
+
+/// How far the window draws a line without ends. The line is cut to the view before it is drawn, so
+/// this only has to be larger than any scene.
+pub const GUIDE_DRAW_REACH: f64 = 1.0e9;
+
+/// The reach of a scene of the given extent (the largest coordinate): ten times the extent, but at
+/// least [`GUIDE_REACH`].
+pub fn reach_for(extent: f64) -> f64 {
+    GUIDE_REACH.max(10.0 * extent.abs())
+}
+
+/// A guide line without ends: kept apart from the index, in a short list.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LineItem {
+    pub origin: DVec3,
+    pub dir: DVec3,
+    pub reach: f64,
+    pub tag: Tag,
+}
+
+impl LineItem {
+    /// The part of the line the inference looks at, as an edge.
+    pub(crate) fn as_edge(&self) -> EdgeItem {
+        EdgeItem {
+            a: self.origin - self.dir * self.reach,
+            b: self.origin + self.dir * self.reach,
+            tag: self.tag,
+        }
+    }
+}
 
 impl SceneBuilder {
     pub fn new() -> SceneBuilder {
         SceneBuilder::default()
+    }
+
+    /// How far the guide lines without ends that are added after this call reach on each side of
+    /// their point. See [`reach_for`].
+    pub fn set_reach(&mut self, reach: f64) -> &mut Self {
+        if reach.is_finite() && reach > 0.0 {
+            self.reach = reach;
+        }
+        self
     }
 
     /// A point to snap to. A point or a center that is not finite is left out.
@@ -173,13 +215,22 @@ impl SceneBuilder {
                 self.add_point(at, PointKind::Guide, tag);
             }
             None => {}
-            Some(d) => {
-                let (a, b) = match g.length {
-                    Some(l) => (at, at + d * l),
-                    None => (at - d * GUIDE_REACH, at + d * GUIDE_REACH),
-                };
-                self.add_edge(a, b, tag);
-            }
+            Some(d) => match g.length {
+                Some(l) => {
+                    self.add_edge(at, at + d * l, tag);
+                }
+                None if at.is_finite() => self.lines.push(LineItem {
+                    origin: at,
+                    dir: d,
+                    reach: if self.reach > 0.0 {
+                        self.reach
+                    } else {
+                        GUIDE_REACH
+                    },
+                    tag,
+                }),
+                None => {}
+            },
         }
         self
     }
@@ -385,6 +436,7 @@ impl SceneBuilder {
             points: self.points,
             edges: self.edges,
             faces: self.faces,
+            lines: self.lines,
             scale,
         }
     }
@@ -454,6 +506,8 @@ pub struct Scene {
     pub(crate) points: Vec<PointItem>,
     pub(crate) edges: Vec<EdgeItem>,
     pub(crate) faces: Vec<FaceItem>,
+    /// Guide lines without ends.
+    pub(crate) lines: Vec<LineItem>,
     pub(crate) bvh_points: Bvh,
     pub(crate) bvh_edges: Bvh,
     pub(crate) bvh_faces: Bvh,
@@ -487,7 +541,20 @@ impl Scene {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.points.is_empty() && self.edges.is_empty() && self.faces.is_empty()
+        self.points.is_empty()
+            && self.edges.is_empty()
+            && self.faces.is_empty()
+            && self.lines.is_empty()
+    }
+
+    /// The number of guide lines without ends.
+    pub fn line_count(&self) -> usize {
+        self.lines.len()
+    }
+
+    /// The largest coordinate of the points, edges and faces: how large the scene is.
+    pub fn extent(&self) -> f64 {
+        self.scale
     }
 
     /// The tolerance for "the same point" in this scene, in world units.
@@ -512,7 +579,8 @@ mod tests {
         b.add_guide(&Guide::line(DVec3::ZERO, DVec3::ZERO), 0.0, 3);
         b.add_guide(&Guide::point(DVec3::NAN), 0.0, 4);
         let s = b.finish();
-        assert_eq!((s.point_count(), s.edge_count()), (1, 2));
+        // The line without ends is in the short list, not in the index.
+        assert_eq!((s.point_count(), s.edge_count(), s.line_count()), (1, 1, 1));
         assert_eq!(
             s.points[0].p,
             DVec3::new(1.0, 2.0, 13.0),
@@ -520,9 +588,15 @@ mod tests {
         );
         assert_eq!(s.points[0].kind, PointKind::Guide);
         assert!(s.points[0].tag == Tag::guide(0) && s.points[0].tag.kind() == TagKind::Guide);
-        let long = s.edges.iter().find(|e| e.tag == Tag::guide(1)).unwrap();
+        let long = s
+            .lines
+            .iter()
+            .find(|l| l.tag == Tag::guide(1))
+            .unwrap()
+            .as_edge();
         assert_eq!(long.a, DVec3::new(0.0, -GUIDE_REACH, 0.0));
         assert_eq!(long.b, DVec3::new(0.0, GUIDE_REACH, 0.0));
+        assert!(!s.is_empty());
         let short = s.edges.iter().find(|e| e.tag == Tag::guide(2)).unwrap();
         assert_eq!(
             (short.a, short.b),
@@ -530,6 +604,24 @@ mod tests {
         );
         assert_eq!(Tag::guide(7).id(), 7);
         assert_eq!(Tag::guide(7).shifted(5), Tag::guide(7), "no model to shift");
+    }
+
+    #[test]
+    fn the_reach_of_a_line_follows_the_size_of_the_scene() {
+        use kadakas_core::guide::Guide;
+        assert_eq!(reach_for(0.0), GUIDE_REACH);
+        assert_eq!(reach_for(1.0e5), GUIDE_REACH, "a small site: 2 km");
+        assert_eq!(reach_for(5.0e6), 5.0e7, "a large site: ten times its size");
+        let mut b = SceneBuilder::new();
+        b.set_reach(5.0e7).set_reach(f64::NAN).set_reach(-1.0);
+        b.add_guide(&Guide::line(DVec3::ZERO, DVec3::X), 0.0, 0);
+        let s = b.finish();
+        assert_eq!(s.lines[0].reach, 5.0e7, "a bad reach is ignored");
+        assert_eq!(
+            s.extent(),
+            0.0,
+            "a line without ends does not make the scene large"
+        );
     }
 
     #[test]

@@ -10,7 +10,7 @@
 use serde::Serialize;
 
 use crate::model::{Document, Shape};
-use crate::surface::{Edit, EdgeId, FaceId, SurfaceError, SurfaceModel};
+use crate::surface::{EdgeId, Edit, FaceId, SurfaceError, SurfaceModel};
 use crate::visibility::is_hidden;
 
 /// The numbers of items that an export leaves out.

@@ -514,7 +514,11 @@ fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Comman
             faces: faces.clone(),
             edges: edges.clone(),
         })],
-        Action::Xform { .. } | Action::Paint { .. } | Action::PaintObjects { .. } | Action::AddGuides { .. } | Action::EraseGuides { .. } => Vec::new(),
+        Action::Xform { .. }
+        | Action::Paint { .. }
+        | Action::PaintObjects { .. }
+        | Action::AddGuides { .. }
+        | Action::EraseGuides { .. } => Vec::new(),
         Action::Delete { faces, edges, .. } => {
             let mut v = Vec::new();
             if !faces.is_empty() {

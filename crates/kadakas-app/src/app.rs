@@ -6708,20 +6708,38 @@ mod tests {
         );
         let guide_id = ObjectId(kadakas_core::uid::Uid::parse(&guide).unwrap());
         let g = app.session.editor.doc().object(guide_id).unwrap();
-        assert!(!app.session.editor.doc().is_pickable(g), "a guide is not pickable");
+        assert!(
+            !app.session.editor.doc().is_pickable(g),
+            "a guide is not pickable"
+        );
         app.apply_menu(&ctx, MenuAction::SelectAll);
         assert_eq!(app.session.selection.len(), 1);
-        assert!(!app.session.selection.contains(&guide_id), "Select All leaves it");
+        assert!(
+            !app.session.selection.contains(&guide_id),
+            "Select All leaves it"
+        );
         // The agent API lists guides only when asked for the kind.
-        let all = app.session.handle("objects.list", serde_json::json!({})).unwrap();
+        let all = app
+            .session
+            .handle("objects.list", serde_json::json!({}))
+            .unwrap();
         assert_eq!(all.as_array().unwrap().len(), 1);
         let only = app
             .session
             .handle("objects.list", serde_json::json!({"kind": "guide"}))
             .unwrap();
         assert_eq!(only.as_array().unwrap().len(), 1);
-        let summary = app.session.handle("document.summary", serde_json::json!({})).unwrap();
-        assert_eq!((summary["object_count"].as_u64(), summary["guide_count"].as_u64()), (Some(1), Some(1)));
+        let summary = app
+            .session
+            .handle("document.summary", serde_json::json!({}))
+            .unwrap();
+        assert_eq!(
+            (
+                summary["object_count"].as_u64(),
+                summary["guide_count"].as_u64()
+            ),
+            (Some(1), Some(1))
+        );
         assert!(summary["objects_by_kind"].get("guide").is_none());
         let _ = rect;
     }
@@ -6771,7 +6789,10 @@ mod tests {
         app.apply_menu(&ctx, MenuAction::DeleteGuides);
         assert_eq!(app.status, tr!("app-no-guides"));
         for i in 0..3 {
-            add_json(&mut app, serde_json::json!({"kind": "guide", "at": [i, 0, 0]}));
+            add_json(
+                &mut app,
+                serde_json::json!({"kind": "guide", "at": [i, 0, 0]}),
+            );
         }
         let depth = app.session.editor.undo_depth();
         app.apply_menu(&ctx, MenuAction::DeleteGuides);
@@ -6779,7 +6800,10 @@ mod tests {
         assert_eq!(app.session.editor.doc().guide_count(), 0);
         assert_eq!(app.session.editor.undo_depth(), depth + 1);
         app.session.editor.undo();
-        add_json(&mut app, serde_json::json!({"kind": "guide", "at": [9, 0, 0]}));
+        add_json(
+            &mut app,
+            serde_json::json!({"kind": "guide", "at": [9, 0, 0]}),
+        );
         let depth = app.session.editor.undo_depth();
         app.apply_menu(&ctx, MenuAction::DeleteGuides);
         assert_eq!(app.guides_confirm, Some(4), "more than three: it asks");
@@ -6802,8 +6826,9 @@ mod tests {
         );
         let oid = ObjectId(kadakas_core::uid::Uid::parse(&id).unwrap());
         assert_eq!(app.hidden_objects(), 0);
-        let cmd = kadakas_core::visibility::set_hidden_command(app.session.editor.doc(), &[oid], true)
-            .unwrap();
+        let cmd =
+            kadakas_core::visibility::set_hidden_command(app.session.editor.doc(), &[oid], true)
+                .unwrap();
         app.session.editor.execute(&cmd).unwrap();
         assert_eq!(app.hidden_objects(), 1);
         let depth = app.session.editor.undo_depth();
@@ -6813,5 +6838,4 @@ mod tests {
         app.apply_menu(&ctx, MenuAction::UnhideAll);
         assert_eq!(app.status, tr!("app-nothing-hidden"));
     }
-
 }

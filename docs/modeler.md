@@ -210,6 +210,9 @@ A guide is an object of the kind `guide` (`kadakas_core::guide`). It makes no ge
 - A window takes guide points and guide lines with ends. A crossing rectangle takes lines without ends too.
 - Move, Rotate and Scale treat a selected guide like any object. The inference snaps to guides (`docs/modeler-inference.md`, "Guides").
 - The Vectorworks-like app keeps guides and does not draw them in the plan. Exports leave them out and say how many (see "Exports" below).
+- In the plan app a guide cannot be picked, and Select All leaves it out. Edit > Delete Guides is there too and asks above three. A 2D move or scale of a selection carries a guide along.
+- The agent API leaves guides out of `objects.list` unless the call asks for `kind: "guide"`. `document.summary` counts them in `guide_count` and not in `object_count`.
+- The counts of the Tags panel leave guides out. The question before a tag is deleted counts them apart.
 
 ### Tape Measure (T)
 
@@ -217,17 +220,25 @@ A guide is an object of the kind `guide` (`kadakas_core::guide`). It makes no ge
 |---|---|
 | start, move, end (Ctrl first: measure only) | The distance shows live in the box and in the status line. It stays after the second click. |
 | an edge or a guide line, then a point away from it | A parallel guide line through the second click. The live value is the offset. |
-| a point, a face or the air, then a direction | A guide line with no ends, from the first point towards the second click. |
+| a point, a face or the air, then a direction | A finite guide line from the first point to the second click, and a guide point at the second click. |
 | two clicks on the same point | A guide point. |
 
 - The inference works as in the drawing tools. The arrow keys and Shift lock a direction.
+- The guide of a parallel line passes through the second click. Its offset is the distance from the line to that point, measured perpendicular to the line in 3D.
+- The inference decides the second click. On a face it is on the face. On an edge it is on the edge. In the air it is on the ground plane.
+- One pair of clicks is one undo step, also when it makes a line and a point.
 - **Typed distance.** With a guide from an edge, the number is the offset. It goes to the side of the pointer. A negative number takes the other side.
-- With a guide from a point, the number is the length of a finite guide line. It runs along the pointer direction. A negative number goes the other way.
+- With a guide from a point, the number is the length of a finite guide line. It has a guide point at its end.
+- The line runs along the pointer direction. A negative number goes the other way.
 - **Ctrl** (Option on macOS) pressed alone toggles between making guides and measuring only. The tool keeps the choice until it is chosen again.
 - Esc cancels the measure in progress. A second Esc goes back to Select. Hovering an edge shows its length.
 - Each guide is one undo step.
-- **Resize the model.** Measure with Ctrl (no guides), then type a new length. A question asks "Resize the model?".
-- On Yes, all objects of the open level are scaled about the first point. Guides scale too. The factor is the typed length over the measured length.
+- **Resize the model.** Measure, then type a new length. Ctrl is not needed: a pair of clicks that made guides is a measure too. A question asks "Resize the model?".
+- A measure lasts until the document changes in another way (an edit, an undo, a new tool). Esc ends it too.
+- Before the question, the window finds what will happen. It lists how many objects scale and how many plan objects keep their height.
+- If an object is on a locked layer or on a grey tag, nothing is asked. The status line names the locked layers or counts the grey objects, because the command would refuse the whole step.
+- On Yes, all objects of the open level are scaled about the **first measured point**. Guides scale too. The factor is the typed length over the measured length.
+- The first point stays where it is. A scale about the origin would move the whole model away from what the person looks at. Which point other modelers use was not checked against a manual. Move the model afterwards if needed.
 - It is one undo step through `transform_objects3d`. Heights of plan objects come from their layers and stay. The status line says so.
 - A factor above 1000 or below 1/1000 is refused. On No nothing changes.
 
@@ -239,10 +250,16 @@ Tags are classes. The panel is in the tray under Entity Info.
 - The swatch shows the pen color of the class, else its fill, else an empty frame. New geometry goes to the active tag.
 - **Untagged** is the default class. It cannot be renamed or deleted.
 - **New** makes the tag `Tag 1`, `Tag 2` and so on. **Rename** (or a double click on the name) edits the name inline. A name must not be empty or the same as another tag, ignoring case.
-- **Delete** asks first when objects use the tag. They move to Untagged in the same undo step. Nothing moves without the answer. A tag without objects goes at once. The core command is `delete_class {id, move_to}`.
+- **Delete** asks first when anything uses the tag. Everything moves to Untagged in the same undo step. Nothing moves without the answer. A tag that nothing uses goes at once.
+- The core command is `delete_class {id, move_to}`. It moves every reference (`kadakas_core::classes`).
+- The references are objects, parts and components of definitions, insert classes of symbols, viewport overrides and annotations, saved views, and material slots.
+- A material slot of the tag is not moved to Untagged, since that would paint every Untagged object. Each moved object gets a slot of its own, so it looks the same.
+- The question says how many of each there are. One undo step brings all of it back.
 - **Show all** shows every hidden tag and layer in one undo step.
 - Below the tags are the layers with an eye and a mark for the active layer. They use the commands that exist (`modify_layer`, `set_active`).
-- **Entity Info** has a Tag list for the selection. The tag belongs to the object. For selected faces and edges it changes the tag of their model. A group gives the tag to its members.
+- **Entity Info** has a Tag list for the selected objects. A group gives the tag to its members.
+- The tag belongs to the object. With faces or edges selected the list is off and a hint says so. Faces keep the tag of their model.
+- The panel makes its rows once for each revision of the document, not for each frame. Its commands run as one batch: one undo step, and a failure applies nothing.
 - A hidden tag hides its objects as a hidden layer does. They leave the 3D view, picking, the inference and exports.
 - The scene builders already leave out objects whose class is not visible. Nothing repeats that rule.
 - Not done: tag folders, the Tag tool, Color by Tag and Purge.
@@ -252,7 +269,8 @@ Tags are classes. The panel is in the tray under Entity Info.
 - **Edit > Hide** hides the selected objects or the selected faces and edges of surface models. A group hides its members.
 - Hide is also in the context menu of the 3D view. It is one undo step.
 - **Edit > Unhide** brings back the selected hidden items. They are selectable only while View > Hidden Geometry (faces and edges) or View > Hidden Objects (objects) is on. **Edit > Unhide All** brings back everything in the document.
-- An object is hidden by the key `hidden_object` in its `data` (`kadakas_core::visibility`).
+- An object is hidden by the key `kadakas.hidden` in its `data` (`kadakas_core::visibility`). The command `set_hidden {ids, hidden}` writes it, a group passes it to its members.
+- Keys that start with `kadakas.` are reserved. The agent API refuses `set_data` for them with a clear error. Reading them is free.
 - A face or an edge is hidden by the attribute `hidden: true`. `edit_surface` sets it with the action `set_hidden {faces, edges, hidden}`.
 - Both are plain data. They are saved and undone. They sync in collaboration like other data.
 - The action is logged as an intent that finds faces and edges by position.
@@ -262,6 +280,8 @@ Tags are classes. The panel is in the tray under Entity Info.
 - With **View > Hidden Geometry** or **Hidden Objects** on, hidden items are drawn ghosted. The inference and the picks offer them.
 - A ghost is a dotted gray line, and a few lines across a hidden face. The 3D renderer never draws a hidden item itself.
 - A hidden object that is not a surface model, such as a plant, is not ghosted. Hidden Objects does not show it.
+- The plan app has no Hide. It shows "N hidden objects" in the status line. A click unhides them, and Edit > Unhide All does the same. Sheets and print follow hidden objects as they always followed hidden layers and tags.
+- Ghosts cost time only when a revision changes. At most 20,000 lines are drawn in a frame, solid above 2,000.
 
 ### Exports
 
@@ -269,7 +289,11 @@ An export never drops construction geometry silently. `export.file` runs on a co
 
 The answer has `left_out` with the numbers: `guides`, `hidden_objects`, `hidden_faces` and `hidden_edges`. It has `notes` too, and the same lines are in `warnings`. A line reads "2 guides left out: construction geometry". The DXF and IFC reports also count a guide as skipped, with the reason.
 
+Only what really left is counted. Hidden faces that could not be taken out of the copy stay in the export. They are counted apart, with a warning. A hidden edge that no face uses goes. One that borders a shown face stays in the geometry and is not drawn as a line. The note says so.
+
 Objects on a hidden layer or tag are not counted. The exports leave them out by the rules of layers and classes, as before. The code is `kadakas_core::leftout`.
+
+The copy costs time and memory in proportion to the size of the document. It is made only when something is left out. A document with nothing hidden and no guides is exported as it is.
 
 ### Not done
 

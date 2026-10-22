@@ -60,7 +60,11 @@ pub fn swatch(attrs: &Attributes) -> Option<[u8; 3]> {
 pub fn rows(doc: &Document) -> Rows {
     let mut counts = std::collections::BTreeMap::<ClassId, usize>::new();
     // Guides are construction geometry: the counts of the panel leave them out.
-    for o in doc.objects.values().filter(|o| !kadakas_core::guide::is_guide(o)) {
+    for o in doc
+        .objects
+        .values()
+        .filter(|o| !kadakas_core::guide::is_guide(o))
+    {
         *counts.entry(o.class).or_default() += 1;
     }
     let mut tags: Vec<TagRow> = doc

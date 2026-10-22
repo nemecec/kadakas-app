@@ -213,6 +213,12 @@ impl SceneCache {
             let mut guides = None;
             if show.guides {
                 let mut b = SceneBuilder::new();
+                // A line without ends reaches ten times the size of the scene, at least 2 km.
+                let mut extent = scenes.iter().map(|s| s.extent()).fold(0.0, f64::max);
+                for (_, g) in doc.guides() {
+                    extent = extent.max(g.at.abs().max_element());
+                }
+                b.set_reach(crate::infer3d::reach_for(extent));
                 for (o, g) in doc.guides().filter(|(o, _)| visible(o)) {
                     b.add_guide(g, elevation(doc, o.id), guide_ids.len() as u32);
                     guide_ids.push(o.id);

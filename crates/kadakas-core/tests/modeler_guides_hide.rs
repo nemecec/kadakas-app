@@ -744,7 +744,12 @@ fn a_hidden_edge_that_no_face_uses_is_taken_out_and_one_on_a_face_is_said_to_sta
     };
     assert!(copy.edge(loose).is_none(), "the loose hidden edge is gone");
     assert!(copy.edge(border).is_some() && copy.edge_hidden(border));
-    assert!(p.left.notes().iter().any(|n| n.contains("stay in the geometry")));
+    assert!(
+        p.left
+            .notes()
+            .iter()
+            .any(|n| n.contains("stay in the geometry"))
+    );
 }
 
 #[test]
@@ -765,9 +770,17 @@ fn a_guide_this_program_cannot_read_stays_unknown_and_is_written_back_unchanged(
     let o = doc.object(id).unwrap();
     assert!(matches!(o.shape, Shape::Unknown { .. }), "{:?}", o.shape);
     assert_eq!(o.shape.kind(), "unknown");
-    assert_eq!(serde_json::to_value(&doc).unwrap(), v, "written back unchanged");
+    assert_eq!(
+        serde_json::to_value(&doc).unwrap(),
+        v,
+        "written back unchanged"
+    );
     let mut ed = Editor::new(doc);
-    assert_eq!(ed.doc().guide_count(), 0, "it is not a guide for this program");
+    assert_eq!(
+        ed.doc().guide_count(),
+        0,
+        "it is not a guide for this program"
+    );
     assert!(
         ed.execute(&Command::SetHidden {
             ids: vec![id],
@@ -776,7 +789,8 @@ fn a_guide_this_program_cannot_read_stays_unknown_and_is_written_back_unchanged(
         .is_err(),
         "it cannot be edited"
     );
-    ed.execute(&Command::DeleteObjects { ids: vec![id] }).unwrap();
+    ed.execute(&Command::DeleteObjects { ids: vec![id] })
+        .unwrap();
     // A guide that this build can read is a guide.
     let mut ok = v.clone();
     ok["objects"][0]["shape"] = serde_json::json!({"kind": "guide", "at": [1, 2, 3]});
@@ -787,7 +801,13 @@ fn a_guide_this_program_cannot_read_stays_unknown_and_is_written_back_unchanged(
 #[test]
 fn the_hide_mark_is_a_reserved_data_key_that_set_data_cannot_write() {
     let mut ed = Editor::with_sequential_ids();
-    let o = add(&mut ed, Shape::Line { a: DVec2::ZERO, b: DVec2::X });
+    let o = add(
+        &mut ed,
+        Shape::Line {
+            a: DVec2::ZERO,
+            b: DVec2::X,
+        },
+    );
     for set in [true, false] {
         let cmd = if set {
             Command::SetData {
@@ -807,7 +827,8 @@ fn the_hide_mark_is_a_reserved_data_key_that_set_data_cannot_write() {
     }
     assert!(!is_hidden(ed.doc().object(o).unwrap()));
     // The owner of the key writes it. Reading the data is free.
-    ed.execute(&set_hidden_command(ed.doc(), &[o], true).unwrap()).unwrap();
+    ed.execute(&set_hidden_command(ed.doc(), &[o], true).unwrap())
+        .unwrap();
     assert_eq!(
         ed.doc().object(o).unwrap().data.get("kadakas.hidden"),
         Some(&serde_json::json!(true))
@@ -820,7 +841,13 @@ fn the_hide_mark_is_a_reserved_data_key_that_set_data_cannot_write() {
     })
     .unwrap();
     // The command refuses an empty list and a missing object.
-    assert!(ed.execute(&Command::SetHidden { ids: vec![], hidden: true }).is_err());
+    assert!(
+        ed.execute(&Command::SetHidden {
+            ids: vec![],
+            hidden: true
+        })
+        .is_err()
+    );
     assert!(
         ed.execute(&Command::SetHidden {
             ids: vec![ObjectId(kadakas_core::uid::Uid::from_num(9999))],

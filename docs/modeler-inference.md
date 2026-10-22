@@ -70,8 +70,10 @@ Ties are broken the same way every time: the kind priority, the pixel distance, 
 A guide (`kadakas_core::guide`) is construction geometry. The scene takes it with `SceneBuilder::add_guide`. The tag of a guide has the kind `TagKind::Guide` and the number `index`, made by `Tag::guide(index)`. The modeler keeps the guides of the document in one scene of their own, after the scenes of the models.
 
 - A guide point is a point to snap to. It is the kind `GuidePoint` and has the priority of an endpoint. At the same distance an endpoint wins.
-- A guide line is a long edge of the scene. It gives only `OnGuide`. Its ends and its middle are no points. An edge wins over a guide line at the same distance.
-- A line without ends reaches `GUIDE_REACH` (1,000,000 mm) on each side of its point.
+- A finite guide line is an edge of the scene. It gives only `OnGuide`. Its ends and its middle are no points. An edge wins over a guide line at the same distance.
+- A line without ends is not in the index. It is in a short list. Every query tests the lines one by one, so no box of the index grows to kilometers. The cost is in `docs/modeler-limits.md`.
+- A line without ends reaches ten times the size of the scene on each side of its point.
+- The least reach is `GUIDE_REACH` (2,000,000 mm, 2 km). `SceneBuilder::set_reach` sets it (`reach_for(extent)`). The modeler uses the largest coordinate of the models and the guides.
 - A guide that crosses an edge or another guide gives an `Intersection`. An axis line from the reference point that crosses a guide gives an `Intersection` too.
 - `Constraint::Line` of an `OnGuide` result holds the line of the guide, so Shift keeps the point on the guide.
 - A tool can skip all guides with a `skip` closure that tests `TagKind::Guide`. The Select tool does this the other way round to pick a guide (`modeling::select::pick_guide`).

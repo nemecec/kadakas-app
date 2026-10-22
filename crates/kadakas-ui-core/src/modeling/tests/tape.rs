@@ -66,12 +66,20 @@ fn the_tape_measure_makes_a_guide_line_through_a_point_in_one_undo_step() {
     let out = r.click(DVec3::new(100.0, 1200.0, 0.0));
     assert!(matches!(out.actions[..], [Action::AddGuides { .. }]));
     assert!(!r.tools.in_progress());
-    assert_eq!(r.ed.undo_depth(), depth + 1, "one undo step for the line and its end point");
+    assert_eq!(
+        r.ed.undo_depth(),
+        depth + 1,
+        "one undo step for the line and its end point"
+    );
     let g = guides(&r);
     assert_eq!(g.len(), 2);
     assert_eq!(g[0].at, DVec3::new(100.0, 200.0, 0.0));
     assert!(g[0].unit_dir().unwrap().distance(DVec3::Y) < 1e-9);
-    assert_eq!(g[0].length, Some(1000.0), "a finite line from the start to the end");
+    assert_eq!(
+        g[0].length,
+        Some(1000.0),
+        "a finite line from the start to the end"
+    );
     assert_eq!(g[1], Guide::point(DVec3::new(100.0, 1200.0, 0.0)));
     assert!(r.ed.undo());
     assert!(guides(&r).is_empty());

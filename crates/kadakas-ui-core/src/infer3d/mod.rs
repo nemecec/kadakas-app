@@ -43,7 +43,9 @@ pub use instances::{
     DefinitionCache, DefinitionScene, InstanceScenes, Placed, scene_of_instances,
     scene_of_instances_cached,
 };
-pub use scene::{GUIDE_REACH, PointKind, Scene, SceneBuilder, Tag, TagKind};
+pub use scene::{
+    GUIDE_DRAW_REACH, GUIDE_REACH, PointKind, Scene, SceneBuilder, Tag, TagKind, reach_for,
+};
 
 use glam::{DVec2, DVec3};
 use kadakas_l10n::tr;

@@ -755,7 +755,10 @@ fn a_selector_for_faces_only_explains_that_tags_belong_to_objects() {
     app.edit.sub.set([Item::Face(id, top)]);
     let _ = shown(&ctx, &mut app, &mut t);
     let on_screen = shown(&ctx, &mut app, &mut t);
-    assert!(on_screen.contains(&tr!("modeler-tags-parts-hint")), "{on_screen}");
+    assert!(
+        on_screen.contains(&tr!("modeler-tags-parts-hint")),
+        "{on_screen}"
+    );
     // Nothing offers a change, and the tag of the model is the same.
     assert!(app.tag_targets_for_test().is_empty());
     assert_eq!(
@@ -767,8 +770,14 @@ fn a_selector_for_faces_only_explains_that_tags_belong_to_objects() {
     app.session.selection = vec![id];
     let _ = shown(&ctx, &mut app, &mut t);
     let on_screen = shown(&ctx, &mut app, &mut t);
-    assert!(!on_screen.contains(&tr!("modeler-tags-parts-hint")), "{on_screen}");
-    assert!(on_screen.contains(&tr!("modeler-tags-entity")), "{on_screen}");
+    assert!(
+        !on_screen.contains(&tr!("modeler-tags-parts-hint")),
+        "{on_screen}"
+    );
+    assert!(
+        on_screen.contains(&tr!("modeler-tags-entity")),
+        "{on_screen}"
+    );
 }
 
 #[test]
@@ -801,7 +810,10 @@ fn the_tag_panel_commands_are_one_batch_and_a_failure_applies_nothing() {
     // Two good commands are one undo step.
     let other = tags::new_tag(app.session.editor.doc(), "Walls").unwrap();
     app.apply_tags(tags_panel::Outcome {
-        commands: vec![tags::toggle_tag(app.session.editor.doc(), tag).unwrap(), other],
+        commands: vec![
+            tags::toggle_tag(app.session.editor.doc(), tag).unwrap(),
+            other,
+        ],
         ..tags_panel::Outcome::default()
     });
     assert_eq!(app.session.editor.undo_depth(), depth + 1);
@@ -821,15 +833,26 @@ fn the_default_flow_measure_then_type_asks_to_resize_and_lists_what_happens() {
     let before = super::transform::bounds(&app, id);
     type_keys(&ctx, &mut app, "2000", &mut t);
     enter(&ctx, &mut app, &mut t);
-    assert!(matches!(app.confirm, Some(Confirm::Resize(..))), "{:?}", app.confirm);
+    assert!(
+        matches!(app.confirm, Some(Confirm::Resize(..))),
+        "{:?}",
+        app.confirm
+    );
     let _ = shown(&ctx, &mut app, &mut t);
     let text = shown(&ctx, &mut app, &mut t);
     assert!(text.contains(&tr!("modeler-resize-title")), "{text}");
     app.answer_confirm(true);
     let (lo, hi) = super::transform::bounds(&app, id);
-    assert!(((hi - lo).x - 2000.0).abs() < 1.0, "{lo:?} {hi:?} from {before:?}");
+    assert!(
+        ((hi - lo).x - 2000.0).abs() < 1.0,
+        "{lo:?} {hi:?} from {before:?}"
+    );
     // The guides scaled with the model.
-    assert!(guides(&app).iter().any(|g| g.length.is_some_and(|l| (l - 2000.0).abs() < 1.0)));
+    assert!(
+        guides(&app)
+            .iter()
+            .any(|g| g.length.is_some_and(|l| (l - 2000.0).abs() < 1.0))
+    );
 }
 
 #[test]
@@ -861,7 +884,11 @@ fn a_locked_layer_refuses_a_resize_before_any_question() {
     enter(&ctx, &mut app, &mut t);
     let _ = shown(&ctx, &mut app, &mut t);
     assert!(app.confirm.is_none(), "no question: it would fail");
-    assert!(app.status.contains("Layer 1"), "the status names the layer: {}", app.status);
+    assert!(
+        app.status.contains("Layer 1"),
+        "the status names the layer: {}",
+        app.status
+    );
 }
 
 #[test]
@@ -880,4 +907,31 @@ fn another_edit_after_a_measure_forgets_it() {
     type_keys(&ctx, &mut app, "2000", &mut t);
     enter(&ctx, &mut app, &mut t);
     assert!(app.confirm.is_none(), "the measure was forgotten");
+}
+
+#[test]
+fn the_rows_of_the_tags_panel_are_made_once_per_revision_not_every_frame() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    let mut t = 0.0;
+    let _ = shown(&ctx, &mut app, &mut t);
+    let built = app.tags.rows_built;
+    assert!(built >= 1);
+    for _ in 0..30 {
+        let _ = shown(&ctx, &mut app, &mut t);
+    }
+    assert_eq!(app.tags.rows_built, built, "30 frames, the same revision");
+    app.apply_tags(tags_panel::Outcome {
+        commands: vec![tags::new_tag(app.session.editor.doc(), "Paths").unwrap()],
+        ..tags_panel::Outcome::default()
+    });
+    let _ = shown(&ctx, &mut app, &mut t);
+    let _ = shown(&ctx, &mut app, &mut t);
+    assert_eq!(
+        app.tags.rows_built,
+        built + 1,
+        "one more for the new revision"
+    );
+    let on_screen = shown(&ctx, &mut app, &mut t);
+    assert!(on_screen.contains("Paths"), "{on_screen}");
 }

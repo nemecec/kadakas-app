@@ -190,7 +190,7 @@ pub fn rect_guides(
             },
             (Some(d), None) if crossing => {
                 // A line without ends: the part that the camera sees, as a long segment.
-                let reach = crate::infer3d::GUIDE_REACH;
+                let reach = crate::infer3d::GUIDE_DRAW_REACH;
                 match cam.screen_seg(at - d * reach, at + d * reach) {
                     Some(seg) => segment_hits_rect(seg.p[0], seg.p[1], lo, hi),
                     None => false,

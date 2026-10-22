@@ -31,6 +31,11 @@ pub struct TagsState {
     pub deleting: Option<(ClassId, String, kadakas_core::classes::ClassUses)>,
     /// The tag that was made last: its name is chosen for editing at the next frame.
     focus_rename: bool,
+    /// The rows of the panel for a revision. They walk all objects, so they are made once per
+    /// revision and not once per frame.
+    rows: Option<(u64, tags::Rows)>,
+    /// How many times the rows were made (a test counts them).
+    pub rows_built: u64,
 }
 
 /// What the panel wants done, after the frame.
@@ -49,6 +54,8 @@ pub struct View<'a> {
     pub doc: &'a Document,
     /// The objects whose tag the selector shows and changes: the selected objects.
     pub objects: &'a [ObjectId],
+    /// The revision of the document: the rows are made again only when it changes.
+    pub rev: u64,
     /// Faces or edges are selected. A tag belongs to an object, so the selector only explains this.
     pub parts: bool,
 }
@@ -135,15 +142,26 @@ fn swatch(ui: &mut egui::Ui, color: Option<[u8; 3]>) {
 
 /// Draws the part of the tag code for the slot. Returns what to do after the frame.
 pub fn show(ui: &mut egui::Ui, state: &mut TagsState, slot: Slot, view: &View) -> Outcome {
-    match slot {
-        Slot::EntityInfo => selector(ui, view),
-        Slot::Panel => panel(ui, state, view),
+    if state.rows.as_ref().is_none_or(|(rev, _)| *rev != view.rev) {
+        state.rows = Some((view.rev, tags::rows(view.doc)));
+        state.rows_built += 1;
     }
+    let rows = state
+        .rows
+        .take()
+        .map(|r| r.1)
+        .unwrap_or_else(|| tags::rows(view.doc));
+    let out = match slot {
+        Slot::EntityInfo => selector(ui, view, &rows),
+        Slot::Panel => panel(ui, state, view, &rows),
+    };
+    state.rows = Some((view.rev, rows));
+    out
 }
 
 /// The tag of the selection with a list to change it: the same tag for the object and for its
 /// faces and edges, because the tag belongs to the object.
-fn selector(ui: &mut egui::Ui, view: &View) -> Outcome {
+fn selector(ui: &mut egui::Ui, view: &View, rows: &tags::Rows) -> Outcome {
     let mut out = Outcome::default();
     if view.parts {
         ui.label(egui::RichText::new(tr!("modeler-tags-parts-hint")).weak());
@@ -153,7 +171,6 @@ fn selector(ui: &mut egui::Ui, view: &View) -> Outcome {
     if current == SelectionTag::None {
         return out;
     }
-    let rows = tags::rows(view.doc);
     let shown = match current {
         SelectionTag::One(id) => rows
             .tags
@@ -184,10 +201,9 @@ fn selector(ui: &mut egui::Ui, view: &View) -> Outcome {
     out
 }
 
-fn panel(ui: &mut egui::Ui, state: &mut TagsState, view: &View) -> Outcome {
+fn panel(ui: &mut egui::Ui, state: &mut TagsState, view: &View, rows: &tags::Rows) -> Outcome {
     let mut out = Outcome::default();
     let doc = view.doc;
-    let rows = tags::rows(doc);
     // A chosen row that is gone (deleted, or undone away) is forgotten.
     if state
         .chosen

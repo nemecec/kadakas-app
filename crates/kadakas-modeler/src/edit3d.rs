@@ -16,7 +16,7 @@ use kadakas_core::command::Command;
 use kadakas_core::mesh::Scene;
 use kadakas_l10n::tr;
 use kadakas_ui_core::infer3d::{
-    self, GUIDE, GUIDE_REACH, Inference, Inferencer, Key, PAUSE_SECONDS, Rgb,
+    self, GUIDE, GUIDE_DRAW_REACH, Inference, Inferencer, Key, PAUSE_SECONDS, Rgb,
 };
 use kadakas_ui_core::keys::Modifiers;
 use kadakas_ui_core::modeler::ModelerTool;
@@ -96,7 +96,13 @@ struct Extras {
 /// Most segments of hidden items that are drawn.
 const MAX_GHOST: usize = 200_000;
 /// Lines across a hidden face.
-const GHOST_HATCH_LINES: usize = 5;
+const GHOST_HATCH_LINES: usize = 3;
+/// With more hidden faces than this in one model a hidden face gets one line.
+const MANY_HIDDEN_FACES: usize = 2_000;
+/// Most ghost lines drawn in one frame. More are drawn with a stride, so the frame stays fast.
+const MAX_GHOST_DRAWN: usize = 20_000;
+/// More ghost lines than this are drawn solid: a dash costs a shape for every piece.
+const MAX_GHOST_DASHED: usize = 2_000;
 
 /// The lines of the selected faces and edges for one revision and selection.
 struct Visuals {
@@ -224,11 +230,17 @@ fn refresh_extras(extras: &mut Extras, world: &World, rev: u64) {
                 extras.ghost_edges.push(s);
             }
         }
+        // A model with very many hidden faces gets one line across each, not several.
+        let lines = if m.hidden_faces().len() > MANY_HIDDEN_FACES {
+            1
+        } else {
+            GHOST_HATCH_LINES
+        };
         for (fid, _) in m.faces() {
             if m.face_hidden(fid) && !whole {
                 extras.ghost_hatch.extend(modeling::select::face_hatch(
                     &world.face_loops(id, fid),
-                    GHOST_HATCH_LINES,
+                    lines,
                 ));
             }
         }
@@ -898,8 +910,8 @@ impl Edit3d {
         let guide_line = |at: DVec3, dir: DVec3, length: Option<f64>, stroke: Stroke| match length {
             Some(l) => dashed(at, at + dir * l, stroke, 6.0, 4.0),
             None => dashed(
-                at - dir * GUIDE_REACH,
-                at + dir * GUIDE_REACH,
+                at - dir * GUIDE_DRAW_REACH,
+                at + dir * GUIDE_DRAW_REACH,
                 stroke,
                 6.0,
                 4.0,
@@ -941,14 +953,21 @@ impl Edit3d {
         }
         // Hidden geometry and hidden objects, when the person asked to see them.
         let ghost = Stroke::new(1.0, Color32::from_gray(140));
+        let all = self.extras.ghost_edges.len() + self.extras.ghost_hatch.len();
+        let stride = all.div_ceil(MAX_GHOST_DRAWN).max(1);
         for s in self
             .extras
             .ghost_edges
             .iter()
             .chain(&self.extras.ghost_hatch)
+            .step_by(stride)
         {
             if let Some([p, q]) = cam.view_segment(s[0], s[1]) {
-                painter.extend(egui::Shape::dashed_line(&[px(p), px(q)], ghost, 2.0, 3.0));
+                if all > MAX_GHOST_DASHED {
+                    painter.line_segment([px(p), px(q)], ghost);
+                } else {
+                    painter.extend(egui::Shape::dashed_line(&[px(p), px(q)], ghost, 2.0, 3.0));
+                }
             }
         }
     }
@@ -1093,5 +1112,116 @@ impl Edit3d {
                 painter.rect_stroke(r, 0.0, Stroke::new(1.0, c), egui::StrokeKind::Inside);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod perf {
+    use super::*;
+    use kadakas_core::command::{Command, Editor};
+    use kadakas_core::model::{Attributes, Shape};
+    use kadakas_core::surface::Edit;
+
+    /// A model of 160 x 160 cells (about 50,000 edges and 25,000 faces) with every face and edge
+    /// hidden, and View > Hidden Geometry on: the cost of the ghosts for one revision. Run with
+    /// `cargo test -p kadakas-modeler --release -- --ignored --nocapture perf_ghosts`.
+    #[test]
+    #[ignore]
+    fn perf_ghosts_of_a_large_hidden_model() {
+        let mut ed = Editor::with_sequential_ids();
+        let id = kadakas_core::model::ObjectId(
+            ed.execute(&Command::AddObject {
+                shape: Shape::SurfaceModel(Box::default()),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let n = 160u32;
+        let p = |i: u32, j: u32| [f64::from(i) * 100.0, f64::from(j) * 100.0, 0.0];
+        let t = Instant::now();
+        for j in 0..n {
+            let mut edges: Vec<[[f64; 3]; 2]> = Vec::new();
+            for i in 0..n {
+                edges.push([p(i, j), p(i + 1, j)]);
+                edges.push([p(i, j), p(i, j + 1)]);
+                edges.push([p(i + 1, j), p(i + 1, j + 1)]);
+                edges.push([p(i, j + 1), p(i + 1, j + 1)]);
+            }
+            ed.execute(&Command::EditSurface {
+                id,
+                edit: Edit::AddEdges { edges },
+            })
+            .unwrap();
+        }
+        let built = t.elapsed();
+        let (faces, edges) = match &ed.doc().object(id).unwrap().shape {
+            Shape::SurfaceModel(m) => (
+                m.faces().map(|(f, _)| f).collect::<Vec<_>>(),
+                m.edges().map(|(e, _)| e).collect::<Vec<_>>(),
+            ),
+            _ => panic!(),
+        };
+        let (nf, ne) = (faces.len(), edges.len());
+        ed.execute(&Command::EditSurface {
+            id,
+            edit: Edit::SetHidden {
+                faces,
+                edges,
+                hidden: true,
+            },
+        })
+        .unwrap();
+        let mut cache = SceneCache::default();
+        cache.show.hidden_geometry = true;
+        let rev = ed.revision();
+        let t = Instant::now();
+        let scenes = cache.get(ed.doc(), rev);
+        let scene_ms = t.elapsed().as_secs_f64() * 1000.0;
+        let world = World {
+            doc: ed.doc(),
+            scenes,
+        };
+        let mut extras = Extras::default();
+        let t = Instant::now();
+        refresh_extras(&mut extras, &world, rev);
+        let ghost_ms = t.elapsed().as_secs_f64() * 1000.0;
+        let t = Instant::now();
+        refresh_extras(&mut extras, &world, rev);
+        let again_ms = t.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "ghosts: {nf} faces, {ne} edges (built in {:.1} s); inference scene with hidden geometry {scene_ms:.1} ms; ghosts {} edges + {} hatch lines in {ghost_ms:.1} ms; the same revision again {again_ms:.3} ms",
+            built.as_secs_f64(),
+            extras.ghost_edges.len(),
+            extras.ghost_hatch.len()
+        );
+        // The cost of drawing them: the shapes of one frame and their tessellation.
+        let mut edit = Edit3d::default();
+        edit.extras = extras;
+        let ctx = egui::Context::default();
+        let mut cam = kadakas_render::Camera::default();
+        cam.set_view(kadakas_render::StandardView::Top);
+        cam.target = glam::Vec3::new(8000.0, 8000.0, 0.0);
+        cam.distance = 20000.0;
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
+        let t = Instant::now();
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let painter = ui.painter_at(rect);
+            edit.paint(&painter, rect, &cam, DVec3::ZERO, Vec2::new(1600.0, 900.0));
+        });
+        let shapes = out.shapes.len();
+        let meshes = ctx.tessellate(out.shapes, 1.0).len();
+        let draw_ms = t.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "ghosts drawn: {shapes} shapes, {meshes} meshes in {draw_ms:.1} ms (shapes and tessellation)"
+        );
+        let extras = &edit.extras;
+        assert!(extras.ghost_edges.len() + extras.ghost_hatch.len() <= MAX_GHOST + 200_000);
+        assert!(
+            again_ms < 1.0,
+            "a frame with the same revision must not walk the model"
+        );
     }
 }
