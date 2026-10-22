@@ -228,6 +228,18 @@ impl Mapper<'_> {
                 let dy = (self.point(at + DVec2::new(0.0, step))? - o.truncate()) / step;
                 *transform = kadakas_core::component::remap_plan(transform, o, dx, dy, self.scale);
             }
+            // A guide moves with its point; its direction turns as the map does there.
+            Shape::Guide(g) => {
+                let o = self.point3(g.at)?;
+                if let Some(d) = g.unit_dir() {
+                    let q = self.point3(g.at + d * 1000.0)?;
+                    g.dir = Some((q - o).try_normalize().unwrap_or(d));
+                    if let Some(l) = &mut g.length {
+                        *l *= self.scale;
+                    }
+                }
+                g.at = o;
+            }
             Shape::Polyline3d { points, .. } => self.vec3(points)?,
             Shape::SiteModel {
                 points,

@@ -300,6 +300,8 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
         | Shape::TitleBlock(_)
         | Shape::Group { .. }
         | Shape::Unknown { .. }
+        // Guides belong to the 3D modeler. The plan keeps them and does not draw them.
+        | Shape::Guide(_)
         | Shape::Symbol { .. } => {}
         Shape::Irrigation(i) => crate::irrigation_ui::draw(painter, view, i, st, offset),
     }

@@ -360,6 +360,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
                 Shape::SurfaceModel(_) | Shape::Component { .. } => {
                     "surface models and components of the 3D modeler: DXF export is not done yet (MOD-12)"
                 }
+                Shape::Guide(_) => "guide: construction geometry of the 3D modeler",
                 _ => "unsupported kind",
             };
             report.skip(o.shape.kind(), why);

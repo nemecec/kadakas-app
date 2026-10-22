@@ -207,7 +207,51 @@ impl Session {
         }))
     }
 
+    /// An export never drops construction geometry silently (MOD-05). Guides, objects that were
+    /// hidden with Hide and hidden faces are left out, and the answer says how many
+    /// (`left_out`, and the same lines in `warnings`). The export runs on a copy of the document
+    /// without them, so every format (DXF, IFC, glTF, OBJ, SVG, print) agrees.
     fn export_impl(&mut self, p: Value, checked: bool) -> Result<Value, RpcError> {
+        let left = kadakas_core::leftout::LeftOut::of(self.editor.doc());
+        if left.is_empty() {
+            return self.export_format(p, checked);
+        }
+        let clean = kadakas_core::command::Editor::new(kadakas_core::leftout::without_hidden(
+            self.editor.doc(),
+        ));
+        let saved = std::mem::replace(&mut self.editor, clean);
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.export_format(p, checked)
+        }));
+        self.editor = saved;
+        let mut out = match ran {
+            Ok(r) => r?,
+            Err(payload) => std::panic::resume_unwind(payload),
+        };
+        let notes = left.notes();
+        if let Some(obj) = out.as_object_mut() {
+            let mut warnings = obj
+                .get("warnings")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            warnings.extend(notes.iter().map(|n| json!(n)));
+            obj.insert("warnings".into(), Value::Array(warnings));
+            obj.insert(
+                "left_out".into(),
+                json!({
+                    "guides": left.guides,
+                    "hidden_objects": left.hidden_objects,
+                    "hidden_faces": left.hidden_faces,
+                    "hidden_edges": left.hidden_edges,
+                    "notes": notes,
+                }),
+            );
+        }
+        Ok(out)
+    }
+
+    fn export_format(&mut self, p: Value, checked: bool) -> Result<Value, RpcError> {
         let FileParams {
             path,
             format,

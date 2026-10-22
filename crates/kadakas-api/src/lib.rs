@@ -118,6 +118,8 @@ mod bed_api;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod bed_api_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
+mod guide_export_tests;
+#[cfg(test)]
 mod io_tests;
 mod limits;
 mod site;

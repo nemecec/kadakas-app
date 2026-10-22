@@ -37,6 +37,7 @@ impl<W: Write> Exporter<'_, W> {
             Shape::Component { .. } => {
                 skip("component: IFC export of components is not done yet (MOD-12)")
             }
+            Shape::Guide(_) => skip("guide: construction geometry of the 3D modeler"),
             Shape::SiteModifier {
                 modifier: kadakas_core::site::ModifierKind::TextureBed { .. },
                 ..

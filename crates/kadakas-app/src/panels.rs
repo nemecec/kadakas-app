@@ -1289,6 +1289,8 @@ fn edit_shape(
                 ));
             }
             Shape::Group { name } => f.text(ui, &tr!("panels-name"), name),
+            // A guide has no fields in the plan; the 3D modeler edits it.
+            Shape::Guide(_) => {}
             Shape::Irrigation(i) => crate::irrigation_ui::edit(ui, &mut f, i),
             Shape::Symbol {
                 at,
