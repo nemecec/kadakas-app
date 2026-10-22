@@ -15,11 +15,12 @@ use kadakas_api::Session;
 use kadakas_core::command::Command;
 use kadakas_core::mesh::Scene;
 use kadakas_l10n::tr;
-use kadakas_ui_core::infer3d::{self, Inference, Inferencer, Key, PAUSE_SECONDS, Rgb};
+use kadakas_ui_core::infer3d::{self, GUIDE, GUIDE_REACH, Inference, Inferencer, Key, PAUSE_SECONDS, Rgb};
 use kadakas_ui_core::keys::Modifiers;
 use kadakas_ui_core::modeler::ModelerTool;
 use kadakas_ui_core::modeling::{
-    self, Item, Modeling, Out, Pointer, Preview, SceneCache, SubSelection, World, XContext,
+    self, Item, Modeling, Out, Pointer, Preview, Resize, SceneCache, SubSelection, World,
+    XContext,
 };
 use kadakas_view3d::vertex::LineVertex;
 use kadakas_view3d::view3d::{self, View3d};
@@ -58,7 +59,39 @@ pub struct Edit3d {
     /// A message for the status line (a refused value, a failed edit).
     pub message: Option<String>,
     visuals: Option<Visuals>,
+    /// The guides and the hidden items to draw, for one revision and set of options.
+    extras: Extras,
+    /// The Tape Measure asked to resize the model: the program asks the person.
+    pub resize_request: Option<Resize>,
 }
+
+/// A guide to draw, in world coordinates.
+#[derive(Clone, Copy, Debug)]
+struct DrawGuide {
+    id: kadakas_core::model::ObjectId,
+    at: DVec3,
+    dir: Option<DVec3>,
+    length: Option<f64>,
+    hidden: bool,
+}
+
+/// The guides, and the hidden items that View > Hidden Geometry and Hidden Objects show.
+#[derive(Default)]
+struct Extras {
+    key: u64,
+    guides: Vec<DrawGuide>,
+    /// Hidden edges (and all edges of hidden objects), drawn dotted.
+    ghost_edges: Vec<[DVec3; 2]>,
+    /// Lines across hidden faces, drawn dotted.
+    ghost_hatch: Vec<[DVec3; 2]>,
+    /// The guides that are selected as objects.
+    selected: std::collections::BTreeSet<kadakas_core::model::ObjectId>,
+}
+
+/// Most segments of hidden items that are drawn.
+const MAX_GHOST: usize = 200_000;
+/// Lines across a hidden face.
+const GHOST_HATCH_LINES: usize = 5;
 
 /// The lines of the selected faces and edges for one revision and selection.
 struct Visuals {
@@ -90,6 +123,8 @@ impl Default for Edit3d {
             band: None,
             message: None,
             visuals: None,
+            extras: Extras::default(),
+            resize_request: None,
         }
     }
 }
@@ -140,6 +175,58 @@ fn refresh_visuals(visuals: &mut Option<Visuals>, sub: &SubSelection, world: &Wo
     *visuals = Some(Visuals { key, edges, hatch });
 }
 
+/// Finds the guides and the ghosts of hidden items for the world.
+fn refresh_extras(extras: &mut Extras, world: &World, rev: u64) {
+    let show = world.scenes.show;
+    let key = hash(&(rev, show.guides, show.hidden_geometry, show.hidden_objects));
+    if extras.key == key && key != 0 {
+        return;
+    }
+    extras.key = key;
+    extras.guides.clear();
+    extras.ghost_edges.clear();
+    extras.ghost_hatch.clear();
+    let doc = world.doc;
+    for &id in world.scenes.guide_ids() {
+        let Some(o) = doc.object(id) else { continue };
+        let kadakas_core::model::Shape::Guide(g) = &o.shape else {
+            continue;
+        };
+        extras.guides.push(DrawGuide {
+            id,
+            at: g.at + DVec3::new(0.0, 0.0, modeling::elevation(doc, id)),
+            dir: g.unit_dir(),
+            length: g.length,
+            hidden: kadakas_core::visibility::is_hidden(o),
+        });
+    }
+    if !(show.hidden_geometry || show.hidden_objects) {
+        return;
+    }
+    'models: for &id in world.scenes.objects() {
+        let Some(m) = modeling::model_of(doc, id) else {
+            continue;
+        };
+        let whole = doc.object(id).is_some_and(kadakas_core::visibility::is_hidden);
+        for (eid, _) in m.edges() {
+            if (whole || m.edge_hidden(eid)) && let Some(s) = world.edge_ends(id, eid) {
+                extras.ghost_edges.push(s);
+            }
+        }
+        for (fid, _) in m.faces() {
+            if m.face_hidden(fid) && !whole {
+                extras.ghost_hatch.extend(modeling::select::face_hatch(
+                    &world.face_loops(id, fid),
+                    GHOST_HATCH_LINES,
+                ));
+            }
+        }
+        if extras.ghost_edges.len() + extras.ghost_hatch.len() > MAX_GHOST {
+            break 'models;
+        }
+    }
+}
+
 impl Edit3d {
     /// Forgets everything of the model (a new or opened file).
     pub fn reset(&mut self) {
@@ -152,6 +239,8 @@ impl Edit3d {
         self.band = None;
         self.visuals = None;
         self.origin = None;
+        self.extras = Extras::default();
+        self.resize_request = None;
     }
 
     /// Makes the tools follow the tool of the window.
@@ -189,7 +278,7 @@ impl Edit3d {
         let default = match tool {
             ModelerTool::Rectangle => LiveLabel::Dimensions,
             ModelerTool::Circle => LiveLabel::Radius,
-            ModelerTool::PushPull => LiveLabel::Distance,
+            ModelerTool::PushPull | ModelerTool::TapeMeasure => LiveLabel::Distance,
             ModelerTool::Rotate => LiveLabel::Angle,
             ModelerTool::Scale => LiveLabel::Factor,
             _ => LiveLabel::Length,
@@ -204,6 +293,11 @@ impl Edit3d {
             Some((l, t)) => Measurement::Live(l, t),
             None => Measurement::Live(default, String::new()),
         })
+    }
+
+    /// The inference under the pointer in the last frame: its kind, label and source.
+    pub fn hover_inference(&self) -> Option<&Inference> {
+        self.hover.as_ref()
     }
 
     // ---- keys --------------------------------------------------------------------------------
@@ -265,6 +359,7 @@ impl Edit3d {
         let tool = inp.tool;
         let drawing = modeling::is_drawing_tool(tool);
         let xform = modeling::is_transform_tool(tool);
+        let tape = tool == ModelerTool::TapeMeasure;
 
         // Shift keeps the inference.
         if inp.mods.shift != self.shift_down {
@@ -278,6 +373,8 @@ impl Edit3d {
 
         if xform {
             self.prepare_transform(session, view3d, nav_cam, inp, &cam, rev);
+        } else if tape {
+            self.ctrl_key(inp);
         } else {
             self.copy_down = false;
         }
@@ -286,6 +383,8 @@ impl Edit3d {
         let mut selection_changed = false;
         let mut object_pick: Option<Option<kadakas_core::model::ObjectId>> = None;
         let mut triple: Option<Item> = None;
+        let mut guide_hit: Option<kadakas_core::model::ObjectId> = None;
+        let mut guides_in_band: Vec<kadakas_core::model::ObjectId> = Vec::new();
         {
             let doc = session.editor.doc();
             let scenes = self.cache.get(doc, rev);
@@ -298,7 +397,7 @@ impl Edit3d {
                 .iter()
                 .copied()
                 .find(|id| modeling::model_of(doc, *id).is_some());
-            if let (true, Some(h)) = (drawing || xform, hover) {
+            if let (true, Some(h)) = (drawing || xform || tape, hover) {
                 let cursor = local(h);
                 let inf = world.infer(
                     &mut self.inferencer,
@@ -375,12 +474,24 @@ impl Edit3d {
                         DVec2::new(f64::from(b.x), f64::from(b.y)),
                         crossing,
                     );
-                    if inp.mods.shift {
-                        self.sub.add(items);
-                    } else {
-                        self.sub.set(items);
+                    if items.is_empty() {
+                        // No face or edge in the band: the guides in it.
+                        guides_in_band = modeling::select::rect_guides(
+                            &world,
+                            &cam,
+                            DVec2::new(f64::from(a.x), f64::from(a.y)),
+                            DVec2::new(f64::from(b.x), f64::from(b.y)),
+                            crossing,
+                        );
                     }
-                    selection_changed = true;
+                    if guides_in_band.is_empty() {
+                        if inp.mods.shift {
+                            self.sub.add(items);
+                        } else {
+                            self.sub.set(items);
+                        }
+                        selection_changed = true;
+                    }
                 }
                 if inp.resp.clicked_by(primary)
                     && let Some(p) = inp.resp.interact_pointer_pos()
@@ -392,13 +503,20 @@ impl Edit3d {
                     } else if inp.resp.double_clicked_by(primary) {
                         // A face with its edges, or an edge with its faces.
                         if let Some(item) = hit {
-                            self.sub.set(modeling::select::with_neighbors(doc, item));
+                            let near = modeling::select::with_neighbors(doc, item);
+                            let near = if world.scenes.show.hidden_geometry {
+                                near
+                            } else {
+                                modeling::select::without_hidden(doc, near)
+                            };
+                            self.sub.set(near);
                             selection_changed = true;
                         }
                     } else if hit.is_some() {
                         self.sub.click(hit, inp.mods.shift);
                         selection_changed = true;
                     } else {
+                        guide_hit = modeling::select::pick_guide(&world, &mut self.picker, &cam, local(p));
                         object_pick = Some(None);
                     }
                 }
@@ -407,17 +525,36 @@ impl Edit3d {
             }
 
             // What to draw.
-            self.preview = if drawing || xform {
+            self.preview = if drawing || xform || tape {
                 self.modeling.preview(&world)
             } else {
                 Preview::default()
             };
             refresh_visuals(&mut self.visuals, &self.sub, &world, rev);
+            refresh_extras(&mut self.extras, &world, rev);
+        }
+        self.extras.selected = session.selection.iter().copied().collect();
+        if !guides_in_band.is_empty() {
+            self.sub.clear();
+            if inp.mods.shift {
+                for g in guides_in_band {
+                    if !session.selection.contains(&g) {
+                        session.selection.push(g);
+                    }
+                }
+            } else {
+                session.selection = guides_in_band;
+            }
         }
 
         if let Some(item) = triple {
-            self.sub
-                .set(modeling::select::connected(session.editor.doc(), item));
+            let all = modeling::select::connected(session.editor.doc(), item);
+            let all = if self.cache.show.hidden_geometry {
+                all
+            } else {
+                modeling::select::without_hidden(session.editor.doc(), all)
+            };
+            self.sub.set(all);
             session.selection.clear();
         } else if selection_changed {
             if !self.sub.is_empty() {
@@ -431,9 +568,12 @@ impl Edit3d {
             let size = inp.size;
             if let Some(p) = inp.resp.interact_pointer_pos() {
                 let at = Vec2::new(p.x - inp.rect.min.x, p.y - inp.rect.min.y);
-                let hit = view3d
-                    .pick(inp.scene, at, size)
-                    .filter(|id| session.editor.doc().object(*id).is_some());
+                // A guide under the pointer comes before the object behind it.
+                let hit = guide_hit.or_else(|| {
+                    view3d
+                        .pick(inp.scene, at, size)
+                        .filter(|id| session.editor.doc().object(*id).is_some())
+                });
                 if hit.is_some() || !inp.mods.shift {
                     self.sub.clear();
                 }
@@ -456,8 +596,18 @@ impl Edit3d {
         cam: &infer3d::Camera,
         rev: u64,
     ) {
-        // Ctrl (Option on a Mac) toggles copy when it is pressed alone and let go without another
-        // key or button (Ctrl+Z and the like do not toggle). Scale takes it held, as Shift.
+        let center = self.ctrl_key(inp);
+        // With nothing selected, a click picks what is under the pointer first, as Select does:
+        // a face or an edge of a surface model, else an object.
+        let primary = egui::PointerButton::Primary;
+        self.prepare_pick(session, view3d, nav_cam, inp, cam, rev, primary);
+        self.finish_context(session, inp, center);
+    }
+
+    /// Ctrl (Option on a Mac) toggles copy (Move, Rotate) or guides (Tape Measure) when it is
+    /// pressed alone and let go without another key or button (Ctrl+Z and the like do not
+    /// toggle). Scale takes it held, as Shift. Returns whether the key is held.
+    fn ctrl_key(&mut self, inp: &Input) -> bool {
         let (key, others) = if cfg!(target_os = "macos") {
             (
                 inp.mods.alt,
@@ -487,10 +637,21 @@ impl Edit3d {
             self.copy_arm = false;
         }
         self.copy_down = key;
-        let center = key;
-        // With nothing selected, a click picks what is under the pointer first, as Select does:
-        // a face or an edge of a surface model, else an object.
-        let primary = egui::PointerButton::Primary;
+        key
+    }
+
+    /// With nothing selected, a click picks what is under the pointer first.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_pick(
+        &mut self,
+        session: &mut Session,
+        view3d: &mut View3d,
+        nav_cam: &kadakas_render::Camera,
+        inp: &Input,
+        cam: &infer3d::Camera,
+        rev: u64,
+        primary: egui::PointerButton,
+    ) {
         if inp.resp.clicked_by(primary)
             && session.selection.is_empty()
             && self.sub.is_empty()
@@ -522,6 +683,10 @@ impl Edit3d {
                 }
             }
         }
+    }
+
+    /// The selection and the keys for Move, Rotate and Scale.
+    fn finish_context(&mut self, session: &mut Session, inp: &Input, center: bool) {
         // The box around the selected objects that are not surface models (the tool measures
         // those itself).
         let doc = session.editor.doc();
@@ -554,6 +719,9 @@ impl Edit3d {
     pub fn run(&mut self, session: &mut Session, out: Out) {
         if let Some(m) = out.message {
             self.message = Some(m);
+        }
+        if out.resize.is_some() {
+            self.resize_request = out.resize;
         }
         if out.actions.is_empty() {
             return;
@@ -620,6 +788,59 @@ impl Edit3d {
 
     // ---- drawing -----------------------------------------------------------------------------
 
+    /// Draws the guides (thin dashed lines and small crosses), the ghosts of hidden items, and the
+    /// guide that the Tape Measure or the Eraser is about to make or erase.
+    fn paint_extras(&self, painter: &egui::Painter, rect: Rect, cam: &infer3d::Camera) {
+        let px = |p: DVec2| Pos2::new(rect.min.x + p.x as f32, rect.min.y + p.y as f32);
+        let amber = color(GUIDE);
+        let dashed = |a: DVec3, b: DVec3, stroke: Stroke, dash: f32, gap: f32| {
+            if let Some([p, q]) = cam.view_segment(a, b) {
+                painter.extend(egui::Shape::dashed_line(&[px(p), px(q)], stroke, dash, gap));
+            }
+        };
+        let guide_line = |at: DVec3, dir: DVec3, length: Option<f64>, stroke: Stroke| {
+            match length {
+                Some(l) => dashed(at, at + dir * l, stroke, 6.0, 4.0),
+                None => dashed(at - dir * GUIDE_REACH, at + dir * GUIDE_REACH, stroke, 6.0, 4.0),
+            }
+        };
+        let cross = |at: DVec3, stroke: Stroke| {
+            if let Some(p) = cam.project(at) {
+                let c = px(p);
+                painter.line_segment([c - egui::vec2(4.0, 4.0), c + egui::vec2(4.0, 4.0)], stroke);
+                painter.line_segment([c - egui::vec2(4.0, -4.0), c + egui::vec2(4.0, -4.0)], stroke);
+            }
+        };
+        let erase = self.preview.erase_guides.clone();
+        for g in &self.extras.guides {
+            let (stroke, width) = if erase.contains(&g.id) {
+                (Color32::from_rgb(220, 50, 50), 2.0)
+            } else if self.extras.selected.contains(&g.id) {
+                (Color32::from_rgb(SELECTED[0], SELECTED[1], SELECTED[2]), 2.0)
+            } else if g.hidden {
+                (amber.gamma_multiply(0.45), 1.0)
+            } else {
+                (amber, 1.0)
+            };
+            let stroke = Stroke::new(width, stroke);
+            match g.dir {
+                Some(d) => guide_line(g.at, d, g.length, stroke),
+                None => cross(g.at, stroke),
+            }
+        }
+        // The guide the Tape Measure would make.
+        for g in &self.preview.guides {
+            guide_line(g.at, g.dir, g.length, Stroke::new(1.5, amber));
+        }
+        // Hidden geometry and hidden objects, when the person asked to see them.
+        let ghost = Stroke::new(1.0, Color32::from_gray(140));
+        for s in self.extras.ghost_edges.iter().chain(&self.extras.ghost_hatch) {
+            if let Some([p, q]) = cam.view_segment(s[0], s[1]) {
+                painter.extend(egui::Shape::dashed_line(&[px(p), px(q)], ghost, 2.0, 3.0));
+            }
+        }
+    }
+
     /// Draws the marks of the tools over the scene.
     pub fn paint(
         &self,
@@ -641,6 +862,7 @@ impl Edit3d {
                 painter.line_segment([a, b], stroke);
             }
         };
+        self.paint_extras(painter, rect, &cam);
         // Selected edges.
         if let Some(v) = &self.visuals {
             for s in &v.edges {

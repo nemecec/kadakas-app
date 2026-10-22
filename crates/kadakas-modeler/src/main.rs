@@ -19,6 +19,7 @@ mod launch;
 mod menu;
 mod prefs;
 mod statusbar;
+mod tags_panel;
 mod toolbar;
 mod tray;
 

@@ -340,7 +340,7 @@ pub fn rect_select(world: &World, cam: &Camera, a: DVec2, b: DVec2, crossing: bo
         };
         for (eid, e) in m.edges() {
             // Hidden edges are offered when Hidden Geometry shows them.
-            if m.edge_hidden(eid) && !world.scenes.show.hidden {
+            if m.edge_hidden(eid) && !world.scenes.show.hidden_geometry {
                 continue;
             }
             let (Some(p), Some(q)) = (px(e.v[0]), px(e.v[1])) else {
@@ -356,7 +356,7 @@ pub fn rect_select(world: &World, cam: &Camera, a: DVec2, b: DVec2, crossing: bo
             }
         }
         for (fid, f) in m.faces() {
-            if m.face_hidden(fid) && !world.scenes.show.hidden {
+            if m.face_hidden(fid) && !world.scenes.show.hidden_geometry {
                 continue;
             }
             let pts: Option<Vec<DVec2>> = f.outer.iter().map(|v| px(*v)).collect();

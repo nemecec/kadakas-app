@@ -134,7 +134,7 @@ fn a_guide_on_a_hidden_tag_or_hidden_with_hide_is_not_in_the_scenes() {
     r.ed.execute(&cmd).unwrap();
     let rev = r.ed.revision();
     assert!(r.cache.get(r.ed.doc(), rev).guide_ids().is_empty());
-    r.cache.show.hidden = true;
+    r.cache.show.hidden_objects = true;
     let ids = r.cache.get(r.ed.doc(), rev).guide_ids().to_vec();
     assert_eq!(ids, vec![plain], "the hidden tag still hides its guide");
     let _ = on_tag;
@@ -160,10 +160,10 @@ fn a_hidden_face_is_not_in_the_scene_nor_picked_until_hidden_geometry_shows_it()
     assert_eq!(pick(&mut r, &mut engine), None, "a hidden face is not picked");
     let rev = r.ed.revision();
     assert_eq!(r.cache.get(r.ed.doc(), rev).face_count(), 0);
-    r.cache.show.hidden = true;
+    r.cache.show.hidden_geometry = true;
     assert_eq!(pick(&mut r, &mut engine), Some(Item::Face(id, face)));
     assert_eq!(r.cache.get(r.ed.doc(), rev).face_count(), 1);
-    r.cache.show.hidden = false;
+    r.cache.show.hidden_geometry = false;
     assert_eq!(pick(&mut r, &mut engine), None);
 }
 
@@ -195,7 +195,7 @@ fn the_window_leaves_out_hidden_faces_and_edges_unless_they_are_shown() {
     assert!(!items.contains(&Item::Face(id, face)));
     assert!(!items.contains(&Item::Edge(id, edge)));
     assert_eq!(items.len(), 3, "the other three edges");
-    r.cache.show.hidden = true;
+    r.cache.show.hidden_geometry = true;
     let items = all(&mut r);
     assert!(items.contains(&Item::Face(id, face)));
     assert!(items.contains(&Item::Edge(id, edge)));
@@ -279,6 +279,6 @@ fn a_hidden_model_object_is_offered_only_when_hidden_objects_are_shown() {
     r.ed.execute(&cmd).unwrap();
     let rev = r.ed.revision();
     assert!(r.cache.get(r.ed.doc(), rev).objects().is_empty());
-    r.cache.show.hidden = true;
+    r.cache.show.hidden_objects = true;
     assert_eq!(r.cache.get(r.ed.doc(), rev).objects(), &[id]);
 }

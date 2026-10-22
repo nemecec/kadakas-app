@@ -53,15 +53,18 @@ struct ModelKey {
 pub struct ShowOptions {
     /// The guides are shown, so the inference snaps to them.
     pub guides: bool,
-    /// Hidden objects, faces and edges are shown (ghosted) and can be picked.
-    pub hidden: bool,
+    /// Hidden faces and edges are shown (ghosted) and can be picked (View > Hidden Geometry).
+    pub hidden_geometry: bool,
+    /// Hidden objects are shown (ghosted) and can be picked (View > Hidden Objects).
+    pub hidden_objects: bool,
 }
 
 impl Default for ShowOptions {
     fn default() -> Self {
         ShowOptions {
             guides: true,
-            hidden: false,
+            hidden_geometry: false,
+            hidden_objects: false,
         }
     }
 }
@@ -164,7 +167,7 @@ impl SceneCache {
             let mut kept = BTreeMap::new();
             let show = self.show;
             let visible = |o: &kadakas_core::model::Object| {
-                if show.hidden {
+                if show.hidden_objects {
                     doc.is_visible_with_hidden(o)
                 } else {
                     doc.is_visible(o)
@@ -182,7 +185,7 @@ impl SceneCache {
                     rev: m.rev(),
                     placement: m.transform.to_cols_array(),
                     elevation: elevation(doc, o.id),
-                    hidden: show.hidden,
+                    hidden: show.hidden_geometry,
                 };
                 let scene = match self.kept.get(&o.id) {
                     Some((k, s)) if *k == key => s.clone(),
@@ -197,7 +200,7 @@ impl SceneCache {
                         Arc::new(Scene::from_surface_model_with(
                             model,
                             key.number,
-                            show.hidden,
+                            show.hidden_geometry,
                         ))
                     }
                 };

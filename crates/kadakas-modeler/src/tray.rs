@@ -11,6 +11,7 @@ pub struct TrayState {
     pub entity_info: bool,
     pub materials: bool,
     pub scenes: bool,
+    pub tags: bool,
 }
 
 impl Default for TrayState {
@@ -19,6 +20,7 @@ impl Default for TrayState {
             entity_info: true,
             materials: true,
             scenes: true,
+            tags: true,
         }
     }
 }
@@ -217,8 +219,14 @@ pub fn scenes(ui: &mut egui::Ui) {
     ui.label(egui::RichText::new(tr!("modeler-scenes-later")).weak());
 }
 
-/// Draws the whole tray inside `ui`.
-pub fn show(ui: &mut egui::Ui, state: &mut TrayState, info: &EntityInfo) {
+/// Draws the whole tray inside `ui`. `tags` draws the part of the Tags code for a slot (the tag
+/// selector under Entity Info, and the Tags panel; see `tags_panel`).
+pub fn show(
+    ui: &mut egui::Ui,
+    state: &mut TrayState,
+    info: &EntityInfo,
+    tags: &mut dyn FnMut(&mut egui::Ui, crate::tags_panel::Slot),
+) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         panel(
             ui,
@@ -227,7 +235,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut TrayState, info: &EntityInfo) {
             &mut state.entity_info,
             |ui| {
                 entity_info(ui, info);
+                tags(ui, crate::tags_panel::Slot::EntityInfo);
             },
+        );
+        panel(
+            ui,
+            "tray-tags",
+            tr!("modeler-tray-tags"),
+            &mut state.tags,
+            |ui| tags(ui, crate::tags_panel::Slot::Panel),
         );
         panel(
             ui,

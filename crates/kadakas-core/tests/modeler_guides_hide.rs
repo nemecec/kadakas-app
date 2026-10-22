@@ -523,3 +523,47 @@ fn what_an_export_leaves_out_is_counted() {
         .unwrap();
     assert_eq!(LeftOut::of(ed.doc()).hidden_objects, 1);
 }
+
+#[test]
+fn a_guide_moves_turns_and_scales_with_the_objects_around_it() {
+    use glam::DAffine3;
+    let mut ed = Editor::with_sequential_ids();
+    let seg = add(
+        &mut ed,
+        guide(Guide::segment(DVec3::new(100.0, 0.0, 0.0), DVec3::X, 50.0)),
+    );
+    let pt = add(&mut ed, guide(Guide::point(DVec3::new(10.0, 20.0, 30.0))));
+    let line = add(&mut ed, guide(Guide::line(DVec3::ZERO, DVec3::Y)));
+    // Twice as large about the origin, then turned a quarter about Z.
+    let m = DAffine3::from_rotation_z(std::f64::consts::FRAC_PI_2)
+        * DAffine3::from_scale(DVec3::splat(2.0));
+    let depth = ed.undo_depth();
+    ed.execute(&Command::TransformObjects3d {
+        ids: vec![seg, pt, line],
+        matrix: m.to_cols_array(),
+        copy: false,
+        count: 1,
+    })
+    .unwrap();
+    assert_eq!(ed.undo_depth(), depth + 1);
+    let g = |id| match &ed.doc().object(id).unwrap().shape {
+        Shape::Guide(g) => (**g).clone(),
+        _ => panic!(),
+    };
+    let s = g(seg);
+    assert!(s.at.distance(DVec3::new(0.0, 200.0, 0.0)) < 1e-9, "{:?}", s.at);
+    assert!(s.unit_dir().unwrap().distance(DVec3::Y) < 1e-9);
+    assert!((s.length.unwrap() - 100.0).abs() < 1e-9, "the length follows the scale");
+    assert!(g(pt).at.distance(DVec3::new(-40.0, 20.0, 60.0)) < 1e-9);
+    assert!(g(line).unit_dir().unwrap().distance(-DVec3::X) < 1e-9);
+    assert_eq!(g(line).length, None);
+    // Copies work too, and the original stays.
+    ed.execute(&Command::TransformObjects3d {
+        ids: vec![pt],
+        matrix: DAffine3::from_translation(DVec3::new(5.0, 0.0, 0.0)).to_cols_array(),
+        copy: true,
+        count: 2,
+    })
+    .unwrap();
+    assert_eq!(ed.doc().guide_count(), 5);
+}
