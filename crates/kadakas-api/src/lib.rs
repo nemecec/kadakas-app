@@ -360,6 +360,36 @@ fn elide_image(object: &mut Value) {
 }
 
 /// True when a command (or a command inside a batch) names a layer or a class by a name.
+/// The first data key of a `set_data` command (or of a command in a batch) that starts with the
+/// reserved prefix `kadakas.`. Agents cannot write or remove these keys. Kadakas itself writes
+/// them with commands of its own.
+fn reserved_data_key(command: &serde_json::Map<String, Value>) -> Option<String> {
+    let reserved = |k: &str| k.starts_with(kadakas_core::visibility::RESERVED_PREFIX);
+    match command.get("op").and_then(Value::as_str) {
+        Some("set_data") => {
+            let set = command.get("set").and_then(Value::as_object);
+            let remove = command.get("remove").and_then(Value::as_array);
+            set.into_iter()
+                .flat_map(|m| m.keys().cloned())
+                .chain(
+                    remove
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|v| v.as_str().map(str::to_string)),
+                )
+                .find(|k| reserved(k))
+        }
+        Some("batch") => command
+            .get("commands")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_object)
+            .find_map(reserved_data_key),
+        _ => None,
+    }
+}
+
 fn json_command_has_names(c: &serde_json::Map<String, Value>) -> bool {
     params::refs::has_names(c)
         || c.get("commands")
@@ -2085,6 +2115,12 @@ impl Session {
         command: serde_json::Map<String, Value>,
     ) -> Result<kadakas_core::command::Outcome, RpcError> {
         use params::refs;
+        if let Some(key) = reserved_data_key(&command) {
+            return Err(RpcError::invalid_params(format!(
+                "the data key '{key}' is reserved: keys that start with '{}' belong to Kadakas and only its own commands write them (reading is free). For hiding use set_hidden",
+                kadakas_core::visibility::RESERVED_PREFIX
+            )));
+        }
         if !json_command_has_names(&command) {
             let command: Command = params(Value::Object(command))?;
             let command = self.in_context(command);

@@ -212,13 +212,14 @@ impl Session {
     /// (`left_out`, and the same lines in `warnings`). The export runs on a copy of the document
     /// without them, so every format (DXF, IFC, glTF, OBJ, SVG, print) agrees.
     fn export_impl(&mut self, p: Value, checked: bool) -> Result<Value, RpcError> {
-        let left = kadakas_core::leftout::LeftOut::of(self.editor.doc());
-        if left.is_empty() {
+        if kadakas_core::leftout::LeftOut::of(self.editor.doc()).is_empty() {
             return self.export_format(p, checked);
         }
-        let clean = kadakas_core::command::Editor::new(kadakas_core::leftout::without_hidden(
-            self.editor.doc(),
-        ));
+        // The copy costs time and memory in proportion to the size of the document. It is made
+        // only when something is left out.
+        let prepared = kadakas_core::leftout::prepare(self.editor.doc());
+        let left = prepared.left;
+        let clean = kadakas_core::command::Editor::new(prepared.doc);
         let saved = std::mem::replace(&mut self.editor, clean);
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.export_format(p, checked)
@@ -244,6 +245,8 @@ impl Session {
                     "hidden_objects": left.hidden_objects,
                     "hidden_faces": left.hidden_faces,
                     "hidden_edges": left.hidden_edges,
+                    "hidden_faces_kept": left.hidden_faces_kept,
+                    "hidden_edges_kept": left.hidden_edges_kept,
                     "notes": notes,
                 }),
             );

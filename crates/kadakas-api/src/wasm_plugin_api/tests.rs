@@ -766,11 +766,15 @@ fn stale_parameters_do_not_block_set_params_and_null_puts_the_default_back() {
     let mut data = s.editor.doc().object(ObjectId(id)).unwrap().data[DATA_KEY].clone();
     data["params"]["gone"] = json!(1);
     data["params"]["height"] = json!(99999);
-    ok(
-        &mut s,
-        "execute",
-        json!({"command": {"op": "set_data", "id": id, "set": {DATA_KEY: data}}}),
-    );
+    // An agent cannot write this key through the API (it is reserved), so the test writes it as
+    // an old file would have it.
+    s.editor
+        .execute(&kadakas_core::command::Command::SetData {
+            id: ObjectId(id),
+            set: [(DATA_KEY.to_string(), data)].into(),
+            remove: vec![],
+        })
+        .unwrap();
     let r = ok(
         &mut s,
         "plugins.set_params",

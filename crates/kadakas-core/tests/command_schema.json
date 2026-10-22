@@ -4487,6 +4487,30 @@
       "type": "object"
     },
     {
+      "description": "Hide (`hidden: true`) or show the objects and the members of the groups among them (MOD-05).\nThe mark is the data key `kadakas.hidden`, which `set_data` cannot write. A hidden object\nstays in the document. Views, picking and exports leave it out.",
+      "properties": {
+        "hidden": {
+          "type": "boolean"
+        },
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "set_hidden",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "hidden"
+      ],
+      "type": "object"
+    },
+    {
       "description": "Several commands as one undo step. Stops at the first error.",
       "properties": {
         "commands": {

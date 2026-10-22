@@ -722,6 +722,13 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resolve: Option<crate::component::Resolve>,
     },
+    /// Hide (`hidden: true`) or show the objects and the members of the groups among them (MOD-05).
+    /// The mark is the data key `kadakas.hidden`, which `set_data` cannot write. A hidden object
+    /// stays in the document. Views, picking and exports leave it out.
+    SetHidden {
+        ids: Vec<ObjectId>,
+        hidden: bool,
+    },
     /// Several commands as one undo step. Stops at the first error.
     Batch {
         commands: Vec<Command>,
@@ -1717,7 +1724,38 @@ impl<'a> Tx<'a> {
                     .vertices_mut()
                     .expect("checked")[*index] = v;
             }
+            Command::SetHidden { ids, hidden } => {
+                let ids = unique(ids);
+                if ids.is_empty() {
+                    return Err(CommandError::Invalid("give at least one object".into()));
+                }
+                for &id in &ids {
+                    self.editable(id)?;
+                }
+                for id in self.doc.with_members(&ids) {
+                    self.editable(id)?;
+                    self.touch(id);
+                    let o = self.doc.object_mut(id).expect("checked");
+                    if *hidden {
+                        o.data.insert(
+                            crate::visibility::HIDDEN_KEY.to_string(),
+                            serde_json::Value::Bool(true),
+                        );
+                    } else {
+                        o.data.remove(crate::visibility::HIDDEN_KEY);
+                    }
+                }
+            }
             Command::SetData { id, set, remove } => {
+                if let Some(k) = set
+                    .keys()
+                    .chain(remove.iter())
+                    .find(|k| k.as_str() == crate::visibility::HIDDEN_KEY)
+                {
+                    return Err(CommandError::Invalid(format!(
+                        "the data key '{k}' is reserved. Use the command set_hidden"
+                    )));
+                }
                 if let Some(k) = set
                     .keys()
                     .chain(remove.iter())

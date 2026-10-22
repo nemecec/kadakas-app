@@ -46,7 +46,11 @@ impl VisMode {
 /// value is `true`. The object stays in the document. Views, picking, inference and exports leave
 /// it out (an export says how many), and Unhide brings it back. A hidden group hides its members:
 /// Hide marks the group and all of its members.
-pub const HIDDEN_KEY: &str = "hidden_object";
+pub const HIDDEN_KEY: &str = "kadakas.hidden";
+
+/// The prefix of the keys in `Object::data` that belong to Kadakas itself. `set_data` refuses to write
+/// or remove a key with it: only the commands that own a key change it. Reading is free.
+pub const RESERVED_PREFIX: &str = "kadakas.";
 
 /// True if the person hid the object with Hide.
 pub fn is_hidden(obj: &Object) -> bool {
@@ -60,31 +64,14 @@ pub fn set_hidden_command(
     ids: &[crate::model::ObjectId],
     hidden: bool,
 ) -> Option<crate::command::Command> {
-    use crate::command::Command;
-    let commands: Vec<Command> = doc
+    let changes = doc
         .with_members(ids)
         .into_iter()
-        .filter(|id| doc.object(*id).is_some_and(|o| is_hidden(o) != hidden))
-        .map(|id| {
-            if hidden {
-                Command::SetData {
-                    id,
-                    set: std::collections::BTreeMap::from([(
-                        HIDDEN_KEY.to_string(),
-                        serde_json::Value::Bool(true),
-                    )]),
-                    remove: Vec::new(),
-                }
-            } else {
-                Command::SetData {
-                    id,
-                    set: Default::default(),
-                    remove: vec![HIDDEN_KEY.to_string()],
-                }
-            }
-        })
-        .collect();
-    (!commands.is_empty()).then_some(Command::Batch { commands })
+        .any(|id| doc.object(id).is_some_and(|o| is_hidden(o) != hidden));
+    changes.then(|| crate::command::Command::SetHidden {
+        ids: ids.to_vec(),
+        hidden,
+    })
 }
 
 /// How many objects are hidden with Hide: groups are not counted, their members are. Guides count.

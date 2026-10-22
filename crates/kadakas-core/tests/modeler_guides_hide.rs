@@ -4,7 +4,7 @@
 use glam::{DVec2, DVec3};
 use kadakas_core::command::{Command, CommandError, Editor};
 use kadakas_core::guide::{Guide, MAX_GUIDES};
-use kadakas_core::leftout::{LeftOut, without_hidden};
+use kadakas_core::leftout::{LeftOut, prepare, prepare_with};
 use kadakas_core::mesh;
 use kadakas_core::model::*;
 use kadakas_core::surface::{Edit, SurfaceModel};
@@ -558,12 +558,14 @@ fn what_an_export_leaves_out_is_counted() {
             guides: 2,
             hidden_objects: 1,
             hidden_faces: 1,
-            hidden_edges: 1
+            hidden_edges: 1,
+            ..LeftOut::default()
         }
     );
     assert_eq!(n.notes().len(), 3);
     // The document for the export has none of them.
-    let clean = without_hidden(ed.doc());
+    let prepared = prepare(ed.doc());
+    let clean = prepared.doc;
     assert_eq!(clean.guide_count(), 0);
     assert!(clean.object(line).is_none());
     let Shape::SurfaceModel(m) = &clean.object(id).unwrap().shape else {
@@ -571,14 +573,12 @@ fn what_an_export_leaves_out_is_counted() {
     };
     assert!(m.hidden_faces().is_empty());
     assert_eq!(m.face_count(), model(&ed, id).face_count() - 1);
-    // A hidden edge is only a mark on the border of faces: the export draws no line for it.
-    assert_eq!(
-        LeftOut::of(&clean),
-        LeftOut {
-            hidden_edges: 1,
-            ..LeftOut::default()
-        }
-    );
+    // The hidden edge borders a face that is shown (or is loose and goes): what really happened is
+    // counted, and a border edge is said to stay.
+    let l = prepared.left;
+    assert_eq!((l.hidden_faces, l.guides, l.hidden_objects), (1, 2, 1));
+    assert_eq!(l.hidden_edges + l.hidden_edges_kept, 1, "{l:?}");
+    assert_eq!(l.hidden_faces_kept, 0);
     // The document itself is not changed.
     assert_eq!(ed.doc().guide_count(), 2);
     // Objects on a hidden tag are not counted: the exports leave them out by the rules of tags.
@@ -665,4 +665,167 @@ fn a_guide_moves_turns_and_scales_with_the_objects_around_it() {
     })
     .unwrap();
     assert_eq!(ed.doc().guide_count(), 5);
+}
+
+#[test]
+fn a_hidden_face_that_cannot_be_taken_out_is_counted_as_kept_not_as_left_out() {
+    let mut ed = Editor::with_sequential_ids();
+    let id = boxed(&mut ed);
+    let face = model(&ed, id).faces().next().unwrap().0;
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: Edit::SetHidden {
+            faces: vec![face],
+            edges: vec![],
+            hidden: true,
+        },
+    })
+    .unwrap();
+    let refused = |_: &mut SurfaceModel, _: Vec<kadakas_core::surface::FaceId>| {
+        Err(kadakas_core::surface::SurfaceError::Unsolved("no".into()))
+    };
+    let p = prepare_with(ed.doc(), &refused);
+    assert_eq!((p.left.hidden_faces, p.left.hidden_faces_kept), (0, 1));
+    let Shape::SurfaceModel(m) = &p.doc.object(id).unwrap().shape else {
+        panic!()
+    };
+    assert_eq!(m.hidden_faces(), vec![face], "the face stays in the copy");
+    let notes = p.left.notes();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n == "Hidden faces that could not be taken out stay in the export: 1"),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn a_hidden_edge_that_no_face_uses_is_taken_out_and_one_on_a_face_is_said_to_stay() {
+    let mut ed = Editor::with_sequential_ids();
+    let id = add(&mut ed, Shape::SurfaceModel(Box::default()));
+    // A loose edge, and a square with a face.
+    let sq = [
+        [0.0, 0.0, 0.0],
+        [1000.0, 0.0, 0.0],
+        [1000.0, 1000.0, 0.0],
+        [0.0, 1000.0, 0.0],
+    ];
+    let mut edges: Vec<[[f64; 3]; 2]> = (0..4).map(|i| [sq[i], sq[(i + 1) % 4]]).collect();
+    edges.push([[3000.0, 0.0, 0.0], [4000.0, 0.0, 0.0]]);
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: Edit::AddEdges { edges },
+    })
+    .unwrap();
+    let m = model(&ed, id);
+    let loose = m
+        .edges()
+        .map(|(e, _)| e)
+        .find(|e| m.faces_of_edge(*e).is_empty())
+        .unwrap();
+    let border = m
+        .edges()
+        .map(|(e, _)| e)
+        .find(|e| !m.faces_of_edge(*e).is_empty())
+        .unwrap();
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: Edit::SetHidden {
+            faces: vec![],
+            edges: vec![loose, border],
+            hidden: true,
+        },
+    })
+    .unwrap();
+    let p = prepare(ed.doc());
+    assert_eq!((p.left.hidden_edges, p.left.hidden_edges_kept), (1, 1));
+    let Shape::SurfaceModel(copy) = &p.doc.object(id).unwrap().shape else {
+        panic!()
+    };
+    assert!(copy.edge(loose).is_none(), "the loose hidden edge is gone");
+    assert!(copy.edge(border).is_some() && copy.edge_hidden(border));
+    assert!(p.left.notes().iter().any(|n| n.contains("stay in the geometry")));
+}
+
+#[test]
+fn a_guide_this_program_cannot_read_stays_unknown_and_is_written_back_unchanged() {
+    // A newer build may write a guide in a form that this build cannot read (here a direction as
+    // an object). The shape is kept as it is, as for every unknown kind, and only delete works.
+    let mut ed = Editor::with_sequential_ids();
+    let id = add(&mut ed, guide(Guide::point(DVec3::ZERO)));
+    let mut v = serde_json::to_value(ed.doc()).unwrap();
+    let future = serde_json::json!({
+        "kind": "guide",
+        "at": [1, 2, 3],
+        "dir": {"x": 0, "y": 1, "z": 0},
+        "curve": "arc"
+    });
+    v["objects"][0]["shape"] = future.clone();
+    let doc = Document::from_value(v.clone()).unwrap();
+    let o = doc.object(id).unwrap();
+    assert!(matches!(o.shape, Shape::Unknown { .. }), "{:?}", o.shape);
+    assert_eq!(o.shape.kind(), "unknown");
+    assert_eq!(serde_json::to_value(&doc).unwrap(), v, "written back unchanged");
+    let mut ed = Editor::new(doc);
+    assert_eq!(ed.doc().guide_count(), 0, "it is not a guide for this program");
+    assert!(
+        ed.execute(&Command::SetHidden {
+            ids: vec![id],
+            hidden: true
+        })
+        .is_err(),
+        "it cannot be edited"
+    );
+    ed.execute(&Command::DeleteObjects { ids: vec![id] }).unwrap();
+    // A guide that this build can read is a guide.
+    let mut ok = v.clone();
+    ok["objects"][0]["shape"] = serde_json::json!({"kind": "guide", "at": [1, 2, 3]});
+    let doc = Document::from_value(ok).unwrap();
+    assert_eq!(doc.guide_count(), 1);
+}
+
+#[test]
+fn the_hide_mark_is_a_reserved_data_key_that_set_data_cannot_write() {
+    let mut ed = Editor::with_sequential_ids();
+    let o = add(&mut ed, Shape::Line { a: DVec2::ZERO, b: DVec2::X });
+    for set in [true, false] {
+        let cmd = if set {
+            Command::SetData {
+                id: o,
+                set: [("kadakas.hidden".to_string(), serde_json::json!(true))].into(),
+                remove: vec![],
+            }
+        } else {
+            Command::SetData {
+                id: o,
+                set: Default::default(),
+                remove: vec!["kadakas.hidden".into()],
+            }
+        };
+        let e = ed.execute(&cmd).unwrap_err().to_string();
+        assert!(e.contains("reserved") && e.contains("kadakas."), "{e}");
+    }
+    assert!(!is_hidden(ed.doc().object(o).unwrap()));
+    // The owner of the key writes it. Reading the data is free.
+    ed.execute(&set_hidden_command(ed.doc(), &[o], true).unwrap()).unwrap();
+    assert_eq!(
+        ed.doc().object(o).unwrap().data.get("kadakas.hidden"),
+        Some(&serde_json::json!(true))
+    );
+    // Other keys still work.
+    ed.execute(&Command::SetData {
+        id: o,
+        set: [("note".to_string(), serde_json::json!("x"))].into(),
+        remove: vec![],
+    })
+    .unwrap();
+    // The command refuses an empty list and a missing object.
+    assert!(ed.execute(&Command::SetHidden { ids: vec![], hidden: true }).is_err());
+    assert!(
+        ed.execute(&Command::SetHidden {
+            ids: vec![ObjectId(kadakas_core::uid::Uid::from_num(9999))],
+            hidden: true
+        })
+        .is_err()
+    );
 }

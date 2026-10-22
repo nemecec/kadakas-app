@@ -96,7 +96,7 @@ fn hidden_objects_are_left_out_and_counted() {
     ok(
         &mut s,
         "execute",
-        json!({"command": {"op": "set_data", "id": ids[1], "set": {"hidden_object": true}}}),
+        json!({"command": {"op": "set_hidden", "ids": [ids[1]], "hidden": true}}),
     );
     let path = tmp("c.geojson");
     let r = ok(
@@ -109,4 +109,40 @@ fn hidden_objects_are_left_out_and_counted() {
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(!text.contains("\"10.0\"") && text.matches("coordinates").count() >= 1);
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn the_api_refuses_to_write_the_reserved_data_keys_and_reads_stay_free() {
+    let (mut s, ids) = session();
+    let line = ids[0].clone();
+    for command in [
+        json!({"op": "set_data", "id": line, "set": {"kadakas.hidden": true}}),
+        json!({"op": "set_data", "id": line, "set": {}, "remove": ["kadakas.plugin"]}),
+        json!({"op": "batch", "commands": [
+            {"op": "set_data", "id": line, "set": {"note": 1}},
+            {"op": "set_data", "id": line, "set": {"kadakas.anything": 1}}
+        ]}),
+    ] {
+        let e = s
+            .handle("execute", json!({"command": command.clone()}))
+            .unwrap_err();
+        assert!(format!("{e:?}").contains("reserved"), "{command}: {e:?}");
+    }
+    // Nothing of the batch was applied.
+    let o = s.handle("objects.get", json!({"id": line})).unwrap();
+    assert!(o["data"].get("note").is_none());
+    // Another key works, and the mark that set_hidden wrote can be read.
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_data", "id": line, "set": {"note": 1}}}),
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_hidden", "ids": [line], "hidden": true}}),
+    );
+    let o = s.handle("objects.get", json!({"id": line})).unwrap();
+    assert_eq!(o["data"]["kadakas.hidden"], true);
+    assert_eq!(o["data"]["note"], 1);
 }
