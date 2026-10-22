@@ -54,7 +54,13 @@ fn model(ed: &Editor, id: ObjectId) -> &SurfaceModel {
     }
 }
 
-fn run(ed: &mut Editor, ids: &[ObjectId], xf: DAffine3, copy: bool, count: u32) -> Vec<kadakas_core::uid::Uid> {
+fn run(
+    ed: &mut Editor,
+    ids: &[ObjectId],
+    xf: DAffine3,
+    copy: bool,
+    count: u32,
+) -> Vec<kadakas_core::uid::Uid> {
     ed.execute(&Command::TransformObjects3d {
         ids: ids.to_vec(),
         matrix: xf.to_cols_array(),
@@ -154,14 +160,21 @@ fn a_group_moves_as_one_unit_and_a_copy_makes_a_row() {
     // Each copy is a group and its two members: three objects; three copies.
     assert_eq!(ed.doc().objects.len(), n + 9);
     assert_eq!(created.len(), 3);
-    assert_eq!(ed.undo_depth(), depth + 2, "one undo step for the whole row");
+    assert_eq!(
+        ed.undo_depth(),
+        depth + 2,
+        "one undo step for the whole row"
+    );
     let xs: Vec<f64> = created
         .iter()
         .flat_map(|id| ed.doc().children(ObjectId(*id)))
         .map(|c| model(&ed, c).bounds().unwrap().0.x)
         .collect();
     for k in 1..=3 {
-        assert_eq!(xs.iter().filter(|x| **x == 3000.0 * f64::from(k)).count(), 2);
+        assert_eq!(
+            xs.iter().filter(|x| **x == 3000.0 * f64::from(k)).count(),
+            2
+        );
     }
     ed.undo();
     assert_eq!(ed.doc().objects.len(), n);
@@ -228,7 +241,11 @@ fn a_plant_moves_in_the_plan_with_a_note_about_its_height() {
     };
     assert_eq!(at, DVec2::new(5100.0, 200.0));
     assert_eq!(height, 3000.0);
-    assert!(out.notes.iter().any(|n| n.contains("height")), "{:?}", out.notes);
+    assert!(
+        out.notes.iter().any(|n| n.contains("height")),
+        "{:?}",
+        out.notes
+    );
     // A move in the plan has no such note.
     let out = ed
         .execute(&Command::TransformObjects3d {

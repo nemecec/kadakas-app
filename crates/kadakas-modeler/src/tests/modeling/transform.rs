@@ -150,7 +150,12 @@ fn a_box_moves_a_thousand_mm_with_a_typed_value() {
     // The red axis is locked, whatever the pointer does.
     let _ = frame(&ctx, &mut app, vec![moved(c + egui::vec2(60.0, 4.0))], t);
     t += 0.1;
-    let _ = frame(&ctx, &mut app, tap(egui::Key::ArrowRight, egui::Modifiers::NONE), t);
+    let _ = frame(
+        &ctx,
+        &mut app,
+        tap(egui::Key::ArrowRight, egui::Modifiers::NONE),
+        t,
+    );
     type_keys(&ctx, &mut app, "1000", &mut t);
     assert_eq!(app.edit.modeling.typed(), "1000");
     enter(&ctx, &mut app, &mut t);
@@ -160,7 +165,11 @@ fn a_box_moves_a_thousand_mm_with_a_typed_value() {
     assert!(near(hi, DVec3::new(1500.0, 500.0, 500.0), 0.5), "{hi:?}");
     assert!(!app.edit.modeling.in_progress());
     app.run(Cmd::Undo, size(&app));
-    assert!(near(bounds(&app, id).0, DVec3::new(-500.0, -500.0, 0.0), 1e-9));
+    assert!(near(
+        bounds(&app, id).0,
+        DVec3::new(-500.0, -500.0, 0.0),
+        1e-9
+    ));
 }
 
 #[test]
@@ -175,7 +184,12 @@ fn move_copies_three_times_with_the_copy_key_and_5x() {
     click_at(&ctx, &mut app, c, &mut t);
     let _ = frame(&ctx, &mut app, vec![moved(c + egui::vec2(60.0, 0.0))], t);
     t += 0.1;
-    let _ = frame(&ctx, &mut app, tap(egui::Key::ArrowRight, egui::Modifiers::NONE), t);
+    let _ = frame(
+        &ctx,
+        &mut app,
+        tap(egui::Key::ArrowRight, egui::Modifiers::NONE),
+        t,
+    );
     type_keys(&ctx, &mut app, "2000", &mut t);
     enter(&ctx, &mut app, &mut t);
     assert_eq!(app.session.editor.undo_depth(), depth + 1);
@@ -285,11 +299,18 @@ fn scale_doubles_a_box_with_a_corner_grip() {
     match info {
         kadakas_ui_core::modeler::EntityInfo::One {
             placement: Some(p), ..
-        } => assert!((p.scale[0] - 2.0).abs() < 1e-9 && (p.scale[2] - 2.0).abs() < 1e-9, "{p:?}"),
+        } => assert!(
+            (p.scale[0] - 2.0).abs() < 1e-9 && (p.scale[2] - 2.0).abs() < 1e-9,
+            "{p:?}"
+        ),
         other => panic!("{other:?}"),
     }
     app.run(Cmd::Undo, size(&app));
-    assert!(near(bounds(&app, id).1, DVec3::new(500.0, 500.0, 500.0), 1e-9));
+    assert!(near(
+        bounds(&app, id).1,
+        DVec3::new(500.0, 500.0, 500.0),
+        1e-9
+    ));
 }
 
 #[test]
@@ -297,7 +318,10 @@ fn scale_stretches_one_axis_with_a_face_grip_and_the_pointer() {
     let (ctx, mut app, mut t, id) = ready();
     // An oblique view, so that the grips do not lie behind each other.
     app.nav.set_projection(Projection::Perspective);
-    app.run(Cmd::Nav(NavAction::View(StandardView::RightIsometric)), size(&app));
+    app.run(
+        Cmd::Nav(NavAction::View(StandardView::RightIsometric)),
+        size(&app),
+    );
     for _ in 0..3 {
         t += 0.1;
         let _ = frame(&ctx, &mut app, vec![], t);
@@ -354,8 +378,17 @@ fn escape_cancels_the_move_in_progress() {
     click_at(&ctx, &mut app, c, &mut t);
     assert!(app.edit.modeling.in_progress());
     t += 0.1;
-    let _ = frame(&ctx, &mut app, tap(egui::Key::Escape, egui::Modifiers::NONE), t);
+    let _ = frame(
+        &ctx,
+        &mut app,
+        tap(egui::Key::Escape, egui::Modifiers::NONE),
+        t,
+    );
     assert!(!app.edit.modeling.in_progress());
     assert_eq!(app.session.editor.undo_depth(), depth);
-    assert!(near(bounds(&app, id).0, DVec3::new(-500.0, -500.0, 0.0), 1e-9));
+    assert!(near(
+        bounds(&app, id).0,
+        DVec3::new(-500.0, -500.0, 0.0),
+        1e-9
+    ));
 }

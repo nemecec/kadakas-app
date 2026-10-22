@@ -113,7 +113,10 @@ fn move_a_face_with_two_clicks_is_one_undo_step() {
     assert_eq!(r.ed.undo_depth(), depth, "the first click changes nothing");
     r.hover(v(500.0, 500.0, 800.0));
     let pv = r.act(|t, w| {
-        assert!(!t.preview(w).shape.is_empty(), "the moving outline is drawn");
+        assert!(
+            !t.preview(w).shape.is_empty(),
+            "the moving outline is drawn"
+        );
         Out::default()
     });
     assert!(pv.actions.is_empty());
@@ -195,32 +198,33 @@ fn ctrl_makes_a_copy_and_5x_and_a_division_redo_it() {
     enter(&mut r, "2000");
     assert_eq!(r.ed.undo_depth(), depth + 1);
     assert_eq!(r.ed.doc().objects.len(), objects + 1, "one copy");
-    assert!(near(bounds(&r, id).0, v(0.0, 0.0, 0.0)), "the original stays");
+    assert!(
+        near(bounds(&r, id).0, v(0.0, 0.0, 0.0)),
+        "the original stays"
+    );
     assert_eq!(r.tools.phase(), Phase::Copied);
     // Five copies at the same step: the step before is taken back.
     enter(&mut r, "5x");
     assert_eq!(r.ed.undo_depth(), depth + 1);
     assert_eq!(r.ed.doc().objects.len(), objects + 5);
-    let mut xs: Vec<f64> = r
-        .ed
-        .doc()
-        .objects
-        .keys()
-        .map(|k| bounds(&r, *k).0.x)
-        .collect();
+    let mut xs: Vec<f64> =
+        r.ed.doc()
+            .objects
+            .keys()
+            .map(|k| bounds(&r, *k).0.x)
+            .collect();
     xs.sort_by(f64::total_cmp);
     assert_eq!(xs, vec![0.0, 2000.0, 4000.0, 6000.0, 8000.0, 10000.0]);
     // /4 divides the distance into four copies: 2000 / 4 apart.
     enter(&mut r, "/4");
     assert_eq!(r.ed.undo_depth(), depth + 1);
     assert_eq!(r.ed.doc().objects.len(), objects + 4);
-    let mut xs: Vec<f64> = r
-        .ed
-        .doc()
-        .objects
-        .keys()
-        .map(|k| bounds(&r, *k).0.x)
-        .collect();
+    let mut xs: Vec<f64> =
+        r.ed.doc()
+            .objects
+            .keys()
+            .map(|k| bounds(&r, *k).0.x)
+            .collect();
     xs.sort_by(f64::total_cmp);
     assert_eq!(xs, vec![0.0, 500.0, 1000.0, 1500.0, 2000.0]);
     // One undo takes back all the copies.
@@ -464,7 +468,10 @@ fn scale_with_a_corner_grip_is_uniform() {
     });
     assert_eq!(r.ed.undo_depth(), depth + 1);
     let (lo, hi) = bounds(&r, id);
-    assert!(near(lo, DVec3::ZERO) && near(hi, v(2000.0, 2000.0, 1000.0)), "{lo:?} {hi:?}");
+    assert!(
+        near(lo, DVec3::ZERO) && near(hi, v(2000.0, 2000.0, 1000.0)),
+        "{lo:?} {hi:?}"
+    );
 }
 
 fn start_scale(r: &mut Rig, grip_at: DVec3) {
@@ -501,7 +508,11 @@ fn scale_takes_a_factor_three_factors_and_a_length() {
     // A length on the face grip at the top: the box gets that height.
     start_scale(&mut r, v(500.0, 500.0, 1500.0));
     enter(&mut r, "2000mm");
-    assert!(near(bounds(&r, id).1, v(1000.0, 1000.0, 2000.0)), "{:?}", bounds(&r, id));
+    assert!(
+        near(bounds(&r, id).1, v(1000.0, 1000.0, 2000.0)),
+        "{:?}",
+        bounds(&r, id)
+    );
 }
 
 #[test]
@@ -522,7 +533,11 @@ fn scale_from_a_face_grip_is_along_one_axis_and_shift_makes_it_uniform() {
     let out = enter(&mut r, "2");
     assert!(out.message.is_none());
     // Uniform about the middle of the opposite face.
-    assert!(near(bounds(&r, id).1, v(2000.0, 1500.0, 750.0)), "{:?}", bounds(&r, id));
+    assert!(
+        near(bounds(&r, id).1, v(2000.0, 1500.0, 750.0)),
+        "{:?}",
+        bounds(&r, id)
+    );
 }
 
 #[test]
@@ -573,7 +588,11 @@ fn scaling_a_face_scales_its_vertices_and_keeps_the_model_sound() {
             },
         );
         let pv = tl.preview(w);
-        assert_eq!(pv.grips.len(), 8, "four corners and four edges of the flat box");
+        assert_eq!(
+            pv.grips.len(),
+            8,
+            "four corners and four edges of the flat box"
+        );
         Out::default()
     });
     start_scale(&mut r, v(1000.0, 1000.0, 500.0));

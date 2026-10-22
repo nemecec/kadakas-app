@@ -32,7 +32,9 @@ pub use tools::{
     arc_points, bulge_of, circle_points, delete_actions, intersect_actions, is_drawing_tool,
     radius_to_bulge, takes_values,
 };
-pub use xform::{Context as XContext, Grip, Subject, is_transform_tool, usable_grips, xform_action};
+pub use xform::{
+    Context as XContext, Grip, Subject, is_transform_tool, usable_grips, xform_action,
+};
 
 /// The camera of the inference for the view of the modeler. `origin` is the world position of the
 /// local point (0, 0, 0) of the scene (`Scene::origin`), `size` the size of the view in points.

@@ -372,9 +372,21 @@ impl Placement {
         let mirror = m.determinant() < 0.0;
         let sx = if mirror { -scale.x } else { scale.x };
         let rot = glam::DMat3::from_cols(
-            if scale.x > 0.0 { m.x_axis / sx } else { m.x_axis },
-            if scale.y > 0.0 { m.y_axis / scale.y } else { m.y_axis },
-            if scale.z > 0.0 { m.z_axis / scale.z } else { m.z_axis },
+            if scale.x > 0.0 {
+                m.x_axis / sx
+            } else {
+                m.x_axis
+            },
+            if scale.y > 0.0 {
+                m.y_axis / scale.y
+            } else {
+                m.y_axis
+            },
+            if scale.z > 0.0 {
+                m.z_axis / scale.z
+            } else {
+                m.z_axis
+            },
         );
         let (x, y, z) = glam::DQuat::from_mat3(&rot).to_euler(glam::EulerRot::XYZ);
         let clean = |a: f64| {
@@ -403,7 +415,11 @@ fn placement_of(doc: &Document, obj: &kadakas_core::model::Object) -> Option<Pla
         )),
         Shape::Plant { at, .. } => Some(Placement {
             position: [at.x, at.y, elevation],
-            rotation_deg: [0.0, 0.0, kadakas_core::plants::link::rotation(obj).to_degrees()],
+            rotation_deg: [
+                0.0,
+                0.0,
+                kadakas_core::plants::link::rotation(obj).to_degrees(),
+            ],
             scale: [1.0, 1.0, 1.0],
         }),
         _ => None,

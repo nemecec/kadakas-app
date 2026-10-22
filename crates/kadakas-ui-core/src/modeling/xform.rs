@@ -392,8 +392,14 @@ struct Last {
 #[derive(Clone, Debug)]
 enum LastKind {
     /// `d` is one step.
-    Move { base: DVec3, d: DVec3 },
-    Rotate { plane: Plane3, angle: f64 },
+    Move {
+        base: DVec3,
+        d: DVec3,
+    },
+    Rotate {
+        plane: Plane3,
+        angle: f64,
+    },
     Scale {
         grip: Grip,
         bounds: (DVec3, DVec3),
@@ -535,11 +541,12 @@ impl Xform {
                 let c = self.cursor?;
                 Some((LiveLabel::Length, text_len(units, plane.origin.distance(c))))
             }
-            XRun::Angle { angle, .. } => Some((
-                LiveLabel::Angle,
-                format!("{:.1}°", angle.to_degrees()),
-            )),
-            XRun::Scale { factors, uniform, .. } => {
+            XRun::Angle { angle, .. } => {
+                Some((LiveLabel::Angle, format!("{:.1}°", angle.to_degrees())))
+            }
+            XRun::Scale {
+                factors, uniform, ..
+            } => {
                 let t = if *uniform || factors.x == factors.y && factors.y == factors.z {
                     format!("{:.2}", factors.x)
                 } else {
@@ -1007,7 +1014,16 @@ impl Xform {
                 }
             },
             (Some(ModelerTool::Rotate), XRun::Idle) => self.redo_rotate(v, revision),
-            (Some(ModelerTool::Scale), XRun::Scale { subject, grip, bounds, uniform, factors }) => {
+            (
+                Some(ModelerTool::Scale),
+                XRun::Scale {
+                    subject,
+                    grip,
+                    bounds,
+                    uniform,
+                    factors,
+                },
+            ) => {
                 self.run = XRun::Scale {
                     subject: subject.clone(),
                     grip,
@@ -1075,7 +1091,11 @@ impl Xform {
         let LastKind::Rotate { plane, angle } = l.kind.clone() else {
             return Modeling::need_start();
         };
-        let whole = if l.divided { angle * f64::from(l.count) } else { angle };
+        let whole = if l.divided {
+            angle * f64::from(l.count)
+        } else {
+            angle
+        };
         let (a, count, divided) = match v {
             Value::Count(n) if l.copy => (angle, n, false),
             Value::Divide(n) if l.copy => (whole / f64::from(n), n, true),
@@ -1141,7 +1161,9 @@ impl Xform {
         };
         let f = match v {
             Value::Factor(f) => per_grip(f),
-            Value::Triple([x, y, z]) => DVec3::new(x.unwrap_or(1.0), y.unwrap_or(1.0), z.unwrap_or(1.0)),
+            Value::Triple([x, y, z]) => {
+                DVec3::new(x.unwrap_or(1.0), y.unwrap_or(1.0), z.unwrap_or(1.0))
+            }
             Value::Length(l) => {
                 let r = self.ref_length(grip, bounds, about_center, uniform);
                 if r < 1e-9 {

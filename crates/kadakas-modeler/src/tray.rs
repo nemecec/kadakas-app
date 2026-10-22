@@ -101,11 +101,7 @@ pub fn entity_info(ui: &mut egui::Ui, info: &EntityInfo) {
                     }
                     if let Some(p) = placement {
                         row(ui, tr!("modeler-entity-position"), lengths(p.position));
-                        row(
-                            ui,
-                            tr!("modeler-entity-rotation"),
-                            degrees(p.rotation_deg),
-                        );
+                        row(ui, tr!("modeler-entity-rotation"), degrees(p.rotation_deg));
                         row(ui, tr!("modeler-entity-scale"), factors(p.scale));
                     }
                     if let Some(s) = surface {
