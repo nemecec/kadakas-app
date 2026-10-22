@@ -4,43 +4,57 @@
 //!
 //! The moved set is the given vertices, all vertices of the given faces and the ends of the given
 //! edges. Each moves by the affine map `matrix` (a move, a rotation, a scale, or any mix; a map
-//! that cannot be inverted is refused). Then, in this order:
+//! that flattens is refused: the ratio of its smallest to its largest singular value is below
+//! the relative tolerance, see [`MIN_SINGULAR_RATIO`]). Then, in this order:
 //!
-//! 1. **Weld.** A moved vertex that lands within the length tolerance of another vertex becomes
+//! 1. **Snap.** Where the moved geometry lands within the length tolerance of geometry that did
+//!    not move (a moved vertex on a vertex or on the inside of an edge, a moved edge over a
+//!    vertex), and all these landings agree on one offset within the plane tolerance, the moved
+//!    vertices are shifted by that offset, so they land exactly. A vertex that lands on the inside
+//!    of an edge that did not move is then put onto the edge. So a landing within the tolerance
+//!    never tilts a face out of its plane.
+//! 2. **Weld.** A moved vertex that lands within the length tolerance of another vertex becomes
 //!    that vertex (the vertex that was there stays; of two that moved, the lower id; the moved
 //!    ones go). Edges that fall together become one, loops and faces that lose their area go
 //!    (the weld of Push/Pull, with its notes). A vertex that lands on the inside of an edge, and
 //!    an edge that is moved over a vertex, split there (a welded T-junction), so the model has no
-//!    vertex on an edge.
-//! 2. **Planes.** Every face that has a moved vertex is looked at again. A face whose vertices
+//!    vertex on an edge; parts of edges that then join the same two vertices (an edge slid along
+//!    another) become one edge (the lower id stays and takes the attributes of the other, with a
+//!    note for a value that differs). A vertex that would land on an edge of its own face is
+//!    refused (the face would touch itself).
+//! 3. **Planes.** Every face that has a moved vertex is looked at again. A face whose vertices
 //!    were all moved is mapped exactly (an affine map keeps planes: the new normal is the old one
 //!    times the inverse transpose of the matrix, and the loops turn around when the map is a
 //!    mirror), so it never folds. Any other face keeps its plane if all its vertices still lie on
 //!    it; else it is refitted (Newell normal, mean offset) and is flat if all its vertices lie
 //!    within the plane tolerance of the fit.
-//! 3. **Fold.** A face that is no longer flat is cut into triangles (ear cutting in the best-fit
-//!    plane, holes bridged), so that every face stays planar. The new edges between the triangles
-//!    have the attributes `soft: true` and `smooth: true`; an edge that was there already is used
-//!    as it is. Every piece keeps the attributes and the unknown fields of the face (so its
-//!    material). **Ids:** the pieces are ordered by area, the largest first (equal areas: the
-//!    lower sorted vertex ids first); the first piece keeps the id of the face (the lowest id of
-//!    all pieces), the others get new ids in that order, and new edges get ids in the order of the
-//!    pieces. The same model and the same edit always give the same ids.
-//! 4. **Merge.** A face that is now coplanar with a neighbour that it was not coplanar with before
+//! 4. **Fold.** A face that is no longer flat is cut into triangles (see the module `fold`: the
+//!    cut depends on the geometry only; a quad along the diagonal that bends the least, any other
+//!    face Delaunay-like in its best-fit plane), so that every face stays planar. The new edges
+//!    between the triangles have the attributes `soft: true` and `smooth: true`; an edge that was
+//!    there already is used as it is. Every piece keeps the attributes and the unknown fields of
+//!    the face (so its material). **Ids:** the pieces are ordered by area, the largest first
+//!    (equal areas: the lower sorted vertex ids first); the first piece keeps the id of the face
+//!    (the lowest id of all pieces), the others get new ids in that order, and new edges get ids
+//!    in the order of the pieces. The same model and the same edit always give the same ids.
+//! 5. **Merge.** A face that is now coplanar with a neighbour that it was not coplanar with before
 //!    merges with it by the rules of Erase (the lower id stays; the look of the larger face wins,
 //!    with a note for each dropped value: rule C). Neighbours that were coplanar before (the two
 //!    halves of a split face) stay apart, and the pieces of a fold stay triangles.
 //!
 //! Refused, with the model unchanged: a loop of a face that would cross itself or touch itself
 //! (the reason names the face), a face that would collapse to zero area without a weld, a map that
-//! flattens the model, and a result with a new problem of the model (a face off its plane, two
-//! edges that cross, a vertex too near an edge). Geometry that is moved through other faces is
-//! accepted: an edge through a face in another plane is the warning `NotIntersected` of `check`,
-//! as for drawing; Intersect Faces makes the edges there.
+//! flattens the model, faces that would overlap in one plane (an edge of a face inside a coplanar
+//! face that looks the same way, or one face over another: the coplanar overlaps of `check`, which
+//! Push/Pull refuses too), and a result with a new problem of the model (a face off its plane, two
+//! edges that cross, a vertex too near an edge, a hole in another hole). Geometry that is moved
+//! through faces in other planes is accepted: an edge through such a face is the warning
+//! `NotIntersected` of `check`, as for drawing; Intersect Faces makes the edges there.
 //!
-//! The work uses box trees of the vertices and edges near the moved geometry and the faces that
-//! use a moved vertex, so moving 1,000 vertices of a model of 80,000 edges takes a fraction of a
-//! second.
+//! The work looks only at the geometry near what moved: box trees of the vertices and edges in
+//! that region, a topology index of the faces that use a moved vertex and their neighbours, and
+//! checks of what changed (the rest of the model is as it was). Moving one vertex of a model of
+//! 80,000 edges takes about 15 ms in a release build; see `docs/modeler.md`.
 //!
 //! # `CopyGeometry`
 //!
@@ -49,36 +63,87 @@
 //! [`SurfaceModel::absorb`]: new ids, a copy that lands on a vertex or an edge of the model welds
 //! and splits there, and the faces take their side, attributes and curves from the originals.
 //! Copies that cross other faces stay unsplit (Intersect Faces). Copies are limited like the
-//! edges of one edit ([`MAX_EDIT_EDGES`] over all copies).
+//! edges of one edit ([`MAX_EDIT_EDGES`] over all copies). A copy that would move no vertex by
+//! the length tolerance (it would lie on the original) is refused.
 
 use glam::{DAffine3, DMat3};
 
+use super::super::RELATIVE_TOLERANCE;
 use super::super::arrange::{canonical, reversed};
 use super::super::check::{self, Problem};
+use super::super::clash;
 use super::super::geom::{newell, point_segment};
 use super::super::part::Absorber;
 use super::pushpull::{new_distance_problem, weld};
 use super::*;
 
-/// Smallest determinant (of the 3x3 part) of a map that is applied.
-const MIN_DET: f64 = 1e-12;
+mod fold;
+
+/// The smallest ratio of the smallest to the largest singular value of the 3x3 part of a map
+/// that is applied. It is the relative tolerance of the model (1e-9): a map below it squashes
+/// some direction to less than the relative tolerance of the sizes in the others, so a face of
+/// any size turned across that direction ends thinner than its own length tolerance (flat by the
+/// rules of the model), and the map of the normals (the inverse transpose) loses more than nine
+/// of the sixteen digits of a number. The ratio does not depend on the size: a uniform scale of
+/// 1e-5 (a site model brought to a sketch) is a ratio of 1 and is applied; a scale of (1, 1,
+/// 1e-10) is refused. (A bound on the determinant refused the first, a determinant of 1e-15, and
+/// accepted a scale of (1e4, 1e4, 1e-7), a determinant of 10 that squashes one direction 1e11
+/// times more than the others.)
+const MIN_SINGULAR_RATIO: f64 = RELATIVE_TOLERANCE;
 
 fn bad(msg: impl Into<String>) -> SurfaceError {
     SurfaceError::Refused(msg.into())
 }
 
-/// The map of a matrix of 12 numbers, if it can be inverted.
+/// The map of a matrix of 12 numbers, if it does not flatten (see [`MIN_SINGULAR_RATIO`]).
 fn affine(matrix: &[f64; 12]) -> Result<DAffine3, SurfaceError> {
     let xf = DAffine3::from_cols_array(matrix);
     if !xf.is_finite() {
         return Err(SurfaceError::BadPoint);
     }
-    if xf.matrix3.determinant().abs() < MIN_DET {
+    if singular_ratio(xf.matrix3) < MIN_SINGULAR_RATIO {
         return Err(bad(
             "the transform flattens the geometry (its matrix cannot be inverted)",
         ));
     }
     Ok(xf)
+}
+
+/// The ratio of the smallest to the largest singular value of `a` (0 when it cannot be
+/// inverted): `1 / (|a| |a^-1|)` with the spectral norms. Each norm is the largest singular value,
+/// which the largest eigenvalue of `aᵀa` gives accurately (a small singular value from `aᵀa`
+/// would lose half the digits).
+fn singular_ratio(a: DMat3) -> f64 {
+    let det = a.determinant();
+    if !det.is_finite() || det == 0.0 {
+        return 0.0;
+    }
+    let inv = a.inverse();
+    if !inv.is_finite() {
+        return 0.0;
+    }
+    let r = 1.0 / (largest_singular(a) * largest_singular(inv));
+    if r.is_finite() { r } else { 0.0 }
+}
+
+/// The largest singular value of `a`: the square root of the largest eigenvalue of the symmetric
+/// `aᵀa`, by the closed form for symmetric 3x3 matrices (Smith, 1961).
+fn largest_singular(a: DMat3) -> f64 {
+    let s = a.transpose() * a;
+    let (m00, m11, m22) = (s.x_axis.x, s.y_axis.y, s.z_axis.z);
+    let (m01, m02, m12) = (s.y_axis.x, s.z_axis.x, s.z_axis.y);
+    let p1 = m01 * m01 + m02 * m02 + m12 * m12;
+    let q = (m00 + m11 + m22) / 3.0;
+    let p2 = (m00 - q).powi(2) + (m11 - q).powi(2) + (m22 - q).powi(2) + 2.0 * p1;
+    let top = if p2 <= f64::MIN_POSITIVE {
+        m00.max(m11).max(m22)
+    } else {
+        let p = (p2 / 6.0).sqrt();
+        let b = (s - DMat3::from_diagonal(DVec3::splat(q))) * (1.0 / p);
+        let r = (b.determinant() / 2.0).clamp(-1.0, 1.0);
+        q + 2.0 * p * (r.acos() / 3.0).cos()
+    };
+    top.max(0.0).sqrt()
 }
 
 fn is_identity(xf: &DAffine3) -> bool {
@@ -227,98 +292,6 @@ fn crosses_itself(m: &SurfaceModel, f: &Face, plane: &Plane) -> bool {
     false
 }
 
-/// The triangles of a face that is not flat, in the best-fit plane: vertex triples, each
-/// counterclockwise around the normal of the fit.
-fn fold(m: &SurfaceModel, f: &Face, id: FaceId) -> Result<Vec<[VertexId; 3]>, SurfaceError> {
-    let cannot = || bad(format!("face {id} cannot be folded into triangles"));
-    let plane = fit(m, f).ok_or_else(cannot)?;
-    let ring = |l: &Vec<VertexId>, want_ccw: bool| -> (Vec<VertexId>, Vec<DVec2>) {
-        let mut ids = l.clone();
-        let mut p: Vec<DVec2> = ids.iter().map(|v| plane.project(m.vertices[v])).collect();
-        if (geom::area2(&p) > 0.0) != want_ccw {
-            ids.reverse();
-            p.reverse();
-        }
-        (ids, p)
-    };
-    let mut ids: Vec<VertexId> = Vec::new();
-    let mut rings: Vec<Vec<DVec2>> = Vec::new();
-    let (oi, op) = ring(&f.outer, true);
-    ids.extend(oi);
-    rings.push(op);
-    for h in &f.holes {
-        let (hi, hp) = ring(h, false);
-        ids.extend(hi);
-        rings.push(hp);
-    }
-    let flat_pts: Vec<DVec2> = rings.iter().flatten().copied().collect();
-    let tris = geom::triangulate_rings(&rings).ok_or_else(cannot)?;
-    let mut tris: Vec<[usize; 3]> = tris.into_iter().map(|t| t.map(|i| i as usize)).collect();
-    let all3: Vec<DVec3> = f.loops().flatten().map(|v| m.vertices[v]).collect();
-    let tol = geom::tol(&all3);
-    let area = |t: &[usize; 3]| {
-        (flat_pts[t[1]] - flat_pts[t[0]]).perp_dot(flat_pts[t[2]] - flat_pts[t[0]])
-    };
-    // The pieces must make up the polygon.
-    let want = geom::area2(&rings[0]) + rings[1..].iter().map(|r| geom::area2(r)).sum::<f64>();
-    let got: f64 = tris.iter().map(|t| area(t).abs()).sum();
-    if (want - got).abs() > 1e-6 * want.abs().max(1.0) {
-        return Err(bad(format!(
-            "a loop of face {id} would cross itself, so it cannot be folded"
-        )));
-    }
-    // A piece with no area (three points on one line, a vertex in a straight side) is turned
-    // away by flipping the diagonal it shares with the next piece.
-    let thin = |t: &[usize; 3], flat_pts: &[DVec2]| {
-        let longest = (0..3)
-            .map(|k| flat_pts[t[k]].distance(flat_pts[t[(k + 1) % 3]]))
-            .fold(0.0, f64::max);
-        area(t).abs() <= tol * longest
-    };
-    for _ in 0..(8 * tris.len() + 8) {
-        let Some(i) = (0..tris.len()).find(|&i| thin(&tris[i], &flat_pts)) else {
-            break;
-        };
-        let t = tris[i];
-        // The side of the thin piece that is the long diagonal: opposite the middle point.
-        let long = (0..3)
-            .max_by(|&a, &b| {
-                let l = |k: usize| flat_pts[t[k]].distance(flat_pts[t[(k + 1) % 3]]);
-                l(a).total_cmp(&l(b))
-            })
-            .expect("three sides");
-        let (x, z, y) = (t[long], t[(long + 1) % 3], t[(long + 2) % 3]);
-        let same = |u: usize, v: usize| ids[u] == ids[x] && ids[v] == ids[z];
-        let other = (0..tris.len()).find(|&j| {
-            j != i
-                && (0..3).any(|k| {
-                    let (a, b) = (tris[j][k], tris[j][(k + 1) % 3]);
-                    same(a, b) || same(b, a)
-                })
-        });
-        let Some(j) = other else {
-            return Err(cannot());
-        };
-        let c = *tris[j]
-            .iter()
-            .find(|&&q| ids[q] != ids[x] && ids[q] != ids[z])
-            .expect("a third vertex");
-        let mut a = [x, y, c];
-        let mut b = [y, z, c];
-        for t in [&mut a, &mut b] {
-            if area(t) < 0.0 {
-                t.swap(1, 2);
-            }
-        }
-        tris[i] = a;
-        tris[j] = b;
-    }
-    if tris.iter().any(|t| thin(t, &flat_pts) || area(t) <= 0.0) {
-        return Err(cannot());
-    }
-    Ok(tris.iter().map(|t| t.map(|i| ids[i])).collect())
-}
-
 /// What happens to the faces that use moved vertices.
 struct Faces {
     /// All vertices of the face moved.
@@ -357,11 +330,12 @@ pub(super) fn transform_vertices(
         full: BTreeSet::new(),
         old: BTreeMap::new(),
     };
+    let moving = check::Mask::of(m, s.iter().copied());
     for (id, f) in &m.faces {
         let (mut moved, mut all) = (0usize, 0usize);
         for v in f.loops().flatten() {
             all += 1;
-            moved += usize::from(s.contains(v));
+            moved += usize::from(moving.has(*v));
         }
         if moved > 0 {
             st.old.insert(*id, f.plane);
@@ -372,6 +346,12 @@ pub(super) fn transform_vertices(
     }
     for (v, q) in &newp {
         m.vertices.insert(*v, *q);
+    }
+    // Landings within the tolerance: the moved geometry is put exactly onto what it lands on.
+    if let Some(off) = landing_offset(m, &s) {
+        for v in &s {
+            *m.vertices.get_mut(v).expect("moved") += off;
+        }
     }
     // Faces that moved whole: the plane is mapped, and a mirror turns the loops around.
     for id in &st.full {
@@ -421,7 +401,46 @@ pub(super) fn transform_vertices(
         .collect();
     // Vertices on edges, and edges over vertices.
     let splits = t_junctions(m, &survivors);
-    let mut w = Work::new(m);
+    // A moved vertex on an edge that did not move goes exactly onto the edge.
+    for (e, vs) in &splits {
+        let ends = m.edges[e].v;
+        if ends.iter().any(|v| s.contains(v)) {
+            continue;
+        }
+        let (a, b) = (m.vertices[&ends[0]], m.vertices[&ends[1]]);
+        for v in vs {
+            if s.contains(v) {
+                let (_, t) = point_segment(m.vertices[v], a, b);
+                m.vertices.insert(*v, a + (b - a) * t);
+            }
+        }
+    }
+    let seeds: Vec<VertexId> = survivors
+        .iter()
+        .copied()
+        .chain(splits.keys().flat_map(|e| m.edges[e].v))
+        .chain(splits.values().flatten().copied())
+        .collect();
+    let mut w = local_work(m, seeds.into_iter());
+    for (e, vs) in &splits {
+        for v in vs {
+            if let Some(f) =
+                w.t.faces_of(*e)
+                    .find(|f| w.m.faces[f].loops().flatten().any(|x| x == v))
+            {
+                if collapsed(w.m, &w.m.faces[&f]) {
+                    return Err(bad(format!(
+                        "face {f} would collapse to zero area (all its vertices would lie on a \
+                         line)"
+                    )));
+                }
+                return Err(bad(format!(
+                    "vertex {v} would land on edge {e} of its own face {f}, so the face would \
+                     touch itself"
+                )));
+            }
+        }
+    }
     let mut touched_pairs = BTreeSet::new();
     let mut made_edges = 0usize;
     for (e, vs) in splits {
@@ -434,11 +453,13 @@ pub(super) fn transform_vertices(
             cur = *w.m.edges.keys().next_back().expect("an edge");
         }
     }
+    join_double_edges(&mut w, &touched_pairs, notes);
     // The faces to look at: every face with a surviving moved vertex.
+    let alive_moved = check::Mask::of(w.m, survivors.iter().copied());
     let mut to_check: Vec<FaceId> =
         w.m.faces
             .iter()
-            .filter(|(_, f)| f.loops().flatten().any(|v| survivors.contains(v)))
+            .filter(|(_, f)| f.loops().flatten().any(|v| alive_moved.has(*v)))
             .map(|(id, _)| *id)
             .collect();
     to_check.sort_unstable();
@@ -479,7 +500,7 @@ pub(super) fn transform_vertices(
                 }
             }
             None => {
-                let tris = fold(w.m, &face, id)?;
+                let tris = fold::fold(w.m, &face, id)?;
                 let fp = fit(w.m, &face).expect("fold found a fit");
                 fold_verts.extend(face.loops().flatten().copied());
                 let mut pieces: Vec<(f64, [VertexId; 3], Plane)> = Vec::new();
@@ -556,12 +577,228 @@ pub(super) fn transform_vertices(
             }
         }
     }
-    drop(w);
     if !merge.is_empty() {
         let list: Vec<EdgeId> = merge.into_iter().collect();
-        super::erase_edges(m, &list, notes)?;
+        if reference::mode() == reference::Mode::Index {
+            w.near = Some(Near::of(w.m));
+        }
+        super::erase_edges_in(&mut w, &list, notes)?;
     }
+    drop(w);
     finish(before, m, &survivors, &fold_verts)
+}
+
+/// A work on `m` whose topology index holds only the part of the model around `seeds` (the
+/// vertices that moved, the edges that are split and the vertices they are split at, so every
+/// vertex of a face that the edit looks at is in a face with a seed): every edge at a vertex of a face
+/// with a seed vertex or at a neighbour of such a vertex, and every face that uses one of these
+/// edges. That is all the edit asks the index: the edges and faces of the faces that it looks at
+/// (splits, folds, merges and the heal of an erase), so the answers are the same as those of an
+/// index of the whole model, which would cost a pass that builds maps of all edges and faces.
+/// With the reference way of the tests (`reference::Mode::Scan`) the index is of the whole model,
+/// so that the tests compare the two.
+fn local_work<'a>(m: &'a mut SurfaceModel, seeds: impl Iterator<Item = VertexId>) -> Work<'a> {
+    if reference::mode() == reference::Mode::Scan {
+        return Work::new(m);
+    }
+    let n = m.next_id as usize + 1;
+    let mut core = vec![false; n];
+    let mark = |mask: &mut Vec<bool>, v: VertexId| {
+        if let Some(x) = mask.get_mut(v.0 as usize) {
+            *x = true;
+        }
+    };
+    let has = |mask: &[bool], v: &VertexId| mask.get(v.0 as usize).copied().unwrap_or(false);
+    for v in seeds {
+        mark(&mut core, v);
+    }
+    let mut near = core.clone();
+    for f in m.faces.values() {
+        if f.loops().flatten().any(|v| has(&core, v)) {
+            for v in f.loops().flatten() {
+                mark(&mut near, *v);
+            }
+        }
+    }
+    let mut wide = near.clone();
+    for e in m.edges.values() {
+        if e.v.iter().any(|v| has(&near, v)) {
+            for v in e.v {
+                mark(&mut wide, v);
+            }
+        }
+    }
+    let mut t = Topo::default();
+    for (id, e) in &m.edges {
+        if e.v.iter().any(|v| has(&wide, v)) {
+            t.add_edge(*id, *e);
+        }
+    }
+    for (id, f) in &m.faces {
+        if f.loops().flatten().any(|v| has(&wide, v)) {
+            t.add_face(*id, f);
+        }
+    }
+    Work { m, t, near: None }
+}
+
+/// Makes one edge of each set of edges that join the same two vertices among `pairs` (the parts
+/// of an edge slid along another, split at each other's ends): the lowest id stays and takes the
+/// attributes of the others (a value that differs is dropped with a note) and their place in a
+/// curve when it is in none (else the others leave their curves), as in the weld.
+fn join_double_edges(
+    w: &mut Work<'_>,
+    pairs: &BTreeSet<(VertexId, VertexId)>,
+    notes: &mut Vec<String>,
+) {
+    let mut recheck: BTreeSet<super::super::CurveId> = BTreeSet::new();
+    for &(a, b) in pairs {
+        let k = key(a, b);
+        let ids: Vec<EdgeId> =
+            w.t.edges_at(a)
+                .filter(|e| w.m.edges.get(e).is_some_and(|x| x.key() == k))
+                .collect();
+        if ids.len() < 2 {
+            continue;
+        }
+        let keep = ids[0];
+        let mut faces: Vec<FaceId> = ids.iter().flat_map(|e| w.t.faces_of(*e)).collect();
+        faces.sort_unstable();
+        faces.dedup();
+        let faces: Vec<(FaceId, Face)> = faces
+            .into_iter()
+            .map(|f| (f, w.m.faces[&f].clone()))
+            .collect();
+        for (f, face) in &faces {
+            w.t.remove_face(*f, face);
+        }
+        for &gone in &ids[1..] {
+            let e = w.m.edges[&gone];
+            w.t.remove_edge(gone, e);
+            w.m.edges.remove(&gone);
+            if let Some(attrs) = w.m.edge_attrs.remove(&gone) {
+                let into = w.m.edge_attrs.entry(keep).or_default();
+                for (name, v) in attrs {
+                    match into.get(&name) {
+                        Some(own) if *own != v => notes.push(format!(
+                            "edge {gone} fell onto edge {keep}: its attribute {name} = {v} was \
+                             dropped (edge {keep} keeps {own})"
+                        )),
+                        Some(_) => {}
+                        None => {
+                            into.insert(name, v);
+                        }
+                    }
+                }
+            }
+            let kept_curved = w.m.curves.values().any(|es| es.contains(&keep));
+            for (c, es) in &mut w.m.curves {
+                if let Some(i) = es.iter().position(|e| *e == gone) {
+                    if kept_curved {
+                        es.remove(i);
+                    } else {
+                        es[i] = keep;
+                    }
+                    recheck.insert(*c);
+                }
+            }
+            w.m.curves.retain(|_, es| !es.is_empty());
+        }
+        // The kept edge again, with no stale uses, then the faces.
+        let ke = w.m.edges[&keep];
+        w.t.remove_edge(keep, ke);
+        w.t.add_edge(keep, ke);
+        for (f, face) in &faces {
+            w.t.add_face(*f, face);
+        }
+    }
+    super::rechain(w.m, &recheck);
+}
+
+/// The offset that puts the moved vertices `s` exactly onto the geometry that did not move and
+/// that they land on within the length tolerance: a moved vertex near a vertex (the nearest one)
+/// or else near the inside of an edge with no moved end, and an edge with both ends moved near a
+/// vertex that did not move. `None` when nothing lands, or when the landings do not agree on one
+/// offset within the plane tolerance (then each one welds or splits as it is).
+fn landing_offset(m: &SurfaceModel, s: &BTreeSet<VertexId>) -> Option<DVec3> {
+    let pad = DVec3::splat(check::window(m));
+    let (lo, hi) = geom::bounds(s.iter().map(|v| m.vertices[v]))?;
+    let (lo, hi) = (lo - pad, hi + pad);
+    let at = check::Positions::of(m);
+    let moving = check::Mask::of(m, s.iter().copied());
+    let outside = |a: DVec3, b: DVec3| b.cmplt(lo).any() || a.cmpgt(hi).any();
+    let vtree = BoxTree::new(
+        m.vertices
+            .iter()
+            .filter(|(v, p)| !moving.has(**v) && !outside(**p, **p))
+            .map(|(v, p)| (*p, *p, v.0))
+            .collect(),
+    );
+    let mut moved_edges: Vec<(DVec3, DVec3)> = Vec::new();
+    let etree = BoxTree::new(
+        m.edges
+            .iter()
+            .filter_map(|(id, e)| {
+                let moved = e.v.map(|v| moving.has(v));
+                let (a, b) = (at.get(e.v[0]), at.get(e.v[1]));
+                if moved[0] && moved[1] {
+                    moved_edges.push((a, b));
+                }
+                (!moved[0] && !moved[1] && !outside(a.min(b), a.max(b))).then_some((
+                    a.min(b) - pad,
+                    a.max(b) + pad,
+                    id.0,
+                ))
+            })
+            .collect(),
+    );
+    let interior = |p: DVec3, a: DVec3, b: DVec3| {
+        let (d, t) = point_segment(p, a, b);
+        let tol = geom::tol(&[p, a, b]);
+        let len = a.distance(b);
+        (d <= tol && t * len > tol && (1.0 - t) * len > tol).then_some((d, a + (b - a) * t))
+    };
+    let mut offs: Vec<DVec3> = Vec::new();
+    for v in s {
+        let p = m.vertices[v];
+        let mut best: Option<(f64, u32, DVec3)> = None;
+        vtree.query(p - pad, p + pad, &mut |c| {
+            let q = m.vertices[&VertexId(c)];
+            let d = p.distance(q);
+            if d <= geom::tol(&[p, q]) && best.is_none_or(|b| (d, c) < (b.0, b.1)) {
+                best = Some((d, c, q));
+            }
+        });
+        if best.is_none() {
+            etree.query(p, p, &mut |e| {
+                let ed = m.edges[&EdgeId(e)];
+                let (a, b) = (m.vertices[&ed.v[0]], m.vertices[&ed.v[1]]);
+                if let Some((d, x)) = interior(p, a, b)
+                    && best.is_none_or(|b| (d, e) < (b.0, b.1))
+                {
+                    best = Some((d, e, x));
+                }
+            });
+        }
+        if let Some((_, _, q)) = best {
+            offs.push(q - p);
+        }
+    }
+    for (a, b) in moved_edges {
+        vtree.query(a.min(b) - pad, a.max(b) + pad, &mut |c| {
+            let q = m.vertices[&VertexId(c)];
+            if let Some((_, x)) = interior(q, a, b) {
+                offs.push(q - x);
+            }
+        });
+    }
+    let first = *offs.first()?;
+    let agree = geom::plane_tol(&[lo, hi]);
+    if offs.iter().any(|o| o.distance(first) > agree) {
+        return None;
+    }
+    let mean = offs.iter().sum::<DVec3>() / offs.len() as f64;
+    (mean != DVec3::ZERO).then_some(mean)
 }
 
 /// A triangle's vertices as a loop that starts at its smallest id.
@@ -576,16 +813,59 @@ fn coplanar_before(before: &SurfaceModel, a: FaceId, b: FaceId) -> bool {
     let (Some(fa), Some(fb)) = (before.faces.get(&a), before.faces.get(&b)) else {
         return false;
     };
-    fa.plane.normal.dot(fb.plane.normal) > 0.0
-        && fb
+    if fa.plane.normal.dot(fb.plane.normal) <= 0.0
+        || !fb
             .loops()
             .flatten()
             .all(|v| on_plane(&fa.plane, before.vertices[v]))
-        && fa.uses().any(|(p, q)| fb.uses().any(|u| u == (q, p)))
+    {
+        return false;
+    }
+    let uses: BTreeSet<(VertexId, VertexId)> = fb.uses().collect();
+    fa.uses().any(|(p, q)| uses.contains(&(q, p)))
+}
+
+/// The keys of the entries that differ between two maps (in one only, or with other values).
+fn changed<K: Ord + Copy, V: PartialEq>(a: &BTreeMap<K, V>, b: &BTreeMap<K, V>) -> Vec<K> {
+    let mut out = Vec::new();
+    let (mut x, mut y) = (a.iter().peekable(), b.iter().peekable());
+    loop {
+        match (x.peek(), y.peek()) {
+            (None, None) => break,
+            (Some((k, _)), None) => {
+                out.push(**k);
+                x.next();
+            }
+            (None, Some((k, _))) => {
+                out.push(**k);
+                y.next();
+            }
+            (Some((ka, va)), Some((kb, vb))) => match ka.cmp(kb) {
+                std::cmp::Ordering::Less => {
+                    out.push(**ka);
+                    x.next();
+                }
+                std::cmp::Ordering::Greater => {
+                    out.push(**kb);
+                    y.next();
+                }
+                std::cmp::Ordering::Equal => {
+                    if va != vb {
+                        out.push(**ka);
+                    }
+                    x.next();
+                    y.next();
+                }
+            },
+        }
+    }
+    out
 }
 
 /// The checks of the result: the faces and the limits, then new structural problems, then new
-/// distance problems around what moved.
+/// distance problems around what moved, then new coplanar overlaps. Only what changed is looked
+/// at (the rest of the model is as it was); when the quick look finds a structural problem, the
+/// full checks of both models decide, so a problem that the model had before stays allowed.
 fn finish(
     before: &SurfaceModel,
     m: &mut SurfaceModel,
@@ -594,30 +874,128 @@ fn finish(
 ) -> Result<(), SurfaceError> {
     check_limits(m)?;
     let invalid = |p: &Problem| bad(format!("the move would make the model invalid: {p}"));
-    let after = check::structure_problems(m);
-    if !after.is_empty() {
-        let old = check::structure_problems(before);
-        if let Some(p) = after.difference(&old).next() {
-            return Err(invalid(p));
+    let cv = changed(&before.vertices, &m.vertices);
+    let ce = changed(&before.edges, &m.edges);
+    let cf = changed(&before.faces, &m.faces);
+    let mut seeds: BTreeSet<VertexId> = cv.iter().copied().collect();
+    let mut ids: BTreeSet<u32> = BTreeSet::new();
+    for e in &ce {
+        for x in [before, &*m] {
+            if let Some(ed) = x.edges.get(e) {
+                seeds.extend(ed.v);
+            }
+        }
+        if m.edges.contains_key(e) {
+            ids.insert(e.0);
         }
     }
+    for f in &cf {
+        for x in [before, &*m] {
+            if let Some(face) = x.faces.get(f) {
+                seeds.extend(face.loops().flatten());
+            }
+        }
+        if m.faces.contains_key(f) {
+            ids.insert(f.0);
+        }
+    }
+    ids.extend(
+        cv.iter()
+            .filter(|v| m.vertices.contains_key(v))
+            .map(|v| v.0),
+    );
+    // The reference way of the tests always runs the full checks.
+    if reference::mode() == reference::Mode::Scan || check::structure_near(m, &seeds, &ids) {
+        let after = check::structure_problems(m);
+        if !after.is_empty() {
+            let old = check::structure_problems(before);
+            if let Some(p) = after.difference(&old).next() {
+                return Err(invalid(p));
+            }
+        }
+    }
+    // The distances of what moved and of every edge that changed (a merge can join two edges
+    // into one that no moved vertex ends).
     let verts: BTreeSet<VertexId> = survivors
         .iter()
         .chain(folded.iter())
+        .chain(cv.iter())
         .copied()
         .filter(|v| m.vertices.contains_key(v))
         .collect();
+    let near = check::Mask::of(m, verts.iter().copied());
     let edges: BTreeSet<EdgeId> = m
         .edges
         .iter()
-        .filter(|(_, e)| e.v.iter().any(|v| verts.contains(v)))
+        .filter(|(id, e)| e.v.iter().any(|v| near.has(*v)) || ce.binary_search(id).is_ok())
         .map(|(id, _)| *id)
         .collect();
     if let Some(p) = new_distance_problem(before, m, &edges, &verts) {
         return Err(invalid(&p));
     }
+    new_overlap(before, m, &cv, &ce, &cf)?;
     if let Some(p) = check::curves(m) {
         return Err(invalid(&p));
+    }
+    Ok(())
+}
+
+/// Refuses a coplanar overlap that the move makes (one that the model before did not have between
+/// the same faces, or the same edge and face): an edge of a face that would lie in a face of the
+/// same plane looking the same way, or two such faces that would share an area. The items looked
+/// at are the changed edges and faces and those at a changed vertex.
+fn new_overlap(
+    before: &SurfaceModel,
+    m: &SurfaceModel,
+    cv: &[VertexId],
+    ce: &[EdgeId],
+    cf: &[FaceId],
+) -> Result<(), SurfaceError> {
+    let moved = check::Mask::of(m, cv.iter().copied().filter(|v| m.vertices.contains_key(v)));
+    let items = |x: &SurfaceModel| {
+        let mut edges: BTreeSet<EdgeId> = ce
+            .iter()
+            .copied()
+            .filter(|e| x.edges.contains_key(e))
+            .collect();
+        edges.extend(
+            x.edges
+                .iter()
+                .filter(|(_, e)| e.v.iter().any(|v| moved.has(*v)))
+                .map(|(id, _)| *id),
+        );
+        let mut faces: BTreeSet<FaceId> = cf
+            .iter()
+            .copied()
+            .filter(|f| x.faces.contains_key(f))
+            .collect();
+        faces.extend(
+            x.faces
+                .iter()
+                .filter(|(_, f)| f.loops().flatten().any(|v| moved.has(*v)))
+                .map(|(id, _)| *id),
+        );
+        (edges, faces)
+    };
+    let window = check::window(m).max(check::window(before));
+    let (edges, faces) = items(m);
+    let (lies, over) = clash::coplanar_near(m, &edges, &faces, window);
+    if lies.is_empty() && over.is_empty() {
+        return Ok(());
+    }
+    let (be, bf) = items(before);
+    let (old_lies, old_over) = clash::coplanar_near(before, &be, &bf, window);
+    if let Some((e, g)) = lies.iter().find(|x| !old_lies.contains(x)) {
+        return Err(bad(format!(
+            "the move would make faces overlap: edge {e} would lie inside face {g}, which is in \
+             the same plane and looks the same way"
+        )));
+    }
+    if let Some((f, g)) = over.iter().find(|x| !old_over.contains(x)) {
+        return Err(bad(format!(
+            "the move would make faces {f} and {g} overlap: they would lie in one plane, look the \
+             same way and share an area"
+        )));
     }
     Ok(())
 }
@@ -705,12 +1083,14 @@ fn t_junctions(
         return BTreeMap::new();
     }
     let pad = DVec3::splat(check::window(m));
-    let pos = |v: VertexId| m.vertices[&v];
+    let at = check::Positions::of(m);
+    let pos = |v: VertexId| at.get(v);
+    let moved = check::Mask::of(m, survivors.iter().copied());
     // The box around the moved vertices and the edges that end at them.
     let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
     let mut moved_edges: Vec<EdgeId> = Vec::new();
     for (id, e) in &m.edges {
-        if e.v.iter().any(|v| survivors.contains(v)) {
+        if e.v.iter().any(|v| moved.has(*v)) {
             moved_edges.push(*id);
             for v in e.v {
                 lo = lo.min(pos(v));
@@ -805,8 +1185,16 @@ pub(super) fn copy_geometry(
             count: total,
         });
     }
-    if is_identity(&xf) {
-        return Err(bad("the copy would lie on the original (the move is zero)"));
+    // A copy whose every vertex stays within the length tolerance of where it was would weld
+    // onto the original and change nothing.
+    let lands_on_itself = part.vertices.values().all(|p| {
+        let q = xf.transform_point3(*p);
+        p.distance(q) <= geom::tol(&[*p, q])
+    });
+    if is_identity(&xf) || lands_on_itself {
+        return Err(bad(
+            "the copy would lie on the original (the move is shorter than the length tolerance)",
+        ));
     }
     let mut a = Absorber::new(m.clone());
     let mut at = DAffine3::IDENTITY;

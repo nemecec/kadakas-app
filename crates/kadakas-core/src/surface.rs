@@ -443,9 +443,12 @@ impl SurfaceModel {
         let intent = sync::Intent::of(self, edit);
         let mut work = self.clone();
         let notes = edit::run(&mut work, edit, self)?;
-        if !work.same_geometry(self) {
-            sync::record(&mut work, self, intent);
+        // An edit that changes nothing leaves the model as it was (also its id counter), so it
+        // is no revision and no undo step.
+        if work.same_geometry(self) {
+            return Ok(notes);
         }
+        sync::record(&mut work, self, intent);
         *self = work;
         Ok(notes)
     }

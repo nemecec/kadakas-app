@@ -69,6 +69,8 @@ pub enum Problem {
     HoleSide(FaceId),
     #[error("a hole of face {0} lies outside its outer loop")]
     HoleOutside(FaceId),
+    #[error("a hole of face {0} lies inside another hole of the face")]
+    HoleInHole(FaceId),
     #[error("vertices {0} and {1} are closer than half the length tolerance")]
     CloseVertices(VertexId, VertexId),
     #[error("vertex {0} lies on edge {1}")]
@@ -298,6 +300,51 @@ pub(super) fn window(m: &SurfaceModel) -> f64 {
     geom::tolerance_at(biggest)
 }
 
+/// The positions of the vertices in a table by id (not finite for an id that is no vertex). It is
+/// made in one pass in id order; a pass over all edges or faces that needs their positions then
+/// reads the table, which is many times faster than a look-up in the map for each end.
+pub(super) struct Positions(Vec<DVec3>);
+
+impl Positions {
+    pub fn of(m: &SurfaceModel) -> Positions {
+        let mut t = vec![DVec3::NAN; m.next_id as usize + 1];
+        for (v, p) in &m.vertices {
+            if let Some(x) = t.get_mut(v.0 as usize) {
+                *x = *p;
+            }
+        }
+        Positions(t)
+    }
+
+    /// The position of a vertex (not finite when there is none).
+    pub fn get(&self, v: VertexId) -> DVec3 {
+        self.0.get(v.0 as usize).copied().unwrap_or(DVec3::NAN)
+    }
+}
+
+/// A set of vertices as a table by id, for passes over all edges or faces.
+pub(super) struct Mask(Vec<bool>);
+
+impl Mask {
+    pub fn of(m: &SurfaceModel, vs: impl IntoIterator<Item = VertexId>) -> Mask {
+        let mut t = Mask(vec![false; m.next_id as usize + 1]);
+        for v in vs {
+            t.add(v);
+        }
+        t
+    }
+
+    pub fn add(&mut self, v: VertexId) {
+        if let Some(x) = self.0.get_mut(v.0 as usize) {
+            *x = true;
+        }
+    }
+
+    pub fn has(&self, v: VertexId) -> bool {
+        self.0.get(v.0 as usize).copied().unwrap_or(false)
+    }
+}
+
 /// The distance problems (as in `full`) of pairs in which one item is in `edges` or `verts`: the
 /// vertices of `verts` against all vertices and edges, and the edges of `edges` against all
 /// vertices and edges. The references of the model must hold for these items.
@@ -309,13 +356,34 @@ pub(super) fn near(
     let window = window(m);
     let pad = DVec3::splat(window);
     let ok = |e: &super::Edge| e.v.iter().all(|v| m.vertices.contains_key(v));
+    // Only the edges near the items can be found by the queries below (each query box is a point
+    // or the box of an edge of the items, and the tree boxes are grown by the window), so the tree
+    // holds those: the same answers as a tree of all edges.
+    let Some((lo, hi)) = geom::bounds(
+        verts
+            .iter()
+            .filter_map(|v| m.vertices.get(v).copied())
+            .chain(
+                edges
+                    .iter()
+                    .filter_map(|e| m.edges.get(e))
+                    .filter(|e| ok(e))
+                    .flat_map(|e| e.v.map(|v| m.vertices[&v])),
+            ),
+    ) else {
+        return BTreeSet::new();
+    };
+    let (lo, hi) = (lo - pad, hi + pad);
+    let at = Positions::of(m);
     let tree = BoxTree::new(
         m.edges
             .iter()
-            .filter(|(_, e)| ok(e))
-            .map(|(id, e)| {
-                let (a, b) = (m.vertices[&e.v[0]], m.vertices[&e.v[1]]);
-                (a.min(b) - pad, a.max(b) + pad, id.0)
+            .filter_map(|(id, e)| {
+                let (a, b) = (at.get(e.v[0]), at.get(e.v[1]));
+                // Not finite: an end that is no vertex (the edge is left out, as by `ok`).
+                let (elo, ehi) = (a.min(b) - pad, a.max(b) + pad);
+                (a.is_finite() && b.is_finite() && !(ehi.cmplt(lo).any() || elo.cmpgt(hi).any()))
+                    .then_some((elo, ehi, id.0))
             })
             .collect(),
     );
@@ -451,74 +519,15 @@ fn structure(m: &SurfaceModel, found: &mut dyn FnMut(Problem) -> bool) {
         }
     }
     for (&id, f) in &m.faces {
-        let n = f.plane.normal;
-        if (n.length() - 1.0).abs() > 1e-9 {
-            report!(Problem::BadNormal(id));
-            continue;
-        }
-        if f.loops().any(|l| l.len() < 3) {
-            report!(Problem::ShortLoop(id));
-            continue;
-        }
-        if f.loops().flatten().any(|v| !m.vertices.contains_key(v)) {
-            report!(Problem::FaceVertex(id));
-            continue;
-        }
-        let mut used: BTreeSet<EdgeId> = BTreeSet::new();
-        let mut broken = false;
-        for l in f.loops() {
-            let mut seen: BTreeSet<VertexId> = BTreeSet::new();
-            for (i, &v) in l.iter().enumerate() {
-                if !seen.insert(v) {
-                    report!(Problem::RepeatedVertex(id, v));
-                    broken = true;
-                }
-                let w = l[(i + 1) % l.len()];
-                match pairs.get(&key(v, w)) {
-                    None => {
-                        report!(Problem::MissingEdge(id, v, w));
-                        broken = true;
-                    }
-                    Some(e) if !used.insert(*e) => {
-                        report!(Problem::RepeatedEdge(id, *e));
-                        broken = true;
-                    }
-                    Some(_) => {}
-                }
-            }
-        }
-        if broken {
-            continue;
-        }
-        // The same test as the edits use, so a face is valid exactly when the edits see it in
-        // its plane.
-        if let Some(v) = f
-            .loops()
-            .flatten()
-            .find(|v| !geom::on_plane(&f.plane, m.vertices[v]))
-        {
-            report!(Problem::OffPlane(id, *v));
-            continue;
-        }
-        let pts = |l: &Vec<VertexId>| m.loop_points(l);
-        if geom::newell(&pts(&f.outer)).dot(n) <= 0.0 {
-            report!(Problem::OuterSide(id));
-            continue;
-        }
-        let ring = |l: &Vec<VertexId>| -> Vec<DVec2> {
-            l.iter().map(|v| f.plane.project(m.vertices[v])).collect()
-        };
-        let outer = [ring(&f.outer)];
-        for h in &f.holes {
-            if geom::newell(&pts(h)).dot(n) >= 0.0 {
-                report!(Problem::HoleSide(id));
-                break;
-            }
-            let r = ring(h);
-            if !inside((r[0] + r[1]) / 2.0, &outer) {
-                report!(Problem::HoleOutside(id));
-                break;
-            }
+        let pair = |a: VertexId, b: VertexId| pairs.get(&key(a, b)).copied();
+        let mut go = true;
+        face_checks(m, id, f, &pair, &mut |p| {
+            clean = false;
+            go = found(p);
+            go
+        });
+        if !go {
+            return;
         }
     }
     if let Some(e) = m.edge_attrs.keys().find(|e| !m.edges.contains_key(e)) {
@@ -540,6 +549,233 @@ fn structure(m: &SurfaceModel, found: &mut dyn FnMut(Problem) -> bool) {
             }
         }
     }
+}
+
+/// The checks of one face (a part of `structure`): normal, loops, edges, plane, sides, holes.
+/// `pair` finds the edge between two vertices. `found` is called for each problem and returns
+/// false to stop the checks.
+fn face_checks(
+    m: &SurfaceModel,
+    id: FaceId,
+    f: &super::Face,
+    pair: &dyn Fn(VertexId, VertexId) -> Option<EdgeId>,
+    found: &mut dyn FnMut(Problem) -> bool,
+) {
+    macro_rules! report {
+        ($p:expr) => {
+            if !found($p) {
+                return;
+            }
+        };
+    }
+    let n = f.plane.normal;
+    if (n.length() - 1.0).abs() > 1e-9 {
+        report!(Problem::BadNormal(id));
+        return;
+    }
+    if f.loops().any(|l| l.len() < 3) {
+        report!(Problem::ShortLoop(id));
+        return;
+    }
+    if f.loops().flatten().any(|v| !m.vertices.contains_key(v)) {
+        report!(Problem::FaceVertex(id));
+        return;
+    }
+    let mut used: BTreeSet<EdgeId> = BTreeSet::new();
+    let mut broken = false;
+    for l in f.loops() {
+        let mut seen: BTreeSet<VertexId> = BTreeSet::new();
+        for (i, &v) in l.iter().enumerate() {
+            if !seen.insert(v) {
+                report!(Problem::RepeatedVertex(id, v));
+                broken = true;
+            }
+            let w = l[(i + 1) % l.len()];
+            match pair(v, w) {
+                None => {
+                    report!(Problem::MissingEdge(id, v, w));
+                    broken = true;
+                }
+                Some(e) if !used.insert(e) => {
+                    report!(Problem::RepeatedEdge(id, e));
+                    broken = true;
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    if broken {
+        return;
+    }
+    // The same test as the edits use, so a face is valid exactly when the edits see it in
+    // its plane.
+    if let Some(v) = f
+        .loops()
+        .flatten()
+        .find(|v| !geom::on_plane(&f.plane, m.vertices[v]))
+    {
+        report!(Problem::OffPlane(id, *v));
+        return;
+    }
+    let pts = |l: &Vec<VertexId>| m.loop_points(l);
+    if geom::newell(&pts(&f.outer)).dot(n) <= 0.0 {
+        report!(Problem::OuterSide(id));
+        return;
+    }
+    let ring = |l: &Vec<VertexId>| -> Vec<DVec2> {
+        l.iter().map(|v| f.plane.project(m.vertices[v])).collect()
+    };
+    let outer = [ring(&f.outer)];
+    let mut holes: Vec<Vec<DVec2>> = Vec::with_capacity(f.holes.len());
+    for h in &f.holes {
+        if geom::newell(&pts(h)).dot(n) >= 0.0 {
+            report!(Problem::HoleSide(id));
+            return;
+        }
+        let r = ring(h);
+        if !inside((r[0] + r[1]) / 2.0, &outer) {
+            report!(Problem::HoleOutside(id));
+            return;
+        }
+        holes.push(r);
+    }
+    if holes_overlap(&holes) {
+        report!(Problem::HoleInHole(id));
+    }
+}
+
+/// True if a hole lies in another hole of the same face: the middle of the first side of one
+/// hole is inside another. (Holes whose sides cross are found by the distance checks.) A box tree
+/// of the holes finds the candidates, so a face with many holes is checked in `O(n log n)`.
+fn holes_overlap(holes: &[Vec<DVec2>]) -> bool {
+    if holes.len() < 2 {
+        return false;
+    }
+    let boxes: Vec<(DVec3, DVec3, u32)> = holes
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let (lo, hi) = r.iter().fold(
+                (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+                |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+            );
+            (lo.extend(0.0), hi.extend(0.0), i as u32)
+        })
+        .collect();
+    let tree = BoxTree::new(boxes);
+    holes.iter().enumerate().any(|(i, r)| {
+        let p = (r[0] + r[1]) / 2.0;
+        let mut hit = false;
+        tree.query(p.extend(0.0), p.extend(0.0), &mut |j| {
+            let j = j as usize;
+            if !hit && j != i && inside(p, std::slice::from_ref(&holes[j])) {
+                hit = true;
+            }
+        });
+        hit
+    })
+}
+
+/// True if the fast checks (as in `structure`) may find a problem at the items of an edit:
+/// `seeds` are the vertices of the new, changed and removed items (the vertices that moved, the
+/// ends of the edges and the vertices of the faces). Each check looks at the faces with a seed
+/// vertex, the edges at their vertices and the uses of those edges, so a problem of the model
+/// that involves a changed item is found; the rest of the model is as it was. The limits are not
+/// looked at (see `check_limits`). An edit that gets `true` compares the full checks of the model
+/// before and after (problems that were there before stay allowed); `false` means that the full
+/// checks find no problem that the model before did not have.
+pub(super) fn structure_near(
+    m: &SurfaceModel,
+    seeds: &BTreeSet<VertexId>,
+    ids: &BTreeSet<u32>,
+) -> bool {
+    let mut mask = Mask::of(m, []);
+    for &id in ids {
+        let kinds = usize::from(m.vertices.contains_key(&VertexId(id)))
+            + usize::from(m.edges.contains_key(&EdgeId(id)))
+            + usize::from(m.faces.contains_key(&FaceId(id)))
+            + usize::from(m.curves.contains_key(&super::CurveId(id)));
+        if id == 0 || id >= m.next_id || kinds > 1 {
+            return true;
+        }
+    }
+    for v in seeds {
+        mask.add(*v);
+        if let Some(p) = m.vertices.get(v)
+            && (!p.is_finite() || geom::size(*p) > MAX_COORD)
+        {
+            return true;
+        }
+    }
+    let faces: Vec<FaceId> = m
+        .faces
+        .iter()
+        .filter(|(_, f)| f.loops().flatten().any(|v| mask.has(*v)))
+        .map(|(id, _)| *id)
+        .collect();
+    let mut wide = mask;
+    for f in &faces {
+        for v in m.faces[f].loops().flatten() {
+            wide.add(*v);
+        }
+    }
+    let mut pairs: BTreeMap<(VertexId, VertexId), EdgeId> = BTreeMap::new();
+    let mut degree: BTreeMap<VertexId, usize> = BTreeMap::new();
+    for (&id, e) in &m.edges {
+        if !e.v.iter().any(|v| wide.has(*v)) {
+            continue;
+        }
+        if e.v.iter().any(|v| !m.vertices.contains_key(v))
+            || e.v[0] == e.v[1]
+            || pairs.insert(e.key(), id).is_some()
+        {
+            return true;
+        }
+        for v in e.v {
+            *degree.entry(v).or_default() += 1;
+        }
+    }
+    if seeds
+        .iter()
+        .any(|v| m.vertices.contains_key(v) && !degree.contains_key(v))
+    {
+        return true;
+    }
+    let pair = |a: VertexId, b: VertexId| pairs.get(&key(a, b)).copied();
+    for f in &faces {
+        let mut bad = false;
+        face_checks(m, *f, &m.faces[f], &pair, &mut |_| {
+            bad = true;
+            false
+        });
+        if bad {
+            return true;
+        }
+    }
+    // Coplanar faces on the same side of an edge: every face that uses a side of a face above has
+    // a vertex in `wide`.
+    let mut uses: BTreeMap<(VertexId, VertexId), Vec<(FaceId, bool)>> = BTreeMap::new();
+    for (&id, f) in &m.faces {
+        if !f.loops().flatten().any(|v| wide.has(*v)) {
+            continue;
+        }
+        for (a, b) in f.uses() {
+            if wide.has(a) && wide.has(b) {
+                uses.entry(key(a, b)).or_default().push((id, a < b));
+            }
+        }
+    }
+    for f in &faces {
+        for (a, b) in m.faces[f].uses() {
+            let k = key(a, b);
+            if let Some(list) = uses.get(&k)
+                && overlap(m, k, list, &pairs, false).is_some()
+            {
+                return true;
+            }
+        }
+    }
+    m.edge_attrs.keys().any(|e| !m.edges.contains_key(e)) || curves(m).is_some()
 }
 
 /// The first problem of the curves: an edge that does not exist, an edge in two curves or twice,

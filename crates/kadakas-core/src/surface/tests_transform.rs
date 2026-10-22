@@ -564,15 +564,20 @@ fn a_hole_face_folds_with_its_hole_kept_in_the_triangles() {
     let corner = vertex_at(&m, [3000.0, 3000.0, 0.0]);
     apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, 600.0))).unwrap();
     sound(&m);
-    // The big face is cut into triangles that do not cover the hole.
-    let covered: f64 = m
+    // The big face is cut into triangles that do not cover the hole: seen from above they cover
+    // the square less the hole exactly, and the hole's own face is still there.
+    let inner = face_with(&m, &[[1000.0, 1000.0, 0.0], [2000.0, 2000.0, 0.0]]);
+    let seen: f64 = m
         .faces()
-        .filter(|(_, f)| {
-            f.attrs.is_empty() && f.holes.is_empty() && f.plane.normal.z > 0.0 && f.outer.len() == 3
-        })
-        .map(|(id, _)| m.face_area(id).unwrap())
+        .filter(|(id, _)| *id != inner)
+        .map(|(id, f)| m.face_area(id).unwrap() * f.plane.normal.z)
         .sum();
-    assert!(covered > 7_000_000.0 && covered < 10_000_000.0, "{covered}");
+    assert!((seen - 8_000_000.0).abs() < 1e-6, "{seen}");
+    assert!(
+        m.faces()
+            .filter(|(id, _)| *id != inner)
+            .all(|(_, f)| f.outer.len() == 3 && f.holes.is_empty())
+    );
 }
 
 #[test]
@@ -602,8 +607,7 @@ fn the_edit_is_logged_and_replays_on_another_copy() {
     .unwrap();
     let entry = a.log().last().unwrap().clone();
     sync::replay_intent(&mut b, &entry.intent).unwrap();
-    assert_eq!(a.faces().count(), b.faces().count());
-    assert_eq!(a.area(), b.area());
+    assert_same_geometry(&a, &b);
 }
 
 // ---- copies ----------------------------------------------------------------------------------
@@ -907,6 +911,22 @@ fn perf_move() {
         .map(|(v, _)| v)
         .take(1000)
         .collect();
+    // One vertex (the fixed cost of an edit), up and back.
+    let one = vertex_at(&m, [20_000.0, 20_000.0, 0.0]);
+    let start = Instant::now();
+    m.apply(&mv_vertices(&[one], DVec3::new(0.0, 0.0, 300.0)))
+        .unwrap();
+    println!("lift 1 vertex: {:?}", start.elapsed());
+    let start = Instant::now();
+    m.apply(&mv_vertices(&[one], DVec3::new(0.0, 0.0, -300.0)))
+        .unwrap();
+    println!("lift it back: {:?}", start.elapsed());
+    // (Back down, the faces around it merge: the vertex heals away.)
+    let other = vertex_at(&m, [30_000.0, 30_000.0, 0.0]);
+    let start = Instant::now();
+    m.apply(&mv_vertices(&[other], DVec3::new(100.0, 50.0, 0.0)))
+        .unwrap();
+    println!("slide 1 vertex in its plane: {:?}", start.elapsed());
     println!("moving {} vertices", block.len());
     let start = Instant::now();
     m.apply(&mv_vertices(&block, DVec3::new(0.0, 0.0, 300.0)))
@@ -942,4 +962,737 @@ fn perf_move() {
     })
     .unwrap();
     println!("lift a block of faces whole: {:?}", start.elapsed());
+}
+
+// ---- review round (MOD-05 round A) ------------------------------------------------------------
+
+/// The face whose outer loop has a vertex at each of the points (in any order).
+fn face_with(m: &SurfaceModel, corners: &[P]) -> FaceId {
+    m.faces()
+        .find(|(_, f)| {
+            corners.iter().all(|c| {
+                f.outer
+                    .iter()
+                    .any(|v| m.vertex(*v).unwrap().distance((*c).into()) < 1e-6)
+            })
+        })
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| panic!("no face at {corners:?}"))
+}
+
+fn mv_faces(fs: &[FaceId], d: DVec3) -> Edit {
+    Edit::TransformVertices {
+        vertices: Vec::new(),
+        faces: fs.to_vec(),
+        edges: Vec::new(),
+        matrix: shift(d),
+    }
+}
+
+/// A loop from its lowest id.
+fn canon(l: &[VertexId]) -> Vec<VertexId> {
+    let i = (0..l.len()).min_by_key(|&i| l[i]).unwrap();
+    let mut out = l.to_vec();
+    out.rotate_left(i);
+    out
+}
+
+/// The same vertices, edges and faces (with their ids, loops, attributes, and positions and planes
+/// within 1e-9), the same edge attributes and curves.
+fn assert_same_geometry(a: &SurfaceModel, b: &SurfaceModel) {
+    let va: Vec<_> = a.vertices().collect();
+    let vb: Vec<_> = b.vertices().collect();
+    assert_eq!(va.len(), vb.len(), "vertex count");
+    for ((ia, pa), (ib, pb)) in va.iter().zip(&vb) {
+        assert_eq!(ia, ib);
+        assert!(pa.distance(*pb) <= 1e-9, "vertex {ia}: {pa} vs {pb}");
+    }
+    assert_eq!(
+        a.edges().collect::<Vec<_>>(),
+        b.edges().collect::<Vec<_>>(),
+        "edges"
+    );
+    assert_eq!(a.edge_attrs, b.edge_attrs, "edge attributes");
+    assert_eq!(a.curves, b.curves, "curves");
+    let fa: Vec<_> = a.faces().collect();
+    let fb: Vec<_> = b.faces().collect();
+    assert_eq!(
+        fa.iter().map(|f| f.0).collect::<Vec<_>>(),
+        fb.iter().map(|f| f.0).collect::<Vec<_>>(),
+        "face ids"
+    );
+    for ((id, x), (_, y)) in fa.iter().zip(&fb) {
+        assert_eq!(canon(&x.outer), canon(&y.outer), "outer loop of face {id}");
+        let holes = |f: &Face| {
+            let mut h: Vec<Vec<VertexId>> = f.holes.iter().map(|l| canon(l)).collect();
+            h.sort();
+            h
+        };
+        assert_eq!(holes(x), holes(y), "holes of face {id}");
+        assert!(
+            x.plane.normal.distance(y.plane.normal) <= 1e-9
+                && (x.plane.offset - y.plane.offset).abs() <= 1e-9,
+            "plane of face {id}: {:?} vs {:?}",
+            x.plane,
+            y.plane
+        );
+        assert_eq!(x.attrs, y.attrs, "attributes of face {id}");
+        assert_eq!(x.extra, y.extra, "fields of face {id}");
+    }
+}
+
+#[test]
+fn a_face_moved_into_a_coplanar_face_is_refused() {
+    // Fable (1): B moved whole into A, and one corner of B moved into A.
+    let scene = || {
+        let mut m = SurfaceModel::new();
+        poly(&mut m, &square(0.0, 0.0, 3000.0, 0.0));
+        poly(&mut m, &square(5000.0, 0.0, 1000.0, 0.0));
+        m
+    };
+    let mut m = scene();
+    let before = m.clone();
+    let b = face_with(&m, &[[5000.0, 0.0, 0.0], [6000.0, 1000.0, 0.0]]);
+    let e = apply(&mut m, mv_faces(&[b], DVec3::new(-4000.0, 1000.0, 0.0)));
+    let msg = e.unwrap_err().to_string();
+    assert!(msg.contains("overlap"), "{msg}");
+    assert_eq!(m, before);
+    let mut m = scene();
+    let corner = vertex_at(&m, [5000.0, 0.0, 0.0]);
+    let e = apply(
+        &mut m,
+        mv_vertices(&[corner], DVec3::new(-3500.0, 1500.0, 0.0)),
+    );
+    assert!(e.is_err(), "{e:?}");
+    assert_eq!(m, before);
+    // Every corner of B moved into A, one at a time: refused too, never an error of `check`.
+    for c in square(5000.0, 0.0, 1000.0, 0.0) {
+        let mut m = scene();
+        let v = vertex_at(&m, c);
+        let to = DVec3::new(1500.0, 1500.0, 0.0) - DVec3::from(c);
+        match apply(&mut m, mv_vertices(&[v], to)) {
+            Ok(_) => sound(&m),
+            Err(_) => assert_eq!(m, before),
+        }
+    }
+}
+
+#[test]
+fn an_edge_slid_along_another_becomes_one_edge_and_the_faces_merge() {
+    // Fable (2): B's bottom edge slides onto a part of A's top edge.
+    let mut m = SurfaceModel::new();
+    poly(&mut m, &square(0.0, 0.0, 1000.0, 0.0));
+    poly(&mut m, &square(500.0, 2000.0, 1000.0, 0.0));
+    let b = face_with(&m, &[[500.0, 2000.0, 0.0], [1500.0, 3000.0, 0.0]]);
+    let area = m.area();
+    apply(&mut m, mv_faces(&[b], DVec3::new(0.0, -1000.0, 0.0))).unwrap();
+    let r = m.check();
+    assert!(r.is_valid(), "{:?}", r.problems);
+    assert!(
+        !r.problems
+            .iter()
+            .any(|p| matches!(p, check::Problem::DoubleEdge(..)))
+    );
+    sound(&m);
+    assert_eq!(m.face_count(), 1, "the coplanar faces merged");
+    assert!((m.area() - area).abs() < 1e-6);
+    // No two edges join the same vertices.
+    let keys: std::collections::BTreeSet<_> = m.edges().map(|(_, e)| e.key()).collect();
+    assert_eq!(keys.len(), m.edge_count());
+}
+
+#[test]
+fn a_fold_does_not_depend_on_the_order_the_square_was_drawn_in() {
+    // Fable (3): the same square from (0, 0) and from (1000, 1000); the corner (1000, 1000) up.
+    let diagonal = |pts: Vec<P>| {
+        let mut m = SurfaceModel::new();
+        poly(&mut m, &pts);
+        let c = vertex_at(&m, [1000.0, 1000.0, 0.0]);
+        apply(&mut m, mv_vertices(&[c], DVec3::new(0.0, 0.0, 400.0))).unwrap();
+        sound(&m);
+        let soft: Vec<[[i64; 3]; 2]> = m
+            .edges()
+            .filter(|(id, _)| m.edge_attrs(*id).is_some_and(|a| a.contains_key("soft")))
+            .map(|(_, e)| {
+                let mut ends = e.v.map(|v| {
+                    m.vertex(v)
+                        .unwrap()
+                        .to_array()
+                        .map(|x| (x * 1000.0).round() as i64)
+                });
+                ends.sort();
+                ends
+            })
+            .collect();
+        assert_eq!(soft.len(), 1);
+        soft[0]
+    };
+    let a = diagonal(square(0.0, 0.0, 1000.0, 0.0));
+    let mut b_pts = square(0.0, 0.0, 1000.0, 0.0);
+    b_pts.rotate_left(2);
+    let b = diagonal(b_pts.clone());
+    b_pts.reverse();
+    let c = diagonal(b_pts);
+    assert_eq!(a, b);
+    assert_eq!(a, c);
+    // The diagonal that bends the least does not touch the lifted corner.
+    assert_eq!(a, [[0, 1_000_000, 0], [1_000_000, 0, 0]]);
+}
+
+#[test]
+fn the_fold_of_an_n_gon_does_not_depend_on_the_ids_either() {
+    // A hexagon drawn from each of its corners, in both directions; one corner up.
+    let pts: Vec<P> = (0..6)
+        .map(|i| {
+            let a = std::f64::consts::TAU * f64::from(i) / 6.0 + 0.2;
+            [1000.0 * a.cos(), 700.0 * a.sin(), 0.0]
+        })
+        .collect();
+    let lift = pts[1];
+    let shape = |order: Vec<P>| {
+        let mut m = SurfaceModel::new();
+        poly(&mut m, &order);
+        let c = vertex_at(&m, lift);
+        apply(&mut m, mv_vertices(&[c], DVec3::new(0.0, 0.0, 300.0))).unwrap();
+        sound(&m);
+        let mut tris: Vec<Vec<[i64; 3]>> = m
+            .faces()
+            .map(|(_, f)| {
+                let mut t: Vec<[i64; 3]> = f
+                    .outer
+                    .iter()
+                    .map(|v| {
+                        m.vertex(*v)
+                            .unwrap()
+                            .to_array()
+                            .map(|x| (x * 1000.0).round() as i64)
+                    })
+                    .collect();
+                t.sort();
+                t
+            })
+            .collect();
+        tris.sort();
+        tris
+    };
+    let first = shape(pts.clone());
+    for k in 0..6 {
+        let mut o = pts.clone();
+        o.rotate_left(k);
+        assert_eq!(shape(o.clone()), first);
+        o.reverse();
+        assert_eq!(shape(o), first);
+    }
+}
+
+#[test]
+fn a_landing_within_the_tolerance_lands_exactly() {
+    // Fable (4): a corner lands 0.004 mm beside and above an edge.
+    let mut m = SurfaceModel::new();
+    poly(&mut m, &square(0.0, 0.0, 1000.0, 0.0));
+    poly(&mut m, &square(0.0, 2000.0, 1000.0, 0.0));
+    let a = face_with(&m, &[[0.0, 0.0, 0.0], [1000.0, 1000.0, 0.0]]);
+    let corner = vertex_at(&m, [0.0, 2000.0, 0.0]);
+    apply(
+        &mut m,
+        mv_vertices(&[corner], DVec3::new(700.0, -999.996, 0.004)),
+    )
+    .unwrap();
+    sound(&m);
+    let landed = m.vertex(corner).unwrap();
+    assert_eq!(
+        landed,
+        DVec3::new(700.0, 1000.0, 0.0),
+        "on the edge exactly"
+    );
+    let fa = m.face(a).unwrap();
+    assert_eq!(
+        fa.outer.len(),
+        5,
+        "A is one face with the vertex in its side"
+    );
+    assert!(fa.outer.contains(&corner));
+    assert_eq!(m.face_count(), 2);
+    assert!(
+        m.edges()
+            .all(|(id, _)| m.edge_attrs(id).is_none_or(|a| !a.contains_key("soft"))),
+        "nothing folded"
+    );
+    // A whole circle face moved onto a vertex 0.005 mm off its plane: it lands on the vertex
+    // and stays one flat face.
+    let mut m = SurfaceModel::new();
+    poly(&mut m, &square(0.0, 0.0, 1000.0, 0.0));
+    let circle: Vec<[f64; 3]> = (0..24)
+        .map(|i| {
+            let t = std::f64::consts::TAU * f64::from(i) / 24.0;
+            [3000.0 + 400.0 * t.cos(), 400.0 * t.sin(), 0.0]
+        })
+        .collect();
+    m.apply(&Edit::AddCurve {
+        points: circle,
+        closed: true,
+    })
+    .unwrap();
+    let disc = face_with(&m, &[[2600.0, 0.0, 0.0]]);
+    let faces = m.face_count();
+    // The point (2600, 0) goes to the corner (1000, 1000) of the square, 0.005 mm too high.
+    apply(
+        &mut m,
+        mv_faces(&[disc], DVec3::new(-1600.0, 1000.0, 0.005)),
+    )
+    .unwrap();
+    sound(&m);
+    assert_eq!(m.face_count(), faces, "nothing folded");
+    assert!(
+        m.faces()
+            .all(|(_, f)| (f.plane.normal.z.abs() - 1.0).abs() < 1e-12
+                && f.plane.offset.abs() < 1e-9),
+        "both faces stay at z = 0"
+    );
+    assert_eq!(m.vertex_count(), 4 + 24 - 1, "the vertices welded");
+}
+
+#[test]
+fn a_tiny_uniform_scale_is_applied_and_a_squash_is_refused() {
+    // A site model scaled to a sketch: 1e-5 (a determinant of 1e-15).
+    let mut m = SurfaceModel::new();
+    poly(&mut m, &square(0.0, 0.0, 3_000_000.0, 0.0));
+    let all: Vec<VertexId> = m.vertices().map(|(v, _)| v).collect();
+    let scale = |k: DVec3| Edit::TransformVertices {
+        vertices: all.clone(),
+        faces: Vec::new(),
+        edges: Vec::new(),
+        matrix: mat(DAffine3::from_scale(k)),
+    };
+    let mut a = m.clone();
+    apply(&mut a, scale(DVec3::splat(1e-5))).unwrap();
+    sound(&a);
+    assert!((a.area() - 900.0).abs() < 1e-6, "{}", a.area());
+    let mut b = m.clone();
+    apply(&mut b, scale(DVec3::splat(0.00009))).unwrap();
+    sound(&b);
+    // A squash below the relative tolerance is refused, whatever the determinant.
+    for k in [
+        DVec3::new(1.0, 1.0, 1e-10),
+        DVec3::new(1e4, 1e4, 1e-7),
+        DVec3::new(1.0, 1.0, 0.0),
+    ] {
+        let mut c = m.clone();
+        let e = apply(&mut c, scale(k)).unwrap_err().to_string();
+        assert!(e.contains("flattens"), "{e}");
+        assert_eq!(c, m);
+    }
+    // A stretch and a turn far from flat are applied.
+    let mut d = m.clone();
+    apply(&mut d, scale(DVec3::new(2.0, 0.5, 4.0))).unwrap();
+    sound(&d);
+}
+
+/// A square of 3000 with a triangle hole that touches the outer loop at the corner (0, 0).
+fn pinched() -> SurfaceModel {
+    let mut m = SurfaceModel::new();
+    poly(&mut m, &square(0.0, 0.0, 3000.0, 0.0));
+    poly(
+        &mut m,
+        &[[0.0, 0.0, 0.0], [1000.0, 500.0, 0.0], [500.0, 1000.0, 0.0]],
+    );
+    m
+}
+
+#[test]
+fn a_face_with_a_hole_at_its_corner_folds() {
+    let mut m = pinched();
+    let big = m
+        .faces()
+        .max_by(|a, b| {
+            m.face_area(a.0)
+                .unwrap()
+                .total_cmp(&m.face_area(b.0).unwrap())
+        })
+        .unwrap()
+        .0;
+    let f = m.face(big).unwrap();
+    assert_eq!(f.holes.len(), 1, "the triangle is a hole");
+    assert!(
+        f.holes[0].iter().any(|v| f.outer.contains(v)),
+        "the hole touches the outer loop"
+    );
+    let faces = m.face_count();
+    let corner = vertex_at(&m, [3000.0, 3000.0, 0.0]);
+    apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, 500.0))).unwrap();
+    sound(&m);
+    assert!(m.face_count() > faces, "the face folded");
+    // The pieces and the triangle's own face cover the square exactly, seen from above.
+    let seen: f64 = m
+        .faces()
+        .map(|(id, f)| m.face_area(id).unwrap() * f.plane.normal.z)
+        .sum();
+    assert!((seen - 9_000_000.0).abs() < 1e-6, "{seen}");
+}
+
+#[test]
+fn a_hole_moved_into_another_hole_is_refused() {
+    let mut m = SurfaceModel::new();
+    poly(&mut m, &square(0.0, 0.0, 10_000.0, 0.0));
+    poly(&mut m, &square(1000.0, 1000.0, 3000.0, 0.0));
+    poly(&mut m, &square(6000.0, 6000.0, 1000.0, 0.0));
+    let big = face_with(&m, &[[0.0, 0.0, 0.0], [10_000.0, 10_000.0, 0.0]]);
+    // Take the small square's face away, so its loop is a hole of the big face only.
+    let small = face_with(&m, &[[6000.0, 6000.0, 0.0], [7000.0, 7000.0, 0.0]]);
+    let mid = face_with(&m, &[[1000.0, 1000.0, 0.0], [4000.0, 4000.0, 0.0]]);
+    m.apply(&Edit::EraseFaces {
+        faces: vec![small, mid],
+    })
+    .unwrap();
+    assert_eq!(m.face(big).unwrap().holes.len(), 2);
+    let before = m.clone();
+    let ring: Vec<VertexId> = square(6000.0, 6000.0, 1000.0, 0.0)
+        .iter()
+        .map(|p| vertex_at(&m, *p))
+        .collect();
+    let e = apply(
+        &mut m,
+        mv_vertices(&ring, DVec3::new(-4000.0, -4000.0, 0.0)),
+    );
+    let msg = e.unwrap_err().to_string();
+    assert!(msg.contains("hole"), "{msg}");
+    assert_eq!(m, before);
+    // The check names it in a model that has it.
+    let mut bad = before.clone();
+    for v in &ring {
+        let p = bad.vertices[v];
+        bad.vertices.insert(*v, p - DVec3::new(4000.0, 4000.0, 0.0));
+    }
+    assert!(
+        bad.check()
+            .problems
+            .contains(&check::Problem::HoleInHole(big)),
+        "{:?}",
+        bad.check().problems
+    );
+}
+
+#[test]
+fn a_vertex_moved_onto_another_side_of_its_face_is_refused_with_the_reason() {
+    let mut m = SurfaceModel::new();
+    poly(&mut m, &square(0.0, 0.0, 1000.0, 0.0));
+    let before = m.clone();
+    let c = vertex_at(&m, [1000.0, 1000.0, 0.0]);
+    let e = apply(&mut m, mv_vertices(&[c], DVec3::new(-500.0, -1000.0, 0.0)));
+    let msg = e.unwrap_err().to_string();
+    assert!(msg.contains("own face"), "{msg}");
+    assert_eq!(m, before);
+}
+
+#[test]
+fn a_fold_moved_back_gives_the_model_before_with_its_ids_and_a_note_for_the_material() {
+    // Fable (5): fold the top of a box, paint the new piece, move the corner back.
+    let original = box_model();
+    let mut m = original.clone();
+    let top = top_face(&m);
+    let corner = vertex_at(&m, [1000.0, 1000.0, 500.0]);
+    apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, 400.0))).unwrap();
+    let pieces: Vec<FaceId> = m
+        .faces()
+        .filter(|(id, _)| original.face(*id).is_none())
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(pieces.len(), 1);
+    assert!(pieces[0] > top);
+    m.faces
+        .get_mut(&pieces[0])
+        .unwrap()
+        .attrs
+        .insert("material".into(), "stone".into());
+    let notes = apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, -400.0))).unwrap();
+    sound(&m);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("stone"), "{notes:?}");
+    assert!(
+        m.face(top).unwrap().attrs.is_empty(),
+        "the look of the top stays"
+    );
+    assert_same_geometry(&m, &original);
+    // Without the paint: no note, the same model.
+    let mut m = original.clone();
+    apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, 400.0))).unwrap();
+    let notes = apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, -400.0))).unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_same_geometry(&m, &original);
+}
+
+#[test]
+fn a_copy_that_moves_less_than_the_tolerance_is_refused_and_no_step_changes_nothing() {
+    use crate::command::{Command, Editor};
+    use crate::model::{Attributes, Document, Shape};
+    let m0 = box_model();
+    let all: Vec<FaceId> = m0.faces().map(|(id, _)| id).collect();
+    let mut m = m0.clone();
+    let e = apply(
+        &mut m,
+        Edit::CopyGeometry {
+            faces: all.clone(),
+            edges: Vec::new(),
+            matrix: shift(DVec3::new(1e-6, 0.0, 0.0)),
+            count: 1,
+        },
+    );
+    assert!(e.unwrap_err().to_string().contains("lie on the original"));
+    assert_eq!(m, m0);
+    // An edit that changes nothing: the model is the same (its revision and id counter too).
+    let mut m = m0.clone();
+    let none = Edit::TransformVertices {
+        vertices: Vec::new(),
+        faces: all.clone(),
+        edges: Vec::new(),
+        matrix: mat(DAffine3::IDENTITY),
+    };
+    apply(&mut m, none.clone()).unwrap();
+    assert_eq!(m, m0);
+    assert_eq!(m.rev(), m0.rev());
+    // Through the editor: no undo step.
+    let mut ed = Editor::new(Document::default());
+    let id = crate::model::ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::SurfaceModel(Box::new(m0.clone())),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let depth = ed.undo_depth();
+    ed.execute(&Command::EditSurface { id, edit: none })
+        .unwrap();
+    assert_eq!(ed.undo_depth(), depth, "no undo step for no change");
+    let r = ed.execute(&Command::EditSurface {
+        id,
+        edit: Edit::CopyGeometry {
+            faces: all,
+            edges: Vec::new(),
+            matrix: shift(DVec3::new(1e-6, 0.0, 0.0)),
+            count: 2,
+        },
+    });
+    assert!(r.is_err());
+    assert_eq!(ed.undo_depth(), depth);
+}
+
+/// Boxes and flat squares 1500 apart (they may touch) beside a large sheet, so that moves of up
+/// to 2000 land on and over each other and into the sheet.
+fn close_scene(seed: u64) -> SurfaceModel {
+    let mut rng = Rng(seed | 1);
+    let mut m = SurfaceModel::new();
+    // A large sheet to the left: a square or a sheet moved by up to 2000 can land inside it.
+    poly(
+        &mut m,
+        &[
+            [-3500.0, -1500.0, 0.0],
+            [-500.0, -1500.0, 0.0],
+            [-500.0, 1500.0, 0.0],
+            [-3500.0, 1500.0, 0.0],
+        ],
+    );
+    for i in 0..rng.below(3) + 2 {
+        let x = 1500.0 * i as f64;
+        // On a grid of 250, so that moves of the same grid land on vertices and edges.
+        let grid = |x: f64| (x / 250.0).round() * 250.0;
+        let y = grid(rng.range(-500.0, 500.0));
+        let w = grid(rng.range(500.0, 1500.0));
+        let h = grid(rng.range(250.0, 1000.0));
+        let known: std::collections::BTreeSet<FaceId> = m.faces().map(|(id, _)| id).collect();
+        if m.apply(&Edit::AddEdges {
+            edges: (0..4)
+                .map(|k| {
+                    let s = square(x, y, w, 0.0);
+                    [s[k], s[(k + 1) % 4]]
+                })
+                .collect(),
+        })
+        .is_err()
+        {
+            continue;
+        }
+        let Some(f) = m.faces().map(|(id, _)| id).find(|id| !known.contains(id)) else {
+            continue;
+        };
+        // Some squares stay flat sheets in one plane, so that moves in the plane overlap them.
+        if rng.next() < 0.4 {
+            continue;
+        }
+        let _ = m.apply(&Edit::PushPull {
+            face: f,
+            distance: h,
+        });
+    }
+    m
+}
+
+/// A random move of vertices or of a face of `m`: a translation of up to `reach` (on a grid of
+/// 250, so that landings happen), now and then off the grid by less than the tolerance, or a turn.
+fn random_edit(rng: &mut Rng, m: &SurfaceModel, reach: f64) -> Edit {
+    let vs: Vec<VertexId> = m.vertices().map(|(v, _)| v).collect();
+    let fs: Vec<FaceId> = m.faces().map(|(f, _)| f).collect();
+    let mut d = DVec3::new(
+        (rng.range(-reach, reach) / 250.0).round() * 250.0,
+        (rng.range(-reach, reach) / 250.0).round() * 250.0,
+        (rng.range(-reach, reach) / 250.0).round() * 250.0,
+    );
+    if rng.next() < 0.4 {
+        // In the plane of the sheets.
+        d.z = 0.0;
+    }
+    if rng.next() < 0.3 {
+        d += DVec3::new(
+            rng.range(-0.004, 0.004),
+            rng.range(-0.004, 0.004),
+            rng.range(-0.004, 0.004),
+        );
+    }
+    let (vertices, faces) = if rng.next() < 0.5 || fs.is_empty() {
+        let k = rng.below(3) + 1;
+        (
+            (0..k).map(|_| vs[rng.below(vs.len())]).collect(),
+            Vec::new(),
+        )
+    } else {
+        (Vec::new(), vec![fs[rng.below(fs.len())]])
+    };
+    let xf = if rng.next() < 0.2 {
+        let c = m.vertex(vs[rng.below(vs.len())]).unwrap();
+        DAffine3::from_translation(c)
+            * DAffine3::from_rotation_z(rng.range(-1.5, 1.5))
+            * DAffine3::from_translation(-c)
+    } else {
+        DAffine3::from_translation(d)
+    };
+    Edit::TransformVertices {
+        vertices,
+        faces,
+        edges: Vec::new(),
+        matrix: mat(xf),
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(160))]
+
+    #[test]
+    fn moves_that_land_on_other_boxes_never_make_an_error_of_the_model(seed in 0u64..u64::MAX) {
+        use crate::command::{Command, Editor};
+        use crate::model::{Attributes, Document, Shape};
+        let mut rng = Rng(seed | 1);
+        let mut m = close_scene(seed);
+        for _ in 0..3 {
+            if m.vertex_count() == 0 {
+                break;
+            }
+            let edit = random_edit(&mut rng, &m, 2000.0);
+            let before = m.clone();
+            let mut twin = m.clone();
+            match m.apply_with_notes(&edit) {
+                Ok(_) => {
+                    let r = m.check();
+                    prop_assert!(r.is_valid(), "{:?} after {:?}", r.problems, edit);
+                    prop_assert!(m.problem().is_none(), "{:?}", m.problem());
+                    twin.apply(&edit).unwrap();
+                    prop_assert_eq!(&m, &twin, "the same edit gives the same model");
+                }
+                Err(_) => prop_assert_eq!(&m, &before),
+            }
+            // Through the editor: one step, and undo gives the model back byte for byte.
+            let mut ed = Editor::new(Document::default());
+            let id = crate::model::ObjectId(
+                ed.execute(&Command::AddObject {
+                    shape: Shape::SurfaceModel(Box::new(before.clone())),
+                    layer: None,
+                    class: None,
+                    attrs: Attributes::default(),
+                })
+                .unwrap()
+                .created[0],
+            );
+            let text = |ed: &Editor| serde_json::to_string(&ed.doc().object(id).unwrap().shape).unwrap();
+            let start = text(&ed);
+            if ed.execute(&Command::EditSurface { id, edit }).is_ok() && text(&ed) != start {
+                ed.undo();
+            }
+            prop_assert_eq!(text(&ed), start);
+        }
+    }
+}
+
+#[test]
+fn most_close_moves_work_and_the_others_change_nothing() {
+    let (mut ok, mut refused) = (0, 0);
+    for seed in 0..300u64 {
+        let mut rng = Rng(seed * 104_729 + 11);
+        let mut m = close_scene(seed);
+        if m.vertex_count() == 0 {
+            continue;
+        }
+        let edit = random_edit(&mut rng, &m, 2000.0);
+        let before = m.clone();
+        match m.apply(&edit) {
+            Ok(()) => {
+                ok += 1;
+                sound(&m);
+            }
+            Err(_) => {
+                refused += 1;
+                assert_eq!(m, before);
+            }
+        }
+    }
+    assert!(ok > 100, "{ok} worked, {refused} were refused");
+}
+
+#[test]
+fn the_local_work_gives_the_same_results_as_the_whole_model() {
+    // The edit looks only at the part of the model around what moved (a topology index of that
+    // part, checks of what changed); the reference way indexes and checks the whole model. Both
+    // give the same model, or the same refusal.
+    use super::edit::reference::{self, Mode};
+    let (mut ok, mut landed) = (0, 0);
+    for seed in 0..500u64 {
+        let mut rng = Rng(seed * 7 + 5);
+        let mut fast = close_scene(seed);
+        let mut slow = fast.clone();
+        for _ in 0..3 {
+            if fast.vertex_count() == 0 {
+                break;
+            }
+            let edit = random_edit(&mut rng, &fast, 2000.0);
+            let before = fast.clone();
+            let a = reference::with(Mode::Index, || fast.apply_with_notes(&edit));
+            let b = reference::with(Mode::Scan, || slow.apply_with_notes(&edit));
+            assert_eq!(a, b, "seed {seed}: {edit:?}");
+            assert_eq!(fast, slow, "seed {seed}: {edit:?}");
+            if a.is_ok() {
+                ok += 1;
+                landed += usize::from(fast.vertex_count() < before.vertex_count());
+                let r = fast.check();
+                assert!(r.is_valid(), "seed {seed}: {:?} after {edit:?}", r.problems);
+            } else {
+                assert_eq!(fast, before);
+            }
+        }
+    }
+    assert!(ok > 800 && landed > 10, "{ok} worked, {landed} welded");
+}
+
+#[test]
+fn an_edge_that_a_merge_joins_is_checked_for_crossings() {
+    // Found by the property test: the move welds, the faces merge, and the heal of the merge joins
+    // two edges into one that no moved vertex ends; that edge crosses another edge.
+    let seed = 2803922998918617984u64;
+    let mut rng = Rng(seed | 1);
+    let mut m = close_scene(seed);
+    let edit = random_edit(&mut rng, &m, 2000.0);
+    let before = m.clone();
+    match m.apply(&edit) {
+        Ok(()) => sound(&m),
+        Err(_) => assert_eq!(m, before),
+    }
 }
