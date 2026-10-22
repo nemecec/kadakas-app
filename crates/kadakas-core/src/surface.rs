@@ -143,6 +143,8 @@ mod tests_index;
 mod tests_intersect;
 #[cfg(test)]
 mod tests_pushpull;
+#[cfg(test)]
+mod tests_transform;
 
 pub use check::{At, Problem, Report};
 pub use edit::{Edit, IntersectScope};
@@ -324,6 +326,8 @@ pub enum SurfaceError {
     NoEdge(EdgeId),
     #[error("face {0} does not exist")]
     NoFace(FaceId),
+    #[error("vertex {0} does not exist")]
+    NoVertex(VertexId),
     #[error("a surface model has at most {max} {what}; the edit needs {count}")]
     Limit {
         what: &'static str,
@@ -332,6 +336,10 @@ pub enum SurfaceError {
     },
     #[error("the faces of a plane could not be solved: {0}")]
     Unsolved(String),
+    /// An edit that would make a face collapse, a loop cross itself or the model invalid: the
+    /// reason is the message (Move, Rotate and Scale).
+    #[error("{0}")]
+    Refused(String),
 }
 
 /// A surface model: vertices, edges and faces in local coordinates, placed by `transform`.

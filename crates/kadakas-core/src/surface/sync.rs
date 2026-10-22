@@ -65,6 +65,18 @@ pub enum Intent {
         faces: Vec<[f64; 3]>,
         edges: Vec<[f64; 3]>,
     },
+    /// Vertices moved by an affine map, by their positions before the move.
+    TransformAt {
+        vertices: Vec<[f64; 3]>,
+        matrix: [f64; 12],
+    },
+    /// Faces (by a point inside each) and edges (by the middle of each) copied `count` times.
+    CopyAt {
+        faces: Vec<[f64; 3]>,
+        edges: Vec<[f64; 3]>,
+        matrix: [f64; 12],
+        count: u32,
+    },
     /// A new transform.
     Place { transform: [f64; 12] },
     /// A change that cannot be replayed (for example a new curve).
@@ -110,6 +122,43 @@ impl Intent {
                 points: points.clone(),
                 closed: *closed,
             },
+            Edit::TransformVertices {
+                vertices,
+                faces: fs,
+                edges,
+                matrix,
+            } => {
+                let mut ids: BTreeSet<super::VertexId> = vertices.iter().copied().collect();
+                for f in fs {
+                    if let Some(f) = m.faces.get(f) {
+                        ids.extend(f.loops().flatten().copied());
+                    }
+                }
+                for e in edges {
+                    if let Some(e) = m.edges.get(e) {
+                        ids.extend(e.v);
+                    }
+                }
+                Intent::TransformAt {
+                    vertices: ids
+                        .iter()
+                        .filter_map(|v| m.vertices.get(v))
+                        .map(|p| p.to_array())
+                        .collect(),
+                    matrix: *matrix,
+                }
+            }
+            Edit::CopyGeometry {
+                faces: fs,
+                edges,
+                matrix,
+                count,
+            } => Intent::CopyAt {
+                faces: faces(fs),
+                edges: middles(edges),
+                matrix: *matrix,
+                count: *count,
+            },
             Edit::PushPull { face, distance } => match face_point(m, *face) {
                 Some(p) => Intent::PushPullAt {
                     point: p.to_array(),
@@ -127,6 +176,8 @@ impl Intent {
             | Intent::EraseFacesAt { points }
             | Intent::ReverseFacesAt { points } => points.len(),
             Intent::AddCurve { points, .. } => points.len(),
+            Intent::TransformAt { vertices, .. } => vertices.len().max(1),
+            Intent::CopyAt { faces, edges, .. } => (faces.len() + edges.len()).max(1),
             Intent::IntersectAt { faces, edges } => (faces.len() + edges.len()).max(1),
             Intent::Place { .. }
             | Intent::Unlogged
@@ -273,6 +324,35 @@ fn gone(what: &str, p: &[f64; 3]) -> SurfaceError {
     SurfaceError::Unsolved(format!("the {what} at {:?} is not in the other model", p))
 }
 
+/// The vertices at the given positions (the nearest within the length tolerance of each).
+fn vertices_at(
+    m: &SurfaceModel,
+    points: &[[f64; 3]],
+) -> Result<Vec<super::VertexId>, SurfaceError> {
+    let tree = super::index::BoxTree::new(
+        m.vertices
+            .iter()
+            .map(|(v, p)| (*p, *p, v.0))
+            .collect::<Vec<_>>(),
+    );
+    let pad = DVec3::splat(super::check::window(m));
+    points
+        .iter()
+        .map(|q| {
+            let p = DVec3::from(*q);
+            let mut best: Option<(f64, super::VertexId)> = None;
+            tree.query(p - pad, p + pad, &mut |c| {
+                let id = super::VertexId(c);
+                let d = m.vertices[&id].distance(p);
+                if d <= geom::tol(&[p, m.vertices[&id]]) && best.is_none_or(|(bd, _)| d < bd) {
+                    best = Some((d, id));
+                }
+            });
+            best.map(|(_, id)| id).ok_or_else(|| gone("vertex", q))
+        })
+        .collect()
+}
+
 /// Runs an intent on a model (a new log entry for it).
 pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), SurfaceError> {
     match intent {
@@ -326,6 +406,36 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
                 scope: IntersectScope::Selection,
                 faces,
                 edges,
+            })
+        }
+        Intent::TransformAt { vertices, matrix } => {
+            let ids = vertices_at(m, vertices)?;
+            m.apply(&Edit::TransformVertices {
+                vertices: ids,
+                faces: Vec::new(),
+                edges: Vec::new(),
+                matrix: *matrix,
+            })
+        }
+        Intent::CopyAt {
+            faces,
+            edges,
+            matrix,
+            count,
+        } => {
+            let faces = faces
+                .iter()
+                .map(|p| face_at(m, DVec3::from(*p)).ok_or_else(|| gone("face", p)))
+                .collect::<Result<Vec<_>, _>>()?;
+            let edges = edges
+                .iter()
+                .map(|p| edge_at(m, DVec3::from(*p)).ok_or_else(|| gone("edge", p)))
+                .collect::<Result<Vec<_>, _>>()?;
+            m.apply(&Edit::CopyGeometry {
+                faces,
+                edges,
+                matrix: *matrix,
+                count: *count,
             })
         }
         Intent::Place { transform } => {
