@@ -217,6 +217,8 @@ pub struct Modeling {
     xf: Xform,
     /// Tape Measure.
     tape: Tape,
+    /// The Paint Bucket and its material. It stays when another tool is chosen.
+    pub paint: super::paint::Paint,
 }
 
 impl Default for Modeling {
@@ -237,6 +239,7 @@ impl Default for Modeling {
             hover_guide: None,
             xf: Xform::default(),
             tape: Tape::default(),
+            paint: super::paint::Paint::default(),
         }
     }
 }

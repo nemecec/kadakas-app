@@ -49,6 +49,28 @@ pub fn command_with(
     Ok(cmd)
 }
 
+/// The command that starts the main app (`kadakas-app`) with `files`, from another program of the
+/// same version folder (the 3D modeler's "Open in the Kadakas app"). `exe` is the path of the
+/// running program: the main app is next to it. The new app is not run by the launcher: it has no
+/// run record, so no crash mark and no restart for an update, and `KADAKAS_VIA_LAUNCHER` is set so
+/// that on macOS it does not hand over to the launcher (which would start the flavor of the
+/// person's choice, maybe the modeler again). `None` if the main app is not next to `exe`.
+pub fn sibling_app_command(exe: &Path, files: &[OsString]) -> Option<Command> {
+    let dir = exe.parent()?;
+    let rel = crate::flavors::find_exe(dir, crate::settings::MAIN_FLAVOR)?;
+    let flavor = Flavor {
+        id: crate::settings::MAIN_FLAVOR.into(),
+        name: "Kadakas".into(),
+        exe: rel,
+    };
+    let env = [(crate::handshake::ENV_VIA.to_string(), "1".to_string())];
+    let mut cmd = command_with(dir, &flavor, "", files, &env).ok()?;
+    // The run of the sender is not the run of the new app.
+    cmd.env_remove(crate::handshake::ENV_RUN)
+        .env_remove(crate::handshake::ENV_ROOT);
+    Some(cmd)
+}
+
 /// Starts the app and does not wait for it.
 pub fn launch(dir: &Path, flavor: &Flavor, profile: &str) -> Result<Child> {
     Ok(command(dir, flavor, profile)?.spawn()?)
@@ -111,6 +133,47 @@ mod tests {
         let args: Vec<&OsStr> = c.get_args().collect();
         assert_eq!(args, ["--", "/a/b.kad"]);
         assert_eq!(c.get_current_dir(), Some(Path::new("/v/1.0.0")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_starts_the_main_app_next_to_it_with_a_file_and_no_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tmp("sibling");
+        let app = d.join("kadakas-app");
+        std::fs::write(
+            &app,
+            "#!/bin/sh\necho \"$2 $KADAKAS_VIA_LAUNCHER [$KADAKAS_RUN_ID]\" > out.txt\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let modeler = d.join("kadakas-modeler");
+        let files = [OsString::from("/a/b.kad")];
+        let mut c = sibling_app_command(&modeler, &files).expect("the app is next to it");
+        assert_eq!(c.get_program(), app.as_os_str());
+        let args: Vec<&OsStr> = c.get_args().collect();
+        assert_eq!(args, ["--", "/a/b.kad"]);
+        // The run variables of the sender are taken out of the environment of the child, and the
+        // marker that stops the handover to the launcher is put in.
+        let envs: Vec<_> = c.get_envs().collect();
+        assert!(
+            envs.contains(&(OsStr::new("KADAKAS_RUN_ID"), None)),
+            "{envs:?}"
+        );
+        assert!(
+            envs.contains(&(OsStr::new("KADAKAS_LAUNCHER_ROOT"), None)),
+            "{envs:?}"
+        );
+        assert!(envs.contains(&(OsStr::new("KADAKAS_VIA_LAUNCHER"), Some(OsStr::new("1")))));
+        let mut child = c.spawn().unwrap();
+        assert!(child.wait().unwrap().success());
+        let out = std::fs::read_to_string(d.join("out.txt")).unwrap();
+        assert!(out.starts_with("/a/b.kad 1 []"), "{out}");
+        // Without the app next to the program there is no command.
+        let lone = tmp("sibling-none");
+        assert!(sibling_app_command(&lone.join("kadakas-modeler"), &files).is_none());
+        std::fs::remove_dir_all(&d).unwrap();
+        std::fs::remove_dir_all(&lone).unwrap();
     }
 
     #[test]

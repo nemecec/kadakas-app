@@ -516,7 +516,14 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64, snap: bool) -> Result<Plan, S
         let (p0, p1, p2) = (w.pos(l[0]), w.pos(l[1]), w.pos(l[2]));
         let plane =
             Plane::new(p0, (p1 - p0).cross(p2 - p1)).ok_or(SurfaceError::TooShort { tol: 0.0 })?;
-        let id = w.new_face(Face::new(plane, l, Vec::new()));
+        // A new wall has the paint of the face that made it, on the same sides.
+        let mut wall = Face::new(plane, l, Vec::new());
+        for key in [super::ATTR_MATERIAL, super::ATTR_BACK_MATERIAL] {
+            if let Some(v) = f.attrs.get(key) {
+                wall.attrs.insert(key.into(), v.clone());
+            }
+        }
+        let id = w.new_face(wall);
         faces_out.insert(id);
     }
 
@@ -586,6 +593,8 @@ fn run(m: &mut SurfaceModel, face: FaceId, d: f64, snap: bool) -> Result<Plan, S
         let mut holes: Vec<Vec<VertexId>> = g.holes.iter().map(|h| reversed(h)).collect();
         holes.sort();
         g.holes = holes;
+        // Turned over, the paint stays on its physical side.
+        super::swap_paint(&mut g.attrs);
     };
     if !attached {
         let id = if d > 0.0 {

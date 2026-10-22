@@ -76,6 +76,10 @@ pub fn scene_key(scene: &Scene) -> u64 {
     for i in &m.indices {
         h = hash_bytes(h, &i.to_le_bytes());
     }
+    h = hash_bytes(h, &m.tri_side);
+    for p in &m.tri_paint {
+        h = hash_bytes(h, &p.to_le_bytes());
+    }
     for s in &scene.lines.positions {
         for c in s.to_array() {
             h = hash_bytes(h, &c.to_bits().to_le_bytes());
@@ -282,7 +286,7 @@ impl Look {
     ) -> Look {
         let mut look = Look::plain(scene);
         let slots = SlotIndex::new(doc);
-        if slots.is_empty() {
+        if slots.is_empty() && scene.mesh.paints.is_empty() {
             cache.finish();
             return look;
         }
@@ -305,22 +309,11 @@ impl Look {
                 mesh.tri_object[t],
                 mesh.tri_part.get(t).copied().unwrap_or(0),
             );
-            let index = *by_part.entry((object, part)).or_insert_with(|| {
-                let Some(obj) = doc.object(object) else {
-                    return NO_MATERIAL;
-                };
-                let Some(rid) = slots.resolve(obj, part) else {
-                    return NO_MATERIAL;
-                };
-                let Some(m) = present::material(doc, rid) else {
-                    return NO_MATERIAL;
-                };
-                // The lines of a paving texture are not the joints of the pattern of the
-                // hardscape: the surface keeps the color of the material.
-                let leave_out = part == present::PART_LAYER && leaves_texture_out(doc, obj, m);
-                if leave_out {
-                    untextured.insert(object);
-                }
+            // The material of the face (Paint Bucket) has priority over the slots of the object.
+            let painted = mesh
+                .paint_of(t)
+                .and_then(|rid| present::material(doc, rid).map(|m| (rid, m)));
+            let mut register = |rid: ResourceId, m: &present::Material, leave_out: bool| {
                 if let Some(i) = by_resource.get(&(rid, leave_out)) {
                     return *i;
                 }
@@ -350,7 +343,29 @@ impl Look {
                 let i = (look.materials.len() - 1) as u32;
                 by_resource.insert((rid, leave_out), i);
                 i
-            });
+            };
+            let index = if let Some((rid, m)) = painted {
+                register(rid, m, false)
+            } else {
+                *by_part.entry((object, part)).or_insert_with(|| {
+                    let Some(obj) = doc.object(object) else {
+                        return NO_MATERIAL;
+                    };
+                    let Some(rid) = slots.resolve(obj, part) else {
+                        return NO_MATERIAL;
+                    };
+                    let Some(m) = present::material(doc, rid) else {
+                        return NO_MATERIAL;
+                    };
+                    // The lines of a paving texture are not the joints of the pattern of the
+                    // hardscape: the surface keeps the color of the material.
+                    let leave_out = part == present::PART_LAYER && leaves_texture_out(doc, obj, m);
+                    if leave_out {
+                        untextured.insert(object);
+                    }
+                    register(rid, m, leave_out)
+                })
+            };
             look.tri_material[t] = index;
             if index == NO_MATERIAL {
                 continue;

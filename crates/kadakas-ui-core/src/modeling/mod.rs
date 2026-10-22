@@ -17,6 +17,7 @@
 //! [`select::SubSelection`]. See `docs/modeler.md`.
 
 pub mod exec;
+pub mod paint;
 mod plane;
 mod scenes;
 pub mod select;

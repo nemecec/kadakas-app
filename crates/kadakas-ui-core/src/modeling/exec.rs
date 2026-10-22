@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use glam::{DAffine3, DVec3};
 use kadakas_core::command::{Command, CommandError, Editor};
 use kadakas_core::model::{Attributes, Document, ObjectId, Shape};
+use kadakas_core::resource::ResourceId;
 use kadakas_core::surface::{EdgeId, Edit, FaceId, IntersectScope};
 
 use super::scenes::{elevation, frame_of, model_of};
@@ -106,6 +107,17 @@ pub enum Action {
         matrix: DAffine3,
         copies: u32,
     },
+    /// The Paint Bucket on faces: for each model the faces whose front and the faces whose back
+    /// get the material (`None` clears it).
+    Paint {
+        models: Vec<(ObjectId, Vec<FaceId>, Vec<FaceId>)>,
+        material: Option<ResourceId>,
+    },
+    /// The Paint Bucket on whole objects (surface models, groups, component instances).
+    PaintObjects {
+        objects: Vec<ObjectId>,
+        material: Option<ResourceId>,
+    },
 }
 
 /// The model that an action works in (a new model counts as `None`).
@@ -122,6 +134,8 @@ impl Action {
             | Action::Intersect { model, .. } => Some(*model),
             Action::Xform { parts, .. } => parts.first().map(|p| p.0),
             Action::AddGuides { .. } | Action::EraseGuides { .. } => None,
+            Action::Paint { models, .. } => models.first().map(|p| p.0),
+            Action::PaintObjects { .. } => None,
         }
     }
 }
@@ -228,6 +242,13 @@ pub fn run_full(editor: &mut Editor, actions: &[Action], undo_first: bool) -> Re
             }
             if let Action::EraseGuides { ids } = a {
                 step.run(&Command::DeleteObjects { ids: ids.clone() })?;
+                continue;
+            }
+            if let Action::Paint { .. } | Action::PaintObjects { .. } = a {
+                for c in paint_commands(a) {
+                    step.run(&c)?;
+                }
+                used = a.model().or(used);
                 continue;
             }
             // A model that the step taken back had made is not there any more: make it again.
@@ -377,6 +398,45 @@ fn copied_parts(
     out
 }
 
+/// The commands of the Paint Bucket: one edit for each model and side, or one slot for each
+/// object.
+fn paint_commands(a: &Action) -> Vec<Command> {
+    use kadakas_core::present::SlotTarget;
+    use kadakas_core::surface::PaintSide;
+    match a {
+        Action::Paint { models, material } => {
+            let mut v = Vec::new();
+            for (id, front, back) in models {
+                for (faces, side) in [(front, PaintSide::Front), (back, PaintSide::Back)] {
+                    if faces.is_empty() {
+                        continue;
+                    }
+                    v.push(Command::EditSurface {
+                        id: *id,
+                        edit: Edit::SetFaceMaterial {
+                            faces: faces.clone(),
+                            side,
+                            material: material.map(|m| m.to_string()),
+                        },
+                    });
+                }
+            }
+            v
+        }
+        Action::PaintObjects { objects, material } => objects
+            .iter()
+            .map(|o| Command::SetMaterialSlot {
+                target: SlotTarget::Object {
+                    object: *o,
+                    slot: None,
+                },
+                material: *material,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn xform_commands(doc: &Document, a: &Action) -> Vec<Command> {
     let Action::Xform {
         objects,
@@ -454,7 +514,7 @@ fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Comman
             faces: faces.clone(),
             edges: edges.clone(),
         })],
-        Action::Xform { .. } | Action::AddGuides { .. } | Action::EraseGuides { .. } => Vec::new(),
+        Action::Xform { .. } | Action::Paint { .. } | Action::PaintObjects { .. } | Action::AddGuides { .. } | Action::EraseGuides { .. } => Vec::new(),
         Action::Delete { faces, edges, .. } => {
             let mut v = Vec::new();
             if !faces.is_empty() {

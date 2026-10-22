@@ -127,6 +127,12 @@ impl Tx<'_> {
         if !is_ours {
             return Ok(false);
         }
+        // Faces that are painted with the material keep it: the caller clears them first (in the
+        // same step) after asking, so no paint is dropped silently.
+        let faces = crate::present::material_uses(self.doc, id).faces;
+        if faces > 0 {
+            return Err(CommandError::ResourceInUse(id, faces));
+        }
         self.doc.resources.remove(id);
         self.doc.drawing.presentation.forget(id);
         Ok(true)

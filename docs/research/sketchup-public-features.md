@@ -373,7 +373,7 @@ Rows MOD-01 to MOD-13 are in section 4.23 of `docs/feature-spec.md`.
 | Edge, face, sticky raw geometry | Surface model: vertices, edges, faces with holes | MOD-06 covers face creation, splitting, merging when an edge is erased, and "geometry in one container sticks together". Hidden edges and Hide/Unhide are not named in MOD rows. |
 | Soft and smooth edges, Soften Edges panel | Soft and smooth edges | MOD-08. The panel (angle slider, Smooth normals, Soften coplanar) is missing. |
 | Front and back faces, Reverse Faces, Orient Faces | none | Missing. |
-| Material, Paint Bucket | Material (3D-06) | MOD-05 lists paint. Missing: Sample, fill modes, texture positioning. |
+| Material, Paint Bucket | Material (3D-06) | MOD-05 round B1 has the Paint Bucket (single face, connected, same material, Alt sample), the front and back sides and the Materials panel. Missing: texture positioning. |
 | Solid group, Solid Tools | Closed surface model, boolean tools | MOD-09 covers union, subtract, intersect, trim, split and the closed-solid check. Outer Shell is missing. |
 | Intersect Faces | Intersect faces | MOD-08. |
 | Push/Pull, Follow Me, Offset | Same tools | MOD-05 (objects with a height) and MOD-08 (any planar face). Missing: Ctrl "new face", repeat by double click, Move auto-fold. |

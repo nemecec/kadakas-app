@@ -31,6 +31,16 @@ pub enum Edit {
     EraseFaces { faces: Vec<FaceId> },
     /// Turns faces over: front and back change places.
     ReverseFaces { faces: Vec<FaceId> },
+    /// Paint (MOD-05): puts a material on the front, the back or both sides of faces, or clears
+    /// it (`material` null). `material` is the id of a material resource of the document (its
+    /// text form); it is stored in the attribute `material` (front) or `back_material` (back) of
+    /// the face. Faces turned over swap the two.
+    SetFaceMaterial {
+        faces: Vec<FaceId>,
+        side: PaintSide,
+        #[serde(default)]
+        material: Option<String>,
+    },
     /// Draws a chain of straight edges through the points (a closed one joins the last point to
     /// the first) and keeps them as one curve (a circle or an arc, MOD-08), so that the pieces
     /// stay one curve when other edges cut them. Welds, splits and faces work as in `AddEdges`.
@@ -90,6 +100,20 @@ pub enum Edit {
         hidden: bool,
     },
 }
+
+/// Which side of a face a material goes on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PaintSide {
+    Front,
+    Back,
+    Both,
+}
+
+/// The attribute of a face that holds the material of its front.
+pub const ATTR_MATERIAL: &str = "material";
+/// The attribute of a face that holds the material of its back.
+pub const ATTR_BACK_MATERIAL: &str = "back_material";
 
 /// What Intersect Faces looks at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -166,6 +190,54 @@ fn run_noted(
             edges,
             hidden,
         } => hide::set_hidden(m, faces, edges, *hidden),
+        Edit::SetFaceMaterial {
+            faces,
+            side,
+            material,
+        } => set_face_material(m, faces, *side, material.as_deref()),
+    }
+}
+
+fn set_face_material(
+    m: &mut SurfaceModel,
+    faces: &[FaceId],
+    side: PaintSide,
+    material: Option<&str>,
+) -> Result<(), SurfaceError> {
+    if material.is_some_and(|t| t.trim().is_empty()) {
+        return Err(SurfaceError::Unsolved("the material name is empty".into()));
+    }
+    for id in existing_faces(m, faces)? {
+        let f = m.faces.get_mut(&id).expect("checked");
+        let keys: &[&str] = match side {
+            PaintSide::Front => &[ATTR_MATERIAL],
+            PaintSide::Back => &[ATTR_BACK_MATERIAL],
+            PaintSide::Both => &[ATTR_MATERIAL, ATTR_BACK_MATERIAL],
+        };
+        for key in keys {
+            match material {
+                Some(t) => {
+                    f.attrs.insert((*key).into(), serde_json::Value::from(t));
+                }
+                None => {
+                    f.attrs.remove(*key);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A face is turned over: the paint stays on the side it was on, so the material of the front
+/// becomes the material of the back and the other way round.
+pub(super) fn swap_paint(attrs: &mut super::Attrs) {
+    let front = attrs.remove(ATTR_MATERIAL);
+    let back = attrs.remove(ATTR_BACK_MATERIAL);
+    if let Some(v) = back {
+        attrs.insert(ATTR_MATERIAL.into(), v);
+    }
+    if let Some(v) = front {
+        attrs.insert(ATTR_BACK_MATERIAL.into(), v);
     }
 }
 
@@ -177,6 +249,7 @@ fn reverse_faces(m: &mut SurfaceModel, faces: &[FaceId]) -> Result<(), SurfaceEr
         let mut holes: Vec<Vec<VertexId>> = f.holes.iter().map(|h| reversed(h)).collect();
         holes.sort();
         f.holes = holes;
+        swap_paint(&mut f.attrs);
     }
     Ok(())
 }

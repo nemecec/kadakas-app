@@ -66,6 +66,11 @@ impl Scene {
                 out.mesh
                     .tri_part
                     .push(self.mesh.tri_part.get(t).copied().unwrap_or(0));
+                out.mesh.mark_triangle(
+                    out.mesh.tri_object.len() - 1,
+                    self.mesh.side_of(t),
+                    self.mesh.paint_of(t),
+                );
             }
             for s in r.segs.clone() {
                 out.lines.positions.extend_from_slice(&[
@@ -114,6 +119,10 @@ impl Scene {
             (0..other.mesh.triangle_count())
                 .map(|t| other.mesh.tri_part.get(t).copied().unwrap_or(0)),
         );
+        for t in 0..other.mesh.triangle_count() {
+            self.mesh
+                .mark_triangle(t0 + t, other.mesh.side_of(t), other.mesh.paint_of(t));
+        }
         self.lines
             .positions
             .extend(other.lines.positions.iter().map(moved));

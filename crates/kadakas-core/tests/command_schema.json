@@ -389,6 +389,37 @@
           "type": "object"
         },
         {
+          "description": "Paint (MOD-05): puts a material on the front, the back or both sides of faces, or clears\nit (`material` null). `material` is the id of a material resource of the document (its\ntext form); it is stored in the attribute `material` (front) or `back_material` (back) of\nthe face. Faces turned over swap the two.",
+          "properties": {
+            "action": {
+              "const": "set_face_material",
+              "type": "string"
+            },
+            "faces": {
+              "items": {
+                "$ref": "#/$defs/FaceId"
+              },
+              "type": "array"
+            },
+            "material": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "side": {
+              "$ref": "#/$defs/PaintSide"
+            }
+          },
+          "required": [
+            "action",
+            "faces",
+            "side"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Draws a chain of straight edges through the points (a closed one joins the last point to\nthe first) and keeps them as one curve (a circle or an arc, MOD-08), so that the pieces\nstay one curve when other edges cut them. Welds, splits and faces work as in `AddEdges`.\nWhen one of the pieces is in a curve already, the edges are drawn and no new curve is made.",
           "properties": {
             "action": {
@@ -964,6 +995,15 @@
           "type": "string"
         }
       ]
+    },
+    "PaintSide": {
+      "description": "Which side of a face a material goes on.",
+      "enum": [
+        "front",
+        "back",
+        "both"
+      ],
+      "type": "string"
     },
     "PaperSize": {
       "enum": [

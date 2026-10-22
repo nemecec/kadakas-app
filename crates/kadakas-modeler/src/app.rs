@@ -13,6 +13,7 @@ use kadakas_core::surface::IntersectScope;
 use kadakas_l10n::tr;
 use kadakas_render::StandardView;
 use kadakas_ui_core::keymap::{Action, Keymap};
+use kadakas_ui_core::materials::{MaterialRow, MaterialsPanel};
 use kadakas_ui_core::modeler::{self, ModelerTool, ToolState};
 use kadakas_ui_core::modeling;
 use kadakas_ui_core::nav3d::{self, Frame, Nav3d, NavAction};
@@ -28,7 +29,7 @@ use crate::launch::Launch;
 use crate::prefs::{self, Prefs, ThemeChoice};
 use crate::tags_panel::{self, TagsState};
 use crate::toolbar;
-use crate::tray::{self, TrayState};
+use crate::tray::{self, TrayAction, TrayData, TrayState, TrayUi};
 
 /// The key of the Entity Info cache and its value.
 type InfoKey = (
@@ -88,6 +89,9 @@ pub enum Cmd {
     ToggleHiddenGeometry,
     /// View > Hidden Objects.
     ToggleHiddenObjects,
+    /// Open the model in the Kadakas app (MOD-05, round B): plants, hardscapes and site models
+    /// are edited there.
+    OpenInApp,
     /// A tool or command of the tool bar.
     Tool(ModelerTool),
     /// Zoom Window: the next drag of the Zoom tool is a window.
@@ -112,7 +116,12 @@ pub enum Replace {
     New,
     /// File > Quit, or the close button of the window.
     Quit,
+    /// File > Open in the Kadakas App: the app opens the saved file.
+    OpenInApp,
 }
+
+/// Starts the Kadakas app with a file.
+pub type AppStarter = Box<dyn FnMut(&std::path::Path) -> Result<crate::launch::Started, String>>;
 
 /// What the person answers to the question about unsaved changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +167,16 @@ pub struct ModelerApp {
     pub gpu_ready: bool,
     fit_pending: bool,
     pub tray: TrayState,
+    tray_ui: TrayUi,
+    /// The Materials panel: the open editor and the question about a used material.
+    pub materials: MaterialsPanel,
+    /// The materials of the model and where they are used, for a revision.
+    rows_cache: Option<(u64, Vec<MaterialRow>)>,
+    /// Starts the Kadakas app with a file. The tests put another one in.
+    pub starter: AppStarter,
+    /// The file while it is open in the Kadakas app too: its path and its last stamp.
+    watch: Option<(PathBuf, (u64, Option<std::time::SystemTime>))>,
+    watch_next: f64,
     pub about: About,
     launch: Launch,
     ask: Box<dyn Ask>,
@@ -200,6 +219,12 @@ impl ModelerApp {
             gpu_ready: false,
             fit_pending: true,
             tray: TrayState::default(),
+            tray_ui: TrayUi::default(),
+            materials: MaterialsPanel::default(),
+            rows_cache: None,
+            starter: Box::new(crate::launch::start_app),
+            watch: None,
+            watch_next: 0.0,
             about: About::default(),
             launch: Launch::new(None),
             ask,
@@ -255,6 +280,14 @@ impl ModelerApp {
     /// that the title, the questions and the end of the program ask.
     pub fn dirty(&self) -> bool {
         self.session.has_unsaved_changes()
+    }
+
+    /// The name of the file of the model, or the word for a model without a file.
+    fn file_name(&self) -> String {
+        self.path.as_ref().and_then(|p| p.file_name()).map_or_else(
+            || tr!("modeler-untitled"),
+            |n| n.to_string_lossy().to_string(),
+        )
     }
 
     /// The title of the window: the file, a star when it has unsaved changes, and the program.
@@ -363,7 +396,82 @@ impl ModelerApp {
                 self.close_confirmed = true;
                 self.quit = true;
             }
+            Replace::OpenInApp => self.start_app_now(),
         }
+    }
+
+    /// File > Open in the Kadakas App. The app opens the file on disk, so a model with changes
+    /// is saved first (the person is asked, as before a New or an Open), and a model that has no
+    /// file yet gets one from Save As.
+    pub fn open_in_app(&mut self) {
+        if self.dirty() {
+            self.ask_replace(Replace::OpenInApp);
+        } else if self.path.is_none() {
+            self.save(true);
+            if self.path.is_some() && !self.dirty() {
+                self.start_app_now();
+            } else {
+                self.status = tr!("modeler-app-save-first");
+            }
+        } else {
+            self.start_app_now();
+        }
+    }
+
+    fn start_app_now(&mut self) {
+        let Some(path) = self.path.clone() else {
+            self.status = tr!("modeler-app-save-first");
+            return;
+        };
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        self.status = match (self.starter)(&path) {
+            Ok(how) => {
+                // From now on the file is open in two programs: watch it for a change by the
+                // other one.
+                self.watch = Some((path.clone(), file_stamp(&path)));
+                match how {
+                    crate::launch::Started::Spawned => tr!("modeler-app-started", name = name),
+                    crate::launch::Started::Sent => tr!("modeler-app-sent", name = name),
+                }
+            }
+            Err(e) => e,
+        };
+    }
+
+    /// While the file is open in the Kadakas app too (see [`ModelerApp::open_in_app`]): looks
+    /// once a second whether the file changed on disk. A model with no unsaved changes is
+    /// loaded again at once; with unsaved changes the status line says so, and a save asks
+    /// before it replaces the file (`files::save`).
+    fn check_external_change(&mut self, now: f64) {
+        if now < self.watch_next {
+            return;
+        }
+        self.watch_next = now + 1.0;
+        let Some((path, stamp)) = self.watch.clone() else {
+            return;
+        };
+        if self.path.as_ref() != Some(&path) {
+            self.watch = None;
+            return;
+        }
+        let current = file_stamp(&path);
+        if current == stamp {
+            return;
+        }
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        if self.dirty() {
+            self.status = tr!("modeler-file-changed-dirty", name = name);
+        } else {
+            self.open_clean(path.clone());
+            self.status = tr!("modeler-file-changed-reloaded", name = name);
+        }
+        self.watch = Some((path.clone(), file_stamp(&path)));
     }
 
     /// A document that the launcher sent: a double click on a `.kad` file while this program
@@ -398,6 +506,10 @@ impl ModelerApp {
                 tr!("modeler-unsaved-quit"),
                 tr!("modeler-unsaved-save-and-quit"),
             ),
+            Replace::OpenInApp => (
+                tr!("modeler-unsaved-open-in-app", name = self.file_name()),
+                tr!("modeler-unsaved-save-and-open-in-app"),
+            ),
         };
         let mut answer = None;
         egui::Window::new(tr!("modeler-unsaved-title"))
@@ -426,6 +538,7 @@ impl ModelerApp {
 
     /// What follows a new or opened model: nothing is selected, the view shows all of it.
     fn after_replace(&mut self, path: Option<PathBuf>) {
+        self.watch = None;
         self.session.selection.clear();
         self.edit.reset();
         self.info_cache = None;
@@ -461,6 +574,12 @@ impl ModelerApp {
                         notes = saved.notes.join(" ")
                     )
                 };
+                // Our own save is not a change by the other program.
+                if let Some(w) = &mut self.watch
+                    && w.0 == saved.path
+                {
+                    w.1 = file_stamp(&saved.path);
+                }
                 self.path = Some(saved.path);
             }
             Err(e) => self.status = e,
@@ -487,6 +606,7 @@ impl ModelerApp {
             }
             Cmd::Save => self.save(false),
             Cmd::SaveAs => self.save(true),
+            Cmd::OpenInApp => self.open_in_app(),
             Cmd::Quit => {
                 if self.dirty() {
                     self.ask_replace(Replace::Quit);
@@ -1328,6 +1448,38 @@ impl ModelerApp {
         info
     }
 
+    /// The materials of the model with where they are used, for the revision of the document.
+    fn material_rows(&mut self) -> Vec<MaterialRow> {
+        let rev = self.session.editor.revision();
+        if self.rows_cache.as_ref().is_none_or(|(r, _)| *r != rev) {
+            let rows = kadakas_ui_core::materials::rows(self.session.editor.doc());
+            self.rows_cache = Some((rev, rows));
+        }
+        self.rows_cache
+            .as_ref()
+            .map(|c| c.1.clone())
+            .unwrap_or_default()
+    }
+
+    /// Runs what a panel of the tray asked for.
+    pub fn tray_action(&mut self, a: TrayAction) {
+        match a {
+            TrayAction::OpenInApp => self.open_in_app(),
+            TrayAction::Material(req) => {
+                let result = self.materials.apply(
+                    &mut self.session.editor,
+                    &mut self.edit.modeling.paint.bucket,
+                    req,
+                );
+                match result {
+                    Ok(msg) if !msg.is_empty() => self.status = msg,
+                    Ok(_) => {}
+                    Err(e) => self.status = e,
+                }
+            }
+        }
+    }
+
     // ---- the frame ---------------------------------------------------------------------------
 
     /// Draws the window. Runs once per frame.
@@ -1371,25 +1523,45 @@ impl ModelerApp {
             crate::statusbar::show(ui, &status_line, self.tools.active(), &measurement);
         });
         let mut tag_out: Vec<tags_panel::Outcome> = Vec::new();
+        let mut tray_actions: Vec<TrayAction> = Vec::new();
         if self.prefs.tray {
+            let rows = self.material_rows();
+            let missing =
+                kadakas_ui_core::materials::missing_defaults(self.session.editor.doc()).len();
             let targets = self.tag_targets();
-            let doc = self.session.editor.doc();
-            let (tray_state, tags_state) = (&mut self.tray, &mut self.tags);
             egui::Panel::right("tray")
                 .default_size(tray::WIDTH)
                 .size_range(180.0..=420.0)
                 .show(ui, |ui| {
+                    let data = TrayData {
+                        info: &info,
+                        doc: self.session.editor.doc(),
+                        rows: &rows,
+                        missing,
+                        panel: &self.materials,
+                        bucket: self.edit.modeling.paint.bucket,
+                    };
                     let view = tags_panel::View {
-                        doc,
+                        doc: self.session.editor.doc(),
                         objects: &targets,
                     };
-                    tray::show(ui, tray_state, &info, &mut |ui, slot| {
-                        tag_out.push(tags_panel::show(ui, tags_state, slot, &view));
-                    });
+                    let tags_state = &mut self.tags;
+                    tray_actions = tray::show(
+                        ui,
+                        &mut self.tray,
+                        &mut self.tray_ui,
+                        &data,
+                        &mut |ui, slot| {
+                            tag_out.push(tags_panel::show(ui, tags_state, slot, &view));
+                        },
+                    );
                 });
         }
         for out in tag_out {
             self.apply_tags(out);
+        }
+        for a in tray_actions {
+            self.tray_action(a);
         }
         let mut shown = canvas::Shown::default();
         let intersect = self.intersect_flags();
@@ -1437,6 +1609,7 @@ impl ModelerApp {
             // Also the wait for a document that the launcher sends.
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
+        self.check_external_change(now);
         self.unsaved_dialog(&ctx);
         // A resize that the Tape Measure asked for becomes a question.
         if let Some(r) = self.edit.resize_request.take() {
@@ -1477,6 +1650,11 @@ impl ModelerApp {
     }
 }
 
+/// The size and the time of the last change of a file: what tells that another program wrote it.
+fn file_stamp(path: &std::path::Path) -> (u64, Option<std::time::SystemTime>) {
+    std::fs::metadata(path).map_or((0, None), |m| (m.len(), m.modified().ok()))
+}
+
 /// What the questions and the status line call a way to replace the model: the file name, a new
 /// model, or the end of the program.
 fn replace_name(what: &Replace) -> String {
@@ -1487,6 +1665,7 @@ fn replace_name(what: &Replace) -> String {
         ),
         Replace::New => tr!("modeler-open-new-model"),
         Replace::Quit => tr!("modeler-open-quit"),
+        Replace::OpenInApp => tr!("modeler-open-in-app-name"),
     }
 }
 

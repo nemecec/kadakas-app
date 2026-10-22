@@ -215,7 +215,7 @@ The 3D modeler (`docs/modeler.md`) has actions that the Vectorworks-like app doe
 | Push/Pull tool (`tool.push_pull`, MOD-05, MOD-08) | none | none | planned |
 | Move tool (`tool.move`, MOD-05) | none | none | planned |
 | Tape Measure tool (`tool.tape_measure`, MOD-05) | none | none | planned |
-| Paint Bucket tool (`tool.paint_bucket`, MOD-05) | none | none | planned |
+| Paint Bucket tool (`tool.paint_bucket`, MOD-05) | none | none | done |
 | Orbit tool (`nav.orbit`, MOD-02) | none | none | done |
 | Pan tool (`nav.pan`, MOD-02) | none | none | done |
 | Zoom tool (`nav.zoom`, MOD-02) | none | none | done |
@@ -249,6 +249,18 @@ The profile `sketchup` is the default of `kadakas-modeler`. The file is `crates/
 | Cmd/Ctrl+1 and Cmd/Ctrl+2 | Zoom in, zoom out (factor 2) |
 | Arrow keys | Pan the view. While a drawing tool, Move or Rotate runs they lock the direction to an axis (Right red, Left green, Up blue); with Rotate, before the center is clicked, they lock the plane of the protractor (Down frees it) |
 | Esc | Ends the tool that is running (Move, Rotate, Scale and the drawing tools), else back to Select |
+
+### Keys while the Paint Bucket runs (MOD-05)
+
+| Key | What a click does |
+|---|---|
+| none | Paints the side of the face you see |
+| Ctrl | Paints the connected faces that have the same material on that side |
+| Shift | Paints all faces with the same material on that side |
+| Alt (Cmd on macOS) | Loads the material under the pointer into the bucket; nothing is painted |
+| Esc | Back to Select; the bucket keeps its material |
+
+Alt (Cmd) for the sample is on an official help page of the public documentation. Ctrl and Shift for the fills are the habit of programs of that kind and are not checked against a manual.
 
 ### Keys while Move, Rotate and Scale run (MOD-05)
 

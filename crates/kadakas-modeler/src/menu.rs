@@ -155,6 +155,15 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
             entry(
                 ui,
                 cmds,
+                tr!("modeler-file-open-in-app"),
+                String::new(),
+                true,
+                Cmd::OpenInApp,
+            );
+            ui.separator();
+            entry(
+                ui,
+                cmds,
                 tr!("modeler-file-quit"),
                 String::new(),
                 true,

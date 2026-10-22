@@ -55,7 +55,7 @@ pub(super) fn bounds(app: &ModelerApp, id: ObjectId) -> (DVec3, DVec3) {
     }
 }
 
-fn near(a: DVec3, b: DVec3, tol: f64) -> bool {
+pub(super) fn near(a: DVec3, b: DVec3, tol: f64) -> bool {
     a.distance(b) < tol
 }
 

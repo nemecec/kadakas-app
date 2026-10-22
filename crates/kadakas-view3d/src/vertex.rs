@@ -25,6 +25,10 @@ pub struct SurfaceVertex {
 /// The vertex belongs to a two-sided surface: the shader draws a back face in the back color
 /// (not when the vertex has a material: then the material shows on both sides).
 pub const FLAG_TWO_SIDED: u32 = 1;
+/// The vertex belongs to a triangle that is drawn only when seen from its front (Paint Bucket).
+pub const FLAG_FRONT_ONLY: u32 = 2;
+/// The vertex belongs to a triangle that is drawn only when seen from its back.
+pub const FLAG_BACK_ONLY: u32 = 4;
 
 /// The material index of a vertex without material.
 pub const NO_MATERIAL: u32 = u32::MAX;
@@ -66,9 +70,17 @@ pub fn surface_vertices(scene: &Scene, look: Option<&Look>) -> Vec<SurfaceVertex
     let ranks = object_ranks(scene);
     // The object of each vertex: the object of the first triangle that uses it.
     let mut owner = vec![None; m.positions.len()];
+    let mut sided = vec![0u32; m.positions.len()];
     for t in 0..m.triangle_count() {
+        let side = match m.side_of(t) {
+            kadakas_core::mesh::SIDE_FRONT => FLAG_FRONT_ONLY,
+            kadakas_core::mesh::SIDE_BACK => FLAG_BACK_ONLY,
+            _ => 0,
+        };
         for k in 0..3 {
-            owner[m.indices[t * 3 + k] as usize].get_or_insert(m.tri_object[t]);
+            let v = m.indices[t * 3 + k] as usize;
+            owner[v].get_or_insert(m.tri_object[t]);
+            sided[v] |= side;
         }
     }
     (0..m.positions.len())
@@ -90,7 +102,7 @@ pub fn surface_vertices(scene: &Scene, look: Option<&Look>) -> Vec<SurfaceVertex
                 order: owner[i]
                     .and_then(|o| ranks.get(&o))
                     .map_or(0.0, |r| *r as f32),
-                flags: if m.is_two_sided(i) { FLAG_TWO_SIDED } else { 0 },
+                flags: sided[i] | if m.is_two_sided(i) { FLAG_TWO_SIDED } else { 0 },
             }
         })
         .collect()

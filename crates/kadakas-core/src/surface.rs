@@ -65,6 +65,8 @@
 //!   faces is healed (the two edges become one again).
 //! - **Erase faces** ([`Edit::EraseFaces`]): only the faces go; their edges stay.
 //! - **Reverse faces** ([`Edit::ReverseFaces`]): front and back change places.
+//! - **Set face material** ([`Edit::SetFaceMaterial`]): Paint Bucket (MOD-05); the material of the
+//!   front is the attribute `material`, of the back `back_material`; Reverse swaps them.
 //! - **Add curve** ([`Edit::AddCurve`]): a chain of edges through points that stays one curve (a
 //!   circle or an arc), with the faces that it closes.
 //! - **Push/Pull** ([`Edit::PushPull`]): a face moves along its normal (the walls follow), or is
@@ -157,7 +159,7 @@ mod tests_pushpull;
 mod tests_transform;
 
 pub use check::{At, Problem, Report};
-pub use edit::{Edit, IntersectScope};
+pub use edit::{ATTR_BACK_MATERIAL, ATTR_MATERIAL, Edit, IntersectScope, PaintSide};
 pub use geom::{Plane, on_plane, plane_tolerance_at, tolerance_at};
 pub use part::{Absorber, Selection};
 
