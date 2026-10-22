@@ -504,3 +504,120 @@ pub(super) fn through_and_overlaps(m: &SurfaceModel, window: f64) -> Clashes {
     }
     out
 }
+
+/// What [`coplanar_near`] finds: the edges that lie in a face and the faces that overlap.
+pub(super) type Coplanar = (Vec<(EdgeId, FaceId)>, Vec<(FaceId, FaceId)>);
+
+/// The coplanar overlaps that involve the given items, as in [`through_and_overlaps`]: the edges
+/// of `edges` that a face uses and that lie in another face of the same plane looking the same
+/// way (`lies_in`), and the pairs of a face of `faces` and a face of the same plane looking the
+/// same way that share an area (`overlaps`). Only the faces near the items are looked at, so an
+/// edit checks what it touched in about `O(n)` simple tests. Each pair once, in id order.
+pub(super) fn coplanar_near(
+    m: &SurfaceModel,
+    edges: &BTreeSet<EdgeId>,
+    faces: &BTreeSet<FaceId>,
+    window: f64,
+) -> Coplanar {
+    let ends = |e: &EdgeId| {
+        let ed = m.edges.get(e)?;
+        Some((*m.vertices.get(&ed.v[0])?, *m.vertices.get(&ed.v[1])?, ed.v))
+    };
+    let whole = |f: &Face| f.loops().flatten().all(|v| m.vertices.contains_key(v));
+    let region = geom::bounds(
+        edges
+            .iter()
+            .filter_map(ends)
+            .flat_map(|(a, b, _)| [a, b])
+            .chain(
+                faces
+                    .iter()
+                    .filter_map(|f| m.faces.get(f))
+                    .filter(|f| whole(f))
+                    .flat_map(|f| f.outer.iter().map(|v| m.vertices[v])),
+            ),
+    );
+    let (mut lies, mut over) = (Vec::new(), Vec::new());
+    let Some((lo, hi)) = region else {
+        return (lies, over);
+    };
+    let pad = DVec3::splat(window);
+    let (lo, hi) = (lo - pad, hi + pad);
+    let tree = BoxTree::new(
+        m.faces
+            .iter()
+            .filter(|(_, f)| whole(f))
+            .filter_map(|(id, f)| {
+                let (flo, fhi) = face_box(m, f, window);
+                (!(fhi.cmplt(lo).any() || flo.cmpgt(hi).any())).then_some((flo, fhi, id.0))
+            })
+            .collect(),
+    );
+    let mut shapes = Shapes::new(m);
+    let mut cands: Vec<FaceId> = Vec::new();
+    for &id in edges {
+        let Some((a, b, vs)) = ends(&id) else {
+            continue;
+        };
+        cands.clear();
+        tree.query(a.min(b), a.max(b), &mut |g| cands.push(FaceId(g)));
+        cands.sort_unstable();
+        let k = key(vs[0], vs[1]);
+        let own: Vec<FaceId> = cands
+            .iter()
+            .copied()
+            .filter(|g| m.faces[g].uses().any(|(p, q)| key(p, q) == k))
+            .collect();
+        for &g in &cands {
+            if own.contains(&g) {
+                continue;
+            }
+            let gf = &m.faces[&g];
+            if !own
+                .iter()
+                .any(|h| coplanar(m, &m.faces[h], gf) == Some(true))
+            {
+                continue;
+            }
+            if lies_in(a, b, vs, gf, shapes.get(g)).is_some() {
+                lies.push((id, g));
+                for h in &own {
+                    if coplanar(m, &m.faces[h], gf) == Some(true) {
+                        over.push((g.min(*h), g.max(*h)));
+                    }
+                }
+            }
+        }
+    }
+    for &id in faces {
+        let Some(f) = m.faces.get(&id).filter(|f| whole(f)) else {
+            continue;
+        };
+        let (flo, fhi) = face_box(m, f, 0.0);
+        cands.clear();
+        tree.query(flo, fhi, &mut |g| cands.push(FaceId(g)));
+        cands.sort_unstable();
+        for &g in &cands {
+            let gf = &m.faces[&g];
+            if g == id || coplanar(m, f, gf) != Some(true) {
+                continue;
+            }
+            let inside_of = |shapes: &mut Shapes, x: FaceId, y: FaceId| {
+                let (xf, yf) = (&m.faces[&x], &m.faces[&y]);
+                let Some(p) = sample_rings(&shapes.get(x).rings).map(|s| lift(xf, s)) else {
+                    return false;
+                };
+                let half = geom::tol(&[p]) / 2.0;
+                shapes.get(y).strictly_inside(yf.plane.project(p), half)
+            };
+            if inside_of(&mut shapes, id, g) || inside_of(&mut shapes, g, id) {
+                over.push((id.min(g), id.max(g)));
+            }
+        }
+    }
+    lies.sort_unstable();
+    lies.dedup();
+    over.sort_unstable();
+    over.dedup();
+    (lies, over)
+}
