@@ -83,6 +83,19 @@ pub enum Intent {
         matrix: [f64; 12],
         count: u32,
     },
+    /// A face offset (MOD-08), by a point inside it.
+    OffsetAt {
+        point: [f64; 3],
+        distance: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        outward: bool,
+    },
+    /// Edges offset (MOD-08), by the middle of each.
+    OffsetEdgesAt {
+        edges: Vec<[f64; 3]>,
+        distance: f64,
+        toward: [f64; 3],
+    },
     /// A new transform.
     Place { transform: [f64; 12] },
     /// A change that cannot be replayed (for example a new curve).
@@ -174,6 +187,27 @@ impl Intent {
                 matrix: *matrix,
                 count: *count,
             },
+            Edit::OffsetFace {
+                face,
+                distance,
+                outward,
+            } => match face_point(m, *face) {
+                Some(p) => Intent::OffsetAt {
+                    point: p.to_array(),
+                    distance: *distance,
+                    outward: *outward,
+                },
+                None => Intent::Unlogged,
+            },
+            Edit::OffsetEdges {
+                edges,
+                distance,
+                toward,
+            } => Intent::OffsetEdgesAt {
+                edges: middles(edges),
+                distance: *distance,
+                toward: *toward,
+            },
             Edit::PushPull { face, distance } => match face_point(m, *face) {
                 Some(p) => Intent::PushPullAt {
                     point: p.to_array(),
@@ -195,9 +229,11 @@ impl Intent {
             Intent::TransformAt { vertices, .. } => vertices.len().max(1),
             Intent::CopyAt { faces, edges, .. } => (faces.len() + edges.len()).max(1),
             Intent::IntersectAt { faces, edges } => (faces.len() + edges.len()).max(1),
+            Intent::OffsetEdgesAt { edges, .. } => edges.len().max(1),
             Intent::Place { .. }
             | Intent::Unlogged
             | Intent::PushPullAt { .. }
+            | Intent::OffsetAt { .. }
             | Intent::IntersectModel => 1,
         }
     }
@@ -417,6 +453,33 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
             m.apply(&Edit::PushPull {
                 face,
                 distance: *distance,
+            })
+        }
+        Intent::OffsetAt {
+            point,
+            distance,
+            outward,
+        } => {
+            let face = face_at(m, DVec3::from(*point)).ok_or_else(|| gone("face", point))?;
+            m.apply(&Edit::OffsetFace {
+                face,
+                distance: *distance,
+                outward: *outward,
+            })
+        }
+        Intent::OffsetEdgesAt {
+            edges,
+            distance,
+            toward,
+        } => {
+            let edges = edges
+                .iter()
+                .map(|p| edge_at(m, DVec3::from(*p)).ok_or_else(|| gone("edge", p)))
+                .collect::<Result<Vec<_>, _>>()?;
+            m.apply(&Edit::OffsetEdges {
+                edges,
+                distance: *distance,
+                toward: *toward,
             })
         }
         Intent::IntersectModel => m.apply(&Edit::IntersectFaces {

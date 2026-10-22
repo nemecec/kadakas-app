@@ -152,6 +152,8 @@ mod tests_index;
 #[cfg(test)]
 mod tests_intersect;
 #[cfg(test)]
+mod tests_offset;
+#[cfg(test)]
 mod tests_pushpull;
 #[cfg(test)]
 mod tests_transform;

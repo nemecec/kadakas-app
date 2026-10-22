@@ -89,6 +89,24 @@ pub enum Edit {
         matrix: [f64; 12],
         count: u32,
     },
+    /// Offset (MOD-08): draws a copy of every loop of the face `distance` mm inside the face
+    /// (`outward` false, the default) or outside it, in the plane of the face, with miter
+    /// corners. The face splits along the new loops; a curve gives a curve. `distance` must be
+    /// larger than the length tolerance. See the module `offset`.
+    OffsetFace {
+        face: FaceId,
+        distance: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        outward: bool,
+    },
+    /// Offset of edges (MOD-08): a chain of edges in one plane (open, or closed) drawn again
+    /// `distance` mm to the side of the point `toward` (local coordinates), with miter corners;
+    /// the ends of an open chain move at a right angle. A curve gives a curve.
+    OffsetEdges {
+        edges: Vec<EdgeId>,
+        distance: f64,
+        toward: [f64; 3],
+    },
 }
 
 /// Which side of a face a material goes on.
@@ -117,6 +135,7 @@ pub enum IntersectScope {
 
 mod intersect;
 mod near;
+mod offset;
 mod pushpull;
 pub(super) mod reference;
 mod transform;
@@ -174,6 +193,16 @@ fn run_noted(
             Ok(())
         }
         Edit::ReverseFaces { faces } => reverse_faces(m, faces),
+        Edit::OffsetFace {
+            face,
+            distance,
+            outward,
+        } => offset::offset_face(m, *face, *distance, *outward),
+        Edit::OffsetEdges {
+            edges,
+            distance,
+            toward,
+        } => offset::offset_edges(m, edges, *distance, DVec3::from(*toward)),
         Edit::SetFaceMaterial {
             faces,
             side,
