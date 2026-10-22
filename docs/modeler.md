@@ -19,11 +19,11 @@
 | Status bar | The instruction for the active tool, or the last message. At the right is the **Measurements** box. |
 | Tray | **Entity Info**, **Materials** and **Scenes**. A click on a title bar collapses the panel. View > Tray hides the tray. |
 
-Select, the drawing tools of MOD-08 (Eraser, Line, Rectangle, Circle, Arc, Push/Pull) and the navigation tools run. The other tools (Move, Rotate, Scale, Tape Measure, Paint Bucket) are in the tool bar, disabled. Their tooltip says "coming in a later version". Their keys show the same note in the status bar. The rows MOD-05 and the rest of MOD-08 turn them on.
+Select, the drawing tools of MOD-08 (Eraser, Line, Rectangle, Circle, Arc, Push/Pull), Move, Rotate and Scale, the Paint Bucket and the navigation tools run. Tape Measure is in the tool bar, disabled. Its tooltip says "coming in a later version", and its key shows the same note in the status bar. The rest of MOD-05 turns it on.
 
 **Measurements box.** It shows the size of the selection (length, width and height in the units of the person), the field of view while the Zoom tool is active, and the live value of a drawing tool that runs (length, width and height, radius, bulge, distance). You type into it without a click: digits and the marks of values start the text, letters follow once the text has started (`24s`, `500r`, `3'6"`), Backspace erases, Enter applies and Esc clears. See "Modeling" below.
 
-**Entity Info.** It shows the type, the id, the layer, the class, the size and the lowest corner of the selected object. For several objects it shows the count and the size of the box around them. With no selection it shows the active layer and class. A surface model also shows its numbers of vertices, edges and faces and whether the faces close a volume. A selected face shows its area, normal, edges and holes. After a merge (Erase, or a flush Push/Pull), the face that stays has the lower id and its own attributes and material. It also has the attributes that it did not have from the merged faces. The status line names what was taken or dropped. A selected edge shows its length, ends, curve and the number of faces on it. Several faces and edges show their counts. **Materials** and **Scenes** are placeholders. Paint comes with MOD-05 and scenes with MOD-10.
+**Entity Info.** It shows the type, the id, the layer, the class, the size and the lowest corner of the selected object. For several objects it shows the count and the size of the box around them. With no selection it shows the active layer and class. A surface model also shows its numbers of vertices, edges and faces and whether the faces close a volume. A selected face shows its area, normal, edges and holes. After a merge (Erase, or a flush Push/Pull), the face that stays has the lower id and its own attributes and material. It also has the attributes that it did not have from the merged faces. The status line names what was taken or dropped. A selected edge shows its length, ends, curve and the number of faces on it. Several faces and edges show their counts. **Materials** is the list of the materials of the model (see "Paint Bucket and Materials" below). **Scenes** is a placeholder; scenes come with MOD-10.
 
 **Unsaved changes.** The session knows when the model has changes that nobody saved. File > New, File > Open, a file from the launcher, File > Quit and the close button then ask the same three questions as the app: Save and open, Don't save, or Cancel. Only one question is open at a time. A second request is dropped, and the status line says so. A drawing tool or an undo makes unsaved changes.
 
@@ -234,6 +234,56 @@ What is left:
 - Each edit builds the index again (`O(E log E)`). So many small edits in a row still add up: 6,250 boxes take 212 s, about 30 ms for each box at the end. To remove this, the index has to stay from one edit to the next. That is a larger change.
 - A long straight run shared by many pieces in many planes still makes the work grow faster than linear in the length of the run.
 
+## Paint Bucket and Materials (MOD-05, round B1)
+
+**Paint Bucket (`B`).** The tool puts a material of the model (3D-06: color, texture, mapping, roughness, metallic, opacity) on faces and objects. Choose the material in the Materials panel first (the bucket shows its color at the pointer), then click.
+
+| Click | What it paints |
+|---|---|
+| Click on a face | The side of the face that faces the viewer (the front or the back), only that face |
+| Ctrl, click | The faces that are connected to it through shared edges and have the same material on that side (the sides follow the direction of the shared edge, so a box paints all its outer faces from one click) |
+| Shift, click | All faces of the model with the same material on that side, in every surface model |
+| Alt (Cmd on a Mac), click | Nothing is painted: the material under the pointer goes into the bucket. An unpainted side loads "Default", and the next click then clears the paint |
+| Click with objects selected | The selected objects as a whole, when the click is on one of them (or in a group of them) |
+| Click on an object that is no face | A group or a component instance as a whole |
+
+The modifiers follow the public habit of programs of this kind. Only Alt (Cmd) for the sample is on an official help page; Ctrl for the connected fill and Shift for the same-material fill are general knowledge and not checked against a manual (`docs/research/sketchup-public-features.md`). The color of the bucket is drawn at the pointer. Esc leaves the tool and keeps the material in the bucket. Each click is one undo step and the status line says what was painted.
+
+**Plants, hardscapes, site models and the other objects of the Vectorworks-like app keep the material of their style.** A click on one of them does nothing and the status line says why ("... Change the style in the Kadakas app."). In a selection of several objects the paintable ones are painted and the status line counts the ones that were left alone.
+
+**Where the paint is stored.**
+
+- A face holds the material of its front in the attribute `material` and of its back in `back_material`, as the text form of the id of a material resource (a face value that is the exact name of a material works too, for files made by hand). The core edit is `edit_surface` `set_face_material {faces, side: front | back | both, material | null}`: one undo step, the ids are the ids of the faces, nothing random, and the edit is a replayable intent for collaboration (`paint_at`: the faces by a point inside each). The command refuses a material that is no material of the document. An edit that changes nothing is no step. The attributes pass through the fold of Move, merge rule C and the split of a face like every attribute of a face. **Reverse Faces swaps the two**, so the paint stays on the side it was on.
+- An object as a whole has a slot of the document (`material.assign` with `object`, no part). A material on a group goes to everything in the group that has no material of its own; the deepest group wins. The order is: the face, the part of the object, the object (and its group), the style, the class.
+
+**How it is drawn.** The scene builder (`kadakas_core::mesh`) groups the triangles of a surface model by the materials of the front and the back of their face. A face with one material on both sides is one set of triangles. Otherwise the front and the back are two sets, each drawn from its side only (`Mesh::tri_side`), and a side without a material has the default front color or the back color. The look of the renderers (`kadakas_render::look`) takes the material of a triangle from its face first (`Mesh::tri_paint`), then from the slots. The GPU view, the PBR and the basic CPU renderers, `render.png` and `render.svg` all follow, with the texture mapping of 3D-06 (planar, box, cylindrical). The vertex color of a painted face is the color of its material, so even a view without textures shows it. The glTF and OBJ files have one material for each face: they carry the front material and leave out the back-only triangles.
+
+**Materials panel.** It lists the materials of the model with a small thumbnail (the color, or one repeat of the generated or stored texture over a checker where the material is clear). The first line is "Default (no material)", an empty bucket. A click puts a material in the bucket; a double click or **Edit** opens the editor under the list. Buttons: **New** (a gray material, opened in the editor), **Add built-in** (Grass, Gravel, Concrete pavers, Bark mulch, Water, Brick, Timber, the ones the model lacks; the same as `material.add_defaults`), **Purge unused**, **Duplicate** and **Delete**. The editor has the name, the color (R, G, B), opacity, roughness, metallic, the generated pattern or none, the mapping (planar, box, cylindrical), the size of one repeat in mm, the rotation and the offset. A field is applied when the person lets go of the slider or leaves the box, and each is one undo step; a value out of range is refused with the reason. **A used material asks first**: Delete shows "{name} is in use ({count}). If you delete it, those faces and objects return to the default look." with **Delete anyway** and **Keep**; the answer yes clears the faces and deletes the material in one undo step. The command itself refuses to delete a material that paints faces (`ResourceInUse`), so nothing is dropped silently. Purge keeps every material that is in use. The logic is `kadakas_ui_core::materials` (no window); the panel is `tray.rs`.
+
+**Entity Info.** A selected face shows the material of its front and of its back, each in a box that changes it (one undo step). An object shows its material as a whole, if it has one.
+
+**Not done.** Texture positioning on a face (pins), importing an image into a material from the panel (the API has `material.import_texture`), the "Default" material of the model with a name, a preview of the faces a fill will paint, materials on the faces inside the definition of a component (edit the component in place), and Both sides in the tool (the core has it, Entity Info sets the sides one by one).
+
+## Landscape objects in the modeler (MOD-05, round B1)
+
+A document made in the Vectorworks-like app holds plants, existing trees, hardscapes, landscape areas, site models, symbols and the like. The modeler **shows** them: it draws the same scene as the app (`Session::scene`: the scene builder with the site model extension), at the elevation of their layer. Plants have a trunk and a canopy, hardscapes are slabs, site models are the terrain mesh, symbols draw their parts. Nothing here is a copy: it is the code of `kadakas-core` and `kadakas-site`.
+
+| Kind | Click | Window and crossing | Entity Info says | Move | Rotate | Scale |
+|---|---|---|---|---|---|---|
+| Plant, existing tree | yes | yes | species, style, height, spread (tree: trunk diameter) | yes | yes (about the pivot, the plant's own turn changes) | the spread; the height stays, the status line says so |
+| Hardscape | yes | yes | area, style, surface material | yes (the height note) | refused by the core ("cannot be turned") | refused |
+| Landscape area | yes | yes | name, area, style | yes | refused | refused |
+| Site model | yes | yes | number of survey points and lines, extent (width, depth, height), texture repeat | yes | refused | refused |
+| Symbol, component instance, group | yes | yes | definition or members | yes | yes | yes |
+
+**Select.** A click picks the object under the pointer when no face or edge of a surface model is there. A window (drag to the right) takes the objects whose drawn geometry lies fully inside, a crossing (drag to the left) the ones it touches, also a rectangle inside a large face (`select::rect_select_objects`). A rectangle that holds faces or edges of surface models selects those; objects that are no surface models are taken when it holds no part. Shift adds. Faces and edges of a model are never selected together with whole objects.
+
+**Move, Rotate, Scale** are the tools of round A (`transform_objects3d`). What the core allows for each kind is in the table; a refusal shows the reason of the core in the status line and changes nothing.
+
+**What needs the Kadakas app.** The modeler does not edit the data of these objects (the plant style, the hardscape pattern, the site model points). Entity Info says so and has the button **Open in the Kadakas app**; so does File > **Open in the Kadakas App**. The model must be saved first: with unsaved changes the same three questions as before a New or an Open come (Save and open, Don't save, Cancel); a model with no file gets Save As. Then the main app is started with the file.
+
+*How it starts.* There is no request in the launcher for "open this file in flavor X" (the open requests of the launcher go to a running app of a run). So the modeler starts the program `kadakas-app` that is next to it in the version folder, with the file after `--` (`kadakas_update::launch::sibling_app_command`; on macOS the main executable of `Kadakas Engine.app`). The new app is not run by the launcher: it has no run record, so no crash mark and no restart for an update, and `KADAKAS_VIA_LAUNCHER` is set so that it does not hand over to the launcher (which would start the flavor of the person's choice again). If the app is not next to the modeler, the status line says so.
+
 ## Groups and components (MOD-07)
 
 Code: `kadakas_core::component` (rules, parts, walks, the edit context), `command/component_ops.rs` (the commands), `surface/part.rs` (take a part out of a surface model, draw a model into another one), `kadakas_ui_core::infer3d` (scenes of instances). Public behavior only, as in `docs/research/sketchup-public-features.md`.
@@ -283,7 +333,7 @@ The layout, the tool names, the logic of the tools and the default keys follow p
 ## Not done yet
 
 - A window of the web build. The program is for the desktop. The 3D view and the tray need a native window and a file dialog.
-- The second half of MOD-05 (round B): Tape Measure and guides, Paint Bucket with materials, visibility by tag (the tags panel), and the display of landscape objects (plants, hardscapes, site models, symbols) in the 3D view of the modeler. The rest of MOD-08: Polygon, Follow Me, Offset, Intersect Faces With Context, drawing tools for soft and smooth edges (the attributes are set by Move now), and the hole through a slab for Push/Pull.
-- Not tried in a real window: the drawing, the marks and the hatch on a GPU window were checked in headless frames and in one GPU test of the back color, not by hand.
+- The rest of MOD-05 (round B2): Tape Measure and guides, and visibility by tag (the tags panel). The rest of MOD-08: Polygon, Follow Me, Offset, Intersect Faces With Context, drawing tools for soft and smooth edges (the attributes are set by Move now), and the hole through a slab for Push/Pull.
+- Not tried in a real window: the drawing, the marks and the hatch on a GPU window were checked in headless frames and in one GPU test of the back color, not by hand. The same holds for the Paint Bucket (the WGSL shader that draws one side of a triangle is checked by reading and by the CPU renderers, not on a GPU), the thumbnails and the editor of the Materials panel, and "Open in the Kadakas app" (the start of the program is tested with a script in a temporary folder, not with a real app).
 - An editor for the keys of the modeler, and a review window for crash reports. A report stays in the queue until `kadakas-app` starts.
 - Autosave and the agent server of the app.

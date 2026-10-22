@@ -1137,6 +1137,7 @@ fn the_geometry_being_pulled_is_left_out_of_the_inference() {
     assert_ne!(skipped.source.kind(), crate::infer3d::TagKind::Face);
 }
 
+mod landscape;
 mod more;
 mod paint;
 mod xform;
