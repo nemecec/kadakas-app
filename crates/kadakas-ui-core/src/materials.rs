@@ -423,10 +423,9 @@ impl MaterialsPanel {
         }
         // The parts of component definitions that use it: the definition is changed in the same
         // step (an edit in place would do the same by hand).
-        let mut by_definition: std::collections::BTreeMap<
-            ResourceId,
-            Vec<(usize, Vec<FaceId>, Vec<FaceId>)>,
-        > = std::collections::BTreeMap::new();
+        type Parts = Vec<(usize, Vec<FaceId>, Vec<FaceId>)>;
+        let mut by_definition: std::collections::BTreeMap<ResourceId, Parts> =
+            std::collections::BTreeMap::new();
         for (def, i, front, back) in uses.parts {
             by_definition.entry(def).or_default().push((i, front, back));
         }

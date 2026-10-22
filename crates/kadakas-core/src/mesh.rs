@@ -999,8 +999,7 @@ impl Builder<'_> {
             std::collections::HashMap::new();
         let mut emits: Vec<(usize, usize)> = Vec::with_capacity(tris.len());
         let doc = self.doc;
-        for t in 0..tris.len() {
-            let face = face_of_triangle[t];
+        for (t, &face) in face_of_triangle.iter().enumerate().take(tris.len()) {
             let (front, back) = *by_face.entry(face).or_insert_with(|| {
                 m.face(face)
                     .map_or((None, None), |f| resolver.faces(&f.attrs))
