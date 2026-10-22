@@ -380,7 +380,7 @@ Rows MOD-01 to MOD-13 are in section 4.23 of `docs/feature-spec.md`.
 | Line, Rectangle, Circle, Polygon, Arc | Same names | MOD-08. Rotated Rectangle, 2 Point Arc, 3 Point Arc and Pie are not named. Freehand and Lasso are missing. |
 | Measurements box (`5x`, `/5`, `[x,y,z]`, `12s`, `24r`, `8:12`) | Measurements box | MOD-04 lists `2.5`, `3;4`, `5x`, `/5`. Missing: absolute and relative coordinates, `s`/`r`/`c` suffixes, slope `a:b`, the `*` form, unit suffixes. |
 | Inference engine | 3D snaps | MOD-03 lists endpoint, midpoint, edge, face, center, intersection, axis lock, parallel, perpendicular, from point, Shift and arrow keys, a label. Missing: tangent, extend edge, through point, square and golden section, half circle, on-section, the Alt/Command three-state toggle, magenta color in groups, Origin and Component Origin. |
-| Tape Measure, guides, Protractor | Tape measure and guides | MOD-05. Missing: guide points, stand-alone Protractor, rescale model by measuring, guide delete. |
+| Tape Measure, guides, Protractor | Tape measure and guides | MOD-05, done in `docs/modeler.md`. Tape Measure, measure only with Ctrl, guide lines, guide points, Delete Guides, rescale by measuring. Missing: the Protractor and angled guides. |
 | Dimension, Text, 3D Text | Annotation (section 4.19) | Dimensions and text exist in the app (ANN rows) but not as 3D entities in the modeler. 3D Text is missing. |
 | Axes tool | User origin, working plane | Missing in the modeler. |
 | Section Plane, Active Cut, Section Fill | Section viewport and cut (section 4.20) | MOD-13 puts surface models in section drawings. The live section plane in the 3D view, Active Cut and fill are missing. |

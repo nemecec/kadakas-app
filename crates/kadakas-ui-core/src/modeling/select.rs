@@ -145,6 +145,66 @@ pub fn pick_visible(
         .then_some(item)
 }
 
+/// The guide under the pointer, if the guides are shown. A guide point or a guide line within the
+/// pick radius of the pointer counts, whatever geometry is near.
+pub fn pick_guide(
+    world: &World,
+    engine: &mut Inferencer,
+    cam: &Camera,
+    cursor: DVec2,
+) -> Option<ObjectId> {
+    engine.reset();
+    let guides: Vec<&crate::infer3d::Scene> = world.scenes.guide_scene().into_iter().collect();
+    let only_guides = |t: crate::infer3d::Tag| t.kind() != TagKind::Guide;
+    let inf = engine.infer_scenes(&guides, cam, cursor, None, &only_guides);
+    world.scenes.guide(inf.source)
+}
+
+/// The guides for a selection rectangle (pixels): a window takes the guide points and the finite
+/// guide lines that lie fully inside, a crossing rectangle takes what it touches (also a guide
+/// line without ends). Guides that are not shown are not in the scenes, so they are never taken.
+pub fn rect_guides(
+    world: &World,
+    cam: &Camera,
+    a: DVec2,
+    b: DVec2,
+    crossing: bool,
+) -> Vec<ObjectId> {
+    let (lo, hi) = (a.min(b), a.max(b));
+    let mut out = Vec::new();
+    for &id in world.scenes.guide_ids() {
+        let Some(g) = world.doc.object(id).and_then(|o| match &o.shape {
+            kadakas_core::model::Shape::Guide(g) => Some(&**g),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let z0 = super::scenes::elevation(world.doc, id);
+        let at = g.at + DVec3::new(0.0, 0.0, z0);
+        let hit = match (g.unit_dir(), g.length) {
+            (None, _) => cam.project(at).is_some_and(|p| in_rect(p, lo, hi)),
+            (Some(d), Some(l)) => match (cam.project(at), cam.project(at + d * l)) {
+                (Some(p), Some(q)) if crossing => segment_hits_rect(p, q, lo, hi),
+                (Some(p), Some(q)) => in_rect(p, lo, hi) && in_rect(q, lo, hi),
+                _ => false,
+            },
+            (Some(d), None) if crossing => {
+                // A line without ends: the part that the camera sees, as a long segment.
+                let reach = crate::infer3d::GUIDE_DRAW_REACH;
+                match cam.screen_seg(at - d * reach, at + d * reach) {
+                    Some(seg) => segment_hits_rect(seg.p[0], seg.p[1], lo, hi),
+                    None => false,
+                }
+            }
+            (Some(_), None) => false,
+        };
+        if hit {
+            out.push(id);
+        }
+    }
+    out
+}
+
 /// The edges that bound a face.
 pub fn face_edges(doc: &Document, model: ObjectId, face: FaceId) -> Vec<EdgeId> {
     let Some(m) = model_of(doc, model) else {
@@ -165,6 +225,18 @@ pub fn face_edges(doc: &Document, model: ObjectId, face: FaceId) -> Vec<EdgeId> 
 /// The faces that use an edge.
 pub fn edge_faces(doc: &Document, model: ObjectId, edge: EdgeId) -> Vec<FaceId> {
     model_of(doc, model).map_or_else(Vec::new, |m| m.faces_of_edge(edge))
+}
+
+/// The items without the hidden faces and edges (Hide, MOD-05). A double click and a triple click
+/// select neighbors; hidden ones stay out unless Hidden Geometry shows them.
+pub fn without_hidden(doc: &Document, items: Vec<Item>) -> Vec<Item> {
+    items
+        .into_iter()
+        .filter(|i| match i {
+            Item::Face(m, f) => !model_of(doc, *m).is_some_and(|s| s.face_hidden(*f)),
+            Item::Edge(m, e) => !model_of(doc, *m).is_some_and(|s| s.edge_hidden(*e)),
+        })
+        .collect()
 }
 
 /// A face with its edges, or an edge with its faces (a double click).
@@ -290,11 +362,8 @@ pub fn rect_select(world: &World, cam: &Camera, a: DVec2, b: DVec2, crossing: bo
                 .and_then(|p| cam.project(fr.transform_point3(p)))
         };
         for (eid, e) in m.edges() {
-            let hidden = m
-                .edge_attrs(eid)
-                .and_then(|x| x.get("hidden"))
-                .is_some_and(|v| v == &serde_json::Value::Bool(true));
-            if hidden {
+            // Hidden edges are offered when Hidden Geometry shows them.
+            if m.edge_hidden(eid) && !world.scenes.show.hidden_geometry {
                 continue;
             }
             let (Some(p), Some(q)) = (px(e.v[0]), px(e.v[1])) else {
@@ -310,6 +379,9 @@ pub fn rect_select(world: &World, cam: &Camera, a: DVec2, b: DVec2, crossing: bo
             }
         }
         for (fid, f) in m.faces() {
+            if m.face_hidden(fid) && !world.scenes.show.hidden_geometry {
+                continue;
+            }
             let pts: Option<Vec<DVec2>> = f.outer.iter().map(|v| px(*v)).collect();
             let Some(pts) = pts else { continue };
             let hit = if crossing {

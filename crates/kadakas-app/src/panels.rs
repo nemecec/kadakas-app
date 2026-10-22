@@ -53,6 +53,10 @@ pub enum MenuAction {
     Bcf,
     /// Edit > New Issue from Selection (REV-05).
     NewIssue,
+    /// Edit > Delete Guides: the guides of the 3D modeler (MOD-05).
+    DeleteGuides,
+    /// Edit > Unhide All: what Hide hid in the 3D modeler (MOD-05).
+    UnhideAll,
     /// File > Compare Drawings...: two DXF or DWG files without an import (IOP-24).
     CompareDrawings,
     Undo,
@@ -169,6 +173,8 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         Cmd::UpdateFromDxf => M::UpdateFromDxf,
         Cmd::Bcf => M::Bcf,
         Cmd::NewIssue => M::NewIssue,
+        Cmd::DeleteGuides => M::DeleteGuides,
+        Cmd::UnhideAll => M::UnhideAll,
         Cmd::CompareDrawings => M::CompareDrawings,
         Cmd::Preferences => M::Preferences,
         Cmd::Undo => M::Undo,
@@ -630,6 +636,8 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         | MenuAction::UpdateFromDxf
         | MenuAction::Bcf
         | MenuAction::NewIssue
+        | MenuAction::DeleteGuides
+        | MenuAction::UnhideAll
         | MenuAction::CompareDrawings
         | MenuAction::CreateSiteModel
         | MenuAction::Preferences
@@ -1289,6 +1297,8 @@ fn edit_shape(
                 ));
             }
             Shape::Group { name } => f.text(ui, &tr!("panels-name"), name),
+            // A guide has no fields in the plan; the 3D modeler edits it.
+            Shape::Guide(_) => {}
             Shape::Irrigation(i) => crate::irrigation_ui::edit(ui, &mut f, i),
             Shape::Symbol {
                 at,

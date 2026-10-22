@@ -25,6 +25,7 @@ pub struct TrayState {
     /// Soften Edges (MOD-08).
     pub soften: bool,
     pub scenes: bool,
+    pub tags: bool,
 }
 
 impl Default for TrayState {
@@ -34,6 +35,7 @@ impl Default for TrayState {
             materials: true,
             soften: true,
             scenes: true,
+            tags: true,
         }
     }
 }
@@ -761,12 +763,15 @@ pub fn scenes(ui: &mut egui::Ui) {
     ui.label(egui::RichText::new(tr!("modeler-scenes-later")).weak());
 }
 
-/// Draws the whole tray inside `ui`. Returns what the person asked for.
+/// Draws the whole tray inside `ui`. Returns what the person asked for. `tags` draws the part of
+/// the Tags code for a slot (the tag selector under Entity Info, and the Tags panel; see
+/// `tags_panel`).
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut TrayState,
     tray: &mut TrayUi,
     data: &TrayData,
+    tags: &mut dyn FnMut(&mut egui::Ui, crate::tags_panel::Slot),
 ) -> Vec<TrayAction> {
     let mut out = Vec::new();
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -777,7 +782,15 @@ pub fn show(
             &mut state.entity_info,
             |ui| {
                 entity_info(ui, data, &mut out);
+                tags(ui, crate::tags_panel::Slot::EntityInfo);
             },
+        );
+        panel(
+            ui,
+            "tray-tags",
+            tr!("modeler-tray-tags"),
+            &mut state.tags,
+            |ui| tags(ui, crate::tags_panel::Slot::Panel),
         );
         panel(
             ui,

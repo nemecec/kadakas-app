@@ -83,6 +83,27 @@ pub fn intersect_menu(ui: &mut egui::Ui, enabled: [bool; 2], cmds: &mut Vec<Cmd>
     });
 }
 
+/// Hide and Unhide (MOD-05) of the Edit menu and of the context menu of the 3D view, each enabled
+/// by its flag.
+pub fn hide_entries(ui: &mut egui::Ui, enabled: [bool; 2], cmds: &mut Vec<Cmd>) {
+    entry(
+        ui,
+        cmds,
+        tr!("modeler-edit-hide"),
+        String::new(),
+        enabled[0],
+        Cmd::Hide,
+    );
+    entry(
+        ui,
+        cmds,
+        tr!("modeler-edit-unhide"),
+        String::new(),
+        enabled[1],
+        Cmd::Unhide,
+    );
+}
+
 /// An item that shows whether it is on.
 fn choice(ui: &mut egui::Ui, cmds: &mut Vec<Cmd>, label: String, selected: bool, cmd: Cmd) {
     if ui.selectable_label(selected, label).clicked() {
@@ -186,6 +207,25 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
             );
             ui.separator();
             intersect_menu(ui, app.intersect_flags(), cmds);
+            ui.separator();
+            // Hide, guides (MOD-05).
+            hide_entries(ui, [app.can_hide(), app.can_unhide()], cmds);
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-unhide-all"),
+                String::new(),
+                true,
+                Cmd::UnhideAll,
+            );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-edit-delete-guides"),
+                String::new(),
+                app.session.editor.doc().guide_count() > 0,
+                Cmd::DeleteGuides,
+            );
             ui.separator();
             // Groups and components (MOD-07).
             entry(
@@ -292,6 +332,29 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
                 tr!("modeler-view-tray"),
                 app.prefs.tray,
                 Cmd::ToggleTray,
+            );
+            ui.separator();
+            let show = app.edit.cache.show;
+            choice(
+                ui,
+                cmds,
+                tr!("modeler-view-guides"),
+                show.guides,
+                Cmd::ToggleGuides,
+            );
+            choice(
+                ui,
+                cmds,
+                tr!("modeler-view-hidden-geometry"),
+                show.hidden_geometry,
+                Cmd::ToggleHiddenGeometry,
+            );
+            choice(
+                ui,
+                cmds,
+                tr!("modeler-view-hidden-objects"),
+                show.hidden_objects,
+                Cmd::ToggleHiddenObjects,
             );
             ui.separator();
             ui.menu_button(tr!("modeler-view-theme"), |ui| {

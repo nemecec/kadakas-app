@@ -17,9 +17,9 @@
 | Tool bar | The Getting Started set: Select, Eraser, Line, Rectangle, Circle, Arc, Push/Pull, Move, Rotate, Scale, Tape Measure, Paint Bucket, Orbit, Pan, Zoom, Zoom Extents. |
 | 3D view | The scene, drawn by the same GPU renderer as the app. The drawing axes are red (X), green (Y) and blue (up). |
 | Status bar | The instruction for the active tool, or the last message. At the right is the **Measurements** box. |
-| Tray | **Entity Info**, **Materials** and **Scenes**. A click on a title bar collapses the panel. View > Tray hides the tray. |
+| Tray | **Entity Info**, **Tags**, **Materials** and **Scenes**. A click on a title bar collapses the panel. View > Tray hides the tray. |
 
-Select, the drawing tools of MOD-08 (Eraser, Line, Rectangle, Circle, Arc, Push/Pull), Move, Rotate and Scale, the Paint Bucket and the navigation tools run. Tape Measure is in the tool bar, disabled. Its tooltip says "coming in a later version", and its key shows the same note in the status bar. The rest of MOD-05 turns it on.
+Select, the drawing tools of MOD-08, Move, Rotate, Scale, the Paint Bucket, Tape Measure and the navigation tools run.
 
 **Measurements box.** It shows the size of the selection (length, width and height in the units of the person), the field of view while the Zoom tool is active, and the live value of a drawing tool that runs (length, width and height, radius, bulge, distance). You type into it without a click: digits and the marks of values start the text, letters follow once the text has started (`24s`, `500r`, `3'6"`), Backspace erases, Enter applies and Esc clears. See "Modeling" below.
 
@@ -204,6 +204,119 @@ The fast check that every command runs takes about 0.09 s more. Since a move no 
 
 **Not done.** Auto-fold (the modifier of SketchUp that releases the constraint on Move), moving a vertex alone (the selection holds faces and edges; the core takes vertices), a rubber-band preview of the folds while the pointer moves (the preview shows the outline of the selection with the map applied), grips on a rotated box (the box is axis aligned in the world), Flip Along and mirror as a tool, and the guides and the Tape Measure (round B).
 
+## Tape Measure, guides, tags and Hide (MOD-05, round B part 2)
+
+The logic is in `kadakas_ui_core::modeling::tape`, `kadakas_ui_core::tags` and the guide code of `infer3d`. The window code is in `edit3d.rs`, `tags_panel.rs` and `app.rs`. Tests cover all of it without a window. Most go through the real input path.
+
+### Guides
+
+A guide is an object of the kind `guide` (`kadakas_core::guide`). It makes no geometry. It is a **guide line** or a **guide point**. A line has a point, a direction and an optional length. Without a length it has no ends.
+
+- A guide lives on a layer and in a class, like any object. The visibility of its tag and its layer applies to it.
+- The numbers are in the coordinates of the layer, so `z` is measured from the layer.
+- A document holds at most 10,000 guides. A command that would add more is refused with a clear message and changes nothing.
+- A guide is a thin dashed amber line. A guide point is a small cross. A line without ends is cut to the view.
+- A selected guide is blue. A hidden guide that is shown is faint.
+- **View > Guides** shows or hides all guides. A hidden guide is not drawn and not offered by the inference. It is not picked. Select All and a rectangle do not take it.
+- **Edit > Delete Guides** removes all guides in one undo step. With more than three guides it asks first.
+- The **Eraser** removes a guide on a click or a drag. **Select** picks a guide on a click.
+- A window takes guide points and guide lines with ends. A crossing rectangle takes lines without ends too.
+- Move, Rotate and Scale treat a selected guide like any object. The inference snaps to guides (`docs/modeler-inference.md`, "Guides").
+- The Vectorworks-like app keeps guides and does not draw them in the plan. Exports leave them out and say how many (see "Exports" below).
+- In the plan app a guide cannot be picked, and Select All leaves it out. Edit > Delete Guides is there too and asks above three. A 2D move or scale of a selection carries a guide along.
+- The agent API leaves guides out of `objects.list` unless the call asks for `kind: "guide"`. `document.summary` counts them in `guide_count` and not in `object_count`.
+- The counts of the Tags panel leave guides out. The question before a tag is deleted counts them apart.
+
+### Tape Measure (T)
+
+| Clicks | What it does |
+|---|---|
+| start, move, end (Ctrl first: measure only) | The distance shows live in the box and in the status line. It stays after the second click. |
+| an edge or a guide line, then a point away from it | A parallel guide line through the second click. The live value is the offset. |
+| a point, a face or the air, then a direction | A finite guide line from the first point to the second click, and a guide point at the second click. |
+| two clicks on the same point | A guide point. |
+
+- The inference works as in the drawing tools. The arrow keys and Shift lock a direction.
+- The guide of a parallel line passes through the second click. Its offset is the distance from the line to that point, measured perpendicular to the line in 3D.
+- The inference decides the second click. On a face it is on the face. On an edge it is on the edge. In the air it is on the ground plane.
+- One pair of clicks is one undo step, also when it makes a line and a point.
+- **Typed distance.** With a guide from an edge, the number is the offset. It goes to the side of the pointer. A negative number takes the other side.
+- With a guide from a point, the number is the length of a finite guide line. It has a guide point at its end.
+- The line runs along the pointer direction. A negative number goes the other way.
+- **Ctrl** (Option on macOS) pressed alone toggles between making guides and measuring only. The tool keeps the choice until it is chosen again.
+- Esc cancels the measure in progress. A second Esc goes back to Select. Hovering an edge shows its length.
+- Each guide is one undo step.
+- **Resize the model.** Measure, then type a new length. Ctrl is not needed: a pair of clicks that made guides is a measure too. A question asks "Resize the model?".
+- A measure lasts until the document changes in another way (an edit, an undo, a new tool). Esc ends it too.
+- Before the question, the window finds what will happen. It lists how many objects scale and how many plan objects keep their height.
+- If an object is on a locked layer or on a grey tag, nothing is asked. The status line names the locked layers or counts the grey objects, because the command would refuse the whole step.
+- On Yes, all objects of the open level are scaled about the **first measured point**. Guides scale too. The factor is the typed length over the measured length.
+- The first point stays where it is. A scale about the origin would move the whole model away from what the person looks at. Which point other modelers use was not checked against a manual. Move the model afterwards if needed.
+- It is one undo step through `transform_objects3d`. Heights of plan objects come from their layers and stay. The status line says so.
+- A factor above 1000 or below 1/1000 is refused. On No nothing changes.
+
+### Tags (the Tags panel)
+
+Tags are classes. The panel is in the tray under Entity Info.
+
+- Each tag has an **eye** (shown or hidden) and a **color swatch**. It has a **mark** for the active tag, a name and a count of objects.
+- The swatch shows the pen color of the class, else its fill, else an empty frame. New geometry goes to the active tag.
+- **Untagged** is the default class. It cannot be renamed or deleted.
+- **New** makes the tag `Tag 1`, `Tag 2` and so on. **Rename** (or a double click on the name) edits the name inline. A name must not be empty or the same as another tag, ignoring case.
+- **Delete** asks first when anything uses the tag. Everything moves to Untagged in the same undo step. Nothing moves without the answer. A tag that nothing uses goes at once.
+- The core command is `delete_class {id, move_to}`. It moves every reference (`kadakas_core::classes`).
+- The references are objects, parts and components of definitions, insert classes of symbols, viewport overrides and annotations, saved views, and material slots.
+- A material slot of the tag is not moved to Untagged, since that would paint every Untagged object. Each moved object gets a slot of its own, so it looks the same.
+- The question says how many of each there are. One undo step brings all of it back.
+- **Show all** shows every hidden tag and layer in one undo step.
+- Below the tags are the layers with an eye and a mark for the active layer. They use the commands that exist (`modify_layer`, `set_active`).
+- **Entity Info** has a Tag list for the selected objects. A group gives the tag to its members.
+- The tag belongs to the object. With faces or edges selected the list is off and a hint says so. Faces keep the tag of their model.
+- The panel makes its rows once for each revision of the document, not for each frame. Its commands run as one batch: one undo step, and a failure applies nothing.
+- A hidden tag hides its objects as a hidden layer does. They leave the 3D view, picking, the inference and exports.
+- The scene builders already leave out objects whose class is not visible. Nothing repeats that rule.
+- Not done: tag folders, the Tag tool, Color by Tag and Purge.
+
+### Hide and Unhide
+
+- **Edit > Hide** hides the selected objects or the selected faces and edges of surface models. A group hides its members.
+- Hide is also in the context menu of the 3D view. It is one undo step.
+- **Edit > Unhide** brings back the selected hidden items. They are selectable only while View > Hidden Geometry (faces and edges) or View > Hidden Objects (objects) is on. **Edit > Unhide All** brings back everything in the document.
+- An object is hidden by the key `kadakas.hidden` in its `data` (`kadakas_core::visibility`). The command `set_hidden {ids, hidden}` writes it, a group passes it to its members.
+- Keys that start with `kadakas.` are reserved. The agent API refuses `set_data` for them with a clear error. Reading them is free.
+- A face or an edge is hidden by the attribute `hidden: true`. `edit_surface` sets it with the action `set_hidden {faces, edges, hidden}`.
+- Both are plain data. They are saved and undone. They sync in collaboration like other data.
+- The action is logged as an intent that finds faces and edges by position.
+- A hidden **edge** does not merge faces, unlike a soft edge. The faces stay as they are.
+- A hidden **face** stays in the model and keeps its edges.
+- The renderers, the picking and the inference leave hidden items out.
+- With **View > Hidden Geometry** or **Hidden Objects** on, hidden items are drawn ghosted. The inference and the picks offer them.
+- A ghost is a dotted gray line, and a few lines across a hidden face. The 3D renderer never draws a hidden item itself.
+- A hidden object that is not a surface model, such as a plant, is not ghosted. Hidden Objects does not show it.
+- The plan app has no Hide. It shows "N hidden objects" in the status line. A click unhides them, and Edit > Unhide All does the same. Sheets and print follow hidden objects as they always followed hidden layers and tags.
+- Ghosts cost time only when a revision changes. At most 20,000 lines are drawn in a frame, solid above 2,000.
+
+### Exports
+
+An export never drops construction geometry silently. `export.file` runs on a copy of the document. The copy has no guides, no hidden objects and no hidden faces. This holds for every format (DXF, IFC, glTF, GLB, OBJ, SVG, PDF, PNG).
+
+The answer has `left_out` with the numbers: `guides`, `hidden_objects`, `hidden_faces` and `hidden_edges`. It has `notes` too, and the same lines are in `warnings`. A line reads "2 guides left out: construction geometry". The DXF and IFC reports also count a guide as skipped, with the reason.
+
+Only what really left is counted. Hidden faces that could not be taken out of the copy stay in the export. They are counted apart, with a warning. A hidden edge that no face uses goes. One that borders a shown face stays in the geometry and is not drawn as a line. The note says so.
+
+Objects on a hidden layer or tag are not counted. The exports leave them out by the rules of layers and classes, as before. The code is `kadakas_core::leftout`.
+
+The copy costs time and memory in proportion to the size of the document. It is made only when something is left out. A document with nothing hidden and no guides is exported as it is.
+
+### Not done
+
+- A tape mode of its own for guide points. A double click on one spot makes one.
+- Angled guides from the Protractor.
+- Tag folders, the Tag tool, Color by Tag, Purge and the Outliner.
+- A ghost for hidden objects that are not surface models.
+- Not tried by hand in a window: the eye, the swatch, the dashes, the ghosts and the question windows.
+- Only headless frames checked these.
+
 ## Surface models (MOD-06)
 
 A surface model (`Shape::SurfaceModel`, MOD-06) is drawn by the same GPU renderer as the other objects. See `docs/feature-spec.md` for what the core does.
@@ -347,7 +460,7 @@ The layout, the tool names, the logic of the tools and the default keys follow p
 ## Not done yet
 
 - A window of the web build. The program is for the desktop. The 3D view and the tray need a native window and a file dialog.
-- The rest of MOD-05 (round B2): Tape Measure and guides, and visibility by tag (the tags panel). The rest of MOD-08: Intersect Faces With Context, coplanar overlaps, rounded corners for Offset, a profile that touches the path inside a side for Follow Me, and View > Hidden Geometry (soft edges are not drawn at all until it comes with the Hide work of round B2).
+- The rest of MOD-08: Intersect Faces With Context, coplanar overlaps, rounded corners for Offset, a Follow Me profile that touches the path inside a side, and a click that selects the surface connected through soft edges (planned: a click selects the surface that is connected through soft edges, as SketchUp's help describes).
 - Not tried in a real window: the drawing, the marks and the hatch on a GPU window were checked in headless frames and in one GPU test of the back color, not by hand. The same holds for the Paint Bucket (the WGSL shader that draws one side of a triangle is checked by reading and by the CPU renderers, not on a GPU), the thumbnails and the editor of the Materials panel, and "Open in the Kadakas app" (the start of the program is tested with a script in a temporary folder, not with a real app).
 - An editor for the keys of the modeler, and a review window for crash reports. A report stays in the queue until `kadakas-app` starts.
 - Autosave and the agent server of the app.

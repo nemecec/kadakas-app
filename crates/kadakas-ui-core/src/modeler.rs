@@ -185,8 +185,8 @@ impl ModelerTool {
     }
 
     /// True for the tools that run in this version: Select, the drawing tools of MOD-08 (Eraser,
-    /// Line, Rectangle, Circle, Arc, Push/Pull), Move, Rotate and Scale and the Paint Bucket (MOD-05) and the
-    /// navigation tools. Tape Measure is shown, disabled.
+    /// Line, Rectangle, Circle, Arc, Push/Pull), Move, Rotate, Scale, Tape Measure and the Paint Bucket
+    /// (MOD-05) and the navigation tools.
     pub fn works(self) -> bool {
         matches!(
             self,
@@ -203,6 +203,7 @@ impl ModelerTool {
                 | ModelerTool::Move
                 | ModelerTool::Rotate
                 | ModelerTool::Scale
+                | ModelerTool::TapeMeasure
                 | ModelerTool::PaintBucket
                 | ModelerTool::Orbit
                 | ModelerTool::Pan
@@ -241,12 +242,12 @@ impl ModelerTool {
             ModelerTool::Move => tr!("uic-modeler-hint-move"),
             ModelerTool::Rotate => tr!("uic-modeler-hint-rotate"),
             ModelerTool::Scale => tr!("uic-modeler-hint-scale"),
+            ModelerTool::TapeMeasure => tr!("uic-modeler-hint-tape-measure"),
             ModelerTool::PaintBucket => tr!("uic-modeler-hint-paint-bucket"),
             ModelerTool::Orbit => tr!("uic-modeler-hint-orbit"),
             ModelerTool::Pan => tr!("uic-modeler-hint-pan"),
             ModelerTool::Zoom => tr!("uic-modeler-hint-zoom"),
             ModelerTool::ZoomExtents => tr!("uic-modeler-hint-zoom-extents"),
-            _ => tr!("uic-modeler-coming-later"),
         }
     }
 
@@ -777,12 +778,10 @@ pub fn entity_info_with_parts(
                 }),
                 faces: m.faces_of_edge(*eid).len(),
                 style: {
-                    use kadakas_core::surface::{ATTR_HIDDEN, ATTR_SMOOTH, ATTR_SOFT, flagged};
-                    let a = m.edge_attrs(*eid);
                     EdgeFlags {
-                        soft: flagged(a, ATTR_SOFT),
-                        smooth: flagged(a, ATTR_SMOOTH),
-                        hidden: flagged(a, ATTR_HIDDEN),
+                        soft: m.edge_soft(*eid),
+                        smooth: m.edge_smooth(*eid),
+                        hidden: m.edge_hidden(*eid),
                     }
                 },
             }
@@ -927,6 +926,7 @@ mod tests {
                 "move",
                 "rotate",
                 "scale",
+                "tape-measure",
                 "paint-bucket",
                 "orbit",
                 "pan",
@@ -977,7 +977,7 @@ mod tests {
         assert!(!ModelerTool::Select.tooltip("Space").contains("later"));
         let tip = ModelerTool::TapeMeasure.tooltip("T");
         assert!(tip.contains("Tape Measure") && tip.contains('T'));
-        assert!(tip.contains(&tr!("uic-modeler-coming-later")));
+        assert!(!tip.contains("later"));
         // Without a key there is no empty bracket.
         assert_eq!(ModelerTool::Select.tooltip(""), ModelerTool::Select.name());
     }
@@ -1016,10 +1016,9 @@ mod tests {
         for t in ModelerTool::ALL {
             assert!(!t.hint().is_empty());
         }
-        assert_eq!(
-            ModelerTool::TapeMeasure.hint(),
-            tr!("uic-modeler-coming-later")
-        );
+        for t in [ModelerTool::PaintBucket, ModelerTool::TapeMeasure] {
+            assert_ne!(t.hint(), tr!("uic-modeler-coming-later"));
+        }
         assert_ne!(ModelerTool::Move.hint(), tr!("uic-modeler-coming-later"));
         assert_ne!(ModelerTool::Line.hint(), ModelerTool::Rectangle.hint());
         assert_ne!(ModelerTool::Orbit.hint(), ModelerTool::Pan.hint());

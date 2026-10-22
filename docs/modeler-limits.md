@@ -250,3 +250,29 @@ CORE=... UI=... PROPS=... BASE=... OUT=/tmp/lm-out2 crates/kadakas-core/tests/li
 ```
 
 Single scenario: `LM_SCALE=3 python3 crates/kadakas-core/tests/limits_measure.py BINARY 5 big "terrain 223"`. A scenario test run without `LM` skips itself, so `cargo test -- --ignored` in CI is safe.
+
+## Guides (MOD-05)
+
+A document holds at most 10,000 guides (`kadakas_core::guide::MAX_GUIDES`). A command that adds more is refused and changes nothing. The limit is measured now (release build, Apple M-series, `perf_10000_guides_infer_build_and_draw_within_a_frame`).
+
+The scene had 10,000 guides over a model of 51,520 edges. There were 4,858 lines without ends, 2,500 finite lines and 2,500 points.
+
+| What | Time |
+|---|---|
+| Scene of the guides for a new revision | 1.7 ms (the model scene: 46.5 ms) |
+| One pointer move, overview of the whole model | p50 0.45 ms, p99 0.54 ms, max 1.7 ms |
+| One pointer move, close view | p50 0.37 ms, p99 0.62 ms, max 0.8 ms |
+| Clip of all 10,000 guides to the view, for drawing | 0.4 ms |
+
+A pointer move costs about 0.4 ms more than without guides. Every line without ends is tested one by one. The test fails above 4 ms at p99, a quarter of a frame.
+
+Hidden Geometry (`perf_ghosts_of_a_large_hidden_model`): a model of 25,600 faces and 51,520 edges, all hidden.
+
+| What | Time |
+|---|---|
+| Inference scene with the hidden geometry | 79 ms for a new revision |
+| Ghosts for a new revision (51,520 edges, 25,600 lines across faces) | 22 ms |
+| The same revision again | under 0.001 ms |
+| Drawing the ghosts in a frame (shapes and tessellation, 19,280 shapes) | 4.2 ms |
+
+The Tags panel makes its rows once for each revision. Guides are saved as plain objects. One guide is about 80 bytes of text.

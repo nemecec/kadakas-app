@@ -533,7 +533,8 @@ fn shape_core(
         }
         // Paper-space objects that other code composes.
         Shape::Viewport(_) | Shape::TitleBlock(_) => {}
-        Shape::Group { .. } | Shape::Unknown { .. } => {}
+        // A guide is construction geometry. The sheet leaves it out (the export says how many).
+        Shape::Group { .. } | Shape::Unknown { .. } | Shape::Guide(_) => {}
         Shape::Underlay(u) => {
             if let Some(img) = crate::underlay::image_prim(u, xf) {
                 out.push(Prim::Image(img));

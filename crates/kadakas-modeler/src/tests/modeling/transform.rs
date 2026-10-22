@@ -97,7 +97,7 @@ pub(super) fn screen_of(app: &mut ModelerApp, p: DVec3) -> egui::Pos2 {
 }
 
 /// The copy key goes down for a frame: Ctrl, or Option on a Mac.
-fn toggle_copy(ctx: &egui::Context, app: &mut ModelerApp, t: &mut f64) {
+pub(super) fn toggle_copy(ctx: &egui::Context, app: &mut ModelerApp, t: &mut f64) {
     let m = if cfg!(target_os = "macos") {
         egui::Modifiers::ALT
     } else {

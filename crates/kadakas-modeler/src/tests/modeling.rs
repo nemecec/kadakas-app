@@ -385,6 +385,7 @@ fn the_modeling_texts_exist_in_both_languages() {
 }
 
 mod editing;
+mod guides;
 mod intersect;
 mod landscape;
 mod mod08;

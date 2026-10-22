@@ -7,7 +7,7 @@ use glam::{DVec2, DVec3};
 use super::bvh::Aabb;
 use super::camera::{Camera, Ray};
 use super::math::{inside_loops, line_line, nearest_on_screen_seg, ray_plane};
-use super::scene::{EdgeItem, FaceItem, PointKind, Scene, Tag};
+use super::scene::{EdgeItem, FaceItem, PointKind, Scene, Tag, TagKind};
 use super::{Axis, Constraint, ConstraintLine, Inference, Kind, Options};
 
 /// The keys that the inference reacts to.
@@ -427,7 +427,7 @@ impl Inferencer {
         // With a reference point, a point (an endpoint, a midpoint or a center) locks the
         // direction from the reference point through it; without one, the point itself.
         let through = match (l.kind, self.last_ref) {
-            (Kind::Endpoint | Kind::Midpoint | Kind::Center, Some(r)) => {
+            (Kind::Endpoint | Kind::GuidePoint | Kind::Midpoint | Kind::Center, Some(r)) => {
                 (l.point - r).try_normalize()
             }
             _ => None,
@@ -553,61 +553,84 @@ impl Inferencer {
         let reach = o.px(o.edge_px.max(o.intersection_px));
         let (ep, mp, edp) = (o.px(o.endpoint_px), o.px(o.midpoint_px), o.px(o.edge_px));
         let mut near: Vec<(f64, EdgeItem)> = Vec::new();
+        let mut visit = |e: EdgeItem| {
+            if (ctx.skip)(e.tag) {
+                return;
+            }
+            let Some(seg) = cam.screen_seg(e.a, e.b) else {
+                return;
+            };
+            let (s, d) = nearest_on_screen_seg(cursor, seg.p[0], seg.p[1]);
+            if d <= reach {
+                near.push((d, e));
+            }
+            let Some(cands) = cands.as_deref_mut() else {
+                return;
+            };
+            // A guide line gives "on guide" only: its ends are no points to snap to.
+            if e.tag.kind() == TagKind::Guide {
+                if d <= edp {
+                    cands.push(Cand {
+                        kind: Kind::OnGuide,
+                        point: e.a.lerp(e.b, seg.world_param(s)),
+                        dist: d,
+                        depth: cam.depth(e.a.lerp(e.b, seg.world_param(s))),
+                        source: e.tag,
+                        other: Tag::NONE,
+                        edge: Some(e),
+                        normal: None,
+                    });
+                }
+                return;
+            }
+            let mut push = |kind: Kind, point: DVec3, dist: f64| {
+                cands.push(Cand {
+                    kind,
+                    point,
+                    dist,
+                    depth: cam.depth(point),
+                    source: e.tag,
+                    other: Tag::NONE,
+                    edge: Some(e),
+                    normal: None,
+                });
+            };
+            if seg.t[0] == 0.0 {
+                let dd = (seg.p[0] - cursor).length();
+                if dd <= ep {
+                    push(Kind::Endpoint, e.a, dd);
+                }
+            }
+            if seg.t[1] == 1.0 {
+                let dd = (seg.p[1] - cursor).length();
+                if dd <= ep {
+                    push(Kind::Endpoint, e.b, dd);
+                }
+            }
+            if seg.t[0] <= 0.5 && 0.5 <= seg.t[1] {
+                let m = e.a.lerp(e.b, 0.5);
+                if let Some(px) = cam.project(m) {
+                    let dd = (px - cursor).length();
+                    if dd <= mp {
+                        push(Kind::Midpoint, m, dd);
+                    }
+                }
+            }
+            if d <= edp {
+                push(Kind::OnEdge, e.a.lerp(e.b, seg.world_param(s)), d);
+            }
+        };
         for scene in ctx.scenes {
             scene
                 .bvh_edges
                 .query(&|b| overlaps_rect(cam, b, cursor, pad), &mut |i| {
-                    let e = scene.edges[i as usize];
-                    if (ctx.skip)(e.tag) {
-                        return;
-                    }
-                    let Some(seg) = cam.screen_seg(e.a, e.b) else {
-                        return;
-                    };
-                    let (s, d) = nearest_on_screen_seg(cursor, seg.p[0], seg.p[1]);
-                    if d <= reach {
-                        near.push((d, e));
-                    }
-                    let Some(cands) = cands.as_deref_mut() else {
-                        return;
-                    };
-                    let mut push = |kind: Kind, point: DVec3, dist: f64| {
-                        cands.push(Cand {
-                            kind,
-                            point,
-                            dist,
-                            depth: cam.depth(point),
-                            source: e.tag,
-                            other: Tag::NONE,
-                            edge: Some(e),
-                            normal: None,
-                        });
-                    };
-                    if seg.t[0] == 0.0 {
-                        let dd = (seg.p[0] - cursor).length();
-                        if dd <= ep {
-                            push(Kind::Endpoint, e.a, dd);
-                        }
-                    }
-                    if seg.t[1] == 1.0 {
-                        let dd = (seg.p[1] - cursor).length();
-                        if dd <= ep {
-                            push(Kind::Endpoint, e.b, dd);
-                        }
-                    }
-                    if seg.t[0] <= 0.5 && 0.5 <= seg.t[1] {
-                        let m = e.a.lerp(e.b, 0.5);
-                        if let Some(px) = cam.project(m) {
-                            let dd = (px - cursor).length();
-                            if dd <= mp {
-                                push(Kind::Midpoint, m, dd);
-                            }
-                        }
-                    }
-                    if d <= edp {
-                        push(Kind::OnEdge, e.a.lerp(e.b, seg.world_param(s)), d);
-                    }
+                    visit(scene.edges[i as usize]);
                 });
+            // Guide lines without ends are not in the index: they are a short list that is
+            // tested one by one, so their length never makes a box of the index huge.
+            for l in &scene.lines {
+                visit(l.as_edge());
+            }
         }
         // The same order for any order of the geometry.
         near.sort_by(|x, y| {
@@ -640,6 +663,7 @@ impl Inferencer {
                     let d = (px - cursor).length();
                     let (kind, r) = match it.kind {
                         PointKind::Endpoint => (Kind::Endpoint, o.endpoint_px),
+                        PointKind::Guide => (Kind::GuidePoint, o.endpoint_px),
                         PointKind::Center => (Kind::Center, o.center_px),
                     };
                     if d <= o.px(r) {
@@ -1026,7 +1050,9 @@ impl Inferencer {
             result = Some(i);
         }
         if result.is_none()
-            && let Some(c) = ctx.pick(cam, &cands, |c| c.kind == Kind::OnEdge)
+            && let Some(c) = ctx.pick(cam, &cands, |c| {
+                matches!(c.kind, Kind::OnEdge | Kind::OnGuide)
+            })
         {
             let mut i = self.cand_result(cam, cursor, &c, Vec::new());
             if let Some(e) = c.edge {
@@ -1158,7 +1184,10 @@ impl Inferencer {
                 // (the end of the perpendicular from the point to the line), with a dotted
                 // helper from the point to it.
                 let snap = ctx.pick(cam, &cands, |c| {
-                    matches!(c.kind, Kind::Endpoint | Kind::Midpoint | Kind::Center)
+                    matches!(
+                        c.kind,
+                        Kind::Endpoint | Kind::GuidePoint | Kind::Midpoint | Kind::Center
+                    )
                 });
                 if let Some(c) = snap
                     && let Some(d) = dir.try_normalize()

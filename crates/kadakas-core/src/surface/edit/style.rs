@@ -21,24 +21,17 @@ use super::*;
 pub const ATTR_SOFT: &str = "soft";
 /// The attribute of a smooth edge.
 pub const ATTR_SMOOTH: &str = "smooth";
-/// The attribute of a hidden edge.
-pub const ATTR_HIDDEN: &str = "hidden";
 
-/// Sets or clears the flags of the given edges (`None` leaves a flag as it is).
+/// Sets or clears the flags of the given edges (hidden is Hide, `Edit::SetHidden`; `None` leaves a flag as it is).
 pub(super) fn set_edge_style(
     m: &mut SurfaceModel,
     edges: &[EdgeId],
     soft: Option<bool>,
     smooth: Option<bool>,
-    hidden: Option<bool>,
 ) -> Result<(), SurfaceError> {
     let ids = existing_edges(m, edges)?;
     for e in ids {
-        for (key, v) in [
-            (ATTR_SOFT, soft),
-            (ATTR_SMOOTH, smooth),
-            (ATTR_HIDDEN, hidden),
-        ] {
+        for (key, v) in [(ATTR_SOFT, soft), (ATTR_SMOOTH, smooth)] {
             if let Some(on) = v {
                 set_flag(m, e, key, on);
             }

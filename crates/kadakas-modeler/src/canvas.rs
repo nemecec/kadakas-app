@@ -73,6 +73,8 @@ pub struct Canvas<'a> {
     pub intersect: [bool; 2],
     /// Faces or edges are selected: Soften, Smooth and Unsoften are enabled (the context menu).
     pub edges: bool,
+    /// Whether Hide and Unhide are enabled (the context menu).
+    pub hide: [bool; 2],
 }
 
 /// What the canvas tells the program.
@@ -149,6 +151,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
         fit_pending,
         intersect,
         edges,
+        hide,
     } = c;
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     let mut shown = Shown {
@@ -375,6 +378,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
         let mut cmds = Vec::new();
         crate::menu::intersect_menu(ui, intersect, &mut cmds);
         crate::soften::context_menu(ui, edges, &mut cmds);
+        crate::menu::hide_entries(ui, hide, &mut cmds);
         if let Some(c) = cmds.pop() {
             shown.command = Some(c);
         }

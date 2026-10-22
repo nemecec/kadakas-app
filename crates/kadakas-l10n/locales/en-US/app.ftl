@@ -117,3 +117,21 @@ app-opened-first-of-several =
         [one] Opened { $name }. { $count } more file was not opened: Kadakas shows one drawing at a time.
        *[other] Opened { $name }. { $count } more files were not opened: Kadakas shows one drawing at a time.
     }
+app-no-guides = There are no guides.
+app-guides-deleted = { $count ->
+    [one] 1 guide is deleted.
+   *[other] { $count } guides are deleted.
+}
+app-guides-delete-title = Delete Guides
+app-guides-delete-question = Delete all { $count } guides of the model?
+app-guides-delete-yes = Delete the guides
+app-nothing-hidden = Nothing is hidden.
+app-unhid = { $count ->
+    [one] 1 item shows again.
+   *[other] { $count } items show again.
+}
+app-hidden-objects = { $count ->
+    [one] 1 hidden object
+   *[other] { $count } hidden objects
+}
+app-hidden-objects-tip = These objects were hidden in the 3D modeler. Click to show them again.

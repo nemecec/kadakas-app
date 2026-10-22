@@ -44,6 +44,10 @@ commands! {
     Bcf => "file.bcf", msg!("panels-bcf"), true;
     // Edit > New Issue from Selection (REV-05).
     NewIssue => "edit.new_issue", msg!("panels-new-issue"), false;
+    // Edit > Delete Guides: all guides of the 3D modeler in one step; it asks above three (MOD-05).
+    DeleteGuides => "edit.delete_guides", msg!("panels-delete-guides"), false;
+    // Edit > Unhide All: everything that Hide hid in the 3D modeler (MOD-05).
+    UnhideAll => "edit.unhide_all", msg!("panels-unhide-all"), false;
     MapSources => "file.map_sources", msg!("panels-map-sources"), true;
     ChangeCrs => "file.change_crs", msg!("panels-change-crs"), true;
     Scripts => "file.scripts", msg!("panels-scripts"), true;
@@ -343,6 +347,9 @@ pub fn default_menus() -> Vec<Menu> {
                 "edit.select_all",
                 "-",
                 "edit.new_issue",
+                "-",
+                "edit.unhide_all",
+                "edit.delete_guides",
                 "-",
                 "ui.quick_search",
             ],

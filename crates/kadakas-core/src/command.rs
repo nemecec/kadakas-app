@@ -240,6 +240,14 @@ pub enum Command {
         #[serde(default)]
         attrs: Option<Attributes>,
     },
+    /// Delete a class (a tag in the 3D modeler). The objects of the class go to `move_to` (the
+    /// default class "None", shown as Untagged, when missing). The default class cannot be deleted.
+    /// The active class becomes `move_to` when it was the deleted one.
+    DeleteClass {
+        id: ClassId,
+        #[serde(default)]
+        move_to: Option<ClassId>,
+    },
     SetActive {
         #[serde(default)]
         layer: Option<LayerId>,
@@ -713,6 +721,13 @@ pub enum Command {
         group: ObjectId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resolve: Option<crate::component::Resolve>,
+    },
+    /// Hide (`hidden: true`) or show the objects and the members of the groups among them (MOD-05).
+    /// The mark is the data key `kadakas.hidden`, which `set_data` cannot write. A hidden object
+    /// stays in the document. Views, picking and exports leave it out.
+    SetHidden {
+        ids: Vec<ObjectId>,
+        hidden: bool,
     },
     /// Several commands as one undo step. Stops at the first error.
     Batch {
@@ -1709,7 +1724,38 @@ impl<'a> Tx<'a> {
                     .vertices_mut()
                     .expect("checked")[*index] = v;
             }
+            Command::SetHidden { ids, hidden } => {
+                let ids = unique(ids);
+                if ids.is_empty() {
+                    return Err(CommandError::Invalid("give at least one object".into()));
+                }
+                for &id in &ids {
+                    self.editable(id)?;
+                }
+                for id in self.doc.with_members(&ids) {
+                    self.editable(id)?;
+                    self.touch(id);
+                    let o = self.doc.object_mut(id).expect("checked");
+                    if *hidden {
+                        o.data.insert(
+                            crate::visibility::HIDDEN_KEY.to_string(),
+                            serde_json::Value::Bool(true),
+                        );
+                    } else {
+                        o.data.remove(crate::visibility::HIDDEN_KEY);
+                    }
+                }
+            }
             Command::SetData { id, set, remove } => {
+                if let Some(k) = set
+                    .keys()
+                    .chain(remove.iter())
+                    .find(|k| k.as_str() == crate::visibility::HIDDEN_KEY)
+                {
+                    return Err(CommandError::Invalid(format!(
+                        "the data key '{k}' is reserved. Use the command set_hidden"
+                    )));
+                }
                 if let Some(k) = set
                     .keys()
                     .chain(remove.iter())
@@ -1892,6 +1938,53 @@ impl<'a> Tx<'a> {
                 }
                 if let Some(v) = attrs {
                     c.attrs = v.clone();
+                }
+            }
+            Command::DeleteClass { id, move_to } => {
+                self.check_class(*id)?;
+                if *id == NONE_CLASS {
+                    return Err(CommandError::Invalid(
+                        "the default class cannot be deleted".into(),
+                    ));
+                }
+                let to = move_to.unwrap_or(NONE_CLASS);
+                self.check_class(to)?;
+                if to == *id {
+                    return Err(CommandError::Invalid(
+                        "the objects cannot move to the class that is deleted".into(),
+                    ));
+                }
+                // Every place that names the class moves with the objects (see `classes`): nothing
+                // is left with an id that is gone, and nothing is dropped without a word.
+                let affected: Vec<ObjectId> = self
+                    .doc
+                    .objects
+                    .values()
+                    .filter(|o| {
+                        o.class == *id
+                            || matches!(&o.shape, Shape::Viewport(v)
+                                if v.class_overrides.contains_key(id)
+                                    || v.annotations.iter().any(|a| a.class == *id))
+                    })
+                    .map(|o| o.id)
+                    .collect();
+                let mut moved: Vec<ObjectId> = Vec::new();
+                for oid in affected {
+                    self.editable(oid)?;
+                    self.touch(oid);
+                    let o = self.doc.object_mut(oid).expect("checked");
+                    if o.class == *id {
+                        o.class = to;
+                        moved.push(oid);
+                    }
+                    crate::classes::remap_object(o, *id, to);
+                }
+                crate::classes::remap_resources(&mut self.doc.resources, *id, to);
+                crate::classes::remap_drawing(&mut self.doc.drawing, *id, to, &moved);
+                self.doc.classes.retain(|c| c.id != *id);
+                self.doc.drawing.grey.classes.remove(id);
+                if self.doc.active_class == *id {
+                    self.doc.active_class = to;
                 }
             }
             Command::SetActive { layer, class } => {
@@ -2106,6 +2199,19 @@ impl<'a> Tx<'a> {
                     id.0
                 )));
             }
+        }
+        // The limit of guides (MOD-05): a step that adds a guide may not take the document over it.
+        if self
+            .added
+            .iter()
+            .filter_map(|id| self.doc.object(*id))
+            .any(crate::guide::is_guide)
+            && self.doc.guide_count() > crate::guide::MAX_GUIDES
+        {
+            return Err(CommandError::Invalid(format!(
+                "a document may hold at most {} guides",
+                crate::guide::MAX_GUIDES
+            )));
         }
         let mut touched = self
             .added

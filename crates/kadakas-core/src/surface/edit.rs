@@ -89,6 +89,16 @@ pub enum Edit {
         matrix: [f64; 12],
         count: u32,
     },
+    /// Hide and Unhide (MOD-05): sets (`hidden: true`) or clears the attribute `hidden` of the
+    /// given faces and edges. Views, picking and the inference leave hidden items out unless
+    /// Hidden Geometry shows them. Nothing else changes: a hidden edge does not merge faces.
+    SetHidden {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        faces: Vec<FaceId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        edges: Vec<EdgeId>,
+        hidden: bool,
+    },
     /// Offset (MOD-08): draws a copy of every loop of the face `distance` mm inside the face
     /// (`outward` false, the default) or outside it, in the plane of the face, with miter
     /// corners. The face splits along the new loops; a curve gives a curve. `distance` must be
@@ -107,17 +117,16 @@ pub enum Edit {
         distance: f64,
         toward: [f64; 3],
     },
-    /// Soft, smooth and hidden edges (MOD-08): sets (`true`) or clears (`false`) the flags of the
-    /// edges; a flag that is not given stays as it is. A soft edge is not drawn; the faces on the
-    /// sides of a smooth edge shade as one surface. See the module `style`.
+    /// Soft and smooth edges (MOD-08): sets (`true`) or clears (`false`) the flags of the edges;
+    /// a flag that is not given stays as it is. A soft edge is not drawn, picked or inferred; the
+    /// faces on the sides of a smooth edge shade as one surface. Hidden is `set_hidden`. See the
+    /// module `style`.
     SetEdgeStyle {
         edges: Vec<EdgeId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         soft: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         smooth: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        hidden: Option<bool>,
     },
     /// Soften Edges (MOD-08): each of the edges between two faces at an angle below `angle`
     /// degrees (0 to 180) becomes soft (and smooth with `smooth`); the others lose both flags.
@@ -166,6 +175,7 @@ pub enum IntersectScope {
 }
 
 mod followme;
+mod hide;
 mod intersect;
 mod near;
 pub(super) mod offset;
@@ -242,14 +252,18 @@ fn run_noted(
             edges,
             soft,
             smooth,
-            hidden,
-        } => style::set_edge_style(m, edges, *soft, *smooth, *hidden),
+        } => style::set_edge_style(m, edges, *soft, *smooth),
         Edit::SoftenEdges {
             edges,
             angle,
             smooth,
             coplanar,
         } => style::soften_edges(m, edges, *angle, *smooth, *coplanar),
+        Edit::SetHidden {
+            faces,
+            edges,
+            hidden,
+        } => hide::set_hidden(m, faces, edges, *hidden),
         Edit::SetFaceMaterial {
             faces,
             side,

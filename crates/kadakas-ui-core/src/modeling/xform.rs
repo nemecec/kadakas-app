@@ -813,6 +813,7 @@ impl Xform {
             actions: vec![action],
             redo,
             message: None,
+            resize: None,
         }
     }
 
@@ -933,6 +934,7 @@ impl Xform {
             actions: vec![action],
             redo,
             message: None,
+            resize: None,
         }
     }
 
@@ -1121,6 +1123,7 @@ impl Xform {
             actions: vec![action],
             redo,
             message: None,
+            resize: None,
         }
     }
 

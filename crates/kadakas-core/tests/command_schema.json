@@ -583,6 +583,35 @@
           "type": "object"
         },
         {
+          "description": "Hide and Unhide (MOD-05): sets (`hidden: true`) or clears the attribute `hidden` of the\ngiven faces and edges. Views, picking and the inference leave hidden items out unless\nHidden Geometry shows them. Nothing else changes: a hidden edge does not merge faces.",
+          "properties": {
+            "action": {
+              "const": "set_hidden",
+              "type": "string"
+            },
+            "edges": {
+              "items": {
+                "$ref": "#/$defs/EdgeId"
+              },
+              "type": "array"
+            },
+            "faces": {
+              "items": {
+                "$ref": "#/$defs/FaceId"
+              },
+              "type": "array"
+            },
+            "hidden": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "action",
+            "hidden"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Offset (MOD-08): draws a copy of every loop of the face `distance` mm inside the face\n(`outward` false, the default) or outside it, in the plane of the face, with miter\ncorners. The face splits along the new loops; a curve gives a curve. `distance` must be\nlarger than the length tolerance. See the module `offset`.",
           "properties": {
             "action": {
@@ -643,7 +672,7 @@
           "type": "object"
         },
         {
-          "description": "Soft, smooth and hidden edges (MOD-08): sets (`true`) or clears (`false`) the flags of the\nedges; a flag that is not given stays as it is. A soft edge is not drawn; the faces on the\nsides of a smooth edge shade as one surface. See the module `style`.",
+          "description": "Soft and smooth edges (MOD-08): sets (`true`) or clears (`false`) the flags of the edges;\na flag that is not given stays as it is. A soft edge is not drawn, picked or inferred; the\nfaces on the sides of a smooth edge shade as one surface. Hidden is `set_hidden`. See the\nmodule `style`.",
           "properties": {
             "action": {
               "const": "set_edge_style",
@@ -654,12 +683,6 @@
                 "$ref": "#/$defs/EdgeId"
               },
               "type": "array"
-            },
-            "hidden": {
-              "type": [
-                "boolean",
-                "null"
-              ]
             },
             "smooth": {
               "type": [
@@ -1753,7 +1776,8 @@
                 "sweep",
                 "irrigation",
                 "surface_model",
-                "component"
+                "component",
+                "guide"
               ]
             }
           },
@@ -2708,6 +2732,34 @@
             "boolean",
             "null"
           ]
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Delete a class (a tag in the 3D modeler). The objects of the class go to `move_to` (the\ndefault class \"None\", shown as Untagged, when missing). The default class cannot be deleted.\nThe active class becomes `move_to` when it was the deleted one.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ClassId"
+        },
+        "move_to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "op": {
+          "const": "delete_class",
+          "type": "string"
         }
       },
       "required": [
@@ -4580,6 +4632,30 @@
       "required": [
         "op",
         "group"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Hide (`hidden: true`) or show the objects and the members of the groups among them (MOD-05).\nThe mark is the data key `kadakas.hidden`, which `set_data` cannot write. A hidden object\nstays in the document. Views, picking and exports leave it out.",
+      "properties": {
+        "hidden": {
+          "type": "boolean"
+        },
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "set_hidden",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "hidden"
       ],
       "type": "object"
     },

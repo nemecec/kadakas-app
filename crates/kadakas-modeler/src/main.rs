@@ -20,6 +20,7 @@ mod menu;
 mod prefs;
 mod soften;
 mod statusbar;
+mod tags_panel;
 mod toolbar;
 mod tray;
 

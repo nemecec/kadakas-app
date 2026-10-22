@@ -42,6 +42,88 @@ impl VisMode {
     }
 }
 
+/// The key in `Object::data` that marks an object that the person hid with Hide (MOD-05). The
+/// value is `true`. The object stays in the document. Views, picking, inference and exports leave
+/// it out (an export says how many), and Unhide brings it back. A hidden group hides its members:
+/// Hide marks the group and all of its members.
+pub const HIDDEN_KEY: &str = "kadakas.hidden";
+
+/// The prefix of the keys in `Object::data` that belong to Kadakas itself. `set_data` refuses to write
+/// or remove a key with it: only the commands that own a key change it. Reading is free.
+pub const RESERVED_PREFIX: &str = "kadakas.";
+
+/// True if the person hid the object with Hide.
+pub fn is_hidden(obj: &Object) -> bool {
+    obj.data.get(HIDDEN_KEY) == Some(&serde_json::Value::Bool(true))
+}
+
+/// The command that hides (or shows again) the objects, and the members of the groups among them,
+/// as one undo step. `None` when no object would change.
+pub fn set_hidden_command(
+    doc: &Document,
+    ids: &[crate::model::ObjectId],
+    hidden: bool,
+) -> Option<crate::command::Command> {
+    let changes = doc
+        .with_members(ids)
+        .into_iter()
+        .any(|id| doc.object(id).is_some_and(|o| is_hidden(o) != hidden));
+    changes.then(|| crate::command::Command::SetHidden {
+        ids: ids.to_vec(),
+        hidden,
+    })
+}
+
+/// How many objects are hidden with Hide: groups are not counted, their members are. Guides count.
+pub fn hidden_object_count(doc: &Document) -> usize {
+    doc.objects
+        .values()
+        .filter(|o| is_hidden(o) && !matches!(o.shape, crate::model::Shape::Group { .. }))
+        .count()
+}
+
+/// The command that shows everything again (Unhide All) and how many items it shows: every hidden
+/// object, and every hidden face and edge of every surface model. One undo step. `None` when
+/// nothing is hidden.
+pub fn unhide_all_command(doc: &Document) -> Option<(crate::command::Command, usize)> {
+    use crate::command::Command;
+    let mut commands: Vec<Command> = Vec::new();
+    let mut count = 0usize;
+    for o in doc.objects.values() {
+        let crate::model::Shape::SurfaceModel(m) = &o.shape else {
+            continue;
+        };
+        let (faces, edges) = (m.hidden_faces(), m.hidden_edges());
+        if faces.is_empty() && edges.is_empty() {
+            continue;
+        }
+        count += faces.len() + edges.len();
+        commands.push(Command::EditSurface {
+            id: o.id,
+            edit: crate::surface::Edit::SetHidden {
+                faces,
+                edges,
+                hidden: false,
+            },
+        });
+    }
+    let hidden = hidden_objects(doc);
+    if let Some(c) = set_hidden_command(doc, &hidden, false) {
+        count += hidden_object_count(doc);
+        commands.push(c);
+    }
+    (!commands.is_empty()).then_some((Command::Batch { commands }, count))
+}
+
+/// The ids of the objects that are hidden with Hide.
+pub fn hidden_objects(doc: &Document) -> Vec<crate::model::ObjectId> {
+    doc.objects
+        .values()
+        .filter(|o| is_hidden(o))
+        .map(|o| o.id)
+        .collect()
+}
+
 /// The layers and classes that are grey.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GreySet {

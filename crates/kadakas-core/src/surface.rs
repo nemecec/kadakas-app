@@ -149,6 +149,7 @@ mod tests;
 mod tests_absorb;
 #[cfg(test)]
 mod tests_followme;
+mod tests_hide;
 #[cfg(test)]
 mod tests_index;
 #[cfg(test)]
@@ -163,7 +164,7 @@ mod tests_style;
 mod tests_transform;
 
 pub use check::{At, Problem, Report};
-pub use edit::style::{ATTR_HIDDEN, ATTR_SMOOTH, ATTR_SOFT, dihedral_of, flagged};
+pub use edit::style::{ATTR_SMOOTH, ATTR_SOFT, dihedral_of, flagged};
 pub use edit::{ATTR_BACK_MATERIAL, ATTR_MATERIAL, Edit, IntersectScope, PaintSide};
 pub use geom::{Plane, on_plane, plane_tolerance_at, tolerance_at};
 pub use part::{Absorber, Selection};
@@ -484,6 +485,54 @@ impl SurfaceModel {
     /// The attributes of an edge (empty when it has none).
     pub fn edge_attrs(&self, id: EdgeId) -> Option<&Attrs> {
         self.edge_attrs.get(&id)
+    }
+
+    /// True if the face is hidden (Hide, MOD-05).
+    pub fn face_hidden(&self, id: FaceId) -> bool {
+        self.faces
+            .get(&id)
+            .is_some_and(|f| f.attrs.get("hidden") == Some(&serde_json::Value::Bool(true)))
+    }
+
+    /// True if the edge is hidden (Hide, MOD-05).
+    pub fn edge_hidden(&self, id: EdgeId) -> bool {
+        self.edge_attrs
+            .get(&id)
+            .is_some_and(|a| a.get("hidden") == Some(&serde_json::Value::Bool(true)))
+    }
+
+    /// True if the edge is soft (MOD-08): not drawn, picked or inferred.
+    pub fn edge_soft(&self, id: EdgeId) -> bool {
+        flagged(self.edge_attrs.get(&id), ATTR_SOFT)
+    }
+
+    /// True if the edge is smooth (MOD-08): the faces on its sides shade as one surface.
+    pub fn edge_smooth(&self, id: EdgeId) -> bool {
+        flagged(self.edge_attrs.get(&id), ATTR_SMOOTH)
+    }
+
+    /// True if the edge is drawn, picked and inferred: neither hidden nor soft (View > Hidden
+    /// Geometry shows the others ghosted).
+    pub fn edge_shown(&self, id: EdgeId) -> bool {
+        !self.edge_hidden(id) && !self.edge_soft(id)
+    }
+
+    /// The hidden faces, in the order of their ids.
+    pub fn hidden_faces(&self) -> Vec<FaceId> {
+        self.faces
+            .keys()
+            .copied()
+            .filter(|id| self.face_hidden(*id))
+            .collect()
+    }
+
+    /// The hidden edges, in the order of their ids.
+    pub fn hidden_edges(&self) -> Vec<EdgeId> {
+        self.edge_attrs
+            .keys()
+            .copied()
+            .filter(|id| self.edge_hidden(*id))
+            .collect()
     }
 
     /// The curves, each a chain of edges in order.

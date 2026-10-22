@@ -27,6 +27,7 @@ use crate::edit3d::Edit3d;
 use crate::files::{self, Ask};
 use crate::launch::Launch;
 use crate::prefs::{self, Prefs, ThemeChoice};
+use crate::tags_panel::{self, TagsState};
 use crate::toolbar;
 use crate::tray::{self, TrayAction, TrayData, TrayState, TrayUi};
 
@@ -76,6 +77,20 @@ pub enum Cmd {
     IntersectFaces(IntersectScope),
     /// Soften, Smooth or Unsoften the selected edges (MOD-08).
     EdgeStyle(kadakas_ui_core::modeling::EdgeStyle),
+    /// Hide the selected objects, or the selected faces and edges (MOD-05).
+    Hide,
+    /// Unhide the selected hidden objects, faces and edges.
+    Unhide,
+    /// Unhide everything that is hidden.
+    UnhideAll,
+    /// Delete all guides (it asks first when there are more than a few).
+    DeleteGuides,
+    /// View > Guides.
+    ToggleGuides,
+    /// View > Hidden Geometry.
+    ToggleHiddenGeometry,
+    /// View > Hidden Objects.
+    ToggleHiddenObjects,
     /// Open the model in the Kadakas app (MOD-05, round B): plants, hardscapes and site models
     /// are edited there.
     OpenInApp,
@@ -116,6 +131,21 @@ pub enum Answer {
     SaveAndGo,
     DontSave,
     Cancel,
+}
+
+/// More guides than this are deleted only after the person says yes.
+pub const FEW_GUIDES: usize = kadakas_core::guide::FEW_GUIDES;
+
+/// A question that waits for a yes or a no. One at a time.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Confirm {
+    /// Delete all guides: how many.
+    DeleteGuides(usize),
+    /// Resize the model (the Tape Measure, after a measure and a typed length).
+    Resize(
+        kadakas_ui_core::modeling::Resize,
+        kadakas_ui_core::modeling::ResizePlan,
+    ),
 }
 
 /// The program.
@@ -164,6 +194,10 @@ pub struct ModelerApp {
     pub canvas_rect: Option<egui::Rect>,
     /// The groups and components that are open for edit (MOD-07).
     pub context: EditContext,
+    /// The Tags panel: the chosen row, a rename, a delete that waits for the answer.
+    pub tags: TagsState,
+    /// A question about guides or a resize that waits for the answer.
+    pub confirm: Option<Confirm>,
 }
 
 impl ModelerApp {
@@ -205,6 +239,8 @@ impl ModelerApp {
             quit: false,
             canvas_rect: None,
             context: EditContext::new(),
+            tags: TagsState::default(),
+            confirm: None,
         }
     }
 
@@ -512,6 +548,8 @@ impl ModelerApp {
         self.edit.reset();
         self.info_cache = None;
         self.context = EditContext::new();
+        self.tags = TagsState::default();
+        self.confirm = None;
         self.path = path;
         self.nav.clear_history();
         self.fit_pending = true;
@@ -601,6 +639,22 @@ impl ModelerApp {
             Cmd::EditSelected => self.edit_selected(),
             Cmd::IntersectFaces(scope) => self.intersect(scope),
             Cmd::EdgeStyle(style) => self.edge_style(style),
+            Cmd::Hide => self.set_hidden(true),
+            Cmd::Unhide => self.set_hidden(false),
+            Cmd::UnhideAll => self.unhide_all(),
+            Cmd::DeleteGuides => self.delete_guides(false),
+            Cmd::ToggleGuides => {
+                let show = &mut self.edit.cache.show;
+                show.guides = !show.guides;
+            }
+            Cmd::ToggleHiddenGeometry => {
+                let show = &mut self.edit.cache.show;
+                show.hidden_geometry = !show.hidden_geometry;
+            }
+            Cmd::ToggleHiddenObjects => {
+                let show = &mut self.edit.cache.show;
+                show.hidden_objects = !show.hidden_objects;
+            }
             Cmd::CloseContext
             | Cmd::CloseKeepMine
             | Cmd::CloseDiscardMine
@@ -629,13 +683,22 @@ impl ModelerApp {
             }
             Cmd::SelectAll => {
                 self.edit.sub.clear();
-                self.session.selection = self
-                    .session
-                    .editor
-                    .doc()
+                // Guides are taken only when they are shown, hidden objects only when Hidden
+                // Objects shows them (MOD-05).
+                let show = self.edit.cache.show;
+                let doc = self.session.editor.doc();
+                self.session.selection = doc
                     .objects
                     .values()
                     .filter(|o| o.parent.is_none())
+                    .filter(|o| show.guides || !kadakas_core::guide::is_guide(o))
+                    .filter(|o| {
+                        if show.hidden_objects {
+                            doc.is_visible_with_hidden(o)
+                        } else {
+                            doc.is_visible(o)
+                        }
+                    })
                     .map(|o| o.id)
                     .collect();
             }
@@ -827,6 +890,282 @@ impl ModelerApp {
         // The parts that the edit split have new ids: the selection of parts is cleared.
         self.edit.sub.clear();
         self.status = self.edit.message.take().unwrap_or_default();
+    }
+
+    // ---- guides, hide and tags (MOD-05) --------------------------------------------------------
+
+    /// Delete Guides: all guides in one undo step. More than a few ask first.
+    pub fn delete_guides(&mut self, confirmed: bool) {
+        let ids = self.session.editor.doc().guide_ids();
+        if ids.is_empty() {
+            self.status = tr!("modeler-guides-none");
+            return;
+        }
+        if ids.len() > FEW_GUIDES && !confirmed {
+            self.confirm = Some(Confirm::DeleteGuides(ids.len()));
+            return;
+        }
+        let count = ids.len();
+        match self.session.editor.execute(&Command::DeleteObjects { ids }) {
+            Ok(_) => {
+                self.status = tr!("modeler-guides-deleted", count = count);
+                self.after_history();
+            }
+            Err(e) => self.status = tr!("modeler-guides-failed", reason = e.to_string()),
+        }
+    }
+
+    /// The faces and edges of the selection of parts, by model.
+    fn parts_by_model(
+        &self,
+    ) -> std::collections::BTreeMap<
+        ObjectId,
+        (
+            Vec<kadakas_core::surface::FaceId>,
+            Vec<kadakas_core::surface::EdgeId>,
+        ),
+    > {
+        let mut by: std::collections::BTreeMap<_, (Vec<_>, Vec<_>)> = Default::default();
+        for (m, f) in self.edit.sub.faces() {
+            by.entry(m).or_default().0.push(f);
+        }
+        for (m, e) in self.edit.sub.edges() {
+            by.entry(m).or_default().1.push(e);
+        }
+        by
+    }
+
+    /// True if Hide has something to work on: selected objects, faces or edges.
+    pub fn can_hide(&self) -> bool {
+        !self.selected().is_empty() || !self.edit.sub.is_empty()
+    }
+
+    /// True if Unhide has something to work on: a selected hidden object, face or edge.
+    pub fn can_unhide(&self) -> bool {
+        let doc = self.session.editor.doc();
+        self.selected().iter().any(|id| {
+            doc.object(*id)
+                .is_some_and(kadakas_core::visibility::is_hidden)
+        }) || self.parts_by_model().into_iter().any(|(m, (fs, es))| {
+            modeling::model_of(doc, m).is_some_and(|s| {
+                fs.iter().any(|f| s.face_hidden(*f)) || es.iter().any(|e| s.edge_hidden(*e))
+            })
+        })
+    }
+
+    /// Hide (or Unhide) the selected objects, and the selected faces and edges, in one undo step.
+    fn set_hidden(&mut self, hidden: bool) {
+        let doc = self.session.editor.doc();
+        let mut commands: Vec<Command> = Vec::new();
+        let mut count = 0usize;
+        for (id, (faces, edges)) in self.parts_by_model() {
+            let Some(m) = modeling::model_of(doc, id) else {
+                continue;
+            };
+            let faces: Vec<_> = faces
+                .into_iter()
+                .filter(|f| m.face_hidden(*f) != hidden)
+                .collect();
+            let edges: Vec<_> = edges
+                .into_iter()
+                .filter(|e| m.edge_hidden(*e) != hidden)
+                .collect();
+            count += faces.len() + edges.len();
+            if !faces.is_empty() || !edges.is_empty() {
+                commands.push(Command::EditSurface {
+                    id,
+                    edit: kadakas_core::surface::Edit::SetHidden {
+                        faces,
+                        edges,
+                        hidden,
+                    },
+                });
+            }
+        }
+        let objects = self.selected();
+        if let Some(c) = kadakas_core::visibility::set_hidden_command(doc, &objects, hidden) {
+            count += doc
+                .with_members(&objects)
+                .into_iter()
+                .filter(|id| {
+                    doc.object(*id)
+                        .is_some_and(|o| kadakas_core::visibility::is_hidden(o) != hidden)
+                })
+                .count();
+            commands.push(c);
+        }
+        if commands.is_empty() {
+            self.status = if hidden {
+                tr!("modeler-hide-nothing")
+            } else {
+                tr!("modeler-unhide-nothing")
+            };
+            return;
+        }
+        match self.session.editor.execute(&Command::Batch { commands }) {
+            Ok(_) => {
+                if hidden {
+                    // What was hidden is not selected any more.
+                    self.session.selection.clear();
+                    self.edit.sub.clear();
+                    self.status = tr!("modeler-hid", count = count);
+                } else {
+                    self.status = tr!("modeler-unhid", count = count);
+                }
+                self.after_history();
+            }
+            Err(e) => self.status = tr!("modeler-hide-failed", reason = e.to_string()),
+        }
+    }
+
+    /// Unhide All: every hidden object, face and edge of the model, in one undo step.
+    fn unhide_all(&mut self) {
+        let Some((command, count)) =
+            kadakas_core::visibility::unhide_all_command(self.session.editor.doc())
+        else {
+            self.status = tr!("modeler-unhide-all-nothing");
+            return;
+        };
+        match self.session.editor.execute(&command) {
+            Ok(_) => self.status = tr!("modeler-unhid", count = count),
+            Err(e) => self.status = tr!("modeler-hide-failed", reason = e.to_string()),
+        }
+    }
+
+    /// The objects that the tag selector of Entity Info changes: the selected objects. The tag
+    /// belongs to the object, so a selection of faces and edges changes nothing here.
+    fn tag_targets(&self) -> Vec<ObjectId> {
+        self.selected()
+    }
+
+    #[cfg(test)]
+    pub fn tag_targets_for_test(&self) -> Vec<ObjectId> {
+        self.tag_targets()
+    }
+
+    /// Runs what the Tags panel asked for.
+    pub fn apply_tags(&mut self, out: tags_panel::Outcome) {
+        if let Some(m) = out.message {
+            self.status = m;
+        }
+        // One batch: a command that fails leaves nothing applied, and it is one undo step.
+        let command = match out.commands.len() {
+            0 => None,
+            1 => out.commands.into_iter().next(),
+            _ => Some(Command::Batch {
+                commands: out.commands,
+            }),
+        };
+        if let Some(c) = command
+            && let Err(e) = self.session.editor.execute(&c)
+        {
+            self.status = tr!("modeler-tags-failed", reason = e.to_string());
+            return;
+        }
+        if let Some(m) = out.after {
+            self.status = m;
+        }
+        self.after_history();
+    }
+
+    /// The answer to a question about guides or a resize.
+    pub fn answer_confirm(&mut self, yes: bool) {
+        let Some(what) = self.confirm.take() else {
+            return;
+        };
+        if !yes {
+            return;
+        }
+        match what {
+            Confirm::DeleteGuides(_) => self.delete_guides(true),
+            Confirm::Resize(r, plan) => self.resize_model(r, &plan),
+        }
+    }
+
+    /// A resize that the Tape Measure asked for: the plan is found first. Locked layers and grey
+    /// tags refuse it, with their names, before any question. Else the question lists what happens.
+    fn ask_resize(&mut self, r: kadakas_ui_core::modeling::Resize) {
+        let plan = modeling::resize_plan(self.session.editor.doc(), self.context.container());
+        if plan.ids.is_empty() {
+            self.status = tr!("modeler-resize-nothing");
+        } else if !plan.locked_layers.is_empty() {
+            self.status = tr!(
+                "modeler-resize-locked",
+                layers = plan.locked_layers.join(", ")
+            );
+        } else if plan.grey_objects > 0 {
+            self.status = tr!("modeler-resize-grey", count = plan.grey_objects);
+        } else {
+            self.confirm = Some(Confirm::Resize(r, plan));
+        }
+    }
+
+    /// Resize the model: the objects of the plan are scaled about the first point of the measure.
+    /// One undo step. The heights of plan objects come from their layers and stay.
+    fn resize_model(&mut self, r: kadakas_ui_core::modeling::Resize, plan: &modeling::ResizePlan) {
+        let command = modeling::resize_command(plan, &r);
+        match self.session.editor.execute(&command) {
+            Ok(out) => {
+                let mut text = tr!("modeler-resize-done", factor = format!("{:.4}", r.factor));
+                if !out.notes.is_empty() {
+                    text = format!("{text} {}", out.notes.join("; "));
+                }
+                self.status = text;
+                self.after_history();
+            }
+            Err(e) => self.status = tr!("modeler-resize-failed", reason = e.to_string()),
+        }
+    }
+
+    /// The question that waits, as a window with Yes and No.
+    fn confirm_dialog(&mut self, ctx: &egui::Context) {
+        let Some(what) = self.confirm.clone() else {
+            return;
+        };
+        let (title, question, yes, no) = match &what {
+            Confirm::DeleteGuides(count) => (
+                tr!("modeler-guides-delete-title"),
+                tr!("modeler-guides-delete-question", count = *count),
+                tr!("modeler-guides-delete-yes"),
+                tr!("modeler-tags-cancel"),
+            ),
+            Confirm::Resize(r, plan) => {
+                let u = kadakas_units::current();
+                (
+                    tr!("modeler-resize-title"),
+                    tr!(
+                        "modeler-resize-question",
+                        measured = u.length_text(r.measured),
+                        typed = u.length_text(r.typed),
+                        factor = format!("{:.4}", r.factor),
+                        count = plan.scaled,
+                        flat = plan.plan_objects
+                    ),
+                    tr!("modeler-resize-yes"),
+                    tr!("modeler-resize-no"),
+                )
+            }
+        };
+        let mut answer = None;
+        egui::Window::new(title)
+            .id(egui::Id::new("win-modeler-confirm"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(question);
+                ui.horizontal(|ui| {
+                    if ui.button(yes).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button(no).clicked() {
+                        answer = Some(false);
+                    }
+                });
+            });
+        if let Some(a) = answer {
+            self.answer_confirm(a);
+        }
     }
 
     /// A name for a new component that no component has.
@@ -1199,14 +1538,25 @@ impl ModelerApp {
             self.status = m;
         }
 
+        // While the Tape Measure runs, the status line shows the distance too.
+        let status_line = if self.tools.active() == ModelerTool::TapeMeasure
+            && self.edit.modeling.in_progress()
+            && !measurement.text().is_empty()
+        {
+            tr!("modeler-tape-distance", value = measurement.text())
+        } else {
+            self.status.clone()
+        };
         egui::Panel::bottom("status").show(ui, |ui| {
-            crate::statusbar::show(ui, &self.status, self.tools.active(), &measurement);
+            crate::statusbar::show(ui, &status_line, self.tools.active(), &measurement);
         });
+        let mut tag_out: Vec<tags_panel::Outcome> = Vec::new();
         let mut tray_actions: Vec<TrayAction> = Vec::new();
         if self.prefs.tray {
             let rows = self.material_rows();
             let missing =
                 kadakas_ui_core::materials::missing_defaults(self.session.editor.doc()).len();
+            let targets = self.tag_targets();
             egui::Panel::right("tray")
                 .default_size(tray::WIDTH)
                 .size_range(180.0..=420.0)
@@ -1220,8 +1570,26 @@ impl ModelerApp {
                         bucket: self.edit.modeling.paint.bucket,
                         edges_selected: !self.edit.sub.is_empty(),
                     };
-                    tray_actions = tray::show(ui, &mut self.tray, &mut self.tray_ui, &data);
+                    let view = tags_panel::View {
+                        doc: self.session.editor.doc(),
+                        objects: &targets,
+                        rev: self.session.editor.revision(),
+                        parts: !self.edit.sub.is_empty(),
+                    };
+                    let tags_state = &mut self.tags;
+                    tray_actions = tray::show(
+                        ui,
+                        &mut self.tray,
+                        &mut self.tray_ui,
+                        &data,
+                        &mut |ui, slot| {
+                            tag_out.push(tags_panel::show(ui, tags_state, slot, &view));
+                        },
+                    );
                 });
+        }
+        for out in tag_out {
+            self.apply_tags(out);
         }
         for a in tray_actions {
             self.tray_action(a);
@@ -1229,6 +1597,7 @@ impl ModelerApp {
         let mut shown = canvas::Shown::default();
         let intersect = self.intersect_flags();
         let edges = !self.edit.sub.is_empty();
+        let hide = [self.can_hide(), self.can_unhide()];
         egui::CentralPanel::no_frame().show(ui, |ui| {
             shown = canvas::show(
                 ui,
@@ -1242,6 +1611,7 @@ impl ModelerApp {
                     fit_pending: &mut self.fit_pending,
                     intersect,
                     edges,
+                    hide,
                 },
             );
         });
@@ -1274,6 +1644,11 @@ impl ModelerApp {
         }
         self.check_external_change(now);
         self.unsaved_dialog(&ctx);
+        // A resize that the Tape Measure asked for becomes a question.
+        if let Some(r) = self.edit.resize_request.take() {
+            self.ask_resize(r);
+        }
+        self.confirm_dialog(&ctx);
         self.about.show(&ctx);
         self.finish_frame(&ctx);
     }

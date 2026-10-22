@@ -251,6 +251,9 @@ pub enum Shape {
         symbol: ResourceId,
         transform: [f64; 12],
     },
+    /// A guide line or a guide point of the 3D modeler (MOD-05, see `guide`). It makes no geometry.
+    /// The plan does not draw it and exports leave it out with a counted note.
+    Guide(Box<crate::guide::Guide>),
 }
 
 fn default_symbol_scale() -> f64 {
@@ -322,6 +325,7 @@ impl Shape {
             Shape::Irrigation(i) => i.kind(),
             Shape::SurfaceModel(_) => "surface_model",
             Shape::Component { .. } => "component",
+            Shape::Guide(_) => "guide",
         }
     }
 
@@ -366,6 +370,7 @@ impl Shape {
             Shape::Irrigation(i) => i.is_finite(),
             Shape::SurfaceModel(s) => s.is_finite(),
             Shape::Component { transform, .. } => transform.iter().all(|x| x.is_finite()),
+            Shape::Guide(g) => g.is_finite(),
             Shape::Symbol {
                 at,
                 rotation,
@@ -460,6 +465,7 @@ impl Shape {
             | Shape::TitleBlock(_)
             | Shape::Group { .. }
             | Shape::Unknown { .. } => {}
+            Shape::Guide(g) => g.numbers(f),
             Shape::Irrigation(i) => i.for_each_number(f),
             Shape::SurfaceModel(s) => s.for_each_number(f),
             Shape::Component { transform, .. } => transform.iter().for_each(|x| f(*x)),
@@ -631,6 +637,7 @@ impl Shape {
             Shape::Extrude(e) => e.problem(),
             Shape::Sweep(s) => s.problem(),
             Shape::SurfaceModel(s) => s.problem(),
+            Shape::Guide(g) => g.problem(),
             Shape::Component { transform, .. }
                 if !crate::component::is_regular(&crate::component::affine(transform)) =>
             {
@@ -670,6 +677,10 @@ impl Shape {
         let mv = |p: &mut DVec2| *p += d;
         match self {
             Shape::Viewport(vp) => vp.translate(d),
+            Shape::Guide(g) => {
+                g.at.x += d.x;
+                g.at.y += d.y;
+            }
             Shape::TitleBlock(tb) => tb.translate(d),
             Shape::Annotation(a) => a.translate(d),
             Shape::Massing(m) => m.footprint.iter_mut().for_each(|x| mv(&mut x.p)),
@@ -799,6 +810,8 @@ impl Shape {
             }
             // The size of these depends on the document. See `Document::object_bounds`.
             Shape::Group { .. } | Shape::Unknown { .. } => from_points(&[]),
+            // A guide is construction geometry: it adds nothing to the extent of the drawing.
+            Shape::Guide(_) => from_points(&[]),
             Shape::Symbol { at, .. } => (*at, *at),
             // The size of an instance depends on its definition. See `Document::object_bounds`.
             Shape::Component { transform, .. } => {
@@ -1967,6 +1980,12 @@ impl Document {
     /// True if the object shows in the model: its design layer and class are visible.
     /// Objects on sheet layers are paper space and never show in the model (see `is_shown`).
     pub fn is_visible(&self, obj: &Object) -> bool {
+        self.is_visible_with_hidden(obj) && !crate::visibility::is_hidden(obj)
+    }
+
+    /// Like `is_visible`, but an object that the person hid with Hide (MOD-05) counts as visible.
+    /// The modeler uses it for View > Hidden Objects.
+    pub fn is_visible_with_hidden(&self, obj: &Object) -> bool {
         self.layer(obj.layer)
             .is_some_and(|l| l.visible && l.kind == LayerKind::Design)
             && self.class(obj.class).is_some_and(|c| c.visible)
@@ -1983,7 +2002,10 @@ impl Document {
     /// True if the object can be picked or snapped to: it shows in the model, or it is on the
     /// active sheet layer.
     pub fn is_pickable(&self, obj: &Object) -> bool {
-        (self.is_displayed(obj) || (self.is_shown(obj) && obj.layer == self.active_layer))
+        // A guide is construction geometry of the 3D modeler. The plan does not draw it, so it
+        // cannot be picked there (the modeler picks guides with its own inference).
+        !matches!(obj.shape, Shape::Guide(_))
+            && (self.is_displayed(obj) || (self.is_shown(obj) && obj.layer == self.active_layer))
             && !self.is_grey(obj)
     }
 
@@ -1992,6 +2014,7 @@ impl Document {
         self.layer(obj.layer).is_some_and(|l| l.visible)
             && self.class(obj.class).is_some_and(|c| c.visible)
             && !crate::symbols::is_being_edited(obj)
+            && !crate::visibility::is_hidden(obj)
     }
 }
 

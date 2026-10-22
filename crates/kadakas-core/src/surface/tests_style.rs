@@ -57,7 +57,7 @@ fn count(m: &SurfaceModel, key: &str) -> usize {
 }
 
 #[test]
-fn set_edge_style_sets_and_clears_the_flags() {
+fn set_edge_style_sets_and_clears_the_flags_and_leaves_hidden_alone() {
     let mut m = box_model();
     let e = all_edges(&m)[0];
     let rev = m.rev();
@@ -65,29 +65,43 @@ fn set_edge_style_sets_and_clears_the_flags() {
         edges: vec![e],
         soft: Some(true),
         smooth: Some(true),
-        hidden: None,
     })
     .unwrap();
     assert_eq!(m.rev(), rev + 1);
-    assert!(flagged(m.edge_attrs(e), ATTR_SOFT));
-    assert!(flagged(m.edge_attrs(e), ATTR_SMOOTH));
-    assert!(!flagged(m.edge_attrs(e), ATTR_HIDDEN));
-    // Only the smooth flag goes.
-    m.apply(&Edit::SetEdgeStyle {
+    assert!(m.edge_soft(e) && m.edge_smooth(e) && !m.edge_hidden(e));
+    // Hide does not touch soft; Unsoften does not touch hidden.
+    m.apply(&Edit::SetHidden {
+        faces: Vec::new(),
         edges: vec![e],
-        soft: None,
-        smooth: Some(false),
-        hidden: Some(true),
+        hidden: true,
     })
     .unwrap();
-    assert!(flagged(m.edge_attrs(e), ATTR_SOFT));
-    assert!(!flagged(m.edge_attrs(e), ATTR_SMOOTH));
-    assert!(flagged(m.edge_attrs(e), ATTR_HIDDEN));
+    assert!(m.edge_soft(e) && m.edge_hidden(e));
+    m.apply(&Edit::SetEdgeStyle {
+        edges: vec![e],
+        soft: Some(false),
+        smooth: Some(false),
+    })
+    .unwrap();
+    assert!(!m.edge_soft(e) && !m.edge_smooth(e) && m.edge_hidden(e));
+    m.apply(&Edit::SetEdgeStyle {
+        edges: vec![e],
+        soft: Some(true),
+        smooth: None,
+    })
+    .unwrap();
+    m.apply(&Edit::SetHidden {
+        faces: Vec::new(),
+        edges: vec![e],
+        hidden: false,
+    })
+    .unwrap();
+    assert!(m.edge_soft(e) && !m.edge_hidden(e), "Unhide leaves soft");
+    // Only the smooth flag goes.
     m.apply(&Edit::SetEdgeStyle {
         edges: vec![e],
         soft: Some(false),
         smooth: None,
-        hidden: Some(false),
     })
     .unwrap();
     assert!(m.edge_attrs(e).is_none(), "no empty map is left");
@@ -97,7 +111,6 @@ fn set_edge_style_sets_and_clears_the_flags() {
         edges: vec![e],
         soft: Some(false),
         smooth: None,
-        hidden: None,
     })
     .unwrap();
     assert_eq!(m.rev(), rev);
@@ -106,7 +119,6 @@ fn set_edge_style_sets_and_clears_the_flags() {
             edges: vec![EdgeId(999)],
             soft: Some(true),
             smooth: None,
-            hidden: None
         }),
         Err(SurfaceError::NoEdge(EdgeId(999)))
     );

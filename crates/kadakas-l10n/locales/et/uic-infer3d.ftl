@@ -13,3 +13,5 @@ uic-infer3d-from-point = Punktist
 uic-infer3d-parallel = Servaga paralleelne
 uic-infer3d-perpendicular = Servaga risti
 uic-infer3d-through-point = Läbi punkti
+uic-infer3d-guide-point = Abipunkt
+uic-infer3d-on-guide = Abijoonel

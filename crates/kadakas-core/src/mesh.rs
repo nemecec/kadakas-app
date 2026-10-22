@@ -1023,29 +1023,36 @@ impl Builder<'_> {
             let pts: Vec<Vec3> = sm.positions.iter().map(|p| at(*p)).collect();
             // The shading follows the smooth edges: the faces across one shade as one surface,
             // every other edge is a crease.
-            let mut groups = surface_groups(m, &sm);
+            let all_groups = surface_groups(m, &sm);
+            // A hidden face (Hide, MOD-05) is not drawn: its triangles, their smoothing groups and
+            // their faces are left out together, so the other faces keep their look.
             // A mirror turns the triangles over; keep them counterclockwise.
-            let tris: Vec<[u32; 3]> = if tf.matrix3.determinant() < 0.0 {
-                for g in &mut groups {
-                    g.swap(1, 2);
+            let flip = tf.matrix3.determinant() < 0.0;
+            let mut tris: Vec<[u32; 3]> = Vec::with_capacity(sm.triangles.len());
+            let mut groups: Vec<[u32; 3]> = Vec::with_capacity(sm.triangles.len());
+            let mut faces: Vec<crate::surface::FaceId> = Vec::with_capacity(sm.triangles.len());
+            for (i, t) in sm.triangles.iter().enumerate() {
+                if m.face_hidden(sm.faces[i]) {
+                    continue;
                 }
-                sm.triangles.iter().map(|t| [t[0], t[2], t[1]]).collect()
-            } else {
-                sm.triangles.clone()
-            };
+                let g = all_groups[i];
+                if flip {
+                    tris.push([t[0], t[2], t[1]]);
+                    groups.push([g[0], g[2], g[1]]);
+                } else {
+                    tris.push(*t);
+                    groups.push(g);
+                }
+                faces.push(sm.faces[i]);
+            }
             self.scene.mesh.part = PART_MAIN;
             self.scene.mesh.two_sided_mode = true;
-            self.painted_faces(m, &sm.faces, &pts, &tris, &groups, color, id);
+            self.painted_faces(m, &faces, &pts, &tris, &groups, color, id);
             self.scene.mesh.two_sided_mode = false;
         }
         for (eid, e) in m.edges() {
-            let flagged = |k: &str| {
-                m.edge_attrs(eid)
-                    .and_then(|a| a.get(k))
-                    .is_some_and(|v| v == &serde_json::Value::Bool(true))
-            };
             // A hidden edge and a soft edge are not drawn; a smooth edge that is not soft is.
-            if flagged(crate::surface::ATTR_HIDDEN) || flagged(crate::surface::ATTR_SOFT) {
+            if !m.edge_shown(eid) {
                 continue;
             }
             if let (Some(a), Some(b)) = (m.vertex(e.v[0]), m.vertex(e.v[1])) {
@@ -1403,7 +1410,7 @@ impl Builder<'_> {
             // Sheet layer objects are paper space. They never reach the 3D scene.
             Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Annotation(_) => {}
             // A group draws through its members.
-            Shape::Group { .. } | Shape::Unknown { .. } => {}
+            Shape::Group { .. } | Shape::Unknown { .. } | Shape::Guide(_) => {}
             // Irrigation objects are flat and drawn in 2D only.
             Shape::Irrigation(_) => {}
             Shape::Symbol { .. } => {

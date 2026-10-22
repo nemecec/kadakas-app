@@ -63,7 +63,6 @@ pub fn edge_style_actions(doc: &Document, sub: &SubSelection, style: EdgeStyle) 
                 edges,
                 soft,
                 smooth,
-                hidden: None,
             },
         })
         .collect()
@@ -122,6 +121,7 @@ impl SoftenPanel {
             redo: !actions.is_empty() && self.applied == Some((revision, self.asked)),
             actions,
             message: None,
+            ..Out::default()
         }
     }
 

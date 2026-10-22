@@ -110,7 +110,6 @@ fn soft_edges_are_one_undo_step_each_and_undo_byte_for_byte() {
             edges: vec![e],
             soft: Some(true),
             smooth: Some(true),
-            hidden: None,
         },
     );
     assert_eq!(ed.undo_depth(), depth + 1);
@@ -160,7 +159,6 @@ fn a_soft_edge_is_not_drawn_and_shades_round_a_smooth_one_is_drawn() {
             edges: vec![e],
             soft: None,
             smooth: Some(true),
-            hidden: None,
         },
     );
     assert_eq!(mesh::build(ed.doc()).lines.segment_count(), 12);
@@ -176,7 +174,6 @@ fn a_soft_edge_is_not_drawn_and_shades_round_a_smooth_one_is_drawn() {
             edges: vec![e],
             soft: Some(true),
             smooth: None,
-            hidden: None,
         },
     );
     assert_eq!(mesh::build(ed.doc()).lines.segment_count(), 11);
@@ -188,7 +185,6 @@ fn a_soft_edge_is_not_drawn_and_shades_round_a_smooth_one_is_drawn() {
             edges: vec![e],
             soft: None,
             smooth: Some(false),
-            hidden: None,
         },
     );
     assert_eq!(

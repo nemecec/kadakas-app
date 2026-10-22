@@ -225,6 +225,8 @@ The 3D modeler (`docs/modeler.md`) has actions that the Vectorworks-like app doe
 | Bottom view (`view.bottom`, MOD-02) | none (Vectorworks gives Bottom no key) | none | done |
 | Select None (`edit.select_none`) | none | none | done |
 
+The Tape Measure (`T`) takes Ctrl (Option on macOS) pressed alone to switch between making guides and measuring only. Hide, Unhide, Unhide All, Delete Guides and the View items Guides, Hidden Geometry and Hidden Objects have no key. They are in the Edit and View menus (MOD-05).
+
 ## SketchUp-like profile (3D modeler)
 
 The profile `sketchup` is the default of `kadakas-modeler`. The file is `crates/kadakas-ui-core/profiles/sketchup.json`. The keys are the public default shortcuts of programs of that kind. A tool has one letter, and Space is Select. The profile is not in the profile list of the Vectorworks-like app. The test `the_sketchup_like_profile_has_the_public_default_keys_of_that_kind_of_program` checks the table below.

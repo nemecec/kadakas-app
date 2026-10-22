@@ -21,6 +21,42 @@ pub enum Target {
     New,
 }
 
+/// A guide that a tool made, in world coordinates (mm). The step puts it on the active layer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GuideSpec {
+    pub at: DVec3,
+    /// The direction of a guide line; `None` makes a guide point.
+    pub dir: Option<DVec3>,
+    /// The length of a finite guide line; `None` is a line without ends.
+    pub length: Option<f64>,
+}
+
+impl GuideSpec {
+    pub fn point(at: DVec3) -> GuideSpec {
+        GuideSpec {
+            at,
+            dir: None,
+            length: None,
+        }
+    }
+
+    pub fn line(at: DVec3, dir: DVec3) -> GuideSpec {
+        GuideSpec {
+            at,
+            dir: Some(dir),
+            length: None,
+        }
+    }
+
+    pub fn segment(at: DVec3, dir: DVec3, length: f64) -> GuideSpec {
+        GuideSpec {
+            at,
+            dir: Some(dir),
+            length: Some(length),
+        }
+    }
+}
+
 /// A finished operation of a tool, in world coordinates (mm).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -56,6 +92,11 @@ pub enum Action {
         faces: Vec<FaceId>,
         edges: Vec<EdgeId>,
     },
+    /// Guides made by the Tape Measure: one object each, on the active layer and class, in one
+    /// undo step.
+    AddGuides { guides: Vec<GuideSpec> },
+    /// Guides erased (the Eraser): the objects go in one undo step.
+    EraseGuides { ids: Vec<ObjectId> },
     /// Move, Rotate or Scale (and the copies of Move and Rotate) of whole objects and of faces and
     /// edges of surface models, by one affine map in world coordinates. `copies` is 0 to change the
     /// geometry in place, else the number of copies (the first placed by the map, the next by the
@@ -96,6 +137,7 @@ impl Action {
             | Action::Edit { model, .. }
             | Action::Intersect { model, .. } => Some(*model),
             Action::Xform { parts, .. } => parts.first().map(|p| p.0),
+            Action::AddGuides { .. } | Action::EraseGuides { .. } => None,
             Action::Paint { models, .. } => models.first().map(|p| p.0),
             Action::PaintObjects { .. } => None,
         }
@@ -184,6 +226,26 @@ pub fn run_full(editor: &mut Editor, actions: &[Action], undo_first: bool) -> Re
                     step.run(&c)?;
                 }
                 used = a.model().or(used);
+                continue;
+            }
+            if let Action::AddGuides { guides } = a {
+                let ground = doc_ground(step.doc());
+                for g in guides {
+                    step.run(&Command::AddObject {
+                        shape: Shape::Guide(Box::new(kadakas_core::guide::Guide {
+                            at: g.at - DVec3::new(0.0, 0.0, ground),
+                            dir: g.dir,
+                            length: g.length,
+                        })),
+                        layer: None,
+                        class: None,
+                        attrs: Attributes::default(),
+                    })?;
+                }
+                continue;
+            }
+            if let Action::EraseGuides { ids } = a {
+                step.run(&Command::DeleteObjects { ids: ids.clone() })?;
                 continue;
             }
             if let Action::Paint { .. } | Action::PaintObjects { .. } = a {
@@ -457,7 +519,11 @@ fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Comman
             edges: edges.clone(),
         })],
         Action::Edit { edit: e, .. } => vec![edit(e.clone())],
-        Action::Xform { .. } | Action::Paint { .. } | Action::PaintObjects { .. } => Vec::new(),
+        Action::Xform { .. }
+        | Action::Paint { .. }
+        | Action::PaintObjects { .. }
+        | Action::AddGuides { .. }
+        | Action::EraseGuides { .. } => Vec::new(),
         Action::Delete { faces, edges, .. } => {
             let mut v = Vec::new();
             if !faces.is_empty() {

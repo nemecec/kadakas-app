@@ -168,6 +168,15 @@ impl Camera {
         }
     }
 
+    /// The part of the segment `a`-`b` that shows in the view, as the pixels of its ends, or
+    /// `None` when none of it does. The segment may be very long (a guide line without ends):
+    /// it is cut at the near plane and then at the edges of the view, so the window draws a
+    /// short line and not millions of dashes.
+    pub fn view_segment(&self, a: DVec3, b: DVec3) -> Option<[DVec2; 2]> {
+        let seg = self.screen_seg(a, b)?;
+        clip_segment(seg.p[0], seg.p[1], DVec2::ZERO, self.viewport)
+    }
+
     /// A segment cut at the near plane and projected. `None` when all of it is behind the near
     /// plane.
     pub(crate) fn screen_seg(&self, a: DVec3, b: DVec3) -> Option<ScreenSeg> {
@@ -198,6 +207,38 @@ impl Camera {
             w: [h0.w, h1.w],
         })
     }
+}
+
+/// The part of the segment `a`-`b` inside the rectangle `lo`-`hi` (Liang and Barsky), or `None`.
+pub fn clip_segment(a: DVec2, b: DVec2, lo: DVec2, hi: DVec2) -> Option<[DVec2; 2]> {
+    if !(a.is_finite() && b.is_finite()) {
+        return None;
+    }
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    let d = b - a;
+    for (p, q) in [
+        (-d.x, a.x - lo.x),
+        (d.x, hi.x - a.x),
+        (-d.y, a.y - lo.y),
+        (d.y, hi.y - a.y),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else {
+            let r = q / p;
+            if p < 0.0 {
+                t0 = t0.max(r);
+            } else {
+                t1 = t1.min(r);
+            }
+            if t0 > t1 {
+                return None;
+            }
+        }
+    }
+    Some([a + d * t0, a + d * t1])
 }
 
 #[cfg(test)]

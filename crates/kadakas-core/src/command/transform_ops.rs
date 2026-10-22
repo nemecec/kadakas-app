@@ -96,6 +96,13 @@ pub fn transform_object3(
             Ok(())
         }
         Shape::Group { .. } => Ok(()),
+        // A guide takes any affine map: its point and its direction move with the map, and a
+        // finite line keeps its length in the new scale.
+        Shape::Guide(g) => {
+            let moved = g.mapped(&d).ok_or("the map flattens the guide")?;
+            o.shape = Shape::Guide(Box::new(moved));
+            Ok(())
+        }
         shape => {
             let m3 = d.matrix3;
             let vertical = m3.x_axis.z.abs() < 1e-9

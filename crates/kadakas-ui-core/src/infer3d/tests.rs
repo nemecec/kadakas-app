@@ -1256,7 +1256,7 @@ proptest! {
 // ----- performance ------------------------------------------------------------------------------
 
 /// A surface model with a grid of `n` by `n` vertices on a ramp: about `2 n^2` edges and `n^2` faces.
-fn grid_model(n: u32) -> SurfaceModel {
+pub(super) fn grid_model(n: u32) -> SurfaceModel {
     use kadakas_core::surface::{Edge, EdgeId, Face, FaceId, Plane, VertexId};
     use std::collections::BTreeMap;
     let id = |x: u32, y: u32| VertexId(y * n + x);
@@ -1313,7 +1313,7 @@ fn grid_model(n: u32) -> SurfaceModel {
     SurfaceModel::from_parts(vertices, edges, faces, n * n + 1)
 }
 
-fn percentile(v: &mut [f64], p: f64) -> f64 {
+pub(super) fn percentile(v: &mut [f64], p: f64) -> f64 {
     v.sort_by(f64::total_cmp);
     v[((v.len() - 1) as f64 * p) as usize]
 }
@@ -2004,8 +2004,10 @@ mod instances {
         assert_eq!(t.shifted(4).model(), 7);
         assert_eq!(t.shifted(4).id(), 9);
         assert_eq!(t.shifted(4).kind(), TagKind::Edge);
-        let other = Tag(3u64 << 62 | 5);
-        assert_eq!(other.kind(), TagKind::Other);
-        assert_eq!(other.shifted(1), other);
+        // A guide has no model: it keeps its number.
+        let guide = Tag(3u64 << 62 | 5);
+        assert_eq!(guide.kind(), TagKind::Guide);
+        assert_eq!(guide.shifted(1), guide);
+        assert_eq!(Tag::NONE.kind(), TagKind::Other);
     }
 }

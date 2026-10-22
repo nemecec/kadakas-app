@@ -8,7 +8,7 @@ The behavior follows the public description of the inference of SketchUp-like mo
 
 ### How the modeler calls it
 
-1. **Scene.** When the geometry changes, build a `Scene` with `SceneBuilder`: `add_point`, `add_edge`, `add_face` (outer loop and holes), `add_surface_model(&SurfaceModel, model_number)`. A surface model gives its edges (not the ones with the attribute `hidden: true`), its faces, and the centers of its circles and arcs (a curve whose corners lie on one circle, so also a regular polygon that is a curve). `finish()` builds the spatial index. A plain face (`add_face`) gives no center, so a rectangle or a square from the rectangle tool has none; `add_polygon_face` gives the center of a regular face for a caller that has no curve.
+1. **Scene.** When the geometry changes, build a `Scene` with `SceneBuilder`: `add_point`, `add_edge`, `add_face` (outer loop and holes), `add_surface_model(&SurfaceModel, model_number)`. A surface model gives its edges (not the ones with the attribute `hidden: true`), its faces, and the centers of its circles and arcs (a curve whose corners lie on one circle, so also a regular polygon that is a curve). `finish()` builds the spatial index. A plain face (`add_face`) gives no center, so a rectangle or a square from the rectangle tool has none; `add_polygon_face` gives the center of a regular face for a caller that has no curve. `add_guide(&Guide, layer_elevation, index)` adds a guide (see "Guides" below). `add_surface_model_placed_with` can offer hidden edges and faces too.
 2. **Camera.** Each frame make a `Camera` with `Camera::look_at(eye, target, up, Projection, viewport_px)`. Perspective (`fov_y`) and parallel (`height`) work.
 3. **Engine.** The active tool keeps one `Inferencer`. On a pointer move call `infer(&scene, &camera, pointer_px, reference)`. `reference` is the last point of the tool, or `None` before the first click.
 4. **Draw.** The `Inference` has `point`, `kind`, `screen` (the pixel of the point), `color`, `label` (en-US or et, from `kadakas-l10n`), `lines` (cue lines, some dotted), `locked`, `source` and `other` (tags of the edge, face or curve), and `constraint` (the point, line or plane that holds the point).
@@ -32,6 +32,8 @@ A `Tag` is a number that the caller chooses. For a surface model the tag says th
 | Midpoint | Midpoint | cyan | the middle of an edge |
 | Intersection | Intersection | near black | two edges cross, an edge crosses a face, an axis line crosses an edge |
 | OnEdge | On Edge | red | on an edge |
+| GuidePoint | Guide Point | amber | a guide point |
+| OnGuide | On Guide | amber | on a guide line |
 | OnAxis(X, Y, Z) | On Red / Green / Blue Axis | red, green, blue | on a line along an axis from the reference point |
 | FromPoint(axis) | From Point | axis color, dotted | on a line along an axis from the point that you paused on; where such a line crosses an axis line from the reference point, the crossing |
 | Parallel | Parallel to Edge | magenta | parallel to the edge that you hovered |
@@ -48,11 +50,11 @@ A smaller number wins. A kind wins only when it is inside its own pick radius.
 
 | Priority | Kinds |
 |---|---|
-| 0 | Endpoint |
+| 0 | Endpoint, GuidePoint |
 | 1 | Center |
 | 2 | Midpoint |
 | 3 | Intersection (also an axis line that crosses an edge) |
-| 4 | OnEdge |
+| 4 | OnEdge, OnGuide |
 | 5 | OnAxis, FromPoint, Parallel, Perpendicular, ThroughPoint |
 | 6 | OnFace |
 | 7 | Free |
@@ -62,6 +64,20 @@ Among the lines, the one with the smallest angle wins. At an equal angle the ord
 Pick radii are in pixels (`Options`): endpoint 10, center 10, midpoint 9, intersection 9, on edge 6. A line inference holds when the pointer is within 4 degrees (on the screen) of the line and at least 6 pixels from its origin. `ui_scale` multiplies the pixel values for high-density displays.
 
 Ties are broken the same way every time: the kind priority, the pixel distance, the depth, the coordinates of the point, then the tags. The order in which the geometry was added does not change the result (there is a property test).
+
+### Guides (MOD-05)
+
+A guide (`kadakas_core::guide`) is construction geometry. The scene takes it with `SceneBuilder::add_guide`. The tag of a guide has the kind `TagKind::Guide` and the number `index`, made by `Tag::guide(index)`. The modeler keeps the guides of the document in one scene of their own, after the scenes of the models.
+
+- A guide point is a point to snap to. It is the kind `GuidePoint` and has the priority of an endpoint. At the same distance an endpoint wins.
+- A finite guide line is an edge of the scene. It gives only `OnGuide`. Its ends and its middle are no points. An edge wins over a guide line at the same distance.
+- A line without ends is not in the index. It is in a short list. Every query tests the lines one by one, so no box of the index grows to kilometers. The cost is in `docs/modeler-limits.md`.
+- A line without ends reaches ten times the size of the scene on each side of its point.
+- The least reach is `GUIDE_REACH` (2,000,000 mm, 2 km). `SceneBuilder::set_reach` sets it (`reach_for(extent)`). The modeler uses the largest coordinate of the models and the guides.
+- A guide that crosses an edge or another guide gives an `Intersection`. An axis line from the reference point that crosses a guide gives an `Intersection` too.
+- `Constraint::Line` of an `OnGuide` result holds the line of the guide, so Shift keeps the point on the guide.
+- A tool can skip all guides with a `skip` closure that tests `TagKind::Guide`. The Select tool does this the other way round to pick a guide (`modeling::select::pick_guide`).
+- The colors are fixed, as for the other kinds. Amber (`infer3d::GUIDE`) is used by no axis, no geometry and no other inference.
 
 ### Locks
 
@@ -74,7 +90,7 @@ Ties are broken the same way every time: the kind priority, the pixel distance, 
 
 ### Not in v1
 
-Tangent at vertex, extend edge, a through-point inference without Shift, square and golden section, half circle, the Alt or Command cycle of linear inference states, magenta marks inside groups and components, origin points, guides, and hiding of points behind back-facing faces only (all faces hide). Perpendicular to a face is not done.
+Tangent at vertex, extend edge, a through-point inference without Shift, square and golden section, half circle, the Alt or Command cycle of linear inference states, magenta marks inside groups and components, origin points, and hiding of points behind back-facing faces only (all faces hide). Perpendicular to a face is not done.
 
 ### Performance
 

@@ -565,6 +565,7 @@ impl Modeling {
             }],
             redo,
             message: None,
+            ..Out::default()
         }
     }
 
@@ -659,6 +660,7 @@ impl Modeling {
             actions: vec![Action::Edit { model, edit }],
             redo,
             message: None,
+            ..Out::default()
         }
     }
 

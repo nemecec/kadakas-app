@@ -103,8 +103,6 @@ pub enum Intent {
         soft: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         smooth: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        hidden: Option<bool>,
     },
     /// Soften Edges, by the middle of each edge.
     SoftenAt {
@@ -117,6 +115,12 @@ pub enum Intent {
     FollowMeAt {
         point: [f64; 3],
         path: Vec<[f64; 3]>,
+    },
+    /// Faces (by a point inside each) and edges (by the middle of each) hidden or shown.
+    HiddenAt {
+        faces: Vec<[f64; 3]>,
+        edges: Vec<[f64; 3]>,
+        hidden: bool,
     },
     /// A new transform.
     Place { transform: [f64; 12] },
@@ -241,12 +245,10 @@ impl Intent {
                 edges,
                 soft,
                 smooth,
-                hidden,
             } => Intent::EdgeStyleAt {
                 edges: middles(edges),
                 soft: *soft,
                 smooth: *smooth,
-                hidden: *hidden,
             },
             Edit::SoftenEdges {
                 edges,
@@ -258,6 +260,15 @@ impl Intent {
                 angle: *angle,
                 smooth: *smooth,
                 coplanar: *coplanar,
+            },
+            Edit::SetHidden {
+                faces: fs,
+                edges,
+                hidden,
+            } => Intent::HiddenAt {
+                faces: faces(fs),
+                edges: middles(edges),
+                hidden: *hidden,
             },
             Edit::PushPull { face, distance } => match face_point(m, *face) {
                 Some(p) => Intent::PushPullAt {
@@ -279,7 +290,9 @@ impl Intent {
             Intent::AddCurve { points, .. } => points.len(),
             Intent::TransformAt { vertices, .. } => vertices.len().max(1),
             Intent::CopyAt { faces, edges, .. } => (faces.len() + edges.len()).max(1),
-            Intent::IntersectAt { faces, edges } => (faces.len() + edges.len()).max(1),
+            Intent::IntersectAt { faces, edges } | Intent::HiddenAt { faces, edges, .. } => {
+                (faces.len() + edges.len()).max(1)
+            }
             Intent::OffsetEdgesAt { edges, .. }
             | Intent::EdgeStyleAt { edges, .. }
             | Intent::SoftenAt { edges, .. } => edges.len().max(1),
@@ -548,14 +561,12 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
             edges,
             soft,
             smooth,
-            hidden,
         } => {
             let edges = edges_at(m, edges)?;
             m.apply(&Edit::SetEdgeStyle {
                 edges,
                 soft: *soft,
                 smooth: *smooth,
-                hidden: *hidden,
             })
         }
         Intent::FollowMeAt { point, path } => {
@@ -595,6 +606,25 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
                 scope: IntersectScope::Selection,
                 faces,
                 edges,
+            })
+        }
+        Intent::HiddenAt {
+            faces,
+            edges,
+            hidden,
+        } => {
+            let faces = faces
+                .iter()
+                .map(|p| face_at(m, DVec3::from(*p)).ok_or_else(|| gone("face", p)))
+                .collect::<Result<Vec<_>, _>>()?;
+            let edges = edges
+                .iter()
+                .map(|p| edge_at(m, DVec3::from(*p)).ok_or_else(|| gone("edge", p)))
+                .collect::<Result<Vec<_>, _>>()?;
+            m.apply(&Edit::SetHidden {
+                faces,
+                edges,
+                hidden: *hidden,
             })
         }
         Intent::TransformAt { vertices, matrix } => {

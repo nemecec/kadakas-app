@@ -1141,4 +1141,7 @@ mod landscape;
 mod mod08;
 mod more;
 mod paint;
+mod resize;
+mod show;
+mod tape;
 mod xform;
