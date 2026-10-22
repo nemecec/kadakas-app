@@ -75,6 +75,12 @@ pub enum Cmd {
     CloseOverwrite,
     /// Intersect Faces (MOD-08): with the whole model, or of the selected faces and edges.
     IntersectFaces(IntersectScope),
+    /// A solid operation on the two solids of the selected faces (MOD-09).
+    Solid(kadakas_core::surface::SolidOp),
+    /// Check Solid (MOD-09): are the selected models closed solids? The open edges get selected.
+    CheckSolid,
+    /// Swap the order of the two solids of the solid tools.
+    SolidSwap,
     /// Soften, Smooth or Unsoften the selected edges (MOD-08).
     EdgeStyle(kadakas_ui_core::modeling::EdgeStyle),
     /// Hide the selected objects, or the selected faces and edges (MOD-05).
@@ -198,6 +204,13 @@ pub struct ModelerApp {
     pub tags: TagsState,
     /// A question about guides or a resize that waits for the answer.
     pub confirm: Option<Confirm>,
+    /// The solid tools take the newer solid as the first one (MOD-09).
+    pub solid_swap: bool,
+    /// The last preview of a solid operation: the revision, the selection (a hash), the order, the
+    /// operation, and the text.
+    #[allow(clippy::type_complexity)]
+    solid_hint:
+        std::cell::RefCell<Option<((u64, u64, bool, kadakas_core::surface::SolidOp), String)>>,
 }
 
 impl ModelerApp {
@@ -241,6 +254,8 @@ impl ModelerApp {
             context: EditContext::new(),
             tags: TagsState::default(),
             confirm: None,
+            solid_swap: false,
+            solid_hint: std::cell::RefCell::new(None),
         }
     }
 
@@ -638,6 +653,16 @@ impl ModelerApp {
             }
             Cmd::EditSelected => self.edit_selected(),
             Cmd::IntersectFaces(scope) => self.intersect(scope),
+            Cmd::Solid(op) => self.solid(op),
+            Cmd::CheckSolid => self.check_solid(),
+            Cmd::SolidSwap => {
+                self.solid_swap = !self.solid_swap;
+                self.status = if self.solid_swap {
+                    tr!("modeler-solid-order-swapped")
+                } else {
+                    tr!("modeler-solid-order-normal")
+                };
+            }
             Cmd::EdgeStyle(style) => self.edge_style(style),
             Cmd::Hide => self.set_hidden(true),
             Cmd::Unhide => self.set_hidden(false),
@@ -825,6 +850,72 @@ impl ModelerApp {
             self.can_intersect(IntersectScope::Model),
             self.can_intersect(IntersectScope::Selection),
         ]
+    }
+
+    /// The two solids of the selected faces, or why the solid tools cannot start (MOD-09).
+    pub fn solid_operands(&self) -> Result<modeling::solid::Operands, modeling::solid::Problem> {
+        modeling::solid::operands(self.session.editor.doc(), &self.edit.sub, self.solid_swap)
+    }
+
+    /// The text for an item of the solid tools: what the operation would do, or why it cannot.
+    /// It runs the operation on a copy, so the last answer is kept for the same model, selection
+    /// and order.
+    pub fn solid_hint(&self, op: kadakas_core::surface::SolidOp) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.edit.sub.hash(&mut h);
+        let key = (
+            self.session.editor.revision(),
+            h.finish(),
+            self.solid_swap,
+            op,
+        );
+        if let Some((k, text)) = &*self.solid_hint.borrow()
+            && *k == key
+        {
+            return text.clone();
+        }
+        let text = modeling::solid::preview_text(
+            self.session.editor.doc(),
+            &self.edit.sub,
+            self.solid_swap,
+            op,
+        );
+        *self.solid_hint.borrow_mut() = Some((key, text.clone()));
+        text
+    }
+
+    /// A solid operation: one undo step. The status line says what was done, or why not.
+    fn solid(&mut self, op: kadakas_core::surface::SolidOp) {
+        match modeling::solid::out(
+            self.session.editor.doc(),
+            &self.edit.sub,
+            self.solid_swap,
+            op,
+        ) {
+            Ok(out) => {
+                self.edit.run(&mut self.session, out);
+                // The pieces have new ids: the selection of parts is cleared.
+                self.edit.sub.clear();
+                self.status = self.edit.message.take().unwrap_or_default();
+            }
+            Err(p) => self.status = p.text(),
+        }
+    }
+
+    /// Check Solid: the status line says whether the selected models are closed solids, and the
+    /// edges that make them open are selected.
+    fn check_solid(&mut self) {
+        let c = modeling::solid::check(
+            self.session.editor.doc(),
+            &self.edit.sub,
+            &self.session.selection,
+        );
+        if !c.open.is_empty() {
+            self.session.selection.clear();
+            self.edit.sub.set(c.open);
+        }
+        self.status = c.text;
     }
 
     /// Soften, Smooth or Unsoften on the selected edges: one undo step.

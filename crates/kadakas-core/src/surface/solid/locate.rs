@@ -137,15 +137,16 @@ impl Soup {
     }
 }
 
-/// The centroids of the triangles of a face: the points that stand for it.
-pub(super) fn centroids(m: &SurfaceModel, id: FaceId) -> Option<Vec<DVec3>> {
+/// The centroids of the triangles of a face with their areas: the points that stand for it, and
+/// how much of it each one stands for.
+pub(super) fn samples(m: &SurfaceModel, id: FaceId) -> Option<Vec<(DVec3, f64)>> {
     let f = m.faces.get(&id)?;
     let t = geom::triangulate_face(id, f, |v| m.vertices[&v])?;
     Some(
         t.triangles
             .iter()
             .map(|tri| tri.map(|i| t.positions[i as usize]))
-            .map(|[a, b, c]| (a + b + c) / 3.0)
+            .map(|[a, b, c]| ((a + b + c) / 3.0, (b - a).cross(c - a).length() / 2.0))
             .collect(),
     )
 }
@@ -254,4 +255,162 @@ pub(super) fn distance_to_triangle(p: DVec3, t: &[DVec3; 3]) -> f64 {
     let v = vb * denom;
     let w = vc * denom;
     p.distance(a + ab * v + ac * w)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tri(a: [f64; 3], b: [f64; 3], c: [f64; 3], n: [f64; 3]) -> Tri {
+        Tri {
+            p: [a, b, c].map(DVec3::from),
+            n: DVec3::from(n),
+        }
+    }
+
+    /// The twelve triangles of the cube [0, 10]^3, fronts out.
+    fn cube() -> Soup {
+        let c = |i: usize| -> [f64; 3] {
+            std::array::from_fn(|k| if i >> k & 1 == 0 { 0.0 } else { 10.0 })
+        };
+        let mut tris = Vec::new();
+        // (corners of a quad counterclockwise from outside), normal
+        for (q, n) in [
+            ([0, 2, 3, 1], [0.0, 0.0, -1.0]),
+            ([4, 5, 7, 6], [0.0, 0.0, 1.0]),
+            ([0, 1, 5, 4], [0.0, -1.0, 0.0]),
+            ([2, 6, 7, 3], [0.0, 1.0, 0.0]),
+            ([0, 4, 6, 2], [-1.0, 0.0, 0.0]),
+            ([1, 3, 7, 5], [1.0, 0.0, 0.0]),
+        ] {
+            tris.push(tri(c(q[0]), c(q[1]), c(q[2]), n));
+            tris.push(tri(c(q[0]), c(q[2]), c(q[3]), n));
+        }
+        Soup::new(tris)
+    }
+
+    #[test]
+    fn a_point_is_in_out_or_on_a_cube() {
+        let s = cube();
+        assert_eq!(s.locate(DVec3::splat(5.0)), Some(Where::In));
+        assert_eq!(s.locate(DVec3::new(5.0, 5.0, 25.0)), Some(Where::Out));
+        assert_eq!(s.locate(DVec3::new(50.0, 5.0, 5.0)), Some(Where::Out));
+        assert_eq!(
+            s.locate(DVec3::new(5.0, 5.0, 10.0)),
+            Some(Where::On(DVec3::Z))
+        );
+        // Within the plane tolerance counts as on.
+        assert_eq!(
+            s.locate(DVec3::new(5.0, 5.0, 10.0 + 0.001)),
+            Some(Where::On(DVec3::Z))
+        );
+        assert_eq!(s.locate(DVec3::new(5.0, 5.0, 10.0 + 0.1)), Some(Where::Out));
+        // On an edge and on a corner.
+        assert!(matches!(
+            s.locate(DVec3::new(0.0, 0.0, 5.0)),
+            Some(Where::On(_))
+        ));
+        assert!(matches!(s.locate(DVec3::splat(10.0)), Some(Where::On(_))));
+        let (lo, hi) = s.bounds();
+        assert_eq!((lo, hi), (DVec3::ZERO, DVec3::splat(10.0)));
+    }
+
+    #[test]
+    fn a_ray_through_a_vertex_is_tried_again_in_another_direction() {
+        let s = cube();
+        // From inside, along the first ray, the cube is left through the corner (10, 10, 10).
+        let d = DVec3::from(RAYS[0]).normalize();
+        let p = DVec3::splat(10.0) - d * 4.0;
+        assert_eq!(s.locate(p), Some(Where::In));
+        // The same from outside.
+        let q = DVec3::splat(10.0) + d * 4.0;
+        assert_eq!(s.locate(q), Some(Where::Out));
+        // A ray through an edge (x = 10, y = 10) from below.
+        let p = DVec3::new(10.0, 10.0, 3.0) - d * 2.0;
+        let _ = s.locate(p);
+    }
+
+    #[test]
+    fn when_every_ray_hits_a_vertex_there_is_no_answer() {
+        // Two triangles whose six corners lie on the six rays from the origin.
+        let c: Vec<DVec3> = RAYS
+            .iter()
+            .map(|r| DVec3::from(*r).normalize() * 10.0)
+            .collect();
+        let s = Soup::new(vec![
+            Tri {
+                p: [c[0], c[1], c[2]],
+                n: DVec3::Z,
+            },
+            Tri {
+                p: [c[3], c[4], c[5]],
+                n: DVec3::Z,
+            },
+        ]);
+        assert_eq!(s.locate(DVec3::ZERO), None);
+    }
+
+    #[test]
+    fn a_ray_in_the_plane_of_a_triangle_is_unsure_only_when_it_meets_it() {
+        let d = DVec3::from(RAYS[0]).normalize();
+        let u = d.cross(DVec3::Z).normalize();
+        let o = DVec3::new(1.0, 2.0, 3.0);
+        // A triangle in the plane of the ray, ahead of the origin, and one beside the line.
+        let ahead = [o + d * 5.0, o + d * 9.0 + u * 2.0, o + d * 9.0 - u * 2.0];
+        let beside = [o + u * 5.0, o + u * 5.0 + d, o + u * 6.0];
+        assert!(matches!(ray_triangle(o, d, &ahead, 0.0025), Hit::Unsure));
+        assert!(matches!(ray_triangle(o, d, &beside, 0.0025), Hit::Miss));
+        // A triangle parallel to the ray but off its plane, and a triangle with no area.
+        let n = d.cross(u);
+        let shifted = ahead.map(|p| p + n * 5.0);
+        assert!(matches!(ray_triangle(o, d, &shifted, 0.0025), Hit::Miss));
+        let flat = [o, o, o];
+        assert!(matches!(ray_triangle(o, d, &flat, 0.0025), Hit::Miss));
+        // A triangle behind the origin is missed; one across it is hit.
+        let behind = [o - d * 5.0 - u, o - d * 5.0 + u, o - d * 5.0 + n];
+        assert!(matches!(ray_triangle(o, d, &behind, 0.0025), Hit::Miss));
+        let across = [
+            o + d * 5.0 - u * 3.0 - n * 3.0,
+            o + d * 5.0 + u * 3.0 - n * 3.0,
+            o + d * 5.0 + n * 3.0,
+        ];
+        assert!(matches!(ray_triangle(o, d, &across, 0.0025), Hit::Yes));
+        // On its edge it is unsure.
+        assert!(matches!(
+            ray_triangle(
+                o,
+                d,
+                &[o + d * 5.0 - n, o + d * 5.0 + n, o + d * 5.0 + u * 4.0],
+                0.0025
+            ),
+            Hit::Unsure
+        ));
+    }
+
+    #[test]
+    fn the_distance_to_a_triangle_covers_vertices_edges_and_the_inside() {
+        let t = [
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(0.0, 10.0, 0.0),
+        ];
+        let d = |x: f64, y: f64, z: f64| distance_to_triangle(DVec3::new(x, y, z), &t);
+        // The three vertex regions.
+        assert!((d(-3.0, -4.0, 0.0) - 5.0).abs() < 1e-9);
+        assert!((d(13.0, -4.0, 0.0) - 5.0).abs() < 1e-9);
+        assert!((d(-3.0, 14.0, 0.0) - 5.0).abs() < 1e-9);
+        // The three edge regions.
+        assert!((d(5.0, -2.0, 0.0) - 2.0).abs() < 1e-9);
+        assert!((d(-2.0, 5.0, 0.0) - 2.0).abs() < 1e-9);
+        assert!((d(8.0, 8.0, 0.0) - 3.0 * 2f64.sqrt()).abs() < 1e-9);
+        // Inside: the height above the plane.
+        assert!((d(2.0, 2.0, 3.0) - 3.0).abs() < 1e-9);
+        assert_eq!(d(2.0, 2.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn a_soup_of_nothing_has_no_bounds_but_answers_out() {
+        let s = Soup::new(vec![]);
+        assert_eq!(s.locate(DVec3::ZERO), Some(Where::Out));
+    }
 }

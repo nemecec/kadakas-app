@@ -457,6 +457,78 @@ Each command is one undo step. An error changes nothing.
 
 **Not done.** Glue To, Cut Opening, Reload and Save As, Always Face Camera, Live and Dynamic Components, Reset Scale and Skew, Change Axes, lock, a live update of the other instances while an edit is open, and the plan drawing of components (MOD-13: the plan shows the box around an instance, the same on the screen, in the SVG and in the print; the box is the box of the definition placed by the instance transform, kept per definition and content version, and read once per definition in a `plan_frame`).
 
+## Solid tools (MOD-09)
+
+The solid tools check that a part of a surface model is a closed solid. They join, cut and intersect two closed solids. The wording follows the public SketchUp help for Solid Tools. It is not verified against the product. No part of the product was used. The code is in `crates/kadakas-core/src/surface/solid.rs` and the modules below it.
+
+### What a solid is
+
+A solid is a set of faces that closes a volume. Each edge of the set has exactly two faces of the set. The two faces use the edge in opposite directions. The fronts of the faces look out. A model can hold many solids. Faces can hold a solid and a cavity. A cavity is a shell whose fronts look into a hollow. It belongs to the solid that holds it.
+
+The core finds the faces of a solid with a walk. It starts at a face and goes over each edge to the face next to it in the material. At an edge with two faces this is the other face. At an edge with more faces it is the face that comes first when the face turns toward its back around the edge. A face that looks into that wedge is not taken. This is how a fin, or a second solid that shares the edge, is told apart. `SurfaceModel::solid_of(face)` gives the faces of the solid of a face.
+
+### The check and the report of open edges
+
+`SurfaceModel::solid_report()` is the closed-solid check. It runs the full check of the model once. It returns a `SolidReport` that serializes to JSON, so an agent can read it.
+
+- `shells`: one entry for each shell, with its `faces`, its `state` (`solid`, `open`, `self_crossing`, `inverted` or `flat`), its `open_edges`, its `crossings`, its signed `volume` in mm³ and its `area` in mm².
+- `open_edges`: each edge with a `kind`. `border` means one face uses it. `non_manifold` means three or more faces of the shell use it. `reversed` means two faces use it the same way round, so one of them needs Reverse Faces.
+- `wire_edges`: edges that no face uses.
+- `crossings`: the number of places where an edge passes through a face without an edge there. Two solids that cross are in this state. The solid tools cut them. The state is not held against either solid.
+
+A shell is `flat` when it is closed but encloses no volume (two faces back to back). It is `inverted` when it is closed and its volume is negative. It is `self_crossing` when an edge of the shell passes through a face of the same shell. `SolidReport::is_closed()` is true when every shell is a solid and no edge is loose. `SurfaceModel::solid_state(faces)` and `solid_volume(faces)` give the same for a list of faces.
+
+Check Solid is in the Edit menu, under Solid Tools. It works on the selected faces and edges, else on the selected surface models. The status line says how many solids are closed and their volume. When something is open, it says how many edges are open, and it selects those edges (and the loose edges) so that the person sees them.
+
+### The operations
+
+One edit does one operation: `edit_surface` with `{"action": "solid", "op": "union", "first": [face ids], "second": [face ids]}`. The lists are the faces of the two solids. Both solids must be in the model of the command. It is one undo step. The `op` is one of:
+
+- `union`: one solid that holds both.
+- `subtract`: `first` less `second`. `second` is used up.
+- `intersect`: only the volume that both hold. Both are used up.
+- `trim`: like subtract. `second` stays in the model as it was.
+- `split`: three solids in place: `first` less `second`, the common part and `second` less `first`. They touch with faces back to back and share the vertices of the cut. A part that would be empty is left out.
+
+How it works:
+
+1. Both lists must be solids (state `solid`). They must not share an edge or a vertex with other geometry of the model. Nothing is changed before this is known.
+2. A copy of the model that holds only the faces of the two solids is cut with Intersect Faces. Faces of one solid that the other crosses are split along the crossing. A crossing that is too small to cut is a refusal.
+3. Each piece is wholly inside, outside or on the surface of the other solid. A ray cast against the triangles of the other solid tells which. A point on the surface (within the plane tolerance) is told by the direction of the face, the same way or the opposite way. If the points of one piece disagree, the piece was not cut and the operation is refused.
+4. The rules of the operation keep, drop or turn over each piece. A face that both solids use is on the surface of both, looking the same way. Two solids that share a plane in one model share the faces there.
+5. Pieces in one plane with the same direction and the same paint merge again. Edges and vertices that no kept face uses go. Soft and smooth edges, curves and paint stay with their pieces.
+6. The solids of the result must be closed and must have the volumes that the operation gives. Union is at least the larger input and at most the sum. Intersect is at most the smaller. Subtract is the first less the common part. Split adds up to both inputs. The model must have no problem that it did not have before.
+7. The result replaces the geometry of the two solids.
+
+The edit is deterministic. The same model and the same edit give the same ids. The edit cannot be replayed on another model for collaboration (the solids are sets of faces), so a concurrent edit by another person shows as a conflict.
+
+### Refusals
+
+The edit changes nothing and gives a reason. The core text is English with ids, for agents and logs. The window shows the same reason in en-US or Estonian without ids.
+
+- an input has no faces, or a face does not exist
+- an input is not a closed solid (the text names the number of open edges and one edge)
+- an input passes through itself
+- an input looks inward (use Reverse Faces) or has no volume
+- an input is stuck to other geometry (shares an edge or a vertex): make a group of it first
+- the result would be empty (no common volume for intersect, or the second solid holds the first for subtract)
+- the cut is too small, or a piece is cut only in part
+- the result is not a closed solid (for example two solids that touch at an edge, which would leave an edge with four faces)
+- a limit would be passed: a cut makes at most `MAX_EDIT_EDGES` (10,000) new edges, and the result must fit the limits of the model
+
+Two boxes that touch with a shared face, built one on the other in one model, are one complex that no solid owns. The shared face cannot look out of both. The tools refuse it (the reason is an edge that two faces use the same way round). To join such boxes, erase the shared face.
+
+### Modeler
+
+Edit > Solid Tools holds Check Solid, Union, Subtract, Intersect, Trim, Split and Swap Order. An operation works on the selected faces of one model. The selection must name exactly two solids. The solid of each selected face is found by the walk. The older solid (the lower face id) is the first one. Swap Order makes the newer one the first. The items are disabled with the reason as a tooltip when the selection does not name two solids. An enabled item shows the preview as a tooltip: the volume of the result, or the reason the operation would be refused. The preview runs the operation on a copy. Running the item does the operation and shows the same text in the status line. A refusal shows in the status line and changes nothing. The code is in `kadakas_ui_core::modeling::solid` and `kadakas-modeler/src/menu.rs`.
+
+### Tests
+
+- Unit tests of the core (`surface/tests_solid.rs`, `surface/solid/`): nine cases of two boxes (crossing, sharing planes, plus sign, nested, nested sharing a corner or a wall, disjoint, the same box twice, a post through a slab), the report for open, reversed, inward, flat and crossing shells, refusals, curved solids, a tube, two balls of 1,280 triangles, the limit of new edges, and the helpers of the ray cast.
+- Property tests: for boxes on a grid (planes, edges and corners shared often) and for a turned box, `vol(A union B) + vol(A intersect B) = vol(A) + vol(B)` and `vol(A subtract B) + vol(A intersect B) = vol(A)`. A refusal changes nothing.
+- Integration tests (`crates/kadakas-core/tests/solid_tools.rs`): each operation is one undo step and comes back with undo and redo, a refusal makes no step, the edit and the report are JSON.
+- Tests of the window and of `ui-core`: operands, order, preview in both languages, one undo step, refusals without ids, Check Solid, the menu.
+
 ## Clean room
 
 The layout, the tool names, the logic of the tools and the default keys follow public documentation of programs of this kind (`docs/research/sketchup-public-features.md`). No program of that kind was downloaded or run. No icon, image or text was copied. SketchUp is a trademark of Trimble Inc. The About window says that Kadakas Modeler is not affiliated with it.
@@ -464,6 +536,7 @@ The layout, the tool names, the logic of the tools and the default keys follow p
 ## Not done yet
 
 - A window of the web build. The program is for the desktop. The 3D view and the tray need a native window and a file dialog.
+- The rest of MOD-09: solids in different groups or components (each is a model of its own, so the operation needs both solids in one model), solid tools in the context menu, and a tool that picks the two solids by clicks.
 - The rest of MOD-08: Intersect Faces With Context, coplanar overlaps, rounded corners for Offset, a Follow Me profile that touches the path inside a side, and check boxes for the edge flags in Entity Info (they are read only).
 - Not tried in a real window: the drawing, the marks and the hatch on a GPU window were checked in headless frames and in one GPU test of the back color, not by hand. The same holds for the Paint Bucket (the WGSL shader that draws one side of a triangle is checked by reading and by the CPU renderers, not on a GPU), the thumbnails and the editor of the Materials panel, and "Open in the Kadakas app" (the start of the program is tested with a script in a temporary folder, not with a real app).
 - An editor for the keys of the modeler, and a review window for crash reports. A report stays in the queue until `kadakas-app` starts.

@@ -359,6 +359,13 @@ pub fn entity_info(ui: &mut egui::Ui, data: &TrayData, out: &mut Vec<TrayAction>
                                 tr!("modeler-entity-solid-open")
                             },
                         );
+                        if s.open_edges > 0 {
+                            row(
+                                ui,
+                                tr!("modeler-entity-open-edges"),
+                                tr!("modeler-entity-open-edges-value", count = s.open_edges),
+                            );
+                        }
                         if s.not_intersected > 0 {
                             row(
                                 ui,

@@ -2,7 +2,7 @@
 //! MOD-02: Previous and Next view, Standard Views, Perspective and Parallel Projection, Field of
 //! View, Zoom Extents and Zoom Window. Items give a `Cmd`; the program runs them after the frame.
 
-use kadakas_core::surface::IntersectScope;
+use kadakas_core::surface::{IntersectScope, SolidOp};
 use kadakas_l10n::tr;
 use kadakas_render::StandardView;
 use kadakas_ui_core::keymap::Action;
@@ -80,6 +80,49 @@ pub fn intersect_menu(ui: &mut egui::Ui, enabled: [bool; 2], cmds: &mut Vec<Cmd>
                 Cmd::IntersectFaces(scope),
             );
         }
+    });
+}
+
+/// The submenu Solid Tools (MOD-09) of the Edit menu: Check Solid, the five operations and the
+/// order of the two solids. An operation is enabled when the selected faces name two solids; the
+/// text of the item says what it would do, or why it is refused.
+pub fn solid_menu(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
+    ui.menu_button(tr!("modeler-edit-solid"), |ui| {
+        entry(
+            ui,
+            cmds,
+            tr!("modeler-solid-check"),
+            String::new(),
+            true,
+            Cmd::CheckSolid,
+        );
+        ui.separator();
+        let operands = app.solid_operands();
+        for op in SolidOp::ALL {
+            let label = kadakas_ui_core::modeling::solid::op_name(op);
+            let text = match &operands {
+                Ok(_) => app.solid_hint(op),
+                Err(p) => p.text(),
+            };
+            let button = ui.add_enabled(operands.is_ok(), egui::Button::new(label));
+            let button = if operands.is_ok() {
+                button.on_hover_text(text)
+            } else {
+                button.on_disabled_hover_text(text)
+            };
+            if button.clicked() {
+                cmds.push(Cmd::Solid(op));
+                ui.close();
+            }
+        }
+        ui.separator();
+        choice(
+            ui,
+            cmds,
+            tr!("modeler-solid-swap"),
+            app.solid_swap,
+            Cmd::SolidSwap,
+        );
     });
 }
 
@@ -207,6 +250,7 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
             );
             ui.separator();
             intersect_menu(ui, app.intersect_flags(), cmds);
+            solid_menu(ui, app, cmds);
             ui.separator();
             // Hide, guides (MOD-05).
             hide_entries(ui, [app.can_hide(), app.can_unhide()], cmds);

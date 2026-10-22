@@ -390,4 +390,5 @@ mod intersect;
 mod landscape;
 mod mod08;
 mod paint;
+mod solid;
 mod transform;

@@ -637,6 +637,9 @@ pub struct SurfaceStats {
     /// The places where an edge passes through a face without an edge there: Intersect Faces
     /// makes the edges (the `NotIntersected` warnings of the check).
     pub not_intersected: usize,
+    /// The edges that make the model open: the open edges of its shells and the loose edges. Check
+    /// Solid (MOD-09) selects them.
+    pub open_edges: usize,
 }
 
 /// The size of a box and its lowest corner. The box is relative to the origin of the scene; the
@@ -684,12 +687,14 @@ pub fn entity_info(doc: &Document, scene: &Scene, selection: &[ObjectId]) -> Ent
             let surface = match &obj.shape {
                 kadakas_core::model::Shape::SurfaceModel(m) => {
                     let report = m.check();
+                    let solids = m.solid_report();
                     Some(SurfaceStats {
                         vertices: m.vertex_count(),
                         edges: m.edge_count(),
                         faces: m.face_count(),
                         closed: m.face_count() > 0 && report.is_closed(),
                         not_intersected: report.not_intersected(),
+                        open_edges: solids.open_edges().len() + solids.wire_edges.len(),
                     })
                 }
                 _ => None,

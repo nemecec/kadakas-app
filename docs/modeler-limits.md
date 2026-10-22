@@ -276,3 +276,20 @@ Hidden Geometry (`perf_ghosts_of_a_large_hidden_model`): a model of 25,600 faces
 | Drawing the ghosts in a frame (shapes and tessellation, 19,280 shapes) | 4.2 ms |
 
 The Tags panel makes its rows once for each revision. Guides are saved as plain objects. One guide is about 80 bytes of text.
+
+## Solid tools (MOD-09)
+
+The solid tools add no limit constant. A cut uses the edit limit of 10,000 new edges (`MAX_EDIT_EDGES`). The result is held to the four count limits of the model. An operation that would pass one is refused and changes nothing. A test builds a bar with 2,600 strips on each of two walls and a slab through it. The cut needs more than 10,000 new edges, and the edit is refused.
+
+Measured once (release build, Apple M1 Pro, one run each, load average about 5 from other work, `perf_two_big_balls` in `surface/tests_solid.rs`, run with `cargo test --release -- --ignored`). The model has two closed balls of 20,480 triangles each, 40,960 faces in all, that cross in a lens.
+
+| What | Time | Faces after |
+|---|---|---|
+| Closed-solid check (`solid_report`, includes the full check of the model) | 0.49 s | |
+| Union | 2.2 s | 30,833 |
+| Subtract | 2.1 s | 24,107 |
+| Intersect | 1.8 s | 10,759 |
+| Trim | 2.4 s | 44,939 |
+| Split | 2.5 s | 52,351 |
+
+The same test checks that `vol(A union B) + vol(A intersect B) = vol(A) + vol(B)` and `vol(A subtract B) + vol(A intersect B) = vol(A)` hold on this model. Dense meshes show a case that small models do not: the pieces next to the cut can be thin slivers that touch the other surface within the plane tolerance. A piece is placed by the place that holds at least 80 percent of its area, so such a sliver does not refuse the operation. This is one measurement, not a campaign. A campaign that finds which step costs most is not done. No limit value changes.

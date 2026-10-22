@@ -24,6 +24,7 @@ mod resize;
 mod scenes;
 pub mod select;
 pub mod soften;
+pub mod solid;
 mod tape;
 mod tools;
 mod xform;

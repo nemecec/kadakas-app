@@ -21,7 +21,7 @@ use super::super::check::Problem;
 use super::super::geom;
 use super::super::topo::Topo;
 use super::super::{EdgeId, FaceId, SurfaceModel, VertexId, key};
-use super::locate::{Soup, Where, centroids};
+use super::locate::{Soup, Where, samples};
 
 /// Why an edge makes a shell open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -346,7 +346,7 @@ fn put_cavities_in_solids(
         .collect();
     let mut joined: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for &c in &hollow {
-        let Some(p) = centroids(m, shells[c].faces[0]).and_then(|v| v.first().copied()) else {
+        let Some(p) = samples(m, shells[c].faces[0]).and_then(|v| v.first().map(|s| s.0)) else {
             continue;
         };
         let host = soups

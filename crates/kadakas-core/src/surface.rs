@@ -85,6 +85,9 @@
 //!   `edit::transform`.
 //! - **Copy geometry** ([`Edit::CopyGeometry`]): copies of faces and edges in the same model, with
 //!   new ids, welded to the geometry they land on.
+//! - **Solid tools** ([`Edit::Solid`], MOD-09): union, subtract, intersect, trim and split of two
+//!   closed solids of the model, and the closed-solid check [`SurfaceModel::solid_report`], which
+//!   names the edges that make a shell open. See the module `solid`.
 //! - Erasing edges of a curve leaves the rest as chains: a curve that is no longer one chain is
 //!   cut into curves.
 //!

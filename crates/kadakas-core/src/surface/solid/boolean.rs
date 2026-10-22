@@ -32,7 +32,7 @@ use super::super::topo::Topo;
 use super::super::{
     Edge, EdgeId, Edit, Face, FaceId, IntersectScope, SurfaceError, SurfaceModel, VertexId, key,
 };
-use super::locate::{Soup, Where, centroids};
+use super::locate::{Soup, Where, samples};
 use super::shell::{ShellState, crossings_of, state_with};
 use super::{Operand, SolidError, SolidOp};
 
@@ -68,12 +68,12 @@ enum Side {
 /// Where a piece is against the other solid.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Class {
-    In,
-    Out,
+    In = 0,
+    Out = 1,
     /// On the surface of the other solid, looking the same way.
-    OnSame,
+    OnSame = 2,
     /// On the surface of the other solid, looking the opposite way.
-    OnOpp,
+    OnOpp = 3,
 }
 
 /// What becomes of a piece of the solid `side`: the solids of the result it goes into (`0` is
@@ -253,19 +253,24 @@ fn roles_of(f: &Face) -> (bool, bool) {
     }
 }
 
-/// Where a piece is against the soup of the other solid. All its points must agree.
+/// The share of the area of a piece that the most common place must have. A piece that the cut
+/// left whole lies on one side. A sliver next to the cut can have one thin triangle within the
+/// plane tolerance of the other surface, which is no reason to refuse.
+const SHARE: f64 = 0.8;
+
+/// Where a piece is against the soup of the other solid: the place that most of its area has.
 fn class_of(sub: &SurfaceModel, id: FaceId, other: &Soup) -> Result<Class, SurfaceError> {
     let f = &sub.faces[&id];
     let (lo, hi) = other.bounds();
     let pad = geom::plane_tol(&[lo, hi]) * 2.0;
     let pts =
-        centroids(sub, id).ok_or_else(|| cut(format!("face {id} cannot be cut into triangles")))?;
-    let mut found: Option<Class> = None;
-    for p in pts {
+        samples(sub, id).ok_or_else(|| cut(format!("face {id} cannot be cut into triangles")))?;
+    let mut area = [0.0f64; 4];
+    for (p, a) in &pts {
         let at = if p.cmplt(lo - pad).any() || p.cmpgt(hi + pad).any() {
             Class::Out
         } else {
-            match other.locate(p).ok_or_else(|| {
+            match other.locate(*p).ok_or_else(|| {
                 cut(format!(
                     "face {id} lies too close to the other solid to tell where it is"
                 ))
@@ -276,17 +281,25 @@ fn class_of(sub: &SurfaceModel, id: FaceId, other: &Soup) -> Result<Class, Surfa
                 Where::On(_) => Class::OnOpp,
             }
         };
-        match found {
-            None => found = Some(at),
-            Some(c) if c == at => {}
-            Some(_) => {
-                return Err(cut(format!(
-                    "face {id} lies partly in and partly out of the other solid and could not be cut there"
-                )));
-            }
-        }
+        area[at as usize] += a;
     }
-    found.ok_or_else(|| cut(format!("face {id} has no area")))
+    vote(area).ok_or_else(|| {
+        cut(format!(
+            "face {id} lies partly in and partly out of the other solid and could not be cut there"
+        ))
+    })
+}
+
+/// The place that holds at least [`SHARE`] of the area (`area` is by place: in, out, on the same
+/// way, on the opposite way).
+fn vote(area: [f64; 4]) -> Option<Class> {
+    let total: f64 = area.iter().sum();
+    let (best, most) = area
+        .iter()
+        .enumerate()
+        .fold((0, 0.0), |b, (i, a)| if *a > b.1 { (i, *a) } else { b });
+    (total > 0.0 && most >= SHARE * total)
+        .then(|| [Class::In, Class::Out, Class::OnSame, Class::OnOpp][best])
 }
 
 /// The face seen from the other side.
@@ -579,4 +592,178 @@ fn put_in(
     m.faces.extend(res.faces);
     m.curves.extend(res.curves);
     m.next_id = m.next_id.max(res.next_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::surface::ShellState;
+
+    #[test]
+    fn the_rules_of_the_operations() {
+        use Class::{In, OnOpp, OnSame, Out};
+        let all = [In, Out, OnSame, OnOpp];
+        let keep = |op, side| -> Vec<Class> {
+            all.iter()
+                .copied()
+                .filter(|c| fates(op, side, *c) == vec![(0, false)])
+                .collect()
+        };
+        assert_eq!(keep(SolidOp::Union, Side::A), vec![Out, OnSame]);
+        assert_eq!(keep(SolidOp::Union, Side::B), vec![Out]);
+        assert_eq!(keep(SolidOp::Intersect, Side::A), vec![In, OnSame]);
+        assert_eq!(keep(SolidOp::Intersect, Side::B), vec![In]);
+        assert_eq!(keep(SolidOp::Subtract, Side::A), vec![Out, OnOpp]);
+        assert_eq!(keep(SolidOp::Trim, Side::A), vec![Out, OnOpp]);
+        // The second solid of Subtract turns over where it is inside the first.
+        assert_eq!(fates(SolidOp::Subtract, Side::B, In), vec![(0, true)]);
+        for c in [Out, OnSame, OnOpp] {
+            assert!(fates(SolidOp::Subtract, Side::B, c).is_empty());
+        }
+        // Trim keeps the whole second solid and also turns over the part inside.
+        for c in [Out, OnSame, OnOpp] {
+            assert_eq!(fates(SolidOp::Trim, Side::B, c), vec![(1, false)]);
+        }
+        assert_eq!(
+            fates(SolidOp::Trim, Side::B, In),
+            vec![(1, false), (0, true)]
+        );
+        // Split: the common part is in group 1 and its faces turn over for the two remainders.
+        assert_eq!(
+            fates(SolidOp::Split, Side::A, In),
+            vec![(1, false), (2, true)]
+        );
+        assert_eq!(
+            fates(SolidOp::Split, Side::B, In),
+            vec![(1, false), (0, true)]
+        );
+        assert_eq!(fates(SolidOp::Split, Side::A, Out), vec![(0, false)]);
+        assert_eq!(fates(SolidOp::Split, Side::A, OnOpp), vec![(0, false)]);
+        assert_eq!(fates(SolidOp::Split, Side::A, OnSame), vec![(1, false)]);
+        assert_eq!(fates(SolidOp::Split, Side::B, Out), vec![(2, false)]);
+        assert_eq!(fates(SolidOp::Split, Side::B, OnOpp), vec![(2, false)]);
+        assert!(fates(SolidOp::Split, Side::B, OnSame).is_empty());
+        // Every group number is below the number of groups of the operation.
+        for op in SolidOp::ALL {
+            for side in [Side::A, Side::B] {
+                for c in all {
+                    assert!(fates(op, side, c).iter().all(|(g, _)| *g < groups_of(op)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn volumes_that_do_not_fit_are_refused() {
+        let (va, vb) = (8.0, 8.0);
+        assert!(expect_volumes(SolidOp::Union, va, vb, &[12.0]).is_ok());
+        assert!(expect_volumes(SolidOp::Union, va, vb, &[17.0]).is_err());
+        assert!(expect_volumes(SolidOp::Union, va, vb, &[7.0]).is_err());
+        assert!(expect_volumes(SolidOp::Intersect, va, vb, &[4.0]).is_ok());
+        assert!(expect_volumes(SolidOp::Intersect, va, vb, &[9.0]).is_err());
+        assert!(expect_volumes(SolidOp::Subtract, va, vb, &[4.0]).is_ok());
+        assert!(expect_volumes(SolidOp::Subtract, va, vb, &[9.0]).is_err());
+        assert!(expect_volumes(SolidOp::Trim, va, vb, &[4.0, 8.0]).is_ok());
+        assert!(expect_volumes(SolidOp::Trim, va, vb, &[4.0, 7.0]).is_err());
+        assert!(expect_volumes(SolidOp::Split, va, vb, &[4.0, 4.0, 4.0]).is_ok());
+        let e = expect_volumes(SolidOp::Split, va, vb, &[4.0, 5.0, 4.0]).unwrap_err();
+        assert!(matches!(e, SurfaceError::Solid(SolidError::NotClosed(_))));
+    }
+
+    fn cuboid(lo: [f64; 3], hi: [f64; 3]) -> Edit {
+        let c = |i: usize| -> [f64; 3] {
+            std::array::from_fn(|k| if i >> k & 1 == 0 { lo[k] } else { hi[k] })
+        };
+        let mut edges = Vec::new();
+        for i in 0..8usize {
+            for bit in [1usize, 2, 4] {
+                if i & bit == 0 {
+                    edges.push([c(i), c(i | bit)]);
+                }
+            }
+        }
+        Edit::AddEdges { edges }
+    }
+
+    #[test]
+    fn a_piece_that_was_not_cut_is_not_given_a_place() {
+        let mut m = SurfaceModel::new();
+        m.apply(&cuboid([0.0; 3], [1000.0; 3])).unwrap();
+        m.apply(&cuboid([500.0; 3], [1500.0; 3])).unwrap();
+        let inward: Vec<FaceId> = m
+            .solid_report()
+            .shells
+            .iter()
+            .filter(|s| s.state == ShellState::Inverted)
+            .flat_map(|s| s.faces.clone())
+            .collect();
+        m.apply(&Edit::ReverseFaces { faces: inward }).unwrap();
+        let r = m.solid_report();
+        let solids: Vec<_> = r.solids().collect();
+        let (a, b): (BTreeSet<FaceId>, BTreeSet<FaceId>) = (
+            solids[0].faces.iter().copied().collect(),
+            solids[1].faces.iter().copied().collect(),
+        );
+        let topo = Topo::of(&m);
+        let sub = copy_of(&m, &topo, &a, &b);
+        let soup_b = Soup::of(
+            &sub,
+            sub.faces
+                .iter()
+                .filter(|(_, f)| roles_of(f) == (false, true))
+                .map(|(id, _)| *id),
+        )
+        .unwrap();
+        // The faces of the first box, not cut: the wall x = 1000 is partly in the second box.
+        let mut classes = Vec::new();
+        for id in &a {
+            classes.push(class_of(&sub, *id, &soup_b));
+        }
+        let errors: Vec<String> = classes
+            .iter()
+            .filter_map(|c| c.as_ref().err().map(ToString::to_string))
+            .collect();
+        assert_eq!(errors.len(), 3, "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|e| e.contains("partly in and partly out"))
+        );
+        // The three faces away from the second box are outside it.
+        assert_eq!(
+            classes
+                .iter()
+                .filter(|c| matches!(c, Ok(Class::Out)))
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn a_thin_sliver_on_the_surface_does_not_decide_but_a_big_share_does() {
+        // A piece next to the cut can have one thin triangle within the plane tolerance of the
+        // other surface. The rest decides.
+        assert_eq!(vote([97.0, 0.0, 3.0, 0.0]), Some(Class::In));
+        assert_eq!(vote([0.0, 90.0, 0.0, 10.0]), Some(Class::Out));
+        assert_eq!(vote([0.0, 0.0, 5.0, 95.0]), Some(Class::OnOpp));
+        assert_eq!(vote([0.0, 0.0, 100.0, 0.0]), Some(Class::OnSame));
+        // A face that the cut missed lies on both sides, or half on the surface.
+        assert_eq!(vote([75.0, 25.0, 0.0, 0.0]), None);
+        assert_eq!(vote([50.0, 0.0, 50.0, 0.0]), None);
+        assert_eq!(vote([0.0; 4]), None);
+    }
+
+    #[test]
+    fn turning_a_face_twice_gives_the_face_again() {
+        let mut m = SurfaceModel::new();
+        m.apply(&cuboid([0.0; 3], [1000.0; 3])).unwrap();
+        for (_, f) in m.faces() {
+            let mut f = f.clone();
+            f.attrs.insert(ATTR_MATERIAL.into(), Value::from("m"));
+            let t = turned(&f);
+            assert_eq!(t.plane, f.plane.flipped());
+            assert_eq!(t.attrs.get(ATTR_BACK_MATERIAL), Some(&Value::from("m")));
+            assert_eq!(turned(&t), f);
+        }
+    }
 }

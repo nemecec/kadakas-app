@@ -3,6 +3,7 @@
 use glam::DVec3;
 use proptest::prelude::*;
 
+use super::geom;
 use super::*;
 
 type P = [f64; 3];
@@ -1110,4 +1111,425 @@ fn a_bar_through_a_tube_and_a_concave_solid() {
 
 fn f_id(m: &SurfaceModel, f: &Face) -> FaceId {
     m.faces().find(|(_, g)| *g == f).map(|(id, _)| id).unwrap()
+}
+
+// ---- models made from parts ---------------------------------------------------------------------
+
+/// A model built face by face: every vertex is new, so two solids never share a vertex.
+#[derive(Default)]
+struct Parts {
+    vertices: Vec<DVec3>,
+    faces: Vec<Vec<usize>>,
+}
+
+impl Parts {
+    fn v(&mut self, p: DVec3) -> usize {
+        self.vertices.push(p);
+        self.vertices.len() - 1
+    }
+
+    /// A face; the corners run counterclockwise seen from the front.
+    fn face(&mut self, corners: &[usize]) {
+        self.faces.push(corners.to_vec());
+    }
+
+    /// A triangle of the surface of a ball: turned so that it looks out of `centre`.
+    fn outward(&mut self, centre: DVec3, a: usize, b: usize, c: usize) {
+        let n = (self.vertices[b] - self.vertices[a]).cross(self.vertices[c] - self.vertices[a]);
+        let mid = (self.vertices[a] + self.vertices[b] + self.vertices[c]) / 3.0;
+        if n.dot(mid - centre) >= 0.0 {
+            self.face(&[a, b, c]);
+        } else {
+            self.face(&[a, c, b]);
+        }
+    }
+
+    fn build(&self) -> SurfaceModel {
+        let mut vertices = std::collections::BTreeMap::new();
+        for (i, p) in self.vertices.iter().enumerate() {
+            vertices.insert(VertexId(i as u32 + 1), *p);
+        }
+        let mut next = self.vertices.len() as u32 + 1;
+        let mut edge_ids = std::collections::BTreeMap::new();
+        let mut edges = std::collections::BTreeMap::new();
+        let mut faces = std::collections::BTreeMap::new();
+        for corners in &self.faces {
+            let ids: Vec<VertexId> = corners.iter().map(|i| VertexId(*i as u32 + 1)).collect();
+            for k in 0..ids.len() {
+                let (a, b) = (ids[k], ids[(k + 1) % ids.len()]);
+                edge_ids.entry(key(a, b)).or_insert_with(|| {
+                    let id = EdgeId(next);
+                    next += 1;
+                    edges.insert(id, Edge { v: [a, b] });
+                    id
+                });
+            }
+            let pts: Vec<DVec3> = corners.iter().map(|i| self.vertices[*i]).collect();
+            let normal = geom::newell(&pts);
+            let plane = geom::Plane::new(pts[0], normal).expect("a face with an area");
+            let mut outer = ids;
+            // The loop starts at its smallest vertex id, as saved.
+            let at = (0..outer.len()).min_by_key(|i| outer[*i]).unwrap();
+            outer.rotate_left(at);
+            faces.insert(FaceId(next), Face::new(plane, outer, vec![]));
+            next += 1;
+        }
+        SurfaceModel::from_parts(vertices, edges, faces, next)
+    }
+}
+
+/// A ball of triangles: an icosahedron cut `depth` times, with the radius `r` around `c`.
+fn ball(parts: &mut Parts, c: DVec3, r: f64, depth: u32) {
+    let t = (1.0 + 5f64.sqrt()) / 2.0;
+    let base: Vec<DVec3> = [
+        (-1.0, t, 0.0),
+        (1.0, t, 0.0),
+        (-1.0, -t, 0.0),
+        (1.0, -t, 0.0),
+        (0.0, -1.0, t),
+        (0.0, 1.0, t),
+        (0.0, -1.0, -t),
+        (0.0, 1.0, -t),
+        (t, 0.0, -1.0),
+        (t, 0.0, 1.0),
+        (-t, 0.0, -1.0),
+        (-t, 0.0, 1.0),
+    ]
+    .iter()
+    .map(|p| DVec3::new(p.0, p.1, p.2).normalize())
+    .collect();
+    let mut tris: Vec<[DVec3; 3]> = [
+        [0, 11, 5],
+        [0, 5, 1],
+        [0, 1, 7],
+        [0, 7, 10],
+        [0, 10, 11],
+        [1, 5, 9],
+        [5, 11, 4],
+        [11, 10, 2],
+        [10, 7, 6],
+        [7, 1, 8],
+        [3, 9, 4],
+        [3, 4, 2],
+        [3, 2, 6],
+        [3, 6, 8],
+        [3, 8, 9],
+        [4, 9, 5],
+        [2, 4, 11],
+        [6, 2, 10],
+        [8, 6, 7],
+        [9, 8, 1],
+    ]
+    .iter()
+    .map(|t| [base[t[0]], base[t[1]], base[t[2]]])
+    .collect();
+    for _ in 0..depth {
+        tris = tris
+            .iter()
+            .flat_map(|[a, b, c]| {
+                let (ab, bc, ca) = (
+                    ((*a + *b) / 2.0).normalize(),
+                    ((*b + *c) / 2.0).normalize(),
+                    ((*c + *a) / 2.0).normalize(),
+                );
+                [[*a, ab, ca], [*b, bc, ab], [*c, ca, bc], [ab, bc, ca]]
+            })
+            .collect();
+    }
+    // One vertex for each corner position, shared by the triangles of this ball.
+    let mut ids: std::collections::BTreeMap<[i64; 3], usize> = std::collections::BTreeMap::new();
+    let mut corner = |parts: &mut Parts, p: DVec3| -> usize {
+        let k = (p * 1e6).round().to_array().map(|x| x as i64);
+        *ids.entry(k).or_insert_with(|| parts.v(c + p * r))
+    };
+    for [a, b, cc] in tris {
+        let (ia, ib, ic) = (corner(parts, a), corner(parts, b), corner(parts, cc));
+        parts.outward(c, ia, ib, ic);
+    }
+}
+
+#[test]
+fn two_balls_of_triangles_have_the_volumes_of_the_identities() {
+    let mut parts = Parts::default();
+    ball(&mut parts, DVec3::new(0.0, 0.0, 0.0), 1000.0, 3);
+    ball(&mut parts, DVec3::new(900.0, 150.0, 80.0), 800.0, 3);
+    let m = parts.build();
+    assert!(m.problem().is_none(), "{:?}", m.problem());
+    let r = m.solid_report();
+    let solids: Vec<&Shell> = r.solids().collect();
+    assert_eq!(
+        solids.len(),
+        2,
+        "{:?}",
+        r.shells
+            .iter()
+            .map(|s| (s.state, s.faces.len()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(solids[0].faces.len(), 1280);
+    let (fa, fb) = (solids[0].faces.clone(), solids[1].faces.clone());
+    let (va, vb) = (solids[0].volume, solids[1].volume);
+    let run = |o: SolidOp, x: &[FaceId], y: &[FaceId]| {
+        let mut w = m.clone();
+        op(&mut w, o, x, y).unwrap_or_else(|e| panic!("{o}: {e}"));
+        assert!(w.check().is_valid(), "{o}: {:?}", w.check().problems);
+        total(&w)
+    };
+    let (u, i) = (
+        run(SolidOp::Union, &fa, &fb),
+        run(SolidOp::Intersect, &fa, &fb),
+    );
+    assert!(close(u + i, va + vb), "{u} {i} {va} {vb}");
+    let (sa, sb) = (
+        run(SolidOp::Subtract, &fa, &fb),
+        run(SolidOp::Subtract, &fb, &fa),
+    );
+    assert!(close(sa + i, va) && close(sb + i, vb), "{sa} {sb} {i}");
+    // The lens is between the two balls and well inside both.
+    assert!(i > 0.0 && i < va.min(vb));
+    // The same through Split: the three parts add up.
+    let v = m.solid_preview(SolidOp::Split, &fa, &fb).unwrap();
+    assert!(
+        close(v[0], sa) && close(v[1], i) && close(v[2], sb),
+        "{v:?}"
+    );
+    // And a ball inside a ball: a hollow ball.
+    let mut parts = Parts::default();
+    ball(&mut parts, DVec3::ZERO, 1000.0, 2);
+    ball(&mut parts, DVec3::new(50.0, 0.0, 0.0), 400.0, 2);
+    let m = parts.build();
+    let r = m.solid_report();
+    let solids: Vec<&Shell> = r.solids().collect();
+    let mut w = m.clone();
+    op(
+        &mut w,
+        SolidOp::Subtract,
+        &solids[0].faces,
+        &solids[1].faces,
+    )
+    .unwrap();
+    assert_sound(&w);
+    assert!(close(total(&w), solids[0].volume - solids[1].volume));
+}
+
+#[test]
+fn an_edit_with_too_many_new_edges_is_refused() {
+    // A bar whose two long walls are cut into strips, and a slab through both walls: every strip
+    // is cut twice on each wall, so the cut needs more than 10,000 new edges.
+    let n = 2_600usize;
+    let mut parts = Parts::default();
+    let (w, h, d) = (10.0, 100.0, 100.0);
+    let row = |parts: &mut Parts, y: f64, z: f64| -> Vec<usize> {
+        (0..=n)
+            .map(|k| parts.v(DVec3::new(k as f64 * w, y, z)))
+            .collect()
+    };
+    let (fb, ft) = (row(&mut parts, 0.0, 0.0), row(&mut parts, 0.0, h));
+    let (bb, bt) = (row(&mut parts, d, 0.0), row(&mut parts, d, h));
+    for k in 0..n {
+        parts.face(&[fb[k], fb[k + 1], ft[k + 1], ft[k]]);
+        parts.face(&[bb[k + 1], bb[k], bt[k], bt[k + 1]]);
+    }
+    let mut bottom: Vec<usize> = fb.clone();
+    bottom.extend(bb.iter().rev());
+    bottom.reverse();
+    parts.face(&bottom);
+    let mut top: Vec<usize> = ft.clone();
+    top.extend(bt.iter().rev());
+    parts.face(&top);
+    parts.face(&[fb[0], ft[0], bt[0], bb[0]]);
+    parts.face(&[fb[n], bb[n], bt[n], ft[n]]);
+    let slab = |parts: &mut Parts| {
+        let (x0, x1, y0, y1, z0, z1) = (-50.0, n as f64 * w + 50.0, -50.0, d + 50.0, 40.0, 60.0);
+        let c = |parts: &mut Parts, x, y, z| parts.v(DVec3::new(x, y, z));
+        let p: Vec<usize> = (0..8)
+            .map(|i| {
+                c(
+                    parts,
+                    if i & 1 == 0 { x0 } else { x1 },
+                    if i & 2 == 0 { y0 } else { y1 },
+                    if i & 4 == 0 { z0 } else { z1 },
+                )
+            })
+            .collect();
+        let centre = DVec3::new((x0 + x1) / 2.0, (y0 + y1) / 2.0, (z0 + z1) / 2.0);
+        for f in [
+            [0, 1, 3, 2],
+            [4, 6, 7, 5],
+            [0, 4, 5, 1],
+            [2, 3, 7, 6],
+            [0, 2, 6, 4],
+            [1, 5, 7, 3],
+        ] {
+            let q = [p[f[0]], p[f[1]], p[f[2]], p[f[3]]];
+            let n = (parts.vertices[q[1]] - parts.vertices[q[0]])
+                .cross(parts.vertices[q[2]] - parts.vertices[q[0]]);
+            let mid = (parts.vertices[q[0]] + parts.vertices[q[2]]) / 2.0;
+            if n.dot(mid - centre) >= 0.0 {
+                parts.face(&q);
+            } else {
+                parts.face(&[q[0], q[3], q[2], q[1]]);
+            }
+        }
+    };
+    let first_faces = parts.faces.len();
+    slab(&mut parts);
+    let m = parts.build();
+    assert!(m.problem().is_none(), "{:?}", m.problem());
+    let all: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
+    let (bar, slab_faces) = all.split_at(first_faces);
+    let s = m.solid_state(bar).unwrap();
+    assert!(s.is_solid(), "{:?} {}", s.state, s.open_edges.len());
+    let mut w = m.clone();
+    let before = w.clone();
+    let err = op(&mut w, SolidOp::Union, bar, slab_faces).unwrap_err();
+    assert!(matches!(err, SurfaceError::Limit { .. }), "{err}");
+    assert_eq!(w, before);
+}
+
+#[test]
+fn a_face_on_an_edge_of_a_solid_sticks_it_to_the_model() {
+    let (a, b) = (([0.0; 3], [K; 3]), ([500.0; 3], [1500.0; 3]));
+    let (mut m, fa, fb) = crossing(a, b);
+    // A fin: a face that uses the edge of the first box from (0,0,0) to (0,0,1000).
+    m.apply(&Edit::AddEdges {
+        edges: vec![
+            [[0.0, 0.0, 0.0], [0.0, -500.0, 0.0]],
+            [[0.0, -500.0, 0.0], [0.0, -500.0, K]],
+            [[0.0, -500.0, K], [0.0, 0.0, K]],
+        ],
+    })
+    .unwrap();
+    assert_eq!(m.face_count(), 13);
+    let before = m.clone();
+    let e = op(&mut m, SolidOp::Subtract, &fa, &fb).unwrap_err();
+    assert_eq!(e, SurfaceError::Solid(SolidError::Attached(Operand::First)));
+    assert_eq!(m, before);
+    // The solid of a face of the box is still the box, and the fin is a shell of its own.
+    assert_eq!(before.solid_of(fa[0]).unwrap(), fa);
+    let fin = before
+        .faces()
+        .map(|(id, _)| id)
+        .find(|id| !fa.contains(id) && !fb.contains(id))
+        .unwrap();
+    let shell = before.solid_state(&before.solid_of(fin).unwrap()).unwrap();
+    assert_eq!(shell.state, ShellState::Open);
+}
+
+#[test]
+fn names_texts_and_json_of_the_types() {
+    for (op, name) in [
+        (SolidOp::Union, "union"),
+        (SolidOp::Subtract, "subtract"),
+        (SolidOp::Intersect, "intersect"),
+        (SolidOp::Trim, "trim"),
+        (SolidOp::Split, "split"),
+    ] {
+        assert_eq!(op.name(), name);
+        assert_eq!(op.to_string(), name);
+        assert_eq!(serde_json::to_value(op).unwrap(), name);
+        assert_eq!(serde_json::from_value::<SolidOp>(name.into()).unwrap(), op);
+    }
+    assert_eq!(SolidOp::ALL.len(), 5);
+    assert_eq!(Operand::First.to_string(), "first");
+    assert_eq!(Operand::Second.to_string(), "second");
+    assert_eq!(OpenKind::Border.to_string(), "only one face uses it");
+    assert_eq!(
+        OpenKind::NonManifold.to_string(),
+        "three or more faces use it"
+    );
+    assert_eq!(
+        OpenKind::Reversed.to_string(),
+        "two faces use it the same way round"
+    );
+    let e = SolidError::Open {
+        which: Operand::Second,
+        count: 3,
+        first: EdgeId(9),
+        kind: OpenKind::Reversed,
+    };
+    assert_eq!(
+        e.to_string(),
+        "the second solid is not a closed solid: 3 edges are open (edge 9: two faces use it the same way round)"
+    );
+    // The error of a model is the error of the solid, with the same text.
+    assert_eq!(SurfaceError::Solid(e.clone()).to_string(), e.to_string());
+    let shell = serde_json::to_value(ShellState::SelfCrossing).unwrap();
+    assert_eq!(shell, "self_crossing");
+}
+
+#[test]
+fn solid_of_an_open_set_is_the_set_that_the_walk_found() {
+    let (mut m, faces) = one_box();
+    m.apply(&Edit::EraseFaces {
+        faces: vec![faces[5]],
+    })
+    .unwrap();
+    let found = m.solid_of(faces[0]).unwrap();
+    assert_eq!(found.len(), 5);
+    assert_eq!(m.solid_state(&found).unwrap().state, ShellState::Open);
+    // A model without faces has no shells and is not closed.
+    let r = SurfaceModel::new().solid_report();
+    assert!(r.shells.is_empty() && !r.is_closed() && r.open_edges().is_empty());
+}
+
+#[test]
+fn three_faces_on_one_edge_with_no_way_through_are_reported_not_guessed() {
+    // Three squares that share the edge from (0,0,0) to (1000,0,0), fronts all up: the walk
+    // finds no neighbour that looks away from the wedge and takes the nearest one.
+    let mut m = SurfaceModel::new();
+    for pts in [
+        [[0.0, 0.0, 0.0], [K, 0.0, 0.0], [K, K, 0.0], [0.0, K, 0.0]],
+        [[0.0, 0.0, 0.0], [K, 0.0, 0.0], [K, -K, 0.0], [0.0, -K, 0.0]],
+    ] {
+        m.apply(&Edit::AddEdges {
+            edges: (0..4).map(|i| [pts[i], pts[(i + 1) % 4]]).collect(),
+        })
+        .unwrap();
+    }
+    m.apply(&Edit::AddEdges {
+        edges: vec![
+            [[0.0, 0.0, 0.0], [0.0, 0.0, K]],
+            [[0.0, 0.0, K], [K, 0.0, K]],
+            [[K, 0.0, K], [K, 0.0, 0.0]],
+        ],
+    })
+    .unwrap();
+    let r = m.solid_report();
+    assert_eq!(r.shells.len() >= 1, true);
+    assert!(!r.is_closed());
+    assert!(r.shells.iter().all(|s| !s.is_solid()));
+    for (id, _) in m.faces() {
+        assert!(m.solid_of(id).is_some());
+    }
+}
+
+/// Timing of the solid tools on two balls of 20,480 triangles each (release build).
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn perf_two_big_balls() {
+    let mut parts = Parts::default();
+    ball(&mut parts, DVec3::ZERO, 1000.0, 5);
+    ball(&mut parts, DVec3::new(900.0, 150.0, 80.0), 800.0, 5);
+    let m = parts.build();
+    let t = std::time::Instant::now();
+    let r = m.solid_report();
+    let report = t.elapsed();
+    let solids: Vec<&Shell> = r.solids().collect();
+    assert_eq!(solids.len(), 2);
+    let (fa, fb) = (solids[0].faces.clone(), solids[1].faces.clone());
+    println!("faces {} report {report:?}", m.face_count());
+    let (va, vb) = (solids[0].volume, solids[1].volume);
+    let mut got = std::collections::BTreeMap::new();
+    for o in SolidOp::ALL {
+        let mut w = m.clone();
+        let t = std::time::Instant::now();
+        op(&mut w, o, &fa, &fb).unwrap();
+        println!("{o}: {:?}, {} faces after", t.elapsed(), w.face_count());
+        assert!(w.check().is_valid(), "{o}: {:?}", w.check().problems);
+        got.insert(o.name(), total(&w));
+    }
+    // The pieces next to the cut are thin slivers on dense meshes: the identities still hold.
+    assert!(close(got["union"] + got["intersect"], va + vb), "{got:?}");
+    assert!(close(got["subtract"] + got["intersect"], va), "{got:?}");
 }

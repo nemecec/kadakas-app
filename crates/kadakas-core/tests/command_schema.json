@@ -762,6 +762,37 @@
             "path"
           ],
           "type": "object"
+        },
+        {
+          "description": "Solid tools (MOD-09): a boolean operation of two closed solids of the model. `first` and\n`second` are the faces of the two solids (see `SurfaceModel::solid_of`); they must not\nshare a face. The result replaces the two solids. Subtract and Trim take `second` from\n`first`; Trim keeps `second`; Split makes three solids. An input that is not a closed\nsolid, a limit, or a result that is not a closed solid refuses the edit with a reason and\nchanges nothing. See the module `solid`.",
+          "properties": {
+            "action": {
+              "const": "solid",
+              "type": "string"
+            },
+            "first": {
+              "items": {
+                "$ref": "#/$defs/FaceId"
+              },
+              "type": "array"
+            },
+            "op": {
+              "$ref": "#/$defs/SolidOp"
+            },
+            "second": {
+              "items": {
+                "$ref": "#/$defs/FaceId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "action",
+            "op",
+            "first",
+            "second"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1809,6 +1840,36 @@
         "kind"
       ],
       "type": "object"
+    },
+    "SolidOp": {
+      "description": "The operation of the solid tools on two solids (`first`, `second`).",
+      "oneOf": [
+        {
+          "const": "union",
+          "description": "One solid that holds both.",
+          "type": "string"
+        },
+        {
+          "const": "subtract",
+          "description": "`first` less `second`; `second` is used up.",
+          "type": "string"
+        },
+        {
+          "const": "intersect",
+          "description": "The volume that both hold; both are used up.",
+          "type": "string"
+        },
+        {
+          "const": "trim",
+          "description": "`first` less `second`; `second` stays as it was.",
+          "type": "string"
+        },
+        {
+          "const": "split",
+          "description": "Three solids: `first` less `second`, the common part, and `second` less `first`.",
+          "type": "string"
+        }
+      ]
     },
     "SunSettings": {
       "description": "The sun: latitude, longitude, date and time.",
