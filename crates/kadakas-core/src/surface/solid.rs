@@ -25,7 +25,8 @@
 //! - **Union**: one solid that holds both. Faces inside the other solid go.
 //! - **Subtract**: `first` less `second`. `second` is used up: it is not in the model afterwards.
 //! - **Intersect**: only the volume that both hold. Both solids are used up.
-//! - **Trim**: like Subtract, and `second` stays in the model as it was.
+//! - **Trim**: like Subtract. `second` stays in the model, but it is split along the cut and
+//!   stuck to `first` (the pieces share the vertices and edges of the cut).
 //! - **Split**: three solids in place: `first` less `second`, the common part and `second` less
 //!   `first`. They touch with faces back to back and share the vertices of the cut.
 //!
@@ -75,7 +76,8 @@ pub enum SolidOp {
     Subtract,
     /// The volume that both hold; both are used up.
     Intersect,
-    /// `first` less `second`; `second` stays as it was.
+    /// `first` less `second`. `second` stays in the model, split along the cut and stuck to
+    /// `first` (they share the vertices and edges of the cut).
     Trim,
     /// Three solids: `first` less `second`, the common part, and `second` less `first`.
     Split,
@@ -127,8 +129,8 @@ impl std::fmt::Display for Operand {
 }
 
 /// Why a solid operation was refused. The model is unchanged after it. The texts are English, for
-/// agents and logs. The window shows the same reasons in the language of the UI (it looks for the
-/// phrases that are marked below).
+/// agents and logs. The window turns the variant into the language of the UI without ids (see
+/// `kadakas_ui_core::modeling::messages`).
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SolidError {
     /// "has no faces"
@@ -168,9 +170,17 @@ pub enum SolidError {
     /// "could not be cut"
     #[error("the solids could not be cut cleanly: {0}")]
     Cut(String),
-    /// "is not a closed solid" with "the result"
+    /// A solid of the result is not closed (the text says which edge).
     #[error("the result of the operation is not a closed solid: {0}")]
-    NotClosed(String),
+    ResultOpen(String),
+    /// The volumes of the result do not fit the volumes of the inputs and the common volume.
+    #[error(
+        "the volume of the result does not fit the volumes of the two solids, so it was not used"
+    )]
+    ResultVolume,
+    /// The result would give the model a problem that it did not have.
+    #[error("the result of the operation would make the model invalid: {0}")]
+    ResultInvalid(String),
 }
 
 impl SurfaceModel {

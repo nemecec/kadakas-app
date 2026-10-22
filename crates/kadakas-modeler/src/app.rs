@@ -206,11 +206,24 @@ pub struct ModelerApp {
     pub confirm: Option<Confirm>,
     /// The solid tools take the newer solid as the first one (MOD-09).
     pub solid_swap: bool,
-    /// The last preview of a solid operation: the revision, the selection (a hash), the order, the
-    /// operation, and the text.
-    #[allow(clippy::type_complexity)]
-    solid_hint:
-        std::cell::RefCell<Option<((u64, u64, bool, kadakas_core::surface::SolidOp), String)>>,
+    /// The previews of the solid operations for one revision, selection and order, by operation.
+    /// An operation runs on a copy once for each key, whatever the menu asks for.
+    solid_hint: std::cell::RefCell<SolidHints>,
+    /// How many times a solid operation was run on a copy to make a preview (for the tests).
+    pub solid_runs: std::cell::Cell<usize>,
+}
+
+/// The key of the previews of the solid tools: the revision, the selection (a hash) and the order.
+type SolidKey = (u64, u64, bool);
+
+/// The previews of the solid tools for one key.
+#[derive(Default)]
+struct SolidHints {
+    key: Option<SolidKey>,
+    done: Vec<(
+        kadakas_core::surface::SolidOp,
+        Result<String, modeling::solid::Problem>,
+    )>,
 }
 
 impl ModelerApp {
@@ -255,7 +268,8 @@ impl ModelerApp {
             tags: TagsState::default(),
             confirm: None,
             solid_swap: false,
-            solid_hint: std::cell::RefCell::new(None),
+            solid_hint: std::cell::RefCell::default(),
+            solid_runs: std::cell::Cell::new(0),
         }
     }
 
@@ -857,41 +871,53 @@ impl ModelerApp {
         modeling::solid::operands(self.session.editor.doc(), &self.edit.sub, self.solid_swap)
     }
 
-    /// The text for an item of the solid tools: what the operation would do, or why it cannot.
-    /// It runs the operation on a copy, so the last answer is kept for the same model, selection
-    /// and order.
-    pub fn solid_hint(&self, op: kadakas_core::surface::SolidOp) -> String {
+    /// The preview of an operation (what it would do, or why it is refused). It runs the operation
+    /// on a copy, once for each revision, selection and order, for each operation.
+    fn solid_preview(
+        &self,
+        op: kadakas_core::surface::SolidOp,
+    ) -> Result<String, modeling::solid::Problem> {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.edit.sub.hash(&mut h);
-        let key = (
-            self.session.editor.revision(),
-            h.finish(),
-            self.solid_swap,
-            op,
-        );
-        if let Some((k, text)) = &*self.solid_hint.borrow()
-            && *k == key
-        {
-            return text.clone();
+        let key = (self.session.editor.revision(), h.finish(), self.solid_swap);
+        let mut hints = self.solid_hint.borrow_mut();
+        if hints.key != Some(key) {
+            hints.key = Some(key);
+            hints.done.clear();
         }
-        let text = modeling::solid::preview_text(
+        if let Some((_, r)) = hints.done.iter().find(|(o, _)| *o == op) {
+            return r.clone();
+        }
+        self.solid_runs.set(self.solid_runs.get() + 1);
+        let r = modeling::solid::preview_result(
             self.session.editor.doc(),
             &self.edit.sub,
             self.solid_swap,
             op,
         );
-        *self.solid_hint.borrow_mut() = Some((key, text.clone()));
-        text
+        hints.done.push((op, r.clone()));
+        r
     }
 
-    /// A solid operation: one undo step. The status line says what was done, or why not.
+    /// The text for an item of the solid tools: what the operation would do, or why it cannot.
+    pub fn solid_hint(&self, op: kadakas_core::surface::SolidOp) -> String {
+        match self.solid_preview(op) {
+            Ok(t) | Err(modeling::solid::Problem::Refused(t)) => t,
+            Err(p) => p.text(),
+        }
+    }
+
+    /// A solid operation: one undo step. The status line says what was done, or why not. The
+    /// preview that the menu made is used, so the operation does not run twice.
     fn solid(&mut self, op: kadakas_core::surface::SolidOp) {
-        match modeling::solid::out(
+        let known = Some(self.solid_preview(op));
+        match modeling::solid::out_with(
             self.session.editor.doc(),
             &self.edit.sub,
             self.solid_swap,
             op,
+            known,
         ) {
             Ok(out) => {
                 self.edit.run(&mut self.session, out);

@@ -93,7 +93,7 @@ impl Soup {
         }
     }
 
-    /// The box around the soup, with the plane tolerance added.
+    /// The box around the triangles of the soup.
     pub fn bounds(&self) -> (DVec3, DVec3) {
         (self.lo, self.hi)
     }

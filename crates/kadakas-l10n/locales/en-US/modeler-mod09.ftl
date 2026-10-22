@@ -6,4 +6,7 @@ modeler-solid-swap = Swap Order
 modeler-solid-order-normal = The older solid is the first one again.
 modeler-solid-order-swapped = The newer solid is the first one now.
 modeler-entity-open-edges = Open edges
-modeler-entity-open-edges-value = { $count } edges; use Edit > Solid Tools > Check Solid
+modeler-entity-open-edges-value = { $count ->
+        [one] One edge
+       *[other] { $count } edges
+    }; use Edit > Solid Tools > Check Solid

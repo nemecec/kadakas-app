@@ -19,7 +19,7 @@ use kadakas_core::surface::{FaceId, ShellState, SolidOp};
 use kadakas_l10n::tr;
 
 use super::exec::Action;
-use super::messages::localize;
+use super::messages::localize_error;
 use super::scenes::model_of;
 use super::select::{Item, SubSelection};
 use super::tools::Out;
@@ -119,7 +119,7 @@ pub fn preview(doc: &Document, ops: &Operands, op: SolidOp) -> Result<String, Pr
     let m = model_of(doc, ops.model).ok_or(Problem::NoSelection)?;
     let v = m
         .solid_preview(op, &ops.first, &ops.second)
-        .map_err(|e| Problem::Refused(localize(&e.to_string())))?;
+        .map_err(|e| Problem::Refused(localize_error(&e)))?;
     let vol = |i: usize| cubic_metres(v[i]);
     Ok(match op {
         SolidOp::Union => tr!("uic-solid-done-union", volume = vol(0)),
@@ -135,10 +135,21 @@ pub fn preview(doc: &Document, ops: &Operands, op: SolidOp) -> Result<String, Pr
     })
 }
 
-/// The preview of an operation on the selection, as a text for the status line (the text of the
-/// refusal when it cannot run).
+/// The preview of an operation on the selection: the text for the status line, or why it cannot
+/// run. It runs the operation on a copy, so a caller that asks again for the same model and
+/// selection keeps the answer and gives it to [`out_with`].
+pub fn preview_result(
+    doc: &Document,
+    sub: &SubSelection,
+    swap: bool,
+    op: SolidOp,
+) -> Result<String, Problem> {
+    operands(doc, sub, swap).and_then(|o| preview(doc, &o, op))
+}
+
+/// The preview as one text for the status line (the text of the refusal when it cannot run).
 pub fn preview_text(doc: &Document, sub: &SubSelection, swap: bool, op: SolidOp) -> String {
-    match operands(doc, sub, swap).and_then(|o| preview(doc, &o, op)) {
+    match preview_result(doc, sub, swap, op) {
         Ok(t) | Err(Problem::Refused(t)) => t,
         Err(p) => p.text(),
     }
@@ -147,8 +158,23 @@ pub fn preview_text(doc: &Document, sub: &SubSelection, swap: bool, op: SolidOp)
 /// The step that runs an operation on the selection: one `edit_surface` edit, so one undo step.
 /// The message is the preview, shown when the step is done.
 pub fn out(doc: &Document, sub: &SubSelection, swap: bool, op: SolidOp) -> Result<Out, Problem> {
+    out_with(doc, sub, swap, op, None)
+}
+
+/// Like [`out`], with a preview that the caller has (from [`preview_result`] for the same model,
+/// selection, order and operation), so the operation is not run a second time to make the message.
+pub fn out_with(
+    doc: &Document,
+    sub: &SubSelection,
+    swap: bool,
+    op: SolidOp,
+    known: Option<Result<String, Problem>>,
+) -> Result<Out, Problem> {
     let ops = operands(doc, sub, swap)?;
-    let message = preview(doc, &ops, op)?;
+    let message = match known {
+        Some(r) => r?,
+        None => preview(doc, &ops, op)?,
+    };
     Ok(Out {
         actions: vec![Action::Edit {
             model: ops.model,

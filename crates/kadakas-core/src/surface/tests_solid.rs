@@ -822,8 +822,7 @@ proptest! {
                     prop_assert!(matches!(e, SurfaceError::Solid(_)), "{e}");
                     if generic(a, b) {
                         let empty = matches!(e, SurfaceError::Solid(SolidError::NoResult(_))) && want <= 0.0;
-                        let touching_sticky = false;
-                        prop_assert!(empty || touching_sticky, "{o} {a:?} {b:?}: {e}");
+                        prop_assert!(empty, "{o} {a:?} {b:?}: {e}");
                     }
                     results.push(None);
                 }
@@ -831,6 +830,25 @@ proptest! {
         }
         if let (Some(u), Some(i)) = (results[0], results[1]) {
             prop_assert!(close(u + i, vol(a) + vol(b)));
+        }
+        // Trim and Split on the same boxes: the same volumes, a sound model, or a refusal that
+        // changes nothing.
+        for o in [SolidOp::Trim, SolidOp::Split] {
+            let mut w = m.clone();
+            match op(&mut w, o, &fa, &fb) {
+                Ok(()) => {
+                    prop_assert!(w.check().is_valid(), "{o} {a:?} {b:?}: {:?}", w.check().problems);
+                    prop_assert!(w.problem().is_none());
+                }
+                Err(e) => {
+                    prop_assert_eq!(&w, &m, "{} {:?} {:?}: {}", o, a, b, e);
+                    if generic(a, b) {
+                        let empty = matches!(e, SurfaceError::Solid(SolidError::NoResult(_)))
+                            && (inter <= 0.0 || (o == SolidOp::Trim && a_less_b <= 0.0));
+                        prop_assert!(empty, "{o} {a:?} {b:?}: {e}");
+                    }
+                }
+            }
         }
         if generic(a, b) && common(a, b).is_some() {
             // Split gives the three parts.
@@ -1532,4 +1550,150 @@ fn perf_two_big_balls() {
     // The pieces next to the cut are thin slivers on dense meshes: the identities still hold.
     assert!(close(got["union"] + got["intersect"], va + vb), "{got:?}");
     assert!(close(got["subtract"] + got["intersect"], va), "{got:?}");
+}
+
+// ---- lines and circles of the person, curves cut in part ----------------------------------------
+
+fn edge_between(m: &SurfaceModel, p: P, q: P) -> bool {
+    let near = |v: VertexId, p: P| {
+        m.vertex(v)
+            .is_some_and(|x| x.distance(DVec3::from(p)) < 1e-6)
+    };
+    m.edges()
+        .any(|(_, e)| (near(e.v[0], p) && near(e.v[1], q)) || (near(e.v[0], q) && near(e.v[1], p)))
+}
+
+/// A box with a line across its top and a circle on its top, and a second box. The solids are the
+/// faces of the two shells.
+fn box_with_marks(b: Box3) -> (SurfaceModel, Vec<FaceId>, Vec<FaceId>) {
+    let a = ([0.0; 3], [K; 3]);
+    let mut m = SurfaceModel::new();
+    draw(&mut m, a);
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[0.0, 300.0, K], [K, 300.0, K]]],
+    })
+    .unwrap();
+    m.apply(&Edit::AddCurve {
+        points: ngon(250.0, 650.0, K, 100.0, 24),
+        closed: true,
+        faceted: false,
+    })
+    .unwrap();
+    draw(&mut m, b);
+    let inward: Vec<FaceId> = m
+        .solid_report()
+        .shells
+        .iter()
+        .filter(|s| s.state == ShellState::Inverted)
+        .flat_map(|s| s.faces.clone())
+        .collect();
+    m.apply(&Edit::ReverseFaces { faces: inward }).unwrap();
+    let r = m.solid_report();
+    let solids: Vec<&Shell> = r.solids().collect();
+    assert_eq!(
+        solids.len(),
+        2,
+        "{:?}",
+        r.shells
+            .iter()
+            .map(|s| (s.state, s.faces.len()))
+            .collect::<Vec<_>>()
+    );
+    let (x, y) = (solids[0].faces.clone(), solids[1].faces.clone());
+    (m, x, y)
+}
+
+#[test]
+fn a_line_and_a_circle_of_the_person_survive_a_union() {
+    for (name, b) in [
+        ("disjoint", ([3.0 * K; 3], [4.0 * K; 3])),
+        ("corner", ([500.0; 3], [1500.0; 3])),
+    ] {
+        let (mut m, fa, fb) = box_with_marks(b);
+        let tops = |m: &SurfaceModel| {
+            m.faces()
+                .filter(|(_, f)| f.plane.normal.z > 0.99 && (f.plane.offset - K).abs() < 1e-6)
+                .count()
+        };
+        // The line cuts the top in two, the circle makes a disc and a hole.
+        assert_eq!(tops(&m), 3, "{name}");
+        op(&mut m, SolidOp::Union, &fa, &fb).unwrap();
+        assert_sound(&m);
+        assert!(
+            edge_between(&m, [0.0, 300.0, K], [K, 300.0, K]),
+            "{name}: the line"
+        );
+        assert!(
+            m.curves().any(|(_, es)| es.len() == 24),
+            "{name}: the circle"
+        );
+        let disc = m
+            .faces()
+            .filter(|(_, f)| f.plane.normal.z > 0.99 && (f.plane.offset - K).abs() < 1e-6)
+            .filter(|(_, f)| f.outer.len() == 24)
+            .count();
+        assert_eq!(disc, 1, "{name}: the disc inside the circle");
+        assert!(tops(&m) >= 3, "{name}");
+    }
+}
+
+#[test]
+fn a_curve_cut_in_part_stays_as_chains() {
+    let mut m = SurfaceModel::new();
+    m.apply(&Edit::AddCurve {
+        points: ngon(500.0, 500.0, 0.0, 300.0, 24),
+        closed: true,
+        faceted: false,
+    })
+    .unwrap();
+    let disc = m.faces().next().unwrap().0;
+    let up = m.face(disc).unwrap().plane.normal.z > 0.0;
+    m.apply(&Edit::PushPull {
+        face: disc,
+        distance: if up { K } else { -K },
+    })
+    .unwrap();
+    assert!(m.curves().count() >= 1);
+    let before: usize = m.curves().map(|(_, es)| es.len()).sum();
+    // A box over the half of the cylinder where x is above 520.
+    let b = ([520.0, -500.0, -500.0], [1500.0, 1500.0, 1500.0]);
+    draw(&mut m, b);
+    let inward: Vec<FaceId> = m
+        .solid_report()
+        .shells
+        .iter()
+        .filter(|s| s.state == ShellState::Inverted)
+        .flat_map(|s| s.faces.clone())
+        .collect();
+    m.apply(&Edit::ReverseFaces { faces: inward }).unwrap();
+    let r = m.solid_report();
+    let solids: Vec<&Shell> = r.solids().collect();
+    assert_eq!(solids.len(), 2);
+    let (cyl, bx) = if solids[0].faces.len() > 6 {
+        (solids[0].faces.clone(), solids[1].faces.clone())
+    } else {
+        (solids[1].faces.clone(), solids[0].faces.clone())
+    };
+    op(&mut m, SolidOp::Subtract, &cyl, &bx).unwrap();
+    assert_sound(&m);
+    let chains: Vec<Vec<EdgeId>> = m.curves().map(|(_, es)| es.clone()).collect();
+    assert!(!chains.is_empty(), "the curves are not dropped");
+    let total: usize = chains.iter().map(Vec::len).sum();
+    assert!(
+        total >= before / 3 && total <= before + 4,
+        "{total} of {before}"
+    );
+    for es in &chains {
+        assert!(!es.is_empty());
+        for e in es {
+            assert!(m.edge(*e).is_some());
+        }
+        // Each chain is one run: the edges meet one after the other.
+        for w in es.windows(2) {
+            let (p, q) = (m.edge(w[0]).unwrap().v, m.edge(w[1]).unwrap().v);
+            assert!(p.iter().any(|v| q.contains(v)), "{es:?}");
+        }
+    }
+    // More than one piece of curve: the top and the bottom circle.
+    assert!(chains.len() >= 2, "{chains:?}");
 }

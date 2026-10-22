@@ -22,18 +22,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use glam::DVec3;
 use serde_json::Value;
 
 use super::super::arrange::reversed;
 use super::super::check::Problem;
-use super::super::edit::{self, ATTR_BACK_MATERIAL, ATTR_MATERIAL};
+use super::super::edit::{self, ATTR_BACK_MATERIAL, ATTR_MATERIAL, rechain};
 use super::super::geom::{self, on_plane};
+use super::super::index::BoxTree;
 use super::super::topo::Topo;
 use super::super::{
-    Edge, EdgeId, Edit, Face, FaceId, IntersectScope, SurfaceError, SurfaceModel, VertexId, key,
+    CurveId, Edge, EdgeId, Edit, Face, FaceId, IntersectScope, SurfaceError, SurfaceModel,
+    VertexId, key,
 };
 use super::locate::{Soup, Where, samples};
-use super::shell::{ShellState, crossings_of, state_with};
+use super::shell::{ShellState, crossings_of, measure, state_with};
 use super::{Operand, SolidError, SolidOp};
 
 /// The attribute that tells a piece which solid it came from, in the copy only.
@@ -314,25 +317,32 @@ fn turned(f: &Face) -> Face {
     g
 }
 
-/// Removes the edges that no face uses, and the vertices that no edge uses.
+/// Removes the edges that no face uses, and the vertices that no edge uses. A curve that loses
+/// edges stays as the chains that are left (the rule of MOD-06).
 fn prune(res: &mut SurfaceModel) {
     let used: BTreeSet<(VertexId, VertexId)> = res
         .faces
         .values()
         .flat_map(|f| f.uses().map(|(a, b)| key(a, b)).collect::<Vec<_>>())
         .collect();
-    let gone: Vec<EdgeId> = res
+    let gone: BTreeSet<EdgeId> = res
         .edges
         .iter()
         .filter(|(_, e)| !used.contains(&e.key()))
         .map(|(id, _)| *id)
         .collect();
-    for id in gone {
-        res.edges.remove(&id);
-        res.edge_attrs.remove(&id);
+    let mut broken: BTreeSet<CurveId> = BTreeSet::new();
+    for (c, es) in res.curves.iter_mut() {
+        if es.iter().any(|e| gone.contains(e)) {
+            es.retain(|e| !gone.contains(e));
+            broken.insert(*c);
+        }
     }
-    res.curves
-        .retain(|_, es| es.iter().all(|e| res.edges.contains_key(e)));
+    for id in &gone {
+        res.edges.remove(id);
+        res.edge_attrs.remove(id);
+    }
+    rechain(res, &broken);
     let ends: BTreeSet<VertexId> = res.edges.values().flat_map(|e: &Edge| e.v).collect();
     res.vertices.retain(|v, _| ends.contains(v));
 }
@@ -350,11 +360,54 @@ fn same_paint(f: &Face, g: &Face) -> bool {
         .all(|k| f.attrs.get(*k) == g.attrs.get(*k))
 }
 
+/// The edges of the solids as they were, to tell the lines of the person from the cut.
+struct Original {
+    segs: Vec<(DVec3, DVec3)>,
+    tree: BoxTree,
+    /// The ids from here up were made by the cut.
+    start: u32,
+}
+
+impl Original {
+    fn of(sub: &SurfaceModel) -> Original {
+        let segs: Vec<(DVec3, DVec3)> = sub
+            .edges
+            .values()
+            .map(|e| (sub.vertices[&e.v[0]], sub.vertices[&e.v[1]]))
+            .collect();
+        let tree = BoxTree::new(
+            segs.iter()
+                .enumerate()
+                .map(|(i, (a, b))| (a.min(*b), a.max(*b), i as u32))
+                .collect(),
+        );
+        Original {
+            segs,
+            tree,
+            start: sub.next_id,
+        }
+    }
+
+    /// True if the point lies on an edge that the solids had (a line, a circle, a border).
+    fn holds(&self, p: DVec3) -> bool {
+        let pad = DVec3::splat(geom::tol(&[p]) * 2.0);
+        let mut found = false;
+        self.tree.query(p - pad, p + pad, &mut |i| {
+            let (a, b) = self.segs[i as usize];
+            found |= geom::point_segment(p, a, b).0 <= geom::tol(&[a, b, p]);
+        });
+        found
+    }
+}
+
 /// Merges neighbours of one solid that lie in one plane, look the same way and have the same
-/// paint (the seams that the cut left). A seam used by more than two faces stays.
+/// paint, along the seams that the cut made. An edge that the solids had before (a line or a
+/// circle of the person, also where the cut split it) is never erased, and a seam used by more
+/// than two faces stays.
 fn tidy(
     res: &mut SurfaceModel,
     group: &mut BTreeMap<FaceId, usize>,
+    original: &Original,
     notes: &mut Vec<String>,
 ) -> Result<(), SurfaceError> {
     let mut by_edge: BTreeMap<(VertexId, VertexId), Vec<FaceId>> = BTreeMap::new();
@@ -368,11 +421,14 @@ fn tidy(
     for (k, fs) in &by_edge {
         let [f, g] = fs.as_slice() else { continue };
         let (ff, gf) = (&res.faces[f], &res.faces[g]);
-        if group[f] == group[g]
-            && same_paint(ff, gf)
-            && flush(res, ff, gf)
-            && let Some(e) = topo.edge(k.0, k.1)
-        {
+        if group[f] != group[g] || !same_paint(ff, gf) || !flush(res, ff, gf) {
+            continue;
+        }
+        let Some(e) = topo.edge(k.0, k.1) else {
+            continue;
+        };
+        let mid = (res.vertices[&k.0] + res.vertices[&k.1]) / 2.0;
+        if e.0 >= original.start && !original.holds(mid) {
             seams.push(e);
         }
     }
@@ -409,6 +465,7 @@ pub(super) fn run(
 
     // 2. Copy and cut.
     let mut sub = copy_of(m, &topo, &a, &b);
+    let original = Original::of(&sub);
     match sub.apply(&Edit::IntersectFaces {
         scope: IntersectScope::Model,
         faces: Vec::new(),
@@ -450,6 +507,9 @@ pub(super) fn run(
     };
     let (soup_a, soup_b) = (soup(&pa)?, soup(&pb)?);
     let mut entries: Vec<(FaceId, usize, bool)> = Vec::new();
+    // The surface of the common volume: the pieces of the first solid in or on the second, and
+    // the pieces of the second in the first.
+    let mut common: BTreeSet<FaceId> = BTreeSet::new();
     for (ids, side, other) in [(&pa, Side::A, &soup_b), (&pb, Side::B, &soup_a)] {
         for &id in ids {
             let at = if roles_of(&sub.faces[&id]) == (true, true) {
@@ -457,11 +517,18 @@ pub(super) fn run(
             } else {
                 class_of(&sub, id, other)?
             };
+            if matches!(
+                (side, at),
+                (Side::A, Class::In | Class::OnSame) | (Side::B, Class::In)
+            ) {
+                common.insert(id);
+            }
             for (g, flip) in fates(op, side, at) {
                 entries.push((id, g, flip));
             }
         }
     }
+    let common_volume = measure(&sub, &common).0;
     entries.sort_by_key(|(id, g, flip)| (*id, *g, *flip));
     entries.dedup();
 
@@ -488,7 +555,7 @@ pub(super) fn run(
     prune(&mut res);
 
     // 5. Tidy.
-    tidy(&mut res, &mut group, notes)?;
+    tidy(&mut res, &mut group, &original, notes)?;
 
     // 6. Verify.
     let topo_r = Topo::of(&res);
@@ -509,7 +576,7 @@ pub(super) fn run(
         }
         let s = state_with(&res, &topo_r, &set, &[]);
         if s.state != ShellState::Solid {
-            return Err(SurfaceError::Solid(SolidError::NotClosed(
+            return Err(SurfaceError::Solid(SolidError::ResultOpen(
                 match s.open_edges.first() {
                     Some(o) => format!("edge {} is open ({})", o.edge, o.kind),
                     None => format!("{:?}", s.state).to_lowercase(),
@@ -518,42 +585,43 @@ pub(super) fn run(
         }
         volumes.push(s.volume);
     }
-    expect_volumes(op, sa.volume, sb.volume, &volumes)?;
+    expect_volumes(op, sa.volume, sb.volume, common_volume, &volumes)?;
 
     // 7. Put in.
     put_in(m, &topo, &a, &b, res);
     edit::check_limits(m)?;
     if let Some(p) = m.problem() {
-        return Err(SurfaceError::Solid(SolidError::NotClosed(p)));
+        return Err(SurfaceError::Solid(SolidError::ResultInvalid(p)));
     }
     let after = m.check();
     if let Some(p) = after.problems.iter().find(|p| !before.problems.contains(p)) {
-        return Err(SurfaceError::Solid(SolidError::NotClosed(p.to_string())));
+        return Err(SurfaceError::Solid(SolidError::ResultInvalid(
+            p.to_string(),
+        )));
     }
     Ok(Outcome { volumes })
 }
 
-/// The volumes of the result must fit the volumes of the inputs; if they do not, a piece was
-/// kept or dropped wrongly and the result is not used.
-fn expect_volumes(op: SolidOp, va: f64, vb: f64, got: &[f64]) -> Result<(), SurfaceError> {
+/// The volumes of the result must be the exact ones. With `i` the common volume (from the pieces
+/// in both solids, found before the rules of the operation were applied): the common part is
+/// `i`, a union is `va + vb - i`, a subtract is `va - i`, and Split adds up the same way. `i` must
+/// be between 0 and the smaller input. If they differ, a piece was kept or dropped wrongly and
+/// the result is not used.
+fn expect_volumes(op: SolidOp, va: f64, vb: f64, i: f64, got: &[f64]) -> Result<(), SurfaceError> {
     let tol = 1e-6 * (va + vb);
-    let ok = match op {
-        SolidOp::Union => got[0] >= va.max(vb) - tol && got[0] <= va + vb + tol,
-        SolidOp::Intersect => got[0] >= -tol && got[0] <= va.min(vb) + tol,
-        SolidOp::Subtract => got[0] >= va - vb - tol && got[0] <= va + tol,
-        SolidOp::Trim => {
-            got[0] >= va - vb - tol && got[0] <= va + tol && (got[1] - vb).abs() <= tol
-        }
-        SolidOp::Split => {
-            (got[0] + got[1] - va).abs() <= tol && (got[1] + got[2] - vb).abs() <= tol
-        }
-    };
+    let near = |x: f64, want: f64| (x - want).abs() <= tol;
+    let ok = (-tol..=va.min(vb) + tol).contains(&i)
+        && match op {
+            SolidOp::Union => near(got[0], va + vb - i),
+            SolidOp::Intersect => near(got[0], i),
+            SolidOp::Subtract => near(got[0], va - i),
+            SolidOp::Trim => near(got[0], va - i) && near(got[1], vb),
+            SolidOp::Split => near(got[0], va - i) && near(got[1], i) && near(got[2], vb - i),
+        };
     if ok {
         Ok(())
     } else {
-        Err(SurfaceError::Solid(SolidError::NotClosed(
-            "its volume does not fit the volumes of the two solids".into(),
-        )))
+        Err(SurfaceError::Solid(SolidError::ResultVolume))
     }
 }
 
@@ -655,19 +723,23 @@ mod tests {
 
     #[test]
     fn volumes_that_do_not_fit_are_refused() {
-        let (va, vb) = (8.0, 8.0);
-        assert!(expect_volumes(SolidOp::Union, va, vb, &[12.0]).is_ok());
-        assert!(expect_volumes(SolidOp::Union, va, vb, &[17.0]).is_err());
-        assert!(expect_volumes(SolidOp::Union, va, vb, &[7.0]).is_err());
-        assert!(expect_volumes(SolidOp::Intersect, va, vb, &[4.0]).is_ok());
-        assert!(expect_volumes(SolidOp::Intersect, va, vb, &[9.0]).is_err());
-        assert!(expect_volumes(SolidOp::Subtract, va, vb, &[4.0]).is_ok());
-        assert!(expect_volumes(SolidOp::Subtract, va, vb, &[9.0]).is_err());
-        assert!(expect_volumes(SolidOp::Trim, va, vb, &[4.0, 8.0]).is_ok());
-        assert!(expect_volumes(SolidOp::Trim, va, vb, &[4.0, 7.0]).is_err());
-        assert!(expect_volumes(SolidOp::Split, va, vb, &[4.0, 4.0, 4.0]).is_ok());
-        let e = expect_volumes(SolidOp::Split, va, vb, &[4.0, 5.0, 4.0]).unwrap_err();
-        assert!(matches!(e, SurfaceError::Solid(SolidError::NotClosed(_))));
+        let (va, vb, i) = (8.0, 8.0, 4.0);
+        assert!(expect_volumes(SolidOp::Union, va, vb, i, &[12.0]).is_ok());
+        assert!(expect_volumes(SolidOp::Union, va, vb, i, &[13.0]).is_err());
+        assert!(expect_volumes(SolidOp::Union, va, vb, i, &[11.0]).is_err());
+        assert!(expect_volumes(SolidOp::Intersect, va, vb, i, &[4.0]).is_ok());
+        assert!(expect_volumes(SolidOp::Intersect, va, vb, i, &[5.0]).is_err());
+        assert!(expect_volumes(SolidOp::Subtract, va, vb, i, &[4.0]).is_ok());
+        assert!(expect_volumes(SolidOp::Subtract, va, vb, i, &[5.0]).is_err());
+        assert!(expect_volumes(SolidOp::Trim, va, vb, i, &[4.0, 8.0]).is_ok());
+        assert!(expect_volumes(SolidOp::Trim, va, vb, i, &[4.0, 7.0]).is_err());
+        assert!(expect_volumes(SolidOp::Split, va, vb, i, &[4.0, 4.0, 4.0]).is_ok());
+        let e = expect_volumes(SolidOp::Split, va, vb, i, &[4.0, 5.0, 4.0]).unwrap_err();
+        assert_eq!(e, SurfaceError::Solid(SolidError::ResultVolume));
+        // The common volume is between 0 and the smaller input.
+        assert!(expect_volumes(SolidOp::Union, va, vb, 9.0, &[7.0]).is_err());
+        assert!(expect_volumes(SolidOp::Union, va, vb, -1.0, &[17.0]).is_err());
+        assert!(expect_volumes(SolidOp::Union, va, vb, 0.0, &[16.0]).is_ok());
     }
 
     fn cuboid(lo: [f64; 3], hi: [f64; 3]) -> Edit {

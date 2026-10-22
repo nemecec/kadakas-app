@@ -487,8 +487,8 @@ One edit does one operation: `edit_surface` with `{"action": "solid", "op": "uni
 - `union`: one solid that holds both.
 - `subtract`: `first` less `second`. `second` is used up.
 - `intersect`: only the volume that both hold. Both are used up.
-- `trim`: like subtract. `second` stays in the model as it was.
-- `split`: three solids in place: `first` less `second`, the common part and `second` less `first`. They touch with faces back to back and share the vertices of the cut. A part that would be empty is left out.
+- `trim`: like subtract. `second` stays in the model, but it is split along the cut and stuck to `first`. The two share the vertices and edges of the cut, and the cut faces lie back to back.
+- `split`: three solids in place: `first` less `second`, the common part and `second` less `first`. They touch with faces back to back and are stuck to each other along the cut, as in trim. A part that would be empty is left out.
 
 How it works:
 
@@ -496,8 +496,8 @@ How it works:
 2. A copy of the model that holds only the faces of the two solids is cut with Intersect Faces. Faces of one solid that the other crosses are split along the crossing. A crossing that is too small to cut is a refusal.
 3. Each piece is wholly inside, outside or on the surface of the other solid. A ray cast against the triangles of the other solid tells which. A point on the surface (within the plane tolerance) is told by the direction of the face, the same way or the opposite way. If the points of one piece disagree, the piece was not cut and the operation is refused.
 4. The rules of the operation keep, drop or turn over each piece. A face that both solids use is on the surface of both, looking the same way. Two solids that share a plane in one model share the faces there.
-5. Pieces in one plane with the same direction and the same paint merge again. Edges and vertices that no kept face uses go. Soft and smooth edges, curves and paint stay with their pieces.
-6. The solids of the result must be closed and must have the volumes that the operation gives. Union is at least the larger input and at most the sum. Intersect is at most the smaller. Subtract is the first less the common part. Split adds up to both inputs. The model must have no problem that it did not have before.
+5. Pieces in one plane with the same direction and the same paint merge again, but only along seams that the cut made. A line or a circle that the person drew is never merged away, also where the cut crosses it. Edges and vertices that no kept face uses go. A curve that loses edges stays as the chains that are left (the rule of MOD-06). Soft and smooth edges and paint stay with their pieces.
+6. The solids of the result must be closed. The common volume `I` is the volume of the surface of the pieces of the first solid that are in or on the second, and the pieces of the second that are in the first. It is found before the rules of the operation are applied, so it is a check that does not depend on them. `I` must be between 0 and the smaller input. The result must have exactly these volumes: union `va + vb - I`, subtract and the cut solid of trim `va - I`, intersect `I`, the kept solid of trim `vb`, and split `va - I`, `I` and `vb - I` (to 1 part in 1,000,000). The model must have no problem that it did not have before.
 7. The result replaces the geometry of the two solids.
 
 The edit is deterministic. The same model and the same edit give the same ids. The edit cannot be replayed on another model for collaboration (the solids are sets of faces), so a concurrent edit by another person shows as a conflict.
@@ -513,20 +513,22 @@ The edit changes nothing and gives a reason. The core text is English with ids, 
 - an input is stuck to other geometry (shares an edge or a vertex): make a group of it first
 - the result would be empty (no common volume for intersect, or the second solid holds the first for subtract)
 - the cut is too small, or a piece is cut only in part
-- the result is not a closed solid (for example two solids that touch at an edge, which would leave an edge with four faces)
+- the result is not a closed solid (for example two solids that touch at an edge, which would leave an edge with four faces), its volumes do not fit the volumes of the inputs and `I`, or it would give the model a problem that it did not have
 - a limit would be passed: a cut makes at most `MAX_EDIT_EDGES` (10,000) new edges, and the result must fit the limits of the model
+
+**Known limit.** After split and trim the pieces share vertices and edges with the other pieces. A later solid operation on one of them is refused as stuck to other geometry. Make Group on a piece gives it a model of its own. The solid tools do not yet work across models, so this is only a way to keep the piece apart. A tool that unsticks the pieces is not done.
 
 Two boxes that touch with a shared face, built one on the other in one model, are one complex that no solid owns. The shared face cannot look out of both. The tools refuse it (the reason is an edge that two faces use the same way round). To join such boxes, erase the shared face.
 
 ### Modeler
 
-Edit > Solid Tools holds Check Solid, Union, Subtract, Intersect, Trim, Split and Swap Order. An operation works on the selected faces of one model. The selection must name exactly two solids. The solid of each selected face is found by the walk. The older solid (the lower face id) is the first one. Swap Order makes the newer one the first. The items are disabled with the reason as a tooltip when the selection does not name two solids. An enabled item shows the preview as a tooltip: the volume of the result, or the reason the operation would be refused. The preview runs the operation on a copy. Running the item does the operation and shows the same text in the status line. A refusal shows in the status line and changes nothing. The code is in `kadakas_ui_core::modeling::solid` and `kadakas-modeler/src/menu.rs`.
+Edit > Solid Tools holds Check Solid, Union, Subtract, Intersect, Trim, Split and Swap Order. An operation works on the selected faces of one model. The selection must name exactly two solids. The solid of each selected face is found by the walk. The older solid (the lower face id) is the first one. Swap Order makes the newer one the first. The items are disabled with the reason as a tooltip when the selection does not name two solids. An enabled item shows the preview as a tooltip: the volume of the result, or the reason the operation would be refused. The preview runs the operation on a copy, and only for the item under the pointer. It is kept for the revision, the selection and the order, so each of the five operations runs once on a copy. Running the item uses that preview and does not run the operation a second time. It shows the same text in the status line. A refusal shows in the status line and changes nothing. The window turns the typed refusal (`SolidError`) into its text, not the English text. The code is in `kadakas_ui_core::modeling::solid` and `kadakas-modeler/src/menu.rs`.
 
 ### Tests
 
 - Unit tests of the core (`surface/tests_solid.rs`, `surface/solid/`): nine cases of two boxes (crossing, sharing planes, plus sign, nested, nested sharing a corner or a wall, disjoint, the same box twice, a post through a slab), the report for open, reversed, inward, flat and crossing shells, refusals, curved solids, a tube, two balls of 1,280 triangles, the limit of new edges, and the helpers of the ray cast.
-- Property tests: for boxes on a grid (planes, edges and corners shared often) and for a turned box, `vol(A union B) + vol(A intersect B) = vol(A) + vol(B)` and `vol(A subtract B) + vol(A intersect B) = vol(A)`. A refusal changes nothing.
-- Integration tests (`crates/kadakas-core/tests/solid_tools.rs`): each operation is one undo step and comes back with undo and redo, a refusal makes no step, the edit and the report are JSON.
+- Property tests: for boxes on a grid (also Trim and Split) (planes, edges and corners shared often) and for a turned box, `vol(A union B) + vol(A intersect B) = vol(A) + vol(B)` and `vol(A subtract B) + vol(A intersect B) = vol(A)`. A refusal changes nothing.
+- Integration tests (`crates/kadakas-core/tests/solid_tools.rs`): each operation is one undo step and comes back with undo and redo, a refusal makes no step, the edit and the report are JSON. Also lines and circles of the person that survive a union, a cylinder cut in half that keeps its curves as chains, and the count of previews in the window.
 - Tests of the window and of `ui-core`: operands, order, preview in both languages, one undo step, refusals without ids, Check Solid, the menu.
 
 ## Clean room

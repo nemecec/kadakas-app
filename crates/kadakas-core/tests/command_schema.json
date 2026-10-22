@@ -764,7 +764,7 @@
           "type": "object"
         },
         {
-          "description": "Solid tools (MOD-09): a boolean operation of two closed solids of the model. `first` and\n`second` are the faces of the two solids (see `SurfaceModel::solid_of`); they must not\nshare a face. The result replaces the two solids. Subtract and Trim take `second` from\n`first`; Trim keeps `second`; Split makes three solids. An input that is not a closed\nsolid, a limit, or a result that is not a closed solid refuses the edit with a reason and\nchanges nothing. See the module `solid`.",
+          "description": "Solid tools (MOD-09): a boolean operation of two closed solids of the model. `first` and\n`second` are the faces of the two solids (see `SurfaceModel::solid_of`). A face that both\nsolids use (two boxes through each other in one plane) may be in both lists. The result\nreplaces the two solids. Subtract and Trim take `second` from `first`. Trim keeps `second`,\nsplit along the cut and stuck to `first`. Split makes three solids. An input that is not a\nclosed solid, a limit, or a result that is not a closed solid refuses the edit with a\nreason and changes nothing. See the module `solid`.",
           "properties": {
             "action": {
               "const": "solid",
@@ -1861,7 +1861,7 @@
         },
         {
           "const": "trim",
-          "description": "`first` less `second`; `second` stays as it was.",
+          "description": "`first` less `second`. `second` stays in the model, split along the cut and stuck to\n`first` (they share the vertices and edges of the cut).",
           "type": "string"
         },
         {

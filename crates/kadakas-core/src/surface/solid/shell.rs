@@ -213,7 +213,7 @@ fn walk(m: &SurfaceModel, uses: &Uses, seed: FaceId) -> BTreeSet<FaceId> {
 }
 
 /// The volume (mm³) and the area (mm²) of the faces, and the size of their coordinates.
-fn measure(m: &SurfaceModel, set: &BTreeSet<FaceId>) -> (f64, f64, f64) {
+pub(super) fn measure(m: &SurfaceModel, set: &BTreeSet<FaceId>) -> (f64, f64, f64) {
     let Some(origin) = set
         .iter()
         .next()

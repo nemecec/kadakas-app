@@ -5,6 +5,7 @@ use super::*;
 use kadakas_core::model::ObjectId;
 use kadakas_core::surface::{Edit, FaceId, ShellState, SolidOp};
 use kadakas_ui_core::modeling::Item;
+use kadakas_ui_core::modeling::solid::Problem;
 
 type P = [f64; 3];
 
@@ -138,7 +139,7 @@ fn a_refusal_is_shown_in_the_status_line_and_changes_nothing() {
     app.run(Cmd::Solid(SolidOp::Subtract), size(&app));
     assert_eq!(
         app.status,
-        tr!("uic-solid-refused-open", which = tr!("uic-solid-first")),
+        tr!("uic-solid-refused-open", which = "first"),
         "{}",
         app.status
     );
@@ -259,4 +260,36 @@ fn entity_info_names_the_open_edges() {
         shown.contains(&tr!("modeler-entity-open-edges-value", count = 4)),
         "{shown}"
     );
+}
+
+#[test]
+fn a_preview_is_made_once_for_each_operation_and_the_click_reuses_it() {
+    let (_ctx, mut app, _t) = top_view();
+    let (id, a, b) = two_solids(&mut app);
+    select_faces(&mut app, id, &[a[0], b[0]]);
+    // Many frames ask for the five items: each operation runs once on a copy, not once a frame.
+    for _ in 0..3 {
+        for op in SolidOp::ALL {
+            assert!(!app.solid_hint(op).is_empty());
+        }
+    }
+    assert_eq!(app.solid_runs.get(), 5);
+    // Running an item uses the preview that is there.
+    app.run(Cmd::Solid(SolidOp::Union), size(&app));
+    assert_eq!(app.solid_runs.get(), 5);
+    assert_eq!(app.status, tr!("uic-solid-done-union", volume = "1.875"));
+    // Another order or selection is another key.
+    let r = surface(&app).solid_report();
+    let s: Vec<_> = r.solids().collect();
+    assert_eq!(s.len(), 1);
+    let f = s[0].faces[0];
+    select_faces(&mut app, id, &[f]);
+    let _ = app.solid_hint(SolidOp::Union);
+    assert_eq!(app.solid_runs.get(), 6, "a new selection is a new key");
+    assert_eq!(
+        app.solid_hint(SolidOp::Union),
+        Problem::Count(1).text(),
+        "one solid: there is nothing to join"
+    );
+    assert_eq!(app.solid_runs.get(), 6);
 }

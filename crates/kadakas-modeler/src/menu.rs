@@ -100,15 +100,13 @@ pub fn solid_menu(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
         let operands = app.solid_operands();
         for op in SolidOp::ALL {
             let label = kadakas_ui_core::modeling::solid::op_name(op);
-            let text = match &operands {
-                Ok(_) => app.solid_hint(op),
-                Err(p) => p.text(),
-            };
             let button = ui.add_enabled(operands.is_ok(), egui::Button::new(label));
-            let button = if operands.is_ok() {
-                button.on_hover_text(text)
-            } else {
-                button.on_disabled_hover_text(text)
+            // The preview runs the operation on a copy: only for the item under the pointer.
+            let button = match &operands {
+                Ok(_) => button.on_hover_ui(|ui| {
+                    ui.label(app.solid_hint(op));
+                }),
+                Err(p) => button.on_disabled_hover_text(p.text()),
             };
             if button.clicked() {
                 cmds.push(Cmd::Solid(op));

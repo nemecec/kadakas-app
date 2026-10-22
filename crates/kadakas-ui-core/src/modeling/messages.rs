@@ -2,6 +2,7 @@
 //! with ids (for agents and logs); the window shows the same reason in the language of the UI,
 //! without internal ids. A text that is not known here is shown as it is.
 
+use kadakas_core::surface::{Operand, SolidError, SurfaceError};
 use kadakas_l10n::tr;
 
 /// The number in "at most about 12.5 mm" of a core message.
@@ -40,45 +41,48 @@ pub fn localize(text: &str) -> String {
         tr!("uic-modeling-follow-hole-face")
     } else if has("was not at a corner of the closed path") {
         tr!("uic-modeling-follow-moved-note")
-    } else if let Some(t) = solid_text(text) {
-        t
     } else {
         text.to_string()
     }
 }
 
-/// The refusals of the solid tools (MOD-09), without ids. The core text says which input it is
-/// about: "the first solid" or "the second solid".
-fn solid_text(text: &str) -> Option<String> {
-    let which = if text.contains("the second solid") {
-        tr!("uic-solid-second")
-    } else {
-        tr!("uic-solid-first")
-    };
-    let has = |s: &str| text.contains(s);
-    Some(if has("solid is not a closed solid") {
-        tr!("uic-solid-refused-open", which = which)
-    } else if has("passes through itself") {
-        tr!("uic-solid-refused-crossing", which = which)
-    } else if has("solid looks inward") {
-        tr!("uic-solid-refused-inward", which = which)
-    } else if has("solid has no volume") {
-        tr!("uic-solid-refused-flat", which = which)
-    } else if has("solid has no faces") {
-        tr!("uic-solid-refused-empty", which = which)
-    } else if has("is stuck to other geometry") {
-        tr!("uic-solid-refused-attached", which = which)
-    } else if has("would be empty") {
-        tr!("uic-solid-refused-empty-result")
-    } else if has("could not be cut cleanly") {
-        tr!("uic-solid-refused-cut")
-    } else if has("the result of the operation is not a closed solid") {
-        tr!("uic-solid-refused-result")
-    } else if has("a surface model has at most") {
-        tr!("uic-solid-refused-limit")
-    } else {
-        return None;
-    })
+/// The text of a refusal that is a [`SurfaceError`], in the language of the window and without ids.
+/// The solid tools (MOD-09) and the limits are told apart by the kind of the error, not by its
+/// English text. Other errors go through [`localize`].
+pub fn localize_error(e: &SurfaceError) -> String {
+    match e {
+        SurfaceError::Solid(s) => solid_text(s),
+        SurfaceError::Limit { .. } => tr!("uic-solid-refused-limit"),
+        other => localize(&other.to_string()),
+    }
+}
+
+fn operand_key(which: Operand) -> &'static str {
+    match which {
+        Operand::First => "first",
+        Operand::Second => "second",
+    }
+}
+
+/// The refusal of a solid operation.
+fn solid_text(e: &SolidError) -> String {
+    match e {
+        SolidError::Empty(w) => tr!("uic-solid-refused-empty", which = operand_key(*w)),
+        SolidError::Open { which, .. } => {
+            tr!("uic-solid-refused-open", which = operand_key(*which))
+        }
+        SolidError::SelfCrossing { which, .. } => {
+            tr!("uic-solid-refused-crossing", which = operand_key(*which))
+        }
+        SolidError::Inverted(w) => tr!("uic-solid-refused-inward", which = operand_key(*w)),
+        SolidError::Flat(w) => tr!("uic-solid-refused-flat", which = operand_key(*w)),
+        SolidError::Attached(w) => tr!("uic-solid-refused-attached", which = operand_key(*w)),
+        SolidError::NoResult(_) => tr!("uic-solid-refused-empty-result"),
+        SolidError::Cut(_) => tr!("uic-solid-refused-cut"),
+        SolidError::ResultOpen(_) => tr!("uic-solid-refused-result"),
+        SolidError::ResultVolume => tr!("uic-solid-refused-volume"),
+        SolidError::ResultInvalid(_) => tr!("uic-solid-refused-invalid"),
+    }
 }
 
 #[cfg(test)]
@@ -87,9 +91,7 @@ mod tests {
 
     #[test]
     fn every_refusal_of_the_solid_tools_is_known_and_loses_its_ids() {
-        use kadakas_core::surface::{
-            EdgeId, FaceId, OpenKind, Operand, SolidError, SolidOp, SurfaceError,
-        };
+        use kadakas_core::surface::{EdgeId, FaceId, OpenKind, SolidOp};
         let errors = [
             SolidError::Empty(Operand::First),
             SolidError::Open {
@@ -108,14 +110,17 @@ mod tests {
             SolidError::Attached(Operand::Second),
             SolidError::NoResult(SolidOp::Intersect),
             SolidError::Cut("edge 5 still passes through face 6".into()),
-            SolidError::NotClosed("edge 9 is open".into()),
+            SolidError::ResultOpen("edge 9 is open".into()),
+            SolidError::ResultVolume,
+            SolidError::ResultInvalid("edge 3 crosses edge 4".into()),
         ];
         let mut seen = std::collections::BTreeSet::new();
         for e in errors {
-            let core = SurfaceError::Solid(e).to_string();
-            let text = localize(&core);
-            assert_ne!(text, core, "{core}");
+            let err = SurfaceError::Solid(e);
+            let core = err.to_string();
+            let text = localize_error(&err);
             assert!(!text.chars().any(|c| c.is_ascii_digit()), "{text}");
+            assert!(!text.contains("{ "), "{text}");
             assert!(seen.insert(text), "{core}");
         }
         let limit = SurfaceError::Limit {
@@ -123,12 +128,20 @@ mod tests {
             max: 100,
             count: 101,
         };
-        assert_eq!(localize(&limit.to_string()), tr!("uic-solid-refused-limit"));
-        // The second solid is told from the first.
-        let second = SurfaceError::Solid(SolidError::Flat(Operand::Second)).to_string();
+        assert_eq!(localize_error(&limit), tr!("uic-solid-refused-limit"));
+        // The second solid is told from the first, and an error of another kind goes on as text.
+        let second = SurfaceError::Solid(SolidError::Flat(Operand::Second));
         assert_eq!(
-            localize(&second),
-            tr!("uic-solid-refused-flat", which = tr!("uic-solid-second"))
+            localize_error(&second),
+            tr!("uic-solid-refused-flat", which = "second")
+        );
+        assert_ne!(
+            localize_error(&second),
+            localize_error(&SurfaceError::Solid(SolidError::Flat(Operand::First)))
+        );
+        assert_eq!(
+            localize_error(&SurfaceError::NoFace(FaceId(3))),
+            "face 3 does not exist"
         );
     }
 

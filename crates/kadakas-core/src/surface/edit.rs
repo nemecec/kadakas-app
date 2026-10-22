@@ -153,11 +153,12 @@ pub enum Edit {
     /// and smooth edges. See the module `followme`.
     FollowMe { face: FaceId, path: Vec<EdgeId> },
     /// Solid tools (MOD-09): a boolean operation of two closed solids of the model. `first` and
-    /// `second` are the faces of the two solids (see `SurfaceModel::solid_of`); they must not
-    /// share a face. The result replaces the two solids. Subtract and Trim take `second` from
-    /// `first`; Trim keeps `second`; Split makes three solids. An input that is not a closed
-    /// solid, a limit, or a result that is not a closed solid refuses the edit with a reason and
-    /// changes nothing. See the module `solid`.
+    /// `second` are the faces of the two solids (see `SurfaceModel::solid_of`). A face that both
+    /// solids use (two boxes through each other in one plane) may be in both lists. The result
+    /// replaces the two solids. Subtract and Trim take `second` from `first`. Trim keeps `second`,
+    /// split along the cut and stuck to `first`. Split makes three solids. An input that is not a
+    /// closed solid, a limit, or a result that is not a closed solid refuses the edit with a
+    /// reason and changes nothing. See the module `solid`.
     Solid {
         op: super::SolidOp,
         first: Vec<FaceId>,
@@ -1834,7 +1835,7 @@ fn erase_edges_in(
 /// starts a new curve (the first chain keeps the id). A closed curve that lost edges is first
 /// turned so that it starts after a gap, so its ends join again (a circle with one edge erased
 /// stays one arc). An empty curve goes.
-fn rechain(m: &mut SurfaceModel, ids: &BTreeSet<super::CurveId>) {
+pub(super) fn rechain(m: &mut SurfaceModel, ids: &BTreeSet<super::CurveId>) {
     let meet = |m: &SurfaceModel, a: EdgeId, b: EdgeId| {
         let (p, q) = (m.edges[&a].v, m.edges[&b].v);
         p.iter().any(|v| q.contains(v))

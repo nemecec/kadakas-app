@@ -225,10 +225,7 @@ fn a_refusal_is_in_the_language_of_the_window_without_ids() {
     let Problem::Refused(text) = &err else {
         panic!("{err:?}")
     };
-    assert_eq!(
-        text,
-        &tr!("uic-solid-refused-open", which = tr!("uic-solid-first"))
-    );
+    assert_eq!(text, &tr!("uic-solid-refused-open", which = "first"));
     assert!(!text.chars().any(|c| c.is_ascii_digit()), "{text}");
     with_language("et", || {
         let err = solid::out(ed.doc(), &sel, false, SolidOp::Union).unwrap_err();
