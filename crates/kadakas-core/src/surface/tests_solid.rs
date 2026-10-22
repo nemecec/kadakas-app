@@ -1496,7 +1496,7 @@ fn three_faces_on_one_edge_with_no_way_through_are_reported_not_guessed() {
     })
     .unwrap();
     let r = m.solid_report();
-    assert_eq!(r.shells.len() >= 1, true);
+    assert!(!r.shells.is_empty());
     assert!(!r.is_closed());
     assert!(r.shells.iter().all(|s| !s.is_solid()));
     for (id, _) in m.faces() {

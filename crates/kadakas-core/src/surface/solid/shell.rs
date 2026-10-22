@@ -188,7 +188,7 @@ fn partner(
                     .min_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)))
                     .map(|(_, g, _)| *g)
             };
-            return first(true).or_else(|| first(false));
+            first(true).or_else(|| first(false))
         }
     }
 }
