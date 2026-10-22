@@ -163,8 +163,8 @@ impl ModelerTool {
     }
 
     /// True for the tools that run in this version: Select, the drawing tools of MOD-08 (Eraser,
-    /// Line, Rectangle, Circle, Arc, Push/Pull) and the navigation tools. The rest are shown,
-    /// disabled.
+    /// Line, Rectangle, Circle, Arc, Push/Pull), Move, Rotate and Scale (MOD-05) and the navigation
+    /// tools. The rest (Tape Measure, Paint Bucket) are shown, disabled.
     pub fn works(self) -> bool {
         matches!(
             self,
@@ -175,6 +175,9 @@ impl ModelerTool {
                 | ModelerTool::Circle
                 | ModelerTool::Arc
                 | ModelerTool::PushPull
+                | ModelerTool::Move
+                | ModelerTool::Rotate
+                | ModelerTool::Scale
                 | ModelerTool::Orbit
                 | ModelerTool::Pan
                 | ModelerTool::Zoom
@@ -206,6 +209,9 @@ impl ModelerTool {
             ModelerTool::Circle => tr!("uic-modeler-hint-circle"),
             ModelerTool::Arc => tr!("uic-modeler-hint-arc"),
             ModelerTool::PushPull => tr!("uic-modeler-hint-push-pull"),
+            ModelerTool::Move => tr!("uic-modeler-hint-move"),
+            ModelerTool::Rotate => tr!("uic-modeler-hint-rotate"),
+            ModelerTool::Scale => tr!("uic-modeler-hint-scale"),
             ModelerTool::Orbit => tr!("uic-modeler-hint-orbit"),
             ModelerTool::Pan => tr!("uic-modeler-hint-pan"),
             ModelerTool::Zoom => tr!("uic-modeler-hint-zoom"),
@@ -530,6 +536,8 @@ impl Measurement {
                 crate::modeling::LiveLabel::Radius => msg!("uic-modeler-measure-radius"),
                 crate::modeling::LiveLabel::Bulge => msg!("uic-modeler-measure-bulge"),
                 crate::modeling::LiveLabel::Distance => msg!("uic-modeler-measure-distance"),
+                crate::modeling::LiveLabel::Angle => msg!("uic-modeler-measure-angle"),
+                crate::modeling::LiveLabel::Factor => msg!("uic-modeler-measure-scale"),
             },
         }
     }
@@ -611,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn select_the_drawing_tools_and_navigation_work_now() {
+    fn select_the_drawing_tools_move_rotate_scale_and_navigation_work_now() {
         let working: Vec<_> = ModelerTool::ALL
             .iter()
             .filter(|t| t.works())
@@ -627,6 +635,9 @@ mod tests {
                 "circle",
                 "arc",
                 "push-pull",
+                "move",
+                "rotate",
+                "scale",
                 "orbit",
                 "pan",
                 "zoom",
@@ -674,8 +685,8 @@ mod tests {
     #[test]
     fn a_tool_that_does_not_run_says_so_in_its_tooltip() {
         assert!(!ModelerTool::Select.tooltip("Space").contains("later"));
-        let tip = ModelerTool::Move.tooltip("M");
-        assert!(tip.contains("Move") && tip.contains('M'));
+        let tip = ModelerTool::TapeMeasure.tooltip("T");
+        assert!(tip.contains("Tape Measure") && tip.contains('T'));
         assert!(tip.contains(&tr!("uic-modeler-coming-later")));
         // Without a key there is no empty bracket.
         assert_eq!(ModelerTool::Select.tooltip(""), ModelerTool::Select.name());
@@ -715,7 +726,11 @@ mod tests {
         for t in ModelerTool::ALL {
             assert!(!t.hint().is_empty());
         }
-        assert_eq!(ModelerTool::Move.hint(), tr!("uic-modeler-coming-later"));
+        assert_eq!(
+            ModelerTool::TapeMeasure.hint(),
+            tr!("uic-modeler-coming-later")
+        );
+        assert_ne!(ModelerTool::Move.hint(), tr!("uic-modeler-coming-later"));
         assert_ne!(ModelerTool::Line.hint(), ModelerTool::Rectangle.hint());
         assert_ne!(ModelerTool::Orbit.hint(), ModelerTool::Pan.hint());
     }

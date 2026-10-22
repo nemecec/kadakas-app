@@ -178,6 +178,9 @@ impl World<'_> {
             let Some(model) = self.scenes.object(tag) else {
                 return false;
             };
+            if excluded.models.contains(&model) {
+                return true;
+            }
             match tag.kind() {
                 crate::infer3d::TagKind::Face => {
                     excluded.faces.contains(&(model, FaceId(tag.id())))

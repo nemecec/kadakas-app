@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use glam::DVec3;
+use glam::{DAffine3, DVec3};
 use kadakas_core::command::{Command, CommandError, Editor};
 use kadakas_core::model::{Attributes, Document, ObjectId, Shape};
 use kadakas_core::surface::{EdgeId, Edit, FaceId, IntersectScope};
@@ -55,6 +55,16 @@ pub enum Action {
         faces: Vec<FaceId>,
         edges: Vec<EdgeId>,
     },
+    /// Move, Rotate or Scale (and the copies of Move and Rotate) of whole objects and of faces and
+    /// edges of surface models, by one affine map in world coordinates. `copies` is 0 to change the
+    /// geometry in place, else the number of copies (the first placed by the map, the next by the
+    /// map applied twice, and so on).
+    Xform {
+        objects: Vec<ObjectId>,
+        parts: Vec<(ObjectId, Vec<FaceId>, Vec<EdgeId>)>,
+        matrix: DAffine3,
+        copies: u32,
+    },
 }
 
 /// The model that an action works in (a new model counts as `None`).
@@ -69,6 +79,7 @@ impl Action {
             | Action::PushPull { model, .. }
             | Action::Delete { model, .. }
             | Action::Intersect { model, .. } => Some(*model),
+            Action::Xform { parts, .. } => parts.first().map(|p| p.0),
         }
     }
 }
@@ -121,6 +132,13 @@ pub fn run_noted(
     let out = editor.execute_stepwise(|step| {
         let mut made: Option<ObjectId> = None;
         for a in actions {
+            if let Action::Xform { .. } = a {
+                for c in xform_commands(step.doc(), a) {
+                    step.run(&c)?;
+                }
+                used = a.model().or(used);
+                continue;
+            }
             // A model that the step taken back had made is not there any more: make it again.
             let mut model = a.model().filter(|id| {
                 step.doc().object(*id).is_some()
@@ -167,6 +185,53 @@ pub fn run_noted(
     }
 }
 
+/// The commands of a Move, Rotate or Scale: whole objects by their transform, faces and edges of
+/// a model by the map in the local coordinates of the model.
+fn xform_commands(doc: &Document, a: &Action) -> Vec<Command> {
+    let Action::Xform {
+        objects,
+        parts,
+        matrix,
+        copies,
+    } = a
+    else {
+        return Vec::new();
+    };
+    let mut v = Vec::new();
+    if !objects.is_empty() {
+        v.push(Command::TransformObjects3d {
+            ids: objects.clone(),
+            matrix: matrix.to_cols_array(),
+            copy: *copies > 0,
+            count: (*copies).max(1),
+        });
+    }
+    for (model, faces, edges) in parts {
+        let fr = frame_of(doc, *model);
+        if fr.matrix3.determinant().abs() < 1e-12 {
+            continue;
+        }
+        let local = (fr.inverse() * *matrix * fr).to_cols_array();
+        let edit = if *copies > 0 {
+            Edit::CopyGeometry {
+                faces: faces.clone(),
+                edges: edges.clone(),
+                matrix: local,
+                count: *copies,
+            }
+        } else {
+            Edit::TransformVertices {
+                vertices: Vec::new(),
+                faces: faces.clone(),
+                edges: edges.clone(),
+                matrix: local,
+            }
+        };
+        v.push(Command::EditSurface { id: *model, edit });
+    }
+    v
+}
+
 fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Command> {
     // A model that this step made has the identity transform on the active layer, like the
     // coordinates `local` gives for `None`.
@@ -199,6 +264,7 @@ fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Comman
             faces: faces.clone(),
             edges: edges.clone(),
         })],
+        Action::Xform { .. } => Vec::new(),
         Action::Delete { faces, edges, .. } => {
             let mut v = Vec::new();
             if !faces.is_empty() {

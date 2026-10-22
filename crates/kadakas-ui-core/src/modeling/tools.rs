@@ -39,12 +39,13 @@ use super::exec::{Action, Target};
 use super::plane::Plane3;
 use super::scenes::World;
 use super::select::SubSelection;
-use crate::infer3d::{Constraint, Inference, Kind, Ray, Rgb, TagKind};
+use super::xform::{Context, Xform, is_transform_tool};
+use crate::infer3d::{Constraint, Inference, Key, Kind, Ray, Rgb, TagKind};
 use crate::measure_box::{self, Phase, Tool, Value};
 use crate::modeler::ModelerTool;
 
 /// Shortest segment or side that a tool draws (mm).
-const MIN_LEN: f64 = 0.01;
+pub(super) const MIN_LEN: f64 = 0.01;
 /// The default number of sides of a circle.
 pub const DEFAULT_SIDES: u32 = 24;
 /// The default number of segments of an arc.
@@ -69,14 +70,14 @@ pub struct Out {
 }
 
 impl Out {
-    fn msg(m: String) -> Out {
+    pub(super) fn msg(m: String) -> Out {
         Out {
             message: Some(m),
             ..Out::default()
         }
     }
 
-    fn act(a: Action) -> Out {
+    pub(super) fn act(a: Action) -> Out {
         Out {
             actions: vec![a],
             ..Out::default()
@@ -93,6 +94,11 @@ pub struct Preview {
     pub erase: Vec<[DVec3; 2]>,
     /// The face that Push/Pull will move and the place it moves to.
     pub pull: Vec<[DVec3; 2]>,
+    /// The grips of Scale on the box around the selection, and the one under the pointer.
+    pub grips: Vec<DVec3>,
+    pub grip_hover: Option<usize>,
+    /// Move or Rotate is in copy mode (the window shows a plus at the pointer).
+    pub copy: bool,
 }
 
 /// The kind of the value in the Measurements box while a tool runs.
@@ -103,6 +109,10 @@ pub enum LiveLabel {
     Radius,
     Bulge,
     Distance,
+    /// The angle of Rotate.
+    Angle,
+    /// The factor of Scale.
+    Factor,
 }
 
 #[derive(Clone, Debug)]
@@ -193,6 +203,8 @@ pub struct Modeling {
     /// The distance of the last Push/Pull, for a double click on another face.
     pub last_pull: Option<f64>,
     hover_edge: Option<(ObjectId, EdgeId)>,
+    /// Move, Rotate and Scale.
+    xf: Xform,
 }
 
 impl Default for Modeling {
@@ -209,6 +221,7 @@ impl Default for Modeling {
             last: None,
             last_pull: None,
             hover_edge: None,
+            xf: Xform::default(),
         }
     }
 }
@@ -226,6 +239,12 @@ pub fn is_drawing_tool(t: ModelerTool) -> bool {
     )
 }
 
+/// True for the tools that take typed values and run the inference: the drawing tools (not the
+/// Eraser) and Move, Rotate and Scale.
+pub fn takes_values(t: ModelerTool) -> bool {
+    (is_drawing_tool(t) && t != ModelerTool::Eraser) || is_transform_tool(t)
+}
+
 fn mb_tool(t: ModelerTool) -> Tool {
     match t {
         ModelerTool::Line => Tool::Line,
@@ -234,6 +253,9 @@ fn mb_tool(t: ModelerTool) -> Tool {
         ModelerTool::Arc => Tool::TwoPointArc,
         ModelerTool::PushPull => Tool::PushPull,
         ModelerTool::Eraser => Tool::Eraser,
+        ModelerTool::Move => Tool::Move,
+        ModelerTool::Rotate => Tool::Rotate,
+        ModelerTool::Scale => Tool::Scale,
         _ => Tool::Select,
     }
 }
@@ -243,6 +265,8 @@ fn mb_tool(t: ModelerTool) -> Tool {
 pub struct Excluded {
     pub faces: BTreeSet<(ObjectId, FaceId)>,
     pub edges: BTreeSet<(ObjectId, EdgeId)>,
+    /// Whole models (an object that is moved, turned or scaled).
+    pub models: BTreeSet<ObjectId>,
 }
 
 impl Modeling {
@@ -259,15 +283,19 @@ impl Modeling {
         self.hover_edge = None;
         self.pending = None;
         self.last = None;
+        self.xf.choose(tool);
     }
 
     /// True while an operation is in progress (a click was made and the tool waits for more).
     pub fn in_progress(&self) -> bool {
-        !matches!(self.run, Run::Idle)
+        !matches!(self.run, Run::Idle) || self.xf.in_progress()
     }
 
     /// The last point of the tool: the inference works from it.
     pub fn reference(&self) -> Option<DVec3> {
+        if let Some(r) = self.xf.reference() {
+            return Some(r);
+        }
         match &self.run {
             Run::Line { pts, .. } | Run::Arc { pts, .. } => pts.last().copied(),
             Run::Rect { a, .. } => Some(*a),
@@ -290,12 +318,41 @@ impl Modeling {
             Run::Erase { marked, .. } => e.edges.clone_from(marked),
             _ => {}
         }
+        if let Some(s) = self.xf.moving() {
+            e.models.extend(s.objects().iter().copied());
+            for (m, faces, edges) in s.parts_moving() {
+                e.faces.extend(faces.iter().map(|f| (m, *f)));
+                e.edges.extend(edges.iter().map(|x| (m, *x)));
+            }
+        }
         e
+    }
+
+    /// The selection and the keys for Move, Rotate and Scale. Call it before each event.
+    pub fn set_context(&mut self, ctx: Context) {
+        self.xf.set_context(ctx);
+    }
+
+    /// Ctrl (Option on macOS) was pressed: Move and Rotate toggle copy, Scale toggles scaling about
+    /// the center.
+    pub fn toggle_ctrl(&mut self) {
+        self.xf.toggle_ctrl();
+    }
+
+    /// True while Move or Rotate is in copy mode.
+    pub fn copying(&self) -> bool {
+        self.xf.copying()
+    }
+
+    /// An arrow key for the protractor of Rotate before its center is clicked. True if used.
+    pub fn arrow_plane(&mut self, key: Key) -> bool {
+        self.xf.arrow(key)
     }
 
     /// Drops what is in progress and the typed text at once, whatever it was (an undo or a redo
     /// can remove the face or the points that a tool holds). The tool stays chosen.
     pub fn abort(&mut self) {
+        self.xf.abort();
         self.run = Run::Idle;
         self.cursor = None;
         self.typed.clear();
@@ -309,6 +366,7 @@ impl Modeling {
             return true;
         }
         let was = self.in_progress();
+        self.xf.cancel();
         self.run = Run::Idle;
         self.cursor = None;
         was
@@ -329,7 +387,7 @@ impl Modeling {
 
     /// A character typed while the tool runs. Returns true if it went into the box.
     pub fn type_char(&mut self, c: char) -> bool {
-        if !is_drawing_tool(self.tool) || self.tool == ModelerTool::Eraser {
+        if !takes_values(self.tool) {
             return false;
         }
         if Modeling::starts_value(c)
@@ -348,6 +406,9 @@ impl Modeling {
 
     /// The phase for the table of what the box accepts.
     pub fn phase(&self) -> Phase {
+        if is_transform_tool(self.tool) {
+            return self.xf.phase();
+        }
         let done = matches!(self.run, Run::Idle) && self.last.is_some();
         if done {
             return Phase::Done;
@@ -363,6 +424,9 @@ impl Modeling {
 
     /// The value the box shows while the tool runs, with its label.
     pub fn live(&self, units: &Units) -> Option<(LiveLabel, String)> {
+        if is_transform_tool(self.tool) {
+            return self.xf.live(units);
+        }
         let c = self.cursor?;
         let len = |v: f64| units.length_text(v);
         match &self.run {
@@ -403,6 +467,7 @@ impl Modeling {
         if model.is_some() {
             self.current = model;
         }
+        self.xf.committed(revision);
         if let Some(l) = self.pending.take() {
             self.last = Some((l, revision));
         }
@@ -410,7 +475,7 @@ impl Modeling {
 
     // ---- the pointer -------------------------------------------------------------------------
 
-    fn resolve(p: &Pointer, plane: Option<&Plane3>) -> DVec3 {
+    pub(super) fn resolve(p: &Pointer, plane: Option<&Plane3>) -> DVec3 {
         let snapped = !matches!(p.inf.kind, Kind::Free | Kind::OnFace);
         match plane {
             Some(pl) if snapped => pl.project(p.inf.point),
@@ -451,6 +516,10 @@ impl Modeling {
 
     /// The pointer moved.
     pub fn moved(&mut self, w: &World, p: &Pointer) {
+        if is_transform_tool(self.tool) {
+            self.xf.moved(w, p);
+            return;
+        }
         match &mut self.run {
             Run::Line { .. } => self.cursor = Some(p.inf.point),
             Run::Rect { plane, .. } | Run::Circle { plane, .. } | Run::Arc { plane, .. } => {
@@ -527,6 +596,9 @@ impl Modeling {
     /// A click of the primary button (not for the Eraser: it works with `press` and `release`).
     pub fn click(&mut self, w: &World, p: &Pointer) -> Out {
         self.typed.clear();
+        if is_transform_tool(self.tool) {
+            return self.xf.click(w, p);
+        }
         match self.tool {
             ModelerTool::Line => self.click_line(w, p),
             ModelerTool::Rectangle => self.click_rect(w, p),
@@ -849,6 +921,7 @@ impl Modeling {
     /// The actions were refused and the step that was taken back for them is back: the revision
     /// moved on, but the document is as it was, so the step can still be redone with a new value.
     pub fn refused(&mut self, revision: u64) {
+        self.xf.refused(revision);
         if let Some((l, _)) = self.last {
             self.last = Some((l, revision));
         }
@@ -858,11 +931,14 @@ impl Modeling {
         self.last.filter(|(_, r)| *r == revision).map(|(l, _)| l)
     }
 
-    fn need_start() -> Out {
+    pub(super) fn need_start() -> Out {
         Out::msg(tr!("uic-modeling-need-start"))
     }
 
     fn apply(&mut self, w: &World, selected: Option<ObjectId>, revision: u64, v: Value) -> Out {
+        if is_transform_tool(self.tool) {
+            return self.xf.apply(v, revision);
+        }
         if let Value::Sides(n) = v {
             return self.set_sides(w, selected, revision, n);
         }
@@ -1054,6 +1130,10 @@ impl Modeling {
     /// What to draw now.
     pub fn preview(&self, w: &World) -> Preview {
         let mut pv = Preview::default();
+        if is_transform_tool(self.tool) {
+            self.xf.preview(w, &mut pv);
+            return pv;
+        }
         let cur = self.cursor;
         match &self.run {
             Run::Line { pts, .. } => {
@@ -1266,7 +1346,7 @@ pub fn arc_points(a: DVec3, b: DVec3, h: f64, plane: &Plane3, segments: u32) -> 
 }
 
 /// The parameter `t` of the point `base + normal * t` of the line that is nearest to the ray.
-fn closest_on_line(ray: &Ray, base: DVec3, normal: DVec3) -> Option<f64> {
+pub(super) fn closest_on_line(ray: &Ray, base: DVec3, normal: DVec3) -> Option<f64> {
     let (u, v) = (ray.dir, normal);
     let w0 = ray.origin - base;
     let (a, b, c) = (u.dot(u), u.dot(v), v.dot(v));
