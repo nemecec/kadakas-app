@@ -27,6 +27,7 @@ pub mod joint_edit;
 pub mod keymap;
 pub mod keys;
 pub mod massing;
+pub mod materials;
 pub mod measure_box;
 pub mod modeler;
 pub mod modeling;

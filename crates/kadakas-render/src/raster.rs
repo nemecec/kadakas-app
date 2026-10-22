@@ -238,9 +238,23 @@ pub fn render(scene: &Scene, camera: &Camera, opts: &RenderOptions) -> Image {
                 Projection::Perspective => (eye - mesh.positions[i[0]]).normalize_or_zero(),
             };
             let mut base = mesh.colors[i[0]];
-            if n.dot(to_eye) < 0.0 {
+            // A triangle of a painted face is drawn from one side only. The side is the one of
+            // the triangle (its winding), as on the GPU, not the one of the smoothed normal.
+            let back =
+                if mesh.is_two_sided(i[0]) || mesh.side_of(t) != kadakas_core::mesh::SIDE_BOTH {
+                    let p = mesh.triangle(t);
+                    (p[1] - p[0]).cross(p[2] - p[0]).dot(to_eye) < 0.0
+                } else {
+                    n.dot(to_eye) < 0.0
+                };
+            match mesh.side_of(t) {
+                kadakas_core::mesh::SIDE_FRONT if back => continue,
+                kadakas_core::mesh::SIDE_BACK if !back => continue,
+                _ => {}
+            }
+            if back {
                 n = -n;
-                if mesh.is_two_sided(i[0]) {
+                if mesh.is_two_sided(i[0]) && mesh.paint_of(t).is_none() {
                     base = kadakas_core::mesh::SURFACE_BACK;
                 }
             }

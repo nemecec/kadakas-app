@@ -8,6 +8,7 @@ use glam::DAffine3;
 use super::*;
 use crate::component::{self, ComponentError, Made, Part};
 use crate::graphics::{GraphicResource, SymbolDef};
+use crate::present::SlotTarget;
 use crate::surface::{Absorber, Selection, SurfaceModel};
 use crate::symbols::{EDIT_GROUP_KEY, EDITING_KEY};
 
@@ -524,9 +525,43 @@ impl Tx<'_> {
         }
         let mut dirty = false;
         let mut gone: Vec<ObjectId> = Vec::new();
+        // The material of the group (and of the groups above it) stays on its members: a model
+        // gets it on the sides of its faces that have none, other members that the Paint Bucket
+        // paints get it as their own material. The group's own slot goes with the group.
+        let group_material = std::iter::once(gid)
+            .chain(self.doc.ancestors(gid))
+            .find_map(|o| crate::present::object_material(self.doc, o));
         for kid in kids {
             self.editable(kid)?;
-            let shape = self.doc.object(kid).expect("exists").shape.clone();
+            let mut shape = self.doc.object(kid).expect("exists").shape.clone();
+            let own = crate::present::object_material(self.doc, kid);
+            let mut baked = false;
+            if let Some(m) = own.or(group_material) {
+                match &mut shape {
+                    Shape::SurfaceModel(s) => {
+                        crate::present::bake_material(s, m).map_err(|e| invalid(e.to_string()))?;
+                        baked = true;
+                        // The model carries the material in its faces now.
+                        self.doc.drawing.presentation.set_slot(
+                            SlotTarget::Object {
+                                object: kid,
+                                slot: None,
+                            },
+                            None,
+                        );
+                    }
+                    other if own.is_none() && crate::present::can_paint_object(other) => {
+                        self.doc.drawing.presentation.set_slot(
+                            SlotTarget::Object {
+                                object: kid,
+                                slot: None,
+                            },
+                            Some(m),
+                        );
+                    }
+                    _ => {}
+                }
+            }
             // A model with a look of its own (class, fill, line type) is not merged into one
             // with another look: merging would change its colour silently. It stays a separate
             // model of the level.
@@ -557,10 +592,16 @@ impl Tx<'_> {
                     self.touch(kid);
                     self.doc.object_mut(kid).expect("exists").parent = level;
                     target = Some((kid, Absorber::new(*s)));
+                    // The baked paint reaches the document through the target.
+                    dirty |= baked;
                 }
-                _ => {
+                (other, _) => {
                     self.touch(kid);
-                    self.doc.object_mut(kid).expect("exists").parent = level;
+                    let o = self.doc.object_mut(kid).expect("exists");
+                    o.parent = level;
+                    if baked {
+                        o.shape = other;
+                    }
                 }
             }
         }
@@ -590,6 +631,16 @@ impl Tx<'_> {
             inst.class,
             false,
         )?;
+        // The material of the instance goes to the group that replaces it.
+        if let Some(m) = crate::present::object_material(self.doc, id) {
+            self.doc.drawing.presentation.set_slot(
+                SlotTarget::Object {
+                    object: gid,
+                    slot: None,
+                },
+                Some(m),
+            );
+        }
         self.remove_objects(vec![id]);
         self.explode_group(gid)?;
         // The last user takes the definition with it.

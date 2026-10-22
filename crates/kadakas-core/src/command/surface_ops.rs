@@ -12,6 +12,19 @@ impl Tx<'_> {
         out: &mut Outcome,
     ) -> Result<(), CommandError> {
         self.editable(id)?;
+        if let crate::surface::Edit::SetFaceMaterial {
+            material: Some(text),
+            ..
+        } = edit
+        {
+            let known = crate::uid::Uid::parse(text)
+                .is_some_and(|u| crate::present::material(self.doc, ResourceId(u)).is_some());
+            if !known {
+                return Err(CommandError::Invalid(format!(
+                    "there is no material with the id {text}"
+                )));
+            }
+        }
         let Some(Shape::SurfaceModel(model)) = self.doc.object(id).map(|o| &o.shape) else {
             return Err(CommandError::Invalid(format!(
                 "object {id} is not a surface model"

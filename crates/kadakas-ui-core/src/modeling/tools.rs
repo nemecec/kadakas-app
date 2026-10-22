@@ -205,6 +205,8 @@ pub struct Modeling {
     hover_edge: Option<(ObjectId, EdgeId)>,
     /// Move, Rotate and Scale.
     xf: Xform,
+    /// The Paint Bucket and its material. It stays when another tool is chosen.
+    pub paint: super::paint::Paint,
 }
 
 impl Default for Modeling {
@@ -222,6 +224,7 @@ impl Default for Modeling {
             last_pull: None,
             hover_edge: None,
             xf: Xform::default(),
+            paint: super::paint::Paint::default(),
         }
     }
 }

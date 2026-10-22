@@ -1356,8 +1356,13 @@ fn the_second_half_of_a_split_top_pushed_to_the_level_of_the_first_merges() {
     // The half with the lower id stays with its own material; the other one is named.
     assert!(m.face(gone).is_none());
     assert_eq!(m.face(keep).unwrap().attrs["material"], "stone");
-    assert_eq!(notes.len(), 1, "{notes:?}");
-    assert!(notes[0].contains("brick") && notes[0].contains("dropped"));
+    // A wall that the push made carries the paint of the face, so it may also be named when it
+    // is lost in the flush; the dropped material is named once.
+    let dropped: Vec<_> = notes
+        .iter()
+        .filter(|n| n.contains("brick") && n.contains("dropped"))
+        .collect();
+    assert_eq!(dropped.len(), 1, "{notes:?}");
     // The vertices that moved down keep their ids; the ones that met them were welded away.
     let ids = |m: &SurfaceModel| m.vertices().map(|(id, _)| id).collect::<Vec<_>>();
     assert_eq!(ids(&m), ids(&plain));

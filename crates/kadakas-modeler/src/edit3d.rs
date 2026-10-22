@@ -39,6 +39,10 @@ pub struct Edit3d {
     pub sub: SubSelection,
     inferencer: Inferencer,
     picker: Inferencer,
+    /// Finds faces only (no snapping to points and edges): the Paint Bucket.
+    painter: Inferencer,
+    /// The color of the material in the bucket, for the mark at the pointer.
+    bucket_color: Option<[u8; 4]>,
     /// How long the last build of the inference scene took.
     pub last_build: Duration,
     /// The world position of the local origin of the scene in the last frame.
@@ -77,6 +81,8 @@ impl Default for Edit3d {
             sub: SubSelection::default(),
             inferencer: Inferencer::default(),
             picker: Inferencer::default(),
+            painter: modeling::paint::face_engine(),
+            bucket_color: None,
             last_build: Duration::ZERO,
             origin: None,
             moved_at: 0.0,
@@ -286,6 +292,7 @@ impl Edit3d {
         let mut selection_changed = false;
         let mut object_pick: Option<Option<kadakas_core::model::ObjectId>> = None;
         let mut triple: Option<Item> = None;
+        let mut rect_objects: Option<Vec<kadakas_core::model::ObjectId>> = None;
         {
             let doc = session.editor.doc();
             let scenes = self.cache.get(doc, rev);
@@ -347,6 +354,55 @@ impl Edit3d {
                 self.hover = None;
             }
 
+            // The Paint Bucket: a click paints the side of the face under the pointer, or the
+            // objects (see `kadakas_ui_core::modeling::paint`).
+            self.bucket_color = self
+                .modeling
+                .paint
+                .material(doc)
+                .and_then(|m| kadakas_core::present::material(doc, m))
+                .map(|m| m.base_color.0);
+            if tool == ModelerTool::PaintBucket {
+                let primary = egui::PointerButton::Primary;
+                if hover.is_some() {
+                    self.last_pointer = hover;
+                }
+                if inp.resp.clicked_by(primary)
+                    && let Some(p) = inp.resp.interact_pointer_pos()
+                {
+                    let at = local(p);
+                    let (mut hit, point) =
+                        modeling::paint::hit_face_at(&world, &mut self.painter, &cam, at);
+                    // An object in front of the face (a tree in front of a wall) is the target.
+                    if let Some(p) = point
+                        && let Some(o) =
+                            modeling::select::object_in_front(doc, inp.scene, &cam, at, p)
+                    {
+                        hit = modeling::paint::PaintHit::Object(o);
+                    }
+                    if hit == modeling::paint::PaintHit::Nothing {
+                        view3d.camera = *nav_cam;
+                        let px = Vec2::new(at.x as f32, at.y as f32);
+                        if let Some(id) = view3d
+                            .pick(inp.scene, px, inp.size)
+                            .filter(|id| doc.object(*id).is_some())
+                        {
+                            hit = modeling::paint::PaintHit::Object(id);
+                        }
+                    }
+                    let mods = modeling::paint::PaintMods {
+                        ctrl: inp.mods.ctrl,
+                        shift: inp.mods.shift,
+                        // Alt, and Cmd on a Mac (Ctrl is the connected fill).
+                        sample: inp.mods.alt || (cfg!(target_os = "macos") && inp.mods.command),
+                    };
+                    out = self
+                        .modeling
+                        .paint
+                        .click(doc, hit, &session.selection, mods);
+                }
+            }
+
             // The Select tool: parts of surface models first, then whole objects.
             if tool == ModelerTool::Select {
                 let primary = egui::PointerButton::Primary;
@@ -375,17 +431,42 @@ impl Edit3d {
                         DVec2::new(f64::from(b.x), f64::from(b.y)),
                         crossing,
                     );
-                    if inp.mods.shift {
-                        self.sub.add(items);
+                    if items.is_empty() {
+                        // No face or edge in the rectangle: the objects that are no surface
+                        // models (plants, hardscapes, site models, instances).
+                        let found = modeling::select::rect_select_objects(
+                            doc,
+                            inp.scene,
+                            &cam,
+                            DVec2::new(f64::from(a.x), f64::from(a.y)),
+                            DVec2::new(f64::from(b.x), f64::from(b.y)),
+                            crossing,
+                        );
+                        if found.is_empty() {
+                            self.sub.set(items);
+                            selection_changed = true;
+                        } else {
+                            rect_objects = Some(found);
+                        }
                     } else {
-                        self.sub.set(items);
+                        if inp.mods.shift {
+                            self.sub.add(items);
+                        } else {
+                            self.sub.set(items);
+                        }
+                        selection_changed = true;
                     }
-                    selection_changed = true;
                 }
                 if inp.resp.clicked_by(primary)
                     && let Some(p) = inp.resp.interact_pointer_pos()
                 {
-                    let hit = modeling::select::pick(&world, &mut self.picker, &cam, local(p));
+                    let hit = modeling::select::pick_visible(
+                        &world,
+                        &mut self.picker,
+                        &cam,
+                        local(p),
+                        inp.scene,
+                    );
                     if inp.resp.triple_clicked_by(primary) {
                         // Everything connected to what was hit.
                         triple = hit;
@@ -415,7 +496,19 @@ impl Edit3d {
             refresh_visuals(&mut self.visuals, &self.sub, &world, rev);
         }
 
-        if let Some(item) = triple {
+        if let Some(found) = rect_objects {
+            // A window or crossing that holds objects: they become the selection (Shift adds).
+            self.sub.clear();
+            if inp.mods.shift {
+                for id in found {
+                    if !session.selection.contains(&id) {
+                        session.selection.push(id);
+                    }
+                }
+            } else {
+                session.selection = found;
+            }
+        } else if let Some(item) = triple {
             self.sub
                 .set(modeling::select::connected(session.editor.doc(), item));
             session.selection.clear();
@@ -502,11 +595,12 @@ impl Edit3d {
                 let doc = session.editor.doc();
                 let scenes = self.cache.get(doc, rev);
                 let world = World { doc, scenes };
-                modeling::select::pick(
+                modeling::select::pick_visible(
                     &world,
                     &mut self.picker,
                     cam,
                     DVec2::new(f64::from(at.x), f64::from(at.y)),
+                    inp.scene,
                 )
             };
             match hit {
@@ -552,6 +646,7 @@ impl Edit3d {
 
     /// Runs the actions of a tool on the session (one undo step) and tells the tool.
     pub fn run(&mut self, session: &mut Session, out: Out) {
+        let done_message = out.message.clone();
         if let Some(m) = out.message {
             self.message = Some(m);
         }
@@ -561,9 +656,13 @@ impl Edit3d {
         match modeling::run_actions_full(&mut session.editor, &out.actions, out.redo) {
             Ok(ran) => {
                 self.modeling.committed(ran.used, session.editor.revision());
-                // What the edit changed that was not asked for (a material of a merged face).
-                self.message = (!ran.notes.is_empty())
-                    .then(|| tr!("modeler-edit-note", note = ran.notes.join("; ")));
+                // What the edit changed that was not asked for (a material of a merged face),
+                // else what the tool says about it (the Paint Bucket tells what it painted).
+                self.message = if ran.notes.is_empty() {
+                    done_message
+                } else {
+                    Some(tr!("modeler-edit-note", note = ran.notes.join("; ")))
+                };
                 // The copies of a Move or Rotate become the selection: the next one moves them.
                 if !ran.objects.is_empty() {
                     self.sub.clear();
@@ -676,6 +775,15 @@ impl Edit3d {
                 painter.rect_filled(r, 1.0, fill);
                 painter.rect_stroke(r, 1.0, Stroke::new(1.0, dark), egui::StrokeKind::Inside);
             }
+        }
+        // The color of the bucket at the pointer.
+        if self.modeling.tool() == ModelerTool::PaintBucket
+            && let Some(p) = self.last_pointer
+        {
+            let c = self.bucket_color.unwrap_or([235, 235, 235, 255]);
+            let at = p + egui::vec2(14.0, 14.0);
+            painter.circle_filled(at, 7.0, Color32::from_rgb(c[0], c[1], c[2]));
+            painter.circle_stroke(at, 7.0, Stroke::new(1.5, Color32::from_rgb(30, 30, 30)));
         }
         // A plus at the pointer while Move or Rotate copies.
         if self.preview.copy

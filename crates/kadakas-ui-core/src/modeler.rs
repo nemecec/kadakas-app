@@ -8,6 +8,7 @@
 
 use kadakas_core::mesh::Scene;
 use kadakas_core::model::{Document, ObjectId};
+use kadakas_core::resource::ResourceId;
 use kadakas_l10n::{msg, tr};
 
 use crate::keymap::Action;
@@ -163,8 +164,8 @@ impl ModelerTool {
     }
 
     /// True for the tools that run in this version: Select, the drawing tools of MOD-08 (Eraser,
-    /// Line, Rectangle, Circle, Arc, Push/Pull), Move, Rotate and Scale (MOD-05) and the navigation
-    /// tools. The rest (Tape Measure, Paint Bucket) are shown, disabled.
+    /// Line, Rectangle, Circle, Arc, Push/Pull), Move, Rotate and Scale and the Paint Bucket (MOD-05) and the
+    /// navigation tools. Tape Measure is shown, disabled.
     pub fn works(self) -> bool {
         matches!(
             self,
@@ -178,6 +179,7 @@ impl ModelerTool {
                 | ModelerTool::Move
                 | ModelerTool::Rotate
                 | ModelerTool::Scale
+                | ModelerTool::PaintBucket
                 | ModelerTool::Orbit
                 | ModelerTool::Pan
                 | ModelerTool::Zoom
@@ -212,6 +214,7 @@ impl ModelerTool {
             ModelerTool::Move => tr!("uic-modeler-hint-move"),
             ModelerTool::Rotate => tr!("uic-modeler-hint-rotate"),
             ModelerTool::Scale => tr!("uic-modeler-hint-scale"),
+            ModelerTool::PaintBucket => tr!("uic-modeler-hint-paint-bucket"),
             ModelerTool::Orbit => tr!("uic-modeler-hint-orbit"),
             ModelerTool::Pan => tr!("uic-modeler-hint-pan"),
             ModelerTool::Zoom => tr!("uic-modeler-hint-zoom"),
@@ -318,6 +321,11 @@ pub enum EntityInfo {
         surface: Option<SurfaceStats>,
         /// Where the object is, how it is turned and how large its scale is (read only).
         placement: Option<Placement>,
+        /// What the object is, for the kinds that come from the Vectorworks-like app (plants,
+        /// hardscapes, site models and the like).
+        summary: Option<Box<Summary>>,
+        /// The material the object has as a whole (Paint Bucket), by name.
+        material: Option<String>,
     },
     /// One face of a surface model.
     Face {
@@ -330,6 +338,11 @@ pub enum EntityInfo {
         /// Edges of the outer loop and of the holes together.
         edges: usize,
         holes: usize,
+        /// The model object, for the changes that Entity Info makes.
+        model_object: ObjectId,
+        /// The material of the front and of the back (Paint Bucket), if the face has one.
+        front: Option<ResourceId>,
+        back: Option<ResourceId>,
     },
     /// One edge of a surface model.
     Edge {
@@ -424,6 +437,151 @@ fn placement_of(doc: &Document, obj: &kadakas_core::model::Object) -> Option<Pla
     }
 }
 
+/// What Entity Info says about an object that the modeler shows, selects and moves but that the
+/// Vectorworks-like app edits (MOD-05, round B). Lengths are in mm, areas in mm squared.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Summary {
+    Plant {
+        species: String,
+        /// The name of the plant style, if the plant has one.
+        style: Option<String>,
+        height: f64,
+        spread: f64,
+    },
+    ExistingTree {
+        species: String,
+        height: f64,
+        spread: f64,
+        /// Trunk diameter.
+        dbh: f64,
+    },
+    Hardscape {
+        area: f64,
+        /// The name of the hardscape style.
+        style: Option<String>,
+        material: String,
+    },
+    LandscapeArea {
+        name: String,
+        area: f64,
+        style: Option<String>,
+    },
+    SiteModel {
+        points: usize,
+        lines: usize,
+        /// Width, depth and height of the box around the survey data.
+        extent: Option<[f64; 3]>,
+        /// Size of one repeat of the ground texture, with the texture look.
+        tile: Option<f64>,
+    },
+    /// A symbol instance (2D or 3D).
+    Symbol {
+        name: String,
+    },
+    Group {
+        members: usize,
+    },
+    /// A component instance.
+    Component {
+        name: String,
+    },
+}
+
+impl Summary {
+    /// True for the kinds that only the Kadakas app edits: the modeler moves, turns and scales
+    /// them and offers "Open in the Kadakas app" for the rest.
+    pub fn needs_app(&self) -> bool {
+        !matches!(self, Summary::Group { .. } | Summary::Component { .. })
+    }
+}
+
+fn resource_name(doc: &Document, id: Option<ResourceId>) -> Option<String> {
+    id.and_then(|i| doc.resources.get(i))
+        .map(|r| r.name.clone())
+}
+
+/// The summary of an object, for the kinds that have one.
+pub fn summary_of(doc: &Document, obj: &kadakas_core::model::Object) -> Option<Summary> {
+    use kadakas_core::model::Shape;
+    Some(match &obj.shape {
+        Shape::Plant {
+            species,
+            spread,
+            height,
+            ..
+        } => Summary::Plant {
+            species: species.clone(),
+            style: resource_name(doc, kadakas_core::plants::link::style_of(obj)),
+            height: *height,
+            spread: *spread,
+        },
+        Shape::ExistingTree {
+            species,
+            dbh,
+            spread,
+            height,
+            ..
+        } => Summary::ExistingTree {
+            species: species.clone(),
+            height: *height,
+            spread: *spread,
+            dbh: *dbh,
+        },
+        Shape::Hardscape {
+            boundary, material, ..
+        } => Summary::Hardscape {
+            area: kadakas_core::curve::area(boundary).abs(),
+            style: resource_name(doc, kadakas_core::hardscape::style_id(obj)),
+            material: material.clone(),
+        },
+        Shape::LandscapeArea { boundary, name } => Summary::LandscapeArea {
+            name: name.clone(),
+            area: kadakas_core::curve::area(boundary).abs(),
+            style: resource_name(
+                doc,
+                kadakas_core::landscape::data(obj).and_then(|d| d.style),
+            ),
+        },
+        Shape::SiteModel {
+            points,
+            lines,
+            settings,
+        } => {
+            let all = points
+                .iter()
+                .copied()
+                .chain(lines.iter().flat_map(|l| l.points.iter().copied()));
+            let bounds = all.fold(None, |acc: Option<(glam::DVec3, glam::DVec3)>, p| {
+                Some(match acc {
+                    None => (p, p),
+                    Some((a, b)) => (a.min(p), b.max(p)),
+                })
+            });
+            // A site model with no data has no extent, but it is still a site model.
+            Summary::SiteModel {
+                points: points.len(),
+                lines: lines.len(),
+                extent: bounds.map(|(lo, hi)| {
+                    let d = hi - lo;
+                    [d.x, d.y, d.z]
+                }),
+                tile: (settings.surface_look == kadakas_core::site::SurfaceLook::Texture)
+                    .then_some(settings.texture_tile),
+            }
+        }
+        Shape::Symbol { symbol, .. } => Summary::Symbol {
+            name: resource_name(doc, Some(*symbol)).unwrap_or_default(),
+        },
+        Shape::Group { .. } => Summary::Group {
+            members: doc.children(obj.id).len(),
+        },
+        Shape::Component { symbol, .. } => Summary::Component {
+            name: resource_name(doc, Some(*symbol)).unwrap_or_default(),
+        },
+        _ => return None,
+    })
+}
+
 /// The counts of a surface model, for Entity Info.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SurfaceStats {
@@ -505,6 +663,9 @@ pub fn entity_info(doc: &Document, scene: &Scene, selection: &[ObjectId]) -> Ent
                 min: bounds.map(|b| b.1),
                 surface,
                 placement: placement_of(doc, obj),
+                summary: summary_of(doc, obj).map(Box::new),
+                material: kadakas_core::present::object_material(doc, *id)
+                    .and_then(|m| resource_name(doc, Some(m))),
             }
         }
         many => EntityInfo::Many {
@@ -547,6 +708,9 @@ pub fn entity_info_with_parts(
                 normal: n.normalize_or_zero().to_array(),
                 edges: f.loop_len(),
                 holes: f.holes.len(),
+                model_object: *mid,
+                front: kadakas_core::present::face_materials(doc, &f.attrs).0,
+                back: kadakas_core::present::face_materials(doc, &f.attrs).1,
             }
         }
         [Item::Edge(mid, eid)] => {
@@ -712,6 +876,7 @@ mod tests {
                 "move",
                 "rotate",
                 "scale",
+                "paint-bucket",
                 "orbit",
                 "pan",
                 "zoom",

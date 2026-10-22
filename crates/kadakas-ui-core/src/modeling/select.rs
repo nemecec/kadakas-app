@@ -109,15 +109,40 @@ impl SubSelection {
 /// The face or edge under the pointer. `engine` is an inferencer of its own, so that the locks
 /// of a tool do not change what a click selects.
 pub fn pick(world: &World, engine: &mut Inferencer, cam: &Camera, cursor: DVec2) -> Option<Item> {
+    pick_at(world, engine, cam, cursor).map(|(item, _)| item)
+}
+
+/// Like [`pick`], with the point of the face or edge that was hit.
+pub fn pick_at(
+    world: &World,
+    engine: &mut Inferencer,
+    cam: &Camera,
+    cursor: DVec2,
+) -> Option<(Item, DVec3)> {
     // A pick is its own question: nothing of an earlier pick (a hovered edge) may change it.
     engine.reset();
     let inf = world.infer(engine, cam, cursor, None, &super::Excluded::default());
     let model = world.scenes.object(inf.source)?;
     match inf.source.kind() {
-        TagKind::Edge => Some(Item::Edge(model, EdgeId(inf.source.id()))),
-        TagKind::Face => Some(Item::Face(model, FaceId(inf.source.id()))),
+        TagKind::Edge => Some((Item::Edge(model, EdgeId(inf.source.id())), inf.point)),
+        TagKind::Face => Some((Item::Face(model, FaceId(inf.source.id())), inf.point)),
         _ => None,
     }
+}
+
+/// Like [`pick`], but an object in front of the face or edge (a tree in front of a wall) wins:
+/// the result is `None` then, and the caller falls back to the pick of objects.
+pub fn pick_visible(
+    world: &World,
+    engine: &mut Inferencer,
+    cam: &Camera,
+    cursor: DVec2,
+    scene: &kadakas_core::mesh::Scene,
+) -> Option<Item> {
+    let (item, point) = pick_at(world, engine, cam, cursor)?;
+    object_in_front(world.doc, scene, cam, cursor, point)
+        .is_none()
+        .then_some(item)
 }
 
 /// The edges that bound a face.
@@ -301,6 +326,120 @@ pub fn rect_select(world: &World, cam: &Camera, a: DVec2, b: DVec2, crossing: bo
         }
     }
     out
+}
+
+/// The objects for a selection rectangle (pixels) that are no surface models: plants, hardscapes,
+/// site models, instances and the like (MOD-05, round B). A window takes the objects whose drawn
+/// geometry lies fully inside, a crossing rectangle the ones it touches. Surface models have
+/// their faces and edges selected by [`rect_select`] instead.
+pub fn rect_select_objects(
+    doc: &Document,
+    scene: &kadakas_core::mesh::Scene,
+    cam: &Camera,
+    a: DVec2,
+    b: DVec2,
+    crossing: bool,
+) -> Vec<ObjectId> {
+    let (lo, hi) = (a.min(b), a.max(b));
+    let px = |p: glam::Vec3| cam.project(scene.to_world(p));
+    let mut out = Vec::new();
+    for id in scene.objects() {
+        if model_of(doc, id).is_some() {
+            continue;
+        }
+        let Some((tris, segs)) = scene.object_ranges(id) else {
+            continue;
+        };
+        let any = std::cell::Cell::new(false);
+        let all_inside = std::cell::Cell::new(true);
+        let touches = std::cell::Cell::new(false);
+        let see = |p: Option<DVec2>| match p {
+            Some(p) => {
+                any.set(true);
+                if in_rect(p, lo, hi) {
+                    touches.set(true);
+                } else {
+                    all_inside.set(false);
+                }
+            }
+            None => all_inside.set(false),
+        };
+        for t in tris.clone() {
+            for p in scene.mesh.triangle(t) {
+                see(px(p));
+            }
+            if !crossing && !all_inside.get() {
+                break;
+            }
+        }
+        for s in segs.clone() {
+            for p in scene.lines.segment(s) {
+                see(px(p));
+            }
+            if !crossing && !all_inside.get() {
+                break;
+            }
+        }
+        let hit = if crossing {
+            touches.get() || {
+                // The rectangle may cross the geometry without holding a corner, or lie inside a
+                // large face.
+                let centre = (lo + hi) / 2.0;
+                tris.clone().any(|t| {
+                    let q = scene.mesh.triangle(t).map(px);
+                    match q {
+                        [Some(p0), Some(p1), Some(p2)] => {
+                            segment_hits_rect(p0, p1, lo, hi)
+                                || segment_hits_rect(p1, p2, lo, hi)
+                                || segment_hits_rect(p2, p0, lo, hi)
+                                || point_in_polygon(centre, &[p0, p1, p2])
+                        }
+                        _ => false,
+                    }
+                }) || segs.clone().any(|s| {
+                    let [p, q] = scene.lines.segment(s).map(px);
+                    matches!((p, q), (Some(p), Some(q)) if segment_hits_rect(p, q, lo, hi))
+                })
+            }
+        } else {
+            any.get() && all_inside.get()
+        };
+        if hit {
+            out.push(id);
+        }
+    }
+    out
+}
+
+/// The object that is in front of a face or an edge under the pointer: an object that is no
+/// surface model (a plant, a slab, a site model) whose surface the pointer ray meets before it
+/// meets `hit`, the point of the face or edge. A click on a tree in front of a wall is a click on
+/// the tree. `None` when the face or edge is the nearest thing.
+pub fn object_in_front(
+    doc: &Document,
+    scene: &kadakas_core::mesh::Scene,
+    cam: &Camera,
+    cursor: DVec2,
+    hit: DVec3,
+) -> Option<ObjectId> {
+    let ray = cam.ray(cursor);
+    // A parallel ray starts on a plane that may be inside the scene: step back out of it.
+    let back = if matches!(
+        cam.projection,
+        crate::infer3d::Projection::Orthographic { .. }
+    ) {
+        let reach = scene.bounds.map_or(0.0, |(lo, hi)| {
+            f64::from((hi - lo).length() + (lo + hi).length())
+        });
+        reach + (ray.origin - hit).length()
+    } else {
+        0.0
+    };
+    let origin = ray.origin - ray.dir * back;
+    let local = (origin - scene.origin).as_vec3();
+    let (id, t) = kadakas_render::pick::pick_ray(scene, local, ray.dir.as_vec3())?;
+    let limit = (hit - origin).dot(ray.dir);
+    (model_of(doc, id).is_none() && f64::from(t) < limit - 1.0).then_some(id)
 }
 
 /// Lines across a face that show it is selected: parallel lines in the plane of the face, clipped

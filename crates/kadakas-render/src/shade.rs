@@ -608,6 +608,15 @@ pub fn render_scene(scene: &Scene, look: &Look, camera: &Camera, opts: &ShadeOpt
         }
         let p = mesh.triangle(t);
         let face_n = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
+        // A triangle of a painted face is drawn from one side only.
+        let side = mesh.side_of(t);
+        if side != kadakas_core::mesh::SIDE_BOTH {
+            let to_eye = if ortho { -fwd } else { eye - p[0] };
+            let back = face_n.dot(to_eye) < 0.0;
+            if (side == kadakas_core::mesh::SIDE_FRONT) == back {
+                return None;
+            }
+        }
         Some((v, face_n))
     };
     for t in 0..mesh.triangle_count() {

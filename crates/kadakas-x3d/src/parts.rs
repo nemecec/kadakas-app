@@ -309,7 +309,9 @@ pub fn build(
     let mut geo: BTreeMap<Uid, Geometry> = BTreeMap::new();
     let wanted = |id: ObjectId| opts.objects.as_ref().is_none_or(|list| list.contains(&id));
     for (t, id) in scene.mesh.tri_object.iter().enumerate() {
-        if !wanted(*id) {
+        // The files have one material per face: the back of a painted face (Paint Bucket) is
+        // left out, its front has the same triangles.
+        if !wanted(*id) || scene.mesh.side_of(t) == kadakas_core::mesh::SIDE_BACK {
             continue;
         }
         geo.entry(id.0)
