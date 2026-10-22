@@ -581,6 +581,161 @@
             "count"
           ],
           "type": "object"
+        },
+        {
+          "description": "Offset (MOD-08): draws a copy of every loop of the face `distance` mm inside the face\n(`outward` false, the default) or outside it, in the plane of the face, with miter\ncorners. The face splits along the new loops; a curve gives a curve. `distance` must be\nlarger than the length tolerance. See the module `offset`.",
+          "properties": {
+            "action": {
+              "const": "offset_face",
+              "type": "string"
+            },
+            "distance": {
+              "format": "double",
+              "type": "number"
+            },
+            "face": {
+              "$ref": "#/$defs/FaceId"
+            },
+            "outward": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "action",
+            "face",
+            "distance"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Offset of edges (MOD-08): a chain of edges in one plane (open, or closed) drawn again\n`distance` mm to the side of the point `toward` (local coordinates), with miter corners;\nthe ends of an open chain move at a right angle. A curve gives a curve.",
+          "properties": {
+            "action": {
+              "const": "offset_edges",
+              "type": "string"
+            },
+            "distance": {
+              "format": "double",
+              "type": "number"
+            },
+            "edges": {
+              "items": {
+                "$ref": "#/$defs/EdgeId"
+              },
+              "type": "array"
+            },
+            "toward": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            }
+          },
+          "required": [
+            "action",
+            "edges",
+            "distance",
+            "toward"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Soft, smooth and hidden edges (MOD-08): sets (`true`) or clears (`false`) the flags of the\nedges; a flag that is not given stays as it is. A soft edge is not drawn; the faces on the\nsides of a smooth edge shade as one surface. See the module `style`.",
+          "properties": {
+            "action": {
+              "const": "set_edge_style",
+              "type": "string"
+            },
+            "edges": {
+              "items": {
+                "$ref": "#/$defs/EdgeId"
+              },
+              "type": "array"
+            },
+            "hidden": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "smooth": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "soft": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "action",
+            "edges"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Soften Edges (MOD-08): each of the edges between two faces at an angle below `angle`\ndegrees (0 to 180) becomes soft (and smooth with `smooth`); the others lose both flags.\nEdges between coplanar faces are softened only with `coplanar`.",
+          "properties": {
+            "action": {
+              "const": "soften_edges",
+              "type": "string"
+            },
+            "angle": {
+              "format": "double",
+              "type": "number"
+            },
+            "coplanar": {
+              "default": false,
+              "type": "boolean"
+            },
+            "edges": {
+              "items": {
+                "$ref": "#/$defs/EdgeId"
+              },
+              "type": "array"
+            },
+            "smooth": {
+              "default": true,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "action",
+            "edges",
+            "angle"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Follow Me (MOD-08): sweeps the face `face` (the profile) along the chain of edges `path`\n(open: a solid with the profile and a new face as caps; closed: a ring without caps). The\nnew faces get the paint of the profile; a curve of the path or of the profile gives soft\nand smooth edges. See the module `followme`.",
+          "properties": {
+            "action": {
+              "const": "follow_me",
+              "type": "string"
+            },
+            "face": {
+              "$ref": "#/$defs/FaceId"
+            },
+            "path": {
+              "items": {
+                "$ref": "#/$defs/EdgeId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "action",
+            "face",
+            "path"
+          ],
+          "type": "object"
         }
       ]
     },
