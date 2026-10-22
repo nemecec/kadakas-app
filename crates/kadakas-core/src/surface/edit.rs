@@ -1522,11 +1522,23 @@ fn erase_edges(
     ids: &[EdgeId],
     notes: &mut Vec<String>,
 ) -> Result<(), SurfaceError> {
-    let ids: BTreeSet<EdgeId> = ids.iter().copied().collect();
     if let Some(id) = ids.iter().find(|id| !m.edges.contains_key(id)) {
         return Err(SurfaceError::NoEdge(*id));
     }
     let mut w = Work::indexed(m);
+    erase_edges_in(&mut w, ids, notes)
+}
+
+/// [`erase_edges`] in a work whose index holds the edges and their faces (all edges must exist).
+/// The topology index may cover only a part of the model: it must hold every edge at the ends of
+/// the erased edges and at their neighbours, and every face of those edges (see
+/// `transform::local_work`).
+fn erase_edges_in(
+    w: &mut Work<'_>,
+    ids: &[EdgeId],
+    notes: &mut Vec<String>,
+) -> Result<(), SurfaceError> {
+    let ids: BTreeSet<EdgeId> = ids.iter().copied().collect();
     let mut groups = Groups::default();
     let mut ends: BTreeSet<VertexId> = BTreeSet::new();
     for &e in &ids {
