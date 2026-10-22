@@ -61,9 +61,72 @@ pub struct Mesh {
     pub two_sided: Vec<bool>,
     /// New vertices are two-sided while this is true.
     pub two_sided_mode: bool,
+    /// Paint (MOD-05): the side of each triangle that is drawn ([`SIDE_BOTH`], [`SIDE_FRONT`] or
+    /// [`SIDE_BACK`]). May be shorter than the triangles; the rest draw both sides. A face with a
+    /// material on only one side, or a different one on each side, is two triangles: one for the
+    /// front and one for the back.
+    pub tri_side: Vec<u8>,
+    /// Paint: one entry per triangle, 0 for none or `n + 1` for `paints[n]`, the material of the
+    /// face. May be shorter than the triangles. It has priority over the slots of the object.
+    pub tri_paint: Vec<u32>,
+    /// The materials that `tri_paint` points at.
+    pub paints: Vec<crate::resource::ResourceId>,
+    /// New triangles get this side and this paint (an entry of `paints` plus one, or 0).
+    pub side_mode: u8,
+    pub paint_mode: u32,
 }
 
+/// A triangle that is drawn from both sides.
+pub const SIDE_BOTH: u8 = 0;
+/// A triangle that is drawn only when seen from its front (the side its normal points to).
+pub const SIDE_FRONT: u8 = 1;
+/// A triangle that is drawn only when seen from its back.
+pub const SIDE_BACK: u8 = 2;
+
 impl Mesh {
+    /// The side of triangle `t` that is drawn.
+    pub fn side_of(&self, t: usize) -> u8 {
+        self.tri_side.get(t).copied().unwrap_or(SIDE_BOTH)
+    }
+
+    /// The material that triangle `t` has from its face (Paint Bucket), if any.
+    pub fn paint_of(&self, t: usize) -> Option<crate::resource::ResourceId> {
+        match self.tri_paint.get(t).copied() {
+            Some(n) if n > 0 => self.paints.get(n as usize - 1).copied(),
+            _ => None,
+        }
+    }
+
+    /// The paint number for a material: the entry of `paints` plus one.
+    pub fn paint_number(&mut self, id: crate::resource::ResourceId) -> u32 {
+        let n = match self.paints.iter().position(|p| *p == id) {
+            Some(n) => n,
+            None => {
+                self.paints.push(id);
+                self.paints.len() - 1
+            }
+        };
+        n as u32 + 1
+    }
+
+    /// Sets the side and the paint of triangle `t` (both are stored only when they are set).
+    pub fn mark_triangle(
+        &mut self,
+        t: usize,
+        side: u8,
+        paint: Option<crate::resource::ResourceId>,
+    ) {
+        if side != SIDE_BOTH {
+            self.tri_side.resize(t, SIDE_BOTH);
+            self.tri_side.push(side);
+        }
+        if let Some(p) = paint {
+            let n = self.paint_number(p);
+            self.tri_paint.resize(t, 0);
+            self.tri_paint.push(n);
+        }
+    }
+
     /// True if vertex `i` belongs to a two-sided surface.
     pub fn is_two_sided(&self, i: usize) -> bool {
         self.two_sided.get(i).copied().unwrap_or(false)
@@ -107,6 +170,17 @@ impl Mesh {
         self.indices.extend_from_slice(&[a, b, c]);
         self.tri_object.push(object);
         self.tri_part.push(self.part);
+        if self.side_mode != SIDE_BOTH || self.paint_mode != 0 {
+            let t = self.tri_object.len() - 1;
+            if self.side_mode != SIDE_BOTH {
+                self.tri_side.resize(t, SIDE_BOTH);
+                self.tri_side.push(self.side_mode);
+            }
+            if self.paint_mode != 0 {
+                self.tri_paint.resize(t, 0);
+                self.tri_paint.push(self.paint_mode);
+            }
+        }
     }
 }
 
@@ -781,7 +855,15 @@ impl Builder<'_> {
             };
             self.scene.mesh.part = PART_MAIN;
             self.scene.mesh.two_sided_mode = true;
-            add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
+            let painted = m.faces().any(|(_, f)| {
+                f.attrs.contains_key(crate::surface::ATTR_MATERIAL)
+                    || f.attrs.contains_key(crate::surface::ATTR_BACK_MATERIAL)
+            });
+            if !painted {
+                add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
+            } else {
+                self.painted_faces(m, &sm.faces, &pts, &tris, color, id);
+            }
             self.scene.mesh.two_sided_mode = false;
         }
         for (eid, e) in m.edges() {
@@ -797,6 +879,59 @@ impl Builder<'_> {
                 self.scene.lines.push(at(a), at(b), edge, id);
             }
         }
+    }
+
+    /// The triangles of a model with painted faces (Paint Bucket). The faces are grouped by the
+    /// materials of their front and back. A face with one material on both sides is one set of
+    /// triangles; otherwise the front and the back are two sets, each drawn from its side only,
+    /// and a side without a material has the default front color or the back color.
+    fn painted_faces(
+        &mut self,
+        m: &crate::surface::SurfaceModel,
+        face_of_triangle: &[crate::surface::FaceId],
+        pts: &[Vec3],
+        tris: &[[u32; 3]],
+        color: [u8; 4],
+        id: ObjectId,
+    ) {
+        use crate::resource::ResourceId;
+        type Pair = (Option<ResourceId>, Option<ResourceId>);
+        let mut by_face: std::collections::HashMap<crate::surface::FaceId, Pair> =
+            std::collections::HashMap::new();
+        let mut groups: std::collections::BTreeMap<Pair, Vec<[u32; 3]>> =
+            std::collections::BTreeMap::new();
+        for (t, tri) in tris.iter().enumerate() {
+            let face = face_of_triangle[t];
+            let pair = *by_face.entry(face).or_insert_with(|| {
+                m.face(face).map_or((None, None), |f| {
+                    crate::present::face_materials(self.doc, &f.attrs)
+                })
+            });
+            groups.entry(pair).or_default().push(*tri);
+        }
+        let base_of = |this: &Self, rid: Option<ResourceId>| {
+            rid.and_then(|r| crate::present::material(this.doc, r))
+                .map_or(color, |mat| mat.base_color.0)
+        };
+        for ((front, back), list) in groups {
+            let emit = |this: &mut Self, side: u8, paint: Option<ResourceId>| {
+                let mesh = &mut this.scene.mesh;
+                mesh.side_mode = side;
+                mesh.paint_mode = paint.map_or(0, |p| mesh.paint_number(p));
+                let c = base_of(this, paint);
+                add_shaded(&mut this.scene.mesh, pts, &list, c, id);
+            };
+            match (front, back) {
+                (None, None) => emit(self, SIDE_BOTH, None),
+                (Some(a), Some(b)) if a == b => emit(self, SIDE_BOTH, Some(a)),
+                _ => {
+                    emit(self, SIDE_FRONT, front);
+                    emit(self, SIDE_BACK, back);
+                }
+            }
+        }
+        self.scene.mesh.side_mode = SIDE_BOTH;
+        self.scene.mesh.paint_mode = 0;
     }
 
     fn add_object(&mut self, obj: &Object, layer: &Layer) {

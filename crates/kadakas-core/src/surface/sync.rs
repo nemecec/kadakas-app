@@ -53,6 +53,12 @@ pub enum Intent {
     EraseFacesAt { points: Vec<[f64; 3]> },
     /// Faces reversed, by a point inside each.
     ReverseFacesAt { points: Vec<[f64; 3]> },
+    /// Faces painted, by a point inside each.
+    PaintAt {
+        points: Vec<[f64; 3]>,
+        side: super::PaintSide,
+        material: Option<String>,
+    },
     /// A curve (circle or arc) drawn as a chain of edges, by its corner points.
     AddCurve { points: Vec<[f64; 3]>, closed: bool },
     /// A face pushed or pulled along its normal, by a point inside it.
@@ -118,6 +124,15 @@ impl Intent {
             },
             Edit::EraseFaces { faces: ids } => Intent::EraseFacesAt { points: faces(ids) },
             Edit::ReverseFaces { faces: ids } => Intent::ReverseFacesAt { points: faces(ids) },
+            Edit::SetFaceMaterial {
+                faces: ids,
+                side,
+                material,
+            } => Intent::PaintAt {
+                points: faces(ids),
+                side: *side,
+                material: material.clone(),
+            },
             Edit::AddCurve { points, closed } => Intent::AddCurve {
                 points: points.clone(),
                 closed: *closed,
@@ -174,7 +189,8 @@ impl Intent {
             Intent::AddEdges { edges } => 2 * edges.len(),
             Intent::EraseEdgesAt { points }
             | Intent::EraseFacesAt { points }
-            | Intent::ReverseFacesAt { points } => points.len(),
+            | Intent::ReverseFacesAt { points }
+            | Intent::PaintAt { points, .. } => points.len(),
             Intent::AddCurve { points, .. } => points.len(),
             Intent::TransformAt { vertices, .. } => vertices.len().max(1),
             Intent::CopyAt { faces, edges, .. } => (faces.len() + edges.len()).max(1),
@@ -376,6 +392,21 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
             } else {
                 m.apply(&Edit::ReverseFaces { faces })
             }
+        }
+        Intent::PaintAt {
+            points,
+            side,
+            material,
+        } => {
+            let faces = points
+                .iter()
+                .map(|p| face_at(m, DVec3::from(*p)).ok_or_else(|| gone("face", p)))
+                .collect::<Result<Vec<_>, _>>()?;
+            m.apply(&Edit::SetFaceMaterial {
+                faces,
+                side: *side,
+                material: material.clone(),
+            })
         }
         Intent::AddCurve { points, closed } => m.apply(&Edit::AddCurve {
             points: points.clone(),

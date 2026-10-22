@@ -614,3 +614,128 @@ fn the_pbr_renderer_shows_the_back_of_a_surface_model_face_in_the_back_color() {
     );
     assert!(back[2] > back[0] + 15, "back is bluish: {back:?}");
 }
+
+/// Paints the only face of the model `id`.
+fn paint_face(
+    ed: &mut Editor,
+    id: ObjectId,
+    side: kadakas_core::surface::PaintSide,
+    m: ResourceId,
+) {
+    use kadakas_core::model::Shape as S;
+    let face = match &ed.doc().object(id).unwrap().shape {
+        S::SurfaceModel(s) => s.faces().next().unwrap().0,
+        _ => unreachable!(),
+    };
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: kadakas_core::surface::Edit::SetFaceMaterial {
+            faces: vec![face],
+            side,
+            material: Some(m.to_string()),
+        },
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_painted_face_draws_the_color_of_its_material_on_the_painted_side_only() {
+    use kadakas_core::surface::PaintSide;
+    let mut ed = Editor::default();
+    let id = add_surface_square(&mut ed, 500.0);
+    let red = add_material(
+        &mut ed,
+        Material {
+            base_color: Color([200, 20, 20, 255]),
+            ..Default::default()
+        },
+    );
+    let green = add_material(
+        &mut ed,
+        Material {
+            base_color: Color([20, 200, 20, 255]),
+            ..Default::default()
+        },
+    );
+    let o = ShadeOptions {
+        edges: false,
+        ..opts(60, 60)
+    };
+    // Front red: seen from above red; seen from below the plain back color (bluish).
+    paint_face(&mut ed, id, PaintSide::Front, red);
+    let top = render_doc(&ed, &top_ortho(1000.0), &o).pixel(30, 30);
+    let bottom = render_doc(&ed, &bottom_ortho(1000.0), &o).pixel(30, 30);
+    assert!(
+        top[0] > top[1] + 60 && top[0] > top[2] + 60,
+        "front red: {top:?}"
+    );
+    assert!(bottom[2] > bottom[0] + 15, "back stays bluish: {bottom:?}");
+    // Back green.
+    paint_face(&mut ed, id, PaintSide::Back, green);
+    let top = render_doc(&ed, &top_ortho(1000.0), &o).pixel(30, 30);
+    let bottom = render_doc(&ed, &bottom_ortho(1000.0), &o).pixel(30, 30);
+    assert!(top[0] > top[1] + 60, "front still red: {top:?}");
+    assert!(
+        bottom[1] > bottom[0] + 30 && bottom[1] > bottom[2] + 30,
+        "back green: {bottom:?}"
+    );
+    // The same in the basic renderer.
+    let scene = scene_of(&ed);
+    let basic = |cam: &Camera| {
+        crate::raster::render(
+            &scene,
+            cam,
+            &crate::raster::RenderOptions {
+                width: 60,
+                height: 60,
+                ..Default::default()
+            },
+        )
+        .pixel(30, 30)
+    };
+    let (t, b) = (basic(&top_ortho(1000.0)), basic(&bottom_ortho(1000.0)));
+    assert!(t[0] > t[1] + 60, "basic front red: {t:?}");
+    assert!(b[1] > b[0] + 30, "basic back green: {b:?}");
+}
+
+#[test]
+fn a_painted_face_takes_the_texture_of_its_material_with_the_mapping() {
+    use kadakas_core::surface::PaintSide;
+    let mut ed = Editor::default();
+    let id = add_surface_square(&mut ed, 500.0);
+    let brick = add_material(
+        &mut ed,
+        Material {
+            base_color: Color([158, 78, 58, 255]),
+            texture: Some(Texture::Procedural {
+                kind: Procedural::Brick,
+                seed: 1,
+            }),
+            mapping: TextureMapping {
+                kind: MappingKind::Box,
+                scale: [200.0, 200.0],
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    let flat = add_material(
+        &mut ed,
+        Material {
+            base_color: Color([158, 78, 58, 255]),
+            ..Default::default()
+        },
+    );
+    let o = ShadeOptions {
+        edges: false,
+        ..opts(80, 80)
+    };
+    paint_face(&mut ed, id, PaintSide::Both, brick);
+    let (_, textured) = stats(&render_doc(&ed, &top_ortho(1000.0), &o), 20, 20, 60, 60);
+    paint_face(&mut ed, id, PaintSide::Both, flat);
+    let (_, plain) = stats(&render_doc(&ed, &top_ortho(1000.0), &o), 20, 20, 60, 60);
+    assert!(
+        textured > plain + 1.0,
+        "texture detail {textured} against {plain}"
+    );
+}

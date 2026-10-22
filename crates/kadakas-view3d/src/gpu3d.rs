@@ -182,14 +182,33 @@ fn shade(i: SurfaceOut) -> vec4<f32> {
     return vec4<f32>(clamp(albedo * light + spec_color * spec, vec3<f32>(0.0), vec3<f32>(1.0)), alpha);
 }
 
+// True for a triangle that is drawn from one side only (flag 2: the front, flag 4: the back,
+// Paint Bucket) and is seen from the other side.
+fn culled(i: SurfaceOut) -> bool {
+    var to_eye = g.eye.xyz;
+    if (g.params.z < 0.5) {
+        to_eye = normalize(g.eye.xyz - i.world);
+    }
+    let back = dot(normalize(i.normal), to_eye) < 0.0;
+    return ((i.flags & 2u) != 0u && back) || ((i.flags & 4u) != 0u && !back);
+}
+
 @fragment
 fn fs_surface(i: SurfaceOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(shade(i).rgb, 1.0);
+    let c = shade(i);
+    if (culled(i)) {
+        discard;
+    }
+    return vec4<f32>(c.rgb, 1.0);
 }
 
 @fragment
 fn fs_surface_blend(i: SurfaceOut) -> @location(0) vec4<f32> {
-    return shade(i);
+    let c = shade(i);
+    if (culled(i)) {
+        discard;
+    }
+    return c;
 }
 
 @fragment

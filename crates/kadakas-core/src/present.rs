@@ -20,6 +20,12 @@ use crate::resource::{ResourceBody, ResourceId};
 use crate::site::SurfaceLook;
 use crate::sun::{self, SunTime};
 
+mod paint;
+pub use paint::{
+    MaterialUses, can_paint_object, face_materials, is_whole_object_slot, material_ref,
+    material_uses, object_material, paint_object_refusal,
+};
+
 /// Largest texture image, as base64 text of the PNG file.
 pub const MAX_TEXTURE_BASE64: usize = 4 * 1024 * 1024;
 /// Largest side of a texture image in pixels.
@@ -843,7 +849,26 @@ impl SlotIndex {
             }
         }
         ix.beds = beds;
+        ix.spread_group_materials(doc);
         ix
+    }
+
+    /// A material on a group goes to everything inside the group that has no material of its own
+    /// (Paint Bucket on a group, MOD-05). The innermost group with a material wins.
+    fn spread_group_materials(&mut self, doc: &Document) {
+        let mut groups: Vec<(ObjectId, ResourceId)> = self
+            .objects
+            .iter()
+            .filter(|((o, slot), _)| slot.is_none() && doc.is_group(*o))
+            .map(|((o, _), m)| (*o, *m))
+            .collect();
+        // The deepest groups first, so an outer group never replaces an inner one.
+        groups.sort_by_key(|(g, _)| (std::cmp::Reverse(doc.ancestors(*g).len()), *g));
+        for (g, m) in groups {
+            for d in doc.descendants(g) {
+                self.objects.entry((d, None)).or_insert(m);
+            }
+        }
     }
 
     /// The texture beds that act on a site model, from the back to the front.
