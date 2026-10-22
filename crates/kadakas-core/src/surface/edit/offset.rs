@@ -34,24 +34,27 @@ pub(super) fn offset_face(
     distance: f64,
     outward: bool,
 ) -> Result<(), SurfaceError> {
-    let moved = outline(m, face, distance, outward)?;
+    let moved = outline(m, face, distance, outward, false)?;
     let f = &m.faces[&face];
     let lines: Vec<(Vec<VertexId>, Vec<DVec3>)> = f.loops().cloned().zip(moved).collect();
     draw(m, &lines, true)
 }
 
 /// The new loops of an offset of `face` (local coordinates, outer loop first), or the refusal.
+/// A `preview` refusal does not look for the largest distance that fits (it is asked on every
+/// move of the pointer).
 pub(in crate::surface) fn outline(
     m: &SurfaceModel,
     face: FaceId,
     distance: f64,
     outward: bool,
+    preview: bool,
 ) -> Result<Vec<Vec<DVec3>>, SurfaceError> {
     let f = m.faces.get(&face).ok_or(SurfaceError::NoFace(face))?;
     let loops: Vec<Vec<DVec3>> = f.loops().map(|l| m.loop_points(l)).collect();
     check_distance(&loops, distance)?;
     let s = if outward { -distance } else { distance };
-    fitted(&loops, f.plane, s, true, &format!("face {face}"))
+    fitted(&loops, f.plane, s, true, &format!("face {face}"), preview)
 }
 
 /// Offset Edges (MOD-08): a chain of edges in one plane (open, or closed as a loop) offset by
@@ -70,7 +73,7 @@ pub(super) fn offset_edges(
     if !toward.is_finite() {
         return Err(SurfaceError::BadPoint);
     }
-    let (chain, closed, moved) = chain_line(m, edges, distance, toward)?;
+    let (chain, closed, moved) = chain_line(m, edges, distance, toward, false)?;
     let lines = vec![(chain, moved)];
     draw(m, &lines, closed)
 }
@@ -82,6 +85,7 @@ pub(in crate::surface) fn chain_line(
     edges: &[EdgeId],
     distance: f64,
     toward: DVec3,
+    preview: bool,
 ) -> Result<(Vec<VertexId>, bool, Vec<DVec3>), SurfaceError> {
     if let Some(e) = edges.iter().find(|e| !m.edges.contains_key(e)) {
         return Err(SurfaceError::NoEdge(*e));
@@ -109,7 +113,14 @@ pub(in crate::surface) fn chain_line(
         ));
     }
     let s = distance * left.signum();
-    let moved = fitted(std::slice::from_ref(&pts), plane, s, closed, "the edges")?;
+    let moved = fitted(
+        std::slice::from_ref(&pts),
+        plane,
+        s,
+        closed,
+        "the edges",
+        preview,
+    )?;
     Ok((chain, closed, moved.into_iter().next().expect("one line")))
 }
 
@@ -136,6 +147,7 @@ fn fitted(
     s: f64,
     closed: bool,
     what: &str,
+    preview: bool,
 ) -> Result<Vec<Vec<DVec3>>, SurfaceError> {
     let n = plane.normal;
     let all: Vec<DVec3> = loops.iter().flatten().copied().collect();
@@ -143,6 +155,9 @@ fn fitted(
     let moved = match offset_loops(loops, n, &plane, s, closed) {
         Ok(l) => l,
         Err(why) => {
+            if preview {
+                return Err(SurfaceError::Refused(why));
+            }
             let most = largest_fit(loops, n, &plane, s.signum(), s.abs(), closed);
             let fits = if most > tol {
                 format!("at most about {} mm fits", (most * 100.0).floor() / 100.0)

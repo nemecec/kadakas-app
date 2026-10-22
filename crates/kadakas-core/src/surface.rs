@@ -644,7 +644,7 @@ impl SurfaceModel {
         distance: f64,
         outward: bool,
     ) -> Result<Vec<Vec<DVec3>>, SurfaceError> {
-        edit::offset::outline(self, face, distance, outward)
+        edit::offset::outline(self, face, distance, outward, true)
     }
 
     /// The line that an Offset of the chain `edges` by `distance` toward `toward` would draw
@@ -655,7 +655,7 @@ impl SurfaceModel {
         distance: f64,
         toward: DVec3,
     ) -> Result<(Vec<DVec3>, bool), SurfaceError> {
-        edit::offset::chain_line(self, edges, distance, toward).map(|(_, c, l)| (l, c))
+        edit::offset::chain_line(self, edges, distance, toward, true).map(|(_, c, l)| (l, c))
     }
 
     /// The triangles of one face (holes are left open).

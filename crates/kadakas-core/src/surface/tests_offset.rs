@@ -583,3 +583,29 @@ fn offset_edges_refuses_what_has_no_offset() {
     assert!(e.to_string().contains("lies on the edges"), "{e}");
     assert_eq!(m, before);
 }
+
+#[test]
+fn the_preview_of_an_offset_gives_the_loops_or_a_short_refusal() {
+    let (m, f) = lone(&square(0.0, 0.0, 1000.0, 0.0));
+    let loops = m.offset_outline(f, 100.0, false).unwrap();
+    assert_eq!(loops.len(), 1);
+    assert!(
+        loops[0]
+            .iter()
+            .any(|p| p.distance(DVec3::new(100.0, 100.0, 0.0)) < 1e-9)
+    );
+    // Too large: refused, without the search for the largest that fits.
+    let e = m.offset_outline(f, 600.0, false).unwrap_err().to_string();
+    assert!(!e.contains("at most"), "{e}");
+    let mut c = SurfaceModel::new();
+    c.apply(&Edit::AddEdges {
+        edges: vec![[[0.0, 0.0, 0.0], [1000.0, 0.0, 0.0]]],
+    })
+    .unwrap();
+    let es: Vec<EdgeId> = c.edges().map(|(id, _)| id).collect();
+    let (line, closed) = c
+        .offset_chain(&es, 50.0, DVec3::new(500.0, 500.0, 0.0))
+        .unwrap();
+    assert!(!closed);
+    assert!(line.iter().all(|p| (p.y - 50.0).abs() < 1e-9));
+}
