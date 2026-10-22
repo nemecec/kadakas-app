@@ -55,6 +55,8 @@ pub struct Edit3d {
     copy_down: bool,
     /// The copy key went down alone and nothing else was pressed since.
     copy_arm: bool,
+    /// Ctrl (Option on a Mac) was down in the last frame, for the kind of a polygon.
+    poly_key_down: bool,
     /// The last inference under the pointer, for the marks.
     hover: Option<Inference>,
     preview: Preview,
@@ -91,6 +93,7 @@ impl Default for Edit3d {
             shift_down: false,
             copy_down: false,
             copy_arm: false,
+            poly_key_down: false,
             hover: None,
             preview: Preview::default(),
             band: None,
@@ -194,8 +197,8 @@ impl Edit3d {
         let live = self.modeling.live(&units);
         let default = match tool {
             ModelerTool::Rectangle => LiveLabel::Dimensions,
-            ModelerTool::Circle => LiveLabel::Radius,
-            ModelerTool::PushPull => LiveLabel::Distance,
+            ModelerTool::Circle | ModelerTool::Polygon => LiveLabel::Radius,
+            ModelerTool::PushPull | ModelerTool::Offset => LiveLabel::Distance,
             ModelerTool::Rotate => LiveLabel::Angle,
             ModelerTool::Scale => LiveLabel::Factor,
             _ => LiveLabel::Length,
@@ -287,6 +290,20 @@ impl Edit3d {
         } else {
             self.copy_down = false;
         }
+        // Offset and Follow Me work on the selected faces and edges; Ctrl (Option on a Mac)
+        // switches the kind of a polygon.
+        if matches!(tool, ModelerTool::Offset | ModelerTool::FollowMe) {
+            self.modeling.set_parts(self.sub.clone());
+        }
+        let poly_key = if cfg!(target_os = "macos") {
+            inp.mods.alt
+        } else {
+            inp.mods.ctrl
+        };
+        if tool == ModelerTool::Polygon && poly_key && !self.poly_key_down {
+            self.modeling.toggle_polygon_kind();
+        }
+        self.poly_key_down = poly_key;
 
         let mut out = Out::default();
         let mut selection_changed = false;

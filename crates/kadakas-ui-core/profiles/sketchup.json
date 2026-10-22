@@ -68,6 +68,8 @@
     "tool.eraser": ["E"],
     "tool.arc": ["A"],
     "tool.push_pull": ["P"],
+    "tool.polygon": [],
+    "tool.follow_me": [],
     "tool.move": ["M"],
     "tool.tape_measure": ["T"],
     "tool.paint_bucket": ["B"],

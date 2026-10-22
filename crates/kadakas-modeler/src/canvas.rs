@@ -71,6 +71,8 @@ pub struct Canvas<'a> {
     pub fit_pending: &'a mut bool,
     /// Whether Intersect Faces With Model and With Selection are enabled (the context menu).
     pub intersect: [bool; 2],
+    /// Faces or edges are selected: Soften, Smooth and Unsoften are enabled (the context menu).
+    pub edges: bool,
 }
 
 /// What the canvas tells the program.
@@ -146,6 +148,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
         gpu_ready,
         fit_pending,
         intersect,
+        edges,
     } = c;
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     let mut shown = Shown {
@@ -371,6 +374,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
     resp.context_menu(|ui| {
         let mut cmds = Vec::new();
         crate::menu::intersect_menu(ui, intersect, &mut cmds);
+        crate::soften::context_menu(ui, edges, &mut cmds);
         if let Some(c) = cmds.pop() {
             shown.command = Some(c);
         }

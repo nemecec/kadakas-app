@@ -168,7 +168,7 @@ pub enum IntersectScope {
 mod followme;
 mod intersect;
 mod near;
-mod offset;
+pub(super) mod offset;
 mod pushpull;
 pub(super) mod reference;
 pub(super) mod style;

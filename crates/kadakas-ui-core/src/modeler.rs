@@ -21,8 +21,14 @@ pub enum ModelerTool {
     Line,
     Rectangle,
     Circle,
+    /// A regular polygon (MOD-08).
+    Polygon,
     Arc,
     PushPull,
+    /// Follow Me (MOD-08): a face swept along a path.
+    FollowMe,
+    /// Offset (MOD-08): the loops of a face, or a chain of edges, drawn again at a distance.
+    Offset,
     Move,
     Rotate,
     Scale,
@@ -36,14 +42,17 @@ pub enum ModelerTool {
 }
 
 impl ModelerTool {
-    pub const ALL: [ModelerTool; 16] = [
+    pub const ALL: [ModelerTool; 19] = [
         ModelerTool::Select,
         ModelerTool::Eraser,
         ModelerTool::Line,
         ModelerTool::Rectangle,
         ModelerTool::Circle,
+        ModelerTool::Polygon,
         ModelerTool::Arc,
         ModelerTool::PushPull,
+        ModelerTool::FollowMe,
+        ModelerTool::Offset,
         ModelerTool::Move,
         ModelerTool::Rotate,
         ModelerTool::Scale,
@@ -67,10 +76,13 @@ impl ModelerTool {
             ModelerTool::Line,
             ModelerTool::Rectangle,
             ModelerTool::Circle,
+            ModelerTool::Polygon,
             ModelerTool::Arc,
         ],
         &[
             ModelerTool::PushPull,
+            ModelerTool::FollowMe,
+            ModelerTool::Offset,
             ModelerTool::Move,
             ModelerTool::Rotate,
             ModelerTool::Scale,
@@ -92,8 +104,11 @@ impl ModelerTool {
             ModelerTool::Line => "line",
             ModelerTool::Rectangle => "rectangle",
             ModelerTool::Circle => "circle",
+            ModelerTool::Polygon => "polygon",
             ModelerTool::Arc => "arc",
             ModelerTool::PushPull => "push-pull",
+            ModelerTool::FollowMe => "follow-me",
+            ModelerTool::Offset => "offset",
             ModelerTool::Move => "move",
             ModelerTool::Rotate => "rotate",
             ModelerTool::Scale => "scale",
@@ -114,8 +129,11 @@ impl ModelerTool {
             ModelerTool::Line => msg!("uic-modeler-tool-line"),
             ModelerTool::Rectangle => msg!("uic-modeler-tool-rectangle"),
             ModelerTool::Circle => msg!("uic-modeler-tool-circle"),
+            ModelerTool::Polygon => msg!("uic-modeler-tool-polygon"),
             ModelerTool::Arc => msg!("uic-modeler-tool-arc"),
             ModelerTool::PushPull => msg!("uic-modeler-tool-push-pull"),
+            ModelerTool::FollowMe => msg!("uic-modeler-tool-follow-me"),
+            ModelerTool::Offset => msg!("uic-modeler-tool-offset"),
             ModelerTool::Move => msg!("uic-modeler-tool-move"),
             ModelerTool::Rotate => msg!("uic-modeler-tool-rotate"),
             ModelerTool::Scale => msg!("uic-modeler-tool-scale"),
@@ -141,8 +159,11 @@ impl ModelerTool {
             ModelerTool::Line => Action::ToolLine,
             ModelerTool::Rectangle => Action::ToolRect,
             ModelerTool::Circle => Action::ToolCircle,
+            ModelerTool::Polygon => Action::ToolPolygon,
             ModelerTool::Arc => Action::ToolArc,
             ModelerTool::PushPull => Action::ToolPushPull,
+            ModelerTool::FollowMe => Action::ToolFollowMe,
+            ModelerTool::Offset => Action::ToolOffset,
             ModelerTool::Move => Action::ToolMove,
             ModelerTool::Rotate => Action::ToolRotate,
             ModelerTool::Scale => Action::ToolScale,
@@ -174,8 +195,11 @@ impl ModelerTool {
                 | ModelerTool::Line
                 | ModelerTool::Rectangle
                 | ModelerTool::Circle
+                | ModelerTool::Polygon
                 | ModelerTool::Arc
                 | ModelerTool::PushPull
+                | ModelerTool::FollowMe
+                | ModelerTool::Offset
                 | ModelerTool::Move
                 | ModelerTool::Rotate
                 | ModelerTool::Scale
@@ -209,8 +233,11 @@ impl ModelerTool {
             ModelerTool::Line => tr!("uic-modeler-hint-line"),
             ModelerTool::Rectangle => tr!("uic-modeler-hint-rectangle"),
             ModelerTool::Circle => tr!("uic-modeler-hint-circle"),
+            ModelerTool::Polygon => tr!("uic-modeler-hint-polygon"),
             ModelerTool::Arc => tr!("uic-modeler-hint-arc"),
             ModelerTool::PushPull => tr!("uic-modeler-hint-push-pull"),
+            ModelerTool::FollowMe => tr!("uic-modeler-hint-follow-me"),
+            ModelerTool::Offset => tr!("uic-modeler-hint-offset"),
             ModelerTool::Move => tr!("uic-modeler-hint-move"),
             ModelerTool::Rotate => tr!("uic-modeler-hint-rotate"),
             ModelerTool::Scale => tr!("uic-modeler-hint-scale"),
@@ -356,6 +383,8 @@ pub enum EntityInfo {
         curve: Option<(u32, usize)>,
         /// How many faces use it.
         faces: usize,
+        /// Soft, smooth and hidden (MOD-08).
+        style: EdgeFlags,
     },
     /// Several faces and edges of surface models.
     Parts { faces: usize, edges: usize },
@@ -364,6 +393,15 @@ pub enum EntityInfo {
         count: usize,
         size: Option<[f64; 3]>,
     },
+}
+
+/// The flags of an edge of a surface model (MOD-08): soft (not drawn), smooth (the faces on its
+/// sides shade as one surface) and hidden.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EdgeFlags {
+    pub soft: bool,
+    pub smooth: bool,
+    pub hidden: bool,
 }
 
 /// The position, rotation and scale of an object, for Entity Info (MOD-05). The position is the
@@ -738,6 +776,15 @@ pub fn entity_info_with_parts(
                     )
                 }),
                 faces: m.faces_of_edge(*eid).len(),
+                style: {
+                    use kadakas_core::surface::{ATTR_HIDDEN, ATTR_SMOOTH, ATTR_SOFT, flagged};
+                    let a = m.edge_attrs(*eid);
+                    EdgeFlags {
+                        soft: flagged(a, ATTR_SOFT),
+                        smooth: flagged(a, ATTR_SMOOTH),
+                        hidden: flagged(a, ATTR_HIDDEN),
+                    }
+                },
             }
         }
         many => EntityInfo::Parts {
@@ -840,15 +887,16 @@ mod tests {
     }
 
     #[test]
-    fn the_tool_bar_has_the_sixteen_getting_started_tools_once() {
+    fn the_tool_bar_has_the_getting_started_tools_and_the_mod08_tools_once() {
         let mut seen: Vec<ModelerTool> = ModelerTool::GROUPS
             .iter()
             .flat_map(|g| g.iter().copied())
             .collect();
-        assert_eq!(seen.len(), 16);
+        // The 16 of the Getting Started set and Polygon, Follow Me and Offset (MOD-08).
+        assert_eq!(seen.len(), 19);
         seen.sort_by_key(|t| t.id());
         seen.dedup();
-        assert_eq!(seen.len(), 16, "each tool is in one group");
+        assert_eq!(seen.len(), 19, "each tool is in one group");
         for t in ModelerTool::ALL {
             assert!(seen.contains(&t));
         }
@@ -871,8 +919,11 @@ mod tests {
                 "line",
                 "rectangle",
                 "circle",
+                "polygon",
                 "arc",
                 "push-pull",
+                "follow-me",
+                "offset",
                 "move",
                 "rotate",
                 "scale",

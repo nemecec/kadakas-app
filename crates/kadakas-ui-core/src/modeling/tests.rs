@@ -1138,6 +1138,7 @@ fn the_geometry_being_pulled_is_left_out_of_the_inference() {
 }
 
 mod landscape;
+mod mod08;
 mod more;
 mod paint;
 mod xform;

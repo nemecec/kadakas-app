@@ -1,5 +1,5 @@
 //! The drawing tools of the modeler as headless state machines: Line, Rectangle, Circle, Arc,
-//! Eraser and Push/Pull.
+//! Eraser and Push/Pull; Polygon, Offset and Follow Me are in the module `more`.
 //!
 //! The window feeds them the pointer (an [`Inference`] and the pointer ray), the clicks and the
 //! text of the Measurements box. They answer with [`Action`]s in world coordinates, which
@@ -43,6 +43,10 @@ use super::xform::{Context, Xform, is_transform_tool};
 use crate::infer3d::{Constraint, Inference, Key, Kind, Ray, Rgb, TagKind};
 use crate::measure_box::{self, Phase, Tool, Value};
 use crate::modeler::ModelerTool;
+
+mod more;
+
+pub use more::{DEFAULT_POLYGON_SIDES, is_more_tool, polygon_points};
 
 /// Shortest segment or side that a tool draws (mm).
 pub(super) const MIN_LEN: f64 = 0.01;
@@ -207,6 +211,8 @@ pub struct Modeling {
     xf: Xform,
     /// The Paint Bucket and its material. It stays when another tool is chosen.
     pub paint: super::paint::Paint,
+    /// Polygon, Offset and Follow Me.
+    more: more::State,
 }
 
 impl Default for Modeling {
@@ -225,6 +231,7 @@ impl Default for Modeling {
             hover_edge: None,
             xf: Xform::default(),
             paint: super::paint::Paint::default(),
+            more: more::State::default(),
         }
     }
 }
@@ -239,13 +246,14 @@ pub fn is_drawing_tool(t: ModelerTool) -> bool {
             | ModelerTool::Arc
             | ModelerTool::Eraser
             | ModelerTool::PushPull
-    )
+    ) || is_more_tool(t)
 }
 
 /// True for the tools that take typed values and run the inference: the drawing tools (not the
 /// Eraser) and Move, Rotate and Scale.
 pub fn takes_values(t: ModelerTool) -> bool {
-    (is_drawing_tool(t) && t != ModelerTool::Eraser) || is_transform_tool(t)
+    (is_drawing_tool(t) && !matches!(t, ModelerTool::Eraser | ModelerTool::FollowMe))
+        || is_transform_tool(t)
 }
 
 fn mb_tool(t: ModelerTool) -> Tool {
@@ -253,6 +261,9 @@ fn mb_tool(t: ModelerTool) -> Tool {
         ModelerTool::Line => Tool::Line,
         ModelerTool::Rectangle => Tool::Rectangle,
         ModelerTool::Circle => Tool::Circle,
+        ModelerTool::Polygon => Tool::Polygon,
+        ModelerTool::Offset => Tool::Offset,
+        ModelerTool::FollowMe => Tool::FollowMe,
         ModelerTool::Arc => Tool::TwoPointArc,
         ModelerTool::PushPull => Tool::PushPull,
         ModelerTool::Eraser => Tool::Eraser,
@@ -287,16 +298,17 @@ impl Modeling {
         self.pending = None;
         self.last = None;
         self.xf.choose(tool);
+        self.more.choose();
     }
 
     /// True while an operation is in progress (a click was made and the tool waits for more).
     pub fn in_progress(&self) -> bool {
-        !matches!(self.run, Run::Idle) || self.xf.in_progress()
+        !matches!(self.run, Run::Idle) || self.xf.in_progress() || self.more.in_progress()
     }
 
     /// The last point of the tool: the inference works from it.
     pub fn reference(&self) -> Option<DVec3> {
-        if let Some(r) = self.xf.reference() {
+        if let Some(r) = self.xf.reference().or_else(|| self.more.reference()) {
             return Some(r);
         }
         match &self.run {
@@ -361,6 +373,7 @@ impl Modeling {
     /// can remove the face or the points that a tool holds). The tool stays chosen.
     pub fn abort(&mut self) {
         self.xf.abort();
+        self.more.reset();
         self.run = Run::Idle;
         self.cursor = None;
         self.typed.clear();
@@ -375,6 +388,7 @@ impl Modeling {
         }
         let was = self.in_progress();
         self.xf.cancel();
+        self.more.reset();
         self.run = Run::Idle;
         self.cursor = None;
         was
@@ -417,6 +431,9 @@ impl Modeling {
         if is_transform_tool(self.tool) {
             return self.xf.phase();
         }
+        if is_more_tool(self.tool) {
+            return self.more_phase();
+        }
         let done = matches!(self.run, Run::Idle) && self.last.is_some();
         if done {
             return Phase::Done;
@@ -434,6 +451,9 @@ impl Modeling {
     pub fn live(&self, units: &Units) -> Option<(LiveLabel, String)> {
         if is_transform_tool(self.tool) {
             return self.xf.live(units);
+        }
+        if is_more_tool(self.tool) {
+            return self.more_live(units);
         }
         let c = self.cursor?;
         let len = |v: f64| units.length_text(v);
@@ -476,6 +496,7 @@ impl Modeling {
             self.current = model;
         }
         self.xf.committed(revision);
+        self.more.committed(revision);
         if let Some(l) = self.pending.take() {
             self.last = Some((l, revision));
         }
@@ -526,6 +547,10 @@ impl Modeling {
     pub fn moved(&mut self, w: &World, p: &Pointer) {
         if is_transform_tool(self.tool) {
             self.xf.moved(w, p);
+            return;
+        }
+        if is_more_tool(self.tool) {
+            self.more_moved(w, p);
             return;
         }
         match &mut self.run {
@@ -613,6 +638,7 @@ impl Modeling {
             ModelerTool::Circle => self.click_circle(w, p),
             ModelerTool::Arc => self.click_arc(w, p),
             ModelerTool::PushPull => self.click_pull(w, p),
+            t if is_more_tool(t) => self.more_click(w, p),
             _ => Out::default(),
         }
     }
@@ -930,6 +956,7 @@ impl Modeling {
     /// moved on, but the document is as it was, so the step can still be redone with a new value.
     pub fn refused(&mut self, revision: u64) {
         self.xf.refused(revision);
+        self.more.refused(revision);
         if let Some((l, _)) = self.last {
             self.last = Some((l, revision));
         }
@@ -946,6 +973,9 @@ impl Modeling {
     fn apply(&mut self, w: &World, selected: Option<ObjectId>, revision: u64, v: Value) -> Out {
         if is_transform_tool(self.tool) {
             return self.xf.apply(v, revision);
+        }
+        if is_more_tool(self.tool) {
+            return self.more_apply(w, selected, revision, v);
         }
         if let Value::Sides(n) = v {
             return self.set_sides(w, selected, revision, n);
@@ -1140,6 +1170,10 @@ impl Modeling {
         let mut pv = Preview::default();
         if is_transform_tool(self.tool) {
             self.xf.preview(w, &mut pv);
+            return pv;
+        }
+        if is_more_tool(self.tool) {
+            self.more_preview(&mut pv);
             return pv;
         }
         let cur = self.cursor;

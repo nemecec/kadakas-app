@@ -34,17 +34,24 @@ pub(super) fn offset_face(
     distance: f64,
     outward: bool,
 ) -> Result<(), SurfaceError> {
-    let f = m
-        .faces
-        .get(&face)
-        .cloned()
-        .ok_or(SurfaceError::NoFace(face))?;
+    let moved = outline(m, face, distance, outward)?;
+    let f = &m.faces[&face];
+    let lines: Vec<(Vec<VertexId>, Vec<DVec3>)> = f.loops().cloned().zip(moved).collect();
+    draw(m, &lines, true)
+}
+
+/// The new loops of an offset of `face` (local coordinates, outer loop first), or the refusal.
+pub(in crate::surface) fn outline(
+    m: &SurfaceModel,
+    face: FaceId,
+    distance: f64,
+    outward: bool,
+) -> Result<Vec<Vec<DVec3>>, SurfaceError> {
+    let f = m.faces.get(&face).ok_or(SurfaceError::NoFace(face))?;
     let loops: Vec<Vec<DVec3>> = f.loops().map(|l| m.loop_points(l)).collect();
     check_distance(&loops, distance)?;
     let s = if outward { -distance } else { distance };
-    let moved = fitted(&loops, f.plane, s, true, &format!("face {face}"))?;
-    let lines: Vec<(Vec<VertexId>, Vec<DVec3>)> = f.loops().cloned().zip(moved).collect();
-    draw(m, &lines, true)
+    fitted(&loops, f.plane, s, true, &format!("face {face}"))
 }
 
 /// Offset Edges (MOD-08): a chain of edges in one plane (open, or closed as a loop) offset by
@@ -57,6 +64,25 @@ pub(super) fn offset_edges(
     distance: f64,
     toward: DVec3,
 ) -> Result<(), SurfaceError> {
+    if let Some(e) = edges.iter().find(|e| !m.edges.contains_key(e)) {
+        return Err(SurfaceError::NoEdge(*e));
+    }
+    if !toward.is_finite() {
+        return Err(SurfaceError::BadPoint);
+    }
+    let (chain, closed, moved) = chain_line(m, edges, distance, toward)?;
+    let lines = vec![(chain, moved)];
+    draw(m, &lines, closed)
+}
+
+/// The new line of an offset of a chain of edges (local coordinates), with the chain and whether
+/// it is closed, or the refusal.
+pub(in crate::surface) fn chain_line(
+    m: &SurfaceModel,
+    edges: &[EdgeId],
+    distance: f64,
+    toward: DVec3,
+) -> Result<(Vec<VertexId>, bool, Vec<DVec3>), SurfaceError> {
     if let Some(e) = edges.iter().find(|e| !m.edges.contains_key(e)) {
         return Err(SurfaceError::NoEdge(*e));
     }
@@ -84,8 +110,7 @@ pub(super) fn offset_edges(
     }
     let s = distance * left.signum();
     let moved = fitted(std::slice::from_ref(&pts), plane, s, closed, "the edges")?;
-    let lines = vec![(chain, moved.into_iter().next().expect("one line"))];
-    draw(m, &lines, closed)
+    Ok((chain, closed, moved.into_iter().next().expect("one line")))
 }
 
 /// Refuses a distance that is not finite or not larger than the length tolerance.

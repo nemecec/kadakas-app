@@ -33,8 +33,11 @@ pub const ICONS: &[(&str, &[u8])] = &[
     icon!("line"),
     icon!("rectangle"),
     icon!("circle"),
+    icon!("polygon"),
     icon!("arc"),
     icon!("push-pull"),
+    icon!("follow-me"),
+    icon!("offset"),
     icon!("move"),
     icon!("rotate"),
     icon!("scale"),
@@ -207,7 +210,8 @@ mod tests {
     #[test]
     fn the_icon_sheet_is_not_blank() {
         let px = 64u32;
-        let (w, h) = (px * 8, px * 2);
+        let rows = (ICONS.len() as u32).div_ceil(8);
+        let (w, h) = (px * 8, px * rows);
         let mut sheet = vec![255u8; (w * h * 4) as usize];
         for (i, (name, _)) in ICONS.iter().enumerate() {
             let data = render_rgba(name, px, [30, 30, 30]).unwrap();

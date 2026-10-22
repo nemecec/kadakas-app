@@ -77,6 +77,9 @@ pub enum Action {
         objects: Vec<ObjectId>,
         material: Option<ResourceId>,
     },
+    /// One edit of a surface model, already in its local coordinates (Offset, Follow Me, the
+    /// styles of edges).
+    Edit { model: ObjectId, edit: Edit },
 }
 
 /// The model that an action works in (a new model counts as `None`).
@@ -90,6 +93,7 @@ impl Action {
             Action::EraseEdges { model, .. }
             | Action::PushPull { model, .. }
             | Action::Delete { model, .. }
+            | Action::Edit { model, .. }
             | Action::Intersect { model, .. } => Some(*model),
             Action::Xform { parts, .. } => parts.first().map(|p| p.0),
             Action::Paint { models, .. } => models.first().map(|p| p.0),
@@ -452,6 +456,7 @@ fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Comman
             faces: faces.clone(),
             edges: edges.clone(),
         })],
+        Action::Edit { edit: e, .. } => vec![edit(e.clone())],
         Action::Xform { .. } | Action::Paint { .. } | Action::PaintObjects { .. } => Vec::new(),
         Action::Delete { faces, edges, .. } => {
             let mut v = Vec::new();

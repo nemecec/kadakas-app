@@ -287,6 +287,8 @@ actions! {
     ToolEraser => "tool.eraser", msg!("action-tool-eraser"), [], false;
     ToolArc => "tool.arc", msg!("action-tool-arc"), [], false;
     ToolPushPull => "tool.push_pull", msg!("action-tool-push-pull"), [], false;
+    ToolPolygon => "tool.polygon", msg!("action-tool-polygon"), [], true;
+    ToolFollowMe => "tool.follow_me", msg!("action-tool-follow-me"), [], true;
     ToolMove => "tool.move", msg!("action-tool-move"), [], false;
     ToolTapeMeasure => "tool.tape_measure", msg!("action-tool-tape-measure"), [], false;
     ToolPaintBucket => "tool.paint_bucket", msg!("action-tool-paint-bucket"), [], true;
@@ -408,6 +410,8 @@ impl Action {
             Action::ToolEraser
                 | Action::ToolArc
                 | Action::ToolPushPull
+                | Action::ToolPolygon
+                | Action::ToolFollowMe
                 | Action::ToolMove
                 | Action::ToolTapeMeasure
                 | Action::ToolPaintBucket

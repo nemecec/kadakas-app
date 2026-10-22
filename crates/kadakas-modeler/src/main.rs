@@ -18,6 +18,7 @@ mod icons;
 mod launch;
 mod menu;
 mod prefs;
+mod soften;
 mod statusbar;
 mod toolbar;
 mod tray;

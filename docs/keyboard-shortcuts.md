@@ -213,6 +213,8 @@ The 3D modeler (`docs/modeler.md`) has actions that the Vectorworks-like app doe
 | Eraser tool (`tool.eraser`, MOD-05) | none | none | planned |
 | Arc tool (`tool.arc`, MOD-08) | none | none | planned |
 | Push/Pull tool (`tool.push_pull`, MOD-05, MOD-08) | none | none | planned |
+| Polygon tool (`tool.polygon`, MOD-08) | none | none | done |
+| Follow Me tool (`tool.follow_me`, MOD-08) | none | none | done |
 | Move tool (`tool.move`, MOD-05) | none | none | planned |
 | Tape Measure tool (`tool.tape_measure`, MOD-05) | none | none | planned |
 | Paint Bucket tool (`tool.paint_bucket`, MOD-05) | none | none | done |

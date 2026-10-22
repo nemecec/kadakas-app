@@ -636,6 +636,28 @@ impl SurfaceModel {
             .then(|| self.transform.inverse().transform_point3(p))
     }
 
+    /// The loops that an Offset of `face` by `distance` would draw (outer loop first, local
+    /// coordinates), for a preview; the error is the reason the edit would give (MOD-08).
+    pub fn offset_outline(
+        &self,
+        face: FaceId,
+        distance: f64,
+        outward: bool,
+    ) -> Result<Vec<Vec<DVec3>>, SurfaceError> {
+        edit::offset::outline(self, face, distance, outward)
+    }
+
+    /// The line that an Offset of the chain `edges` by `distance` toward `toward` would draw
+    /// (local coordinates) and whether it is closed, for a preview (MOD-08).
+    pub fn offset_chain(
+        &self,
+        edges: &[EdgeId],
+        distance: f64,
+        toward: DVec3,
+    ) -> Result<(Vec<DVec3>, bool), SurfaceError> {
+        edit::offset::chain_line(self, edges, distance, toward).map(|(_, c, l)| (l, c))
+    }
+
     /// The triangles of one face (holes are left open).
     pub fn triangulate_face(&self, id: FaceId) -> Result<FaceTriangles, SurfaceError> {
         let f = self.faces.get(&id).ok_or(SurfaceError::NoFace(id))?;

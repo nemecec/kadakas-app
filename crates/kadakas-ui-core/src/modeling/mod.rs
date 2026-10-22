@@ -21,6 +21,7 @@ pub mod paint;
 mod plane;
 mod scenes;
 pub mod select;
+pub mod soften;
 mod tools;
 mod xform;
 
@@ -31,10 +32,11 @@ pub use exec::{
 pub use plane::Plane3;
 pub use scenes::{SceneCache, Scenes, World, elevation, frame_of, model_of};
 pub use select::{Item, SubSelection};
+pub use soften::{EdgeStyle, SoftenPanel, edge_style_actions};
 pub use tools::{
-    DEFAULT_ARC_SIDES, DEFAULT_SIDES, Excluded, LiveLabel, Modeling, Out, Pointer, Preview,
-    arc_points, bulge_of, circle_points, delete_actions, intersect_actions, is_drawing_tool,
-    radius_to_bulge, takes_values,
+    DEFAULT_ARC_SIDES, DEFAULT_POLYGON_SIDES, DEFAULT_SIDES, Excluded, LiveLabel, Modeling, Out,
+    Pointer, Preview, arc_points, bulge_of, circle_points, delete_actions, intersect_actions,
+    is_drawing_tool, is_more_tool, polygon_points, radius_to_bulge, takes_values,
 };
 pub use xform::{
     Context as XContext, Grip, Subject, is_transform_tool, usable_grips, xform_action,
