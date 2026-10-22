@@ -1479,10 +1479,21 @@ fn a_copy_that_moves_less_than_the_tolerance_is_refused_and_no_step_changes_noth
     assert_eq!(ed.undo_depth(), depth);
 }
 
-/// Boxes 1500 apart (they may touch), so that moves of up to 2000 land on and over each other.
+/// Boxes and flat squares 1500 apart (they may touch) beside a large sheet, so that moves of up
+/// to 2000 land on and over each other and into the sheet.
 fn close_scene(seed: u64) -> SurfaceModel {
     let mut rng = Rng(seed | 1);
     let mut m = SurfaceModel::new();
+    // A large sheet to the left: a square or a sheet moved by up to 2000 can land inside it.
+    poly(
+        &mut m,
+        &[
+            [-3500.0, -1500.0, 0.0],
+            [-500.0, -1500.0, 0.0],
+            [-500.0, 1500.0, 0.0],
+            [-3500.0, 1500.0, 0.0],
+        ],
+    );
     for i in 0..rng.below(3) + 2 {
         let x = 1500.0 * i as f64;
         // On a grid of 250, so that moves of the same grid land on vertices and edges.
@@ -1506,6 +1517,10 @@ fn close_scene(seed: u64) -> SurfaceModel {
         let Some(f) = m.faces().map(|(id, _)| id).find(|id| !known.contains(id)) else {
             continue;
         };
+        // Some squares stay flat sheets in one plane, so that moves in the plane overlap them.
+        if rng.next() < 0.4 {
+            continue;
+        }
         let _ = m.apply(&Edit::PushPull {
             face: f,
             distance: h,
@@ -1524,6 +1539,10 @@ fn random_edit(rng: &mut Rng, m: &SurfaceModel, reach: f64) -> Edit {
         (rng.range(-reach, reach) / 250.0).round() * 250.0,
         (rng.range(-reach, reach) / 250.0).round() * 250.0,
     );
+    if rng.next() < 0.4 {
+        // In the plane of the sheets.
+        d.z = 0.0;
+    }
     if rng.next() < 0.3 {
         d += DVec3::new(
             rng.range(-0.004, 0.004),
