@@ -753,49 +753,42 @@ fn a_hidden_edge_that_no_face_uses_is_taken_out_and_one_on_a_face_is_said_to_sta
 }
 
 #[test]
-fn a_guide_this_program_cannot_read_stays_unknown_and_is_written_back_unchanged() {
-    // A newer build may write a guide in a form that this build cannot read (here a direction as
-    // an object). The shape is kept as it is, as for every unknown kind, and only delete works.
+fn an_older_program_keeps_a_guide_as_an_unknown_shape_and_writes_it_back_unchanged() {
+    // An older program does not know the kind `guide`. We cannot run one here, so the test does
+    // what that program's reader does with a kind that is not in its list: it renames the kind in
+    // the file to one that this build does not know. The mechanism is the same one that keeps
+    // every unknown kind (`forward_compat.rs`). The test also checks that `guide` is a kind of
+    // this build, which is why an older build lacks it.
+    let names = kadakas_core::schema::variant_names::<Shape>(Some("kind"));
+    assert!(names.contains(&"guide".to_string()), "{names:?}");
     let mut ed = Editor::with_sequential_ids();
-    let id = add(&mut ed, guide(Guide::point(DVec3::ZERO)));
+    let id = add(
+        &mut ed,
+        guide(Guide::segment(DVec3::new(1.0, 2.0, 3.0), DVec3::Y, 50.0)),
+    );
     let mut v = serde_json::to_value(ed.doc()).unwrap();
-    let future = serde_json::json!({
-        "kind": "guide",
-        "at": [1, 2, 3],
-        "dir": {"x": 0, "y": 1, "z": 0},
-        "curve": "arc"
-    });
-    v["objects"][0]["shape"] = future.clone();
+    assert_eq!(v["objects"][0]["shape"]["kind"], "guide");
+    v["objects"][0]["shape"]["kind"] = serde_json::json!("not_known_to_the_older_program");
     let doc = Document::from_value(v.clone()).unwrap();
     let o = doc.object(id).unwrap();
     assert!(matches!(o.shape, Shape::Unknown { .. }), "{:?}", o.shape);
-    assert_eq!(o.shape.kind(), "unknown");
+    assert_eq!(doc.guide_count(), 0, "it is not a guide for that program");
     assert_eq!(
         serde_json::to_value(&doc).unwrap(),
         v,
         "written back unchanged"
     );
+    // Only delete works on it.
     let mut ed = Editor::new(doc);
-    assert_eq!(
-        ed.doc().guide_count(),
-        0,
-        "it is not a guide for this program"
-    );
     assert!(
         ed.execute(&Command::SetHidden {
             ids: vec![id],
             hidden: true
         })
-        .is_err(),
-        "it cannot be edited"
+        .is_err()
     );
     ed.execute(&Command::DeleteObjects { ids: vec![id] })
         .unwrap();
-    // A guide that this build can read is a guide.
-    let mut ok = v.clone();
-    ok["objects"][0]["shape"] = serde_json::json!({"kind": "guide", "at": [1, 2, 3]});
-    let doc = Document::from_value(ok).unwrap();
-    assert_eq!(doc.guide_count(), 1);
 }
 
 #[test]

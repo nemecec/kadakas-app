@@ -1198,8 +1198,10 @@ mod perf {
             extras.ghost_hatch.len()
         );
         // The cost of drawing them: the shapes of one frame and their tessellation.
-        let mut edit = Edit3d::default();
-        edit.extras = extras;
+        let edit = Edit3d {
+            extras,
+            ..Edit3d::default()
+        };
         let ctx = egui::Context::default();
         let mut cam = kadakas_render::Camera::default();
         cam.set_view(kadakas_render::StandardView::Top);
