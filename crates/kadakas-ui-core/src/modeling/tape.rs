@@ -14,17 +14,24 @@
 //!   distance of the pointer from the line). A typed distance sets the offset, on the side where
 //!   the pointer is. A negative one takes the other side.
 //! - A click **on a point** (or on a face, or in the air), then a click in a direction, makes a
-//!   guide line through the point towards the second click. It has no ends. A typed distance
-//!   makes a finite guide line of that length instead. A second click on the same point makes a
-//!   guide point.
+//!   **guide point** at the second click and a finite guide line from the first point to it. A
+//!   typed distance makes a finite guide line of that length, with a guide point at its end. A
+//!   second click on the same point makes a guide point alone.
 //!
-//! Each guide is one undo step. Esc cancels what is in progress.
+//! The offset of a parallel guide is the distance from the line to the second click, measured
+//! perpendicular to the line in 3D. The inference decides the second click: on a face it is on the
+//! face, on an edge it is on the edge, in the air it is on the ground plane.
+//!
+//! Each click pair is one undo step (a guide line and its end point are one step). Esc cancels what
+//! is in progress.
 //!
 //! # Resize the model
 //!
-//! After a measure (Ctrl pressed, so no guides), a typed length asks to resize the model: the
-//! answer carries the factor (typed length over measured length) and the first point. The window
-//! asks "Resize the model?" and runs the scale. The tool itself changes nothing.
+//! After any measure (with guides or with Ctrl, measure only), a typed length asks to resize the
+//! model: the answer carries the factor (typed length over measured length) and the first point.
+//! The window asks "Resize the model?" and runs the scale. The tool itself changes nothing. The
+//! measure is forgotten when the document changes in another way (the window tells the tool with
+//! `seen_revision`), when the tool is chosen again and on Esc.
 
 use glam::DVec3;
 use kadakas_l10n::tr;
@@ -59,6 +66,22 @@ enum Origin {
     Line { dir: DVec3 },
 }
 
+/// A measure that a typed length can still resize the model by.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Measured {
+    a: DVec3,
+    b: DVec3,
+    /// The revision of the document the measure belongs to. `None` until the window has told the
+    /// tool (the click may still make a guide, which changes the revision).
+    rev: Option<u64>,
+}
+
+impl Measured {
+    fn new(a: DVec3, b: DVec3) -> Measured {
+        Measured { a, b, rev: None }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Run {
     Idle,
@@ -73,7 +96,7 @@ pub(super) struct Tape {
     creating: bool,
     cursor: Option<DVec3>,
     /// The last measure, for a typed length that resizes the model.
-    measured: Option<(DVec3, DVec3)>,
+    measured: Option<Measured>,
     /// The length of the edge under the pointer, while the tool waits for the first click.
     hover_length: Option<f64>,
 }
@@ -112,7 +135,26 @@ impl Tape {
         let was = !matches!(self.run, Run::Idle);
         self.run = Run::Idle;
         self.cursor = None;
+        self.measured = None;
         was
+    }
+
+    /// The window tells the tool the revision of the document. A measure belongs to the revision
+    /// after its own click, so another change of the document (an edit, an undo) forgets it.
+    pub fn seen_revision(&mut self, rev: u64) {
+        match &mut self.measured {
+            Some(m) if m.rev.is_none() => m.rev = Some(rev),
+            Some(m) if m.rev != Some(rev) => self.measured = None,
+            _ => {}
+        }
+    }
+
+    /// An action of the tool ran and made this revision: the measure that went with it belongs to
+    /// it.
+    pub fn committed(&mut self, rev: u64) {
+        if let Some(m) = &mut self.measured {
+            m.rev = Some(rev);
+        }
     }
 
     pub fn in_progress(&self) -> bool {
@@ -161,7 +203,7 @@ impl Tape {
     pub fn live(&self, units: &Units) -> Option<(LiveLabel, String)> {
         let d = self
             .distance()
-            .or_else(|| self.measured.map(|(a, b)| a.distance(b)))
+            .or_else(|| self.measured.map(|m| m.a.distance(m.b)))
             .or(self.hover_length)?;
         Some((LiveLabel::Distance, units.length_text(d)))
     }
@@ -201,19 +243,27 @@ impl Tape {
             if pt.distance(start) < MIN_LEN {
                 return Out::msg(tr!("uic-modeling-too-small"));
             }
-            self.measured = Some((start, pt));
+            self.measured = Some(Measured::new(start, pt));
             return Out::default();
         }
         match origin {
             Origin::Line { dir } => {
-                if perpendicular(pt - start, dir).length() < MIN_LEN {
+                let off = perpendicular(pt - start, dir);
+                if off.length() < MIN_LEN {
                     return Out::msg(tr!("uic-modeling-guide-on-the-line"));
                 }
-                guide(GuideSpec::line(pt, dir))
+                self.measured = Some(Measured::new(start, start + off));
+                guide(vec![GuideSpec::line(pt, dir)])
             }
             Origin::Point => match (pt - start).try_normalize() {
-                Some(dir) if pt.distance(start) >= MIN_LEN => guide(GuideSpec::line(start, dir)),
-                _ => guide(GuideSpec::point(start)),
+                Some(dir) if pt.distance(start) >= MIN_LEN => {
+                    self.measured = Some(Measured::new(start, pt));
+                    guide(vec![
+                        GuideSpec::segment(start, dir, pt.distance(start)),
+                        GuideSpec::point(pt),
+                    ])
+                }
+                _ => guide(vec![GuideSpec::point(start)]),
             },
         }
     }
@@ -233,7 +283,7 @@ impl Tape {
                 if !self.creating {
                     // The end of the measure, along the pointer.
                     let dir = (cursor - start).try_normalize().unwrap_or(DVec3::X);
-                    self.measured = Some((start, start + dir * d));
+                    self.measured = Some(Measured::new(start, start + dir * d));
                     return Out::default();
                 }
                 match origin {
@@ -249,17 +299,20 @@ impl Tape {
                                 };
                                 dir.cross(axis).normalize()
                             });
-                        guide(GuideSpec::line(start + side * d, dir))
+                        guide(vec![GuideSpec::line(start + side * d, dir)])
                     }
                     Origin::Point => {
                         let dir = (cursor - start).try_normalize().unwrap_or(DVec3::X);
                         let dir = if d < 0.0 { -dir } else { dir };
-                        guide(GuideSpec::segment(start, dir, d.abs()))
+                        guide(vec![
+                            GuideSpec::segment(start, dir, d.abs()),
+                            GuideSpec::point(start + dir * d.abs()),
+                        ])
                     }
                 }
             }
             Run::Idle => match self.measured {
-                Some((a, b)) => {
+                Some(Measured { a, b, .. }) => {
                     let measured = a.distance(b);
                     let typed = d.abs();
                     let factor = typed / measured;
@@ -303,15 +356,19 @@ impl Tape {
             }
             Origin::Point => {
                 if let Some(dir) = (c - start).try_normalize() {
-                    pv.guides.push(PreviewGuide::line(start, dir));
+                    pv.guides.push(PreviewGuide {
+                        at: start,
+                        dir,
+                        length: Some(c.distance(start)),
+                    });
                 }
             }
         }
     }
 }
 
-fn guide(spec: GuideSpec) -> Out {
-    Out::act(Action::AddGuides { guides: vec![spec] })
+fn guide(guides: Vec<GuideSpec>) -> Out {
+    Out::act(Action::AddGuides { guides })
 }
 
 /// A guide that the window draws while the tool runs, in world coordinates.

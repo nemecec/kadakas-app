@@ -16,7 +16,7 @@ fn guides(r: &Rig) -> Vec<Guide> {
 }
 
 /// A model with one edge along X from the origin to (1000, 0, 0). Its number in the scenes is 0.
-fn with_edge(r: &mut Rig) -> EdgeId {
+pub(super) fn with_edge(r: &mut Rig) -> EdgeId {
     let id = ObjectId(
         r.ed.execute(&Command::AddObject {
             shape: Shape::SurfaceModel(Box::default()),
@@ -38,7 +38,7 @@ fn with_edge(r: &mut Rig) -> EdgeId {
 }
 
 /// The inference of a pointer that is on the edge at `p`.
-fn on_edge(edge: EdgeId, p: DVec3) -> Inference {
+pub(super) fn on_edge(edge: EdgeId, p: DVec3) -> Inference {
     Inference {
         kind: Kind::OnEdge,
         source: Tag::edge(0, edge),
@@ -66,12 +66,13 @@ fn the_tape_measure_makes_a_guide_line_through_a_point_in_one_undo_step() {
     let out = r.click(DVec3::new(100.0, 1200.0, 0.0));
     assert!(matches!(out.actions[..], [Action::AddGuides { .. }]));
     assert!(!r.tools.in_progress());
-    assert_eq!(r.ed.undo_depth(), depth + 1, "one undo step");
+    assert_eq!(r.ed.undo_depth(), depth + 1, "one undo step for the line and its end point");
     let g = guides(&r);
-    assert_eq!(g.len(), 1);
+    assert_eq!(g.len(), 2);
     assert_eq!(g[0].at, DVec3::new(100.0, 200.0, 0.0));
     assert!(g[0].unit_dir().unwrap().distance(DVec3::Y) < 1e-9);
-    assert_eq!(g[0].length, None, "a line without ends");
+    assert_eq!(g[0].length, Some(1000.0), "a finite line from the start to the end");
+    assert_eq!(g[1], Guide::point(DVec3::new(100.0, 1200.0, 0.0)));
     assert!(r.ed.undo());
     assert!(guides(&r).is_empty());
 }
@@ -161,17 +162,19 @@ fn a_typed_distance_makes_a_finite_guide_from_a_point() {
     r.hover(DVec3::new(10.0, 0.0, 0.0));
     r.type_text("750");
     let g = guides(&r);
-    assert_eq!(g.len(), 1);
+    assert_eq!(g.len(), 2, "the line and a point at its end");
     assert_eq!(g[0].at, DVec3::ZERO);
     assert_eq!(g[0].length, Some(750.0));
     assert!(g[0].unit_dir().unwrap().distance(DVec3::X) < 1e-9);
+    assert_eq!(g[1], Guide::point(DVec3::new(750.0, 0.0, 0.0)));
     // A negative length points the other way.
     r.click(DVec3::ZERO);
     r.hover(DVec3::new(10.0, 0.0, 0.0));
     r.type_text("-100");
     let g = guides(&r);
-    assert!(g[1].unit_dir().unwrap().distance(-DVec3::X) < 1e-9);
-    assert_eq!(g[1].length, Some(100.0));
+    assert!(g[2].unit_dir().unwrap().distance(-DVec3::X) < 1e-9);
+    assert_eq!(g[2].length, Some(100.0));
+    assert_eq!(g[3], Guide::point(DVec3::new(-100.0, 0.0, 0.0)));
 }
 
 #[test]

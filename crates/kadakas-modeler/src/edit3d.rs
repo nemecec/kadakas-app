@@ -353,6 +353,7 @@ impl Edit3d {
             self.last_build = t0.elapsed();
         }
         self.sub.retain_existing(session.editor.doc());
+        self.modeling.seen_revision(rev);
         let Some(cam) = modeling::infer_camera(nav_cam, inp.scene.origin, inp.size) else {
             return;
         };

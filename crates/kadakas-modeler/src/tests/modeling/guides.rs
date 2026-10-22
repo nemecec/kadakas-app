@@ -178,14 +178,15 @@ fn a_click_on_a_corner_and_one_in_a_direction_make_a_guide_line_through_the_corn
     click_at(&ctx, &mut app, corner, &mut t);
     click_at(&ctx, &mut app, toward, &mut t);
     let g = guides(&app);
-    assert_eq!(g.len(), 1);
+    assert_eq!(g.len(), 2, "a finite line and a point at its end");
     assert!(
         g[0].at.distance(DVec3::new(500.0, -500.0, 500.0)) < 1e-6,
         "{:?}",
         g[0].at
     );
     assert!(g[0].unit_dir().unwrap().dot(DVec3::Y).abs() > 0.999999);
-    assert_eq!(g[0].length, None);
+    assert!((g[0].length.unwrap() - 1000.0).abs() < 1e-6);
+    assert!(g[1].is_point() && g[1].at.distance(DVec3::new(500.0, 500.0, 500.0)) < 1e-6);
 }
 
 #[test]
@@ -241,7 +242,7 @@ fn a_measure_and_a_typed_length_resize_the_model_after_a_yes() {
     enter(&ctx, &mut app, &mut t);
     // The question is open; nothing changed yet.
     assert!(
-        matches!(app.confirm, Some(Confirm::Resize(r)) if (r.factor - 2.0).abs() < 1e-9),
+        matches!(app.confirm, Some(Confirm::Resize(r, _)) if (r.factor - 2.0).abs() < 1e-9),
         "{:?}",
         app.confirm
     );
@@ -744,4 +745,139 @@ fn undo_ends_a_tape_measure_that_is_running_and_show_options_have_defaults() {
     assert!(!app.edit.modeling.in_progress());
     assert_eq!(app.edit.cache.show, ShowOptions::default());
     let _ = (type_more, make_box);
+}
+
+#[test]
+fn a_selector_for_faces_only_explains_that_tags_belong_to_objects() {
+    let (ctx, mut app, mut t, id) = ready();
+    app.run(Cmd::ToggleTray, size(&app));
+    let top = top_face(&app, id);
+    app.edit.sub.set([Item::Face(id, top)]);
+    let _ = shown(&ctx, &mut app, &mut t);
+    let on_screen = shown(&ctx, &mut app, &mut t);
+    assert!(on_screen.contains(&tr!("modeler-tags-parts-hint")), "{on_screen}");
+    // Nothing offers a change, and the tag of the model is the same.
+    assert!(app.tag_targets_for_test().is_empty());
+    assert_eq!(
+        app.session.editor.doc().object(id).unwrap().class,
+        kadakas_core::model::NONE_CLASS
+    );
+    // With the object selected the list is there.
+    app.edit.sub.clear();
+    app.session.selection = vec![id];
+    let _ = shown(&ctx, &mut app, &mut t);
+    let on_screen = shown(&ctx, &mut app, &mut t);
+    assert!(!on_screen.contains(&tr!("modeler-tags-parts-hint")), "{on_screen}");
+    assert!(on_screen.contains(&tr!("modeler-tags-entity")), "{on_screen}");
+}
+
+#[test]
+fn the_tag_panel_commands_are_one_batch_and_a_failure_applies_nothing() {
+    let (_ctx, mut app, _t, _) = ready();
+    let tag = ClassId(
+        app.session
+            .editor
+            .execute(&Command::AddClass {
+                name: "Trees".into(),
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+    );
+    let depth = app.session.editor.undo_depth();
+    // Hide the tag, then an impossible delete of Untagged: nothing may stay.
+    app.apply_tags(tags_panel::Outcome {
+        commands: vec![
+            tags::toggle_tag(app.session.editor.doc(), tag).unwrap(),
+            Command::DeleteClass {
+                id: kadakas_core::model::NONE_CLASS,
+                move_to: None,
+            },
+        ],
+        ..tags_panel::Outcome::default()
+    });
+    assert_eq!(app.session.editor.undo_depth(), depth, "no step");
+    assert!(app.session.editor.doc().class(tag).unwrap().visible);
+    // Two good commands are one undo step.
+    let other = tags::new_tag(app.session.editor.doc(), "Walls").unwrap();
+    app.apply_tags(tags_panel::Outcome {
+        commands: vec![tags::toggle_tag(app.session.editor.doc(), tag).unwrap(), other],
+        ..tags_panel::Outcome::default()
+    });
+    assert_eq!(app.session.editor.undo_depth(), depth + 1);
+}
+
+#[test]
+fn the_default_flow_measure_then_type_asks_to_resize_and_lists_what_happens() {
+    let (ctx, mut app, mut t, id) = ready();
+    iso(&ctx, &mut app, &mut t);
+    choose(&ctx, &mut app, egui::Key::T, &mut t);
+    // No Ctrl: the click pair makes guides and the measure is kept.
+    let a = screen_of(&mut app, DVec3::new(-500.0, -500.0, 500.0));
+    let b = screen_of(&mut app, DVec3::new(500.0, -500.0, 500.0));
+    click_at(&ctx, &mut app, a, &mut t);
+    click_at(&ctx, &mut app, b, &mut t);
+    assert!(app.edit.modeling.tape_creates_guides());
+    let before = super::transform::bounds(&app, id);
+    type_keys(&ctx, &mut app, "2000", &mut t);
+    enter(&ctx, &mut app, &mut t);
+    assert!(matches!(app.confirm, Some(Confirm::Resize(..))), "{:?}", app.confirm);
+    let _ = shown(&ctx, &mut app, &mut t);
+    let text = shown(&ctx, &mut app, &mut t);
+    assert!(text.contains(&tr!("modeler-resize-title")), "{text}");
+    app.answer_confirm(true);
+    let (lo, hi) = super::transform::bounds(&app, id);
+    assert!(((hi - lo).x - 2000.0).abs() < 1.0, "{lo:?} {hi:?} from {before:?}");
+    // The guides scaled with the model.
+    assert!(guides(&app).iter().any(|g| g.length.is_some_and(|l| (l - 2000.0).abs() < 1.0)));
+}
+
+#[test]
+fn a_locked_layer_refuses_a_resize_before_any_question() {
+    let (ctx, mut app, mut t, _) = ready();
+    iso(&ctx, &mut app, &mut t);
+    choose(&ctx, &mut app, egui::Key::T, &mut t);
+    toggle_copy(&ctx, &mut app, &mut t);
+    let a = screen_of(&mut app, DVec3::new(-500.0, -500.0, 500.0));
+    let b = screen_of(&mut app, DVec3::new(500.0, -500.0, 500.0));
+    click_at(&ctx, &mut app, a, &mut t);
+    click_at(&ctx, &mut app, b, &mut t);
+    // Locking the layer is another change of the document: the measure must be made again.
+    app.session
+        .editor
+        .execute(&Command::ModifyLayer {
+            id: kadakas_core::model::FIRST_LAYER,
+            name: None,
+            visible: None,
+            locked: Some(true),
+            elevation: None,
+            scale: None,
+        })
+        .unwrap();
+    let _ = shown(&ctx, &mut app, &mut t);
+    click_at(&ctx, &mut app, a, &mut t);
+    click_at(&ctx, &mut app, b, &mut t);
+    type_keys(&ctx, &mut app, "2000", &mut t);
+    enter(&ctx, &mut app, &mut t);
+    let _ = shown(&ctx, &mut app, &mut t);
+    assert!(app.confirm.is_none(), "no question: it would fail");
+    assert!(app.status.contains("Layer 1"), "the status names the layer: {}", app.status);
+}
+
+#[test]
+fn another_edit_after_a_measure_forgets_it() {
+    let (ctx, mut app, mut t, _) = ready();
+    iso(&ctx, &mut app, &mut t);
+    choose(&ctx, &mut app, egui::Key::T, &mut t);
+    let a = screen_of(&mut app, DVec3::new(-500.0, -500.0, 500.0));
+    let b = screen_of(&mut app, DVec3::new(500.0, -500.0, 500.0));
+    click_at(&ctx, &mut app, a, &mut t);
+    click_at(&ctx, &mut app, b, &mut t);
+    let _ = shown(&ctx, &mut app, &mut t);
+    // Another change of the document.
+    add_guide(&mut app, Guide::point(DVec3::new(9.0, 9.0, 9.0)));
+    let _ = shown(&ctx, &mut app, &mut t);
+    type_keys(&ctx, &mut app, "2000", &mut t);
+    enter(&ctx, &mut app, &mut t);
+    assert!(app.confirm.is_none(), "the measure was forgotten");
 }

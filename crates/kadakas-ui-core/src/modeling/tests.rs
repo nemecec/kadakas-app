@@ -1142,4 +1142,5 @@ mod more;
 mod show;
 mod tape;
 mod paint;
+mod resize;
 mod xform;

@@ -367,6 +367,12 @@ impl Modeling {
         }
     }
 
+    /// The window tells the tools the revision of the document (once per frame). The Tape Measure
+    /// forgets a measure when the document changed in another way.
+    pub fn seen_revision(&mut self, rev: u64) {
+        self.tape.seen_revision(rev);
+    }
+
     /// True while the Tape Measure makes guides (Ctrl turns it off).
     pub fn tape_creates_guides(&self) -> bool {
         self.tape.creating()
@@ -516,6 +522,7 @@ impl Modeling {
             self.current = model;
         }
         self.xf.committed(revision);
+        self.tape.committed(revision);
         if let Some(l) = self.pending.take() {
             self.last = Some((l, revision));
         }

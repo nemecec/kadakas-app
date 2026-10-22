@@ -140,7 +140,10 @@ pub enum Confirm {
     /// Delete all guides: how many.
     DeleteGuides(usize),
     /// Resize the model (the Tape Measure, after a measure and a typed length).
-    Resize(kadakas_ui_core::modeling::Resize),
+    Resize(
+        kadakas_ui_core::modeling::Resize,
+        kadakas_ui_core::modeling::ResizePlan,
+    ),
 }
 
 /// The program.
@@ -990,16 +993,29 @@ impl ModelerApp {
         self.selected()
     }
 
+    #[cfg(test)]
+    pub fn tag_targets_for_test(&self) -> Vec<ObjectId> {
+        self.tag_targets()
+    }
+
     /// Runs what the Tags panel asked for.
     pub fn apply_tags(&mut self, out: tags_panel::Outcome) {
         if let Some(m) = out.message {
             self.status = m;
         }
-        for c in &out.commands {
-            if let Err(e) = self.session.editor.execute(c) {
-                self.status = tr!("modeler-tags-failed", reason = e.to_string());
-                return;
-            }
+        // One batch: a command that fails leaves nothing applied, and it is one undo step.
+        let command = match out.commands.len() {
+            0 => None,
+            1 => out.commands.into_iter().next(),
+            _ => Some(Command::Batch {
+                commands: out.commands,
+            }),
+        };
+        if let Some(c) = command
+            && let Err(e) = self.session.editor.execute(&c)
+        {
+            self.status = tr!("modeler-tags-failed", reason = e.to_string());
+            return;
         }
         if let Some(m) = out.after {
             self.status = m;
@@ -1017,38 +1033,29 @@ impl ModelerApp {
         }
         match what {
             Confirm::DeleteGuides(_) => self.delete_guides(true),
-            Confirm::Resize(r) => self.resize_model(r),
+            Confirm::Resize(r, plan) => self.resize_model(r, &plan),
         }
     }
 
-    /// Resize the model: every object of the open level (guides too) is scaled by the factor
-    /// about the first point of the measure. One undo step. The heights of plan objects come from
-    /// their layers and stay, and the answer says so.
-    fn resize_model(&mut self, r: kadakas_ui_core::modeling::Resize) {
-        let doc = self.session.editor.doc();
-        let level = self.context.container();
-        let ids: Vec<ObjectId> = doc
-            .objects
-            .values()
-            .filter(|o| o.parent == level)
-            .filter(|o| {
-                doc.layer(o.layer)
-                    .is_some_and(|l| l.kind == kadakas_core::model::LayerKind::Design)
-            })
-            .map(|o| o.id)
-            .collect();
-        if ids.is_empty() {
+    /// A resize that the Tape Measure asked for: the plan is found first. Locked layers and grey
+    /// tags refuse it, with their names, before any question. Else the question lists what happens.
+    fn ask_resize(&mut self, r: kadakas_ui_core::modeling::Resize) {
+        let plan = modeling::resize_plan(self.session.editor.doc(), self.context.container());
+        if plan.ids.is_empty() {
             self.status = tr!("modeler-resize-nothing");
-            return;
+        } else if !plan.locked_layers.is_empty() {
+            self.status = tr!("modeler-resize-locked", layers = plan.locked_layers.join(", "));
+        } else if plan.grey_objects > 0 {
+            self.status = tr!("modeler-resize-grey", count = plan.grey_objects);
+        } else {
+            self.confirm = Some(Confirm::Resize(r, plan));
         }
-        let about = glam::DAffine3::from_translation(r.about);
-        let m = about * glam::DAffine3::from_scale(glam::DVec3::splat(r.factor)) * about.inverse();
-        let command = Command::TransformObjects3d {
-            ids,
-            matrix: m.to_cols_array(),
-            copy: false,
-            count: 1,
-        };
+    }
+
+    /// Resize the model: the objects of the plan are scaled about the first point of the measure.
+    /// One undo step. The heights of plan objects come from their layers and stay.
+    fn resize_model(&mut self, r: kadakas_ui_core::modeling::Resize, plan: &modeling::ResizePlan) {
+        let command = modeling::resize_command(plan, &r);
         match self.session.editor.execute(&command) {
             Ok(out) => {
                 let mut text = tr!("modeler-resize-done", factor = format!("{:.4}", r.factor));
@@ -1074,7 +1081,7 @@ impl ModelerApp {
                 tr!("modeler-guides-delete-yes"),
                 tr!("modeler-tags-cancel"),
             ),
-            Confirm::Resize(r) => {
+            Confirm::Resize(r, plan) => {
                 let u = kadakas_units::current();
                 (
                     tr!("modeler-resize-title"),
@@ -1082,7 +1089,9 @@ impl ModelerApp {
                         "modeler-resize-question",
                         measured = u.length_text(r.measured),
                         typed = u.length_text(r.typed),
-                        factor = format!("{:.4}", r.factor)
+                        factor = format!("{:.4}", r.factor),
+                        count = plan.scaled,
+                        flat = plan.plan_objects
                     ),
                     tr!("modeler-resize-yes"),
                     tr!("modeler-resize-no"),
@@ -1584,7 +1593,7 @@ impl ModelerApp {
         self.unsaved_dialog(&ctx);
         // A resize that the Tape Measure asked for becomes a question.
         if let Some(r) = self.edit.resize_request.take() {
-            self.confirm = Some(Confirm::Resize(r));
+            self.ask_resize(r);
         }
         self.confirm_dialog(&ctx);
         self.about.show(&ctx);
