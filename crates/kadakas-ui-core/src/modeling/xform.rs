@@ -150,21 +150,18 @@ impl Subject {
                 }
             }
         }
-        match objects {
-            Some((lo, hi)) => {
-                add(lo);
-                add(hi);
-            }
-            None => {
-                for id in &self.objects {
-                    if let Some(model) = model_of(w.doc, *id) {
-                        let fr = frame_of(w.doc, *id);
-                        for (_, p) in model.vertices() {
-                            add(fr.transform_point3(p));
-                        }
-                    }
+        // Surface models are measured here; the window gives the box of the other objects.
+        for id in &self.objects {
+            if let Some(model) = model_of(w.doc, *id) {
+                let fr = frame_of(w.doc, *id);
+                for (_, p) in model.vertices() {
+                    add(fr.transform_point3(p));
                 }
             }
+        }
+        if let Some((lo, hi)) = objects {
+            add(lo);
+            add(hi);
         }
         b
     }

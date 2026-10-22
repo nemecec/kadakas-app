@@ -270,13 +270,8 @@ fn a_tool_that_does_not_run_yet_stays_off_and_says_why() {
     let ctx = egui::Context::default();
     let mut app = app();
     let none = egui::Modifiers::NONE;
-    for key in [
-        egui::Key::M,
-        egui::Key::B,
-        egui::Key::T,
-        egui::Key::Q,
-        egui::Key::S,
-    ] {
+    // Tape Measure and Paint Bucket are round B of MOD-05; Move, Rotate and Scale run.
+    for key in [egui::Key::B, egui::Key::T] {
         app.status.clear();
         let _ = frame(&ctx, &mut app, tap(key, none), 0.1);
         assert_eq!(app.tools.active(), ModelerTool::Select, "{key:?}");

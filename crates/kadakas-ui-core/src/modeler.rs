@@ -316,6 +316,8 @@ pub enum EntityInfo {
         min: Option<[f64; 3]>,
         /// The counts of a surface model.
         surface: Option<SurfaceStats>,
+        /// Where the object is, how it is turned and how large its scale is (read only).
+        placement: Option<Placement>,
     },
     /// One face of a surface model.
     Face {
@@ -349,6 +351,63 @@ pub enum EntityInfo {
         count: usize,
         size: Option<[f64; 3]>,
     },
+}
+
+/// The position, rotation and scale of an object, for Entity Info (MOD-05). The position is the
+/// origin of the object in the world (mm), the rotation the turn about the x, y and z axes in
+/// degrees (the x axis first), the scale the length of each axis of the object (1 for none).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement {
+    pub position: [f64; 3],
+    pub rotation_deg: [f64; 3],
+    pub scale: [f64; 3],
+}
+
+impl Placement {
+    /// The placement of a transform from the local coordinates of an object to the world.
+    pub fn of_transform(t: &glam::DAffine3) -> Placement {
+        let m = t.matrix3;
+        let scale = glam::DVec3::new(m.x_axis.length(), m.y_axis.length(), m.z_axis.length());
+        // A mirror shows as a negative scale of the x axis.
+        let mirror = m.determinant() < 0.0;
+        let sx = if mirror { -scale.x } else { scale.x };
+        let rot = glam::DMat3::from_cols(
+            if scale.x > 0.0 { m.x_axis / sx } else { m.x_axis },
+            if scale.y > 0.0 { m.y_axis / scale.y } else { m.y_axis },
+            if scale.z > 0.0 { m.z_axis / scale.z } else { m.z_axis },
+        );
+        let (x, y, z) = glam::DQuat::from_mat3(&rot).to_euler(glam::EulerRot::XYZ);
+        let clean = |a: f64| {
+            let d = a.to_degrees();
+            // Rounding noise of a turn that is none.
+            if d.abs() < 1e-9 { 0.0 } else { d }
+        };
+        Placement {
+            position: t.translation.to_array(),
+            rotation_deg: [clean(x), clean(y), clean(z)],
+            scale: [sx, scale.y, scale.z],
+        }
+    }
+}
+
+/// The placement of an object that has a transform of its own (a surface model, a component
+/// instance) or a position and a turn (a plant).
+fn placement_of(doc: &Document, obj: &kadakas_core::model::Object) -> Option<Placement> {
+    use kadakas_core::model::Shape;
+    let elevation = doc.layer(obj.layer).map_or(0.0, |l| l.elevation);
+    let lift = glam::DAffine3::from_translation(glam::DVec3::new(0.0, 0.0, elevation));
+    match &obj.shape {
+        Shape::SurfaceModel(m) => Some(Placement::of_transform(&(lift * m.transform))),
+        Shape::Component { transform, .. } => Some(Placement::of_transform(
+            &(lift * kadakas_core::component::affine(transform)),
+        )),
+        Shape::Plant { at, .. } => Some(Placement {
+            position: [at.x, at.y, elevation],
+            rotation_deg: [0.0, 0.0, kadakas_core::plants::link::rotation(obj).to_degrees()],
+            scale: [1.0, 1.0, 1.0],
+        }),
+        _ => None,
+    }
 }
 
 /// The counts of a surface model, for Entity Info.
@@ -431,6 +490,7 @@ pub fn entity_info(doc: &Document, scene: &Scene, selection: &[ObjectId]) -> Ent
                 size: bounds.map(|b| b.0),
                 min: bounds.map(|b| b.1),
                 surface,
+                placement: placement_of(doc, obj),
             }
         }
         many => EntityInfo::Many {

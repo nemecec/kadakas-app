@@ -71,6 +71,9 @@ modeler-entity-id = Id
 modeler-entity-layer = Layer
 modeler-entity-class = Class
 modeler-entity-size = Size
+modeler-entity-position = Position
+modeler-entity-rotation = Rotation (x, y, z)
+modeler-entity-scale = Scale
 modeler-entity-corner = Lowest corner
 modeler-entity-many =
     { $count ->

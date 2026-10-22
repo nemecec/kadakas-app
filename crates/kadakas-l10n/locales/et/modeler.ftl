@@ -71,6 +71,9 @@ modeler-entity-id = Tunnus
 modeler-entity-layer = Kiht
 modeler-entity-class = Klass
 modeler-entity-size = Suurus
+modeler-entity-position = Asukoht
+modeler-entity-rotation = Pööre (x, y, z)
+modeler-entity-scale = Mõõtkava
 modeler-entity-corner = Madalaim nurk
 modeler-entity-many =
     { $count ->
