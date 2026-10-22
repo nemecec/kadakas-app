@@ -121,7 +121,9 @@ fn the_editor_changes_one_field_with_checks_and_one_undo_step_each() {
         MaterialEdit::Offset([5.0, 6.0]),
         MaterialEdit::Name("Teak".into()),
     ] {
-        panel.apply(&mut ed, &mut bucket, Request::Edit(a, e)).unwrap();
+        panel
+            .apply(&mut ed, &mut bucket, Request::Edit(a, e))
+            .unwrap();
     }
     assert_eq!(ed.undo_depth(), depth + 10);
     let m = present::material(ed.doc(), a).unwrap();
@@ -140,7 +142,11 @@ fn the_editor_changes_one_field_with_checks_and_one_undo_step_each() {
     assert_eq!(ed.doc().resources.get(a).unwrap().name, "Teak");
     // Pattern none removes the texture.
     panel
-        .apply(&mut ed, &mut bucket, Request::Edit(a, MaterialEdit::Pattern(None)))
+        .apply(
+            &mut ed,
+            &mut bucket,
+            Request::Edit(a, MaterialEdit::Pattern(None)),
+        )
         .unwrap();
     assert!(present::material(ed.doc(), a).unwrap().texture.is_none());
     // Refused: a value out of range, an empty name, a name that is taken. Nothing changes.
@@ -151,11 +157,19 @@ fn the_editor_changes_one_field_with_checks_and_one_undo_step_each() {
         MaterialEdit::Name("  ".into()),
         MaterialEdit::Name("material 2".into()),
     ] {
-        assert!(panel.apply(&mut ed, &mut bucket, Request::Edit(a, e)).is_err());
+        assert!(
+            panel
+                .apply(&mut ed, &mut bucket, Request::Edit(a, e))
+                .is_err()
+        );
     }
     // The same value again is no step.
     panel
-        .apply(&mut ed, &mut bucket, Request::Edit(a, MaterialEdit::Opacity(0.5)))
+        .apply(
+            &mut ed,
+            &mut bucket,
+            Request::Edit(a, MaterialEdit::Opacity(0.5)),
+        )
         .unwrap();
     assert_eq!(ed.undo_depth(), depth);
     let _ = b;
@@ -225,9 +239,11 @@ fn an_unused_material_is_deleted_at_once_a_used_one_asks_first() {
     assert!(ed.undo());
     assert!(ed.doc().resources.get(brick).is_some());
     // A confirm with no question is refused.
-    assert!(panel
-        .apply(&mut ed, &mut bucket, Request::ConfirmDelete)
-        .is_err());
+    assert!(
+        panel
+            .apply(&mut ed, &mut bucket, Request::ConfirmDelete)
+            .is_err()
+    );
 }
 
 #[test]
@@ -260,7 +276,10 @@ fn a_material_in_a_slot_asks_too_and_purge_deletes_the_unused_ones() {
     assert_eq!(ed.undo_depth(), depth + 1);
     assert_eq!(names(&ed), ["Timber"]);
     assert_eq!(bucket, None);
-    assert!(panel.pending_delete.is_none(), "any other request closes the question");
+    assert!(
+        panel.pending_delete.is_none(),
+        "any other request closes the question"
+    );
     let msg = panel.apply(&mut ed, &mut bucket, Request::Purge).unwrap();
     assert_eq!(msg, tr!("uic-materials-purge-none"));
 }

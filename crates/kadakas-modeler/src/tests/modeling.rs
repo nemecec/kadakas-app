@@ -386,4 +386,5 @@ fn the_modeling_texts_exist_in_both_languages() {
 
 mod editing;
 mod intersect;
+mod paint;
 mod transform;

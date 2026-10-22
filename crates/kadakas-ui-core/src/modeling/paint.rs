@@ -125,7 +125,12 @@ pub fn hit_face(w: &World, engine: &mut Inferencer, cam: &Camera, cursor: DVec2)
 }
 
 /// The material on one side of a face.
-pub fn side_material(doc: &Document, model: ObjectId, face: FaceId, front: bool) -> Option<ResourceId> {
+pub fn side_material(
+    doc: &Document,
+    model: ObjectId,
+    face: FaceId,
+    front: bool,
+) -> Option<ResourceId> {
     let f = model_of(doc, model)?.face(face)?;
     let (a, b) = present::face_materials(doc, &f.attrs);
     if front { a } else { b }
@@ -135,8 +140,15 @@ pub fn side_material(doc: &Document, model: ObjectId, face: FaceId, front: bool)
 /// has): a painted side counts as painted.
 fn side_attr(doc: &Document, model: ObjectId, face: FaceId, front: bool) -> Option<String> {
     let f = model_of(doc, model)?.face(face)?;
-    let key = if front { ATTR_MATERIAL } else { ATTR_BACK_MATERIAL };
-    f.attrs.get(key).and_then(|v| v.as_str()).map(str::to_string)
+    let key = if front {
+        ATTR_MATERIAL
+    } else {
+        ATTR_BACK_MATERIAL
+    };
+    f.attrs
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
 }
 
 /// The faces a fill covers, each with the side that is painted (`true`: the front). The clicked
@@ -230,8 +242,7 @@ impl Paint {
 
     /// The bucket, if its material is still in the document.
     pub fn material(&self, doc: &Document) -> Option<ResourceId> {
-        self.bucket
-            .filter(|m| present::material(doc, *m).is_some())
+        self.bucket.filter(|m| present::material(doc, *m).is_some())
     }
 
     /// A click. `selection` holds the objects that are selected as a whole.
@@ -275,7 +286,11 @@ impl Paint {
                 out.message = Some(if n == 1 {
                     tr!("uic-paint-painted-one", name = name_of(doc, material))
                 } else {
-                    tr!("uic-paint-painted-many", count = n, name = name_of(doc, material))
+                    tr!(
+                        "uic-paint-painted-many",
+                        count = n,
+                        name = name_of(doc, material)
+                    )
                 });
                 out
             }
@@ -309,7 +324,11 @@ fn paint_objects(doc: &Document, objects: Vec<ObjectId>, material: Option<Resour
         material,
     });
     out.message = Some(if refused.is_empty() {
-        tr!("uic-paint-painted-objects", count = ok.len(), name = name_of(doc, material))
+        tr!(
+            "uic-paint-painted-objects",
+            count = ok.len(),
+            name = name_of(doc, material)
+        )
     } else {
         tr!(
             "uic-paint-painted-some-objects",

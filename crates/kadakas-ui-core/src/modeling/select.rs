@@ -303,6 +303,89 @@ pub fn rect_select(world: &World, cam: &Camera, a: DVec2, b: DVec2, crossing: bo
     out
 }
 
+/// The objects for a selection rectangle (pixels) that are no surface models: plants, hardscapes,
+/// site models, instances and the like (MOD-05, round B). A window takes the objects whose drawn
+/// geometry lies fully inside, a crossing rectangle the ones it touches. Surface models have
+/// their faces and edges selected by [`rect_select`] instead.
+pub fn rect_select_objects(
+    doc: &Document,
+    scene: &kadakas_core::mesh::Scene,
+    cam: &Camera,
+    a: DVec2,
+    b: DVec2,
+    crossing: bool,
+) -> Vec<ObjectId> {
+    let (lo, hi) = (a.min(b), a.max(b));
+    let px = |p: glam::Vec3| cam.project(scene.to_world(p));
+    let mut out = Vec::new();
+    for id in scene.objects() {
+        if model_of(doc, id).is_some() {
+            continue;
+        }
+        let Some((tris, segs)) = scene.object_ranges(id) else {
+            continue;
+        };
+        let any = std::cell::Cell::new(false);
+        let all_inside = std::cell::Cell::new(true);
+        let touches = std::cell::Cell::new(false);
+        let see = |p: Option<DVec2>| match p {
+            Some(p) => {
+                any.set(true);
+                if in_rect(p, lo, hi) {
+                    touches.set(true);
+                } else {
+                    all_inside.set(false);
+                }
+            }
+            None => all_inside.set(false),
+        };
+        for t in tris.clone() {
+            for p in scene.mesh.triangle(t) {
+                see(px(p));
+            }
+            if !crossing && !all_inside.get() {
+                break;
+            }
+        }
+        for s in segs.clone() {
+            for p in scene.lines.segment(s) {
+                see(px(p));
+            }
+            if !crossing && !all_inside.get() {
+                break;
+            }
+        }
+        let hit = if crossing {
+            touches.get() || {
+                // The rectangle may cross the geometry without holding a corner, or lie inside a
+                // large face.
+                let centre = (lo + hi) / 2.0;
+                tris.clone().any(|t| {
+                    let q = scene.mesh.triangle(t).map(px);
+                    match q {
+                        [Some(p0), Some(p1), Some(p2)] => {
+                            segment_hits_rect(p0, p1, lo, hi)
+                                || segment_hits_rect(p1, p2, lo, hi)
+                                || segment_hits_rect(p2, p0, lo, hi)
+                                || point_in_polygon(centre, &[p0, p1, p2])
+                        }
+                        _ => false,
+                    }
+                }) || segs.clone().any(|s| {
+                    let [p, q] = scene.lines.segment(s).map(px);
+                    matches!((p, q), (Some(p), Some(q)) if segment_hits_rect(p, q, lo, hi))
+                })
+            }
+        } else {
+            any.get() && all_inside.get()
+        };
+        if hit {
+            out.push(id);
+        }
+    }
+    out
+}
+
 /// Lines across a face that show it is selected: parallel lines in the plane of the face, clipped
 /// to the face (holes stay open). `loops` are in world coordinates, the outer loop first.
 pub fn face_hatch(loops: &[Vec<DVec3>], lines: usize) -> Vec<[DVec3; 2]> {

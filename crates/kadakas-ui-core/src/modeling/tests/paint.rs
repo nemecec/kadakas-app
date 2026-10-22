@@ -113,7 +113,13 @@ fn a_click_paints_one_side_of_one_face_in_one_undo_step_and_undo_takes_it_back()
     let mut p = paint::Paint::default();
     p.set(Some(brick));
     let depth = ed.undo_depth();
-    let out = click(&mut ed, &mut p, face_hit(id, f[0], true), &[], PaintMods::default());
+    let out = click(
+        &mut ed,
+        &mut p,
+        face_hit(id, f[0], true),
+        &[],
+        PaintMods::default(),
+    );
     assert!(out.message.is_some());
     assert_eq!(ed.undo_depth(), depth + 1);
     assert_eq!(attr(&ed, id, f[0], ATTR_MATERIAL), Some(brick.to_string()));
@@ -122,8 +128,17 @@ fn a_click_paints_one_side_of_one_face_in_one_undo_step_and_undo_takes_it_back()
         assert_eq!(attr(&ed, id, *other, ATTR_MATERIAL), None);
     }
     // The back of another face.
-    click(&mut ed, &mut p, face_hit(id, f[1], false), &[], PaintMods::default());
-    assert_eq!(attr(&ed, id, f[1], ATTR_BACK_MATERIAL), Some(brick.to_string()));
+    click(
+        &mut ed,
+        &mut p,
+        face_hit(id, f[1], false),
+        &[],
+        PaintMods::default(),
+    );
+    assert_eq!(
+        attr(&ed, id, f[1], ATTR_BACK_MATERIAL),
+        Some(brick.to_string())
+    );
     assert_eq!(attr(&ed, id, f[1], ATTR_MATERIAL), None);
     assert!(ed.undo());
     assert_eq!(attr(&ed, id, f[1], ATTR_BACK_MATERIAL), None);
@@ -151,7 +166,13 @@ fn ctrl_fills_the_connected_faces_with_the_same_material_and_stops_at_other_pain
     let mut p = paint::Paint::default();
     // One face has grass: the fill of the unpainted faces leaves it.
     p.set(Some(grass));
-    click(&mut ed, &mut p, face_hit(id, f[2], true), &[], PaintMods::default());
+    click(
+        &mut ed,
+        &mut p,
+        face_hit(id, f[2], true),
+        &[],
+        PaintMods::default(),
+    );
     p.set(Some(brick));
     let ctrl = PaintMods {
         ctrl: true,
@@ -208,9 +229,21 @@ fn shift_fills_all_faces_of_the_document_with_the_same_material_on_that_side() {
     // Brick on the front of three faces of the box and the face of the other model.
     p.set(Some(brick));
     for x in &f[..3] {
-        click(&mut ed, &mut p, face_hit(id, *x, true), &[], PaintMods::default());
+        click(
+            &mut ed,
+            &mut p,
+            face_hit(id, *x, true),
+            &[],
+            PaintMods::default(),
+        );
     }
-    click(&mut ed, &mut p, face_hit(other, g, true), &[], PaintMods::default());
+    click(
+        &mut ed,
+        &mut p,
+        face_hit(other, g, true),
+        &[],
+        PaintMods::default(),
+    );
     // Shift with grass on one brick face: all four brick fronts become grass; the unpainted stay.
     p.set(Some(grass));
     let shift = PaintMods {
@@ -236,7 +269,13 @@ fn alt_samples_the_material_under_the_pointer_and_paints_nothing() {
     let f = faces(&ed, id);
     let mut p = paint::Paint::default();
     p.set(Some(grass));
-    click(&mut ed, &mut p, face_hit(id, f[0], true), &[], PaintMods::default());
+    click(
+        &mut ed,
+        &mut p,
+        face_hit(id, f[0], true),
+        &[],
+        PaintMods::default(),
+    );
     p.set(Some(brick));
     let depth = ed.undo_depth();
     let alt = PaintMods {
@@ -250,7 +289,13 @@ fn alt_samples_the_material_under_the_pointer_and_paints_nothing() {
     // An unpainted side loads the default material: the next click clears.
     click(&mut ed, &mut p, face_hit(id, f[1], true), &[], alt);
     assert_eq!(p.bucket, None);
-    click(&mut ed, &mut p, face_hit(id, f[0], true), &[], PaintMods::default());
+    click(
+        &mut ed,
+        &mut p,
+        face_hit(id, f[0], true),
+        &[],
+        PaintMods::default(),
+    );
     assert_eq!(attr(&ed, id, f[0], ATTR_MATERIAL), None, "cleared");
     // Over nothing a sample does nothing.
     p.set(Some(brick));
@@ -287,7 +332,10 @@ fn escape_ends_nothing_and_keeps_the_bucket_when_the_tool_changes() {
     tools.choose(ModelerTool::PaintBucket);
     tools.paint.set(Some(brick));
     assert!(!tools.in_progress());
-    assert!(!tools.cancel(), "nothing to cancel: the window goes to Select");
+    assert!(
+        !tools.cancel(),
+        "nothing to cancel: the window goes to Select"
+    );
     tools.choose(ModelerTool::Select);
     tools.choose(ModelerTool::PaintBucket);
     assert_eq!(tools.paint.material(ed.doc()), Some(brick));
@@ -303,10 +351,23 @@ fn whole_objects_take_a_material_but_plants_hardscapes_and_site_models_are_refus
     p.set(Some(brick));
     // A selected model: a click on one of its faces paints the object as a whole.
     let first = faces(&ed, id)[0];
-    let out = click(&mut ed, &mut p, face_hit(id, first, true), &[id], PaintMods::default());
+    let out = click(
+        &mut ed,
+        &mut p,
+        face_hit(id, first, true),
+        &[id],
+        PaintMods::default(),
+    );
     assert!(out.message.is_some());
-    assert_eq!(kadakas_core::present::object_material(ed.doc(), id), Some(brick));
-    assert_eq!(attr(&ed, id, first, ATTR_MATERIAL), None, "no face was painted");
+    assert_eq!(
+        kadakas_core::present::object_material(ed.doc(), id),
+        Some(brick)
+    );
+    assert_eq!(
+        attr(&ed, id, first, ATTR_MATERIAL),
+        None,
+        "no face was painted"
+    );
     assert!(ed.undo());
     assert_eq!(kadakas_core::present::object_material(ed.doc(), id), None);
     // A plant, a hardscape and a site model: refused, nothing changes.
@@ -318,11 +379,7 @@ fn whole_objects_take_a_material_but_plants_hardscapes_and_site_models_are_refus
             height: 5000.0,
         },
         Shape::Hardscape {
-            boundary: vec![
-                pt(0.0, 0.0),
-                pt(1000.0, 0.0),
-                pt(1000.0, 1000.0),
-            ],
+            boundary: vec![pt(0.0, 0.0), pt(1000.0, 0.0), pt(1000.0, 1000.0)],
             material: "m".into(),
             thickness: None,
             elevation: None,
@@ -341,12 +398,27 @@ fn whole_objects_take_a_material_but_plants_hardscapes_and_site_models_are_refus
             .created[0],
         );
         let depth = ed.undo_depth();
-        let out = click(&mut ed, &mut p, PaintHit::Object(o), &[], PaintMods::default());
+        let out = click(
+            &mut ed,
+            &mut p,
+            PaintHit::Object(o),
+            &[],
+            PaintMods::default(),
+        );
         assert!(out.actions.is_empty(), "{kind}");
-        assert_eq!(out.message, Some(kadakas_l10n::tr!("uic-paint-refused-style")));
+        assert_eq!(
+            out.message,
+            Some(kadakas_l10n::tr!("uic-paint-refused-style"))
+        );
         assert_eq!(ed.undo_depth(), depth);
         // Also when selected with a model: the model is painted, the rest is counted.
-        let out = click(&mut ed, &mut p, face_hit(id, first, true), &[id, o], PaintMods::default());
+        let out = click(
+            &mut ed,
+            &mut p,
+            face_hit(id, first, true),
+            &[id, o],
+            PaintMods::default(),
+        );
         assert_eq!(out.actions.len(), 1, "{kind}");
         assert!(out.message.unwrap().contains('1'));
         assert!(ed.undo());
@@ -367,8 +439,17 @@ fn a_group_and_an_instance_take_a_material_as_a_whole() {
     p.set(Some(brick));
     // The group is selected and a face of a member is clicked: the group is painted.
     let first = faces(&ed, id)[0];
-    click(&mut ed, &mut p, face_hit(id, first, true), &[grp], PaintMods::default());
-    assert_eq!(kadakas_core::present::object_material(ed.doc(), grp), Some(brick));
+    click(
+        &mut ed,
+        &mut p,
+        face_hit(id, first, true),
+        &[grp],
+        PaintMods::default(),
+    );
+    assert_eq!(
+        kadakas_core::present::object_material(ed.doc(), grp),
+        Some(brick)
+    );
     let slots = kadakas_core::present::SlotIndex::new(ed.doc());
     assert_eq!(slots.resolve(ed.doc().object(id).unwrap(), 0), Some(brick));
     // An instance that is hit without a selection is painted by itself.
@@ -407,8 +488,17 @@ fn the_face_under_the_pointer_and_the_side_the_viewer_sees() {
         panic!("a face: {hit:?}");
     };
     assert_eq!(model, id);
-    let n = model_of(ed.doc(), id).unwrap().face(face).unwrap().plane.normal;
-    assert_eq!(front, n.z > 0.0, "the front is seen when the normal points up");
+    let n = model_of(ed.doc(), id)
+        .unwrap()
+        .face(face)
+        .unwrap()
+        .plane
+        .normal;
+    assert_eq!(
+        front,
+        n.z > 0.0,
+        "the front is seen when the normal points up"
+    );
     // From below the other side of the box is seen.
     let below = Camera::look_at(
         v(500.0, 500.0, -6000.0),
@@ -427,7 +517,12 @@ fn the_face_under_the_pointer_and_the_side_the_viewer_sees() {
         panic!("a face from below");
     };
     assert_ne!(f2, face, "the bottom is another face");
-    let n2 = model_of(ed.doc(), id).unwrap().face(f2).unwrap().plane.normal;
+    let n2 = model_of(ed.doc(), id)
+        .unwrap()
+        .face(f2)
+        .unwrap()
+        .plane
+        .normal;
     assert_eq!(front2, n2.z < 0.0);
     // Near an edge the face is still found (no snapping to the edge).
     let near_edge = above.project(v(500.0, 1.0, 1000.0)).unwrap();

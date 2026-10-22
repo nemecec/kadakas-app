@@ -25,6 +25,28 @@ pub struct MaterialRow {
     pub textured: bool,
     /// Slots and face sides that use the material.
     pub uses: usize,
+    /// Changes when the look of the swatch changes (the color, the opacity, the texture).
+    pub thumb_key: u64,
+}
+
+/// A number that changes when the swatch of the material would look different.
+pub fn thumb_key(m: &Material) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    m.base_color.0.hash(&mut h);
+    m.opacity.to_bits().hash(&mut h);
+    match &m.texture {
+        None => 0u8.hash(&mut h),
+        Some(Texture::Procedural { kind, seed }) => (1u8, kind.id(), seed).hash(&mut h),
+        Some(Texture::Image { png_base64, .. }) => (
+            2u8,
+            png_base64.len(),
+            png_base64.get(..64),
+            png_base64.get(png_base64.len().saturating_sub(64)..),
+        )
+            .hash(&mut h),
+    }
+    h.finish()
 }
 
 /// The materials of the document in the order they were made, with how often each is used.
@@ -40,6 +62,7 @@ pub fn rows(doc: &Document) -> Vec<MaterialRow> {
                 opacity: m.opacity,
                 textured: m.texture.is_some(),
                 uses: present::material_uses(doc, r.id).total(),
+                thumb_key: thumb_key(m),
             })
         })
         .collect()
@@ -166,6 +189,8 @@ pub enum Request {
     CancelDelete,
     /// Delete all materials that nothing uses.
     Purge,
+    /// Open the small editor for a material, or close it.
+    Editor(Option<ResourceId>),
     /// Put the material (or none) in the bucket.
     Select(Option<ResourceId>),
     /// Put the material on the given side of faces of the model (Entity Info).
@@ -309,6 +334,10 @@ impl MaterialsPanel {
                 self.delete(editor, bucket, p.id)
             }
             Request::CancelDelete => Ok(String::new()),
+            Request::Editor(id) => {
+                self.editing = id.filter(|i| resource(editor.doc(), *i).is_some());
+                Ok(String::new())
+            }
             Request::Purge => {
                 let doc = editor.doc();
                 let unused: Vec<ResourceId> = rows(doc)
@@ -394,10 +423,7 @@ impl MaterialsPanel {
                 }
             }
         }
-        commands.push(Command::DeleteResource {
-            id,
-            reassign: None,
-        });
+        commands.push(Command::DeleteResource { id, reassign: None });
         editor
             .execute(&Command::Batch { commands })
             .map_err(|e| e.to_string())?;

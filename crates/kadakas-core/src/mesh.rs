@@ -257,6 +257,13 @@ impl Scene {
         b.get()
     }
 
+    /// The triangles and the line segments of an object, as ranges of their numbers.
+    pub fn object_ranges(&self, id: ObjectId) -> Option<(Range<usize>, Range<usize>)> {
+        self.ranges
+            .get(&id)
+            .map(|r| (r.tris.clone(), r.segs.clone()))
+    }
+
     /// Objects that have geometry, in document order.
     pub fn objects(&self) -> impl Iterator<Item = ObjectId> + '_ {
         self.ranges.keys().copied()

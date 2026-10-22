@@ -73,6 +73,28 @@ pub fn set_gpu(adapter: &str, driver: &str, backend: &str) {
     });
 }
 
+/// Starts the main Kadakas app with a file (File > Open in the Kadakas App). The app is the
+/// program next to this one in the version folder; it runs on its own, outside the launcher's
+/// supervision (see `kadakas_update::launch::sibling_app_command`).
+pub fn start_app(file: &std::path::Path) -> Result<(), String> {
+    use kadakas_l10n::tr;
+    let exe =
+        std::env::current_exe().map_err(|e| tr!("modeler-app-failed", error = e.to_string()))?;
+    let Some(mut cmd) =
+        kadakas_update::launch::sibling_app_command(&exe, &[file.as_os_str().to_owned()])
+    else {
+        return Err(tr!("modeler-app-missing"));
+    };
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| tr!("modeler-app-failed", error = e.to_string()))?;
+    // Collect the child when it ends, so that it does not stay a zombie.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 /// How often the requests to open documents are looked at, in seconds.
 const OPEN_POLL_SECONDS: f64 = 0.5;
 

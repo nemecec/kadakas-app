@@ -7,7 +7,7 @@ use kadakas_core::model::ObjectId;
 use kadakas_core::surface::Edit;
 
 /// A box of 1000 x 1000 x 500 around the origin (its top at 500), in the document.
-fn make_box(app: &mut ModelerApp) -> ObjectId {
+pub(super) fn make_box(app: &mut ModelerApp) -> ObjectId {
     let id = app
         .session
         .editor
@@ -48,19 +48,19 @@ fn make_box(app: &mut ModelerApp) -> ObjectId {
     id
 }
 
-fn bounds(app: &ModelerApp, id: ObjectId) -> (DVec3, DVec3) {
+pub(super) fn bounds(app: &ModelerApp, id: ObjectId) -> (DVec3, DVec3) {
     match &app.session.editor.doc().object(id).unwrap().shape {
         ModelShape::SurfaceModel(m) => m.bounds().unwrap(),
         _ => panic!("not a surface model"),
     }
 }
 
-fn near(a: DVec3, b: DVec3, tol: f64) -> bool {
+pub(super) fn near(a: DVec3, b: DVec3, tol: f64) -> bool {
     a.distance(b) < tol
 }
 
 /// Types text; `x`, `/`, `-`, `<`, `>` and `,` too.
-fn type_more(ctx: &egui::Context, app: &mut ModelerApp, text: &str, t: &mut f64) {
+pub(super) fn type_more(ctx: &egui::Context, app: &mut ModelerApp, text: &str, t: &mut f64) {
     use egui::Key;
     for c in text.chars() {
         let key = match c {
@@ -83,7 +83,7 @@ fn type_more(ctx: &egui::Context, app: &mut ModelerApp, text: &str, t: &mut f64)
 }
 
 /// Where a world point is on the screen.
-fn screen_of(app: &mut ModelerApp, p: DVec3) -> egui::Pos2 {
+pub(super) fn screen_of(app: &mut ModelerApp, p: DVec3) -> egui::Pos2 {
     let origin = app.session.scene().origin;
     let r = app.canvas_rect.unwrap();
     let cam = kadakas_ui_core::modeling::infer_camera(
@@ -109,7 +109,7 @@ fn toggle_copy(ctx: &egui::Context, app: &mut ModelerApp, t: &mut f64) {
     let _ = frame(ctx, app, vec![], *t);
 }
 
-fn ready() -> (egui::Context, ModelerApp, f64, ObjectId) {
+pub(super) fn ready() -> (egui::Context, ModelerApp, f64, ObjectId) {
     let (ctx, mut app, mut t) = top_view();
     let id = make_box(&mut app);
     // The tray changes its width with its content; keep the view still.
