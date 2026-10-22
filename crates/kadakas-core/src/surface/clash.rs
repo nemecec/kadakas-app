@@ -543,13 +543,18 @@ pub(super) fn coplanar_near(
     };
     let pad = DVec3::splat(window);
     let (lo, hi) = (lo - pad, hi + pad);
+    // The boxes of all faces from a table of the positions (one pass; see `check::Positions`).
+    let at = super::check::Positions::of(m);
     let tree = BoxTree::new(
         m.faces
             .iter()
-            .filter(|(_, f)| whole(f))
             .filter_map(|(id, f)| {
-                let (flo, fhi) = face_box(m, f, window);
-                (!(fhi.cmplt(lo).any() || flo.cmpgt(hi).any())).then_some((flo, fhi, id.0))
+                let mut ps = f.outer.iter().map(|v| at.get(*v));
+                let first = ps.next()?;
+                let (flo, fhi) = ps.fold((first, first), |(l, h), p| (l.min(p), h.max(p)));
+                let all = f.loops().flatten().all(|v| at.get(*v).is_finite());
+                let (flo, fhi) = (flo - pad, fhi + pad);
+                (all && !(fhi.cmplt(lo).any() || flo.cmpgt(hi).any())).then_some((flo, fhi, id.0))
             })
             .collect(),
     );

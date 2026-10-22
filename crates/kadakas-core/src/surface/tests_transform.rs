@@ -1485,9 +1485,11 @@ fn close_scene(seed: u64) -> SurfaceModel {
     let mut m = SurfaceModel::new();
     for i in 0..rng.below(3) + 2 {
         let x = 1500.0 * i as f64;
-        let y = rng.range(-300.0, 300.0).round();
-        let w = rng.range(500.0, 1500.0).round();
-        let h = rng.range(300.0, 900.0).round();
+        // On a grid of 250, so that moves of the same grid land on vertices and edges.
+        let grid = |x: f64| (x / 250.0).round() * 250.0;
+        let y = grid(rng.range(-500.0, 500.0));
+        let w = grid(rng.range(500.0, 1500.0));
+        let h = grid(rng.range(250.0, 1000.0));
         let known: std::collections::BTreeSet<FaceId> = m.faces().map(|(id, _)| id).collect();
         if m.apply(&Edit::AddEdges {
             edges: (0..4)
@@ -1512,16 +1514,23 @@ fn close_scene(seed: u64) -> SurfaceModel {
     m
 }
 
-/// A random move of vertices or of a face of `m`: a translation of up to `reach` (rounded to 10,
-/// so that landings happen) or a turn.
+/// A random move of vertices or of a face of `m`: a translation of up to `reach` (on a grid of
+/// 250, so that landings happen), now and then off the grid by less than the tolerance, or a turn.
 fn random_edit(rng: &mut Rng, m: &SurfaceModel, reach: f64) -> Edit {
     let vs: Vec<VertexId> = m.vertices().map(|(v, _)| v).collect();
     let fs: Vec<FaceId> = m.faces().map(|(f, _)| f).collect();
-    let d = DVec3::new(
-        (rng.range(-reach, reach) / 10.0).round() * 10.0,
-        (rng.range(-reach, reach) / 10.0).round() * 10.0,
-        (rng.range(-reach, reach) / 10.0).round() * 10.0,
+    let mut d = DVec3::new(
+        (rng.range(-reach, reach) / 250.0).round() * 250.0,
+        (rng.range(-reach, reach) / 250.0).round() * 250.0,
+        (rng.range(-reach, reach) / 250.0).round() * 250.0,
     );
+    if rng.next() < 0.3 {
+        d += DVec3::new(
+            rng.range(-0.004, 0.004),
+            rng.range(-0.004, 0.004),
+            rng.range(-0.004, 0.004),
+        );
+    }
     let (vertices, faces) = if rng.next() < 0.5 || fs.is_empty() {
         let k = rng.below(3) + 1;
         (
@@ -1618,4 +1627,38 @@ fn most_close_moves_work_and_the_others_change_nothing() {
         }
     }
     assert!(ok > 100, "{ok} worked, {refused} were refused");
+}
+
+#[test]
+fn the_local_work_gives_the_same_results_as_the_whole_model() {
+    // The edit looks only at the part of the model around what moved (a topology index of that
+    // part, checks of what changed); the reference way indexes and checks the whole model. Both
+    // give the same model, or the same refusal.
+    use super::edit::reference::{self, Mode};
+    let (mut ok, mut landed) = (0, 0);
+    for seed in 0..500u64 {
+        let mut rng = Rng(seed * 7 + 5);
+        let mut fast = close_scene(seed);
+        let mut slow = fast.clone();
+        for _ in 0..3 {
+            if fast.vertex_count() == 0 {
+                break;
+            }
+            let edit = random_edit(&mut rng, &fast, 2000.0);
+            let before = fast.clone();
+            let a = reference::with(Mode::Index, || fast.apply_with_notes(&edit));
+            let b = reference::with(Mode::Scan, || slow.apply_with_notes(&edit));
+            assert_eq!(a, b, "seed {seed}: {edit:?}");
+            assert_eq!(fast, slow, "seed {seed}: {edit:?}");
+            if a.is_ok() {
+                ok += 1;
+                landed += usize::from(fast.vertex_count() < before.vertex_count());
+                let r = fast.check();
+                assert!(r.is_valid(), "seed {seed}: {:?} after {edit:?}", r.problems);
+            } else {
+                assert_eq!(fast, before);
+            }
+        }
+    }
+    assert!(ok > 800 && landed > 10, "{ok} worked, {landed} welded");
 }

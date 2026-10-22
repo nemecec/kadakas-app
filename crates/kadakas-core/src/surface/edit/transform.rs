@@ -54,7 +54,7 @@
 //! The work looks only at the geometry near what moved: box trees of the vertices and edges in
 //! that region, a topology index of the faces that use a moved vertex and their neighbours, and
 //! checks of what changed (the rest of the model is as it was). Moving one vertex of a model of
-//! 80,000 edges takes a few milliseconds plus the linear scans; see `docs/modeler.md`.
+//! 80,000 edges takes about 15 ms in a release build; see `docs/modeler.md`.
 //!
 //! # `CopyGeometry`
 //!
@@ -330,11 +330,12 @@ pub(super) fn transform_vertices(
         full: BTreeSet::new(),
         old: BTreeMap::new(),
     };
+    let moving = check::Mask::of(m, s.iter().copied());
     for (id, f) in &m.faces {
         let (mut moved, mut all) = (0usize, 0usize);
         for v in f.loops().flatten() {
             all += 1;
-            moved += usize::from(s.contains(v));
+            moved += usize::from(moving.has(*v));
         }
         if moved > 0 {
             st.old.insert(*id, f.plane);
@@ -418,6 +419,7 @@ pub(super) fn transform_vertices(
         .iter()
         .copied()
         .chain(splits.keys().flat_map(|e| m.edges[e].v))
+        .chain(splits.values().flatten().copied())
         .collect();
     let mut w = local_work(m, seeds.into_iter());
     for (e, vs) in &splits {
@@ -453,10 +455,11 @@ pub(super) fn transform_vertices(
     }
     join_double_edges(&mut w, &touched_pairs, notes);
     // The faces to look at: every face with a surviving moved vertex.
+    let alive_moved = check::Mask::of(w.m, survivors.iter().copied());
     let mut to_check: Vec<FaceId> =
         w.m.faces
             .iter()
-            .filter(|(_, f)| f.loops().flatten().any(|v| survivors.contains(v)))
+            .filter(|(_, f)| f.loops().flatten().any(|v| alive_moved.has(*v)))
             .map(|(id, _)| *id)
             .collect();
     to_check.sort_unstable();
@@ -586,12 +589,18 @@ pub(super) fn transform_vertices(
 }
 
 /// A work on `m` whose topology index holds only the part of the model around `seeds` (the
-/// vertices that moved and the ends of the edges they split): every edge at a vertex of a face
+/// vertices that moved, the edges that are split and the vertices they are split at, so every
+/// vertex of a face that the edit looks at is in a face with a seed): every edge at a vertex of a face
 /// with a seed vertex or at a neighbour of such a vertex, and every face that uses one of these
 /// edges. That is all the edit asks the index: the edges and faces of the faces that it looks at
 /// (splits, folds, merges and the heal of an erase), so the answers are the same as those of an
 /// index of the whole model, which would cost a pass that builds maps of all edges and faces.
+/// With the reference way of the tests (`reference::Mode::Scan`) the index is of the whole model,
+/// so that the tests compare the two.
 fn local_work<'a>(m: &'a mut SurfaceModel, seeds: impl Iterator<Item = VertexId>) -> Work<'a> {
+    if reference::mode() == reference::Mode::Scan {
+        return Work::new(m);
+    }
     let n = m.next_id as usize + 1;
     let mut core = vec![false; n];
     let mark = |mask: &mut Vec<bool>, v: VertexId| {
@@ -715,11 +724,13 @@ fn landing_offset(m: &SurfaceModel, s: &BTreeSet<VertexId>) -> Option<DVec3> {
     let pad = DVec3::splat(check::window(m));
     let (lo, hi) = geom::bounds(s.iter().map(|v| m.vertices[v]))?;
     let (lo, hi) = (lo - pad, hi + pad);
+    let at = check::Positions::of(m);
+    let moving = check::Mask::of(m, s.iter().copied());
     let outside = |a: DVec3, b: DVec3| b.cmplt(lo).any() || a.cmpgt(hi).any();
     let vtree = BoxTree::new(
         m.vertices
             .iter()
-            .filter(|(v, p)| !s.contains(v) && !outside(**p, **p))
+            .filter(|(v, p)| !moving.has(**v) && !outside(**p, **p))
             .map(|(v, p)| (*p, *p, v.0))
             .collect(),
     );
@@ -728,8 +739,8 @@ fn landing_offset(m: &SurfaceModel, s: &BTreeSet<VertexId>) -> Option<DVec3> {
         m.edges
             .iter()
             .filter_map(|(id, e)| {
-                let moved = e.v.map(|v| s.contains(&v));
-                let (a, b) = (m.vertices[&e.v[0]], m.vertices[&e.v[1]]);
+                let moved = e.v.map(|v| moving.has(v));
+                let (a, b) = (at.get(e.v[0]), at.get(e.v[1]));
                 if moved[0] && moved[1] {
                     moved_edges.push((a, b));
                 }
@@ -893,7 +904,8 @@ fn finish(
             .filter(|v| m.vertices.contains_key(v))
             .map(|v| v.0),
     );
-    if check::structure_near(m, &seeds, &ids) {
+    // The reference way of the tests always runs the full checks.
+    if reference::mode() == reference::Mode::Scan || check::structure_near(m, &seeds, &ids) {
         let after = check::structure_problems(m);
         if !after.is_empty() {
             let old = check::structure_problems(before);
@@ -908,10 +920,11 @@ fn finish(
         .copied()
         .filter(|v| m.vertices.contains_key(v))
         .collect();
+    let near = check::Mask::of(m, verts.iter().copied());
     let edges: BTreeSet<EdgeId> = m
         .edges
         .iter()
-        .filter(|(_, e)| e.v.iter().any(|v| verts.contains(v)))
+        .filter(|(_, e)| e.v.iter().any(|v| near.has(*v)))
         .map(|(id, _)| *id)
         .collect();
     if let Some(p) = new_distance_problem(before, m, &edges, &verts) {
@@ -935,11 +948,7 @@ fn new_overlap(
     ce: &[EdgeId],
     cf: &[FaceId],
 ) -> Result<(), SurfaceError> {
-    let moved: BTreeSet<VertexId> = cv
-        .iter()
-        .copied()
-        .filter(|v| m.vertices.contains_key(v))
-        .collect();
+    let moved = check::Mask::of(m, cv.iter().copied().filter(|v| m.vertices.contains_key(v)));
     let items = |x: &SurfaceModel| {
         let mut edges: BTreeSet<EdgeId> = ce
             .iter()
@@ -949,7 +958,7 @@ fn new_overlap(
         edges.extend(
             x.edges
                 .iter()
-                .filter(|(_, e)| e.v.iter().any(|v| moved.contains(v)))
+                .filter(|(_, e)| e.v.iter().any(|v| moved.has(*v)))
                 .map(|(id, _)| *id),
         );
         let mut faces: BTreeSet<FaceId> = cf
@@ -960,7 +969,7 @@ fn new_overlap(
         faces.extend(
             x.faces
                 .iter()
-                .filter(|(_, f)| f.loops().flatten().any(|v| moved.contains(v)))
+                .filter(|(_, f)| f.loops().flatten().any(|v| moved.has(*v)))
                 .map(|(id, _)| *id),
         );
         (edges, faces)
@@ -1071,12 +1080,14 @@ fn t_junctions(
         return BTreeMap::new();
     }
     let pad = DVec3::splat(check::window(m));
-    let pos = |v: VertexId| m.vertices[&v];
+    let at = check::Positions::of(m);
+    let pos = |v: VertexId| at.get(v);
+    let moved = check::Mask::of(m, survivors.iter().copied());
     // The box around the moved vertices and the edges that end at them.
     let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
     let mut moved_edges: Vec<EdgeId> = Vec::new();
     for (id, e) in &m.edges {
-        if e.v.iter().any(|v| survivors.contains(v)) {
+        if e.v.iter().any(|v| moved.has(*v)) {
             moved_edges.push(*id);
             for v in e.v {
                 lo = lo.min(pos(v));

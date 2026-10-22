@@ -300,6 +300,51 @@ pub(super) fn window(m: &SurfaceModel) -> f64 {
     geom::tolerance_at(biggest)
 }
 
+/// The positions of the vertices in a table by id (not finite for an id that is no vertex). It is
+/// made in one pass in id order; a pass over all edges or faces that needs their positions then
+/// reads the table, which is many times faster than a look-up in the map for each end.
+pub(super) struct Positions(Vec<DVec3>);
+
+impl Positions {
+    pub fn of(m: &SurfaceModel) -> Positions {
+        let mut t = vec![DVec3::NAN; m.next_id as usize + 1];
+        for (v, p) in &m.vertices {
+            if let Some(x) = t.get_mut(v.0 as usize) {
+                *x = *p;
+            }
+        }
+        Positions(t)
+    }
+
+    /// The position of a vertex (not finite when there is none).
+    pub fn get(&self, v: VertexId) -> DVec3 {
+        self.0.get(v.0 as usize).copied().unwrap_or(DVec3::NAN)
+    }
+}
+
+/// A set of vertices as a table by id, for passes over all edges or faces.
+pub(super) struct Mask(Vec<bool>);
+
+impl Mask {
+    pub fn of(m: &SurfaceModel, vs: impl IntoIterator<Item = VertexId>) -> Mask {
+        let mut t = Mask(vec![false; m.next_id as usize + 1]);
+        for v in vs {
+            t.add(v);
+        }
+        t
+    }
+
+    pub fn add(&mut self, v: VertexId) {
+        if let Some(x) = self.0.get_mut(v.0 as usize) {
+            *x = true;
+        }
+    }
+
+    pub fn has(&self, v: VertexId) -> bool {
+        self.0.get(v.0 as usize).copied().unwrap_or(false)
+    }
+}
+
 /// The distance problems (as in `full`) of pairs in which one item is in `edges` or `verts`: the
 /// vertices of `verts` against all vertices and edges, and the edges of `edges` against all
 /// vertices and edges. The references of the model must hold for these items.
@@ -329,14 +374,16 @@ pub(super) fn near(
         return BTreeSet::new();
     };
     let (lo, hi) = (lo - pad, hi + pad);
+    let at = Positions::of(m);
     let tree = BoxTree::new(
         m.edges
             .iter()
-            .filter(|(_, e)| ok(e))
             .filter_map(|(id, e)| {
-                let (a, b) = (m.vertices[&e.v[0]], m.vertices[&e.v[1]]);
+                let (a, b) = (at.get(e.v[0]), at.get(e.v[1]));
+                // Not finite: an end that is no vertex (the edge is left out, as by `ok`).
                 let (elo, ehi) = (a.min(b) - pad, a.max(b) + pad);
-                (!(ehi.cmplt(lo).any() || elo.cmpgt(hi).any())).then_some((elo, ehi, id.0))
+                (a.is_finite() && b.is_finite() && !(ehi.cmplt(lo).any() || elo.cmpgt(hi).any()))
+                    .then_some((elo, ehi, id.0))
             })
             .collect(),
     );
@@ -642,8 +689,7 @@ pub(super) fn structure_near(
     seeds: &BTreeSet<VertexId>,
     ids: &BTreeSet<u32>,
 ) -> bool {
-    let mut mask = vec![false; m.next_id as usize + 1];
-    let has = |mask: &[bool], v: &VertexId| mask.get(v.0 as usize).copied().unwrap_or(false);
+    let mut mask = Mask::of(m, []);
     for &id in ids {
         let kinds = usize::from(m.vertices.contains_key(&VertexId(id)))
             + usize::from(m.edges.contains_key(&EdgeId(id)))
@@ -654,9 +700,7 @@ pub(super) fn structure_near(
         }
     }
     for v in seeds {
-        if let Some(x) = mask.get_mut(v.0 as usize) {
-            *x = true;
-        }
+        mask.add(*v);
         if let Some(p) = m.vertices.get(v)
             && (!p.is_finite() || geom::size(*p) > MAX_COORD)
         {
@@ -666,21 +710,19 @@ pub(super) fn structure_near(
     let faces: Vec<FaceId> = m
         .faces
         .iter()
-        .filter(|(_, f)| f.loops().flatten().any(|v| has(&mask, v)))
+        .filter(|(_, f)| f.loops().flatten().any(|v| mask.has(*v)))
         .map(|(id, _)| *id)
         .collect();
-    let mut wide = mask.clone();
+    let mut wide = mask;
     for f in &faces {
         for v in m.faces[f].loops().flatten() {
-            if let Some(x) = wide.get_mut(v.0 as usize) {
-                *x = true;
-            }
+            wide.add(*v);
         }
     }
     let mut pairs: BTreeMap<(VertexId, VertexId), EdgeId> = BTreeMap::new();
     let mut degree: BTreeMap<VertexId, usize> = BTreeMap::new();
     for (&id, e) in &m.edges {
-        if !e.v.iter().any(|v| has(&wide, v)) {
+        if !e.v.iter().any(|v| wide.has(*v)) {
             continue;
         }
         if e.v.iter().any(|v| !m.vertices.contains_key(v))
@@ -714,11 +756,11 @@ pub(super) fn structure_near(
     // a vertex in `wide`.
     let mut uses: BTreeMap<(VertexId, VertexId), Vec<(FaceId, bool)>> = BTreeMap::new();
     for (&id, f) in &m.faces {
-        if !f.loops().flatten().any(|v| has(&wide, v)) {
+        if !f.loops().flatten().any(|v| wide.has(*v)) {
             continue;
         }
         for (a, b) in f.uses() {
-            if has(&wide, &a) && has(&wide, &b) {
+            if wide.has(a) && wide.has(b) {
                 uses.entry(key(a, b)).or_default().push((id, a < b));
             }
         }
