@@ -1681,3 +1681,18 @@ fn the_local_work_gives_the_same_results_as_the_whole_model() {
     }
     assert!(ok > 800 && landed > 10, "{ok} worked, {landed} welded");
 }
+
+#[test]
+fn an_edge_that_a_merge_joins_is_checked_for_crossings() {
+    // Found by the property test: the move welds, the faces merge, and the heal of the merge joins
+    // two edges into one that no moved vertex ends; that edge crosses another edge.
+    let seed = 2803922998918617984u64;
+    let mut rng = Rng(seed | 1);
+    let mut m = close_scene(seed);
+    let edit = random_edit(&mut rng, &m, 2000.0);
+    let before = m.clone();
+    match m.apply(&edit) {
+        Ok(()) => sound(&m),
+        Err(_) => assert_eq!(m, before),
+    }
+}

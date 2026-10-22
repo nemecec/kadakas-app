@@ -914,9 +914,12 @@ fn finish(
             }
         }
     }
+    // The distances of what moved and of every edge that changed (a merge can join two edges
+    // into one that no moved vertex ends).
     let verts: BTreeSet<VertexId> = survivors
         .iter()
         .chain(folded.iter())
+        .chain(cv.iter())
         .copied()
         .filter(|v| m.vertices.contains_key(v))
         .collect();
@@ -924,7 +927,7 @@ fn finish(
     let edges: BTreeSet<EdgeId> = m
         .edges
         .iter()
-        .filter(|(_, e)| e.v.iter().any(|v| near.has(*v)))
+        .filter(|(id, e)| e.v.iter().any(|v| near.has(*v)) || ce.binary_search(id).is_ok())
         .map(|(id, _)| *id)
         .collect();
     if let Some(p) = new_distance_problem(before, m, &edges, &verts) {
