@@ -567,10 +567,16 @@ impl GraphicResource {
         }
     }
 
-    /// The classes that the components of a symbol use.
+    /// The classes that a symbol uses: its 2D components, its 3D parts and its insert class.
     pub fn classes(&self) -> Vec<ClassId> {
         match self {
-            GraphicResource::Symbol(s) => s.items.iter().filter_map(|i| i.class).collect(),
+            GraphicResource::Symbol(s) => s
+                .items
+                .iter()
+                .filter_map(|i| i.class)
+                .chain(s.parts.iter().filter_map(|p| p.class))
+                .chain(s.insert_class)
+                .collect(),
             _ => Vec::new(),
         }
     }
@@ -581,6 +587,10 @@ impl GraphicResource {
             for it in &mut s.items {
                 it.class = it.class.and_then(f);
             }
+            for p in &mut s.parts {
+                p.class = p.class.and_then(f);
+            }
+            s.insert_class = s.insert_class.and_then(f);
         }
     }
 

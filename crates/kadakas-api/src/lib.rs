@@ -1595,7 +1595,7 @@ impl Session {
             }
             "document.summary" => {
                 let mut kinds = BTreeMap::<&str, usize>::new();
-                for o in doc.objects.values() {
+                for o in doc.objects.values().filter(|o| !kadakas_core::guide::is_guide(o)) {
                     *kinds.entry(o.shape.kind()).or_default() += 1;
                 }
                 let bounds = kadakas_core::svg::drawing_bounds(doc)
@@ -1605,7 +1605,9 @@ impl Session {
                     "classes": doc.classes,
                     "active_layer": doc.active_layer,
                     "active_class": doc.active_class,
-                    "object_count": doc.objects.len(),
+                    // Guides are counted in `guide_count` and not here.
+                    "object_count": doc.objects.len() - doc.guide_count(),
+                    "guide_count": doc.guide_count(),
                     "objects_by_kind": kinds,
                     "unknown_shapes": doc.objects.values().filter_map(|o| match &o.shape {
                         Shape::Unknown { kind, .. } => Some(json!({"id": o.id, "kind": kind})),
@@ -1687,6 +1689,8 @@ impl Session {
                     .filter(|o| f.layer.is_none_or(|l| o.layer == l))
                     .filter(|o| f.class.is_none_or(|c| o.class == c))
                     .filter(|o| f.kind.as_deref().is_none_or(|k| o.shape.kind() == k))
+                    // Guides are construction geometry: only a request for the kind lists them.
+                    .filter(|o| f.kind.as_deref() == Some("guide") || !kadakas_core::guide::is_guide(o))
                     .collect();
                 let mut v = serde_json::to_value(list).unwrap();
                 v.as_array_mut().into_iter().flatten().for_each(|o| {

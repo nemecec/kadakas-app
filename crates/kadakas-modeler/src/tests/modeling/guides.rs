@@ -652,7 +652,11 @@ fn deleting_a_tag_with_objects_asks_first_and_moves_them_to_untagged() {
     app.session.editor.execute(&cmd).unwrap();
     // The window asks: the panel keeps the tag and states the question.
     app.tags.chosen = Some(tag);
-    app.tags.deleting = Some((tag, "Trees".into(), 1));
+    app.tags.deleting = Some((
+        tag,
+        "Trees".into(),
+        kadakas_core::classes::uses(app.session.editor.doc(), tag),
+    ));
     // A window takes one frame to find its size, then it shows.
     let _ = shown(&ctx, &mut app, &mut t);
     let text = shown(&ctx, &mut app, &mut t);
@@ -663,7 +667,7 @@ fn deleting_a_tag_with_objects_asks_first_and_moves_them_to_untagged() {
     );
     // The answer through the plan: tag deleted, objects in Untagged, one undo step.
     let plan = tags::delete_tag(app.session.editor.doc(), tag).unwrap();
-    assert_eq!(plan.objects, 1);
+    assert_eq!(plan.uses.objects, 1);
     let depth = app.session.editor.undo_depth();
     app.apply_tags(tags_panel::Outcome {
         commands: vec![plan.command],

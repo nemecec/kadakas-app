@@ -209,6 +209,9 @@
         "-",
         "edit.new_issue",
         "-",
+        "edit.unhide_all",
+        "edit.delete_guides",
+        "-",
         "ui.quick_search"
       ]
     },

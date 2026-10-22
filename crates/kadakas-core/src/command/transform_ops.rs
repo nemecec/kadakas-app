@@ -99,13 +99,7 @@ pub fn transform_object3(
         // A guide takes any affine map: its point and its direction move with the map, and a
         // finite line keeps its length in the new scale.
         Shape::Guide(g) => {
-            let mut moved = (**g).clone();
-            moved.at = d.transform_point3(g.at);
-            if let Some(u) = g.unit_dir() {
-                let v = d.matrix3 * u;
-                moved.dir = Some(v.try_normalize().ok_or("the map flattens the guide")?);
-                moved.length = g.length.map(|l| l * v.length());
-            }
+            let moved = g.mapped(&d).ok_or("the map flattens the guide")?;
             o.shape = Shape::Guide(Box::new(moved));
             Ok(())
         }

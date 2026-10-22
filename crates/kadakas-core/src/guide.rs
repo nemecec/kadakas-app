@@ -17,6 +17,9 @@ use crate::model::{Document, MAX_COORD, Object, ObjectId, Shape};
 /// move, and a file with more is a mistake (a script in a loop).
 pub const MAX_GUIDES: usize = 10_000;
 
+/// More guides than this are deleted only after the person says yes (Delete Guides).
+pub const FEW_GUIDES: usize = 3;
+
 /// A guide line or a guide point.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Guide {
@@ -74,6 +77,19 @@ impl Guide {
         Some([self.at, self.at + d * l])
     }
 
+    /// The guide after an affine map: its point and its direction move with the map, and a finite
+    /// line keeps its length in the new scale. `None` when the map flattens the direction.
+    pub fn mapped(&self, map: &glam::DAffine3) -> Option<Guide> {
+        let mut out = self.clone();
+        out.at = map.transform_point3(self.at);
+        if let Some(u) = self.unit_dir() {
+            let v = map.matrix3 * u;
+            out.dir = Some(v.try_normalize()?);
+            out.length = self.length.map(|l| l * v.length());
+        }
+        Some(out)
+    }
+
     /// The same guide moved by `d`.
     pub fn moved(&self, d: DVec3) -> Guide {
         Guide {
@@ -126,6 +142,13 @@ impl Guide {
 /// True if the object is a guide.
 pub fn is_guide(obj: &Object) -> bool {
     matches!(obj.shape, Shape::Guide(_))
+}
+
+/// The command that deletes all guides of the document in one undo step, or `None` without guides.
+/// The modeler and the plan app both use it (the window asks first above [`FEW_GUIDES`]).
+pub fn delete_all_command(doc: &Document) -> Option<crate::command::Command> {
+    let ids = doc.guide_ids();
+    (!ids.is_empty()).then_some(crate::command::Command::DeleteObjects { ids })
 }
 
 impl Document {

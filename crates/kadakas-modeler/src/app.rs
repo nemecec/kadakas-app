@@ -132,7 +132,7 @@ pub enum Answer {
 }
 
 /// More guides than this are deleted only after the person says yes.
-pub const FEW_GUIDES: usize = 3;
+pub const FEW_GUIDES: usize = kadakas_core::guide::FEW_GUIDES;
 
 /// A question that waits for a yes or a no. One at a time.
 #[derive(Clone, Debug, PartialEq)]
@@ -972,52 +972,22 @@ impl ModelerApp {
 
     /// Unhide All: every hidden object, face and edge of the model, in one undo step.
     fn unhide_all(&mut self) {
-        let doc = self.session.editor.doc();
-        let mut commands: Vec<Command> = Vec::new();
-        let mut count = 0usize;
-        for o in doc.objects.values() {
-            let Some(m) = modeling::model_of(doc, o.id) else {
-                continue;
-            };
-            let (faces, edges) = (m.hidden_faces(), m.hidden_edges());
-            if faces.is_empty() && edges.is_empty() {
-                continue;
-            }
-            count += faces.len() + edges.len();
-            commands.push(Command::EditSurface {
-                id: o.id,
-                edit: kadakas_core::surface::Edit::SetHidden {
-                    faces,
-                    edges,
-                    hidden: false,
-                },
-            });
-        }
-        let hidden = kadakas_core::visibility::hidden_objects(doc);
-        if let Some(c) = kadakas_core::visibility::set_hidden_command(doc, &hidden, false) {
-            count += hidden.len();
-            commands.push(c);
-        }
-        if commands.is_empty() {
+        let Some((command, count)) = kadakas_core::visibility::unhide_all_command(
+            self.session.editor.doc(),
+        ) else {
             self.status = tr!("modeler-unhide-all-nothing");
             return;
-        }
-        match self.session.editor.execute(&Command::Batch { commands }) {
+        };
+        match self.session.editor.execute(&command) {
             Ok(_) => self.status = tr!("modeler-unhid", count = count),
             Err(e) => self.status = tr!("modeler-hide-failed", reason = e.to_string()),
         }
     }
 
-    /// The objects that the tag selector of Entity Info changes: the selected objects, and the
-    /// models of the selected faces and edges (the tag belongs to the object).
+    /// The objects that the tag selector of Entity Info changes: the selected objects. The tag
+    /// belongs to the object, so a selection of faces and edges changes nothing here.
     fn tag_targets(&self) -> Vec<ObjectId> {
-        let mut ids = self.selected();
-        for item in self.edit.sub.items() {
-            if !ids.contains(&item.model()) {
-                ids.push(item.model());
-            }
-        }
-        ids
+        self.selected()
     }
 
     /// Runs what the Tags panel asked for.
@@ -1544,6 +1514,7 @@ impl ModelerApp {
                     let view = tags_panel::View {
                         doc: self.session.editor.doc(),
                         objects: &targets,
+                        parts: !self.edit.sub.is_empty(),
                     };
                     let tags_state = &mut self.tags;
                     tray_actions = tray::show(

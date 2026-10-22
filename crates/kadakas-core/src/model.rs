@@ -2002,7 +2002,10 @@ impl Document {
     /// True if the object can be picked or snapped to: it shows in the model, or it is on the
     /// active sheet layer.
     pub fn is_pickable(&self, obj: &Object) -> bool {
-        (self.is_displayed(obj) || (self.is_shown(obj) && obj.layer == self.active_layer))
+        // A guide is construction geometry of the 3D modeler. The plan does not draw it, so it
+        // cannot be picked there (the modeler picks guides with its own inference).
+        !matches!(obj.shape, Shape::Guide(_))
+            && (self.is_displayed(obj) || (self.is_shown(obj) && obj.layer == self.active_layer))
             && !self.is_grey(obj)
     }
 

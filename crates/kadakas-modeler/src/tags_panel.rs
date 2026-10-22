@@ -27,8 +27,8 @@ pub struct TagsState {
     pub chosen: Option<ClassId>,
     /// A rename in progress: the tag and the text so far.
     pub renaming: Option<(ClassId, String)>,
-    /// A delete that waits for the answer: the tag, its name and the number of its objects.
-    pub deleting: Option<(ClassId, String, usize)>,
+    /// A delete that waits for the answer: the tag, its name and every reference to it.
+    pub deleting: Option<(ClassId, String, kadakas_core::classes::ClassUses)>,
     /// The tag that was made last: its name is chosen for editing at the next frame.
     focus_rename: bool,
 }
@@ -47,9 +47,10 @@ pub struct Outcome {
 /// What the panel needs to know: the document and the objects that Entity Info changes.
 pub struct View<'a> {
     pub doc: &'a Document,
-    /// The objects whose tag the selector shows and changes: the selected objects, or the models
-    /// of the selected faces and edges.
+    /// The objects whose tag the selector shows and changes: the selected objects.
     pub objects: &'a [ObjectId],
+    /// Faces or edges are selected. A tag belongs to an object, so the selector only explains this.
+    pub parts: bool,
 }
 
 fn problem_text(p: NameProblem) -> String {
@@ -144,6 +145,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut TagsState, slot: Slot, view: &View) -
 /// faces and edges, because the tag belongs to the object.
 fn selector(ui: &mut egui::Ui, view: &View) -> Outcome {
     let mut out = Outcome::default();
+    if view.parts {
+        ui.label(egui::RichText::new(tr!("modeler-tags-parts-hint")).weak());
+        return out;
+    }
     let current = tags::tag_of(view.doc, view.objects);
     if current == SelectionTag::None {
         return out;
@@ -225,12 +230,12 @@ fn panel(ui: &mut egui::Ui, state: &mut TagsState, view: &View) -> Outcome {
                             .iter()
                             .find(|t| t.id == id)
                             .map_or_else(String::new, |t| t.name.clone());
-                        if plan.objects == 0 {
+                        if plan.uses.total() == 0 {
                             out.commands.push(plan.command);
                             out.after = Some(tr!("modeler-tags-deleted-empty", name = name));
                         } else {
                             // Never silently: the person answers first.
-                            state.deleting = Some((id, name, plan.objects));
+                            state.deleting = Some((id, name, plan.uses));
                         }
                     }
                     Err(p) => out.message = Some(problem_text(p)),
@@ -321,7 +326,7 @@ fn panel(ui: &mut egui::Ui, state: &mut TagsState, view: &View) -> Outcome {
 
 /// The question before a tag with objects is deleted.
 fn delete_dialog(ctx: &egui::Context, state: &mut TagsState, doc: &Document, out: &mut Outcome) {
-    let Some((id, name, count)) = state.deleting.clone() else {
+    let Some((id, name, uses)) = state.deleting.clone() else {
         return;
     };
     if doc.class(id).is_none() {
@@ -335,11 +340,24 @@ fn delete_dialog(ctx: &egui::Context, state: &mut TagsState, doc: &Document, out
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.label(tr!(
-                "modeler-tags-delete-question",
-                count = count,
-                name = name.clone()
-            ));
+            if uses.objects > 0 {
+                ui.label(tr!(
+                    "modeler-tags-delete-objects",
+                    count = uses.objects,
+                    name = name.clone()
+                ));
+            }
+            if uses.others() > 0 {
+                ui.label(tr!(
+                    "modeler-tags-delete-others",
+                    guides = uses.guides,
+                    parts = uses.definition_parts,
+                    overrides = uses.viewport_overrides + uses.annotations,
+                    views = uses.saved_views,
+                    slots = uses.material_slots
+                ));
+            }
+            ui.label(tr!("modeler-tags-delete-ask", name = name.clone()));
             ui.horizontal(|ui| {
                 if ui.button(tr!("modeler-tags-delete-yes")).clicked() {
                     answer = Some(true);
@@ -353,7 +371,11 @@ fn delete_dialog(ctx: &egui::Context, state: &mut TagsState, doc: &Document, out
         Some(true) => {
             if let Ok(plan) = tags::delete_tag(doc, id) {
                 out.commands.push(plan.command);
-                out.after = Some(tr!("modeler-tags-deleted", count = count, name = name));
+                out.after = Some(tr!(
+                    "modeler-tags-deleted",
+                    count = uses.objects,
+                    name = name
+                ));
             }
             state.deleting = None;
         }

@@ -362,6 +362,22 @@ pub fn map_shape(shape: &Shape, xf: &Xf) -> Result<Shape, String> {
             m.place(map * m.transform);
             Shape::SurfaceModel(Box::new(m))
         }
+        Shape::Guide(g) => {
+            // The plan map as an affine map of 3D: a uniform scale scales the heights too.
+            let k = sim.unwrap_or(1.0);
+            let map = glam::DAffine3 {
+                matrix3: glam::DMat3::from_cols(
+                    xf.m.x_axis.extend(0.0),
+                    xf.m.y_axis.extend(0.0),
+                    glam::DVec3::Z * k,
+                ),
+                translation: xf.apply(DVec2::ZERO).extend(0.0),
+            };
+            match g.mapped(&map) {
+                Some(m) => Shape::Guide(Box::new(m)),
+                None => return Err("a guide cannot be flattened".into()),
+            }
+        }
         Shape::Component { symbol, transform } => {
             // The same plan map as for a surface model, applied to the instance transform.
             let k = sim.unwrap_or(1.0);

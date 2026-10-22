@@ -59,7 +59,8 @@ pub fn swatch(attrs: &Attributes) -> Option<[u8; 3]> {
 /// The rows for the document. The default class is Untagged and has no swatch.
 pub fn rows(doc: &Document) -> Rows {
     let mut counts = std::collections::BTreeMap::<ClassId, usize>::new();
-    for o in doc.objects.values() {
+    // Guides are construction geometry: the counts of the panel leave them out.
+    for o in doc.objects.values().filter(|o| !kadakas_core::guide::is_guide(o)) {
         *counts.entry(o.class).or_default() += 1;
     }
     let mut tags: Vec<TagRow> = doc
@@ -209,9 +210,10 @@ pub fn rename_tag(doc: &Document, id: ClassId, name: &str) -> Result<Command, Na
 /// What deleting a tag does.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeletePlan {
-    /// How many objects have the tag. They go to Untagged. When this is more than zero the window
-    /// asks first: nothing is moved without the answer.
-    pub objects: usize,
+    /// Every place that names the tag (see `kadakas_core::classes`). The objects go to Untagged.
+    /// When there is any reference the window asks first, with these numbers: nothing is moved
+    /// without the answer.
+    pub uses: kadakas_core::classes::ClassUses,
     pub command: Command,
 }
 
@@ -222,7 +224,7 @@ pub fn delete_tag(doc: &Document, id: ClassId) -> Result<DeletePlan, NameProblem
     }
     doc.class(id).ok_or(NameProblem::NoSuchTag)?;
     Ok(DeletePlan {
-        objects: doc.objects.values().filter(|o| o.class == id).count(),
+        uses: kadakas_core::classes::uses(doc, id),
         command: Command::DeleteClass {
             id,
             move_to: Some(NONE_CLASS),

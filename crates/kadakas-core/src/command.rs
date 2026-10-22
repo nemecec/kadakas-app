@@ -1916,18 +1916,33 @@ impl<'a> Tx<'a> {
                         "the objects cannot move to the class that is deleted".into(),
                     ));
                 }
-                let moved: Vec<ObjectId> = self
+                // Every place that names the class moves with the objects (see `classes`): nothing
+                // is left with an id that is gone, and nothing is dropped without a word.
+                let affected: Vec<ObjectId> = self
                     .doc
                     .objects
                     .values()
-                    .filter(|o| o.class == *id)
+                    .filter(|o| {
+                        o.class == *id
+                            || matches!(&o.shape, Shape::Viewport(v)
+                                if v.class_overrides.contains_key(id)
+                                    || v.annotations.iter().any(|a| a.class == *id))
+                    })
                     .map(|o| o.id)
                     .collect();
-                for oid in moved {
+                let mut moved: Vec<ObjectId> = Vec::new();
+                for oid in affected {
                     self.editable(oid)?;
                     self.touch(oid);
-                    self.doc.object_mut(oid).expect("checked").class = to;
+                    let o = self.doc.object_mut(oid).expect("checked");
+                    if o.class == *id {
+                        o.class = to;
+                        moved.push(oid);
+                    }
+                    crate::classes::remap_object(o, *id, to);
                 }
+                crate::classes::remap_resources(&mut self.doc.resources, *id, to);
+                crate::classes::remap_drawing(&mut self.doc.drawing, *id, to, &moved);
                 self.doc.classes.retain(|c| c.id != *id);
                 self.doc.drawing.grey.classes.remove(id);
                 if self.doc.active_class == *id {

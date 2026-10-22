@@ -18,10 +18,12 @@ modeler-tags-objects = { $count ->
    *[other] { $count } objekti
 }
 modeler-tags-delete-title = Kustuta silt
-modeler-tags-delete-question = { $count ->
-    [one] 1 objektil on silt { $name }. See läheb sildita objektide hulka. Kas kustutada silt?
-   *[other] { $count } objektil on silt { $name }. Need lähevad sildita objektide hulka. Kas kustutada silt?
+modeler-tags-delete-objects = { $count ->
+    [one] 1 objektil on silt { $name }. See läheb sildita objektide hulka.
+   *[other] { $count } objektil on silt { $name }. Need lähevad sildita objektide hulka.
 }
+modeler-tags-delete-others = Sildita hulka läheb ka: { $guides } abijoont, { $parts } definitsioonide osa, { $overrides } vaateakna alistust ja märkust, { $views } salvestatud vaadet. Sildi { $slots } materjalipesa muutub selle objektide materjalipesadeks.
+modeler-tags-delete-ask = Kas kustutada silt { $name }?
 modeler-tags-delete-yes = Kustuta silt
 modeler-tags-cancel = Loobu
 modeler-tags-deleted = { $count ->
@@ -83,3 +85,4 @@ modeler-resize-no = Ei
 modeler-resize-done = Mudeli suurust muudeti teguriga { $factor }.
 modeler-resize-failed = Mudeli suurust ei muudetud: { $reason }
 modeler-resize-nothing = Pole midagi suuruse muutmiseks.
+modeler-tags-parts-hint = Sildid kuuluvad objektidele. Vali objekt, et muuta selle silti. Tahud säilitavad oma mudeli sildi.

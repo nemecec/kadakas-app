@@ -87,6 +87,47 @@ pub fn set_hidden_command(
     (!commands.is_empty()).then_some(Command::Batch { commands })
 }
 
+/// How many objects are hidden with Hide: groups are not counted, their members are. Guides count.
+pub fn hidden_object_count(doc: &Document) -> usize {
+    doc.objects
+        .values()
+        .filter(|o| is_hidden(o) && !matches!(o.shape, crate::model::Shape::Group { .. }))
+        .count()
+}
+
+/// The command that shows everything again (Unhide All) and how many items it shows: every hidden
+/// object, and every hidden face and edge of every surface model. One undo step. `None` when
+/// nothing is hidden.
+pub fn unhide_all_command(doc: &Document) -> Option<(crate::command::Command, usize)> {
+    use crate::command::Command;
+    let mut commands: Vec<Command> = Vec::new();
+    let mut count = 0usize;
+    for o in doc.objects.values() {
+        let crate::model::Shape::SurfaceModel(m) = &o.shape else {
+            continue;
+        };
+        let (faces, edges) = (m.hidden_faces(), m.hidden_edges());
+        if faces.is_empty() && edges.is_empty() {
+            continue;
+        }
+        count += faces.len() + edges.len();
+        commands.push(Command::EditSurface {
+            id: o.id,
+            edit: crate::surface::Edit::SetHidden {
+                faces,
+                edges,
+                hidden: false,
+            },
+        });
+    }
+    let hidden = hidden_objects(doc);
+    if let Some(c) = set_hidden_command(doc, &hidden, false) {
+        count += hidden_object_count(doc);
+        commands.push(c);
+    }
+    (!commands.is_empty()).then_some((Command::Batch { commands }, count))
+}
+
 /// The ids of the objects that are hidden with Hide.
 pub fn hidden_objects(doc: &Document) -> Vec<crate::model::ObjectId> {
     doc.objects

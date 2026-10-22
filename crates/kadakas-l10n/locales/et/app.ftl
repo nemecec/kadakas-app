@@ -113,3 +113,21 @@ app-opened-first-of-several =
         [one] Avasin faili { $name }. { $count } fail jäi avamata: Kadakas näitab korraga ühte joonist.
        *[other] Avasin faili { $name }. { $count } faili jäi avamata: Kadakas näitab korraga ühte joonist.
     }
+app-no-guides = Abijooni ei ole.
+app-guides-deleted = { $count ->
+    [one] 1 abijoon on kustutatud.
+   *[other] { $count } abijoont on kustutatud.
+}
+app-guides-delete-title = Kustuta abijooned
+app-guides-delete-question = Kas kustutada mudeli kõik { $count } abijoont?
+app-guides-delete-yes = Kustuta abijooned
+app-nothing-hidden = Midagi pole peidetud.
+app-unhid = { $count ->
+    [one] 1 asi paistab jälle.
+   *[other] { $count } asja paistab jälle.
+}
+app-hidden-objects = { $count ->
+    [one] 1 peidetud objekt
+   *[other] { $count } peidetud objekti
+}
+app-hidden-objects-tip = Need objektid peideti 3D-modelleerijas. Klõpsa, et need jälle nähtavale tuua.

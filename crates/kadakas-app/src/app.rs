@@ -117,6 +117,10 @@ pub struct KadakasApp {
     layout_checked: f64,
     quick: QuickSearch,
     array_dlg: ArrayDialog,
+    /// Delete Guides waits for the answer: how many guides (MOD-05).
+    guides_confirm: Option<usize>,
+    /// The number of hidden objects for the revision (the status line shows it).
+    hidden_count: (u64, usize),
     solid_dlg: SolidDialog,
     view_history: ViewHistory,
     /// Screenshot requests of agents that wait for a picture.
@@ -539,6 +543,8 @@ impl KadakasApp {
             layout_checked: 0.0,
             quick: QuickSearch::default(),
             array_dlg: ArrayDialog::default(),
+            guides_confirm: None,
+            hidden_count: (0, 0),
             solid_dlg: SolidDialog::default(),
             view_history: ViewHistory::default(),
             shots: Vec::new(),
@@ -1083,6 +1089,80 @@ impl KadakasApp {
         self.status = crate::site_ui::update_site_models(&mut self.session);
     }
 
+    /// Edit > Delete Guides: all guides of the 3D modeler in one step. More than a few ask first.
+    fn delete_guides(&mut self, confirmed: bool) {
+        let doc = self.session.editor.doc();
+        let Some(command) = kadakas_core::guide::delete_all_command(doc) else {
+            self.status = tr!("app-no-guides");
+            return;
+        };
+        let count = doc.guide_count();
+        if count > kadakas_core::guide::FEW_GUIDES && !confirmed {
+            self.guides_confirm = Some(count);
+            return;
+        }
+        self.status = match self.session.editor.execute(&command) {
+            Ok(_) => tr!("app-guides-deleted", count = count),
+            Err(e) => tr!("app-error", e = e.to_string()),
+        };
+    }
+
+    /// Edit > Unhide All: everything that Hide hid in the 3D modeler.
+    fn unhide_all(&mut self) {
+        let Some((command, count)) =
+            kadakas_core::visibility::unhide_all_command(self.session.editor.doc())
+        else {
+            self.status = tr!("app-nothing-hidden");
+            return;
+        };
+        self.status = match self.session.editor.execute(&command) {
+            Ok(_) => tr!("app-unhid", count = count),
+            Err(e) => tr!("app-error", e = e.to_string()),
+        };
+    }
+
+    /// The question before many guides are deleted.
+    fn guides_dialog(&mut self, ctx: &egui::Context) {
+        let Some(count) = self.guides_confirm else {
+            return;
+        };
+        let mut answer = None;
+        egui::Window::new(tr!("app-guides-delete-title"))
+            .id(egui::Id::new("win-guides-delete"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(tr!("app-guides-delete-question", count = count));
+                ui.horizontal(|ui| {
+                    if ui.button(tr!("app-guides-delete-yes")).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button(tr!("common-cancel")).clicked() {
+                        answer = Some(false);
+                    }
+                });
+            });
+        if let Some(yes) = answer {
+            self.guides_confirm = None;
+            if yes {
+                self.delete_guides(true);
+            }
+        }
+    }
+
+    /// The number of objects hidden with Hide, kept for the revision.
+    fn hidden_objects(&mut self) -> usize {
+        let rev = self.session.editor.revision();
+        if self.hidden_count.0 != rev {
+            self.hidden_count = (
+                rev,
+                kadakas_core::visibility::hidden_object_count(self.session.editor.doc()),
+            );
+        }
+        self.hidden_count.1
+    }
+
     fn select_all(&mut self) {
         let doc = &self.session.editor.doc();
         self.session.selection = doc
@@ -1141,6 +1221,8 @@ impl KadakasApp {
             MenuAction::Redo => self.redo(),
             MenuAction::Delete => self.delete_selection(),
             MenuAction::SelectAll => self.select_all(),
+            MenuAction::DeleteGuides => self.delete_guides(false),
+            MenuAction::UnhideAll => self.unhide_all(),
             MenuAction::ZoomFit => self.zoom_fit(),
             MenuAction::CreateSiteModel => self.create_site_model(),
             MenuAction::UpdateSiteModel => self.update_site_model(),
@@ -3822,6 +3904,8 @@ impl eframe::App for KadakasApp {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as u64);
         let mut report_error = false;
+        let hidden = self.hidden_objects();
+        let mut unhide_click = false;
         egui::Panel::bottom("status").show(ui, |ui| {
             // The counts at the right are laid out first; the rest gets the room that is left and
             // cuts its texts to it, so that the two never lie on top of each other.
@@ -3836,11 +3920,19 @@ impl eframe::App for KadakasApp {
                     agent_click = crate::agent_status::item(ui, *addr, st, agent_locked, now_ms);
                     ui.separator();
                 }
+                // Hidden objects are not drawn: say how many there are, and bring them back on a click.
+                if hidden > 0 {
+                    unhide_click = ui
+                        .link(tr!("app-hidden-objects", count = hidden))
+                        .on_hover_text(tr!("app-hidden-objects-tip"))
+                        .clicked();
+                    ui.separator();
+                }
                 if self.plan() {
                     let u = kadakas_units::current();
                     ui.label(tr!(
                         "app-status-objects-zoom",
-                        objects = d.objects.len(),
+                        objects = d.objects.len() - d.guide_count(),
                         selected = self.session.selection.len(),
                         zoom = u.number_text(self.view.zoom, 3),
                         scale = u
@@ -3852,7 +3944,7 @@ impl eframe::App for KadakasApp {
                     let v = self.session.view;
                     ui.label(tr!(
                         "app-objects-selected",
-                        objects = d.objects.len(),
+                        objects = d.objects.len() - d.guide_count(),
                         selected = self.session.selection.len(),
                         view = crate::enum_names::standard_view(v.view),
                         projection = crate::enum_names::name("projection", v.projection.id())
@@ -3877,6 +3969,11 @@ impl eframe::App for KadakasApp {
                 });
             });
         });
+        if unhide_click {
+            self.unhide_all();
+        }
+        let ctx_guides = ui.ctx().clone();
+        self.guides_dialog(&ctx_guides);
         // The quiet notice that a new version is ready (or available), above the status line.
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -6583,4 +6680,138 @@ mod tests {
         assert_eq!(on_disk.keep_older, 2);
         let _ = std::fs::remove_dir_all(root);
     }
+
+    // ---- guides and hidden objects in the plan (MOD-05) ------------------------------------
+
+    fn add_json(app: &mut KadakasApp, shape: serde_json::Value) -> String {
+        let r = app
+            .session
+            .handle(
+                "execute",
+                serde_json::json!({"command": {"op": "add_object", "shape": shape}}),
+            )
+            .unwrap();
+        r["created"][0].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn the_plan_does_not_pick_or_select_guides_and_counts_them_apart() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        let rect = add_json(
+            &mut app,
+            serde_json::json!({"kind": "rect", "min": [0, 0], "max": [1000, 1000]}),
+        );
+        let guide = add_json(
+            &mut app,
+            serde_json::json!({"kind": "guide", "at": [500, 500, 0], "dir": [1, 0, 0]}),
+        );
+        let guide_id = ObjectId(kadakas_core::uid::Uid::parse(&guide).unwrap());
+        let g = app.session.editor.doc().object(guide_id).unwrap();
+        assert!(!app.session.editor.doc().is_pickable(g), "a guide is not pickable");
+        app.apply_menu(&ctx, MenuAction::SelectAll);
+        assert_eq!(app.session.selection.len(), 1);
+        assert!(!app.session.selection.contains(&guide_id), "Select All leaves it");
+        // The agent API lists guides only when asked for the kind.
+        let all = app.session.handle("objects.list", serde_json::json!({})).unwrap();
+        assert_eq!(all.as_array().unwrap().len(), 1);
+        let only = app
+            .session
+            .handle("objects.list", serde_json::json!({"kind": "guide"}))
+            .unwrap();
+        assert_eq!(only.as_array().unwrap().len(), 1);
+        let summary = app.session.handle("document.summary", serde_json::json!({})).unwrap();
+        assert_eq!((summary["object_count"].as_u64(), summary["guide_count"].as_u64()), (Some(1), Some(1)));
+        assert!(summary["objects_by_kind"].get("guide").is_none());
+        let _ = rect;
+    }
+
+    #[test]
+    fn a_2d_scale_or_move_of_everything_does_not_fail_on_a_guide() {
+        use kadakas_core::command::Command;
+        use kadakas_core::edit2d::Transform;
+        let mut app = KadakasApp::blank();
+        let rect = add_json(
+            &mut app,
+            serde_json::json!({"kind": "rect", "min": [0, 0], "max": [1000, 1000]}),
+        );
+        let guide = add_json(
+            &mut app,
+            serde_json::json!({"kind": "guide", "at": [100, 0, 0], "dir": [1, 0, 0], "length": 50}),
+        );
+        let ids: Vec<ObjectId> = [rect, guide]
+            .iter()
+            .map(|s| ObjectId(kadakas_core::uid::Uid::parse(s).unwrap()))
+            .collect();
+        app.session
+            .editor
+            .execute(&Command::TransformObjects {
+                ids: ids.clone(),
+                transform: Transform::Scale {
+                    center: glam::DVec2::ZERO,
+                    sx: 2.0,
+                    sy: Some(2.0),
+                },
+                copy: false,
+            })
+            .unwrap();
+        match &app.session.editor.doc().object(ids[1]).unwrap().shape {
+            kadakas_core::model::Shape::Guide(g) => {
+                assert_eq!(g.at.x, 200.0);
+                assert_eq!(g.length, Some(100.0));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn delete_guides_in_the_plan_asks_above_three_and_is_one_step() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.apply_menu(&ctx, MenuAction::DeleteGuides);
+        assert_eq!(app.status, tr!("app-no-guides"));
+        for i in 0..3 {
+            add_json(&mut app, serde_json::json!({"kind": "guide", "at": [i, 0, 0]}));
+        }
+        let depth = app.session.editor.undo_depth();
+        app.apply_menu(&ctx, MenuAction::DeleteGuides);
+        assert!(app.guides_confirm.is_none());
+        assert_eq!(app.session.editor.doc().guide_count(), 0);
+        assert_eq!(app.session.editor.undo_depth(), depth + 1);
+        app.session.editor.undo();
+        add_json(&mut app, serde_json::json!({"kind": "guide", "at": [9, 0, 0]}));
+        let depth = app.session.editor.undo_depth();
+        app.apply_menu(&ctx, MenuAction::DeleteGuides);
+        assert_eq!(app.guides_confirm, Some(4), "more than three: it asks");
+        assert_eq!(app.session.editor.doc().guide_count(), 4);
+        // No keeps them, Yes deletes them in one step.
+        app.guides_confirm = None;
+        app.apply_menu(&ctx, MenuAction::DeleteGuides);
+        app.delete_guides(true);
+        assert_eq!(app.session.editor.doc().guide_count(), 0);
+        assert_eq!(app.session.editor.undo_depth(), depth + 1);
+    }
+
+    #[test]
+    fn hidden_objects_show_in_the_status_line_and_unhide_all_brings_them_back() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        let id = add_json(
+            &mut app,
+            serde_json::json!({"kind": "rect", "min": [0, 0], "max": [1000, 1000]}),
+        );
+        let oid = ObjectId(kadakas_core::uid::Uid::parse(&id).unwrap());
+        assert_eq!(app.hidden_objects(), 0);
+        let cmd = kadakas_core::visibility::set_hidden_command(app.session.editor.doc(), &[oid], true)
+            .unwrap();
+        app.session.editor.execute(&cmd).unwrap();
+        assert_eq!(app.hidden_objects(), 1);
+        let depth = app.session.editor.undo_depth();
+        app.apply_menu(&ctx, MenuAction::UnhideAll);
+        assert_eq!(app.hidden_objects(), 0);
+        assert_eq!(app.session.editor.undo_depth(), depth + 1);
+        app.apply_menu(&ctx, MenuAction::UnhideAll);
+        assert_eq!(app.status, tr!("app-nothing-hidden"));
+    }
+
 }

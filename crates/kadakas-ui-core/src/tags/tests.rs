@@ -159,7 +159,7 @@ fn deleting_a_tag_counts_its_objects_and_moves_them_to_untagged() {
     let a = line(&mut ed, Some(t));
     let b = line(&mut ed, Some(t));
     let plan = delete_tag(ed.doc(), t).unwrap();
-    assert_eq!(plan.objects, 2, "the window asks before this runs");
+    assert_eq!(plan.uses.objects, 2, "the window asks before this runs");
     ed.execute(&plan.command).unwrap();
     assert!(ed.doc().class(t).is_none());
     for id in [a, b] {
@@ -167,7 +167,7 @@ fn deleting_a_tag_counts_its_objects_and_moves_them_to_untagged() {
     }
     let t2 = tag(&mut ed, "Empty", Attributes::default());
     assert_eq!(
-        delete_tag(ed.doc(), t2).unwrap().objects,
+        delete_tag(ed.doc(), t2).unwrap().uses.total(),
         0,
         "no question for an empty tag"
     );

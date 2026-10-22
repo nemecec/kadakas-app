@@ -18,10 +18,12 @@ modeler-tags-objects = { $count ->
    *[other] { $count } objects
 }
 modeler-tags-delete-title = Delete tag
-modeler-tags-delete-question = { $count ->
-    [one] 1 object has the tag { $name }. It moves to Untagged. Delete the tag?
-   *[other] { $count } objects have the tag { $name }. They move to Untagged. Delete the tag?
+modeler-tags-delete-objects = { $count ->
+    [one] 1 object has the tag { $name }. It moves to Untagged.
+   *[other] { $count } objects have the tag { $name }. They move to Untagged.
 }
+modeler-tags-delete-others = Also moved to Untagged: { $guides } guides, { $parts } parts of definitions, { $overrides } viewport overrides and annotations, { $views } saved views. { $slots } material slots of the tag become material slots of its objects.
+modeler-tags-delete-ask = Delete the tag { $name }?
 modeler-tags-delete-yes = Delete the tag
 modeler-tags-cancel = Cancel
 modeler-tags-deleted = { $count ->
@@ -83,3 +85,4 @@ modeler-resize-no = No
 modeler-resize-done = The model is resized by { $factor }.
 modeler-resize-failed = The model was not resized: { $reason }
 modeler-resize-nothing = There is nothing to resize.
+modeler-tags-parts-hint = Tags belong to objects. Select the object to change its tag. Faces keep the tag of their model.

@@ -7,6 +7,7 @@ pub mod annot;
 pub mod arrangement;
 pub mod blob;
 pub mod cache;
+pub mod classes;
 pub mod change;
 pub mod command;
 pub mod component;
