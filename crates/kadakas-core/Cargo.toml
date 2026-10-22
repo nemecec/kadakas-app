@@ -9,10 +9,6 @@ repository.workspace = true
 [features]
 # A test can make the next command panic after its first change (`fault::arm`). Not for release.
 fault-injection = []
-# The limits of a surface model (vertices, edges, faces, loop vertices) can be multiplied by a factor
-# (`surface::set_limit_scale`), to measure what the limits would cost if they were raised
-# (`docs/modeler-limits.md`). The factor is 1 and cannot change without this feature. Not for release.
-measure-limits = []
 
 [dependencies]
 glam = { version = "0.34.1", features = ["serde"] }
@@ -28,3 +24,8 @@ thiserror = "2.0.21"
 
 [dev-dependencies]
 proptest = "1.11.0"
+
+[lints.rust]
+# `kadakas_measure` is set only by RUSTFLAGS in the measurement of the limits
+# (`crates/kadakas-core/tests/limits_campaign.sh`). It is not a feature, so no dependency can turn it on.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kadakas_measure)'] }

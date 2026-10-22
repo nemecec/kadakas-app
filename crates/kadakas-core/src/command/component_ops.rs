@@ -417,6 +417,7 @@ impl Tx<'_> {
                 ));
             }
         }
+        self.check_explode_total(&ids)?;
         for id in ids {
             if self.doc.is_group(id) {
                 self.explode_group(id)?;
@@ -427,20 +428,66 @@ impl Tx<'_> {
         Ok(())
     }
 
+    /// Before any work: the faces that the whole command welds, over all its groups and
+    /// instances, and the faces that the models of the levels already hold, must be within
+    /// [`component::MAX_EXPLODE_FACES`] and the face limit of a surface model. Only the surface
+    /// models at the top of a group or of a definition are welded. Groups and instances inside
+    /// move up as they are, so a nested or mirrored instance adds no face. The command fails
+    /// here, at once, and the document stays as it was.
+    fn check_explode_total(&self, ids: &[ObjectId]) -> Result<(), CommandError> {
+        let faces_of = |shape: &Shape| match shape {
+            Shape::SurfaceModel(m) => m.face_count(),
+            _ => 0,
+        };
+        let mut new_faces = 0usize;
+        // The model that each level welds into, counted once for the level.
+        let mut present: BTreeMap<(Option<ObjectId>, LayerId), usize> = BTreeMap::new();
+        for &id in ids {
+            let o = self.doc.object(id).expect("checked");
+            new_faces += match &o.shape {
+                Shape::Group { .. } => self
+                    .doc
+                    .children(id)
+                    .into_iter()
+                    .filter_map(|k| self.doc.object(k))
+                    .map(|k| faces_of(&k.shape))
+                    .sum(),
+                Shape::Component { symbol, .. } => {
+                    self.doc.resources.symbol(*symbol).map_or(0, |d| {
+                        d.parts
+                            .iter()
+                            .filter(|p| p.parent.is_none())
+                            .map(|p| faces_of(&p.shape))
+                            .sum()
+                    })
+                }
+                _ => 0,
+            };
+            present.entry((o.parent, o.layer)).or_insert_with(|| {
+                component::raw_model(self.doc, o.parent, o.layer)
+                    .and_then(|t| self.doc.object(t))
+                    .map_or(0, |t| faces_of(&t.shape))
+            });
+        }
+        check_explode_size(new_faces)?;
+        let total = new_faces + present.values().sum::<usize>();
+        let max = crate::surface::MAX_FACES * crate::surface::limit_scale();
+        if total > max {
+            return Err(invalid(format!(
+                "this explode would make a surface model of {} faces, the limit is {}. Explode fewer groups at once",
+                component::grouped(total),
+                component::grouped(max)
+            )));
+        }
+        Ok(())
+    }
+
     /// Dissolves a group: its surface models merge into the raw model of the level, the rest
     /// moves up.
     fn explode_group(&mut self, gid: ObjectId) -> Result<(), CommandError> {
         let g = self.doc.object(gid).expect("checked").clone();
         let level = g.parent;
         let kids = self.doc.children(gid);
-        let faces: usize = kids
-            .iter()
-            .filter_map(|k| match &self.doc.object(*k)?.shape {
-                Shape::SurfaceModel(m) => Some(m.face_count()),
-                _ => None,
-            })
-            .sum();
-        check_explode_size(faces)?;
         // The raw model of the level that is not a part of the group.
         // The models of the group are taken into it one after another, with the indexes of the
         // target kept between them (`Absorber`), so the cost grows with the parts and not with
@@ -512,16 +559,6 @@ impl Tx<'_> {
                 "the instance has a transform that cannot be inverted",
             ));
         }
-        // Refuse before the parts are made into objects.
-        check_explode_size(
-            parts
-                .iter()
-                .map(|p| match &p.shape {
-                    Shape::SurfaceModel(m) => m.face_count(),
-                    _ => 0,
-                })
-                .sum(),
-        )?;
         let gid = ObjectId(self.alloc()?);
         let mut g = Object::new(gid, inst.layer, inst.class, Shape::Group { name });
         g.parent = inst.parent;

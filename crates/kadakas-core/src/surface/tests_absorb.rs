@@ -187,3 +187,21 @@ fn the_lookups_through_the_index_find_what_the_scans_find() {
         }
     }
 }
+
+#[test]
+fn the_absorber_gives_the_same_with_the_scans_instead_of_the_index() {
+    use super::edit::reference::{self, Mode};
+    reference::with(Mode::Scan, || {
+        for seed in 1..80u64 {
+            check(seed.wrapping_mul(0xA24B_AED4_963E_E407));
+        }
+        // The lookups fall back to the scans too.
+        let mut rng = Rng(77);
+        let mut s = super::edit::Session::new(random_model(&mut rng, false));
+        s.add_edges(&rect(0.0, 0.0, 2000.0, 1000.0, 0.0)).unwrap();
+        let m = s.model().clone();
+        let p = DVec3::new(500.0, 500.0, 0.0);
+        assert_eq!(s.face_at(p), sync::face_at(&m, p));
+        assert_eq!(s.edge_at(p), sync::edge_at(&m, p));
+    });
+}

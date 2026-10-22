@@ -11,7 +11,7 @@ A surface model is the 3D geometry of one object: vertices (points), edges and f
 - The machine was shared with other work. The load average (`uptime`) was 2.2 to 3.9 for the guard and raised-limit runs. It was 3 to 9 for the Explode runs of the old code. The exact lines are in the result files of the campaign.
 - Times are CPU time (user plus system) unless a table says wall. Heap numbers come from a counting allocator and do not depend on load.
 - "Drawn" means built with `Edit::AddEdges`. "Constructed" means built with `SurfaceModel::from_parts`, which makes the same data as a loaded file without drawing time.
-- Raised limits: the cargo feature `measure-limits` of `kadakas-core` sets a factor for the four count limits. These are vertices, edges, faces and loop vertices. Without the feature the factor is 1 and nothing changes it. The raised runs use the factor 3. The edit limit of 10,000 edges stays as it is.
+- Raised limits: the cfg `kadakas_measure` (set with `RUSTFLAGS`, not a cargo feature) lets a measurement set a factor for the four count limits. These are vertices, edges, faces and loop vertices. Without the cfg the factor is 1 and nothing changes it. No dependency can turn the cfg on. The raised runs use the factor 3. The edit limit of 10,000 edges stays as it is.
 - Code: `crates/kadakas-core/tests/limits_measure.rs` (+ `limits_common.rs`, `limits_measure.py`, `limits_campaign.sh`), `crates/kadakas-ui-core/tests/limits_measure.rs`, `crates/kadakas-props/tests/limits_measure.rs`. The stages of the second campaign are `big`, `big2`, `guards`, `explode`, `collab2` and `collab3`. The first campaign stages `a1` and `a2` were run again.
 - "Old" in a table is main at commit `114a7d50`, which has the index. Where the table says so, it is the first report.
 
@@ -146,7 +146,7 @@ Models in all               Mesh: time  Mesh: heap  Mesh: resident memory  Infer
 250,000 (25,000 instances)  1.14 s      542 MB      238 MB                 2.9 s                  616 MB                      1.9 GB
 ```
 
-The mesh costs 2.2 KB and the inference scene 2.5 KB per model. Together that is 4.7 KB, which agrees with the first report. So 250,000 models need about 1.2 GB for both. The process maximum of the scene run is higher. The measurement builds the scene three times to test the cache. The inference itself stays fast (10 microseconds per move, 1 ms for the first).
+The mesh costs 2.2 KB and the inference scene 2.5 KB per model. Together that is 4.7 KB, which agrees with the first report. So 250,000 models need about 1.2 GB for both. Instances on hidden layers count too, because they still use memory. The process maximum of the scene run is higher. The measurement builds the scene three times to test the cache. The inference itself stays fast (10 microseconds per move, 1 ms for the first).
 
 ### B3. Size of a definition
 
@@ -240,11 +240,12 @@ The largest value after the size guard is the definition: 16 MiB of text at most
 
 ```
 export CARGO_TARGET_DIR=<dir> CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0
-cargo test --release -p kadakas-core --features measure-limits --test limits_measure --no-run
+export RUSTFLAGS="--cfg kadakas_measure"   # use a target directory of its own for these builds
+cargo test --release -p kadakas-core --test limits_measure --no-run
 cargo test --release -p kadakas-ui-core --test limits_measure --no-run
-cargo test --release -p kadakas-props --features measure-limits --test limits_measure --no-run
+cargo test --release -p kadakas-props --test limits_measure --no-run
 # BASE: the same test built from the code before the guards (commit 114a7d50), for the old numbers
 CORE=... UI=... PROPS=... BASE=... OUT=/tmp/lm-out2 crates/kadakas-core/tests/limits_campaign.sh big   # and big2 guards explode collab2 collab3 a1 a2
 ```
 
-Single scenario: `LM_SCALE=3 python3 crates/kadakas-core/tests/limits_measure.py BINARY 5 big "terrain 223"`.
+Single scenario: `LM_SCALE=3 python3 crates/kadakas-core/tests/limits_measure.py BINARY 5 big "terrain 223"`. A scenario test run without `LM` skips itself, so `cargo test -- --ignored` in CI is safe.

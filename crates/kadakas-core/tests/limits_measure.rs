@@ -1026,19 +1026,16 @@ fn deepest(stack_kib: usize) {
 // Scenarios of the second campaign (guards, raised limits).
 
 /// Multiplies the count limits of the surface model for this process (`LM_SCALE`, default 1).
-/// Needs `--features measure-limits` on `kadakas-core`.
+/// Needs `RUSTFLAGS="--cfg kadakas_measure"`.
 fn scale_limits() -> usize {
     let n: usize = std::env::var("LM_SCALE")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
-    #[cfg(feature = "measure-limits")]
+    #[cfg(kadakas_measure)]
     kadakas_core::surface::set_limit_scale(n);
-    #[cfg(not(feature = "measure-limits"))]
-    assert_eq!(
-        n, 1,
-        "LM_SCALE needs --features measure-limits on kadakas-core"
-    );
+    #[cfg(not(kadakas_measure))]
+    assert_eq!(n, 1, "LM_SCALE needs RUSTFLAGS='--cfg kadakas_measure'");
     n
 }
 
@@ -1394,7 +1391,10 @@ fn total_models() {
 #[test]
 #[ignore = "measurement: run in release mode, see the header of this file"]
 fn scenario() {
-    let name = std::env::var("LM").expect("set LM to the scenario name");
+    let Ok(name) = std::env::var("LM") else {
+        println!("skipped: set LM to the scenario name (see the header of this file)");
+        return;
+    };
     match name.as_str() {
         "noop" => {
             result("noop", &format!("rss_mb={}", mb(rss())));

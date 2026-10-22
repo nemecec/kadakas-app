@@ -346,7 +346,30 @@ pub struct Resource {
 /// All resources of a document, in creation order. In files they are a JSON array.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Resources(Vec<Resource>);
+pub struct Resources(Vec<Resource>, #[serde(skip)] IdIndex);
+
+/// The place of each resource in the list, made when it is first asked and dropped by every
+/// change of the list. Not part of the content: it is never saved and never compared.
+#[derive(Default)]
+struct IdIndex(std::sync::OnceLock<std::collections::HashMap<ResourceId, usize>>);
+
+impl Clone for IdIndex {
+    fn clone(&self) -> Self {
+        IdIndex::default()
+    }
+}
+
+impl std::fmt::Debug for IdIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("IdIndex")
+    }
+}
+
+impl PartialEq for IdIndex {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
 
 impl Resources {
     pub fn is_empty(&self) -> bool {
@@ -362,23 +385,35 @@ impl Resources {
     }
 
     pub fn get(&self, id: ResourceId) -> Option<&Resource> {
-        self.0.iter().find(|r| r.id == id)
+        // Of two resources with one ID (not in a valid document) the first counts.
+        let index = self.1.0.get_or_init(|| {
+            let mut m = std::collections::HashMap::with_capacity(self.0.len());
+            for (i, r) in self.0.iter().enumerate() {
+                m.entry(r.id).or_insert(i);
+            }
+            m
+        });
+        index.get(&id).map(|i| &self.0[*i])
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Resource> {
+        self.1 = IdIndex::default();
         self.0.iter_mut()
     }
 
     pub fn get_mut(&mut self, id: ResourceId) -> Option<&mut Resource> {
+        self.1 = IdIndex::default();
         self.0.iter_mut().find(|r| r.id == id)
     }
 
     pub fn push(&mut self, r: Resource) {
+        self.1 = IdIndex::default();
         self.0.push(r);
     }
 
     pub fn remove(&mut self, id: ResourceId) -> Option<Resource> {
         let i = self.0.iter().position(|r| r.id == id)?;
+        self.1 = IdIndex::default();
         Some(self.0.remove(i))
     }
 

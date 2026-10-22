@@ -4,7 +4,8 @@
 #   OUT=<directory for the results> limits_campaign.sh STAGE
 # STAGE is one of: a1 a2 a2big a3 b4 b5 b6 collab (first campaign) and big guards explode collab2
 # (second campaign, with BASE: the binary of the code before the guards, and with the feature
-# measure-limits on kadakas-core for the stages that raise the limits). Each line runs one
+# the cfg kadakas_measure for the stages that raise the limits: build the core and props binaries
+# with RUSTFLAGS="--cfg kadakas_measure" in a target directory of their own). Each line runs one
 # scenario RUNS times in its own process (see limits_measure.py). Release binaries only.
 set -u
 PY="$(dirname "$0")/limits_measure.py"
@@ -100,7 +101,7 @@ collab)
   ;;
 big)
   # Models above the current limits, measured with the limits multiplied by 3 (feature
-  # measure-limits). The first three lines are at the current limits, for comparison.
+  # kadakas_measure). The first three lines are at the current limits, for comparison.
   for a in "terrain 158" "grid 222" "sphere 112"; do LM_SCALE=1 run big_now $CORE 5 big "$a"; done
   for a in "terrain 194" "terrain 223" "grid 273" "grid 316" "sphere 194" "sphere 224" "spiky 194" "spiky 224"; do
     LM_SCALE=3 run big_raised $CORE 5 big "$a"

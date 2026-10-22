@@ -115,7 +115,7 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 
 ## Test-only features
 
-A feature that only tests need must never be in a program that we ship. `kadakas-core` has `fault-injection` (a command can be made to panic, see `kadakas_core::fault`); only the dev-dependencies of `kadakas-api` turn it on. `scripts/check-test-hook.sh` reads the feature tree of `kadakas-app`, `kadakas-cli` and `kadakas-launcher` and fails if a hook is in it (and fails if it cannot see the hook in the tree of the tests). CI runs it (job `test-hooks`). Add the name of each new test-only feature to `HOOKS` in the script.
+A feature that only tests need must never be in a program that we ship. `kadakas-core` has `fault-injection` (a command can be made to panic, see `kadakas_core::fault`); only the dev-dependencies of `kadakas-api` turn it on. `scripts/check-test-hook.sh` reads the feature tree of `kadakas-app`, `kadakas-cli` and `kadakas-launcher` and fails if a hook is in it (and fails if it cannot see the hook in the tree of the tests). CI runs it (job `test-hooks`). Add the name of each new test-only feature to `HOOKS` in the script. The measurement of the limits (`docs/modeler-limits.md`) needs the surface limits to be raised. That is the cfg `kadakas_measure`, set only by `RUSTFLAGS="--cfg kadakas_measure"` in the measurement runs. It is not a cargo feature, so no dependency can turn it on, and the check above has nothing to look for.
 
 ## Toolchain
 

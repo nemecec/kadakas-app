@@ -259,12 +259,16 @@ fn collab() {
 #[test]
 #[ignore = "measurement: run in release mode"]
 fn scenario() {
-    // LM_SCALE multiplies the count limits of the surface model (feature `measure-limits`).
-    #[cfg(feature = "measure-limits")]
+    // LM_SCALE multiplies the count limits of the surface model (cfg `kadakas_measure`).
+    #[cfg(kadakas_measure)]
     if let Some(n) = std::env::var("LM_SCALE").ok().and_then(|s| s.parse().ok()) {
         kadakas_core::surface::set_limit_scale(n);
     }
-    match std::env::var("LM").expect("set LM").as_str() {
+    let Ok(name) = std::env::var("LM") else {
+        println!("skipped: set LM to the scenario name");
+        return;
+    };
+    match name.as_str() {
         "collab" => collab(),
         other => panic!("unknown scenario {other}"),
     }

@@ -2321,6 +2321,9 @@ pub struct Editor {
     total_cache: Option<(u64, usize)>,
     /// The total that the step in progress leaves, stored with its revision when it succeeds.
     pending_total: Option<usize>,
+    /// How often the total was counted over all objects (the rest of the steps add and take off
+    /// the models of the objects they touch). Tests read it.
+    total_recounts: u64,
 }
 
 /// Source of the serials of undo steps. One counter for the process, so a serial from an editor
@@ -2389,6 +2392,7 @@ impl Editor {
             restoring: false,
             total_cache: None,
             pending_total: None,
+            total_recounts: 0,
         }
     }
 
@@ -2500,7 +2504,6 @@ impl Editor {
             Ok(()) => {
                 if !patch.is_empty() {
                     self.revision = next_revision();
-                    self.total_cache = self.pending_total.map(|t| (self.revision, t));
                     let mut cs = patch.change_set(true, self.revision, &op(), self.origin);
                     cs.detail = detail;
                     self.log.push(cs);
@@ -2511,6 +2514,11 @@ impl Editor {
                     if self.open_run.is_none() {
                         self.trim_history();
                     }
+                }
+                // The total belongs to the revision that is current now (a step that changed
+                // nothing keeps the revision, and so keeps a total that was true for it).
+                if let Some(t) = self.pending_total {
+                    self.total_cache = Some((self.revision, t));
                 }
                 Ok(out)
             }
@@ -2642,6 +2650,74 @@ impl Editor {
         Ok(self.revision != before)
     }
 
+    /// The models over all instances, counted over all objects.
+    fn count_total(&mut self) -> usize {
+        self.total_recounts += 1;
+        crate::component::total_models(&self.doc)
+    }
+
+    /// The total after `patch` was applied forward (or taken back, with `forward` off) to a
+    /// document whose total was `base` before. `None` if the patch changes the resources (then
+    /// the models of an instance may change too, and the objects must be counted again). Reads
+    /// the resources of the document now, which are those of both states.
+    fn total_through(&self, base: usize, patch: &Patch, forward: bool) -> Option<usize> {
+        if patch.meta.is_some() {
+            return None;
+        }
+        let mut cache = crate::component::ExpansionCache::new(&self.doc.resources);
+        let mut models = |o: &Object| crate::component::instance_models(o, &mut cache).unwrap_or(0);
+        let (mut gain, mut loss) = (0usize, 0usize);
+        for (_, o) in &patch.added {
+            if forward {
+                gain += models(o)
+            } else {
+                loss += models(o)
+            }
+        }
+        for (_, o) in &patch.removed {
+            if forward {
+                loss += models(o)
+            } else {
+                gain += models(o)
+            }
+        }
+        for (b, a) in &patch.modified {
+            let (new, old) = if forward { (a, b) } else { (b, a) };
+            gain += models(new);
+            loss += models(old);
+        }
+        Some((base + gain).saturating_sub(loss))
+    }
+
+    /// The total of the document as it is, kept from step to step. Tests use it to check the
+    /// running total against a count from scratch.
+    #[doc(hidden)]
+    pub fn running_total(&self) -> Option<usize> {
+        self.total_cache
+            .filter(|(rev, _)| *rev == self.revision)
+            .map(|(_, t)| t)
+    }
+
+    /// How often the total was counted over all objects. Tests read it.
+    #[doc(hidden)]
+    pub fn total_recounts(&self) -> u64 {
+        self.total_recounts
+    }
+
+    /// After an undo or a redo: keeps the total (from the patch, or by a count) and says so in
+    /// the notes if the document is over the limit of models. An undo can bring back instances
+    /// that other changes made room for, so the limit is not held against it.
+    fn total_after_move(&mut self, before: Option<usize>, patch: &Patch, forward: bool) {
+        let total = match before.and_then(|b| self.total_through(b, patch, forward)) {
+            Some(t) => t,
+            None => self.count_total(),
+        };
+        self.total_cache = Some((self.revision, total));
+        if total > crate::component::MAX_TOTAL_MODELS {
+            self.note_definition_problems();
+        }
+    }
+
     /// Refuses a step that takes the models over all instances over
     /// [`component::MAX_TOTAL_MODELS`] (MOD-07): the scene of an instance holds its own copy of the
     /// points, so the total is what memory must hold. A step that does not make the total
@@ -2657,21 +2733,9 @@ impl Editor {
             .total_cache
             .filter(|(rev, _)| *rev == self.revision)
             .map(|(_, t)| t);
-        let after = match (cached, &patch.meta) {
-            (Some(before), None) => {
-                let mut cache = crate::component::ExpansionCache::new(&self.doc.resources);
-                let mut models =
-                    |o: &Object| crate::component::instance_models(o, &mut cache).unwrap_or(0);
-                let added: usize = patch.added.iter().map(|(_, o)| models(o)).sum();
-                let removed: usize = patch.removed.iter().map(|(_, o)| models(o)).sum();
-                let (mut up, mut down) = (0usize, 0usize);
-                for (b, a) in &patch.modified {
-                    up += models(a);
-                    down += models(b);
-                }
-                (before + added + up).saturating_sub(removed + down)
-            }
-            _ => crate::component::total_models(&self.doc),
+        let after = match cached.and_then(|before| self.total_through(before, patch, true)) {
+            Some(t) => t,
+            None => self.count_total(),
         };
         self.pending_total = Some(after);
         if after <= crate::component::MAX_TOTAL_MODELS {
@@ -2715,8 +2779,10 @@ impl Editor {
         let Some(p) = self.undo.pop() else {
             return false;
         };
+        let before = self.running_total();
         p.apply(&mut self.doc, false);
         self.revision = next_revision();
+        self.total_after_move(before, &p, false);
         self.log
             .push(p.change_set(false, self.revision, "undo", self.origin));
         self.last_moved = Some((p.serial, false));
@@ -2728,8 +2794,10 @@ impl Editor {
         let Some(p) = self.redo.pop() else {
             return false;
         };
+        let before = self.running_total();
         p.apply(&mut self.doc, true);
         self.revision = next_revision();
+        self.total_after_move(before, &p, true);
         self.log
             .push(p.change_set(true, self.revision, "redo", self.origin));
         self.last_moved = Some((p.serial, true));

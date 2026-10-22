@@ -1155,7 +1155,7 @@ fn biggest_user(doc: &Document, cache: &mut ExpansionCache<'_>) -> String {
     };
     let name = doc.resources.get(id).map_or("", |r| r.name.as_str());
     format!(
-        "Most of them come from component '{name}': {} instances with {} models each. Delete some instances or take parts out of the component",
+        "Most of them come from component '{name}': {} instances with {} models each. Delete some instances or take parts out of the component. Instances on hidden layers count too",
         grouped(n),
         grouped(models)
     )
@@ -1700,6 +1700,380 @@ mod tests {
             }
         }
         assert!(ok > 100, "ok {ok}, refused {refused}");
+    }
+
+    /// `n` definitions in a chain: the first holds a group, each next one an instance of the one
+    /// before. Returns them from the bottom up.
+    fn chain(n: usize) -> (Resources, Vec<ResourceId>) {
+        let mut doc = Document::with_sequential_ids();
+        let mut res = Resources::default();
+        let mut ids: Vec<ResourceId> = Vec::new();
+        for i in 0..n {
+            let id = ResourceId(doc.alloc_id());
+            let parts = match ids.last() {
+                None => vec![Part::new(Shape::Group { name: "g".into() })],
+                Some(prev) => vec![instance(*prev, 0)],
+            };
+            res.push(Resource {
+                id,
+                name: format!("D{i}"),
+                body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
+                    parts,
+                    ..SymbolDef::default()
+                }))),
+            });
+            ids.push(id);
+        }
+        (res, ids)
+    }
+
+    #[test]
+    fn a_measured_definition_that_is_used_once_more_can_pass_the_depth() {
+        // 16 deep is the most. The 16th is measured first and passes. A definition that uses it
+        // is the 17th, and it is refused although the stack of the walk is short.
+        let (mut res, ids) = chain(16);
+        let mut cache = ExpansionCache::new(&res);
+        assert_eq!(cache.get(ids[15]).unwrap().depth, 16);
+        let top = ResourceId::from_num(9_000);
+        let body = ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
+            parts: vec![instance(ids[15], 0)],
+            ..SymbolDef::default()
+        })));
+        res.push(Resource {
+            id: top,
+            name: "Top".into(),
+            body,
+        });
+        let mut cache = ExpansionCache::new(&res);
+        cache.get(ids[15]).unwrap();
+        let (bad, e) = cache.get(top).unwrap_err();
+        assert_eq!(bad, top);
+        assert!(
+            matches!(e, ComponentError::ComponentsTooDeep { max: 16 }),
+            "{e:?}"
+        );
+        // The cache keeps the failure, and shows the resources it reads.
+        assert!(cache.get(top).is_err());
+        assert_eq!(cache.resources().len(), 17);
+    }
+
+    #[test]
+    fn the_second_wall_of_the_walk_holds_when_the_cache_is_bypassed() {
+        let (res, ids) = chain(3);
+        let mut out = Vec::new();
+        // Too many visited parts.
+        let mut visited = MAX_VISITED;
+        let r = walk(
+            &res,
+            ids[2],
+            DAffine3::IDENTITY,
+            &mut vec![ids[2]],
+            &mut visited,
+            &mut out,
+        );
+        assert!(
+            matches!(
+                r,
+                Err(ComponentError::TooBig {
+                    max: MAX_VISITED,
+                    ..
+                })
+            ),
+            "{r:?}"
+        );
+        // A cycle: the stack already holds the definition that the part names.
+        let r = walk(
+            &res,
+            ids[2],
+            DAffine3::IDENTITY,
+            &mut vec![ids[2], ids[1]],
+            &mut 0,
+            &mut out,
+        );
+        assert!(matches!(r, Err(ComponentError::Cycle(_))), "{r:?}");
+        // A stack that is full.
+        let mut full: Vec<ResourceId> = vec![ids[2]];
+        full.extend((1..MAX_COMPONENT_DEPTH).map(|k| ResourceId::from_num(9_100 + k as u64)));
+        let r = walk(
+            &res,
+            ids[2],
+            DAffine3::IDENTITY,
+            &mut full,
+            &mut 0,
+            &mut out,
+        );
+        assert!(
+            matches!(r, Err(ComponentError::ComponentsTooDeep { .. })),
+            "{r:?}"
+        );
+        // Too many models: a definition with a model, and a list that is full.
+        let mut res2 = Resources::default();
+        let id = ResourceId::from_num(9_200);
+        res2.push(Resource {
+            id,
+            name: "M".into(),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
+                parts: vec![model_part()],
+                ..SymbolDef::default()
+            }))),
+        });
+        let one = leaves(&res2, id).unwrap()[0];
+        let mut full_list = vec![one; MAX_LEAVES];
+        let r = walk(
+            &res2,
+            id,
+            DAffine3::IDENTITY,
+            &mut vec![id],
+            &mut 0,
+            &mut full_list,
+        );
+        assert!(matches!(r, Err(ComponentError::TooMany { .. })), "{r:?}");
+        // A missing definition.
+        let gone = ResourceId::from_num(9_300);
+        let r = walk(
+            &res,
+            gone,
+            DAffine3::IDENTITY,
+            &mut vec![gone],
+            &mut 0,
+            &mut out,
+        );
+        assert!(matches!(r, Err(ComponentError::Missing(_))), "{r:?}");
+    }
+
+    #[test]
+    fn the_plan_axes_of_an_instance_follow_a_change_of_the_map() {
+        let t = raw(&DAffine3::from_translation(DVec3::new(1.0, 2.0, 3.0)));
+        let moved = remap_plan(
+            &t,
+            DVec3::new(100.0, 200.0, 5.0),
+            glam::DVec2::new(2.0, 0.0),
+            glam::DVec2::new(0.0, 2.0),
+            0.5,
+        );
+        let a = affine(&moved);
+        assert_eq!(a.translation, DVec3::new(100.0, 200.0, 5.0));
+        assert_eq!(a.matrix3.x_axis, DVec3::new(2.0, 0.0, 0.0));
+        assert_eq!(a.matrix3.z_axis, DVec3::new(0.0, 0.0, 0.5));
+    }
+
+    #[test]
+    fn groups_have_a_depth_and_a_height() {
+        use crate::command::{Command, Editor};
+        let mut ed = Editor::with_sequential_ids();
+        let add = |ed: &mut Editor| {
+            ed.execute(&Command::AddObject {
+                shape: Shape::SurfaceModel(Box::default()),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0]
+        };
+        let (a, b) = (ObjectId(add(&mut ed)), ObjectId(add(&mut ed)));
+        let inner = ObjectId(
+            ed.execute(&Command::Group {
+                ids: vec![a, b],
+                name: None,
+            })
+            .unwrap()
+            .created[0],
+        );
+        let c = ObjectId(add(&mut ed));
+        let outer = ObjectId(
+            ed.execute(&Command::Group {
+                ids: vec![inner, c],
+                name: None,
+            })
+            .unwrap()
+            .created[0],
+        );
+        let doc = ed.doc();
+        assert_eq!(group_depth(doc, a), 2);
+        assert_eq!(group_depth(doc, outer), 0);
+        assert_eq!(group_height(doc, outer), 2);
+        assert_eq!(group_height(doc, inner), 1);
+        assert_eq!(group_height(doc, a), 0);
+        // The models of a group are not the raw model of the root, and are plain.
+        let layer = doc.object(outer).unwrap().layer;
+        assert_eq!(raw_model(doc, None, layer), None);
+        assert_eq!(raw_model(doc, Some(inner), layer), Some(a));
+        assert!(is_plain_model(doc, a, Some(inner)));
+        assert!(!is_plain_model(doc, outer, None));
+    }
+
+    #[test]
+    fn parts_from_objects_refuse_what_cannot_be_a_part() {
+        use crate::command::{Command, Editor};
+        let mut ed = Editor::with_sequential_ids();
+        let p = ObjectId(
+            ed.execute(&Command::AddObject {
+                shape: Shape::Locus3d { p: DVec3::ZERO },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let e = parts_from_objects(ed.doc(), &[p], &DAffine3::IDENTITY).unwrap_err();
+        assert!(matches!(e, ComponentError::NotAllowed(_)), "{e:?}");
+        let gone = ObjectId::from_num(404_404);
+        let e = parts_from_objects(ed.doc(), &[gone], &DAffine3::IDENTITY);
+        // An object that is not in the list is not looked at.
+        assert!(e.unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_index_of_the_resources_is_not_content() {
+        let (res, ids) = chain(3);
+        let copy = res.clone();
+        assert_eq!(res, copy);
+        assert_eq!(res.get(ids[1]), copy.get(ids[1]));
+        assert!(format!("{res:?}").contains("IdIndex"));
+        // A list with one ID twice: the first counts, as with the scan.
+        let mut twice = res.clone();
+        let mut again = res.get(ids[0]).unwrap().clone();
+        again.name = "second".into();
+        twice.push(again);
+        assert_eq!(twice.get(ids[0]).unwrap().name, "D0");
+    }
+
+    #[test]
+    fn an_instance_says_why_it_cannot_be_used() {
+        let (res, ids) = chain(2);
+        let mut doc = Document::with_sequential_ids();
+        doc.resources = res;
+        let inst = |symbol| Shape::Component {
+            symbol,
+            transform: raw(&DAffine3::IDENTITY),
+        };
+        // Fine: a definition with parts that expands.
+        assert_eq!(instance_problem(&doc, &inst(ids[1])), None);
+        // A definition that is missing.
+        let gone = ResourceId::from_num(77_000);
+        assert!(
+            instance_problem(&doc, &inst(gone))
+                .unwrap()
+                .contains("does not exist")
+        );
+        // A resource that is not a symbol, and a symbol with no 3D parts.
+        let flat = ResourceId::from_num(77_001);
+        doc.resources.push(Resource {
+            id: flat,
+            name: "Flat".into(),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef::default()))),
+        });
+        assert!(
+            instance_problem(&doc, &inst(flat))
+                .unwrap()
+                .contains("no 3D parts")
+        );
+        let hatch = ResourceId::from_num(77_002);
+        doc.resources.push(Resource {
+            id: hatch,
+            name: "Hatch".into(),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::Hatch(Default::default()))),
+        });
+        assert!(
+            instance_problem(&doc, &inst(hatch))
+                .unwrap()
+                .contains("not a component")
+        );
+        // A symbol instance that names a definition with parts only.
+        let symbol_instance = Shape::Symbol {
+            symbol: ids[0],
+            at: glam::DVec2::ZERO,
+            rotation: 0.0,
+            scale: 1.0,
+            scale_y: None,
+        };
+        assert!(
+            instance_problem(&doc, &symbol_instance)
+                .unwrap()
+                .contains("Use a component instance")
+        );
+        assert_eq!(
+            instance_problem(&doc, &Shape::Locus3d { p: DVec3::ZERO }),
+            None
+        );
+    }
+
+    #[test]
+    fn the_size_of_a_definition_is_checked_in_edges_then_in_bytes() {
+        assert_eq!(definition_size_problem(&[]), None);
+        let mut big = Part::new(Shape::SurfaceModel(Box::default()));
+        let Shape::SurfaceModel(m) = &mut big.shape else {
+            unreachable!()
+        };
+        m.name = "x".repeat(MAX_DEFINITION_BYTES);
+        let why = definition_size_problem(&[big]).unwrap();
+        assert!(why.contains("16 MiB of saved text"), "{why}");
+    }
+
+    #[test]
+    fn the_notes_of_a_loaded_document_list_a_budget_and_a_broken_instance() {
+        let mut doc = Document::with_sequential_ids();
+        let sym = ResourceId(doc.alloc_id());
+        doc.resources.push(Resource {
+            id: sym,
+            name: "Many".into(),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
+                parts: (0..10_000).map(|_| model_part()).collect(),
+                ..SymbolDef::default()
+            }))),
+        });
+        for k in 0..26 {
+            let id = ObjectId(doc.alloc_id());
+            doc.objects.insert(
+                id,
+                crate::model::Object::new(
+                    id,
+                    crate::model::FIRST_LAYER,
+                    crate::model::NONE_CLASS,
+                    Shape::Component {
+                        symbol: sym,
+                        transform: raw(&DAffine3::from_translation(DVec3::new(k as f64, 0.0, 0.0))),
+                    },
+                ),
+            );
+        }
+        let broken = ObjectId(doc.alloc_id());
+        doc.objects.insert(
+            broken,
+            crate::model::Object::new(
+                broken,
+                crate::model::FIRST_LAYER,
+                crate::model::NONE_CLASS,
+                Shape::Component {
+                    symbol: ResourceId::from_num(88_000),
+                    transform: raw(&DAffine3::IDENTITY),
+                },
+            ),
+        );
+        let notes = load_findings(&doc);
+        assert!(
+            notes.iter().any(|n| n.contains("260,000 models")),
+            "{notes:?}"
+        );
+        assert!(
+            notes.iter().any(|n| n.contains("does not exist")),
+            "{notes:?}"
+        );
+        assert_eq!(
+            budget_findings(&doc, &mut ExpansionCache::new(&doc.resources)).len(),
+            1
+        );
+        assert_eq!(findings(&doc).len(), 2);
+        assert_eq!(total_models(&doc), 260_000);
+        assert!(check_total_models(&doc).is_err());
+        assert_eq!(
+            Budget::of(&doc, &mut ExpansionCache::new(&doc.resources))
+                .over
+                .len(),
+            1
+        );
     }
 
     #[test]

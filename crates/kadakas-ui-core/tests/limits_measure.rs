@@ -163,7 +163,11 @@ fn wide() {
 #[test]
 #[ignore = "measurement: run in release mode"]
 fn scenario() {
-    match std::env::var("LM").expect("set LM").as_str() {
+    let Ok(name) = std::env::var("LM") else {
+        println!("skipped: set LM to the scenario name");
+        return;
+    };
+    match name.as_str() {
         "infer" => infer(),
         "deep" => deep(num(&args(), 0)),
         "wide" => wide(),

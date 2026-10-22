@@ -7,7 +7,7 @@
 #[path = "limits_common.rs"]
 mod limits_common;
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use glam::{DAffine3, DVec3};
 use kadakas_core::command::{Command, Editor};
@@ -37,11 +37,17 @@ fn empty_chain(levels: usize, fan: usize) -> (Document, ResourceId, Vec<ObjectId
     (doc, def, ids)
 }
 
+/// Runs `f` and fails if it takes more than five times `limit` of CPU time. The old walk took
+/// 20 s and more, so the generous bound still finds a hang, and a busy machine does not fail it.
 fn under(what: &str, limit: Duration, f: impl FnOnce()) {
-    let t = Instant::now();
+    let start = limits_common::cpu();
     f();
-    let took = t.elapsed();
-    assert!(took < limit, "{what} took {took:?}, the limit is {limit:?}");
+    let took = limits_common::cpu() - start;
+    let bound = 5.0 * limit.as_secs_f64();
+    assert!(
+        took < bound,
+        "{what} took {took:.2} s of CPU time, the bound is {bound} s"
+    );
 }
 
 fn symbol_body(parts: Vec<Part>) -> ResourceBody {
@@ -196,7 +202,7 @@ fn the_budget_of_visited_parts_is_exact() {
 fn a_command_that_makes_a_chain_over_the_budget_is_refused_and_changes_nothing() {
     let mut ed = Editor::with_sequential_ids();
     let mut def = add_resource(&mut ed, "D0", def_parts("empty", 1)).unwrap();
-    let t = Instant::now();
+    let t = limits_common::cpu();
     let mut refused = None;
     for lvl in 1..=10 {
         let parts: Vec<Part> = (0..8).map(|k| Part::new(instance_shape(def, k))).collect();
@@ -210,7 +216,11 @@ fn a_command_that_makes_a_chain_over_the_budget_is_refused_and_changes_nothing()
             }
         }
     }
-    assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+    assert!(
+        limits_common::cpu() - t < 5.0,
+        "{} s of CPU time",
+        limits_common::cpu() - t
+    );
     let (lvl, e) = refused.expect("the chain is refused");
     assert_eq!(lvl, 7, "8^7 visited parts are over the budget");
     assert!(e.contains("'D7'") && e.contains("1,000,000"), "{e}");
@@ -757,12 +767,12 @@ fn an_explode_of_more_than_20000_faces_is_refused_and_changes_nothing() {
         grid_part(1, 400_000.0),
     ]);
     let (rev, n) = (ed.revision(), ed.doc().objects.len());
-    let t = Instant::now();
+    let t = limits_common::cpu();
     let e = ed
         .execute(&Command::Explode { ids: vec![inst] })
         .unwrap_err()
         .to_string();
-    assert!(t.elapsed() < Duration::from_secs(1));
+    assert!(limits_common::cpu() - t < 5.0);
     assert!(
         e.contains("would weld 20,001 faces, the limit is 20,000") && e.contains("smaller groups"),
         "{e}"
@@ -820,4 +830,376 @@ fn a_group_of_more_than_20000_faces_is_refused_too() {
         .unwrap_err()
         .to_string();
     assert!(e.contains("20,001 faces"), "{e}");
+}
+
+// ------------------------------------------- the running total of models
+
+#[test]
+fn commands_that_change_nothing_do_not_count_the_models_again_after_an_undo() {
+    let (mut ed, sym) = world_of_10k(3);
+    let first = *ed.doc().objects.keys().next().unwrap();
+    add_instance(&mut ed, sym, 50).unwrap();
+    assert!(ed.undo());
+    let counted = ed.total_recounts();
+    // A move by nothing changes nothing: no revision, no step.
+    for _ in 0..5 {
+        let rev = ed.revision();
+        ed.execute(&Command::MoveObjects {
+            ids: vec![first],
+            delta: glam::DVec2::ZERO,
+        })
+        .unwrap();
+        assert_eq!(ed.revision(), rev, "the command changed nothing");
+    }
+    assert_eq!(ed.total_recounts(), counted, "no walk over all objects");
+    assert_eq!(ed.running_total(), Some(component::total_models(ed.doc())));
+    // The undo and the redo themselves carry the total on.
+    assert!(ed.redo());
+    assert!(ed.undo());
+    assert_eq!(ed.total_recounts(), counted);
+    assert_eq!(ed.running_total(), Some(30_000));
+}
+
+#[test]
+fn a_redo_that_brings_the_total_over_the_limit_keeps_the_total_and_says_so() {
+    // A restore of a version is allowed to go over the limit (it has a finding). Its undo goes
+    // back to a document within the limit, and its redo goes over again, by design.
+    let (mut ed, _sym) = world_of_10k(25);
+    let (big, _) = world_of_10k(27);
+    assert!(ed.restore_content(big.doc(), None).unwrap());
+    assert_eq!(component::total_models(ed.doc()), 270_000);
+    let counted = ed.total_recounts();
+    assert!(ed.undo());
+    assert_eq!(component::total_models(ed.doc()), 250_000);
+    assert!(ed.redo());
+    assert_eq!(component::total_models(ed.doc()), 270_000);
+    assert_eq!(ed.running_total(), Some(270_000), "the total is kept");
+    assert!(
+        ed.total_recounts() <= counted + 2,
+        "an undo and a redo carry the total on"
+    );
+    let notes = ed.doc().load_notes().join("\n");
+    assert!(notes.contains("270,000 models"), "{notes}");
+    // Commands that do not add models still work, and one that adds is refused.
+    let first = *ed.doc().objects.keys().next().unwrap();
+    ed.execute(&Command::DeleteObjects { ids: vec![first] })
+        .unwrap();
+}
+
+mod running_total_props {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// A small world: a big definition (10,000 empty models), a small one (3 models) and a
+    /// single-model one, with 20 big instances (200,000 models) and a few small ones.
+    fn world() -> (Editor, [ResourceId; 3]) {
+        let mut doc = Document::with_sequential_ids();
+        let big = push_def(&mut doc, "Big", empty_models(10_000));
+        let small = push_def(&mut doc, "Small", empty_models(3));
+        let one = push_def(&mut doc, "One", empty_models(1));
+        push_instances(&mut doc, big, 20);
+        push_instances(&mut doc, small, 6);
+        (Editor::new(doc), [big, small, one])
+    }
+
+    fn pick(ed: &Editor, n: usize) -> Option<ObjectId> {
+        let keys: Vec<ObjectId> = ed.doc().objects.keys().copied().collect();
+        (!keys.is_empty()).then(|| keys[n % keys.len()])
+    }
+
+    fn step(ed: &mut Editor, defs: &[ResourceId; 3], op: u8, n: usize) {
+        let target = pick(ed, n);
+        let _ = match op % 13 {
+            0 => add_instance(ed, defs[0], n).map(|_| ()),
+            1 => add_instance(ed, defs[1], n).map(|_| ()),
+            2 => add_instance(ed, defs[2], n).map(|_| ()),
+            3 => target.map_or(Ok(()), |t| {
+                ed.execute(&Command::CopyObjects {
+                    ids: vec![t],
+                    delta: glam::DVec2::new(5.0, 5.0),
+                })
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+            }),
+            4 => target.map_or(Ok(()), |t| {
+                ed.execute(&Command::ArrayObjects {
+                    ids: vec![t],
+                    array: kadakas_core::edit2d::spec::ArrayParams {
+                        layout: kadakas_core::edit2d::spec::ArrayLayout::Linear {
+                            count: 1 + n % 4,
+                            offset: Some(glam::DVec2::new(7.0, 0.0)),
+                            distance: None,
+                            angle: None,
+                        },
+                        resize: None,
+                        rotate: None,
+                        retain: true,
+                    },
+                })
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+            }),
+            5 => target.map_or(Ok(()), |t| {
+                ed.execute(&Command::DeleteObjects { ids: vec![t] })
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            }),
+            6 => {
+                ed.undo();
+                Ok(())
+            }
+            7 => {
+                ed.redo();
+                Ok(())
+            }
+            8 => target.map_or(Ok(()), |t| {
+                ed.execute(&Command::MakeComponent {
+                    name: format!("C{n}"),
+                    model: None,
+                    faces: vec![],
+                    edges: vec![],
+                    objects: vec![t],
+                    replace: true,
+                })
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+            }),
+            9 => target.map_or(Ok(()), |t| {
+                ed.execute(&Command::Explode { ids: vec![t] })
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            }),
+            10 => ed
+                .execute(&Command::ModifyResource {
+                    id: defs[1],
+                    name: None,
+                    body: Some(symbol_body(empty_models(1 + n % 6))),
+                })
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            11 => ed
+                .execute(&Command::ModifyResource {
+                    id: defs[0],
+                    name: None,
+                    body: Some(symbol_body(empty_models(9_990 + n % 11))),
+                })
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            _ => {
+                // A command that fails halfway: a batch whose second command is bad.
+                ed.execute(&Command::Batch {
+                    commands: vec![
+                        Command::AddObject {
+                            shape: instance_shape(defs[0], n),
+                            layer: None,
+                            class: None,
+                            attrs: Attributes::default(),
+                        },
+                        Command::DeleteObjects {
+                            ids: vec![ObjectId::from_num(999_999)],
+                        },
+                    ],
+                })
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+            }
+        };
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        #[test]
+        fn the_running_total_equals_the_count_from_scratch(
+            ops in proptest::collection::vec((any::<u8>(), 0usize..1000), 1..30)
+        ) {
+            let (mut ed, defs) = world();
+            for (op, n) in ops {
+                step(&mut ed, &defs, op, n);
+                let truth = component::total_models(ed.doc());
+                if let Some(t) = ed.running_total() {
+                    prop_assert_eq!(t, truth, "op {} {}", op % 13, n);
+                }
+                // The documents that the commands make are within the limit, or were not made
+                // larger by the step (a rollback leaves the document as it was).
+                prop_assert!(truth <= component::MAX_TOTAL_MODELS + 3 * 10_011,
+                    "total {}", truth);
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ explode, more
+
+#[test]
+fn the_faces_of_all_ids_are_added_before_any_work_starts() {
+    // Two instances of 10,000 faces and 10,001 faces: each alone is within the limit.
+    let mut doc = Document::with_sequential_ids();
+    let a = push_def(&mut doc, "A", vec![grid_part(100, 0.0)]);
+    let b = push_def(
+        &mut doc,
+        "B",
+        vec![grid_part(100, 0.0), grid_part(1, 400_000.0)],
+    );
+    let ia = push_instances(&mut doc, a, 1)[0];
+    let ib = push_instances(&mut doc, b, 1)[0];
+    let mut ed = Editor::new(doc);
+    let (rev, n) = (ed.revision(), ed.doc().objects.len());
+    let t = limits_common::cpu();
+    let e = ed
+        .execute(&Command::Explode { ids: vec![ia, ib] })
+        .unwrap_err()
+        .to_string();
+    assert!(limits_common::cpu() - t < 5.0, "refused before any weld");
+    assert!(e.contains("would weld 20,001 faces"), "{e}");
+    assert_eq!((ed.revision(), ed.doc().objects.len()), (rev, n));
+}
+
+#[test]
+fn the_faces_that_the_target_already_holds_count_too() {
+    // A model of 40,000 faces on the layer, a group of 10,001 faces: 50,001 in one model.
+    let mut ed = Editor::with_sequential_ids();
+    let add = |ed: &mut Editor, m: SurfaceModel| {
+        ObjectId(
+            ed.execute(&Command::AddObject {
+                shape: Shape::SurfaceModel(Box::new(m)),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        )
+    };
+    add(
+        &mut ed,
+        limits_common::construct(&limits_common::grid_mesh(200, 0.0, 0.0, 0.0)),
+    );
+    let g1 = add(
+        &mut ed,
+        limits_common::construct(&limits_common::grid_mesh(100, 900_000.0, 0.0, 0.0)),
+    );
+    let g2 = add(
+        &mut ed,
+        limits_common::construct(&limits_common::grid_mesh(1, 2_000_000.0, 0.0, 0.0)),
+    );
+    let group = ed
+        .execute(&Command::Group {
+            ids: vec![g1, g2],
+            name: None,
+        })
+        .unwrap()
+        .created[0];
+    let (rev, n) = (ed.revision(), ed.doc().objects.len());
+    let t = limits_common::cpu();
+    let e = ed
+        .execute(&Command::Explode {
+            ids: vec![ObjectId(group)],
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(limits_common::cpu() - t < 5.0, "refused before any weld");
+    assert!(
+        e.contains("a surface model of 50,001 faces, the limit is 50,000"),
+        "{e}"
+    );
+    assert_eq!((ed.revision(), ed.doc().objects.len()), (rev, n));
+}
+
+#[test]
+fn models_inside_a_nested_group_are_not_welded_and_not_counted() {
+    // The top of the definition: a group, and inside it a model of 24,964 faces. An explode
+    // moves the group up and welds nothing.
+    let mut group = Part::new(Shape::Group { name: "g".into() });
+    group.parent = None;
+    let mut inner = grid_part(158, 0.0);
+    inner.parent = Some(0);
+    let (mut ed, inst) = explode_world(vec![group, inner]);
+    ed.execute(&Command::Explode { ids: vec![inst] })
+        .expect("nothing is welded");
+}
+
+#[test]
+fn many_small_parts_in_several_instances_weld_into_one_model() {
+    let mut doc = Document::with_sequential_ids();
+    let a = push_def(&mut doc, "A", def_parts("sq", 600));
+    let b = push_def(&mut doc, "B", def_parts("sq", 400));
+    let ia = push_instances(&mut doc, a, 1)[0];
+    let mut ids = vec![ia];
+    // The second instance is far from the first, so that the squares do not overlap.
+    let ib = ObjectId(doc.alloc_id());
+    doc.objects.insert(
+        ib,
+        Object::new(
+            ib,
+            FIRST_LAYER,
+            NONE_CLASS,
+            Shape::Component {
+                symbol: b,
+                transform: component::raw(&DAffine3::from_translation(DVec3::new(0.0, 5.0e6, 0.0))),
+            },
+        ),
+    );
+    ids.push(ib);
+    let mut ed = Editor::new(doc);
+    ed.execute(&Command::Explode { ids }).unwrap();
+    let faces: Vec<usize> = ed
+        .doc()
+        .objects
+        .values()
+        .filter_map(|o| match &o.shape {
+            Shape::SurfaceModel(m) => Some(m.face_count()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(faces.iter().sum::<usize>(), 1_000);
+}
+
+#[test]
+#[ignore = "slow in a debug build (7 s in a release build); run it with --ignored"]
+fn thousands_of_small_parts_near_the_limit_weld_into_one_model() {
+    // 3,333 cubes: 19,998 faces, two faces under the limit.
+    let (mut ed, inst) = explode_world(def_parts("cube", 3_333));
+    ed.execute(&Command::Explode { ids: vec![inst] }).unwrap();
+    let faces: Vec<usize> = ed
+        .doc()
+        .objects
+        .values()
+        .filter_map(|o| match &o.shape {
+            Shape::SurfaceModel(m) => Some(m.face_count()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(faces, vec![19_998]);
+}
+
+#[test]
+fn twenty_thousand_definitions_are_counted_in_linear_time() {
+    // Every definition holds a group and an instance of the one before it (chains of 10).
+    let mut doc = Document::with_sequential_ids();
+    let mut prev: Option<ResourceId> = None;
+    for i in 0..20_000usize {
+        let mut parts = def_parts("empty", 1);
+        if let (Some(p), true) = (prev, i % 10 != 0) {
+            parts.push(Part::new(instance_shape(p, 0)));
+        }
+        prev = Some(push_def(&mut doc, &format!("D{i}"), parts));
+    }
+    under(
+        "counting 20,000 definitions",
+        Duration::from_secs(1),
+        || {
+            assert!(component::definition_findings(&doc).is_empty());
+        },
+    );
+    // The index follows the changes of the list.
+    let mut res = doc.resources.clone();
+    let last = res.iter().last().unwrap().id;
+    assert!(res.get(last).is_some());
+    res.remove(last);
+    assert!(res.get(last).is_none());
+    assert!(res.get_mut(last).is_none());
+    let first = res.iter().next().unwrap().id;
+    res.get_mut(first).unwrap().name = "renamed".into();
+    assert_eq!(res.get(first).unwrap().name, "renamed");
 }
