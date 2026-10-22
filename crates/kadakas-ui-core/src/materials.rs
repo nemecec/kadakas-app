@@ -118,7 +118,7 @@ pub fn swatch(m: &Material, size: u32) -> Vec<[u8; 4]> {
                 }
                 None => base.map(f32::from),
             };
-            let checker = if (x * 4 / size + y * 4 / size) % 2 == 0 {
+            let checker = if (x * 4 / size + y * 4 / size).is_multiple_of(2) {
                 235.0
             } else {
                 205.0

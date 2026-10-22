@@ -323,7 +323,7 @@ pub enum EntityInfo {
         placement: Option<Placement>,
         /// What the object is, for the kinds that come from the Vectorworks-like app (plants,
         /// hardscapes, site models and the like).
-        summary: Option<Summary>,
+        summary: Option<Box<Summary>>,
         /// The material the object has as a whole (Paint Bucket), by name.
         material: Option<String>,
     },
@@ -660,7 +660,7 @@ pub fn entity_info(doc: &Document, scene: &Scene, selection: &[ObjectId]) -> Ent
                 min: bounds.map(|b| b.1),
                 surface,
                 placement: placement_of(doc, obj),
-                summary: summary_of(doc, obj),
+                summary: summary_of(doc, obj).map(Box::new),
                 material: kadakas_core::present::object_material(doc, *id)
                     .and_then(|m| resource_name(doc, Some(m))),
             }
@@ -873,6 +873,7 @@ mod tests {
                 "move",
                 "rotate",
                 "scale",
+                "paint-bucket",
                 "orbit",
                 "pan",
                 "zoom",

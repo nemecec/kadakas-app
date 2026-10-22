@@ -289,7 +289,7 @@ actions! {
     ToolPushPull => "tool.push_pull", msg!("action-tool-push-pull"), [], false;
     ToolMove => "tool.move", msg!("action-tool-move"), [], false;
     ToolTapeMeasure => "tool.tape_measure", msg!("action-tool-tape-measure"), [], false;
-    ToolPaintBucket => "tool.paint_bucket", msg!("action-tool-paint-bucket"), [], false;
+    ToolPaintBucket => "tool.paint_bucket", msg!("action-tool-paint-bucket"), [], true;
     NavOrbit => "nav.orbit", msg!("action-nav-orbit"), [], true;
     NavPan => "nav.pan", msg!("action-nav-pan"), [], true;
     NavZoom => "nav.zoom", msg!("action-nav-zoom"), [], true;

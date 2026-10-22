@@ -46,7 +46,7 @@ fn add_material(ed: &mut Editor, name: &str, color: [u8; 4]) -> ResourceId {
             body: ResourceBody::Render(Box::new(present::RenderResource::Material(m))),
         })
         .unwrap();
-    ResourceId(out.created[0].into())
+    ResourceId(out.created[0])
 }
 
 /// A model with two squares side by side (two faces) and two materials.

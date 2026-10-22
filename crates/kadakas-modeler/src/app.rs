@@ -105,6 +105,9 @@ pub enum Replace {
     OpenInApp,
 }
 
+/// Starts the Kadakas app with a file.
+pub type AppStarter = Box<dyn FnMut(&std::path::Path) -> Result<(), String>>;
+
 /// What the person answers to the question about unsaved changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Answer {
@@ -143,7 +146,7 @@ pub struct ModelerApp {
     /// The materials of the model and where they are used, for a revision.
     rows_cache: Option<(u64, Vec<MaterialRow>)>,
     /// Starts the Kadakas app with a file. The tests put another one in.
-    pub starter: Box<dyn FnMut(&std::path::Path) -> Result<(), String>>,
+    pub starter: AppStarter,
     pub about: About,
     launch: Launch,
     ask: Box<dyn Ask>,

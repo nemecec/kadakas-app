@@ -939,3 +939,113 @@ fn a_surface_model_face_has_a_front_and_a_back_color() {
     assert!(b[2] > b[0] + 10 && b[2] > f[2] / 8, "back is bluish: {b:?}");
     assert!(f[0].abs_diff(f[2]) < 30, "front is neutral: {f:?}");
 }
+
+/// A painted face (Paint Bucket, MOD-05) shows the material on the painted side only: the front in
+/// red and the back in green, seen from above and from below. A side without paint keeps its
+/// default color. The shader draws the triangle set of one side only (the flags 2 and 4).
+#[test]
+fn a_painted_face_shows_each_material_on_its_own_side() {
+    let Some((device, queue)) =
+        device_or_skip("a_painted_face_shows_each_material_on_its_own_side")
+    else {
+        return;
+    };
+    let mut rig = Rig::new(device, queue, [100, 100]);
+    let mut ed = Editor::default();
+    let id = kadakas_core::model::ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::SurfaceModel(Box::default()),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let p = [
+        [-500.0, -500.0, 0.0],
+        [500.0, -500.0, 0.0],
+        [500.0, 500.0, 0.0],
+        [-500.0, 500.0, 0.0],
+    ];
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: kadakas_core::surface::Edit::AddEdges {
+            edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+        },
+    })
+    .unwrap();
+    let material = |ed: &mut Editor, name: &str, c: [u8; 4]| {
+        ResourceId(
+            ed.execute(&Command::AddResource {
+                name: name.into(),
+                body: ResourceBody::Render(Box::new(RenderResource::Material(Material {
+                    base_color: Color(c),
+                    ..Default::default()
+                }))),
+            })
+            .unwrap()
+            .created[0],
+        )
+    };
+    let red = material(&mut ed, "Red", [220, 20, 20, 255]);
+    let green = material(&mut ed, "Green", [20, 200, 20, 255]);
+    let face = match &ed.doc().object(id).unwrap().shape {
+        Shape::SurfaceModel(m) => m.faces().next().unwrap().0,
+        _ => unreachable!(),
+    };
+    let paint = |ed: &mut Editor, side, m: ResourceId| {
+        ed.execute(&Command::EditSurface {
+            id,
+            edit: kadakas_core::surface::Edit::SetFaceMaterial {
+                faces: vec![face],
+                side,
+                material: Some(m.to_string()),
+            },
+        })
+        .unwrap();
+    };
+    let mut under = Camera::standard(StandardView::Bottom, Projection::Orthographic);
+    under.distance = top_cam(1000.0).distance;
+    // Only the front is painted: red from above, the plain back color from below.
+    paint(&mut ed, kadakas_core::surface::PaintSide::Front, red);
+    let top = px(
+        &rig.draw(&ed, &top_cam(1000.0), &style_for(&ed, true, |_| {}), &[]),
+        100,
+        50,
+        50,
+    );
+    let bottom = px(
+        &rig.draw(&ed, &under, &style_for(&ed, true, |_| {}), &[]),
+        100,
+        50,
+        50,
+    );
+    assert!(
+        top[0] > top[1] + 80 && top[0] > top[2] + 80,
+        "red front: {top:?}"
+    );
+    assert!(
+        bottom[2] > bottom[0] + 10,
+        "plain back stays bluish: {bottom:?}"
+    );
+    // The back is painted too: green from below.
+    paint(&mut ed, kadakas_core::surface::PaintSide::Back, green);
+    let top = px(
+        &rig.draw(&ed, &top_cam(1000.0), &style_for(&ed, true, |_| {}), &[]),
+        100,
+        50,
+        50,
+    );
+    let bottom = px(
+        &rig.draw(&ed, &under, &style_for(&ed, true, |_| {}), &[]),
+        100,
+        50,
+        50,
+    );
+    assert!(top[0] > top[1] + 80, "front still red: {top:?}");
+    assert!(
+        bottom[1] > bottom[0] + 40 && bottom[1] > bottom[2] + 40,
+        "green back: {bottom:?}"
+    );
+}

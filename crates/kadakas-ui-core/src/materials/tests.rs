@@ -318,8 +318,8 @@ fn select_loads_the_bucket_and_a_swatch_shows_the_color_or_the_texture() {
         ..plain
     };
     let s = swatch(&clear, 16);
-    assert!(s.iter().any(|p| *p == [235, 235, 235, 255]));
-    assert!(s.iter().any(|p| *p == [205, 205, 205, 255]));
+    assert!(s.contains(&[235, 235, 235, 255]));
+    assert!(s.contains(&[205, 205, 205, 255]));
     assert!(resource(ed.doc(), r[0].id).is_some());
     assert!(resource(ed.doc(), ResourceId::from_num(9999)).is_none());
 }

@@ -358,7 +358,7 @@ pub fn entity_info(ui: &mut egui::Ui, data: &TrayData, out: &mut Vec<TrayAction>
                         }
                     }
                 });
-            if summary.as_ref().is_some_and(Summary::needs_app) {
+            if summary.as_ref().is_some_and(|s| s.needs_app()) {
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new(tr!("modeler-entity-needs-app")).weak());
                 if ui.button(tr!("modeler-entity-open-in-app")).clicked() {
